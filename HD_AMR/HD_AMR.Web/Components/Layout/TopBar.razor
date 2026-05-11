@@ -1,0 +1,45 @@
+<div class="tb-root px-4">
+    <div class="tb-left">
+        <div class="tb-group">
+            <span class="tb-icon tb-icon-robot" aria-hidden="true"></span>
+            <span class="tb-label">AMR</span>
+            <span class="tb-badge tb-badge-off">@AmrStatus</span>
+            <span class="tb-badge tb-badge-value">@AmrValue</span>
+        </div>
+
+        @* Cobot — style only; no service wired *@
+        <div class="tb-group">
+            <span class="tb-icon tb-icon-gear" aria-hidden="true"></span>
+            <span class="tb-label">Cobot</span>
+            <span class="tb-badge tb-badge-off">@CobotStatus</span>
+            <span class="tb-badge tb-badge-value">@CobotValue</span>
+        </div>
+
+        <div class="tb-group tb-lamp">
+            <span class="tb-icon tb-icon-lightbulb" aria-hidden="true"></span>
+            <span class="tb-lamp-dot @(LampRed ? "is-red-on" : "")"></span>
+            <span class="tb-lamp-dot @(LampYellow ? "is-yellow-on" : "")"></span>
+            <span class="tb-lamp-dot @(LampGreen ? "is-green-on" : "")"></span>
+        </div>
+
+        <div class="tb-group tb-battery">
+            <span class="tb-icon tb-icon-battery" aria-hidden="true"></span>
+            <span class="tb-battery-text">@(BatteryPercent?.ToString() ?? "--")%</span>
+        </div>
+    </div>
+
+    <div class="tb-right">
+        <a href="https://learn.microsoft.com/aspnet/core/" target="_blank">About</a>
+    </div>
+</div>
+
+@code {
+    [Parameter] public string AmrStatus { get; set; } = "OFF";
+    [Parameter] public string AmrValue { get; set; } = "--";
+    [Parameter] public string CobotStatus { get; set; } = "OFF";
+    [Parameter] public string CobotValue { get; set; } = "--";
+    [Parameter] public bool LampRed { get; set; }
+    [Parameter] public bool LampYellow { get; set; }
+    [Parameter] public bool LampGreen { get; set; }
+    [Parameter] public int? BatteryPercent { get; set; }
+}

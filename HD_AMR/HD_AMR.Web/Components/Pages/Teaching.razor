@@ -1,0 +1,681 @@
+@page "/teaching"
+@rendermode InteractiveServer
+@using HD_AMR.Data.Entities
+@using HD_AMR.Service
+@using Microsoft.JSInterop
+@inject DrawingService Service
+@inject IJSRuntime JS
+@inject ILogger<Teaching> Logger
+
+<PageTitle>Teaching</PageTitle>
+
+<h1>Teaching</h1>
+
+<section class="upload-section">
+    <h3>도면 업로드</h3>
+    <div class="upload-row">
+        <InputFile OnChange="OnFileSelected" accept=".dwg,.dxf" />
+        <input type="text" placeholder="이름 (선택)" @bind="uploadName" class="name-input" />
+        <button class="btn btn-primary" disabled="@(pendingFile is null || isUploading)" @onclick="OnUploadClicked">
+            @(isUploading ? "업로드 중..." : "업로드")
+        </button>
+    </div>
+    @if (!string.IsNullOrEmpty(uploadMessage))
+    {
+        <div class="upload-message @(uploadIsError ? "err" : "ok")">@uploadMessage</div>
+    }
+</section>
+
+<section class="list-section">
+    <h3>도면 리스트</h3>
+    @if (drawings is null)
+    {
+        <p><em>Loading...</em></p>
+    }
+    else if (drawings.Count == 0)
+    {
+        <p>업로드된 도면이 없습니다.</p>
+    }
+    else
+    {
+        <table class="drawing-table">
+            <thead>
+                <tr>
+                    <th>id</th>
+                    <th>name</th>
+                    <th>file_name</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var d in drawings)
+                {
+                    <tr class="@(d.Id == selectedId ? "selected" : "")" @onclick="() => SelectDrawingAsync(d.Id)">
+                        <td>@d.Id</td>
+                        <td>@d.Name</td>
+                        <td>
+                            @d.FileName
+                            @if (!string.IsNullOrEmpty(d.ConversionError))
+                            {
+                                <span class="warn-icon" title="@d.ConversionError">⚠️</span>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+</section>
+
+@if (selected is not null)
+{
+    <section class="detail-section">
+        <h3>도면 보기 — @selected.Name</h3>
+        @if (!string.IsNullOrEmpty(selected.ConversionError))
+        {
+            <div class="conversion-error-banner">
+                <strong>⚠️ DXF 변환 실패</strong>
+                <div>@selected.ConversionError</div>
+            </div>
+        }
+        @if (previewLines.Count == 0 && selected.ExcludedRegions.Count == 0)
+        {
+            <p><em>도면을 미리볼 수 없습니다.</em></p>
+        }
+        else
+        {
+            <div class="view-bar">
+                <p class="hint">드래그: 영역 선택 · 휠: 확대/축소 · Shift+드래그: 이동</p>
+                <div class="zoom-bar">
+                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => ZoomAt(1.25)">＋</button>
+                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => ZoomAt(1.0 / 1.25)">−</button>
+                    <button class="btn btn-sm btn-outline-secondary" @onclick="ResetView">맞춤</button>
+                    <span class="scale-info">
+                        확대 @($"{zoom * 100:0}%")
+                        @if (mmPerPixel > 0)
+                        {
+                            <span> · 1 px ≈ @($"{mmPerPixel:0.###}") mm</span>
+                        }
+                    </span>
+                </div>
+            </div>
+            <svg @ref="svgRef"
+                 viewBox="@svgViewBox"
+                 class="drawing-svg @(isPanning ? "panning" : "")"
+                 xmlns="http://www.w3.org/2000/svg"
+                 preserveAspectRatio="xMidYMid meet"
+                 @onmousedown="OnSvgMouseDown"
+                 @onmousemove="OnSvgMouseMove"
+                 @onmouseup="OnSvgMouseUp"
+                 @onmouseleave="OnSvgMouseLeave"
+                 @onwheel="OnSvgWheel"
+                 @onwheel:preventDefault="true">
+                @foreach (var r in selected.ExcludedRegions)
+                {
+                    <rect class="region-rect"
+                          x="@F(r.MinX)" y="@F(-r.MaxY)"
+                          width="@F(r.MaxX - r.MinX)" height="@F(r.MaxY - r.MinY)"
+                          stroke-width="@F(strokeWidth)" />
+                }
+                @foreach (var ln in previewLines)
+                {
+                    <line x1="@F(ln.X1)" y1="@F(-ln.Y1)" x2="@F(ln.X2)" y2="@F(-ln.Y2)"
+                          stroke="#0d6efd" stroke-width="@F(strokeWidth)"
+                          pointer-events="none" />
+                }
+                @foreach (var s in selected.Segments)
+                {
+                    <line x1="@F(s.StartX)" y1="@F(-s.StartY)" x2="@F(s.EndX)" y2="@F(-s.EndY)"
+                          stroke="#dc3545" stroke-width="@F(strokeWidth * 1.2)"
+                          stroke-dasharray="@F(strokeWidth * 2),@F(strokeWidth)"
+                          pointer-events="none" />
+                }
+                @if (isDragging)
+                {
+                    var dx = Math.Min(dragStartX, dragCurrentX);
+                    var dy = Math.Min(dragStartY, dragCurrentY);
+                    var dw = Math.Abs(dragCurrentX - dragStartX);
+                    var dh = Math.Abs(dragCurrentY - dragStartY);
+                    <rect class="drag-rect"
+                          x="@F(dx)" y="@F(dy)"
+                          width="@F(dw)" height="@F(dh)"
+                          stroke-width="@F(strokeWidth)"
+                          pointer-events="none" />
+                }
+            </svg>
+        }
+        <div class="actions">
+            <button class="btn btn-success"
+                    disabled="@(isAnalyzing || string.IsNullOrEmpty(selected.DxfPath))"
+                    title="@(string.IsNullOrEmpty(selected.DxfPath) ? "DXF가 없어 분석할 수 없습니다" : null)"
+                    @onclick="AnalyzeAsync">
+                @(isAnalyzing ? "분석 중..." : "분석")
+            </button>
+            <button class="btn btn-outline-secondary"
+                    disabled="@(isClearingRegions || selected.ExcludedRegions.Count == 0)"
+                    @onclick="OnClearRegions">
+                @(isClearingRegions ? "초기화 중..." : $"선택 마스크 초기화 ({selected.ExcludedRegions.Count})")
+            </button>
+            @if (!string.IsNullOrEmpty(analyzeMessage))
+            {
+                <span class="analyze-message @(analyzeIsError ? "err" : "ok")">@analyzeMessage</span>
+            }
+        </div>
+
+        <div class="delete-row">
+            @if (!pendingDelete)
+            {
+                <button class="btn btn-danger" disabled="@isDeleting" @onclick="OnDeleteClicked">삭제</button>
+            }
+            else
+            {
+                <span class="confirm-text">정말 삭제하시겠습니까? (파일과 분석 결과가 모두 제거됩니다)</span>
+                <button class="btn btn-danger" disabled="@isDeleting" @onclick="OnConfirmDelete">
+                    @(isDeleting ? "삭제 중..." : "확인")
+                </button>
+                <button class="btn btn-secondary" disabled="@isDeleting" @onclick="OnCancelDelete">취소</button>
+            }
+            @if (!string.IsNullOrEmpty(deleteMessage))
+            {
+                <span class="analyze-message err">@deleteMessage</span>
+            }
+        </div>
+
+        <h3>분석 결과</h3>
+        @if (regionsChangedSinceAnalysis)
+        {
+            <p class="hint">선택 영역이 변경되어 이전 분석 결과가 비워졌습니다. "분석"을 다시 눌러주세요.</p>
+        }
+        @if (selected.Segments.Count == 0)
+        {
+            <p>분석 결과가 없습니다. "분석" 버튼을 눌러 10mm 단위로 분할하세요.</p>
+        }
+        else
+        {
+            <table class="segment-table">
+                <thead>
+                    <tr>
+                        <th>번호</th>
+                        <th>시작 (x, y)</th>
+                        <th>끝 (x, y)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var s in selected.Segments)
+                    {
+                        <tr>
+                            <td>@s.Number</td>
+                            <td>(@F(s.StartX), @F(s.StartY))</td>
+                            <td>(@F(s.EndX), @F(s.EndY))</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </section>
+}
+
+@code {
+    private const long MaxUploadSize = 50L * 1024 * 1024;
+
+    private List<Drawing>? drawings;
+    private int? selectedId;
+    private Drawing? selected;
+    private List<LineSegment> previewLines = new();
+    private string svgViewBox = "0 0 100 100";
+    private double strokeWidth = 0.5;
+
+    private Microsoft.AspNetCore.Components.Forms.IBrowserFile? pendingFile;
+    private string uploadName = "";
+    private bool isUploading;
+    private bool uploadIsError;
+    private string? uploadMessage;
+
+    private bool isAnalyzing;
+    private bool analyzeIsError;
+    private string? analyzeMessage;
+
+    private bool pendingDelete;
+    private bool isDeleting;
+    private string? deleteMessage;
+
+    private ElementReference svgRef;
+    private bool isDragging;
+    private double dragStartX, dragStartY, dragCurrentX, dragCurrentY;
+    private bool isClearingRegions;
+    private bool regionsChangedSinceAnalysis;
+
+    private double baseMinX, baseMinY, baseW = 100, baseH = 100;
+    private double zoom = 1.0;
+    private double panOffsetX, panOffsetY;
+    private const double MinZoom = 0.1;
+    private const double MaxZoom = 200.0;
+
+    private bool isPanning;
+    private double panStartSvgX, panStartSvgY;
+    private double panStartOffsetX, panStartOffsetY;
+
+    private double mmPerPixel;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await RefreshListAsync();
+    }
+
+    private async Task RefreshListAsync()
+    {
+        drawings = await Service.ListAsync();
+    }
+
+    private void OnFileSelected(InputFileChangeEventArgs e)
+    {
+        pendingFile = e.File;
+        if (string.IsNullOrWhiteSpace(uploadName))
+            uploadName = Path.GetFileNameWithoutExtension(e.File.Name);
+        uploadMessage = null;
+    }
+
+    private async Task OnUploadClicked()
+    {
+        if (pendingFile is null) return;
+        isUploading = true;
+        uploadMessage = null;
+        uploadIsError = false;
+        try
+        {
+            await using var stream = pendingFile.OpenReadStream(MaxUploadSize);
+            var saved = await Service.SaveAsync(uploadName, pendingFile.Name, stream);
+            if (!string.IsNullOrEmpty(saved.ConversionError))
+            {
+                uploadIsError = true;
+                uploadMessage = $"업로드 완료 (id={saved.Id}). ⚠️ DXF 변환 실패: {saved.ConversionError}";
+            }
+            else if (!string.IsNullOrEmpty(saved.DxfPath) && saved.DxfPath != saved.FilePath)
+            {
+                uploadMessage = $"업로드 완료: {saved.FileName} → DXF 변환됨 (id={saved.Id})";
+            }
+            else
+            {
+                uploadMessage = $"업로드 완료: {saved.FileName} (id={saved.Id})";
+            }
+            pendingFile = null;
+            uploadName = "";
+            await RefreshListAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Upload failed");
+            uploadIsError = true;
+            uploadMessage = $"업로드 실패: {ex.Message}";
+        }
+        finally
+        {
+            isUploading = false;
+        }
+    }
+
+    private async Task SelectDrawingAsync(int id)
+    {
+        var changedDrawing = selectedId != id;
+        selectedId = id;
+        analyzeMessage = null;
+        pendingDelete = false;
+        deleteMessage = null;
+        isDragging = false;
+        isPanning = false;
+        regionsChangedSinceAnalysis = false;
+        selected = await Service.GetAsync(id);
+        if (selected is null) return;
+        previewLines = Service.GetLines(selected);
+        if (changedDrawing)
+        {
+            zoom = 1.0;
+            panOffsetX = 0;
+            panOffsetY = 0;
+        }
+        ComputeViewBox();
+    }
+
+    private void OnDeleteClicked()
+    {
+        pendingDelete = true;
+        deleteMessage = null;
+    }
+
+    private void OnCancelDelete()
+    {
+        pendingDelete = false;
+        deleteMessage = null;
+    }
+
+    private async Task OnConfirmDelete()
+    {
+        if (selected is null) return;
+        isDeleting = true;
+        deleteMessage = null;
+        var deletedName = selected.FileName;
+        try
+        {
+            await Service.DeleteAsync(selected.Id);
+            selected = null;
+            selectedId = null;
+            previewLines = new();
+            pendingDelete = false;
+            analyzeMessage = null;
+            uploadIsError = false;
+            uploadMessage = $"삭제 완료: {deletedName}";
+            await RefreshListAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Delete failed");
+            deleteMessage = $"삭제 실패: {ex.Message}";
+        }
+        finally
+        {
+            isDeleting = false;
+        }
+    }
+
+    private async Task AnalyzeAsync()
+    {
+        if (selected is null) return;
+        isAnalyzing = true;
+        analyzeMessage = null;
+        analyzeIsError = false;
+        try
+        {
+            await Service.AnalyzeAsync(selected.Id);
+            selected = await Service.GetAsync(selected.Id);
+            if (selected != null)
+            {
+                previewLines = Service.GetLines(selected);
+                ComputeViewBox();
+                analyzeMessage = $"{selected.Segments.Count}개의 10mm 세그먼트가 생성되었습니다.";
+                regionsChangedSinceAnalysis = false;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Analyze failed");
+            analyzeIsError = true;
+            analyzeMessage = $"분석 실패: {ex.Message}";
+        }
+        finally
+        {
+            isAnalyzing = false;
+        }
+    }
+
+    private async Task OnSvgMouseDown(MouseEventArgs e)
+    {
+        if (selected is null) return;
+        var pt = await GetSvgPointAsync(e.ClientX, e.ClientY);
+        if (pt is null) return;
+
+        if (e.ShiftKey)
+        {
+            panStartSvgX = pt.Value.x;
+            panStartSvgY = pt.Value.y;
+            panStartOffsetX = panOffsetX;
+            panStartOffsetY = panOffsetY;
+            isPanning = true;
+            return;
+        }
+
+        dragStartX = dragCurrentX = pt.Value.x;
+        dragStartY = dragCurrentY = pt.Value.y;
+        isDragging = true;
+    }
+
+    private async Task OnSvgMouseMove(MouseEventArgs e)
+    {
+        if (!isDragging && !isPanning) return;
+        var pt = await GetSvgPointAsync(e.ClientX, e.ClientY);
+        if (pt is null) return;
+
+        if (isPanning)
+        {
+            var dx = pt.Value.x - panStartSvgX;
+            var dy = pt.Value.y - panStartSvgY;
+            panOffsetX = panStartOffsetX - dx;
+            panOffsetY = panStartOffsetY - dy;
+            BuildViewBox();
+            return;
+        }
+
+        dragCurrentX = pt.Value.x;
+        dragCurrentY = pt.Value.y;
+    }
+
+    private async Task OnSvgMouseUp(MouseEventArgs e)
+    {
+        if (isPanning) { isPanning = false; return; }
+        if (!isDragging || selected is null) { isDragging = false; return; }
+        var pt = await GetSvgPointAsync(e.ClientX, e.ClientY);
+        if (pt is not null)
+        {
+            dragCurrentX = pt.Value.x;
+            dragCurrentY = pt.Value.y;
+        }
+        isDragging = false;
+
+        // SVG y is flipped: SVG y = -world y
+        var minX = Math.Min(dragStartX, dragCurrentX);
+        var maxX = Math.Max(dragStartX, dragCurrentX);
+        var svgMinY = Math.Min(dragStartY, dragCurrentY);
+        var svgMaxY = Math.Max(dragStartY, dragCurrentY);
+        var worldMinY = -svgMaxY;
+        var worldMaxY = -svgMinY;
+
+        // Ignore trivial drags (likely accidental clicks)
+        if ((maxX - minX) < 1e-6 || (worldMaxY - worldMinY) < 1e-6) return;
+
+        try
+        {
+            await Service.AddRegionAsync(selected.Id, minX, worldMinY, maxX, worldMaxY);
+            selected = await Service.GetAsync(selected.Id);
+            if (selected != null)
+            {
+                previewLines = Service.GetLines(selected);
+                ComputeViewBox();
+                regionsChangedSinceAnalysis = true;
+                analyzeMessage = null;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "AddRegion failed");
+            analyzeIsError = true;
+            analyzeMessage = $"영역 추가 실패: {ex.Message}";
+        }
+    }
+
+    private void OnSvgMouseLeave(MouseEventArgs e)
+    {
+        // Cancel any in-progress drag/pan if the cursor leaves the SVG without releasing
+        if (isDragging) isDragging = false;
+        if (isPanning) isPanning = false;
+    }
+
+    private async Task OnClearRegions()
+    {
+        if (selected is null || isClearingRegions) return;
+        isClearingRegions = true;
+        try
+        {
+            await Service.ClearRegionsAsync(selected.Id);
+            selected = await Service.GetAsync(selected.Id);
+            if (selected != null)
+            {
+                previewLines = Service.GetLines(selected);
+                ComputeViewBox();
+                regionsChangedSinceAnalysis = false;
+                analyzeMessage = null;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "ClearRegions failed");
+            analyzeIsError = true;
+            analyzeMessage = $"영역 초기화 실패: {ex.Message}";
+        }
+        finally
+        {
+            isClearingRegions = false;
+        }
+    }
+
+    private async Task<(double x, double y)?> GetSvgPointAsync(double clientX, double clientY)
+    {
+        try
+        {
+            var result = await JS.InvokeAsync<double[]>("hdAmrTeaching.svgPoint", svgRef, clientX, clientY);
+            if (result is { Length: 2 }) return (result[0], result[1]);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "svgPoint JS interop failed");
+        }
+        return null;
+    }
+
+    // Refresh both the underlying Fit extent and the effective viewBox.
+    private void ComputeViewBox()
+    {
+        RecomputeBaseExtent();
+        BuildViewBox();
+    }
+
+    private void RecomputeBaseExtent()
+    {
+        if (previewLines.Count == 0 && (selected?.Segments.Count ?? 0) == 0 && (selected?.ExcludedRegions.Count ?? 0) == 0)
+        {
+            baseMinX = 0; baseMinY = -100; baseW = 100; baseH = 100;
+            strokeWidth = 0.5;
+            return;
+        }
+
+        double minX = double.PositiveInfinity, minY = double.PositiveInfinity;
+        double maxX = double.NegativeInfinity, maxY = double.NegativeInfinity;
+        foreach (var ln in previewLines)
+        {
+            minX = Math.Min(minX, Math.Min(ln.X1, ln.X2));
+            minY = Math.Min(minY, Math.Min(ln.Y1, ln.Y2));
+            maxX = Math.Max(maxX, Math.Max(ln.X1, ln.X2));
+            maxY = Math.Max(maxY, Math.Max(ln.Y1, ln.Y2));
+        }
+        foreach (var s in selected!.Segments)
+        {
+            minX = Math.Min(minX, Math.Min(s.StartX, s.EndX));
+            minY = Math.Min(minY, Math.Min(s.StartY, s.EndY));
+            maxX = Math.Max(maxX, Math.Max(s.StartX, s.EndX));
+            maxY = Math.Max(maxY, Math.Max(s.StartY, s.EndY));
+        }
+        foreach (var r in selected.ExcludedRegions)
+        {
+            minX = Math.Min(minX, r.MinX);
+            minY = Math.Min(minY, r.MinY);
+            maxX = Math.Max(maxX, r.MaxX);
+            maxY = Math.Max(maxY, r.MaxY);
+        }
+
+        if (double.IsInfinity(minX) || double.IsInfinity(minY))
+        {
+            baseMinX = 0; baseMinY = -100; baseW = 100; baseH = 100;
+            strokeWidth = 0.5;
+            return;
+        }
+
+        var w = Math.Max(maxX - minX, 1e-6);
+        var h = Math.Max(maxY - minY, 1e-6);
+        var pad = 0.05 * Math.Max(w, h);
+
+        // SVG renders with Y flipped (-worldY). Store the Fit extent in SVG coords so
+        // BuildViewBox() can simply add panOffset without re-flipping each call.
+        baseMinX = minX - pad;
+        baseMinY = -(maxY + pad);
+        baseW = w + 2 * pad;
+        baseH = h + 2 * pad;
+        strokeWidth = Math.Max(w, h) * 0.003;
+    }
+
+    private void BuildViewBox()
+    {
+        var vw = baseW / zoom;
+        var vh = baseH / zoom;
+        var vx = baseMinX + (baseW - vw) / 2.0 + panOffsetX;
+        var vy = baseMinY + (baseH - vh) / 2.0 + panOffsetY;
+        svgViewBox = $"{F(vx)} {F(vy)} {F(vw)} {F(vh)}";
+    }
+
+    // Compute viewBox origin given a desired width/height and an SVG-coord anchor that
+    // must remain pinned to the same screen ratio (rx, ry in [0,1]).
+    private void RebuildAroundAnchor(double anchorSvgX, double anchorSvgY, double rx, double ry)
+    {
+        var vw = baseW / zoom;
+        var vh = baseH / zoom;
+        var vx = anchorSvgX - rx * vw;
+        var vy = anchorSvgY - ry * vh;
+        panOffsetX = vx - (baseMinX + (baseW - vw) / 2.0);
+        panOffsetY = vy - (baseMinY + (baseH - vh) / 2.0);
+        BuildViewBox();
+    }
+
+    private void ResetView()
+    {
+        zoom = 1.0;
+        panOffsetX = 0;
+        panOffsetY = 0;
+        BuildViewBox();
+    }
+
+    private void ZoomAt(double factor)
+    {
+        // Anchor at the current viewBox center (the geometric middle of the view).
+        var centerSvgX = baseMinX + (baseW) / 2.0 + panOffsetX;   // before factor change, center of current view in SVG coords
+        var centerSvgY = baseMinY + (baseH) / 2.0 + panOffsetY;
+        zoom = Math.Clamp(zoom * factor, MinZoom, MaxZoom);
+        RebuildAroundAnchor(centerSvgX, centerSvgY, 0.5, 0.5);
+    }
+
+    private async Task OnSvgWheel(WheelEventArgs e)
+    {
+        if (selected is null) return;
+        var pt = await GetSvgPointAsync(e.ClientX, e.ClientY);
+        if (pt is null) return;
+        var anchorSvgX = pt.Value.x;
+        var anchorSvgY = pt.Value.y;
+
+        // Current viewBox in SVG coords
+        var vw = baseW / zoom;
+        var vh = baseH / zoom;
+        var vx = baseMinX + (baseW - vw) / 2.0 + panOffsetX;
+        var vy = baseMinY + (baseH - vh) / 2.0 + panOffsetY;
+        var rx = vw > 0 ? (anchorSvgX - vx) / vw : 0.5;
+        var ry = vh > 0 ? (anchorSvgY - vy) / vh : 0.5;
+
+        var factor = e.DeltaY < 0 ? 1.15 : 1.0 / 1.15;
+        zoom = Math.Clamp(zoom * factor, MinZoom, MaxZoom);
+        RebuildAroundAnchor(anchorSvgX, anchorSvgY, rx, ry);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (selected is null) return;
+        try
+        {
+            var newValue = await JS.InvokeAsync<double>("hdAmrTeaching.mmPerPixel", svgRef);
+            if (newValue > 0 && Math.Abs(newValue - mmPerPixel) > 1e-6)
+            {
+                mmPerPixel = newValue;
+                StateHasChanged();
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "mmPerPixel update skipped");
+        }
+    }
+
+    private static string F(double v) => v.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+}
