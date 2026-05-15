@@ -58,3 +58,8 @@ HD_AMR/HD_AMR.Web/UploadedDrawings/
 HD_AMR/HD_AMR.Web/*.db
 HD_AMR/HD_AMR.Web/*.db-shm
 HD_AMR/HD_AMR.Web/*.db-wal
+
+# JetBrains Rider / ReSharper
+.idea/
+*.sln.DotSettings.user
+*.DotSettings.user
