@@ -26,6 +26,12 @@ builder.Services.Configure<FairinoRpcSettings>(
 builder.Services.AddSingleton<CobotService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<CobotService>());
 
+// Orbbec Gemini 2 깊이 카메라. CobotService 와 동일 패턴(싱글톤 + 호스티드).
+builder.Services.Configure<OrbbecGeminiSettings>(
+    builder.Configuration.GetSection("Camera"));
+builder.Services.AddSingleton<CameraService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<CameraService>());
+
 var uploadDirectory = Path.Combine(builder.Environment.ContentRootPath, "UploadedDrawings");
 builder.Services.Configure<DrawingStorageOptions>(opt => opt.UploadDirectory = uploadDirectory);
 
@@ -86,5 +92,57 @@ app.UseAntiforgery();
 
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
+
+// MJPEG 라이브 스트림 엔드포인트. 브라우저의 <img src="/camera/color.mjpeg"> 로 직접 표시 가능.
+// multipart/x-mixed-replace 응답으로 JPEG 프레임을 연속 송출.
+app.MapGet("/camera/color.mjpeg",
+    (CameraService svc, HttpContext http, CancellationToken ct) =>
+        StreamMjpegAsync(http, ct, svc.Settings.MjpegFps,
+            () => svc.GetLatestColorJpegAsync(svc.Settings.JpegQuality, ct)));
+
+app.MapGet("/camera/depth.mjpeg",
+    (CameraService svc, HttpContext http, CancellationToken ct) =>
+        StreamMjpegAsync(http, ct, svc.Settings.MjpegFps,
+            () => svc.GetLatestDepthJpegAsync(svc.Settings.JpegQuality, ct)));
+
+static async Task StreamMjpegAsync(HttpContext http, CancellationToken ct, int fps,
+    Func<Task<byte[]?>> getJpeg)
+{
+    const string boundary = "frame";
+    http.Response.ContentType = $"multipart/x-mixed-replace; boundary={boundary}";
+    http.Response.Headers.CacheControl = "no-cache, no-store, must-revalidate";
+    http.Response.Headers.Pragma = "no-cache";
+    http.Response.Headers["Connection"] = "close";
+
+    var delayMs = Math.Max(33, 1000 / Math.Max(1, fps));
+    var crlf = "\r\n"u8.ToArray();
+    var body = http.Response.Body;
+
+    // 헤더를 즉시 흘려보내 클라이언트(브라우저/curl)가 200 응답을 받고 첫 프레임을 기다릴 수 있게 한다.
+    // 프레임이 없는 동안(예: 카메라 미연결)에도 연결이 살아 있어야 자동 복구 후 표시가 시작됨.
+    await http.Response.StartAsync(ct);
+    await body.FlushAsync(ct);
+
+    while (!ct.IsCancellationRequested)
+    {
+        var jpeg = await getJpeg();
+        if (jpeg is not null && jpeg.Length > 0)
+        {
+            var header = System.Text.Encoding.ASCII.GetBytes(
+                $"--{boundary}\r\nContent-Type: image/jpeg\r\nContent-Length: {jpeg.Length}\r\n\r\n");
+            try
+            {
+                await body.WriteAsync(header, ct);
+                await body.WriteAsync(jpeg, ct);
+                await body.WriteAsync(crlf, ct);
+                await body.FlushAsync(ct);
+            }
+            catch (OperationCanceledException) { break; }
+            catch (Exception) { break; } // 클라이언트 단절 — 루프 종료.
+        }
+        try { await Task.Delay(delayMs, ct); }
+        catch (OperationCanceledException) { break; }
+    }
+}
 
 app.Run();

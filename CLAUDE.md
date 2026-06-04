@@ -16,6 +16,18 @@ No test project exists yet. When one is added, `dotnet test` from the root will 
 
 The SDK is pinned by `HD_AMR/global.json` to `8.0.0` with `rollForward: latestMinor` — install .NET 8 SDK 8.0.x.
 
+### Orbbec SDK (Gemini 2 depth camera)
+
+`HD_AMR/HD_AMR/libs/orbbec/runtimes/<rid>/native/` is auto-populated by `dotnet build` — the `RestoreOrbbecSdk*` MSBuild targets in `HD_AMR.csproj` download Orbbec SDK **v1.10.16** for the host RID (macOS arm64, Linux arm64, or Windows x64) from GitHub Releases on first build. Downloaded binaries are `.gitignore`d. Offline/manual install + per-OS post-install steps documented in `HD_AMR/HD_AMR/libs/orbbec/README.md`.
+
+**macOS heads-up**: after first download run `xattr -dr com.apple.quarantine HD_AMR/HD_AMR/libs/orbbec/runtimes/osx-arm64/native/` once. Note that macOS auto-claims the camera via `UVCAssistant`/`VDCAssistant`, blocking Orbbec SDK from opening it. Real camera testing should use a Linux or Windows machine; on macOS, hardware connection will report `uvc_open already opened` until those daemons are killed (which macOS auto-restarts).
+
+**Linux arm64 heads-up**: copy `99-obsensor-libusb.rules` (in the downloaded zip's `Script/`) to `/etc/udev/rules.d/` once per machine and reload udev.
+
+### Remote deploy to Jetson Nano Orin
+
+Camera testing happens on Linux (macOS UVCAssistant blocks the device). Use `scripts/deploy-jetson.sh` from Mac to rsync source, build & run on Jetson, and forward port 5253 back via SSH. First time, run `scripts/jetson-setup.sh` on the Jetson via `ssh -t "$JETSON_USER@$JETSON_HOST" "cd ~/HD_AMR && bash scripts/jetson-setup.sh"` (the `-t` is required so sudo can prompt for the password during .NET SDK install) — installs .NET 8 SDK and Orbbec udev rules. Target is configured via `JETSON_HOST` / `JETSON_USER` env vars. Full usage and troubleshooting in `scripts/README.md`.
+
 ## Architecture
 
 Two projects in `HD_AMR.sln`:

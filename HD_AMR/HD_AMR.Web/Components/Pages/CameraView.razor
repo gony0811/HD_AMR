@@ -1,0 +1,164 @@
+@page "/camera"
+@rendermode InteractiveServer
+@using HD_AMR.Communication
+@using HD_AMR.Service
+@inject CameraService Svc
+@implements IDisposable
+
+<PageTitle>Camera</PageTitle>
+
+<h1>Gemini 2 깊이 카메라</h1>
+
+<div class="mb-3">
+    <span class="badge @(Svc.IsConnected ? "bg-success" : "bg-secondary")">연결 @(Svc.IsConnected ? "정상" : "끊김")</span>
+    <span class="badge @(Svc.IsStreaming ? "bg-success" : "bg-secondary")">스트림 @(Svc.IsStreaming ? "활성" : "정지")</span>
+    <span class="text-muted ms-2">
+        @Svc.Settings.ColorWidth×@Svc.Settings.ColorHeight @@@Svc.Settings.ColorFps fps
+        · 깊이 @Svc.Settings.DepthMinMm~@Svc.Settings.DepthMaxMm mm
+        @if (Svc.IsStreaming)
+        {
+            <span> · 추정 FPS @_estimatedFps.ToString("0.0")</span>
+        }
+    </span>
+</div>
+
+<div class="mb-3">
+    <button class="btn btn-success" @onclick="StartStream" disabled="@(_busy || !Svc.IsConnected || Svc.IsStreaming)">시작</button>
+    <button class="btn btn-warning" @onclick="StopStream" disabled="@(_busy || !Svc.IsStreaming)">정지</button>
+    <button class="btn btn-outline-secondary" @onclick="Reconnect" disabled="@_busy">재연결</button>
+</div>
+
+@if (Svc.IsStreaming)
+{
+    <div class="row g-3">
+        <div class="col-md-6">
+            <h5 class="text-muted">Color</h5>
+            <img src="/camera/color.mjpeg?k=@_streamKey" alt="Color stream"
+                 style="width:100%;max-width:640px;border:1px solid #ccc;border-radius:4px" />
+        </div>
+        <div class="col-md-6">
+            <h5 class="text-muted">Depth</h5>
+            <img src="/camera/depth.mjpeg?k=@_streamKey" alt="Depth stream"
+                 style="width:100%;max-width:640px;border:1px solid #ccc;border-radius:4px" />
+        </div>
+    </div>
+}
+else
+{
+    <div class="alert alert-secondary" style="max-width:760px">
+        스트림이 정지 상태입니다. 카메라가 연결된 뒤 <b>시작</b> 버튼을 누르거나, 자동 재연결을 기다리세요.
+    </div>
+}
+
+@if (!string.IsNullOrEmpty(_message))
+{
+    <div class="alert @(_isError ? "alert-danger" : "alert-info") mt-3" style="max-width:760px">@_message</div>
+}
+
+@code {
+    private bool _busy;
+    private string? _message;
+    private bool _isError;
+
+    // <img> src 의 쿼리스트링. 스트림 시작/재연결 시 키를 갱신해 브라우저가 새 연결을 맺도록.
+    private int _streamKey = 1;
+
+    // 추정 FPS — 1초마다 LastFrameAt 누적 카운트로 계산.
+    private double _estimatedFps;
+    private DateTime _lastSampleAt;
+    private DateTime _lastFrameSampleAt;
+
+    private CancellationTokenSource? _cts;
+
+    protected override void OnInitialized()
+    {
+        _cts = new CancellationTokenSource();
+        _ = PollLoop(_cts.Token);
+    }
+
+    private async Task PollLoop(CancellationToken ct)
+    {
+        try
+        {
+            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+            while (await timer.WaitForNextTickAsync(ct))
+            {
+                UpdateFpsEstimate();
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private void UpdateFpsEstimate()
+    {
+        var now = DateTime.UtcNow;
+        var last = Svc.LastFrameAt;
+        if (_lastSampleAt == default)
+        {
+            _lastSampleAt = now;
+            _lastFrameSampleAt = last;
+            return;
+        }
+        var elapsed = (now - _lastSampleAt).TotalSeconds;
+        if (elapsed <= 0.1) return;
+
+        // 직전 샘플 이후 새 프레임이 들어왔으면 시간 차로 FPS 추정. 없으면 0 으로 감쇠.
+        if (last > _lastFrameSampleAt)
+        {
+            _estimatedFps = 1.0 / Math.Max(0.001, (last - _lastFrameSampleAt).TotalSeconds);
+            _lastFrameSampleAt = last;
+        }
+        else
+        {
+            _estimatedFps *= 0.5; // 감쇠.
+        }
+        _lastSampleAt = now;
+    }
+
+    private async Task StartStream()
+        => await Run("스트림 시작", async () => { await Svc.StartStreamAsync(); _streamKey++; });
+
+    private async Task StopStream()
+        => await Run("스트림 정지", () => Svc.StopStreamAsync());
+
+    private async Task Reconnect()
+        => await Run("재연결", async () =>
+        {
+            await Svc.StopStreamAsync();
+            // 백그라운드 재연결 루프가 5초 안에 다시 연결을 시도한다.
+            _streamKey++;
+        });
+
+    private async Task Run(string label, Func<Task> action)
+    {
+        if (_busy) return;
+        _busy = true;
+        _message = null;
+        try
+        {
+            await action();
+            Notify($"{label} 완료", false);
+        }
+        catch (Exception ex)
+        {
+            Notify($"{label} 실패: {ex.Message}", true);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void Notify(string msg, bool error)
+    {
+        _message = msg;
+        _isError = error;
+    }
+
+    public void Dispose()
+    {
+        _cts?.Cancel();
+        _cts?.Dispose();
+    }
+}

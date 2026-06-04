@@ -1,0 +1,188 @@
+using System.Runtime.InteropServices;
+using HD_AMR.Communication;
+using HD_AMR.Models;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Formats.Jpeg;
+using SixLabors.ImageSharp.PixelFormats;
+
+namespace HD_AMR.Service;
+
+/// <summary>
+/// Orbbec Gemini 2 깊이 카메라 연결을 유지하는 백그라운드 서비스. <see cref="CobotService"/>·
+/// <see cref="AMRService"/> 와 동일하게 5초 재연결 루프. 컬러/깊이 최신 프레임을
+/// <see cref="OrbbecGeminiClient"/> 에서 노출하고, JPEG 인코딩(컬러: ImageSharp 로 RGB24→JPEG,
+/// 깊이: 선형 cold→hot LUT 적용 후 JPEG) 헬퍼를 MJPEG 엔드포인트에 제공한다.
+/// </summary>
+public class CameraService : BackgroundService
+{
+    private readonly OrbbecGeminiSettings _settings;
+    private readonly OrbbecGeminiClient _client;
+    private readonly ILogger<CameraService> _logger;
+
+    public CameraService(IOptions<OrbbecGeminiSettings> options, ILoggerFactory loggerFactory)
+    {
+        _settings = options.Value;
+        _logger = loggerFactory.CreateLogger<CameraService>();
+        _client = new OrbbecGeminiClient(_settings, loggerFactory.CreateLogger<OrbbecGeminiClient>());
+    }
+
+    public bool IsConnected => _client.IsConnected;
+    public bool IsStreaming => _client.IsStreaming;
+    public OrbbecGeminiSettings Settings => _settings;
+    public CameraFrame? LatestColor => _client.LatestColor;
+    public CameraFrame? LatestDepth => _client.LatestDepth;
+    public DateTime LastFrameAt => _client.LastFrameAt;
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        _logger.LogInformation("CameraService 시작 (device={Serial})",
+            string.IsNullOrWhiteSpace(_settings.DeviceSerial) ? "<first>" : _settings.DeviceSerial);
+
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
+            {
+                if (!_client.IsConnected)
+                {
+                    _logger.LogWarning("Orbbec 카메라 연결 시도");
+                    await _client.ConnectAsync(stoppingToken);
+                }
+                if (_client.IsConnected && !_client.IsStreaming)
+                {
+                    await _client.StartStreamAsync(stoppingToken);
+                    // 프레임 수신 루프는 Run 메서드가 완료될 때까지 백그라운드로 돈다. 끊기면
+                    // 다음 5초 틱에서 IsStreaming==false 가 되어 재시도.
+                    _ = _client.RunAsync(stoppingToken);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (DllNotFoundException ex)
+            {
+                _logger.LogError(ex,
+                    "Orbbec 네이티브 라이브러리(libOrbbecSDK)를 찾을 수 없습니다 — 카메라는 비활성 상태로 유지됩니다.");
+                // 네이티브가 없으면 재시도해도 결과가 같으므로 한 박자 길게 쉰다.
+                await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
+                continue;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Orbbec 카메라 연결 실패 — {Sec}초 후 재시도",
+                    _settings.ReconnectDelayMs / 1000);
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(_settings.ReconnectDelayMs), stoppingToken);
+        }
+    }
+
+    public Task StartStreamAsync(CancellationToken ct = default) => _client.StartStreamAsync(ct);
+    public Task StopStreamAsync(CancellationToken ct = default) => _client.StopStreamAsync(ct);
+
+    /// <summary>최신 컬러 프레임을 JPEG 바이트로 반환한다. 프레임이 없으면 null.
+    /// PixelFormat 이 <c>"mjpg"</c> 이면 카메라가 이미 JPEG 으로 인코딩해 보내준 것이므로
+    /// 바이트를 그대로 패스스루(추가 인코딩 비용 없음). <c>"rgb24"</c> 이면 ImageSharp 로
+    /// 인코딩.</summary>
+    public Task<byte[]?> GetLatestColorJpegAsync(int quality, CancellationToken ct = default)
+    {
+        var f = _client.LatestColor;
+        if (f is null) return Task.FromResult<byte[]?>(null);
+        if (f.PixelFormat == "mjpg") return Task.FromResult<byte[]?>(f.Pixels);
+        return Task.Run<byte[]?>(() => EncodeRgb24ToJpeg(f, quality), ct);
+    }
+
+    /// <summary>최신 깊이 프레임을 컬러라이즈 → JPEG 인코딩한다. 프레임이 없으면 null.</summary>
+    public Task<byte[]?> GetLatestDepthJpegAsync(int quality, CancellationToken ct = default)
+    {
+        var f = _client.LatestDepth;
+        if (f is null) return Task.FromResult<byte[]?>(null);
+        return Task.Run<byte[]?>(() => EncodeDepth16ToJpeg(f, _settings.DepthMinMm, _settings.DepthMaxMm, quality), ct);
+    }
+
+    private static byte[] EncodeRgb24ToJpeg(CameraFrame f, int quality)
+    {
+        // Pixels 는 RGB888 row-major. ImageSharp 의 Image<Rgb24>.LoadPixelData 로 직접 래핑.
+        using var img = Image.LoadPixelData<Rgb24>(f.Pixels, f.Width, f.Height);
+        using var ms = new MemoryStream();
+        img.Save(ms, new JpegEncoder { Quality = Math.Clamp(quality, 1, 100) });
+        return ms.ToArray();
+    }
+
+    private static byte[] EncodeDepth16ToJpeg(CameraFrame f, int minMm, int maxMm, int quality)
+    {
+        // depth16: little-endian uint16, 0=무효(검정 처리). [minMm, maxMm] 범위를 cold→hot 으로.
+        var span = MemoryMarshal.Cast<byte, ushort>(f.Pixels);
+        var rgb = new byte[f.Width * f.Height * 3];
+        var range = Math.Max(1, maxMm - minMm);
+
+        for (int i = 0; i < span.Length; i++)
+        {
+            int d = span[i];
+            if (d == 0)
+            {
+                // 무효 픽셀: 검정 (기본값이라 별도 처리 불필요).
+                continue;
+            }
+            // [0,1] 로 정규화. 가까울수록 작은 t.
+            double t = Math.Clamp((double)(d - minMm) / range, 0.0, 1.0);
+            ColorizeColdHot(t, out var r, out var g, out var b);
+            int o = i * 3;
+            rgb[o] = r; rgb[o + 1] = g; rgb[o + 2] = b;
+        }
+
+        using var img = Image.LoadPixelData<Rgb24>(rgb, f.Width, f.Height);
+        using var ms = new MemoryStream();
+        img.Save(ms, new JpegEncoder { Quality = Math.Clamp(quality, 1, 100) });
+        return ms.ToArray();
+    }
+
+    /// <summary>
+    /// t∈[0,1] 을 cold(파랑)→cyan→green→yellow→red(hot) 5단 그라디언트로 매핑. 1차 구현용 단순 LUT,
+    /// 필요시 turbo/jet 으로 교체.
+    /// </summary>
+    private static void ColorizeColdHot(double t, out byte r, out byte g, out byte b)
+    {
+        // 가까울수록(=t 작음) 따뜻한 색, 멀수록 차가운 색이 직관적이라 t 를 반전.
+        double u = 1.0 - t;
+        // 5단계 보간.
+        double x = u * 4.0;
+        int seg = Math.Min(3, (int)x);
+        double f = x - seg;
+        (double R, double G, double B) c0, c1;
+        switch (seg)
+        {
+            case 0: c0 = (0, 0, 0.5); c1 = (0, 1, 1); break;     // 차가운 끝 → cyan
+            case 1: c0 = (0, 1, 1);  c1 = (0, 1, 0); break;       // cyan → green
+            case 2: c0 = (0, 1, 0);  c1 = (1, 1, 0); break;       // green → yellow
+            default: c0 = (1, 1, 0); c1 = (1, 0, 0); break;        // yellow → hot 끝
+        }
+        r = (byte)Math.Clamp((c0.R + (c1.R - c0.R) * f) * 255, 0, 255);
+        g = (byte)Math.Clamp((c0.G + (c1.G - c0.G) * f) * 255, 0, 255);
+        b = (byte)Math.Clamp((c0.B + (c1.B - c0.B) * f) * 255, 0, 255);
+    }
+
+    public override async Task StopAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (_client.IsStreaming) await _client.StopStreamAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "종료 중 스트림 정지 실패");
+        }
+        _client.Disconnect();
+        _logger.LogInformation("CameraService 종료");
+        await base.StopAsync(cancellationToken);
+    }
+
+    public override void Dispose()
+    {
+        _client.Dispose();
+        base.Dispose();
+    }
+}
