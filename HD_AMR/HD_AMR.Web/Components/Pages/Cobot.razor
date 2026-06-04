@@ -1,0 +1,356 @@
+@page "/cobot"
+@rendermode InteractiveServer
+@using HD_AMR.Communication
+@using HD_AMR.Service
+@inject CobotService Svc
+@implements IDisposable
+
+<PageTitle>Cobot</PageTitle>
+
+<h1>페어리노 코봇</h1>
+
+<div class="mb-3">
+    <span class="badge @(Svc.IsConnected ? "bg-success" : "bg-secondary")">명령 @(Svc.IsConnected ? "연결됨" : "끊김")</span>
+    <span class="badge @(Svc.IsStateConnected ? "bg-success" : "bg-secondary")">상태 @(Svc.IsStateConnected ? "수신중" : "끊김")</span>
+</div>
+
+    <p class="mb-2">실시간 상태:
+        <span class="badge @(Svc.IsStateConnected ? "bg-success" : "bg-secondary")">
+            @(Svc.IsStateConnected ? "수신중" : "미수신")
+        </span>
+    </p>
+
+    <hr />
+    <h4>좌표계 변경</h4>
+    <div class="row g-2" style="max-width:760px">
+        <div class="col-auto">
+            <label class="form-label">번호(id)</label>
+            <input class="form-control" type="number" @bind="_frameId" style="width:90px" />
+        </div>
+        @for (int i = 0; i < 6; i++)
+        {
+            var idx = i;
+            <div class="col-auto">
+                <label class="form-label">@PoseLabels[idx]</label>
+                <input class="form-control" type="number" step="0.1" @bind="_frame[idx]" style="width:100px" />
+            </div>
+        }
+    </div>
+    <div class="mt-2">
+        <button class="btn btn-outline-secondary" @onclick="LoadToolCoord" disabled="@(_busy || !Svc.IsConnected)">공구 불러오기</button>
+        <button class="btn btn-outline-secondary" @onclick="LoadWObjCoord" disabled="@(_busy || !Svc.IsConnected)">작업물 불러오기</button>
+        <span class="mx-2">|</span>
+        <button class="btn btn-primary" @onclick="SetToolCoord" disabled="@_busy">공구 좌표계 설정 (SetToolCoord)</button>
+        <button class="btn btn-outline-primary" @onclick="SetWObjCoord" disabled="@_busy">사용자 좌표계 설정 (SetWObjCoord)</button>
+    </div>
+    <p class="text-muted mt-1" style="max-width:760px"><small>⚠ 설정 전에 반드시 '불러오기'로 현재 값을 확인·수정하세요. 빈 값(0)으로 설정하면 기존 좌표계가 0으로 덮어써집니다.</small></p>
+
+    <hr />
+    <h4>이동</h4>
+    <div class="row g-2" style="max-width:760px">
+        @for (int i = 0; i < 6; i++)
+        {
+            var idx = i;
+            <div class="col-auto">
+                <label class="form-label">@PoseLabels[idx]</label>
+                <input class="form-control" type="number" step="0.1" @bind="_target[idx]" style="width:100px" />
+            </div>
+        }
+    </div>
+    <div class="row g-2 mt-1 align-items-end" style="max-width:900px">
+        <div class="col-auto">
+            <label class="form-label">공구(tool)</label>
+            <input class="form-control" type="number" min="0" max="15" @bind="_moveTool" style="width:90px" />
+        </div>
+        <div class="col-auto">
+            <label class="form-label">작업물(user)</label>
+            <input class="form-control" type="number" min="0" max="14" @bind="_moveUser" style="width:90px" />
+        </div>
+        <div class="col-auto">
+            <label class="form-label">속도(%) : @_vel</label>
+            <input type="range" class="form-range" min="1" max="100" @bind="_vel" style="width:160px" />
+        </div>
+        <div class="col-auto">
+            <button class="btn btn-success" @onclick="MoveL" disabled="@(_busy || !Svc.IsConnected)">MoveL (직선)</button>
+            <button class="btn btn-warning" @onclick="UseCurrentPose" disabled="@_busy">현재 포즈 불러오기</button>
+            <button class="btn btn-danger" @onclick="StopRpc">정지 (StopMotion)</button>
+        </div>
+    </div>
+    <p class="text-muted mt-1" style="max-width:900px"><small>⚠ 공구 번호는 로봇의 현재 활성 공구와 같게 두세요. 다르면 TCP가 바뀌어 엉뚱한 위치로 이동합니다.</small></p>
+
+    <hr />
+    <h4>작업물 좌표계 교시 (3점법)</h4>
+    <div class="row g-2 align-items-end mb-2" style="max-width:900px">
+        <div class="col-auto">
+            <label class="form-label">작업물 번호(id)</label>
+            <input class="form-control" type="number" min="0" max="14" @bind="_wobjId" style="width:120px" />
+        </div>
+        <div class="col-auto">
+            <label class="form-label">계산법</label>
+            <select class="form-select" @bind="_wobjMethod" style="width:210px">
+                <option value="0">0: 원점-X축-Z축</option>
+                <option value="1">1: 원점-X축-XY평면</option>
+            </select>
+        </div>
+        <div class="col-auto">
+            <label class="form-label">측정 방식</label>
+            <select class="form-select" @bind="_teachMode" style="width:150px">
+                <option value="jog">조그-캡처</option>
+                <option value="manual">수동 입력</option>
+            </select>
+        </div>
+    </div>
+
+    @for (int pi = 0; pi < 3; pi++)
+    {
+        var p = pi;
+        <div class="row g-2 align-items-end mb-1" style="max-width:900px">
+            <div class="col-auto" style="width:130px"><label class="form-label mb-0">@PointLabels[p]</label></div>
+            @if (_teachMode == "jog")
+            {
+                <div class="col-auto">
+                    <button class="btn btn-outline-primary btn-sm" @onclick="@(() => CapturePoint(p + 1))" disabled="@(_busy || !Svc.IsConnected)">현재 위치 캡처</button>
+                </div>
+                <div class="col-auto">
+                    <span class="@(_captured[p] ? "text-success" : "text-muted")">@(_captured[p] ? "캡처됨 " + FormatXyz(_points[p]) : "미캡처")</span>
+                </div>
+            }
+            else
+            {
+                @for (int k = 0; k < 6; k++)
+                {
+                    var kk = k;
+                    <div class="col-auto">
+                        <label class="form-label mb-0">@PoseLabels[kk]</label>
+                        <input class="form-control form-control-sm" type="number" step="0.1" @bind="_points[p][kk]" style="width:85px" />
+                    </div>
+                }
+            }
+        </div>
+    }
+    <div class="mt-2">
+        <button class="btn btn-primary" @onclick="RegisterWObj" disabled="@(_busy || !Svc.IsConnected)">좌표계 계산 &amp; 등록</button>
+        @if (_wobjPose is not null)
+        {
+            <span class="ms-2 text-success">등록됨 #@_wobjId : @FormatPose6(_wobjPose)</span>
+        }
+    </div>
+
+    <hr />
+    <h4>오프셋 이동 (작업물 좌표계 기준)</h4>
+    <div class="row g-2 align-items-end" style="max-width:900px">
+        <div class="col-auto">
+            <label class="form-label">공구(tool)</label>
+            <input class="form-control" type="number" min="0" max="15" @bind="_offTool" style="width:90px" />
+        </div>
+        <div class="col-auto">
+            <label class="form-label">작업물 번호(user)</label>
+            <input class="form-control" type="number" min="0" max="14" @bind="_offUser" style="width:110px" />
+        </div>
+        @for (int i = 0; i < 6; i++)
+        {
+            var idx = i;
+            <div class="col-auto">
+                <label class="form-label">@OffsetLabels[idx]</label>
+                <input class="form-control" type="number" step="0.1" @bind="_offset[idx]" style="width:85px" />
+            </div>
+        }
+    </div>
+    <div class="row g-2 align-items-end mt-1" style="max-width:900px">
+        <div class="col-auto">
+            <label class="form-label">속도(%) : @_offVel</label>
+            <input type="range" class="form-range" min="1" max="100" @bind="_offVel" style="width:180px" />
+        </div>
+        <div class="col-auto">
+            <label class="form-label">기준</label>
+            <select class="form-select" @bind="_offMode" style="width:230px">
+                <option value="origin">작업물 원점 기준 (절대)</option>
+                <option value="current">현재 위치 기준 (증분)</option>
+            </select>
+            <small class="text-muted d-block">절대 = 입력값이 작업물 좌표계 목표 위치 ([0,0,0]=원점)</small>
+        </div>
+        <div class="col-auto">
+            <button class="btn btn-success" @onclick="MoveByOffset" disabled="@(_busy || !Svc.IsConnected)">오프셋 이동</button>
+        </div>
+    </div>
+
+@if (!string.IsNullOrEmpty(_message))
+{
+    <div class="alert @(_isError ? "alert-danger" : "alert-info") mt-3" style="max-width:760px">@_message</div>
+}
+
+@code {
+    private static readonly string[] PoseLabels = { "X", "Y", "Z", "Rx", "Ry", "Rz" };
+    private static readonly string[] PointLabels = { "점1 (원점)", "점2 (X축 방향)", "점3 (평면/Z)" };
+    private static readonly string[] OffsetLabels = { "dX", "dY", "dZ", "dRx", "dRy", "dRz" };
+
+    // RPC 입력
+    private int _frameId;
+    private readonly double[] _frame = new double[6];
+    private readonly double[] _target = new double[6];
+    private int _vel = 20;
+    private int _moveTool = 1;   // 로봇 현재 활성 공구와 같게 (0으로 두면 TCP가 바뀜)
+    private int _moveUser = 0;
+
+    // 작업물 좌표계 교시
+    private int _wobjId;
+    private int _wobjMethod;                 // 0=원점-X-Z, 1=원점-X-XY평면
+    private string _teachMode = "jog";       // "jog" | "manual"
+    private readonly double[][] _points = { new double[6], new double[6], new double[6] };
+    private readonly bool[] _captured = new bool[3];
+    private double[]? _wobjPose;             // 등록된 좌표계 pose(절대 오프셋 앵커)
+
+    // 오프셋 이동
+    private int _offTool = 1;                 // 로봇 현재 활성 공구와 같게
+    private int _offUser;
+    private readonly double[] _offset = new double[6];
+    private int _offVel = 20;
+    private string _offMode = "origin";      // "origin" | "current"
+
+    private bool _busy;
+    private string? _message;
+    private bool _isError;
+
+    private CancellationTokenSource? _cts;
+
+    protected override void OnInitialized()
+    {
+        _cts = new CancellationTokenSource();
+        _ = PollLoop(_cts.Token);
+    }
+
+    private async Task PollLoop(CancellationToken ct)
+    {
+        try
+        {
+            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+            while (await timer.WaitForNextTickAsync(ct))
+            {
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    // ── RPC 동작 ───────────────────────────────────────────────────
+    private async Task LoadToolCoord()
+        => await Run($"공구 #{_frameId} 불러오기", async () =>
+        {
+            var c = await Svc.Rpc!.GetToolCoordAsync(_frameId);
+            for (int i = 0; i < 6 && i < c.Length; i++) _frame[i] = c[i];
+            return 0;
+        });
+
+    private async Task LoadWObjCoord()
+        => await Run($"작업물 #{_frameId} 불러오기", async () =>
+        {
+            var c = await Svc.Rpc!.GetWObjCoordAsync(_frameId);
+            for (int i = 0; i < 6 && i < c.Length; i++) _frame[i] = c[i];
+            return 0;
+        });
+
+    private async Task SetToolCoord()
+        => await Run("공구 좌표계 설정", () => Svc.Rpc!.SetToolCoordAsync(_frameId, (double[])_frame.Clone()));
+
+    private async Task SetWObjCoord()
+        => await Run("사용자 좌표계 설정", () => Svc.Rpc!.SetWObjCoordAsync(_frameId, (double[])_frame.Clone()));
+
+    private async Task MoveL()
+        => await Run("MoveL", () => Svc.Rpc!.MoveLAsync((double[])_target.Clone(), tool: _moveTool, user: _moveUser, vel: _vel));
+
+    private async Task StopRpc()
+        => await Run("정지", () => Svc.Rpc!.StopMotionAsync());
+
+    // ── 작업물 좌표계 교시 ─────────────────────────────────────────
+    private async Task CapturePoint(int pointNum)
+    {
+        if (!Svc.IsConnected) { Notify("연결되지 않았습니다.", true); return; }
+        await Run($"점{pointNum} 캡처", async () =>
+        {
+            var rc = await Svc.Rpc!.SetWObjCoordPointAsync(pointNum);
+            try
+            {
+                var pose = await Svc.Rpc!.GetTcpPoseAsync();
+                for (int k = 0; k < 6 && k < pose.Length; k++) _points[pointNum - 1][k] = pose[k];
+            }
+            catch { /* 표시용 조회 실패는 무시 */ }
+            _captured[pointNum - 1] = true;
+            return rc;
+        });
+    }
+
+    private async Task RegisterWObj()
+        => await Run("작업물 좌표계 등록", async () =>
+        {
+            _wobjPose = _teachMode == "jog"
+                ? await Svc.Rpc!.RegisterWObjFromTeachingAsync(_wobjId, _wobjMethod)
+                : await Svc.Rpc!.RegisterWObjFromPointsAsync(_wobjId,
+                    (double[])_points[0].Clone(), (double[])_points[1].Clone(), (double[])_points[2].Clone(), _wobjMethod);
+            _offUser = _wobjId; // 편의: 방금 등록한 번호를 오프셋 이동 user로
+            return 0;
+        });
+
+    // ── 오프셋 이동 ────────────────────────────────────────────────
+    private async Task MoveByOffset()
+    {
+        if (!Svc.IsConnected) { Notify("연결되지 않았습니다.", true); return; }
+        await Run("오프셋 이동", async () =>
+        {
+            if (_offMode == "origin")
+            {
+                // 절대: 입력값이 곧 작업물 좌표계(user)에서의 목표 위치. [0,0,0,0,0,0]=원점.
+                return await Svc.Rpc!.MoveLAsync((double[])_offset.Clone(),
+                    tool: _offTool, user: _offUser, vel: _offVel, acc: 100, ovl: 100, blendR: -1);
+            }
+            // 증분: 현재 베이스 포즈에 작업물 좌표계 축으로 offset 적용(offset_flag=1).
+            var current = await Svc.Rpc!.GetTcpPoseAsync();
+            return await Svc.Rpc!.MoveByOffsetAsync(current, _offUser, (double[])_offset.Clone(), tool: _offTool, vel: _offVel);
+        });
+    }
+
+    private static string FormatXyz(double[] p) => $"({p[0]:0.0}, {p[1]:0.0}, {p[2]:0.0})";
+    private static string FormatPose6(double[] p) => string.Join(", ", p.Select(v => v.ToString("0.0")));
+
+    private async Task UseCurrentPose()
+    {
+        if (!Svc.IsConnected) { Notify("연결되지 않았습니다.", true); return; }
+        await Run("현재 포즈 조회", async () =>
+        {
+            var pose = await Svc.Rpc!.GetTcpPoseAsync();
+            for (int i = 0; i < 6 && i < pose.Length; i++) _target[i] = pose[i];
+            return 0;
+        });
+    }
+
+    private async Task Run(string label, Func<Task<int>> action)
+    {
+        if (_busy) return;
+        _busy = true;
+        _message = null;
+        try
+        {
+            var rc = await action();
+            Notify($"{label} 완료 (rc={rc})", rc != 0);
+        }
+        catch (Exception ex)
+        {
+            Notify($"{label} 실패: {ex.Message}", true);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void Notify(string msg, bool error)
+    {
+        _message = msg;
+        _isError = error;
+    }
+
+    public void Dispose()
+    {
+        _cts?.Cancel();
+        _cts?.Dispose();
+    }
+}

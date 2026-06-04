@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "web",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": ["run", "--project", "C:\\source\\HD_AMR\\HD_AMR\\HD_AMR.Web", "--launch-profile", "http"],
+      "port": 5253
+    }
+  ]
+}

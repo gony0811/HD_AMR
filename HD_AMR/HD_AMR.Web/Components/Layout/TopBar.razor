@@ -1,3 +1,7 @@
+@using HD_AMR.Service
+@inject CobotService Cobot
+@implements IDisposable
+
 <div class="tb-root px-4">
     <div class="tb-left">
         <div class="tb-group">
@@ -7,12 +11,10 @@
             <span class="tb-badge tb-badge-value">@AmrValue</span>
         </div>
 
-        @* Cobot — style only; no service wired *@
         <div class="tb-group">
             <span class="tb-icon tb-icon-gear" aria-hidden="true"></span>
             <span class="tb-label">Cobot</span>
-            <span class="tb-badge tb-badge-off">@CobotStatus</span>
-            <span class="tb-badge tb-badge-value">@CobotValue</span>
+            <span class="tb-badge @(Cobot.IsConnected ? "tb-badge-on" : "tb-badge-off")">@(Cobot.IsConnected ? "연결" : "미연결")</span>
         </div>
 
         <div class="tb-group tb-lamp">
@@ -36,10 +38,33 @@
 @code {
     [Parameter] public string AmrStatus { get; set; } = "OFF";
     [Parameter] public string AmrValue { get; set; } = "--";
-    [Parameter] public string CobotStatus { get; set; } = "OFF";
-    [Parameter] public string CobotValue { get; set; } = "--";
     [Parameter] public bool LampRed { get; set; }
     [Parameter] public bool LampYellow { get; set; }
     [Parameter] public bool LampGreen { get; set; }
     [Parameter] public int? BatteryPercent { get; set; }
+
+    private CancellationTokenSource? _cts;
+
+    protected override void OnInitialized()
+    {
+        _cts = new CancellationTokenSource();
+        _ = PollLoop(_cts.Token);
+    }
+
+    private async Task PollLoop(CancellationToken ct)
+    {
+        try
+        {
+            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+            while (await timer.WaitForNextTickAsync(ct))
+                await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    public void Dispose()
+    {
+        _cts?.Cancel();
+        _cts?.Dispose();
+    }
 }

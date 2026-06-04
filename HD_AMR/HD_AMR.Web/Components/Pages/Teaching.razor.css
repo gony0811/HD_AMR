@@ -4,6 +4,11 @@
     margin-bottom: 1.5rem;
 }
 
+.excluded-row td {
+    color: #aaa;
+    text-decoration: line-through;
+}
+
 .upload-row {
     display: flex;
     align-items: center;

@@ -10,10 +10,10 @@ namespace HD_AMR.Service;
 
 public record LineSegment(double X1, double Y1, double X2, double Y2);
 
+public record PointMarker(double X, double Y);
+
 public class DrawingService
 {
-    private const double SegmentLengthMm = 10.0;
-
     private readonly HdAmrDbContext _db;
     private readonly DrawingStorageOptions _options;
     private readonly IDwgConverter _converter;
@@ -169,46 +169,30 @@ public class DrawingService
         return false;
     }
 
-    public async Task<List<DrawingSegment>> AnalyzeAsync(int drawingId, CancellationToken ct = default)
+    /// <summary>DXF의 POINT 엔티티를 추출한다. (선 없이 점만 있는 도면 대응)</summary>
+    public List<PointMarker> GetPoints(Drawing drawing)
     {
-        var drawing = await _db.Drawings.Include(d => d.Segments).FirstOrDefaultAsync(d => d.Id == drawingId, ct)
-            ?? throw new InvalidOperationException($"Drawing {drawingId} not found");
+        if (string.IsNullOrEmpty(drawing.DxfPath)) return new();
+        var fullPath = Path.Combine(_options.UploadDirectory, drawing.DxfPath);
+        if (!File.Exists(fullPath)) return new();
 
-        if (string.IsNullOrEmpty(drawing.DxfPath))
-            throw new InvalidOperationException(drawing.ConversionError ?? "DXF가 없어 분석할 수 없습니다.");
+        var doc = DxfDocument.Load(fullPath);
+        if (doc == null) return new();
 
-        var lines = GetLines(drawing);
+        var points = ExtractPoints(doc);
 
-        if (drawing.Segments.Count > 0)
-        {
-            _db.DrawingSegments.RemoveRange(drawing.Segments);
-            drawing.Segments.Clear();
-        }
+        var regions = drawing.ExcludedRegions;
+        if (regions == null || regions.Count == 0) return points;
 
-        int number = 1;
-        foreach (var ln in lines)
-        {
-            foreach (var seg in SplitLine(ln, SegmentLengthMm))
-            {
-                _db.DrawingSegments.Add(new DrawingSegment
-                {
-                    DrawingId = drawing.Id,
-                    Number = number++,
-                    StartX = seg.X1,
-                    StartY = seg.Y1,
-                    EndX = seg.X2,
-                    EndY = seg.Y2
-                });
-            }
-        }
+        return points.Where(p => !IsPointInsideAnyRegion(p, regions)).ToList();
+    }
 
-        await _db.SaveChangesAsync(ct);
-
-        return await _db.DrawingSegments
-            .Where(s => s.DrawingId == drawingId)
-            .OrderBy(s => s.Number)
-            .AsNoTracking()
-            .ToListAsync(ct);
+    private static bool IsPointInsideAnyRegion(PointMarker p, IReadOnlyList<ExcludedRegion> regions)
+    {
+        foreach (var r in regions)
+            if (p.X >= r.MinX && p.X <= r.MaxX && p.Y >= r.MinY && p.Y <= r.MaxY)
+                return true;
+        return false;
     }
 
     public async Task DeleteAsync(int id, CancellationToken ct = default)
@@ -220,34 +204,6 @@ public class DrawingService
             TryDelete(Path.Combine(_options.UploadDirectory, drawing.DxfPath));
         _db.Drawings.Remove(drawing);
         await _db.SaveChangesAsync(ct);
-    }
-
-    internal static IEnumerable<LineSegment> SplitLine(LineSegment line, double stepMm)
-    {
-        var dx = line.X2 - line.X1;
-        var dy = line.Y2 - line.Y1;
-        var length = Math.Sqrt(dx * dx + dy * dy);
-        if (length <= 0) yield break;
-
-        var ux = dx / length;
-        var uy = dy / length;
-
-        int full = (int)Math.Floor(length / stepMm);
-        for (int i = 0; i < full; i++)
-        {
-            var sx = line.X1 + i * stepMm * ux;
-            var sy = line.Y1 + i * stepMm * uy;
-            var ex = line.X1 + (i + 1) * stepMm * ux;
-            var ey = line.Y1 + (i + 1) * stepMm * uy;
-            yield return new LineSegment(sx, sy, ex, ey);
-        }
-        var remainder = length - full * stepMm;
-        if (remainder > 1e-9)
-        {
-            var sx = line.X1 + full * stepMm * ux;
-            var sy = line.Y1 + full * stepMm * uy;
-            yield return new LineSegment(sx, sy, line.X2, line.Y2);
-        }
     }
 
     private static List<LineSegment> ExtractLines(DxfDocument doc)
@@ -280,6 +236,69 @@ public class DrawingService
         }
 
         return result;
+    }
+
+    private static List<PointMarker> ExtractPoints(DxfDocument doc)
+    {
+        var result = new List<PointMarker>();
+        var identity = Transform2D.Identity;
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var p in doc.Entities.Points)
+            AddPoint(result, p, identity);
+
+        foreach (var ins in doc.Entities.Inserts)
+            ExpandInsertPoints(result, ins, identity, visited);
+
+        if (result.Count == 0)
+        {
+            foreach (var block in doc.Blocks)
+            {
+                if (IsLayoutBlock(block.Name)) continue;
+                FlattenBlockPoints(result, block, identity, visited);
+            }
+        }
+
+        return result;
+    }
+
+    private static void ExpandInsertPoints(List<PointMarker> result, Insert ins, Transform2D parent, HashSet<string> visited)
+    {
+        var block = ins.Block;
+        if (block == null) return;
+        var name = block.Name ?? "";
+        if (!visited.Add(name)) return;
+        try
+        {
+            var local = Transform2D.Compose(parent, Transform2D.FromInsert(ins));
+            foreach (var e in block.Entities)
+            {
+                if (e is netDxf.Entities.Point pt) AddPoint(result, pt, local);
+                else if (e is Insert child) ExpandInsertPoints(result, child, local, visited);
+            }
+        }
+        finally { visited.Remove(name); }
+    }
+
+    private static void FlattenBlockPoints(List<PointMarker> result, Block block, Transform2D t, HashSet<string> visited)
+    {
+        var name = block.Name ?? "";
+        if (!visited.Add(name)) return;
+        try
+        {
+            foreach (var e in block.Entities)
+            {
+                if (e is netDxf.Entities.Point pt) AddPoint(result, pt, t);
+                else if (e is Insert child) ExpandInsertPoints(result, child, t, visited);
+            }
+        }
+        finally { visited.Remove(name); }
+    }
+
+    private static void AddPoint(List<PointMarker> result, netDxf.Entities.Point p, Transform2D t)
+    {
+        var (x, y) = t.Apply(p.Position.X, p.Position.Y);
+        result.Add(new PointMarker(x, y));
     }
 
     private static bool IsLayoutBlock(string? name) =>

@@ -13,6 +13,7 @@
       <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.5" />
       <PackageReference Include="netDxf.netstandard" Version="3.0.1" />
       <PackageReference Include="NModbus" Version="3.0.81" />
+      <PackageReference Include="Horizon.XmlRpc.Client" Version="2.5.2" />
     </ItemGroup>
 
 </Project>

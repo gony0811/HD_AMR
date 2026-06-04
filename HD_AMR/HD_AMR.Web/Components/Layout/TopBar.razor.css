@@ -58,6 +58,11 @@
     color: #ffffff;
 }
 
+.tb-badge-on {
+    background-color: #16a34a;
+    color: #ffffff;
+}
+
 .tb-badge-value {
     background-color: #6b7280;
     color: #ffffff;

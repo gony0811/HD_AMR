@@ -2,10 +2,13 @@
 @rendermode InteractiveServer
 @using HD_AMR.Data.Entities
 @using HD_AMR.Service
+@using HD_AMR.Communication
 @using Microsoft.JSInterop
 @inject DrawingService Service
+@inject CobotService Cobot
 @inject IJSRuntime JS
 @inject ILogger<Teaching> Logger
+@implements IDisposable
 
 <PageTitle>Teaching</PageTitle>
 
@@ -77,7 +80,7 @@
                 <div>@selected.ConversionError</div>
             </div>
         }
-        @if (previewLines.Count == 0 && selected.ExcludedRegions.Count == 0)
+        @if (previewPoints.Count == 0 && selected.ExcludedRegions.Count == 0)
         {
             <p><em>도면을 미리볼 수 없습니다.</em></p>
         }
@@ -106,9 +109,7 @@
                  @onmousedown="OnSvgMouseDown"
                  @onmousemove="OnSvgMouseMove"
                  @onmouseup="OnSvgMouseUp"
-                 @onmouseleave="OnSvgMouseLeave"
-                 @onwheel="OnSvgWheel"
-                 @onwheel:preventDefault="true">
+                 @onmouseleave="OnSvgMouseLeave">
                 @foreach (var r in selected.ExcludedRegions)
                 {
                     <rect class="region-rect"
@@ -116,18 +117,18 @@
                           width="@F(r.MaxX - r.MinX)" height="@F(r.MaxY - r.MinY)"
                           stroke-width="@F(strokeWidth)" />
                 }
-                @foreach (var ln in previewLines)
+                @foreach (var p in _thinned)
                 {
-                    <line x1="@F(ln.X1)" y1="@F(-ln.Y1)" x2="@F(ln.X2)" y2="@F(-ln.Y2)"
-                          stroke="#0d6efd" stroke-width="@F(strokeWidth)"
-                          pointer-events="none" />
+                    <circle cx="@F(p.X)" cy="@F(-p.Y)" r="@F(pointRadius)"
+                            fill="#0d6efd" pointer-events="none" />
                 }
-                @foreach (var s in selected.Segments)
+                @if (_selectedWpIndex >= 0 && _selectedWpIndex < _thinned.Count)
                 {
-                    <line x1="@F(s.StartX)" y1="@F(-s.StartY)" x2="@F(s.EndX)" y2="@F(-s.EndY)"
-                          stroke="#dc3545" stroke-width="@F(strokeWidth * 1.2)"
-                          stroke-dasharray="@F(strokeWidth * 2),@F(strokeWidth)"
-                          pointer-events="none" />
+                    var sp = _thinned[_selectedWpIndex];
+                    <circle cx="@F(sp.X)" cy="@F(-sp.Y)" r="@F(pointRadius * 3)"
+                            fill="none" stroke="#dc3545" stroke-width="@F(strokeWidth * 1.5)" pointer-events="none" />
+                    <circle cx="@F(sp.X)" cy="@F(-sp.Y)" r="@F(pointRadius * 1.2)"
+                            fill="#dc3545" pointer-events="none" />
                 }
                 @if (isDragging)
                 {
@@ -144,21 +145,11 @@
             </svg>
         }
         <div class="actions">
-            <button class="btn btn-success"
-                    disabled="@(isAnalyzing || string.IsNullOrEmpty(selected.DxfPath))"
-                    title="@(string.IsNullOrEmpty(selected.DxfPath) ? "DXF가 없어 분석할 수 없습니다" : null)"
-                    @onclick="AnalyzeAsync">
-                @(isAnalyzing ? "분석 중..." : "분석")
-            </button>
             <button class="btn btn-outline-secondary"
                     disabled="@(isClearingRegions || selected.ExcludedRegions.Count == 0)"
                     @onclick="OnClearRegions">
                 @(isClearingRegions ? "초기화 중..." : $"선택 마스크 초기화 ({selected.ExcludedRegions.Count})")
             </button>
-            @if (!string.IsNullOrEmpty(analyzeMessage))
-            {
-                <span class="analyze-message @(analyzeIsError ? "err" : "ok")">@analyzeMessage</span>
-            }
         </div>
 
         <div class="delete-row">
@@ -180,14 +171,62 @@
             }
         </div>
 
-        <h3>분석 결과</h3>
-        @if (regionsChangedSinceAnalysis)
+        <h3>경유점 (Teaching Waypoints)</h3>
+        <div class="actions">
+            <label class="form-label me-1">직선 간격(mm)</label>
+            <input type="number" step="1" min="0" style="width:80px" @bind="_spacingMm" @bind:after="RecomputeThinned" />
+            <label class="form-label ms-3 me-1">코로게이션 판정각(°)</label>
+            <input type="number" step="1" min="0" style="width:80px" @bind="_corrugThresholdDeg" @bind:after="RecomputeThinned" />
+            <label class="form-label ms-3 me-1">코로게이션 분할각(°)</label>
+            <input type="number" step="1" min="0" style="width:80px" @bind="_corrugStepDeg" @bind:after="RecomputeThinned" />
+            <span class="ms-2">전체 @(previewPoints.Count)개 → 솎은 @(_thinned.Count)개 → 실행 @(IncludedCount())개 (|θ| ≤ @F(_thMax)° 만)</span>
+        </div>
+        <p class="hint">분할: 직선 구간은 '직선 간격(mm)' 거리로, 코로게이션 구간(이전 점↔앞 점 선분의 |수평 대비 기울기| ≥ '판정각')은 '분할각(°)'(그 기울기가 그만큼 바뀔 때마다)으로 솎습니다. 표의 행을 클릭하면 도면에 빨간색으로 표시되고, X/Z/θ 칸은 직접 수정할 수 있습니다. θ를 직접 입력하면 자동 계산값 대신 그 값이 적용됩니다(실행·ry에 즉시 반영). 각 행의 '이동' 버튼으로 해당 경유점으로 개별 이동합니다. ⚠ 간격·판정각·분할각을 바꾸면 다시 솎여 수정값(θ 포함)이 초기화됩니다.
+            @if (_selectedWpIndex >= 0 && _selectedWpIndex < _thinned.Count)
+            {
+                <span> — 선택: #@(_selectedWpIndex + 1) (X=@F(_thinned[_selectedWpIndex].X), Z=@F(_thinned[_selectedWpIndex].Y))</span>
+            }
+        </p>
+
+        @* ── 코봇 실행 패널 ── *@
+        <div class="cobot-run" style="margin:10px 0; padding:10px; border:1px solid #ccc; border-radius:6px; max-width:900px">
+            <strong>코봇 실행 (작업물 좌표계 / 레퍼런스 재현)</strong>
+            @if (!Cobot.IsConnected)
+            {
+                <div class="hint">⚠ 코봇 RPC 미연결.</div>
+            }
+            <div class="row g-2 align-items-end mt-1">
+                <div class="col-auto"><label class="form-label">공구(tool)</label>
+                    <input class="form-control" type="number" min="0" max="15" style="width:80px" @bind="_runTool" /></div>
+                <div class="col-auto"><label class="form-label">작업물(user)</label>
+                    <input class="form-control" type="number" min="0" max="14" style="width:80px" @bind="_runUser" /></div>
+                <div class="col-auto"><label class="form-label">속도(%)</label>
+                    <input class="form-control" type="number" min="1" max="100" style="width:80px" @bind="_runVel" /></div>
+                <div class="col-auto"><label class="form-label">지연(초)</label>
+                    <input class="form-control" type="number" step="0.1" min="0" style="width:90px" @bind="_delaySec" /></div>
+                <div class="col-auto"><label class="form-label">th_max(°)</label>
+                    <input class="form-control" type="number" step="1" min="0" style="width:80px" @bind="_thMax" /></div>
+                <div class="col-auto form-check" style="padding-top:28px">
+                    <input class="form-check-input" type="checkbox" id="goHome" @bind="_moveHomeFirst" />
+                    <label class="form-check-label" for="goHome">시작 시 원점 이동</label>
+                </div>
+                <div class="col-auto">
+                    <button class="btn btn-success" @onclick="RunWaypoints"
+                            disabled="@(_isRunning || _thinned.Count < 2 || !Cobot.IsConnected)">
+                        @(_isRunning ? "실행 중..." : "실행")
+                    </button>
+                    <button class="btn btn-danger" @onclick="StopRun" disabled="@(!_isRunning)">정지</button>
+                </div>
+            </div>
+            @if (!string.IsNullOrEmpty(_runMessage))
+            {
+                <div class="analyze-message @(_runIsError ? "err" : "ok") mt-1">@_runMessage</div>
+            }
+        </div>
+
+        @if (_thinned.Count == 0)
         {
-            <p class="hint">선택 영역이 변경되어 이전 분석 결과가 비워졌습니다. "분석"을 다시 눌러주세요.</p>
-        }
-        @if (selected.Segments.Count == 0)
-        {
-            <p>분석 결과가 없습니다. "분석" 버튼을 눌러 10mm 단위로 분할하세요.</p>
+            <p>표시할 점이 없습니다. (DXF에 POINT 엔티티가 없거나 모두 마스크로 제외됨)</p>
         }
         else
         {
@@ -195,17 +234,35 @@
                 <thead>
                     <tr>
                         <th>번호</th>
-                        <th>시작 (x, y)</th>
-                        <th>끝 (x, y)</th>
+                        <th>X (mm)</th>
+                        <th>Z (mm)</th>
+                        <th>θ (°)</th>
+                        <th>ry (°)</th>
+                        <th>실행</th>
+                        <th>이동</th>
                     </tr>
                 </thead>
                 <tbody>
-                    @foreach (var s in selected.Segments)
+                    @for (int i = 0; i < _thinned.Count; i++)
                     {
-                        <tr>
-                            <td>@s.Number</td>
-                            <td>(@F(s.StartX), @F(s.StartY))</td>
-                            <td>(@F(s.EndX), @F(s.EndY))</td>
+                        var idx = i;
+                        double thetaDeg = EffectiveThetaDeg(idx);
+                        bool included = Math.Abs(thetaDeg) <= _thMax;
+                        <tr class="@((idx == _selectedWpIndex || idx == _runIndex) ? "selected" : (included ? "" : "excluded-row"))"
+                            style="cursor:pointer" @onclick="() => _selectedWpIndex = idx">
+                            <td>@(idx + 1)</td>
+                            <td><input type="number" step="0.1" style="width:100px"
+                                       value="@F(_thinned[idx].X)" @onchange="e => SetWpX(idx, e.Value)" /></td>
+                            <td><input type="number" step="0.1" style="width:100px"
+                                       value="@F(_thinned[idx].Y)" @onchange="e => SetWpZ(idx, e.Value)" /></td>
+                            <td><input type="number" step="1" style="width:90px"
+                                       value="@F(thetaDeg)" @onchange="e => SetWpTheta(idx, e.Value)"
+                                       title="@(_thetaOverrides.ContainsKey(idx) ? "수동 입력값" : "자동 계산값(수정 시 고정)")" /></td>
+                            <td>@(included ? F(thetaDeg) : "-")</td>
+                            <td>@(included ? "○" : "제외(>th_max)")</td>
+                            <td><button class="btn btn-sm btn-outline-primary"
+                                        @onclick="() => MoveToWaypointAsync(idx)" @onclick:stopPropagation="true"
+                                        disabled="@(_isRunning || !Cobot.IsConnected)">이동</button></td>
                         </tr>
                     }
                 </tbody>
@@ -220,9 +277,31 @@
     private List<Drawing>? drawings;
     private int? selectedId;
     private Drawing? selected;
-    private List<LineSegment> previewLines = new();
+    private List<PointMarker> previewPoints = new();
+    private List<PointMarker> _thinned = new();
     private string svgViewBox = "0 0 100 100";
     private double strokeWidth = 0.5;
+    private double pointRadius = 1.0;
+
+    // 경유점 솎기 + 코봇 실행
+    private double _spacingMm = 10;            // 직선 구간 분할 간격(mm)
+    private double _corrugThresholdDeg = 5;    // 코로게이션 판정각(°): 이전 점↔앞 점(i-1→i+1) 선분의 |수평 대비 기울기| ≥ 이 값이면 코로게이션
+    private double _corrugStepDeg = 5;         // 코로게이션 구간 분할각(°)
+    private double _thMax = 40;
+    private int _runTool = 1;
+    private int _runUser = 0;
+    private int _runVel = 5;
+    private double _delaySec = 0.5;
+    private bool _moveHomeFirst = true;
+    private bool _isRunning;
+    private bool _runIsError;
+    private string? _runMessage;
+    private int _runIndex = -1;
+    private int _selectedWpIndex = -1;
+    private CancellationTokenSource? _runCts;
+    // 경유점 인덱스별 θ(도) 수동 입력값. 있으면 자동 계산값(ThetaDegAt) 대신 사용한다.
+    // _thinned가 다시 솎이면(RecomputeThinned) 초기화된다(X/Z 수정값과 동일한 수명).
+    private readonly Dictionary<int, double> _thetaOverrides = new();
 
     private Microsoft.AspNetCore.Components.Forms.IBrowserFile? pendingFile;
     private string uploadName = "";
@@ -230,19 +309,15 @@
     private bool uploadIsError;
     private string? uploadMessage;
 
-    private bool isAnalyzing;
-    private bool analyzeIsError;
-    private string? analyzeMessage;
-
     private bool pendingDelete;
     private bool isDeleting;
     private string? deleteMessage;
 
     private ElementReference svgRef;
+    private DotNetObjectReference<Teaching>? selfRef;
     private bool isDragging;
     private double dragStartX, dragStartY, dragCurrentX, dragCurrentY;
     private bool isClearingRegions;
-    private bool regionsChangedSinceAnalysis;
 
     private double baseMinX, baseMinY, baseW = 100, baseH = 100;
     private double zoom = 1.0;
@@ -317,15 +392,14 @@
     {
         var changedDrawing = selectedId != id;
         selectedId = id;
-        analyzeMessage = null;
         pendingDelete = false;
         deleteMessage = null;
         isDragging = false;
         isPanning = false;
-        regionsChangedSinceAnalysis = false;
         selected = await Service.GetAsync(id);
         if (selected is null) return;
-        previewLines = Service.GetLines(selected);
+        previewPoints = Service.GetPoints(selected);
+        RecomputeThinned();
         if (changedDrawing)
         {
             zoom = 1.0;
@@ -358,9 +432,9 @@
             await Service.DeleteAsync(selected.Id);
             selected = null;
             selectedId = null;
-            previewLines = new();
+            previewPoints = new();
+            _thinned = new();
             pendingDelete = false;
-            analyzeMessage = null;
             uploadIsError = false;
             uploadMessage = $"삭제 완료: {deletedName}";
             await RefreshListAsync();
@@ -373,36 +447,6 @@
         finally
         {
             isDeleting = false;
-        }
-    }
-
-    private async Task AnalyzeAsync()
-    {
-        if (selected is null) return;
-        isAnalyzing = true;
-        analyzeMessage = null;
-        analyzeIsError = false;
-        try
-        {
-            await Service.AnalyzeAsync(selected.Id);
-            selected = await Service.GetAsync(selected.Id);
-            if (selected != null)
-            {
-                previewLines = Service.GetLines(selected);
-                ComputeViewBox();
-                analyzeMessage = $"{selected.Segments.Count}개의 10mm 세그먼트가 생성되었습니다.";
-                regionsChangedSinceAnalysis = false;
-            }
-        }
-        catch (Exception ex)
-        {
-            Logger.LogError(ex, "Analyze failed");
-            analyzeIsError = true;
-            analyzeMessage = $"분석 실패: {ex.Message}";
-        }
-        finally
-        {
-            isAnalyzing = false;
         }
     }
 
@@ -476,17 +520,14 @@
             selected = await Service.GetAsync(selected.Id);
             if (selected != null)
             {
-                previewLines = Service.GetLines(selected);
+                previewPoints = Service.GetPoints(selected);
+                RecomputeThinned();
                 ComputeViewBox();
-                regionsChangedSinceAnalysis = true;
-                analyzeMessage = null;
             }
         }
         catch (Exception ex)
         {
             Logger.LogError(ex, "AddRegion failed");
-            analyzeIsError = true;
-            analyzeMessage = $"영역 추가 실패: {ex.Message}";
         }
     }
 
@@ -507,17 +548,14 @@
             selected = await Service.GetAsync(selected.Id);
             if (selected != null)
             {
-                previewLines = Service.GetLines(selected);
+                previewPoints = Service.GetPoints(selected);
+                RecomputeThinned();
                 ComputeViewBox();
-                regionsChangedSinceAnalysis = false;
-                analyzeMessage = null;
             }
         }
         catch (Exception ex)
         {
             Logger.LogError(ex, "ClearRegions failed");
-            analyzeIsError = true;
-            analyzeMessage = $"영역 초기화 실패: {ex.Message}";
         }
         finally
         {
@@ -539,6 +577,253 @@
         return null;
     }
 
+    // ── 경유점 솎기 / 코봇 실행 ─────────────────────────────────────
+    private void RecomputeThinned()
+    {
+        // X축(로봇 x = DXF X) 오름차순으로 순차 정렬 후 솎기. (DXF 저장 순서가 아닌 진행 순서로 정렬)
+        var ordered = previewPoints.OrderBy(p => p.X).ThenBy(p => p.Y).ToList();
+        _thinned = ThinHybrid(ordered);
+        _selectedWpIndex = -1;
+        _thetaOverrides.Clear();
+    }
+
+    // 직선/코로게이션 구간을 구분해 분할한다.
+    //  · 코로게이션 판정: 현재 점 i의 이전 점(i-1)과 앞 점(i+1)이 이루는 선분 i-1→i+1 이 수평(X축)과
+    //    이루는 각(중앙차분 기울기)의 절댓값이 _corrugThresholdDeg 이상.
+    //  · 직선 구간: 마지막 채택점과의 거리 ≥ _spacingMm 이면 채택(거리 기준).
+    //  · 코로게이션 구간: 위 기울기가 마지막 채택 시점 대비 ≥ _corrugStepDeg 만큼 바뀌면 채택(각도 기준).
+    //  첫 점과 끝 점은 항상 포함.
+    private List<PointMarker> ThinHybrid(List<PointMarker> pts)
+    {
+        if (pts.Count <= 2) return new List<PointMarker>(pts);
+
+        var result = new List<PointMarker> { pts[0] };
+        var lastKept = pts[0];
+        double refSlope = HeadingDeg(pts[0], pts[2]); // 마지막 채택 시점의 중앙차분 기울기(코로게이션 비교 기준)
+
+        for (int i = 1; i < pts.Count - 1; i++) // 끝 점은 루프 뒤에서 항상 추가
+        {
+            // 현재 점의 이전 점(i-1)과 앞 점(i+1)이 이루는 선분 기울기(중앙차분).
+            double slope = HeadingDeg(pts[i - 1], pts[i + 1]);
+            bool corrugation = Math.Abs(slope) >= _corrugThresholdDeg;
+
+            bool keep;
+            if (corrugation)
+            {
+                keep = _corrugStepDeg <= 0 || Math.Abs(AngleDiffDeg(slope, refSlope)) >= _corrugStepDeg;
+            }
+            else
+            {
+                double dx = pts[i].X - lastKept.X;
+                double dz = pts[i].Y - lastKept.Y;
+                keep = _spacingMm <= 0 || Math.Sqrt(dx * dx + dz * dz) >= _spacingMm;
+            }
+
+            if (keep)
+            {
+                result.Add(pts[i]);
+                lastKept = pts[i];
+                refSlope = slope;
+            }
+        }
+
+        var lastPt = pts[^1];
+        if (result[^1] != lastPt) result.Add(lastPt);
+        return result;
+    }
+
+    // prev→curr 선분이 수평(X축)과 이루는 각(도). (X,Y)=로봇(x,z).
+    private static double HeadingDeg(PointMarker a, PointMarker b)
+        => Math.Atan2(b.Y - a.Y, b.X - a.X) * 180.0 / Math.PI;
+
+    // 두 각도(도)의 차를 [-180,180]로 정규화.
+    private static double AngleDiffDeg(double a, double b)
+    {
+        double d = (a - b) % 360.0;
+        if (d > 180.0) d -= 360.0;
+        else if (d < -180.0) d += 360.0;
+        return d;
+    }
+
+    // θ(도): 첫/마지막 점은 0, 중간 점은 이전 점→다음 점 선분의 법선 각도(중앙차분). (X,Y)=로봇(x,z).
+    private static double ThetaDegAt(List<PointMarker> pts, int i)
+    {
+        if (i <= 0 || i >= pts.Count - 1) return 0.0;
+        var dx = pts[i + 1].X - pts[i - 1].X;
+        var dz = pts[i + 1].Y - pts[i - 1].Y;
+        return -Math.Atan2(dz, dx) * 180.0 / Math.PI;
+    }
+
+    // 실제 적용 θ: 수동 입력값이 있으면 그 값을, 없으면 자동 계산값을 쓴다.
+    private double EffectiveThetaDeg(int i)
+        => _thetaOverrides.TryGetValue(i, out var t) ? t : ThetaDegAt(_thinned, i);
+
+    // θ 수동 수정. 입력 시 해당 경유점은 자동 계산 대신 입력값으로 고정된다.
+    private void SetWpTheta(int i, object? value)
+    {
+        if (i < 0 || i >= _thinned.Count) return;
+        if (double.TryParse(value?.ToString(), out var v))
+            _thetaOverrides[i] = v;
+    }
+
+    // 경유점 좌표 수동 수정 (record는 with로 치환). X=로봇 x, Z=로봇 z(=DXF Y).
+    private void SetWpX(int i, object? value)
+    {
+        if (i < 0 || i >= _thinned.Count) return;
+        if (double.TryParse(value?.ToString(), out var v))
+            _thinned[i] = _thinned[i] with { X = v };
+    }
+
+    private void SetWpZ(int i, object? value)
+    {
+        if (i < 0 || i >= _thinned.Count) return;
+        if (double.TryParse(value?.ToString(), out var v))
+            _thinned[i] = _thinned[i] with { Y = v };
+    }
+
+    // |θ| ≤ th_max 인 점만 이동 대상.
+    private bool IsWaypointIncluded(int i) => Math.Abs(EffectiveThetaDeg(i)) <= _thMax;
+
+    private int IncludedCount()
+    {
+        int c = 0;
+        for (int i = 0; i < _thinned.Count; i++)
+            if (Math.Abs(EffectiveThetaDeg(i)) <= _thMax) c++;
+        return c;
+    }
+
+    private async Task RunWaypoints()
+    {
+        if (_isRunning) return;
+        if (!Cobot.IsConnected)
+        {
+            _runIsError = true; _runMessage = "코봇 RPC가 연결되지 않았습니다."; return;
+        }
+        if (_thinned.Count < 2)
+        {
+            _runIsError = true; _runMessage = "실행할 경유점이 부족합니다(2개 이상 필요)."; return;
+        }
+
+        _isRunning = true;
+        _runIsError = false;
+        _runMessage = null;
+        _runIndex = -1;
+        _runCts = new CancellationTokenSource();
+        var ct = _runCts.Token;
+        var rpc = Cobot.Rpc!;
+        var delayMs = (int)Math.Round(Math.Max(0, _delaySec) * 1000);
+
+        try
+        {
+            if (_moveHomeFirst)
+            {
+                var home = await rpc.MoveLAsync(new double[6], tool: _runTool, user: _runUser,
+                    vel: _runVel, acc: 100, ovl: 100, blendR: -1, ct: ct);
+                if (home != 0)
+                {
+                    _runIsError = true; _runMessage = $"원점 이동 실패 (rc={home}) — 중단";
+                    return;
+                }
+                await Task.Delay(delayMs, ct);
+            }
+
+            int moved = 0;
+            for (int i = 0; i < _thinned.Count; i++)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                double theta = EffectiveThetaDeg(i);
+                if (Math.Abs(theta) > _thMax) continue; // th_max 초과 점은 제외
+
+                _runIndex = i;
+                double x = _thinned[i].X;
+                double z = _thinned[i].Y;
+                var pose = new[] { x, 0.0, z, 0.0, theta, 0.0 };
+
+                var rc = await rpc.MoveLAsync(pose, tool: _runTool, user: _runUser,
+                    vel: _runVel, acc: 100, ovl: 100, blendR: -1, ct: ct);
+
+                moved++;
+                _runMessage = $"#{i + 1} 이동 (rc={rc})";
+                await InvokeAsync(StateHasChanged);
+
+                if (rc != 0)
+                {
+                    _runIsError = true;
+                    _runMessage = $"#{i + 1} 점 이동 실패 (rc={rc}) — 중단";
+                    return;
+                }
+
+                await Task.Delay(delayMs, ct);
+            }
+
+            _runMessage = $"완료: {moved}개 점 이동";
+        }
+        catch (OperationCanceledException)
+        {
+            _runMessage = "사용자 정지";
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "RunWaypoints failed");
+            _runIsError = true;
+            _runMessage = $"실행 실패: {ex.Message}";
+        }
+        finally
+        {
+            _isRunning = false;
+            _runIndex = -1;
+        }
+    }
+
+    private void StopRun()
+    {
+        _runCts?.Cancel();
+        _ = Cobot.Rpc?.StopMotionAsync();
+    }
+
+    // 단일 경유점으로 개별 이동(현재 X/Z/θ 및 tool/user/속도 설정 사용). 배치 실행 중에는 무시.
+    private async Task MoveToWaypointAsync(int i)
+    {
+        if (_isRunning) return;
+        if (!Cobot.IsConnected)
+        {
+            _runIsError = true; _runMessage = "코봇 RPC가 연결되지 않았습니다."; return;
+        }
+        if (i < 0 || i >= _thinned.Count) return;
+
+        _isRunning = true;
+        _runIsError = false;
+        _runMessage = null;
+        _runIndex = i;
+        _selectedWpIndex = i;
+        try
+        {
+            var rpc = Cobot.Rpc!;
+            double x = _thinned[i].X;
+            double z = _thinned[i].Y;
+            double theta = EffectiveThetaDeg(i);
+            var pose = new[] { x, 0.0, z, 0.0, theta, 0.0 };
+
+            var rc = await rpc.MoveLAsync(pose, tool: _runTool, user: _runUser,
+                vel: _runVel, acc: 100, ovl: 100, blendR: -1);
+
+            _runIsError = rc != 0;
+            _runMessage = rc == 0 ? $"#{i + 1} 이동 완료" : $"#{i + 1} 이동 실패 (rc={rc})";
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "MoveToWaypoint failed");
+            _runIsError = true;
+            _runMessage = $"#{i + 1} 이동 실패: {ex.Message}";
+        }
+        finally
+        {
+            _isRunning = false;
+            _runIndex = -1;
+        }
+    }
+
     // Refresh both the underlying Fit extent and the effective viewBox.
     private void ComputeViewBox()
     {
@@ -548,30 +833,24 @@
 
     private void RecomputeBaseExtent()
     {
-        if (previewLines.Count == 0 && (selected?.Segments.Count ?? 0) == 0 && (selected?.ExcludedRegions.Count ?? 0) == 0)
+        if (previewPoints.Count == 0 && (selected?.ExcludedRegions.Count ?? 0) == 0)
         {
             baseMinX = 0; baseMinY = -100; baseW = 100; baseH = 100;
             strokeWidth = 0.5;
+            pointRadius = 1.0;
             return;
         }
 
         double minX = double.PositiveInfinity, minY = double.PositiveInfinity;
         double maxX = double.NegativeInfinity, maxY = double.NegativeInfinity;
-        foreach (var ln in previewLines)
+        foreach (var p in previewPoints)
         {
-            minX = Math.Min(minX, Math.Min(ln.X1, ln.X2));
-            minY = Math.Min(minY, Math.Min(ln.Y1, ln.Y2));
-            maxX = Math.Max(maxX, Math.Max(ln.X1, ln.X2));
-            maxY = Math.Max(maxY, Math.Max(ln.Y1, ln.Y2));
+            minX = Math.Min(minX, p.X);
+            minY = Math.Min(minY, p.Y);
+            maxX = Math.Max(maxX, p.X);
+            maxY = Math.Max(maxY, p.Y);
         }
-        foreach (var s in selected!.Segments)
-        {
-            minX = Math.Min(minX, Math.Min(s.StartX, s.EndX));
-            minY = Math.Min(minY, Math.Min(s.StartY, s.EndY));
-            maxX = Math.Max(maxX, Math.Max(s.StartX, s.EndX));
-            maxY = Math.Max(maxY, Math.Max(s.StartY, s.EndY));
-        }
-        foreach (var r in selected.ExcludedRegions)
+        foreach (var r in selected!.ExcludedRegions)
         {
             minX = Math.Min(minX, r.MinX);
             minY = Math.Min(minY, r.MinY);
@@ -583,6 +862,7 @@
         {
             baseMinX = 0; baseMinY = -100; baseW = 100; baseH = 100;
             strokeWidth = 0.5;
+            pointRadius = 1.0;
             return;
         }
 
@@ -597,6 +877,7 @@
         baseW = w + 2 * pad;
         baseH = h + 2 * pad;
         strokeWidth = Math.Max(w, h) * 0.003;
+        pointRadius = Math.Max(w, h) * 0.006;
     }
 
     private void BuildViewBox()
@@ -638,13 +919,13 @@
         RebuildAroundAnchor(centerSvgX, centerSvgY, 0.5, 0.5);
     }
 
-    private async Task OnSvgWheel(WheelEventArgs e)
+    // Invoked from the native (non-passive) wheel listener in teaching.js when Shift+wheel
+    // fires. The JS side computes the SVG-space anchor and passes the scroll delta, so this
+    // does not depend on Blazor's @onwheel round-trip. delta < 0 means zoom in.
+    [JSInvokable]
+    public void ZoomFromJs(double anchorSvgX, double anchorSvgY, double delta)
     {
         if (selected is null) return;
-        var pt = await GetSvgPointAsync(e.ClientX, e.ClientY);
-        if (pt is null) return;
-        var anchorSvgX = pt.Value.x;
-        var anchorSvgY = pt.Value.y;
 
         // Current viewBox in SVG coords
         var vw = baseW / zoom;
@@ -654,9 +935,10 @@
         var rx = vw > 0 ? (anchorSvgX - vx) / vw : 0.5;
         var ry = vh > 0 ? (anchorSvgY - vy) / vh : 0.5;
 
-        var factor = e.DeltaY < 0 ? 1.15 : 1.0 / 1.15;
+        var factor = delta < 0 ? 1.15 : 1.0 / 1.15;
         zoom = Math.Clamp(zoom * factor, MinZoom, MaxZoom);
         RebuildAroundAnchor(anchorSvgX, anchorSvgY, rx, ry);
+        StateHasChanged();
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -664,6 +946,8 @@
         if (selected is null) return;
         try
         {
+            selfRef ??= DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync("hdAmrTeaching.attachWheelZoom", svgRef, selfRef);
             var newValue = await JS.InvokeAsync<double>("hdAmrTeaching.mmPerPixel", svgRef);
             if (newValue > 0 && Math.Abs(newValue - mmPerPixel) > 1e-6)
             {
@@ -678,4 +962,9 @@
     }
 
     private static string F(double v) => v.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+
+    public void Dispose()
+    {
+        selfRef?.Dispose();
+    }
 }
