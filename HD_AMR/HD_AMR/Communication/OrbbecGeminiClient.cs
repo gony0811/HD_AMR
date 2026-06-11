@@ -33,8 +33,16 @@ public class OrbbecGeminiClient : IDisposable
     // 실제 카메라에서 선택된 컬러 포맷(MJPG/RGB/YUYV 등). 프레임 추출 시 어떻게 해석할지 결정.
     private int _chosenColorFormat = OrbbecNative.OB_FORMAT_UNKNOWN;
 
+    // USB 연결 협상 속도("USB2.0"/"USB3.0"/…). Gemini 2 는 USB 3.0 필요 — USB2.x 면 컨트롤
+    // 전송 실패로 프레임이 전혀 안 올 수 있어 진단용으로 노출.
+    private string? _connectionType;
+
     private volatile bool _connected;
     private volatile bool _streaming;
+
+    // 진단용: 첫 color/depth 프레임 수신 시 1회만 로그. 스트림 재시작마다 초기화.
+    private bool _loggedFirstColor;
+    private bool _loggedFirstDepth;
 
     public OrbbecGeminiClient(OrbbecGeminiSettings settings, ILogger<OrbbecGeminiClient> logger)
     {
@@ -47,6 +55,7 @@ public class OrbbecGeminiClient : IDisposable
     public CameraFrame? LatestColor => _latestColor;
     public CameraFrame? LatestDepth => _latestDepth;
     public DateTime LastFrameAt => _lastFrameAt;
+    public string? ConnectionType => _connectionType;
     public OrbbecGeminiSettings Settings => _settings;
 
     public async Task ConnectAsync(CancellationToken ct = default)
@@ -84,6 +93,19 @@ public class OrbbecGeminiClient : IDisposable
             }
             _config = OrbbecNative.CheckPtr(OrbbecNative.ob_create_config(out var cfgErr), cfgErr, "create_config");
 
+            // USB 연결 협상 속도 확인. Gemini 2(USB 3.0 카메라)가 USB 2.0 로 잡히면 디바이스
+            // 초기화 중 'receive control transfer failed' 로 깊이 보정 파라미터를 못 읽어 프레임이
+            // 전혀 안 오고 wait_for_frameset 가 영구 타임아웃이 된다 — 코드가 아닌 케이블/포트 문제.
+            ReadConnectionType();
+            if (_connectionType is not null &&
+                _connectionType.StartsWith("USB2", StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.LogWarning(
+                    "{Name} USB 2.0 연결 감지({Conn}) — Gemini 2 는 USB 3.0 필요. 프레임 미전송/컨트롤 전송 " +
+                    "실패가 발생할 수 있으니 USB 3.0 포트 + SuperSpeed 케이블 직결(허브 제거)을 권장합니다.",
+                    _settings.Name, _connectionType);
+            }
+
             // 카메라가 실제로 노출하는 프로파일을 열거하고 그 중에서 매칭 — 하드코딩된 w/h/fps/format
             // 으로 enable_video_stream 을 호출하면 카메라/SDK 의 실제 프로파일 셋과 어긋날 때
             // 'No matched profile found' 로 실패하므로 (Linux arm64 + Gemini 2 조합에서 자주 발생).
@@ -103,6 +125,14 @@ public class OrbbecGeminiClient : IDisposable
                     OrbbecNative.OB_STREAM_DEPTH, "depth",
                     preferredFormats: new[] { OrbbecNative.OB_FORMAT_Y16 });
             }
+
+            // color/depth 가 서로 다른 시점에 도착해도 각각 frameset 으로 흘러나오게 한다. 기본
+            // FULL_FRAME_REQUIRE 모드에서는 한 스트림이 누락되면 frameset 전체가 drop 되어 둘 다
+            // 화면에 안 나온다(특히 depth 의 d2c param 경고 동반 시). 개별 프레임 null 은
+            // TrySwapColor/TrySwapDepth 가 이미 안전 처리하므로 ANY_SITUATION 과 호환된다.
+            OrbbecNative.ob_config_set_frame_aggregate_output_mode(
+                _config, OrbbecNative.OB_FRAME_AGGREGATE_OUTPUT_ANY_SITUATION, out var aggErr);
+            OrbbecNative.LogIfError(_logger, aggErr, "set_frame_aggregate_output_mode");
 
             _connected = true;
             _logger.LogInformation("{Name} 연결 완료 (color={Color}, depth={Depth})",
@@ -130,6 +160,8 @@ public class OrbbecGeminiClient : IDisposable
             OrbbecNative.ob_pipeline_start_with_config(_pipeline, _config, out var err);
             OrbbecNative.ThrowIfError(err, "pipeline_start_with_config");
             _streaming = true;
+            _loggedFirstColor = false;
+            _loggedFirstDepth = false;
             _logger.LogInformation("{Name} 스트림 시작", _settings.Name);
         }
         finally
@@ -167,6 +199,7 @@ public class OrbbecGeminiClient : IDisposable
     {
         return Task.Run(() =>
         {
+            int consecutiveTimeouts = 0;
             while (!ct.IsCancellationRequested && _streaming)
             {
                 IntPtr set = IntPtr.Zero;
@@ -174,10 +207,33 @@ public class OrbbecGeminiClient : IDisposable
                 {
                     set = OrbbecNative.ob_pipeline_wait_for_frameset(_pipeline, (uint)_settings.FrameWaitTimeoutMs, out var err);
                     OrbbecNative.ThrowIfError(err, "wait_for_frameset");
-                    if (set == IntPtr.Zero) continue; // 타임아웃 — 다음 틱.
+                    if (set == IntPtr.Zero)
+                    {
+                        // 타임아웃 — 프레임이 한동안 안 오면 주기적으로 한 번씩 경고(매 30회 ≈ 30초).
+                        if (++consecutiveTimeouts % 30 == 0)
+                            _logger.LogWarning("{Name} wait_for_frameset {Count}회 연속 타임아웃 — 프레임 미수신",
+                                _settings.Name, consecutiveTimeouts);
+                        continue;
+                    }
+                    consecutiveTimeouts = 0;
 
                     if (_settings.EnableColor) TrySwapColor(set);
                     if (_settings.EnableDepth) TrySwapDepth(set);
+
+                    // 첫 color/depth 프레임을 1회씩 로그 — 어느 스트림이 실제로 들어오는지, 해상도/사이즈가
+                    // 정상인지 즉시 확인용. 원인 확정 후 Debug 레벨로 낮추거나 제거 가능.
+                    if (!_loggedFirstColor && _latestColor is { } c)
+                    {
+                        _loggedFirstColor = true;
+                        _logger.LogInformation("{Name} 첫 color 프레임 수신: {W}x{H} fmt={Fmt} size={Size}",
+                            _settings.Name, c.Width, c.Height, c.PixelFormat, c.Pixels.Length);
+                    }
+                    if (!_loggedFirstDepth && _latestDepth is { } d)
+                    {
+                        _loggedFirstDepth = true;
+                        _logger.LogInformation("{Name} 첫 depth 프레임 수신: {W}x{H} size={Size}",
+                            _settings.Name, d.Width, d.Height, d.Pixels.Length);
+                    }
 
                     _lastFrameAt = DateTime.UtcNow;
                 }
@@ -381,6 +437,34 @@ public class OrbbecGeminiClient : IDisposable
         }
     }
 
+    /// <summary>
+    /// 파이프라인에 연결된 디바이스에서 USB 연결 타입("USB2.0"/"USB3.0"/…)을 읽어 <see cref="_connectionType"/>
+    /// 에 저장한다. 실패해도 진단용 부가 정보이므로 조용히 무시. 파이프라인이 소유한 디바이스 핸들은
+    /// 빌린 것일 수 있어 삭제하지 않는다(이중 free 회피).
+    /// </summary>
+    private void ReadConnectionType()
+    {
+        try
+        {
+            var dev = OrbbecNative.ob_pipeline_get_device(_pipeline, out var devErr);
+            OrbbecNative.SafeDeleteError(devErr);
+            if (dev == IntPtr.Zero) return;
+
+            var info = OrbbecNative.ob_device_get_device_info(dev, out var infErr);
+            OrbbecNative.SafeDeleteError(infErr);
+            if (info == IntPtr.Zero) return;
+
+            var ctPtr = OrbbecNative.ob_device_info_connection_type(info, out var ctErr);
+            OrbbecNative.SafeDeleteError(ctErr);
+            _connectionType = ctPtr != IntPtr.Zero ? Marshal.PtrToStringAnsi(ctPtr) : null;
+            OrbbecNative.SafeDeleteDeviceInfo(info);
+        }
+        catch
+        {
+            // 연결 타입 조회는 부가 진단 — 실패해도 본 흐름에 영향 없음.
+        }
+    }
+
     public void Disconnect()
     {
         // _gate 이 이미 Dispose() 된 상황(중복 호출 등)에서는 Wait 가 ObjectDisposedException 을
@@ -408,6 +492,7 @@ public class OrbbecGeminiClient : IDisposable
 
         Interlocked.Exchange(ref _latestColor, null);
         Interlocked.Exchange(ref _latestDepth, null);
+        _connectionType = null;
     }
 
     public void Dispose()
@@ -435,6 +520,11 @@ internal static class OrbbecNative
     public const int OB_FORMAT_RGB = 22;
     public const int OB_FORMAT_UNKNOWN = 0xff;
 
+    // 프레임 집계(aggregate) 출력 모드 (Pipeline.h / ObTypes.h). 기본값 0 =
+    // FULL_FRAME_REQUIRE: 활성화된 모든 스트림(color+depth)의 프레임이 한 frameset 에 다
+    // 있어야만 출력 → 한 스트림이라도 프레임을 흘리면 frameset 전체가 drop 되어 둘 다 공백이 됨.
+    public const int OB_FRAME_AGGREGATE_OUTPUT_ANY_SITUATION = 2; // 한 스트림만 있어도 frameset 출력
+
     // ── 핸들 생성/소멸 ────────────────────────────────────────────────────
     [DllImport(Lib)] public static extern IntPtr ob_create_context(out IntPtr error);
     [DllImport(Lib)] public static extern void   ob_delete_context(IntPtr context, out IntPtr error);
@@ -447,11 +537,13 @@ internal static class OrbbecNative
 
     [DllImport(Lib)] public static extern IntPtr ob_device_get_device_info(IntPtr device, out IntPtr error);
     [DllImport(Lib)] public static extern IntPtr ob_device_info_serial_number(IntPtr info, out IntPtr error);
+    [DllImport(Lib, CharSet = CharSet.Ansi)] public static extern IntPtr ob_device_info_connection_type(IntPtr info, out IntPtr error);
     [DllImport(Lib)] public static extern void   ob_delete_device_info(IntPtr info, out IntPtr error);
 
     [DllImport(Lib)] public static extern IntPtr ob_create_pipeline(out IntPtr error);
     [DllImport(Lib)] public static extern IntPtr ob_create_pipeline_with_device(IntPtr device, out IntPtr error);
     [DllImport(Lib)] public static extern void   ob_delete_pipeline(IntPtr pipeline, out IntPtr error);
+    [DllImport(Lib)] public static extern IntPtr ob_pipeline_get_device(IntPtr pipeline, out IntPtr error);
 
     [DllImport(Lib)] public static extern IntPtr ob_create_config(out IntPtr error);
     [DllImport(Lib)] public static extern void   ob_delete_config(IntPtr config, out IntPtr error);
@@ -459,6 +551,7 @@ internal static class OrbbecNative
     [DllImport(Lib)] public static extern void ob_config_enable_video_stream(
         IntPtr config, int streamType, int width, int height, int fps, int format, out IntPtr error);
     [DllImport(Lib)] public static extern void   ob_config_enable_stream(IntPtr config, IntPtr profile, out IntPtr error);
+    [DllImport(Lib)] public static extern void   ob_config_set_frame_aggregate_output_mode(IntPtr config, int mode, out IntPtr error);
 
     // 스트림 프로파일 열거 — 카메라가 실제로 노출하는 프로파일을 직접 받아 매칭한다.
     [DllImport(Lib)] public static extern IntPtr ob_pipeline_get_stream_profile_list(IntPtr pipeline, int sensorType, out IntPtr error);

@@ -66,6 +66,29 @@ CREATE TABLE IF NOT EXISTS ExcludedRegions (
 CREATE INDEX IF NOT EXISTS IX_ExcludedRegions_DrawingId ON ExcludedRegions (DrawingId);
 ");
 
+    // Backward-compatible schema add for TeachingProfiles (preserves existing data).
+    db.Database.ExecuteSqlRaw(@"
+CREATE TABLE IF NOT EXISTS TeachingProfiles (
+    Id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    DrawingId INTEGER NOT NULL,
+    Name TEXT NOT NULL,
+    SpacingMm REAL NOT NULL,
+    CorrugThresholdDeg REAL NOT NULL,
+    CorrugStepDeg REAL NOT NULL,
+    RunTool INTEGER NOT NULL,
+    RunUser INTEGER NOT NULL,
+    RunVel INTEGER NOT NULL,
+    DelaySec REAL NOT NULL,
+    ThMax REAL NOT NULL,
+    MoveHomeFirst INTEGER NOT NULL,
+    WaypointsJson TEXT NOT NULL,
+    CreatedAt TEXT NOT NULL,
+    UpdatedAt TEXT NOT NULL,
+    CONSTRAINT FK_TeachingProfiles_Drawings_DrawingId FOREIGN KEY (DrawingId) REFERENCES Drawings (Id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS IX_TeachingProfiles_DrawingId ON TeachingProfiles (DrawingId);
+");
+
     var converter = scope.ServiceProvider.GetRequiredService<IDwgConverter>();
     if (!converter.IsAvailable)
     {
@@ -104,6 +127,28 @@ app.MapGet("/camera/depth.mjpeg",
     (CameraService svc, HttpContext http, CancellationToken ct) =>
         StreamMjpegAsync(http, ct, svc.Settings.MjpegFps,
             () => svc.GetLatestDepthJpegAsync(svc.Settings.JpegQuality, ct)));
+
+// 깊이 영상 hover 프로브 — 정규화 좌표 (u,v)∈[0,1] 위치의 깊이값(mm)을 반환. mm=null 이면 무효/프레임없음.
+app.MapGet("/camera/depth/value",
+    (CameraService svc, double u, double v) => Results.Json(new { mm = svc.GetLatestDepthMmAt(u, v) }));
+
+// 진단용 상태 엔드포인트 — 브라우저 DevTools 없이 프레임 수신 여부를 한눈에 확인.
+// color/depth 가 null 이 아니고 lastFrameMsAgo 가 작게 갱신되면 프레임이 들어오는 중.
+app.MapGet("/camera/status", (CameraService svc) => Results.Json(new
+{
+    svc.IsConnected,
+    svc.IsStreaming,
+    svc.ConnectionType,
+    lastFrameMsAgo = (DateTime.UtcNow - svc.LastFrameAt).TotalMilliseconds,
+    color = svc.LatestColor is null ? null : (object)new
+    {
+        svc.LatestColor.Width, svc.LatestColor.Height, svc.LatestColor.PixelFormat, len = svc.LatestColor.Pixels.Length
+    },
+    depth = svc.LatestDepth is null ? null : (object)new
+    {
+        svc.LatestDepth.Width, svc.LatestDepth.Height, len = svc.LatestDepth.Pixels.Length
+    },
+}));
 
 static async Task StreamMjpegAsync(HttpContext http, CancellationToken ct, int fps,
     Func<Task<byte[]?>> getJpeg)

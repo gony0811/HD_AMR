@@ -139,6 +139,64 @@ public class DrawingService
         await _db.SaveChangesAsync(ct);
     }
 
+    // ── Teaching 설정 프로파일 (도면별 저장/불러오기) ────────────────────
+    public Task<List<TeachingProfile>> ListProfilesAsync(int drawingId, CancellationToken ct = default) =>
+        _db.TeachingProfiles.AsNoTracking()
+            .Where(p => p.DrawingId == drawingId)
+            .OrderByDescending(p => p.UpdatedAt)
+            .ToListAsync(ct);
+
+    public Task<TeachingProfile?> GetProfileAsync(int id, CancellationToken ct = default) =>
+        _db.TeachingProfiles.AsNoTracking().FirstOrDefaultAsync(p => p.Id == id, ct);
+
+    /// <summary>프로파일 저장. Id==0 이면 신규 생성, 아니면 기존 행 갱신.</summary>
+    public async Task<TeachingProfile> SaveProfileAsync(TeachingProfile profile, CancellationToken ct = default)
+    {
+        var now = DateTime.UtcNow;
+        if (profile.Id == 0)
+        {
+            profile.CreatedAt = now;
+            profile.UpdatedAt = now;
+            _db.TeachingProfiles.Add(profile);
+        }
+        else
+        {
+            var existing = await _db.TeachingProfiles.FirstOrDefaultAsync(p => p.Id == profile.Id, ct);
+            if (existing == null)
+            {
+                profile.CreatedAt = now;
+                profile.UpdatedAt = now;
+                _db.TeachingProfiles.Add(profile);
+            }
+            else
+            {
+                existing.Name = profile.Name;
+                existing.SpacingMm = profile.SpacingMm;
+                existing.CorrugThresholdDeg = profile.CorrugThresholdDeg;
+                existing.CorrugStepDeg = profile.CorrugStepDeg;
+                existing.RunTool = profile.RunTool;
+                existing.RunUser = profile.RunUser;
+                existing.RunVel = profile.RunVel;
+                existing.DelaySec = profile.DelaySec;
+                existing.ThMax = profile.ThMax;
+                existing.MoveHomeFirst = profile.MoveHomeFirst;
+                existing.WaypointsJson = profile.WaypointsJson;
+                existing.UpdatedAt = now;
+                profile = existing;
+            }
+        }
+        await _db.SaveChangesAsync(ct);
+        return profile;
+    }
+
+    public async Task DeleteProfileAsync(int id, CancellationToken ct = default)
+    {
+        var profile = await _db.TeachingProfiles.FirstOrDefaultAsync(p => p.Id == id, ct);
+        if (profile == null) return;
+        _db.TeachingProfiles.Remove(profile);
+        await _db.SaveChangesAsync(ct);
+    }
+
     public List<LineSegment> GetLines(Drawing drawing)
     {
         if (string.IsNullOrEmpty(drawing.DxfPath)) return new();

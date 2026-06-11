@@ -3,6 +3,7 @@
 @using HD_AMR.Communication
 @using HD_AMR.Service
 @inject CameraService Svc
+@inject IJSRuntime JS
 @implements IDisposable
 
 <PageTitle>Camera</PageTitle>
@@ -37,9 +38,13 @@
                  style="width:100%;max-width:640px;border:1px solid #ccc;border-radius:4px" />
         </div>
         <div class="col-md-6">
-            <h5 class="text-muted">Depth</h5>
-            <img src="/camera/depth.mjpeg?k=@_streamKey" alt="Depth stream"
-                 style="width:100%;max-width:640px;border:1px solid #ccc;border-radius:4px" />
+            <h5 class="text-muted">Depth <span class="text-muted" style="font-size:.8rem">(마우스 올리면 거리 mm 표시)</span></h5>
+            <div style="position:relative; display:inline-block; width:100%; max-width:640px">
+                <img @ref="_depthImg" src="/camera/depth.mjpeg?k=@_streamKey" alt="Depth stream"
+                     style="width:100%;display:block;border:1px solid #ccc;border-radius:4px" />
+                <div @ref="_depthLabel"
+                     style="display:none;position:absolute;pointer-events:none;padding:2px 6px;background:rgba(0,0,0,.7);color:#fff;font-size:12px;border-radius:3px;white-space:nowrap"></div>
+            </div>
         </div>
     </div>
 }
@@ -70,10 +75,25 @@ else
 
     private CancellationTokenSource? _cts;
 
+    // Depth hover 프로브용 엘리먼트 참조.
+    private ElementReference _depthImg;
+    private ElementReference _depthLabel;
+
     protected override void OnInitialized()
     {
         _cts = new CancellationTokenSource();
         _ = PollLoop(_cts.Token);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // 스트리밍 중이면(=Depth <img> 가 렌더된 상태) hover 프로브를 바인딩. 1초마다 StateHasChanged 로
+        // 재호출돼도 JS 쪽 _probeInit 가드로 실제 바인딩은 1회만.
+        if (Svc.IsStreaming)
+        {
+            try { await JS.InvokeVoidAsync("hdAmrCamera.initDepthProbe", _depthImg, _depthLabel); }
+            catch { /* 엘리먼트 미준비/회로 종료 등 무시 */ }
+        }
     }
 
     private async Task PollLoop(CancellationToken ct)

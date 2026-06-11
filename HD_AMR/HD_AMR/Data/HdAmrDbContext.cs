@@ -12,6 +12,7 @@ public class HdAmrDbContext : DbContext
     public DbSet<Drawing> Drawings => Set<Drawing>();
     public DbSet<DrawingSegment> DrawingSegments => Set<DrawingSegment>();
     public DbSet<ExcludedRegion> ExcludedRegions => Set<ExcludedRegion>();
+    public DbSet<TeachingProfile> TeachingProfiles => Set<TeachingProfile>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -31,6 +32,10 @@ public class HdAmrDbContext : DbContext
                 .WithOne(r => r.Drawing!)
                 .HasForeignKey(r => r.DrawingId)
                 .OnDelete(DeleteBehavior.Cascade);
+            b.HasMany<TeachingProfile>()
+                .WithOne(p => p.Drawing!)
+                .HasForeignKey(p => p.DrawingId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<DrawingSegment>(b =>
@@ -43,6 +48,14 @@ public class HdAmrDbContext : DbContext
         {
             b.HasKey(r => r.Id);
             b.HasIndex(r => r.DrawingId);
+        });
+
+        modelBuilder.Entity<TeachingProfile>(b =>
+        {
+            b.HasKey(p => p.Id);
+            b.Property(p => p.Name).IsRequired().HasMaxLength(200);
+            b.Property(p => p.WaypointsJson).IsRequired();
+            b.HasIndex(p => p.DrawingId);
         });
     }
 }

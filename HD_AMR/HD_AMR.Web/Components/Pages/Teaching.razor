@@ -224,6 +224,52 @@
             }
         </div>
 
+        @* ── 티칭 설정 저장 / 불러오기 ── *@
+        <div class="teaching-profiles" style="margin:10px 0; padding:10px; border:1px solid #ccc; border-radius:6px; max-width:900px">
+            <strong>티칭 설정 저장 / 불러오기</strong>
+            <p class="hint">현재 솎기·코봇 파라미터와 경유점(X/Z/θ 수동 편집 포함)을 이 도면에 이름붙여 저장합니다. 같은 이름으로 저장하면 덮어씁니다. 불러오면 저장 시점 그대로 복원됩니다.</p>
+            <div class="row g-2 align-items-end">
+                <div class="col-auto">
+                    <input class="form-control" type="text" placeholder="설정 이름" style="width:220px" @bind="_profileName" />
+                </div>
+                <div class="col-auto">
+                    <button class="btn btn-primary" @onclick="SaveProfileAsync"
+                            disabled="@(string.IsNullOrWhiteSpace(_profileName) || _thinned.Count == 0)">현재 설정 저장</button>
+                </div>
+            </div>
+            @if (!string.IsNullOrEmpty(_profileMessage))
+            {
+                <div class="analyze-message @(_profileIsError ? "err" : "ok") mt-1">@_profileMessage</div>
+            }
+            <div class="row g-2 align-items-end mt-1">
+                <div class="col-auto">
+                    <label class="form-label">저장된 설정</label>
+                    <select class="form-select" style="width:220px" @bind="_selectedProfileId" @bind:after="OnProfileSelected">
+                        <option value="">— 저장된 설정 선택 —</option>
+                        @foreach (var p in _profiles)
+                        {
+                            <option value="@p.Id">@p.Name</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-auto">
+                    <button class="btn btn-outline-primary" @onclick="LoadSelectedProfile"
+                            disabled="@(_selectedProfileId is null)">불러오기</button>
+                    <button class="btn btn-outline-danger" @onclick="DeleteSelectedProfileAsync"
+                            disabled="@(_selectedProfileId is null)">삭제</button>
+                </div>
+                @{
+                    var sel = _profiles.FirstOrDefault(p => p.Id == _selectedProfileId);
+                }
+                @if (sel is not null)
+                {
+                    <div class="col-auto">
+                        <span class="hint">경유점 @WaypointCount(sel)개 · 저장 @sel.UpdatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</span>
+                    </div>
+                }
+            </div>
+        </div>
+
         @if (_thinned.Count == 0)
         {
             <p>표시할 점이 없습니다. (DXF에 POINT 엔티티가 없거나 모두 마스크로 제외됨)</p>
@@ -239,7 +285,7 @@
                         <th>θ (°)</th>
                         <th>ry (°)</th>
                         <th>실행</th>
-                        <th>이동</th>
+                        <th>동작</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -260,9 +306,17 @@
                                        title="@(_thetaOverrides.ContainsKey(idx) ? "수동 입력값" : "자동 계산값(수정 시 고정)")" /></td>
                             <td>@(included ? F(thetaDeg) : "-")</td>
                             <td>@(included ? "○" : "제외(>th_max)")</td>
-                            <td><button class="btn btn-sm btn-outline-primary"
+                            <td>
+                                <button class="btn btn-sm btn-outline-primary"
                                         @onclick="() => MoveToWaypointAsync(idx)" @onclick:stopPropagation="true"
-                                        disabled="@(_isRunning || !Cobot.IsConnected)">이동</button></td>
+                                        disabled="@(_isRunning || !Cobot.IsConnected)">이동</button>
+                                <button class="btn btn-sm btn-outline-danger" title="해당 경유점 삭제"
+                                        @onclick="() => DeleteWaypoint(idx)" @onclick:stopPropagation="true"
+                                        disabled="@_isRunning">－</button>
+                                <button class="btn btn-sm btn-outline-success" title="아래에 새 경유점 삽입"
+                                        @onclick="() => InsertWaypointBelow(idx)" @onclick:stopPropagation="true"
+                                        disabled="@_isRunning">＋</button>
+                            </td>
                         </tr>
                     }
                 </tbody>
@@ -312,6 +366,13 @@
     private bool pendingDelete;
     private bool isDeleting;
     private string? deleteMessage;
+
+    // 티칭 설정 프로파일 저장/불러오기
+    private string _profileName = "";
+    private List<TeachingProfile> _profiles = new();
+    private int? _selectedProfileId;
+    private string? _profileMessage;
+    private bool _profileIsError;
 
     private ElementReference svgRef;
     private DotNetObjectReference<Teaching>? selfRef;
@@ -400,6 +461,9 @@
         if (selected is null) return;
         previewPoints = Service.GetPoints(selected);
         RecomputeThinned();
+        _profiles = await Service.ListProfilesAsync(id);
+        _selectedProfileId = null;
+        _profileMessage = null;
         if (changedDrawing)
         {
             zoom = 1.0;
@@ -681,6 +745,39 @@
             _thinned[i] = _thinned[i] with { Y = v };
     }
 
+    // 경유점 행 삭제. 인덱스 키 상태(_thetaOverrides, _selectedWpIndex)를 함께 당긴다.
+    private void DeleteWaypoint(int i)
+    {
+        if (i < 0 || i >= _thinned.Count) return;
+        _thinned.RemoveAt(i);
+        var remapped = _thetaOverrides
+            .Where(kv => kv.Key != i)
+            .ToDictionary(kv => kv.Key > i ? kv.Key - 1 : kv.Key, kv => kv.Value);
+        _thetaOverrides.Clear();
+        foreach (var kv in remapped) _thetaOverrides[kv.Key] = kv.Value;
+
+        if (_selectedWpIndex == i) _selectedWpIndex = -1;
+        else if (_selectedWpIndex > i) _selectedWpIndex--;
+    }
+
+    // 현재 행 바로 아래에 새 경유점 삽입. 기본 좌표는 다음 점과의 중점(마지막 행이면 현재 점 복사).
+    // θ는 override 없이 자동 계산값을 따른다. 인덱스 키 상태를 뒤로 한 칸 민다.
+    private void InsertWaypointBelow(int i)
+    {
+        if (i < 0 || i >= _thinned.Count) return;
+        int at = i + 1;
+        var np = at < _thinned.Count
+            ? new PointMarker((_thinned[i].X + _thinned[at].X) / 2.0, (_thinned[i].Y + _thinned[at].Y) / 2.0)
+            : _thinned[i];
+        _thinned.Insert(at, np);
+        var remapped = _thetaOverrides
+            .ToDictionary(kv => kv.Key >= at ? kv.Key + 1 : kv.Key, kv => kv.Value);
+        _thetaOverrides.Clear();
+        foreach (var kv in remapped) _thetaOverrides[kv.Key] = kv.Value;
+
+        _selectedWpIndex = at;
+    }
+
     // |θ| ≤ th_max 인 점만 이동 대상.
     private bool IsWaypointIncluded(int i) => Math.Abs(EffectiveThetaDeg(i)) <= _thMax;
 
@@ -822,6 +919,137 @@
             _isRunning = false;
             _runIndex = -1;
         }
+    }
+
+    // ── 티칭 설정 저장 / 불러오기 ───────────────────────────────────
+    private async Task SaveProfileAsync()
+    {
+        if (selected is null || _thinned.Count == 0) return;
+        _profileMessage = null;
+        _profileIsError = false;
+        try
+        {
+            var waypoints = new List<TeachingWaypoint>(_thinned.Count);
+            for (int i = 0; i < _thinned.Count; i++)
+                waypoints.Add(new TeachingWaypoint(
+                    _thinned[i].X, _thinned[i].Y, EffectiveThetaDeg(i), _thetaOverrides.ContainsKey(i)));
+
+            // 같은 도면에 같은 이름이 있으면 그 프로파일을 갱신(덮어쓰기).
+            var name = _profileName.Trim();
+            var existing = _profiles.FirstOrDefault(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase));
+            var profile = new TeachingProfile
+            {
+                Id = existing?.Id ?? 0,
+                DrawingId = selected.Id,
+                Name = name,
+                SpacingMm = _spacingMm,
+                CorrugThresholdDeg = _corrugThresholdDeg,
+                CorrugStepDeg = _corrugStepDeg,
+                RunTool = _runTool,
+                RunUser = _runUser,
+                RunVel = _runVel,
+                DelaySec = _delaySec,
+                ThMax = _thMax,
+                MoveHomeFirst = _moveHomeFirst,
+                WaypointsJson = System.Text.Json.JsonSerializer.Serialize(waypoints)
+            };
+            var saved = await Service.SaveProfileAsync(profile);
+            _profiles = await Service.ListProfilesAsync(selected.Id);
+            _selectedProfileId = saved.Id;
+            _profileMessage = $"저장 완료: {name} ({waypoints.Count}개 경유점)";
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "SaveProfile failed");
+            _profileIsError = true;
+            _profileMessage = $"저장 실패: {ex.Message}";
+        }
+    }
+
+    // 콤보박스에서 설정을 고르면 이름칸을 채워, 그대로 저장하면 덮어쓰기가 되게 한다.
+    private void OnProfileSelected()
+    {
+        var p = _profiles.FirstOrDefault(x => x.Id == _selectedProfileId);
+        if (p is not null) _profileName = p.Name;
+    }
+
+    private void LoadSelectedProfile()
+    {
+        var p = _profiles.FirstOrDefault(x => x.Id == _selectedProfileId);
+        if (p is not null) LoadProfile(p);
+    }
+
+    private async Task DeleteSelectedProfileAsync()
+    {
+        if (_selectedProfileId is int id)
+        {
+            await DeleteProfileAsync(id);
+            _selectedProfileId = null;
+        }
+    }
+
+    // 저장된 설정을 그대로 복원한다. RecomputeThinned()를 호출하면 안 된다(수동 편집이 초기화됨).
+    private void LoadProfile(TeachingProfile p)
+    {
+        _profileMessage = null;
+        _profileIsError = false;
+        try
+        {
+            _spacingMm = p.SpacingMm;
+            _corrugThresholdDeg = p.CorrugThresholdDeg;
+            _corrugStepDeg = p.CorrugStepDeg;
+            _runTool = p.RunTool;
+            _runUser = p.RunUser;
+            _runVel = p.RunVel;
+            _delaySec = p.DelaySec;
+            _thMax = p.ThMax;
+            _moveHomeFirst = p.MoveHomeFirst;
+
+            var waypoints = System.Text.Json.JsonSerializer.Deserialize<List<TeachingWaypoint>>(p.WaypointsJson) ?? new();
+            _thinned = waypoints.Select(w => new PointMarker(w.X, w.Z)).ToList();
+            _thetaOverrides.Clear();
+            for (int i = 0; i < waypoints.Count; i++)
+                if (waypoints[i].ThetaManual) _thetaOverrides[i] = waypoints[i].Theta;
+
+            _selectedWpIndex = -1;
+            _profileName = p.Name;
+            ComputeViewBox();
+            _profileMessage = $"불러오기 완료: {p.Name} ({_thinned.Count}개 경유점)";
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "LoadProfile failed");
+            _profileIsError = true;
+            _profileMessage = $"불러오기 실패: {ex.Message}";
+        }
+    }
+
+    private async Task DeleteProfileAsync(int id)
+    {
+        if (selected is null) return;
+        _profileMessage = null;
+        _profileIsError = false;
+        try
+        {
+            await Service.DeleteProfileAsync(id);
+            _profiles = await Service.ListProfilesAsync(selected.Id);
+            _profileMessage = "삭제 완료";
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "DeleteProfile failed");
+            _profileIsError = true;
+            _profileMessage = $"삭제 실패: {ex.Message}";
+        }
+    }
+
+    private static int WaypointCount(TeachingProfile p)
+    {
+        try
+        {
+            return System.Text.Json.JsonSerializer.Deserialize<List<TeachingWaypoint>>(p.WaypointsJson)?.Count ?? 0;
+        }
+        catch { return 0; }
     }
 
     // Refresh both the underlying Fit extent and the effective viewBox.

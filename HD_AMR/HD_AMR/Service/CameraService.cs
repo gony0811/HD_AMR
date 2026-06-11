@@ -35,6 +35,7 @@ public class CameraService : BackgroundService
     public CameraFrame? LatestColor => _client.LatestColor;
     public CameraFrame? LatestDepth => _client.LatestDepth;
     public DateTime LastFrameAt => _client.LastFrameAt;
+    public string? ConnectionType => _client.ConnectionType;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -93,6 +94,23 @@ public class CameraService : BackgroundService
         if (f is null) return Task.FromResult<byte[]?>(null);
         if (f.PixelFormat == "mjpg") return Task.FromResult<byte[]?>(f.Pixels);
         return Task.Run<byte[]?>(() => EncodeRgb24ToJpeg(f, quality), ct);
+    }
+
+    /// <summary>
+    /// 정규화 좌표 (u,v)∈[0,1] 위치의 깊이값(mm)을 반환한다. 프레임 없음/범위밖/무효(0)면 null.
+    /// 정규화 좌표를 쓰므로 표시 스케일·네이티브 해상도(640×400/1280×800)와 무관하게 동작한다.
+    /// </summary>
+    public int? GetLatestDepthMmAt(double u, double v)
+    {
+        var f = _client.LatestDepth;
+        if (f is null || u < 0 || u > 1 || v < 0 || v > 1) return null;
+        int x = Math.Clamp((int)(u * f.Width), 0, f.Width - 1);
+        int y = Math.Clamp((int)(v * f.Height), 0, f.Height - 1);
+        var span = MemoryMarshal.Cast<byte, ushort>(f.Pixels);
+        int idx = y * f.Width + x;
+        if ((uint)idx >= (uint)span.Length) return null;
+        int mm = span[idx];
+        return mm == 0 ? (int?)null : mm;   // 0=무효 픽셀
     }
 
     /// <summary>최신 깊이 프레임을 컬러라이즈 → JPEG 인코딩한다. 프레임이 없으면 null.</summary>
