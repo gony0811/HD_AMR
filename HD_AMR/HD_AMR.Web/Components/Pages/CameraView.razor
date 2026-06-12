@@ -13,6 +13,7 @@
 <div class="mb-3">
     <span class="badge @(Svc.IsConnected ? "bg-success" : "bg-secondary")">연결 @(Svc.IsConnected ? "정상" : "끊김")</span>
     <span class="badge @(Svc.IsStreaming ? "bg-success" : "bg-secondary")">스트림 @(Svc.IsStreaming ? "활성" : "정지")</span>
+    <span class="badge @(Svc.IsIrActive ? "bg-success" : "bg-secondary")">IR @(Svc.IsIrActive ? "활성" : "미지원")</span>
     <span class="text-muted ms-2">
         @Svc.Settings.ColorWidth×@Svc.Settings.ColorHeight @@@Svc.Settings.ColorFps fps
         · 깊이 @Svc.Settings.DepthMinMm~@Svc.Settings.DepthMaxMm mm
@@ -31,13 +32,28 @@
 
 @if (Svc.IsStreaming)
 {
+    @* 좌→우: RGB · IR · Depth *@
     <div class="row g-3">
-        <div class="col-md-6">
-            <h5 class="text-muted">Color</h5>
+        <div class="col-lg-4">
+            <h5 class="text-muted">RGB</h5>
             <img src="/camera/color.mjpeg?k=@_streamKey" alt="Color stream"
                  style="width:100%;max-width:640px;border:1px solid #ccc;border-radius:4px" />
         </div>
-        <div class="col-md-6">
+        <div class="col-lg-4">
+            <h5 class="text-muted">IR</h5>
+            @if (Svc.IsIrActive)
+            {
+                <img src="/camera/ir.mjpeg?k=@_streamKey" alt="IR stream"
+                     style="width:100%;max-width:640px;border:1px solid #ccc;border-radius:4px;background:#000" />
+            }
+            else
+            {
+                <div class="alert alert-secondary mb-0" style="max-width:640px">
+                    IR 스트림이 이 카메라/설정에서 활성화되지 않았습니다.
+                </div>
+            }
+        </div>
+        <div class="col-lg-4">
             <h5 class="text-muted">Depth <span class="text-muted" style="font-size:.8rem">(마우스 올리면 거리 mm 표시)</span></h5>
             <div style="position:relative; display:inline-block; width:100%; max-width:640px">
                 <img @ref="_depthImg" src="/camera/depth.mjpeg?k=@_streamKey" alt="Depth stream"

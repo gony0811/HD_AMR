@@ -24,6 +24,13 @@ public class OrbbecGeminiSettings
     public int DepthFps { get; set; } = 30;
     public bool EnableDepth { get; set; } = true;
 
+    // IR(적외선) 스트림. Gemini 2 의 IR 센서 그레이스케일 영상. 활성화 실패(프로파일 없음/대역폭
+    // 부족)는 치명적이지 않게 처리되어 컬러/깊이 스트림에는 영향을 주지 않는다.
+    public int IrWidth { get; set; } = 640;
+    public int IrHeight { get; set; } = 400;
+    public int IrFps { get; set; } = 30;
+    public bool EnableIr { get; set; } = true;
+
     /// <summary>깊이 컬러라이즈 LUT 의 가까운 끝(mm). 이 거리보다 가까운 값은 모두 따뜻한 색.</summary>
     public int DepthMinMm { get; set; } = 200;
 

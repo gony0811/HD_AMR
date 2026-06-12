@@ -1,0 +1,450 @@
+@using HD_AMR.Communication.Vision
+@implements IDisposable
+
+@* 자동화(Client) / 비전(Server) 한 쪽을 그리는 재사용 패널. 원본 WinForms 의 SidePanelControl 대응. *@
+
+<div class="card h-100">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <strong>@RoleTitle</strong>
+        <span class="badge @(Engine.IsConnected ? "bg-success" : "bg-secondary")">@Engine.Status</span>
+    </div>
+    <div class="card-body">
+
+        @* ── 연결 ────────────────────────────────────────────── *@
+        <div class="row g-2 align-items-end mb-2">
+            <div class="col-auto">
+                <label class="form-label mb-0">@(IsClient ? "비전 서버 IP" : "Bind IP")</label>
+                <input class="form-control form-control-sm" @bind="_host" style="width:130px" disabled="@Engine.IsConnected" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label mb-0">Port</label>
+                <input class="form-control form-control-sm" type="number" min="1" max="65535" @bind="_port" style="width:90px" disabled="@Engine.IsConnected" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-sm btn-success" @onclick="Connect" disabled="@(_busy || Engine.IsConnected)">@(IsClient ? "▶ Connect" : "▶ Listen")</button>
+                <button class="btn btn-sm btn-outline-secondary" @onclick="Disconnect" disabled="@(_busy || !Engine.IsConnected)">Disconnect</button>
+            </div>
+        </div>
+        <div class="row g-3 mb-2">
+            <div class="col-auto form-check ms-2">
+                <input class="form-check-input" type="checkbox" id="@($"hb_{Engine.Role}")" @bind="_autoHeartbeat" @bind:after="ApplyHeartbeat" />
+                <label class="form-check-label" for="@($"hb_{Engine.Role}")">Heartbeat 5초 자동 송신</label>
+            </div>
+            @if (IsClient)
+            {
+                <div class="col-auto form-check">
+                    <input class="form-check-input" type="checkbox" id="@($"rc_{Engine.Role}")" @bind="_autoReconnect" />
+                    <label class="form-check-label" for="@($"rc_{Engine.Role}")">Heartbeat 실패 시 재연결 (3초/최대10회)</label>
+                </div>
+            }
+        </div>
+
+        @* ── 서버 자동 응답 ──────────────────────────────────── *@
+        @if (!IsClient)
+        {
+            <div class="row g-2 align-items-end mb-2 p-2 rounded" style="background:#f6f8fa">
+                <div class="col-auto form-check ms-2">
+                    <input class="form-check-input" type="checkbox" id="@($"ar_{Engine.Role}")" @bind="_autoReply" @bind:after="ApplyAutoReply" />
+                    <label class="form-check-label" for="@($"ar_{Engine.Role}")">CAPTURE_REQ 수신 시 자동 CAPTURE_RES</label>
+                </div>
+                <div class="col-auto">
+                    <label class="form-label mb-0">Result</label>
+                    <select class="form-select form-select-sm" @bind="_autoReplyResult" @bind:after="ApplyAutoReply" style="width:200px">
+                        @foreach (var rc in ResultCodes)
+                        {
+                            <option value="@rc">0x@(rc.ToString("X4")) @ResultCodeNames.NameOf(rc)</option>
+                        }
+                    </select>
+                </div>
+            </div>
+        }
+
+        <ul class="nav nav-tabs" role="tablist">
+            <li class="nav-item"><button class="nav-link @(_tab == "frame" ? "active" : "")" @onclick='() => _tab = "frame"'>프레임</button></li>
+            <li class="nav-item"><button class="nav-link @(_tab == "raw" ? "active" : "")" @onclick='() => _tab = "raw"'>Raw HEX</button></li>
+        </ul>
+
+        <div class="border border-top-0 p-3 mb-2">
+            @if (_tab == "frame")
+            {
+                @* ── 프레임 구성 ──────────────────────────────── *@
+                <div class="row g-2 align-items-end mb-2">
+                    <div class="col-auto">
+                        <label class="form-label mb-0">COMMAND</label>
+                        <select class="form-select form-select-sm" @bind="_command" style="width:170px">
+                            @foreach (var c in Commands)
+                            {
+                                <option value="@((int)c)">0x@(((byte)c).ToString("X2")) @CommandNames.NameOf((byte)c)</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="col-auto">
+                        <label class="form-label mb-0">SEQ (hex)</label>
+                        <input class="form-control form-control-sm" type="number" min="0" max="255" @bind="_seq" style="width:80px" disabled="@_autoSeq" />
+                    </div>
+                    <div class="col-auto form-check">
+                        <input class="form-check-input" type="checkbox" id="@($"sq_{Engine.Role}")" @bind="_autoSeq" />
+                        <label class="form-check-label" for="@($"sq_{Engine.Role}")">Auto++</label>
+                    </div>
+                    <div class="col-auto">
+                        <label class="form-label mb-0">TO</label>
+                        <select class="form-select form-select-sm" @bind="_to" style="width:130px">
+                            @foreach (var d in Devices)
+                            {
+                                <option value="@((int)d)">0x@(((byte)d).ToString("X2")) @DeviceIdNames.NameOf((byte)d)</option>
+                            }
+                        </select>
+                    </div>
+                </div>
+
+                @* DATA 영역 — COMMAND 별 *@
+                @if (_command == (int)CommandCode.Heartbeat)
+                {
+                    <div class="row g-2 align-items-end mb-2">
+                        <div class="col-auto">
+                            <label class="form-label mb-0">Timestamp (14B ASCII)</label>
+                            <input class="form-control form-control-sm" maxlength="14" @bind="_hbTimestamp" style="width:160px" />
+                        </div>
+                        <div class="col-auto">
+                            <label class="form-label mb-0">Reserved (6B)</label>
+                            <input class="form-control form-control-sm" maxlength="6" @bind="_hbReserved" style="width:90px" />
+                        </div>
+                        <div class="col-auto">
+                            <button class="btn btn-sm btn-outline-secondary" @onclick="StampNow">현재 시각</button>
+                        </div>
+                    </div>
+                }
+                else if (_command == (int)CommandCode.CaptureReq)
+                {
+                    <div class="row g-2 align-items-end mb-2">
+                        <div class="col-auto">
+                            <label class="form-label mb-0">Surface Type</label>
+                            <select class="form-select form-select-sm" @bind="_surfaceType" style="width:150px">
+                                <option value="0">0x00 Flat</option>
+                                <option value="1">0x01 Corrugation</option>
+                            </select>
+                        </div>
+                        <div class="col-auto">
+                            <label class="form-label mb-0">Surface ID</label>
+                            <select class="form-select form-select-sm" @bind="_surfaceId" style="width:230px">
+                                @foreach (var s in SurfaceCatalog.All)
+                                {
+                                    <option value="@s.Id">0x@(s.Id.ToString("X2")) @s.Name</option>
+                                }
+                            </select>
+                        </div>
+                    </div>
+                    <div class="row g-2 align-items-end mb-2">
+                        <div class="col-auto">
+                            <label class="form-label mb-0">Position X (mm)</label>
+                            <input class="form-control form-control-sm" type="number" min="0" max="999999" @bind="_posX" style="width:120px" />
+                        </div>
+                        <div class="col-auto">
+                            <label class="form-label mb-0">Position Y (mm)</label>
+                            <input class="form-control form-control-sm" type="number" min="0" max="999999" @bind="_posY" style="width:120px" />
+                        </div>
+                        <div class="col-auto text-muted"><small>+ Reserved 4B (0x00) → DATA 15B</small></div>
+                    </div>
+                }
+                else
+                {
+                    <div class="row g-2 align-items-end mb-2">
+                        <div class="col-auto">
+                            <label class="form-label mb-0">@(_command == (int)CommandCode.ErrorNoti ? "Error Code" : "Result Code")</label>
+                            <select class="form-select form-select-sm" @bind="_resultCode" style="width:230px">
+                                @foreach (var rc in ResultCodes)
+                                {
+                                    <option value="@rc">0x@(rc.ToString("X4")) @ResultCodeNames.NameOf(rc)</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="col-auto text-muted"><small>+ Reserved 4B (0x00) → DATA 6B</small></div>
+                    </div>
+                }
+
+                @* 오버라이드 — 음성 테스트용 *@
+                <div class="row g-2 align-items-end mb-2">
+                    <div class="col-auto form-check ms-2">
+                        <input class="form-check-input" type="checkbox" id="@($"al_{Engine.Role}")" @bind="_autoLen" />
+                        <label class="form-check-label" for="@($"al_{Engine.Role}")">Auto LENGTH</label>
+                    </div>
+                    <div class="col-auto">
+                        <input class="form-control form-control-sm" type="number" min="0" max="65535" @bind="_len" style="width:90px" disabled="@_autoLen" />
+                    </div>
+                    <div class="col-auto form-check">
+                        <input class="form-check-input" type="checkbox" id="@($"ac_{Engine.Role}")" @bind="_autoChk" />
+                        <label class="form-check-label" for="@($"ac_{Engine.Role}")">Auto CHECKSUM</label>
+                    </div>
+                    <div class="col-auto">
+                        <input class="form-control form-control-sm" type="number" min="0" max="255" @bind="_chk" style="width:80px" disabled="@_autoChk" />
+                    </div>
+                </div>
+
+                <button class="btn btn-primary" @onclick="SendStructured" disabled="@(_busy || !Engine.IsConnected)">▶ Send</button>
+            }
+            else
+            {
+                @* ── Raw HEX ──────────────────────────────────── *@
+                <textarea class="form-control mb-2" rows="3" style="font-family:monospace" @bind="_rawHex"></textarea>
+                <button class="btn btn-primary" @onclick="SendRaw" disabled="@(_busy || !Engine.IsConnected)">▶ Send Raw</button>
+                @if (!string.IsNullOrEmpty(_rawError))
+                {
+                    <span class="text-danger ms-2">@_rawError</span>
+                }
+            }
+        </div>
+
+        @* ── 로그 ────────────────────────────────────────────── *@
+        <div class="d-flex justify-content-between align-items-center mb-1">
+            <strong>로그 <span class="text-muted">(최신순)</span></strong>
+            <button class="btn btn-sm btn-outline-secondary" @onclick="ClearLog">Clear</button>
+        </div>
+        <div style="max-height:300px;overflow:auto;border:1px solid #dee2e6;border-radius:4px">
+            <table class="table table-sm table-hover mb-0" style="font-family:monospace;font-size:.78rem">
+                <thead class="table-light" style="position:sticky;top:0">
+                    <tr><th style="width:90px">시간</th><th style="width:48px">방향</th><th>HEX</th><th>해석</th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var e in _logSnapshot)
+                    {
+                        <tr class="@RowClass(e.Direction)">
+                            <td>@e.At.ToString("HH:mm:ss.fff")</td>
+                            <td>@e.Direction</td>
+                            <td style="word-break:break-all">@e.Hex</td>
+                            <td>@e.Summary</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public VisionEngine Engine { get; set; } = default!;
+    [Parameter] public string Host { get; set; } = "127.0.0.1";
+    [Parameter] public int Port { get; set; } = 5000;
+    [Parameter] public bool AutoReconnectDefault { get; set; }
+
+    private static readonly CommandCode[] Commands = { CommandCode.Heartbeat, CommandCode.CaptureReq, CommandCode.CaptureRes, CommandCode.ErrorNoti };
+    private static readonly DeviceId[] Devices = { DeviceId.Automation, DeviceId.Vision };
+    private static readonly ushort[] ResultCodes = { 0x0000, 0x0001, 0x0002, 0x0003, 0x0004, 0x0005, 0x00FF };
+
+    private bool IsClient => Engine.Role == SideRole.Client;
+    private string RoleTitle => IsClient ? "자동화 S/W (Client · ID=0x01)" : "비전 S/W (Server · ID=0x02)";
+
+    // 연결
+    private string _host = "127.0.0.1";
+    private int _port = 5000;
+    private bool _autoHeartbeat = true;
+    private bool _autoReconnect;
+
+    // 프레임 빌더
+    private string _tab = "frame";
+    private int _command;
+    private int _seq;
+    private bool _autoSeq = true;
+    private int _to;
+
+    private string _hbTimestamp = "";
+    private string _hbReserved = "000000";
+
+    private int _surfaceType;
+    private int _surfaceId = 1;
+    private int _posX;
+    private int _posY;
+
+    private int _resultCode;
+
+    private bool _autoLen = true;
+    private int _len;
+    private bool _autoChk = true;
+    private int _chk;
+
+    private string _rawHex = "";
+    private string? _rawError;
+
+    // 서버 자동 응답
+    private bool _autoReply;
+    private int _autoReplyResult;
+
+    private bool _busy;
+
+    // 로그 폴링
+    private IReadOnlyList<VisionLogEntry> _logSnapshot = Array.Empty<VisionLogEntry>();
+    private long _lastLogVersion = -1;
+    private CancellationTokenSource? _cts;
+
+    protected override void OnInitialized()
+    {
+        _host = Host;
+        _port = Port;
+        _autoReconnect = AutoReconnectDefault;
+        _command = IsClient ? (int)CommandCode.CaptureReq : (int)CommandCode.CaptureRes;
+        _to = IsClient ? (int)DeviceId.Vision : (int)DeviceId.Automation;
+        _hbTimestamp = DateTime.Now.ToString("yyyyMMddHHmmss");
+        _rawHex = "02 00 17 00 01 01 02 " +
+                  string.Concat(Enumerable.Repeat("30 ", 14)) +
+                  "30 30 30 30 30 30 00 03";
+
+        _cts = new CancellationTokenSource();
+        _ = PollLoop(_cts.Token);
+    }
+
+    private async Task PollLoop(CancellationToken ct)
+    {
+        try
+        {
+            using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(700));
+            while (await timer.WaitForNextTickAsync(ct))
+            {
+                if (Engine.LogVersion != _lastLogVersion)
+                {
+                    RefreshLog();
+                }
+                await InvokeAsync(StateHasChanged); // 연결 상태/Status 배지 갱신
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private void RefreshLog()
+    {
+        var all = Engine.SnapshotLogs();
+        // 최신순 + 최대 300줄 표시.
+        _logSnapshot = all.Reverse().Take(300).ToArray();
+        _lastLogVersion = Engine.LogVersion;
+    }
+
+    private void ApplyHeartbeat() => Engine.AutoHeartbeat = _autoHeartbeat;
+
+    private void ApplyAutoReply()
+    {
+        Engine.AutoReply = _autoReply;
+        Engine.AutoReplyResultCode = (ushort)_autoReplyResult;
+    }
+
+    private void StampNow() => _hbTimestamp = DateTime.Now.ToString("yyyyMMddHHmmss");
+
+    private async Task Connect()
+    {
+        if (_busy || Engine.IsConnected) return;
+        _busy = true;
+        try
+        {
+            Engine.AutoHeartbeat = _autoHeartbeat;
+            Engine.AutoIncrementSeq = _autoSeq;
+            if (IsClient)
+                await Engine.ConnectClientAsync(_host.Trim(), _port, _autoReconnect);
+            else
+                await Engine.ListenServerAsync(_host.Trim(), _port);
+        }
+        finally { _busy = false; RefreshLog(); }
+    }
+
+    private async Task Disconnect()
+    {
+        if (_busy) return;
+        _busy = true;
+        try { await Engine.StopAsync(); }
+        finally { _busy = false; RefreshLog(); }
+    }
+
+    private async Task SendStructured()
+    {
+        if (_busy || !Engine.IsConnected) return;
+        _busy = true;
+        try
+        {
+            var cmd = (CommandCode)_command;
+            byte[] data = cmd switch
+            {
+                CommandCode.Heartbeat  => BuildHeartbeatData(),
+                CommandCode.CaptureReq => BuildCaptureReqData(),
+                CommandCode.CaptureRes => BuildResultData(),
+                CommandCode.ErrorNoti  => BuildResultData(),
+                _ => Array.Empty<byte>(),
+            };
+            ushort? lenOverride = _autoLen ? null : (ushort)_len;
+            byte? chkOverride = _autoChk ? null : (byte)_chk;
+            byte? seqOverride = _autoSeq ? null : (byte)_seq;
+
+            Engine.AutoIncrementSeq = _autoSeq;
+            await Engine.SendAsync(new SendRequest(
+                Command: cmd,
+                To: (DeviceId)_to,
+                Data: data,
+                SeqOverride: seqOverride,
+                LengthOverride: lenOverride,
+                ChecksumOverride: chkOverride));
+
+            if (_autoSeq) _seq = Engine.NextSeq;
+        }
+        finally { _busy = false; RefreshLog(); }
+    }
+
+    private byte[] BuildHeartbeatData()
+    {
+        var ts = (_hbTimestamp ?? "").PadRight(14).Substring(0, 14);
+        var rs = (_hbReserved ?? "").PadRight(6).Substring(0, 6);
+        var data = new byte[20];
+        System.Text.Encoding.ASCII.GetBytes(ts, 0, 14, data, 0);
+        System.Text.Encoding.ASCII.GetBytes(rs, 0, 6, data, 14);
+        return data;
+    }
+
+    private byte[] BuildCaptureReqData()
+    {
+        var data = new byte[15];
+        data[0] = (byte)_surfaceType;
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(1, 2), (ushort)_surfaceId);
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(data.AsSpan(3, 4), _posX);
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(data.AsSpan(7, 4), _posY);
+        // bytes 11..14 reserved → 0x00
+        return data;
+    }
+
+    private byte[] BuildResultData()
+    {
+        var data = new byte[6];
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(0, 2), (ushort)_resultCode);
+        return data;
+    }
+
+    private async Task SendRaw()
+    {
+        if (_busy || !Engine.IsConnected) return;
+        _busy = true;
+        _rawError = null;
+        try
+        {
+            if (!FrameCodec.TryParseHex(_rawHex, out var bytes) || bytes.Length == 0)
+            {
+                _rawError = "HEX 파싱 실패 — 짝수 길이 16진수만 입력하세요.";
+                return;
+            }
+            await Engine.SendRawAsync(bytes);
+        }
+        finally { _busy = false; RefreshLog(); }
+    }
+
+    private void ClearLog()
+    {
+        Engine.ClearLog();
+        RefreshLog();
+    }
+
+    private static string RowClass(LogDirection d) => d switch
+    {
+        LogDirection.Tx => "table-primary",
+        LogDirection.Rx => "table-success",
+        LogDirection.Error => "table-danger",
+        _ => "table-light",
+    };
+
+    public void Dispose()
+    {
+        _cts?.Cancel();
+        _cts?.Dispose();
+    }
+}

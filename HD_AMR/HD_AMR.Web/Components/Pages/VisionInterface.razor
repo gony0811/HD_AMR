@@ -1,0 +1,25 @@
+@page "/vision"
+@rendermode InteractiveServer
+@using HD_AMR.Communication.Vision
+@using HD_AMR.Service
+@inject VisionInterfaceService Svc
+
+<PageTitle>Vision Interface</PageTitle>
+
+<h1>비전 인터페이스</h1>
+<p class="text-muted" style="max-width:1100px">
+    HD현대 비전 통신 프로토콜(사양 v2) 시뮬레이터/테스터. 한 화면에서 <b>자동화 S/W(클라이언트)</b> 와
+    <b>비전 S/W(서버)</b> 양측을 띄워 TCP 로 프레임을 주고받으며 규칙을 점검합니다.
+    내부 루프백 테스트는 양측 포트를 같게 두고 서버를 먼저 <b>Listen</b> 한 뒤 클라이언트를 <b>Connect</b> 하세요.
+    실제 비전 장비와 연동하려면 클라이언트의 "비전 서버 IP"를 장비 주소로 지정합니다.
+</p>
+
+<div class="row g-3">
+    <div class="col-xl-6">
+        <VisionPanel Engine="Svc.Server" Host="@Svc.Settings.ServerBindIp" Port="Svc.Settings.Port" />
+    </div>
+    <div class="col-xl-6">
+        <VisionPanel Engine="Svc.Client" Host="@Svc.Settings.ServerHost" Port="Svc.Settings.Port"
+                     AutoReconnectDefault="false" />
+    </div>
+</div>
