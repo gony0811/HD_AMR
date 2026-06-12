@@ -134,6 +134,11 @@ public class OrbbecGeminiClient : IDisposable
                 _config, OrbbecNative.OB_FRAME_AGGREGATE_OUTPUT_ANY_SITUATION, out var aggErr);
             OrbbecNative.LogIfError(_logger, aggErr, "set_frame_aggregate_output_mode");
 
+            // 깊이 소프트웨어 필터 토글. 가까이서 빠르게 움직이는 물체로 깊이 노이즈가 폭증하면 이
+            // CPU 필터들의 큐가 포화(Source frameset queue fulled)되어 프레임이 백업 → UVC 버퍼
+            // 오버플로 → 장치 재열거로 영상이 멈춘다. 끄면 방아쇠가 제거된다.
+            ApplyDepthFilterSettings();
+
             _connected = true;
             _logger.LogInformation("{Name} 연결 완료 (color={Color}, depth={Depth})",
                 _settings.Name, _settings.EnableColor, _settings.EnableDepth);
@@ -200,6 +205,10 @@ public class OrbbecGeminiClient : IDisposable
         return Task.Run(() =>
         {
             int consecutiveTimeouts = 0;
+            // 워치독: 마지막으로 프레임을 성공 수신한 시점. 이 시점 이후 일정 시간 프레임이 끊기면
+            // (USB 재열거 등으로 wait_for_frameset 가 예외 없이 타임아웃만 반복) 강제 재연결한다.
+            var lastOk = DateTime.UtcNow;
+            bool receivedAny = false;
             while (!ct.IsCancellationRequested && _streaming)
             {
                 IntPtr set = IntPtr.Zero;
@@ -213,9 +222,26 @@ public class OrbbecGeminiClient : IDisposable
                         if (++consecutiveTimeouts % 30 == 0)
                             _logger.LogWarning("{Name} wait_for_frameset {Count}회 연속 타임아웃 — 프레임 미수신",
                                 _settings.Name, consecutiveTimeouts);
+
+                        // 프레임 기아 감지 → 강제 teardown 후 종료. 첫 프레임 수신 전(콜드스타트)에는
+                        // 카메라 초기화/d2c 보정에 시간이 걸리므로 더 넉넉히 기다린다.
+                        var idleMs = (DateTime.UtcNow - lastOk).TotalMilliseconds;
+                        var limitMs = receivedAny
+                            ? _settings.FrameStarvationReconnectMs
+                            : Math.Max(_settings.FrameStarvationReconnectMs, 8000);
+                        if (idleMs >= limitMs)
+                        {
+                            _logger.LogWarning(
+                                "{Name} {Idle:F0}ms 동안 프레임 끊김 — 강제 재연결(USB 재열거 추정)",
+                                _settings.Name, idleMs);
+                            Disconnect();   // _connected/_streaming=false + 프레임 스냅샷 비움 → 상위 루프가 재연결
+                            return;
+                        }
                         continue;
                     }
                     consecutiveTimeouts = 0;
+                    lastOk = DateTime.UtcNow;
+                    receivedAny = true;
 
                     if (_settings.EnableColor) TrySwapColor(set);
                     if (_settings.EnableDepth) TrySwapDepth(set);
@@ -442,6 +468,35 @@ public class OrbbecGeminiClient : IDisposable
     /// 에 저장한다. 실패해도 진단용 부가 정보이므로 조용히 무시. 파이프라인이 소유한 디바이스 핸들은
     /// 빌린 것일 수 있어 삭제하지 않는다(이중 free 회피).
     /// </summary>
+    /// <summary>
+    /// 파이프라인이 소유한 디바이스에 깊이 소프트웨어 필터 토글을 적용한다. 펌웨어가 특정 속성을
+    /// 지원하지 않으면 set 이 에러를 돌려주지만 <see cref="OrbbecNative.LogIfError"/> 로 흡수하므로
+    /// 본 연결 흐름엔 영향이 없다. 디바이스 핸들은 파이프라인 소유(빌린 것)라 삭제하지 않는다.
+    /// </summary>
+    private void ApplyDepthFilterSettings()
+    {
+        if (!_settings.DisableDepthNoiseRemoval && !_settings.DisableDepthSoftFilter && !_settings.EnableDeviceFrameSkip)
+            return;
+
+        var dev = OrbbecNative.ob_pipeline_get_device(_pipeline, out var devErr);
+        OrbbecNative.SafeDeleteError(devErr);
+        if (dev == IntPtr.Zero) return;
+
+        void SetBool(int propId, bool value, string label)
+        {
+            OrbbecNative.ob_device_set_bool_property(dev, propId, value, out var err);
+            if (err != IntPtr.Zero) { OrbbecNative.LogIfError(_logger, err, $"set_bool_property({label})"); return; }
+            _logger.LogInformation("{Name} {Label} = {Value}", _settings.Name, label, value);
+        }
+
+        if (_settings.DisableDepthNoiseRemoval)
+            SetBool(OrbbecNative.OB_PROP_DEPTH_NOISE_REMOVAL_FILTER_BOOL, false, "DEPTH_NOISE_REMOVAL_FILTER");
+        if (_settings.DisableDepthSoftFilter)
+            SetBool(OrbbecNative.OB_PROP_DEPTH_SOFT_FILTER_BOOL, false, "DEPTH_SOFT_FILTER");
+        if (_settings.EnableDeviceFrameSkip)
+            SetBool(OrbbecNative.OB_PROP_SKIP_FRAME_BOOL, true, "SKIP_FRAME");
+    }
+
     private void ReadConnectionType()
     {
         try
@@ -520,6 +575,12 @@ internal static class OrbbecNative
     public const int OB_FORMAT_RGB = 22;
     public const int OB_FORMAT_UNKNOWN = 0xff;
 
+    // 깊이 소프트웨어 필터 토글용 디바이스 속성 ID (Property.h). 부하 폭증 시 큐 포화 → 장치
+    // 재열거의 주 용의자라 끄는 데 사용.
+    public const int OB_PROP_DEPTH_SOFT_FILTER_BOOL = 24;
+    public const int OB_PROP_DEPTH_NOISE_REMOVAL_FILTER_BOOL = 165;
+    public const int OB_PROP_SKIP_FRAME_BOOL = 2036;
+
     // 프레임 집계(aggregate) 출력 모드 (Pipeline.h / ObTypes.h). 기본값 0 =
     // FULL_FRAME_REQUIRE: 활성화된 모든 스트림(color+depth)의 프레임이 한 frameset 에 다
     // 있어야만 출력 → 한 스트림이라도 프레임을 흘리면 frameset 전체가 drop 되어 둘 다 공백이 됨.
@@ -535,6 +596,7 @@ internal static class OrbbecNative
     [DllImport(Lib)] public static extern void   ob_delete_device_list(IntPtr list, out IntPtr error);
     [DllImport(Lib)] public static extern void   ob_delete_device(IntPtr device, out IntPtr error);
 
+    [DllImport(Lib)] public static extern void   ob_device_set_bool_property(IntPtr device, int propertyId, bool value, out IntPtr error);
     [DllImport(Lib)] public static extern IntPtr ob_device_get_device_info(IntPtr device, out IntPtr error);
     [DllImport(Lib)] public static extern IntPtr ob_device_info_serial_number(IntPtr info, out IntPtr error);
     [DllImport(Lib, CharSet = CharSet.Ansi)] public static extern IntPtr ob_device_info_connection_type(IntPtr info, out IntPtr error);

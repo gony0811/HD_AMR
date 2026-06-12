@@ -41,4 +41,28 @@ public class OrbbecGeminiSettings
 
     /// <summary><c>pipeline.WaitForFrameset</c> 의 한 번 대기 한도(ms).</summary>
     public int FrameWaitTimeoutMs { get; set; } = 1000;
+
+    /// <summary>
+    /// 스트리밍 중 이 시간(ms) 동안 프레임이 한 장도 안 들어오면 워치독이 강제로 연결을 끊어
+    /// 상위 재연결 루프가 파이프라인을 새 장치 핸들로 재구성하게 한다. USB 재열거(장치가 버스에서
+    /// 잠깐 빠졌다 돌아옴) 후 <c>wait_for_frameset</c> 가 예외 없이 타임아웃만 반복하는 상황을 복구.
+    /// </summary>
+    public int FrameStarvationReconnectMs { get; set; } = 4000;
+
+    /// <summary>
+    /// 깊이 노이즈 제거 필터(<c>OB_PROP_DEPTH_NOISE_REMOVAL_FILTER</c>)를 끈다. 가까이서 빠르게
+    /// 움직이는 물체로 깊이 노이즈가 폭증하면 이 CPU 소프트웨어 필터의 큐가 포화되어
+    /// (<c>Source frameset queue fulled</c>) 프레임이 백업 → UVC 버퍼 오버플로 → 장치 재열거로
+    /// 영상이 멈추는 원인이 된다. 기본 끔.
+    /// </summary>
+    public bool DisableDepthNoiseRemoval { get; set; } = true;
+
+    /// <summary>깊이 soft/speckle 필터(<c>OB_PROP_DEPTH_SOFT_FILTER</c>)를 끈다. 위와 동일 취지. 기본 끔.</summary>
+    public bool DisableDepthSoftFilter { get; set; } = true;
+
+    /// <summary>
+    /// 장치측 프레임 스킵 모드(<c>OB_PROP_SKIP_FRAME</c>)를 켠다. 백로그 발생 시 호스트 버퍼가
+    /// 넘치기 전에 장치가 프레임을 드롭하게 한다. 기본 끔(옵션).
+    /// </summary>
+    public bool EnableDeviceFrameSkip { get; set; } = false;
 }
