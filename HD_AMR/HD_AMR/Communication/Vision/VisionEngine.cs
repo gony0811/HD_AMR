@@ -1,5 +1,3 @@
-using System.Buffers.Binary;
-using System.Net;
 using System.Text;
 
 namespace HD_AMR.Communication.Vision;
@@ -21,9 +19,6 @@ public sealed class VisionEngine : IAsyncDisposable
 
     public bool AutoHeartbeat { get; set; } = true;
     public int HeartbeatPeriodMs { get; set; } = 5000;
-
-    public bool AutoReply { get; set; }              // server-only
-    public ushort AutoReplyResultCode { get; set; }  // server-only
 
     public byte NextSeq { get; private set; }
     public bool AutoIncrementSeq { get; set; } = true;
@@ -64,13 +59,6 @@ public sealed class VisionEngine : IAsyncDisposable
     {
         var t = new VisionTcpClientTransport(host, port) { AutoReconnect = autoReconnect };
         return StartAsync(t);
-    }
-
-    /// <summary>비전(Server)으로 지정 IP/포트에서 Listen.</summary>
-    public Task ListenServerAsync(string bindIp, int port)
-    {
-        if (!IPAddress.TryParse(bindIp, out var ip)) ip = IPAddress.Loopback;
-        return StartAsync(new VisionTcpServerTransport(ip, port));
     }
 
     public async Task StartAsync(IVisionTransport transport)
@@ -115,7 +103,6 @@ public sealed class VisionEngine : IAsyncDisposable
             if (r.Decoded is { } f && r.Fault is null)
             {
                 Log(LogDirection.Rx, FrameCodec.ToHex(r.Bytes), FrameDescriber.Summary(f));
-                MaybeAutoReply(f);
             }
             else
             {
@@ -124,25 +111,6 @@ public sealed class VisionEngine : IAsyncDisposable
                 Log(LogDirection.Error, FrameCodec.ToHex(r.Bytes), $"⚠ {r.Fault}: {detail}  | {summary}");
             }
         }
-    }
-
-    private void MaybeAutoReply(Frame f)
-    {
-        if (Role != SideRole.Server || !AutoReply) return;
-        if (f.Command != (byte)CommandCode.CaptureReq) return;
-
-        var data = new byte[6];
-        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(0, 2), AutoReplyResultCode);
-        // Reserved 4 bytes already 0x00.
-
-        _ = SendAsync(new SendRequest(
-            Command: CommandCode.CaptureRes,
-            To: PeerId,
-            Data: data,
-            SeqOverride: f.Seq,
-            LengthOverride: null,
-            ChecksumOverride: null,
-            Note: "auto-reply"));
     }
 
     public byte ConsumeSeq(byte? explicitSeq)

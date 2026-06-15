@@ -13,7 +13,7 @@
         @* ── 연결 ────────────────────────────────────────────── *@
         <div class="row g-2 align-items-end mb-2">
             <div class="col-auto">
-                <label class="form-label mb-0">@(IsClient ? "비전 서버 IP" : "Bind IP")</label>
+                <label class="form-label mb-0">비전 서버 IP</label>
                 <input class="form-control form-control-sm" @bind="_host" style="width:130px" disabled="@Engine.IsConnected" />
             </div>
             <div class="col-auto">
@@ -21,7 +21,7 @@
                 <input class="form-control form-control-sm" type="number" min="1" max="65535" @bind="_port" style="width:90px" disabled="@Engine.IsConnected" />
             </div>
             <div class="col-auto">
-                <button class="btn btn-sm btn-success" @onclick="Connect" disabled="@(_busy || Engine.IsConnected)">@(IsClient ? "▶ Connect" : "▶ Listen")</button>
+                <button class="btn btn-sm btn-success" @onclick="Connect" disabled="@(_busy || Engine.IsConnected)">▶ Connect</button>
                 <button class="btn btn-sm btn-outline-secondary" @onclick="Disconnect" disabled="@(_busy || !Engine.IsConnected)">Disconnect</button>
             </div>
         </div>
@@ -30,34 +30,11 @@
                 <input class="form-check-input" type="checkbox" id="@($"hb_{Engine.Role}")" @bind="_autoHeartbeat" @bind:after="ApplyHeartbeat" />
                 <label class="form-check-label" for="@($"hb_{Engine.Role}")">Heartbeat 5초 자동 송신</label>
             </div>
-            @if (IsClient)
-            {
-                <div class="col-auto form-check">
-                    <input class="form-check-input" type="checkbox" id="@($"rc_{Engine.Role}")" @bind="_autoReconnect" />
-                    <label class="form-check-label" for="@($"rc_{Engine.Role}")">Heartbeat 실패 시 재연결 (3초/최대10회)</label>
-                </div>
-            }
-        </div>
-
-        @* ── 서버 자동 응답 ──────────────────────────────────── *@
-        @if (!IsClient)
-        {
-            <div class="row g-2 align-items-end mb-2 p-2 rounded" style="background:#f6f8fa">
-                <div class="col-auto form-check ms-2">
-                    <input class="form-check-input" type="checkbox" id="@($"ar_{Engine.Role}")" @bind="_autoReply" @bind:after="ApplyAutoReply" />
-                    <label class="form-check-label" for="@($"ar_{Engine.Role}")">CAPTURE_REQ 수신 시 자동 CAPTURE_RES</label>
-                </div>
-                <div class="col-auto">
-                    <label class="form-label mb-0">Result</label>
-                    <select class="form-select form-select-sm" @bind="_autoReplyResult" @bind:after="ApplyAutoReply" style="width:200px">
-                        @foreach (var rc in ResultCodes)
-                        {
-                            <option value="@rc">0x@(rc.ToString("X4")) @ResultCodeNames.NameOf(rc)</option>
-                        }
-                    </select>
-                </div>
+            <div class="col-auto form-check">
+                <input class="form-check-input" type="checkbox" id="@($"rc_{Engine.Role}")" @bind="_autoReconnect" />
+                <label class="form-check-label" for="@($"rc_{Engine.Role}")">Heartbeat 실패 시 재연결 (3초/최대10회)</label>
             </div>
-        }
+        </div>
 
         <ul class="nav nav-tabs" role="tablist">
             <li class="nav-item"><button class="nav-link @(_tab == "frame" ? "active" : "")" @onclick='() => _tab = "frame"'>프레임</button></li>
@@ -230,8 +207,7 @@
     private static readonly DeviceId[] Devices = { DeviceId.Automation, DeviceId.Vision };
     private static readonly ushort[] ResultCodes = { 0x0000, 0x0001, 0x0002, 0x0003, 0x0004, 0x0005, 0x00FF };
 
-    private bool IsClient => Engine.Role == SideRole.Client;
-    private string RoleTitle => IsClient ? "자동화 S/W (Client · ID=0x01)" : "비전 S/W (Server · ID=0x02)";
+    private string RoleTitle => "자동화 S/W (Client · ID=0x01)";
 
     // 연결
     private string _host = "127.0.0.1";
@@ -264,10 +240,6 @@
     private string _rawHex = "";
     private string? _rawError;
 
-    // 서버 자동 응답
-    private bool _autoReply;
-    private int _autoReplyResult;
-
     private bool _busy;
 
     // 로그 폴링
@@ -280,8 +252,8 @@
         _host = Host;
         _port = Port;
         _autoReconnect = AutoReconnectDefault;
-        _command = IsClient ? (int)CommandCode.CaptureReq : (int)CommandCode.CaptureRes;
-        _to = IsClient ? (int)DeviceId.Vision : (int)DeviceId.Automation;
+        _command = (int)CommandCode.CaptureReq;
+        _to = (int)DeviceId.Vision;
         _hbTimestamp = DateTime.Now.ToString("yyyyMMddHHmmss");
         _rawHex = "02 00 17 00 01 01 02 " +
                   string.Concat(Enumerable.Repeat("30 ", 14)) +
@@ -318,12 +290,6 @@
 
     private void ApplyHeartbeat() => Engine.AutoHeartbeat = _autoHeartbeat;
 
-    private void ApplyAutoReply()
-    {
-        Engine.AutoReply = _autoReply;
-        Engine.AutoReplyResultCode = (ushort)_autoReplyResult;
-    }
-
     private void StampNow() => _hbTimestamp = DateTime.Now.ToString("yyyyMMddHHmmss");
 
     private async Task Connect()
@@ -334,10 +300,7 @@
         {
             Engine.AutoHeartbeat = _autoHeartbeat;
             Engine.AutoIncrementSeq = _autoSeq;
-            if (IsClient)
-                await Engine.ConnectClientAsync(_host.Trim(), _port, _autoReconnect);
-            else
-                await Engine.ListenServerAsync(_host.Trim(), _port);
+            await Engine.ConnectClientAsync(_host.Trim(), _port, _autoReconnect);
         }
         finally { _busy = false; RefreshLog(); }
     }

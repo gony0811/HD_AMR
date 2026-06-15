@@ -13,12 +13,8 @@ public class VisionInterfaceSettings
     /// <summary>비전 S/W(서버) 호스트. 자동화 측이 접속할 IP.</summary>
     public string ServerHost { get; set; } = "127.0.0.1";
 
-    /// <summary>비전 인터페이스 TCP 포트(클라이언트 접속/서버 Listen 공통 기본값).</summary>
+    /// <summary>비전 인터페이스 TCP 포트(클라이언트 접속 대상 포트).</summary>
     public int Port { get; set; } = 5000;
-
-    // 비전(Server) — 내장 서버(시뮬레이터)가 Listen 할 IP.
-    /// <summary>내장 비전 서버 바인드 IP. 보통 127.0.0.1 또는 0.0.0.0.</summary>
-    public string ServerBindIp { get; set; } = "127.0.0.1";
 
     /// <summary>Heartbeat 자동 송신 주기(ms). 사양 기본 5초.</summary>
     public int HeartbeatPeriodMs { get; set; } = 5000;
