@@ -1,5 +1,7 @@
+using System.Runtime.InteropServices;
 using HD_AMR.Communication;
 using HD_AMR.Communication.Vision;
+using HD_AMR.Communication.Weld;
 using HD_AMR.Data;
 using HD_AMR.Service;
 using HD_AMR.Web.Components;
@@ -39,6 +41,21 @@ builder.Services.Configure<VisionInterfaceSettings>(
     builder.Configuration.GetSection("Vision"));
 builder.Services.AddSingleton<VisionInterfaceService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<VisionInterfaceService>());
+
+// 용접라인 추적(명세서 v2). 검출은 OpenCvSharp(Windows) — 그 외 플랫폼은 no-op 폴백.
+// ROI 프로파일은 JSON 파일로 저장. 싱글톤(운영자 1인, 상태 유지).
+builder.Services.Configure<WeldTrackingSettings>(
+    builder.Configuration.GetSection("WeldTracking"));
+if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+    builder.Services.AddSingleton<IWeldVisionDetector, WeldVisionDetector>();
+else
+    builder.Services.AddSingleton<IWeldVisionDetector, NoopWeldVisionDetector>();
+builder.Services.AddSingleton(sp =>
+{
+    var dir = builder.Configuration.GetSection("WeldTracking")["ProfileDirectory"] ?? "RoiProfiles";
+    return new RoiProfileStore(Path.Combine(builder.Environment.ContentRootPath, dir));
+});
+builder.Services.AddSingleton<WeldTrackingService>();
 
 var uploadDirectory = Path.Combine(builder.Environment.ContentRootPath, "UploadedDrawings");
 builder.Services.Configure<DrawingStorageOptions>(opt => opt.UploadDirectory = uploadDirectory);
@@ -167,6 +184,15 @@ app.MapGet("/camera/status", (CameraService svc) => Results.Json(new
         svc.LatestIr.Width, svc.LatestIr.Height, svc.LatestIr.PixelFormat, len = svc.LatestIr.Pixels.Length
     },
 }));
+
+// 용접라인 검출 overlay(주석 이미지) — 수동 트리거라 단일 JPEG 으로 제공. 프레임 없으면 204.
+// UI 는 <img src="/camera/weld/overlay.jpg?k=캐시버스터"> 로 검출 후 갱신.
+app.MapGet("/camera/weld/overlay.jpg", (WeldTrackingService w) => JpegOrNoContent(w.LastOverlay));
+app.MapGet("/camera/weld/peak1.jpg", (WeldTrackingService w) => JpegOrNoContent(w.Peak1Overlay));
+app.MapGet("/camera/weld/peak2.jpg", (WeldTrackingService w) => JpegOrNoContent(w.Peak2Overlay));
+
+static IResult JpegOrNoContent(byte[]? jpeg)
+    => jpeg is { Length: > 0 } ? Results.File(jpeg, "image/jpeg") : Results.NoContent();
 
 static async Task StreamMjpegAsync(HttpContext http, CancellationToken ct, int fps,
     Func<Task<byte[]?>> getJpeg)

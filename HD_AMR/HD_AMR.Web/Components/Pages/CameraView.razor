@@ -76,6 +76,9 @@ else
     <div class="alert @(_isError ? "alert-danger" : "alert-info") mt-3" style="max-width:760px">@_message</div>
 }
 
+@* 명세서 v2 — 용접라인 추적 패널(스트리밍 이미지 아래). *@
+<WeldTrackingPanel />
+
 @code {
     private bool _busy;
     private string? _message;

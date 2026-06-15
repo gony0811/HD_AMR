@@ -1,0 +1,391 @@
+@using HD_AMR.Communication.Weld
+@using HD_AMR.Models
+@using HD_AMR.Service
+@inject WeldTrackingService Svc
+@inject CameraService Cam
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+@* 명세서 v2 — 용접라인 추적(수동 2-shot). Camera 페이지 스트림 아래에 표시. *@
+<hr class="mt-4" />
+<h3>용접라인 추적 <span class="text-muted" style="font-size:.8rem">(명세서 v2 · 수동 측정)</span></h3>
+
+<div class="mb-2">
+    <span class="badge @(Svc.DetectorAvailable ? "bg-success" : "bg-secondary")">
+        검출엔진 @(Svc.DetectorAvailable ? "OpenCV 사용가능" : "비활성(Windows 전용)")
+    </span>
+    <span class="badge bg-info text-dark">상태: @Svc.State</span>
+    @if (Svc.MmPerPixel > 0)
+    {
+        <span class="badge bg-light text-dark">d·ΔPeak: mm · Pitch: mm</span>
+    }
+    else
+    {
+        <span class="badge bg-warning text-dark">⚠ mm/px=0 · theta 계산불가 (d=px, Pitch=mm)</span>
+    }
+</div>
+
+<div class="row g-3">
+    @* ── 좌: ROI 에디터 ─────────────────────────────── *@
+    <div class="col-xl-6">
+        <div class="card">
+            <div class="card-header py-1"><strong>ROI 지정</strong> <span class="text-muted">(스트림 위 드래그)</span></div>
+            <div class="card-body">
+                @if (Cam.IsStreaming)
+                {
+                    <div class="mb-2">
+                        <div class="btn-group btn-group-sm" role="group">
+                            <input type="radio" class="btn-check" name="drawkind" id="dk_weld" checked="@(_drawKind == "weld")" @onchange='() => SetKind("weld")' />
+                            <label class="btn btn-outline-warning" for="dk_weld">Weld ROI 그리기</label>
+                            <input type="radio" class="btn-check" name="drawkind" id="dk_peak" checked="@(_drawKind == "peak")" @onchange='() => SetKind("peak")' />
+                            <label class="btn btn-outline-info" for="dk_peak">Peak ROI 그리기</label>
+                        </div>
+                        <button class="btn btn-sm btn-outline-secondary ms-2" @onclick="ResetRoi">ROI 초기화</button>
+                    </div>
+                    <div style="position:relative; display:inline-block; width:100%; max-width:640px">
+                        <img @ref="_editorImg" src="@EditorStreamSrc" alt="ROI editor"
+                             style="width:100%; display:block; border:1px solid #ccc; border-radius:4px" />
+                        <canvas @ref="_editorCanvas"
+                                style="position:absolute; top:0; left:0; width:100%; height:100%; cursor:crosshair"></canvas>
+                    </div>
+                    <div class="small text-muted mt-1">
+                        Weld=<span style="color:#caa500">노랑</span>, Peak=<span style="color:#00a6c0">하늘</span> ·
+                        에디터 영상은 검출 모드(@Svc.Params.Mode)를 따릅니다.
+                    </div>
+                }
+                else
+                {
+                    <div class="alert alert-secondary mb-0">
+                        스트림이 정지 상태입니다. 위에서 <b>시작</b> 후 ROI를 지정하세요.
+                    </div>
+                }
+
+                @* 수동 좌표 입력 (선택 ROI 에 적용) *@
+                <div class="row g-1 align-items-end mt-2" style="max-width:560px">
+                    <div class="col-auto"><label class="form-label mb-0 small">X</label><input class="form-control form-control-sm" type="number" @bind="_mx" style="width:80px" /></div>
+                    <div class="col-auto"><label class="form-label mb-0 small">Y</label><input class="form-control form-control-sm" type="number" @bind="_my" style="width:80px" /></div>
+                    <div class="col-auto"><label class="form-label mb-0 small">W</label><input class="form-control form-control-sm" type="number" @bind="_mw" style="width:80px" /></div>
+                    <div class="col-auto"><label class="form-label mb-0 small">H</label><input class="form-control form-control-sm" type="number" @bind="_mh" style="width:80px" /></div>
+                    <div class="col-auto">
+                        <button class="btn btn-sm btn-outline-primary" @onclick="ApplyManualRoi">@( _drawKind=="peak" ? "Peak" : "Weld") ROI 적용</button>
+                    </div>
+                </div>
+                <div class="small mt-1">
+                    <span class="text-warning">Weld</span>: @RoiText(Svc.WeldRoi) &nbsp;|&nbsp;
+                    <span class="text-info">Peak</span>: @RoiText(Svc.PeakRoi)
+                </div>
+
+                @* 프로파일 Save/Load *@
+                <div class="row g-1 align-items-end mt-2" style="max-width:560px">
+                    <div class="col-auto"><label class="form-label mb-0 small">프로파일명</label><input class="form-control form-control-sm" @bind="Svc.ProfileName" style="width:160px" /></div>
+                    <div class="col-auto"><button class="btn btn-sm btn-primary" @onclick="SaveProfile">Save</button></div>
+                    <div class="col-auto">
+                        <select class="form-select form-select-sm" @bind="_loadName" style="width:160px">
+                            <option value="">— 불러올 프로파일 —</option>
+                            @foreach (var n in Svc.ListProfiles())
+                            {
+                                <option value="@n">@n</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="col-auto"><button class="btn btn-sm btn-outline-secondary" @onclick="LoadProfile" disabled="@string.IsNullOrEmpty(_loadName)">Load</button></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    @* ── 우: 파라미터 + 측정 ─────────────────────────── *@
+    <div class="col-xl-6">
+        <div class="card mb-3">
+            <div class="card-header py-1"><strong>검출 파라미터</strong></div>
+            <div class="card-body">
+                <div class="row g-2">
+                    <div class="col-auto" title="검출에 쓸 입력 영상. IR=권장(Depth와 정합), RGB Grayscale=컬러 흑백, RGB HSV(S)=채도 채널">
+                        <label class="form-label mb-0 small">입력 ⓘ</label>
+                        <select class="form-select form-select-sm" @bind="Svc.Params.Mode" style="width:150px">
+                            <option value="@WeldImageMode.Ir">IR</option>
+                            <option value="@WeldImageMode.RgbGrayscale">RGB Grayscale</option>
+                            <option value="@WeldImageMode.RgbHsv">RGB HSV(S)</option>
+                        </select>
+                    </div>
+                    <div class="col-auto" title="용접 진행 방향. 가로=비드가 좌우로 흐름(경계는 상/하), 세로=상하로 흐름(경계는 좌/우)">
+                        <label class="form-label mb-0 small">진행축 ⓘ</label>
+                        <select class="form-select form-select-sm" @bind="Svc.Params.ProgressAxis" style="width:130px">
+                            <option value="@WeldProgressAxis.Horizontal">가로(좌우)</option>
+                            <option value="@WeldProgressAxis.Vertical">세로(상하)</option>
+                        </select>
+                    </div>
+                    <div class="col-auto" title="흑백 영상→비드/배경 2값 마스크. Otsu=전역 자동(조명 균일), Adaptive=국소(조명 불균일), Canny=경계선만">
+                        <label class="form-label mb-0 small">이진화 ⓘ</label>
+                        <select class="form-select form-select-sm" @bind="Svc.Params.Threshold" style="width:120px">
+                            <option value="@WeldThresholdMethod.Otsu">Otsu</option>
+                            <option value="@WeldThresholdMethod.Adaptive">Adaptive</option>
+                            <option value="@WeldThresholdMethod.Canny">Canny</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="row g-2 mt-1 align-items-end">
+                    <div class="col-auto form-check ms-2" title="비드가 배경보다 어두우면 체크(흑백 반전). Otsu/Adaptive 전용 — Canny는 무관">
+                        <input class="form-check-input" type="checkbox" id="wk_inv" @bind="Svc.Params.Invert" />
+                        <label class="form-check-label small" for="wk_inv">비드가 어두움(반전)</label>
+                    </div>
+                    <div class="col-auto form-check" title="국소 대비강화. 경계가 흐릿하면 ON, 노이즈가 많으면 OFF">
+                        <input class="form-check-input" type="checkbox" id="wk_clahe" @bind="Svc.Params.UseClahe" />
+                        <label class="form-check-label small" for="wk_clahe">CLAHE</label>
+                    </div>
+                    <div class="col-auto" title="가우시안 블러 커널. 잔노이즈 완화. 클수록 경계도 뭉개짐">
+                        <label class="form-label mb-0 small">Blur</label>
+                        <input class="form-control form-control-sm" type="number" @bind="Svc.Params.BlurKernel" style="width:70px" />
+                        <div class="text-muted" style="font-size:.68rem">0=끔·홀수3~9</div>
+                    </div>
+                    <div class="col-auto" title="모폴로지 close+open. 끊긴 경계 잇고 작은 노이즈 제거. 클수록 형상 왜곡">
+                        <label class="form-label mb-0 small">Morph</label>
+                        <input class="form-control form-control-sm" type="number" @bind="Svc.Params.MorphKernel" style="width:70px" />
+                        <div class="text-muted" style="font-size:.68rem">0=끔·홀수3~9</div>
+                    </div>
+                    <div class="col-auto" title="centerline 이동평균 윈도(픽셀 수). 중심선을 매끈하게. 클수록 곡률에 둔감">
+                        <label class="form-label mb-0 small">Smooth</label>
+                        <input class="form-control form-control-sm" type="number" @bind="Svc.Params.SmoothingWindow" style="width:70px" />
+                        <div class="text-muted" style="font-size:.68rem">0~1=끔·3~15</div>
+                    </div>
+                </div>
+                <div class="row g-2 mt-1 align-items-end">
+                    <div class="col-auto" title="위치 오차 d 의 기준선. FOV 중심=ROI 중앙선, Peak ROI 중심=Peak ROI 중앙선">
+                        <label class="form-label mb-0 small">기준선 ⓘ</label>
+                        <select class="form-select form-select-sm" @bind="Svc.ReferenceMode" style="width:150px">
+                            <option value="@WeldReferenceMode.FovCenter">FOV 중심</option>
+                            <option value="@WeldReferenceMode.PeakLine">Peak ROI 중심</option>
+                        </select>
+                    </div>
+                    <div class="col-auto" title="픽셀↔mm 환산계수. 0이면 픽셀 단위로 표시, 값을 넣으면 d/theta 를 mm 로 환산">
+                        <label class="form-label mb-0 small">mm/px ⓘ <span class="text-danger" style="font-size:.68rem">0=theta불가</span></label>
+                        <input class="form-control form-control-sm" type="number" step="0.01" @bind="Svc.MmPerPixel" style="width:100px" />
+                    </div>
+                </div>
+
+                <details class="mt-2">
+                    <summary class="small text-primary" style="cursor:pointer">ⓘ 파라미터 설명 보기</summary>
+                    <ul class="small text-muted mb-0 mt-1" style="line-height:1.5">
+                        <li><b>입력</b>: 검출 영상. <b>IR 권장</b>(Depth와 같은 센서라 Peak ROI와 정합). RGB는 컬러 흑백/채도.</li>
+                        <li><b>진행축</b>: 비드가 흐르는 방향. 가로=경계 상/하, 세로=경계 좌/우.</li>
+                        <li><b>이진화</b>: <b>Otsu</b>(전역 자동·조명 균일) / <b>Adaptive</b>(국소·조명 얼룩) / <b>Canny</b>(경계선만).</li>
+                        <li><b>반전</b>: 비드가 어두울 때 체크. <b>CLAHE</b>: 대비 강화(흐리면 ON, 노이즈면 OFF).</li>
+                        <li><b>Blur</b>(0/홀수3~9): 노이즈↓·경계도 뭉개짐. <b>Morph</b>(0/홀수3~9): 틈 메움·점노이즈 제거.</li>
+                        <li><b>Smooth</b>(0~1끔·3~15): 중심선 매끄럽게. <b>기준선</b>: d 기준(FOV 중심 / Peak ROI 중심).</li>
+                        <li><b>mm/px</b>: 픽셀→mm 환산계수. <b>0이면 d·ΔPeak는 픽셀, theta는 계산 불가</b>(Pitch가 mm라 단위 불일치). 값을 넣어야 각도 계산됨.</li>
+                    </ul>
+                </details>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header py-1"><strong>측정 (수동 2-shot)</strong></div>
+            <div class="card-body">
+                <div class="mb-2">
+                    <button class="btn btn-sm btn-secondary" @onclick="DetectOnce" disabled="@(_busy || !Svc.DetectorAvailable)">1회 검출</button>
+                    <button class="btn btn-sm btn-info" @onclick="() => Capture(1)" disabled="@(_busy || !Svc.DetectorAvailable)">Peak #1 캡처</button>
+                    <button class="btn btn-sm btn-info" @onclick="() => Capture(2)" disabled="@(_busy || !Svc.DetectorAvailable)">Peak #2 캡처</button>
+                    <button class="btn btn-sm btn-outline-secondary" @onclick="ResetMeas" disabled="@_busy">측정 초기화</button>
+                </div>
+                <div class="row g-2 align-items-end mb-2">
+                    <div class="col-auto" title="로봇이 이동하는 Pitch(명령값). 로봇 파라미터라 항상 mm 단위">
+                        <label class="form-label mb-0 small">Pitch (mm)</label>
+                        <input class="form-control form-control-sm" type="number" step="0.1" @bind="Svc.Pitch" style="width:110px" />
+                    </div>
+                    <div class="col-auto form-check" title="로봇 위치 반복정도 오차를 영상의 Peak 변위로 교정: 보정 Pitch = Pitch + 부호×ΔPeak">
+                        <input class="form-check-input" type="checkbox" id="wk_pcorr" @bind="Svc.PitchCorrectionEnabled" />
+                        <label class="form-check-label small" for="wk_pcorr">Peak 변위로 보정</label>
+                    </div>
+                    <div class="col-auto" title="ΔPeak(=ProgressPos2−ProgressPos1) 적용 부호. 진행/장착 방향 규약에 맞춰 한 번 정함">
+                        <label class="form-label mb-0 small">부호</label>
+                        <select class="form-select form-select-sm" @bind="Svc.PitchCorrectionSign" style="width:70px">
+                            <option value="-1">−</option>
+                            <option value="1">+</option>
+                        </select>
+                    </div>
+                    <div class="col-auto"><button class="btn btn-sm btn-primary" @onclick="ComputeAngle" disabled="@(_busy || Svc.M1 is null || Svc.M2 is null || Svc.MmPerPixel <= 0)">각도 계산</button></div>
+                </div>
+                @if (Svc.MmPerPixel <= 0)
+                {
+                    <div class="alert alert-warning py-2 mb-2">
+                        <b>⚠ theta 계산 불가</b> — mm/px(환산계수)가 <b>0</b>입니다.
+                        d는 <b>픽셀</b>, Pitch는 <b>mm</b>라 단위가 달라 각도를 계산할 수 없습니다.
+                        검출 파라미터의 <b>mm/px</b>에 값을 입력하세요. (입력하면 d·ΔPeak가 mm로 환산되어 각도 계산이 활성화됩니다.)
+                    </div>
+                }
+
+                <table class="table table-sm mb-2" style="max-width:460px">
+                    <tbody>
+                        <tr><td class="text-muted">Peak #1 d</td><td>@MeasText(Svc.M1)</td></tr>
+                        <tr><td class="text-muted">Peak #2 d</td><td>@MeasText(Svc.M2)</td></tr>
+                        @if (Svc.Angle is { } a)
+                        {
+                            <tr>
+                                <td class="text-muted">Pitch</td>
+                                <td>
+                                    @a.NominalPitch.ToString("0.#")@a.Unit
+                                    @if (a.Corrected)
+                                    {
+                                        <text> → <b>보정 Pitch @a.Pitch.ToString("0.#")@a.Unit</b> (ΔPeak @a.PeakShift.ToString("0.0"), 적용 @((a.Pitch - a.NominalPitch).ToString("+0.0;-0.0")))</text>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                        <tr><td class="text-muted">theta</td><td>@(Svc.Angle is null ? "—" : $"{Svc.Angle.ThetaDeg:0.00}° ({Svc.Angle.ThetaRad:0.0000} rad)")</td></tr>
+                    </tbody>
+                </table>
+
+                @if (!string.IsNullOrEmpty(Svc.Message))
+                {
+                    <div class="alert @(Svc.LastDetect is { Success: false } ? "alert-warning" : "alert-info") py-1 mb-0">@Svc.Message</div>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@* ── 검출 결과 오버레이 ─────────────────────────── *@
+<div class="row g-3 mt-1">
+    <div class="col-md-6">
+        <h6 class="text-muted">최근 검출 오버레이</h6>
+        @if (Svc.LastOverlay is not null)
+        {
+            <img src="/camera/weld/overlay.jpg?k=@_resultKey" alt="weld overlay"
+                 style="width:100%; max-width:640px; border:1px solid #ccc; border-radius:4px; background:#000" />
+        }
+        else { <div class="text-muted small">아직 검출 결과가 없습니다.</div> }
+    </div>
+    <div class="col-md-3">
+        <h6 class="text-muted">Peak #1</h6>
+        @if (Svc.Peak1Overlay is not null)
+        {
+            <img src="/camera/weld/peak1.jpg?k=@_resultKey" alt="peak1" style="width:100%; border:1px solid #ccc; border-radius:4px; background:#000" />
+        }
+        else { <div class="text-muted small">—</div> }
+    </div>
+    <div class="col-md-3">
+        <h6 class="text-muted">Peak #2</h6>
+        @if (Svc.Peak2Overlay is not null)
+        {
+            <img src="/camera/weld/peak2.jpg?k=@_resultKey" alt="peak2" style="width:100%; border:1px solid #ccc; border-radius:4px; background:#000" />
+        }
+        else { <div class="text-muted small">—</div> }
+    </div>
+</div>
+
+@code {
+    private ElementReference _editorImg;
+    private ElementReference _editorCanvas;
+    private DotNetObjectReference<WeldTrackingPanel>? _ref;
+    private bool _editorInited;
+
+    private string _drawKind = "weld";
+    private string _loadName = "";
+    private int _editorKey = 1;
+    private int _resultKey = 1;
+    private bool _busy;
+
+    // 수동 좌표 입력 backing
+    private int _mx, _my, _mw, _mh;
+
+    private string EditorStreamSrc =>
+        (Svc.Params.Mode == WeldImageMode.Ir ? "/camera/ir.mjpeg" : "/camera/color.mjpeg") + "?k=" + _editorKey;
+
+    protected override void OnInitialized() => _ref = DotNetObjectReference.Create(this);
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (Cam.IsStreaming && !_editorInited)
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("hdAmrWeld.initRoiEditor", _editorImg, _editorCanvas, _ref);
+                _editorInited = true;
+                await PushRois();
+            }
+            catch { /* 엘리먼트 미준비/회로 종료 무시 */ }
+        }
+        else if (!Cam.IsStreaming)
+        {
+            _editorInited = false; // 스트림 정지 시 재init 허용
+        }
+    }
+
+    [JSInvokable]
+    public async Task OnRoiDrawn(string kind, double x, double y, double w, double h)
+    {
+        var r = new RoiRect((int)x, (int)y, (int)w, (int)h);
+        if (kind == "peak") Svc.SetPeakRoi(r); else Svc.SetWeldRoi(r);
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task SetKind(string kind)
+    {
+        _drawKind = kind;
+        if (_editorInited) try { await JS.InvokeVoidAsync("hdAmrWeld.setKind", _editorCanvas, kind); } catch { }
+    }
+
+    private async Task PushRois()
+    {
+        if (!_editorInited) return;
+        object? peak = Svc.PeakRoi is { } p ? new { x = p.X, y = p.Y, w = p.Width, h = p.Height } : null;
+        object? weld = Svc.WeldRoi is { } wl ? new { x = wl.X, y = wl.Y, w = wl.Width, h = wl.Height } : null;
+        try
+        {
+            await JS.InvokeVoidAsync("hdAmrWeld.setRois", _editorCanvas, peak, weld);
+            await JS.InvokeVoidAsync("hdAmrWeld.setKind", _editorCanvas, _drawKind);
+        }
+        catch { }
+    }
+
+    private async Task ApplyManualRoi()
+    {
+        var r = new RoiRect(_mx, _my, _mw, _mh);
+        if (_drawKind == "peak") Svc.SetPeakRoi(r); else Svc.SetWeldRoi(r);
+        await PushRois();
+    }
+
+    private async Task ResetRoi()
+    {
+        Svc.ResetRoi();
+        await PushRois();
+    }
+
+    private void SaveProfile() => Svc.SaveProfile(string.IsNullOrWhiteSpace(Svc.ProfileName) ? "default" : Svc.ProfileName);
+
+    private async Task LoadProfile()
+    {
+        if (string.IsNullOrEmpty(_loadName)) return;
+        Svc.LoadProfile(_loadName);
+        await PushRois();
+    }
+
+    private async Task DetectOnce() => await Run(() => { Svc.DetectOnce(); return Task.CompletedTask; });
+    private async Task Capture(int id) => await Run(() => { Svc.CapturePeak(id); return Task.CompletedTask; });
+    private void ComputeAngle() => Svc.ComputeAngle();
+    private void ResetMeas() => Svc.ResetMeasurements();
+
+    private async Task Run(Func<Task> action)
+    {
+        if (_busy) return;
+        _busy = true;
+        try { await Task.Run(action); _resultKey++; }
+        finally { _busy = false; }
+    }
+
+    private static string RoiText(RoiRect? r) => r is null ? "미지정" : $"({r.X},{r.Y},{r.Width}×{r.Height})";
+
+    private string MeasText(PeakMeasurement? m)
+    {
+        if (m is null) return "—";
+        string d = Svc.MmPerPixel > 0 ? $"{m.DPixel * Svc.MmPerPixel:0.0}mm" : $"{m.DPixel:0.0}px";
+        string peak = m.Peak is { Found: true } ? $", peak@{m.Peak.ProgressPos:0}px/{m.Peak.DepthValue}mm" : "";
+        return $"{d} (conf {m.Confidence:P0}{peak})";
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _ref?.Dispose();
+        await Task.CompletedTask;
+    }
+}
