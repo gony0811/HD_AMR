@@ -117,6 +117,11 @@ public sealed class WeldVisionDetector : IWeldVisionDetector
 
             var overlay = EncodeOverlay(bgr, roi, p, pts, refPos, weldCenterFull);
 
+            // 타깃 지점의 비드/기준 픽셀 좌표(full-image) — 깊이 샘플링·스케일 환산용.
+            double targetProgFull = (horiz ? roi.X : roi.Y) + targetS;
+            var weldPt = horiz ? new PixelPoint(targetProgFull, weldCenterFull) : new PixelPoint(weldCenterFull, targetProgFull);
+            var refPt = horiz ? new PixelPoint(targetProgFull, refPos) : new PixelPoint(refPos, targetProgFull);
+
             return new WeldDetectionResult
             {
                 Success = true,
@@ -125,6 +130,8 @@ public sealed class WeldVisionDetector : IWeldVisionDetector
                 ReferencePos = refPos,
                 WeldCenterAtTarget = weldCenterFull,
                 DPixel = d,
+                WeldPoint = weldPt,
+                RefPoint = refPt,
                 OverlayJpeg = overlay,
             };
         }

@@ -90,6 +90,12 @@ public sealed class WeldDetectionResult
     /// <summary>위치 오차 d (픽셀) = WeldCenterAtTarget − ReferencePos.</summary>
     public double DPixel { get; init; }
 
+    /// <summary>타깃 지점의 비드 중심점(전체 이미지 픽셀). 깊이 샘플링·스케일 환산용.</summary>
+    public PixelPoint? WeldPoint { get; init; }
+
+    /// <summary>타깃 지점의 기준선 점(전체 이미지 픽셀).</summary>
+    public PixelPoint? RefPoint { get; init; }
+
     /// <summary>주석(overlay) JPEG. UI 표시용. 없으면 null.</summary>
     public byte[]? OverlayJpeg { get; init; }
 
@@ -114,6 +120,26 @@ public sealed class PeakMeasurement
     public PeakInfo? Peak { get; init; }
     public DateTime At { get; init; }
     public byte[]? OverlayJpeg { get; init; }
+
+    /// <summary>비드 중심점 위치의 깊이(mm, 0=무효). Depth 자동 스케일(mm/px=Z/fx) 환산용.</summary>
+    public double DepthZ { get; init; }
+}
+
+/// <summary>스케일 모드. AutoDepth=깊이로 mm/px 자동, Fixed=고정 mm/px(2점 보정/수동).</summary>
+public enum WeldScaleMode { AutoDepth, Fixed }
+
+/// <summary>스케일 검증 결과 — 아는 길이를 보정 전(Depth 자동)/후(현재 스케일)로 측정해 비교.</summary>
+public sealed class ScaleValidationResult
+{
+    public double TrueMm { get; init; }
+    public double PixelDist { get; init; }
+    public double AutoMm { get; init; }       // Depth 자동 스케일로 측정
+    public double FixedMm { get; init; }      // 현재 고정 스케일(2점/수동)로 측정
+    public bool FixedAvailable { get; init; } // 고정 스케일이 설정돼 있는지
+    public double AutoErr => AutoMm - TrueMm;
+    public double FixedErr => FixedMm - TrueMm;
+    public double AutoErrPct => TrueMm != 0 ? AutoErr / TrueMm * 100 : 0;
+    public double FixedErrPct => TrueMm != 0 ? FixedErr / TrueMm * 100 : 0;
 }
 
 /// <summary>d1,d2,pitch 로 산출한 각도(명세서 11장).</summary>

@@ -12,6 +12,10 @@ public sealed class RoiProfile
     public int FrameWidth { get; set; }
     public int FrameHeight { get; set; }
     public DateTime SavedAt { get; set; }
+
+    // 스케일: Depth 자동 기본 + 2점 보정계수(보강)
+    public double ScaleCorrection { get; set; } = 1.0;
+    public bool ScaleCorrectionEnabled { get; set; }
 }
 
 /// <summary>

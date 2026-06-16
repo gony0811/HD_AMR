@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using HD_AMR.Communication.Weld;
 using HD_AMR.Models;
 using Microsoft.Extensions.Logging;
@@ -32,7 +33,6 @@ public class WeldTrackingService
         _store = store;
         _settings = options.Value;
         _logger = loggerFactory.CreateLogger<WeldTrackingService>();
-        MmPerPixel = _settings.MmPerPixel;
         PitchCorrectionEnabled = _settings.PitchCorrectionEnabled;
         PitchCorrectionSign = _settings.PitchCorrectionSign >= 0 ? 1 : -1;
 
@@ -51,7 +51,21 @@ public class WeldTrackingService
     public WeldDetectionParams Params { get; } = new();
     public WeldReferenceMode ReferenceMode { get; set; } = WeldReferenceMode.FovCenter;
     public double Pitch { get; set; }
-    public double MmPerPixel { get; set; }
+
+    /// <summary>2점 보정으로 산출한 스케일 보정계수. Depth 자동(mm/px=Z/fx)에 곱해 체계적 오차를 보강. 1=보정 없음.</summary>
+    public double ScaleCorrection { get; set; } = 1.0;
+
+    /// <summary>2점 보정계수 적용 여부. 끄면 순수 Depth 자동.</summary>
+    public bool ScaleCorrectionEnabled { get; set; }
+
+    /// <summary>스케일 사용 가능 여부 — fx(해상도·FOV) 만 있으면 Depth 자동으로 항상 가능.</summary>
+    public bool ScaleAvailable => Fx() > 0;
+
+    /// <summary>최근 검증(Validate) 결과. 없으면 null.</summary>
+    public ScaleValidationResult? LastValidation { get; private set; }
+
+    /// <summary>측정 d 를 현재 스케일(Depth 자동 ± 보정)로 mm 환산.</summary>
+    public double DMm(PeakMeasurement m) => m.DPixel * EffectiveMmPerPixel(m.DepthZ);
 
     /// <summary>Peak 변위로 pitch 를 보정할지(로봇 반복정도 오차 교정).</summary>
     public bool PitchCorrectionEnabled { get; set; }
@@ -87,6 +101,8 @@ public class WeldTrackingService
             WeldRoi = WeldRoi,
             FrameWidth = size?.w ?? 0,
             FrameHeight = size?.h ?? 0,
+            ScaleCorrection = ScaleCorrection,
+            ScaleCorrectionEnabled = ScaleCorrectionEnabled,
         });
         ProfileName = name;
         Message = $"프로파일 '{name}' 저장됨";
@@ -104,6 +120,8 @@ public class WeldTrackingService
     private void ApplyProfile(RoiProfile p)
     {
         ProfileName = p.Name;
+        ScaleCorrection = p.ScaleCorrection <= 0 ? 1.0 : p.ScaleCorrection;
+        ScaleCorrectionEnabled = p.ScaleCorrectionEnabled;
         var size = FrameSize();
         if (size is { } s)
         {
@@ -146,6 +164,10 @@ public class WeldTrackingService
         if (depth is not null && PeakRoi is not null)
             peak = DepthPeakAnalyzer.Analyze(depth, PeakRoi, Params.ProgressAxis);
 
+        // 비드 중심점 위치의 깊이(mm) — Depth 자동 스케일(Z/fx)용. 없으면 peak 깊이로 대체.
+        double depthZ = r.WeldPoint is { } wp ? SampleDepthAtDetectionPoint(wp) : 0;
+        if (depthZ <= 0 && peak is { Found: true }) depthZ = peak.DepthValue;
+
         var m = new PeakMeasurement
         {
             PeakId = id,
@@ -154,47 +176,48 @@ public class WeldTrackingService
             Peak = peak,
             At = DateTime.Now,
             OverlayJpeg = r.OverlayJpeg,
+            DepthZ = depthZ,
         };
         if (id == 1) { M1 = m; State = WeldTrackingState.Peak1Captured; }
         else { M2 = m; State = WeldTrackingState.Peak2Captured; }
-        Message = $"Peak #{id} 캡처: d={Fmt(r.DPixel)}" + (peak is { Found: true } ? $", peak@{peak.ProgressPos:0}px / {peak.DepthValue}mm" : "");
+        Message = $"Peak #{id} 캡처: d={DMm(m):0.0}mm ({r.DPixel:0.0}px)"
+            + (peak is { Found: true } ? $", peak@{peak.ProgressPos:0}px / {peak.DepthValue}mm" : "");
 
-        // Pitch(mm)·두 측정이 있고 mm/px(환산계수)가 설정됐을 때만 자동 각도 산출.
-        if (M1 is not null && M2 is not null && Pitch > 0 && MmPerPixel > 0) ComputeAngle();
+        // Pitch(mm)·두 측정이 있고 스케일이 사용 가능할 때만 자동 각도 산출.
+        if (M1 is not null && M2 is not null && Pitch > 0 && ScaleAvailable) ComputeAngle();
     }
 
     /// <summary>
-    /// d1·d2·Pitch 로 각도 theta 산출. <b>Pitch 는 항상 mm</b>(로봇 파라미터)이고 d·ΔPeak 는 픽셀
-    /// 측정이므로, 둘을 같은 단위로 맞추려면 <see cref="MmPerPixel"/>(환산계수)가 반드시 필요하다.
-    /// mm/px 가 0 이면 단위 불일치라 각도를 계산하지 않고 <see cref="Angle"/> 를 비우고 경고만 남긴다.
+    /// d1·d2·Pitch 로 각도 theta 산출. <b>Pitch 는 항상 mm</b>(로봇 파라미터). d 는 픽셀 측정이라
+    /// Depth 자동 스케일(mm/px=Z/fx, ±2점 보정계수)로 mm 환산해 단위를 맞춘다.
     /// </summary>
     public void ComputeAngle()
     {
         if (M1 is null || M2 is null) { Message = "Peak #1, #2 측정이 모두 필요합니다."; return; }
         if (Pitch <= 0) { Message = "Pitch(mm) 값을 입력하세요(>0)."; return; }
-        if (MmPerPixel <= 0)
+        if (!ScaleAvailable)
         {
-            // 사고 방지: 픽셀 d 와 mm Pitch 를 섞어 계산하지 않는다.
             Angle = null;
-            Message = "⚠ theta 계산 불가: mm/px(환산계수)가 0 입니다. d 는 픽셀, Pitch 는 mm 라 단위가 달라 " +
-                      "각도를 계산할 수 없습니다. mm/px 값을 입력하세요.";
+            Message = "⚠ theta 계산 불가: 해상도/FOV 를 알 수 없어 스케일(fx)을 만들 수 없습니다.";
             return;
         }
 
-        double mmpp = MmPerPixel;
-        double d1 = M1.DPixel * mmpp;   // mm
-        double d2 = M2.DPixel * mmpp;   // mm
+        // 측정마다 그 지점의 스케일로 d 를 mm 로 환산. 자동이면 Z/fx, 고정이면 mm/px.
+        double mmpp1 = EffectiveMmPerPixel(M1.DepthZ);
+        double mmpp2 = EffectiveMmPerPixel(M2.DepthZ);
+        double d1 = M1.DPixel * mmpp1;   // mm
+        double d2 = M2.DPixel * mmpp2;   // mm
 
         double nominal = Pitch;          // mm (로봇 파라미터)
         double effPitch = nominal;
         double peakShift = 0;            // mm
         bool corrected = false;
 
-        // Peak 변위 보정: 보정 Pitch = Pitch + Sign × ΔPeak (ΔPeak = (ProgressPos2 − ProgressPos1)×mm/px).
+        // Peak 변위 보정: 보정 Pitch = Pitch + Sign × ΔPeak. ΔPeak 는 두 측정 평균 스케일로 mm 환산.
         if (PitchCorrectionEnabled && M1.Peak is { Found: true } p1 && M2.Peak is { Found: true } p2)
         {
             double dppPx = p2.ProgressPos - p1.ProgressPos;
-            peakShift = dppPx * mmpp;    // mm
+            peakShift = dppPx * ((mmpp1 + mmpp2) / 2.0);   // mm
             int sign = PitchCorrectionSign >= 0 ? 1 : -1;
             effPitch = nominal + sign * peakShift;
             corrected = true;
@@ -254,11 +277,112 @@ public class WeldTrackingService
         return _detector.DetectWeld(frame, weldRoi, Params, ReferenceMode, peakRef);
     }
 
-    private string Fmt(double dpx) => MmPerPixel > 0 ? $"{dpx * MmPerPixel:0.0}mm" : $"{dpx:0.0}px";
+    private static string Fmt(double dpx) => $"{dpx:0.0}px";   // 1회 검출(튜닝)은 깊이 컨텍스트가 없어 px 로 표시
 
     private (int w, int h)? FrameSize()
     {
         var f = _camera.LatestColor ?? _camera.LatestIr ?? _camera.LatestDepth;
         return f is null ? null : (f.Width, f.Height);
+    }
+
+    // ── 스케일(mm 환산) ─────────────────────────────────────────────
+    /// <summary>Depth 자동 mm/px = Z/fx (기본). 2점 보정계수가 켜져 있으면 곱해 보강한다.</summary>
+    private double EffectiveMmPerPixel(double depthZ)
+    {
+        double fx = Fx();
+        if (fx <= 0) return 0;
+        double z = depthZ > 0 ? depthZ : _settings.DefaultWorkDistanceMm;
+        double mmpp = z / fx;                                          // Depth 자동 기본
+        return ScaleCorrectionEnabled ? mmpp * ScaleCorrection : mmpp; // 2점 보정 보강
+    }
+
+    /// <summary>현재 검출 모드의 fx(px) = (영상폭/2)/tan(HFov/2). FOV·해상도 기반(간이 intrinsic).</summary>
+    private double Fx()
+    {
+        bool ir = Params.Mode == WeldImageMode.Ir;
+        var frame = ir ? _camera.LatestIr : _camera.LatestColor;
+        int w = frame?.Width ?? (ir ? _camera.Settings.IrWidth : _camera.Settings.ColorWidth);
+        double hfov = ir ? _settings.IrHFovDeg : _settings.ColorHFovDeg;
+        if (w <= 0 || hfov <= 0) return 0;
+        return (w / 2.0) / Math.Tan(hfov * Math.PI / 180.0 / 2.0);
+    }
+
+    /// <summary>검출 프레임 좌표 (u,v) 위치의 깊이(mm). 깊이 해상도가 다르면 비율로 스케일. 무효면 0.</summary>
+    private double SampleDepthAtDetectionPoint(PixelPoint p)
+    {
+        var depth = _camera.LatestDepth;
+        if (depth is null) return 0;
+        bool ir = Params.Mode == WeldImageMode.Ir;
+        var frame = ir ? _camera.LatestIr : _camera.LatestColor;
+        int fw = frame?.Width ?? depth.Width, fh = frame?.Height ?? depth.Height;
+        double sx = (double)depth.Width / fw, sy = (double)depth.Height / fh;
+        return SampleDepthMm(depth, p.X * sx, p.Y * sy);
+    }
+
+    private static double SampleDepthMm(CameraFrame depth, double u, double v)
+    {
+        int x = (int)Math.Round(u), y = (int)Math.Round(v);
+        var span = MemoryMarshal.Cast<byte, ushort>(depth.Pixels);
+        var vals = new List<int>(25);
+        for (int dy = -2; dy <= 2; dy++)
+        for (int dx = -2; dx <= 2; dx++)
+        {
+            int xx = x + dx, yy = y + dy;
+            if (xx < 0 || yy < 0 || xx >= depth.Width || yy >= depth.Height) continue;
+            int idx = yy * depth.Width + xx;
+            if ((uint)idx >= (uint)span.Length) continue;
+            int mm = span[idx];
+            if (mm > 0) vals.Add(mm);
+        }
+        if (vals.Count == 0) return 0;
+        vals.Sort();
+        return vals[vals.Count / 2];
+    }
+
+    // ── 2점 보정(보강) / 검증 ───────────────────────────────────────
+    /// <summary>
+    /// 클릭한 두 점과 아는 거리(mm)로 <b>보정계수</b>를 산출해 Depth 자동에 곱한다(보강).
+    /// 보정계수 = 참값 ÷ (Depth 자동만으로 잰 값). 거리 자동대응은 유지하면서 체계적 오차만 잡는다.
+    /// </summary>
+    public void Calibrate2Point(PixelPoint p1, PixelPoint p2, double knownMm)
+    {
+        double dist = Distance(p1, p2);
+        if (dist < 1 || knownMm <= 0) { Message = "두 점이 너무 가깝거나 실제 거리(mm)가 0입니다."; return; }
+        double fx = Fx();
+        double z = SampleDepthAtDetectionPoint(new PixelPoint((p1.X + p2.X) / 2, (p1.Y + p2.Y) / 2));
+        if (z <= 0) z = _settings.DefaultWorkDistanceMm;
+        double autoMeasured = fx > 0 ? dist * (z / fx) : 0;     // Depth 자동만으로 잰 길이
+        if (autoMeasured <= 0) { Message = "Depth 자동 스케일을 만들 수 없습니다(해상도·FOV 확인)."; return; }
+        ScaleCorrection = knownMm / autoMeasured;
+        ScaleCorrectionEnabled = true;
+        Message = $"2점 보정: Depth 자동 {autoMeasured:0.0}mm → 참값 {knownMm:0.#}mm, 보정계수 ×{ScaleCorrection:0.0000} 적용";
+    }
+
+    /// <summary>아는 길이를 보정 전(Depth 자동)/후(×보정계수)로 측정해 비교(검증).</summary>
+    public ScaleValidationResult ValidateScale(PixelPoint p1, PixelPoint p2, double knownMm)
+    {
+        double dist = Distance(p1, p2);
+        double fx = Fx();
+        double zMid = SampleDepthAtDetectionPoint(new PixelPoint((p1.X + p2.X) / 2, (p1.Y + p2.Y) / 2));
+        if (zMid <= 0) zMid = _settings.DefaultWorkDistanceMm;
+        double baseMm = fx > 0 ? dist * (zMid / fx) : 0;        // 보정 전(Depth 자동)
+        var res = new ScaleValidationResult
+        {
+            TrueMm = knownMm,
+            PixelDist = dist,
+            AutoMm = baseMm,
+            FixedMm = baseMm * ScaleCorrection,                 // 보정 후(×보정계수)
+            FixedAvailable = ScaleCorrectionEnabled,
+        };
+        LastValidation = res;
+        Message = $"검증: 참값 {knownMm:0.#}mm / Depth자동 {res.AutoMm:0.0}mm ({res.AutoErrPct:+0.0;-0.0}%)"
+            + (res.FixedAvailable ? $" / 보정후 {res.FixedMm:0.0}mm ({res.FixedErrPct:+0.0;-0.0}%)" : "");
+        return res;
+    }
+
+    private static double Distance(PixelPoint a, PixelPoint b)
+    {
+        double dx = a.X - b.X, dy = a.Y - b.Y;
+        return Math.Sqrt(dx * dx + dy * dy);
     }
 }

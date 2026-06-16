@@ -15,14 +15,9 @@
         검출엔진 @(Svc.DetectorAvailable ? "OpenCV 사용가능" : "비활성(Windows 전용)")
     </span>
     <span class="badge bg-info text-dark">상태: @Svc.State</span>
-    @if (Svc.MmPerPixel > 0)
-    {
-        <span class="badge bg-light text-dark">d·ΔPeak: mm · Pitch: mm</span>
-    }
-    else
-    {
-        <span class="badge bg-warning text-dark">⚠ mm/px=0 · theta 계산불가 (d=px, Pitch=mm)</span>
-    }
+    <span class="badge bg-light text-dark">
+        스케일: Depth 자동@(Svc.ScaleCorrectionEnabled ? $" ×{Svc.ScaleCorrection:0.000}" : "")
+    </span>
 </div>
 
 <div class="row g-3">
@@ -36,12 +31,23 @@
                     <div class="mb-2">
                         <div class="btn-group btn-group-sm" role="group">
                             <input type="radio" class="btn-check" name="drawkind" id="dk_weld" checked="@(_drawKind == "weld")" @onchange='() => SetKind("weld")' />
-                            <label class="btn btn-outline-warning" for="dk_weld">Weld ROI 그리기</label>
+                            <label class="btn btn-outline-warning" for="dk_weld">Weld ROI</label>
                             <input type="radio" class="btn-check" name="drawkind" id="dk_peak" checked="@(_drawKind == "peak")" @onchange='() => SetKind("peak")' />
-                            <label class="btn btn-outline-info" for="dk_peak">Peak ROI 그리기</label>
+                            <label class="btn btn-outline-info" for="dk_peak">Peak ROI</label>
+                            <input type="radio" class="btn-check" name="drawkind" id="dk_cal" checked="@(_drawKind == "cal")" @onchange='() => SetKind("cal")' />
+                            <label class="btn btn-outline-success" for="dk_cal">보정 2점</label>
+                            <input type="radio" class="btn-check" name="drawkind" id="dk_val" checked="@(_drawKind == "validate")" @onchange='() => SetKind("validate")' />
+                            <label class="btn btn-outline-danger" for="dk_val">검증 2점</label>
                         </div>
                         <button class="btn btn-sm btn-outline-secondary ms-2" @onclick="ResetRoi">ROI 초기화</button>
                     </div>
+                    @if (_drawKind == "cal" || _drawKind == "validate")
+                    {
+                        <div class="small text-muted mb-1">
+                            @(_drawKind == "cal" ? "보정" : "검증") 모드: 길이를 아는 두 점을 영상에서 클릭하세요
+                            (@(_drawKind == "cal" ? "초록" : "분홍") 점). 오른쪽 "스케일 보정" 카드에서 실제 거리를 입력합니다.
+                        </div>
+                    }
                     <div style="position:relative; display:inline-block; width:100%; max-width:640px">
                         <img @ref="_editorImg" src="@EditorStreamSrc" alt="ROI editor"
                              style="width:100%; display:block; border:1px solid #ccc; border-radius:4px" />
@@ -157,10 +163,6 @@
                             <option value="@WeldReferenceMode.PeakLine">Peak ROI 중심</option>
                         </select>
                     </div>
-                    <div class="col-auto" title="픽셀↔mm 환산계수. 0이면 픽셀 단위로 표시, 값을 넣으면 d/theta 를 mm 로 환산">
-                        <label class="form-label mb-0 small">mm/px ⓘ <span class="text-danger" style="font-size:.68rem">0=theta불가</span></label>
-                        <input class="form-control form-control-sm" type="number" step="0.01" @bind="Svc.MmPerPixel" style="width:100px" />
-                    </div>
                 </div>
 
                 <details class="mt-2">
@@ -172,9 +174,73 @@
                         <li><b>반전</b>: 비드가 어두울 때 체크. <b>CLAHE</b>: 대비 강화(흐리면 ON, 노이즈면 OFF).</li>
                         <li><b>Blur</b>(0/홀수3~9): 노이즈↓·경계도 뭉개짐. <b>Morph</b>(0/홀수3~9): 틈 메움·점노이즈 제거.</li>
                         <li><b>Smooth</b>(0~1끔·3~15): 중심선 매끄럽게. <b>기준선</b>: d 기준(FOV 중심 / Peak ROI 중심).</li>
-                        <li><b>mm/px</b>: 픽셀→mm 환산계수. <b>0이면 d·ΔPeak는 픽셀, theta는 계산 불가</b>(Pitch가 mm라 단위 불일치). 값을 넣어야 각도 계산됨.</li>
+                        <li>mm 환산(스케일)은 아래 <b>스케일 보정</b> 카드에서 설정합니다(Depth 자동 / 2점 보정 / 수동).</li>
                     </ul>
                 </details>
+            </div>
+        </div>
+
+        <div class="card mb-3">
+            <div class="card-header py-1"><strong>스케일 보정 (mm 환산)</strong></div>
+            <div class="card-body">
+                <div class="small mb-2">
+                    <b>기본: Depth 자동</b> — 측정 지점 깊이(Z)로 <code>mm/px = Z/fx</code> 자동(거리 자동대응).
+                </div>
+                <div class="small mb-2">
+                    보정계수 <b>×@Svc.ScaleCorrection.ToString("0.0000")</b>
+                    <span class="@(Svc.ScaleCorrectionEnabled ? "text-success" : "text-muted")">(@(Svc.ScaleCorrectionEnabled ? "적용 중" : "미적용"))</span>
+                    <span class="form-check form-check-inline ms-2">
+                        <input class="form-check-input" type="checkbox" id="sc_en" @bind="Svc.ScaleCorrectionEnabled" />
+                        <label class="form-check-label small" for="sc_en">보정 적용</label>
+                    </span>
+                    <button class="btn btn-sm btn-outline-secondary py-0" @onclick="ClearCorrection">보정 해제</button>
+                </div>
+
+                <div class="small text-muted">2점 보정(보강): 스케일이 틀어지면 길이 아는 두 점으로 <b>보정계수</b>를 잡아 Depth 자동을 보강합니다.</div>
+                <div class="small text-muted mb-1">왼쪽에서 <b>보정 2점</b> 선택 → 두 점 클릭 → 실제 거리(mm) 입력 → 보정 적용.</div>
+                <div class="row g-2 align-items-end mb-1">
+                    <div class="col-auto small">
+                        점: @(_calP1 is null ? "—" : $"({_calP1.X:0},{_calP1.Y:0})") / @(_calP2 is null ? "—" : $"({_calP2.X:0},{_calP2.Y:0})")
+                        · 픽셀거리 @(_calDist is { } cd ? cd.ToString("0.0") + "px" : "—")
+                    </div>
+                    <div class="col-auto">
+                        <label class="form-label mb-0 small">실제 거리(mm)</label>
+                        <input class="form-control form-control-sm" type="number" step="0.1" @bind="_calKnownMm" style="width:100px" />
+                    </div>
+                    <div class="col-auto">
+                        <button class="btn btn-sm btn-success" @onclick="ApplyTwoPointCal" disabled="@(_calP1 is null || _calP2 is null || _calKnownMm <= 0)">보정 적용</button>
+                    </div>
+                </div>
+
+                <hr class="my-2" />
+                <div class="small"><b>검증</b> <span class="text-muted">— 아는 길이를 재서 보정 전(Depth 자동)/후(보정계수) 오차 비교</span></div>
+                <div class="small text-muted mb-1">왼쪽에서 <b>검증 2점</b>을 선택해 <b>다른 기준</b> 두 점을 클릭하세요.</div>
+                <div class="row g-2 align-items-end mb-2">
+                    <div class="col-auto small">
+                        점: @(_valP1 is null ? "—" : $"({_valP1.X:0},{_valP1.Y:0})") / @(_valP2 is null ? "—" : $"({_valP2.X:0},{_valP2.Y:0})")
+                    </div>
+                    <div class="col-auto">
+                        <label class="form-label mb-0 small">실제 거리(mm)</label>
+                        <input class="form-control form-control-sm" type="number" step="0.1" @bind="_valKnownMm" style="width:100px" />
+                    </div>
+                    <div class="col-auto">
+                        <button class="btn btn-sm btn-outline-danger" @onclick="RunValidate" disabled="@(_valP1 is null || _valP2 is null || _valKnownMm <= 0)">검증</button>
+                    </div>
+                </div>
+                @if (Svc.LastValidation is { } v)
+                {
+                    <table class="table table-sm mb-0" style="max-width:380px">
+                        <thead><tr><th></th><th>측정</th><th>오차</th></tr></thead>
+                        <tbody>
+                            <tr><td class="text-muted">참값</td><td>@v.TrueMm.ToString("0.#") mm</td><td>—</td></tr>
+                            <tr><td class="text-muted">Depth 자동 (보정 전)</td><td>@v.AutoMm.ToString("0.0") mm</td><td class="@(Math.Abs(v.AutoErrPct) <= 2 ? "text-success" : "text-danger")">@v.AutoErrPct.ToString("+0.0;-0.0")%</td></tr>
+                            @if (v.FixedAvailable)
+                            {
+                                <tr><td class="text-muted">보정 후 (×계수)</td><td>@v.FixedMm.ToString("0.0") mm</td><td class="@(Math.Abs(v.FixedErrPct) <= 2 ? "text-success" : "text-danger")">@v.FixedErrPct.ToString("+0.0;-0.0")%</td></tr>
+                            }
+                        </tbody>
+                    </table>
+                }
             </div>
         </div>
 
@@ -203,14 +269,14 @@
                             <option value="1">+</option>
                         </select>
                     </div>
-                    <div class="col-auto"><button class="btn btn-sm btn-primary" @onclick="ComputeAngle" disabled="@(_busy || Svc.M1 is null || Svc.M2 is null || Svc.MmPerPixel <= 0)">각도 계산</button></div>
+                    <div class="col-auto"><button class="btn btn-sm btn-primary" @onclick="ComputeAngle" disabled="@(_busy || Svc.M1 is null || Svc.M2 is null || !Svc.ScaleAvailable)">각도 계산</button></div>
                 </div>
-                @if (Svc.MmPerPixel <= 0)
+                @if (!Svc.ScaleAvailable)
                 {
                     <div class="alert alert-warning py-2 mb-2">
-                        <b>⚠ theta 계산 불가</b> — mm/px(환산계수)가 <b>0</b>입니다.
+                        <b>⚠ theta 계산 불가</b> — 스케일이 설정되지 않았습니다.
                         d는 <b>픽셀</b>, Pitch는 <b>mm</b>라 단위가 달라 각도를 계산할 수 없습니다.
-                        검출 파라미터의 <b>mm/px</b>에 값을 입력하세요. (입력하면 d·ΔPeak가 mm로 환산되어 각도 계산이 활성화됩니다.)
+                        위 <b>스케일 보정</b>에서 <b>Depth 자동</b>을 켜거나 <b>2점 보정/수동</b>으로 mm/px를 설정하세요.
                     </div>
                 }
 
@@ -288,6 +354,14 @@
     // 수동 좌표 입력 backing
     private int _mx, _my, _mw, _mh;
 
+    // 스케일 보정/검증
+    private PixelPoint? _calP1, _calP2;
+    private double _calKnownMm;
+    private PixelPoint? _valP1, _valP2;
+    private double _valKnownMm;
+    private double? _calDist => (_calP1 is { } a && _calP2 is { } b)
+        ? Math.Sqrt((a.X - b.X) * (a.X - b.X) + (a.Y - b.Y) * (a.Y - b.Y)) : null;
+
     private string EditorStreamSrc =>
         (Svc.Params.Mode == WeldImageMode.Ir ? "/camera/ir.mjpeg" : "/camera/color.mjpeg") + "?k=" + _editorKey;
 
@@ -317,6 +391,32 @@
         var r = new RoiRect((int)x, (int)y, (int)w, (int)h);
         if (kind == "peak") Svc.SetPeakRoi(r); else Svc.SetWeldRoi(r);
         await InvokeAsync(StateHasChanged);
+    }
+
+    [JSInvokable]
+    public async Task OnTwoPointsPicked(string kind, double x1, double y1, double x2, double y2)
+    {
+        if (kind == "cal") { _calP1 = new PixelPoint(x1, y1); _calP2 = new PixelPoint(x2, y2); }
+        else { _valP1 = new PixelPoint(x1, y1); _valP2 = new PixelPoint(x2, y2); }
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void ApplyTwoPointCal()
+    {
+        if (_calP1 is { } a && _calP2 is { } b && _calKnownMm > 0)
+            Svc.Calibrate2Point(a, b, _calKnownMm);
+    }
+
+    private void ClearCorrection()
+    {
+        Svc.ScaleCorrection = 1.0;
+        Svc.ScaleCorrectionEnabled = false;
+    }
+
+    private void RunValidate()
+    {
+        if (_valP1 is { } a && _valP2 is { } b && _valKnownMm > 0)
+            Svc.ValidateScale(a, b, _valKnownMm);
     }
 
     private async Task SetKind(string kind)
@@ -378,7 +478,7 @@
     private string MeasText(PeakMeasurement? m)
     {
         if (m is null) return "—";
-        string d = Svc.MmPerPixel > 0 ? $"{m.DPixel * Svc.MmPerPixel:0.0}mm" : $"{m.DPixel:0.0}px";
+        string d = $"{Svc.DMm(m):0.0}mm ({m.DPixel:0.0}px)";
         string peak = m.Peak is { Found: true } ? $", peak@{m.Peak.ProgressPos:0}px/{m.Peak.DepthValue}mm" : "";
         return $"{d} (conf {m.Confidence:P0}{peak})";
     }

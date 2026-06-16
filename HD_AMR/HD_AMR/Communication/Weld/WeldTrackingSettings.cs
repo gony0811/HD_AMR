@@ -13,12 +13,6 @@ public class WeldTrackingSettings
     public string? AutoLoadProfile { get; set; } = "default";
 
     /// <summary>
-    /// 픽셀↔mm 환산계수(mm per pixel). 0이면 픽셀 단위로만 표시. 값이 있으면 d/theta 를 mm 기반으로
-    /// 환산해 표시한다(간이 — 정식 캘리브레이션 전 임시 브리지).
-    /// </summary>
-    public double MmPerPixel { get; set; }
-
-    /// <summary>
     /// Peak 변위 기반 pitch 보정 사용. 로봇 위치 반복정도 오차를 영상으로 본 Peak 변위로 교정한다.
     /// 보정 pitch = 공칭 pitch + Sign × (ProgressPos2 − ProgressPos1). (연속 Peak 가정, 명세서 §7.5)
     /// </summary>
@@ -26,4 +20,14 @@ public class WeldTrackingSettings
 
     /// <summary>Peak 변위 보정 부호(+1 또는 −1). 진행/장착 방향 규약에 맞춰 설정.</summary>
     public int PitchCorrectionSign { get; set; } = -1;
+
+    // ── 스케일(mm 환산) ─────────────────────────────────────────────
+    /// <summary>IR/Depth 센서 수평 화각(°). fx = (영상폭/2)/tan(HFov/2) 산출에 사용. Gemini 2 기본 91°.</summary>
+    public double IrHFovDeg { get; set; } = 91.0;
+
+    /// <summary>컬러(RGB) 센서 수평 화각(°). Gemini 2 기본 86°.</summary>
+    public double ColorHFovDeg { get; set; } = 86.0;
+
+    /// <summary>깊이 값이 없을 때 Depth 자동 스케일에 쓰는 기본 작업거리(mm).</summary>
+    public double DefaultWorkDistanceMm { get; set; } = 500.0;
 }
