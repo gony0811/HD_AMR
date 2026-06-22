@@ -1,0 +1,508 @@
+@using HD_AMR.Communication.Weld
+@using HD_AMR.Models
+@using HD_AMR.Service
+@inject WeldTrackingService Svc
+@inject CameraService Cam
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+@* 명세서 v2 — 용접라인 추적(수동 2-shot). Camera 페이지 스트림 아래에 표시. *@
+<hr class="mt-4" />
+<h3>용접라인 추적 <span class="text-muted" style="font-size:.8rem">(명세서 v2 · 수동 측정)</span></h3>
+
+<div class="mb-2">
+    <span class="badge @(Svc.DetectorAvailable ? "bg-success" : "bg-secondary")">
+        검출엔진 @(Svc.DetectorAvailable ? "OpenCV 사용가능" : "비활성(Windows 전용)")
+    </span>
+    <span class="badge bg-info text-dark">상태: @Svc.State</span>
+    <span class="badge bg-light text-dark">
+        스케일: Depth 자동@(Svc.ScaleCorrectionEnabled ? $" ×{Svc.ScaleCorrection:0.000}" : "")
+    </span>
+</div>
+
+<div class="row g-3">
+    @* ── 좌: ROI 에디터 ─────────────────────────────── *@
+    <div class="col-xl-6">
+        <div class="card">
+            <div class="card-header py-1"><strong>ROI 지정</strong> <span class="text-muted">(스트림 위 드래그)</span></div>
+            <div class="card-body">
+                @if (Cam.IsStreaming)
+                {
+                    <div class="mb-2">
+                        <div class="btn-group btn-group-sm" role="group">
+                            <input type="radio" class="btn-check" name="drawkind" id="dk_weld" checked="@(_drawKind == "weld")" @onchange='() => SetKind("weld")' />
+                            <label class="btn btn-outline-warning" for="dk_weld">Weld ROI</label>
+                            <input type="radio" class="btn-check" name="drawkind" id="dk_peak" checked="@(_drawKind == "peak")" @onchange='() => SetKind("peak")' />
+                            <label class="btn btn-outline-info" for="dk_peak">Peak ROI</label>
+                            <input type="radio" class="btn-check" name="drawkind" id="dk_cal" checked="@(_drawKind == "cal")" @onchange='() => SetKind("cal")' />
+                            <label class="btn btn-outline-success" for="dk_cal">보정 2점</label>
+                            <input type="radio" class="btn-check" name="drawkind" id="dk_val" checked="@(_drawKind == "validate")" @onchange='() => SetKind("validate")' />
+                            <label class="btn btn-outline-danger" for="dk_val">검증 2점</label>
+                        </div>
+                        <button class="btn btn-sm btn-outline-secondary ms-2" @onclick="ResetRoi">ROI 초기화</button>
+                    </div>
+                    @if (_drawKind == "cal" || _drawKind == "validate")
+                    {
+                        <div class="small text-muted mb-1">
+                            @(_drawKind == "cal" ? "보정" : "검증") 모드: 길이를 아는 두 점을 영상에서 클릭하세요
+                            (@(_drawKind == "cal" ? "초록" : "분홍") 점). 오른쪽 "스케일 보정" 카드에서 실제 거리를 입력합니다.
+                        </div>
+                    }
+                    <div style="position:relative; display:inline-block; width:100%; max-width:640px">
+                        <img @ref="_editorImg" src="@EditorStreamSrc" alt="ROI editor"
+                             style="width:100%; display:block; border:1px solid #ccc; border-radius:4px" />
+                        <canvas @ref="_editorCanvas"
+                                style="position:absolute; top:0; left:0; width:100%; height:100%; cursor:crosshair"></canvas>
+                    </div>
+                    <div class="small text-muted mt-1">
+                        Weld=<span style="color:#caa500">노랑</span>, Peak=<span style="color:#00a6c0">하늘</span> ·
+                        에디터 영상은 검출 모드(@Svc.Params.Mode)를 따릅니다.
+                    </div>
+                }
+                else
+                {
+                    <div class="alert alert-secondary mb-0">
+                        스트림이 정지 상태입니다. 위에서 <b>시작</b> 후 ROI를 지정하세요.
+                    </div>
+                }
+
+                @* 수동 좌표 입력 (선택 ROI 에 적용) *@
+                <div class="row g-1 align-items-end mt-2" style="max-width:560px">
+                    <div class="col-auto"><label class="form-label mb-0 small">X</label><input class="form-control form-control-sm" type="number" @bind="_mx" style="width:80px" /></div>
+                    <div class="col-auto"><label class="form-label mb-0 small">Y</label><input class="form-control form-control-sm" type="number" @bind="_my" style="width:80px" /></div>
+                    <div class="col-auto"><label class="form-label mb-0 small">W</label><input class="form-control form-control-sm" type="number" @bind="_mw" style="width:80px" /></div>
+                    <div class="col-auto"><label class="form-label mb-0 small">H</label><input class="form-control form-control-sm" type="number" @bind="_mh" style="width:80px" /></div>
+                    <div class="col-auto">
+                        <button class="btn btn-sm btn-outline-primary" @onclick="ApplyManualRoi">@( _drawKind=="peak" ? "Peak" : "Weld") ROI 적용</button>
+                    </div>
+                </div>
+                <div class="small mt-1">
+                    <span class="text-warning">Weld</span>: @RoiText(Svc.WeldRoi) &nbsp;|&nbsp;
+                    <span class="text-info">Peak</span>: @RoiText(Svc.PeakRoi)
+                </div>
+
+                @* 프로파일 Save/Load *@
+                <div class="row g-1 align-items-end mt-2" style="max-width:560px">
+                    <div class="col-auto"><label class="form-label mb-0 small">프로파일명</label><input class="form-control form-control-sm" @bind="Svc.ProfileName" style="width:160px" /></div>
+                    <div class="col-auto"><button class="btn btn-sm btn-primary" @onclick="SaveProfile">Save</button></div>
+                    <div class="col-auto">
+                        <select class="form-select form-select-sm" @bind="_loadName" style="width:160px">
+                            <option value="">— 불러올 프로파일 —</option>
+                            @foreach (var n in Svc.ListProfiles())
+                            {
+                                <option value="@n">@n</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="col-auto"><button class="btn btn-sm btn-outline-secondary" @onclick="LoadProfile" disabled="@string.IsNullOrEmpty(_loadName)">Load</button></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    @* ── 우: 파라미터 + 측정 ─────────────────────────── *@
+    <div class="col-xl-6">
+        <div class="card mb-3">
+            <div class="card-header py-1"><strong>검출 파라미터</strong></div>
+            <div class="card-body">
+                <div class="row g-2">
+                    <div class="col-auto" title="검출에 쓸 입력 영상. IR=권장(Depth와 정합), RGB Grayscale=컬러 흑백, RGB HSV(S)=채도 채널">
+                        <label class="form-label mb-0 small">입력 ⓘ</label>
+                        <select class="form-select form-select-sm" @bind="Svc.Params.Mode" style="width:150px">
+                            <option value="@WeldImageMode.Ir">IR</option>
+                            <option value="@WeldImageMode.RgbGrayscale">RGB Grayscale</option>
+                            <option value="@WeldImageMode.RgbHsv">RGB HSV(S)</option>
+                        </select>
+                    </div>
+                    <div class="col-auto" title="용접 진행 방향. 가로=비드가 좌우로 흐름(경계는 상/하), 세로=상하로 흐름(경계는 좌/우)">
+                        <label class="form-label mb-0 small">진행축 ⓘ</label>
+                        <select class="form-select form-select-sm" @bind="Svc.Params.ProgressAxis" style="width:130px">
+                            <option value="@WeldProgressAxis.Horizontal">가로(좌우)</option>
+                            <option value="@WeldProgressAxis.Vertical">세로(상하)</option>
+                        </select>
+                    </div>
+                    <div class="col-auto" title="흑백 영상→비드/배경 2값 마스크. Otsu=전역 자동(조명 균일), Adaptive=국소(조명 불균일), Canny=경계선만">
+                        <label class="form-label mb-0 small">이진화 ⓘ</label>
+                        <select class="form-select form-select-sm" @bind="Svc.Params.Threshold" style="width:120px">
+                            <option value="@WeldThresholdMethod.Otsu">Otsu</option>
+                            <option value="@WeldThresholdMethod.Adaptive">Adaptive</option>
+                            <option value="@WeldThresholdMethod.Canny">Canny</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="row g-2 mt-1 align-items-end">
+                    <div class="col-auto form-check ms-2" title="비드가 배경보다 어두우면 체크(흑백 반전). Otsu/Adaptive 전용 — Canny는 무관">
+                        <input class="form-check-input" type="checkbox" id="wk_inv" @bind="Svc.Params.Invert" />
+                        <label class="form-check-label small" for="wk_inv">비드가 어두움(반전)</label>
+                    </div>
+                    <div class="col-auto form-check" title="국소 대비강화. 경계가 흐릿하면 ON, 노이즈가 많으면 OFF">
+                        <input class="form-check-input" type="checkbox" id="wk_clahe" @bind="Svc.Params.UseClahe" />
+                        <label class="form-check-label small" for="wk_clahe">CLAHE</label>
+                    </div>
+                    <div class="col-auto" title="가우시안 블러 커널. 잔노이즈 완화. 클수록 경계도 뭉개짐">
+                        <label class="form-label mb-0 small">Blur</label>
+                        <input class="form-control form-control-sm" type="number" @bind="Svc.Params.BlurKernel" style="width:70px" />
+                        <div class="text-muted" style="font-size:.68rem">0=끔·홀수3~9</div>
+                    </div>
+                    <div class="col-auto" title="모폴로지 close+open. 끊긴 경계 잇고 작은 노이즈 제거. 클수록 형상 왜곡">
+                        <label class="form-label mb-0 small">Morph</label>
+                        <input class="form-control form-control-sm" type="number" @bind="Svc.Params.MorphKernel" style="width:70px" />
+                        <div class="text-muted" style="font-size:.68rem">0=끔·홀수3~9</div>
+                    </div>
+                    <div class="col-auto" title="centerline 이동평균 윈도(픽셀 수). 중심선을 매끈하게. 클수록 곡률에 둔감">
+                        <label class="form-label mb-0 small">Smooth</label>
+                        <input class="form-control form-control-sm" type="number" @bind="Svc.Params.SmoothingWindow" style="width:70px" />
+                        <div class="text-muted" style="font-size:.68rem">0~1=끔·3~15</div>
+                    </div>
+                </div>
+                <div class="small text-muted mt-1">위치 오차 <b>d</b> 의 기준선: <b>FOV 중심</b>(회색 센터선) 고정.</div>
+
+                <details class="mt-2">
+                    <summary class="small text-primary" style="cursor:pointer">ⓘ 파라미터 설명 보기</summary>
+                    <ul class="small text-muted mb-0 mt-1" style="line-height:1.5">
+                        <li><b>입력</b>: 검출 영상. <b>IR 권장</b>(Depth와 같은 센서라 Peak ROI와 정합). RGB는 컬러 흑백/채도.</li>
+                        <li><b>진행축</b>: 비드가 흐르는 방향. 가로=경계 상/하, 세로=경계 좌/우.</li>
+                        <li><b>이진화</b>: <b>Otsu</b>(전역 자동·조명 균일) / <b>Adaptive</b>(국소·조명 얼룩) / <b>Canny</b>(경계선만).</li>
+                        <li><b>반전</b>: 비드가 어두울 때 체크. <b>CLAHE</b>: 대비 강화(흐리면 ON, 노이즈면 OFF).</li>
+                        <li><b>Blur</b>(0/홀수3~9): 노이즈↓·경계도 뭉개짐. <b>Morph</b>(0/홀수3~9): 틈 메움·점노이즈 제거.</li>
+                        <li><b>Smooth</b>(0~1끔·3~15): 중심선 매끄럽게. <b>d 기준선</b>: FOV 중심(회색 센터선) 고정.</li>
+                        <li>mm 환산(스케일)은 아래 <b>스케일 보정</b> 카드에서 설정합니다(Depth 자동 / 2점 보정 / 수동).</li>
+                    </ul>
+                </details>
+            </div>
+        </div>
+
+        <div class="card mb-3">
+            <div class="card-header py-1"><strong>측정 (수동 2-shot)</strong></div>
+            <div class="card-body">
+                <div class="mb-2">
+                    <button class="btn btn-sm btn-secondary" @onclick="DetectOnce" disabled="@(_busy || !Svc.DetectorAvailable)">1회 검출</button>
+                    <button class="btn btn-sm btn-info" @onclick="() => Capture(1)" disabled="@(_busy || !Svc.DetectorAvailable)">Peak #1 캡처</button>
+                    <button class="btn btn-sm btn-info" @onclick="() => Capture(2)" disabled="@(_busy || !Svc.DetectorAvailable)">Peak #2 캡처</button>
+                    <button class="btn btn-sm btn-outline-secondary" @onclick="ResetMeas" disabled="@_busy">측정 초기화</button>
+                </div>
+                <div class="row g-2 align-items-end mb-2">
+                    <div class="col-auto" title="로봇이 이동하는 Pitch(명령값). 로봇 파라미터라 항상 mm 단위">
+                        <label class="form-label mb-0 small">Pitch (mm)</label>
+                        <input class="form-control form-control-sm" type="number" step="0.1" @bind="Svc.Pitch" style="width:110px" />
+                    </div>
+                    <div class="col-auto form-check" title="로봇 위치 반복정도 오차를 영상의 Peak 변위로 교정: 보정 Pitch = Pitch + 부호×ΔPeak">
+                        <input class="form-check-input" type="checkbox" id="wk_pcorr" @bind="Svc.PitchCorrectionEnabled" />
+                        <label class="form-check-label small" for="wk_pcorr">Peak 변위로 보정</label>
+                    </div>
+                    <div class="col-auto" title="ΔPeak(=ProgressPos2−ProgressPos1) 적용 부호. 진행/장착 방향 규약에 맞춰 한 번 정함">
+                        <label class="form-label mb-0 small">부호</label>
+                        <select class="form-select form-select-sm" @bind="Svc.PitchCorrectionSign" style="width:70px">
+                            <option value="-1">−</option>
+                            <option value="1">+</option>
+                        </select>
+                    </div>
+                    <div class="col-auto"><button class="btn btn-sm btn-primary" @onclick="ComputeAngle" disabled="@(_busy || Svc.M1 is null || Svc.M2 is null || !Svc.ScaleAvailable)">각도 계산</button></div>
+                </div>
+                @if (!Svc.ScaleAvailable)
+                {
+                    <div class="alert alert-warning py-2 mb-2">
+                        <b>⚠ theta 계산 불가</b> — 스케일이 설정되지 않았습니다.
+                        d는 <b>픽셀</b>, Pitch는 <b>mm</b>라 단위가 달라 각도를 계산할 수 없습니다.
+                        아래 <b>스케일 보정</b>에서 <b>Depth 자동</b>을 켜거나 <b>2점 보정/수동</b>으로 mm/px를 설정하세요.
+                    </div>
+                }
+
+                <table class="table table-sm mb-2" style="max-width:460px">
+                    <tbody>
+                        <tr><td class="text-muted">Peak #1 d</td><td>@MeasText(Svc.M1)</td></tr>
+                        <tr><td class="text-muted">Peak #2 d</td><td>@MeasText(Svc.M2)</td></tr>
+                        @if (Svc.Angle is { } a)
+                        {
+                            <tr>
+                                <td class="text-muted">Pitch</td>
+                                <td>
+                                    @a.NominalPitch.ToString("0.#")@a.Unit
+                                    @if (a.Corrected)
+                                    {
+                                        <text> → <b>보정 Pitch @a.Pitch.ToString("0.#")@a.Unit</b> (ΔPeak @a.PeakShift.ToString("0.0"), 적용 @((a.Pitch - a.NominalPitch).ToString("+0.0;-0.0")))</text>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                        <tr><td class="text-muted">theta</td><td>@(Svc.Angle is null ? "—" : $"{Svc.Angle.ThetaDeg:0.00}° ({Svc.Angle.ThetaRad:0.0000} rad)")</td></tr>
+                    </tbody>
+                </table>
+
+                @if (!string.IsNullOrEmpty(Svc.Message))
+                {
+                    <div class="alert @(Svc.LastDetect is { Success: false } ? "alert-warning" : "alert-info") py-1 mb-0">@Svc.Message</div>
+                }
+            </div>
+        </div>
+
+        @* Peak #1 / #2 그랩 이미지 — 측정과 스케일 보정 사이 *@
+        <div class="row g-2 mb-3">
+            <div class="col-6">
+                <h6 class="text-muted mb-1">Peak #1</h6>
+                @if (Svc.Peak1Overlay is not null)
+                {
+                    <img src="/camera/weld/peak1.jpg?k=@_resultKey" alt="peak1" style="width:100%; border:1px solid #ccc; border-radius:4px; background:#000" />
+                }
+                else { <div class="text-muted small">—</div> }
+            </div>
+            <div class="col-6">
+                <h6 class="text-muted mb-1">Peak #2</h6>
+                @if (Svc.Peak2Overlay is not null)
+                {
+                    <img src="/camera/weld/peak2.jpg?k=@_resultKey" alt="peak2" style="width:100%; border:1px solid #ccc; border-radius:4px; background:#000" />
+                }
+                else { <div class="text-muted small">—</div> }
+            </div>
+        </div>
+
+        @* 오버레이 색상 범례 — 측정 화면 방해 없이 그랩 이미지 바로 아래 *@
+        <div class="rounded p-2 mb-3" style="background:#1e1e1e; color:#ddd; font-size:.72rem; line-height:1.9">
+            <b class="me-2" style="color:#fff">범례</b>
+            <span class="me-3" style="white-space:nowrap"><span style="display:inline-block;width:14px;height:0;border-top:2px solid #ff00ff;vertical-align:middle"></span> Peak 위치(P1/P2)</span>
+            <span class="me-3" style="white-space:nowrap"><span style="display:inline-block;width:13px;height:13px;border:2px solid #ffff00;vertical-align:middle"></span> Weld ROI</span>
+            <span class="me-3" style="white-space:nowrap"><span style="display:inline-block;width:14px;height:0;border-top:2px solid #00e600;vertical-align:middle"></span> 비드 중심선</span>
+            <span class="me-3" style="white-space:nowrap"><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#ff0000;vertical-align:middle"></span> 비드 중심점(평균)</span>
+            <span class="me-3" style="white-space:nowrap"><span style="display:inline-block;width:14px;height:0;border-top:2px dashed #aaaaaa;vertical-align:middle"></span> FOV 센터선(d 기준)</span>
+        </div>
+
+        <div class="card">
+            <div class="card-header py-1"><strong>스케일 보정 (mm 환산)</strong></div>
+            <div class="card-body">
+                <div class="small mb-2">
+                    <b>기본: Depth 자동</b> — 측정 지점 깊이(Z)로 <code>mm/px = Z/fx</code> 자동(거리 자동대응).
+                </div>
+                <div class="small mb-2">
+                    보정계수 <b>×@Svc.ScaleCorrection.ToString("0.0000")</b>
+                    <span class="@(Svc.ScaleCorrectionEnabled ? "text-success" : "text-muted")">(@(Svc.ScaleCorrectionEnabled ? "적용 중" : "미적용"))</span>
+                    <span class="form-check form-check-inline ms-2">
+                        <input class="form-check-input" type="checkbox" id="sc_en" @bind="Svc.ScaleCorrectionEnabled" />
+                        <label class="form-check-label small" for="sc_en">보정 적용</label>
+                    </span>
+                    <button class="btn btn-sm btn-outline-secondary py-0" @onclick="ClearCorrection">보정 해제</button>
+                </div>
+
+                <div class="small text-muted">2점 보정(보강): 스케일이 틀어지면 길이 아는 두 점으로 <b>보정계수</b>를 잡아 Depth 자동을 보강합니다.</div>
+                <div class="small text-muted mb-1">왼쪽에서 <b>보정 2점</b> 선택 → 두 점 클릭 → 실제 거리(mm) 입력 → 보정 적용.</div>
+                <div class="row g-2 align-items-end mb-1">
+                    <div class="col-auto small">
+                        점: @(_calP1 is null ? "—" : $"({_calP1.X:0},{_calP1.Y:0})") / @(_calP2 is null ? "—" : $"({_calP2.X:0},{_calP2.Y:0})")
+                        · 픽셀거리 @(_calDist is { } cd ? cd.ToString("0.0") + "px" : "—")
+                    </div>
+                    <div class="col-auto">
+                        <label class="form-label mb-0 small">실제 거리(mm)</label>
+                        <input class="form-control form-control-sm" type="number" step="0.1" @bind="_calKnownMm" style="width:100px" />
+                    </div>
+                    <div class="col-auto">
+                        <button class="btn btn-sm btn-success" @onclick="ApplyTwoPointCal" disabled="@(_calP1 is null || _calP2 is null || _calKnownMm <= 0)">보정 적용</button>
+                    </div>
+                </div>
+
+                <hr class="my-2" />
+                <div class="small"><b>검증</b> <span class="text-muted">— 아는 길이를 재서 보정 전(Depth 자동)/후(보정계수) 오차 비교</span></div>
+                <div class="small text-muted mb-1">왼쪽에서 <b>검증 2점</b>을 선택해 <b>다른 기준</b> 두 점을 클릭하세요.</div>
+                <div class="row g-2 align-items-end mb-2">
+                    <div class="col-auto small">
+                        점: @(_valP1 is null ? "—" : $"({_valP1.X:0},{_valP1.Y:0})") / @(_valP2 is null ? "—" : $"({_valP2.X:0},{_valP2.Y:0})")
+                    </div>
+                    <div class="col-auto">
+                        <label class="form-label mb-0 small">실제 거리(mm)</label>
+                        <input class="form-control form-control-sm" type="number" step="0.1" @bind="_valKnownMm" style="width:100px" />
+                    </div>
+                    <div class="col-auto">
+                        <button class="btn btn-sm btn-outline-danger" @onclick="RunValidate" disabled="@(_valP1 is null || _valP2 is null || _valKnownMm <= 0)">검증</button>
+                    </div>
+                </div>
+                @if (Svc.LastValidation is { } v)
+                {
+                    <table class="table table-sm mb-0" style="max-width:380px">
+                        <thead><tr><th></th><th>측정</th><th>오차</th></tr></thead>
+                        <tbody>
+                            <tr><td class="text-muted">참값</td><td>@v.TrueMm.ToString("0.#") mm</td><td>—</td></tr>
+                            <tr><td class="text-muted">Depth 자동 (보정 전)</td><td>@v.AutoMm.ToString("0.0") mm</td><td class="@(Math.Abs(v.AutoErrPct) <= 2 ? "text-success" : "text-danger")">@v.AutoErrPct.ToString("+0.0;-0.0")%</td></tr>
+                            @if (v.FixedAvailable)
+                            {
+                                <tr><td class="text-muted">보정 후 (×계수)</td><td>@v.FixedMm.ToString("0.0") mm</td><td class="@(Math.Abs(v.FixedErrPct) <= 2 ? "text-success" : "text-danger")">@v.FixedErrPct.ToString("+0.0;-0.0")%</td></tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@* ── 최근 검출 오버레이 ─────────────────────────── *@
+<div class="row g-3 mt-1">
+    <div class="col-md-6">
+        <h6 class="text-muted">최근 검출 오버레이</h6>
+        @if (Svc.LastOverlay is not null)
+        {
+            <img src="/camera/weld/overlay.jpg?k=@_resultKey" alt="weld overlay"
+                 style="width:100%; max-width:640px; border:1px solid #ccc; border-radius:4px; background:#000" />
+        }
+        else { <div class="text-muted small">아직 검출 결과가 없습니다.</div> }
+    </div>
+</div>
+
+@code {
+    private ElementReference _editorImg;
+    private ElementReference _editorCanvas;
+    private DotNetObjectReference<WeldTrackingPanel>? _ref;
+    private bool _editorInited;
+
+    private string _drawKind = "weld";
+    private string _loadName = "";
+    private int _editorKey = 1;
+    private int _resultKey = 1;
+    private bool _busy;
+
+    // 수동 좌표 입력 backing
+    private int _mx, _my, _mw, _mh;
+
+    // 스케일 보정/검증
+    private PixelPoint? _calP1, _calP2;
+    private double _calKnownMm;
+    private PixelPoint? _valP1, _valP2;
+    private double _valKnownMm;
+    private double? _calDist => (_calP1 is { } a && _calP2 is { } b)
+        ? Math.Sqrt((a.X - b.X) * (a.X - b.X) + (a.Y - b.Y) * (a.Y - b.Y)) : null;
+
+    private string EditorStreamSrc =>
+        (Svc.Params.Mode == WeldImageMode.Ir ? "/camera/ir.mjpeg" : "/camera/color.mjpeg") + "?k=" + _editorKey;
+
+    protected override void OnInitialized() => _ref = DotNetObjectReference.Create(this);
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (Cam.IsStreaming && !_editorInited)
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("hdAmrWeld.initRoiEditor", _editorImg, _editorCanvas, _ref);
+                _editorInited = true;
+                await PushRois();
+            }
+            catch { /* 엘리먼트 미준비/회로 종료 무시 */ }
+        }
+        else if (!Cam.IsStreaming)
+        {
+            _editorInited = false; // 스트림 정지 시 재init 허용
+        }
+    }
+
+    [JSInvokable]
+    public async Task OnRoiDrawn(string kind, double x, double y, double w, double h)
+    {
+        var r = new RoiRect((int)x, (int)y, (int)w, (int)h);
+        if (kind == "peak") Svc.SetPeakRoi(r); else Svc.SetWeldRoi(r);
+        // 드래그한 박스 좌표를 X/Y/W/H 입력칸에 채워 미세조정/재현이 쉽도록.
+        _mx = r.X; _my = r.Y; _mw = r.Width; _mh = r.Height;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    /// <summary>선택한 종류(Weld/Peak)의 현재 ROI 값을 수동 입력칸에 채운다.</summary>
+    private void FillManualFields(string kind)
+    {
+        var r = kind == "peak" ? Svc.PeakRoi : Svc.WeldRoi;
+        if (r is not null) { _mx = r.X; _my = r.Y; _mw = r.Width; _mh = r.Height; }
+    }
+
+    [JSInvokable]
+    public async Task OnTwoPointsPicked(string kind, double x1, double y1, double x2, double y2)
+    {
+        if (kind == "cal") { _calP1 = new PixelPoint(x1, y1); _calP2 = new PixelPoint(x2, y2); }
+        else { _valP1 = new PixelPoint(x1, y1); _valP2 = new PixelPoint(x2, y2); }
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void ApplyTwoPointCal()
+    {
+        if (_calP1 is { } a && _calP2 is { } b && _calKnownMm > 0)
+            Svc.Calibrate2Point(a, b, _calKnownMm);
+    }
+
+    private void ClearCorrection()
+    {
+        Svc.ScaleCorrection = 1.0;
+        Svc.ScaleCorrectionEnabled = false;
+    }
+
+    private void RunValidate()
+    {
+        if (_valP1 is { } a && _valP2 is { } b && _valKnownMm > 0)
+            Svc.ValidateScale(a, b, _valKnownMm);
+    }
+
+    private async Task SetKind(string kind)
+    {
+        _drawKind = kind;
+        if (kind is "weld" or "peak") FillManualFields(kind);
+        if (_editorInited) try { await JS.InvokeVoidAsync("hdAmrWeld.setKind", _editorCanvas, kind); } catch { }
+    }
+
+    private async Task PushRois()
+    {
+        if (!_editorInited) return;
+        object? peak = Svc.PeakRoi is { } p ? new { x = p.X, y = p.Y, w = p.Width, h = p.Height } : null;
+        object? weld = Svc.WeldRoi is { } wl ? new { x = wl.X, y = wl.Y, w = wl.Width, h = wl.Height } : null;
+        try
+        {
+            await JS.InvokeVoidAsync("hdAmrWeld.setRois", _editorCanvas, peak, weld);
+            await JS.InvokeVoidAsync("hdAmrWeld.setKind", _editorCanvas, _drawKind);
+        }
+        catch { }
+    }
+
+    private async Task ApplyManualRoi()
+    {
+        var r = new RoiRect(_mx, _my, _mw, _mh);
+        if (_drawKind == "peak") Svc.SetPeakRoi(r); else Svc.SetWeldRoi(r);
+        await PushRois();
+    }
+
+    private async Task ResetRoi()
+    {
+        Svc.ResetRoi();
+        await PushRois();
+    }
+
+    private void SaveProfile() => Svc.SaveProfile(string.IsNullOrWhiteSpace(Svc.ProfileName) ? "default" : Svc.ProfileName);
+
+    private async Task LoadProfile()
+    {
+        if (string.IsNullOrEmpty(_loadName)) return;
+        Svc.LoadProfile(_loadName);
+        FillManualFields(_drawKind);
+        await PushRois();
+    }
+
+    private async Task DetectOnce() => await Run(() => { Svc.DetectOnce(); return Task.CompletedTask; });
+    private async Task Capture(int id) => await Run(() => { Svc.CapturePeak(id); return Task.CompletedTask; });
+    private void ComputeAngle() => Svc.ComputeAngle();
+    private void ResetMeas() => Svc.ResetMeasurements();
+
+    private async Task Run(Func<Task> action)
+    {
+        if (_busy) return;
+        _busy = true;
+        try { await Task.Run(action); _resultKey++; }
+        finally { _busy = false; }
+    }
+
+    private static string RoiText(RoiRect? r) => r is null ? "미지정" : $"({r.X},{r.Y},{r.Width}×{r.Height})";
+
+    private string MeasText(PeakMeasurement? m)
+    {
+        if (m is null) return "—";
+        string d = $"{Svc.DMm(m):0.0}mm ({m.DPixel:0.0}px)";
+        string peak = m.Peak is { Found: true } ? $", peak@{m.Peak.ProgressPos:0}px/{m.Peak.DepthValue}mm" : "";
+        return $"{d} (conf {m.Confidence:P0}{peak})";
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _ref?.Dispose();
+        await Task.CompletedTask;
+    }
+}

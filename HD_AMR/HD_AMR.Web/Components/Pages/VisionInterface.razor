@@ -1,0 +1,20 @@
+@page "/vision"
+@rendermode InteractiveServer
+@using HD_AMR.Communication.Vision
+@using HD_AMR.Service
+@inject VisionInterfaceService Svc
+
+<PageTitle>Vision Interface</PageTitle>
+
+<h1>비전 인터페이스</h1>
+<p class="text-muted" style="max-width:1100px">
+    HD현대 비전 통신 프로토콜(사양 v2) 기반 <b>자동화 S/W(클라이언트)</b>. "비전 서버 IP"에
+    원격 비전 서버 주소를 지정하고 <b>Connect</b> 하면 TCP 로 프레임을 주고받습니다.
+</p>
+
+<div class="row g-3">
+    <div class="col-xl-8">
+        <VisionPanel Engine="Svc.Client" Host="@Svc.Settings.ServerHost" Port="Svc.Settings.Port"
+                     AutoReconnectDefault="false" />
+    </div>
+</div>

@@ -1,4 +1,7 @@
+using System.Runtime.InteropServices;
 using HD_AMR.Communication;
+using HD_AMR.Communication.Vision;
+using HD_AMR.Communication.Weld;
 using HD_AMR.Data;
 using HD_AMR.Service;
 using HD_AMR.Web.Components;
@@ -33,6 +36,28 @@ builder.Services.Configure<OrbbecGeminiSettings>(
     builder.Configuration.GetSection("Camera"));
 builder.Services.AddSingleton<CameraService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<CameraService>());
+
+// 비전 인터페이스(자동화↔비전 TCP 프로토콜) 시뮬레이터/테스터. 싱글톤 + 호스티드.
+// 기동 시 자동 접속하지 않음 — 연결은 Vision Interface 페이지에서 수동.
+builder.Services.Configure<VisionInterfaceSettings>(
+    builder.Configuration.GetSection("Vision"));
+builder.Services.AddSingleton<VisionInterfaceService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<VisionInterfaceService>());
+
+// 용접라인 추적(명세서 v2). 검출은 OpenCvSharp(Windows) — 그 외 플랫폼은 no-op 폴백.
+// ROI 프로파일은 JSON 파일로 저장. 싱글톤(운영자 1인, 상태 유지).
+builder.Services.Configure<WeldTrackingSettings>(
+    builder.Configuration.GetSection("WeldTracking"));
+if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+    builder.Services.AddSingleton<IWeldVisionDetector, WeldVisionDetector>();
+else
+    builder.Services.AddSingleton<IWeldVisionDetector, NoopWeldVisionDetector>();
+builder.Services.AddSingleton(sp =>
+{
+    var dir = builder.Configuration.GetSection("WeldTracking")["ProfileDirectory"] ?? "RoiProfiles";
+    return new RoiProfileStore(Path.Combine(builder.Environment.ContentRootPath, dir));
+});
+builder.Services.AddSingleton<WeldTrackingService>();
 
 var uploadDirectory = Path.Combine(builder.Environment.ContentRootPath, "UploadedDrawings");
 builder.Services.Configure<DrawingStorageOptions>(opt => opt.UploadDirectory = uploadDirectory);
@@ -130,6 +155,11 @@ app.MapGet("/camera/depth.mjpeg",
         StreamMjpegAsync(http, ct, svc.Settings.MjpegFps,
             () => svc.GetLatestDepthJpegAsync(svc.Settings.JpegQuality, ct)));
 
+app.MapGet("/camera/ir.mjpeg",
+    (CameraService svc, HttpContext http, CancellationToken ct) =>
+        StreamMjpegAsync(http, ct, svc.Settings.MjpegFps,
+            () => svc.GetLatestIrJpegAsync(svc.Settings.JpegQuality, ct)));
+
 // 깊이 영상 hover 프로브 — 정규화 좌표 (u,v)∈[0,1] 위치의 깊이값(mm)을 반환. mm=null 이면 무효/프레임없음.
 app.MapGet("/camera/depth/value",
     (CameraService svc, double u, double v) => Results.Json(new { mm = svc.GetLatestDepthMmAt(u, v) }));
@@ -140,6 +170,7 @@ app.MapGet("/camera/status", (CameraService svc) => Results.Json(new
 {
     svc.IsConnected,
     svc.IsStreaming,
+    svc.IsIrActive,
     svc.ConnectionType,
     lastFrameMsAgo = (DateTime.UtcNow - svc.LastFrameAt).TotalMilliseconds,
     color = svc.LatestColor is null ? null : (object)new
@@ -150,7 +181,20 @@ app.MapGet("/camera/status", (CameraService svc) => Results.Json(new
     {
         svc.LatestDepth.Width, svc.LatestDepth.Height, len = svc.LatestDepth.Pixels.Length
     },
+    ir = svc.LatestIr is null ? null : (object)new
+    {
+        svc.LatestIr.Width, svc.LatestIr.Height, svc.LatestIr.PixelFormat, len = svc.LatestIr.Pixels.Length
+    },
 }));
+
+// 용접라인 검출 overlay(주석 이미지) — 수동 트리거라 단일 JPEG 으로 제공. 프레임 없으면 204.
+// UI 는 <img src="/camera/weld/overlay.jpg?k=캐시버스터"> 로 검출 후 갱신.
+app.MapGet("/camera/weld/overlay.jpg", (WeldTrackingService w) => JpegOrNoContent(w.LastOverlay));
+app.MapGet("/camera/weld/peak1.jpg", (WeldTrackingService w) => JpegOrNoContent(w.Peak1Overlay));
+app.MapGet("/camera/weld/peak2.jpg", (WeldTrackingService w) => JpegOrNoContent(w.Peak2Overlay));
+
+static IResult JpegOrNoContent(byte[]? jpeg)
+    => jpeg is { Length: > 0 } ? Results.File(jpeg, "image/jpeg") : Results.NoContent();
 
 static async Task StreamMjpegAsync(HttpContext http, CancellationToken ct, int fps,
     Func<Task<byte[]?>> getJpeg)

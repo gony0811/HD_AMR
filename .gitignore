@@ -59,6 +59,12 @@ HD_AMR/HD_AMR.Web/*.db
 HD_AMR/HD_AMR.Web/*.db-shm
 HD_AMR/HD_AMR.Web/*.db-wal
 
+# Visual Studio 캐시/사용자 폴더
+.vs/
+
+# Claude Code (preview launch.json, 격리 worktree 등)
+.claude/
+
 # JetBrains Rider / ReSharper
 .idea/
 *.sln.DotSettings.user

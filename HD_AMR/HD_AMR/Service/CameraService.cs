@@ -34,6 +34,9 @@ public class CameraService : BackgroundService
     public OrbbecGeminiSettings Settings => _settings;
     public CameraFrame? LatestColor => _client.LatestColor;
     public CameraFrame? LatestDepth => _client.LatestDepth;
+    public CameraFrame? LatestIr => _client.LatestIr;
+    /// <summary>IR 스트림이 실제로 활성화되어 프레임을 받는 중인지.</summary>
+    public bool IsIrActive => _client.IsIrActive;
     public DateTime LastFrameAt => _client.LastFrameAt;
     public string? ConnectionType => _client.ConnectionType;
 
@@ -121,6 +124,15 @@ public class CameraService : BackgroundService
         return Task.Run<byte[]?>(() => EncodeDepth16ToJpeg(f, _settings.DepthMinMm, _settings.DepthMaxMm, quality), ct);
     }
 
+    /// <summary>최신 IR 프레임을 그레이스케일 JPEG 으로 인코딩한다. 프레임이 없으면 null.
+    /// <c>"ir8"</c> 은 8bit 그대로, <c>"ir16"</c> 은 프레임 최대값 기준 오토게인으로 8bit 축소.</summary>
+    public Task<byte[]?> GetLatestIrJpegAsync(int quality, CancellationToken ct = default)
+    {
+        var f = _client.LatestIr;
+        if (f is null) return Task.FromResult<byte[]?>(null);
+        return Task.Run<byte[]?>(() => EncodeIrToJpeg(f, quality), ct);
+    }
+
     private static byte[] EncodeRgb24ToJpeg(CameraFrame f, int quality)
     {
         // Pixels 는 RGB888 row-major. ImageSharp 의 Image<Rgb24>.LoadPixelData 로 직접 래핑.
@@ -153,6 +165,37 @@ public class CameraService : BackgroundService
         }
 
         using var img = Image.LoadPixelData<Rgb24>(rgb, f.Width, f.Height);
+        using var ms = new MemoryStream();
+        img.Save(ms, new JpegEncoder { Quality = Math.Clamp(quality, 1, 100) });
+        return ms.ToArray();
+    }
+
+    /// <summary>
+    /// IR 그레이스케일 → JPEG. ir8: 1바이트=1픽셀 그대로. ir16: little-endian uint16 이며 IR 강도의
+    /// 실제 동적범위(8/10/16bit)가 카메라마다 달라, 프레임 내 최대값을 기준으로 8bit 로 오토게인한다.
+    /// </summary>
+    private static byte[] EncodeIrToJpeg(CameraFrame f, int quality)
+    {
+        int n = f.Width * f.Height;
+        var gray = new byte[n];
+
+        if (f.PixelFormat == "ir16")
+        {
+            var span = MemoryMarshal.Cast<byte, ushort>(f.Pixels);
+            int count = Math.Min(n, span.Length);
+            int max = 1;
+            for (int i = 0; i < count; i++) if (span[i] > max) max = span[i];
+            // 최대값을 255 로 맞추는 선형 스케일. (max 가 작으면 어두운 IR 도 또렷하게.)
+            for (int i = 0; i < count; i++)
+                gray[i] = (byte)(span[i] * 255 / max);
+        }
+        else // "ir8" 등 8bit 단일 채널
+        {
+            int count = Math.Min(n, f.Pixels.Length);
+            Array.Copy(f.Pixels, gray, count);
+        }
+
+        using var img = Image.LoadPixelData<L8>(gray, f.Width, f.Height);
         using var ms = new MemoryStream();
         img.Save(ms, new JpegEncoder { Quality = Math.Clamp(quality, 1, 100) });
         return ms.ToArray();

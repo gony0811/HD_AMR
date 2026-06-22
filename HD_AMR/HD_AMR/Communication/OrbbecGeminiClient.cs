@@ -28,10 +28,15 @@ public class OrbbecGeminiClient : IDisposable
 
     private CameraFrame? _latestColor;
     private CameraFrame? _latestDepth;
+    private CameraFrame? _latestIr;
     private DateTime _lastFrameAt;
 
     // 실제 카메라에서 선택된 컬러 포맷(MJPG/RGB/YUYV 등). 프레임 추출 시 어떻게 해석할지 결정.
     private int _chosenColorFormat = OrbbecNative.OB_FORMAT_UNKNOWN;
+    // 실제 카메라에서 선택된 IR 포맷(Y8/Y16 등).
+    private int _chosenIrFormat = OrbbecNative.OB_FORMAT_UNKNOWN;
+    // IR 스트림이 실제로 활성화됐는지. IR 은 best-effort 라 실패 시 false 로 두고 컬러/깊이만 운용.
+    private volatile bool _irActive;
 
     // USB 연결 협상 속도("USB2.0"/"USB3.0"/…). Gemini 2 는 USB 3.0 필요 — USB2.x 면 컨트롤
     // 전송 실패로 프레임이 전혀 안 올 수 있어 진단용으로 노출.
@@ -40,9 +45,10 @@ public class OrbbecGeminiClient : IDisposable
     private volatile bool _connected;
     private volatile bool _streaming;
 
-    // 진단용: 첫 color/depth 프레임 수신 시 1회만 로그. 스트림 재시작마다 초기화.
+    // 진단용: 첫 color/depth/ir 프레임 수신 시 1회만 로그. 스트림 재시작마다 초기화.
     private bool _loggedFirstColor;
     private bool _loggedFirstDepth;
+    private bool _loggedFirstIr;
 
     public OrbbecGeminiClient(OrbbecGeminiSettings settings, ILogger<OrbbecGeminiClient> logger)
     {
@@ -54,6 +60,9 @@ public class OrbbecGeminiClient : IDisposable
     public bool IsStreaming => _streaming;
     public CameraFrame? LatestColor => _latestColor;
     public CameraFrame? LatestDepth => _latestDepth;
+    public CameraFrame? LatestIr => _latestIr;
+    /// <summary>IR 스트림이 실제로 활성화되어 프레임을 받는 중인지.</summary>
+    public bool IsIrActive => _irActive;
     public DateTime LastFrameAt => _lastFrameAt;
     public string? ConnectionType => _connectionType;
     public OrbbecGeminiSettings Settings => _settings;
@@ -125,6 +134,24 @@ public class OrbbecGeminiClient : IDisposable
                     OrbbecNative.OB_STREAM_DEPTH, "depth",
                     preferredFormats: new[] { OrbbecNative.OB_FORMAT_Y16 });
             }
+            // IR 은 best-effort: 프로파일이 없거나 대역폭으로 enable 이 실패해도 컬러/깊이는 그대로
+            // 유지되도록 예외를 흡수한다(_irActive=false). Gemini 2 IR 센서는 보통 Y8 그레이스케일.
+            if (_settings.EnableIr)
+            {
+                try
+                {
+                    _chosenIrFormat = EnableStream(
+                        OrbbecNative.OB_STREAM_IR, "ir",
+                        preferredFormats: new[] { OrbbecNative.OB_FORMAT_Y8, OrbbecNative.OB_FORMAT_Y16 });
+                    _irActive = true;
+                }
+                catch (Exception ex)
+                {
+                    _irActive = false;
+                    _logger.LogWarning(ex,
+                        "{Name} IR 스트림 활성화 실패 — IR 없이 컬러/깊이만 진행합니다.", _settings.Name);
+                }
+            }
 
             // color/depth 가 서로 다른 시점에 도착해도 각각 frameset 으로 흘러나오게 한다. 기본
             // FULL_FRAME_REQUIRE 모드에서는 한 스트림이 누락되면 frameset 전체가 drop 되어 둘 다
@@ -140,8 +167,8 @@ public class OrbbecGeminiClient : IDisposable
             ApplyDepthFilterSettings();
 
             _connected = true;
-            _logger.LogInformation("{Name} 연결 완료 (color={Color}, depth={Depth})",
-                _settings.Name, _settings.EnableColor, _settings.EnableDepth);
+            _logger.LogInformation("{Name} 연결 완료 (color={Color}, depth={Depth}, ir={Ir})",
+                _settings.Name, _settings.EnableColor, _settings.EnableDepth, _irActive);
         }
         catch
         {
@@ -167,6 +194,7 @@ public class OrbbecGeminiClient : IDisposable
             _streaming = true;
             _loggedFirstColor = false;
             _loggedFirstDepth = false;
+            _loggedFirstIr = false;
             _logger.LogInformation("{Name} 스트림 시작", _settings.Name);
         }
         finally
@@ -186,6 +214,7 @@ public class OrbbecGeminiClient : IDisposable
             // 정지 시점에 잔존하던 프레임 스냅샷을 비워 UI 가 즉시 "정지" 상태로 보이도록.
             Interlocked.Exchange(ref _latestColor, null);
             Interlocked.Exchange(ref _latestDepth, null);
+            Interlocked.Exchange(ref _latestIr, null);
             OrbbecNative.LogIfError(_logger, err, "pipeline_stop");
             _logger.LogInformation("{Name} 스트림 정지", _settings.Name);
         }
@@ -245,6 +274,7 @@ public class OrbbecGeminiClient : IDisposable
 
                     if (_settings.EnableColor) TrySwapColor(set);
                     if (_settings.EnableDepth) TrySwapDepth(set);
+                    if (_irActive) TrySwapIr(set);
 
                     // 첫 color/depth 프레임을 1회씩 로그 — 어느 스트림이 실제로 들어오는지, 해상도/사이즈가
                     // 정상인지 즉시 확인용. 원인 확정 후 Debug 레벨로 낮추거나 제거 가능.
@@ -259,6 +289,12 @@ public class OrbbecGeminiClient : IDisposable
                         _loggedFirstDepth = true;
                         _logger.LogInformation("{Name} 첫 depth 프레임 수신: {W}x{H} size={Size}",
                             _settings.Name, d.Width, d.Height, d.Pixels.Length);
+                    }
+                    if (!_loggedFirstIr && _latestIr is { } ir)
+                    {
+                        _loggedFirstIr = true;
+                        _logger.LogInformation("{Name} 첫 IR 프레임 수신: {W}x{H} fmt={Fmt} size={Size}",
+                            _settings.Name, ir.Width, ir.Height, ir.PixelFormat, ir.Pixels.Length);
                     }
 
                     _lastFrameAt = DateTime.UtcNow;
@@ -299,6 +335,38 @@ public class OrbbecGeminiClient : IDisposable
             if (snap is not null) Interlocked.Exchange(ref _latestDepth, snap);
         }
         finally { OrbbecNative.SafeDeleteFrame(frame); }
+    }
+
+    private void TrySwapIr(IntPtr frameset)
+    {
+        var frame = OrbbecNative.ob_frameset_ir_frame(frameset, out var err);
+        if (err != IntPtr.Zero || frame == IntPtr.Zero) { OrbbecNative.SafeDeleteError(err); return; }
+        try
+        {
+            var snap = ExtractIr(frame, _chosenIrFormat);
+            if (snap is not null) Interlocked.Exchange(ref _latestIr, snap);
+        }
+        finally { OrbbecNative.SafeDeleteFrame(frame); }
+    }
+
+    private static CameraFrame? ExtractIr(IntPtr frame, int format)
+    {
+        var w = OrbbecNative.ob_video_frame_width(frame, out var werr); OrbbecNative.SafeDeleteError(werr);
+        var h = OrbbecNative.ob_video_frame_height(frame, out var herr); OrbbecNative.SafeDeleteError(herr);
+        var size = OrbbecNative.ob_frame_data_size(frame, out var serr); OrbbecNative.SafeDeleteError(serr);
+        var data = OrbbecNative.ob_frame_data(frame, out var derr); OrbbecNative.SafeDeleteError(derr);
+        if (w <= 0 || h <= 0 || size == 0 || data == IntPtr.Zero) return null;
+
+        var managed = new byte[size];
+        Marshal.Copy(data, managed, 0, (int)size);
+
+        // IR 은 단일 채널 그레이스케일. Y16(16bit) 또는 Y8(8bit). CameraService 가 포맷 문자열로 분기.
+        string pixelFormat = format switch
+        {
+            OrbbecNative.OB_FORMAT_Y16 => "ir16",
+            _                           => "ir8",
+        };
+        return new CameraFrame(managed, w, h, pixelFormat, DateTime.UtcNow);
     }
 
     private static CameraFrame? ExtractColor(IntPtr frame, int format)
@@ -402,10 +470,13 @@ public class OrbbecGeminiClient : IDisposable
                 finally { OrbbecNative.SafeDeleteStreamProfile(p); }
             }
 
-            bool isColor = streamType == OrbbecNative.OB_STREAM_COLOR;
-            int wantW = isColor ? _settings.ColorWidth : _settings.DepthWidth;
-            int wantH = isColor ? _settings.ColorHeight : _settings.DepthHeight;
-            int wantFps = isColor ? _settings.ColorFps : _settings.DepthFps;
+            int wantW, wantH, wantFps;
+            if (streamType == OrbbecNative.OB_STREAM_COLOR)
+                (wantW, wantH, wantFps) = (_settings.ColorWidth, _settings.ColorHeight, _settings.ColorFps);
+            else if (streamType == OrbbecNative.OB_STREAM_IR)
+                (wantW, wantH, wantFps) = (_settings.IrWidth, _settings.IrHeight, _settings.IrFps);
+            else
+                (wantW, wantH, wantFps) = (_settings.DepthWidth, _settings.DepthHeight, _settings.DepthFps);
 
             int matchIdx = -1;
             int chosenFmt = OrbbecNative.OB_FORMAT_UNKNOWN;
@@ -539,6 +610,7 @@ public class OrbbecGeminiClient : IDisposable
         }
         _streaming = false;
         _connected = false;
+        _irActive = false;
 
         OrbbecNative.SafeDeleteConfig(_config); _config = IntPtr.Zero;
         OrbbecNative.SafeDeletePipeline(_pipeline); _pipeline = IntPtr.Zero;
@@ -547,6 +619,7 @@ public class OrbbecGeminiClient : IDisposable
 
         Interlocked.Exchange(ref _latestColor, null);
         Interlocked.Exchange(ref _latestDepth, null);
+        Interlocked.Exchange(ref _latestIr, null);
         _connectionType = null;
     }
 
@@ -568,10 +641,12 @@ internal static class OrbbecNative
 
     // 스트림 / 포맷 상수 (OrbbecSDK 1.10+ 기준). 펌웨어 버전에 따라 값이 달라지면 여기를 조정.
     // OBStreamType 열거값. OrbbecSDK 1.10.x: VIDEO=0, IR=1, COLOR=2, DEPTH=3, ACCEL=4, GYRO=5.
+    public const int OB_STREAM_IR = 1;
     public const int OB_STREAM_COLOR = 2;
     public const int OB_STREAM_DEPTH = 3;
     public const int OB_FORMAT_MJPG = 5;    // Gemini 2 컬러 센서의 네이티브 포맷.
-    public const int OB_FORMAT_Y16 = 8;
+    public const int OB_FORMAT_Y16 = 8;     // 16bit 그레이스케일(깊이/IR).
+    public const int OB_FORMAT_Y8 = 9;      // 8bit 그레이스케일(IR).
     public const int OB_FORMAT_RGB = 22;
     public const int OB_FORMAT_UNKNOWN = 0xff;
 
@@ -634,6 +709,7 @@ internal static class OrbbecNative
 
     [DllImport(Lib)] public static extern IntPtr ob_frameset_color_frame(IntPtr frameset, out IntPtr error);
     [DllImport(Lib)] public static extern IntPtr ob_frameset_depth_frame(IntPtr frameset, out IntPtr error);
+    [DllImport(Lib)] public static extern IntPtr ob_frameset_ir_frame(IntPtr frameset, out IntPtr error);
 
     [DllImport(Lib)] public static extern int    ob_video_frame_width(IntPtr frame, out IntPtr error);
     [DllImport(Lib)] public static extern int    ob_video_frame_height(IntPtr frame, out IntPtr error);
