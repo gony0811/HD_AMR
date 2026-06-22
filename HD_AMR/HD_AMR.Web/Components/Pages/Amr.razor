@@ -1,0 +1,358 @@
+@page "/amr"
+@rendermode InteractiveServer
+@using HD_AMR.Enums
+@using HD_AMR.Models
+@using HD_AMR.Service
+@inject AMRService Svc
+@implements IDisposable
+
+<PageTitle>AMR</PageTitle>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="page-title mb-0">자율주행 로봇 (AMR)</h1>
+    <span class="badge @(Svc.IsConnected ? "bg-success" : "bg-secondary")">
+        Modbus: @(Svc.IsConnected ? "연결됨" : "미연결")
+    </span>
+</div>
+
+<div class="card-surface">
+    <div class="row">
+
+        @* ══════════════ 왼쪽: 상태 읽기 (Input Register) ══════════════ *@
+        <div class="col-lg-6 mb-3">
+            <h5 class="mb-3">상태 읽기 (Input Register)</h5>
+
+            @* 기본 상태 *@
+            <div class="card mb-3">
+                <div class="card-header py-2"><strong>기본 상태</strong></div>
+                <div class="card-body py-2">
+                    <table class="table table-sm table-borderless mb-0">
+                        <tbody>
+                            <tr><td class="text-muted" style="width:40%">Power State</td><td>@EnumLabel(_status?.PowerState)</td></tr>
+                            <tr><td class="text-muted">Robot State</td><td>@EnumLabel(_status?.RobotState)</td></tr>
+                            <tr><td class="text-muted">Error Code</td><td>@(_status?.ErrorCode.ToString() ?? "-")</td></tr>
+                            <tr><td class="text-muted">Robot Stop</td><td>@RobotStopLabel(_status?.RobotStopActive)</td></tr>
+                            <tr><td class="text-muted">WiFi</td><td>@EnumLabel(_status?.WiFi)</td></tr>
+                            <tr><td class="text-muted">Work Status</td><td>@EnumLabel(_status?.WorkStatus)</td></tr>
+                            <tr><td class="text-muted">Driving Mode</td><td>@EnumLabel(_status?.DrivingMode)</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            @* 위치 (Pose) *@
+            <div class="card mb-3">
+                <div class="card-header py-2"><strong>위치 (Pose)</strong></div>
+                <div class="card-body py-2">
+                    <table class="table table-sm table-borderless mb-0">
+                        <tbody>
+                            <tr><td class="text-muted" style="width:40%">X (m)</td><td>@Num(_status?.Pose.X, 3)</td></tr>
+                            <tr><td class="text-muted">Y (m)</td><td>@Num(_status?.Pose.Y, 3)</td></tr>
+                            <tr><td class="text-muted">Angle (rad)</td><td>@Num(_status?.Pose.Angle, 3)</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            @* 배터리 *@
+            <div class="card mb-3">
+                <div class="card-header py-2"><strong>배터리</strong></div>
+                <div class="card-body py-2">
+                    <table class="table table-sm table-borderless mb-0">
+                        <tbody>
+                            <tr><td class="text-muted" style="width:40%">Level</td><td>@(_status is null ? "-" : Num(_status.Battery.LevelPercent, 2) + " %")</td></tr>
+                            <tr><td class="text-muted">Voltage (V)</td><td>@Num(_status?.Battery.Voltage, 2)</td></tr>
+                            <tr><td class="text-muted">Current (A)</td><td>@Num(_status?.Battery.Current, 2)</td></tr>
+                            <tr><td class="text-muted">Temp (&deg;C)</td><td>@Num(_status?.Battery.TemperatureCelsius, 2)</td></tr>
+                            <tr><td class="text-muted">Charging</td><td>@EnumLabel(_status?.Battery.ChargingState)</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            @* 맵 & Task 진행 *@
+            <div class="card mb-3">
+                <div class="card-header py-2"><strong>맵 / Task 진행</strong></div>
+                <div class="card-body py-2">
+                    <table class="table table-sm table-borderless mb-0">
+                        <tbody>
+                            <tr><td class="text-muted" style="width:40%">Map Status (%)</td><td>@Num(_status?.MapStatusPercent, 2)</td></tr>
+                            <tr><td class="text-muted">Total Task</td><td>@(_status?.TaskProgress.TotalTaskCount.ToString() ?? "-")</td></tr>
+                            <tr><td class="text-muted">Current Task</td><td>@(_status?.TaskProgress.CurrentTaskNumber.ToString() ?? "-")</td></tr>
+                            <tr><td class="text-muted">Total Job</td><td>@(_status?.TaskProgress.TotalJobCount.ToString() ?? "-")</td></tr>
+                            <tr><td class="text-muted">Current Job</td><td>@(_status?.TaskProgress.CurrentJobNumber.ToString() ?? "-")</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        @* ══════════════ 오른쪽: 제어 쓰기 (Holding Register) ══════════════ *@
+        <div class="col-lg-6 mb-3">
+            <h5 class="mb-3">제어 쓰기 (Holding Register)</h5>
+
+            @* 전원 제어 *@
+            <div class="card mb-3">
+                <div class="card-header py-2"><strong>전원 제어</strong></div>
+                <div class="card-body py-2">
+                    <div class="input-group input-group-sm">
+                        <select class="form-select form-select-sm" @bind="_power">
+                            <option value="0">None (0)</option>
+                            <option value="1">PowerOff (1)</option>
+                            <option value="2">Restart (2)</option>
+                            <option value="3">QuickRestart (3)</option>
+                        </select>
+                        <button class="btn btn-warning btn-sm" disabled="@WriteDisabled"
+                                @onclick="@(() => Run($"Power = {_power}", ct => Svc.SetPowerAsync((PowerCommand)_power, ct)))">쓰기</button>
+                    </div>
+                </div>
+            </div>
+
+            @* 주행 모드 *@
+            <div class="card mb-3">
+                <div class="card-header py-2"><strong>주행 모드</strong></div>
+                <div class="card-body py-2">
+                    <div class="input-group input-group-sm">
+                        <select class="form-select form-select-sm" @bind="_drivingMode">
+                            <option value="1">Drive (1)</option>
+                            <option value="2">Cart (2)</option>
+                        </select>
+                        <button class="btn btn-warning btn-sm" disabled="@WriteDisabled"
+                                @onclick="@(() => Run($"DrivingMode = {_drivingMode}", ct => Svc.SetDrivingModeAsync((DrivingMode)_drivingMode, ct)))">쓰기</button>
+                    </div>
+                </div>
+            </div>
+
+            @* 상태 제어 (ExecutionControl) *@
+            <div class="card mb-3">
+                <div class="card-header py-2"><strong>상태 제어 (Execution)</strong></div>
+                <div class="card-body py-2">
+                    <div class="input-group input-group-sm">
+                        <select class="form-select form-select-sm" @bind="_execution">
+                            <option value="1">Stop (1)</option>
+                            <option value="2">Start (2)</option>
+                            <option value="3">Pause (3)</option>
+                        </select>
+                        <button class="btn btn-warning btn-sm" disabled="@WriteDisabled"
+                                @onclick="@(() => Run($"ExecutionControl = {_execution}", ct => Svc.SetExecutionControlAsync((ExecutionControl)_execution, ct)))">쓰기</button>
+                    </div>
+                </div>
+            </div>
+
+            @* 로봇 정지 *@
+            <div class="card mb-3">
+                <div class="card-header py-2"><strong>로봇 주행 정지</strong></div>
+                <div class="card-body py-2">
+                    <div class="input-group input-group-sm">
+                        <select class="form-select form-select-sm" @bind="_robotStop">
+                            <option value="1">활성화 (1)</option>
+                            <option value="2">비활성화 (2)</option>
+                        </select>
+                        <button class="btn btn-warning btn-sm" disabled="@WriteDisabled"
+                                @onclick="@(() => Run($"RobotStop = {_robotStop}", ct => Svc.SetRobotStopAsync(_robotStop, ct)))">쓰기</button>
+                    </div>
+                </div>
+            </div>
+
+            @* Error Reset *@
+            <div class="card mb-3">
+                <div class="card-header py-2"><strong>Error Reset</strong></div>
+                <div class="card-body py-2">
+                    <button class="btn btn-warning btn-sm" disabled="@WriteDisabled"
+                            @onclick="@(() => Run("AirInitialize = 1", ct => Svc.AirInitializeAsync(ct)))">Error Reset</button>
+                </div>
+            </div>
+
+            @* Task / Job Index *@
+            <div class="card mb-3">
+                <div class="card-header py-2"><strong>Task / Job 제어</strong></div>
+                <div class="card-body py-2">
+                    <div class="row g-2 align-items-end">
+                        <div class="col">
+                            <label class="form-label form-label-sm mb-0">Task Index</label>
+                            <input type="number" min="0" class="form-control form-control-sm" @bind="_taskIndex" />
+                        </div>
+                        <div class="col">
+                            <label class="form-label form-label-sm mb-0">Job Index</label>
+                            <input type="number" min="0" class="form-control form-control-sm" @bind="_jobIndex" />
+                        </div>
+                        <div class="col-auto">
+                            <button class="btn btn-warning btn-sm" disabled="@WriteDisabled" @onclick="WriteTaskJob">쓰기</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            @* 포즈 탐색 *@
+            <div class="card mb-3">
+                <div class="card-header py-2"><strong>포즈 탐색</strong></div>
+                <div class="card-body py-2">
+                    <div class="mb-2">
+                        <button class="btn btn-info btn-sm" disabled="@WriteDisabled"
+                                @onclick="@(() => Run("PoseSearch = 1", ct => Svc.SetPoseSearchAsync(1, ct)))">포즈 탐색 활성화</button>
+                    </div>
+                    <div class="row g-2">
+                        <div class="col-4">
+                            <label class="form-label form-label-sm mb-0">X (m)</label>
+                            <input type="number" step="0.001" class="form-control form-control-sm" @bind="_poseX" />
+                        </div>
+                        <div class="col-4">
+                            <label class="form-label form-label-sm mb-0">Y (m)</label>
+                            <input type="number" step="0.001" class="form-control form-control-sm" @bind="_poseY" />
+                        </div>
+                        <div class="col-4">
+                            <label class="form-label form-label-sm mb-0">Angle (rad)</label>
+                            <input type="number" step="0.001" class="form-control form-control-sm" @bind="_poseAngle" />
+                        </div>
+                    </div>
+                    <button class="btn btn-warning btn-sm mt-2" disabled="@WriteDisabled" @onclick="WritePoseTarget">포즈 좌표 쓰기</button>
+                </div>
+            </div>
+
+            @* 쓰기 결과 로그 *@
+            <div class="card">
+                <div class="card-header py-2 d-flex justify-content-between align-items-center">
+                    <strong>쓰기 로그</strong>
+                    <button class="btn btn-outline-secondary btn-sm py-0" @onclick="@(() => _log.Clear())">지우기</button>
+                </div>
+                <div class="card-body p-0" style="max-height:200px; overflow-y:auto;">
+                    <table class="table table-sm table-striped mb-0">
+                        <thead class="table-light sticky-top">
+                            <tr><th>시간</th><th>명령</th><th>결과</th></tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var e in _log)
+                            {
+                                <tr>
+                                    <td>@e.Time</td>
+                                    <td>@e.Command</td>
+                                    <td>
+                                        @if (e.Ok)
+                                        {
+                                            <span class="badge bg-success">OK</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="badge bg-danger">@(e.Error ?? "FAIL")</span>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private RobotStatus? _status;
+    private bool _busy;
+
+    // 쓰기 입력값
+    private ushort _power;
+    private ushort _drivingMode = 1;
+    private ushort _execution = 1;
+    private ushort _robotStop = 1;
+    private int _taskIndex;
+    private int _jobIndex;
+    private float _poseX;
+    private float _poseY;
+    private float _poseAngle;
+
+    private readonly List<LogEntry> _log = new();
+
+    private CancellationTokenSource? _cts;
+
+    private bool WriteDisabled => _busy || !Svc.IsConnected;
+
+    protected override void OnInitialized()
+    {
+        _cts = new CancellationTokenSource();
+        _ = PollLoop(_cts.Token);
+    }
+
+    private async Task PollLoop(CancellationToken ct)
+    {
+        try
+        {
+            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+            do
+            {
+                if (Svc.IsConnected)
+                {
+                    try { _status = await Svc.ReadStatusAsync(ct); }
+                    catch (OperationCanceledException) { throw; }
+                    catch { _status = null; }
+                }
+                else
+                {
+                    _status = null;
+                }
+                await InvokeAsync(StateHasChanged);
+            }
+            while (await timer.WaitForNextTickAsync(ct));
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private Task WriteTaskJob()
+        => Run($"Task={_taskIndex}, Job={_jobIndex}", async ct =>
+        {
+            await Svc.SetTaskIndexAsync((ushort)_taskIndex, ct);
+            await Svc.SetJobIndexAsync((ushort)_jobIndex, ct);
+        });
+
+    private Task WritePoseTarget()
+        => Run($"PoseTarget X={_poseX}, Y={_poseY}, A={_poseAngle}",
+            ct => Svc.SetPoseTargetAsync(_poseX, _poseY, _poseAngle, ct));
+
+    private async Task Run(string label, Func<CancellationToken, Task> action)
+    {
+        if (_busy) return;
+        _busy = true;
+        try
+        {
+            await action(_cts?.Token ?? CancellationToken.None);
+            AddLog(label, true, null);
+        }
+        catch (Exception ex)
+        {
+            AddLog(label, false, ex.Message);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void AddLog(string command, bool ok, string? error)
+    {
+        _log.Insert(0, new LogEntry(DateTime.Now.ToString("HH:mm:ss"), command, ok, error));
+        if (_log.Count > 100) _log.RemoveAt(_log.Count - 1);
+    }
+
+    /// <summary>Enum 값이 정의된 경우 이름, 아니면 "-" 반환. null(미연결)도 "-".</summary>
+    private static string EnumLabel<T>(T? value) where T : struct, Enum
+        => value is { } v && Enum.IsDefined(v) ? v.ToString() : "-";
+
+    private static string RobotStopLabel(ushort? value) => value switch
+    {
+        null => "-",
+        1 => "활성화",
+        0 => "-",
+        _ => "비활성화"
+    };
+
+    private static string Num(float? value, int digits)
+        => value is { } v ? Math.Round(v, digits).ToString() : "-";
+
+    private record LogEntry(string Time, string Command, bool Ok, string? Error);
+
+    public void Dispose()
+    {
+        _cts?.Cancel();
+        _cts?.Dispose();
+    }
+}
