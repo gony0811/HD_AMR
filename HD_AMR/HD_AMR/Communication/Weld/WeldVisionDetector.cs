@@ -207,6 +207,9 @@ public sealed class WeldVisionDetector : IWeldVisionDetector
             using var canvas = bgr.Clone();
             bool horiz = p.ProgressAxis == WeldProgressAxis.Horizontal;
 
+            // FOV x,y 센터선(회색 점선) — 화면 기하중심
+            DrawCenterCross(canvas);
+
             // ROI(노랑)
             Cv2.Rectangle(canvas, new Rect(roi.X, roi.Y, roi.Width, roi.Height), new Scalar(0, 255, 255), 1);
 
@@ -240,6 +243,32 @@ public sealed class WeldVisionDetector : IWeldVisionDetector
             return buf;
         }
         catch { return null; }
+    }
+
+    /// <summary>FOV 기하중심을 지나는 세로/가로 센터선(회색 점선)을 그린다.</summary>
+    private static void DrawCenterCross(Mat canvas)
+    {
+        int cx = canvas.Width / 2;
+        int cy = canvas.Height / 2;
+        var color = new Scalar(170, 170, 170);
+        DrawDashedLine(canvas, new Point(cx, 0), new Point(cx, canvas.Height), color);
+        DrawDashedLine(canvas, new Point(0, cy), new Point(canvas.Width, cy), color);
+    }
+
+    /// <summary>점선 그리기(OpenCV 기본 미지원). dash/gap 픽셀 길이로 분할해 그린다.</summary>
+    private static void DrawDashedLine(Mat img, Point a, Point b, Scalar color, int dash = 8, int gap = 6)
+    {
+        double dx = b.X - a.X, dy = b.Y - a.Y;
+        double len = Math.Sqrt(dx * dx + dy * dy);
+        if (len < 1) return;
+        double ux = dx / len, uy = dy / len;
+        for (double t = 0; t < len; t += dash + gap)
+        {
+            var p1 = new Point((int)(a.X + ux * t), (int)(a.Y + uy * t));
+            double t2 = Math.Min(t + dash, len);
+            var p2 = new Point((int)(a.X + ux * t2), (int)(a.Y + uy * t2));
+            Cv2.Line(img, p1, p2, color, 1);
+        }
     }
 
     /// <summary>CameraFrame → (BGR overlay 용, Gray 작업용) Mat. 호출자가 Dispose.</summary>

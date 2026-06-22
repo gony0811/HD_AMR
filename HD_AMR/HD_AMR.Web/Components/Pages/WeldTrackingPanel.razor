@@ -181,6 +181,90 @@
         </div>
 
         <div class="card mb-3">
+            <div class="card-header py-1"><strong>측정 (수동 2-shot)</strong></div>
+            <div class="card-body">
+                <div class="mb-2">
+                    <button class="btn btn-sm btn-secondary" @onclick="DetectOnce" disabled="@(_busy || !Svc.DetectorAvailable)">1회 검출</button>
+                    <button class="btn btn-sm btn-info" @onclick="() => Capture(1)" disabled="@(_busy || !Svc.DetectorAvailable)">Peak #1 캡처</button>
+                    <button class="btn btn-sm btn-info" @onclick="() => Capture(2)" disabled="@(_busy || !Svc.DetectorAvailable)">Peak #2 캡처</button>
+                    <button class="btn btn-sm btn-outline-secondary" @onclick="ResetMeas" disabled="@_busy">측정 초기화</button>
+                </div>
+                <div class="row g-2 align-items-end mb-2">
+                    <div class="col-auto" title="로봇이 이동하는 Pitch(명령값). 로봇 파라미터라 항상 mm 단위">
+                        <label class="form-label mb-0 small">Pitch (mm)</label>
+                        <input class="form-control form-control-sm" type="number" step="0.1" @bind="Svc.Pitch" style="width:110px" />
+                    </div>
+                    <div class="col-auto form-check" title="로봇 위치 반복정도 오차를 영상의 Peak 변위로 교정: 보정 Pitch = Pitch + 부호×ΔPeak">
+                        <input class="form-check-input" type="checkbox" id="wk_pcorr" @bind="Svc.PitchCorrectionEnabled" />
+                        <label class="form-check-label small" for="wk_pcorr">Peak 변위로 보정</label>
+                    </div>
+                    <div class="col-auto" title="ΔPeak(=ProgressPos2−ProgressPos1) 적용 부호. 진행/장착 방향 규약에 맞춰 한 번 정함">
+                        <label class="form-label mb-0 small">부호</label>
+                        <select class="form-select form-select-sm" @bind="Svc.PitchCorrectionSign" style="width:70px">
+                            <option value="-1">−</option>
+                            <option value="1">+</option>
+                        </select>
+                    </div>
+                    <div class="col-auto"><button class="btn btn-sm btn-primary" @onclick="ComputeAngle" disabled="@(_busy || Svc.M1 is null || Svc.M2 is null || !Svc.ScaleAvailable)">각도 계산</button></div>
+                </div>
+                @if (!Svc.ScaleAvailable)
+                {
+                    <div class="alert alert-warning py-2 mb-2">
+                        <b>⚠ theta 계산 불가</b> — 스케일이 설정되지 않았습니다.
+                        d는 <b>픽셀</b>, Pitch는 <b>mm</b>라 단위가 달라 각도를 계산할 수 없습니다.
+                        아래 <b>스케일 보정</b>에서 <b>Depth 자동</b>을 켜거나 <b>2점 보정/수동</b>으로 mm/px를 설정하세요.
+                    </div>
+                }
+
+                <table class="table table-sm mb-2" style="max-width:460px">
+                    <tbody>
+                        <tr><td class="text-muted">Peak #1 d</td><td>@MeasText(Svc.M1)</td></tr>
+                        <tr><td class="text-muted">Peak #2 d</td><td>@MeasText(Svc.M2)</td></tr>
+                        @if (Svc.Angle is { } a)
+                        {
+                            <tr>
+                                <td class="text-muted">Pitch</td>
+                                <td>
+                                    @a.NominalPitch.ToString("0.#")@a.Unit
+                                    @if (a.Corrected)
+                                    {
+                                        <text> → <b>보정 Pitch @a.Pitch.ToString("0.#")@a.Unit</b> (ΔPeak @a.PeakShift.ToString("0.0"), 적용 @((a.Pitch - a.NominalPitch).ToString("+0.0;-0.0")))</text>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                        <tr><td class="text-muted">theta</td><td>@(Svc.Angle is null ? "—" : $"{Svc.Angle.ThetaDeg:0.00}° ({Svc.Angle.ThetaRad:0.0000} rad)")</td></tr>
+                    </tbody>
+                </table>
+
+                @if (!string.IsNullOrEmpty(Svc.Message))
+                {
+                    <div class="alert @(Svc.LastDetect is { Success: false } ? "alert-warning" : "alert-info") py-1 mb-0">@Svc.Message</div>
+                }
+            </div>
+        </div>
+
+        @* Peak #1 / #2 그랩 이미지 — 측정과 스케일 보정 사이 *@
+        <div class="row g-2 mb-3">
+            <div class="col-6">
+                <h6 class="text-muted mb-1">Peak #1</h6>
+                @if (Svc.Peak1Overlay is not null)
+                {
+                    <img src="/camera/weld/peak1.jpg?k=@_resultKey" alt="peak1" style="width:100%; border:1px solid #ccc; border-radius:4px; background:#000" />
+                }
+                else { <div class="text-muted small">—</div> }
+            </div>
+            <div class="col-6">
+                <h6 class="text-muted mb-1">Peak #2</h6>
+                @if (Svc.Peak2Overlay is not null)
+                {
+                    <img src="/camera/weld/peak2.jpg?k=@_resultKey" alt="peak2" style="width:100%; border:1px solid #ccc; border-radius:4px; background:#000" />
+                }
+                else { <div class="text-muted small">—</div> }
+            </div>
+        </div>
+
+        <div class="card">
             <div class="card-header py-1"><strong>스케일 보정 (mm 환산)</strong></div>
             <div class="card-body">
                 <div class="small mb-2">
@@ -243,74 +327,10 @@
                 }
             </div>
         </div>
-
-        <div class="card">
-            <div class="card-header py-1"><strong>측정 (수동 2-shot)</strong></div>
-            <div class="card-body">
-                <div class="mb-2">
-                    <button class="btn btn-sm btn-secondary" @onclick="DetectOnce" disabled="@(_busy || !Svc.DetectorAvailable)">1회 검출</button>
-                    <button class="btn btn-sm btn-info" @onclick="() => Capture(1)" disabled="@(_busy || !Svc.DetectorAvailable)">Peak #1 캡처</button>
-                    <button class="btn btn-sm btn-info" @onclick="() => Capture(2)" disabled="@(_busy || !Svc.DetectorAvailable)">Peak #2 캡처</button>
-                    <button class="btn btn-sm btn-outline-secondary" @onclick="ResetMeas" disabled="@_busy">측정 초기화</button>
-                </div>
-                <div class="row g-2 align-items-end mb-2">
-                    <div class="col-auto" title="로봇이 이동하는 Pitch(명령값). 로봇 파라미터라 항상 mm 단위">
-                        <label class="form-label mb-0 small">Pitch (mm)</label>
-                        <input class="form-control form-control-sm" type="number" step="0.1" @bind="Svc.Pitch" style="width:110px" />
-                    </div>
-                    <div class="col-auto form-check" title="로봇 위치 반복정도 오차를 영상의 Peak 변위로 교정: 보정 Pitch = Pitch + 부호×ΔPeak">
-                        <input class="form-check-input" type="checkbox" id="wk_pcorr" @bind="Svc.PitchCorrectionEnabled" />
-                        <label class="form-check-label small" for="wk_pcorr">Peak 변위로 보정</label>
-                    </div>
-                    <div class="col-auto" title="ΔPeak(=ProgressPos2−ProgressPos1) 적용 부호. 진행/장착 방향 규약에 맞춰 한 번 정함">
-                        <label class="form-label mb-0 small">부호</label>
-                        <select class="form-select form-select-sm" @bind="Svc.PitchCorrectionSign" style="width:70px">
-                            <option value="-1">−</option>
-                            <option value="1">+</option>
-                        </select>
-                    </div>
-                    <div class="col-auto"><button class="btn btn-sm btn-primary" @onclick="ComputeAngle" disabled="@(_busy || Svc.M1 is null || Svc.M2 is null || !Svc.ScaleAvailable)">각도 계산</button></div>
-                </div>
-                @if (!Svc.ScaleAvailable)
-                {
-                    <div class="alert alert-warning py-2 mb-2">
-                        <b>⚠ theta 계산 불가</b> — 스케일이 설정되지 않았습니다.
-                        d는 <b>픽셀</b>, Pitch는 <b>mm</b>라 단위가 달라 각도를 계산할 수 없습니다.
-                        위 <b>스케일 보정</b>에서 <b>Depth 자동</b>을 켜거나 <b>2점 보정/수동</b>으로 mm/px를 설정하세요.
-                    </div>
-                }
-
-                <table class="table table-sm mb-2" style="max-width:460px">
-                    <tbody>
-                        <tr><td class="text-muted">Peak #1 d</td><td>@MeasText(Svc.M1)</td></tr>
-                        <tr><td class="text-muted">Peak #2 d</td><td>@MeasText(Svc.M2)</td></tr>
-                        @if (Svc.Angle is { } a)
-                        {
-                            <tr>
-                                <td class="text-muted">Pitch</td>
-                                <td>
-                                    @a.NominalPitch.ToString("0.#")@a.Unit
-                                    @if (a.Corrected)
-                                    {
-                                        <text> → <b>보정 Pitch @a.Pitch.ToString("0.#")@a.Unit</b> (ΔPeak @a.PeakShift.ToString("0.0"), 적용 @((a.Pitch - a.NominalPitch).ToString("+0.0;-0.0")))</text>
-                                    }
-                                </td>
-                            </tr>
-                        }
-                        <tr><td class="text-muted">theta</td><td>@(Svc.Angle is null ? "—" : $"{Svc.Angle.ThetaDeg:0.00}° ({Svc.Angle.ThetaRad:0.0000} rad)")</td></tr>
-                    </tbody>
-                </table>
-
-                @if (!string.IsNullOrEmpty(Svc.Message))
-                {
-                    <div class="alert @(Svc.LastDetect is { Success: false } ? "alert-warning" : "alert-info") py-1 mb-0">@Svc.Message</div>
-                }
-            </div>
-        </div>
     </div>
 </div>
 
-@* ── 검출 결과 오버레이 ─────────────────────────── *@
+@* ── 최근 검출 오버레이 ─────────────────────────── *@
 <div class="row g-3 mt-1">
     <div class="col-md-6">
         <h6 class="text-muted">최근 검출 오버레이</h6>
@@ -320,22 +340,6 @@
                  style="width:100%; max-width:640px; border:1px solid #ccc; border-radius:4px; background:#000" />
         }
         else { <div class="text-muted small">아직 검출 결과가 없습니다.</div> }
-    </div>
-    <div class="col-md-3">
-        <h6 class="text-muted">Peak #1</h6>
-        @if (Svc.Peak1Overlay is not null)
-        {
-            <img src="/camera/weld/peak1.jpg?k=@_resultKey" alt="peak1" style="width:100%; border:1px solid #ccc; border-radius:4px; background:#000" />
-        }
-        else { <div class="text-muted small">—</div> }
-    </div>
-    <div class="col-md-3">
-        <h6 class="text-muted">Peak #2</h6>
-        @if (Svc.Peak2Overlay is not null)
-        {
-            <img src="/camera/weld/peak2.jpg?k=@_resultKey" alt="peak2" style="width:100%; border:1px solid #ccc; border-radius:4px; background:#000" />
-        }
-        else { <div class="text-muted small">—</div> }
     </div>
 </div>
 
