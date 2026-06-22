@@ -95,14 +95,18 @@ public sealed class WeldVisionDetector : IWeldVisionDetector
             if (p.SmoothingWindow >= 2)
                 SmoothValid(centerCross, valid, p.SmoothingWindow);
 
-            // 7) 기준선/타깃/d 계산 (cross 좌표는 full-image 기준으로 변환)
+            // 7) 기준선/중심/d 계산 (cross 좌표는 full-image 기준으로 변환)
             double crossOffset = horiz ? roi.Y : roi.X;
+            // 기준선: Peak 모드면 Peak 중심선, 아니면 FOV(전체 화면) 가로/세로 센터선(회색 점선과 동일).
             double refPos = referenceMode == WeldReferenceMode.PeakLine && peakReferencePos is { } pr
                 ? pr
-                : crossOffset + (horiz ? roi.Height : roi.Width) / 2.0; // FOV(=ROI) 중심
+                : (horiz ? gray.Height : gray.Width) / 2.0;
 
-            double targetS = sCount / 2.0;
-            double weldCenterRoi = SampleAround(centerCross, valid, (int)targetS, 5);
+            // 비드 중심 = 유효 centerline 전체의 평균(mean). 직선 비드에 강건(끝점 튐에 둔감).
+            double sumC = 0; int nC = 0;
+            for (int s = 0; s < sCount; s++) if (valid[s]) { sumC += centerCross[s]; nC++; }
+            double targetS = sCount / 2.0; // 깊이 샘플링용 진행축 기준(ROI 중앙)
+            double weldCenterRoi = nC > 0 ? sumC / nC : SampleAround(centerCross, valid, (int)targetS, 5);
             double weldCenterFull = crossOffset + weldCenterRoi;
             double d = weldCenterFull - refPos;
 
@@ -215,8 +219,9 @@ public sealed class WeldVisionDetector : IWeldVisionDetector
             // ROI(노랑)
             Cv2.Rectangle(canvas, new Rect(roi.X, roi.Y, roi.Width, roi.Height), new Scalar(0, 255, 255), 1);
 
-            // 기준선(하늘색)
-            if (!double.IsNaN(refPos))
+            // 기준선(하늘색) — FOV 센터선(회색)과 겹치면(=FOV 기준) 생략해 이중선 방지.
+            double fovCenter = (horiz ? canvas.Height : canvas.Width) / 2.0;
+            if (!double.IsNaN(refPos) && Math.Abs(refPos - fovCenter) > 1.0)
             {
                 if (horiz) Cv2.Line(canvas, new Point(roi.X, (int)refPos), new Point(roi.Right, (int)refPos), new Scalar(255, 255, 0), 1);
                 else Cv2.Line(canvas, new Point((int)refPos, roi.Y), new Point((int)refPos, roi.Bottom), new Scalar(255, 255, 0), 1);

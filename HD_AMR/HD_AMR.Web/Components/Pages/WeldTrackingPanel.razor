@@ -155,15 +155,7 @@
                         <div class="text-muted" style="font-size:.68rem">0~1=끔·3~15</div>
                     </div>
                 </div>
-                <div class="row g-2 mt-1 align-items-end">
-                    <div class="col-auto" title="위치 오차 d 의 기준선. FOV 중심=ROI 중앙선, Peak ROI 중심=Peak ROI 중앙선">
-                        <label class="form-label mb-0 small">기준선 ⓘ</label>
-                        <select class="form-select form-select-sm" @bind="Svc.ReferenceMode" style="width:150px">
-                            <option value="@WeldReferenceMode.FovCenter">FOV 중심</option>
-                            <option value="@WeldReferenceMode.PeakLine">Peak ROI 중심</option>
-                        </select>
-                    </div>
-                </div>
+                <div class="small text-muted mt-1">위치 오차 <b>d</b> 의 기준선: <b>FOV 중심</b>(회색 센터선) 고정.</div>
 
                 <details class="mt-2">
                     <summary class="small text-primary" style="cursor:pointer">ⓘ 파라미터 설명 보기</summary>
@@ -173,7 +165,7 @@
                         <li><b>이진화</b>: <b>Otsu</b>(전역 자동·조명 균일) / <b>Adaptive</b>(국소·조명 얼룩) / <b>Canny</b>(경계선만).</li>
                         <li><b>반전</b>: 비드가 어두울 때 체크. <b>CLAHE</b>: 대비 강화(흐리면 ON, 노이즈면 OFF).</li>
                         <li><b>Blur</b>(0/홀수3~9): 노이즈↓·경계도 뭉개짐. <b>Morph</b>(0/홀수3~9): 틈 메움·점노이즈 제거.</li>
-                        <li><b>Smooth</b>(0~1끔·3~15): 중심선 매끄럽게. <b>기준선</b>: d 기준(FOV 중심 / Peak ROI 중심).</li>
+                        <li><b>Smooth</b>(0~1끔·3~15): 중심선 매끄럽게. <b>d 기준선</b>: FOV 중심(회색 센터선) 고정.</li>
                         <li>mm 환산(스케일)은 아래 <b>스케일 보정</b> 카드에서 설정합니다(Depth 자동 / 2점 보정 / 수동).</li>
                     </ul>
                 </details>
@@ -269,10 +261,9 @@
             <b class="me-2" style="color:#fff">범례</b>
             <span class="me-3" style="white-space:nowrap"><span style="display:inline-block;width:14px;height:0;border-top:2px solid #ff00ff;vertical-align:middle"></span> Peak 위치(P1/P2)</span>
             <span class="me-3" style="white-space:nowrap"><span style="display:inline-block;width:13px;height:13px;border:2px solid #ffff00;vertical-align:middle"></span> Weld ROI</span>
-            <span class="me-3" style="white-space:nowrap"><span style="display:inline-block;width:14px;height:0;border-top:2px solid #00ffff;vertical-align:middle"></span> 기준선(d 기준)</span>
             <span class="me-3" style="white-space:nowrap"><span style="display:inline-block;width:14px;height:0;border-top:2px solid #00e600;vertical-align:middle"></span> 비드 중심선</span>
-            <span class="me-3" style="white-space:nowrap"><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#ff0000;vertical-align:middle"></span> 비드 중심점(d)</span>
-            <span class="me-3" style="white-space:nowrap"><span style="display:inline-block;width:14px;height:0;border-top:2px dashed #aaaaaa;vertical-align:middle"></span> FOV 센터선</span>
+            <span class="me-3" style="white-space:nowrap"><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#ff0000;vertical-align:middle"></span> 비드 중심점(평균)</span>
+            <span class="me-3" style="white-space:nowrap"><span style="display:inline-block;width:14px;height:0;border-top:2px dashed #aaaaaa;vertical-align:middle"></span> FOV 센터선(d 기준)</span>
         </div>
 
         <div class="card">
@@ -405,7 +396,16 @@
     {
         var r = new RoiRect((int)x, (int)y, (int)w, (int)h);
         if (kind == "peak") Svc.SetPeakRoi(r); else Svc.SetWeldRoi(r);
+        // 드래그한 박스 좌표를 X/Y/W/H 입력칸에 채워 미세조정/재현이 쉽도록.
+        _mx = r.X; _my = r.Y; _mw = r.Width; _mh = r.Height;
         await InvokeAsync(StateHasChanged);
+    }
+
+    /// <summary>선택한 종류(Weld/Peak)의 현재 ROI 값을 수동 입력칸에 채운다.</summary>
+    private void FillManualFields(string kind)
+    {
+        var r = kind == "peak" ? Svc.PeakRoi : Svc.WeldRoi;
+        if (r is not null) { _mx = r.X; _my = r.Y; _mw = r.Width; _mh = r.Height; }
     }
 
     [JSInvokable]
@@ -437,6 +437,7 @@
     private async Task SetKind(string kind)
     {
         _drawKind = kind;
+        if (kind is "weld" or "peak") FillManualFields(kind);
         if (_editorInited) try { await JS.InvokeVoidAsync("hdAmrWeld.setKind", _editorCanvas, kind); } catch { }
     }
 
@@ -472,6 +473,7 @@
     {
         if (string.IsNullOrEmpty(_loadName)) return;
         Svc.LoadProfile(_loadName);
+        FillManualFields(_drawKind);
         await PushRois();
     }
 

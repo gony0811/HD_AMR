@@ -49,7 +49,6 @@ public class WeldTrackingService
     public RoiRect? WeldRoi { get; private set; }
     public string ProfileName { get; set; } = "default";
     public WeldDetectionParams Params { get; } = new();
-    public WeldReferenceMode ReferenceMode { get; set; } = WeldReferenceMode.FovCenter;
     public double Pitch { get; set; }
 
     /// <summary>2점 보정으로 산출한 스케일 보정계수. Depth 자동(mm/px=Z/fx)에 곱해 체계적 오차를 보강. 1=보정 없음.</summary>
@@ -269,13 +268,8 @@ public class WeldTrackingService
 
         var weldRoi = WeldRoi ?? RoiRect.Full(frame.Width, frame.Height);
 
-        double? peakRef = null;
-        if (ReferenceMode == WeldReferenceMode.PeakLine && PeakRoi is { } pr)
-            peakRef = Params.ProgressAxis == WeldProgressAxis.Horizontal
-                ? pr.Y + pr.Height / 2.0
-                : pr.X + pr.Width / 2.0;
-
-        return _detector.DetectWeld(frame, weldRoi, Params, ReferenceMode, peakRef, peakProgressPos, peakLabel);
+        // d 기준선은 FOV(전체 화면) 센터선으로 고정.
+        return _detector.DetectWeld(frame, weldRoi, Params, WeldReferenceMode.FovCenter, null, peakProgressPos, peakLabel);
     }
 
     private static string Fmt(double dpx) => $"{dpx:0.0}px";   // 1회 검출(튜닝)은 깊이 컨텍스트가 없어 px 로 표시
