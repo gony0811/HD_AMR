@@ -3,9 +3,11 @@
 @using HD_AMR.Data.Entities
 @using HD_AMR.Service
 @using HD_AMR.Communication
+@using HD_AMR.Communication.Vision
 @using Microsoft.JSInterop
 @inject DrawingService Service
 @inject CobotService Cobot
+@inject VisionInterfaceService Vision
 @inject IJSRuntime JS
 @inject ILogger<Teaching> Logger
 @implements IDisposable
@@ -202,14 +204,17 @@
                     <input class="form-control" type="number" min="0" max="14" style="width:80px" @bind="_runUser" /></div>
                 <div class="col-auto"><label class="form-label">속도(%)</label>
                     <input class="form-control" type="number" min="1" max="100" style="width:80px" @bind="_runVel" /></div>
-                <div class="col-auto"><label class="form-label">지연(초)</label>
-                    <input class="form-control" type="number" step="0.1" min="0" style="width:90px" @bind="_delaySec" /></div>
+                <div class="col-auto"><label class="form-label">응답 대기 제한(초)</label>
+                    <input class="form-control" type="number" step="0.1" min="0" style="width:120px" @bind="_visionTimeoutSec" /></div>
                 <div class="col-auto"><label class="form-label">th_max(°)</label>
                     <input class="form-control" type="number" step="1" min="0" style="width:80px" @bind="_thMax" /></div>
-                <div class="col-auto form-check" style="padding-top:28px">
-                    <input class="form-check-input" type="checkbox" id="goHome" @bind="_moveHomeFirst" />
-                    <label class="form-check-label" for="goHome">시작 시 원점 이동</label>
-                </div>
+                <div class="col-auto"><label class="form-label">Surface ID</label>
+                    <select class="form-select" style="width:230px" @bind="_surfaceId">
+                        @foreach (var s in SurfaceCatalog.All)
+                        {
+                            <option value="@s.Id">@($"0x{s.Id:X2}") @s.Name</option>
+                        }
+                    </select></div>
                 <div class="col-auto">
                     <button class="btn btn-success" @onclick="RunWaypoints"
                             disabled="@(_isRunning || _thinned.Count < 2 || !Cobot.IsConnected)">
@@ -286,7 +291,9 @@
                         <th>Z (mm)</th>
                         <th>θ (°)</th>
                         <th>ry (°)</th>
+                        <th>Surface</th>
                         <th>실행</th>
+                        <th>비전 결과</th>
                         <th>동작</th>
                     </tr>
                 </thead>
@@ -307,7 +314,16 @@
                                        value="@F(thetaDeg)" @onchange="e => SetWpTheta(idx, e.Value)"
                                        title="@(_thetaOverrides.ContainsKey(idx) ? "수동 입력값" : "자동 계산값(수정 시 고정)")" /></td>
                             <td>@(included ? F(thetaDeg) : "-")</td>
+                            <td>
+                                <select class="form-select form-select-sm" style="width:130px"
+                                        value="@((int)EffectiveSurfaceType(idx))"
+                                        @onchange="e => SetWpSurfaceType(idx, e.Value)" @onclick:stopPropagation="true">
+                                    <option value="0">Flat</option>
+                                    <option value="1">Corrugation</option>
+                                </select>
+                            </td>
                             <td>@(included ? "○" : "제외(>th_max)")</td>
+                            <td>@(_visionResults.GetValueOrDefault(idx))</td>
                             <td>
                                 <button class="btn btn-sm btn-outline-primary"
                                         @onclick="() => MoveToWaypointAsync(idx)" @onclick:stopPropagation="true"
@@ -347,8 +363,13 @@
     private int _runTool = 1;
     private int _runUser = 0;
     private int _runVel = 5;
-    private double _delaySec = 0.5;
-    private bool _moveHomeFirst = true;
+    private double _visionTimeoutSec = 10;     // CAPTURE_REQ 응답 대기 제한(초)
+    private bool _moveHomeFirst = false;       // (UI 제거됨) 프로필 호환을 위해 필드는 유지, 항상 false
+    private int _surfaceId = 1;                // CAPTURE_REQ Surface ID(콤보박스)
+    // 경유점별 Surface Type 수동 지정(없으면 |θ| ≥ 코로게이션 판정각 으로 자동 판정)
+    private readonly Dictionary<int, SurfaceType> _surfaceTypeOverrides = new();
+    // 경유점별 비전 응답 결과 표시 문자열
+    private readonly Dictionary<int, string> _visionResults = new();
     private bool _isRunning;
     private bool _runIsError;
     private string? _runMessage;
@@ -732,6 +753,20 @@
             _thetaOverrides[i] = v;
     }
 
+    // 경유점 Surface Type: 수동 지정값이 있으면 그 값, 없으면 |θ| ≥ 코로게이션 판정각 → Corrugation.
+    private SurfaceType EffectiveSurfaceType(int i)
+        => _surfaceTypeOverrides.TryGetValue(i, out var t)
+            ? t
+            : (Math.Abs(EffectiveThetaDeg(i)) >= _corrugThresholdDeg ? SurfaceType.Corrugation : SurfaceType.Flat);
+
+    // Surface Type 드롭다운 수동 변경.
+    private void SetWpSurfaceType(int i, object? value)
+    {
+        if (i < 0 || i >= _thinned.Count) return;
+        if (int.TryParse(value?.ToString(), out var v) && Enum.IsDefined(typeof(SurfaceType), (byte)v))
+            _surfaceTypeOverrides[i] = (SurfaceType)v;
+    }
+
     // 경유점 좌표 수동 수정 (record는 with로 치환). X=로봇 x, Z=로봇 z(=DXF Y).
     private void SetWpX(int i, object? value)
     {
@@ -807,25 +842,14 @@
         _runIsError = false;
         _runMessage = null;
         _runIndex = -1;
+        _visionResults.Clear();
         _runCts = new CancellationTokenSource();
         var ct = _runCts.Token;
         var rpc = Cobot.Rpc!;
-        var delayMs = (int)Math.Round(Math.Max(0, _delaySec) * 1000);
+        var visionTimeout = TimeSpan.FromSeconds(Math.Max(0, _visionTimeoutSec));
 
         try
         {
-            if (_moveHomeFirst)
-            {
-                var home = await rpc.MoveLAsync(new double[6], tool: _runTool, user: _runUser,
-                    vel: _runVel, acc: 100, ovl: 100, blendR: -1, ct: ct);
-                if (home != 0)
-                {
-                    _runIsError = true; _runMessage = $"원점 이동 실패 (rc={home}) — 중단";
-                    return;
-                }
-                await Task.Delay(delayMs, ct);
-            }
-
             int moved = 0;
             for (int i = 0; i < _thinned.Count; i++)
             {
@@ -853,7 +877,21 @@
                     return;
                 }
 
-                await Task.Delay(delayMs, ct);
+                // 지연 대신: 비전으로 CAPTURE_REQ 전송 후 응답 대기.
+                var data = CaptureReqPayload.Build(EffectiveSurfaceType(i), (ushort)_surfaceId,
+                    (int)Math.Round(x), (int)Math.Round(z));
+                var outcome = await Vision.Client.RequestCaptureAsync(data, visionTimeout, ct);
+                var result = outcome switch
+                {
+                    { Sent: false }      => "비전 미연결",
+                    { Responded: false } => "응답 없음(타임아웃)",
+                    { Success: true }    => "비전 OK",
+                    _                    => $"비전 실패({ResultCodeNames.NameOf((ushort)outcome.Code!)})",
+                };
+                _visionResults[i] = result;
+                // 실패/무응답이어도 중단하지 않고 다음 점으로 진행.
+                _runMessage = $"#{i + 1} 이동 완료 · {result}";
+                await InvokeAsync(StateHasChanged);
             }
 
             _runMessage = $"완료: {moved}개 점 이동";
@@ -963,7 +1001,7 @@
                 RunTool = _runTool,
                 RunUser = _runUser,
                 RunVel = _runVel,
-                DelaySec = _delaySec,
+                DelaySec = _visionTimeoutSec, // 응답 대기 제한(초)을 기존 DelaySec 칼럼에 저장
                 ThMax = _thMax,
                 MoveHomeFirst = _moveHomeFirst,
                 WaypointsJson = System.Text.Json.JsonSerializer.Serialize(waypoints)
@@ -1016,13 +1054,15 @@
             _runTool = p.RunTool;
             _runUser = p.RunUser;
             _runVel = p.RunVel;
-            _delaySec = p.DelaySec;
+            _visionTimeoutSec = p.DelaySec; // DelaySec 칼럼에 저장된 응답 대기 제한(초)
             _thMax = p.ThMax;
             _moveHomeFirst = p.MoveHomeFirst;
 
             var waypoints = System.Text.Json.JsonSerializer.Deserialize<List<TeachingWaypoint>>(p.WaypointsJson) ?? new();
             _thinned = waypoints.Select(w => new PointMarker(w.X, w.Z)).ToList();
             _thetaOverrides.Clear();
+            _surfaceTypeOverrides.Clear();
+            _visionResults.Clear();
             for (int i = 0; i < waypoints.Count; i++)
                 if (waypoints[i].ThetaManual) _thetaOverrides[i] = waypoints[i].Theta;
 

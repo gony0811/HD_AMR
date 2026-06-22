@@ -1,4 +1,24 @@
+using System.Buffers.Binary;
+
 namespace HD_AMR.Communication.Vision;
+
+/// <summary>
+/// CAPTURE_REQ 의 15바이트 DATA 페이로드 생성.
+/// 레이아웃: [0]Surface Type, [1-2]Surface ID(LE), [3-6]PosX(LE,mm), [7-10]PosY(LE,mm), [11-14]예약(0).
+/// </summary>
+public static class CaptureReqPayload
+{
+    public static byte[] Build(SurfaceType type, ushort surfaceId, int posX, int posY)
+    {
+        var data = new byte[15];
+        data[0] = (byte)type;
+        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(1, 2), surfaceId);
+        BinaryPrimitives.WriteInt32LittleEndian(data.AsSpan(3, 4), posX);
+        BinaryPrimitives.WriteInt32LittleEndian(data.AsSpan(7, 4), posY);
+        // bytes 11..14 reserved → 0x00
+        return data;
+    }
+}
 
 /// <summary>
 /// HD현대 비전 인터페이스 프로토콜 상수/코드 정의. 사양: docs/비전 인터페이스_v2.xlsx.

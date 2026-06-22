@@ -32,6 +32,12 @@ public sealed class VisionEngine : IAsyncDisposable
     // Serializes wire writes so the heartbeat timer cannot interleave bytes with a UI-triggered send.
     private readonly SemaphoreSlim _sendLock = new(1, 1);
 
+    // ── CAPTURE_REQ 요청/응답 상관 ──────────────────────────────────
+    // Teaching 실행은 한 번에 한 점씩 순차로 await 하므로 단일 보류 슬롯으로 충분하다.
+    // (응답 프레임의 SEQ 에코를 가정하지 않고, 직전에 보낸 요청 하나를 매칭한다.)
+    private readonly object _captureLock = new();
+    private TaskCompletionSource<Frame>? _pendingCapture;
+
     // ── 로그 버퍼(폴링 모델) ────────────────────────────────────────
     private const int MaxLogs = 1000;
     private readonly object _logLock = new();
@@ -103,6 +109,13 @@ public sealed class VisionEngine : IAsyncDisposable
             if (r.Decoded is { } f && r.Fault is null)
             {
                 Log(LogDirection.Rx, FrameCodec.ToHex(r.Bytes), FrameDescriber.Summary(f));
+                // CAPTURE_RES(성공/실패 코드) 또는 ERROR_NOTI 수신 시 보류 중인 요청을 완료시킨다.
+                if (f.Command is (byte)CommandCode.CaptureRes or (byte)CommandCode.ErrorNoti)
+                {
+                    TaskCompletionSource<Frame>? pending;
+                    lock (_captureLock) { pending = _pendingCapture; }
+                    pending?.TrySetResult(f);
+                }
             }
             else
             {
@@ -157,6 +170,50 @@ public sealed class VisionEngine : IAsyncDisposable
             Log(LogDirection.Error, FrameCodec.ToHex(bytes), $"전송 실패: {ex.Message}");
         }
         finally { _sendLock.Release(); }
+    }
+
+    /// <summary>
+    /// CAPTURE_REQ 를 전송하고 비전의 응답(CAPTURE_RES/ERROR_NOTI)을 <paramref name="timeout"/> 까지 대기한다.
+    /// 미연결이면 전송하지 않고 즉시 반환(Sent=false). 응답이 없으면 Responded=false(타임아웃).
+    /// </summary>
+    public async Task<CaptureOutcome> RequestCaptureAsync(byte[] data, TimeSpan timeout, CancellationToken ct = default)
+    {
+        var t = _transport;
+        if (t is null || !t.IsConnected)
+        {
+            Log(LogDirection.Error, "", "CAPTURE_REQ 전송 실패: 연결되어 있지 않음");
+            return new CaptureOutcome(false, false, null);
+        }
+
+        var tcs = new TaskCompletionSource<Frame>(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (_captureLock) { _pendingCapture = tcs; }
+        try
+        {
+            await SendAsync(new SendRequest(
+                Command: CommandCode.CaptureReq,
+                To: PeerId,
+                Data: data,
+                Note: "capture")).ConfigureAwait(false);
+
+            var winner = await Task.WhenAny(tcs.Task, Task.Delay(timeout, ct)).ConfigureAwait(false);
+            if (winner == tcs.Task)
+            {
+                var f = await tcs.Task.ConfigureAwait(false);
+                if (f.Command == (byte)CommandCode.CaptureRes && f.Data.Length >= 2)
+                {
+                    var code = (ushort)(f.Data[0] | (f.Data[1] << 8));
+                    return new CaptureOutcome(true, true, (ResultCode)code);
+                }
+                // ERROR_NOTI 등: 응답은 왔으나 성공 코드가 아님.
+                return new CaptureOutcome(true, true, ResultCode.ErrUnknown);
+            }
+
+            return new CaptureOutcome(true, false, null); // 타임아웃/취소
+        }
+        finally
+        {
+            lock (_captureLock) { if (ReferenceEquals(_pendingCapture, tcs)) _pendingCapture = null; }
+        }
     }
 
     public async Task SendRawAsync(byte[] bytes, string note = "raw")
@@ -236,3 +293,12 @@ public sealed record SendRequest(
     ushort? LengthOverride = null,
     byte? ChecksumOverride = null,
     string? Note = null);
+
+/// <summary>
+/// <see cref="VisionEngine.RequestCaptureAsync"/> 결과. Sent=전송 여부(미연결이면 false),
+/// Responded=응답 수신 여부(타임아웃이면 false), Code=수신한 결과 코드(있을 때).
+/// </summary>
+public sealed record CaptureOutcome(bool Sent, bool Responded, ResultCode? Code)
+{
+    public bool Success => Responded && Code == ResultCode.Success;
+}

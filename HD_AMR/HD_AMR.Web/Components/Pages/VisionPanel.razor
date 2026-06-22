@@ -357,15 +357,7 @@
     }
 
     private byte[] BuildCaptureReqData()
-    {
-        var data = new byte[15];
-        data[0] = (byte)_surfaceType;
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(1, 2), (ushort)_surfaceId);
-        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(data.AsSpan(3, 4), _posX);
-        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(data.AsSpan(7, 4), _posY);
-        // bytes 11..14 reserved → 0x00
-        return data;
-    }
+        => CaptureReqPayload.Build((SurfaceType)_surfaceType, (ushort)_surfaceId, _posX, _posY);
 
     private byte[] BuildResultData()
     {

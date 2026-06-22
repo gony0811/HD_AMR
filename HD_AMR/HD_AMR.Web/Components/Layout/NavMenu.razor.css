@@ -144,12 +144,14 @@
         color: var(--accent-hover);
     }
 
-.nav-scrollable {
-    display: none;
-}
+@media (max-width: 640px) {
+    .nav-scrollable {
+        display: none;
+    }
 
-.navbar-toggler:checked ~ .nav-scrollable {
-    display: block;
+    .navbar-toggler:checked ~ .nav-scrollable {
+        display: block;
+    }
 }
 
 @media (min-width: 641px) {
