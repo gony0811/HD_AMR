@@ -16,7 +16,8 @@ public sealed class WeldVisionDetector : IWeldVisionDetector
 
     public WeldDetectionResult DetectWeld(
         CameraFrame frame, RoiRect weldRoi, WeldDetectionParams p,
-        WeldReferenceMode referenceMode = WeldReferenceMode.FovCenter, double? peakReferencePos = null)
+        WeldReferenceMode referenceMode = WeldReferenceMode.FovCenter, double? peakReferencePos = null,
+        double? peakProgressPos = null, string? peakLabel = null)
     {
         Mat? bgr = null, gray = null;
         try
@@ -87,7 +88,7 @@ public sealed class WeldVisionDetector : IWeldVisionDetector
                 {
                     Success = false,
                     Message = $"비드 후보 부족(coverage={coverage:P0}) — ROI/파라미터를 조정하세요.",
-                    OverlayJpeg = EncodeOverlay(bgr, roi, p, null, double.NaN, double.NaN),
+                    OverlayJpeg = EncodeOverlay(bgr, roi, p, null, double.NaN, double.NaN, peakProgressPos, peakLabel),
                 };
 
             // 6) 이동평균 smoothing
@@ -115,7 +116,7 @@ public sealed class WeldVisionDetector : IWeldVisionDetector
                 pts.Add(new PixelPoint(x, y));
             }
 
-            var overlay = EncodeOverlay(bgr, roi, p, pts, refPos, weldCenterFull);
+            var overlay = EncodeOverlay(bgr, roi, p, pts, refPos, weldCenterFull, peakProgressPos, peakLabel);
 
             // 타깃 지점의 비드/기준 픽셀 좌표(full-image) — 깊이 샘플링·스케일 환산용.
             double targetProgFull = (horiz ? roi.X : roi.Y) + targetS;
@@ -200,7 +201,8 @@ public sealed class WeldVisionDetector : IWeldVisionDetector
 
     private static byte[]? EncodeOverlay(
         Mat bgr, RoiRect roi, WeldDetectionParams p,
-        IReadOnlyList<PixelPoint>? centerline, double refPos, double weldCenterFull)
+        IReadOnlyList<PixelPoint>? centerline, double refPos, double weldCenterFull,
+        double? peakProgressPos = null, string? peakLabel = null)
     {
         try
         {
@@ -237,6 +239,28 @@ public sealed class WeldVisionDetector : IWeldVisionDetector
                 double d = weldCenterFull - refPos;
                 Cv2.PutText(canvas, $"d={d:0.0}px", new Point(roi.X, Math.Max(12, roi.Y - 6)),
                     HersheyFonts.HersheySimplex, 0.5, new Scalar(0, 0, 255), 1);
+            }
+
+            // Peak 위치(자홍색 진행축-수직 선 + 라벨 P1/P2)
+            if (peakProgressPos is { } pp && !double.IsNaN(pp))
+            {
+                var magenta = new Scalar(255, 0, 255);
+                if (horiz)
+                {
+                    int x = (int)pp;
+                    Cv2.Line(canvas, new Point(x, roi.Y), new Point(x, roi.Bottom), magenta, 1);
+                    if (!string.IsNullOrEmpty(peakLabel))
+                        Cv2.PutText(canvas, peakLabel, new Point(x + 3, Math.Max(12, roi.Y + 14)),
+                            HersheyFonts.HersheySimplex, 0.5, magenta, 1);
+                }
+                else
+                {
+                    int y = (int)pp;
+                    Cv2.Line(canvas, new Point(roi.X, y), new Point(roi.Right, y), magenta, 1);
+                    if (!string.IsNullOrEmpty(peakLabel))
+                        Cv2.PutText(canvas, peakLabel, new Point(roi.X + 3, Math.Max(12, y - 4)),
+                            HersheyFonts.HersheySimplex, 0.5, magenta, 1);
+                }
             }
 
             Cv2.ImEncode(".jpg", canvas, out byte[] buf, new[] { (int)ImwriteFlags.JpegQuality, 80 });

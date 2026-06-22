@@ -20,10 +20,14 @@ public interface IWeldVisionDetector
     /// <param name="p">검출 파라미터.</param>
     /// <param name="referenceMode">d 기준선.</param>
     /// <param name="peakReferencePos">PeakLine 모드일 때 기준선 cross-axis 위치(픽셀). 없으면 FOV 중심 사용.</param>
+    /// <param name="peakProgressPos">Peak 의 진행축 위치(픽셀). 주면 오버레이에 자홍색 Peak 선을 그린다.</param>
+    /// <param name="peakLabel">Peak 선 라벨(예: P1/P2). 없으면 라벨 생략.</param>
     WeldDetectionResult DetectWeld(
         CameraFrame frame,
         RoiRect weldRoi,
         WeldDetectionParams p,
         WeldReferenceMode referenceMode = WeldReferenceMode.FovCenter,
-        double? peakReferencePos = null);
+        double? peakReferencePos = null,
+        double? peakProgressPos = null,
+        string? peakLabel = null);
 }

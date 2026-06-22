@@ -151,18 +151,19 @@ public class WeldTrackingService
     /// <summary>Peak #1 또는 #2 에서 한 장을 캡처해 d 와 Peak 정보를 측정 슬롯에 저장.</summary>
     public void CapturePeak(int id)
     {
-        var r = RunDetect();
+        // Peak(진행축 위치)를 먼저 구해, 오버레이에 자홍색 Peak 선/라벨로 그릴 수 있게 한다.
+        PeakInfo? peak = null;
+        var depth = _camera.LatestDepth;
+        if (depth is not null && PeakRoi is not null)
+            peak = DepthPeakAnalyzer.Analyze(depth, PeakRoi, Params.ProgressAxis);
+
+        var r = RunDetect(peak is { Found: true } ? peak.ProgressPos : null, $"P{id}");
         LastDetect = r;
         if (!r.Success)
         {
             Message = $"Peak #{id} 캡처 실패: {r.Message}";
             return;
         }
-
-        PeakInfo? peak = null;
-        var depth = _camera.LatestDepth;
-        if (depth is not null && PeakRoi is not null)
-            peak = DepthPeakAnalyzer.Analyze(depth, PeakRoi, Params.ProgressAxis);
 
         // 비드 중심점 위치의 깊이(mm) — Depth 자동 스케일(Z/fx)용. 없으면 peak 깊이로 대체.
         double depthZ = r.WeldPoint is { } wp ? SampleDepthAtDetectionPoint(wp) : 0;
@@ -255,7 +256,7 @@ public class WeldTrackingService
     }
 
     // ── 내부 ────────────────────────────────────────────────────────
-    private WeldDetectionResult RunDetect()
+    private WeldDetectionResult RunDetect(double? peakProgressPos = null, string? peakLabel = null)
     {
         if (!_detector.IsAvailable)
             return WeldDetectionResult.Fail("OpenCV 네이티브가 없어 검출 비활성(Windows에서만 지원).");
@@ -274,7 +275,7 @@ public class WeldTrackingService
                 ? pr.Y + pr.Height / 2.0
                 : pr.X + pr.Width / 2.0;
 
-        return _detector.DetectWeld(frame, weldRoi, Params, ReferenceMode, peakRef);
+        return _detector.DetectWeld(frame, weldRoi, Params, ReferenceMode, peakRef, peakProgressPos, peakLabel);
     }
 
     private static string Fmt(double dpx) => $"{dpx:0.0}px";   // 1회 검출(튜닝)은 깊이 컨텍스트가 없어 px 로 표시
