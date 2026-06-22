@@ -28,6 +28,10 @@ public class CobotService : BackgroundService
     /// <summary>RPC 명령 클라이언트.</summary>
     public FairinoRpcClient Rpc => _rpc;
 
+    /// <summary>긴급 정지: 진행 중인 블로킹 이동을 가로채 즉시 StopMotion 전송(세마포어 우회).</summary>
+    public Task<int> StopMotionImmediateAsync(CancellationToken ct = default)
+        => _rpc.StopMotionImmediateAsync(ct);
+
     /// <summary>최신 RPC 실시간 상태(포즈/조인트). 미수신 시 null.</summary>
     public FairinoState? State => _state.Latest;
 

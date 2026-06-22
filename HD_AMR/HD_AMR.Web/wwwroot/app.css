@@ -1,19 +1,82 @@
+/* ── Self-hosted font (no external CDN; works offline on Jetson) ──────────── */
+@font-face {
+    font-family: 'Inter';
+    font-style: normal;
+    font-display: swap;
+    font-weight: 100 900;
+    src: url('fonts/inter-latin-wght-normal.woff2') format('woff2');
+}
+
+/* ── Design tokens ───────────────────────────────────────────────────────── */
+:root {
+    --app-bg:        #eceef0;   /* 페이지 배경 (밝은 중립 회색) */
+    --surface:       #ffffff;   /* 카드 표면 */
+    --surface-muted: #f4f5f7;   /* 보조 표면 */
+    --border:        #e5e7eb;   /* 옅은 경계선 */
+    --sidebar-bg:    #16181d;   /* 거의 검정 사이드바 */
+    --sidebar-fg:    #c7cad1;   /* 사이드바 기본 텍스트 */
+    --sidebar-muted: #8a8f99;   /* 사이드바 보조 텍스트 */
+    --accent:        #15b8a6;   /* HD_AMR 강조색 — 산업용 틸/그린 */
+    --accent-hover:  #119a8b;
+    --accent-soft:   #d6f4ef;   /* 강조색 옅은 배경 */
+    --accent-ink:    #0b1f1d;   /* 강조색 위 텍스트 */
+    --text:          #1a1d21;   /* 본문 텍스트 */
+    --text-muted:    #6b7280;
+    --ok:            #16a34a;
+    --warn:          #f59e0b;
+    --danger:        #ef4444;
+    --radius-card:   18px;
+    --radius-pill:   999px;
+    --shadow-card:   0 1px 3px rgba(0, 0, 0, .06), 0 8px 24px rgba(0, 0, 0, .04);
+}
+
+/* ── Base ────────────────────────────────────────────────────────────────── */
 html, body {
-    font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    font-family: 'Inter', system-ui, -apple-system, 'Apple SD Gothic Neo',
+                 'Malgun Gothic', 'Segoe UI', Roboto, sans-serif;
+    background-color: var(--app-bg);
+    color: var(--text);
 }
 
 a, .btn-link {
-    color: #006bb7;
+    color: var(--accent);
+}
+
+a:hover {
+    color: var(--accent-hover);
 }
 
 .btn-primary {
     color: #fff;
-    background-color: #1b6ec2;
-    border-color: #1861ac;
+    background-color: var(--accent);
+    border-color: var(--accent);
 }
 
-.btn:focus, .btn:active:focus, .btn-link.nav-link:focus, .form-control:focus, .form-check-input:focus {
-  box-shadow: 0 0 0 0.1rem white, 0 0 0 0.25rem #258cfb;
+.btn-primary:hover, .btn-primary:focus, .btn-primary:active {
+    background-color: var(--accent-hover) !important;
+    border-color: var(--accent-hover) !important;
+}
+
+.btn-outline-primary {
+    color: var(--accent);
+    border-color: var(--accent);
+}
+
+.btn-outline-primary:hover, .btn-outline-primary:active {
+    background-color: var(--accent) !important;
+    border-color: var(--accent) !important;
+    color: #fff !important;
+}
+
+.btn:focus, .btn:active:focus, .btn-link.nav-link:focus,
+.form-control:focus, .form-select:focus, .form-check-input:focus {
+    box-shadow: 0 0 0 0.2rem rgba(21, 184, 166, 0.30);
+    border-color: var(--accent);
+}
+
+.form-check-input:checked {
+    background-color: var(--accent);
+    border-color: var(--accent);
 }
 
 .content {
@@ -24,16 +87,57 @@ h1:focus {
     outline: none;
 }
 
+/* ── Shared layout primitives (dashboard + pages) ────────────────────────── */
+.page-title {
+    font-size: 2.4rem;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    margin-bottom: 0.25rem;
+}
+
+.page-subtitle {
+    color: var(--text-muted);
+    margin-bottom: 1.5rem;
+}
+
+.card-surface {
+    background: var(--surface);
+    border-radius: var(--radius-card);
+    box-shadow: var(--shadow-card);
+    padding: 1.25rem 1.4rem;
+}
+
+/* Status chip / pill */
+.pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    min-height: 1.6rem;
+    padding: 0.18rem 0.7rem;
+    border-radius: var(--radius-pill);
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    background: var(--surface-muted);
+    color: var(--text);
+}
+
+.pill-on     { background: var(--accent); color: #fff; }
+.pill-off    { background: #e5e7eb; color: var(--text-muted); }
+.pill-danger { background: #fde2e2; color: #b42318; }
+.pill-warn   { background: #fef0d6; color: #b25e09; }
+
+/* ── Validation / error UI (kept) ────────────────────────────────────────── */
 .valid.modified:not([type=checkbox]) {
-    outline: 1px solid #26b050;
+    outline: 1px solid var(--ok);
 }
 
 .invalid {
-    outline: 1px solid #e50000;
+    outline: 1px solid var(--danger);
 }
 
 .validation-message {
-    color: #e50000;
+    color: var(--danger);
 }
 
 .blazor-error-boundary {

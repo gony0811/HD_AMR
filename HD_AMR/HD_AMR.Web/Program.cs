@@ -17,7 +17,9 @@ builder.Services.AddRazorComponents()
 
 builder.Services.Configure<AmrModbusTcpSettings>(
     builder.Configuration.GetSection("Amr"));
-builder.Services.AddHostedService<AMRService>();
+// 컴포넌트 주입과 호스티드 서비스가 동일 인스턴스를 공유하도록 싱글톤으로 등록.
+builder.Services.AddSingleton<AMRService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<AMRService>());
 
 // 코봇은 RPC 전용. (AMR/IO는 위 Modbus를 계속 사용)
 builder.Services.Configure<FairinoRpcSettings>(

@@ -12,7 +12,7 @@
 
 <PageTitle>Teaching</PageTitle>
 
-<h1>Teaching</h1>
+<h1 class="page-title">Teaching</h1>
 
 <section class="upload-section">
     <h3>도면 업로드</h3>
@@ -215,7 +215,9 @@
                             disabled="@(_isRunning || _thinned.Count < 2 || !Cobot.IsConnected)">
                         @(_isRunning ? "실행 중..." : "실행")
                     </button>
-                    <button class="btn btn-danger" @onclick="StopRun" disabled="@(!_isRunning)">정지</button>
+                    <button class="btn btn-danger @(_isRunning ? "btn-lg fw-bold" : "")" @onclick="StopRun" disabled="@(!_isRunning)">
+                        ■ 정지 (즉시 멈춤)
+                    </button>
                 </div>
             </div>
             @if (!string.IsNullOrEmpty(_runMessage))
@@ -873,10 +875,23 @@
         }
     }
 
-    private void StopRun()
+    private async Task StopRun()
     {
-        _runCts?.Cancel();
-        _ = Cobot.Rpc?.StopMotionAsync();
+        _runCts?.Cancel();   // 루프가 다음 점 스케줄을 중단(OperationCanceledException → "사용자 정지")
+        // 진행 중인 블로킹 이동을 가로채 즉시 멈춤(세마포어 우회 채널).
+        try
+        {
+            if (Cobot.Rpc is { } rpc)
+            {
+                var rc = await rpc.StopMotionImmediateAsync();
+                _runMessage = $"정지 요청 (rc={rc})";
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "StopRun StopMotionImmediate 실패");
+        }
     }
 
     // 단일 경유점으로 개별 이동(현재 X/Z/θ 및 tool/user/속도 설정 사용). 배치 실행 중에는 무시.

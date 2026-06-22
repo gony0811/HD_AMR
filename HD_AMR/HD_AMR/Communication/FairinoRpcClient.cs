@@ -18,6 +18,9 @@ public class FairinoRpcClient : IDisposable
     private readonly SemaphoreSlim _semaphore = new(1, 1);
 
     private IFairinoRpc? _proxy;
+    // 긴급 정지 전용 프록시. 진행 중인 블로킹 이동이 _proxy 를 점유해도, 별도 연결로
+    // StopMotion 을 즉시 보낼 수 있도록 _semaphore 와 무관하게 사용한다.
+    private IFairinoRpc? _stopProxy;
     private volatile bool _connected;
     private bool _disposed;
 
@@ -64,7 +67,15 @@ public class FairinoRpcClient : IDisposable
             proxy.Timeout = _settings.CommandTimeoutMs;
             proxy.KeepAlive = false;
 
+            // 긴급 정지 전용 프록시(같은 URL, 짧은 타임아웃). KeepAlive=false 라 호출마다 새 TCP 연결이므로
+            // 이동 프록시가 블로킹 중이어도 별도 연결로 StopMotion 을 동시에 보낼 수 있다.
+            var stopProxy = XmlRpcProxyGen.Create<IFairinoRpc>();
+            stopProxy.Url = proxy.Url;
+            stopProxy.Timeout = _settings.TimeoutMs;
+            stopProxy.KeepAlive = false;
+
             _proxy = proxy;
+            _stopProxy = stopProxy;
             _connected = true;
             _logger.LogInformation("{Name} XML-RPC 연결 완료 ({Url})", _settings.Name, proxy.Url);
         }
@@ -72,6 +83,7 @@ public class FairinoRpcClient : IDisposable
         {
             _connected = false;
             _proxy = null;
+            _stopProxy = null;
             _logger.LogWarning(ex, "{Name} XML-RPC 연결 실패 ({Ip}:{Port})",
                 _settings.Name, _settings.IpAddress, _settings.CommandPort);
             throw;
@@ -86,6 +98,7 @@ public class FairinoRpcClient : IDisposable
     {
         _connected = false;
         _proxy = null;
+        _stopProxy = null;
     }
 
     // ── 좌표계 ─────────────────────────────────────────────────────
@@ -221,6 +234,26 @@ public class FairinoRpcClient : IDisposable
     public Task<int> StopMotionAsync(CancellationToken ct = default)
         => InvokeAsync("StopMotion", p => ToErr(p.StopMotion()), ct);
 
+    /// <summary>
+    /// 긴급 정지. 직렬화 세마포어를 <b>우회</b>하여 전용 프록시(_stopProxy)로 StopMotion 을 즉시 전송한다.
+    /// 진행 중인 블로킹 이동(MoveL 등)이 _proxy 와 세마포어를 점유한 상태에서도 가로채 멈출 수 있다.
+    /// </summary>
+    public async Task<int> StopMotionImmediateAsync(CancellationToken ct = default)
+    {
+        EnsureConnected();
+        var proxy = _stopProxy ?? _proxy!;   // 폴백: 정지 전용 프록시가 없으면 일반 프록시 사용.
+        try
+        {
+            // _semaphore 를 잡지 않는다 → in-flight 이동과 동시에 별도 연결로 전송.
+            return await Task.Run(() => ToErr(proxy.StopMotion()), ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "{Name} StopMotion(즉시) 실패", _settings.Name);
+            throw;
+        }
+    }
+
     /// <summary>현재 TCP 포즈 [x,y,z,rx,ry,rz] 조회 (errcode 헤더 제거 후 반환).</summary>
     public Task<double[]> GetTcpPoseAsync(int flag = 0, CancellationToken ct = default)
         => InvokeAsync("GetActualTCPPose", p => ToPose(p.GetActualTCPPose(flag)), ct);
@@ -344,6 +377,7 @@ public class FairinoRpcClient : IDisposable
         _disposed = true;
         _connected = false;
         _proxy = null;
+        _stopProxy = null;
         _semaphore.Dispose();
     }
 }

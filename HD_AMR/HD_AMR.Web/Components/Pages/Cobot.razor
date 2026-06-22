@@ -7,7 +7,16 @@
 
 <PageTitle>Cobot</PageTitle>
 
-<h1>페어리노 코봇</h1>
+<h1 class="page-title">코봇</h1>
+
+<div class="estop-bar">
+    <button class="btn btn-danger estop-btn" @onclick="EmergencyStop" disabled="@(!Svc.IsConnected)">
+        ■ 긴급 정지 (E-STOP)
+    </button>
+    <span class="estop-hint">동작 중 즉시 정지하고 진행 중인 명령을 종료합니다.</span>
+</div>
+
+<div class="card-surface">
 
 <div class="mb-3">
     <span class="badge @(Svc.IsConnected ? "bg-success" : "bg-secondary")">명령 @(Svc.IsConnected ? "연결됨" : "끊김")</span>
@@ -73,7 +82,7 @@
         <div class="col-auto">
             <button class="btn btn-success" @onclick="MoveL" disabled="@(_busy || !Svc.IsConnected)">MoveL (직선)</button>
             <button class="btn btn-warning" @onclick="UseCurrentPose" disabled="@_busy">현재 포즈 불러오기</button>
-            <button class="btn btn-danger" @onclick="StopRpc">정지 (StopMotion)</button>
+            <button class="btn btn-danger" @onclick="EmergencyStop" disabled="@(!Svc.IsConnected)">정지 (StopMotion)</button>
         </div>
     </div>
     <p class="text-muted mt-1" style="max-width:900px"><small>⚠ 공구 번호는 로봇의 현재 활성 공구와 같게 두세요. 다르면 TCP가 바뀌어 엉뚱한 위치로 이동합니다.</small></p>
@@ -179,6 +188,8 @@
     <div class="alert @(_isError ? "alert-danger" : "alert-info") mt-3" style="max-width:760px">@_message</div>
 }
 
+</div>
+
 @code {
     private static readonly string[] PoseLabels = { "X", "Y", "Z", "Rx", "Ry", "Rz" };
     private static readonly string[] PointLabels = { "점1 (원점)", "점2 (X축 방향)", "점3 (평면/Z)" };
@@ -212,6 +223,7 @@
     private bool _isError;
 
     private CancellationTokenSource? _cts;
+    private CancellationTokenSource? _opCts;   // 진행 중인 명령 취소(긴급 정지 시)
 
     protected override void OnInitialized()
     {
@@ -234,43 +246,55 @@
 
     // ── RPC 동작 ───────────────────────────────────────────────────
     private async Task LoadToolCoord()
-        => await Run($"공구 #{_frameId} 불러오기", async () =>
+        => await Run($"공구 #{_frameId} 불러오기", async ct =>
         {
-            var c = await Svc.Rpc!.GetToolCoordAsync(_frameId);
+            var c = await Svc.Rpc!.GetToolCoordAsync(_frameId, ct);
             for (int i = 0; i < 6 && i < c.Length; i++) _frame[i] = c[i];
             return 0;
         });
 
     private async Task LoadWObjCoord()
-        => await Run($"작업물 #{_frameId} 불러오기", async () =>
+        => await Run($"작업물 #{_frameId} 불러오기", async ct =>
         {
-            var c = await Svc.Rpc!.GetWObjCoordAsync(_frameId);
+            var c = await Svc.Rpc!.GetWObjCoordAsync(_frameId, ct);
             for (int i = 0; i < 6 && i < c.Length; i++) _frame[i] = c[i];
             return 0;
         });
 
     private async Task SetToolCoord()
-        => await Run("공구 좌표계 설정", () => Svc.Rpc!.SetToolCoordAsync(_frameId, (double[])_frame.Clone()));
+        => await Run("공구 좌표계 설정", ct => Svc.Rpc!.SetToolCoordAsync(_frameId, (double[])_frame.Clone(), ct: ct));
 
     private async Task SetWObjCoord()
-        => await Run("사용자 좌표계 설정", () => Svc.Rpc!.SetWObjCoordAsync(_frameId, (double[])_frame.Clone()));
+        => await Run("사용자 좌표계 설정", ct => Svc.Rpc!.SetWObjCoordAsync(_frameId, (double[])_frame.Clone(), ct: ct));
 
     private async Task MoveL()
-        => await Run("MoveL", () => Svc.Rpc!.MoveLAsync((double[])_target.Clone(), tool: _moveTool, user: _moveUser, vel: _vel));
+        => await Run("MoveL", ct => Svc.Rpc!.MoveLAsync((double[])_target.Clone(), tool: _moveTool, user: _moveUser, vel: _vel, ct: ct));
 
-    private async Task StopRpc()
-        => await Run("정지", () => Svc.Rpc!.StopMotionAsync());
+    /// <summary>긴급 정지: 진행 중인 명령을 취소하고 즉시 StopMotion 전송(세마포어 우회).</summary>
+    private async Task EmergencyStop()
+    {
+        _opCts?.Cancel();   // 진행 중 명령의 클라이언트 대기/후속 호출 즉시 중단
+        try
+        {
+            var rc = await Svc.StopMotionImmediateAsync();
+            Notify($"긴급 정지 (rc={rc})", rc != 0);
+        }
+        catch (Exception ex)
+        {
+            Notify($"긴급 정지 실패: {ex.Message}", true);
+        }
+    }
 
     // ── 작업물 좌표계 교시 ─────────────────────────────────────────
     private async Task CapturePoint(int pointNum)
     {
         if (!Svc.IsConnected) { Notify("연결되지 않았습니다.", true); return; }
-        await Run($"점{pointNum} 캡처", async () =>
+        await Run($"점{pointNum} 캡처", async ct =>
         {
-            var rc = await Svc.Rpc!.SetWObjCoordPointAsync(pointNum);
+            var rc = await Svc.Rpc!.SetWObjCoordPointAsync(pointNum, ct);
             try
             {
-                var pose = await Svc.Rpc!.GetTcpPoseAsync();
+                var pose = await Svc.Rpc!.GetTcpPoseAsync(ct: ct);
                 for (int k = 0; k < 6 && k < pose.Length; k++) _points[pointNum - 1][k] = pose[k];
             }
             catch { /* 표시용 조회 실패는 무시 */ }
@@ -280,12 +304,12 @@
     }
 
     private async Task RegisterWObj()
-        => await Run("작업물 좌표계 등록", async () =>
+        => await Run("작업물 좌표계 등록", async ct =>
         {
             _wobjPose = _teachMode == "jog"
-                ? await Svc.Rpc!.RegisterWObjFromTeachingAsync(_wobjId, _wobjMethod)
+                ? await Svc.Rpc!.RegisterWObjFromTeachingAsync(_wobjId, _wobjMethod, ct: ct)
                 : await Svc.Rpc!.RegisterWObjFromPointsAsync(_wobjId,
-                    (double[])_points[0].Clone(), (double[])_points[1].Clone(), (double[])_points[2].Clone(), _wobjMethod);
+                    (double[])_points[0].Clone(), (double[])_points[1].Clone(), (double[])_points[2].Clone(), _wobjMethod, ct: ct);
             _offUser = _wobjId; // 편의: 방금 등록한 번호를 오프셋 이동 user로
             return 0;
         });
@@ -294,17 +318,17 @@
     private async Task MoveByOffset()
     {
         if (!Svc.IsConnected) { Notify("연결되지 않았습니다.", true); return; }
-        await Run("오프셋 이동", async () =>
+        await Run("오프셋 이동", async ct =>
         {
             if (_offMode == "origin")
             {
                 // 절대: 입력값이 곧 작업물 좌표계(user)에서의 목표 위치. [0,0,0,0,0,0]=원점.
                 return await Svc.Rpc!.MoveLAsync((double[])_offset.Clone(),
-                    tool: _offTool, user: _offUser, vel: _offVel, acc: 100, ovl: 100, blendR: -1);
+                    tool: _offTool, user: _offUser, vel: _offVel, acc: 100, ovl: 100, blendR: -1, ct: ct);
             }
             // 증분: 현재 베이스 포즈에 작업물 좌표계 축으로 offset 적용(offset_flag=1).
-            var current = await Svc.Rpc!.GetTcpPoseAsync();
-            return await Svc.Rpc!.MoveByOffsetAsync(current, _offUser, (double[])_offset.Clone(), tool: _offTool, vel: _offVel);
+            var current = await Svc.Rpc!.GetTcpPoseAsync(ct: ct);
+            return await Svc.Rpc!.MoveByOffsetAsync(current, _offUser, (double[])_offset.Clone(), tool: _offTool, vel: _offVel, ct: ct);
         });
     }
 
@@ -314,23 +338,30 @@
     private async Task UseCurrentPose()
     {
         if (!Svc.IsConnected) { Notify("연결되지 않았습니다.", true); return; }
-        await Run("현재 포즈 조회", async () =>
+        await Run("현재 포즈 조회", async ct =>
         {
-            var pose = await Svc.Rpc!.GetTcpPoseAsync();
+            var pose = await Svc.Rpc!.GetTcpPoseAsync(ct: ct);
             for (int i = 0; i < 6 && i < pose.Length; i++) _target[i] = pose[i];
             return 0;
         });
     }
 
-    private async Task Run(string label, Func<Task<int>> action)
+    private async Task Run(string label, Func<CancellationToken, Task<int>> action)
     {
         if (_busy) return;
         _busy = true;
         _message = null;
+        _opCts?.Dispose();
+        _opCts = new CancellationTokenSource();
+        var ct = _opCts.Token;
         try
         {
-            var rc = await action();
+            var rc = await action(ct);
             Notify($"{label} 완료 (rc={rc})", rc != 0);
+        }
+        catch (OperationCanceledException)
+        {
+            Notify($"{label} 취소됨 (긴급 정지)", true);
         }
         catch (Exception ex)
         {
@@ -352,5 +383,7 @@
     {
         _cts?.Cancel();
         _cts?.Dispose();
+        _opCts?.Cancel();
+        _opCts?.Dispose();
     }
 }

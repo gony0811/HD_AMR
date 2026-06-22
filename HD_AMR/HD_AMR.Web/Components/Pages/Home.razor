@@ -1,7 +1,160 @@
-﻿@page "/"
+@page "/"
+@rendermode InteractiveServer
+@using HD_AMR.Service
+@inject AMRService Amr
+@inject CobotService Cobot
+@inject CameraService Camera
+@implements IDisposable
 
-<PageTitle>Home</PageTitle>
+<PageTitle>대시보드</PageTitle>
 
-<h1>Hello, world!</h1>
+<div class="dash-head">
+    <div>
+        <h1 class="page-title">상태 개요</h1>
+        <p class="page-subtitle">HD현대 AMR 통합 제어 콘솔 · 실시간 장비 상태</p>
+    </div>
+    <span class="pill">@DateTime.Now.ToString("yyyy-MM-dd HH:mm")</span>
+</div>
 
-Welcome to your new app.
+<div class="row g-3">
+    <!-- AMR -->
+    <div class="col-12 col-md-6 col-xl-4">
+        <div class="card-surface stat">
+            <div class="stat-head">
+                <span class="stat-icon stat-icon-amr"></span>
+                <span class="stat-title">AMR</span>
+                <span class="pill @(Amr.IsConnected ? "pill-on" : "pill-off") ms-auto">
+                    @(Amr.IsConnected ? "연결" : "미연결")
+                </span>
+            </div>
+            <div class="stat-value">@(Amr.IsConnected ? "주행 대기" : "오프라인")</div>
+            <div class="stat-sub">자율주행 모듈 (Modbus TCP)</div>
+        </div>
+    </div>
+
+    <!-- Cobot -->
+    <div class="col-12 col-md-6 col-xl-4">
+        <div class="card-surface stat">
+            <div class="stat-head">
+                <span class="stat-icon stat-icon-cobot"></span>
+                <span class="stat-title">Cobot</span>
+                <span class="pill @(Cobot.IsConnected ? "pill-on" : "pill-off") ms-auto">
+                    @(Cobot.IsConnected ? "연결" : "미연결")
+                </span>
+            </div>
+            <div class="stat-value">페어리노 코봇</div>
+            <div class="stat-chips">
+                <span class="pill @(Cobot.IsConnected ? "pill-on" : "pill-off")">명령 @(Cobot.IsConnected ? "ON" : "OFF")</span>
+                <span class="pill @(Cobot.IsStateConnected ? "pill-on" : "pill-off")">상태 @(Cobot.IsStateConnected ? "수신" : "끊김")</span>
+            </div>
+            <a class="stat-link" href="cobot">코봇 제어 →</a>
+        </div>
+    </div>
+
+    <!-- Camera -->
+    <div class="col-12 col-md-6 col-xl-4">
+        <div class="card-surface stat">
+            <div class="stat-head">
+                <span class="stat-icon stat-icon-camera"></span>
+                <span class="stat-title">Camera</span>
+                <span class="pill @(Camera.IsConnected ? "pill-on" : "pill-off") ms-auto">
+                    @(Camera.IsConnected ? "연결" : "미연결")
+                </span>
+            </div>
+            <div class="stat-value">Gemini 2 깊이</div>
+            <div class="stat-chips">
+                <span class="pill @(Camera.IsStreaming ? "pill-on" : "pill-off")">스트림 @(Camera.IsStreaming ? "활성" : "정지")</span>
+                @if (!string.IsNullOrEmpty(Camera.ConnectionType))
+                {
+                    <span class="pill">@Camera.ConnectionType</span>
+                }
+            </div>
+            <a class="stat-link" href="camera">실시간 영상 →</a>
+        </div>
+    </div>
+
+    <!-- Battery -->
+    <div class="col-12 col-md-6 col-xl-4">
+        <div class="card-surface stat">
+            <div class="stat-head">
+                <span class="stat-icon stat-icon-battery"></span>
+                <span class="stat-title">배터리</span>
+                <span class="pill @BatteryPillClass ms-auto">@(BatteryPercent?.ToString() ?? "--")%</span>
+            </div>
+            <div class="gauge">
+                <div class="gauge-fill @BatteryPillClass" style="width:@(BatteryPercent ?? 0)%"></div>
+            </div>
+            <div class="stat-sub">@(BatteryPercent is null ? "텔레메트리 연동 예정" : "AMR 배터리 잔량")</div>
+        </div>
+    </div>
+
+    <!-- Safety lamp -->
+    <div class="col-12 col-md-6 col-xl-4">
+        <div class="card-surface stat">
+            <div class="stat-head">
+                <span class="stat-icon stat-icon-lamp"></span>
+                <span class="stat-title">안전 신호등</span>
+            </div>
+            <div class="lamp-row">
+                <span class="lamp-dot @(LampRed ? "is-red-on" : "")"></span>
+                <span class="lamp-dot @(LampYellow ? "is-yellow-on" : "")"></span>
+                <span class="lamp-dot @(LampGreen ? "is-green-on" : "")"></span>
+            </div>
+            <div class="stat-sub">적색 정지 · 황색 주의 · 녹색 정상</div>
+        </div>
+    </div>
+
+    <!-- Teaching shortcut -->
+    <div class="col-12 col-md-6 col-xl-4">
+        <div class="card-surface stat stat-accent">
+            <div class="stat-head">
+                <span class="stat-icon stat-icon-teach"></span>
+                <span class="stat-title">Teaching</span>
+            </div>
+            <div class="stat-value">도면 기반 경로 교시</div>
+            <div class="stat-sub">DXF 업로드 → 경유점 생성 → 코봇 실행</div>
+            <a class="stat-link" href="teaching">교시 작업 →</a>
+        </div>
+    </div>
+</div>
+
+@code {
+    // 배터리/램프는 현재 텔레메트리 연동 전이라 플레이스홀더. (TopBar 와 동일 수준)
+    private int? BatteryPercent;
+    private bool LampRed;
+    private bool LampYellow;
+    private bool LampGreen = true;
+
+    private string BatteryPillClass => BatteryPercent switch
+    {
+        null => "pill-off",
+        <= 20 => "pill-danger",
+        <= 40 => "pill-warn",
+        _ => "pill-on"
+    };
+
+    private CancellationTokenSource? _cts;
+
+    protected override void OnInitialized()
+    {
+        _cts = new CancellationTokenSource();
+        _ = PollLoop(_cts.Token);
+    }
+
+    private async Task PollLoop(CancellationToken ct)
+    {
+        try
+        {
+            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+            while (await timer.WaitForNextTickAsync(ct))
+                await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    public void Dispose()
+    {
+        _cts?.Cancel();
+        _cts?.Dispose();
+    }
+}

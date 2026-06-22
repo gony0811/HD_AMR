@@ -8,7 +8,9 @@
 
 <PageTitle>Camera</PageTitle>
 
-<h1>Gemini 2 깊이 카메라</h1>
+<h1 class="page-title">Gemini 2 깊이 카메라</h1>
+
+<div class="card-surface">
 
 <div class="mb-3">
     <span class="badge @(Svc.IsConnected ? "bg-success" : "bg-secondary")">연결 @(Svc.IsConnected ? "정상" : "끊김")</span>
@@ -59,6 +61,8 @@ else
 {
     <div class="alert @(_isError ? "alert-danger" : "alert-info") mt-3" style="max-width:760px">@_message</div>
 }
+
+</div>
 
 @code {
     private bool _busy;
