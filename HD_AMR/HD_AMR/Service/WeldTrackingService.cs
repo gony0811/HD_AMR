@@ -151,10 +151,9 @@ public class WeldTrackingService
     public void CapturePeak(int id)
     {
         // Peak(진행축 위치)를 먼저 구해, 오버레이에 자홍색 Peak 선/라벨로 그릴 수 있게 한다.
-        PeakInfo? peak = null;
-        var depth = _camera.LatestDepth;
-        if (depth is not null && PeakRoi is not null)
-            peak = DepthPeakAnalyzer.Analyze(depth, PeakRoi, Params.ProgressAxis);
+        // Peak 는 Depth 에서 찾으므로, 검출 프레임이 IR 이면 1:1, RGB 면 공장 캘리브레이션으로
+        // Depth↔Color 좌표를 맞춰(방법 ②) ProgressPos 를 검출 프레임 좌표로 변환한다.
+        PeakInfo? peak = ComputePeak();
 
         var r = RunDetect(peak is { Found: true } ? peak.ProgressPos : null, $"P{id}");
         LastDetect = r;
@@ -185,6 +184,48 @@ public class WeldTrackingService
 
         // Pitch(mm)·두 측정이 있고 스케일이 사용 가능할 때만 자동 각도 산출.
         if (M1 is not null && M2 is not null && Pitch > 0 && ScaleAvailable) ComputeAngle();
+    }
+
+    /// <summary>
+    /// Depth 에서 Peak 를 찾아 <see cref="PeakInfo.ProgressPos"/> 를 <b>검출 프레임 좌표</b>로 반환한다.
+    /// IR 모드: Depth=IR 동일 좌표라 그대로. RGB 모드: 공장 캘리브레이션으로 Depth→Color 재투영(방법 ②).
+    /// 캘리브레이션/컬러 프레임이 없거나 재투영 실패면 Peak 미발견으로 처리(자홍선 미표시).
+    /// </summary>
+    private PeakInfo? ComputePeak()
+    {
+        var depth = _camera.LatestDepth;
+        if (depth is null || PeakRoi is null) return null;
+
+        if (Params.Mode == WeldImageMode.Ir)
+            return DepthPeakAnalyzer.Analyze(depth, PeakRoi, Params.ProgressAxis);
+
+        // RGB 모드: ROI(컬러)→Depth 매핑해 분석 → peak(Depth)→컬러 재투영.
+        var mapper = BuildMapper(depth);
+        if (mapper is null) return null;
+
+        var depthRoi = mapper.MapColorRoiToDepth(PeakRoi, depth.Width, depth.Height);
+        var dp = DepthPeakAnalyzer.Analyze(depth, depthRoi, Params.ProgressAxis);
+        if (!dp.Found) return dp;
+
+        bool horiz = Params.ProgressAxis == WeldProgressAxis.Horizontal;
+        double crossCenter = horiz ? depthRoi.Y + depthRoi.Height / 2.0 : depthRoi.X + depthRoi.Width / 2.0;
+        double du = horiz ? dp.ProgressPos : crossCenter;
+        double dv = horiz ? crossCenter : dp.ProgressPos;
+        if (mapper.DepthToColor(du, dv, dp.DepthValue) is not { } cc)
+            return new PeakInfo { Found = false };
+
+        double colorProgress = horiz ? cc.u : cc.v;
+        return new PeakInfo { Found = true, ProgressPos = colorProgress, DepthValue = dp.DepthValue, Confidence = dp.Confidence };
+    }
+
+    /// <summary>Depth↔Color 좌표 매퍼 생성. 캘리브레이션·컬러 프레임이 없으면 null.</summary>
+    private DepthColorMapper? BuildMapper(CameraFrame depth)
+    {
+        var color = _camera.LatestColor;
+        if (color is null) return null;
+        var p = _camera.GetD2CParams();
+        if (p is null || !p.IsValid) return null;
+        return new DepthColorMapper(p, depth.Width, depth.Height, color.Width, color.Height);
     }
 
     /// <summary>

@@ -40,6 +40,9 @@ public class CameraService : BackgroundService
     public DateTime LastFrameAt => _client.LastFrameAt;
     public string? ConnectionType => _client.ConnectionType;
 
+    /// <summary>Depth↔Color 정합용 공장 캘리브레이션(있으면). RGB 모드 Peak 재투영에 사용.</summary>
+    public CameraD2CParams? GetD2CParams() => _client.TryGetCameraParam();
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("CameraService 시작 (device={Serial})",
