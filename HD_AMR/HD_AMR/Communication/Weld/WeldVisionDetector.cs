@@ -67,16 +67,24 @@ public sealed class WeldVisionDetector : IWeldVisionDetector
 
             for (int s = 0; s < sCount; s++)
             {
-                int first = -1, last = -1;
+                // 열(또는 행)에서 마스크가 '연속으로 가장 긴 구간'(=비드 본체)을 찾고 그 중점을 쓴다.
+                // 첫~끝 span 방식과 달리, 위/아래로 떨어진 반사 점 하나에 중점이 끌려가지 않는다.
+                int bestStart = -1, bestLen = 0, curStart = -1, curLen = 0;
                 for (int c = 0; c < crossCount; c++)
                 {
                     int x = horiz ? s : c;
                     int y = horiz ? c : s;
-                    if (m[y * roi.Width + x] > 0) { if (first < 0) first = c; last = c; }
+                    if (m[y * roi.Width + x] > 0)
+                    {
+                        if (curStart < 0) { curStart = c; curLen = 0; }
+                        curLen++;
+                        if (curLen > bestLen) { bestLen = curLen; bestStart = curStart; }
+                    }
+                    else { curStart = -1; curLen = 0; }
                 }
-                if (first >= 0)
+                if (bestStart >= 0)
                 {
-                    centerCross[s] = (first + last) / 2.0;
+                    centerCross[s] = bestStart + (bestLen - 1) / 2.0;
                     valid[s] = true;
                     validCount++;
                 }
@@ -102,11 +110,20 @@ public sealed class WeldVisionDetector : IWeldVisionDetector
                 ? pr
                 : (horiz ? gray.Height : gray.Width) / 2.0;
 
-            // 비드 중심 = 유효 centerline 전체의 평균(mean). 직선 비드에 강건(끝점 튐에 둔감).
-            double sumC = 0; int nC = 0;
-            for (int s = 0; s < sCount; s++) if (valid[s]) { sumC += centerCross[s]; nC++; }
+            // 비드 중심 = 유효 centerline 의 중앙값(median). 튀는 구간(반사 등)에 평균보다 강건.
+            var centerVals = new List<double>(validCount);
+            for (int s = 0; s < sCount; s++) if (valid[s]) centerVals.Add(centerCross[s]);
             double targetS = sCount / 2.0; // 깊이 샘플링용 진행축 기준(ROI 중앙)
-            double weldCenterRoi = nC > 0 ? sumC / nC : SampleAround(centerCross, valid, (int)targetS, 5);
+            double weldCenterRoi;
+            if (centerVals.Count > 0)
+            {
+                centerVals.Sort();
+                int mid = centerVals.Count / 2;
+                weldCenterRoi = centerVals.Count % 2 == 1
+                    ? centerVals[mid]
+                    : (centerVals[mid - 1] + centerVals[mid]) / 2.0;
+            }
+            else weldCenterRoi = SampleAround(centerCross, valid, (int)targetS, 5);
             double weldCenterFull = crossOffset + weldCenterRoi;
             double d = weldCenterFull - refPos;
 
