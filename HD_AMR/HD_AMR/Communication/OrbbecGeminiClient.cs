@@ -45,6 +45,10 @@ public class OrbbecGeminiClient : IDisposable
     private volatile bool _connected;
     private volatile bool _streaming;
 
+    // Depth↔Color 정합 파라미터(공장 캘리브레이션). 한 번 성공하면 캐시. 재연결 시 초기화.
+    private readonly object _camParamLock = new();
+    private CameraD2CParams? _camParam;
+
     // 진단용: 첫 color/depth/ir 프레임 수신 시 1회만 로그. 스트림 재시작마다 초기화.
     private bool _loggedFirstColor;
     private bool _loggedFirstDepth;
@@ -178,6 +182,42 @@ public class OrbbecGeminiClient : IDisposable
         finally
         {
             _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Depth↔Color 정합용 공장 캘리브레이션 파라미터를 반환한다(스트리밍 중에만 유효). 한 번
+    /// 성공하면 캐시한다. 네이티브 부재/미스트리밍/유효하지 않으면 null(다음에 재시도).
+    /// </summary>
+    public CameraD2CParams? TryGetCameraParam()
+    {
+        if (_camParam is not null) return _camParam;
+        lock (_camParamLock)
+        {
+            if (_camParam is not null) return _camParam;
+            if (_pipeline == IntPtr.Zero || !_streaming) return null;
+            try
+            {
+                var raw = OrbbecNative.ob_pipeline_get_camera_param(_pipeline, out var err);
+                if (err != IntPtr.Zero) { OrbbecNative.SafeDeleteError(err); return null; }
+                var di = raw.depthIntrinsic; var ci = raw.rgbIntrinsic; var t = raw.transform;
+                var p = new CameraD2CParams(
+                    di.fx, di.fy, di.cx, di.cy, di.width, di.height,
+                    ci.fx, ci.fy, ci.cx, ci.cy, ci.width, ci.height,
+                    new double[] { t.r0, t.r1, t.r2, t.r3, t.r4, t.r5, t.r6, t.r7, t.r8 },
+                    new double[] { t.t0, t.t1, t.t2 });
+                if (!p.IsValid) return null;   // 첫 프레임 전 등 0 값이면 캐시하지 않고 재시도
+                _camParam = p;
+                _logger.LogInformation("{Name} Depth↔Color 캘리브레이션 획득: depth fx={Dfx:0.0} color fx={Cfx:0.0} baseline≈{B:0.0}mm",
+                    _settings.Name, p.DepthFx, p.ColorFx, Math.Abs(t.t0));
+                return _camParam;
+            }
+            catch (DllNotFoundException) { return null; }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "{Name} 카메라 파라미터 조회 실패", _settings.Name);
+                return null;
+            }
         }
     }
 
@@ -621,6 +661,7 @@ public class OrbbecGeminiClient : IDisposable
         Interlocked.Exchange(ref _latestDepth, null);
         Interlocked.Exchange(ref _latestIr, null);
         _connectionType = null;
+        lock (_camParamLock) _camParam = null;   // 파이프라인 재생성 시 재획득
     }
 
     public void Dispose()
@@ -706,6 +747,30 @@ internal static class OrbbecNative
     [DllImport(Lib)] public static extern void   ob_pipeline_start_with_config(IntPtr pipeline, IntPtr config, out IntPtr error);
     [DllImport(Lib)] public static extern void   ob_pipeline_stop(IntPtr pipeline, out IntPtr error);
     [DllImport(Lib)] public static extern IntPtr ob_pipeline_wait_for_frameset(IntPtr pipeline, uint timeoutMs, out IntPtr error);
+
+    // Depth↔Color 정합용 공장 캘리브레이션. 구조체를 값으로 반환(blittable). (Pipeline.h / ObTypes.h)
+    [DllImport(Lib)] public static extern OBCameraParam ob_pipeline_get_camera_param(IntPtr pipeline, out IntPtr error);
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct OBCameraIntrinsic { public float fx, fy, cx, cy; public short width, height; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct OBCameraDistortion { public float k1, k2, k3, k4, k5, k6, p1, p2; }
+
+    // OBD2CTransform: 회전 9 + 평행이동 3 (Depth→Color). 배열 마샬링 회피 위해 개별 float.
+    [StructLayout(LayoutKind.Sequential)]
+    public struct OBD2CTransform { public float r0, r1, r2, r3, r4, r5, r6, r7, r8, t0, t1, t2; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct OBCameraParam
+    {
+        public OBCameraIntrinsic depthIntrinsic;
+        public OBCameraIntrinsic rgbIntrinsic;
+        public OBCameraDistortion depthDistortion;
+        public OBCameraDistortion rgbDistortion;
+        public OBD2CTransform transform;
+        public byte isMirrored;
+    }
 
     [DllImport(Lib)] public static extern IntPtr ob_frameset_color_frame(IntPtr frameset, out IntPtr error);
     [DllImport(Lib)] public static extern IntPtr ob_frameset_depth_frame(IntPtr frameset, out IntPtr error);
