@@ -98,17 +98,34 @@
                 </div>
             </div>
         </div>
+
+        @* 최근 검출 오버레이 — ROI 지정 박스 바로 아래(라이브 미리보기 결과) *@
+        <div class="mt-3">
+            <h6 class="text-muted mb-1">최근 검출 오버레이 <span style="font-size:.75rem">(라이브 미리보기)</span></h6>
+            @if (Svc.LastOverlay is not null)
+            {
+                <img src="/camera/weld/overlay.jpg?k=@_resultKey" alt="weld overlay"
+                     style="width:100%; max-width:640px; border:1px solid #ccc; border-radius:4px; background:#000" />
+            }
+            else { <div class="text-muted small">아직 검출 결과가 없습니다. 파라미터를 바꾸거나 <b>1회 검출</b>을 누르세요.</div> }
+        </div>
     </div>
 
     @* ── 우: 파라미터 + 측정 ─────────────────────────── *@
     <div class="col-xl-6">
         <div class="card mb-3">
-            <div class="card-header py-1"><strong>검출 파라미터</strong></div>
+            <div class="card-header py-1 d-flex justify-content-between align-items-center">
+                <strong>검출 파라미터</strong>
+                <span class="form-check form-switch mb-0" title="켜면 파라미터를 바꿀 때마다 자동으로 재검출해 '최근 검출 오버레이'를 갱신합니다(약 0.25초 디바운스).">
+                    <input class="form-check-input" type="checkbox" id="wk_live" @bind="_livePreview" />
+                    <label class="form-check-label small" for="wk_live">라이브 미리보기</label>
+                </span>
+            </div>
             <div class="card-body">
                 <div class="row g-2">
                     <div class="col-auto" title="검출에 쓸 입력 영상. IR=권장(Depth와 정합), RGB Grayscale=컬러 흑백, RGB HSV(S)=채도 채널">
                         <label class="form-label mb-0 small">입력 ⓘ</label>
-                        <select class="form-select form-select-sm" @bind="Svc.Params.Mode" style="width:150px">
+                        <select class="form-select form-select-sm" @bind="Svc.Params.Mode" @bind:after="LivePreview" style="width:150px">
                             <option value="@WeldImageMode.Ir">IR</option>
                             <option value="@WeldImageMode.RgbGrayscale">RGB Grayscale</option>
                             <option value="@WeldImageMode.RgbHsv">RGB HSV(S)</option>
@@ -116,14 +133,14 @@
                     </div>
                     <div class="col-auto" title="용접 진행 방향. 가로=비드가 좌우로 흐름(경계는 상/하), 세로=상하로 흐름(경계는 좌/우)">
                         <label class="form-label mb-0 small">진행축 ⓘ</label>
-                        <select class="form-select form-select-sm" @bind="Svc.Params.ProgressAxis" style="width:130px">
+                        <select class="form-select form-select-sm" @bind="Svc.Params.ProgressAxis" @bind:after="LivePreview" style="width:130px">
                             <option value="@WeldProgressAxis.Horizontal">가로(좌우)</option>
                             <option value="@WeldProgressAxis.Vertical">세로(상하)</option>
                         </select>
                     </div>
                     <div class="col-auto" title="흑백 영상→비드/배경 2값 마스크. Otsu=전역 자동(조명 균일), Adaptive=국소(조명 불균일), Canny=경계선만">
                         <label class="form-label mb-0 small">이진화 ⓘ</label>
-                        <select class="form-select form-select-sm" @bind="Svc.Params.Threshold" style="width:120px">
+                        <select class="form-select form-select-sm" @bind="Svc.Params.Threshold" @bind:after="LivePreview" style="width:120px">
                             <option value="@WeldThresholdMethod.Otsu">Otsu</option>
                             <option value="@WeldThresholdMethod.Adaptive">Adaptive</option>
                             <option value="@WeldThresholdMethod.Canny">Canny</option>
@@ -132,26 +149,26 @@
                 </div>
                 <div class="row g-2 mt-1 align-items-end">
                     <div class="col-auto form-check ms-2" title="비드가 배경보다 어두우면 체크(흑백 반전). Otsu/Adaptive 전용 — Canny는 무관">
-                        <input class="form-check-input" type="checkbox" id="wk_inv" @bind="Svc.Params.Invert" />
+                        <input class="form-check-input" type="checkbox" id="wk_inv" @bind="Svc.Params.Invert" @bind:after="LivePreview" />
                         <label class="form-check-label small" for="wk_inv">비드가 어두움(반전)</label>
                     </div>
                     <div class="col-auto form-check" title="국소 대비강화. 경계가 흐릿하면 ON, 노이즈가 많으면 OFF">
-                        <input class="form-check-input" type="checkbox" id="wk_clahe" @bind="Svc.Params.UseClahe" />
+                        <input class="form-check-input" type="checkbox" id="wk_clahe" @bind="Svc.Params.UseClahe" @bind:after="LivePreview" />
                         <label class="form-check-label small" for="wk_clahe">CLAHE</label>
                     </div>
                     <div class="col-auto" title="가우시안 블러 커널. 잔노이즈 완화. 클수록 경계도 뭉개짐">
                         <label class="form-label mb-0 small">Blur</label>
-                        <input class="form-control form-control-sm" type="number" @bind="Svc.Params.BlurKernel" style="width:70px" />
+                        <input class="form-control form-control-sm" type="number" @bind="Svc.Params.BlurKernel" @bind:after="LivePreview" style="width:70px" />
                         <div class="text-muted" style="font-size:.68rem">0=끔·홀수3~9</div>
                     </div>
                     <div class="col-auto" title="모폴로지 close+open. 끊긴 경계 잇고 작은 노이즈 제거. 클수록 형상 왜곡">
                         <label class="form-label mb-0 small">Morph</label>
-                        <input class="form-control form-control-sm" type="number" @bind="Svc.Params.MorphKernel" style="width:70px" />
+                        <input class="form-control form-control-sm" type="number" @bind="Svc.Params.MorphKernel" @bind:after="LivePreview" style="width:70px" />
                         <div class="text-muted" style="font-size:.68rem">0=끔·홀수3~9</div>
                     </div>
                     <div class="col-auto" title="centerline 이동평균 윈도(픽셀 수). 중심선을 매끈하게. 클수록 곡률에 둔감">
                         <label class="form-label mb-0 small">Smooth</label>
-                        <input class="form-control form-control-sm" type="number" @bind="Svc.Params.SmoothingWindow" style="width:70px" />
+                        <input class="form-control form-control-sm" type="number" @bind="Svc.Params.SmoothingWindow" @bind:after="LivePreview" style="width:70px" />
                         <div class="text-muted" style="font-size:.68rem">0~1=끔·3~15</div>
                     </div>
                 </div>
@@ -262,7 +279,7 @@
             <span class="me-3" style="white-space:nowrap"><span style="display:inline-block;width:14px;height:0;border-top:2px solid #ff00ff;vertical-align:middle"></span> Peak 위치(P1/P2)</span>
             <span class="me-3" style="white-space:nowrap"><span style="display:inline-block;width:13px;height:13px;border:2px solid #ffff00;vertical-align:middle"></span> Weld ROI</span>
             <span class="me-3" style="white-space:nowrap"><span style="display:inline-block;width:14px;height:0;border-top:2px solid #00e600;vertical-align:middle"></span> 비드 중심선</span>
-            <span class="me-3" style="white-space:nowrap"><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#ff0000;vertical-align:middle"></span> 비드 중심점(평균)</span>
+            <span class="me-3" style="white-space:nowrap"><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#ff0000;vertical-align:middle"></span> 비드 중심점(중앙값)</span>
             <span class="me-3" style="white-space:nowrap"><span style="display:inline-block;width:14px;height:0;border-top:2px dashed #aaaaaa;vertical-align:middle"></span> FOV 센터선(d 기준)</span>
         </div>
 
@@ -332,19 +349,6 @@
     </div>
 </div>
 
-@* ── 최근 검출 오버레이 ─────────────────────────── *@
-<div class="row g-3 mt-1">
-    <div class="col-md-6">
-        <h6 class="text-muted">최근 검출 오버레이</h6>
-        @if (Svc.LastOverlay is not null)
-        {
-            <img src="/camera/weld/overlay.jpg?k=@_resultKey" alt="weld overlay"
-                 style="width:100%; max-width:640px; border:1px solid #ccc; border-radius:4px; background:#000" />
-        }
-        else { <div class="text-muted small">아직 검출 결과가 없습니다.</div> }
-    </div>
-</div>
-
 @code {
     private ElementReference _editorImg;
     private ElementReference _editorCanvas;
@@ -356,6 +360,8 @@
     private int _editorKey = 1;
     private int _resultKey = 1;
     private bool _busy;
+    private bool _livePreview = true;
+    private CancellationTokenSource? _liveCts;
 
     // 수동 좌표 입력 backing
     private int _mx, _my, _mw, _mh;
@@ -477,6 +483,19 @@
         await PushRois();
     }
 
+    /// <summary>파라미터 변경 시 자동 재검출(디바운스). 라이브 미리보기 ON + 스트리밍 + 검출 가능할 때만.</summary>
+    private async Task LivePreview()
+    {
+        if (!_livePreview || !Cam.IsStreaming || !Svc.DetectorAvailable) return;
+        _liveCts?.Cancel();
+        var cts = new CancellationTokenSource();
+        _liveCts = cts;
+        try { await Task.Delay(250, cts.Token); }
+        catch (TaskCanceledException) { return; }
+        if (cts.IsCancellationRequested) return;
+        await DetectOnce();
+    }
+
     private async Task DetectOnce() => await Run(() => { Svc.DetectOnce(); return Task.CompletedTask; });
     private async Task Capture(int id) => await Run(() => { Svc.CapturePeak(id); return Task.CompletedTask; });
     private void ComputeAngle() => Svc.ComputeAngle();
@@ -502,6 +521,8 @@
 
     public async ValueTask DisposeAsync()
     {
+        _liveCts?.Cancel();
+        _liveCts?.Dispose();
         _ref?.Dispose();
         await Task.CompletedTask;
     }
