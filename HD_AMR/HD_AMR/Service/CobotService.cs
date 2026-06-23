@@ -32,6 +32,20 @@ public class CobotService : BackgroundService
     public Task<int> StopMotionImmediateAsync(CancellationToken ct = default)
         => _rpc.StopMotionImmediateAsync(ct);
 
+    /// <summary>
+    /// 서보(로봇) 활성화 상태. FAIRINO는 서보 전용 제어가 없어 RobotEnable로 통합되며,
+    /// 상태 피드백에서 실측을 신뢰성 있게 읽을 수 없어 마지막 명령 상태를 보관한다.
+    /// </summary>
+    public bool IsServoEnabled { get; private set; }
+
+    /// <summary>서보(로봇) 활성화/비활성화. RobotEnable 호출 성공(rc=0) 시 상태 갱신.</summary>
+    public async Task<int> SetServoEnableAsync(bool enable, CancellationToken ct = default)
+    {
+        var rc = await _rpc.RobotEnableAsync(enable, ct);
+        if (rc == 0) IsServoEnabled = enable;
+        return rc;
+    }
+
     /// <summary>최신 RPC 실시간 상태(포즈/조인트). 미수신 시 null.</summary>
     public FairinoState? State => _state.Latest;
 
@@ -56,7 +70,7 @@ public class CobotService : BackgroundService
                 {
                     _logger.LogWarning("코봇 XML-RPC 연결 시도");
                     await _rpc.ConnectAsync(stoppingToken);
-                    await _rpc.RobotEnableAsync(true, stoppingToken);
+                    await SetServoEnableAsync(true, stoppingToken);
                     _logger.LogInformation("코봇 XML-RPC 연결 완료");
                 }
             }
