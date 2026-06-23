@@ -10,6 +10,10 @@
 <h1 class="page-title">코봇</h1>
 
 <div class="estop-bar">
+    <button class="btn @(Svc.IsServoEnabled ? "btn-success" : "btn-outline-secondary")"
+            @onclick="ToggleServo" disabled="@(!Svc.IsConnected)">
+        @(Svc.IsServoEnabled ? "서보 ON" : "서보 OFF")
+    </button>
     <button class="btn btn-danger estop-btn" @onclick="EmergencyStop" disabled="@(!Svc.IsConnected)">
         ■ 긴급 정지 (E-STOP)
     </button>
@@ -282,6 +286,21 @@
         catch (Exception ex)
         {
             Notify($"긴급 정지 실패: {ex.Message}", true);
+        }
+    }
+
+    /// <summary>서보(로봇) 활성화/비활성화 토글. FAIRINO는 서보 전용 제어가 없어 RobotEnable로 통합된다.</summary>
+    private async Task ToggleServo()
+    {
+        var target = !Svc.IsServoEnabled;
+        try
+        {
+            var rc = await Svc.SetServoEnableAsync(target);
+            Notify($"서보 {(target ? "활성화" : "비활성화")} (rc={rc})", rc != 0);
+        }
+        catch (Exception ex)
+        {
+            Notify($"서보 전환 실패: {ex.Message}", true);
         }
     }
 

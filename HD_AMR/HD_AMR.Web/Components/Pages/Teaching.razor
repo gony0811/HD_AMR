@@ -958,8 +958,28 @@
             var rc = await rpc.MoveLAsync(pose, tool: _runTool, user: _runUser,
                 vel: _runVel, acc: 100, ovl: 100, blendR: -1);
 
-            _runIsError = rc != 0;
-            _runMessage = rc == 0 ? $"#{i + 1} 이동 완료" : $"#{i + 1} 이동 실패 (rc={rc})";
+            if (rc != 0)
+            {
+                _runIsError = true;
+                _runMessage = $"#{i + 1} 이동 실패 (rc={rc})";
+                return; // finally에서 _isRunning 해제
+            }
+
+            // 이동 성공 → 비전으로 CAPTURE_REQ 전송 후 응답 대기 (RunWaypoints와 동일 패턴).
+            var visionTimeout = TimeSpan.FromSeconds(Math.Max(0, _visionTimeoutSec));
+            var data = CaptureReqPayload.Build(EffectiveSurfaceType(i), (ushort)_surfaceId,
+                (int)Math.Round(x), (int)Math.Round(z));
+            var outcome = await Vision.Client.RequestCaptureAsync(data, visionTimeout, CancellationToken.None);
+            var result = outcome switch
+            {
+                { Sent: false }      => "비전 미연결",
+                { Responded: false } => "응답 없음(타임아웃)",
+                { Success: true }    => "비전 OK",
+                _                    => $"비전 실패({ResultCodeNames.NameOf((ushort)outcome.Code!)})",
+            };
+            _visionResults[i] = result;
+            _runIsError = false;
+            _runMessage = $"#{i + 1} 이동 완료 · {result}";
         }
         catch (Exception ex)
         {
