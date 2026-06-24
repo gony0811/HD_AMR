@@ -59,8 +59,8 @@ public class FairinoRpcClient : IDisposable
 
             // 2) XML-RPC 프록시 생성. 경로 "/RPC2" 필수(루트는 404) — 파이썬 ServerProxy 기본 핸들러와 동일.
             var path = string.IsNullOrEmpty(_settings.RpcPath) ? ""
-                     : _settings.RpcPath.StartsWith('/') ? _settings.RpcPath
-                     : "/" + _settings.RpcPath;
+                    : _settings.RpcPath.StartsWith('/') ? _settings.RpcPath
+                    : "/" + _settings.RpcPath;
             var proxy = XmlRpcProxyGen.Create<IFairinoRpc>();
             proxy.Url = $"http://{_settings.IpAddress}:{_settings.CommandPort}{path}";
             // 모션 명령(MoveL 등)은 완료까지 블로킹 → 긴 타임아웃 필요.
@@ -205,11 +205,11 @@ public class FairinoRpcClient : IDisposable
     }
 
     /// <summary>
-    /// 작업물 좌표계(user) 기준으로 앵커 포즈에서 offset만큼 이동. offset_flag=1(작업물 좌표계 오프셋) 사용.
+    /// 작업물 좌표계(user) 기준으로 앵커 포즈에서 offset만큼 이동. offset_flag=0(툴 좌표계 오프셋) 사용.
     /// anchorPose는 베이스 기준 유효 TCP 포즈(IK 계산용). offset=[dx,dy,dz,drx,dry,drz].
     /// </summary>
     public Task<int> MoveByOffsetAsync(double[] anchorPose, int user, double[] offset, int? tool = null, double? vel = null, CancellationToken ct = default)
-        => MoveLAsync(anchorPose, tool: tool, user: user, vel: vel, offsetFlag: 1, offsetPos: offset, ct: ct);
+        => MoveLAsync(anchorPose, tool: tool, user: user, vel: vel, offsetFlag: 0, offsetPos: offset, ct: ct);
 
     /// <summary>관절 이동(MoveJ). jointPos = 6축 각도, descPose = 대응 직교 포즈(0이면 컨트롤러가 정기구학 계산).</summary>
     public Task<int> MoveJAsync(double[] jointPos, double[] descPose, int? tool = null, int? user = null,
@@ -302,7 +302,7 @@ public class FairinoRpcClient : IDisposable
         _ => throw new InvalidOperationException($"예상치 못한 RPC 반환 형식: {r.GetType().Name}"),
     };
 
-    /// <summary>TCP 포즈 추출. [errcode,[x..]] / [errcode,x,y,..] / [x,y,..] 모두 처리.</summary>
+    /// <summary>TCP 포즈 추출. [errcode,x,y,..] / [errcode,x,y,..] 모두 처리.</summary>
     private static double[] ToPose(object? r)
     {
         if (r is not object[] a || a.Length == 0) return Array.Empty<double>();
