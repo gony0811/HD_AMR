@@ -172,6 +172,36 @@ public class FairinoRpcClient : IDisposable
             $"역기구학(GetInverseKin) 실패 (errcode={err}). 목표 자세가 작업영역 밖이거나 도달 불가일 수 있습니다.");
     }
 
+    /// <summary>현재 관절각(도) [j0..j5] 조회. flag 0=블로킹,1=논블로킹. 실패 시 예외.</summary>
+    public async Task<double[]> GetActualJointPosAsync(int flag = 0, CancellationToken ct = default)
+    {
+        var raw = await InvokeAsync("GetActualJointPosDegree", p => p.GetActualJointPosDegree(flag), ct);
+        if (raw is object[] a && a.Length >= 7 && ToErr(a[0]) == 0)
+            return a[1..7].Select(ToDouble).ToArray();
+        var err = raw is object[] arr && arr.Length > 0 ? ToErr(arr[0]) : -1;
+        throw new InvalidOperationException($"관절각 조회(GetActualJointPosDegree) 실패 (errcode={err}).");
+    }
+
+    /// <summary>정기구학: 관절각 → 베이스 기준 TCP 직교 포즈 [x,y,z,rx,ry,rz](현재 활성 공구 적용). 실패 시 예외.</summary>
+    public async Task<double[]> GetForwardKinAsync(double[] jointPos, CancellationToken ct = default)
+    {
+        var raw = await InvokeAsync("GetForwardKin", p => p.GetForwardKin(jointPos), ct);
+        if (raw is object[] a && a.Length >= 7 && ToErr(a[0]) == 0)
+            return a[1..7].Select(ToDouble).ToArray();
+        var err = raw is object[] arr && arr.Length > 0 ? ToErr(arr[0]) : -1;
+        throw new InvalidOperationException($"정기구학(GetForwardKin) 실패 (errcode={err}). 컨트롤러 펌웨어 미지원일 수 있습니다.");
+    }
+
+    /// <summary>
+    /// 베이스 좌표계 기준 현재 TCP 포즈 [x,y,z,rx,ry,rz]. GetActualTCPPose는 활성 작업물 좌표계 기준이므로,
+    /// 현재 관절각을 읽어 정기구학(GetForwardKin)으로 BASE 기준 포즈를 구한다.
+    /// </summary>
+    public async Task<double[]> GetTcpPoseInBaseAsync(CancellationToken ct = default)
+    {
+        var joints = await GetActualJointPosAsync(ct: ct);
+        return await GetForwardKinAsync(joints, ct);
+    }
+
     // ── 이동 ───────────────────────────────────────────────────────
     /// <summary>
     /// 직교 직선 이동(MoveL). descPose = [x,y,z,rx,ry,rz]. jointPos 미지정 시 역기구학으로 계산한다
@@ -254,7 +284,9 @@ public class FairinoRpcClient : IDisposable
         }
     }
 
-    /// <summary>현재 TCP 포즈 [x,y,z,rx,ry,rz] 조회 (errcode 헤더 제거 후 반환).</summary>
+    /// <summary>현재 TCP 포즈 [x,y,z,rx,ry,rz] 조회 (errcode 헤더 제거 후 반환).
+    /// ⚠ 활성 작업물(user) 좌표계 기준. BASE 기준이 필요하면 <see cref="GetTcpPoseInBaseAsync"/>를 쓸 것.
+    /// flag 0=블로킹,1=논블로킹.</summary>
     public Task<double[]> GetTcpPoseAsync(int flag = 0, CancellationToken ct = default)
         => InvokeAsync("GetActualTCPPose", p => ToPose(p.GetActualTCPPose(flag)), ct);
 

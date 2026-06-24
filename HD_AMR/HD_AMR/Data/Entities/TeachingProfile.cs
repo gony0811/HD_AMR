@@ -21,6 +21,7 @@ public class TeachingProfile
     public int RunVel { get; set; }
     public double DelaySec { get; set; }
     public double ThMax { get; set; }
+    public double SettleDelaySec { get; set; }   // 이동 후 진동 흡수 대기(초)
     public bool MoveHomeFirst { get; set; }
 
     /// <summary>경유점 목록(<see cref="TeachingWaypoint"/>)을 JSON 직렬화한 문자열.</summary>

@@ -1,5 +1,6 @@
 @using HD_AMR.Service
 @inject CobotService Cobot
+@inject VisionInterfaceService Vision
 @implements IDisposable
 
 <div class="tb-root px-4">
@@ -15,6 +16,12 @@
             <span class="tb-icon tb-icon-gear" aria-hidden="true"></span>
             <span class="tb-label">Cobot</span>
             <span class="tb-badge @(Cobot.IsConnected ? "tb-badge-on" : "tb-badge-off")">@(Cobot.IsConnected ? "연결" : "미연결")</span>
+        </div>
+
+        <div class="tb-group">
+            <span class="tb-icon tb-icon-vision" aria-hidden="true"></span>
+            <span class="tb-label">Vision</span>
+            <span class="tb-badge @(Vision.Client.IsConnected ? "tb-badge-on" : "tb-badge-off")">@(Vision.Client.IsConnected ? "연결" : "미연결")</span>
         </div>
 
         <div class="tb-group tb-lamp">

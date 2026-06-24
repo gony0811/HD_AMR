@@ -37,8 +37,8 @@ builder.Services.Configure<OrbbecGeminiSettings>(
 builder.Services.AddSingleton<CameraService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<CameraService>());
 
-// 비전 인터페이스(자동화↔비전 TCP 프로토콜) 시뮬레이터/테스터. 싱글톤 + 호스티드.
-// 기동 시 자동 접속하지 않음 — 연결은 Vision Interface 페이지에서 수동.
+// 비전 인터페이스(자동화↔비전 TCP 프로토콜). 싱글톤 + 호스티드.
+// AMR/Cobot 과 동일하게 기동 시 상시 자동 접속 — 실패 시 5초마다 재시도.
 builder.Services.Configure<VisionInterfaceSettings>(
     builder.Configuration.GetSection("Vision"));
 builder.Services.AddSingleton<VisionInterfaceService>();
