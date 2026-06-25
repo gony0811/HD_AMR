@@ -70,6 +70,7 @@ builder.Services.AddDbContext<HdAmrDbContext>(opt =>
                   ?? "Data Source=hd_amr.db"));
 
 builder.Services.AddScoped<DrawingService>();
+builder.Services.AddScoped<TeachingService>();
 
 var app = builder.Build();
 
@@ -93,9 +94,22 @@ CREATE TABLE IF NOT EXISTS ExcludedRegions (
 CREATE INDEX IF NOT EXISTS IX_ExcludedRegions_DrawingId ON ExcludedRegions (DrawingId);
 ");
 
-    // Backward-compatible schema add for TeachingProfiles (preserves existing data).
+    // 과거 TeachingProfiles 테이블을 InspectionProfiles 로 이름 변경(기존 데이터 보존).
+    // 구 테이블이 있고 신 테이블이 없을 때만 RENAME 한다(SQLite는 RENAME IF EXISTS 미지원).
+    var hasOldTeachingProfiles = db.Database
+        .SqlQueryRaw<long>("SELECT COUNT(*) AS Value FROM sqlite_master WHERE type = 'table' AND name = 'TeachingProfiles'")
+        .AsEnumerable().First() > 0;
+    var hasInspectionProfiles = db.Database
+        .SqlQueryRaw<long>("SELECT COUNT(*) AS Value FROM sqlite_master WHERE type = 'table' AND name = 'InspectionProfiles'")
+        .AsEnumerable().First() > 0;
+    if (hasOldTeachingProfiles && !hasInspectionProfiles)
+    {
+        db.Database.ExecuteSqlRaw("ALTER TABLE TeachingProfiles RENAME TO InspectionProfiles;");
+    }
+
+    // Backward-compatible schema add for InspectionProfiles (preserves existing data).
     db.Database.ExecuteSqlRaw(@"
-CREATE TABLE IF NOT EXISTS TeachingProfiles (
+CREATE TABLE IF NOT EXISTS InspectionProfiles (
     Id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     DrawingId INTEGER NOT NULL,
     Name TEXT NOT NULL,
@@ -112,21 +126,39 @@ CREATE TABLE IF NOT EXISTS TeachingProfiles (
     WaypointsJson TEXT NOT NULL,
     CreatedAt TEXT NOT NULL,
     UpdatedAt TEXT NOT NULL,
-    CONSTRAINT FK_TeachingProfiles_Drawings_DrawingId FOREIGN KEY (DrawingId) REFERENCES Drawings (Id) ON DELETE CASCADE
+    CONSTRAINT FK_InspectionProfiles_Drawings_DrawingId FOREIGN KEY (DrawingId) REFERENCES Drawings (Id) ON DELETE CASCADE
 );
-CREATE INDEX IF NOT EXISTS IX_TeachingProfiles_DrawingId ON TeachingProfiles (DrawingId);
+CREATE INDEX IF NOT EXISTS IX_InspectionProfiles_DrawingId ON InspectionProfiles (DrawingId);
 ");
 
     // 기존 DB에 SettleDelaySec 컬럼이 없으면 추가(엔티티가 나중에 추가된 칼럼). SQLite는
     // ADD COLUMN IF NOT EXISTS 가 없으므로 pragma 로 존재 여부를 확인한 뒤에만 ALTER 한다.
     var hasSettleDelaySec = db.Database
-        .SqlQueryRaw<long>("SELECT COUNT(*) AS Value FROM pragma_table_info('TeachingProfiles') WHERE name = 'SettleDelaySec'")
+        .SqlQueryRaw<long>("SELECT COUNT(*) AS Value FROM pragma_table_info('InspectionProfiles') WHERE name = 'SettleDelaySec'")
         .AsEnumerable().First() > 0;
     if (!hasSettleDelaySec)
     {
         db.Database.ExecuteSqlRaw(
-            "ALTER TABLE TeachingProfiles ADD COLUMN SettleDelaySec REAL NOT NULL DEFAULT 0;");
+            "ALTER TABLE InspectionProfiles ADD COLUMN SettleDelaySec REAL NOT NULL DEFAULT 0;");
     }
+
+    // Backward-compatible schema add for TeachingPositions (고정 슬롯형 티칭 위치; 기존 데이터 보존).
+    db.Database.ExecuteSqlRaw(@"
+CREATE TABLE IF NOT EXISTS TeachingPositions (
+    Id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    ""Key"" TEXT NOT NULL,
+    Name TEXT NOT NULL,
+    SortOrder INTEGER NOT NULL DEFAULT 0,
+    X REAL NULL, Y REAL NULL, Z REAL NULL,
+    Rx REAL NULL, Ry REAL NULL, Rz REAL NULL,
+    J1 REAL NULL, J2 REAL NULL, J3 REAL NULL, J4 REAL NULL, J5 REAL NULL, J6 REAL NULL,
+    Tool INTEGER NOT NULL DEFAULT 1,
+    CapturedAt TEXT NULL,
+    CreatedAt TEXT NOT NULL,
+    UpdatedAt TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS IX_TeachingPositions_Key ON TeachingPositions (""Key"");
+");
 
     var converter = scope.ServiceProvider.GetRequiredService<IDwgConverter>();
     if (!converter.IsAvailable)

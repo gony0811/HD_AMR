@@ -1,4 +1,4 @@
-window.hdAmrTeaching = {
+window.hdAmrInspection = {
     // Convert a (clientX, clientY) pair from a mouse event into the SVG's user-coordinate space
     // by inverting the screen CTM. Returns [x, y].
     svgPoint: function (svgEl, clientX, clientY) {
@@ -24,7 +24,7 @@ window.hdAmrTeaching = {
         if (!svgEl || svgEl._hdWheelHandler) return;
         var handler = function (e) {
             e.preventDefault();
-            var pt = window.hdAmrTeaching.svgPoint(svgEl, e.clientX, e.clientY);
+            var pt = window.hdAmrInspection.svgPoint(svgEl, e.clientX, e.clientY);
             var delta = e.deltaY !== 0 ? e.deltaY : e.deltaX;
             dotnetRef.invokeMethodAsync("ZoomFromJs", pt[0], pt[1], delta);
         };

@@ -12,7 +12,8 @@ public class HdAmrDbContext : DbContext
     public DbSet<Drawing> Drawings => Set<Drawing>();
     public DbSet<DrawingSegment> DrawingSegments => Set<DrawingSegment>();
     public DbSet<ExcludedRegion> ExcludedRegions => Set<ExcludedRegion>();
-    public DbSet<TeachingProfile> TeachingProfiles => Set<TeachingProfile>();
+    public DbSet<InspectionProfile> InspectionProfiles => Set<InspectionProfile>();
+    public DbSet<TeachingPosition> TeachingPositions => Set<TeachingPosition>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -32,7 +33,7 @@ public class HdAmrDbContext : DbContext
                 .WithOne(r => r.Drawing!)
                 .HasForeignKey(r => r.DrawingId)
                 .OnDelete(DeleteBehavior.Cascade);
-            b.HasMany<TeachingProfile>()
+            b.HasMany<InspectionProfile>()
                 .WithOne(p => p.Drawing!)
                 .HasForeignKey(p => p.DrawingId)
                 .OnDelete(DeleteBehavior.Cascade);
@@ -50,12 +51,21 @@ public class HdAmrDbContext : DbContext
             b.HasIndex(r => r.DrawingId);
         });
 
-        modelBuilder.Entity<TeachingProfile>(b =>
+        modelBuilder.Entity<InspectionProfile>(b =>
         {
             b.HasKey(p => p.Id);
             b.Property(p => p.Name).IsRequired().HasMaxLength(200);
             b.Property(p => p.WaypointsJson).IsRequired();
             b.HasIndex(p => p.DrawingId);
+        });
+
+        modelBuilder.Entity<TeachingPosition>(b =>
+        {
+            b.HasKey(p => p.Id);
+            b.Property(p => p.Key).IsRequired().HasMaxLength(100);
+            b.Property(p => p.Name).IsRequired().HasMaxLength(200);
+            b.HasIndex(p => p.Key).IsUnique();
+            b.Ignore(p => p.IsTaught);
         });
     }
 }

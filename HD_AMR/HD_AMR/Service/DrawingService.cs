@@ -139,34 +139,34 @@ public class DrawingService
         await _db.SaveChangesAsync(ct);
     }
 
-    // ── Teaching 설정 프로파일 (도면별 저장/불러오기) ────────────────────
-    public Task<List<TeachingProfile>> ListProfilesAsync(int drawingId, CancellationToken ct = default) =>
-        _db.TeachingProfiles.AsNoTracking()
+    // ── Inspection 설정 프로파일 (도면별 저장/불러오기) ────────────────────
+    public Task<List<InspectionProfile>> ListProfilesAsync(int drawingId, CancellationToken ct = default) =>
+        _db.InspectionProfiles.AsNoTracking()
             .Where(p => p.DrawingId == drawingId)
             .OrderByDescending(p => p.UpdatedAt)
             .ToListAsync(ct);
 
-    public Task<TeachingProfile?> GetProfileAsync(int id, CancellationToken ct = default) =>
-        _db.TeachingProfiles.AsNoTracking().FirstOrDefaultAsync(p => p.Id == id, ct);
+    public Task<InspectionProfile?> GetProfileAsync(int id, CancellationToken ct = default) =>
+        _db.InspectionProfiles.AsNoTracking().FirstOrDefaultAsync(p => p.Id == id, ct);
 
     /// <summary>프로파일 저장. Id==0 이면 신규 생성, 아니면 기존 행 갱신.</summary>
-    public async Task<TeachingProfile> SaveProfileAsync(TeachingProfile profile, CancellationToken ct = default)
+    public async Task<InspectionProfile> SaveProfileAsync(InspectionProfile profile, CancellationToken ct = default)
     {
         var now = DateTime.UtcNow;
         if (profile.Id == 0)
         {
             profile.CreatedAt = now;
             profile.UpdatedAt = now;
-            _db.TeachingProfiles.Add(profile);
+            _db.InspectionProfiles.Add(profile);
         }
         else
         {
-            var existing = await _db.TeachingProfiles.FirstOrDefaultAsync(p => p.Id == profile.Id, ct);
+            var existing = await _db.InspectionProfiles.FirstOrDefaultAsync(p => p.Id == profile.Id, ct);
             if (existing == null)
             {
                 profile.CreatedAt = now;
                 profile.UpdatedAt = now;
-                _db.TeachingProfiles.Add(profile);
+                _db.InspectionProfiles.Add(profile);
             }
             else
             {
@@ -192,9 +192,9 @@ public class DrawingService
 
     public async Task DeleteProfileAsync(int id, CancellationToken ct = default)
     {
-        var profile = await _db.TeachingProfiles.FirstOrDefaultAsync(p => p.Id == id, ct);
+        var profile = await _db.InspectionProfiles.FirstOrDefaultAsync(p => p.Id == id, ct);
         if (profile == null) return;
-        _db.TeachingProfiles.Remove(profile);
+        _db.InspectionProfiles.Remove(profile);
         await _db.SaveChangesAsync(ct);
     }
 

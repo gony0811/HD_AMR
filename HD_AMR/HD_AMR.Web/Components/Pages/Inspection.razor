@@ -1,0 +1,1311 @@
+@page "/inspection"
+@rendermode InteractiveServer
+@using HD_AMR.Data.Entities
+@using HD_AMR.Service
+@using HD_AMR.Communication
+@using HD_AMR.Communication.Vision
+@using Microsoft.JSInterop
+@inject DrawingService Service
+@inject CobotService Cobot
+@inject VisionInterfaceService Vision
+@inject IJSRuntime JS
+@inject ILogger<Inspection> Logger
+@implements IDisposable
+
+<PageTitle>Inspection</PageTitle>
+
+<h1 class="page-title">Inspection</h1>
+
+<section class="upload-section">
+    <h3>도면 업로드</h3>
+    <div class="upload-row">
+        <InputFile OnChange="OnFileSelected" accept=".dwg,.dxf" />
+        <input type="text" placeholder="이름 (선택)" @bind="uploadName" class="name-input" />
+        <button class="btn btn-primary" disabled="@(pendingFile is null || isUploading)" @onclick="OnUploadClicked">
+            @(isUploading ? "업로드 중..." : "업로드")
+        </button>
+    </div>
+    @if (!string.IsNullOrEmpty(uploadMessage))
+    {
+        <div class="upload-message @(uploadIsError ? "err" : "ok")">@uploadMessage</div>
+    }
+</section>
+
+<section class="list-section">
+    <h3>도면 리스트</h3>
+    @if (drawings is null)
+    {
+        <p><em>Loading...</em></p>
+    }
+    else if (drawings.Count == 0)
+    {
+        <p>업로드된 도면이 없습니다.</p>
+    }
+    else
+    {
+        <table class="drawing-table">
+            <thead>
+                <tr>
+                    <th>id</th>
+                    <th>name</th>
+                    <th>file_name</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var d in drawings)
+                {
+                    <tr class="@(d.Id == selectedId ? "selected" : "")" @onclick="() => SelectDrawingAsync(d.Id)">
+                        <td>@d.Id</td>
+                        <td>@d.Name</td>
+                        <td>
+                            @d.FileName
+                            @if (!string.IsNullOrEmpty(d.ConversionError))
+                            {
+                                <span class="warn-icon" title="@d.ConversionError">⚠️</span>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+    @if (!string.IsNullOrEmpty(loadMessage))
+    {
+        <div class="upload-message @(loadIsError ? "err" : "ok")">@loadMessage</div>
+    }
+</section>
+
+@if (selected is not null)
+{
+    <section class="detail-section">
+        <h3>도면 보기 — @selected.Name</h3>
+        @if (!string.IsNullOrEmpty(selected.ConversionError))
+        {
+            <div class="conversion-error-banner">
+                <strong>⚠️ DXF 변환 실패</strong>
+                <div>@selected.ConversionError</div>
+            </div>
+        }
+        @if (previewPoints.Count == 0 && selected.ExcludedRegions.Count == 0)
+        {
+            <p><em>도면을 미리볼 수 없습니다.</em></p>
+        }
+        else
+        {
+            <div class="view-bar">
+                <p class="hint">드래그: 영역 선택 · 휠: 확대/축소 · Shift+드래그: 이동</p>
+                <div class="zoom-bar">
+                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => ZoomAt(1.25)">＋</button>
+                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => ZoomAt(1.0 / 1.25)">−</button>
+                    <button class="btn btn-sm btn-outline-secondary" @onclick="ResetView">맞춤</button>
+                    <span class="scale-info">
+                        확대 @($"{zoom * 100:0}%")
+                        @if (mmPerPixel > 0)
+                        {
+                            <span> · 1 px ≈ @($"{mmPerPixel:0.###}") mm</span>
+                        }
+                    </span>
+                </div>
+            </div>
+            <svg @ref="svgRef"
+                 viewBox="@svgViewBox"
+                 class="drawing-svg @(isPanning ? "panning" : "")"
+                 xmlns="http://www.w3.org/2000/svg"
+                 preserveAspectRatio="xMidYMid meet"
+                 @onmousedown="OnSvgMouseDown"
+                 @onmousemove="OnSvgMouseMove"
+                 @onmouseup="OnSvgMouseUp"
+                 @onmouseleave="OnSvgMouseLeave">
+                @foreach (var r in selected.ExcludedRegions)
+                {
+                    <rect class="region-rect"
+                          x="@F(r.MinX)" y="@F(-r.MaxY)"
+                          width="@F(r.MaxX - r.MinX)" height="@F(r.MaxY - r.MinY)"
+                          stroke-width="@F(strokeWidth)" />
+                }
+                @foreach (var p in _thinned)
+                {
+                    <circle cx="@F(p.X)" cy="@F(-p.Y)" r="@F(pointRadius)"
+                            fill="#0d6efd" pointer-events="none" />
+                }
+                @if (_selectedWpIndex >= 0 && _selectedWpIndex < _thinned.Count)
+                {
+                    var sp = _thinned[_selectedWpIndex];
+                    <circle cx="@F(sp.X)" cy="@F(-sp.Y)" r="@F(pointRadius * 3)"
+                            fill="none" stroke="#dc3545" stroke-width="@F(strokeWidth * 1.5)" pointer-events="none" />
+                    <circle cx="@F(sp.X)" cy="@F(-sp.Y)" r="@F(pointRadius * 1.2)"
+                            fill="#dc3545" pointer-events="none" />
+                }
+                @if (isDragging)
+                {
+                    var dx = Math.Min(dragStartX, dragCurrentX);
+                    var dy = Math.Min(dragStartY, dragCurrentY);
+                    var dw = Math.Abs(dragCurrentX - dragStartX);
+                    var dh = Math.Abs(dragCurrentY - dragStartY);
+                    <rect class="drag-rect"
+                          x="@F(dx)" y="@F(dy)"
+                          width="@F(dw)" height="@F(dh)"
+                          stroke-width="@F(strokeWidth)"
+                          pointer-events="none" />
+                }
+            </svg>
+        }
+        <div class="actions">
+            <button class="btn btn-outline-secondary"
+                    disabled="@(isClearingRegions || selected.ExcludedRegions.Count == 0)"
+                    @onclick="OnClearRegions">
+                @(isClearingRegions ? "초기화 중..." : $"선택 마스크 초기화 ({selected.ExcludedRegions.Count})")
+            </button>
+        </div>
+
+        <div class="delete-row">
+            @if (!pendingDelete)
+            {
+                <button class="btn btn-danger" disabled="@isDeleting" @onclick="OnDeleteClicked">삭제</button>
+            }
+            else
+            {
+                <span class="confirm-text">정말 삭제하시겠습니까? (파일과 분석 결과가 모두 제거됩니다)</span>
+                <button class="btn btn-danger" disabled="@isDeleting" @onclick="OnConfirmDelete">
+                    @(isDeleting ? "삭제 중..." : "확인")
+                </button>
+                <button class="btn btn-secondary" disabled="@isDeleting" @onclick="OnCancelDelete">취소</button>
+            }
+            @if (!string.IsNullOrEmpty(deleteMessage))
+            {
+                <span class="analyze-message err">@deleteMessage</span>
+            }
+        </div>
+
+        <h3>경유점 (Inspection Waypoints)</h3>
+        <div class="actions">
+            <label class="form-label me-1">직선 간격(mm)</label>
+            <input type="number" step="1" min="0" style="width:80px" @bind="_spacingMm" @bind:after="RecomputeThinned" />
+            <label class="form-label ms-3 me-1">코로게이션 판정각(°)</label>
+            <input type="number" step="1" min="0" style="width:80px" @bind="_corrugThresholdDeg" @bind:after="RecomputeThinned" />
+            <label class="form-label ms-3 me-1">코로게이션 분할각(°)</label>
+            <input type="number" step="1" min="0" style="width:80px" @bind="_corrugStepDeg" @bind:after="RecomputeThinned" />
+            <span class="ms-2">전체 @(previewPoints.Count)개 → 솎은 @(_thinned.Count)개 → 실행 @(IncludedCount())개 (|θ| ≤ @F(_thMax)° 만)</span>
+        </div>
+        <p class="hint">분할: 직선 구간은 '직선 간격(mm)' 거리로, 코로게이션 구간(이전 점↔앞 점 선분의 |수평 대비 기울기| ≥ '판정각')은 '분할각(°)'(그 기울기가 그만큼 바뀔 때마다)으로 솎습니다. 표의 행을 클릭하면 도면에 빨간색으로 표시되고, X/Z/θ 칸은 직접 수정할 수 있습니다. θ를 직접 입력하면 자동 계산값 대신 그 값이 적용됩니다(실행·ry에 즉시 반영). 각 행의 '이동' 버튼으로 해당 경유점으로 개별 이동합니다. ⚠ 간격·판정각·분할각을 바꾸면 다시 솎여 수정값(θ 포함)이 초기화됩니다.
+            @if (_selectedWpIndex >= 0 && _selectedWpIndex < _thinned.Count)
+            {
+                <span> — 선택: #@(_selectedWpIndex + 1) (X=@F(_thinned[_selectedWpIndex].X), Z=@F(_thinned[_selectedWpIndex].Y))</span>
+            }
+        </p>
+
+        @* ── 코봇 실행 패널 ── *@
+        <div class="cobot-run" style="margin:10px 0; padding:10px; border:1px solid #ccc; border-radius:6px; max-width:900px">
+            <strong>코봇 실행 (작업물 좌표계 / 레퍼런스 재현)</strong>
+            @if (!Cobot.IsConnected)
+            {
+                <div class="hint">⚠ 코봇 RPC 미연결.</div>
+            }
+            <div class="row g-2 align-items-end mt-1">
+                <div class="col-auto"><label class="form-label">공구(tool)</label>
+                    <input class="form-control" type="number" min="0" max="15" style="width:80px" @bind="_runTool" /></div>
+                <div class="col-auto"><label class="form-label">작업물(user)</label>
+                    <input class="form-control" type="number" min="0" max="14" style="width:80px" @bind="_runUser" /></div>
+                <div class="col-auto"><label class="form-label">속도(%)</label>
+                    <input class="form-control" type="number" min="1" max="100" style="width:80px" @bind="_runVel" /></div>
+                <div class="col-auto"><label class="form-label">응답 대기 제한(초)</label>
+                    <input class="form-control" type="number" step="0.1" min="0" style="width:120px" @bind="_visionTimeoutSec" /></div>
+                <div class="col-auto"><label class="form-label">th_max(°)</label>
+                    <input class="form-control" type="number" step="1" min="0" style="width:80px" @bind="_thMax" /></div>
+                <div class="col-auto"><label class="form-label">DELAY TIME(초)</label>
+                    <input class="form-control" type="number" step="0.1" min="0" style="width:120px" @bind="_settleDelaySec" /></div>
+                <div class="col-auto"><label class="form-label">Surface ID</label>
+                    <select class="form-select" style="width:230px" @bind="_surfaceId">
+                        @foreach (var s in SurfaceCatalog.All)
+                        {
+                            <option value="@s.Id">@($"0x{s.Id:X2}") @s.Name</option>
+                        }
+                    </select></div>
+                <div class="col-auto">
+                    <button class="btn btn-success" @onclick="RunWaypoints"
+                            disabled="@(_isRunning || _thinned.Count < 2 || !Cobot.IsConnected)">
+                        @(_isRunning ? "실행 중..." : "실행")
+                    </button>
+                    <button class="btn btn-danger @(_isRunning ? "btn-lg fw-bold" : "")" @onclick="StopRun" disabled="@(!_isRunning)">
+                        ■ 정지 (즉시 멈춤)
+                    </button>
+                </div>
+            </div>
+            @if (!string.IsNullOrEmpty(_runMessage))
+            {
+                <div class="analyze-message @(_runIsError ? "err" : "ok") mt-1">@_runMessage</div>
+            }
+        </div>
+
+        @* ── 티칭 설정 저장 / 불러오기 ── *@
+        <div class="teaching-profiles" style="margin:10px 0; padding:10px; border:1px solid #ccc; border-radius:6px; max-width:900px">
+            <strong>티칭 설정 저장 / 불러오기</strong>
+            <p class="hint">현재 솎기·코봇 파라미터와 경유점(X/Z/θ 수동 편집 포함)을 이 도면에 이름붙여 저장합니다. 같은 이름으로 저장하면 덮어씁니다. 불러오면 저장 시점 그대로 복원됩니다.</p>
+            <div class="row g-2 align-items-end">
+                <div class="col-auto">
+                    <input class="form-control" type="text" placeholder="설정 이름" style="width:220px" @bind="_profileName" />
+                </div>
+                <div class="col-auto">
+                    <button class="btn btn-primary" @onclick="SaveProfileAsync"
+                            disabled="@(string.IsNullOrWhiteSpace(_profileName) || _thinned.Count == 0)">현재 설정 저장</button>
+                </div>
+            </div>
+            @if (!string.IsNullOrEmpty(_profileMessage))
+            {
+                <div class="analyze-message @(_profileIsError ? "err" : "ok") mt-1">@_profileMessage</div>
+            }
+            <div class="row g-2 align-items-end mt-1">
+                <div class="col-auto">
+                    <label class="form-label">저장된 설정</label>
+                    <select class="form-select" style="width:220px" @bind="_selectedProfileId" @bind:after="OnProfileSelected">
+                        <option value="">— 저장된 설정 선택 —</option>
+                        @foreach (var p in _profiles)
+                        {
+                            <option value="@p.Id">@p.Name</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-auto">
+                    <button class="btn btn-outline-primary" @onclick="LoadSelectedProfile"
+                            disabled="@(_selectedProfileId is null)">불러오기</button>
+                    <button class="btn btn-outline-danger" @onclick="DeleteSelectedProfileAsync"
+                            disabled="@(_selectedProfileId is null)">삭제</button>
+                </div>
+                @{
+                    var sel = _profiles.FirstOrDefault(p => p.Id == _selectedProfileId);
+                }
+                @if (sel is not null)
+                {
+                    <div class="col-auto">
+                        <span class="hint">경유점 @WaypointCount(sel)개 · 저장 @sel.UpdatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</span>
+                    </div>
+                }
+            </div>
+        </div>
+
+        @if (_thinned.Count == 0)
+        {
+            <p>표시할 점이 없습니다. (DXF에 POINT 엔티티가 없거나 모두 마스크로 제외됨)</p>
+        }
+        else
+        {
+            <table class="segment-table">
+                <thead>
+                    <tr>
+                        <th>번호</th>
+                        <th>X (mm)</th>
+                        <th>Z (mm)</th>
+                        <th>θ (°)</th>
+                        <th>ry (°)</th>
+                        <th>Surface</th>
+                        <th>실행</th>
+                        <th>비전 결과</th>
+                        <th>동작</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @for (int i = 0; i < _thinned.Count; i++)
+                    {
+                        var idx = i;
+                        double thetaDeg = EffectiveThetaDeg(idx);
+                        bool included = Math.Abs(thetaDeg) <= _thMax;
+                        <tr class="@((idx == _selectedWpIndex || idx == _runIndex) ? "selected" : (included ? "" : "excluded-row"))"
+                            style="cursor:pointer" @onclick="() => _selectedWpIndex = idx">
+                            <td>@(idx + 1)</td>
+                            <td><input type="number" step="0.1" style="width:100px"
+                                       value="@F(_thinned[idx].X)" @onchange="e => SetWpX(idx, e.Value)" /></td>
+                            <td><input type="number" step="0.1" style="width:100px"
+                                       value="@F(_thinned[idx].Y)" @onchange="e => SetWpZ(idx, e.Value)" /></td>
+                            <td><input type="number" step="1" style="width:90px"
+                                       value="@F(thetaDeg)" @onchange="e => SetWpTheta(idx, e.Value)"
+                                       title="@(_thetaOverrides.ContainsKey(idx) ? "수동 입력값" : "자동 계산값(수정 시 고정)")" /></td>
+                            <td>@(included ? F(thetaDeg) : "-")</td>
+                            <td>
+                                <select class="form-select form-select-sm" style="width:130px"
+                                        value="@((int)EffectiveSurfaceType(idx))"
+                                        @onchange="e => SetWpSurfaceType(idx, e.Value)" @onclick:stopPropagation="true">
+                                    <option value="0">Flat</option>
+                                    <option value="1">Corrugation</option>
+                                </select>
+                            </td>
+                            <td>@(included ? "○" : "제외(>th_max)")</td>
+                            <td>@(_visionResults.GetValueOrDefault(idx))</td>
+                            <td>
+                                <button class="btn btn-sm btn-outline-primary"
+                                        @onclick="() => MoveToWaypointAsync(idx)" @onclick:stopPropagation="true"
+                                        disabled="@(_isRunning || !Cobot.IsConnected)">이동</button>
+                                <button class="btn btn-sm btn-outline-danger" title="해당 경유점 삭제"
+                                        @onclick="() => DeleteWaypoint(idx)" @onclick:stopPropagation="true"
+                                        disabled="@_isRunning">－</button>
+                                <button class="btn btn-sm btn-outline-success" title="아래에 새 경유점 삽입"
+                                        @onclick="() => InsertWaypointBelow(idx)" @onclick:stopPropagation="true"
+                                        disabled="@_isRunning">＋</button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </section>
+}
+
+@code {
+    private const long MaxUploadSize = 50L * 1024 * 1024;
+
+    private List<Drawing>? drawings;
+    private int? selectedId;
+    private Drawing? selected;
+    private List<PointMarker> previewPoints = new();
+    private List<PointMarker> _thinned = new();
+    private string svgViewBox = "0 0 100 100";
+    private double strokeWidth = 0.5;
+    private double pointRadius = 1.0;
+
+    // 경유점 솎기 + 코봇 실행
+    private double _spacingMm = 10;            // 직선 구간 분할 간격(mm)
+    private double _corrugThresholdDeg = 5;    // 코로게이션 판정각(°): 이전 점↔앞 점(i-1→i+1) 선분의 |수평 대비 기울기| ≥ 이 값이면 코로게이션
+    private double _corrugStepDeg = 5;         // 코로게이션 구간 분할각(°)
+    private double _thMax = 40;
+    private int _runTool = 1;
+    private int _runUser = 0;
+    private int _runVel = 5;
+    private double _visionTimeoutSec = 10;     // CAPTURE_REQ 응답 대기 제한(초)
+    private double _settleDelaySec = 0.5;       // 이동 후 진동 흡수 대기(초)
+    private bool _moveHomeFirst = false;       // (UI 제거됨) 프로필 호환을 위해 필드는 유지, 항상 false
+    private int _surfaceId = 1;                // CAPTURE_REQ Surface ID(콤보박스)
+    // 경유점별 Surface Type 수동 지정(없으면 |θ| ≥ 코로게이션 판정각 으로 자동 판정)
+    private readonly Dictionary<int, SurfaceType> _surfaceTypeOverrides = new();
+    // 경유점별 비전 응답 결과 표시 문자열
+    private readonly Dictionary<int, string> _visionResults = new();
+    private bool _isRunning;
+    private bool _runIsError;
+    private string? _runMessage;
+    private int _runIndex = -1;
+    private int _selectedWpIndex = -1;
+    private CancellationTokenSource? _runCts;
+    // 경유점 인덱스별 θ(도) 수동 입력값. 있으면 자동 계산값(ThetaDegAt) 대신 사용한다.
+    // _thinned가 다시 솎이면(RecomputeThinned) 초기화된다(X/Z 수정값과 동일한 수명).
+    private readonly Dictionary<int, double> _thetaOverrides = new();
+
+    private Microsoft.AspNetCore.Components.Forms.IBrowserFile? pendingFile;
+    private string uploadName = "";
+    private bool isUploading;
+    private bool uploadIsError;
+    private string? uploadMessage;
+
+    private bool pendingDelete;
+    private bool isDeleting;
+    private string? deleteMessage;
+
+    // 도면 선택/로딩 실패 메시지 (DxfDocument.Load 등에서 예외가 나면 무증상으로 회로가 죽지 않도록 노출)
+    private string? loadMessage;
+    private bool loadIsError;
+
+    // 티칭 설정 프로파일 저장/불러오기
+    private string _profileName = "";
+    private List<InspectionProfile> _profiles = new();
+    private int? _selectedProfileId;
+    private string? _profileMessage;
+    private bool _profileIsError;
+
+    private ElementReference svgRef;
+    private DotNetObjectReference<Inspection>? selfRef;
+    private bool isDragging;
+    private double dragStartX, dragStartY, dragCurrentX, dragCurrentY;
+    private bool isClearingRegions;
+
+    private double baseMinX, baseMinY, baseW = 100, baseH = 100;
+    private double zoom = 1.0;
+    private double panOffsetX, panOffsetY;
+    private const double MinZoom = 0.1;
+    private const double MaxZoom = 200.0;
+
+    private bool isPanning;
+    private double panStartSvgX, panStartSvgY;
+    private double panStartOffsetX, panStartOffsetY;
+
+    private double mmPerPixel;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await RefreshListAsync();
+    }
+
+    private async Task RefreshListAsync()
+    {
+        drawings = await Service.ListAsync();
+    }
+
+    private void OnFileSelected(InputFileChangeEventArgs e)
+    {
+        pendingFile = e.File;
+        if (string.IsNullOrWhiteSpace(uploadName))
+            uploadName = Path.GetFileNameWithoutExtension(e.File.Name);
+        uploadMessage = null;
+    }
+
+    private async Task OnUploadClicked()
+    {
+        if (pendingFile is null) return;
+        isUploading = true;
+        uploadMessage = null;
+        uploadIsError = false;
+        try
+        {
+            await using var stream = pendingFile.OpenReadStream(MaxUploadSize);
+            var saved = await Service.SaveAsync(uploadName, pendingFile.Name, stream);
+            if (!string.IsNullOrEmpty(saved.ConversionError))
+            {
+                uploadIsError = true;
+                uploadMessage = $"업로드 완료 (id={saved.Id}). ⚠️ DXF 변환 실패: {saved.ConversionError}";
+            }
+            else if (!string.IsNullOrEmpty(saved.DxfPath) && saved.DxfPath != saved.FilePath)
+            {
+                uploadMessage = $"업로드 완료: {saved.FileName} → DXF 변환됨 (id={saved.Id})";
+            }
+            else
+            {
+                uploadMessage = $"업로드 완료: {saved.FileName} (id={saved.Id})";
+            }
+            pendingFile = null;
+            uploadName = "";
+            await RefreshListAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Upload failed");
+            uploadIsError = true;
+            uploadMessage = $"업로드 실패: {ex.Message}";
+        }
+        finally
+        {
+            isUploading = false;
+        }
+    }
+
+    private async Task SelectDrawingAsync(int id)
+    {
+        var changedDrawing = selectedId != id;
+        selectedId = id;
+        pendingDelete = false;
+        deleteMessage = null;
+        loadMessage = null;
+        loadIsError = false;
+        isDragging = false;
+        isPanning = false;
+        try
+        {
+            selected = await Service.GetAsync(id);
+            if (selected is null)
+            {
+                loadIsError = true;
+                loadMessage = $"도면을 찾을 수 없습니다 (id={id}).";
+                return;
+            }
+            previewPoints = Service.GetPoints(selected);
+            RecomputeThinned();
+            _profiles = await Service.ListProfilesAsync(id);
+            _selectedProfileId = null;
+            _profileMessage = null;
+            if (changedDrawing)
+            {
+                zoom = 1.0;
+                panOffsetX = 0;
+                panOffsetY = 0;
+            }
+            ComputeViewBox();
+        }
+        catch (Exception ex)
+        {
+            // GetPoints → DxfDocument.Load 등에서 예외가 나도 회로가 죽지 않도록 흡수하고 메시지로 노출.
+            Logger.LogError(ex, "SelectDrawing failed (id={Id})", id);
+            previewPoints = new();
+            _thinned = new();
+            loadIsError = true;
+            loadMessage = $"도면을 불러오지 못했습니다: {ex.Message}";
+        }
+    }
+
+    private void OnDeleteClicked()
+    {
+        pendingDelete = true;
+        deleteMessage = null;
+    }
+
+    private void OnCancelDelete()
+    {
+        pendingDelete = false;
+        deleteMessage = null;
+    }
+
+    private async Task OnConfirmDelete()
+    {
+        if (selected is null) return;
+        isDeleting = true;
+        deleteMessage = null;
+        var deletedName = selected.FileName;
+        try
+        {
+            await Service.DeleteAsync(selected.Id);
+            selected = null;
+            selectedId = null;
+            previewPoints = new();
+            _thinned = new();
+            pendingDelete = false;
+            uploadIsError = false;
+            uploadMessage = $"삭제 완료: {deletedName}";
+            await RefreshListAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Delete failed");
+            deleteMessage = $"삭제 실패: {ex.Message}";
+        }
+        finally
+        {
+            isDeleting = false;
+        }
+    }
+
+    private async Task OnSvgMouseDown(MouseEventArgs e)
+    {
+        if (selected is null) return;
+        var pt = await GetSvgPointAsync(e.ClientX, e.ClientY);
+        if (pt is null) return;
+
+        if (e.ShiftKey)
+        {
+            panStartSvgX = pt.Value.x;
+            panStartSvgY = pt.Value.y;
+            panStartOffsetX = panOffsetX;
+            panStartOffsetY = panOffsetY;
+            isPanning = true;
+            return;
+        }
+
+        dragStartX = dragCurrentX = pt.Value.x;
+        dragStartY = dragCurrentY = pt.Value.y;
+        isDragging = true;
+    }
+
+    private async Task OnSvgMouseMove(MouseEventArgs e)
+    {
+        if (!isDragging && !isPanning) return;
+        var pt = await GetSvgPointAsync(e.ClientX, e.ClientY);
+        if (pt is null) return;
+
+        if (isPanning)
+        {
+            var dx = pt.Value.x - panStartSvgX;
+            var dy = pt.Value.y - panStartSvgY;
+            panOffsetX = panStartOffsetX - dx;
+            panOffsetY = panStartOffsetY - dy;
+            BuildViewBox();
+            return;
+        }
+
+        dragCurrentX = pt.Value.x;
+        dragCurrentY = pt.Value.y;
+    }
+
+    private async Task OnSvgMouseUp(MouseEventArgs e)
+    {
+        if (isPanning) { isPanning = false; return; }
+        if (!isDragging || selected is null) { isDragging = false; return; }
+        var pt = await GetSvgPointAsync(e.ClientX, e.ClientY);
+        if (pt is not null)
+        {
+            dragCurrentX = pt.Value.x;
+            dragCurrentY = pt.Value.y;
+        }
+        isDragging = false;
+
+        // SVG y is flipped: SVG y = -world y
+        var minX = Math.Min(dragStartX, dragCurrentX);
+        var maxX = Math.Max(dragStartX, dragCurrentX);
+        var svgMinY = Math.Min(dragStartY, dragCurrentY);
+        var svgMaxY = Math.Max(dragStartY, dragCurrentY);
+        var worldMinY = -svgMaxY;
+        var worldMaxY = -svgMinY;
+
+        // Ignore trivial drags (likely accidental clicks)
+        if ((maxX - minX) < 1e-6 || (worldMaxY - worldMinY) < 1e-6) return;
+
+        try
+        {
+            await Service.AddRegionAsync(selected.Id, minX, worldMinY, maxX, worldMaxY);
+            selected = await Service.GetAsync(selected.Id);
+            if (selected != null)
+            {
+                previewPoints = Service.GetPoints(selected);
+                RecomputeThinned();
+                ComputeViewBox();
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "AddRegion failed");
+        }
+    }
+
+    private void OnSvgMouseLeave(MouseEventArgs e)
+    {
+        // Cancel any in-progress drag/pan if the cursor leaves the SVG without releasing
+        if (isDragging) isDragging = false;
+        if (isPanning) isPanning = false;
+    }
+
+    private async Task OnClearRegions()
+    {
+        if (selected is null || isClearingRegions) return;
+        isClearingRegions = true;
+        try
+        {
+            await Service.ClearRegionsAsync(selected.Id);
+            selected = await Service.GetAsync(selected.Id);
+            if (selected != null)
+            {
+                previewPoints = Service.GetPoints(selected);
+                RecomputeThinned();
+                ComputeViewBox();
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "ClearRegions failed");
+        }
+        finally
+        {
+            isClearingRegions = false;
+        }
+    }
+
+    private async Task<(double x, double y)?> GetSvgPointAsync(double clientX, double clientY)
+    {
+        try
+        {
+            var result = await JS.InvokeAsync<double[]>("hdAmrInspection.svgPoint", svgRef, clientX, clientY);
+            if (result is { Length: 2 }) return (result[0], result[1]);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "svgPoint JS interop failed");
+        }
+        return null;
+    }
+
+    // ── 경유점 솎기 / 코봇 실행 ─────────────────────────────────────
+    private void RecomputeThinned()
+    {
+        // X축(로봇 x = DXF X) 오름차순으로 순차 정렬 후 솎기. (DXF 저장 순서가 아닌 진행 순서로 정렬)
+        var ordered = previewPoints.OrderBy(p => p.X).ThenBy(p => p.Y).ToList();
+        _thinned = ThinHybrid(ordered);
+        _selectedWpIndex = -1;
+        _thetaOverrides.Clear();
+    }
+
+    // 직선/코로게이션 구간을 구분해 분할한다.
+    //  · 코로게이션 판정: 현재 점 i의 이전 점(i-1)과 앞 점(i+1)이 이루는 선분 i-1→i+1 이 수평(X축)과
+    //    이루는 각(중앙차분 기울기)의 절댓값이 _corrugThresholdDeg 이상.
+    //  · 직선 구간: 마지막 채택점과의 거리 ≥ _spacingMm 이면 채택(거리 기준).
+    //  · 코로게이션 구간: 위 기울기가 마지막 채택 시점 대비 ≥ _corrugStepDeg 만큼 바뀌면 채택(각도 기준).
+    //  첫 점과 끝 점은 항상 포함.
+    private List<PointMarker> ThinHybrid(List<PointMarker> pts)
+    {
+        if (pts.Count <= 2) return new List<PointMarker>(pts);
+
+        var result = new List<PointMarker> { pts[0] };
+        var lastKept = pts[0];
+        double refSlope = HeadingDeg(pts[0], pts[2]); // 마지막 채택 시점의 중앙차분 기울기(코로게이션 비교 기준)
+
+        for (int i = 1; i < pts.Count - 1; i++) // 끝 점은 루프 뒤에서 항상 추가
+        {
+            // 현재 점의 이전 점(i-1)과 앞 점(i+1)이 이루는 선분 기울기(중앙차분).
+            double slope = HeadingDeg(pts[i - 1], pts[i + 1]);
+            bool corrugation = Math.Abs(slope) >= _corrugThresholdDeg;
+
+            bool keep;
+            if (corrugation)
+            {
+                keep = _corrugStepDeg <= 0 || Math.Abs(AngleDiffDeg(slope, refSlope)) >= _corrugStepDeg;
+            }
+            else
+            {
+                double dx = pts[i].X - lastKept.X;
+                double dz = pts[i].Y - lastKept.Y;
+                keep = _spacingMm <= 0 || Math.Sqrt(dx * dx + dz * dz) >= _spacingMm;
+            }
+
+            if (keep)
+            {
+                result.Add(pts[i]);
+                lastKept = pts[i];
+                refSlope = slope;
+            }
+        }
+
+        var lastPt = pts[^1];
+        if (result[^1] != lastPt) result.Add(lastPt);
+        return result;
+    }
+
+    // prev→curr 선분이 수평(X축)과 이루는 각(도). (X,Y)=로봇(x,z).
+    private static double HeadingDeg(PointMarker a, PointMarker b)
+        => Math.Atan2(b.Y - a.Y, b.X - a.X) * 180.0 / Math.PI;
+
+    // 두 각도(도)의 차를 [-180,180]로 정규화.
+    private static double AngleDiffDeg(double a, double b)
+    {
+        double d = (a - b) % 360.0;
+        if (d > 180.0) d -= 360.0;
+        else if (d < -180.0) d += 360.0;
+        return d;
+    }
+
+    // θ(도): 첫/마지막 점은 0, 중간 점은 이전 점→다음 점 선분의 법선 각도(중앙차분). (X,Y)=로봇(x,z).
+    private static double ThetaDegAt(List<PointMarker> pts, int i)
+    {
+        if (i <= 0 || i >= pts.Count - 1) return 0.0;
+        var dx = pts[i + 1].X - pts[i - 1].X;
+        var dz = pts[i + 1].Y - pts[i - 1].Y;
+        return -Math.Atan2(dz, dx) * 180.0 / Math.PI;
+    }
+
+    // 실제 적용 θ: 수동 입력값이 있으면 그 값을, 없으면 자동 계산값을 쓴다.
+    private double EffectiveThetaDeg(int i)
+        => _thetaOverrides.TryGetValue(i, out var t) ? t : ThetaDegAt(_thinned, i);
+
+    // θ 수동 수정. 입력 시 해당 경유점은 자동 계산 대신 입력값으로 고정된다.
+    private void SetWpTheta(int i, object? value)
+    {
+        if (i < 0 || i >= _thinned.Count) return;
+        if (double.TryParse(value?.ToString(), out var v))
+            _thetaOverrides[i] = v;
+    }
+
+    // 경유점 Surface Type: 수동 지정값이 있으면 그 값, 없으면 |θ| ≥ 코로게이션 판정각 → Corrugation.
+    private SurfaceType EffectiveSurfaceType(int i)
+        => _surfaceTypeOverrides.TryGetValue(i, out var t)
+            ? t
+            : (Math.Abs(EffectiveThetaDeg(i)) >= _corrugThresholdDeg ? SurfaceType.Corrugation : SurfaceType.Flat);
+
+    // Surface Type 드롭다운 수동 변경.
+    private void SetWpSurfaceType(int i, object? value)
+    {
+        if (i < 0 || i >= _thinned.Count) return;
+        if (int.TryParse(value?.ToString(), out var v) && Enum.IsDefined(typeof(SurfaceType), (byte)v))
+            _surfaceTypeOverrides[i] = (SurfaceType)v;
+    }
+
+    // 경유점 좌표 수동 수정 (record는 with로 치환). X=로봇 x, Z=로봇 z(=DXF Y).
+    private void SetWpX(int i, object? value)
+    {
+        if (i < 0 || i >= _thinned.Count) return;
+        if (double.TryParse(value?.ToString(), out var v))
+            _thinned[i] = _thinned[i] with { X = v };
+    }
+
+    private void SetWpZ(int i, object? value)
+    {
+        if (i < 0 || i >= _thinned.Count) return;
+        if (double.TryParse(value?.ToString(), out var v))
+            _thinned[i] = _thinned[i] with { Y = v };
+    }
+
+    // 경유점 행 삭제. 인덱스 키 상태(_thetaOverrides, _selectedWpIndex)를 함께 당긴다.
+    private void DeleteWaypoint(int i)
+    {
+        if (i < 0 || i >= _thinned.Count) return;
+        _thinned.RemoveAt(i);
+        var remapped = _thetaOverrides
+            .Where(kv => kv.Key != i)
+            .ToDictionary(kv => kv.Key > i ? kv.Key - 1 : kv.Key, kv => kv.Value);
+        _thetaOverrides.Clear();
+        foreach (var kv in remapped) _thetaOverrides[kv.Key] = kv.Value;
+
+        if (_selectedWpIndex == i) _selectedWpIndex = -1;
+        else if (_selectedWpIndex > i) _selectedWpIndex--;
+    }
+
+    // 현재 행 바로 아래에 새 경유점 삽입. 기본 좌표는 다음 점과의 중점(마지막 행이면 현재 점 복사).
+    // θ는 override 없이 자동 계산값을 따른다. 인덱스 키 상태를 뒤로 한 칸 민다.
+    private void InsertWaypointBelow(int i)
+    {
+        if (i < 0 || i >= _thinned.Count) return;
+        int at = i + 1;
+        var np = at < _thinned.Count
+            ? new PointMarker((_thinned[i].X + _thinned[at].X) / 2.0, (_thinned[i].Y + _thinned[at].Y) / 2.0)
+            : _thinned[i];
+        _thinned.Insert(at, np);
+        var remapped = _thetaOverrides
+            .ToDictionary(kv => kv.Key >= at ? kv.Key + 1 : kv.Key, kv => kv.Value);
+        _thetaOverrides.Clear();
+        foreach (var kv in remapped) _thetaOverrides[kv.Key] = kv.Value;
+
+        _selectedWpIndex = at;
+    }
+
+    // |θ| ≤ th_max 인 점만 이동 대상.
+    private bool IsWaypointIncluded(int i) => Math.Abs(EffectiveThetaDeg(i)) <= _thMax;
+
+    private int IncludedCount()
+    {
+        int c = 0;
+        for (int i = 0; i < _thinned.Count; i++)
+            if (Math.Abs(EffectiveThetaDeg(i)) <= _thMax) c++;
+        return c;
+    }
+
+    private async Task RunWaypoints()
+    {
+        if (_isRunning) return;
+        if (!Cobot.IsConnected)
+        {
+            _runIsError = true; _runMessage = "코봇 RPC가 연결되지 않았습니다."; return;
+        }
+        if (_thinned.Count < 2)
+        {
+            _runIsError = true; _runMessage = "실행할 경유점이 부족합니다(2개 이상 필요)."; return;
+        }
+
+        _isRunning = true;
+        _runIsError = false;
+        _runMessage = null;
+        _runIndex = -1;
+        _visionResults.Clear();
+        _runCts = new CancellationTokenSource();
+        var ct = _runCts.Token;
+        var rpc = Cobot.Rpc!;
+        var visionTimeout = TimeSpan.FromSeconds(Math.Max(0, _visionTimeoutSec));
+
+        try
+        {
+            int moved = 0;
+            for (int i = 0; i < _thinned.Count; i++)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                double theta = EffectiveThetaDeg(i);
+                if (Math.Abs(theta) > _thMax) continue; // th_max 초과 점은 제외
+
+                _runIndex = i;
+                double x = _thinned[i].X;
+                double z = _thinned[i].Y;
+                var pose = new[] { x, 0.0, z, 0.0, theta, 0.0 };
+
+                var rc = await rpc.MoveLAsync(pose, tool: _runTool, user: _runUser,
+                    vel: _runVel, acc: 100, ovl: 100, blendR: -1, ct: ct);
+
+                moved++;
+                _runMessage = $"#{i + 1} 이동 (rc={rc})";
+                await InvokeAsync(StateHasChanged);
+
+                if (rc != 0)
+                {
+                    _runIsError = true;
+                    _runMessage = $"#{i + 1} 점 이동 실패 (rc={rc}) — 중단";
+                    return;
+                }
+
+                // 이동 후 진동 흡수 대기 → 비전으로 CAPTURE_REQ 전송 후 응답 대기.
+                if (_settleDelaySec > 0)
+                    await Task.Delay(TimeSpan.FromSeconds(_settleDelaySec), ct);
+
+                var data = CaptureReqPayload.Build(EffectiveSurfaceType(i), (ushort)_surfaceId,
+                    (int)Math.Round(x), (int)Math.Round(z));
+                var outcome = await Vision.Client.RequestCaptureAsync(data, visionTimeout, ct);
+                var result = outcome switch
+                {
+                    { Sent: false }      => "비전 미연결",
+                    { Responded: false } => "응답 없음(타임아웃)",
+                    { Success: true }    => "비전 OK",
+                    _                    => $"비전 실패({ResultCodeNames.NameOf((ushort)outcome.Code!)})",
+                };
+                _visionResults[i] = result;
+                // 실패/무응답이어도 중단하지 않고 다음 점으로 진행.
+                _runMessage = $"#{i + 1} 이동 완료 · {result}";
+                await InvokeAsync(StateHasChanged);
+            }
+
+            _runMessage = $"완료: {moved}개 점 이동";
+        }
+        catch (OperationCanceledException)
+        {
+            _runMessage = "사용자 정지";
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "RunWaypoints failed");
+            _runIsError = true;
+            _runMessage = $"실행 실패: {ex.Message}";
+        }
+        finally
+        {
+            _isRunning = false;
+            _runIndex = -1;
+        }
+    }
+
+    private async Task StopRun()
+    {
+        _runCts?.Cancel();   // 루프가 다음 점 스케줄을 중단(OperationCanceledException → "사용자 정지")
+        // 진행 중인 블로킹 이동을 가로채 즉시 멈춤(세마포어 우회 채널).
+        try
+        {
+            if (Cobot.Rpc is { } rpc)
+            {
+                var rc = await rpc.StopMotionImmediateAsync();
+                _runMessage = $"정지 요청 (rc={rc})";
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "StopRun StopMotionImmediate 실패");
+        }
+    }
+
+    // 단일 경유점으로 개별 이동(현재 X/Z/θ 및 tool/user/속도 설정 사용). 배치 실행 중에는 무시.
+    private async Task MoveToWaypointAsync(int i)
+    {
+        if (_isRunning) return;
+        if (!Cobot.IsConnected)
+        {
+            _runIsError = true; _runMessage = "코봇 RPC가 연결되지 않았습니다."; return;
+        }
+        if (i < 0 || i >= _thinned.Count) return;
+
+        _isRunning = true;
+        _runIsError = false;
+        _runMessage = null;
+        _runIndex = i;
+        _selectedWpIndex = i;
+        try
+        {
+            var rpc = Cobot.Rpc!;
+            double x = _thinned[i].X;
+            double z = _thinned[i].Y;
+            double theta = EffectiveThetaDeg(i);
+            var pose = new[] { x, 0.0, z, 0.0, theta, 0.0 };
+
+            var rc = await rpc.MoveLAsync(pose, tool: _runTool, user: _runUser,
+                vel: _runVel, acc: 100, ovl: 100, blendR: -1);
+
+            if (rc != 0)
+            {
+                _runIsError = true;
+                _runMessage = $"#{i + 1} 이동 실패 (rc={rc})";
+                return; // finally에서 _isRunning 해제
+            }
+
+            // 이동 성공 → 진동 흡수 대기 → 비전으로 CAPTURE_REQ 전송 후 응답 대기 (RunWaypoints와 동일 패턴).
+            if (_settleDelaySec > 0)
+                await Task.Delay(TimeSpan.FromSeconds(_settleDelaySec));
+
+            var visionTimeout = TimeSpan.FromSeconds(Math.Max(0, _visionTimeoutSec));
+            var data = CaptureReqPayload.Build(EffectiveSurfaceType(i), (ushort)_surfaceId,
+                (int)Math.Round(x), (int)Math.Round(z));
+            var outcome = await Vision.Client.RequestCaptureAsync(data, visionTimeout, CancellationToken.None);
+            var result = outcome switch
+            {
+                { Sent: false }      => "비전 미연결",
+                { Responded: false } => "응답 없음(타임아웃)",
+                { Success: true }    => "비전 OK",
+                _                    => $"비전 실패({ResultCodeNames.NameOf((ushort)outcome.Code!)})",
+            };
+            _visionResults[i] = result;
+            _runIsError = false;
+            _runMessage = $"#{i + 1} 이동 완료 · {result}";
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "MoveToWaypoint failed");
+            _runIsError = true;
+            _runMessage = $"#{i + 1} 이동 실패: {ex.Message}";
+        }
+        finally
+        {
+            _isRunning = false;
+            _runIndex = -1;
+        }
+    }
+
+    // ── 티칭 설정 저장 / 불러오기 ───────────────────────────────────
+    private async Task SaveProfileAsync()
+    {
+        if (selected is null || _thinned.Count == 0) return;
+        _profileMessage = null;
+        _profileIsError = false;
+        try
+        {
+            var waypoints = new List<InspectionWaypoint>(_thinned.Count);
+            for (int i = 0; i < _thinned.Count; i++)
+                waypoints.Add(new InspectionWaypoint(
+                    _thinned[i].X, _thinned[i].Y, EffectiveThetaDeg(i), _thetaOverrides.ContainsKey(i)));
+
+            // 같은 도면에 같은 이름이 있으면 그 프로파일을 갱신(덮어쓰기).
+            var name = _profileName.Trim();
+            var existing = _profiles.FirstOrDefault(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase));
+            var profile = new InspectionProfile
+            {
+                Id = existing?.Id ?? 0,
+                DrawingId = selected.Id,
+                Name = name,
+                SpacingMm = _spacingMm,
+                CorrugThresholdDeg = _corrugThresholdDeg,
+                CorrugStepDeg = _corrugStepDeg,
+                RunTool = _runTool,
+                RunUser = _runUser,
+                RunVel = _runVel,
+                DelaySec = _visionTimeoutSec, // 응답 대기 제한(초)을 기존 DelaySec 칼럼에 저장
+                ThMax = _thMax,
+                SettleDelaySec = _settleDelaySec,
+                MoveHomeFirst = _moveHomeFirst,
+                WaypointsJson = System.Text.Json.JsonSerializer.Serialize(waypoints)
+            };
+            var saved = await Service.SaveProfileAsync(profile);
+            _profiles = await Service.ListProfilesAsync(selected.Id);
+            _selectedProfileId = saved.Id;
+            _profileMessage = $"저장 완료: {name} ({waypoints.Count}개 경유점)";
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "SaveProfile failed");
+            _profileIsError = true;
+            _profileMessage = $"저장 실패: {ex.Message}";
+        }
+    }
+
+    // 콤보박스에서 설정을 고르면 이름칸을 채워, 그대로 저장하면 덮어쓰기가 되게 한다.
+    private void OnProfileSelected()
+    {
+        var p = _profiles.FirstOrDefault(x => x.Id == _selectedProfileId);
+        if (p is not null) _profileName = p.Name;
+    }
+
+    private void LoadSelectedProfile()
+    {
+        var p = _profiles.FirstOrDefault(x => x.Id == _selectedProfileId);
+        if (p is not null) LoadProfile(p);
+    }
+
+    private async Task DeleteSelectedProfileAsync()
+    {
+        if (_selectedProfileId is int id)
+        {
+            await DeleteProfileAsync(id);
+            _selectedProfileId = null;
+        }
+    }
+
+    // 저장된 설정을 그대로 복원한다. RecomputeThinned()를 호출하면 안 된다(수동 편집이 초기화됨).
+    private void LoadProfile(InspectionProfile p)
+    {
+        _profileMessage = null;
+        _profileIsError = false;
+        try
+        {
+            _spacingMm = p.SpacingMm;
+            _corrugThresholdDeg = p.CorrugThresholdDeg;
+            _corrugStepDeg = p.CorrugStepDeg;
+            _runTool = p.RunTool;
+            _runUser = p.RunUser;
+            _runVel = p.RunVel;
+            _visionTimeoutSec = p.DelaySec; // DelaySec 칼럼에 저장된 응답 대기 제한(초)
+            _thMax = p.ThMax;
+            _settleDelaySec = p.SettleDelaySec;
+            _moveHomeFirst = p.MoveHomeFirst;
+
+            var waypoints = System.Text.Json.JsonSerializer.Deserialize<List<InspectionWaypoint>>(p.WaypointsJson) ?? new();
+            _thinned = waypoints.Select(w => new PointMarker(w.X, w.Z)).ToList();
+            _thetaOverrides.Clear();
+            _surfaceTypeOverrides.Clear();
+            _visionResults.Clear();
+            for (int i = 0; i < waypoints.Count; i++)
+                if (waypoints[i].ThetaManual) _thetaOverrides[i] = waypoints[i].Theta;
+
+            _selectedWpIndex = -1;
+            _profileName = p.Name;
+            ComputeViewBox();
+            _profileMessage = $"불러오기 완료: {p.Name} ({_thinned.Count}개 경유점)";
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "LoadProfile failed");
+            _profileIsError = true;
+            _profileMessage = $"불러오기 실패: {ex.Message}";
+        }
+    }
+
+    private async Task DeleteProfileAsync(int id)
+    {
+        if (selected is null) return;
+        _profileMessage = null;
+        _profileIsError = false;
+        try
+        {
+            await Service.DeleteProfileAsync(id);
+            _profiles = await Service.ListProfilesAsync(selected.Id);
+            _profileMessage = "삭제 완료";
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "DeleteProfile failed");
+            _profileIsError = true;
+            _profileMessage = $"삭제 실패: {ex.Message}";
+        }
+    }
+
+    private static int WaypointCount(InspectionProfile p)
+    {
+        try
+        {
+            return System.Text.Json.JsonSerializer.Deserialize<List<InspectionWaypoint>>(p.WaypointsJson)?.Count ?? 0;
+        }
+        catch { return 0; }
+    }
+
+    // Refresh both the underlying Fit extent and the effective viewBox.
+    private void ComputeViewBox()
+    {
+        RecomputeBaseExtent();
+        BuildViewBox();
+    }
+
+    private void RecomputeBaseExtent()
+    {
+        if (previewPoints.Count == 0 && (selected?.ExcludedRegions.Count ?? 0) == 0)
+        {
+            baseMinX = 0; baseMinY = -100; baseW = 100; baseH = 100;
+            strokeWidth = 0.5;
+            pointRadius = 1.0;
+            return;
+        }
+
+        double minX = double.PositiveInfinity, minY = double.PositiveInfinity;
+        double maxX = double.NegativeInfinity, maxY = double.NegativeInfinity;
+        foreach (var p in previewPoints)
+        {
+            minX = Math.Min(minX, p.X);
+            minY = Math.Min(minY, p.Y);
+            maxX = Math.Max(maxX, p.X);
+            maxY = Math.Max(maxY, p.Y);
+        }
+        foreach (var r in selected!.ExcludedRegions)
+        {
+            minX = Math.Min(minX, r.MinX);
+            minY = Math.Min(minY, r.MinY);
+            maxX = Math.Max(maxX, r.MaxX);
+            maxY = Math.Max(maxY, r.MaxY);
+        }
+
+        if (double.IsInfinity(minX) || double.IsInfinity(minY))
+        {
+            baseMinX = 0; baseMinY = -100; baseW = 100; baseH = 100;
+            strokeWidth = 0.5;
+            pointRadius = 1.0;
+            return;
+        }
+
+        var w = Math.Max(maxX - minX, 1e-6);
+        var h = Math.Max(maxY - minY, 1e-6);
+        var pad = 0.05 * Math.Max(w, h);
+
+        // SVG renders with Y flipped (-worldY). Store the Fit extent in SVG coords so
+        // BuildViewBox() can simply add panOffset without re-flipping each call.
+        baseMinX = minX - pad;
+        baseMinY = -(maxY + pad);
+        baseW = w + 2 * pad;
+        baseH = h + 2 * pad;
+        strokeWidth = Math.Max(w, h) * 0.003;
+        pointRadius = Math.Max(w, h) * 0.006;
+    }
+
+    private void BuildViewBox()
+    {
+        var vw = baseW / zoom;
+        var vh = baseH / zoom;
+        var vx = baseMinX + (baseW - vw) / 2.0 + panOffsetX;
+        var vy = baseMinY + (baseH - vh) / 2.0 + panOffsetY;
+        svgViewBox = $"{F(vx)} {F(vy)} {F(vw)} {F(vh)}";
+    }
+
+    // Compute viewBox origin given a desired width/height and an SVG-coord anchor that
+    // must remain pinned to the same screen ratio (rx, ry in [0,1]).
+    private void RebuildAroundAnchor(double anchorSvgX, double anchorSvgY, double rx, double ry)
+    {
+        var vw = baseW / zoom;
+        var vh = baseH / zoom;
+        var vx = anchorSvgX - rx * vw;
+        var vy = anchorSvgY - ry * vh;
+        panOffsetX = vx - (baseMinX + (baseW - vw) / 2.0);
+        panOffsetY = vy - (baseMinY + (baseH - vh) / 2.0);
+        BuildViewBox();
+    }
+
+    private void ResetView()
+    {
+        zoom = 1.0;
+        panOffsetX = 0;
+        panOffsetY = 0;
+        BuildViewBox();
+    }
+
+    private void ZoomAt(double factor)
+    {
+        // Anchor at the current viewBox center (the geometric middle of the view).
+        var centerSvgX = baseMinX + (baseW) / 2.0 + panOffsetX;   // before factor change, center of current view in SVG coords
+        var centerSvgY = baseMinY + (baseH) / 2.0 + panOffsetY;
+        zoom = Math.Clamp(zoom * factor, MinZoom, MaxZoom);
+        RebuildAroundAnchor(centerSvgX, centerSvgY, 0.5, 0.5);
+    }
+
+    // Invoked from the native (non-passive) wheel listener in inspection.js when Shift+wheel
+    // fires. The JS side computes the SVG-space anchor and passes the scroll delta, so this
+    // does not depend on Blazor's @onwheel round-trip. delta < 0 means zoom in.
+    [JSInvokable]
+    public void ZoomFromJs(double anchorSvgX, double anchorSvgY, double delta)
+    {
+        if (selected is null) return;
+
+        // Current viewBox in SVG coords
+        var vw = baseW / zoom;
+        var vh = baseH / zoom;
+        var vx = baseMinX + (baseW - vw) / 2.0 + panOffsetX;
+        var vy = baseMinY + (baseH - vh) / 2.0 + panOffsetY;
+        var rx = vw > 0 ? (anchorSvgX - vx) / vw : 0.5;
+        var ry = vh > 0 ? (anchorSvgY - vy) / vh : 0.5;
+
+        var factor = delta < 0 ? 1.15 : 1.0 / 1.15;
+        zoom = Math.Clamp(zoom * factor, MinZoom, MaxZoom);
+        RebuildAroundAnchor(anchorSvgX, anchorSvgY, rx, ry);
+        StateHasChanged();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (selected is null) return;
+        try
+        {
+            selfRef ??= DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync("hdAmrInspection.attachWheelZoom", svgRef, selfRef);
+            var newValue = await JS.InvokeAsync<double>("hdAmrInspection.mmPerPixel", svgRef);
+            if (newValue > 0 && Math.Abs(newValue - mmPerPixel) > 1e-6)
+            {
+                mmPerPixel = newValue;
+                StateHasChanged();
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "mmPerPixel update skipped");
+        }
+    }
+
+    private static string F(double v) => v.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+
+    public void Dispose()
+    {
+        selfRef?.Dispose();
+    }
+}
