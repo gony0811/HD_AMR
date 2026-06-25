@@ -23,8 +23,8 @@ public class FairinoRpcSettings
     /// <summary>실시간 상태 피드백 TCP 포트.</summary>
     public int StatePort { get; set; } = 20004;
 
-    /// <summary>기본 공구 좌표계(Tool) 번호.</summary>
-    public int DefaultToolId { get; set; } = 0;
+    /// <summary>기본 공구 좌표계(Tool) 번호. 실제 TCP가 설정된 공구(=1)와 일치시켜 UI 기본값과 맞춘다.</summary>
+    public int DefaultToolId { get; set; } = 1;
 
     /// <summary>기본 사용자(작업물) 좌표계(User) 번호.</summary>
     public int DefaultUserId { get; set; } = 0;

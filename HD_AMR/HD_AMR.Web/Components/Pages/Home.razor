@@ -1,6 +1,7 @@
 @page "/"
 @rendermode InteractiveServer
 @using HD_AMR.Service
+@using HD_AMR.Enums
 @inject AMRService Amr
 @inject CobotService Cobot
 @inject CameraService Camera
@@ -81,10 +82,10 @@
                 <span class="stat-title">배터리</span>
                 <span class="pill @BatteryPillClass ms-auto">@(BatteryPercent?.ToString() ?? "--")%</span>
             </div>
-            <div class="gauge">
-                <div class="gauge-fill @BatteryPillClass" style="width:@(BatteryPercent ?? 0)%"></div>
+            <div class="battery-vis">
+                <BatteryIndicator Percent="BatteryPercent" Charging="IsCharging" HeightRem="2.4" />
             </div>
-            <div class="stat-sub">@(BatteryPercent is null ? "텔레메트리 연동 예정" : "AMR 배터리 잔량")</div>
+            <div class="stat-sub">@BatterySubText</div>
         </div>
     </div>
 
@@ -119,8 +120,9 @@
 </div>
 
 @code {
-    // 배터리/램프는 현재 텔레메트리 연동 전이라 플레이스홀더. (TopBar 와 동일 수준)
-    private int? BatteryPercent;
+    // 배터리는 AMRService 캐시에서, 램프는 현재 텔레메트리 연동 전이라 플레이스홀더.
+    private int? BatteryPercent => Amr.LatestStatus is { } s ? (int)Math.Round(s.Battery.LevelPercent) : null;
+    private bool IsCharging => Amr.LatestStatus?.Battery.ChargingState == ChargingState.Charging;
     private bool LampRed;
     private bool LampYellow;
     private bool LampGreen = true;
@@ -128,10 +130,14 @@
     private string BatteryPillClass => BatteryPercent switch
     {
         null => "pill-off",
-        <= 20 => "pill-danger",
-        <= 40 => "pill-warn",
+        < 20 => "pill-danger",
+        < 50 => "pill-warn",
         _ => "pill-on"
     };
+
+    private string BatterySubText => BatteryPercent is null
+        ? "텔레메트리 연동 예정"
+        : IsCharging ? "AMR 배터리 충전 중" : "AMR 배터리 잔량";
 
     private CancellationTokenSource? _cts;
 

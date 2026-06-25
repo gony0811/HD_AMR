@@ -60,6 +60,10 @@ public interface IFairinoRpc : IXmlRpcProxy
     [XmlRpcMethod("GetInverseKin")]
     object GetInverseKin(int type, double[] desc_pos, int config);
 
+    /// <summary>정기구학: 관절각[6](도) → 베이스 기준 공구 포즈. 반환 [errcode, x,y,z,rx,ry,rz].</summary>
+    [XmlRpcMethod("GetForwardKin")]
+    object GetForwardKin(double[] joint_pos);
+
     // ── 상태/제어 ──────────────────────────────────────────────────
     /// <summary>로봇 사용 활성화/비활성화. state: 1=Enable, 0=Disable.</summary>
     [XmlRpcMethod("RobotEnable")]
@@ -73,7 +77,15 @@ public interface IFairinoRpc : IXmlRpcProxy
     [XmlRpcMethod("SetSpeed")]
     object SetSpeed(int vel);
 
-    /// <summary>현재 TCP 직교 포즈 조회. flag: 0=절대,1=공구좌표 등. 반환 = [errcode, [x,y,z,rx,ry,rz]] 또는 평탄 배열.</summary>
+    /// <summary>현재 관절각(도) 조회. flag: 0=블로킹,1=논블로킹. 반환 [errcode, j0..j5].</summary>
+    [XmlRpcMethod("GetActualJointPosDegree")]
+    object GetActualJointPosDegree(int flag);
+
+    /// <summary>
+    /// 현재 TCP 직교 포즈 조회. flag: 0=블로킹,1=논블로킹(좌표계 선택 아님).
+    /// ⚠ 반환 포즈는 현재 활성 작업물(user) 좌표계 기준이다. BASE 기준 포즈는 GetForwardKin으로 구할 것.
+    /// 반환 = [errcode, [x,y,z,rx,ry,rz]] 또는 평탄 배열.
+    /// </summary>
     [XmlRpcMethod("GetActualTCPPose")]
     object GetActualTCPPose(int flag);
 

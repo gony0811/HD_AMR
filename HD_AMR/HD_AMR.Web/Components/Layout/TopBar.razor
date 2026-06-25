@@ -1,5 +1,8 @@
 @using HD_AMR.Service
+@using HD_AMR.Enums
+@inject AMRService Amr
 @inject CobotService Cobot
+@inject VisionInterfaceService Vision
 @implements IDisposable
 
 <div class="tb-root px-4">
@@ -7,14 +10,19 @@
         <div class="tb-group">
             <span class="tb-icon tb-icon-robot" aria-hidden="true"></span>
             <span class="tb-label">AMR</span>
-            <span class="tb-badge tb-badge-off">@AmrStatus</span>
-            <span class="tb-badge tb-badge-value">@AmrValue</span>
+            <span class="tb-badge @(Amr.IsConnected ? "tb-badge-on" : "tb-badge-off")">@(Amr.IsConnected ? "연결" : "미연결")</span>
         </div>
 
         <div class="tb-group">
             <span class="tb-icon tb-icon-gear" aria-hidden="true"></span>
             <span class="tb-label">Cobot</span>
             <span class="tb-badge @(Cobot.IsConnected ? "tb-badge-on" : "tb-badge-off")">@(Cobot.IsConnected ? "연결" : "미연결")</span>
+        </div>
+
+        <div class="tb-group">
+            <span class="tb-icon tb-icon-vision" aria-hidden="true"></span>
+            <span class="tb-label">Vision</span>
+            <span class="tb-badge @(Vision.Client.IsConnected ? "tb-badge-on" : "tb-badge-off")">@(Vision.Client.IsConnected ? "연결" : "미연결")</span>
         </div>
 
         <div class="tb-group tb-lamp">
@@ -25,7 +33,7 @@
         </div>
 
         <div class="tb-group tb-battery">
-            <span class="tb-icon tb-icon-battery" aria-hidden="true"></span>
+            <BatteryIndicator Percent="BatteryPercent" Charging="IsCharging" HeightRem="1.35" />
             <span class="tb-battery-text">@(BatteryPercent?.ToString() ?? "--")%</span>
         </div>
     </div>
@@ -36,12 +44,12 @@
 </div>
 
 @code {
-    [Parameter] public string AmrStatus { get; set; } = "OFF";
-    [Parameter] public string AmrValue { get; set; } = "--";
     [Parameter] public bool LampRed { get; set; }
     [Parameter] public bool LampYellow { get; set; }
     [Parameter] public bool LampGreen { get; set; }
-    [Parameter] public int? BatteryPercent { get; set; }
+
+    private int? BatteryPercent => Amr.LatestStatus is { } s ? (int)Math.Round(s.Battery.LevelPercent) : null;
+    private bool IsCharging => Amr.LatestStatus?.Battery.ChargingState == ChargingState.Charging;
 
     private CancellationTokenSource? _cts;
 

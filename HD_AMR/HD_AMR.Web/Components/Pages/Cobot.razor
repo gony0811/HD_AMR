@@ -59,7 +59,7 @@
     <p class="text-muted mt-1" style="max-width:760px"><small>⚠ 설정 전에 반드시 '불러오기'로 현재 값을 확인·수정하세요. 빈 값(0)으로 설정하면 기존 좌표계가 0으로 덮어써집니다.</small></p>
 
     <hr />
-    <h4>이동</h4>
+    <h4>이동 (BASE 좌표계 기준)</h4>
     <div class="row g-2" style="max-width:760px">
         @for (int i = 0; i < 6; i++)
         {
@@ -76,10 +76,6 @@
             <input class="form-control" type="number" min="0" max="15" @bind="_moveTool" style="width:90px" />
         </div>
         <div class="col-auto">
-            <label class="form-label">작업물(user)</label>
-            <input class="form-control" type="number" min="0" max="14" @bind="_moveUser" style="width:90px" />
-        </div>
-        <div class="col-auto">
             <label class="form-label">속도(%) : @_vel</label>
             <input type="range" class="form-range" min="1" max="100" @bind="_vel" style="width:160px" />
         </div>
@@ -89,7 +85,42 @@
             <button class="btn btn-danger" @onclick="EmergencyStop" disabled="@(!Svc.IsConnected)">정지 (StopMotion)</button>
         </div>
     </div>
-    <p class="text-muted mt-1" style="max-width:900px"><small>⚠ 공구 번호는 로봇의 현재 활성 공구와 같게 두세요. 다르면 TCP가 바뀌어 엉뚱한 위치로 이동합니다.</small></p>
+    <p class="text-muted mt-1" style="max-width:900px"><small>⚠ 입력 포즈는 BASE 좌표계 기준 절대 목표 위치입니다. 공구 번호는 로봇의 현재 활성 공구와 같게 두세요. 다르면 TCP가 바뀌어 엉뚱한 위치로 이동합니다.</small></p>
+
+    <hr />
+    <h4>조그 (BASE 좌표계)</h4>
+    <div class="row g-2 align-items-end mb-2" style="max-width:900px">
+        <div class="col-auto">
+            <label class="form-label">병진 스텝(mm)</label>
+            <input class="form-control" type="number" min="0" step="0.1" @bind="_jogStepMm" style="width:110px" />
+        </div>
+        <div class="col-auto">
+            <label class="form-label">회전 스텝(°)</label>
+            <input class="form-control" type="number" min="0" step="0.1" @bind="_jogStepDeg" style="width:110px" />
+        </div>
+        <div class="col-auto">
+            <label class="form-label">공구(tool)</label>
+            <input class="form-control" type="number" min="0" max="15" @bind="_jogTool" style="width:90px" />
+        </div>
+        <div class="col-auto">
+            <label class="form-label">속도(%) : @_jogVel</label>
+            <input type="range" class="form-range" min="1" max="100" @bind="_jogVel" style="width:160px" />
+        </div>
+    </div>
+    @for (int ai = 0; ai < 6; ai++)
+    {
+        var axis = ai;
+        <div class="row g-2 align-items-center mb-1" style="max-width:420px">
+            <div class="col-auto" style="width:60px"><label class="form-label mb-0">@PoseLabels[axis]</label></div>
+            <div class="col-auto">
+                <button class="btn btn-outline-primary" @onclick="@(() => BaseJog(axis, -1))" disabled="@(_busy || !Svc.IsConnected)">@PoseLabels[axis] −</button>
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-outline-primary" @onclick="@(() => BaseJog(axis, +1))" disabled="@(_busy || !Svc.IsConnected)">@PoseLabels[axis] +</button>
+            </div>
+        </div>
+    }
+    <p class="text-muted mt-1" style="max-width:900px"><small>⚠ 현재 위치에서 BASE 좌표계 축 방향으로 ±스텝만큼 이동합니다. 저속·소스텝으로 시작하세요.</small></p>
 
     <hr />
     <h4>작업물 좌표계 교시 (3점법)</h4>
@@ -205,7 +236,12 @@
     private readonly double[] _target = new double[6];
     private int _vel = 20;
     private int _moveTool = 1;   // 로봇 현재 활성 공구와 같게 (0으로 두면 TCP가 바뀜)
-    private int _moveUser = 0;
+
+    // BASE축 조그
+    private int _jogTool = 1;     // 로봇 현재 활성 공구와 같게
+    private int _jogVel = 20;
+    private double _jogStepMm = 10;
+    private double _jogStepDeg = 5;
 
     // 작업물 좌표계 교시
     private int _wobjId;
@@ -272,7 +308,21 @@
         => await Run("사용자 좌표계 설정", ct => Svc.Rpc!.SetWObjCoordAsync(_frameId, (double[])_frame.Clone(), ct: ct));
 
     private async Task MoveL()
-        => await Run("MoveL", ct => Svc.Rpc!.MoveLAsync((double[])_target.Clone(), tool: _moveTool, user: _moveUser, vel: _vel, ct: ct));
+        => await Run("MoveL", ct => Svc.Rpc!.MoveLAsync((double[])_target.Clone(), tool: _moveTool, user: 0, vel: _vel, ct: ct));
+
+    /// <summary>BASE 좌표계 축 방향으로 현재 위치에서 ±스텝만큼 이동. user:0 → offset_flag=1 오프셋이 BASE축 기준 적용.</summary>
+    private async Task BaseJog(int axis, int sign)
+    {
+        if (!Svc.IsConnected) { Notify("연결되지 않았습니다.", true); return; }
+        var label = $"조그 {PoseLabels[axis]}{(sign > 0 ? "+" : "-")}";
+        await Run(label, async ct =>
+        {
+            var current = await Svc.Rpc!.GetTcpPoseInBaseAsync(_jogTool, ct);   // BASE 기준 현재 TCP 포즈(이동 공구로 활성 공구 동기)
+            var off = new double[6];
+            off[axis] = sign * (axis < 3 ? _jogStepMm : _jogStepDeg);
+            return await Svc.Rpc!.MoveByOffsetAsync(current, user: 0, off, tool: _jogTool, vel: _jogVel, ct: ct);
+        });
+    }
 
     /// <summary>긴급 정지: 진행 중인 명령을 취소하고 즉시 StopMotion 전송(세마포어 우회).</summary>
     private async Task EmergencyStop()
@@ -313,7 +363,7 @@
             var rc = await Svc.Rpc!.SetWObjCoordPointAsync(pointNum, ct);
             try
             {
-                var pose = await Svc.Rpc!.GetTcpPoseAsync(ct: ct);
+                var pose = await Svc.Rpc!.GetTcpPoseInBaseAsync(_jogTool, ct);
                 for (int k = 0; k < 6 && k < pose.Length; k++) _points[pointNum - 1][k] = pose[k];
             }
             catch { /* 표시용 조회 실패는 무시 */ }
@@ -346,7 +396,7 @@
                     tool: _offTool, user: _offUser, vel: _offVel, acc: 100, ovl: 100, blendR: -1, ct: ct);
             }
             // 증분: 현재 베이스 포즈에 작업물 좌표계 축으로 offset 적용(offset_flag=1).
-            var current = await Svc.Rpc!.GetTcpPoseAsync(ct: ct);
+            var current = await Svc.Rpc!.GetTcpPoseInBaseAsync(_offTool, ct);
             return await Svc.Rpc!.MoveByOffsetAsync(current, _offUser, (double[])_offset.Clone(), tool: _offTool, vel: _offVel, ct: ct);
         });
     }
@@ -359,7 +409,7 @@
         if (!Svc.IsConnected) { Notify("연결되지 않았습니다.", true); return; }
         await Run("현재 포즈 조회", async ct =>
         {
-            var pose = await Svc.Rpc!.GetTcpPoseAsync(ct: ct);
+            var pose = await Svc.Rpc!.GetTcpPoseInBaseAsync(_moveTool, ct);
             for (int i = 0; i < 6 && i < pose.Length; i++) _target[i] = pose[i];
             return 0;
         });
