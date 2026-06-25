@@ -79,25 +79,12 @@
         color: var(--accent-hover);
     }
 
-/* Gauge */
-.gauge {
-    height: 0.7rem;
-    border-radius: var(--radius-pill);
-    background: var(--surface-muted);
-    overflow: hidden;
-    margin: 0.4rem 0;
+/* Battery visualization */
+.battery-vis {
+    display: flex;
+    align-items: center;
+    margin: 0.5rem 0;
 }
-
-.gauge-fill {
-    height: 100%;
-    border-radius: var(--radius-pill);
-    background: var(--accent);
-    transition: width .4s ease;
-}
-
-    .gauge-fill.pill-danger { background: var(--danger); }
-    .gauge-fill.pill-warn   { background: var(--warn); }
-    .gauge-fill.pill-off    { background: #d1d5db; }
 
 /* Safety lamp */
 .lamp-row {

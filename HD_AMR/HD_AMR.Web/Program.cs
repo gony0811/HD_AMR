@@ -107,6 +107,7 @@ CREATE TABLE IF NOT EXISTS TeachingProfiles (
     RunVel INTEGER NOT NULL,
     DelaySec REAL NOT NULL,
     ThMax REAL NOT NULL,
+    SettleDelaySec REAL NOT NULL DEFAULT 0,
     MoveHomeFirst INTEGER NOT NULL,
     WaypointsJson TEXT NOT NULL,
     CreatedAt TEXT NOT NULL,
@@ -115,6 +116,17 @@ CREATE TABLE IF NOT EXISTS TeachingProfiles (
 );
 CREATE INDEX IF NOT EXISTS IX_TeachingProfiles_DrawingId ON TeachingProfiles (DrawingId);
 ");
+
+    // 기존 DB에 SettleDelaySec 컬럼이 없으면 추가(엔티티가 나중에 추가된 칼럼). SQLite는
+    // ADD COLUMN IF NOT EXISTS 가 없으므로 pragma 로 존재 여부를 확인한 뒤에만 ALTER 한다.
+    var hasSettleDelaySec = db.Database
+        .SqlQueryRaw<long>("SELECT COUNT(*) AS Value FROM pragma_table_info('TeachingProfiles') WHERE name = 'SettleDelaySec'")
+        .AsEnumerable().First() > 0;
+    if (!hasSettleDelaySec)
+    {
+        db.Database.ExecuteSqlRaw(
+            "ALTER TABLE TeachingProfiles ADD COLUMN SettleDelaySec REAL NOT NULL DEFAULT 0;");
+    }
 
     var converter = scope.ServiceProvider.GetRequiredService<IDwgConverter>();
     if (!converter.IsAvailable)

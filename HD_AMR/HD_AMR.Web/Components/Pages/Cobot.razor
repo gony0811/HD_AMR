@@ -317,7 +317,7 @@
         var label = $"조그 {PoseLabels[axis]}{(sign > 0 ? "+" : "-")}";
         await Run(label, async ct =>
         {
-            var current = await Svc.Rpc!.GetTcpPoseInBaseAsync(ct);   // BASE 기준 현재 TCP 포즈
+            var current = await Svc.Rpc!.GetTcpPoseInBaseAsync(_jogTool, ct);   // BASE 기준 현재 TCP 포즈(이동 공구로 활성 공구 동기)
             var off = new double[6];
             off[axis] = sign * (axis < 3 ? _jogStepMm : _jogStepDeg);
             return await Svc.Rpc!.MoveByOffsetAsync(current, user: 0, off, tool: _jogTool, vel: _jogVel, ct: ct);
@@ -363,7 +363,7 @@
             var rc = await Svc.Rpc!.SetWObjCoordPointAsync(pointNum, ct);
             try
             {
-                var pose = await Svc.Rpc!.GetTcpPoseInBaseAsync(ct);
+                var pose = await Svc.Rpc!.GetTcpPoseInBaseAsync(_jogTool, ct);
                 for (int k = 0; k < 6 && k < pose.Length; k++) _points[pointNum - 1][k] = pose[k];
             }
             catch { /* 표시용 조회 실패는 무시 */ }
@@ -396,7 +396,7 @@
                     tool: _offTool, user: _offUser, vel: _offVel, acc: 100, ovl: 100, blendR: -1, ct: ct);
             }
             // 증분: 현재 베이스 포즈에 작업물 좌표계 축으로 offset 적용(offset_flag=1).
-            var current = await Svc.Rpc!.GetTcpPoseInBaseAsync(ct);
+            var current = await Svc.Rpc!.GetTcpPoseInBaseAsync(_offTool, ct);
             return await Svc.Rpc!.MoveByOffsetAsync(current, _offUser, (double[])_offset.Clone(), tool: _offTool, vel: _offVel, ct: ct);
         });
     }
@@ -409,7 +409,7 @@
         if (!Svc.IsConnected) { Notify("연결되지 않았습니다.", true); return; }
         await Run("현재 포즈 조회", async ct =>
         {
-            var pose = await Svc.Rpc!.GetTcpPoseInBaseAsync(ct);
+            var pose = await Svc.Rpc!.GetTcpPoseInBaseAsync(_moveTool, ct);
             for (int i = 0; i < 6 && i < pose.Length; i++) _target[i] = pose[i];
             return 0;
         });

@@ -179,6 +179,7 @@ public class DrawingService
                 existing.RunVel = profile.RunVel;
                 existing.DelaySec = profile.DelaySec;
                 existing.ThMax = profile.ThMax;
+                existing.SettleDelaySec = profile.SettleDelaySec;
                 existing.MoveHomeFirst = profile.MoveHomeFirst;
                 existing.WaypointsJson = profile.WaypointsJson;
                 existing.UpdatedAt = now;

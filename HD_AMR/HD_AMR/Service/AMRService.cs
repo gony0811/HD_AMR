@@ -24,6 +24,9 @@ public class AMRService : BackgroundService
 
     public ModbusTcpClient Client => _client;
 
+    /// <summary>백그라운드 폴링으로 캐싱된 최신 로봇 상태 (미연결/읽기 실패 시 null)</summary>
+    public RobotStatus? LatestStatus { get; private set; }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("AMRService 시작 ({Ip}:{Port})", _settings.IpAddress, _settings.Port);
@@ -38,6 +41,8 @@ public class AMRService : BackgroundService
                     await _client.ConnectAsync(stoppingToken);
                     _logger.LogInformation("AMR Modbus TCP 연결 완료");
                 }
+
+                LatestStatus = await ReadStatusAsync(stoppingToken);
             }
             catch (OperationCanceledException)
             {
@@ -45,10 +50,13 @@ public class AMRService : BackgroundService
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "AMR Modbus TCP 연결 실패 — 5초 후 재시도");
+                LatestStatus = null;
+                _logger.LogWarning(ex, "AMR Modbus TCP 연결/상태 읽기 실패 — 5초 후 재시도");
+                await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+                continue;
             }
 
-            await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+            await Task.Delay(TimeSpan.FromSeconds(1), stoppingToken);
         }
     }
 

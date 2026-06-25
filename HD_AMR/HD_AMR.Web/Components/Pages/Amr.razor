@@ -280,16 +280,7 @@
             using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
             do
             {
-                if (Svc.IsConnected)
-                {
-                    try { _status = await Svc.ReadStatusAsync(ct); }
-                    catch (OperationCanceledException) { throw; }
-                    catch { _status = null; }
-                }
-                else
-                {
-                    _status = null;
-                }
+                _status = Svc.IsConnected ? Svc.LatestStatus : null;
                 await InvokeAsync(StateHasChanged);
             }
             while (await timer.WaitForNextTickAsync(ct));

@@ -69,6 +69,10 @@
             </tbody>
         </table>
     }
+    @if (!string.IsNullOrEmpty(loadMessage))
+    {
+        <div class="upload-message @(loadIsError ? "err" : "ok")">@loadMessage</div>
+    }
 </section>
 
 @if (selected is not null)
@@ -393,6 +397,10 @@
     private bool isDeleting;
     private string? deleteMessage;
 
+    // 도면 선택/로딩 실패 메시지 (DxfDocument.Load 등에서 예외가 나면 무증상으로 회로가 죽지 않도록 노출)
+    private string? loadMessage;
+    private bool loadIsError;
+
     // 티칭 설정 프로파일 저장/불러오기
     private string _profileName = "";
     private List<TeachingProfile> _profiles = new();
@@ -481,22 +489,41 @@
         selectedId = id;
         pendingDelete = false;
         deleteMessage = null;
+        loadMessage = null;
+        loadIsError = false;
         isDragging = false;
         isPanning = false;
-        selected = await Service.GetAsync(id);
-        if (selected is null) return;
-        previewPoints = Service.GetPoints(selected);
-        RecomputeThinned();
-        _profiles = await Service.ListProfilesAsync(id);
-        _selectedProfileId = null;
-        _profileMessage = null;
-        if (changedDrawing)
+        try
         {
-            zoom = 1.0;
-            panOffsetX = 0;
-            panOffsetY = 0;
+            selected = await Service.GetAsync(id);
+            if (selected is null)
+            {
+                loadIsError = true;
+                loadMessage = $"도면을 찾을 수 없습니다 (id={id}).";
+                return;
+            }
+            previewPoints = Service.GetPoints(selected);
+            RecomputeThinned();
+            _profiles = await Service.ListProfilesAsync(id);
+            _selectedProfileId = null;
+            _profileMessage = null;
+            if (changedDrawing)
+            {
+                zoom = 1.0;
+                panOffsetX = 0;
+                panOffsetY = 0;
+            }
+            ComputeViewBox();
         }
-        ComputeViewBox();
+        catch (Exception ex)
+        {
+            // GetPoints → DxfDocument.Load 등에서 예외가 나도 회로가 죽지 않도록 흡수하고 메시지로 노출.
+            Logger.LogError(ex, "SelectDrawing failed (id={Id})", id);
+            previewPoints = new();
+            _thinned = new();
+            loadIsError = true;
+            loadMessage = $"도면을 불러오지 못했습니다: {ex.Message}";
+        }
     }
 
     private void OnDeleteClicked()

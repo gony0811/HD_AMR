@@ -1,0 +1,47 @@
+@* 잔량만큼 내부가 채워지는 배터리 모양 + 충전 시 번개 표시 *@
+
+<svg class="battery-indicator" viewBox="0 0 28 14" style="height:@(HeightRem.ToString(System.Globalization.CultureInfo.InvariantCulture))rem"
+     role="img" aria-label="배터리 @(Percent?.ToString() ?? "--")%@(Charging ? ", 충전중" : "")">
+    @* 본체 윤곽 *@
+    <rect x="0.6" y="1.6" width="22.8" height="10.8" rx="2.2" ry="2.2"
+          fill="none" stroke="@StrokeColor" stroke-width="1.2" />
+    @* 우측 단자 *@
+    <rect x="24.4" y="4.8" width="2.4" height="4.4" rx="1" ry="1" fill="@StrokeColor" />
+    @* 내부 채움 *@
+    <rect class="battery-fill" x="2" y="3" width="@FillWidth.ToString(System.Globalization.CultureInfo.InvariantCulture)" height="8" rx="1" ry="1"
+          fill="@FillColor" />
+    @if (Charging && Percent is not null)
+    {
+        @* 충전 번개 (본체 중앙) *@
+        <path d="M13.4 2.6 L9 8.2 H11.6 L10.6 11.4 L15 5.8 H12.4 Z"
+              fill="#ffffff" stroke="#1a1d21" stroke-width="0.4" stroke-linejoin="round" />
+    }
+</svg>
+
+@code {
+    [Parameter] public int? Percent { get; set; }
+    [Parameter] public bool Charging { get; set; }
+    [Parameter] public double HeightRem { get; set; } = 1.35;
+
+    // 내부 채움 가능한 최대 폭 (x=2 ~ x=23 본체 내부, rx 여유 포함 ≈ 19)
+    private const double MaxFillWidth = 19.0;
+
+    private double FillWidth
+    {
+        get
+        {
+            var pct = Math.Clamp(Percent ?? 0, 0, 100);
+            return MaxFillWidth * pct / 100.0;
+        }
+    }
+
+    private string FillColor => Percent switch
+    {
+        null => "#d1d5db",
+        < 20 => "#ef4444", // --danger
+        < 50 => "#f59e0b", // --warn
+        _    => "#22c55e", // green (안전 신호등 녹색과 동일)
+    };
+
+    private string StrokeColor => Percent is null ? "#d1d5db" : "#6b7280"; // --text-muted
+}

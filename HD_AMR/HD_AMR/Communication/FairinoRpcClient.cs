@@ -24,6 +24,11 @@ public class FairinoRpcClient : IDisposable
     private volatile bool _connected;
     private bool _disposed;
 
+    // 컨트롤러의 현재 활성 공구 번호 추적값. GetForwardKin/GetInverseKin/MoveL은 모두 활성 공구
+    // 프레임을 쓰므로, FK로 앵커를 읽기 전에 이동에 쓸 공구로 활성 공구를 맞춰야 프레임이 일치한다.
+    // -1 = 미상(연결 직후). 연결 시 재설정된다.
+    private int _activeTool = -1;
+
     public FairinoRpcClient(FairinoRpcSettings settings, ILogger<FairinoRpcClient> logger)
     {
         _settings = settings;
@@ -76,6 +81,7 @@ public class FairinoRpcClient : IDisposable
 
             _proxy = proxy;
             _stopProxy = stopProxy;
+            _activeTool = -1;   // 새 연결: 활성 공구 추적값 초기화(다음 Ensure 호출이 강제 동기화).
             _connected = true;
             _logger.LogInformation("{Name} XML-RPC 연결 완료 ({Url})", _settings.Name, proxy.Url);
         }
@@ -99,6 +105,7 @@ public class FairinoRpcClient : IDisposable
         _connected = false;
         _proxy = null;
         _stopProxy = null;
+        _activeTool = -1;
     }
 
     // ── 좌표계 ─────────────────────────────────────────────────────
@@ -193,11 +200,31 @@ public class FairinoRpcClient : IDisposable
     }
 
     /// <summary>
+    /// 컨트롤러의 활성 공구를 <paramref name="tool"/>로 맞춘다(이미 같으면 no-op). GetForwardKin/MoveL은
+    /// 모두 활성 공구 프레임을 쓰므로, FK 앵커를 읽기 전에 이동에 쓸 공구로 활성 공구를 동기화해야
+    /// 첫 명령부터 프레임이 일치한다(연결 직후 첫 조그가 엉뚱한 곳으로 가던 문제 방지).
+    /// 활성화는 해당 공구 좌표를 읽어 같은 값으로 되써(SetToolCoord round-trip) 값 변경 없이 현재 공구로 선택한다.
+    /// </summary>
+    public async Task EnsureActiveToolAsync(int tool, CancellationToken ct = default)
+    {
+        if (tool == _activeTool) return;
+        var coord = await GetToolCoordAsync(tool, ct);          // 현재 값 보존용으로 읽기
+        var rc = await SetToolCoordAsync(tool, coord, ct: ct);  // 동일 값 되써 → 활성 공구 전환
+        if (rc != 0)
+            throw new InvalidOperationException($"활성 공구 #{tool} 설정(SetToolCoord) 실패 (rc={rc}).");
+        _activeTool = tool;
+        _logger.LogInformation("{Name} 활성 공구 #{Tool}로 동기화", _settings.Name, tool);
+    }
+
+    /// <summary>
     /// 베이스 좌표계 기준 현재 TCP 포즈 [x,y,z,rx,ry,rz]. GetActualTCPPose는 활성 작업물 좌표계 기준이므로,
     /// 현재 관절각을 읽어 정기구학(GetForwardKin)으로 BASE 기준 포즈를 구한다.
+    /// ⚠ FK는 활성 공구 프레임 기준이므로, 이 포즈로 이동할 때 쓸 <paramref name="tool"/>을 넘겨
+    /// 활성 공구를 먼저 맞춘다(이동 명령의 tool과 프레임 일치 보장).
     /// </summary>
-    public async Task<double[]> GetTcpPoseInBaseAsync(CancellationToken ct = default)
+    public async Task<double[]> GetTcpPoseInBaseAsync(int tool, CancellationToken ct = default)
     {
+        await EnsureActiveToolAsync(tool, ct);
         var joints = await GetActualJointPosAsync(ct: ct);
         return await GetForwardKinAsync(joints, ct);
     }
@@ -231,7 +258,9 @@ public class FairinoRpcClient : IDisposable
             100.0,                              // oacc
             0,                                  // velAccParamMode
         };
-        return await InvokeAsync("MoveL", p => ToErr(p.MoveL(args)), ct);
+        var rc = await InvokeAsync("MoveL", p => ToErr(p.MoveL(args)), ct);
+        if (rc == 0) _activeTool = t;   // MoveL의 tool 인자가 컨트롤러 활성 공구를 바꾸므로 추적값 동기.
+        return rc;
     }
 
     /// <summary>

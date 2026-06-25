@@ -1,0 +1,8 @@
+.battery-indicator {
+    display: inline-block;
+    vertical-align: middle;
+}
+
+.battery-fill {
+    transition: width .4s ease, fill .4s ease;
+}
