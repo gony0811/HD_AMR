@@ -116,6 +116,52 @@ public class CameraService : BackgroundService
         return mm == 0 ? (int?)null : mm;   // 0=무효 픽셀
     }
 
+    /// <summary>
+    /// 정규화 사각형 ROI(x,y,w,h ∈[0,1], 좌상단 기준) 안의 깊이 통계를 계산한다.
+    /// 무효(0) 픽셀은 제외하고 최소/최대/평균(mm)·유효 픽셀 수·유효율을 구한다.
+    /// 프레임이 없거나 ROI 가 프레임 밖이면 null. 정규화 좌표라 해상도와 무관하게 동작한다.
+    /// </summary>
+    public DepthRoiStats? ComputeDepthRoiStats(double x, double y, double w, double h)
+    {
+        var f = _client.LatestDepth;
+        if (f is null) return null;
+
+        // 정규화 → 픽셀. 음수/초과 입력도 프레임 안으로 클램프.
+        int x0 = Math.Clamp((int)Math.Floor(x * f.Width), 0, f.Width - 1);
+        int y0 = Math.Clamp((int)Math.Floor(y * f.Height), 0, f.Height - 1);
+        int x1 = Math.Clamp((int)Math.Ceiling((x + w) * f.Width), 0, f.Width);
+        int y1 = Math.Clamp((int)Math.Ceiling((y + h) * f.Height), 0, f.Height);
+        if (x1 <= x0 || y1 <= y0) return null;
+
+        var span = MemoryMarshal.Cast<byte, ushort>(f.Pixels);
+        int min = int.MaxValue, max = 0, validCount = 0;
+        long sum = 0;
+        int total = (x1 - x0) * (y1 - y0);
+
+        for (int py = y0; py < y1; py++)
+        {
+            int rowBase = py * f.Width;
+            for (int px = x0; px < x1; px++)
+            {
+                int idx = rowBase + px;
+                if ((uint)idx >= (uint)span.Length) continue;
+                int d = span[idx];
+                if (d == 0) continue;   // 무효 픽셀 제외
+                if (d < min) min = d;
+                if (d > max) max = d;
+                sum += d;
+                validCount++;
+            }
+        }
+
+        if (validCount == 0)
+            return new DepthRoiStats(0, 0, 0, 0, total, 0);
+
+        double avg = (double)sum / validCount;
+        double ratio = total > 0 ? (double)validCount / total : 0;
+        return new DepthRoiStats(min, max, avg, validCount, total, ratio);
+    }
+
     /// <summary>최신 깊이 프레임을 컬러라이즈 → JPEG 인코딩한다. 프레임이 없으면 null.</summary>
     public Task<byte[]?> GetLatestDepthJpegAsync(int quality, CancellationToken ct = default)
     {

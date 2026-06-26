@@ -28,5 +28,82 @@ window.hdAmrCamera = {
     });
 
     img.addEventListener('mouseleave', () => { label.style.display = 'none'; });
-  }
+  },
+
+  // Depth <img> 위에 <canvas> 를 겹쳐 ROI 사각형을 드래그/표시한다. weld.js initRoiEditor 의 단순화 버전으로,
+  // 좌표는 표시 스케일과 무관하도록 정규화([0,1]) 로 .NET 에 콜백한다(OnRoiDrawn).
+  initDepthRoi(img, canvas, dotnetRef) {
+    if (!img || !canvas || canvas._roiInit) return;
+    canvas._roiInit = true;
+    console.debug('[hdAmrCamera] initDepthRoi bound — drag to set depth ROI');
+    const st = canvas._roi = { img, dotnetRef, roi: null, enabled: true, drag: null };
+
+    // clientX/Y → 이미지 박스 기준 정규화 좌표(0..1, 박스 밖은 클램프).
+    const toNorm = (clientX, clientY) => {
+      const r = img.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) return { x: 0, y: 0 };
+      return {
+        x: Math.min(1, Math.max(0, (clientX - r.left) / r.width)),
+        y: Math.min(1, Math.max(0, (clientY - r.top) / r.height)),
+      };
+    };
+
+    canvas.addEventListener('mousedown', (e) => {
+      const p = toNorm(e.clientX, e.clientY);
+      st.drag = { x0: p.x, y0: p.y, x1: p.x, y1: p.y };
+      e.preventDefault();
+    });
+    window.addEventListener('mousemove', (e) => {
+      if (!st.drag) return;
+      const p = toNorm(e.clientX, e.clientY);
+      st.drag.x1 = p.x; st.drag.y1 = p.y;
+    });
+    window.addEventListener('mouseup', () => {
+      if (!st.drag) return;
+      const d = st.drag; st.drag = null;
+      const x = Math.min(d.x0, d.x1), y = Math.min(d.y0, d.y1);
+      const w = Math.abs(d.x1 - d.x0), h = Math.abs(d.y1 - d.y0);
+      if (w < 0.01 || h < 0.01) return;   // 너무 작은 드래그는 무시(오클릭)
+      st.roi = { x, y, w, h };
+      st.dotnetRef.invokeMethodAsync('OnRoiDrawn', x, y, w, h);
+    });
+
+    const draw = () => {
+      if (!document.body.contains(canvas)) return;
+      const r = img.getBoundingClientRect();
+      if (canvas.width !== Math.round(r.width)) canvas.width = Math.round(r.width);
+      if (canvas.height !== Math.round(r.height)) canvas.height = Math.round(r.height);
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.lineWidth = 2;
+      // 확정 ROI(노랑). 비활성화면 점선으로 흐리게.
+      if (st.roi) {
+        ctx.strokeStyle = st.enabled ? '#ffd000' : 'rgba(255,208,0,.5)';
+        if (!st.enabled) ctx.setLineDash([6, 4]);
+        ctx.strokeRect(st.roi.x * canvas.width, st.roi.y * canvas.height,
+                       st.roi.w * canvas.width, st.roi.h * canvas.height);
+        ctx.setLineDash([]);
+        ctx.fillStyle = ctx.strokeStyle; ctx.font = '12px sans-serif';
+        ctx.fillText('ROI', st.roi.x * canvas.width + 3, st.roi.y * canvas.height + 13);
+      }
+      // 드래그 중 미리보기(점선).
+      if (st.drag) {
+        const x = Math.min(st.drag.x0, st.drag.x1) * canvas.width;
+        const y = Math.min(st.drag.y0, st.drag.y1) * canvas.height;
+        const w = Math.abs(st.drag.x1 - st.drag.x0) * canvas.width;
+        const h = Math.abs(st.drag.y1 - st.drag.y0) * canvas.height;
+        ctx.strokeStyle = '#ffd000'; ctx.setLineDash([5, 4]);
+        ctx.strokeRect(x, y, w, h); ctx.setLineDash([]);
+      }
+      requestAnimationFrame(draw);
+    };
+    requestAnimationFrame(draw);
+  },
+
+  // 저장/숫자입력값으로 ROI 박스를 갱신(정규화 좌표). null 이면 박스 제거.
+  setRoi(canvas, x, y, w, h, enabled) {
+    if (!canvas || !canvas._roi) return;
+    canvas._roi.enabled = !!enabled;
+    canvas._roi.roi = (w > 0 && h > 0) ? { x, y, w, h } : null;
+  },
 };

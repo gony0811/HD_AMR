@@ -21,6 +21,13 @@ public sealed record RoiRect(int X, int Y, int Width, int Height)
     public static RoiRect Full(int w, int h) => new(0, 0, w, h);
 }
 
+/// <summary>
+/// 깊이 ROI 영역 통계. 무효(0) 픽셀은 제외하고 계산. <see cref="ValidCount"/>==0 이면
+/// 영역 전체가 무효라 <see cref="MinMm"/>/<see cref="MaxMm"/>/<see cref="AvgMm"/> 는 0.
+/// </summary>
+public sealed record DepthRoiStats(
+    int MinMm, int MaxMm, double AvgMm, int ValidCount, int TotalCount, double ValidRatio);
+
 /// <summary>검출 입력 이미지 선택.</summary>
 public enum WeldImageMode { RgbGrayscale, RgbHsv, Ir }
 

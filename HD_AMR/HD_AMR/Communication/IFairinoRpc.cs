@@ -81,6 +81,10 @@ public interface IFairinoRpc : IXmlRpcProxy
     [XmlRpcMethod("GetActualJointPosDegree")]
     object GetActualJointPosDegree(int flag);
 
+    /// <summary>현재 활성 공구(Tool) 좌표계 번호 조회. flag: 0=블로킹,1=논블로킹. 반환 [errcode, toolNum].</summary>
+    [XmlRpcMethod("GetActualTCPNum")]
+    object GetActualTCPNum(int flag);
+
     /// <summary>
     /// 현재 TCP 직교 포즈 조회. flag: 0=블로킹,1=논블로킹(좌표계 선택 아님).
     /// ⚠ 반환 포즈는 현재 활성 작업물(user) 좌표계 기준이다. BASE 기준 포즈는 GetForwardKin으로 구할 것.
@@ -92,4 +96,12 @@ public interface IFairinoRpc : IXmlRpcProxy
     /// <summary>모션 정지.</summary>
     [XmlRpcMethod("StopMotion")]
     object StopMotion();
+
+    /// <summary>컨트롤러의 걸린 오류 상태를 해제(복구). 반환 errcode.</summary>
+    [XmlRpcMethod("ResetAllError")]
+    object ResetAllError();
+
+    /// <summary>현재 로봇 오류 코드 조회. 반환 [errcode, maincode, subcode].</summary>
+    [XmlRpcMethod("GetRobotErrorCode")]
+    object GetRobotErrorCode();
 }

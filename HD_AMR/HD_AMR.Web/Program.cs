@@ -71,6 +71,7 @@ builder.Services.AddDbContext<HdAmrDbContext>(opt =>
 
 builder.Services.AddScoped<DrawingService>();
 builder.Services.AddScoped<TeachingService>();
+builder.Services.AddScoped<ParameterService>();
 
 var app = builder.Build();
 
@@ -160,6 +161,18 @@ CREATE TABLE IF NOT EXISTS TeachingPositions (
 CREATE UNIQUE INDEX IF NOT EXISTS IX_TeachingPositions_Key ON TeachingPositions (""Key"");
 ");
 
+    // Backward-compatible schema add for Parameters (범용 key/value 설정 저장소; 기존 데이터 보존).
+    db.Database.ExecuteSqlRaw(@"
+CREATE TABLE IF NOT EXISTS Parameters (
+    Id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    Name TEXT NOT NULL,
+    Value TEXT NOT NULL,
+    Description TEXT NULL,
+    UpdatedAt TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS IX_Parameters_Name ON Parameters (Name);
+");
+
     var converter = scope.ServiceProvider.GetRequiredService<IDwgConverter>();
     if (!converter.IsAvailable)
     {
@@ -207,6 +220,11 @@ app.MapGet("/camera/ir.mjpeg",
 // 깊이 영상 hover 프로브 — 정규화 좌표 (u,v)∈[0,1] 위치의 깊이값(mm)을 반환. mm=null 이면 무효/프레임없음.
 app.MapGet("/camera/depth/value",
     (CameraService svc, double u, double v) => Results.Json(new { mm = svc.GetLatestDepthMmAt(u, v) }));
+
+// 깊이 ROI 통계 — 정규화 사각형(x,y,w,h)∈[0,1] 안의 최소/평균/최대(mm)·유효율. 프레임/영역 없으면 null.
+app.MapGet("/camera/depth/roi-stats",
+    (CameraService svc, double x, double y, double w, double h) =>
+        Results.Json(svc.ComputeDepthRoiStats(x, y, w, h)));
 
 // 진단용 상태 엔드포인트 — 브라우저 DevTools 없이 프레임 수신 여부를 한눈에 확인.
 // color/depth 가 null 이 아니고 lastFrameMsAgo 가 작게 갱신되면 프레임이 들어오는 중.

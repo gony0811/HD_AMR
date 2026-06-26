@@ -17,7 +17,10 @@
     <button class="btn btn-danger estop-btn" @onclick="EmergencyStop" disabled="@(!Svc.IsConnected)">
         ■ 긴급 정지 (E-STOP)
     </button>
-    <span class="estop-hint">동작 중 즉시 정지하고 진행 중인 명령을 종료합니다.</span>
+    <button class="btn btn-outline-warning" @onclick="ResetError" disabled="@(_busy || !Svc.IsConnected)">
+        오류 해제 (Reset Error)
+    </button>
+    <span class="estop-hint">동작 중 즉시 정지하고 진행 중인 명령을 종료합니다. 오류(errcode 14 등) 발생 시 '오류 해제' 후 재시도하세요.</span>
 </div>
 
 <div class="card-surface">
@@ -25,6 +28,10 @@
 <div class="mb-3">
     <span class="badge @(Svc.IsConnected ? "bg-success" : "bg-secondary")">명령 @(Svc.IsConnected ? "연결됨" : "끊김")</span>
     <span class="badge @(Svc.IsStateConnected ? "bg-success" : "bg-secondary")">상태 @(Svc.IsStateConnected ? "수신중" : "끊김")</span>
+    @if (Svc.State is { ErrorCode: not 0 } st)
+    {
+        <span class="badge bg-danger">오류 코드 @st.ErrorCode — '오류 해제' 필요</span>
+    }
 </div>
 
     <p class="mb-2">실시간 상태:
@@ -338,6 +345,10 @@
             Notify($"긴급 정지 실패: {ex.Message}", true);
         }
     }
+
+    /// <summary>컨트롤러의 걸린 오류 상태를 해제(ResetAllError). errcode 14(fault)로 조그/이동이 막힐 때 사용.</summary>
+    private async Task ResetError()
+        => await Run("오류 해제", ct => Svc.ResetErrorAsync(ct));
 
     /// <summary>서보(로봇) 활성화/비활성화 토글. FAIRINO는 서보 전용 제어가 없어 RobotEnable로 통합된다.</summary>
     private async Task ToggleServo()

@@ -1,8 +1,10 @@
 @page "/camera"
 @rendermode InteractiveServer
 @using HD_AMR.Communication
+@using HD_AMR.Models
 @using HD_AMR.Service
 @inject CameraService Svc
+@inject ParameterService Param
 @inject IJSRuntime JS
 @implements IDisposable
 
@@ -54,12 +56,77 @@
             }
         </div>
         <div class="col-lg-4">
-            <h5 class="text-muted">Depth <span class="text-muted" style="font-size:.8rem">(마우스 올리면 거리 mm 표시)</span></h5>
+            <h5 class="text-muted">Depth <span class="text-muted" style="font-size:.8rem">(드래그로 ROI 지정 · 마우스 올리면 거리 mm)</span></h5>
             <div style="position:relative; display:inline-block; width:100%; max-width:640px">
                 <img @ref="_depthImg" src="/camera/depth.mjpeg?k=@_streamKey" alt="Depth stream"
                      style="width:100%;display:block;border:1px solid #ccc;border-radius:4px" />
+                <canvas @ref="_roiCanvas"
+                        style="position:absolute;left:0;top:0;width:100%;height:100%;cursor:crosshair"></canvas>
                 <div @ref="_depthLabel"
                      style="display:none;position:absolute;pointer-events:none;padding:2px 6px;background:rgba(0,0,0,.7);color:#fff;font-size:12px;border-radius:3px;white-space:nowrap"></div>
+            </div>
+
+            @* 깊이 ROI 설정/계산 패널 — 값은 정규화([0,1]) 보관, 화면은 % 표시. *@
+            <div class="card mt-2" style="max-width:640px">
+                <div class="card-body p-2">
+                    <div class="form-check form-switch mb-2">
+                        <input class="form-check-input" type="checkbox" id="roiEnabled"
+                               @bind="_roiEnabled" @bind:after="OnRoiNumericChanged" />
+                        <label class="form-check-label" for="roiEnabled">ROI 사용(관심영역만 계산)</label>
+                    </div>
+                    <div class="row g-2 mb-2">
+                        <div class="col-3">
+                            <label class="form-label mb-0" style="font-size:.75rem">X %</label>
+                            <input type="number" class="form-control form-control-sm" min="0" max="100" step="0.5"
+                                   @bind="RoiXPct" @bind:after="OnRoiNumericChanged" />
+                        </div>
+                        <div class="col-3">
+                            <label class="form-label mb-0" style="font-size:.75rem">Y %</label>
+                            <input type="number" class="form-control form-control-sm" min="0" max="100" step="0.5"
+                                   @bind="RoiYPct" @bind:after="OnRoiNumericChanged" />
+                        </div>
+                        <div class="col-3">
+                            <label class="form-label mb-0" style="font-size:.75rem">너비 %</label>
+                            <input type="number" class="form-control form-control-sm" min="0" max="100" step="0.5"
+                                   @bind="RoiWPct" @bind:after="OnRoiNumericChanged" />
+                        </div>
+                        <div class="col-3">
+                            <label class="form-label mb-0" style="font-size:.75rem">높이 %</label>
+                            <input type="number" class="form-control form-control-sm" min="0" max="100" step="0.5"
+                                   @bind="RoiHPct" @bind:after="OnRoiNumericChanged" />
+                        </div>
+                    </div>
+                    <button class="btn btn-sm btn-primary" @onclick="SaveRoi" disabled="@_busy">저장</button>
+
+                    <div class="mt-2" style="font-size:.85rem">
+                        @if (!_roiEnabled)
+                        {
+                            <span class="text-muted">ROI 비활성화 — 사용 체크 후 영역을 지정하세요.</span>
+                        }
+                        else if (_roiW <= 0 || _roiH <= 0)
+                        {
+                            <span class="text-muted">영역이 비어 있습니다 — 이미지에서 드래그하세요.</span>
+                        }
+                        else if (_roiStats is null)
+                        {
+                            <span class="text-muted">프레임 대기 중…</span>
+                        }
+                        else if (_roiStats.ValidCount == 0)
+                        {
+                            <span class="text-warning">유효 픽셀 없음(영역 전체 무효) · 유효율 0%</span>
+                        }
+                        else
+                        {
+                            <span>
+                                최소 <b>@_roiStats.MinMm</b> mm ·
+                                평균 <b>@_roiStats.AvgMm.ToString("0")</b> mm ·
+                                최대 <b>@_roiStats.MaxMm</b> mm ·
+                                유효율 <b>@((_roiStats.ValidRatio * 100).ToString("0.0"))</b>%
+                                <span class="text-muted">(@_roiStats.ValidCount/@_roiStats.TotalCount px)</span>
+                            </span>
+                        }
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -97,21 +164,56 @@ else
     // Depth hover 프로브용 엘리먼트 참조.
     private ElementReference _depthImg;
     private ElementReference _depthLabel;
+    private ElementReference _roiCanvas;
 
-    protected override void OnInitialized()
+    // JS → .NET 콜백(OnRoiDrawn)용 참조. 스트리밍 중 1회 init.
+    private DotNetObjectReference<CameraView>? _selfRef;
+
+    // 깊이 ROI 상태 — 정규화([0,1]) 보관. UI 입력은 % 환산.
+    private bool _roiEnabled;
+    private double _roiX, _roiY, _roiW, _roiH;
+    private DepthRoiStats? _roiStats;
+
+    private const string RoiEnabledKey = "Camera.Depth.Roi.Enabled";
+    private const string RoiXKey = "Camera.Depth.Roi.X";
+    private const string RoiYKey = "Camera.Depth.Roi.Y";
+    private const string RoiWKey = "Camera.Depth.Roi.W";
+    private const string RoiHKey = "Camera.Depth.Roi.H";
+
+    private double RoiXPct { get => Math.Round(_roiX * 100, 1); set => _roiX = Clamp01(value / 100); }
+    private double RoiYPct { get => Math.Round(_roiY * 100, 1); set => _roiY = Clamp01(value / 100); }
+    private double RoiWPct { get => Math.Round(_roiW * 100, 1); set => _roiW = Clamp01(value / 100); }
+    private double RoiHPct { get => Math.Round(_roiH * 100, 1); set => _roiH = Clamp01(value / 100); }
+
+    protected override async Task OnInitializedAsync()
     {
         _cts = new CancellationTokenSource();
+        await LoadRoiAsync();
         _ = PollLoop(_cts.Token);
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        // 스트리밍 중이면(=Depth <img> 가 렌더된 상태) hover 프로브를 바인딩. 1초마다 StateHasChanged 로
-        // 재호출돼도 JS 쪽 _probeInit 가드로 실제 바인딩은 1회만.
+        // 스트리밍 중이면(=Depth <img>/<canvas> 가 렌더된 상태) hover 프로브와 ROI 에디터를 바인딩.
+        // 1초마다 StateHasChanged 로 재호출돼도 JS 쪽 _probeInit/_roiInit 가드로 실제 바인딩은 1회만.
         if (Svc.IsStreaming)
         {
-            try { await JS.InvokeVoidAsync("hdAmrCamera.initDepthProbe", _depthImg, _depthLabel); }
-            catch { /* 엘리먼트 미준비/회로 종료 등 무시 */ }
+            try
+            {
+                _selfRef ??= DotNetObjectReference.Create(this);
+                // 캔버스가 이미지 위를 덮으므로 hover 프로브도 캔버스에 바인딩(rect/이벤트 동일).
+                await JS.InvokeVoidAsync("hdAmrCamera.initDepthProbe", _roiCanvas, _depthLabel);
+                await JS.InvokeVoidAsync("hdAmrCamera.initDepthRoi", _depthImg, _roiCanvas, _selfRef);
+                // 저장/로드된 ROI 를 캔버스에 반영.
+                await JS.InvokeVoidAsync("hdAmrCamera.setRoi", _roiCanvas, _roiX, _roiY, _roiW, _roiH, _roiEnabled);
+            }
+            catch (Microsoft.JSInterop.JSDisconnectedException) { /* 회로 종료 — 정상 종료 시 무시 */ }
+            catch (Exception ex)
+            {
+                // 과거엔 모든 예외를 삼켜서 camera.js 캐시 문제로 initDepthRoi 가 없을 때도 조용히 실패했다.
+                // 실제 오류는 콘솔로 드러내 진단 가능하게(비치명적).
+                Console.Error.WriteLine($"[CameraView] ROI 에디터 초기화 실패: {ex.Message}");
+            }
         }
     }
 
@@ -123,6 +225,7 @@ else
             while (await timer.WaitForNextTickAsync(ct))
             {
                 UpdateFpsEstimate();
+                UpdateRoiStats();
                 await InvokeAsync(StateHasChanged);
             }
         }
@@ -195,9 +298,87 @@ else
         _isError = error;
     }
 
+    // ROI 영역의 깊이 통계를 서버 측에서 직접 계산(엔드포인트와 동일 로직, HTTP 불필요).
+    private void UpdateRoiStats()
+    {
+        _roiStats = (Svc.IsStreaming && _roiEnabled && _roiW > 0 && _roiH > 0)
+            ? Svc.ComputeDepthRoiStats(_roiX, _roiY, _roiW, _roiH)
+            : null;
+    }
+
+    // 숫자 입력/체크박스 변경 시: 값 클램프 → 캔버스 박스 갱신 → 통계 즉시 반영.
+    private async Task OnRoiNumericChanged()
+    {
+        ClampRoi();
+        try { await JS.InvokeVoidAsync("hdAmrCamera.setRoi", _roiCanvas, _roiX, _roiY, _roiW, _roiH, _roiEnabled); }
+        catch { /* 미준비/회로 종료 무시 */ }
+        UpdateRoiStats();
+    }
+
+    // 캔버스에서 드래그로 ROI 가 그려졌을 때(정규화 좌표) JS 가 호출.
+    [JSInvokable]
+    public void OnRoiDrawn(double x, double y, double w, double h)
+    {
+        _roiX = x; _roiY = y; _roiW = w; _roiH = h;
+        _roiEnabled = true;
+        ClampRoi();
+        UpdateRoiStats();
+        InvokeAsync(StateHasChanged);
+    }
+
+    private async Task SaveRoi()
+    {
+        if (_busy) return;
+        _busy = true;
+        try
+        {
+            ClampRoi();
+            await Param.SetBoolAsync(RoiEnabledKey, _roiEnabled, "깊이 ROI 사용 여부");
+            await Param.SetDoubleAsync(RoiXKey, _roiX, "깊이 ROI 좌상단 X (정규화 0~1)");
+            await Param.SetDoubleAsync(RoiYKey, _roiY, "깊이 ROI 좌상단 Y (정규화 0~1)");
+            await Param.SetDoubleAsync(RoiWKey, _roiW, "깊이 ROI 너비 (정규화 0~1)");
+            await Param.SetDoubleAsync(RoiHKey, _roiH, "깊이 ROI 높이 (정규화 0~1)");
+            Notify("ROI 설정 저장 완료", false);
+        }
+        catch (Exception ex)
+        {
+            Notify($"ROI 저장 실패: {ex.Message}", true);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    // 저장된 ROI 파라미터를 불러와 상태에 반영(없으면 비활성·빈 영역).
+    private async Task LoadRoiAsync()
+    {
+        try
+        {
+            _roiEnabled = await Param.GetBoolAsync(RoiEnabledKey) ?? false;
+            _roiX = await Param.GetDoubleAsync(RoiXKey) ?? 0;
+            _roiY = await Param.GetDoubleAsync(RoiYKey) ?? 0;
+            _roiW = await Param.GetDoubleAsync(RoiWKey) ?? 0;
+            _roiH = await Param.GetDoubleAsync(RoiHKey) ?? 0;
+            ClampRoi();
+        }
+        catch { /* DB 미준비 등 — 기본값 유지 */ }
+    }
+
+    private static double Clamp01(double v) => Math.Clamp(v, 0, 1);
+
+    private void ClampRoi()
+    {
+        _roiX = Clamp01(_roiX); _roiY = Clamp01(_roiY);
+        _roiW = Clamp01(_roiW); _roiH = Clamp01(_roiH);
+        if (_roiX + _roiW > 1) _roiW = 1 - _roiX;
+        if (_roiY + _roiH > 1) _roiH = 1 - _roiY;
+    }
+
     public void Dispose()
     {
         _cts?.Cancel();
         _cts?.Dispose();
+        _selfRef?.Dispose();
     }
 }

@@ -46,6 +46,10 @@ public class CobotService : BackgroundService
         return rc;
     }
 
+    /// <summary>컨트롤러의 걸린 오류 상태를 해제(ResetAllError). errcode 14(fault) 복구용. UI 버튼에서 호출.</summary>
+    public Task<int> ResetErrorAsync(CancellationToken ct = default)
+        => _rpc.ResetAllErrorAsync(ct);
+
     /// <summary>최신 RPC 실시간 상태(포즈/조인트). 미수신 시 null.</summary>
     public FairinoState? State => _state.Latest;
 
@@ -70,6 +74,17 @@ public class CobotService : BackgroundService
                 {
                     _logger.LogWarning("코봇 XML-RPC 연결 시도");
                     await _rpc.ConnectAsync(stoppingToken);
+                    // 이전 세션/펜던트에서 걸린 컨트롤러 fault를 enable 전에 1회 해제한다.
+                    // (fault가 남아 있으면 GetActualJointPosDegree 등 모든 RPC가 errcode 14로 실패한다.)
+                    try
+                    {
+                        var rc = await _rpc.ResetAllErrorAsync(stoppingToken);
+                        if (rc != 0) _logger.LogWarning("코봇 오류 해제(ResetAllError) rc={Rc}", rc);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "코봇 오류 해제(ResetAllError) 실패 — 연결 계속 진행");
+                    }
                     await SetServoEnableAsync(true, stoppingToken);
                     // 첫 동작 전 활성 공구를 확정한다. FK 앵커(GetForwardKin)와 이동(MoveL)의 공구 프레임을
                     // 맞춰, 연결 직후 첫 조그가 엉뚱한 곳으로 가던 문제를 막는다.

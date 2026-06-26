@@ -189,6 +189,16 @@ public class FairinoRpcClient : IDisposable
         throw new InvalidOperationException($"관절각 조회(GetActualJointPosDegree) 실패 (errcode={err}).");
     }
 
+    /// <summary>현재 활성 공구(Tool) 좌표계 번호 조회. flag 0=블로킹,1=논블로킹. 실패 시 예외.</summary>
+    public async Task<int> GetActualToolNumAsync(int flag = 0, CancellationToken ct = default)
+    {
+        var raw = await InvokeAsync("GetActualTCPNum", p => p.GetActualTCPNum(flag), ct);
+        if (raw is object[] a && a.Length >= 2 && ToErr(a[0]) == 0)
+            return (int)ToDouble(a[1]);
+        var err = raw is object[] arr && arr.Length > 0 ? ToErr(arr[0]) : -1;
+        throw new InvalidOperationException($"활성 공구 번호 조회(GetActualTCPNum) 실패 (errcode={err}). 컨트롤러 펌웨어 미지원일 수 있습니다.");
+    }
+
     /// <summary>정기구학: 관절각 → 베이스 기준 TCP 직교 포즈 [x,y,z,rx,ry,rz](현재 활성 공구 적용). 실패 시 예외.</summary>
     public async Task<double[]> GetForwardKinAsync(double[] jointPos, CancellationToken ct = default)
     {
@@ -200,20 +210,29 @@ public class FairinoRpcClient : IDisposable
     }
 
     /// <summary>
-    /// 컨트롤러의 활성 공구를 <paramref name="tool"/>로 맞춘다(이미 같으면 no-op). GetForwardKin/MoveL은
-    /// 모두 활성 공구 프레임을 쓰므로, FK 앵커를 읽기 전에 이동에 쓸 공구로 활성 공구를 동기화해야
-    /// 첫 명령부터 프레임이 일치한다(연결 직후 첫 조그가 엉뚱한 곳으로 가던 문제 방지).
-    /// 활성화는 해당 공구 좌표를 읽어 같은 값으로 되써(SetToolCoord round-trip) 값 변경 없이 현재 공구로 선택한다.
+    /// 컨트롤러의 활성 공구를 <paramref name="tool"/>로 맞춘다. GetForwardKin/MoveL은 모두 활성 공구 프레임을
+    /// 쓰므로, FK 앵커를 읽기 전에 이동에 쓸 공구로 활성 공구를 동기화해야 첫 명령부터 프레임이 일치한다
+    /// (연결 직후/공구 변경 직후 첫 조그가 엉뚱한 곳으로 가던 문제 방지).
+    /// ⚠ SetToolCoord 되쓰기(round-trip)는 실물에서 활성 공구를 실제로 전환하지 못한다. 활성 공구는 모션
+    /// 명령의 tool 인자로만 바뀌므로, <b>현재 관절각으로 변위 0짜리 MoveJ(tool 지정)</b>를 보내 확실히 전환한다.
+    /// GetActualTCPNum으로 실측을 읽어 비교/검증하므로 스테일 캐시·펜던트 외부 변경에도 견고하다.
     /// </summary>
     public async Task EnsureActiveToolAsync(int tool, CancellationToken ct = default)
     {
-        if (tool == _activeTool) return;
-        var coord = await GetToolCoordAsync(tool, ct);          // 현재 값 보존용으로 읽기
-        var rc = await SetToolCoordAsync(tool, coord, ct: ct);  // 동일 값 되써 → 활성 공구 전환
+        var actual = await GetActualToolNumAsync(ct: ct);   // 컨트롤러 실제 활성 공구 = 진실의 원천
+        if (actual == tool) { _activeTool = tool; return; }
+
+        // 무변위 활성화: 현재 관절각으로 그대로 MoveJ(tool 지정) → 변위 0이지만 컨트롤러 활성 공구가 tool로 전환됨.
+        var joints = await GetActualJointPosAsync(ct: ct);
+        var rc = await MoveJAsync(joints, new double[6], tool: tool, user: 0, vel: _settings.DefaultVelPct, ct: ct);
         if (rc != 0)
-            throw new InvalidOperationException($"활성 공구 #{tool} 설정(SetToolCoord) 실패 (rc={rc}).");
+            throw new InvalidOperationException($"활성 공구 #{tool} 전환(MoveJ) 실패 (rc={rc}).");
+
+        var after = await GetActualToolNumAsync(ct: ct);    // 전환 검증
+        if (after != tool)
+            throw new InvalidOperationException($"활성 공구 전환 확인 실패: 요청 {tool}, 실제 {after}.");
         _activeTool = tool;
-        _logger.LogInformation("{Name} 활성 공구 #{Tool}로 동기화", _settings.Name, tool);
+        _logger.LogInformation("{Name} 활성 공구 #{Prev}→#{Tool}로 전환(무변위 MoveJ)", _settings.Name, actual, tool);
     }
 
     /// <summary>
@@ -264,11 +283,13 @@ public class FairinoRpcClient : IDisposable
     }
 
     /// <summary>
-    /// 작업물 좌표계(user) 기준으로 앵커 포즈에서 offset만큼 이동. offset_flag=0(툴 좌표계 오프셋) 사용.
+    /// 작업물/베이스 좌표계(user) 기준으로 앵커 포즈에서 offset만큼 이동. offset_flag=1(base/작업물 좌표계 오프셋) 사용.
+    /// ⚠ FAIRINO offset_flag: 0=오프셋 없음(무시), 1=base/작업물 좌표 오프셋, 2=tool 좌표 오프셋.
+    /// user=0이면 BASE축, user=N이면 작업물 N축 기준으로 offset이 적용된다.
     /// anchorPose는 베이스 기준 유효 TCP 포즈(IK 계산용). offset=[dx,dy,dz,drx,dry,drz].
     /// </summary>
     public Task<int> MoveByOffsetAsync(double[] anchorPose, int user, double[] offset, int? tool = null, double? vel = null, CancellationToken ct = default)
-        => MoveLAsync(anchorPose, tool: tool, user: user, vel: vel, offsetFlag: 0, offsetPos: offset, ct: ct);
+        => MoveLAsync(anchorPose, tool: tool, user: user, vel: vel, offsetFlag: 1, offsetPos: offset, ct: ct);
 
     /// <summary>관절 이동(MoveJ). jointPos = 6축 각도, descPose = 대응 직교 포즈(0이면 컨트롤러가 정기구학 계산).</summary>
     public Task<int> MoveJAsync(double[] jointPos, double[] descPose, int? tool = null, int? user = null,
@@ -292,6 +313,21 @@ public class FairinoRpcClient : IDisposable
 
     public Task<int> StopMotionAsync(CancellationToken ct = default)
         => InvokeAsync("StopMotion", p => ToErr(p.StopMotion()), ct);
+
+    /// <summary>컨트롤러의 걸린 오류 상태를 해제(복구). errcode 14("interface execution failed" — fault 상태)에서
+    /// 복구하려면 이 호출이 필요하다. 반환 rc(0=성공).</summary>
+    public Task<int> ResetAllErrorAsync(CancellationToken ct = default)
+        => InvokeAsync("ResetAllError", p => ToErr(p.ResetAllError()), ct);
+
+    /// <summary>현재 로봇 오류 코드 [main, sub] 조회. 오류 없으면 (0,0). 호출 자체 실패 시 예외.</summary>
+    public async Task<(int Main, int Sub)> GetRobotErrorCodeAsync(CancellationToken ct = default)
+    {
+        var raw = await InvokeAsync("GetRobotErrorCode", p => p.GetRobotErrorCode(), ct);
+        if (raw is object[] a && a.Length >= 3 && ToErr(a[0]) == 0)
+            return ((int)ToDouble(a[1]), (int)ToDouble(a[2]));
+        var err = raw is object[] arr && arr.Length > 0 ? ToErr(arr[0]) : -1;
+        throw new InvalidOperationException($"로봇 오류 코드 조회(GetRobotErrorCode) 실패 (errcode={err}).");
+    }
 
     /// <summary>
     /// 긴급 정지. 직렬화 세마포어를 <b>우회</b>하여 전용 프록시(_stopProxy)로 StopMotion 을 즉시 전송한다.

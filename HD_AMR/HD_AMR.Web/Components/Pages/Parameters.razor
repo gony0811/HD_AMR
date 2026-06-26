@@ -1,0 +1,199 @@
+@page "/parameter"
+@rendermode InteractiveServer
+@using HD_AMR.Data.Entities
+@using HD_AMR.Service
+@inject ParameterService Service
+@inject ILogger<Parameters> Logger
+
+<PageTitle>Parameter</PageTitle>
+
+<h1>파라미터 관리</h1>
+<p class="text-muted">각 페이지에서 저장한 설정(파라미터)을 한 화면에서 조회·수정·삭제합니다. 값을 수정한 뒤 해당 페이지를 다시 열면 적용됩니다.</p>
+
+<div class="mb-3 d-flex gap-2 align-items-center" style="max-width:760px">
+    <input class="form-control form-control-sm" style="max-width:320px" placeholder="이름/설명 검색…"
+           @bind="_filter" @bind:event="oninput" />
+    <button class="btn btn-sm btn-outline-secondary" @onclick="Reload" disabled="@_busy">새로고침</button>
+    <span class="text-muted ms-auto">총 @_rows.Count 개</span>
+</div>
+
+@if (!string.IsNullOrEmpty(_msg))
+{
+    <div class="alert @(_isErr ? "alert-danger" : "alert-info") py-2" style="max-width:980px">@_msg</div>
+}
+
+<div class="table-responsive" style="max-width:980px">
+    <table class="table table-sm align-middle">
+        <thead>
+            <tr>
+                <th style="min-width:220px">이름(Name)</th>
+                <th style="min-width:160px">값(Value)</th>
+                <th style="min-width:220px">설명(Description)</th>
+                <th style="white-space:nowrap">수정시각</th>
+                <th style="width:140px"></th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var row in Filtered)
+            {
+                <tr @key="row.Id">
+                    <td><code>@row.Name</code></td>
+                    <td><input class="form-control form-control-sm" @bind="row.Value" /></td>
+                    <td><input class="form-control form-control-sm" @bind="row.Description" /></td>
+                    <td class="text-muted" style="white-space:nowrap;font-size:.8rem">@row.UpdatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
+                    <td style="white-space:nowrap">
+                        <button class="btn btn-sm btn-primary" @onclick="() => Save(row)" disabled="@_busy">저장</button>
+                        <button class="btn btn-sm btn-outline-danger" @onclick="() => Delete(row)" disabled="@_busy">삭제</button>
+                    </td>
+                </tr>
+            }
+            @if (Filtered.Count == 0)
+            {
+                <tr><td colspan="5" class="text-center text-muted py-3">표시할 파라미터가 없습니다.</td></tr>
+            }
+        </tbody>
+    </table>
+</div>
+
+@* 새 파라미터 추가 *@
+<div class="card mt-3" style="max-width:980px">
+    <div class="card-body py-2">
+        <h6 class="card-title mb-2">새 파라미터 추가</h6>
+        <div class="row g-2 align-items-end">
+            <div class="col-md-4">
+                <label class="form-label mb-0" style="font-size:.8rem">이름</label>
+                <input class="form-control form-control-sm" placeholder="예: Camera.Depth.Roi.X" @bind="_newName" />
+            </div>
+            <div class="col-md-3">
+                <label class="form-label mb-0" style="font-size:.8rem">값</label>
+                <input class="form-control form-control-sm" @bind="_newValue" />
+            </div>
+            <div class="col-md-3">
+                <label class="form-label mb-0" style="font-size:.8rem">설명</label>
+                <input class="form-control form-control-sm" @bind="_newDescription" />
+            </div>
+            <div class="col-md-2">
+                <button class="btn btn-sm btn-success w-100" @onclick="Add" disabled="@_busy">추가</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private List<Parameter> _rows = new();
+    private string _filter = "";
+    private bool _busy;
+    private string? _msg;
+    private bool _isErr;
+
+    private string _newName = "";
+    private string _newValue = "";
+    private string _newDescription = "";
+
+    private List<Parameter> Filtered =>
+        string.IsNullOrWhiteSpace(_filter)
+            ? _rows
+            : _rows.Where(p =>
+                  p.Name.Contains(_filter, StringComparison.OrdinalIgnoreCase) ||
+                  (p.Description?.Contains(_filter, StringComparison.OrdinalIgnoreCase) ?? false))
+              .ToList();
+
+    protected override async Task OnInitializedAsync() => await Reload();
+
+    private async Task Reload()
+    {
+        try
+        {
+            _rows = await Service.GetAllAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "파라미터 목록 로드 실패");
+            Notify($"목록 로드 실패: {ex.Message}", true);
+        }
+    }
+
+    private async Task Save(Parameter row)
+    {
+        if (_busy) return;
+        _busy = true;
+        try
+        {
+            await Service.SetAsync(row.Name, row.Value ?? "", row.Description ?? "");
+            await Reload();
+            Notify($"'{row.Name}' 저장 완료", false);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "파라미터 저장 실패 (name={Name})", row.Name);
+            Notify($"저장 실패: {ex.Message}", true);
+        }
+        finally
+        {
+            _busy = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task Delete(Parameter row)
+    {
+        if (_busy) return;
+        _busy = true;
+        try
+        {
+            await Service.DeleteAsync(row.Id);
+            await Reload();
+            Notify($"'{row.Name}' 삭제 완료", false);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "파라미터 삭제 실패 (id={Id})", row.Id);
+            Notify($"삭제 실패: {ex.Message}", true);
+        }
+        finally
+        {
+            _busy = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task Add()
+    {
+        if (_busy) return;
+        var name = _newName?.Trim() ?? "";
+        if (string.IsNullOrEmpty(name))
+        {
+            Notify("이름을 입력하세요.", true);
+            return;
+        }
+        if (_rows.Any(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)))
+        {
+            Notify($"이미 존재하는 이름입니다: {name}", true);
+            return;
+        }
+        _busy = true;
+        try
+        {
+            await Service.SetAsync(name, _newValue ?? "", _newDescription ?? "");
+            _newName = _newValue = _newDescription = "";
+            await Reload();
+            Notify($"'{name}' 추가 완료", false);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "파라미터 추가 실패 (name={Name})", name);
+            Notify($"추가 실패: {ex.Message}", true);
+        }
+        finally
+        {
+            _busy = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void Notify(string msg, bool error)
+    {
+        _msg = msg;
+        _isErr = error;
+    }
+}

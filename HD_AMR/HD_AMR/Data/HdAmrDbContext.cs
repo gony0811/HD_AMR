@@ -14,6 +14,7 @@ public class HdAmrDbContext : DbContext
     public DbSet<ExcludedRegion> ExcludedRegions => Set<ExcludedRegion>();
     public DbSet<InspectionProfile> InspectionProfiles => Set<InspectionProfile>();
     public DbSet<TeachingPosition> TeachingPositions => Set<TeachingPosition>();
+    public DbSet<Parameter> Parameters => Set<Parameter>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -66,6 +67,15 @@ public class HdAmrDbContext : DbContext
             b.Property(p => p.Name).IsRequired().HasMaxLength(200);
             b.HasIndex(p => p.Key).IsUnique();
             b.Ignore(p => p.IsTaught);
+        });
+
+        modelBuilder.Entity<Parameter>(b =>
+        {
+            b.HasKey(p => p.Id);
+            b.Property(p => p.Name).IsRequired().HasMaxLength(200);
+            b.Property(p => p.Value).IsRequired();
+            b.Property(p => p.Description).HasMaxLength(500);
+            b.HasIndex(p => p.Name).IsUnique();
         });
     }
 }
