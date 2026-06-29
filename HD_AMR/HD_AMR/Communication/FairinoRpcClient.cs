@@ -179,24 +179,60 @@ public class FairinoRpcClient : IDisposable
             $"역기구학(GetInverseKin) 실패 (errcode={err}). 목표 자세가 작업영역 밖이거나 도달 불가일 수 있습니다.");
     }
 
-    /// <summary>현재 관절각(도) [j0..j5] 조회. flag 0=블로킹,1=논블로킹. 실패 시 예외.</summary>
+    /// <summary>현재 관절각(도) [j0..j5] 조회. flag 0=블로킹,1=논블로킹. 실패 시 예외.
+    /// 블로킹(flag=0)이 막히는 펌웨어 대비 실패 시 논블로킹(flag=1, 캐시)으로 1회 폴백하고,
+    /// 최종 실패 메시지에는 실제 컨트롤러 오류코드(main/sub)를 best-effort로 덧붙인다.</summary>
     public async Task<double[]> GetActualJointPosAsync(int flag = 0, CancellationToken ct = default)
     {
         var raw = await InvokeAsync("GetActualJointPosDegree", p => p.GetActualJointPosDegree(flag), ct);
         if (raw is object[] a && a.Length >= 7 && ToErr(a[0]) == 0)
             return a[1..7].Select(ToDouble).ToArray();
+
+        if (flag == 0)   // 블로킹 실패 시 논블로킹(캐시)으로 1회 폴백
+        {
+            var raw2 = await InvokeAsync("GetActualJointPosDegree", p => p.GetActualJointPosDegree(1), ct);
+            if (raw2 is object[] b && b.Length >= 7 && ToErr(b[0]) == 0)
+                return b[1..7].Select(ToDouble).ToArray();
+            raw = raw2;
+        }
         var err = raw is object[] arr && arr.Length > 0 ? ToErr(arr[0]) : -1;
-        throw new InvalidOperationException($"관절각 조회(GetActualJointPosDegree) 실패 (errcode={err}).");
+        var detail = await TryDescribeRobotErrorAsync(ct);
+        throw new InvalidOperationException($"관절각 조회(GetActualJointPosDegree) 실패 (errcode={err}).{detail}");
     }
 
-    /// <summary>현재 활성 공구(Tool) 좌표계 번호 조회. flag 0=블로킹,1=논블로킹. 실패 시 예외.</summary>
-    public async Task<int> GetActualToolNumAsync(int flag = 0, CancellationToken ct = default)
+    /// <summary>실제 컨트롤러 오류코드(main/sub)를 best-effort로 읽어 진단 문자열 반환(실패 시 빈 문자열).</summary>
+    private async Task<string> TryDescribeRobotErrorAsync(CancellationToken ct)
     {
-        var raw = await InvokeAsync("GetActualTCPNum", p => p.GetActualTCPNum(flag), ct);
-        if (raw is object[] a && a.Length >= 2 && ToErr(a[0]) == 0)
-            return (int)ToDouble(a[1]);
-        var err = raw is object[] arr && arr.Length > 0 ? ToErr(arr[0]) : -1;
-        throw new InvalidOperationException($"활성 공구 번호 조회(GetActualTCPNum) 실패 (errcode={err}). 컨트롤러 펌웨어 미지원일 수 있습니다.");
+        try
+        {
+            var (m, s) = await GetRobotErrorCodeAsync(ct);
+            return m == 0 && s == 0
+                ? " 컨트롤러 보고 오류 없음(main=0,sub=0) — 모드/통신 상태 확인 필요."
+                : $" 컨트롤러 오류 main={m}, sub={s}.";
+        }
+        catch { return ""; }
+    }
+
+    /// <summary>현재 활성 공구(Tool) 좌표계 번호 조회. flag 0=블로킹,1=논블로킹.
+    /// 성공 시 번호, 실패(펌웨어 미지원·형식 불일치·예외) 시 null을 반환한다(예외를 던지지 않고 추적 캐시로 폴백하게 함).
+    /// 일부 컨트롤러 펌웨어는 GetActualTCPNum이 기대 형식 [errcode, toolNum]으로 응답하지 않는다.</summary>
+    public async Task<int?> TryGetActualToolNumAsync(int flag = 0, CancellationToken ct = default)
+    {
+        try
+        {
+            var raw = await InvokeAsync("GetActualTCPNum", p => p.GetActualTCPNum(flag), ct);
+            if (raw is object[] a && a.Length >= 2 && ToErr(a[0]) == 0)
+                return (int)ToDouble(a[1]);
+            var err = raw is object[] arr && arr.Length > 0 ? ToErr(arr[0]) : -1;
+            _logger.LogWarning("{Name} 활성 공구 번호 조회(GetActualTCPNum) 실패 (errcode={Err}) — 추적 캐시로 폴백", _settings.Name, err);
+            return null;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "{Name} 활성 공구 번호 조회(GetActualTCPNum) 예외 — 추적 캐시로 폴백", _settings.Name);
+            return null;
+        }
     }
 
     /// <summary>정기구학: 관절각 → 베이스 기준 TCP 직교 포즈 [x,y,z,rx,ry,rz](현재 활성 공구 적용). 실패 시 예외.</summary>
@@ -215,12 +251,16 @@ public class FairinoRpcClient : IDisposable
     /// (연결 직후/공구 변경 직후 첫 조그가 엉뚱한 곳으로 가던 문제 방지).
     /// ⚠ SetToolCoord 되쓰기(round-trip)는 실물에서 활성 공구를 실제로 전환하지 못한다. 활성 공구는 모션
     /// 명령의 tool 인자로만 바뀌므로, <b>현재 관절각으로 변위 0짜리 MoveJ(tool 지정)</b>를 보내 확실히 전환한다.
-    /// GetActualTCPNum으로 실측을 읽어 비교/검증하므로 스테일 캐시·펜던트 외부 변경에도 견고하다.
+    /// GetActualTCPNum 실측을 읽어 비교/검증하되, 펌웨어가 이를 지원하지 않으면(null) MoveL/MoveJ가 추적해 온
+    /// <see cref="_activeTool"/> 캐시로 폴백한다(스테일 캐시·펜던트 외부 변경에는 약하지만, 시퀀스 하드 실패는 막는다).
     /// </summary>
     public async Task EnsureActiveToolAsync(int tool, CancellationToken ct = default)
     {
-        var actual = await GetActualToolNumAsync(ct: ct);   // 컨트롤러 실제 활성 공구 = 진실의 원천
+        var actual = await TryGetActualToolNumAsync(ct: ct);   // null = 조회 미지원/실패
         if (actual == tool) { _activeTool = tool; return; }
+
+        // 조회 불가(null)인데 추적 캐시가 이미 목표면 신뢰 → 불필요한 모션 회피(MoveL 직후 정상 경로).
+        if (actual is null && _activeTool == tool) return;
 
         // 무변위 활성화: 현재 관절각으로 그대로 MoveJ(tool 지정) → 변위 0이지만 컨트롤러 활성 공구가 tool로 전환됨.
         var joints = await GetActualJointPosAsync(ct: ct);
@@ -228,8 +268,9 @@ public class FairinoRpcClient : IDisposable
         if (rc != 0)
             throw new InvalidOperationException($"활성 공구 #{tool} 전환(MoveJ) 실패 (rc={rc}).");
 
-        var after = await GetActualToolNumAsync(ct: ct);    // 전환 검증
-        if (after != tool)
+        // 전환 검증: 조회가 가능하면 확인, 불가하면(null) MoveJ의 tool 인자를 신뢰.
+        var after = await TryGetActualToolNumAsync(ct: ct);
+        if (after is not null && after != tool)
             throw new InvalidOperationException($"활성 공구 전환 확인 실패: 요청 {tool}, 실제 {after}.");
         _activeTool = tool;
         _logger.LogInformation("{Name} 활성 공구 #{Prev}→#{Tool}로 전환(무변위 MoveJ)", _settings.Name, actual, tool);
@@ -277,7 +318,7 @@ public class FairinoRpcClient : IDisposable
             100.0,                              // oacc
             0,                                  // velAccParamMode
         };
-        var rc = await InvokeAsync("MoveL", p => ToErr(p.MoveL(args)), ct);
+        var rc = await InvokeAsync("MoveL", p => ToErr(p.MoveL(args)), ct, faultRecovery: false);
         if (rc == 0) _activeTool = t;   // MoveL의 tool 인자가 컨트롤러 활성 공구를 바꾸므로 추적값 동기.
         return rc;
     }
@@ -299,7 +340,7 @@ public class FairinoRpcClient : IDisposable
                 jointPos, descPose,
                 tool ?? _settings.DefaultToolId, user ?? _settings.DefaultUserId,
                 vel ?? _settings.DefaultVelPct, acc, ovl,
-                new double[4], blendT, 0, new double[6])), ct);
+                new double[4], blendT, 0, new double[6])), ct, faultRecovery: false);
 
     // ── 상태/제어 ──────────────────────────────────────────────────
     public Task<int> RobotEnableAsync(bool enable, CancellationToken ct = default)
@@ -312,12 +353,12 @@ public class FairinoRpcClient : IDisposable
         => InvokeAsync("SetSpeed", p => ToErr(p.SetSpeed(velPct)), ct);
 
     public Task<int> StopMotionAsync(CancellationToken ct = default)
-        => InvokeAsync("StopMotion", p => ToErr(p.StopMotion()), ct);
+        => InvokeAsync("StopMotion", p => ToErr(p.StopMotion()), ct, faultRecovery: false);
 
     /// <summary>컨트롤러의 걸린 오류 상태를 해제(복구). errcode 14("interface execution failed" — fault 상태)에서
     /// 복구하려면 이 호출이 필요하다. 반환 rc(0=성공).</summary>
     public Task<int> ResetAllErrorAsync(CancellationToken ct = default)
-        => InvokeAsync("ResetAllError", p => ToErr(p.ResetAllError()), ct);
+        => InvokeAsync("ResetAllError", p => ToErr(p.ResetAllError()), ct, faultRecovery: false);
 
     /// <summary>현재 로봇 오류 코드 [main, sub] 조회. 오류 없으면 (0,0). 호출 자체 실패 시 예외.</summary>
     public async Task<(int Main, int Sub)> GetRobotErrorCodeAsync(CancellationToken ct = default)
@@ -356,7 +397,13 @@ public class FairinoRpcClient : IDisposable
         => InvokeAsync("GetActualTCPPose", p => ToPose(p.GetActualTCPPose(flag)), ct);
 
     // ── 공통 호출 래퍼 ─────────────────────────────────────────────
-    private async Task<T> InvokeAsync<T>(string op, Func<IFairinoRpc, T> call, CancellationToken ct)
+    /// <summary>
+    /// 모든 RPC의 단일 통로. <paramref name="faultRecovery"/>가 true(기본)이고 반환 rc가 14
+    /// ("interface execution failed")면, 같은 연결로 ResetAllError를 1회 보낸 뒤 300ms 대기하고
+    /// 원호출을 1회 재시도한다(일시적/해제 가능한 fault 자동 복구). 모션 명령은 fault 해제 후 조용히
+    /// 재실행되면 위험하므로 호출부에서 <paramref name="faultRecovery"/>=false로 비활성한다.
+    /// </summary>
+    private async Task<T> InvokeAsync<T>(string op, Func<IFairinoRpc, T> call, CancellationToken ct, bool faultRecovery = true)
     {
         EnsureConnected();
         await _semaphore.WaitAsync(ct);
@@ -366,6 +413,14 @@ public class FairinoRpcClient : IDisposable
             // XML-RPC 프록시 호출은 동기(blocking HTTP)이므로 스레드풀로 오프로드.
             var proxy = _proxy!;
             var result = await Task.Run(() => call(proxy), ct);
+            if (faultRecovery && TryGetErr(result) == 14)
+            {
+                _logger.LogWarning("{Name} {Op} errcode=14(interface execution failed) — ResetAllError 후 1회 재시도", _settings.Name, op);
+                // 세마포어를 쥔 채 프록시로 직접 호출(ResetAllErrorAsync 경유 시 세마포어 재진입 데드락 회피).
+                await Task.Run(() => { try { proxy.ResetAllError(); } catch { /* 진단 무관 — 재시도로 판정 */ } }, ct);
+                await Task.Delay(300, ct);
+                result = await Task.Run(() => call(proxy), ct);
+            }
             return result;
         }
         catch (Exception ex)
@@ -378,6 +433,16 @@ public class FairinoRpcClient : IDisposable
             _semaphore.Release();
         }
     }
+
+    /// <summary>예외를 던지지 않는 errcode 추출(unknown 타입은 null). rc=14 자동복구 판정용.</summary>
+    private static int? TryGetErr(object? r) => r switch
+    {
+        int i => i,
+        long l => (int)l,
+        double d => (int)d,
+        object[] a when a.Length > 0 => TryGetErr(a[0]),
+        _ => null,
+    };
 
     private void EnsureConnected()
     {

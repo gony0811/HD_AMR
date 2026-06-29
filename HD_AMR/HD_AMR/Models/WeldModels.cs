@@ -26,7 +26,8 @@ public sealed record RoiRect(int X, int Y, int Width, int Height)
 /// 영역 전체가 무효라 <see cref="MinMm"/>/<see cref="MaxMm"/>/<see cref="AvgMm"/> 는 0.
 /// </summary>
 public sealed record DepthRoiStats(
-    int MinMm, int MaxMm, double AvgMm, int ValidCount, int TotalCount, double ValidRatio);
+    int MinMm, int MaxMm, double AvgMm, int ValidCount, int TotalCount, double ValidRatio,
+    double MinU, double MinV);   // 최소 픽셀의 정규화 좌표(전체 프레임 기준 0~1)
 
 /// <summary>검출 입력 이미지 선택.</summary>
 public enum WeldImageMode { RgbGrayscale, RgbHsv, Ir }

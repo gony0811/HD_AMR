@@ -95,6 +95,39 @@ window.hdAmrCamera = {
         ctx.strokeStyle = '#ffd000'; ctx.setLineDash([5, 4]);
         ctx.strokeRect(x, y, w, h); ctx.setLineDash([]);
       }
+      // 최소 깊이 지점 검정 화살표 + 거리값(서버에서 1초마다 setMinMarker 로 갱신).
+      const m = canvas._minMarker;
+      if (m) {
+        const tipX = m.u * canvas.width, tipY = m.v * canvas.height;
+        // 꼬리는 끝점 좌상단 26px. 화면 밖이면 우하단으로 뒤집어 항상 보이게.
+        const offX = tipX < 30 ? 26 : -26;
+        const offY = tipY < 30 ? 26 : -26;
+        const tailX = tipX + offX, tailY = tipY + offY;
+        ctx.save();
+        ctx.shadowColor = '#fff'; ctx.shadowBlur = 2;   // 어두운 깊이맵 위 가독성 확보
+        ctx.strokeStyle = '#000'; ctx.fillStyle = '#000'; ctx.lineWidth = 2;
+        // 화살대
+        ctx.beginPath(); ctx.moveTo(tailX, tailY); ctx.lineTo(tipX, tipY); ctx.stroke();
+        // 화살촉(끝점 방향)
+        const ang = Math.atan2(tipY - tailY, tipX - tailX), hl = 9, ha = 0.45;
+        ctx.beginPath();
+        ctx.moveTo(tipX, tipY);
+        ctx.lineTo(tipX - hl * Math.cos(ang - ha), tipY - hl * Math.sin(ang - ha));
+        ctx.lineTo(tipX - hl * Math.cos(ang + ha), tipY - hl * Math.sin(ang + ha));
+        ctx.closePath(); ctx.fill();
+        // 끝점 표시
+        ctx.beginPath(); ctx.arc(tipX, tipY, 2.5, 0, Math.PI * 2); ctx.fill();
+        // 거리값 라벨(꼬리 쪽, 화면 안으로 클램프)
+        ctx.font = 'bold 13px sans-serif';
+        const txt = `${m.mm} mm`;
+        const tw = ctx.measureText(txt).width;
+        let lx = offX < 0 ? tailX - tw - 2 : tailX + 2;
+        let ly = offY < 0 ? tailY - 4 : tailY + 14;
+        lx = Math.min(Math.max(2, lx), canvas.width - tw - 2);
+        ly = Math.min(Math.max(12, ly), canvas.height - 2);
+        ctx.fillText(txt, lx, ly);
+        ctx.restore();
+      }
       requestAnimationFrame(draw);
     };
     requestAnimationFrame(draw);
@@ -105,5 +138,11 @@ window.hdAmrCamera = {
     if (!canvas || !canvas._roi) return;
     canvas._roi.enabled = !!enabled;
     canvas._roi.roi = (w > 0 && h > 0) ? { x, y, w, h } : null;
+  },
+
+  // 최소 깊이 지점 마커를 갱신(정규화 좌표 u,v + 거리 mm). u<0 또는 mm<=0 이면 마커 제거.
+  setMinMarker(canvas, u, v, mm) {
+    if (!canvas) return;
+    canvas._minMarker = (u >= 0 && mm > 0) ? { u, v, mm } : null;
   },
 };

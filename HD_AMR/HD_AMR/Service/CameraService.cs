@@ -135,6 +135,7 @@ public class CameraService : BackgroundService
 
         var span = MemoryMarshal.Cast<byte, ushort>(f.Pixels);
         int min = int.MaxValue, max = 0, validCount = 0;
+        int minPx = 0, minPy = 0;   // 최소값이 잡힌 픽셀 위치
         long sum = 0;
         int total = (x1 - x0) * (y1 - y0);
 
@@ -147,7 +148,7 @@ public class CameraService : BackgroundService
                 if ((uint)idx >= (uint)span.Length) continue;
                 int d = span[idx];
                 if (d == 0) continue;   // 무효 픽셀 제외
-                if (d < min) min = d;
+                if (d < min) { min = d; minPx = px; minPy = py; }
                 if (d > max) max = d;
                 sum += d;
                 validCount++;
@@ -155,11 +156,14 @@ public class CameraService : BackgroundService
         }
 
         if (validCount == 0)
-            return new DepthRoiStats(0, 0, 0, 0, total, 0);
+            return new DepthRoiStats(0, 0, 0, 0, total, 0, 0, 0);
 
         double avg = (double)sum / validCount;
         double ratio = total > 0 ? (double)validCount / total : 0;
-        return new DepthRoiStats(min, max, avg, validCount, total, ratio);
+        // 최소 픽셀을 정규화 좌표(전체 프레임 기준)로 변환 — 표시 해상도와 무관하게 오버레이에 정렬된다.
+        double minU = (minPx + 0.5) / f.Width;
+        double minV = (minPy + 0.5) / f.Height;
+        return new DepthRoiStats(min, max, avg, validCount, total, ratio, minU, minV);
     }
 
     /// <summary>최신 깊이 프레임을 컬러라이즈 → JPEG 인코딩한다. 프레임이 없으면 null.</summary>
