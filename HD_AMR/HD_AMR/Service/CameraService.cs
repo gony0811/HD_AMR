@@ -208,27 +208,30 @@ public class CameraService : BackgroundService
         return Task.Run<CaptureResult>(() =>
         {
             Directory.CreateDirectory(dir);
-            string ts = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
+            // 초 단위 타임스탬프. 같은 초에 두 번 캡처하면 _2, _3… 를 붙여 덮어쓰기를 막는다.
+            string ts = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+            string stem = ts;
+            for (int k = 2; Directory.GetFiles(dir, stem + "_*").Length > 0; k++) stem = $"{ts}_{k}";
             var files = new List<string>();
 
             if (color is not null)
             {
-                string p = Path.Combine(dir, $"{ts}_rgb.png");
+                string p = Path.Combine(dir, $"{stem}_rgb.png");
                 SaveColorPng(color, p); files.Add(p);
             }
             if (ir is not null)
             {
-                string p = Path.Combine(dir, $"{ts}_ir.png");
+                string p = Path.Combine(dir, $"{stem}_ir.png");
                 SaveIrPng(ir, p); files.Add(p);
             }
             if (depth is not null)
             {
-                string raw = Path.Combine(dir, $"{ts}_depth16.png");
+                string raw = Path.Combine(dir, $"{stem}_depth16.png");
                 SaveDepthRawPng(depth, raw); files.Add(raw);
-                string vis = Path.Combine(dir, $"{ts}_depth_vis.png");
+                string vis = Path.Combine(dir, $"{stem}_depth_vis.png");
                 SaveDepthVisPng(depth, minMm, maxMm, vis); files.Add(vis);
             }
-            return new CaptureResult(dir, ts, files);
+            return new CaptureResult(dir, stem, files);
         }, ct);
     }
 

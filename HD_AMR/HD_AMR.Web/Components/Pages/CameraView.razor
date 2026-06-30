@@ -3,6 +3,7 @@
 @using HD_AMR.Communication
 @using HD_AMR.Models
 @using HD_AMR.Service
+@using HD_AMR.Web.Services
 @inject CameraService Svc
 @inject ParameterService Param
 @inject IJSRuntime JS
@@ -39,9 +40,9 @@
             <span class="text-muted" style="font-size:.8rem">(RGB·IR·Depth 동시 저장 · PNG 무손실)</span></h6>
         <div class="input-group input-group-sm mb-2">
             <span class="input-group-text">저장 폴더</span>
-            <input type="text" class="form-control" @bind="_captureDir"
-                   placeholder="예: C:\weld_data" />
-            <button class="btn btn-outline-secondary" @onclick="SaveCaptureDir" disabled="@_busy">경로 저장</button>
+            <input type="text" class="form-control" value="@_captureDir" readonly
+                   placeholder="폴더 선택… 버튼으로 지정" />
+            <button class="btn btn-outline-secondary" @onclick="BrowseFolder" disabled="@_busy">📁 폴더 선택…</button>
         </div>
         <button class="btn btn-primary btn-sm" @onclick="CaptureFrames"
                 disabled="@(_busy || !Svc.IsStreaming)">📷 캡처</button>
@@ -236,17 +237,27 @@ else
                 Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "weld_captures");
     }
 
-    // 캡처 폴더 경로를 DB에 영속화.
-    private async Task SaveCaptureDir()
+    // 네이티브 폴더 탐색기를 열어 저장 폴더를 고르고 DB에 영속화.
+    private async Task BrowseFolder()
     {
         if (_busy) return;
         _busy = true;
+        _message = null;
         try
         {
-            await Param.SetAsync(CaptureDirKey, _captureDir ?? "", "학습 데이터 캡처 저장 폴더");
-            Notify("저장 폴더 경로를 저장했습니다.", false);
+            // COM 대화상자는 STA 스레드에서 블로킹 → UI 스레드를 막지 않게 Task.Run.
+            var picked = await Task.Run(() => NativeFolderDialog.PickFolder());
+            if (string.IsNullOrEmpty(picked))
+            {
+                if (!OperatingSystem.IsWindows())
+                    Notify("폴더 탐색기는 Windows 에서만 지원됩니다.", true);
+                return; // 취소 시 조용히 종료
+            }
+            _captureDir = picked;
+            await Param.SetAsync(CaptureDirKey, _captureDir, "학습 데이터 캡처 저장 폴더");
+            Notify($"저장 폴더 지정: {_captureDir}", false);
         }
-        catch (Exception ex) { Notify($"경로 저장 실패: {ex.Message}", true); }
+        catch (Exception ex) { Notify($"폴더 선택 실패: {ex.Message}", true); }
         finally { _busy = false; }
     }
 
