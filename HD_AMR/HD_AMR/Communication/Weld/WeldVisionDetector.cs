@@ -20,7 +20,8 @@ public sealed class WeldVisionDetector : IWeldVisionDetector
     public WeldDetectionResult DetectWeld(
         CameraFrame frame, RoiRect weldRoi, WeldDetectionParams p,
         WeldReferenceMode referenceMode = WeldReferenceMode.FovCenter, double? peakReferencePos = null,
-        double? peakProgressPos = null, string? peakLabel = null, RoiRect? peakRoi = null)
+        double? peakProgressPos = null, string? peakLabel = null, RoiRect? peakRoi = null,
+        double? peakCrossStart = null, double? peakCrossEnd = null)
     {
         Mat? bgr = null, gray = null;
         try
@@ -99,7 +100,7 @@ public sealed class WeldVisionDetector : IWeldVisionDetector
                 {
                     Success = false,
                     Message = $"비드 후보 부족(coverage={coverage:P0}) — ROI/파라미터를 조정하세요.",
-                    OverlayJpeg = EncodeOverlay(bgr, roi, p, null, double.NaN, double.NaN, peakProgressPos, peakLabel, peakRoi),
+                    OverlayJpeg = EncodeOverlay(bgr, roi, p, null, double.NaN, double.NaN, peakProgressPos, peakLabel, peakRoi, peakCrossStart, peakCrossEnd),
                 };
 
             // 6) 이동평균 smoothing
@@ -140,7 +141,7 @@ public sealed class WeldVisionDetector : IWeldVisionDetector
                 pts.Add(new PixelPoint(x, y));
             }
 
-            var overlay = EncodeOverlay(bgr, roi, p, pts, refPos, weldCenterFull, peakProgressPos, peakLabel, peakRoi);
+            var overlay = EncodeOverlay(bgr, roi, p, pts, refPos, weldCenterFull, peakProgressPos, peakLabel, peakRoi, peakCrossStart, peakCrossEnd);
 
             // 타깃 지점의 비드/기준 픽셀 좌표(full-image) — 깊이 샘플링·스케일 환산용.
             double targetProgFull = (horiz ? roi.X : roi.Y) + targetS;
@@ -241,7 +242,8 @@ public sealed class WeldVisionDetector : IWeldVisionDetector
     private static byte[]? EncodeOverlay(
         Mat bgr, RoiRect roi, WeldDetectionParams p,
         IReadOnlyList<PixelPoint>? centerline, double refPos, double weldCenterFull,
-        double? peakProgressPos = null, string? peakLabel = null, RoiRect? peakRoi = null)
+        double? peakProgressPos = null, string? peakLabel = null, RoiRect? peakRoi = null,
+        double? peakCrossStart = null, double? peakCrossEnd = null)
     {
         try
         {
@@ -281,23 +283,33 @@ public sealed class WeldVisionDetector : IWeldVisionDetector
                     HersheyFonts.HersheySimplex, 0.5, new Scalar(0, 0, 255), 1);
             }
 
-            // Peak 위치(자홍색 진행축-수직 '틱' + 라벨 P1/P2)
-            // ROI 폭에 묶지 않고 고정 길이(±PeakTickHalf) 틱으로 그린다. 비드 중심선(초록)에서 peak 진행축
-            // 위치의 cross 좌표를 찾아 그 위에 얹는다(없으면 Peak ROI cross-center). 양산처럼 ROI 가 거의
-            // 전체 프레임이어도 선이 FOV 를 가로지르지 않고 Peak 지점만 콕 집어 표시된다.
+            // Peak 위치(자홍색 진행축-수직 선 + 라벨 P1/P2)
+            // 1순위: depth 기반 비드 cross 구간[peakCrossStart..peakCrossEnd]만큼 그린다(급변점에서 끊김).
+            //        초록 중심선이 틀려도 영향받지 않고 실제 측정 비드 위에 정확히 그려진다.
+            // 2순위(구간 없음): 중심선 위 고정 길이(±PeakTickHalf) 틱으로 폴백.
             if (peakProgressPos is { } pp && !double.IsNaN(pp))
             {
                 var magenta = new Scalar(255, 0, 255);
                 var pr = peakRoi ?? roi;
-                const int half = PeakTickHalf;
-                double crossCenter = CrossAtProgress(centerline, pp, horiz)
-                    ?? (horiz ? pr.Y + pr.Height / 2.0 : pr.X + pr.Width / 2.0);
+                bool hasSpan = peakCrossStart is { } cs0 && peakCrossEnd is { } ce0
+                    && !double.IsNaN(cs0) && !double.IsNaN(ce0) && Math.Abs(ce0 - cs0) >= 1.0;
+
                 if (horiz)
                 {
                     int x = (int)pp;
                     int lo = Math.Max(0, pr.Y), hiB = Math.Min(canvas.Height - 1, pr.Bottom);
-                    int y0 = Math.Clamp((int)(crossCenter - half), lo, hiB);
-                    int y1 = Math.Clamp((int)(crossCenter + half), lo, hiB);
+                    int y0, y1;
+                    if (hasSpan)
+                    {
+                        y0 = Math.Clamp((int)Math.Min(peakCrossStart!.Value, peakCrossEnd!.Value), lo, hiB);
+                        y1 = Math.Clamp((int)Math.Max(peakCrossStart!.Value, peakCrossEnd!.Value), lo, hiB);
+                    }
+                    else
+                    {
+                        double cc = CrossAtProgress(centerline, pp, horiz) ?? (pr.Y + pr.Height / 2.0);
+                        y0 = Math.Clamp((int)(cc - PeakTickHalf), lo, hiB);
+                        y1 = Math.Clamp((int)(cc + PeakTickHalf), lo, hiB);
+                    }
                     Cv2.Line(canvas, new Point(x, y0), new Point(x, y1), magenta, 1);
                     if (!string.IsNullOrEmpty(peakLabel))
                         Cv2.PutText(canvas, peakLabel, new Point(x + 3, Math.Max(12, y0 - 4)),
@@ -307,8 +319,18 @@ public sealed class WeldVisionDetector : IWeldVisionDetector
                 {
                     int y = (int)pp;
                     int lo = Math.Max(0, pr.X), hiR = Math.Min(canvas.Width - 1, pr.Right);
-                    int x0 = Math.Clamp((int)(crossCenter - half), lo, hiR);
-                    int x1 = Math.Clamp((int)(crossCenter + half), lo, hiR);
+                    int x0, x1;
+                    if (hasSpan)
+                    {
+                        x0 = Math.Clamp((int)Math.Min(peakCrossStart!.Value, peakCrossEnd!.Value), lo, hiR);
+                        x1 = Math.Clamp((int)Math.Max(peakCrossStart!.Value, peakCrossEnd!.Value), lo, hiR);
+                    }
+                    else
+                    {
+                        double cc = CrossAtProgress(centerline, pp, horiz) ?? (pr.X + pr.Width / 2.0);
+                        x0 = Math.Clamp((int)(cc - PeakTickHalf), lo, hiR);
+                        x1 = Math.Clamp((int)(cc + PeakTickHalf), lo, hiR);
+                    }
                     Cv2.Line(canvas, new Point(x0, y), new Point(x1, y), magenta, 1);
                     if (!string.IsNullOrEmpty(peakLabel))
                         Cv2.PutText(canvas, peakLabel, new Point(x1 + 3, Math.Max(12, y - 4)),

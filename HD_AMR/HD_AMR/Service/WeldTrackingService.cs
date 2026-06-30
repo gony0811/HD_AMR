@@ -155,7 +155,10 @@ public class WeldTrackingService
         // Depth↔Color 좌표를 맞춰(방법 ②) ProgressPos 를 검출 프레임 좌표로 변환한다.
         PeakInfo? peak = ComputePeak();
 
-        var r = RunDetect(peak is { Found: true } ? peak.ProgressPos : null, $"P{id}");
+        var r = RunDetect(
+            peak is { Found: true } ? peak.ProgressPos : null, $"P{id}",
+            peak is { Found: true, HasCrossSpan: true } ? peak.CrossStart : null,
+            peak is { Found: true, HasCrossSpan: true } ? peak.CrossEnd : null);
         LastDetect = r;
         if (!r.Success)
         {
@@ -213,9 +216,24 @@ public class WeldTrackingService
         double dv = horiz ? crossCenter : dp.ProgressPos;
         if (mapper.DepthToColor(du, dv, dp.DepthValue) is not { } cc)
             return new PeakInfo { Found = false };
-
         double colorProgress = horiz ? cc.u : cc.v;
-        return new PeakInfo { Found = true, ProgressPos = colorProgress, DepthValue = dp.DepthValue, Confidence = dp.Confidence };
+
+        // 비드 cross 구간 양 끝점도 컬러로 재투영(자홍선을 그 구간만큼만 그리기 위해).
+        bool hasSpan = false; double cStart = 0, cEnd = 0;
+        if (dp.HasCrossSpan
+            && mapper.DepthToColor(horiz ? dp.ProgressPos : dp.CrossStart, horiz ? dp.CrossStart : dp.ProgressPos, dp.DepthValue) is { } ca
+            && mapper.DepthToColor(horiz ? dp.ProgressPos : dp.CrossEnd, horiz ? dp.CrossEnd : dp.ProgressPos, dp.DepthValue) is { } cb)
+        {
+            cStart = horiz ? ca.v : ca.u;
+            cEnd = horiz ? cb.v : cb.u;
+            hasSpan = true;
+        }
+
+        return new PeakInfo
+        {
+            Found = true, ProgressPos = colorProgress, DepthValue = dp.DepthValue, Confidence = dp.Confidence,
+            HasCrossSpan = hasSpan, CrossStart = cStart, CrossEnd = cEnd,
+        };
     }
 
     /// <summary>Depth↔Color 좌표 매퍼 생성. 캘리브레이션·컬러 프레임이 없으면 null.</summary>
@@ -296,7 +314,8 @@ public class WeldTrackingService
     }
 
     // ── 내부 ────────────────────────────────────────────────────────
-    private WeldDetectionResult RunDetect(double? peakProgressPos = null, string? peakLabel = null)
+    private WeldDetectionResult RunDetect(double? peakProgressPos = null, string? peakLabel = null,
+        double? peakCrossStart = null, double? peakCrossEnd = null)
     {
         if (!_detector.IsAvailable)
             return WeldDetectionResult.Fail("OpenCV 네이티브가 없어 검출 비활성(Windows에서만 지원).");
@@ -309,8 +328,9 @@ public class WeldTrackingService
 
         var weldRoi = WeldRoi ?? RoiRect.Full(frame.Width, frame.Height);
 
-        // d 기준선은 FOV(전체 화면) 센터선으로 고정. 자홍 Peak 선은 Peak ROI 범위로만 그린다.
-        return _detector.DetectWeld(frame, weldRoi, Params, WeldReferenceMode.FovCenter, null, peakProgressPos, peakLabel, PeakRoi);
+        // d 기준선은 FOV(전체 화면) 센터선으로 고정. 자홍 Peak 선은 depth 기반 비드 cross 구간만큼 그린다.
+        return _detector.DetectWeld(frame, weldRoi, Params, WeldReferenceMode.FovCenter, null,
+            peakProgressPos, peakLabel, PeakRoi, peakCrossStart, peakCrossEnd);
     }
 
     private static string Fmt(double dpx) => $"{dpx:0.0}px";   // 1회 검출(튜닝)은 깊이 컨텍스트가 없어 px 로 표시

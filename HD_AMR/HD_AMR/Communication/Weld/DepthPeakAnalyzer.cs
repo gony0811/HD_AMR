@@ -20,8 +20,12 @@ public static class DepthPeakAnalyzer
     /// <param name="minPromBandMm">prominence 게이트 최소 밴드(mm). MAD≈0(평탄면)일 때 진짜 비드(수 mm 돌출)를
     /// 잘못 제외하지 않도록 게이트를 최소 이만큼 median 아래로 둔다. 보수적으로 크게 잡는다.</param>
     /// <param name="minIqrBandMm">IQR 게이트 최소 밴드(mm). 위와 같은 취지로 잡음 상한의 하한을 둔다.</param>
+    /// <param name="crossJumpMm">Peak 슬라이스 cross 구간 산출 시, 인접 픽셀 depth 차가 이보다 크면
+    /// 비드 경계로 보고 선을 끊는다.</param>
+    /// <param name="crossBandMm">cross 구간 산출 시 씨앗(최소) depth 대비 이보다 더 멀어지면 끊는다(상한).</param>
     public static PeakInfo Analyze(CameraFrame depth, RoiRect roi, WeldProgressAxis axis,
-        double promK = 4.0, double iqrK = 4.0, double minPromBandMm = 40.0, double minIqrBandMm = 40.0)
+        double promK = 4.0, double iqrK = 4.0, double minPromBandMm = 40.0, double minIqrBandMm = 40.0,
+        double crossJumpMm = 25.0, double crossBandMm = 60.0)
     {
         if (depth.PixelFormat != "depth16") return new PeakInfo { Found = false };
         var clamped = roi.ClampTo(depth.Width, depth.Height);
@@ -110,12 +114,53 @@ public static class DepthPeakAnalyzer
         if (!gated) conf *= 0.5;   // 폴백이면 신뢰도 절반.
 
         double progressPos = (horiz ? clamped.X : clamped.Y) + bestS;
+
+        // Peak 슬라이스에서 비드 cross 구간: depth 최소 픽셀을 씨앗으로 양쪽으로 뻗다가, 인접 픽셀과
+        // 급격히 점프(>crossJumpMm)하거나 무효(0)/상한(>씨앗+crossBandMm)을 만나면 멈춘다.
+        bool hasSpan = false; double crossStart = 0, crossEnd = 0;
+        {
+            int cross0 = horiz ? clamped.Y : clamped.X;
+            var dline = new int[crossCount];
+            int seed = -1, seedV = int.MaxValue;
+            for (int c = 0; c < crossCount; c++)
+            {
+                int x = clamped.X + (horiz ? bestS : c);
+                int y = clamped.Y + (horiz ? c : bestS);
+                int idx = y * W + x;
+                int mm = (uint)idx < (uint)px.Length ? px[idx] : 0;
+                dline[c] = mm;
+                if (mm > 0 && mm < seedV) { seedV = mm; seed = c; }
+            }
+            if (seed >= 0)
+            {
+                int lo = seed, hi = seed;
+                for (int c = seed - 1; c >= 0; c--)
+                {
+                    if (dline[c] <= 0 || Math.Abs(dline[c] - dline[c + 1]) > crossJumpMm
+                        || dline[c] > seedV + crossBandMm) break;
+                    lo = c;
+                }
+                for (int c = seed + 1; c < crossCount; c++)
+                {
+                    if (dline[c] <= 0 || Math.Abs(dline[c] - dline[c - 1]) > crossJumpMm
+                        || dline[c] > seedV + crossBandMm) break;
+                    hi = c;
+                }
+                crossStart = cross0 + lo;
+                crossEnd = cross0 + hi;
+                hasSpan = hi > lo;
+            }
+        }
+
         return new PeakInfo
         {
             Found = true,
             ProgressPos = progressPos,
             DepthValue = (int)Math.Round(bestV),
             Confidence = conf,
+            HasCrossSpan = hasSpan,
+            CrossStart = crossStart,
+            CrossEnd = crossEnd,
         };
     }
 

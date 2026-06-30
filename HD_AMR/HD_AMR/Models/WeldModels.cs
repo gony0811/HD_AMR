@@ -117,6 +117,12 @@ public sealed class PeakInfo
     public double ProgressPos { get; init; }   // 진행축 좌표(픽셀)
     public int DepthValue { get; init; }        // mm
     public double Confidence { get; init; }
+
+    // Peak 슬라이스에서 depth-최소부(비드)의 cross 축 구간. 급격한 depth 점프/무효 픽셀에서 끊긴다.
+    // 자홍 Peak 선을 이 구간만큼만 그리는 데 쓴다. ProgressPos 와 같은 프레임 좌표(IR=깊이, RGB=재투영).
+    public bool HasCrossSpan { get; init; }
+    public double CrossStart { get; init; }
+    public double CrossEnd { get; init; }
 }
 
 /// <summary>Peak #1/#2 한 곳의 측정 스냅샷(수동 트리거 결과).</summary>

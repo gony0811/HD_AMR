@@ -12,6 +12,7 @@ public sealed class NoopWeldVisionDetector : IWeldVisionDetector
     public WeldDetectionResult DetectWeld(
         CameraFrame frame, RoiRect weldRoi, WeldDetectionParams p,
         WeldReferenceMode referenceMode = WeldReferenceMode.FovCenter, double? peakReferencePos = null,
-        double? peakProgressPos = null, string? peakLabel = null, RoiRect? peakRoi = null)
+        double? peakProgressPos = null, string? peakLabel = null, RoiRect? peakRoi = null,
+        double? peakCrossStart = null, double? peakCrossEnd = null)
         => WeldDetectionResult.Fail("OpenCV 네이티브가 없어 용접라인 검출이 비활성 상태입니다(Windows에서만 지원).");
 }
