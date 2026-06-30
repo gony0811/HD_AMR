@@ -95,7 +95,7 @@ window.hdAmrCamera = {
         ctx.strokeStyle = '#ffd000'; ctx.setLineDash([5, 4]);
         ctx.strokeRect(x, y, w, h); ctx.setLineDash([]);
       }
-      // 최소 깊이 지점 검정 화살표 + 거리값(서버에서 1초마다 setMinMarker 로 갱신).
+      // 최소 깊이 지점 마젠타 화살표 + 거리값(서버에서 1초마다 setMinMarker 로 갱신).
       const m = canvas._minMarker;
       if (m) {
         const tipX = m.u * canvas.width, tipY = m.v * canvas.height;
@@ -105,7 +105,7 @@ window.hdAmrCamera = {
         const tailX = tipX + offX, tailY = tipY + offY;
         ctx.save();
         ctx.shadowColor = '#fff'; ctx.shadowBlur = 2;   // 어두운 깊이맵 위 가독성 확보
-        ctx.strokeStyle = '#000'; ctx.fillStyle = '#000'; ctx.lineWidth = 2;
+        ctx.strokeStyle = '#ff00ff'; ctx.fillStyle = '#ff00ff'; ctx.lineWidth = 2;
         // 화살대
         ctx.beginPath(); ctx.moveTo(tailX, tailY); ctx.lineTo(tipX, tipY); ctx.stroke();
         // 화살촉(끝점 방향)
