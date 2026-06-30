@@ -309,8 +309,8 @@ public class WeldTrackingService
 
         var weldRoi = WeldRoi ?? RoiRect.Full(frame.Width, frame.Height);
 
-        // d 기준선은 FOV(전체 화면) 센터선으로 고정.
-        return _detector.DetectWeld(frame, weldRoi, Params, WeldReferenceMode.FovCenter, null, peakProgressPos, peakLabel);
+        // d 기준선은 FOV(전체 화면) 센터선으로 고정. 자홍 Peak 선은 Peak ROI 범위로만 그린다.
+        return _detector.DetectWeld(frame, weldRoi, Params, WeldReferenceMode.FovCenter, null, peakProgressPos, peakLabel, PeakRoi);
     }
 
     private static string Fmt(double dpx) => $"{dpx:0.0}px";   // 1회 검출(튜닝)은 깊이 컨텍스트가 없어 px 로 표시
