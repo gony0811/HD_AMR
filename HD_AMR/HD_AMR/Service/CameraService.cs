@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Formats.Jpeg;
+using SixLabors.ImageSharp.Formats.Png;
 using SixLabors.ImageSharp.PixelFormats;
 
 namespace HD_AMR.Service;
@@ -184,6 +185,108 @@ public class CameraService : BackgroundService
         var f = _client.LatestIr;
         if (f is null) return Task.FromResult<byte[]?>(null);
         return Task.Run<byte[]?>(() => EncodeIrToJpeg(f, quality), ct);
+    }
+
+    /// <summary>
+    /// 현재 최신 RGB·IR·Depth 프레임을 학습 데이터용으로 한 폴더에 무손실(PNG) 저장한다.
+    /// 같은 타임스탬프 접두사로 rgb.png(무손실), ir.png(8bit), depth16.png(16bit raw mm),
+    /// depth_vis.png(컬러 미리보기)를 만든다. 저장할 프레임/경로가 없으면 예외.
+    /// </summary>
+    public Task<CaptureResult> SaveCaptureAsync(string dir, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(dir))
+            throw new ArgumentException("저장 폴더 경로를 입력하세요.", nameof(dir));
+
+        // 호출 시점의 최신 프레임을 스냅샷(인코딩 중 교체돼도 일관성 유지).
+        var color = _client.LatestColor;
+        var ir = _client.LatestIr;
+        var depth = _client.LatestDepth;
+        if (color is null && ir is null && depth is null)
+            throw new InvalidOperationException("저장할 프레임이 없습니다 — 스트림을 먼저 시작하세요.");
+
+        int minMm = _settings.DepthMinMm, maxMm = _settings.DepthMaxMm;
+        return Task.Run<CaptureResult>(() =>
+        {
+            Directory.CreateDirectory(dir);
+            string ts = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
+            var files = new List<string>();
+
+            if (color is not null)
+            {
+                string p = Path.Combine(dir, $"{ts}_rgb.png");
+                SaveColorPng(color, p); files.Add(p);
+            }
+            if (ir is not null)
+            {
+                string p = Path.Combine(dir, $"{ts}_ir.png");
+                SaveIrPng(ir, p); files.Add(p);
+            }
+            if (depth is not null)
+            {
+                string raw = Path.Combine(dir, $"{ts}_depth16.png");
+                SaveDepthRawPng(depth, raw); files.Add(raw);
+                string vis = Path.Combine(dir, $"{ts}_depth_vis.png");
+                SaveDepthVisPng(depth, minMm, maxMm, vis); files.Add(vis);
+            }
+            return new CaptureResult(dir, ts, files);
+        }, ct);
+    }
+
+    /// <summary>RGB 프레임 → 무손실 PNG. mjpg 는 디코드 후, rgb24 는 픽셀 직접 래핑.</summary>
+    private static void SaveColorPng(CameraFrame f, string path)
+    {
+        using Image<Rgb24> img = f.PixelFormat == "mjpg"
+            ? Image.Load<Rgb24>(f.Pixels)
+            : Image.LoadPixelData<Rgb24>(f.Pixels, f.Width, f.Height);
+        img.Save(path, new PngEncoder());
+    }
+
+    /// <summary>IR 프레임 → 8bit 그레이스케일 PNG(스트림 표시와 동일한 오토게인).</summary>
+    private static void SaveIrPng(CameraFrame f, string path)
+    {
+        int n = f.Width * f.Height;
+        var gray = new byte[n];
+        if (f.PixelFormat == "ir16")
+        {
+            var span = MemoryMarshal.Cast<byte, ushort>(f.Pixels);
+            int count = Math.Min(n, span.Length);
+            int max = 1;
+            for (int i = 0; i < count; i++) if (span[i] > max) max = span[i];
+            for (int i = 0; i < count; i++) gray[i] = (byte)(span[i] * 255 / max);
+        }
+        else
+        {
+            Array.Copy(f.Pixels, gray, Math.Min(n, f.Pixels.Length));
+        }
+        using var img = Image.LoadPixelData<L8>(gray, f.Width, f.Height);
+        img.Save(path, new PngEncoder());
+    }
+
+    /// <summary>Depth 프레임 → 16bit 무손실 PNG(픽셀=mm 그대로). 라벨/학습에서 원본 깊이 복원 가능.</summary>
+    private static void SaveDepthRawPng(CameraFrame f, string path)
+    {
+        // depth16: little-endian uint16 mm == L16 메모리 레이아웃이라 직접 래핑.
+        using var img = Image.LoadPixelData<L16>(f.Pixels, f.Width, f.Height);
+        img.Save(path, new PngEncoder());
+    }
+
+    /// <summary>Depth 프레임 → 컬러 미리보기 PNG(사람 확인용). 무효(0)=검정.</summary>
+    private static void SaveDepthVisPng(CameraFrame f, int minMm, int maxMm, string path)
+    {
+        var span = MemoryMarshal.Cast<byte, ushort>(f.Pixels);
+        var rgb = new byte[f.Width * f.Height * 3];
+        var range = Math.Max(1, maxMm - minMm);
+        for (int i = 0; i < span.Length; i++)
+        {
+            int d = span[i];
+            if (d == 0) continue;
+            double t = Math.Clamp((double)(d - minMm) / range, 0.0, 1.0);
+            ColorizeColdHot(t, out var r, out var g, out var b);
+            int o = i * 3;
+            rgb[o] = r; rgb[o + 1] = g; rgb[o + 2] = b;
+        }
+        using var img = Image.LoadPixelData<Rgb24>(rgb, f.Width, f.Height);
+        img.Save(path, new PngEncoder());
     }
 
     private static byte[] EncodeRgb24ToJpeg(CameraFrame f, int quality)

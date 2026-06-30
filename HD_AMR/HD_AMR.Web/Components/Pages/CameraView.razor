@@ -32,6 +32,29 @@
     <button class="btn btn-outline-secondary" @onclick="Reconnect" disabled="@_busy">재연결</button>
 </div>
 
+@* 학습 데이터 캡처 — 현재 RGB·IR·Depth 프레임을 한 폴더에 무손실 저장. *@
+<div class="card mb-3" style="max-width:760px">
+    <div class="card-body p-2">
+        <h6 class="mb-2">학습 데이터 캡처
+            <span class="text-muted" style="font-size:.8rem">(RGB·IR·Depth 동시 저장 · PNG 무손실)</span></h6>
+        <div class="input-group input-group-sm mb-2">
+            <span class="input-group-text">저장 폴더</span>
+            <input type="text" class="form-control" @bind="_captureDir"
+                   placeholder="예: C:\weld_data" />
+            <button class="btn btn-outline-secondary" @onclick="SaveCaptureDir" disabled="@_busy">경로 저장</button>
+        </div>
+        <button class="btn btn-primary btn-sm" @onclick="CaptureFrames"
+                disabled="@(_busy || !Svc.IsStreaming)">📷 캡처</button>
+        <span class="ms-2 text-muted" style="font-size:.85rem">
+            세션 누적 <b>@_captureCount</b>회
+            @if (!string.IsNullOrEmpty(_lastCaptureInfo))
+            {
+                <span> · @_lastCaptureInfo</span>
+            }
+        </span>
+    </div>
+</div>
+
 @if (Svc.IsStreaming)
 {
     @* 좌→우: RGB · IR · Depth *@
@@ -178,6 +201,12 @@ else
     private const int MinWindowSize = 10;
     private readonly Queue<int> _minMmWindow = new();
 
+    // 학습 데이터 캡처 상태.
+    private string _captureDir = "";
+    private int _captureCount;
+    private string? _lastCaptureInfo;
+    private const string CaptureDirKey = "Camera.Capture.Dir";
+
     private const string RoiEnabledKey = "Camera.Depth.Roi.Enabled";
     private const string RoiXKey = "Camera.Depth.Roi.X";
     private const string RoiYKey = "Camera.Depth.Roi.Y";
@@ -193,7 +222,49 @@ else
     {
         _cts = new CancellationTokenSource();
         await LoadRoiAsync();
+        await LoadCaptureDirAsync();
         _ = PollLoop(_cts.Token);
+    }
+
+    // 저장된 캡처 폴더 불러오기(없으면 내문서\weld_captures 기본).
+    private async Task LoadCaptureDirAsync()
+    {
+        try { _captureDir = await Param.GetAsync(CaptureDirKey) ?? ""; }
+        catch { /* DB 미준비 — 기본값 유지 */ }
+        if (string.IsNullOrWhiteSpace(_captureDir))
+            _captureDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "weld_captures");
+    }
+
+    // 캡처 폴더 경로를 DB에 영속화.
+    private async Task SaveCaptureDir()
+    {
+        if (_busy) return;
+        _busy = true;
+        try
+        {
+            await Param.SetAsync(CaptureDirKey, _captureDir ?? "", "학습 데이터 캡처 저장 폴더");
+            Notify("저장 폴더 경로를 저장했습니다.", false);
+        }
+        catch (Exception ex) { Notify($"경로 저장 실패: {ex.Message}", true); }
+        finally { _busy = false; }
+    }
+
+    // 현재 RGB·IR·Depth 프레임을 캡처 폴더에 무손실 저장.
+    private async Task CaptureFrames()
+    {
+        if (_busy) return;
+        _busy = true;
+        _message = null;
+        try
+        {
+            var r = await Svc.SaveCaptureAsync(_captureDir);
+            _captureCount++;
+            _lastCaptureInfo = $"{r.Timestamp} · {r.Files.Count}개 파일 → {r.Dir}";
+            Notify($"캡처 완료: {r.Files.Count}개 파일 저장 ({r.Dir})", false);
+        }
+        catch (Exception ex) { Notify($"캡처 실패: {ex.Message}", true); }
+        finally { _busy = false; }
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
