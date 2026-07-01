@@ -1,0 +1,202 @@
+@page "/label"
+@rendermode InteractiveServer
+@using HD_AMR.Web.Services
+@inject LabelDataService Lbl
+@inject IJSRuntime JS
+
+<PageTitle>비드 마스크 라벨링</PageTitle>
+
+<h1>비드 마스크 라벨링 <span class="text-muted" style="font-size:1rem">(DL 학습용 초안 수정/생성)</span></h1>
+
+@if (_dir is null)
+{
+    <div class="alert alert-warning" style="max-width:760px">
+        캡처 저장 폴더가 설정되지 않았습니다. <a href="/camera">카메라</a> 페이지에서 <b>폴더 선택</b> 후 캡처하세요.
+    </div>
+}
+else
+{
+    <div class="mb-2 text-muted" style="font-size:.9rem">폴더: <code>@_dir</code>
+        <button class="btn btn-sm btn-outline-secondary ms-2" @onclick="RefreshList" disabled="@_busy">새로고침</button>
+    </div>
+
+    <div class="row g-3">
+        @* 좌: 촬영본 목록 *@
+        <div class="col-lg-3">
+            <label class="form-label mb-1">촬영본 (@_entries.Count)</label>
+            <select class="form-select form-select-sm" size="18" @onchange="OnSelect"
+                    style="font-family:monospace;font-size:.8rem">
+                @foreach (var e in _entries)
+                {
+                    var mark = (e.RgbMask || e.IrMask) ? "✓ " : "· ";
+                    <option value="@e.Stem" selected="@(e.Stem == _selectedStem)">@mark@e.Stem</option>
+                }
+            </select>
+            <div class="text-muted mt-1" style="font-size:.75rem">✓ = 마스크 있음</div>
+        </div>
+
+        @* 우: 에디터 *@
+        <div class="col-lg-9">
+            @if (_selectedStem is null)
+            {
+                <div class="alert alert-secondary">왼쪽에서 촬영본을 선택하세요.</div>
+            }
+            else
+            {
+                var cur = _entries.FirstOrDefault(x => x.Stem == _selectedStem);
+                <div class="mb-2 d-flex align-items-center flex-wrap gap-2">
+                    @* 모달리티 *@
+                    <div class="btn-group btn-group-sm" role="group">
+                        <button class="btn @(_modality == "rgb" ? "btn-primary" : "btn-outline-primary")"
+                                disabled="@(cur is null || !cur.HasRgb)" @onclick='() => SetModality("rgb")'>RGB</button>
+                        <button class="btn @(_modality == "ir" ? "btn-primary" : "btn-outline-primary")"
+                                disabled="@(cur is null || !cur.HasIr)" @onclick='() => SetModality("ir")'>IR</button>
+                    </div>
+                    <span class="text-muted" style="font-size:.85rem">|</span>
+                    @* 브러시 *@
+                    <div class="btn-group btn-group-sm" role="group">
+                        <button class="btn @(_brushMode == "paint" ? "btn-danger" : "btn-outline-danger")"
+                                @onclick='() => SetBrushMode("paint")'>🖌 칠하기</button>
+                        <button class="btn @(_brushMode == "erase" ? "btn-secondary" : "btn-outline-secondary")"
+                                @onclick='() => SetBrushMode("erase")'>🧽 지우기</button>
+                    </div>
+                    <label class="ms-1" style="font-size:.85rem">굵기 @_radius
+                        <input type="range" min="2" max="60" step="1" @bind="_radius" @bind:after="ApplyBrush"
+                               style="vertical-align:middle;width:120px" /></label>
+                    <span class="text-muted" style="font-size:.85rem">|</span>
+                    <button class="btn btn-sm btn-outline-secondary" @onclick="ReloadDraft">초안 다시</button>
+                    <button class="btn btn-sm btn-outline-warning" @onclick="ClearMask">전체 지우기</button>
+                    <button class="btn btn-sm btn-success" @onclick="SaveMask" disabled="@_busy">💾 마스크 저장</button>
+                </div>
+
+                @* 이미지 + 마스크 오버레이. 캔버스가 이미지 위를 덮어 브러시로 칠한다. *@
+                <div style="position:relative; display:inline-block; max-width:100%; border:1px solid #ccc; background:#000">
+                    <img @ref="_baseImg" alt="capture"
+                         style="display:block; max-width:100%; user-select:none; -webkit-user-drag:none" />
+                    <canvas @ref="_maskCanvas"
+                            style="position:absolute; left:0; top:0; width:100%; height:100%; cursor:crosshair; touch-action:none"></canvas>
+                </div>
+                <div class="text-muted mt-1" style="font-size:.8rem">
+                    비드를 빨갛게 칠하세요. 저장하면 <code>@(_selectedStem)_@(_modality)_maskdraft.png</code> 로 덮어씁니다(흑백 이진 마스크).
+                </div>
+            }
+        </div>
+    </div>
+}
+
+@if (!string.IsNullOrEmpty(_message))
+{
+    <div class="alert @(_isError ? "alert-danger" : "alert-info") mt-3" style="max-width:900px">@_message</div>
+}
+
+@code {
+    private string? _dir;
+    private List<CaptureEntry> _entries = new();
+    private string? _selectedStem;
+    private string _modality = "rgb";
+    private string _brushMode = "paint";
+    private int _radius = 12;
+    private bool _busy;
+    private string? _message;
+    private bool _isError;
+
+    private ElementReference _baseImg;
+    private ElementReference _maskCanvas;
+    private bool _pendingOpen;
+    private int _cacheBust = 1;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _dir = await Lbl.GetDirAsync();
+        await RefreshList();
+    }
+
+    private async Task RefreshList()
+    {
+        try { _entries = await Lbl.ListAsync(); }
+        catch (Exception ex) { Notify($"목록 로드 실패: {ex.Message}", true); }
+    }
+
+    private void OnSelect(ChangeEventArgs e)
+    {
+        _selectedStem = e.Value?.ToString();
+        var cur = _entries.FirstOrDefault(x => x.Stem == _selectedStem);
+        // 사용 가능한 모달리티로 기본 선택.
+        _modality = cur is { HasRgb: true } ? "rgb" : (cur is { HasIr: true } ? "ir" : "rgb");
+        _pendingOpen = true;   // 렌더 후 에디터 열기
+    }
+
+    private void SetModality(string m)
+    {
+        if (_modality == m) return;
+        _modality = m;
+        _pendingOpen = true;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_pendingOpen && _selectedStem is not null)
+        {
+            _pendingOpen = false;
+            await OpenEditorAsync();
+        }
+    }
+
+    private async Task OpenEditorAsync()
+    {
+        try
+        {
+            var imgUrl = $"/camera/label/image?v={_cacheBust}&name={_selectedStem}_{_modality}.png";
+            var maskUrl = $"/camera/label/image?v={_cacheBust}&name={_selectedStem}_{_modality}_maskdraft.png";
+            await JS.InvokeVoidAsync("hdAmrLabel.open", _baseImg, _maskCanvas, imgUrl, maskUrl);
+            await JS.InvokeVoidAsync("hdAmrLabel.setBrush", _brushMode, _radius);
+        }
+        catch (Exception ex) { Notify($"에디터 열기 실패: {ex.Message}", true); }
+    }
+
+    private async Task SetBrushMode(string m)
+    {
+        _brushMode = m;
+        await ApplyBrush();
+    }
+
+    private async Task ApplyBrush()
+    {
+        try { await JS.InvokeVoidAsync("hdAmrLabel.setBrush", _brushMode, _radius); }
+        catch { /* 미준비 무시 */ }
+    }
+
+    private async Task ClearMask()
+    {
+        try { await JS.InvokeVoidAsync("hdAmrLabel.clear"); }
+        catch { }
+    }
+
+    private async Task ReloadDraft()
+    {
+        var maskUrl = $"/camera/label/image?v={_cacheBust}&name={_selectedStem}_{_modality}_maskdraft.png";
+        try { await JS.InvokeVoidAsync("hdAmrLabel.reload", maskUrl); }
+        catch { }
+    }
+
+    private async Task SaveMask()
+    {
+        if (_busy || _selectedStem is null) return;
+        _busy = true;
+        _message = null;
+        try
+        {
+            var b64 = await JS.InvokeAsync<string>("hdAmrLabel.exportPng");
+            if (string.IsNullOrEmpty(b64)) { Notify("마스크를 읽지 못했습니다.", true); return; }
+            var bytes = Convert.FromBase64String(b64);
+            var name = await Lbl.SaveMaskAsync(_selectedStem, _modality, bytes);
+            _cacheBust++;
+            await RefreshList();
+            Notify($"저장 완료: {name}", false);
+        }
+        catch (Exception ex) { Notify($"저장 실패: {ex.Message}", true); }
+        finally { _busy = false; }
+    }
+
+    private void Notify(string msg, bool error) { _message = msg; _isError = error; }
+}

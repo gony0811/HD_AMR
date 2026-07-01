@@ -72,6 +72,7 @@ builder.Services.AddDbContext<HdAmrDbContext>(opt =>
 builder.Services.AddScoped<DrawingService>();
 builder.Services.AddScoped<TeachingService>();
 builder.Services.AddScoped<ParameterService>();
+builder.Services.AddScoped<HD_AMR.Web.Services.LabelDataService>();
 
 var app = builder.Build();
 
@@ -257,6 +258,14 @@ app.MapGet("/camera/weld/peak2.jpg", (WeldTrackingService w) => JpegOrNoContent(
 
 static IResult JpegOrNoContent(byte[]? jpeg)
     => jpeg is { Length: > 0 } ? Results.File(jpeg, "image/jpeg") : Results.NoContent();
+
+// DL 라벨 에디터용 — 캡처 폴더의 이미지/마스크 파일을 이름으로 서빙(폴더는 서버 설정값, 경로 탈출 차단).
+// UI 는 <img src="/camera/label/image?name=STEM_rgb.png"> 로 로드. 캐시 방지 위해 no-store.
+app.MapGet("/camera/label/image", async (string name, HD_AMR.Web.Services.LabelDataService lbl) =>
+{
+    var bytes = await lbl.ReadAsync(name);
+    return bytes is null ? Results.NotFound() : Results.File(bytes, "image/png");
+});
 
 static async Task StreamMjpegAsync(HttpContext http, CancellationToken ct, int fps,
     Func<Task<byte[]?>> getJpeg)

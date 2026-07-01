@@ -66,6 +66,8 @@ public sealed class WeldVisionDetector : IWeldVisionDetector
             int sCount = horiz ? roi.Width : roi.Height;
             int crossCount = horiz ? roi.Height : roi.Width;
             var centerCross = new double[sCount];
+            var runStart = new int[sCount];   // 슬라이스 비드 run 시작(ROI cross 좌표)
+            var runLen = new int[sCount];     // 그 run 길이(=비드 폭). 라벨 초안 마스크용.
             var valid = new bool[sCount];
             int validCount = 0;
 
@@ -89,6 +91,8 @@ public sealed class WeldVisionDetector : IWeldVisionDetector
                 if (bestStart >= 0)
                 {
                     centerCross[s] = bestStart + (bestLen - 1) / 2.0;
+                    runStart[s] = bestStart;
+                    runLen[s] = bestLen;
                     valid[s] = true;
                     validCount++;
                 }
@@ -131,14 +135,21 @@ public sealed class WeldVisionDetector : IWeldVisionDetector
             double weldCenterFull = crossOffset + weldCenterRoi;
             double d = weldCenterFull - refPos;
 
-            // centerline 점들(full-image)
+            // centerline 점들(full-image) + 비드 폭 span(라벨 초안 마스크용, full-image 좌표)
             var pts = new List<PixelPoint>(validCount);
+            var spans = new List<BeadSpan>(validCount);
+            int crossOffsetI = horiz ? roi.Y : roi.X;
             for (int s = 0; s < sCount; s++)
             {
                 if (!valid[s]) continue;
                 double x = horiz ? roi.X + s : roi.X + centerCross[s];
                 double y = horiz ? roi.Y + centerCross[s] : roi.Y + s;
                 pts.Add(new PixelPoint(x, y));
+
+                int progFull = (horiz ? roi.X : roi.Y) + s;
+                int cs = crossOffsetI + runStart[s];
+                int ce = crossOffsetI + runStart[s] + runLen[s] - 1;
+                spans.Add(new BeadSpan(progFull, cs, ce));
             }
 
             var overlay = EncodeOverlay(bgr, roi, p, pts, refPos, weldCenterFull, peakProgressPos, peakLabel, peakRoi, peakCrossStart, peakCrossEnd);
@@ -159,6 +170,7 @@ public sealed class WeldVisionDetector : IWeldVisionDetector
                 WeldPoint = weldPt,
                 RefPoint = refPt,
                 OverlayJpeg = overlay,
+                BeadSpans = spans,
             };
         }
         catch (Exception ex)

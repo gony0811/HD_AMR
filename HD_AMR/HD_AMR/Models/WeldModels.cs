@@ -110,8 +110,14 @@ public sealed class WeldDetectionResult
     /// <summary>주석(overlay) JPEG. UI 표시용. 없으면 null.</summary>
     public byte[]? OverlayJpeg { get; init; }
 
+    /// <summary>진행축 슬라이스별 비드 cross 구간(전체 이미지 좌표). DL 라벨 초안 마스크를 굽는 데 쓴다.</summary>
+    public IReadOnlyList<BeadSpan>? BeadSpans { get; init; }
+
     public static WeldDetectionResult Fail(string msg) => new() { Success = false, Message = msg };
 }
+
+/// <summary>비드 한 슬라이스의 cross 구간. Progress=진행축 좌표, [CrossStart,CrossEnd]=비드 폭(모두 전체 이미지 픽셀).</summary>
+public readonly record struct BeadSpan(int Progress, int CrossStart, int CrossEnd);
 
 /// <summary>Depth 기반 Peak 정보(명세서 7장). 1차에서는 진행축 상의 위치/깊이만.</summary>
 public sealed class PeakInfo

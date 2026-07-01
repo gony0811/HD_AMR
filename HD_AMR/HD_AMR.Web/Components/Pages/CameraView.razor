@@ -5,6 +5,7 @@
 @using HD_AMR.Service
 @using HD_AMR.Web.Services
 @inject CameraService Svc
+@inject WeldTrackingService Weld
 @inject ParameterService Param
 @inject IJSRuntime JS
 @implements IDisposable
@@ -269,10 +270,24 @@ else
         _message = null;
         try
         {
+            // 검출 모드 프레임에서 DL 라벨 초안 마스크를 먼저 굽고(성공+신뢰도 충분 시), 이미지와 같은 stem 으로 저장.
+            var mask = Weld.TryBuildLabelMask();
             var r = await Svc.SaveCaptureAsync(_captureDir);
             _captureCount++;
-            _lastCaptureInfo = $"{r.Timestamp} · {r.Files.Count}개 파일 → {r.Dir}";
-            Notify($"캡처 완료: {r.Files.Count}개 파일 저장 ({r.Dir})", false);
+
+            string extra;
+            if (mask is { } mk)
+            {
+                string mp = Path.Combine(r.Dir, $"{r.Timestamp}_{mk.Modality}_maskdraft.png");
+                await File.WriteAllBytesAsync(mp, mk.Png);
+                extra = $" + 마스크초안({mk.Modality}, 신뢰도 {mk.Confidence:P0})";
+            }
+            else
+            {
+                extra = " · 마스크초안 없음(검출 실패/저신뢰 — Weld ROI·파라미터 확인)";
+            }
+            _lastCaptureInfo = $"{r.Timestamp} · {r.Files.Count}개 파일{extra}";
+            Notify($"캡처 완료: {r.Files.Count}개 파일 저장 ({r.Dir}){extra}", false);
         }
         catch (Exception ex) { Notify($"캡처 실패: {ex.Message}", true); }
         finally { _busy = false; }

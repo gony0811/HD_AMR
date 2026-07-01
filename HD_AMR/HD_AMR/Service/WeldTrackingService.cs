@@ -3,6 +3,9 @@ using HD_AMR.Communication.Weld;
 using HD_AMR.Models;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Formats.Png;
+using SixLabors.ImageSharp.PixelFormats;
 
 namespace HD_AMR.Service;
 
@@ -331,6 +334,58 @@ public class WeldTrackingService
         // d 기준선은 FOV(전체 화면) 센터선으로 고정. 자홍 Peak 선은 depth 기반 비드 cross 구간만큼 그린다.
         return _detector.DetectWeld(frame, weldRoi, Params, WeldReferenceMode.FovCenter, null,
             peakProgressPos, peakLabel, PeakRoi, peakCrossStart, peakCrossEnd);
+    }
+
+    /// <summary>
+    /// 현재 프레임에서 DL 라벨 <b>초안</b> 마스크(비드=흰색, 배경=검정)를 굽는다. 검출기가 찾은 비드
+    /// cross 구간을 채워 만든다(=경계 채우기). 검출 실패·신뢰도 미달이면 null(→ 사람이 처음부터 라벨).
+    /// 반환 Modality 는 검출 모드에 맞춘 "ir"/"rgb" (저장 이미지와 정렬).
+    /// </summary>
+    public (byte[] Png, string Modality, double Confidence)? TryBuildLabelMask(double minConfidence = 0.3)
+    {
+        if (!_detector.IsAvailable) return null;
+        var frame = Params.Mode == WeldImageMode.Ir ? _camera.LatestIr : _camera.LatestColor;
+        if (frame is null) return null;
+
+        var weldRoi = WeldRoi ?? RoiRect.Full(frame.Width, frame.Height);
+        var r = _detector.DetectWeld(frame, weldRoi, Params, WeldReferenceMode.FovCenter);
+        if (!r.Success || r.BeadSpans is not { Count: > 0 } spans || r.Confidence < minConfidence)
+            return null;
+
+        bool horiz = Params.ProgressAxis == WeldProgressAxis.Horizontal;
+        var png = RasterizeMaskPng(spans, frame.Width, frame.Height, horiz);
+        string modality = Params.Mode == WeldImageMode.Ir ? "ir" : "rgb";
+        return (png, modality, r.Confidence);
+    }
+
+    /// <summary>비드 span 들을 채워 L8(1채널) PNG 마스크로 래스터화. 비드=255, 배경=0.</summary>
+    private static byte[] RasterizeMaskPng(IReadOnlyList<BeadSpan> spans, int w, int h, bool horiz)
+    {
+        var buf = new byte[w * h];
+        foreach (var sp in spans)
+        {
+            if (horiz)
+            {
+                int x = sp.Progress;
+                if ((uint)x >= (uint)w) continue;
+                int y0 = Math.Clamp(Math.Min(sp.CrossStart, sp.CrossEnd), 0, h - 1);
+                int y1 = Math.Clamp(Math.Max(sp.CrossStart, sp.CrossEnd), 0, h - 1);
+                for (int y = y0; y <= y1; y++) buf[y * w + x] = 255;
+            }
+            else
+            {
+                int y = sp.Progress;
+                if ((uint)y >= (uint)h) continue;
+                int x0 = Math.Clamp(Math.Min(sp.CrossStart, sp.CrossEnd), 0, w - 1);
+                int x1 = Math.Clamp(Math.Max(sp.CrossStart, sp.CrossEnd), 0, w - 1);
+                int rowBase = y * w;
+                for (int x = x0; x <= x1; x++) buf[rowBase + x] = 255;
+            }
+        }
+        using var img = Image.LoadPixelData<L8>(buf, w, h);
+        using var ms = new MemoryStream();
+        img.Save(ms, new PngEncoder());
+        return ms.ToArray();
     }
 
     private static string Fmt(double dpx) => $"{dpx:0.0}px";   // 1회 검출(튜닝)은 깊이 컨텍스트가 없어 px 로 표시
