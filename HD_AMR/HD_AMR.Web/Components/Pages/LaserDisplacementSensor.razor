@@ -1,0 +1,265 @@
+@page "/laser"
+@rendermode InteractiveServer
+@using HD_AMR.Models
+@using HD_AMR.Service
+@implements IDisposable
+@inject LaserDisplacementSensorService Svc
+@inject ILogger<LaserDisplacementSensor> Logger
+
+<PageTitle>Laser Displacement Sensor</PageTitle>
+
+<h1 class="page-title">Laser Displacement Sensor</h1>
+<p class="page-subtitle">레이저 변위 센서 — EtherNet/IP 통신 연결 및 3채널 변위 측정</p>
+
+<div class="card card-surface mb-3" style="max-width: 720px;">
+    <div class="card-body">
+        <div class="d-flex align-items-center justify-content-between mb-3">
+            <h5 class="card-title mb-0">통신 연결 (EtherNet/IP)</h5>
+            <span class="badge @(Svc.IsConnected ? "bg-success" : "bg-secondary")">
+                @(Svc.IsConnected ? "연결됨" : "끊김")
+            </span>
+        </div>
+
+        <div class="row g-2 align-items-end">
+            <div class="col-sm-7">
+                <label class="form-label mb-1">IP 주소</label>
+                <input class="form-control" @bind="Svc.Settings.IpAddress"
+                       disabled="@(_busy || Svc.IsConnected)" />
+            </div>
+            <div class="col-sm-5">
+                <label class="form-label mb-1">포트</label>
+                <input type="number" class="form-control" @bind="Svc.Settings.Port"
+                       disabled="@(_busy || Svc.IsConnected)" />
+            </div>
+        </div>
+
+        <div class="d-flex gap-2 mt-3">
+            <button class="btn btn-primary" @onclick="Connect"
+                    disabled="@(_busy || Svc.IsConnected)">
+                연결
+            </button>
+            <button class="btn btn-outline-secondary" @onclick="Disconnect"
+                    disabled="@(_busy || !Svc.IsConnected)">
+                연결 해제
+            </button>
+        </div>
+
+        @if (!string.IsNullOrEmpty(_message))
+        {
+            <div class="alert @(_isError ? "alert-danger" : "alert-success") mt-3 mb-0 py-2">
+                @_message
+            </div>
+        }
+        else if (!string.IsNullOrEmpty(Svc.LastError))
+        {
+            <div class="alert alert-warning mt-3 mb-0 py-2">
+                마지막 연결 오류: @Svc.LastError
+            </div>
+        }
+    </div>
+</div>
+
+<div class="card card-surface" style="max-width: 720px;">
+    <div class="card-body">
+        <div class="d-flex align-items-center justify-content-between mb-3">
+            <h5 class="card-title mb-0">측정값 (변위)</h5>
+            <div class="d-flex gap-2">
+                <button class="btn btn-sm btn-outline-primary" @onclick="ZeroSetAll"
+                        disabled="@(!Svc.IsConnected)">전체 영점 설정</button>
+                <button class="btn btn-sm btn-outline-secondary" @onclick="ZeroResetAll"
+                        disabled="@(!Svc.IsConnected)">전체 해제</button>
+            </div>
+        </div>
+
+        @if (!Svc.IsConnected)
+        {
+            <div class="text-muted">연결되면 채널별 변위가 실시간으로 표시됩니다.</div>
+        }
+        else
+        {
+            <table class="table table-sm align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th style="width: 70px;">채널</th>
+                        <th class="text-end">변위</th>
+                        <th class="text-end">원시값</th>
+                        <th>상태</th>
+                        <th style="width: 190px;">영점</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var r in _readings)
+                    {
+                        <tr>
+                            <td><strong>CH@(r.Channel)</strong></td>
+                            <td class="text-end">
+                                @if (r.Enabled)
+                                {
+                                    <span class="fs-5 fw-semibold">@r.Value.ToString("F3")</span>
+                                    <span class="text-muted ms-1">@Svc.Settings.MeasurementUnit</span>
+                                }
+                                else
+                                {
+                                    <span class="text-muted">—</span>
+                                }
+                            </td>
+                            <td class="text-end text-muted">@r.Raw</td>
+                            <td>
+                                <span class="badge @(r.Enabled ? "bg-success" : "bg-secondary") me-1">
+                                    @(r.Enabled ? "측정중" : "범위밖")
+                                </span>
+                                @if (r.Error)
+                                {
+                                    <span class="badge bg-danger me-1">에러</span>
+                                }
+                                @if (r.Warning)
+                                {
+                                    <span class="badge bg-warning text-dark me-1">경고</span>
+                                }
+                                @if (r.High)
+                                {
+                                    <span class="badge bg-info text-dark me-1">HIGH</span>
+                                }
+                                @if (r.Low)
+                                {
+                                    <span class="badge bg-info text-dark me-1">LOW</span>
+                                }
+                                @if (r.Pass)
+                                {
+                                    <span class="badge bg-primary me-1">PASS</span>
+                                }
+                                @if (r.Zeroed)
+                                {
+                                    <span class="badge bg-dark me-1">영점</span>
+                                }
+                            </td>
+                            <td>
+                                <button class="btn btn-sm btn-primary me-1" @onclick="() => ZeroSet(r.Channel)">설정</button>
+                                <button class="btn btn-sm btn-outline-secondary" @onclick="() => ZeroReset(r.Channel)">해제</button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </div>
+</div>
+
+@code {
+    private bool _busy;
+    private bool _isError;
+    private string? _message;
+
+    private IReadOnlyList<LaserChannelReading> _readings = Array.Empty<LaserChannelReading>();
+
+    private PeriodicTimer? _timer;
+    private CancellationTokenSource? _cts;
+
+    protected override void OnInitialized()
+    {
+        _cts = new CancellationTokenSource();
+        _ = RefreshLoopAsync(_cts.Token);
+    }
+
+    // 연결 상태일 때 UiRefreshMs 주기로 측정 스냅샷을 갱신한다.
+    private async Task RefreshLoopAsync(CancellationToken ct)
+    {
+        var period = TimeSpan.FromMilliseconds(Math.Max(50, Svc.Settings.UiRefreshMs));
+        _timer = new PeriodicTimer(period);
+        try
+        {
+            while (await _timer.WaitForNextTickAsync(ct))
+            {
+                if (Svc.IsConnected)
+                {
+                    _readings = Svc.GetReadings();
+                    await InvokeAsync(StateHasChanged);
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // 페이지 폐기 — 정상 종료.
+        }
+    }
+
+    private async Task Connect()
+    {
+        if (_busy) return;
+        _busy = true;
+        _message = null;
+        try
+        {
+            await Svc.ConnectAsync();
+            _isError = false;
+            _message = $"{Svc.Settings.IpAddress}:{Svc.Settings.Port} 연결됨.";
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "레이저 변위 센서 연결 실패");
+            _isError = true;
+            _message = $"연결 실패: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task Disconnect()
+    {
+        if (_busy) return;
+        _busy = true;
+        _message = null;
+        try
+        {
+            await Svc.DisconnectAsync();
+            _readings = Array.Empty<LaserChannelReading>();
+            _isError = false;
+            _message = "연결이 해제되었습니다.";
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "레이저 변위 센서 연결 해제 실패");
+            _isError = true;
+            _message = $"연결 해제 실패: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void ZeroSet(int ch)
+    {
+        Svc.ZeroSet(ch);
+        _readings = Svc.GetReadings();
+    }
+
+    private void ZeroReset(int ch)
+    {
+        Svc.ZeroReset(ch);
+        _readings = Svc.GetReadings();
+    }
+
+    private void ZeroSetAll()
+    {
+        Svc.ZeroSetAll();
+        _readings = Svc.GetReadings();
+    }
+
+    private void ZeroResetAll()
+    {
+        Svc.ZeroResetAll();
+        _readings = Svc.GetReadings();
+    }
+
+    public void Dispose()
+    {
+        _cts?.Cancel();
+        _timer?.Dispose();
+        _cts?.Dispose();
+    }
+}

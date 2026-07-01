@@ -44,6 +44,13 @@ builder.Services.Configure<VisionInterfaceSettings>(
 builder.Services.AddSingleton<VisionInterfaceService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<VisionInterfaceService>());
 
+// 레이저 변위 센서(EtherNet/IP). 싱글톤 + 호스티드. 다른 장치와 달리 상시 자동 접속이 아니라
+// 페이지의 [연결]/[해제] 버튼으로 켜고 끄는 재접속 루프(_enabled 게이팅) — appsettings 의 AutoConnect 로 초기값 결정.
+builder.Services.Configure<LaserDisplacementSensorSettings>(
+    builder.Configuration.GetSection("LaserDisplacementSensor"));
+builder.Services.AddSingleton<LaserDisplacementSensorService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<LaserDisplacementSensorService>());
+
 // 용접라인 추적(명세서 v2). 검출은 OpenCvSharp(Windows) — 그 외 플랫폼은 no-op 폴백.
 // ROI 프로파일은 JSON 파일로 저장. 싱글톤(운영자 1인, 상태 유지).
 builder.Services.Configure<WeldTrackingSettings>(
