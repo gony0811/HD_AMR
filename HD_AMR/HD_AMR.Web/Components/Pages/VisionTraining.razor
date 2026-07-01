@@ -1,0 +1,336 @@
+@page "/vision-training"
+@rendermode InteractiveServer
+@using HD_AMR.Web.Services
+@implements IAsyncDisposable
+@inject WeldTrainingService Train
+@inject LabelDataService Lbl
+
+<PageTitle>비전 학습 (DL)</PageTitle>
+
+<h1>비전 학습 <span class="text-muted" style="font-size:1rem">(YOLOv8-seg · CPU 파이프라인)</span></h1>
+
+@if (_paths is null)
+{
+    <div class="alert alert-warning" style="max-width:820px">
+        캡처 저장 폴더가 설정되지 않았습니다. <a href="/camera">카메라</a> 페이지에서 <b>폴더 선택</b> 후
+        캡처하고, <a href="/label">비드 라벨링</a>에서 마스크를 만든 뒤 이 화면으로 오세요.
+    </div>
+}
+else
+{
+    <div class="mb-2 text-muted" style="font-size:.9rem">작업 폴더: <code>@_paths.Workspace</code></div>
+
+    @* 탭 *@
+    <ul class="nav nav-tabs mb-3">
+        <li class="nav-item"><button class="nav-link @Active("data")" @onclick='() => _tab="data"'>① 데이터셋</button></li>
+        <li class="nav-item"><button class="nav-link @Active("train")" @onclick='() => _tab="train"'>② 학습</button></li>
+        <li class="nav-item"><button class="nav-link @Active("model")" @onclick='() => _tab="model"'>③ 모델 · 내보내기</button></li>
+        <li class="nav-item"><button class="nav-link @Active("infer")" @onclick='() => _tab="infer"'>④ 추론 · 검증</button></li>
+    </ul>
+
+    @* ── Python 상태(공통) ── *@
+    <div class="card mb-3" style="max-width:960px">
+        <div class="card-body py-2">
+            <div class="d-flex align-items-center flex-wrap gap-2">
+                <span class="fw-bold">Python</span>
+                @if (_py is null)
+                {
+                    <span class="text-muted">확인 중…</span>
+                }
+                else if (_py.UltralyticsOk)
+                {
+                    <span class="badge bg-success">사용 가능</span> <code>@_py.Detail</code>
+                }
+                else if (_py.PythonOk)
+                {
+                    <span class="badge bg-warning text-dark">ultralytics 미설치</span> <code>@_py.Detail</code>
+                }
+                else
+                {
+                    <span class="badge bg-danger">Python 없음</span> <span class="text-muted">@_py.Detail</span>
+                }
+                <span class="ms-auto"></span>
+                <input class="form-control form-control-sm" style="width:260px" placeholder="python 실행 경로 (예: python 또는 C:\...\python.exe)"
+                       @bind="_pythonExe" />
+                <button class="btn btn-sm btn-outline-secondary" @onclick="SavePython">저장·확인</button>
+            </div>
+            @if (_py is { UltralyticsOk: false })
+            {
+                <div class="text-muted mt-1" style="font-size:.8rem">
+                    설치: <code>@_py.Exe -m pip install ultralytics onnx</code>
+                </div>
+            }
+        </div>
+    </div>
+
+    @* ── ① 데이터셋 ── *@
+    @if (_tab == "data")
+    {
+        <div class="card" style="max-width:960px">
+            <div class="card-body">
+                <h5 class="card-title">마스크 초안 → YOLO-seg 데이터셋 변환</h5>
+                <p class="text-muted" style="font-size:.9rem">
+                    선택한 모달리티의 <code>*_maskdraft.png</code> 를 스캔해 폴리곤 라벨(<code>.txt</code>)과
+                    <code>data.yaml</code> 을 생성합니다. (표본이 적어 val = train 으로 둠 — 과적합/배선 점검용)
+                </p>
+                <div class="d-flex align-items-center flex-wrap gap-3">
+                    <div class="btn-group btn-group-sm" role="group">
+                        <button class="btn @(_modality == "rgb" ? "btn-primary" : "btn-outline-primary")"
+                                @onclick='() => _modality="rgb"'>RGB (마스크 @(_rgbMasks)개)</button>
+                        <button class="btn @(_modality == "ir" ? "btn-primary" : "btn-outline-primary")"
+                                @onclick='() => _modality="ir"'>IR (마스크 @(_irMasks)개)</button>
+                    </div>
+                    <button class="btn btn-success btn-sm" @onclick="Convert" disabled="@_working">데이터셋 변환</button>
+                </div>
+                @if (_convert is not null)
+                {
+                    <div class="alert alert-info mt-3 mb-0" style="font-size:.9rem">
+                        변환 완료 — 사용 <b>@_convert.Used</b>건 / 건너뜀 @(_convert.Skipped)건 / 폴리곤 @(_convert.Instances)개<br />
+                        <code>@_convert.DataYaml</code>
+                    </div>
+                }
+            </div>
+        </div>
+    }
+
+    @* ── ② 학습 ── *@
+    else if (_tab == "train")
+    {
+        <div class="card" style="max-width:960px">
+            <div class="card-body">
+                <h5 class="card-title">학습 (YOLOv8-seg, CPU)</h5>
+                <div class="row g-2 align-items-end" style="max-width:720px">
+                    <div class="col-auto"><label class="form-label mb-0" style="font-size:.85rem">베이스</label>
+                        <select class="form-select form-select-sm" @bind="_baseModel">
+                            <option value="yolov8n-seg.pt">yolov8n-seg (최소)</option>
+                            <option value="yolov8s-seg.pt">yolov8s-seg (소형)</option>
+                        </select></div>
+                    <div class="col-auto"><label class="form-label mb-0" style="font-size:.85rem">epochs</label>
+                        <input type="number" class="form-control form-control-sm" style="width:90px" @bind="_epochs" /></div>
+                    <div class="col-auto"><label class="form-label mb-0" style="font-size:.85rem">imgsz</label>
+                        <input type="number" class="form-control form-control-sm" style="width:90px" @bind="_imgsz" /></div>
+                    <div class="col-auto"><label class="form-label mb-0" style="font-size:.85rem">batch</label>
+                        <input type="number" class="form-control form-control-sm" style="width:80px" @bind="_batch" /></div>
+                    <div class="col-auto">
+                        <button class="btn btn-success btn-sm" @onclick="StartTrain"
+                                disabled="@(_working || Train.IsBusy || _py is not { UltralyticsOk: true })">학습 시작</button>
+                    </div>
+                </div>
+                <div class="text-muted mt-2" style="font-size:.8rem">
+                    CPU 학습은 느립니다. 2~수십 장 규모에서 배선/과적합 확인이 목적이면 epochs 100~300 권장.
+                </div>
+            </div>
+        </div>
+    }
+
+    @* ── ③ 모델 ── *@
+    else if (_tab == "model")
+    {
+        <div class="card" style="max-width:960px">
+            <div class="card-body">
+                <h5 class="card-title">ONNX 내보내기 · 모델 목록</h5>
+                <div class="d-flex align-items-end gap-2 flex-wrap">
+                    <div><label class="form-label mb-0" style="font-size:.85rem">opset</label>
+                        <input type="number" class="form-control form-control-sm" style="width:90px" @bind="_opset" /></div>
+                    <div><label class="form-label mb-0" style="font-size:.85rem">imgsz</label>
+                        <input type="number" class="form-control form-control-sm" style="width:90px" @bind="_exportImgsz" /></div>
+                    <button class="btn btn-success btn-sm" @onclick="StartExport"
+                            disabled="@(_working || Train.IsBusy || _py is not { UltralyticsOk: true })">best.pt → ONNX</button>
+                    <button class="btn btn-outline-secondary btn-sm" @onclick="RefreshModels">목록 새로고침</button>
+                </div>
+
+                <table class="table table-sm mt-3 mb-0">
+                    <thead><tr><th>파일</th><th class="text-end">크기</th><th>수정</th></tr></thead>
+                    <tbody>
+                        @if (_models.Count == 0)
+                        {
+                            <tr><td colspan="3" class="text-muted">아직 모델이 없습니다. 학습→내보내기 후 생성됩니다.</td></tr>
+                        }
+                        @foreach (var m in _models)
+                        {
+                            <tr>
+                                <td><code>@m.Name</code></td>
+                                <td class="text-end">@($"{m.Bytes / 1024.0:0.0} KB")</td>
+                                <td>@m.Modified.ToString("yyyy-MM-dd HH:mm")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
+
+    @* ── ④ 추론(Phase 2 예정) ── *@
+    else if (_tab == "infer")
+    {
+        <div class="alert alert-secondary" style="max-width:960px">
+            네이티브 ONNX 추론/검증(캡처·실시간 프레임에 비드 마스크 오버레이)은 다음 단계에서 붙입니다.
+            먼저 ①→②→③ 로 <code>weld_seg.onnx</code> 를 만들어 두세요.
+        </div>
+    }
+
+    @* ── 실행 상태 · 로그(공통) ── *@
+    <div class="card mt-3" style="max-width:960px">
+        <div class="card-body py-2">
+            <div class="d-flex align-items-center gap-2">
+                <span class="fw-bold">상태</span>
+                <span class="badge @PhaseBadge">@Train.Phase</span>
+                @if (!string.IsNullOrEmpty(Train.StatusText)) { <span class="text-muted">@Train.StatusText</span> }
+                <span class="ms-auto"></span>
+                @if (Train.IsBusy)
+                {
+                    <span class="spinner-border spinner-border-sm text-primary"></span>
+                    <button class="btn btn-sm btn-outline-danger" @onclick="Stop">중단</button>
+                }
+                <button class="btn btn-sm btn-outline-secondary" @onclick="() => Train.ClearLog()">로그 지우기</button>
+            </div>
+            <pre @ref="_logEl" style="background:#111;color:#ddd;font-size:.78rem;max-height:320px;overflow:auto;margin:.5rem 0 0;padding:.5rem;border-radius:4px">@_logText</pre>
+        </div>
+    </div>
+}
+
+@if (!string.IsNullOrEmpty(_message))
+{
+    <div class="alert @(_isError ? "alert-danger" : "alert-info") mt-3" style="max-width:960px">@_message</div>
+}
+
+@code {
+    private TrainingPaths? _paths;
+    private PythonInfo? _py;
+    private string _pythonExe = "python";
+    private string _tab = "data";
+    private string _modality = "rgb";
+    private int _rgbMasks, _irMasks;
+
+    private int _epochs = 200, _imgsz = 640, _batch = 2;
+    private string _baseModel = "yolov8n-seg.pt";
+    private int _opset = 12, _exportImgsz = 640;
+
+    private ConvertResult? _convert;
+    private List<ModelInfo> _models = new();
+    private bool _working;
+    private string? _message;
+    private bool _isError;
+
+    private string _logText = "";
+    private ElementReference _logEl;
+    private CancellationTokenSource? _pollCts;
+
+    private string Active(string t) => _tab == t ? "active" : "";
+    private string PhaseBadge => Train.Phase switch
+    {
+        TrainingPhase.Training or TrainingPhase.Exporting or TrainingPhase.Converting => "bg-primary",
+        TrainingPhase.Done => "bg-success",
+        TrainingPhase.Error => "bg-danger",
+        _ => "bg-secondary"
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        _paths = await Train.GetPathsAsync();
+        if (_paths is null) return;
+        await RefreshCounts();
+        await RefreshModels();
+        _ = DetectPython();
+    }
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (firstRender && _paths is not null)
+            _ = PollLoop();
+    }
+
+    // 로그/상태를 주기적으로 폴링해 화면 갱신(학습 프로세스는 백그라운드에서 진행).
+    private async Task PollLoop()
+    {
+        _pollCts = new CancellationTokenSource();
+        var ct = _pollCts.Token;
+        try
+        {
+            using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(1000));
+            while (await timer.WaitForNextTickAsync(ct))
+            {
+                var txt = string.Join('\n', Train.LogTail(500));
+                if (txt != _logText)
+                {
+                    _logText = txt;
+                    await InvokeAsync(StateHasChanged);
+                }
+                else
+                {
+                    // 상태 배지/스피너 갱신을 위해 가볍게.
+                    await InvokeAsync(StateHasChanged);
+                }
+            }
+        }
+        catch (OperationCanceledException) { /* 페이지 종료 */ }
+    }
+
+    private async Task DetectPython()
+    {
+        _py = await Train.DetectPythonAsync();
+        _pythonExe = _py.Exe;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task SavePython()
+    {
+        try { await Train.SetPythonAsync(_pythonExe); await DetectPython(); }
+        catch (Exception ex) { Notify(ex.Message, true); }
+    }
+
+    private async Task RefreshCounts()
+    {
+        try
+        {
+            var list = await Lbl.ListAsync();
+            _rgbMasks = list.Count(e => e.RgbMask);
+            _irMasks = list.Count(e => e.IrMask);
+        }
+        catch { /* 무시 */ }
+    }
+
+    private async Task RefreshModels()
+    {
+        try { _models = await Train.ListModelsAsync(); }
+        catch (Exception ex) { Notify(ex.Message, true); }
+    }
+
+    private async Task Convert()
+    {
+        _working = true; _message = null;
+        try
+        {
+            await RefreshCounts();
+            _convert = await Train.ConvertAsync(_modality);
+            Notify($"데이터셋 변환 완료 — 사용 {_convert.Used}건.", false);
+        }
+        catch (Exception ex) { Notify($"변환 실패: {ex.Message}", true); }
+        finally { _working = false; }
+    }
+
+    private async Task StartTrain()
+    {
+        _message = null;
+        try { await Train.StartTrainingAsync(_epochs, _imgsz, _batch, _baseModel); }
+        catch (Exception ex) { Notify($"학습 시작 실패: {ex.Message}", true); }
+    }
+
+    private async Task StartExport()
+    {
+        _message = null;
+        try { await Train.StartExportAsync(_opset, _exportImgsz); }
+        catch (Exception ex) { Notify($"내보내기 시작 실패: {ex.Message}", true); }
+    }
+
+    private void Stop() => Train.Stop();
+
+    private void Notify(string msg, bool error) { _message = msg; _isError = error; }
+
+    public ValueTask DisposeAsync()
+    {
+        _pollCts?.Cancel();
+        _pollCts?.Dispose();
+        return ValueTask.CompletedTask;
+    }
+}

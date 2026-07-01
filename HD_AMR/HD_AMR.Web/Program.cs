@@ -73,6 +73,8 @@ builder.Services.AddScoped<DrawingService>();
 builder.Services.AddScoped<TeachingService>();
 builder.Services.AddScoped<ParameterService>();
 builder.Services.AddScoped<HD_AMR.Web.Services.LabelDataService>();
+// DL 학습 오케스트레이터 — 학습 프로세스가 페이지 이동/서킷과 무관하게 살아 있어야 하므로 싱글톤.
+builder.Services.AddSingleton<HD_AMR.Web.Services.WeldTrainingService>();
 
 var app = builder.Build();
 
