@@ -4,6 +4,7 @@
 @implements IAsyncDisposable
 @inject WeldTrainingService Train
 @inject LabelDataService Lbl
+@inject OnnxBeadSegmentationService Seg
 
 <PageTitle>비전 학습 (DL)</PageTitle>
 
@@ -160,12 +161,60 @@ else
         </div>
     }
 
-    @* ── ④ 추론(Phase 2 예정) ── *@
+    @* ── ④ 추론 · 검증 ── *@
     else if (_tab == "infer")
     {
-        <div class="alert alert-secondary" style="max-width:960px">
-            네이티브 ONNX 추론/검증(캡처·실시간 프레임에 비드 마스크 오버레이)은 다음 단계에서 붙입니다.
-            먼저 ①→②→③ 로 <code>weld_seg.onnx</code> 를 만들어 두세요.
+        <div class="card" style="max-width:960px">
+            <div class="card-body">
+                <h5 class="card-title">네이티브 ONNX 추론 (CPU)</h5>
+                <p class="text-muted" style="font-size:.9rem">
+                    학습한 <code>.onnx</code> 로 캡처 이미지에 비드 마스크를 추론해 오버레이로 확인합니다.
+                    (2장 학습 모델은 같은 이미지에 잘 맞으면 "학습됨"을 뜻할 뿐, 일반화는 별개)
+                </p>
+                @if (_models.Count == 0)
+                {
+                    <div class="alert alert-warning mb-0">모델이 없습니다. ①→②→③ 로 <code>weld_seg.onnx</code> 를 먼저 만드세요.</div>
+                }
+                else
+                {
+                    <div class="row g-2 align-items-end">
+                        <div class="col-auto"><label class="form-label mb-0" style="font-size:.85rem">모델</label>
+                            <select class="form-select form-select-sm" style="min-width:200px" @bind="_selModel">
+                                @foreach (var m in _models) { <option value="@m.Path">@m.Name</option> }
+                            </select></div>
+                        <div class="col-auto"><label class="form-label mb-0" style="font-size:.85rem">이미지</label>
+                            <select class="form-select form-select-sm" style="min-width:220px;font-family:monospace" @bind="_inferStem">
+                                @foreach (var e in _entries) { <option value="@e.Stem">@e.Stem</option> }
+                            </select></div>
+                        <div class="col-auto"><label class="form-label mb-0" style="font-size:.85rem">모달리티</label>
+                            <select class="form-select form-select-sm" @bind="_inferModality">
+                                <option value="rgb">RGB</option>
+                                <option value="ir">IR</option>
+                            </select></div>
+                        <div class="col-auto">
+                            <button class="btn btn-success btn-sm" @onclick="RunInfer" disabled="@_inferring">추론 실행</button>
+                        </div>
+                    </div>
+                    <div class="d-flex align-items-center gap-3 mt-2 flex-wrap">
+                        <label style="font-size:.85rem">conf @_conf.ToString("0.00")
+                            <input type="range" min="0.05" max="0.9" step="0.05" @bind="_conf" style="vertical-align:middle;width:140px" /></label>
+                        <label style="font-size:.85rem">mask @_maskThr.ToString("0.00")
+                            <input type="range" min="0.30" max="0.70" step="0.05" @bind="_maskThr" style="vertical-align:middle;width:140px" /></label>
+                    </div>
+
+                    @if (_inferResult is not null)
+                    {
+                        <div class="alert @(_inferResult.Count > 0 ? "alert-success" : "alert-warning") mt-2" style="font-size:.9rem">
+                            검출 <b>@_inferResult.Count</b>개 · 최고점수 @_inferResult.MaxScore.ToString("0.00")
+                            · 커버리지 @((_inferResult.Coverage * 100).ToString("0.0"))% · @_inferResult.Millis ms
+                            (@_inferResult.Width×@_inferResult.Height)
+                        </div>
+                        <div style="border:1px solid #ccc;background:#000;display:inline-block;max-width:100%">
+                            <img src="/vision/infer/overlay.jpg?k=@_inferBust" alt="overlay" style="display:block;max-width:100%" />
+                        </div>
+                    }
+                }
+            </div>
         </div>
     }
 
@@ -208,9 +257,20 @@ else
 
     private ConvertResult? _convert;
     private List<ModelInfo> _models = new();
+    private List<CaptureEntry> _entries = new();
     private bool _working;
     private string? _message;
     private bool _isError;
+
+    // ④ 추론
+    private string? _selModel;
+    private string? _inferStem;
+    private string _inferModality = "ir";
+    private double _conf = 0.25, _maskThr = 0.50;
+    private InferResult? _inferResult;
+    private int _inferBust = 1;
+    private bool _inferring;
+    private TrainingPhase _lastPhase = TrainingPhase.Idle;
 
     private string _logText = "";
     private ElementReference _logEl;
@@ -250,17 +310,13 @@ else
             using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(1000));
             while (await timer.WaitForNextTickAsync(ct))
             {
-                var txt = string.Join('\n', Train.LogTail(500));
-                if (txt != _logText)
-                {
-                    _logText = txt;
-                    await InvokeAsync(StateHasChanged);
-                }
-                else
-                {
-                    // 상태 배지/스피너 갱신을 위해 가볍게.
-                    await InvokeAsync(StateHasChanged);
-                }
+                // 작업이 방금 끝났으면(→ Done) 모델 목록을 자동 갱신.
+                if (_lastPhase != TrainingPhase.Done && Train.Phase == TrainingPhase.Done)
+                    await RefreshModels();
+                _lastPhase = Train.Phase;
+
+                _logText = string.Join('\n', Train.LogTail(500));
+                await InvokeAsync(StateHasChanged);
             }
         }
         catch (OperationCanceledException) { /* 페이지 종료 */ }
@@ -283,17 +339,36 @@ else
     {
         try
         {
-            var list = await Lbl.ListAsync();
-            _rgbMasks = list.Count(e => e.RgbMask);
-            _irMasks = list.Count(e => e.IrMask);
+            _entries = await Lbl.ListAsync();
+            _rgbMasks = _entries.Count(e => e.RgbMask);
+            _irMasks = _entries.Count(e => e.IrMask);
+            _inferStem ??= _entries.FirstOrDefault()?.Stem;
         }
         catch { /* 무시 */ }
     }
 
     private async Task RefreshModels()
     {
-        try { _models = await Train.ListModelsAsync(); }
+        try
+        {
+            _models = await Train.ListModelsAsync();
+            _selModel ??= _models.FirstOrDefault()?.Path;
+        }
         catch (Exception ex) { Notify(ex.Message, true); }
+    }
+
+    private async Task RunInfer()
+    {
+        if (_inferring) return;
+        if (_selModel is null || _inferStem is null) { Notify("모델과 이미지를 선택하세요.", true); return; }
+        _inferring = true; _message = null;
+        try
+        {
+            _inferResult = await Seg.RunOnCaptureAsync(_selModel, _inferStem, _inferModality, (float)_conf, (float)_maskThr);
+            _inferBust++;
+        }
+        catch (Exception ex) { Notify($"추론 실패: {ex.Message}", true); }
+        finally { _inferring = false; }
     }
 
     private async Task Convert()

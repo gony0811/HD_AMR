@@ -75,6 +75,8 @@ builder.Services.AddScoped<ParameterService>();
 builder.Services.AddScoped<HD_AMR.Web.Services.LabelDataService>();
 // DL 학습 오케스트레이터 — 학습 프로세스가 페이지 이동/서킷과 무관하게 살아 있어야 하므로 싱글톤.
 builder.Services.AddSingleton<HD_AMR.Web.Services.WeldTrainingService>();
+// DL 비드 세그멘테이션 추론(ONNX CPU) — 세션 캐시 유지 위해 싱글톤.
+builder.Services.AddSingleton<HD_AMR.Web.Services.OnnxBeadSegmentationService>();
 
 var app = builder.Build();
 
@@ -268,6 +270,10 @@ app.MapGet("/camera/label/image", async (string name, HD_AMR.Web.Services.LabelD
     var bytes = await lbl.ReadAsync(name);
     return bytes is null ? Results.NotFound() : Results.File(bytes, "image/png");
 });
+
+// DL 추론 결과 오버레이(비드 마스크) — 수동 트리거라 단일 JPEG. 없으면 204.
+app.MapGet("/vision/infer/overlay.jpg",
+    (HD_AMR.Web.Services.OnnxBeadSegmentationService seg) => JpegOrNoContent(seg.LastOverlay));
 
 static async Task StreamMjpegAsync(HttpContext http, CancellationToken ct, int fps,
     Func<Task<byte[]?>> getJpeg)
