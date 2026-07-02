@@ -201,7 +201,7 @@ public class ModbusTcpClient : IDisposable
         await _semaphore.WaitAsync(ct);
         try
         {
-            _logger.LogDebug("{Name} WriteMultipleRegisters: address={Address}, count={Count}", _settings.Name, startAddress, values.Length);
+             _logger.LogDebug("{Name} WriteMultipleRegisters: address={Address}, count={Count}", _settings.Name, startAddress, values.Length);
             await _master!.WriteMultipleRegistersAsync(_settings.SlaveId, startAddress, values);
         }
         catch (Exception ex)

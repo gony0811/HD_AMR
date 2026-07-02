@@ -27,6 +27,9 @@ public class AMRService : BackgroundService
     /// <summary>백그라운드 폴링으로 캐싱된 최신 로봇 상태 (미연결/읽기 실패 시 null)</summary>
     public RobotStatus? LatestStatus { get; private set; }
 
+    // 연결 실패 warn을 끊김당 1회만 남기기 위한 플래그(재연결 성공 시 리셋).
+    private bool _retryWarned;
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("AMRService 시작 ({Ip}:{Port})", _settings.IpAddress, _settings.Port);
@@ -37,8 +40,9 @@ public class AMRService : BackgroundService
             {
                 if (!_client.IsConnected)
                 {
-                    _logger.LogWarning("AMR Modbus TCP 연결 시도");
+                    _logger.LogDebug("AMR Modbus TCP 연결 시도");
                     await _client.ConnectAsync(stoppingToken);
+                    _retryWarned = false;
                     _logger.LogInformation("AMR Modbus TCP 연결 완료");
                 }
 
@@ -51,7 +55,11 @@ public class AMRService : BackgroundService
             catch (Exception ex)
             {
                 LatestStatus = null;
-                _logger.LogWarning(ex, "AMR Modbus TCP 연결/상태 읽기 실패 — 5초 후 재시도");
+                if (!_retryWarned)
+                {
+                    _logger.LogWarning("AMR Modbus TCP 연결/상태 읽기 실패, 이후 자동 재시도 — {Err}", ex.Message);
+                    _retryWarned = true;
+                }
                 await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
                 continue;
             }

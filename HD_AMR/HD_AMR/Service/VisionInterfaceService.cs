@@ -32,6 +32,9 @@ public class VisionInterfaceService : BackgroundService, IAsyncDisposable
         Client = new VisionEngine(SideRole.Client) { HeartbeatPeriodMs = _settings.HeartbeatPeriodMs };
     }
 
+    // 연결 실패 warn을 끊김당 1회만 남기기 위한 플래그(재연결 성공 시 리셋).
+    private bool _retryWarned;
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation(
@@ -44,9 +47,10 @@ public class VisionInterfaceService : BackgroundService, IAsyncDisposable
             {
                 if (!Client.IsConnected)
                 {
-                    _logger.LogWarning("비전 인터페이스 연결 시도");
+                    _logger.LogDebug("비전 인터페이스 연결 시도");
                     // 전송 계층의 자체 재연결은 끄고(autoReconnect:false), 이 루프가 5초 주기 재시도를 담당.
                     await Client.ConnectClientAsync(_settings.ServerHost, _settings.Port, autoReconnect: false);
+                    _retryWarned = false;
                     _logger.LogInformation("비전 인터페이스 연결 완료");
                 }
             }
@@ -56,7 +60,11 @@ public class VisionInterfaceService : BackgroundService, IAsyncDisposable
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "비전 인터페이스 연결 실패 — 5초 후 재시도");
+                if (!_retryWarned)
+                {
+                    _logger.LogWarning("비전 인터페이스 연결 실패, 이후 자동 재시도 — {Err}", ex.Message);
+                    _retryWarned = true;
+                }
             }
 
             await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);

@@ -40,6 +40,9 @@ public class CameraService : BackgroundService
     public DateTime LastFrameAt => _client.LastFrameAt;
     public string? ConnectionType => _client.ConnectionType;
 
+    // 연결 실패 warn을 끊김당 1회만 남기기 위한 플래그(재연결 성공 시 리셋).
+    private bool _retryWarned;
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("CameraService 시작 (device={Serial})",
@@ -51,8 +54,9 @@ public class CameraService : BackgroundService
             {
                 if (!_client.IsConnected)
                 {
-                    _logger.LogWarning("Orbbec 카메라 연결 시도");
+                    _logger.LogDebug("Orbbec 카메라 연결 시도");
                     await _client.ConnectAsync(stoppingToken);
+                    _retryWarned = false;
                 }
                 if (_client.IsConnected && !_client.IsStreaming)
                 {
@@ -76,8 +80,11 @@ public class CameraService : BackgroundService
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Orbbec 카메라 연결 실패 — {Sec}초 후 재시도",
-                    _settings.ReconnectDelayMs / 1000);
+                if (!_retryWarned)
+                {
+                    _logger.LogWarning("Orbbec 카메라 연결 실패, 이후 자동 재시도 — {Err}", ex.Message);
+                    _retryWarned = true;
+                }
             }
 
             await Task.Delay(TimeSpan.FromMilliseconds(_settings.ReconnectDelayMs), stoppingToken);

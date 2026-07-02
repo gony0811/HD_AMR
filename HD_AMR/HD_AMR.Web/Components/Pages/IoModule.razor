@@ -1,0 +1,363 @@
+@page "/io"
+@rendermode InteractiveServer
+@using HD_AMR.Communication
+@using HD_AMR.Service
+@implements IDisposable
+@inject IoModuleService Svc
+@inject ILogger<IoModule> Logger
+
+<PageTitle>IO Module</PageTitle>
+
+<h1 class="page-title">IO Module</h1>
+<p class="page-subtitle">LS산전 IO Module — 접점 모니터링 / 출력 제어</p>
+
+<div class="card card-surface mb-3" style="max-width: 820px;">
+    <div class="card-body">
+        <div class="d-flex align-items-center justify-content-between mb-2">
+            <h5 class="card-title mb-0">통신 연결 (ModbusTCP)</h5>
+            <span class="badge @(Svc.IsConnected ? "bg-success" : "bg-secondary")">
+                @(Svc.IsConnected ? "연결됨" : "끊김")
+            </span>
+        </div>
+        <div class="text-muted small">
+            @Svc.Settings.Name — @Svc.Settings.IpAddress:@Svc.Settings.Port, SlaveId @Svc.Settings.SlaveId
+            <span class="ms-1">(자동 연결 — 실패 시 5초마다 재시도)</span>
+        </div>
+        @if (!Svc.IsConnected && !string.IsNullOrEmpty(Svc.LastError))
+        {
+            <div class="alert alert-warning mt-2 mb-0 py-2">마지막 오류: @Svc.LastError</div>
+        }
+    </div>
+</div>
+
+<div class="card card-surface mb-3" style="max-width: 820px;">
+    <div class="card-body">
+        <h5 class="card-title mb-3">입력 접점</h5>
+        @if (_state is not null)
+        {
+            <div class="d-flex flex-wrap gap-2">
+                @for (var i = 0; i < _state.Inputs.Length; i++)
+                {
+                    var on = _state.Inputs[i];
+                    <span class="badge @(on ? "bg-success" : "bg-secondary")"
+                          style="min-width: 88px; padding: 0.5rem 0.4rem;">
+                        IN @i.ToString("00") · @(on ? "ON" : "OFF")
+                    </span>
+                }
+            </div>
+        }
+        else
+        {
+            <div class="text-muted small">상태 수신 대기 중…</div>
+        }
+    </div>
+</div>
+
+<div class="card card-surface mb-3" style="max-width: 820px;">
+    <div class="card-body">
+        <h5 class="card-title mb-3">출력 제어</h5>
+        @if (_state is not null)
+        {
+            <div class="d-flex flex-column gap-2">
+                @for (var i = 0; i < _state.Outputs.Length; i++)
+                {
+                    var idx = i;
+                    var on = _state.Outputs[idx];
+                    <div class="d-flex align-items-center gap-3">
+                        <span style="min-width: 64px; font-weight: 600;">OUT @idx</span>
+                        <span class="badge @(on ? "bg-success" : "bg-secondary")" style="min-width: 56px;">
+                            @(on ? "ON" : "OFF")
+                        </span>
+                        <div class="form-check form-switch mb-0">
+                            <input class="form-check-input" type="checkbox" role="switch"
+                                   style="width: 2.6rem; height: 1.4rem;"
+                                   checked="@on"
+                                   disabled="@(_busy || !Svc.IsConnected)"
+                                   @onchange="() => ToggleOutput(idx, !on)" />
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+        else
+        {
+            <div class="text-muted small">상태 수신 대기 중…</div>
+        }
+
+        @if (!string.IsNullOrEmpty(_message))
+        {
+            <div class="alert @(_isError ? "alert-danger" : "alert-success") mt-3 mb-0 py-2">
+                @_message
+            </div>
+        }
+    </div>
+</div>
+
+<details class="card card-surface" style="max-width: 820px;">
+    <summary class="card-body" style="cursor: pointer; font-weight: 600;">고급 / 디버그 — 범용 Modbus 읽기·쓰기</summary>
+    <div class="card-body pt-0">
+        <h6 class="mb-3">읽기</h6>
+        <div class="row g-2 align-items-end">
+            <div class="col-sm-5">
+                <label class="form-label mb-1">객체 종류</label>
+                <select class="form-select" @bind="_readType" disabled="@_busy">
+                    <option value="@ModbusObject.Coil">Coil (출력, FC01)</option>
+                    <option value="@ModbusObject.DiscreteInput">Discrete Input (입력, FC02)</option>
+                    <option value="@ModbusObject.HoldingRegister">Holding Register (FC03)</option>
+                    <option value="@ModbusObject.InputRegister">Input Register (FC04)</option>
+                </select>
+            </div>
+            <div class="col-sm-3">
+                <label class="form-label mb-1">시작 주소</label>
+                <input type="number" class="form-control" min="0" max="65535" @bind="_readStart" disabled="@_busy" />
+            </div>
+            <div class="col-sm-2">
+                <label class="form-label mb-1">개수</label>
+                <input type="number" class="form-control" min="1" max="125" @bind="_readCount" disabled="@_busy" />
+            </div>
+            <div class="col-sm-2">
+                <button class="btn btn-primary w-100" @onclick="Read"
+                        disabled="@(_busy || !Svc.IsConnected)">읽기</button>
+            </div>
+        </div>
+
+        @if (_bitResults is not null)
+        {
+            <div class="d-flex flex-wrap gap-2 mt-3">
+                @for (var i = 0; i < _bitResults.Length; i++)
+                {
+                    var addr = _readStart + i;
+                    var on = _bitResults[i];
+                    <span class="badge @(on ? "bg-success" : "bg-secondary")" style="min-width: 74px;">
+                        @addr : @(on ? "ON" : "OFF")
+                    </span>
+                }
+            </div>
+        }
+        else if (_regResults is not null)
+        {
+            <table class="table table-sm align-middle mt-3 mb-0" style="max-width: 380px;">
+                <thead>
+                    <tr>
+                        <th style="width: 110px;">주소</th>
+                        <th class="text-end">값 (dec)</th>
+                        <th class="text-end">값 (hex)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @for (var i = 0; i < _regResults.Length; i++)
+                    {
+                        <tr>
+                            <td>@(_readStart + i)</td>
+                            <td class="text-end">@_regResults[i]</td>
+                            <td class="text-end text-muted">0x@_regResults[i].ToString("X4")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+
+        <h6 class="mt-4 mb-3">쓰기</h6>
+        <div class="row g-2 align-items-end">
+            <div class="col-sm-4">
+                <label class="form-label mb-1">Coil 주소 (FC05)</label>
+                <input type="number" class="form-control" min="0" max="65535" @bind="_coilAddr" disabled="@_busy" />
+            </div>
+            <div class="col-sm-8">
+                <button class="btn btn-success me-2" @onclick="() => WriteCoil(true)"
+                        disabled="@(_busy || !Svc.IsConnected)">Coil ON</button>
+                <button class="btn btn-outline-secondary" @onclick="() => WriteCoil(false)"
+                        disabled="@(_busy || !Svc.IsConnected)">Coil OFF</button>
+            </div>
+        </div>
+
+        <div class="row g-2 align-items-end mt-2">
+            <div class="col-sm-4">
+                <label class="form-label mb-1">Register 주소 (FC06)</label>
+                <input type="number" class="form-control" min="0" max="65535" @bind="_regAddr" disabled="@_busy" />
+            </div>
+            <div class="col-sm-4">
+                <label class="form-label mb-1">값 (0~65535)</label>
+                <input type="number" class="form-control" min="0" max="65535" @bind="_regValue" disabled="@_busy" />
+            </div>
+            <div class="col-sm-4">
+                <button class="btn btn-primary" @onclick="WriteRegister"
+                        disabled="@(_busy || !Svc.IsConnected)">Register 쓰기</button>
+            </div>
+        </div>
+    </div>
+</details>
+
+@code {
+    private enum ModbusObject { Coil, DiscreteInput, HoldingRegister, InputRegister }
+
+    private IoModuleState? _state;
+
+    private ModbusObject _readType = ModbusObject.DiscreteInput;
+    private int _readStart;
+    private int _readCount = 16;
+
+    private bool[]? _bitResults;
+    private ushort[]? _regResults;
+
+    private int _coilAddr;
+    private int _regAddr;
+    private int _regValue;
+
+    private bool _busy;
+    private bool _isError;
+    private string? _message;
+
+    private PeriodicTimer? _timer;
+    private CancellationTokenSource? _cts;
+
+    protected override void OnInitialized()
+    {
+        _state = Svc.GetState();
+        _cts = new CancellationTokenSource();
+        _ = RefreshLoopAsync(_cts.Token);
+    }
+
+    // 서비스가 캐싱한 입출력 스냅샷을 주기적으로 당겨 화면 갱신.
+    private async Task RefreshLoopAsync(CancellationToken ct)
+    {
+        _timer = new PeriodicTimer(TimeSpan.FromMilliseconds(300));
+        try
+        {
+            while (await _timer.WaitForNextTickAsync(ct))
+            {
+                _state = Svc.GetState();
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // 페이지 폐기 — 정상 종료.
+        }
+    }
+
+    private async Task ToggleOutput(int index, bool value)
+    {
+        if (_busy) return;
+        _busy = true;
+        _message = null;
+        try
+        {
+            await Svc.WriteOutputAsync(index, value);
+            _state = Svc.GetState();
+            _isError = false;
+            _message = $"OUT {index} ← {(value ? "ON" : "OFF")} 설정 성공.";
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "IO Module 출력 쓰기 실패 (OUT {Index})", index);
+            _isError = true;
+            _message = $"OUT {index} 설정 실패: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task Read()
+    {
+        if (_busy) return;
+        _busy = true;
+        _message = null;
+        _bitResults = null;
+        _regResults = null;
+        var start = (ushort)Math.Clamp(_readStart, 0, 65535);
+        var count = (ushort)Math.Clamp(_readCount, 1, 125);
+        try
+        {
+            switch (_readType)
+            {
+                case ModbusObject.Coil:
+                    _bitResults = await Svc.ReadCoilsAsync(start, count);
+                    break;
+                case ModbusObject.DiscreteInput:
+                    _bitResults = await Svc.ReadDiscreteInputsAsync(start, count);
+                    break;
+                case ModbusObject.HoldingRegister:
+                    _regResults = await Svc.ReadHoldingRegistersAsync(start, count);
+                    break;
+                case ModbusObject.InputRegister:
+                    _regResults = await Svc.ReadInputRegistersAsync(start, count);
+                    break;
+            }
+            _isError = false;
+            _message = $"{_readType} {start}~{start + count - 1} 읽기 성공.";
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "IO Module 읽기 실패");
+            _isError = true;
+            _message = $"읽기 실패: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task WriteCoil(bool value)
+    {
+        if (_busy) return;
+        _busy = true;
+        _message = null;
+        var addr = (ushort)Math.Clamp(_coilAddr, 0, 65535);
+        try
+        {
+            await Svc.WriteSingleCoilAsync(addr, value);
+            _isError = false;
+            _message = $"Coil {addr} ← {(value ? "ON" : "OFF")} 쓰기 성공.";
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "IO Module Coil 쓰기 실패");
+            _isError = true;
+            _message = $"Coil 쓰기 실패: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task WriteRegister()
+    {
+        if (_busy) return;
+        _busy = true;
+        _message = null;
+        var addr = (ushort)Math.Clamp(_regAddr, 0, 65535);
+        var val = (ushort)Math.Clamp(_regValue, 0, 65535);
+        try
+        {
+            await Svc.WriteSingleRegisterAsync(addr, val);
+            _isError = false;
+            _message = $"Register {addr} ← {val} (0x{val:X4}) 쓰기 성공.";
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "IO Module Register 쓰기 실패");
+            _isError = true;
+            _message = $"Register 쓰기 실패: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    public void Dispose()
+    {
+        _cts?.Cancel();
+        _timer?.Dispose();
+        _cts?.Dispose();
+    }
+}

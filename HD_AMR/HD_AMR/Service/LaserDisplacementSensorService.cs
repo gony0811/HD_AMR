@@ -44,6 +44,9 @@ public class LaserDisplacementSensorService : BackgroundService
     /// <summary>마지막 접속 실패 메시지. 성공 시 null. 페이지에 표시.</summary>
     public string? LastError { get; private set; }
 
+    // 연결 실패 warn을 끊김당 1회만 남기기 위한 플래그(재연결 성공 시 리셋).
+    private bool _retryWarned;
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("LaserDisplacementSensorService 시작 (autoConnect={Auto})", _settings.AutoConnect);
@@ -56,6 +59,7 @@ public class LaserDisplacementSensorService : BackgroundService
                 {
                     await _client.ConnectAsync(stoppingToken);
                     LastError = null;
+                    _retryWarned = false;
                 }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -65,8 +69,11 @@ public class LaserDisplacementSensorService : BackgroundService
             catch (Exception ex)
             {
                 LastError = ex.Message;
-                _logger.LogWarning(ex, "레이저 변위 센서 연결 실패 — {Sec}초 후 재시도",
-                    _settings.ReconnectDelayMs / 1000);
+                if (!_retryWarned)
+                {
+                    _logger.LogWarning("레이저 변위 센서 연결 실패, 이후 자동 재시도 — {Err}", ex.Message);
+                    _retryWarned = true;
+                }
             }
 
             await Task.Delay(TimeSpan.FromMilliseconds(_settings.ReconnectDelayMs), stoppingToken);

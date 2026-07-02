@@ -69,3 +69,16 @@
 - FAIRINO에서 `SetToolCoord`(round-trip)가 실제로 **활성 공구를 전환**하는지 실물에서 확인 필요.
   RPC 계층 시그니처가 SDK 기준 "추정"이므로, 전환되지 않으면 펌웨어 전용 공구 선택 RPC를
   `IFairinoRpc`에 추가해 `EnsureActiveToolAsync` 내부 호출을 교체한다.
+
+## 후속 (2026-07-01) — 활성 공구 전환 방식 폐기, 클라이언트 재프레임으로 교체
+위 수정은 활성 공구를 **무변위 MoveJ**(현재 관절각 + tool 인자)로 전환했는데, 실물에서 이 MoveJ가
+`rc=154`로 거부되어(변위 0 궤적 거부 + MoveJ가 enable/자동 모드를 요구 — 단순 포즈 조회엔 부적절)
+`현재 포즈 조회 실패: 활성 공구 #1 전환(MoveJ) 실패 (rc=154)`로 나타났다.
+
+해결: **포즈 조회가 모션을 전혀 보내지 않도록** `GetTcpPoseInBaseAsync`를 재작성했다. 활성 공구를 물리적으로
+바꾸는 대신, 이동 공구 T의 TCP 포즈를 공구 오프셋으로 클라이언트에서 합성한다:
+`P_T = P_active ∘ inv(offset_active) ∘ offset_T` (`offset_k` = `GetToolCoord(k)`, 공구 0 = identity).
+- `EnsureActiveToolAsync`는 **삭제**됐고, 연결 흐름(`CobotService`)도 더는 전환 모션을 보내지 않는다.
+- 변환 수학은 신규 `Communication/PoseMath.cs`(ZYX RPY 도 규약, `ComputeFramePose`와 동일)에 있다.
+- 이 문서의 SetToolCoord/MoveJ 전환 방식은 위 재프레임으로 **대체**되었다. 오일러 규약은 여전히
+  실물 대조(감독된 MoveJ 후 GetForwardKin 비교) 검증이 필요하다.
