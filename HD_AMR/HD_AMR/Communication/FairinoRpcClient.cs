@@ -24,9 +24,9 @@ public class FairinoRpcClient : IDisposable
     private volatile bool _connected;
     private bool _disposed;
 
-    // 컨트롤러의 현재 활성 공구 번호 추적값. GetForwardKin/GetInverseKin/MoveL은 모두 활성 공구
-    // 프레임을 쓰므로, FK로 앵커를 읽기 전에 이동에 쓸 공구로 활성 공구를 맞춰야 프레임이 일치한다.
-    // -1 = 미상(연결 직후). 연결 시 재설정된다.
+    // 컨트롤러의 현재 활성 공구 번호 추적값. MoveL/MoveJ의 tool 인자가 활성 공구를 바꾸므로 성공 시 갱신한다.
+    // GetActualTCPNum 실측을 못 읽는 펌웨어에서 GetTcpPoseInBaseAsync의 재프레임에 쓸 활성 공구의
+    // 폴백 소스로 쓰인다(ResolveActiveToolAsync). -1 = 미상(연결 직후). 연결/해제 시 재설정된다.
     private int _activeTool = -1;
 
     public FairinoRpcClient(FairinoRpcSettings settings, ILogger<FairinoRpcClient> logger)
@@ -246,47 +246,45 @@ public class FairinoRpcClient : IDisposable
     }
 
     /// <summary>
-    /// 컨트롤러의 활성 공구를 <paramref name="tool"/>로 맞춘다. GetForwardKin/MoveL은 모두 활성 공구 프레임을
-    /// 쓰므로, FK 앵커를 읽기 전에 이동에 쓸 공구로 활성 공구를 동기화해야 첫 명령부터 프레임이 일치한다
-    /// (연결 직후/공구 변경 직후 첫 조그가 엉뚱한 곳으로 가던 문제 방지).
-    /// ⚠ SetToolCoord 되쓰기(round-trip)는 실물에서 활성 공구를 실제로 전환하지 못한다. 활성 공구는 모션
-    /// 명령의 tool 인자로만 바뀌므로, <b>현재 관절각으로 변위 0짜리 MoveJ(tool 지정)</b>를 보내 확실히 전환한다.
-    /// GetActualTCPNum 실측을 읽어 비교/검증하되, 펌웨어가 이를 지원하지 않으면(null) MoveL/MoveJ가 추적해 온
-    /// <see cref="_activeTool"/> 캐시로 폴백한다(스테일 캐시·펜던트 외부 변경에는 약하지만, 시퀀스 하드 실패는 막는다).
-    /// </summary>
-    public async Task EnsureActiveToolAsync(int tool, CancellationToken ct = default)
-    {
-        var actual = await TryGetActualToolNumAsync(ct: ct);   // null = 조회 미지원/실패
-        if (actual == tool) { _activeTool = tool; return; }
-
-        // 조회 불가(null)인데 추적 캐시가 이미 목표면 신뢰 → 불필요한 모션 회피(MoveL 직후 정상 경로).
-        if (actual is null && _activeTool == tool) return;
-
-        // 무변위 활성화: 현재 관절각으로 그대로 MoveJ(tool 지정) → 변위 0이지만 컨트롤러 활성 공구가 tool로 전환됨.
-        var joints = await GetActualJointPosAsync(ct: ct);
-        var rc = await MoveJAsync(joints, new double[6], tool: tool, user: 0, vel: _settings.DefaultVelPct, ct: ct);
-        if (rc != 0)
-            throw new InvalidOperationException($"활성 공구 #{tool} 전환(MoveJ) 실패 (rc={rc}).");
-
-        // 전환 검증: 조회가 가능하면 확인, 불가하면(null) MoveJ의 tool 인자를 신뢰.
-        var after = await TryGetActualToolNumAsync(ct: ct);
-        if (after is not null && after != tool)
-            throw new InvalidOperationException($"활성 공구 전환 확인 실패: 요청 {tool}, 실제 {after}.");
-        _activeTool = tool;
-        _logger.LogInformation("{Name} 활성 공구 #{Prev}→#{Tool}로 전환(무변위 MoveJ)", _settings.Name, actual, tool);
-    }
-
-    /// <summary>
-    /// 베이스 좌표계 기준 현재 TCP 포즈 [x,y,z,rx,ry,rz]. GetActualTCPPose는 활성 작업물 좌표계 기준이므로,
-    /// 현재 관절각을 읽어 정기구학(GetForwardKin)으로 BASE 기준 포즈를 구한다.
-    /// ⚠ FK는 활성 공구 프레임 기준이므로, 이 포즈로 이동할 때 쓸 <paramref name="tool"/>을 넘겨
-    /// 활성 공구를 먼저 맞춘다(이동 명령의 tool과 프레임 일치 보장).
+    /// 베이스 좌표계 기준, 이동 공구 <paramref name="tool"/> 프레임의 현재 TCP 포즈 [x,y,z,rx,ry,rz].
+    /// GetActualTCPPose는 활성 작업물 좌표계 기준이므로, 현재 관절각을 읽어 정기구학(GetForwardKin)으로
+    /// BASE 기준 포즈를 구한다.
+    /// ⚠ FK는 <b>현재 활성 공구</b> 프레임 기준이다. 과거에는 무변위 MoveJ로 활성 공구를 tool로 바꿔
+    /// 프레임을 맞췄으나(실물에서 rc=154로 거부), 이제는 <b>모션을 전혀 보내지 않고</b> 공구 오프셋으로
+    /// 클라이언트에서 재프레임한다: P_T = P_active ∘ inv(offset_active) ∘ offset_T.
+    /// 이렇게 하면 포즈 조회가 로봇을 움직이지 않고 enable/자동 모드도 요구하지 않는다. 후속 이동
+    /// (MoveL/MoveByOffset)이 같은 tool을 쓰므로 앵커와 이동 공구 프레임은 항상 일치한다.
     /// </summary>
     public async Task<double[]> GetTcpPoseInBaseAsync(int tool, CancellationToken ct = default)
     {
-        await EnsureActiveToolAsync(tool, ct);
         var joints = await GetActualJointPosAsync(ct: ct);
-        return await GetForwardKinAsync(joints, ct);
+        var pActive = await GetForwardKinAsync(joints, ct);   // BASE, 현재 활성 공구 프레임
+        int active = await ResolveActiveToolAsync(ct);
+        if (active == tool) return pActive;                    // 재프레임 불필요 → 공구 좌표 조회 생략.
+
+        var offAct = await GetToolOffsetAsync(active, ct);     // 0 → identity(flange)
+        var offT = await GetToolOffsetAsync(tool, ct);         // 0 → identity(flange)
+        var tFlange = PoseMath.Multiply(PoseMath.FromPose(pActive),
+                                        PoseMath.Inverse(PoseMath.FromPose(offAct)));
+        var tT = PoseMath.Multiply(tFlange, PoseMath.FromPose(offT));
+        return PoseMath.ToPose(tT);
+    }
+
+    /// <summary>공구 <paramref name="id"/>의 flange→TCP 오프셋 [x,y,z,rx,ry,rz]. 공구 0 = flange(identity).
+    /// 그 외는 GetToolCoordAsync(실패 시 throw)로 읽는다.</summary>
+    private async Task<double[]> GetToolOffsetAsync(int id, CancellationToken ct)
+        => id == 0 ? new double[6] : await GetToolCoordAsync(id, ct);
+
+    /// <summary>현재 활성 공구 번호를 확정한다: GetActualTCPNum 실측(read-only) 우선 → 추적 캐시
+    /// <see cref="_activeTool"/> → 기본값(DefaultToolId). 실측이 되면 캐시도 갱신한다.</summary>
+    private async Task<int> ResolveActiveToolAsync(CancellationToken ct)
+    {
+        var actual = await TryGetActualToolNumAsync(ct: ct);   // 미지원 시 null
+        if (actual is int a) { _activeTool = a; return a; }
+        if (_activeTool >= 0) return _activeTool;
+        _logger.LogWarning("{Name} 활성 공구 미상 — 기본 공구 #{Def} 가정(실제와 다르면 앵커가 틀어질 수 있음).",
+            _settings.Name, _settings.DefaultToolId);
+        return _settings.DefaultToolId;
     }
 
     // ── 이동 ───────────────────────────────────────────────────────
@@ -333,14 +331,19 @@ public class FairinoRpcClient : IDisposable
         => MoveLAsync(anchorPose, tool: tool, user: user, vel: vel, offsetFlag: 1, offsetPos: offset, ct: ct);
 
     /// <summary>관절 이동(MoveJ). jointPos = 6축 각도, descPose = 대응 직교 포즈(0이면 컨트롤러가 정기구학 계산).</summary>
-    public Task<int> MoveJAsync(double[] jointPos, double[] descPose, int? tool = null, int? user = null,
-                                double? vel = null, double acc = 0, double ovl = 100, double blendT = -1,
-                                CancellationToken ct = default)
-        => InvokeAsync("MoveJ", p => ToErr(p.MoveJ(
+    public async Task<int> MoveJAsync(double[] jointPos, double[] descPose, int? tool = null, int? user = null,
+                                      double? vel = null, double acc = 0, double ovl = 100, double blendT = -1,
+                                      CancellationToken ct = default)
+    {
+        int t = tool ?? _settings.DefaultToolId;
+        var rc = await InvokeAsync("MoveJ", p => ToErr(p.MoveJ(
                 jointPos, descPose,
-                tool ?? _settings.DefaultToolId, user ?? _settings.DefaultUserId,
+                t, user ?? _settings.DefaultUserId,
                 vel ?? _settings.DefaultVelPct, acc, ovl,
                 new double[4], blendT, 0, new double[6])), ct, faultRecovery: false);
+        if (rc == 0) _activeTool = t;   // MoveJ의 tool 인자가 컨트롤러 활성 공구를 바꾸므로 추적값 동기.
+        return rc;
+    }
 
     // ── 상태/제어 ──────────────────────────────────────────────────
     public Task<int> RobotEnableAsync(bool enable, CancellationToken ct = default)
