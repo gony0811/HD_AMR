@@ -1,6 +1,7 @@
 @page "/vision-training"
 @rendermode InteractiveServer
 @using HD_AMR.Web.Services
+@using Microsoft.AspNetCore.Components.Forms
 @implements IAsyncDisposable
 @inject WeldTrainingService Train
 @inject LabelDataService Lbl
@@ -190,7 +191,7 @@ else
                             <select class="form-select form-select-sm" style="min-width:200px" @bind="_selModel">
                                 @foreach (var m in _models) { <option value="@m.Path">@m.Name</option> }
                             </select></div>
-                        <div class="col-auto"><label class="form-label mb-0" style="font-size:.85rem">이미지</label>
+                        <div class="col-auto"><label class="form-label mb-0" style="font-size:.85rem">캡처 이미지</label>
                             <select class="form-select form-select-sm" style="min-width:220px;font-family:monospace" @bind="_inferStem">
                                 @foreach (var e in _entries) { <option value="@e.Stem">@e.Stem</option> }
                             </select></div>
@@ -201,6 +202,17 @@ else
                             </select></div>
                         <div class="col-auto">
                             <button class="btn btn-success btn-sm" @onclick="RunInfer" disabled="@_inferring">추론 실행</button>
+                        </div>
+                    </div>
+
+                    @* 외부(검증용) 이미지 업로드 — 캡처 폴더 밖 이미지에 바로 추론 *@
+                    <div class="mt-2 p-2" style="background:#f6f8fa;border:1px dashed #bbb;border-radius:6px">
+                        <label class="form-label mb-1" style="font-size:.85rem">또는 검증용 이미지 업로드
+                            <span class="text-muted">(따로 빼둔 이미지 — 모델이 학습한 모달리티와 같은 종류로)</span></label>
+                        <div class="d-flex align-items-center gap-2 flex-wrap">
+                            <InputFile OnChange="OnUpload" accept="image/*" class="form-control form-control-sm" style="max-width:340px" />
+                            @if (!string.IsNullOrEmpty(_uploadName)) { <span class="text-muted" style="font-size:.85rem">📄 @_uploadName</span> }
+                            @if (_inferring) { <span class="spinner-border spinner-border-sm text-primary"></span> }
                         </div>
                     </div>
                     <div class="d-flex align-items-center gap-3 mt-2 flex-wrap">
@@ -293,6 +305,7 @@ else
     private InferResult? _inferResult;
     private int _inferBust = 1;
     private bool _inferring;
+    private string? _uploadName;
     private TrainingPhase _lastPhase = TrainingPhase.Idle;
 
     private string _logText = "";
@@ -414,10 +427,29 @@ else
         _inferring = true; _message = null;
         try
         {
+            _uploadName = null;
             _inferResult = await Seg.RunOnCaptureAsync(_selModel, _inferStem, _inferModality, (float)_conf, (float)_maskThr);
             _inferBust++;
         }
         catch (Exception ex) { Notify($"추론 실패: {ex.Message}", true); }
+        finally { _inferring = false; }
+    }
+
+    // 외부 검증용 이미지 업로드 → 바이트로 바로 추론.
+    private async Task OnUpload(InputFileChangeEventArgs e)
+    {
+        if (_inferring) return;
+        if (_selModel is null) { Notify("먼저 모델을 선택하세요.", true); return; }
+        _inferring = true; _message = null;
+        try
+        {
+            using var ms = new MemoryStream();
+            await e.File.OpenReadStream(30 * 1024 * 1024).CopyToAsync(ms); // 최대 30MB
+            _inferResult = await Seg.RunOnBytesAsync(_selModel, ms.ToArray(), (float)_conf, (float)_maskThr);
+            _uploadName = e.File.Name;
+            _inferBust++;
+        }
+        catch (Exception ex) { Notify($"업로드 추론 실패: {ex.Message}", true); }
         finally { _inferring = false; }
     }
 
