@@ -117,8 +117,15 @@ else
                                 disabled="@(_working || Train.IsBusy || _py is not { UltralyticsOk: true })">학습 시작</button>
                     </div>
                 </div>
-                <div class="text-muted mt-2" style="font-size:.8rem">
-                    CPU 학습은 느립니다. 2~수십 장 규모에서 배선/과적합 확인이 목적이면 epochs 100~300 권장.
+                <div class="form-check mt-2">
+                    <input class="form-check-input" type="checkbox" id="augMin" @bind="_minimalAug" />
+                    <label class="form-check-label" for="augMin" style="font-size:.9rem">
+                        증강 최소화 <span class="text-muted">(mosaic·기하·색 증강 끔 — 소규모 데이터/과적합 검증용, 권장)</span>
+                    </label>
+                </div>
+                <div class="text-muted mt-1" style="font-size:.8rem">
+                    CPU 학습은 느립니다. 2~수십 장 규모에서 배선/과적합 확인이 목적이면 epochs 100~300 + 증강 최소화 권장.
+                    데이터가 충분해지면(수백 장) 체크 해제해 mosaic 등 기본 증강을 켜세요.
                 </div>
             </div>
         </div>
@@ -251,7 +258,8 @@ else
     private string _modality = "rgb";
     private int _rgbMasks, _irMasks;
 
-    private int _epochs = 200, _imgsz = 640, _batch = 2;
+    private int _epochs = 300, _imgsz = 640, _batch = 2;
+    private bool _minimalAug = true;
     private string _baseModel = "yolov8n-seg.pt";
     private int _opset = 12, _exportImgsz = 640;
 
@@ -387,7 +395,7 @@ else
     private async Task StartTrain()
     {
         _message = null;
-        try { await Train.StartTrainingAsync(_epochs, _imgsz, _batch, _baseModel); }
+        try { await Train.StartTrainingAsync(_epochs, _imgsz, _batch, _baseModel, _minimalAug); }
         catch (Exception ex) { Notify($"학습 시작 실패: {ex.Message}", true); }
     }
 

@@ -195,7 +195,11 @@ public sealed class WeldTrainingService
     }
 
     // ── ② 학습 ───────────────────────────────────────────────────────────────
-    public async Task StartTrainingAsync(int epochs, int imgsz, int batch, string baseModel)
+    /// <param name="minimalAug">
+    /// 증강 최소화(소규모/과적합 검증용). true 면 mosaic·기하·색 증강을 끄고 밝기만 약간 준다.
+    /// 표본이 적을 때 mosaic 은 오히려 학습을 방해하므로 기본 권장값은 true.
+    /// </param>
+    public async Task StartTrainingAsync(int epochs, int imgsz, int batch, string baseModel, bool minimalAug)
     {
         if (IsBusy) throw new InvalidOperationException("이미 실행 중인 작업이 있습니다.");
         var paths = await GetPathsAsync() ?? throw new InvalidOperationException("캡처 폴더 미설정");
@@ -207,12 +211,13 @@ public sealed class WeldTrainingService
         await File.WriteAllTextAsync(script, TrainPy);
 
         var py = await GetPythonAsync();
+        var aug = minimalAug ? "min" : "full";
         var args = new[]
         {
             script, baseModel, dataYaml, imgsz.ToString(), epochs.ToString(),
-            batch.ToString(), "cpu", paths.Runs, "hd"
+            batch.ToString(), "cpu", paths.Runs, "hd", aug
         };
-        Emit($"[학습] 시작 — model={baseModel} epochs={epochs} imgsz={imgsz} batch={batch} device=cpu");
+        Emit($"[학습] 시작 — model={baseModel} epochs={epochs} imgsz={imgsz} batch={batch} device=cpu 증강={(minimalAug ? "최소" : "기본")}");
         StartProcess(py, args, paths.Workspace, TrainingPhase.Training, "학습");
     }
 
@@ -349,9 +354,13 @@ public sealed class WeldTrainingService
     private const string TrainPy =
         "import sys\n" +
         "from ultralytics import YOLO\n" +
-        "model, data, imgsz, epochs, batch, device, project, name = sys.argv[1:9]\n" +
-        "YOLO(model).train(data=data, imgsz=int(imgsz), epochs=int(epochs), batch=int(batch),\n" +
-        "                  device=device, project=project, name=name, exist_ok=True, plots=True)\n" +
+        "model, data, imgsz, epochs, batch, device, project, name, aug = sys.argv[1:10]\n" +
+        "kw = dict(data=data, imgsz=int(imgsz), epochs=int(epochs), batch=int(batch),\n" +
+        "          device=device, project=project, name=name, exist_ok=True, plots=True)\n" +
+        "if aug == 'min':\n" +
+        "    kw.update(mosaic=0.0, close_mosaic=0, hsv_h=0.0, hsv_s=0.0, hsv_v=0.2,\n" +
+        "              translate=0.0, scale=0.0, fliplr=0.0, erasing=0.0)\n" +
+        "YOLO(model).train(**kw)\n" +
         "print('TRAIN_DONE')\n";
 
     private const string ExportPy =
