@@ -284,11 +284,15 @@ else
                 var cur = Train.TrainCurrentEpoch;
                 var tot = Train.TrainTotalEpochs;
                 var pct = tot > 0 ? (int)Math.Round(100.0 * cur / tot) : 0;
-                <div class="progress mt-2" style="height:20px">
-                    <div class="progress-bar progress-bar-striped @(Train.IsBusy ? "progress-bar-animated" : "")"
-                         role="progressbar" style="width:@pct%">@cur/@tot · @pct%</div>
+                @* 글자는 바 위 전체 폭에 두어 진행률이 낮아도 항상 읽히게 한다. *@
+                <div class="d-flex justify-content-between align-items-baseline mt-2" style="font-size:.82rem">
+                    <span><b>@cur/@tot</b> epoch · @pct%</span>
+                    <span class="text-muted">@EtaText</span>
                 </div>
-                <div class="text-muted mt-1" style="font-size:.8rem">@EtaText</div>
+                <div class="progress" style="height:14px">
+                    <div class="progress-bar progress-bar-striped @(Train.IsBusy ? "progress-bar-animated" : "")"
+                         role="progressbar" style="width:@pct%"></div>
+                </div>
             }
 
             <pre @ref="_logEl" style="background:#111;color:#ddd;font-size:.78rem;max-height:320px;overflow:auto;margin:.5rem 0 0;padding:.5rem;border-radius:4px"></pre>
