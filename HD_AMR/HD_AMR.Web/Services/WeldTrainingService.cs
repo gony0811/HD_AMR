@@ -186,6 +186,63 @@ public sealed class WeldTrainingService
         return new ConvertResult(used, skipped, instances, yamlPath);
     }
 
+    // ── 데이터 증강: 이미지+마스크 90° 회전본 생성 ────────────────────────────
+    /// <summary>
+    /// 캡처 폴더의 각 촬영본(이미지 + 마스크 초안)을 <b>쌍으로</b> 90° 회전해 새 촬영본으로 저장한다.
+    /// 0°/90° 두 방향 비드를 모두 학습하기 위한 오프라인 증강. 마스크도 함께 회전하므로 정렬이 유지된다.
+    /// 이미 회전본(stem 에 cw90/ccw90 포함)은 원본에서 제외해 재실행 시 중복 회전을 막는다.
+    /// </summary>
+    /// <param name="direction">"cw"(시계) | "ccw"(반시계) | "both"(양방향)</param>
+    public async Task<RotateResult> GenerateRotatedCopiesAsync(string direction)
+    {
+        var paths = await GetPathsAsync() ?? throw new InvalidOperationException("캡처 저장 폴더가 설정되지 않았습니다.");
+        var dir = paths.CaptureDir;
+        if (!Directory.Exists(dir)) throw new DirectoryNotFoundException(dir);
+
+        var dirs = direction switch
+        {
+            "both" => new[] { ("_cw90", RotateFlags.Rotate90Clockwise), ("_ccw90", RotateFlags.Rotate90Counterclockwise) },
+            "ccw" => new[] { ("_ccw90", RotateFlags.Rotate90Counterclockwise) },
+            _ => new[] { ("_cw90", RotateFlags.Rotate90Clockwise) },
+        };
+        var kinds = new[] { "rgb", "ir", "rgb_maskdraft", "ir_maskdraft" };
+
+        // 원본 stem 수집(이미 회전된 것 제외).
+        var stems = new HashSet<string>();
+        foreach (var f in Directory.GetFiles(dir, "*_ir.png").Concat(Directory.GetFiles(dir, "*_rgb.png")))
+        {
+            var name = Path.GetFileName(f);
+            var stem = name.EndsWith("_ir.png") ? name[..^"_ir.png".Length] : name[..^"_rgb.png".Length];
+            if (stem.Contains("cw90")) continue; // cw90/ccw90 모두 제외
+            stems.Add(stem);
+        }
+
+        int created = 0, skipped = 0;
+        await Task.Run(() =>
+        {
+            foreach (var stem in stems)
+                foreach (var (suffix, flag) in dirs)
+                {
+                    var newStem = stem + suffix;
+                    bool any = false;
+                    foreach (var kind in kinds)
+                    {
+                        var src = Path.Combine(dir, $"{stem}_{kind}.png");
+                        if (!File.Exists(src)) continue;
+                        using var m = Cv2.ImRead(src, ImreadModes.Unchanged);
+                        if (m.Empty()) continue;
+                        using var r = new Mat();
+                        Cv2.Rotate(m, r, flag);
+                        Cv2.ImWrite(Path.Combine(dir, $"{newStem}_{kind}.png"), r);
+                        any = true;
+                    }
+                    if (any) created++; else skipped++;
+                }
+        });
+        Emit($"[증강] 90° 회전본 생성 — {created}건 (방향 {direction})");
+        return new RotateResult(created, skipped);
+    }
+
     /// <summary>마스크 PNG → YOLO-seg 라벨 텍스트(클래스0 정규화 폴리곤). 반환: (텍스트, 폴리곤 수).</summary>
     private static (string Text, int Count) MaskToYoloLabel(string maskPath)
     {
@@ -410,4 +467,5 @@ public enum TrainingPhase { Idle, Converting, Training, Exporting, Done, Error }
 public sealed record TrainingPaths(string CaptureDir, string Workspace, string Dataset, string Runs, string Models);
 public sealed record PythonInfo(bool PythonOk, bool UltralyticsOk, string Exe, string Detail);
 public sealed record ConvertResult(int Used, int Skipped, int Instances, string DataYaml);
+public sealed record RotateResult(int Created, int Skipped);
 public sealed record ModelInfo(string Path, string Name, long Bytes, DateTime Modified);
