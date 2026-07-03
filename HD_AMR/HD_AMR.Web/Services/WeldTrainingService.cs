@@ -26,6 +26,11 @@ public sealed class WeldTrainingService
     public string? StatusText { get; private set; }
     public bool IsBusy { get { lock (_gate) return _proc is { HasExited: false }; } }
 
+    // 학습 진행 상태(진행 바·ETA용). 학습이 아닌 작업 중에는 TrainTotalEpochs=0.
+    public int TrainTotalEpochs { get; private set; }
+    public int TrainCurrentEpoch { get; private set; }
+    public DateTime? TrainStartUtc { get; private set; }
+
     public WeldTrainingService(IServiceScopeFactory scopes, ILogger<WeldTrainingService> log)
     {
         _scopes = scopes;
@@ -36,11 +41,32 @@ public sealed class WeldTrainingService
     private void Emit(string? line)
     {
         if (line is null) return;
+        // 학습 중이면 ultralytics 진행 로그의 "현재/전체 epoch"(예: 17/100)을 파싱해 진행 상태 갱신.
+        if (TrainTotalEpochs > 0)
+        {
+            var ep = TryParseEpoch(line, TrainTotalEpochs);
+            if (ep > 0 && ep >= TrainCurrentEpoch) TrainCurrentEpoch = ep;
+        }
         lock (_gate)
         {
             _lines.Add(line);
             if (_lines.Count > 4000) _lines.RemoveRange(0, _lines.Count - 4000);
         }
+    }
+
+    // "…  17/100  0G  …" 같은 줄에서 현재 epoch(17)을 뽑는다. 분모가 전체 epoch 수와 일치하는
+    // "/{total}" 토큰을 찾아, 바로 뒤가 숫자가 아니고(예: /1000 배제) 앞의 연속 숫자를 읽는다.
+    private static int TryParseEpoch(string line, int total)
+    {
+        var tok = "/" + total.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        int idx = line.IndexOf(tok, StringComparison.Ordinal);
+        if (idx <= 0) return 0;
+        int after = idx + tok.Length;
+        if (after < line.Length && char.IsDigit(line[after])) return 0; // "/1000" 등 배제
+        int end = idx - 1, j = end;
+        while (j >= 0 && char.IsDigit(line[j])) j--;
+        if (j == end) return 0;
+        return int.TryParse(line.AsSpan(j + 1, end - j), out var v) ? v : 0;
     }
 
     /// <summary>최근 로그 tail 줄. UI 폴링용.</summary>
@@ -217,6 +243,10 @@ public sealed class WeldTrainingService
             script, baseModel, dataYaml, imgsz.ToString(), epochs.ToString(),
             batch.ToString(), "cpu", paths.Runs, "hd", aug
         };
+        // 진행 상태 초기화(진행 바·ETA).
+        TrainTotalEpochs = epochs;
+        TrainCurrentEpoch = 0;
+        TrainStartUtc = DateTime.UtcNow;
         Emit($"[학습] 시작 — model={baseModel} epochs={epochs} imgsz={imgsz} batch={batch} device=cpu 증강={(minimalAug ? "최소" : "기본")}");
         StartProcess(py, args, paths.Workspace, TrainingPhase.Training, "학습");
     }
@@ -235,6 +265,7 @@ public sealed class WeldTrainingService
 
         var py = await GetPythonAsync();
         var args = new[] { script, best, opset.ToString(), imgsz.ToString(), paths.Models };
+        TrainTotalEpochs = 0; // 내보내기는 epoch 진행 개념 없음.
         Emit($"[내보내기] 시작 — {best} → ONNX(opset {opset}, imgsz {imgsz})");
         StartProcess(py, args, paths.Workspace, TrainingPhase.Exporting, "내보내기");
     }

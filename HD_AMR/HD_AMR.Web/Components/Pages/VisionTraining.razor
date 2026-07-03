@@ -5,6 +5,7 @@
 @inject WeldTrainingService Train
 @inject LabelDataService Lbl
 @inject OnnxBeadSegmentationService Seg
+@inject IJSRuntime JS
 
 <PageTitle>비전 학습 (DL)</PageTitle>
 
@@ -240,7 +241,21 @@ else
                 }
                 <button class="btn btn-sm btn-outline-secondary" @onclick="() => Train.ClearLog()">로그 지우기</button>
             </div>
-            <pre @ref="_logEl" style="background:#111;color:#ddd;font-size:.78rem;max-height:320px;overflow:auto;margin:.5rem 0 0;padding:.5rem;border-radius:4px">@_logText</pre>
+
+            @* epoch 진행 바 + ETA (학습 중일 때) *@
+            @if (Train.TrainTotalEpochs > 0 && (Train.IsBusy || Train.TrainCurrentEpoch > 0))
+            {
+                var cur = Train.TrainCurrentEpoch;
+                var tot = Train.TrainTotalEpochs;
+                var pct = tot > 0 ? (int)Math.Round(100.0 * cur / tot) : 0;
+                <div class="progress mt-2" style="height:20px">
+                    <div class="progress-bar progress-bar-striped @(Train.IsBusy ? "progress-bar-animated" : "")"
+                         role="progressbar" style="width:@pct%">@cur/@tot · @pct%</div>
+                </div>
+                <div class="text-muted mt-1" style="font-size:.8rem">@EtaText</div>
+            }
+
+            <pre @ref="_logEl" style="background:#111;color:#ddd;font-size:.78rem;max-height:320px;overflow:auto;margin:.5rem 0 0;padding:.5rem;border-radius:4px"></pre>
         </div>
     </div>
 }
@@ -285,6 +300,30 @@ else
     private CancellationTokenSource? _pollCts;
 
     private string Active(string t) => _tab == t ? "active" : "";
+
+    // 경과시간 ÷ 완료 epoch 로 epoch당 평균을 구해 남은 epoch에 외삽 → ETA.
+    private string EtaText
+    {
+        get
+        {
+            var start = Train.TrainStartUtc;
+            int cur = Train.TrainCurrentEpoch, tot = Train.TrainTotalEpochs;
+            if (start is null || tot <= 0) return "";
+            var elapsed = (DateTime.UtcNow - start.Value).TotalSeconds;
+            if (Train.Phase != TrainingPhase.Training)
+                return $"경과 {FormatDuration(elapsed)}";
+            if (cur <= 0) return $"예상 시간 계산 중… (경과 {FormatDuration(elapsed)})";
+            var remain = elapsed / cur * Math.Max(0, tot - cur);
+            return $"약 {FormatDuration(remain)} 남음 · 경과 {FormatDuration(elapsed)}";
+        }
+    }
+
+    private static string FormatDuration(double seconds)
+    {
+        if (seconds < 60) return $"{Math.Round(seconds)}초";
+        if (seconds < 3600) return $"{Math.Floor(seconds / 60)}분 {Math.Round(seconds % 60)}초";
+        return $"{Math.Floor(seconds / 3600)}시간 {Math.Round(seconds % 3600 / 60)}분";
+    }
     private string PhaseBadge => Train.Phase switch
     {
         TrainingPhase.Training or TrainingPhase.Exporting or TrainingPhase.Converting => "bg-primary",
@@ -325,6 +364,9 @@ else
 
                 _logText = string.Join('\n', Train.LogTail(500));
                 await InvokeAsync(StateHasChanged);
+                // 로그는 sticky-scroll 헬퍼로 밀어넣는다(바닥일 때만 따라감).
+                try { await JS.InvokeVoidAsync("hdAmrLog.set", _logEl, _logText); }
+                catch { /* 아직 렌더 전/요소 없음 무시 */ }
             }
         }
         catch (OperationCanceledException) { /* 페이지 종료 */ }
