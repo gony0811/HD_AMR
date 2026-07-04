@@ -32,6 +32,14 @@ public class CobotService : BackgroundService
     public Task<int> StopMotionImmediateAsync(CancellationToken ct = default)
         => _rpc.StopMotionImmediateAsync(ct);
 
+    /// <summary>점동 감속 정지(버튼 떼기). 세마포어 우회로 StopJOG 전송.</summary>
+    public Task<int> StopJogAsync(JogFrame frame, CancellationToken ct = default)
+        => _rpc.StopJogAsync(frame, ct);
+
+    /// <summary>점동 즉시 정지(비상). 세마포어 우회로 ImmStopJOG 전송.</summary>
+    public Task<int> ImmStopJogImmediateAsync(CancellationToken ct = default)
+        => _rpc.ImmStopJogImmediateAsync(ct);
+
     /// <summary>
     /// 서보(로봇) 활성화 상태. FAIRINO는 서보 전용 제어가 없어 RobotEnable로 통합되며,
     /// 상태 피드백에서 실측을 신뢰성 있게 읽을 수 없어 마지막 명령 상태를 보관한다.

@@ -55,9 +55,9 @@
 | 항목 | 바이트 오프셋 | 형식 |
 |---|---|---|
 | 측정값(변위) | `48 + (N-1)*4` (CH1=48, CH2=52, CH3=56) | 32bit signed int |
-| Sensor Enable(측정범위 내/유효) | byte 8, bit (N-1) | 채널별 비트 |
+| Sensor Enable(측정범위 내/유효) | byte 10, bit (N-1) | 채널별 비트 (byte 8-9는 Reserved; 라이브 hex 확인 권장) |
 | Sensor Error / Warning | byte 2 / byte 4, bit (N-1) | 채널별 비트 |
-| 판정 HIGH / LOW / PASS | byte 18 / 20 / 22, bit (N-1) | 채널별 비트 |
+| 판정 HIGH / LOW / PASS | byte 18 / 20 / 22, bit (N-1) | 채널별 비트 (Sensor Output 1/2/3; 라이브 확인 필요) |
 
 - **Output Assembly(132) — 영점 제어**: External Input Request 2(=Zero Reset) = **byte 2**, 채널별 비트
   (CH1=bit0 … CH8=bit7, CH9~16=byte 3). 비트 ON=현재값을 0으로(영점 설정), OFF=실제값 복원(영점 해제).

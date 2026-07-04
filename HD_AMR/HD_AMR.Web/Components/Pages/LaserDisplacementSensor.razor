@@ -82,7 +82,6 @@
                     <tr>
                         <th style="width: 70px;">채널</th>
                         <th class="text-end">변위</th>
-                        <th class="text-end">원시값</th>
                         <th>상태</th>
                         <th style="width: 190px;">영점</th>
                     </tr>
@@ -93,17 +92,11 @@
                         <tr>
                             <td><strong>CH@(r.Channel)</strong></td>
                             <td class="text-end">
-                                @if (r.Enabled)
-                                {
-                                    <span class="fs-5 fw-semibold">@r.Value.ToString("F3")</span>
-                                    <span class="text-muted ms-1">@Svc.Settings.MeasurementUnit</span>
-                                }
-                                else
-                                {
-                                    <span class="text-muted">—</span>
-                                }
+                                @* 변위 숫자는 Enabled 여부와 무관하게 항상 표시(범위밖이면 흐리게).
+                                   유효성은 옆의 "상태" 배지로 구분한다. *@
+                                <span class="fs-5 fw-semibold @(r.Enabled ? "" : "text-muted")">@r.Value.ToString("F3")</span>
+                                <span class="text-muted ms-1">@Svc.Settings.MeasurementUnit</span>
                             </td>
-                            <td class="text-end text-muted">@r.Raw</td>
                             <td>
                                 <span class="badge @(r.Enabled ? "bg-success" : "bg-secondary") me-1">
                                     @(r.Enabled ? "측정중" : "범위밖")
@@ -141,6 +134,33 @@
                     }
                 </tbody>
             </table>
+
+            @* 진단: 실장비에서 상태 비트 오프셋 확정용. 측정 중일 때 아래 각 상태 byte 의 실제 값을 보고
+               어느 byte 의 CH비트가 ON 되는지 확인해 appsettings 의 *ByteOffset 을 확정한다. *@
+            <details class="mt-3">
+                <summary class="text-muted" style="cursor: pointer;">진단 (상태 오프셋 / Input Assembly 원본)</summary>
+                <div class="mt-2">
+                    <div class="mb-2 small">
+                        <span class="text-muted">측정:</span> byte @Svc.Settings.MeasurementByteOffset
+                        (stride @Svc.Settings.MeasurementStride) · ×@Svc.Settings.MeasurementScale
+                    </div>
+                    <table class="table table-sm mb-2" style="max-width: 360px;">
+                        <thead>
+                            <tr><th>상태</th><th class="text-end">오프셋</th><th class="text-end">현재 byte 값</th></tr>
+                        </thead>
+                        <tbody>
+                            <tr><td>Enable</td><td class="text-end">byte @Svc.Settings.SensorEnableByteOffset</td><td class="text-end font-monospace">@ByteHex(Svc.Settings.SensorEnableByteOffset)</td></tr>
+                            <tr><td>Error</td><td class="text-end">byte @Svc.Settings.SensorErrorByteOffset</td><td class="text-end font-monospace">@ByteHex(Svc.Settings.SensorErrorByteOffset)</td></tr>
+                            <tr><td>Warning</td><td class="text-end">byte @Svc.Settings.SensorWarningByteOffset</td><td class="text-end font-monospace">@ByteHex(Svc.Settings.SensorWarningByteOffset)</td></tr>
+                            <tr><td>HIGH</td><td class="text-end">byte @Svc.Settings.OutputHighByteOffset</td><td class="text-end font-monospace">@ByteHex(Svc.Settings.OutputHighByteOffset)</td></tr>
+                            <tr><td>LOW</td><td class="text-end">byte @Svc.Settings.OutputLowByteOffset</td><td class="text-end font-monospace">@ByteHex(Svc.Settings.OutputLowByteOffset)</td></tr>
+                            <tr><td>PASS</td><td class="text-end">byte @Svc.Settings.OutputPassByteOffset</td><td class="text-end font-monospace">@ByteHex(Svc.Settings.OutputPassByteOffset)</td></tr>
+                        </tbody>
+                    </table>
+                    <div class="small text-muted mb-1">Input Assembly (@(_dumpBytes?.Length ?? 0) bytes, hex):</div>
+                    <pre class="small bg-body-secondary p-2 rounded" style="white-space: pre-wrap; word-break: break-all;">@_hexDump</pre>
+                </div>
+            </details>
         }
     </div>
 </div>
@@ -151,6 +171,10 @@
     private string? _message;
 
     private IReadOnlyList<LaserChannelReading> _readings = Array.Empty<LaserChannelReading>();
+
+    // 진단(Input Assembly 원본 hex) 상태.
+    private byte[]? _dumpBytes;
+    private string _hexDump = "(프레임 없음)";
 
     private PeriodicTimer? _timer;
     private CancellationTokenSource? _cts;
@@ -173,6 +197,8 @@
                 if (Svc.IsConnected)
                 {
                     _readings = Svc.GetReadings();
+                    _dumpBytes = Svc.SnapshotInputAssembly();
+                    _hexDump = FormatHex(_dumpBytes);
                     await InvokeAsync(StateHasChanged);
                 }
             }
@@ -216,6 +242,8 @@
         {
             await Svc.DisconnectAsync();
             _readings = Array.Empty<LaserChannelReading>();
+            _dumpBytes = null;
+            _hexDump = "(프레임 없음)";
             _isError = false;
             _message = "연결이 해제되었습니다.";
         }
@@ -230,6 +258,29 @@
             _busy = false;
             await InvokeAsync(StateHasChanged);
         }
+    }
+
+    // 진단: 주어진 오프셋의 최신 프레임 byte 값을 "0xNN (2진수)" 로. 비트가 어느 채널인지 대조용.
+    private string ByteHex(int offset)
+    {
+        var d = _dumpBytes;
+        if (d is null || (uint)offset >= (uint)d.Length) return "—";
+        return $"0x{d[offset]:X2} ({Convert.ToString(d[offset], 2).PadLeft(8, '0')})";
+    }
+
+    // 바이트 오프셋을 쉽게 대조하도록 16바이트마다 "오프셋: 바이트열" 형식으로 hex 덤프.
+    private static string FormatHex(byte[]? data)
+    {
+        if (data is null || data.Length == 0) return "(프레임 없음)";
+        var sb = new System.Text.StringBuilder(data.Length * 3 + data.Length / 16 * 8);
+        for (int i = 0; i < data.Length; i += 16)
+        {
+            sb.Append(i.ToString("D3")).Append(": ");
+            for (int j = i; j < i + 16 && j < data.Length; j++)
+                sb.Append(data[j].ToString("X2")).Append(' ');
+            sb.Append('\n');
+        }
+        return sb.ToString();
     }
 
     private void ZeroSet(int ch)

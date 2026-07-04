@@ -95,19 +95,24 @@
     <p class="text-muted mt-1" style="max-width:900px"><small>⚠ 입력 포즈는 BASE 좌표계 기준 절대 목표 위치입니다. 공구 번호는 로봇의 현재 활성 공구와 같게 두세요. 다르면 TCP가 바뀌어 엉뚱한 위치로 이동합니다.</small></p>
 
     <hr />
-    <h4>조그 (BASE 좌표계)</h4>
+    <h4>조그 (StartJOG)</h4>
     <div class="row g-2 align-items-end mb-2" style="max-width:900px">
         <div class="col-auto">
-            <label class="form-label">병진 스텝(mm)</label>
-            <input class="form-control" type="number" min="0" step="0.1" @bind="_jogStepMm" style="width:110px" />
+            <label class="form-label">좌표계</label>
+            <select class="form-select" @bind="_jogFrame" style="width:130px">
+                <option value="@JogFrame.Joint">관절</option>
+                <option value="@JogFrame.Base">베이스</option>
+                <option value="@JogFrame.Tool">툴</option>
+                <option value="@JogFrame.Workpiece">작업물</option>
+            </select>
         </div>
         <div class="col-auto">
-            <label class="form-label">회전 스텝(°)</label>
-            <input class="form-control" type="number" min="0" step="0.1" @bind="_jogStepDeg" style="width:110px" />
+            <label class="form-label">1회 최대 병진(mm)</label>
+            <input class="form-control" type="number" min="0.1" step="0.1" @bind="_jogMaxMm" style="width:130px" />
         </div>
         <div class="col-auto">
-            <label class="form-label">공구(tool)</label>
-            <input class="form-control" type="number" min="0" max="15" @bind="_jogTool" style="width:90px" />
+            <label class="form-label">1회 최대 회전(°)</label>
+            <input class="form-control" type="number" min="0.1" step="0.1" @bind="_jogMaxDeg" style="width:130px" />
         </div>
         <div class="col-auto">
             <label class="form-label">속도(%) : @_jogVel</label>
@@ -118,16 +123,20 @@
     {
         var axis = ai;
         <div class="row g-2 align-items-center mb-1" style="max-width:420px">
-            <div class="col-auto" style="width:60px"><label class="form-label mb-0">@PoseLabels[axis]</label></div>
+            <div class="col-auto" style="width:60px"><label class="form-label mb-0">@JogAxisLabels[axis]</label></div>
             <div class="col-auto">
-                <button class="btn btn-outline-primary" @onclick="@(() => BaseJog(axis, -1))" disabled="@(_busy || !Svc.IsConnected)">@PoseLabels[axis] −</button>
+                <button class="btn btn-outline-primary" disabled="@(_busy || !Svc.IsConnected)"
+                        @onpointerdown="@(() => JogStart(axis, -1))" @onpointerup="JogStop"
+                        @onpointerleave="JogStop" @onlostpointercapture="JogStop">@JogAxisLabels[axis] −</button>
             </div>
             <div class="col-auto">
-                <button class="btn btn-outline-primary" @onclick="@(() => BaseJog(axis, +1))" disabled="@(_busy || !Svc.IsConnected)">@PoseLabels[axis] +</button>
+                <button class="btn btn-outline-primary" disabled="@(_busy || !Svc.IsConnected)"
+                        @onpointerdown="@(() => JogStart(axis, +1))" @onpointerup="JogStop"
+                        @onpointerleave="JogStop" @onlostpointercapture="JogStop">@JogAxisLabels[axis] +</button>
             </div>
         </div>
     }
-    <p class="text-muted mt-1" style="max-width:900px"><small>⚠ 현재 위치에서 BASE 좌표계 축 방향으로 ±스텝만큼 이동합니다. 저속·소스텝으로 시작하세요.</small></p>
+    <p class="text-muted mt-1" style="max-width:900px"><small>⚠ 버튼을 <b>누르고 있는 동안</b> 이동하고 떼면 정지합니다(StartJOG/StopJOG, IK 없이 축 직접 이동 → 특이점 rc=38 회피). 1회 최대값은 떼기 지연 시 오버런을 막는 안전 상한입니다. 저속으로 시작하세요.</small></p>
 
     <hr />
     <h4>작업물 좌표계 교시 (3점법)</h4>
@@ -244,11 +253,19 @@
     private int _vel = 20;
     private int _moveTool = 1;   // 로봇 현재 활성 공구와 같게 (0으로 두면 TCP가 바뀜)
 
-    // BASE축 조그
-    private int _jogTool = 1;     // 로봇 현재 활성 공구와 같게
+    // 조그(StartJOG) — IK 없이 축 직접 이동(특이점 rc=38 회피). press-hold: 누르면 StartJOG, 떼면 StopJOG.
+    private JogFrame _jogFrame = JogFrame.Base;   // 관절/베이스/툴/작업물
     private int _jogVel = 20;
-    private double _jogStepMm = 10;
-    private double _jogStepDeg = 5;
+    private double _jogMaxMm = 20;                 // 1회 최대(병진, mm) — 떼기 지연 대비 오버런 안전 상한
+    private double _jogMaxDeg = 15;                // 1회 최대(회전, °)
+    private bool _jogging;                         // press-hold 진행 중(StartJOG~StopJOG 사이)
+
+    private static readonly string[] JointLabels = { "J1", "J2", "J3", "J4", "J5", "J6" };
+    // 관절 프레임이면 J1..J6, 직교(베이스/툴/작업물)면 X,Y,Z,Rx,Ry,Rz.
+    private string[] JogAxisLabels => _jogFrame == JogFrame.Joint ? JointLabels : PoseLabels;
+    // 관절은 전부 회전(°), 직교는 0~2=병진(mm)·3~5=회전(°).
+    private bool JogAxisIsRotational(int axis) => _jogFrame == JogFrame.Joint || axis >= 3;
+    private double JogMaxDis(int axis) => JogAxisIsRotational(axis) ? _jogMaxDeg : _jogMaxMm;
 
     // 작업물 좌표계 교시
     private int _wobjId;
@@ -317,28 +334,51 @@
     private async Task MoveL()
         => await Run("MoveL", ct => Svc.Rpc!.MoveLAsync((double[])_target.Clone(), tool: _moveTool, user: 0, vel: _vel, ct: ct));
 
-    /// <summary>BASE 좌표계 축 방향으로 현재 위치에서 ±스텝만큼 이동. user:0 → offset_flag=1 오프셋이 BASE축 기준 적용.</summary>
-    private async Task BaseJog(int axis, int sign)
+    /// <summary>조그 시작(버튼 누름). StartJOG(논블로킹)로 axis(0기준)를 sign 방향으로 이동 개시. Run 게이트 우회
+    /// (press-hold는 _busy로 묶으면 pointerup을 못 받음). 실패 rc는 한글 사유와 함께 표시.</summary>
+    private async Task JogStart(int axis, int sign)
     {
-        if (!Svc.IsConnected) { Notify("연결되지 않았습니다.", true); return; }
-        var label = $"조그 {PoseLabels[axis]}{(sign > 0 ? "+" : "-")}";
-        await Run(label, async ct =>
+        if (_jogging || _busy || !Svc.IsConnected) return;
+        _jogging = true;
+        var label = $"조그 {JogAxisLabels[axis]}{(sign > 0 ? "+" : "-")}";
+        try
         {
-            var current = await Svc.Rpc!.GetTcpPoseInBaseAsync(_jogTool, ct);   // BASE 기준 현재 TCP 포즈(이동 공구로 활성 공구 동기)
-            var off = new double[6];
-            off[axis] = sign * (axis < 3 ? _jogStepMm : _jogStepDeg);
-            return await Svc.Rpc!.MoveByOffsetAsync(current, user: 0, off, tool: _jogTool, vel: _jogVel, ct: ct);
-        });
+            var rc = await Svc.Rpc!.StartJogAsync(_jogFrame, axis + 1, sign > 0 ? 1 : 0, JogMaxDis(axis), _jogVel);
+            if (rc != 0) { _jogging = false; Notify($"{label} 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}", true); }
+            else Notify($"{label} (누르는 중)", false);
+        }
+        catch (Exception ex)
+        {
+            _jogging = false;
+            Notify($"{label} 실패: {ex.Message}", true);
+        }
+    }
+
+    /// <summary>조그 정지(버튼 뗌/벗어남). StopJOG(감속) 전송. 세마포어 우회 경로라 조그가 물고 있어도 정지 가능.</summary>
+    private async Task JogStop()
+    {
+        if (!_jogging) return;
+        _jogging = false;
+        try
+        {
+            await Svc.StopJogAsync(_jogFrame);
+        }
+        catch (Exception ex)
+        {
+            Notify($"조그 정지 실패: {ex.Message}", true);
+        }
     }
 
     /// <summary>긴급 정지: 진행 중인 명령을 취소하고 즉시 StopMotion 전송(세마포어 우회).</summary>
     private async Task EmergencyStop()
     {
         _opCts?.Cancel();   // 진행 중 명령의 클라이언트 대기/후속 호출 즉시 중단
+        _jogging = false;   // 조그 press-hold 상태 해제(뗌 이벤트를 못 받아도 안전)
         try
         {
+            await Svc.ImmStopJogImmediateAsync();   // 진행 중 조그 즉시 정지(ImmStopJOG)
             var rc = await Svc.StopMotionImmediateAsync();
-            Notify($"긴급 정지 (rc={rc})", rc != 0);
+            Notify($"긴급 정지 (rc={rc}){FairinoErrorCodes.Suffix(rc)}", rc != 0);
         }
         catch (Exception ex)
         {
@@ -357,7 +397,7 @@
         try
         {
             var rc = await Svc.SetServoEnableAsync(target);
-            Notify($"서보 {(target ? "활성화" : "비활성화")} (rc={rc})", rc != 0);
+            Notify($"서보 {(target ? "활성화" : "비활성화")} (rc={rc}){FairinoErrorCodes.Suffix(rc)}", rc != 0);
         }
         catch (Exception ex)
         {
@@ -374,7 +414,7 @@
             var rc = await Svc.Rpc!.SetWObjCoordPointAsync(pointNum, ct);
             try
             {
-                var pose = await Svc.Rpc!.GetTcpPoseInBaseAsync(_jogTool, ct);
+                var pose = await Svc.Rpc!.GetTcpPoseInBaseAsync(_offTool, ct);   // 표시용(교시 워크플로 공구 기준)
                 for (int k = 0; k < 6 && k < pose.Length; k++) _points[pointNum - 1][k] = pose[k];
             }
             catch { /* 표시용 조회 실패는 무시 */ }
@@ -437,7 +477,7 @@
         try
         {
             var rc = await action(ct);
-            Notify($"{label} 완료 (rc={rc})", rc != 0);
+            Notify($"{label} 완료 (rc={rc}){FairinoErrorCodes.Suffix(rc)}", rc != 0);
         }
         catch (OperationCanceledException)
         {
@@ -461,6 +501,9 @@
 
     public void Dispose()
     {
+        // 회선 끊김 등으로 pointerup을 못 받고 파괴될 때 조그가 계속 돌지 않게 best-effort 정지.
+        // (근본 오버런 방어는 StartJOG의 max_dis 상한.)
+        if (_jogging) { _jogging = false; if (Svc.IsConnected) _ = Svc.ImmStopJogImmediateAsync(); }
         _cts?.Cancel();
         _cts?.Dispose();
         _opCts?.Cancel();

@@ -38,6 +38,14 @@ public class LaserDisplacementSensorSettings
     /// 하드웨어에서 튜닝 대상. 기본 1.</summary>
     public int ConfigAssemblyInstanceId { get; set; } = 1;
 
+    /// <summary>측정값(32bit signed)이 시작되는 Input Assembly 바이트 오프셋. 채널 N(1-based)의 값은
+    /// <c>MeasurementByteOffset + (N-1) * MeasurementStride</c>. 매뉴얼 Z496 기준 CH1=48이지만
+    /// 실제 프레임(런/아이들 헤더 유무 등)에 따라 밀릴 수 있어 실장비에서 튜닝 가능하도록 설정으로 노출.</summary>
+    public int MeasurementByteOffset { get; set; } = 48;
+
+    /// <summary>채널당 측정값 바이트 수(int32 → 4). 오프셋 계산 stride.</summary>
+    public int MeasurementStride { get; set; } = 4;
+
     /// <summary>측정 원시값(32bit signed) → 물리값 스케일. <c>value = raw * MeasurementScale</c>.
     /// 스케일/단위는 이 통신 매뉴얼에 없고 앰프의 소수점 설정에 따르므로 하드웨어에서 튜닝한다.
     /// 기본 0.001 은 raw 가 µm 단위라고 가정(→ mm).</summary>
@@ -45,6 +53,29 @@ public class LaserDisplacementSensorSettings
 
     /// <summary>측정값 표시 단위 라벨.</summary>
     public string MeasurementUnit { get; set; } = "mm";
+
+    // ── Input Assembly(110) 상태 비트 오프셋 ──────────────────────────────────
+    // 채널 N(1-based)의 비트 = byte(offset + (N-1)/8) 의 bit((N-1)%8). 매뉴얼 Z496 기준값이나
+    // PDF 표 추출이 모호해 실장비 hex 로 확정 가능하도록 설정으로 노출한다.
+
+    /// <summary>Sensor Error Status 비트 오프셋. 기본 2.</summary>
+    public int SensorErrorByteOffset { get; set; } = 2;
+
+    /// <summary>Sensor Warning Status 비트 오프셋. 기본 4.</summary>
+    public int SensorWarningByteOffset { get; set; } = 4;
+
+    /// <summary>Sensor Enable(측정범위 내/유효) 비트 오프셋. 매뉴얼 재구성상 byte 10(byte 8-9는 Reserved).
+    /// 기본 10. 실장비 hex 에서 측정 중 ON 되는 byte 로 확정.</summary>
+    public int SensorEnableByteOffset { get; set; } = 10;
+
+    /// <summary>판정 HIGH(Sensor Output 1) 비트 오프셋. 기본 18(라이브 확인 필요).</summary>
+    public int OutputHighByteOffset { get; set; } = 18;
+
+    /// <summary>판정 LOW(Sensor Output 2) 비트 오프셋. 기본 20(라이브 확인 필요).</summary>
+    public int OutputLowByteOffset { get; set; } = 20;
+
+    /// <summary>판정 PASS(Sensor Output 3) 비트 오프셋. 기본 22(라이브 확인 필요).</summary>
+    public int OutputPassByteOffset { get; set; } = 22;
 
     /// <summary>페이지 실시간 갱신 주기(ms). SignalR 부하와 응답성의 절충값.</summary>
     public int UiRefreshMs { get; set; } = 200;

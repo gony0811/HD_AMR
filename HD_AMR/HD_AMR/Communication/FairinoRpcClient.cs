@@ -345,6 +345,51 @@ public class FairinoRpcClient : IDisposable
         return rc;
     }
 
+    // ── 점동(JOG) ──────────────────────────────────────────────────
+    /// <summary>
+    /// 점동(JOG) 시작. IK 없이 <paramref name="axis"/>축(1~6)을 <paramref name="dir"/>(0=음,1=양) 방향으로
+    /// 직접 이동시킨다 — MoveL+IK 방식의 특이점 rc=38을 회피한다. <b>논블로킹</b>: 즉시 반환하고
+    /// <see cref="StopJogAsync"/>/<see cref="ImmStopJogImmediateAsync"/> 전까지(또는 <paramref name="maxDis"/>까지)
+    /// 계속 이동한다. <paramref name="maxDis"/>는 오버런 방어용 안전 상한(mm 또는 °). 모션이므로 faultRecovery=false.
+    /// </summary>
+    public Task<int> StartJogAsync(JogFrame frame, int axis, int dir, double maxDis, double vel,
+                                   double acc = 100.0, CancellationToken ct = default)
+        => InvokeAsync("StartJOG", p => ToErr(p.StartJOG(frame.StartRef(), axis, dir, maxDis, vel, acc)),
+                       ct, faultRecovery: false);
+
+    /// <summary>점동 감속 정지(버튼 떼기). <see cref="StopMotionImmediateAsync"/>와 동일하게 <see cref="_semaphore"/>를
+    /// <b>우회</b>(_stopProxy)해, 진행 중 조그가 세마포어를 물고 있어도 정지가 막히지 않게 한다.</summary>
+    public async Task<int> StopJogAsync(JogFrame frame, CancellationToken ct = default)
+    {
+        EnsureConnected();
+        var proxy = _stopProxy ?? _proxy!;
+        try
+        {
+            return await Task.Run(() => ToErr(proxy.StopJOG(frame.StopRef())), ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "{Name} StopJOG 실패", _settings.Name);
+            throw;
+        }
+    }
+
+    /// <summary>점동 즉시 정지(비상). 세마포어 우회(_stopProxy)로 ImmStopJOG를 즉시 전송한다.</summary>
+    public async Task<int> ImmStopJogImmediateAsync(CancellationToken ct = default)
+    {
+        EnsureConnected();
+        var proxy = _stopProxy ?? _proxy!;
+        try
+        {
+            return await Task.Run(() => ToErr(proxy.ImmStopJOG()), ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "{Name} ImmStopJOG 실패", _settings.Name);
+            throw;
+        }
+    }
+
     // ── 상태/제어 ──────────────────────────────────────────────────
     public Task<int> RobotEnableAsync(bool enable, CancellationToken ct = default)
         => InvokeAsync("RobotEnable", p => ToErr(p.RobotEnable(enable ? 1 : 0)), ct);

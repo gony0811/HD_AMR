@@ -23,13 +23,7 @@ namespace HD_AMR.Communication;
 public sealed class LaserDisplacementSensorClient : IDisposable
 {
     // ── Input Assembly(110) 오프셋 ────────────────────────────────────────────
-    private const int SensorErrorByte = 2;    // 채널별 에러 비트(byte 2: CH1-8, byte 3: CH9-16)
-    private const int SensorWarningByte = 4;   // 채널별 경고 비트
-    private const int SensorEnableByte = 8;    // 채널별 Enable(측정범위 내) 비트
-    private const int OutputHighByte = 18;     // 판정 HIGH
-    private const int OutputLowByte = 20;      // 판정 LOW
-    private const int OutputPassByte = 22;     // 판정 PASS
-    private const int MeasurementBase = 48;    // Output Data 1(=CH1) 시작. 채널당 4바이트 int32.
+    // 상태 비트 오프셋은 실장비 튜닝을 위해 설정(_settings.*ByteOffset)에서 읽는다.
     private const int InputAssemblyLength = 276;
 
     // ── Output Assembly(132) 오프셋 ───────────────────────────────────────────
@@ -199,10 +193,13 @@ public sealed class LaserDisplacementSensorClient : IDisposable
         count = Math.Max(0, count);
         var result = new LaserChannelReading[count];
 
+        int measBase = _settings.MeasurementByteOffset;
+        int stride = _settings.MeasurementStride;
+
         var client = _eeip;
         var data = _connected ? client?.T_O_IOData : null;
         // 프레임 수신 전이거나 측정값 영역에 못 미치면 데이터 없음으로 처리.
-        bool hasFrame = data is not null && data.Length >= MeasurementBase + count * 4;
+        bool hasFrame = data is not null && data.Length >= measBase + count * stride;
 
         for (int i = 0; i < count; i++)
         {
@@ -213,23 +210,33 @@ public sealed class LaserDisplacementSensorClient : IDisposable
                 continue;
             }
 
-            int raw = BitConverter.ToInt32(data!, MeasurementBase + i * 4);   // CIP LE = 머신 LE(x64/arm64)
+            int raw = BitConverter.ToInt32(data!, measBase + i * stride);   // CIP LE = 머신 LE(x64/arm64)
             double value = raw * _settings.MeasurementScale;
 
             result[i] = new LaserChannelReading(
                 ch,
                 raw,
                 value,
-                Enabled: Bit(data!, SensorEnableByte, i),
-                Error: Bit(data!, SensorErrorByte, i),
-                Warning: Bit(data!, SensorWarningByte, i),
-                High: Bit(data!, OutputHighByte, i),
-                Low: Bit(data!, OutputLowByte, i),
-                Pass: Bit(data!, OutputPassByte, i),
+                Enabled: Bit(data!, _settings.SensorEnableByteOffset, i),
+                Error: Bit(data!, _settings.SensorErrorByteOffset, i),
+                Warning: Bit(data!, _settings.SensorWarningByteOffset, i),
+                High: Bit(data!, _settings.OutputHighByteOffset, i),
+                Low: Bit(data!, _settings.OutputLowByteOffset, i),
+                Pass: Bit(data!, _settings.OutputPassByteOffset, i),
                 Zeroed: IsZeroed(ch));
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// 최신 Input Assembly(T→O) 프레임의 원본 바이트 스냅샷. 미연결/프레임 없음이면 null.
+    /// 실장비에서 측정값 오프셋·스케일을 확정하기 위한 진단용(hex 덤프).
+    /// </summary>
+    public byte[]? SnapshotInputAssembly()
+    {
+        var data = _connected ? _eeip?.T_O_IOData : null;
+        return data is null ? null : (byte[])data.Clone();
     }
 
     /// <summary>채널별 비트 필드(byte baseOffset: CH1-8, baseOffset+1: CH9-16)에서 채널 인덱스 비트 읽기.</summary>

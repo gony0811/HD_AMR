@@ -46,7 +46,13 @@ public static class FrameDescriber
     private static string DescribeCaptureReq(byte[] data)
     {
         if (data.Length < 15) return $"REQ DATA({data.Length}B 부족)";
-        var surfaceType = data[0] == 0x00 ? "Flat" : data[0] == 0x01 ? "Corrugation" : $"0x{data[0]:X2}";
+        var surfaceType = data[0] switch
+        {
+            0x00 => "Flat",
+            0x01 => "Corrugation",
+            0x02 => "Corner",
+            _    => $"0x{data[0]:X2}",
+        };
         ushort surfaceId = (ushort)(data[1] | (data[2] << 8));
         int posX = data[3] | (data[4] << 8) | (data[5] << 16) | (data[6] << 24);
         int posY = data[7] | (data[8] << 8) | (data[9] << 16) | (data[10] << 24);

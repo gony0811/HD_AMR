@@ -53,6 +53,7 @@ public enum SurfaceType : byte
 {
     Flat        = 0x00,
     Corrugation = 0x01,
+    Corner      = 0x02,
 }
 
 public enum ResultCode : ushort

@@ -1,5 +1,6 @@
 @page "/sequence"
 @rendermode InteractiveServer
+@using HD_AMR.Communication
 @using HD_AMR.Data.Entities
 @using HD_AMR.Service
 @inject TeachingService Service
@@ -355,7 +356,7 @@
                 ? $"측정 {d:0.#}mm → -Y {Math.Abs(delta):0.#}mm 이동, 목표 {TargetDistanceMm:0}mm 정렬 완료."
                 : rc == 112
                     ? $"정렬 이동 실패 (rc=112: 목표 자세 도달 불가). 측정 {d:0.#}mm, BASE Y {offset[1]:+0.#;-0.#}mm 보정 목표가 작업영역 밖입니다 — 측정값/방향 확인 필요."
-                    : $"정렬 이동 실패 (rc={rc}).";
+                    : $"정렬 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.";
         }
         catch (OperationCanceledException)
         {

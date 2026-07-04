@@ -111,6 +111,9 @@ public class LaserDisplacementSensorService : BackgroundService
     public IReadOnlyList<LaserChannelReading> GetReadings()
         => _client.IsConnected ? _client.ReadChannels(_settings.ChannelCount) : Array.Empty<LaserChannelReading>();
 
+    /// <summary>최신 Input Assembly 원본 바이트 스냅샷(진단용). 미연결이면 null.</summary>
+    public byte[]? SnapshotInputAssembly() => _client.SnapshotInputAssembly();
+
     /// <summary>채널 영점 설정(현재값을 0으로).</summary>
     public void ZeroSet(int channel) => _client.SetZero(channel, true);
 

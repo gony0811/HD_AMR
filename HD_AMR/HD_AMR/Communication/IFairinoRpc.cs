@@ -56,6 +56,25 @@ public interface IFairinoRpc : IXmlRpcProxy
                  double vel, double acc, double ovl, double[] exaxis_pos,
                  double blendT, int offset_flag, double[] offset_pos);
 
+    /// <summary>
+    /// 점동(JOG) 시작. IK 없이 nb축을 dir 방향으로 직접 미소 이동시킨다(MoveL+IK 방식의 특이점 rc=38 회피).
+    /// 논블로킹: 즉시 반환하고 StopJOG/ImmStopJOG 전까지(또는 max_dis까지) 계속 이동한다.
+    /// 와이어(추정): StartJOG(ref, nb, dir, max_dis, vel, acc).
+    ///   ref: 0=관절,2=베이스,4=툴,8=작업물 / nb: 축 1~6 / dir: 0=음,1=양 /
+    ///   max_dis: 1회 최대 이동(mm 또는 °) / vel,acc: % (0~100).
+    /// ⚠ 시그니처·타입은 SDK 기준 추정 — 어긋나면 rc=3(개수)/4(값)로 거부되니 실물에서 20003 캡처로 보정.
+    /// </summary>
+    [XmlRpcMethod("StartJOG")]
+    object StartJOG(int reference, int nb, int dir, double max_dis, double vel, double acc);
+
+    /// <summary>점동 감속 정지. ref = StartJOG의 ref+1 (1=관절,3=베이스,5=툴,9=작업물).</summary>
+    [XmlRpcMethod("StopJOG")]
+    object StopJOG(int reference);
+
+    /// <summary>점동 즉시 정지(인자 없음). 비상정지에 사용.</summary>
+    [XmlRpcMethod("ImmStopJOG")]
+    object ImmStopJOG();
+
     /// <summary>역기구학: 직교 자세 → 관절각. 반환 [errcode, j0..j5]. type=0, config=-1 기본.</summary>
     [XmlRpcMethod("GetInverseKin")]
     object GetInverseKin(int type, double[] desc_pos, int config);
