@@ -37,22 +37,41 @@ public sealed class OnnxBeadSegmentationService
 
         return await Task.Run(() =>
         {
-            lock (_gate)
-            {
-                var session = GetSession(modelPath);
-                using var bgr = Cv2.ImRead(imgPath, ImreadModes.Color);
-                if (bgr.Empty()) throw new InvalidOperationException("이미지를 읽지 못했습니다.");
-                var sw = System.Diagnostics.Stopwatch.StartNew();
-                var (mask, count, maxScore) = YoloSeg.Decode(session, bgr, conf, 0.5f, maskThr);
-                sw.Stop();
-                using (mask)
-                {
-                    LastOverlay = BuildOverlay(bgr, mask);
-                    double covered = count > 0 ? Cv2.CountNonZero(mask) / (double)(bgr.Width * bgr.Height) : 0;
-                    return new InferResult(count, maxScore, covered, sw.ElapsedMilliseconds, bgr.Width, bgr.Height);
-                }
-            }
+            using var bgr = Cv2.ImRead(imgPath, ImreadModes.Color);
+            if (bgr.Empty()) throw new InvalidOperationException("이미지를 읽지 못했습니다.");
+            return Infer(modelPath, bgr, conf, maskThr);
         });
+    }
+
+    /// <summary>업로드/외부 이미지 바이트에 대해 추론. 캡처 폴더 밖의 검증용 이미지에 사용.</summary>
+    public async Task<InferResult> RunOnBytesAsync(string modelPath, byte[] imageBytes, float conf, float maskThr)
+    {
+        if (!File.Exists(modelPath)) throw new FileNotFoundException("모델(.onnx)이 없습니다.", modelPath);
+        if (imageBytes is null || imageBytes.Length == 0) throw new ArgumentException("빈 이미지입니다.", nameof(imageBytes));
+        return await Task.Run(() =>
+        {
+            using var bgr = Cv2.ImDecode(imageBytes, ImreadModes.Color);
+            if (bgr.Empty()) throw new InvalidOperationException("이미지를 디코드하지 못했습니다(형식 확인).");
+            return Infer(modelPath, bgr, conf, maskThr);
+        });
+    }
+
+    // 실제 추론 본체(캡처/바이트 공통). 세션은 캐시하며 단일 운영자 전제로 직렬화한다.
+    private InferResult Infer(string modelPath, Mat bgr, float conf, float maskThr)
+    {
+        lock (_gate)
+        {
+            var session = GetSession(modelPath);
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var (mask, count, maxScore) = YoloSeg.Decode(session, bgr, conf, 0.5f, maskThr);
+            sw.Stop();
+            using (mask)
+            {
+                LastOverlay = BuildOverlay(bgr, mask);
+                double covered = count > 0 ? Cv2.CountNonZero(mask) / (double)(bgr.Width * bgr.Height) : 0;
+                return new InferResult(count, maxScore, covered, sw.ElapsedMilliseconds, bgr.Width, bgr.Height);
+            }
+        }
     }
 
     private InferenceSession GetSession(string modelPath)

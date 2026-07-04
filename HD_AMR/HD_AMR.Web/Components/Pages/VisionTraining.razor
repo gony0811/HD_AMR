@@ -1,10 +1,12 @@
 @page "/vision-training"
 @rendermode InteractiveServer
 @using HD_AMR.Web.Services
+@using Microsoft.AspNetCore.Components.Forms
 @implements IAsyncDisposable
 @inject WeldTrainingService Train
 @inject LabelDataService Lbl
 @inject OnnxBeadSegmentationService Seg
+@inject IJSRuntime JS
 
 <PageTitle>비전 학습 (DL)</PageTitle>
 
@@ -88,6 +90,30 @@ else
                     <div class="alert alert-info mt-3 mb-0" style="font-size:.9rem">
                         변환 완료 — 사용 <b>@_convert.Used</b>건 / 건너뜀 @(_convert.Skipped)건 / 폴리곤 @(_convert.Instances)개<br />
                         <code>@_convert.DataYaml</code>
+                    </div>
+                }
+
+                <hr />
+                <h6 class="mb-1">데이터 증강 — 90° 회전본 생성</h6>
+                <p class="text-muted" style="font-size:.85rem">
+                    0°/90° 두 방향 비드를 모두 학습하려면, 기존 이미지와 마스크를 <b>함께</b> 90° 회전한 복사본을 만듭니다
+                    (마스크도 같이 회전돼 정렬 유지). 생성 후 위의 <b>데이터셋 변환</b>을 다시 누르세요. 재실행해도 이미 만든
+                    회전본은 중복 생성하지 않습니다.
+                </p>
+                <div class="d-flex align-items-end gap-2 flex-wrap">
+                    <div><label class="form-label mb-0" style="font-size:.85rem">회전 방향</label>
+                        <select class="form-select form-select-sm" style="width:170px" @bind="_rotDir">
+                            <option value="cw">시계 90°</option>
+                            <option value="ccw">반시계 90°</option>
+                            <option value="both">양방향(±90°, 2배)</option>
+                        </select></div>
+                    <button class="btn btn-outline-primary btn-sm" @onclick="GenerateRotated" disabled="@_working">90° 회전본 생성</button>
+                </div>
+                @if (_rot is not null)
+                {
+                    <div class="alert alert-success mt-2 mb-0" style="font-size:.9rem">
+                        회전본 생성 완료 — <b>@_rot.Created</b>건 생성 (건너뜀 @(_rot.Skipped)건).
+                        이제 <b>데이터셋 변환</b>을 다시 실행하세요.
                     </div>
                 }
             </div>
@@ -189,7 +215,7 @@ else
                             <select class="form-select form-select-sm" style="min-width:200px" @bind="_selModel">
                                 @foreach (var m in _models) { <option value="@m.Path">@m.Name</option> }
                             </select></div>
-                        <div class="col-auto"><label class="form-label mb-0" style="font-size:.85rem">이미지</label>
+                        <div class="col-auto"><label class="form-label mb-0" style="font-size:.85rem">캡처 이미지</label>
                             <select class="form-select form-select-sm" style="min-width:220px;font-family:monospace" @bind="_inferStem">
                                 @foreach (var e in _entries) { <option value="@e.Stem">@e.Stem</option> }
                             </select></div>
@@ -200,6 +226,17 @@ else
                             </select></div>
                         <div class="col-auto">
                             <button class="btn btn-success btn-sm" @onclick="RunInfer" disabled="@_inferring">추론 실행</button>
+                        </div>
+                    </div>
+
+                    @* 외부(검증용) 이미지 업로드 — 캡처 폴더 밖 이미지에 바로 추론 *@
+                    <div class="mt-2 p-2" style="background:#f6f8fa;border:1px dashed #bbb;border-radius:6px">
+                        <label class="form-label mb-1" style="font-size:.85rem">또는 검증용 이미지 업로드
+                            <span class="text-muted">(따로 빼둔 이미지 — 모델이 학습한 모달리티와 같은 종류로)</span></label>
+                        <div class="d-flex align-items-center gap-2 flex-wrap">
+                            <InputFile OnChange="OnUpload" accept="image/*" class="form-control form-control-sm" style="max-width:340px" />
+                            @if (!string.IsNullOrEmpty(_uploadName)) { <span class="text-muted" style="font-size:.85rem">📄 @_uploadName</span> }
+                            @if (_inferring) { <span class="spinner-border spinner-border-sm text-primary"></span> }
                         </div>
                     </div>
                     <div class="d-flex align-items-center gap-3 mt-2 flex-wrap">
@@ -240,7 +277,25 @@ else
                 }
                 <button class="btn btn-sm btn-outline-secondary" @onclick="() => Train.ClearLog()">로그 지우기</button>
             </div>
-            <pre @ref="_logEl" style="background:#111;color:#ddd;font-size:.78rem;max-height:320px;overflow:auto;margin:.5rem 0 0;padding:.5rem;border-radius:4px">@_logText</pre>
+
+            @* epoch 진행 바 + ETA (학습 중일 때) *@
+            @if (Train.TrainTotalEpochs > 0 && (Train.IsBusy || Train.TrainCurrentEpoch > 0))
+            {
+                var cur = Train.TrainCurrentEpoch;
+                var tot = Train.TrainTotalEpochs;
+                var pct = tot > 0 ? (int)Math.Round(100.0 * cur / tot) : 0;
+                @* 글자는 바 위 전체 폭에 두어 진행률이 낮아도 항상 읽히게 한다. *@
+                <div class="d-flex justify-content-between align-items-baseline mt-2" style="font-size:.82rem">
+                    <span><b>@cur/@tot</b> epoch · @pct%</span>
+                    <span class="text-muted">@EtaText</span>
+                </div>
+                <div class="progress" style="height:14px">
+                    <div class="progress-bar progress-bar-striped @(Train.IsBusy ? "progress-bar-animated" : "")"
+                         role="progressbar" style="width:@pct%"></div>
+                </div>
+            }
+
+            <pre @ref="_logEl" style="background:#111;color:#ddd;font-size:.78rem;max-height:320px;overflow:auto;margin:.5rem 0 0;padding:.5rem;border-radius:4px"></pre>
         </div>
     </div>
 }
@@ -264,6 +319,8 @@ else
     private int _opset = 12, _exportImgsz = 640;
 
     private ConvertResult? _convert;
+    private RotateResult? _rot;
+    private string _rotDir = "cw";
     private List<ModelInfo> _models = new();
     private List<CaptureEntry> _entries = new();
     private bool _working;
@@ -278,6 +335,7 @@ else
     private InferResult? _inferResult;
     private int _inferBust = 1;
     private bool _inferring;
+    private string? _uploadName;
     private TrainingPhase _lastPhase = TrainingPhase.Idle;
 
     private string _logText = "";
@@ -285,6 +343,30 @@ else
     private CancellationTokenSource? _pollCts;
 
     private string Active(string t) => _tab == t ? "active" : "";
+
+    // 경과시간 ÷ 완료 epoch 로 epoch당 평균을 구해 남은 epoch에 외삽 → ETA.
+    private string EtaText
+    {
+        get
+        {
+            var start = Train.TrainStartUtc;
+            int cur = Train.TrainCurrentEpoch, tot = Train.TrainTotalEpochs;
+            if (start is null || tot <= 0) return "";
+            var elapsed = (DateTime.UtcNow - start.Value).TotalSeconds;
+            if (Train.Phase != TrainingPhase.Training)
+                return $"경과 {FormatDuration(elapsed)}";
+            if (cur <= 0) return $"예상 시간 계산 중… (경과 {FormatDuration(elapsed)})";
+            var remain = elapsed / cur * Math.Max(0, tot - cur);
+            return $"약 {FormatDuration(remain)} 남음 · 경과 {FormatDuration(elapsed)}";
+        }
+    }
+
+    private static string FormatDuration(double seconds)
+    {
+        if (seconds < 60) return $"{Math.Round(seconds)}초";
+        if (seconds < 3600) return $"{Math.Floor(seconds / 60)}분 {Math.Round(seconds % 60)}초";
+        return $"{Math.Floor(seconds / 3600)}시간 {Math.Round(seconds % 3600 / 60)}분";
+    }
     private string PhaseBadge => Train.Phase switch
     {
         TrainingPhase.Training or TrainingPhase.Exporting or TrainingPhase.Converting => "bg-primary",
@@ -325,6 +407,9 @@ else
 
                 _logText = string.Join('\n', Train.LogTail(500));
                 await InvokeAsync(StateHasChanged);
+                // 로그는 sticky-scroll 헬퍼로 밀어넣는다(바닥일 때만 따라감).
+                try { await JS.InvokeVoidAsync("hdAmrLog.set", _logEl, _logText); }
+                catch { /* 아직 렌더 전/요소 없음 무시 */ }
             }
         }
         catch (OperationCanceledException) { /* 페이지 종료 */ }
@@ -372,10 +457,29 @@ else
         _inferring = true; _message = null;
         try
         {
+            _uploadName = null;
             _inferResult = await Seg.RunOnCaptureAsync(_selModel, _inferStem, _inferModality, (float)_conf, (float)_maskThr);
             _inferBust++;
         }
         catch (Exception ex) { Notify($"추론 실패: {ex.Message}", true); }
+        finally { _inferring = false; }
+    }
+
+    // 외부 검증용 이미지 업로드 → 바이트로 바로 추론.
+    private async Task OnUpload(InputFileChangeEventArgs e)
+    {
+        if (_inferring) return;
+        if (_selModel is null) { Notify("먼저 모델을 선택하세요.", true); return; }
+        _inferring = true; _message = null;
+        try
+        {
+            using var ms = new MemoryStream();
+            await e.File.OpenReadStream(30 * 1024 * 1024).CopyToAsync(ms); // 최대 30MB
+            _inferResult = await Seg.RunOnBytesAsync(_selModel, ms.ToArray(), (float)_conf, (float)_maskThr);
+            _uploadName = e.File.Name;
+            _inferBust++;
+        }
+        catch (Exception ex) { Notify($"업로드 추론 실패: {ex.Message}", true); }
         finally { _inferring = false; }
     }
 
@@ -389,6 +493,19 @@ else
             Notify($"데이터셋 변환 완료 — 사용 {_convert.Used}건.", false);
         }
         catch (Exception ex) { Notify($"변환 실패: {ex.Message}", true); }
+        finally { _working = false; }
+    }
+
+    private async Task GenerateRotated()
+    {
+        _working = true; _message = null;
+        try
+        {
+            _rot = await Train.GenerateRotatedCopiesAsync(_rotDir);
+            await RefreshCounts();
+            Notify($"90° 회전본 {_rot.Created}건 생성 완료. 데이터셋 변환을 다시 실행하세요.", false);
+        }
+        catch (Exception ex) { Notify($"회전본 생성 실패: {ex.Message}", true); }
         finally { _working = false; }
     }
 

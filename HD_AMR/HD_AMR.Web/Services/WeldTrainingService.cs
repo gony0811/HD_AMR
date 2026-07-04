@@ -26,6 +26,11 @@ public sealed class WeldTrainingService
     public string? StatusText { get; private set; }
     public bool IsBusy { get { lock (_gate) return _proc is { HasExited: false }; } }
 
+    // 학습 진행 상태(진행 바·ETA용). 학습이 아닌 작업 중에는 TrainTotalEpochs=0.
+    public int TrainTotalEpochs { get; private set; }
+    public int TrainCurrentEpoch { get; private set; }
+    public DateTime? TrainStartUtc { get; private set; }
+
     public WeldTrainingService(IServiceScopeFactory scopes, ILogger<WeldTrainingService> log)
     {
         _scopes = scopes;
@@ -36,11 +41,32 @@ public sealed class WeldTrainingService
     private void Emit(string? line)
     {
         if (line is null) return;
+        // 학습 중이면 ultralytics 진행 로그의 "현재/전체 epoch"(예: 17/100)을 파싱해 진행 상태 갱신.
+        if (TrainTotalEpochs > 0)
+        {
+            var ep = TryParseEpoch(line, TrainTotalEpochs);
+            if (ep > 0 && ep >= TrainCurrentEpoch) TrainCurrentEpoch = ep;
+        }
         lock (_gate)
         {
             _lines.Add(line);
             if (_lines.Count > 4000) _lines.RemoveRange(0, _lines.Count - 4000);
         }
+    }
+
+    // "…  17/100  0G  …" 같은 줄에서 현재 epoch(17)을 뽑는다. 분모가 전체 epoch 수와 일치하는
+    // "/{total}" 토큰을 찾아, 바로 뒤가 숫자가 아니고(예: /1000 배제) 앞의 연속 숫자를 읽는다.
+    private static int TryParseEpoch(string line, int total)
+    {
+        var tok = "/" + total.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        int idx = line.IndexOf(tok, StringComparison.Ordinal);
+        if (idx <= 0) return 0;
+        int after = idx + tok.Length;
+        if (after < line.Length && char.IsDigit(line[after])) return 0; // "/1000" 등 배제
+        int end = idx - 1, j = end;
+        while (j >= 0 && char.IsDigit(line[j])) j--;
+        if (j == end) return 0;
+        return int.TryParse(line.AsSpan(j + 1, end - j), out var v) ? v : 0;
     }
 
     /// <summary>최근 로그 tail 줄. UI 폴링용.</summary>
@@ -160,6 +186,63 @@ public sealed class WeldTrainingService
         return new ConvertResult(used, skipped, instances, yamlPath);
     }
 
+    // ── 데이터 증강: 이미지+마스크 90° 회전본 생성 ────────────────────────────
+    /// <summary>
+    /// 캡처 폴더의 각 촬영본(이미지 + 마스크 초안)을 <b>쌍으로</b> 90° 회전해 새 촬영본으로 저장한다.
+    /// 0°/90° 두 방향 비드를 모두 학습하기 위한 오프라인 증강. 마스크도 함께 회전하므로 정렬이 유지된다.
+    /// 이미 회전본(stem 에 cw90/ccw90 포함)은 원본에서 제외해 재실행 시 중복 회전을 막는다.
+    /// </summary>
+    /// <param name="direction">"cw"(시계) | "ccw"(반시계) | "both"(양방향)</param>
+    public async Task<RotateResult> GenerateRotatedCopiesAsync(string direction)
+    {
+        var paths = await GetPathsAsync() ?? throw new InvalidOperationException("캡처 저장 폴더가 설정되지 않았습니다.");
+        var dir = paths.CaptureDir;
+        if (!Directory.Exists(dir)) throw new DirectoryNotFoundException(dir);
+
+        var dirs = direction switch
+        {
+            "both" => new[] { ("_cw90", RotateFlags.Rotate90Clockwise), ("_ccw90", RotateFlags.Rotate90Counterclockwise) },
+            "ccw" => new[] { ("_ccw90", RotateFlags.Rotate90Counterclockwise) },
+            _ => new[] { ("_cw90", RotateFlags.Rotate90Clockwise) },
+        };
+        var kinds = new[] { "rgb", "ir", "rgb_maskdraft", "ir_maskdraft" };
+
+        // 원본 stem 수집(이미 회전된 것 제외).
+        var stems = new HashSet<string>();
+        foreach (var f in Directory.GetFiles(dir, "*_ir.png").Concat(Directory.GetFiles(dir, "*_rgb.png")))
+        {
+            var name = Path.GetFileName(f);
+            var stem = name.EndsWith("_ir.png") ? name[..^"_ir.png".Length] : name[..^"_rgb.png".Length];
+            if (stem.Contains("cw90")) continue; // cw90/ccw90 모두 제외
+            stems.Add(stem);
+        }
+
+        int created = 0, skipped = 0;
+        await Task.Run(() =>
+        {
+            foreach (var stem in stems)
+                foreach (var (suffix, flag) in dirs)
+                {
+                    var newStem = stem + suffix;
+                    bool any = false;
+                    foreach (var kind in kinds)
+                    {
+                        var src = Path.Combine(dir, $"{stem}_{kind}.png");
+                        if (!File.Exists(src)) continue;
+                        using var m = Cv2.ImRead(src, ImreadModes.Unchanged);
+                        if (m.Empty()) continue;
+                        using var r = new Mat();
+                        Cv2.Rotate(m, r, flag);
+                        Cv2.ImWrite(Path.Combine(dir, $"{newStem}_{kind}.png"), r);
+                        any = true;
+                    }
+                    if (any) created++; else skipped++;
+                }
+        });
+        Emit($"[증강] 90° 회전본 생성 — {created}건 (방향 {direction})");
+        return new RotateResult(created, skipped);
+    }
+
     /// <summary>마스크 PNG → YOLO-seg 라벨 텍스트(클래스0 정규화 폴리곤). 반환: (텍스트, 폴리곤 수).</summary>
     private static (string Text, int Count) MaskToYoloLabel(string maskPath)
     {
@@ -217,6 +300,10 @@ public sealed class WeldTrainingService
             script, baseModel, dataYaml, imgsz.ToString(), epochs.ToString(),
             batch.ToString(), "cpu", paths.Runs, "hd", aug
         };
+        // 진행 상태 초기화(진행 바·ETA).
+        TrainTotalEpochs = epochs;
+        TrainCurrentEpoch = 0;
+        TrainStartUtc = DateTime.UtcNow;
         Emit($"[학습] 시작 — model={baseModel} epochs={epochs} imgsz={imgsz} batch={batch} device=cpu 증강={(minimalAug ? "최소" : "기본")}");
         StartProcess(py, args, paths.Workspace, TrainingPhase.Training, "학습");
     }
@@ -235,6 +322,7 @@ public sealed class WeldTrainingService
 
         var py = await GetPythonAsync();
         var args = new[] { script, best, opset.ToString(), imgsz.ToString(), paths.Models };
+        TrainTotalEpochs = 0; // 내보내기는 epoch 진행 개념 없음.
         Emit($"[내보내기] 시작 — {best} → ONNX(opset {opset}, imgsz {imgsz})");
         StartProcess(py, args, paths.Workspace, TrainingPhase.Exporting, "내보내기");
     }
@@ -379,4 +467,5 @@ public enum TrainingPhase { Idle, Converting, Training, Exporting, Done, Error }
 public sealed record TrainingPaths(string CaptureDir, string Workspace, string Dataset, string Runs, string Models);
 public sealed record PythonInfo(bool PythonOk, bool UltralyticsOk, string Exe, string Detail);
 public sealed record ConvertResult(int Used, int Skipped, int Instances, string DataYaml);
+public sealed record RotateResult(int Created, int Skipped);
 public sealed record ModelInfo(string Path, string Name, long Bytes, DateTime Modified);
