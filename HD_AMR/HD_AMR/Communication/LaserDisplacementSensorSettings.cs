@@ -79,4 +79,41 @@ public class LaserDisplacementSensorSettings
 
     /// <summary>페이지 실시간 갱신 주기(ms). SignalR 부하와 응답성의 절충값.</summary>
     public int UiRefreshMs { get; set; } = 200;
+
+    // ── 평면 기울기 계산용 헤드 기하 (cobot base 좌표계) ────────────────────────
+    // 3개 레이저 헤드의 base XY 위치(mm). 규약: Ch1→Ch3 = base +X, Ch2(상단) = +Y쪽,
+    // 빔 = base −Z. 기본값은 등변삼각형(한 변 100mm) placeholder — TODO: 실장비에서 확정.
+
+    /// <summary>Ch1(좌측 꼭지점) 헤드 X(mm, base). 기본 −50.</summary>
+    public double Head1OffsetXmm { get; set; } = -50.0;
+
+    /// <summary>Ch1(좌측 꼭지점) 헤드 Y(mm, base). 기본 0.</summary>
+    public double Head1OffsetYmm { get; set; } = 0.0;
+
+    /// <summary>Ch2(상단 꼭지점) 헤드 X(mm, base). 기본 0.</summary>
+    public double Head2OffsetXmm { get; set; } = 0.0;
+
+    /// <summary>Ch2(상단 꼭지점) 헤드 Y(mm, base). 기본 86.6(등변삼각형 높이).</summary>
+    public double Head2OffsetYmm { get; set; } = 86.6;
+
+    /// <summary>Ch3(우측 꼭지점) 헤드 X(mm, base). 기본 50.</summary>
+    public double Head3OffsetXmm { get; set; } = 50.0;
+
+    /// <summary>Ch3(우측 꼭지점) 헤드 Y(mm, base). 기본 0.</summary>
+    public double Head3OffsetYmm { get; set; } = 0.0;
+
+    /// <summary>변위 +가 base +Z(위, 센서쪽)에 대응하는지. 빔=−Z + 가까워짐=+ 규약이면 true.
+    /// 실장비 극성이 반대로 나오면 false 로 뒤집는다(통신 매뉴얼에 극성 미확정).</summary>
+    public bool TiltReadingSignForUp { get; set; } = true;
+
+    // ── 삼각형 평면 중심 pose(툴 좌표계) 계산용 ──────────────────────────────
+    // 헤드 툴-XY 는 위 Head{1,2,3}Offset{X,Y}mm 를 툴 좌표로 재해석, 빔 = 툴 +Z 평행 가정.
+
+    /// <summary>공칭 standoff(mm) — 헤드 평면(툴 Z=0)에서 기준면까지의 툴 Z 거리. 중심 pose 의 z =
+    /// Standoff + 변위평균. 기본 100 placeholder — TODO 실장비 확정.</summary>
+    public double TiltStandoffMm { get; set; } = 100.0;
+
+    /// <summary>평면 법선(Z축)을 센서쪽(표면 외향, 툴 −Z측)으로 향하게 할지. true 면 수평 기준 rx≈±180°.
+    /// false 면 표면쪽(툴 접근방향)으로 뒤집혀 rx≈0. 기본 true.</summary>
+    public bool TiltNormalTowardSensor { get; set; } = true;
 }
