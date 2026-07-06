@@ -1,4 +1,5 @@
 using HD_AMR.Service;
+using OpenCvSharp;
 
 namespace HD_AMR.Web.Services;
 
@@ -76,6 +77,32 @@ public class LabelDataService
         var path = Path.Combine(dir, name);
         await File.WriteAllBytesAsync(path, png);
         return name;
+    }
+
+    /// <summary>
+    /// 외부/업로드 이미지를 캡처 폴더에 새 촬영본으로 저장(실패 케이스 추가학습용). 파일명 규약을
+    /// 지켜 저장하므로 목록·라벨링·데이터셋 변환이 자동 인식한다. 반환: 저장된 stem.
+    /// </summary>
+    public async Task<string> SaveCaptureImageAsync(byte[] bytes, string modality)
+    {
+        var dir = await GetDirAsync() ?? throw new InvalidOperationException("캡처 저장 폴더가 설정되지 않았습니다.");
+        modality = modality == "ir" ? "ir" : "rgb";
+        Directory.CreateDirectory(dir);
+
+        // 실패 케이스 식별용 접두어 hard_. 초까지의 타임스탬프 + 충돌 시 일련번호.
+        var ts = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+        var stem = "hard_" + ts;
+        for (int k = 2; Directory.GetFiles(dir, stem + "_*").Length > 0; k++) stem = $"hard_{ts}_{k}";
+
+        var target = Path.Combine(dir, $"{stem}_{modality}.png");
+        await Task.Run(() =>
+        {
+            // 디코드 후 PNG 로 재인코딩(채널/포맷 정규화). 실패하면 원본 바이트를 그대로 기록.
+            using var m = Cv2.ImDecode(bytes, ImreadModes.Unchanged);
+            if (m.Empty()) File.WriteAllBytes(target, bytes);
+            else Cv2.ImWrite(target, m);
+        });
+        return stem;
     }
 
     private static string? TrimSuffix(string fileName, string suffix)

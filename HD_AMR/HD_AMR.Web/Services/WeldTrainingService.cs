@@ -30,6 +30,8 @@ public sealed class WeldTrainingService
     public int TrainTotalEpochs { get; private set; }
     public int TrainCurrentEpoch { get; private set; }
     public DateTime? TrainStartUtc { get; private set; }
+    // 프로세스 종료(정지/완료/실패) 시각. 설정되면 경과시간이 여기서 멈춘다(계속 카운트 방지).
+    public DateTime? TrainEndUtc { get; private set; }
 
     public WeldTrainingService(IServiceScopeFactory scopes, ILogger<WeldTrainingService> log)
     {
@@ -282,7 +284,8 @@ public sealed class WeldTrainingService
     /// 증강 최소화(소규모/과적합 검증용). true 면 mosaic·기하·색 증강을 끄고 밝기만 약간 준다.
     /// 표본이 적을 때 mosaic 은 오히려 학습을 방해하므로 기본 권장값은 true.
     /// </param>
-    public async Task StartTrainingAsync(int epochs, int imgsz, int batch, string baseModel, bool minimalAug)
+    /// <param name="brightAug">밝기/채도 증강 강화(조명·노출 편차 대응). 회전 등 기하 증강과 독립적으로 켤 수 있다.</param>
+    public async Task StartTrainingAsync(int epochs, int imgsz, int batch, string baseModel, bool minimalAug, bool brightAug)
     {
         if (IsBusy) throw new InvalidOperationException("이미 실행 중인 작업이 있습니다.");
         var paths = await GetPathsAsync() ?? throw new InvalidOperationException("캡처 폴더 미설정");
@@ -298,13 +301,14 @@ public sealed class WeldTrainingService
         var args = new[]
         {
             script, baseModel, dataYaml, imgsz.ToString(), epochs.ToString(),
-            batch.ToString(), "cpu", paths.Runs, "hd", aug
+            batch.ToString(), "cpu", paths.Runs, "hd", aug, brightAug ? "1" : "0"
         };
         // 진행 상태 초기화(진행 바·ETA).
         TrainTotalEpochs = epochs;
         TrainCurrentEpoch = 0;
         TrainStartUtc = DateTime.UtcNow;
-        Emit($"[학습] 시작 — model={baseModel} epochs={epochs} imgsz={imgsz} batch={batch} device=cpu 증강={(minimalAug ? "최소" : "기본")}");
+        TrainEndUtc = null;
+        Emit($"[학습] 시작 — model={baseModel} epochs={epochs} imgsz={imgsz} batch={batch} device=cpu 증강={(minimalAug ? "최소" : "기본")} 밝기증강={(brightAug ? "켬" : "끔")}");
         StartProcess(py, args, paths.Workspace, TrainingPhase.Training, "학습");
     }
 
@@ -385,6 +389,7 @@ public sealed class WeldTrainingService
         {
             int code = -1;
             try { code = proc.ExitCode; } catch { /* 이미 정리됨 */ }
+            TrainEndUtc = DateTime.UtcNow; // 경과시간 고정(정지/완료/실패 시점).
             Phase = code == 0 ? TrainingPhase.Done : TrainingPhase.Error;
             StatusText = code == 0 ? $"{label} 완료" : $"{label} 실패(코드 {code})";
             Emit($"[{label}] 종료 코드 {code}");
@@ -442,12 +447,14 @@ public sealed class WeldTrainingService
     private const string TrainPy =
         "import sys\n" +
         "from ultralytics import YOLO\n" +
-        "model, data, imgsz, epochs, batch, device, project, name, aug = sys.argv[1:10]\n" +
+        "model, data, imgsz, epochs, batch, device, project, name, aug, bright = sys.argv[1:11]\n" +
         "kw = dict(data=data, imgsz=int(imgsz), epochs=int(epochs), batch=int(batch),\n" +
         "          device=device, project=project, name=name, exist_ok=True, plots=True)\n" +
         "if aug == 'min':\n" +
         "    kw.update(mosaic=0.0, close_mosaic=0, hsv_h=0.0, hsv_s=0.0, hsv_v=0.2,\n" +
         "              translate=0.0, scale=0.0, fliplr=0.0, erasing=0.0)\n" +
+        "if bright == '1':\n" +
+        "    kw.update(hsv_v=0.5, hsv_s=0.3)  # 밝기/채도 변동 강화(조명·노출 편차 대응)\n" +
         "YOLO(model).train(**kw)\n" +
         "print('TRAIN_DONE')\n";
 

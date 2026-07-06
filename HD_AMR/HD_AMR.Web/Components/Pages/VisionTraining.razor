@@ -7,6 +7,7 @@
 @inject LabelDataService Lbl
 @inject OnnxBeadSegmentationService Seg
 @inject IJSRuntime JS
+@inject NavigationManager Nav
 
 <PageTitle>비전 학습 (DL)</PageTitle>
 
@@ -149,9 +150,22 @@ else
                         증강 최소화 <span class="text-muted">(mosaic·기하·색 증강 끔 — 소규모 데이터/과적합 검증용, 권장)</span>
                     </label>
                 </div>
-                <div class="text-muted mt-1" style="font-size:.8rem">
-                    CPU 학습은 느립니다. 2~수십 장 규모에서 배선/과적합 확인이 목적이면 epochs 100~300 + 증강 최소화 권장.
-                    데이터가 충분해지면(수백 장) 체크 해제해 mosaic 등 기본 증강을 켜세요.
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" id="augBright" @bind="_brightAug" />
+                    <label class="form-check-label" for="augBright" style="font-size:.9rem">
+                        밝기 증강 <span class="text-muted">(조명·노출 편차·반사 대응 — 회전은 유지하고 밝기/채도만 변동. 위 최소화와 함께 켤 수 있음)</span>
+                    </label>
+                </div>
+                <div class="alert alert-light border mt-2 mb-0" style="font-size:.82rem">
+                    <b>epochs</b> — 전체 학습 반복 횟수. CPU 학습은 느립니다. 2~수십 장 규모에서 배선/과적합 확인이
+                    목적이면 <code>100~300</code> 권장.<br />
+                    <b>증강 최소화</b> — 소규모 데이터엔 켜기(권장). 데이터가 충분해지면(수백 장) 해제해 mosaic 등
+                    기본 증강을 켜세요.<br />
+                    <b>imgsz</b> — 모델이 이미지를 리사이즈하는 작업 해상도(<b>32의 배수</b>). 원본 크기
+                    (IR 640×400 / RGB 1280×720)와 <b>무관</b>하게 이 크기로 레터박스됩니다. IR·RGB 공통값.
+                    예: <code>640</code> 기본(빠름·권장) · <code>960</code>/<code>1280</code> RGB 고해상(느림·메모리↑).
+                    내보내기·추론이 <b>이 imgsz에 자동으로 맞춰집니다</b> — 값을 바꿔도 ④ 추론이 그대로 따라갑니다.<br />
+                    <b>batch</b> — 한 번에 묶어 학습하는 이미지 수(메모리·속도). CPU면 <code>2~8</code>, 기본 <code>4</code> 권장.
                 </div>
             </div>
         </div>
@@ -202,7 +216,6 @@ else
                 <h5 class="card-title">네이티브 ONNX 추론 (CPU)</h5>
                 <p class="text-muted" style="font-size:.9rem">
                     학습한 <code>.onnx</code> 로 캡처 이미지에 비드 마스크를 추론해 오버레이로 확인합니다.
-                    (2장 학습 모델은 같은 이미지에 잘 맞으면 "학습됨"을 뜻할 뿐, 일반화는 별개)
                 </p>
                 @if (_models.Count == 0)
                 {
@@ -238,6 +251,20 @@ else
                             @if (!string.IsNullOrEmpty(_uploadName)) { <span class="text-muted" style="font-size:.85rem">📄 @_uploadName</span> }
                             @if (_inferring) { <span class="spinner-border spinner-border-sm text-primary"></span> }
                         </div>
+                        @* 검출 실패 시: 이 업로드 이미지를 학습셋에 추가하고 라벨링으로 바로 이동 *@
+                        @if (_uploadBytes is not null)
+                        {
+                            <div class="d-flex align-items-center gap-2 flex-wrap mt-2">
+                                <span class="text-muted" style="font-size:.85rem">검출이 안 되면 이 이미지를 학습에 추가 →</span>
+                                <select class="form-select form-select-sm" style="width:90px" @bind="_addModality">
+                                    <option value="ir">IR</option>
+                                    <option value="rgb">RGB</option>
+                                </select>
+                                <button class="btn btn-sm btn-warning" @onclick="AddToTrainingAndLabel" disabled="@_inferring">
+                                    학습셋에 추가 + 라벨링
+                                </button>
+                            </div>
+                        }
                     </div>
                     <div class="d-flex align-items-center gap-3 mt-2 flex-wrap">
                         <label style="font-size:.85rem">conf @_conf.ToString("0.00")
@@ -283,15 +310,16 @@ else
             {
                 var cur = Train.TrainCurrentEpoch;
                 var tot = Train.TrainTotalEpochs;
-                var pct = tot > 0 ? (int)Math.Round(100.0 * cur / tot) : 0;
+                var pct = tot > 0 ? 100.0 * cur / tot : 0.0;
+                var pctStr = pct.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
                 @* 글자는 바 위 전체 폭에 두어 진행률이 낮아도 항상 읽히게 한다. *@
                 <div class="d-flex justify-content-between align-items-baseline mt-2" style="font-size:.82rem">
-                    <span><b>@cur/@tot</b> epoch · @pct%</span>
+                    <span><b>@cur/@tot</b> epoch · @pctStr%</span>
                     <span class="text-muted">@EtaText</span>
                 </div>
                 <div class="progress" style="height:14px">
                     <div class="progress-bar progress-bar-striped @(Train.IsBusy ? "progress-bar-animated" : "")"
-                         role="progressbar" style="width:@pct%"></div>
+                         role="progressbar" style="width:@pctStr%"></div>
                 </div>
             }
 
@@ -313,8 +341,9 @@ else
     private string _modality = "rgb";
     private int _rgbMasks, _irMasks;
 
-    private int _epochs = 300, _imgsz = 640, _batch = 2;
+    private int _epochs = 300, _imgsz = 640, _batch = 4;
     private bool _minimalAug = true;
+    private bool _brightAug = false;
     private string _baseModel = "yolov8n-seg.pt";
     private int _opset = 12, _exportImgsz = 640;
 
@@ -336,6 +365,8 @@ else
     private int _inferBust = 1;
     private bool _inferring;
     private string? _uploadName;
+    private byte[]? _uploadBytes;
+    private string _addModality = "ir";
     private TrainingPhase _lastPhase = TrainingPhase.Idle;
 
     private string _logText = "";
@@ -352,9 +383,11 @@ else
             var start = Train.TrainStartUtc;
             int cur = Train.TrainCurrentEpoch, tot = Train.TrainTotalEpochs;
             if (start is null || tot <= 0) return "";
-            var elapsed = (DateTime.UtcNow - start.Value).TotalSeconds;
+            // 종료됐으면 종료시각으로 경과를 고정(계속 카운트 방지), 진행 중이면 현재시각.
+            var end = Train.TrainEndUtc ?? DateTime.UtcNow;
+            var elapsed = (end - start.Value).TotalSeconds;
             if (Train.Phase != TrainingPhase.Training)
-                return $"경과 {FormatDuration(elapsed)}";
+                return $"경과 {FormatDuration(elapsed)} · 종료";
             if (cur <= 0) return $"예상 시간 계산 중… (경과 {FormatDuration(elapsed)})";
             var remain = elapsed / cur * Math.Max(0, tot - cur);
             return $"약 {FormatDuration(remain)} 남음 · 경과 {FormatDuration(elapsed)}";
@@ -475,12 +508,28 @@ else
         {
             using var ms = new MemoryStream();
             await e.File.OpenReadStream(30 * 1024 * 1024).CopyToAsync(ms); // 최대 30MB
-            _inferResult = await Seg.RunOnBytesAsync(_selModel, ms.ToArray(), (float)_conf, (float)_maskThr);
+            _uploadBytes = ms.ToArray();
             _uploadName = e.File.Name;
+            // 업로드 파일명이 _ir/_rgb 를 담고 있으면 추가 모달리티 기본값을 맞춘다.
+            if (_uploadName.Contains("_rgb", StringComparison.OrdinalIgnoreCase)) _addModality = "rgb";
+            else if (_uploadName.Contains("_ir", StringComparison.OrdinalIgnoreCase)) _addModality = "ir";
+            _inferResult = await Seg.RunOnBytesAsync(_selModel, _uploadBytes, (float)_conf, (float)_maskThr);
             _inferBust++;
         }
         catch (Exception ex) { Notify($"업로드 추론 실패: {ex.Message}", true); }
         finally { _inferring = false; }
+    }
+
+    // 업로드한(검출 실패한) 이미지를 캡처 폴더에 학습 데이터로 저장하고, 라벨링 화면으로 이동.
+    private async Task AddToTrainingAndLabel()
+    {
+        if (_uploadBytes is null) { Notify("먼저 이미지를 업로드하세요.", true); return; }
+        try
+        {
+            var stem = await Lbl.SaveCaptureImageAsync(_uploadBytes, _addModality);
+            Nav.NavigateTo($"/label?sel={Uri.EscapeDataString(stem)}&mod={_addModality}");
+        }
+        catch (Exception ex) { Notify($"학습셋 추가 실패: {ex.Message}", true); }
     }
 
     private async Task Convert()
@@ -512,7 +561,7 @@ else
     private async Task StartTrain()
     {
         _message = null;
-        try { await Train.StartTrainingAsync(_epochs, _imgsz, _batch, _baseModel, _minimalAug); }
+        try { await Train.StartTrainingAsync(_epochs, _imgsz, _batch, _baseModel, _minimalAug, _brightAug); }
         catch (Exception ex) { Notify($"학습 시작 실패: {ex.Message}", true); }
     }
 

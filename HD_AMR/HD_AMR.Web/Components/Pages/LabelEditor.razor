@@ -105,10 +105,28 @@ else
     private bool _pendingOpen;
     private int _cacheBust = 1;
 
+    // ④ 추론 탭에서 "학습셋에 추가 + 라벨링"으로 넘어올 때 대상 이미지를 지정하는 쿼리 파라미터.
+    [Parameter, SupplyParameterFromQuery(Name = "sel")] public string? SelParam { get; set; }
+    [Parameter, SupplyParameterFromQuery(Name = "mod")] public string? ModParam { get; set; }
+
     protected override async Task OnInitializedAsync()
     {
         _dir = await Lbl.GetDirAsync();
         await RefreshList();
+
+        // 쿼리로 지정된 촬영본이 있으면 자동 선택 + 에디터 열기.
+        if (!string.IsNullOrEmpty(SelParam))
+        {
+            var match = _entries.FirstOrDefault(e => e.Stem == SelParam);
+            if (match is not null)
+            {
+                _selectedStem = match.Stem;
+                _modality = (ModParam == "ir" && match.HasIr) ? "ir"
+                    : (ModParam == "rgb" && match.HasRgb) ? "rgb"
+                    : match.HasIr ? "ir" : "rgb";
+                _pendingOpen = true;
+            }
+        }
     }
 
     private async Task RefreshList()

@@ -113,11 +113,16 @@ public sealed record InferResult(int Count, float MaxScore, double Coverage, lon
 /// <summary>YOLOv8-seg ONNX 출력 디코더(단일 클래스 비드). letterbox 전처리 → NMS → proto 마스크 합성.</summary>
 internal static class YoloSeg
 {
-    private const int S = 640; // 입력 정사각 크기(export imgsz 와 일치)
-
     public static (Mat Mask, int Count, float MaxScore) Decode(
         InferenceSession sess, Mat bgr, float conf, float iou, float maskThr)
     {
+        // 입력 정사각 크기(S)를 모델 입력 메타데이터에서 자동으로 읽는다 → export imgsz 와 자동 일치.
+        // 값을 바꿔 학습/내보내기해도 추론이 따라간다. 동적 차원(-1) 등으로 못 읽으면 640 폴백.
+        var inName = sess.InputMetadata.Keys.First();
+        int S = 640;
+        var inDims = sess.InputMetadata[inName].Dimensions;
+        if (inDims is { Length: 4 } && inDims[2] > 0 && inDims[3] > 0) S = inDims[3];
+
         int W = bgr.Width, H = bgr.Height;
         double r = Math.Min((double)S / W, (double)S / H);
         int newW = (int)Math.Round(W * r), newH = (int)Math.Round(H * r);
@@ -144,7 +149,6 @@ internal static class YoloSeg
             }
         var input = new DenseTensor<float>(data, new[] { 1, 3, S, S });
 
-        var inName = sess.InputMetadata.Keys.First();
         using var results = sess.Run(new[] { NamedOnnxValue.CreateFromTensor(inName, input) });
 
         // 출력 식별: rank3 = 검출[1,ch,na], rank4 = proto[1,pc,ph,pw].
