@@ -19,7 +19,8 @@ namespace HD_AMR.Service;
 public class WeldTrackingService
 {
     private readonly CameraService _camera;
-    private readonly IWeldVisionDetector _detector;
+    private readonly IWeldVisionDetector _cvDetector;
+    private readonly IDlWeldVisionDetector _dlDetector;
     private readonly RoiProfileStore _store;
     private readonly WeldTrackingSettings _settings;
     private readonly ILogger<WeldTrackingService> _logger;
@@ -27,17 +28,17 @@ public class WeldTrackingService
     public WeldTrackingService(
         CameraService camera,
         IWeldVisionDetector detector,
+        IDlWeldVisionDetector dlDetector,
         RoiProfileStore store,
         IOptions<WeldTrackingSettings> options,
         ILoggerFactory loggerFactory)
     {
         _camera = camera;
-        _detector = detector;
+        _cvDetector = detector;
+        _dlDetector = dlDetector;
         _store = store;
         _settings = options.Value;
         _logger = loggerFactory.CreateLogger<WeldTrackingService>();
-        PitchCorrectionEnabled = _settings.PitchCorrectionEnabled;
-        PitchCorrectionSign = _settings.PitchCorrectionSign >= 0 ? 1 : -1;
 
         if (!string.IsNullOrWhiteSpace(_settings.AutoLoadProfile))
         {
@@ -47,7 +48,13 @@ public class WeldTrackingService
     }
 
     // ── 상태(UI 가 읽음) ────────────────────────────────────────────
-    public bool DetectorAvailable => _detector.IsAvailable;
+    /// <summary>비드 검출 방식. 기본 DL(학습 모델). 파라미터(고전 CV)는 폴백/비교용으로 유지.</summary>
+    public WeldDetectionMethod Method { get; set; } = WeldDetectionMethod.Dl;
+
+    /// <summary>현재 방식에 해당하는 검출기.</summary>
+    private IWeldVisionDetector Detector => Method == WeldDetectionMethod.Dl ? _dlDetector : _cvDetector;
+
+    public bool DetectorAvailable => Detector.IsAvailable;
     public RoiRect? PeakRoi { get; private set; }
     public RoiRect? WeldRoi { get; private set; }
     public string ProfileName { get; set; } = "default";
@@ -68,11 +75,6 @@ public class WeldTrackingService
 
     /// <summary>측정 d 를 현재 스케일(Depth 자동 ± 보정)로 mm 환산.</summary>
     public double DMm(PeakMeasurement m) => m.DPixel * EffectiveMmPerPixel(m.DepthZ);
-
-    /// <summary>Peak 변위로 pitch 를 보정할지(로봇 반복정도 오차 교정).</summary>
-    public bool PitchCorrectionEnabled { get; set; }
-    /// <summary>Peak 변위 보정 부호(+1/−1).</summary>
-    public int PitchCorrectionSign { get; set; } = -1;
 
     public WeldTrackingState State { get; private set; } = WeldTrackingState.Idle;
     public string? Message { get; private set; }
@@ -145,7 +147,7 @@ public class WeldTrackingService
         var r = RunDetect();
         LastDetect = r;
         State = r.Success ? WeldTrackingState.WeldDetected
-            : (_detector.IsAvailable ? State : WeldTrackingState.DetectUnavailable);
+            : (Detector.IsAvailable ? State : WeldTrackingState.DetectUnavailable);
         Message = r.Success ? $"검출 성공 (d={Fmt(r.DPixel)}, conf={r.Confidence:P0})" : $"검출 실패: {r.Message}";
         return r;
     }
@@ -270,45 +272,25 @@ public class WeldTrackingService
         double d1 = M1.DPixel * mmpp1;   // mm
         double d2 = M2.DPixel * mmpp2;   // mm
 
-        double nominal = Pitch;          // mm (로봇 파라미터)
-        double effPitch = nominal;
-        double peakShift = 0;            // mm
-        bool corrected = false;
+        // 이동거리가 항상 FOV 보다 커 두 샷의 겹침이 없으므로 영상 기반 Peak 변위 보정은 쓰지 않는다.
+        // 분모 Pitch 는 로봇 명령값(mm)을 그대로 사용.
+        double pitch = Pitch;            // mm (로봇 파라미터, 명령값)
 
-        // Peak 변위 보정: 보정 Pitch = Pitch + Sign × ΔPeak. ΔPeak 는 두 측정 평균 스케일로 mm 환산.
-        if (PitchCorrectionEnabled && M1.Peak is { Found: true } p1 && M2.Peak is { Found: true } p2)
-        {
-            double dppPx = p2.ProgressPos - p1.ProgressPos;
-            peakShift = dppPx * ((mmpp1 + mmpp2) / 2.0);   // mm
-            int sign = PitchCorrectionSign >= 0 ? 1 : -1;
-            effPitch = nominal + sign * peakShift;
-            corrected = true;
-
-            if (effPitch <= 0)
-            {
-                Message = $"보정 Pitch({effPitch:0.#}mm)가 0 이하 — 부호(+/−)/값 확인. Pitch 값으로 계산합니다.";
-                effPitch = nominal;
-                corrected = false;
-            }
-        }
-
-        double thetaRad = Math.Atan2(d2 - d1, effPitch);
+        double thetaRad = Math.Atan2(d2 - d1, pitch);
         Angle = new AngleResult
         {
             D1 = d1,
             D2 = d2,
-            Pitch = effPitch,
-            NominalPitch = nominal,
-            PeakShift = peakShift,
-            Corrected = corrected,
+            Pitch = pitch,
+            NominalPitch = pitch,
+            PeakShift = 0,
+            Corrected = false,
             ThetaRad = thetaRad,
             ThetaDeg = thetaRad * 180.0 / Math.PI,
             Unit = "mm",
         };
         State = WeldTrackingState.ThetaComputed;
-        Message = corrected
-            ? $"theta = {Angle.ThetaDeg:0.00}° · 보정 Pitch={effPitch:0.#}mm (Pitch {nominal:0.#} {(PitchCorrectionSign >= 0 ? "+" : "−")} ΔPeak {Math.Abs(peakShift):0.0})"
-            : $"theta = {Angle.ThetaDeg:0.00}° (d1={d1:0.0}, d2={d2:0.0} mm, Pitch={effPitch:0.#})";
+        Message = $"theta = {Angle.ThetaDeg:0.00}° (d1={d1:0.0}, d2={d2:0.0} mm, Pitch={pitch:0.#})";
     }
 
     public void ResetMeasurements()
@@ -320,8 +302,8 @@ public class WeldTrackingService
     private WeldDetectionResult RunDetect(double? peakProgressPos = null, string? peakLabel = null,
         double? peakCrossStart = null, double? peakCrossEnd = null)
     {
-        if (!_detector.IsAvailable)
-            return WeldDetectionResult.Fail("OpenCV 네이티브가 없어 검출 비활성(Windows에서만 지원).");
+        if (!Detector.IsAvailable)
+            return WeldDetectionResult.Fail("검출기가 비활성 상태입니다(OpenCV 네이티브 없음 — Windows에서만 지원).");
 
         var frame = Params.Mode == WeldImageMode.Ir ? _camera.LatestIr : _camera.LatestColor;
         if (frame is null)
@@ -332,7 +314,7 @@ public class WeldTrackingService
         var weldRoi = WeldRoi ?? RoiRect.Full(frame.Width, frame.Height);
 
         // d 기준선은 FOV(전체 화면) 센터선으로 고정. 자홍 Peak 선은 depth 기반 비드 cross 구간만큼 그린다.
-        return _detector.DetectWeld(frame, weldRoi, Params, WeldReferenceMode.FovCenter, null,
+        return Detector.DetectWeld(frame, weldRoi, Params, WeldReferenceMode.FovCenter, null,
             peakProgressPos, peakLabel, PeakRoi, peakCrossStart, peakCrossEnd);
     }
 
@@ -343,12 +325,13 @@ public class WeldTrackingService
     /// </summary>
     public (byte[] Png, string Modality, double Confidence)? TryBuildLabelMask(double minConfidence = 0.3)
     {
-        if (!_detector.IsAvailable) return null;
+        // 라벨 초안은 항상 고전 CV 로 생성한다(아직 DL 모델이 없을 때도 초안을 만들어 라벨링을 부트스트랩).
+        if (!_cvDetector.IsAvailable) return null;
         var frame = Params.Mode == WeldImageMode.Ir ? _camera.LatestIr : _camera.LatestColor;
         if (frame is null) return null;
 
         var weldRoi = WeldRoi ?? RoiRect.Full(frame.Width, frame.Height);
-        var r = _detector.DetectWeld(frame, weldRoi, Params, WeldReferenceMode.FovCenter);
+        var r = _cvDetector.DetectWeld(frame, weldRoi, Params, WeldReferenceMode.FovCenter);
         if (!r.Success || r.BeadSpans is not { Count: > 0 } spans || r.Confidence < minConfidence)
             return null;
 

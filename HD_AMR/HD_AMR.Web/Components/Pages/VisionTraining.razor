@@ -178,13 +178,21 @@ else
             <div class="card-body">
                 <h5 class="card-title">ONNX 내보내기 · 모델 목록</h5>
                 <div class="d-flex align-items-end gap-2 flex-wrap">
+                    <div><label class="form-label mb-0" style="font-size:.85rem">모달리티</label>
+                        <select class="form-select form-select-sm" style="width:90px" @bind="_exportModality">
+                            <option value="ir">IR</option>
+                            <option value="rgb">RGB</option>
+                        </select></div>
                     <div><label class="form-label mb-0" style="font-size:.85rem">opset</label>
                         <input type="number" class="form-control form-control-sm" style="width:90px" @bind="_opset" /></div>
                     <div><label class="form-label mb-0" style="font-size:.85rem">imgsz</label>
                         <input type="number" class="form-control form-control-sm" style="width:90px" @bind="_exportImgsz" /></div>
                     <button class="btn btn-success btn-sm" @onclick="StartExport"
-                            disabled="@(_working || Train.IsBusy || _py is not { UltralyticsOk: true })">best.pt → ONNX</button>
+                            disabled="@(_working || Train.IsBusy || _py is not { UltralyticsOk: true })">best.pt → <code class="text-white">weld_seg_@(_exportModality).onnx</code></button>
                     <button class="btn btn-outline-secondary btn-sm" @onclick="RefreshModels">목록 새로고침</button>
+                </div>
+                <div class="text-muted mt-1" style="font-size:.8rem">
+                    방금 학습한 데이터셋의 모달리티로 내보내세요. IR/RGB 모델이 <b>파일명으로 구분</b>되어 함께 보관됩니다.
                 </div>
 
                 <table class="table table-sm mt-3 mb-0">
@@ -346,6 +354,7 @@ else
     private bool _brightAug = false;
     private string _baseModel = "yolov8n-seg.pt";
     private int _opset = 12, _exportImgsz = 640;
+    private string _exportModality = "ir";
 
     private ConvertResult? _convert;
     private RotateResult? _rot;
@@ -539,6 +548,7 @@ else
         {
             await RefreshCounts();
             _convert = await Train.ConvertAsync(_modality);
+            _exportModality = _modality;  // 방금 변환한 모달리티를 내보내기 기본값으로.
             Notify($"데이터셋 변환 완료 — 사용 {_convert.Used}건.", false);
         }
         catch (Exception ex) { Notify($"변환 실패: {ex.Message}", true); }
@@ -568,7 +578,7 @@ else
     private async Task StartExport()
     {
         _message = null;
-        try { await Train.StartExportAsync(_opset, _exportImgsz); }
+        try { await Train.StartExportAsync(_opset, _exportImgsz, _exportModality); }
         catch (Exception ex) { Notify($"내보내기 시작 실패: {ex.Message}", true); }
     }
 

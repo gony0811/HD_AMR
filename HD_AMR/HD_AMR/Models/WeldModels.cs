@@ -44,6 +44,9 @@ public enum WeldThresholdMethod { Otsu, Adaptive, Canny }
 /// <summary>위치 오차 d 의 기준선.</summary>
 public enum WeldReferenceMode { FovCenter, PeakLine }
 
+/// <summary>비드 검출 방식. Param=고전 CV 파라미터 이진화, Dl=학습된 YOLOv8-seg 모델 추론.</summary>
+public enum WeldDetectionMethod { Param, Dl }
+
 /// <summary>용접라인 검출 파라미터(명세서 8장). 1차 구현에 필요한 핵심 튜너블만.</summary>
 public sealed class WeldDetectionParams
 {
@@ -77,6 +80,17 @@ public sealed class WeldDetectionParams
 
     /// <summary>centerline 이동평균 윈도(0/1=끔).</summary>
     public int SmoothingWindow { get; set; } = 5;
+
+    // ── DL 검출(YOLOv8-seg) 전용 ─────────────────────────────────────────────
+    // 아래 값들은 WeldDetectionMethod.Dl 에서만 사용된다(고전 CV 경로는 무시).
+    /// <summary>DL 검출 confidence 임계값(이 값 미만 후보 제거).</summary>
+    public double DlConfidence { get; set; } = 0.25;
+
+    /// <summary>DL 마스크 확률 임계값(proto 마스크 이진화 기준).</summary>
+    public double DlMaskThreshold { get; set; } = 0.50;
+
+    /// <summary>사용할 .onnx 경로. null 이면 모달리티(Mode)로 <c>weld_seg_{ir|rgb}.onnx</c> 자동 해석.</summary>
+    public string? DlModelPath { get; set; }
 }
 
 /// <summary>한 점(이미지 픽셀 좌표).</summary>

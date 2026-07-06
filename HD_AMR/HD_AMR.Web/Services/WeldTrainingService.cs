@@ -33,6 +33,9 @@ public sealed class WeldTrainingService
     // 프로세스 종료(정지/완료/실패) 시각. 설정되면 경과시간이 여기서 멈춘다(계속 카운트 방지).
     public DateTime? TrainEndUtc { get; private set; }
 
+    // 마지막으로 데이터셋 변환한 모달리티("ir"/"rgb"). 내보내기 파일명 weld_seg_{modality}.onnx 기본값.
+    public string LastConvertedModality { get; private set; } = "ir";
+
     public WeldTrainingService(IServiceScopeFactory scopes, ILogger<WeldTrainingService> log)
     {
         _scopes = scopes;
@@ -141,6 +144,7 @@ public sealed class WeldTrainingService
     public async Task<ConvertResult> ConvertAsync(string modality)
     {
         modality = modality == "ir" ? "ir" : "rgb";
+        LastConvertedModality = modality;
         var paths = await GetPathsAsync();
         if (paths is null) throw new InvalidOperationException("캡처 저장 폴더가 설정되지 않았습니다.");
         if (!Directory.Exists(paths.CaptureDir)) throw new DirectoryNotFoundException(paths.CaptureDir);
@@ -313,9 +317,11 @@ public sealed class WeldTrainingService
     }
 
     // ── ③ ONNX 내보내기 ──────────────────────────────────────────────────────
-    public async Task StartExportAsync(int opset = 12, int imgsz = 640)
+    /// <param name="modality">"ir"/"rgb" — 출력 파일명 weld_seg_{modality}.onnx (IR/RGB 모델 동시 보관).</param>
+    public async Task StartExportAsync(int opset = 12, int imgsz = 640, string? modality = null)
     {
         if (IsBusy) throw new InvalidOperationException("이미 실행 중인 작업이 있습니다.");
+        modality = modality == "rgb" ? "rgb" : modality == "ir" ? "ir" : LastConvertedModality;
         var paths = await GetPathsAsync() ?? throw new InvalidOperationException("캡처 폴더 미설정");
         var best = Path.Combine(paths.Runs, "hd", "weights", "best.pt");
         if (!File.Exists(best)) throw new FileNotFoundException("학습된 가중치(best.pt)가 없습니다. 먼저 학습을 완료하세요.", best);
@@ -325,9 +331,10 @@ public sealed class WeldTrainingService
         await File.WriteAllTextAsync(script, ExportPy);
 
         var py = await GetPythonAsync();
-        var args = new[] { script, best, opset.ToString(), imgsz.ToString(), paths.Models };
+        var outName = $"weld_seg_{modality}.onnx";
+        var args = new[] { script, best, opset.ToString(), imgsz.ToString(), paths.Models, outName };
         TrainTotalEpochs = 0; // 내보내기는 epoch 진행 개념 없음.
-        Emit($"[내보내기] 시작 — {best} → ONNX(opset {opset}, imgsz {imgsz})");
+        Emit($"[내보내기] 시작 — {best} → {outName} (opset {opset}, imgsz {imgsz})");
         StartProcess(py, args, paths.Workspace, TrainingPhase.Exporting, "내보내기");
     }
 
@@ -462,9 +469,10 @@ public sealed class WeldTrainingService
         "import sys, shutil, os\n" +
         "from ultralytics import YOLO\n" +
         "best, opset, imgsz, outdir = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]\n" +
+        "outname = sys.argv[5] if len(sys.argv) > 5 else 'weld_seg.onnx'\n" +
         "path = YOLO(best).export(format='onnx', opset=opset, imgsz=imgsz)\n" +
         "os.makedirs(outdir, exist_ok=True)\n" +
-        "dst = os.path.join(outdir, 'weld_seg.onnx')\n" +
+        "dst = os.path.join(outdir, outname)\n" +
         "shutil.copyfile(path, dst)\n" +
         "print('EXPORT_DONE', dst)\n";
 }

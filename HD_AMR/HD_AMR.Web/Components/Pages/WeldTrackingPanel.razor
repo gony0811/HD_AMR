@@ -12,7 +12,8 @@
 
 <div class="mb-2">
     <span class="badge @(Svc.DetectorAvailable ? "bg-success" : "bg-secondary")">
-        검출엔진 @(Svc.DetectorAvailable ? "OpenCV 사용가능" : "비활성(Windows 전용)")
+        검출 @(Svc.Method == WeldDetectionMethod.Dl ? "DL 모델" : "파라미터(CV)")
+        · @(Svc.DetectorAvailable ? "사용가능" : "비활성(Windows 전용)")
     </span>
     <span class="badge bg-info text-dark">상태: @Svc.State</span>
     <span class="badge bg-light text-dark">
@@ -113,6 +114,83 @@
 
     @* ── 우: 파라미터 + 측정 ─────────────────────────── *@
     <div class="col-xl-6">
+        @* 검출 방식 토글: DL(학습 모델) / 파라미터(고전 CV). 기본 DL. *@
+        <div class="card mb-3">
+            <div class="card-header py-1"><strong>검출 방식</strong></div>
+            <div class="card-body py-2">
+                <div class="btn-group btn-group-sm" role="group">
+                    <input type="radio" class="btn-check" name="detmethod" id="dm_dl"
+                           checked="@(Svc.Method == WeldDetectionMethod.Dl)" @onchange='() => SetMethod(WeldDetectionMethod.Dl)' />
+                    <label class="btn btn-outline-primary" for="dm_dl">🧠 DL 모델</label>
+                    <input type="radio" class="btn-check" name="detmethod" id="dm_param"
+                           checked="@(Svc.Method == WeldDetectionMethod.Param)" @onchange='() => SetMethod(WeldDetectionMethod.Param)' />
+                    <label class="btn btn-outline-secondary" for="dm_param">⚙ 파라미터(CV)</label>
+                </div>
+                <span class="text-muted ms-2" style="font-size:.8rem">
+                    @(Svc.Method == WeldDetectionMethod.Dl
+                        ? "학습된 weld_seg 모델로 비드를 찾습니다(권장)."
+                        : "고전 CV 이진화로 찾습니다(모델 없이 튜닝/폴백용).")
+                </span>
+            </div>
+        </div>
+
+        @* ── DL 검출 카드 (Method=Dl) ── *@
+        @if (Svc.Method == WeldDetectionMethod.Dl)
+        {
+            <div class="card mb-3">
+                <div class="card-header py-1 d-flex justify-content-between align-items-center">
+                    <strong>DL 검출 (YOLOv8-seg)</strong>
+                    <span class="form-check form-switch mb-0" title="conf/mask/입력을 바꿀 때마다 자동 재검출(약 0.25초 디바운스).">
+                        <input class="form-check-input" type="checkbox" id="dl_live" @bind="_livePreview" />
+                        <label class="form-check-label small" for="dl_live">라이브 미리보기</label>
+                    </span>
+                </div>
+                <div class="card-body">
+                    <div class="row g-2 align-items-end">
+                        <div class="col-auto" title="검출 입력 영상 = 학습한 모델의 모달리티와 맞춰야 함. IR이면 weld_seg_ir.onnx 사용.">
+                            <label class="form-label mb-0 small">입력 ⓘ</label>
+                            <select class="form-select form-select-sm" @bind="Svc.Params.Mode" @bind:after="OnModeChanged" style="width:150px">
+                                <option value="@WeldImageMode.Ir">IR</option>
+                                <option value="@WeldImageMode.RgbGrayscale">RGB Grayscale</option>
+                                <option value="@WeldImageMode.RgbHsv">RGB HSV(S)</option>
+                            </select>
+                        </div>
+                        <div class="col-auto" title="용접 진행 방향. 마스크만으론 방향을 모르므로 지정 필요. 가로=경계 상/하, 세로=경계 좌/우.">
+                            <label class="form-label mb-0 small">진행축 ⓘ</label>
+                            <select class="form-select form-select-sm" @bind="Svc.Params.ProgressAxis" @bind:after="LivePreview" style="width:130px">
+                                <option value="@WeldProgressAxis.Horizontal">가로(좌우)</option>
+                                <option value="@WeldProgressAxis.Vertical">세로(상하)</option>
+                            </select>
+                        </div>
+                        <div class="col-auto" title="centerline 이동평균 윈도(픽셀). 중심선을 매끈하게. 0~1=끔.">
+                            <label class="form-label mb-0 small">Smooth</label>
+                            <input class="form-control form-control-sm" type="number" @bind="Svc.Params.SmoothingWindow" @bind:after="LivePreview" style="width:70px" />
+                        </div>
+                    </div>
+                    <div class="row g-2 mt-1 align-items-center">
+                        <div class="col-auto">
+                            <label class="form-label mb-0 small">conf @Svc.Params.DlConfidence.ToString("0.00")</label>
+                            <input type="range" min="0.05" max="0.90" step="0.05" @bind="Svc.Params.DlConfidence" @bind:after="LivePreview"
+                                   style="vertical-align:middle;width:150px" />
+                        </div>
+                        <div class="col-auto">
+                            <label class="form-label mb-0 small">mask @Svc.Params.DlMaskThreshold.ToString("0.00")</label>
+                            <input type="range" min="0.30" max="0.70" step="0.05" @bind="Svc.Params.DlMaskThreshold" @bind:after="LivePreview"
+                                   style="vertical-align:middle;width:150px" />
+                        </div>
+                    </div>
+                    <div class="small mt-2 @(Svc.DetectorAvailable ? "text-muted" : "text-danger")">
+                        모델: <code>weld_seg_@(Svc.Params.Mode == WeldImageMode.Ir ? "ir" : "rgb").onnx</code>
+                        — <a href="/vision-training">비전 학습</a>에서 ①변환→②학습→③내보내기로 생성/갱신합니다.
+                    </div>
+                    <div class="small text-muted mt-1">위치 오차 <b>d</b> 의 기준선: <b>FOV 중심</b>(회색 센터선) 고정.</div>
+                </div>
+            </div>
+        }
+
+        @* ── 고전 CV 파라미터 카드 (Method=Param) ── *@
+        @if (Svc.Method == WeldDetectionMethod.Param)
+        {
         <div class="card mb-3">
             <div class="card-header py-1 d-flex justify-content-between align-items-center">
                 <strong>검출 파라미터</strong>
@@ -188,6 +266,7 @@
                 </details>
             </div>
         </div>
+        }
 
         <div class="card mb-3">
             <div class="card-header py-1"><strong>측정 (수동 2-shot)</strong></div>
@@ -199,20 +278,9 @@
                     <button class="btn btn-sm btn-outline-secondary" @onclick="ResetMeas" disabled="@_busy">측정 초기화</button>
                 </div>
                 <div class="row g-2 align-items-end mb-2">
-                    <div class="col-auto" title="로봇이 이동하는 Pitch(명령값). 로봇 파라미터라 항상 mm 단위">
+                    <div class="col-auto" title="로봇이 이동하는 Pitch(명령값). 로봇 파라미터라 항상 mm 단위. theta 계산의 분모로 사용.">
                         <label class="form-label mb-0 small">Pitch (mm)</label>
                         <input class="form-control form-control-sm" type="number" step="0.1" @bind="Svc.Pitch" style="width:110px" />
-                    </div>
-                    <div class="col-auto form-check" title="로봇 위치 반복정도 오차를 영상의 Peak 변위로 교정: 보정 Pitch = Pitch + 부호×ΔPeak">
-                        <input class="form-check-input" type="checkbox" id="wk_pcorr" @bind="Svc.PitchCorrectionEnabled" />
-                        <label class="form-check-label small" for="wk_pcorr">Peak 변위로 보정</label>
-                    </div>
-                    <div class="col-auto" title="ΔPeak(=ProgressPos2−ProgressPos1) 적용 부호. 진행/장착 방향 규약에 맞춰 한 번 정함">
-                        <label class="form-label mb-0 small">부호</label>
-                        <select class="form-select form-select-sm" @bind="Svc.PitchCorrectionSign" style="width:70px">
-                            <option value="-1">−</option>
-                            <option value="1">+</option>
-                        </select>
                     </div>
                     <div class="col-auto"><button class="btn btn-sm btn-primary" @onclick="ComputeAngle" disabled="@(_busy || Svc.M1 is null || Svc.M2 is null || !Svc.ScaleAvailable)">각도 계산</button></div>
                 </div>
@@ -233,13 +301,7 @@
                         {
                             <tr>
                                 <td class="text-muted">Pitch</td>
-                                <td>
-                                    @a.NominalPitch.ToString("0.#")@a.Unit
-                                    @if (a.Corrected)
-                                    {
-                                        <text> → <b>보정 Pitch @a.Pitch.ToString("0.#")@a.Unit</b> (ΔPeak @a.PeakShift.ToString("0.0"), 적용 @((a.Pitch - a.NominalPitch).ToString("+0.0;-0.0")))</text>
-                                    }
-                                </td>
+                                <td>@a.Pitch.ToString("0.#")@a.Unit</td>
                             </tr>
                         }
                         <tr><td class="text-muted">theta</td><td>@(Svc.Angle is null ? "—" : $"{Svc.Angle.ThetaDeg:0.00}° ({Svc.Angle.ThetaRad:0.0000} rad)")</td></tr>
@@ -481,6 +543,21 @@
         Svc.LoadProfile(_loadName);
         FillManualFields(_drawKind);
         await PushRois();
+    }
+
+    /// <summary>검출 방식 전환(DL ↔ 파라미터). 전환 후 라이브 미리보기가 켜져 있으면 재검출.</summary>
+    private async Task SetMethod(WeldDetectionMethod m)
+    {
+        if (Svc.Method == m) return;
+        Svc.Method = m;
+        await LivePreview();
+    }
+
+    /// <summary>입력(모달리티) 변경: 에디터 스트림 소스가 바뀌므로 캐시버스터를 올리고 재검출.</summary>
+    private async Task OnModeChanged()
+    {
+        _editorKey++;   // ir/color mjpeg 스트림 전환
+        await LivePreview();
     }
 
     /// <summary>파라미터 변경 시 자동 재검출(디바운스). 라이브 미리보기 ON + 스트리밍 + 검출 가능할 때만.</summary>

@@ -61,10 +61,17 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<IoModuleService>()
 // ROI 프로파일은 JSON 파일로 저장. 싱글톤(운영자 1인, 상태 유지).
 builder.Services.Configure<WeldTrackingSettings>(
     builder.Configuration.GetSection("WeldTracking"));
+// 고전 CV(파라미터) 검출기 + DL(YOLOv8-seg) 검출기를 함께 등록 → WeldTrackingService 가 런타임 토글.
 if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+{
     builder.Services.AddSingleton<IWeldVisionDetector, WeldVisionDetector>();
+    builder.Services.AddSingleton<IDlWeldVisionDetector, HD_AMR.Web.Services.DlWeldVisionDetector>();
+}
 else
+{
     builder.Services.AddSingleton<IWeldVisionDetector, NoopWeldVisionDetector>();
+    builder.Services.AddSingleton<IDlWeldVisionDetector, NoopWeldVisionDetector>();
+}
 builder.Services.AddSingleton(sp =>
 {
     var dir = builder.Configuration.GetSection("WeldTracking")["ProfileDirectory"] ?? "RoiProfiles";
