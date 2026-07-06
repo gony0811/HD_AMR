@@ -128,6 +128,21 @@ window.hdAmrCamera = {
         ctx.fillText(txt, lx, ly);
         ctx.restore();
       }
+      // 평면 검출 결과 — 가장 평평한 셀(시안 사각형 + 중심점). VerifyPlane 버튼이 setFlatCell 로 설정.
+      const fc = canvas._flatCell;
+      if (fc) {
+        ctx.save();
+        ctx.shadowColor = 'rgba(0,0,0,.7)'; ctx.shadowBlur = 2;   // 밝은 시안이 뜨도록 어두운 외곽
+        ctx.strokeStyle = '#00e5ff'; ctx.fillStyle = '#00e5ff'; ctx.lineWidth = 2.5;
+        const rx = fc.x * canvas.width, ry = fc.y * canvas.height;
+        const rw = fc.w * canvas.width, rh = fc.h * canvas.height;
+        ctx.strokeRect(rx, ry, rw, rh);
+        const cx = (fc.x + fc.w / 2) * canvas.width, cy = (fc.y + fc.h / 2) * canvas.height;
+        ctx.beginPath(); ctx.arc(cx, cy, 4, 0, Math.PI * 2); ctx.fill();   // 중심점
+        ctx.font = 'bold 12px sans-serif';
+        ctx.fillText('평탄', rx + 3, ry + 13);
+        ctx.restore();
+      }
       requestAnimationFrame(draw);
     };
     requestAnimationFrame(draw);
@@ -144,5 +159,11 @@ window.hdAmrCamera = {
   setMinMarker(canvas, u, v, mm) {
     if (!canvas) return;
     canvas._minMarker = (u >= 0 && mm > 0) ? { u, v, mm } : null;
+  },
+
+  // 가장 평평한 셀(정규화 x,y,w,h). w/h<=0 이면 오버레이 제거.
+  setFlatCell(canvas, x, y, w, h) {
+    if (!canvas) return;
+    canvas._flatCell = (w > 0 && h > 0) ? { x, y, w, h } : null;
   },
 };
