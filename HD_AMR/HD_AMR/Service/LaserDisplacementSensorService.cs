@@ -114,6 +114,45 @@ public class LaserDisplacementSensorService : BackgroundService
     /// <summary>최신 Input Assembly 원본 바이트 스냅샷(진단용). 미연결이면 null.</summary>
     public byte[]? SnapshotInputAssembly() => _client.SnapshotInputAssembly();
 
+    /// <summary>
+    /// 최신 3채널 측정으로 평면 기울기(cobot base 기준 rx,ry,rz)를 계산한다. 3채널이 모두 존재하고
+    /// 유효(Enabled)할 때만 계산하며, 아니면 <see cref="PlaneTilt.Valid"/>=false 로 사유를 담는다.
+    /// 헤드 기하·부호는 <see cref="Settings"/> 값을 사용한다.
+    /// </summary>
+    public PlaneTilt GetPlaneTilt()
+    {
+        var r = GetReadings();
+        if (r.Count < 3)
+            return PlaneTilt.Invalid("연결/측정 대기 중 — 3채널이 필요합니다.");
+        if (!(r[0].Enabled && r[1].Enabled && r[2].Enabled))
+            return PlaneTilt.Invalid("3채널 모두 측정중(범위 내)이어야 기울기를 계산할 수 있습니다.");
+
+        var hx = new[] { _settings.Head1OffsetXmm, _settings.Head2OffsetXmm, _settings.Head3OffsetXmm };
+        var hy = new[] { _settings.Head1OffsetYmm, _settings.Head2OffsetYmm, _settings.Head3OffsetYmm };
+        var d = new[] { r[0].Value, r[1].Value, r[2].Value };
+        return PlaneTiltCalculator.Compute(hx, hy, d, _settings.TiltReadingSignForUp);
+    }
+
+    /// <summary>
+    /// 최신 3채널 측정으로 삼각형 평면 중심의 <b>툴 좌표계</b> pose(x,y,z,rx,ry,rz)를 계산한다.
+    /// 3채널이 모두 존재·유효(Enabled)할 때만 계산하며, 아니면 <see cref="PlanePose.Valid"/>=false.
+    /// 헤드 기하·standoff·부호·법선방향은 <see cref="Settings"/> 값을 사용한다.
+    /// </summary>
+    public PlanePose GetPlanePose()
+    {
+        var r = GetReadings();
+        if (r.Count < 3)
+            return PlanePose.Invalid("연결/측정 대기 중 — 3채널이 필요합니다.");
+        if (!(r[0].Enabled && r[1].Enabled && r[2].Enabled))
+            return PlanePose.Invalid("3채널 모두 측정중(범위 내)이어야 중심 pose를 계산할 수 있습니다.");
+
+        var hx = new[] { _settings.Head1OffsetXmm, _settings.Head2OffsetXmm, _settings.Head3OffsetXmm };
+        var hy = new[] { _settings.Head1OffsetYmm, _settings.Head2OffsetYmm, _settings.Head3OffsetYmm };
+        var d = new[] { r[0].Value, r[1].Value, r[2].Value };
+        return PlaneTiltCalculator.ComputePose(
+            hx, hy, d, _settings.TiltStandoffMm, _settings.TiltReadingSignForUp, _settings.TiltNormalTowardSensor);
+    }
+
     /// <summary>채널 영점 설정(현재값을 0으로).</summary>
     public void ZeroSet(int channel) => _client.SetZero(channel, true);
 
