@@ -4,12 +4,11 @@
 @using HD_AMR.Service
 @implements IDisposable
 @inject LaserDisplacementSensorService Svc
-@inject ILogger<LaserDisplacementSensor> Logger
 
 <PageTitle>Laser Displacement Sensor</PageTitle>
 
 <h1 class="page-title">Laser Displacement Sensor</h1>
-<p class="page-subtitle">레이저 변위 센서 — EtherNet/IP 통신 연결 및 3채널 변위 측정</p>
+<p class="page-subtitle">레이저 변위 센서 — EtherNet/IP 통신 연결 및 3채널 거리 측정</p>
 
 <div class="card card-surface mb-3" style="max-width: 720px;">
     <div class="card-body">
@@ -20,37 +19,11 @@
             </span>
         </div>
 
-        <div class="row g-2 align-items-end">
-            <div class="col-sm-7">
-                <label class="form-label mb-1">IP 주소</label>
-                <input class="form-control" @bind="Svc.Settings.IpAddress"
-                       disabled="@(_busy || Svc.IsConnected)" />
-            </div>
-            <div class="col-sm-5">
-                <label class="form-label mb-1">포트</label>
-                <input type="number" class="form-control" @bind="Svc.Settings.Port"
-                       disabled="@(_busy || Svc.IsConnected)" />
-            </div>
-        </div>
+        @* 다른 모듈(AMR/Camera 등)과 동일하게 상시 자동 접속 — 수동 연결/해제 없이 상태만 표시.
+           대상 IP/포트는 appsettings 로 설정하며 여기서는 참고용으로만 노출한다. *@
+        <div class="text-muted small">대상: @Svc.Settings.IpAddress:@Svc.Settings.Port</div>
 
-        <div class="d-flex gap-2 mt-3">
-            <button class="btn btn-primary" @onclick="Connect"
-                    disabled="@(_busy || Svc.IsConnected)">
-                연결
-            </button>
-            <button class="btn btn-outline-secondary" @onclick="Disconnect"
-                    disabled="@(_busy || !Svc.IsConnected)">
-                연결 해제
-            </button>
-        </div>
-
-        @if (!string.IsNullOrEmpty(_message))
-        {
-            <div class="alert @(_isError ? "alert-danger" : "alert-success") mt-3 mb-0 py-2">
-                @_message
-            </div>
-        }
-        else if (!string.IsNullOrEmpty(Svc.LastError))
+        @if (!string.IsNullOrEmpty(Svc.LastError))
         {
             <div class="alert alert-warning mt-3 mb-0 py-2">
                 마지막 연결 오류: @Svc.LastError
@@ -62,7 +35,7 @@
 <div class="card card-surface" style="max-width: 720px;">
     <div class="card-body">
         <div class="d-flex align-items-center justify-content-between mb-3">
-            <h5 class="card-title mb-0">측정값 (변위)</h5>
+            <h5 class="card-title mb-0">측정값 (거리)</h5>
             <div class="d-flex gap-2">
                 <button class="btn btn-sm btn-outline-primary" @onclick="ZeroSetAll"
                         disabled="@(!Svc.IsConnected)">전체 영점 설정</button>
@@ -73,7 +46,7 @@
 
         @if (!Svc.IsConnected)
         {
-            <div class="text-muted">연결되면 채널별 변위가 실시간으로 표시됩니다.</div>
+            <div class="text-muted">연결되면 채널별 거리가 실시간으로 표시됩니다.</div>
         }
         else
         {
@@ -81,7 +54,7 @@
                 <thead>
                     <tr>
                         <th style="width: 70px;">채널</th>
-                        <th class="text-end">변위</th>
+                        <th class="text-end">거리</th>
                         <th>상태</th>
                         <th style="width: 190px;">영점</th>
                     </tr>
@@ -92,7 +65,7 @@
                         <tr>
                             <td><strong>CH@(r.Channel)</strong></td>
                             <td class="text-end">
-                                @* 변위 숫자는 Enabled 여부와 무관하게 항상 표시(범위밖이면 흐리게).
+                                @* 거리 숫자는 Enabled 여부와 무관하게 항상 표시(범위밖이면 흐리게).
                                    유효성은 옆의 "상태" 배지로 구분한다. *@
                                 <span class="fs-5 fw-semibold @(r.Enabled ? "" : "text-muted")">@r.Value.ToString("F3")</span>
                                 <span class="text-muted ms-1">@Svc.Settings.MeasurementUnit</span>
@@ -135,44 +108,8 @@
                 </tbody>
             </table>
 
-            @* 평면 기울기(3점 측정 → cobot base 기준 rx/ry/rz). 3점 거리는 법선(2 DOF)만 결정하므로
-               rz 는 항상 0(요각 미관측). 헤드 기하/부호는 appsettings 로 튜닝. *@
-            <div class="mt-3 pt-3 border-top">
-                <div class="d-flex align-items-center justify-content-between mb-2">
-                    <h6 class="mb-0">평면 기울기 (cobot base 기준)</h6>
-                    <span class="badge @(_tilt.Valid ? "bg-success" : "bg-secondary")">
-                        @(_tilt.Valid ? "계산됨" : "대기")
-                    </span>
-                </div>
-
-                @if (_tilt.Valid)
-                {
-                    <div class="row g-2 text-center">
-                        <div class="col-4">
-                            <div class="small text-muted">Rx</div>
-                            <div class="fs-5 fw-semibold">@_tilt.RxDeg.ToString("F3")<span class="small text-muted">°</span></div>
-                        </div>
-                        <div class="col-4">
-                            <div class="small text-muted">Ry</div>
-                            <div class="fs-5 fw-semibold">@_tilt.RyDeg.ToString("F3")<span class="small text-muted">°</span></div>
-                        </div>
-                        <div class="col-4" title="3점 거리로는 요각(법선축 둘레 회전) 미관측 → 0 고정">
-                            <div class="small text-muted">Rz</div>
-                            <div class="fs-5 fw-semibold text-muted">@_tilt.RzDeg.ToString("F3")<span class="small">°</span></div>
-                        </div>
-                    </div>
-                    <div class="small text-muted mt-2">
-                        법선(base): (@_tilt.Normal[0].ToString("F4"), @_tilt.Normal[1].ToString("F4"), @_tilt.Normal[2].ToString("F4"))
-                    </div>
-                }
-                else
-                {
-                    <div class="text-muted small">@_tilt.Note</div>
-                }
-            </div>
-
             @* 삼각형 평면 중심 pose (툴 좌표계). 헤드가 툴에 고정되어 로봇 자세 없이 계산.
-               x,y=헤드 XY 평균, z=standoff+변위평균, rx/ry/rz=평면 자세(X=Ch1→Ch3). *@
+               x,y=헤드 XY 평균, z=standoff+거리평균, rx/ry/rz=평면 자세(X=Ch1→Ch3). *@
             <div class="mt-3 pt-3 border-top">
                 <div class="d-flex align-items-center justify-content-between mb-2">
                     <h6 class="mb-0">삼각형 평면 중심 (툴 좌표계)</h6>
@@ -232,14 +169,7 @@
 </div>
 
 @code {
-    private bool _busy;
-    private bool _isError;
-    private string? _message;
-
     private IReadOnlyList<LaserChannelReading> _readings = Array.Empty<LaserChannelReading>();
-
-    // 평면 기울기(base 기준 rx/ry/rz). 매 폴링마다 3채널 측정으로 갱신.
-    private PlaneTilt _tilt = PlaneTilt.Invalid("연결 대기 중.");
 
     // 삼각형 평면 중심 pose(툴 좌표계 x,y,z,rx,ry,rz). 매 폴링마다 갱신.
     private PlanePose _pose = PlanePose.Invalid("연결 대기 중.");
@@ -269,7 +199,6 @@
                 if (Svc.IsConnected)
                 {
                     _readings = Svc.GetReadings();
-                    _tilt = Svc.GetPlaneTilt();
                     _pose = Svc.GetPlanePose();
                     _dumpBytes = Svc.SnapshotInputAssembly();
                     _hexDump = FormatHex(_dumpBytes);
@@ -280,59 +209,6 @@
         catch (OperationCanceledException)
         {
             // 페이지 폐기 — 정상 종료.
-        }
-    }
-
-    private async Task Connect()
-    {
-        if (_busy) return;
-        _busy = true;
-        _message = null;
-        try
-        {
-            await Svc.ConnectAsync();
-            _isError = false;
-            _message = $"{Svc.Settings.IpAddress}:{Svc.Settings.Port} 연결됨.";
-        }
-        catch (Exception ex)
-        {
-            Logger.LogError(ex, "레이저 변위 센서 연결 실패");
-            _isError = true;
-            _message = $"연결 실패: {ex.Message}";
-        }
-        finally
-        {
-            _busy = false;
-            await InvokeAsync(StateHasChanged);
-        }
-    }
-
-    private async Task Disconnect()
-    {
-        if (_busy) return;
-        _busy = true;
-        _message = null;
-        try
-        {
-            await Svc.DisconnectAsync();
-            _readings = Array.Empty<LaserChannelReading>();
-            _tilt = PlaneTilt.Invalid("연결 대기 중.");
-            _pose = PlanePose.Invalid("연결 대기 중.");
-            _dumpBytes = null;
-            _hexDump = "(프레임 없음)";
-            _isError = false;
-            _message = "연결이 해제되었습니다.";
-        }
-        catch (Exception ex)
-        {
-            Logger.LogError(ex, "레이저 변위 센서 연결 해제 실패");
-            _isError = true;
-            _message = $"연결 해제 실패: {ex.Message}";
-        }
-        finally
-        {
-            _busy = false;
-            await InvokeAsync(StateHasChanged);
         }
     }
 

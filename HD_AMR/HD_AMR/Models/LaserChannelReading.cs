@@ -2,12 +2,12 @@ namespace HD_AMR.Models;
 
 /// <summary>
 /// 레이저 변위 센서 한 채널의 측정 스냅샷. OMRON ZP-EIP Input Assembly(인스턴스 110, 276B)에서
-/// 파싱한다. <see cref="Raw"/> 는 32bit signed 원시값, <see cref="Value"/> 는 스케일 적용 물리값(단위는
-/// 설정의 MeasurementUnit).
+/// 파싱한다. <see cref="Raw"/> 는 32bit signed 원시값, <see cref="Value"/> 는 아핀 캘리브레이션 적용 물리값
+/// (단위는 설정의 MeasurementUnit).
 /// </summary>
 /// <param name="Channel">채널 번호(1-based).</param>
 /// <param name="Raw">측정 원시값(32bit signed, little-endian).</param>
-/// <param name="Value">물리값 = Raw × MeasurementScale.</param>
+/// <param name="Value">물리값 = MeasurementOffsetMm + Raw × MeasurementScale. 출사부 기준 절대거리로 캘리브레이션 가능.</param>
 /// <param name="Enabled">Sensor Enable — 측정 범위 내(유효)면 true.</param>
 /// <param name="Error">Sensor Error Status.</param>
 /// <param name="Warning">Sensor Warning Status.</param>

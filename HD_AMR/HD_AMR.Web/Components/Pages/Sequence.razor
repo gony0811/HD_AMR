@@ -1,12 +1,12 @@
 @page "/sequence"
 @rendermode InteractiveServer
 @using HD_AMR.Communication
-@using HD_AMR.Data.Entities
 @using HD_AMR.Service
-@inject TeachingService Service
+@using HD_AMR.Service.Sequence
+@inject SequenceService Seq
+@inject TeachingService Teaching
 @inject CobotService Cobot
 @inject CameraService Camera
-@inject ParameterService Param
 @inject ILogger<Sequence> Logger
 @implements IDisposable
 
@@ -15,7 +15,7 @@
 <h1 class="page-title">Sequence</h1>
 
 <section class="capture-panel">
-    <strong>세미오토 시퀀스 (수동 단계 실행)</strong>
+    <strong>시퀀스 실행</strong>
     @if (!Cobot.IsConnected)
     {
         <div class="hint">⚠ 코봇 RPC 미연결 — 시퀀스 실행 불가.</div>
@@ -28,22 +28,28 @@
         <div class="col-auto">
             <label class="form-label">공구(tool)</label>
             <input class="form-control" type="number" min="0" max="15" style="width:90px"
-                   @bind="_runTool" disabled="@_isBusy" />
+                   @bind="_context.Tool" disabled="@Seq.IsBusy" />
         </div>
         <div class="col-auto">
             <label class="form-label">속도(%)</label>
             <input class="form-control" type="number" min="1" max="100" style="width:90px"
-                   @bind="_vel" disabled="@_isBusy" />
+                   @bind="_context.Velocity" disabled="@Seq.IsBusy" />
         </div>
         <div class="col-auto">
-            <button class="btn btn-danger @(_isBusy ? "btn-lg fw-bold" : "")"
-                    @onclick="StopAsync" disabled="@(!_isBusy)">
-                ■ 정지 (즉시 멈춤)
+            <button class="btn btn-primary" @onclick="RunAllAsync"
+                    disabled="@(!Cobot.IsConnected || Seq.IsBusy)">
+                ▶▶ 풀오토
+            </button>
+        </div>
+        <div class="col-auto">
+            <button class="btn btn-danger @(Seq.IsBusy ? "btn-lg fw-bold" : "")"
+                    @onclick="StopAsync" disabled="@(!Seq.IsBusy)">
+                ■ 정지
             </button>
         </div>
         <div class="col-auto">
             <button class="btn btn-outline-warning" @onclick="ResetFaultAsync"
-                    disabled="@(_isBusy || !Cobot.IsConnected)">
+                    disabled="@(Seq.IsBusy || !Cobot.IsConnected)">
                 오류 해제 (Reset Error)
             </button>
         </div>
@@ -65,103 +71,83 @@
             </tr>
         </thead>
         <tbody>
-            <tr class="@(_runningStep == 1 ? "selected" : "")">
-                <td class="step-no">①</td>
-                <td class="step-name">AMR 검사위치 이동</td>
-                <td class="step-note">
-                    @if (_home?.IsTaught != true)
-                    {
-                        <span class="warn">홈 위치 미티칭 — Teaching에서 먼저 저장</span>
-                    }
-                    else
-                    {
-                        <span>홈이 아니면 코봇 홈 복귀 후 AMR 이동(미구현)</span>
-                    }
-                </td>
-                <td class="ops">
-                    <button class="btn btn-sm btn-outline-success" title="코봇 홈 확인/복귀 후 AMR 검사위치 이동"
-                            @onclick="RunAmrToInspectionAsync"
-                            disabled="@(!Cobot.IsConnected || _isBusy)">▶ 실행</button>
-                </td>
-            </tr>
-            <tr class="@(_runningStep == 2 ? "selected" : "")">
-                <td class="step-no">②</td>
-                <td class="step-name">Cobot 검사위치 이동</td>
-                <td class="step-note">
-                    @if (_inspection?.IsTaught != true)
-                    {
-                        <span class="warn">검사 준비 위치 미티칭 — Teaching에서 먼저 저장</span>
-                    }
-                    else
-                    {
-                        <span>검사 준비 위치로 이동 (MoveL)</span>
-                    }
-                </td>
-                <td class="ops">
-                    <button class="btn btn-sm btn-outline-success" title="저장된 검사 준비 위치로 이동 (MoveL)"
-                            @onclick="RunCobotToInspectionAsync"
-                            disabled="@(!Cobot.IsConnected || _isBusy || _inspection?.IsTaught != true)">▶ 실행</button>
-                </td>
-            </tr>
-            <tr class="@(_runningStep == 3 ? "selected" : "")">
-                <td class="step-no">③</td>
-                <td class="step-name">카메라 거리 정렬 (400mm)</td>
-                <td class="step-note">
-                    @if (!Camera.IsConnected)
-                    {
-                        <span class="warn">카메라 미연결 — depth 측정 불가</span>
-                    }
-                    else if (_inspection?.IsTaught != true)
-                    {
-                        <span class="warn">검사 준비 위치 미티칭 — Teaching에서 먼저 저장</span>
-                    }
-                    else
-                    {
-                        <span>현재 검사 준비 위치일 때만 실행. 1초간 10회 측정 → tool 1 BASE -Y로 400mm 정렬</span>
-                    }
-                </td>
-                <td class="ops">
-                    <button class="btn btn-sm btn-outline-success" title="depth 최소거리 측정 후 tool 1을 BASE -Y로 이동해 400mm 정렬"
-                            @onclick="RunCameraAlignAsync"
-                            disabled="@(!Cobot.IsConnected || !Camera.IsConnected || _isBusy || _inspection?.IsTaught != true)">▶ 실행</button>
-                </td>
-            </tr>
+            @{ var idx = 0; }
+            @foreach (var step in Seq.Steps)
+            {
+                idx++;
+                var status = Seq.StepStatuses.GetValueOrDefault(step.Key);
+                var isCurrent = Seq.CurrentStepKey == step.Key;
+                var validation = step.Validate(_context);
+                <tr class="@(isCurrent ? "selected" : "")">
+                    <td class="step-no">@StepCircle(idx)</td>
+                    <td class="step-name">@step.DisplayName</td>
+                    <td class="step-note">
+                        @if (status?.State == StepState.Running)
+                        {
+                            <span class="badge bg-primary">실행 중…</span>
+                        }
+                        else if (status?.State == StepState.Completed)
+                        {
+                            <span class="badge bg-success">완료</span>
+                            @if (!string.IsNullOrEmpty(status.Message))
+                            {
+                                <span> @status.Message</span>
+                            }
+                        }
+                        else if (status?.State == StepState.Failed)
+                        {
+                            <span class="badge bg-danger">실패</span>
+                            @if (!string.IsNullOrEmpty(status.Message))
+                            {
+                                <span> @status.Message</span>
+                            }
+                        }
+                        else if (!validation.IsValid)
+                        {
+                            <span class="warn">@validation.Message</span>
+                        }
+                        else
+                        {
+                            <span>대기</span>
+                        }
+                    </td>
+                    <td class="ops">
+                        <button class="btn btn-sm btn-outline-success" title="이 단계만 실행"
+                                @onclick="() => RunStepAsync(step.Key)"
+                                disabled="@(!Cobot.IsConnected || Seq.IsBusy || !validation.IsValid)">▶ 실행</button>
+                    </td>
+                </tr>
+            }
         </tbody>
     </table>
 </section>
 
 @code {
-    private TeachingPosition? _home;
-    private TeachingPosition? _inspection;
-    private int _runTool = 1;
-    private int _vel = 20;
-    private const double HomeToleranceDeg = 0.5;   // 홈/검사위치 도달 판정 관절각 허용오차
-    private const double TargetDistanceMm = 400;   // 카메라 정렬 목표 거리
-    private const double MaxAlignTravelMm = 600;   // 정렬 1회 보정 최대 이동량(폭주 방지). 900→400 등 ~500mm 보정 허용.
-
-    // 깊이 ROI 파라미터 키 — CameraView와 공유. 카메라 페이지에서 지정/저장한 영역을 그대로 써서
-    // 거리 측정을 일치시킨다(전체 프레임 최소값은 앞쪽 잡티를 잡아 측정이 틀어진다).
-    private const string RoiEnabledKey = "Camera.Depth.Roi.Enabled";
-    private const string RoiXKey = "Camera.Depth.Roi.X";
-    private const string RoiYKey = "Camera.Depth.Roi.Y";
-    private const string RoiWKey = "Camera.Depth.Roi.W";
-    private const string RoiHKey = "Camera.Depth.Roi.H";
-    private bool _isBusy;
-    private int _runningStep = -1;
+    private readonly SequenceContext _context = new();
     private string? _msg;
     private bool _isErr;
-    private CancellationTokenSource? _moveCts;
     private readonly CancellationTokenSource _cts = new();
 
     protected override async Task OnInitializedAsync()
     {
-        var list = await Service.ListAsync();
-        _home = list.FirstOrDefault(p => p.Key == "home");
-        _inspection = list.FirstOrDefault(p => p.Key == "inspectionReady");
-        _ = RefreshLoopAsync();   // fault 배지/연결상태 1초 주기 라이브 갱신
+        Seq.StateChanged += OnSequenceStateChanged;
+        await LoadPositionsAsync();
+        _ = RefreshLoopAsync();
     }
 
-    /// <summary>연결상태·fault 배지를 1초 주기로 다시 렌더한다(상태는 백그라운드에서 갱신되므로 폴링 필요).</summary>
+    private async Task LoadPositionsAsync()
+    {
+        var list = await Teaching.ListAsync();
+        _context.Positions = list.ToDictionary(p => p.Key, p => p);
+    }
+
+    private async void OnSequenceStateChanged()
+    {
+        try { await InvokeAsync(StateHasChanged); }
+        catch (ObjectDisposedException) { }
+    }
+
+    /// <summary>연결상태·fault 배지를 1초 주기로 갱신.</summary>
     private async Task RefreshLoopAsync()
     {
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
@@ -169,264 +155,30 @@
         catch (OperationCanceledException) { }
     }
 
-    // ── 단계 ① AMR 검사위치 이동 (선행: 코봇 홈 확인/복귀) ────────────────
-    private async Task RunAmrToInspectionAsync()
+    // ── 풀오토 ───────────────────────────────────────────────────────
+    private async Task RunAllAsync()
     {
-        if (!Cobot.IsConnected) return;
-        if (_home?.IsTaught != true)
-        {
-            _isErr = true;
-            _msg = "홈 위치가 티칭되지 않았습니다 — Teaching 페이지에서 먼저 저장하세요.";
-            return;
-        }
-
-        _isBusy = true;
-        _runningStep = 1;
         _msg = null;
-        _moveCts = new CancellationTokenSource();
-        try
-        {
-            var moved = await EnsureCobotAtHomeAsync(_moveCts.Token);
-
-            // TODO: AMR 검사위치 이동 (미구현)
-
-            _isErr = false;
-            _msg = moved
-                ? "코봇 홈 복귀 완료 (AMR 이동은 미구현)."
-                : "코봇이 이미 홈 위치에 있습니다 (AMR 이동은 미구현).";
-        }
-        catch (OperationCanceledException)
-        {
-            _isErr = true;
-            _msg = "사용자 정지";
-        }
-        catch (Exception ex)
-        {
-            Logger.LogError(ex, "Sequence step 1 (AMR to inspection) failed");
-            _isErr = true;
-            _msg = $"실행 실패: {ex.Message}{StateErrSuffix()}";
-        }
-        finally
-        {
-            _moveCts?.Dispose();
-            _moveCts = null;
-            _isBusy = false;
-            _runningStep = -1;
-            await InvokeAsync(StateHasChanged);
-        }
+        var success = await Seq.RunAllAsync(_context, _cts.Token);
+        _isErr = !success;
+        _msg = success ? "풀오토 시퀀스 완료." : "시퀀스 중단 — 위 상태를 확인하세요.";
     }
 
-    /// <summary>현재 관절각을 홈 티칭값과 비교해 허용오차를 벗어나면 MoveJ로 홈 복귀. 이동했으면 true.</summary>
-    private async Task<bool> EnsureCobotAtHomeAsync(CancellationToken ct)
+    // ── 세미오토 (단일 단계) ─────────────────────────────────────────
+    private async Task RunStepAsync(string stepKey)
     {
-        var homeJoints = new[]
-        {
-            _home!.J1!.Value, _home.J2!.Value, _home.J3!.Value,
-            _home.J4!.Value, _home.J5!.Value, _home.J6!.Value,
-        };
-
-        var cur = await Cobot.Rpc.GetActualJointPosAsync(ct: ct);
-        if (IsWithinJointTolerance(cur, homeJoints)) return false;   // 이미 홈
-
-        var homePose = new[]
-        {
-            _home.X!.Value, _home.Y!.Value, _home.Z!.Value,
-            _home.Rx!.Value, _home.Ry!.Value, _home.Rz!.Value,
-        };
-        var rc = await Cobot.Rpc.MoveJAsync(homeJoints, homePose, tool: _runTool, user: 0, vel: _vel, ct: ct);
-        if (rc != 0)
-            throw new InvalidOperationException($"홈 이동(MoveJ) 실패 (rc={rc}).");
-        return true;
-    }
-
-    // ── 단계 ② Cobot 검사위치 이동 ───────────────────────────────────────
-    private async Task RunCobotToInspectionAsync()
-    {
-        if (!Cobot.IsConnected || _inspection?.IsTaught != true) return;
-
-        _isBusy = true;
-        _runningStep = 2;
         _msg = null;
-        _moveCts = new CancellationTokenSource();
-        try
-        {
-            var pose = new[]
-            {
-                _inspection.X!.Value, _inspection.Y!.Value, _inspection.Z!.Value,
-                _inspection.Rx!.Value, _inspection.Ry!.Value, _inspection.Rz!.Value,
-            };
-            var rc = await Cobot.Rpc.MoveLAsync(pose, tool: _runTool, user: 0, vel: _vel, ct: _moveCts.Token);
-            _isErr = rc != 0;
-            _msg = rc == 0 ? "검사 준비 위치로 이동 완료." : $"이동 실패 (rc={rc}).";
-        }
-        catch (OperationCanceledException)
-        {
-            _isErr = true;
-            _msg = "사용자 정지";
-        }
-        catch (Exception ex)
-        {
-            Logger.LogError(ex, "Sequence step 2 (cobot to inspection) failed");
-            _isErr = true;
-            _msg = $"이동 실패: {ex.Message}{StateErrSuffix()}";
-        }
-        finally
-        {
-            _moveCts?.Dispose();
-            _moveCts = null;
-            _isBusy = false;
-            _runningStep = -1;
-            await InvokeAsync(StateHasChanged);
-        }
+        var result = await Seq.RunStepAsync(stepKey, _context, _cts.Token);
+        _isErr = !result.Success;
+        _msg = result.Message;
     }
 
-    // ── 단계 ③ 카메라 거리 정렬 (400mm) ──────────────────────────────────
-    private async Task RunCameraAlignAsync()
-    {
-        if (!Cobot.IsConnected || _inspection?.IsTaught != true) return;
-        if (!Camera.IsConnected || Camera.LatestDepth is null)
-        {
-            _isErr = true;
-            _msg = "카메라가 연결되지 않았거나 깊이 프레임이 없습니다.";
-            return;
-        }
+    // ── 정지 ─────────────────────────────────────────────────────────
+    private async Task StopAsync() => await Seq.StopAsync();
 
-        _isBusy = true;
-        _runningStep = 3;
-        _msg = null;
-        _moveCts = new CancellationTokenSource();
-        try
-        {
-            // 1) 선행조건: 현재 자세가 검사 준비 위치여야 함(이동하지 않고 검증만).
-            var inspJoints = new[]
-            {
-                _inspection.J1!.Value, _inspection.J2!.Value, _inspection.J3!.Value,
-                _inspection.J4!.Value, _inspection.J5!.Value, _inspection.J6!.Value,
-            };
-            var cur = await Cobot.Rpc.GetActualJointPosAsync(ct: _moveCts.Token);
-            if (!IsWithinJointTolerance(cur, inspJoints))
-            {
-                _isErr = true;
-                _msg = "검사 준비 위치가 아닙니다 — 먼저 ② 단계를 실행하세요.";
-                return;
-            }
-
-            // 2) 거리 측정: 설정된 깊이 ROI의 최소값을 100ms 간격 10회(1초) 샘플링 → 유효값 평균.
-            //    (전체 프레임 최소값은 앞쪽 잡티를 잡아 카메라 페이지 측정값과 어긋난다.)
-            var (rx, ry, rw, rh, roiSrc) = await GetDepthRoiAsync();
-            var samples = new List<int>(10);
-            for (var i = 0; i < 10; i++)
-            {
-                var mm = Camera.ComputeDepthRoiStats(rx, ry, rw, rh)?.MinMm ?? 0;
-                if (mm > 0) samples.Add(mm);
-                if (i < 9) await Task.Delay(100, _moveCts.Token);
-            }
-            if (samples.Count == 0)
-            {
-                _isErr = true;
-                _msg = "유효한 깊이 측정값이 없습니다.";
-                return;
-            }
-            var d = samples.Average();
-            var delta = d - TargetDistanceMm;   // +면 너무 멀어 -Y로 접근, -면 +Y로 후퇴
-
-            // 3) 안전 가드: 비정상적으로 큰 보정량은 거부.
-            if (Math.Abs(delta) > MaxAlignTravelMm)
-            {
-                _isErr = true;
-                _msg = $"측정 {d:0.#}mm — 보정량 {Math.Abs(delta):0.#}mm가 한계({MaxAlignTravelMm:0}mm) 초과로 중단.";
-                return;
-            }
-
-            // 4) 원샷 보정: tool 1을 BASE -Y로 delta만큼 이동(이미 목표면 생략).
-            if (Math.Abs(delta) < 1.0)
-            {
-                _isErr = false;
-                _msg = $"측정 {d:0.#}mm — 이미 목표 {TargetDistanceMm:0}mm 범위(이동 생략).";
-                return;
-            }
-            var anchor = await Cobot.Rpc.GetTcpPoseInBaseAsync(1, _moveCts.Token);
-            var offset = new[] { 0.0, TargetDistanceMm - d, 0.0, 0.0, 0.0, 0.0 };   // -Y로 delta
-            Logger.LogInformation(
-                "Sequence ③ 정렬 이동: ROI={Roi}({Rx:0.00},{Ry:0.00},{Rw:0.00},{Rh:0.00}) 측정 d={D:0.#}mm, BASE Y보정={OffY:+0.#;-0.#}mm, anchor=[{Ax:0.#},{Ay:0.#},{Az:0.#},{Arx:0.#},{Ary:0.#},{Arz:0.#}]",
-                roiSrc, rx, ry, rw, rh, d, offset[1], anchor[0], anchor[1], anchor[2], anchor[3], anchor[4], anchor[5]);
-            var rc = await Cobot.Rpc.MoveByOffsetAsync(anchor, user: 0, offset, tool: 1, vel: _vel, ct: _moveCts.Token);
-            _isErr = rc != 0;
-            _msg = rc == 0
-                ? $"측정 {d:0.#}mm → -Y {Math.Abs(delta):0.#}mm 이동, 목표 {TargetDistanceMm:0}mm 정렬 완료."
-                : rc == 112
-                    ? $"정렬 이동 실패 (rc=112: 목표 자세 도달 불가). 측정 {d:0.#}mm, BASE Y {offset[1]:+0.#;-0.#}mm 보정 목표가 작업영역 밖입니다 — 측정값/방향 확인 필요."
-                    : $"정렬 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.";
-        }
-        catch (OperationCanceledException)
-        {
-            _isErr = true;
-            _msg = "사용자 정지";
-        }
-        catch (Exception ex)
-        {
-            Logger.LogError(ex, "Sequence step 3 (camera align) failed");
-            _isErr = true;
-            _msg = $"정렬 실패: {ex.Message}{StateErrSuffix()}";
-        }
-        finally
-        {
-            _moveCts?.Dispose();
-            _moveCts = null;
-            _isBusy = false;
-            _runningStep = -1;
-            await InvokeAsync(StateHasChanged);
-        }
-    }
-
-    /// <summary>현재 관절각이 목표 관절각과 모든 축에서 <see cref="HomeToleranceDeg"/> 이내인지.</summary>
-    private static bool IsWithinJointTolerance(double[] cur, double[] target)
-    {
-        for (var i = 0; i < 6; i++)
-        {
-            if (Math.Abs(cur[i] - target[i]) > HomeToleranceDeg) return false;
-        }
-        return true;
-    }
-
-    /// <summary>거리 측정에 쓸 깊이 ROI(정규화 x,y,w,h)와 출처. 카메라 페이지에서 저장한 ROI가 유효하면
-    /// 그것을, 없으면 중앙 30% 기본영역을 쓴다. 전체 프레임 최소값은 앞쪽 잡티를 잡으므로 쓰지 않는다.</summary>
-    private async Task<(double X, double Y, double W, double H, string Src)> GetDepthRoiAsync()
-    {
-        try
-        {
-            if (await Param.GetBoolAsync(RoiEnabledKey) == true)
-            {
-                var x = await Param.GetDoubleAsync(RoiXKey) ?? 0;
-                var y = await Param.GetDoubleAsync(RoiYKey) ?? 0;
-                var w = await Param.GetDoubleAsync(RoiWKey) ?? 0;
-                var h = await Param.GetDoubleAsync(RoiHKey) ?? 0;
-                if (w > 0 && h > 0 && x + w <= 1.0001 && y + h <= 1.0001)
-                    return (x, y, w, h, "저장 ROI");
-            }
-        }
-        catch { /* DB 미준비 등 — 기본값 폴백 */ }
-        return (0.35, 0.35, 0.30, 0.30, "중앙 기본 ROI");
-    }
-
-    private async Task StopAsync()
-    {
-        _moveCts?.Cancel();
-        try
-        {
-            await Cobot.StopMotionImmediateAsync();
-        }
-        catch (Exception ex)
-        {
-            Logger.LogError(ex, "Sequence stop failed");
-        }
-    }
-
-    /// <summary>수동 '오류 해제' 버튼 핸들러. 컨트롤러 fault(errcode 14 등)를 해제한다.</summary>
+    // ── 오류 해제 ────────────────────────────────────────────────────
     private async Task ResetFaultAsync()
     {
-        if (_isBusy) return;
-        _isBusy = true;
         _msg = null;
         try
         {
@@ -440,24 +192,19 @@
             _isErr = true;
             _msg = $"오류 해제 실패: {ex.Message}";
         }
-        finally
-        {
-            _isBusy = false;
-            await InvokeAsync(StateHasChanged);
-        }
     }
 
-    /// <summary>예외 메시지에 상태패킷 오류코드(있을 때)를 덧붙여 진단을 돕는다.</summary>
-    private string StateErrSuffix()
+    private static string StepCircle(int n) => n switch
     {
-        var sc = Cobot.State?.ErrorCode;
-        return sc is not null and not 0 ? $" (상태코드={sc})" : "";
-    }
+        1 => "①", 2 => "②", 3 => "③", 4 => "④", 5 => "⑤",
+        6 => "⑥", 7 => "⑦", 8 => "⑧", 9 => "⑨", 10 => "⑩",
+        _ => $"({n})"
+    };
 
     public void Dispose()
     {
+        Seq.StateChanged -= OnSequenceStateChanged;
         _cts.Cancel();
         _cts.Dispose();
-        _moveCts?.Dispose();
     }
 }

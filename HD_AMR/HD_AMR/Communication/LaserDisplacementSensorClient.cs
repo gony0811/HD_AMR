@@ -211,7 +211,9 @@ public sealed class LaserDisplacementSensorClient : IDisposable
             }
 
             int raw = BitConverter.ToInt32(data!, measBase + i * stride);   // CIP LE = 머신 LE(x64/arm64)
-            double value = raw * _settings.MeasurementScale;
+            // 아핀 캘리브레이션: value = Offset + raw×Scale. 절대거리 표시 시 Offset=기준거리(300mm),
+            // Scale 음수(raw+ = 가까워짐 → 거리 감소).
+            double value = _settings.MeasurementOffsetMm + raw * _settings.MeasurementScale;
 
             result[i] = new LaserChannelReading(
                 ch,

@@ -17,10 +17,6 @@ public class LaserDisplacementSensorSettings
     /// <summary>EtherNet/IP 표준 TCP 포트(0xAF12 = 44818).</summary>
     public int Port { get; set; } = 44818;
 
-    /// <summary>기동 시 자동 접속 여부. false 면 사용자가 [연결] 버튼을 눌러야 접속을 시작한다.
-    /// 자동 재접속 루프는 이 값(및 페이지의 연결/해제)이 켠 <c>_enabled</c> 상태일 때만 동작한다.</summary>
-    public bool AutoConnect { get; set; } = false;
-
     /// <summary>세션 등록(RegisterSession)·ForwardOpen 타임아웃(ms).</summary>
     public int ConnectTimeoutMs { get; set; } = 3000;
 
@@ -46,10 +42,15 @@ public class LaserDisplacementSensorSettings
     /// <summary>채널당 측정값 바이트 수(int32 → 4). 오프셋 계산 stride.</summary>
     public int MeasurementStride { get; set; } = 4;
 
-    /// <summary>측정 원시값(32bit signed) → 물리값 스케일. <c>value = raw * MeasurementScale</c>.
+    /// <summary>측정 원시값(32bit signed) → 물리값 스케일. 물리값 <c>value = MeasurementOffsetMm + raw * MeasurementScale</c>(아핀).
     /// 스케일/단위는 이 통신 매뉴얼에 없고 앰프의 소수점 설정에 따르므로 하드웨어에서 튜닝한다.
-    /// 기본 0.001 은 raw 가 µm 단위라고 가정(→ mm).</summary>
+    /// 기본 0.001 은 raw 가 µm 단위라고 가정(→ mm). <b>음수 가능</b> — 캘리브레이션 방향(raw+ = 가까워짐이면
+    /// 절대거리는 감소하므로 음수).</summary>
     public double MeasurementScale { get; set; } = 0.001;
+
+    /// <summary>측정 물리값 아핀 오프셋(mm). <c>value = MeasurementOffsetMm + raw * MeasurementScale</c>.
+    /// 출사부 기준 절대거리로 표시하려면 센서 기준거리(ZP-LS300S=300)를 넣는다. 기본 0(오프셋 없음=변위).</summary>
+    public double MeasurementOffsetMm { get; set; } = 0.0;
 
     /// <summary>측정값 표시 단위 라벨.</summary>
     public string MeasurementUnit { get; set; } = "mm";
@@ -80,38 +81,39 @@ public class LaserDisplacementSensorSettings
     /// <summary>페이지 실시간 갱신 주기(ms). SignalR 부하와 응답성의 절충값.</summary>
     public int UiRefreshMs { get; set; } = 200;
 
-    // ── 평면 기울기 계산용 헤드 기하 (cobot base 좌표계) ────────────────────────
-    // 3개 레이저 헤드의 base XY 위치(mm). 규약: Ch1→Ch3 = base +X, Ch2(상단) = +Y쪽,
-    // 빔 = base −Z. 기본값은 등변삼각형(한 변 100mm) placeholder — TODO: 실장비에서 확정.
+    // ── 평면 중심 pose 계산용 헤드 기하 (툴 좌표계) ────────────────────────────
+    // 3개 레이저 헤드는 툴(플랜지)에 강체 고정이므로 XY 위치(mm)는 툴 좌표계에서 고정값이다.
+    // 규약: Ch1→Ch3 = 툴 +X, Ch2(상단) = +Y쪽, 빔 = 툴 +Z 평행(헤드는 툴 Z=0 평면).
+    // 기본값은 등변삼각형(한 변 100mm) placeholder — TODO: 실장비에서 확정.
 
-    /// <summary>Ch1(좌측 꼭지점) 헤드 X(mm, base). 기본 −50.</summary>
+    /// <summary>Ch1(좌측 꼭지점) 헤드 X(mm, 툴). 기본 −50.</summary>
     public double Head1OffsetXmm { get; set; } = -50.0;
 
-    /// <summary>Ch1(좌측 꼭지점) 헤드 Y(mm, base). 기본 0.</summary>
+    /// <summary>Ch1(좌측 꼭지점) 헤드 Y(mm, 툴). 기본 0.</summary>
     public double Head1OffsetYmm { get; set; } = 0.0;
 
-    /// <summary>Ch2(상단 꼭지점) 헤드 X(mm, base). 기본 0.</summary>
+    /// <summary>Ch2(상단 꼭지점) 헤드 X(mm, 툴). 기본 0.</summary>
     public double Head2OffsetXmm { get; set; } = 0.0;
 
-    /// <summary>Ch2(상단 꼭지점) 헤드 Y(mm, base). 기본 86.6(등변삼각형 높이).</summary>
+    /// <summary>Ch2(상단 꼭지점) 헤드 Y(mm, 툴). 기본 86.6(등변삼각형 높이).</summary>
     public double Head2OffsetYmm { get; set; } = 86.6;
 
-    /// <summary>Ch3(우측 꼭지점) 헤드 X(mm, base). 기본 50.</summary>
+    /// <summary>Ch3(우측 꼭지점) 헤드 X(mm, 툴). 기본 50.</summary>
     public double Head3OffsetXmm { get; set; } = 50.0;
 
-    /// <summary>Ch3(우측 꼭지점) 헤드 Y(mm, base). 기본 0.</summary>
+    /// <summary>Ch3(우측 꼭지점) 헤드 Y(mm, 툴). 기본 0.</summary>
     public double Head3OffsetYmm { get; set; } = 0.0;
 
-    /// <summary>변위 +가 base +Z(위, 센서쪽)에 대응하는지. 빔=−Z + 가까워짐=+ 규약이면 true.
+    /// <summary>변위 +가 툴 +Z(표면점 Z 증가, 센서쪽)에 대응하는지. 빔=툴 +Z 평행 + 가까워짐=+ 규약이면 true.
     /// 실장비 극성이 반대로 나오면 false 로 뒤집는다(통신 매뉴얼에 극성 미확정).</summary>
     public bool TiltReadingSignForUp { get; set; } = true;
 
-    // ── 삼각형 평면 중심 pose(툴 좌표계) 계산용 ──────────────────────────────
-    // 헤드 툴-XY 는 위 Head{1,2,3}Offset{X,Y}mm 를 툴 좌표로 재해석, 빔 = 툴 +Z 평행 가정.
+    // ── 삼각형 평면 중심 pose(툴 좌표계) — standoff·법선 방향 ──────────────────
 
-    /// <summary>공칭 standoff(mm) — 헤드 평면(툴 Z=0)에서 기준면까지의 툴 Z 거리. 중심 pose 의 z =
-    /// Standoff + 변위평균. 기본 100 placeholder — TODO 실장비 확정.</summary>
-    public double TiltStandoffMm { get; set; } = 100.0;
+    /// <summary>헤드(출사부) 평면의 툴 Z 오프셋(mm). 중심 pose 의 z = Standoff + 거리평균. 측정값이 이미
+    /// 출사부→표면 절대거리로 캘리브레이션되어 있으면(<see cref="MeasurementOffsetMm"/> 사용) 0 이면 중심 Z가
+    /// 곧 실제 거리가 된다. 기본 0.</summary>
+    public double TiltStandoffMm { get; set; } = 0.0;
 
     /// <summary>평면 법선(Z축)을 센서쪽(표면 외향, 툴 −Z측)으로 향하게 할지. true 면 수평 기준 rx≈±180°.
     /// false 면 표면쪽(툴 접근방향)으로 뒤집혀 rx≈0. 기본 true.</summary>
