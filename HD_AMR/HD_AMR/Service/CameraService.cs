@@ -208,10 +208,13 @@ public class CameraService : BackgroundService
         return Task.Run<CaptureResult>(() =>
         {
             Directory.CreateDirectory(dir);
+            // 캡처 그룹마다 3자리 일련번호 접두("NNN_"). 폴더 내 기존 최대 번호에서 이어서 부여한다.
+            // 같은 타임스탬프의 파일(rgb/ir/depth·회전본·마스크)은 같은 stem 을 공유해 자동으로 같은 번호가 된다.
+            int seq = NextCaptureSeq(dir);
             // 초 단위 타임스탬프. 같은 초에 두 번 캡처하면 _2, _3… 를 붙여 덮어쓰기를 막는다.
             string ts = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-            string stem = ts;
-            for (int k = 2; Directory.GetFiles(dir, stem + "_*").Length > 0; k++) stem = $"{ts}_{k}";
+            string stem = $"{seq:D3}_{ts}";
+            for (int k = 2; Directory.GetFiles(dir, stem + "_*").Length > 0; k++) stem = $"{seq:D3}_{ts}_{k}";
             var files = new List<string>();
 
             if (color is not null)
@@ -233,6 +236,23 @@ public class CameraService : BackgroundService
             }
             return new CaptureResult(dir, stem, files);
         }, ct);
+    }
+
+    /// <summary>
+    /// 폴더 내 기존 캡처의 최대 일련번호 +1 을 반환(없으면 1). "NNN_…" 형태의 3~4자리 접두 번호를
+    /// 인식한다(원시 타임스탬프 yyyyMMdd 는 8자리라 3~4자리 뒤 밑줄이 없어 자동 구분됨). 접두 뒤가
+    /// 날짜든 hard_ 든 무관하게 번호만 읽으므로 실패 케이스 추가 파일(NNN_hard_…)도 함께 반영된다.
+    /// </summary>
+    private static int NextCaptureSeq(string dir)
+    {
+        int max = 0;
+        var rx = new System.Text.RegularExpressions.Regex(@"^(\d{3,4})_");
+        foreach (var f in Directory.GetFiles(dir))
+        {
+            var m = rx.Match(Path.GetFileName(f));
+            if (m.Success && int.TryParse(m.Groups[1].Value, out var n) && n > max) max = n;
+        }
+        return max + 1;
     }
 
     /// <summary>RGB 프레임 → 무손실 PNG. mjpg 는 디코드 후, rgb24 는 픽셀 직접 래핑.</summary>

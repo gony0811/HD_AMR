@@ -236,7 +236,7 @@ else
                             <select class="form-select form-select-sm" style="min-width:200px" @bind="_selModel">
                                 @foreach (var m in _models) { <option value="@m.Path">@m.Name</option> }
                             </select></div>
-                        <div class="col-auto"><label class="form-label mb-0" style="font-size:.85rem">캡처 이미지</label>
+                        <div class="col-auto"><label class="form-label mb-0" style="font-size:.85rem">학습 이미지 (동작 점검)</label>
                             <select class="form-select form-select-sm" style="min-width:220px;font-family:monospace" @bind="_inferStem">
                                 @foreach (var e in _entries) { <option value="@e.Stem">@e.Stem</option> }
                             </select></div>

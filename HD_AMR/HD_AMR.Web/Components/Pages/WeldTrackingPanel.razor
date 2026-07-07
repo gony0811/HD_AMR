@@ -1,8 +1,11 @@
 @using HD_AMR.Communication.Weld
 @using HD_AMR.Models
 @using HD_AMR.Service
+@using HD_AMR.Web.Services
 @inject WeldTrackingService Svc
 @inject CameraService Cam
+@inject LabelDataService Lbl
+@inject NavigationManager Nav
 @inject IJSRuntime JS
 @implements IAsyncDisposable
 
@@ -312,6 +315,21 @@
                 {
                     <div class="alert @(Svc.LastDetect is { Success: false } ? "alert-warning" : "alert-info") py-1 mb-0">@Svc.Message</div>
                 }
+
+                @* 검출 실패 시: 현재 프레임을 학습셋에 추가하고 라벨링으로 바로 이동(추가 학습용). *@
+                @if (Svc.LastDetect is { Success: false })
+                {
+                    <div class="mt-2 d-flex align-items-center gap-2 flex-wrap">
+                        <span class="text-muted small">비드를 못 찾았나요? 현재 프레임(@Svc.Params.Mode)을 학습에 추가 →</span>
+                        <button class="btn btn-sm btn-warning" @onclick="AddFrameToTrainingAndLabel" disabled="@(_busy || !Cam.IsStreaming)">
+                            학습셋에 추가 + 라벨링
+                        </button>
+                    </div>
+                }
+                @if (!string.IsNullOrEmpty(_addMsg))
+                {
+                    <div class="alert alert-danger py-1 mt-2 mb-0">@_addMsg</div>
+                }
             </div>
         </div>
 
@@ -571,6 +589,22 @@
         catch (TaskCanceledException) { return; }
         if (cts.IsCancellationRequested) return;
         await DetectOnce();
+    }
+
+    private string? _addMsg;
+
+    /// <summary>검출 실패한 현재 프레임을 캡처 폴더에 학습 데이터로 저장하고 라벨링 화면으로 이동.</summary>
+    private async Task AddFrameToTrainingAndLabel()
+    {
+        _addMsg = null;
+        try
+        {
+            var grab = Svc.GrabCurrentFramePng();
+            if (grab is null) { _addMsg = "현재 프레임을 가져오지 못했습니다(스트림/IR 활성 확인)."; return; }
+            var stem = await Lbl.SaveCaptureImageAsync(grab.Value.Png, grab.Value.Modality);
+            Nav.NavigateTo($"/label?sel={Uri.EscapeDataString(stem)}&mod={grab.Value.Modality}");
+        }
+        catch (Exception ex) { _addMsg = $"학습셋 추가 실패: {ex.Message}"; }
     }
 
     private async Task DetectOnce() => await Run(() => { Svc.DetectOnce(); return Task.CompletedTask; });
