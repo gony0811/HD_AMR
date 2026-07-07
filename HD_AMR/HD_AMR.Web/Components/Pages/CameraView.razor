@@ -32,6 +32,12 @@
     <button class="btn btn-success" @onclick="StartStream" disabled="@(_busy || !Svc.IsConnected || Svc.IsStreaming)">시작</button>
     <button class="btn btn-warning" @onclick="StopStream" disabled="@(_busy || !Svc.IsStreaming)">정지</button>
     <button class="btn btn-outline-secondary" @onclick="Reconnect" disabled="@_busy">재연결</button>
+    @* 조그를 별도 브라우저 팝업 창으로 연다. 네이티브 onclick(직접 사용자 제스처)이라 팝업 차단기에 막히지 않는다.
+       같은 창 이름(cobotJog)이라 이미 열려 있으면 그 창을 재사용/포커스한다. *@
+    <button class="btn btn-outline-primary" type="button"
+            onclick="window.open('/jog','cobotJog','width=1040,height=820,menubar=no,toolbar=no,location=no,resizable=yes')">
+        코봇 조그 (팝업)
+    </button>
 </div>
 
 @* 학습 데이터 캡처 — 현재 RGB·IR·Depth 프레임을 한 폴더에 무손실 저장. *@

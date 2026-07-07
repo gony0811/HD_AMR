@@ -94,7 +94,7 @@ public class LaserDisplacementSensorService : BackgroundService
         var hy = new[] { _settings.Head1OffsetYmm, _settings.Head2OffsetYmm, _settings.Head3OffsetYmm };
         var d = new[] { r[0].Value, r[1].Value, r[2].Value };
         return PlanePoseCalculator.ComputePose(
-            hx, hy, d, _settings.TiltStandoffMm, _settings.TiltReadingSignForUp, _settings.TiltNormalTowardSensor);
+            hx, hy, d, _settings.TiltStandoffMm, _settings.TiltReadingSignForUp);
     }
 
     /// <summary>채널 영점 설정(현재값을 0으로).</summary>

@@ -114,8 +114,4 @@ public class LaserDisplacementSensorSettings
     /// 출사부→표면 절대거리로 캘리브레이션되어 있으면(<see cref="MeasurementOffsetMm"/> 사용) 0 이면 중심 Z가
     /// 곧 실제 거리가 된다. 기본 0.</summary>
     public double TiltStandoffMm { get; set; } = 0.0;
-
-    /// <summary>평면 법선(Z축)을 센서쪽(표면 외향, 툴 −Z측)으로 향하게 할지. true 면 수평 기준 rx≈±180°.
-    /// false 면 표면쪽(툴 접근방향)으로 뒤집혀 rx≈0. 기본 true.</summary>
-    public bool TiltNormalTowardSensor { get; set; } = true;
 }

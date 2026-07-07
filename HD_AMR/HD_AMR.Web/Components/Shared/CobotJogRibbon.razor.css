@@ -1,0 +1,144 @@
+/* ── 안전 헤더(ShowSafetyHeader) — 코봇 페이지 .estop-bar 복제 ─────── */
+.estop-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    margin: 0 0 1rem;
+    padding: 0.6rem 0.9rem;
+    background: #fff5f5;
+    border: 1px solid #f8caca;
+    border-radius: 14px;
+}
+
+.estop-btn {
+    font-weight: 800;
+    font-size: 1.05rem;
+    padding: 0.6rem 1.6rem;
+    border-radius: 12px;
+    letter-spacing: 0.02em;
+    box-shadow: 0 2px 8px rgba(239, 68, 68, 0.35);
+}
+
+    .estop-btn:disabled {
+        box-shadow: none;
+    }
+
+/* ── 조그 화살표 패드 (docs/jog_ui.png) ───────────────────────── */
+.jog-mode-seg .btn {
+    min-width: 88px;
+}
+
+.jog-panels {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.25rem;
+    margin-top: 0.5rem;
+    zoom: 0.7; /* 직교 화살표 패드만 70% 축소(컨트롤·입력은 원래 크기 유지) */
+}
+
+.jog-panel {
+    width: 264px;
+    border: 1px solid #d0d5dd;
+    border-radius: 10px;
+    overflow: hidden;
+    background: #fff;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.jog-panel-hd {
+    background: #c9ced6;
+    color: #1f2937;
+    font-weight: 700;
+    padding: 0.4rem 0.8rem;
+    font-size: 0.95rem;
+}
+
+/* 인라인 SVG 화살표 패드 */
+.jog-svg {
+    display: block;
+    width: 100%;
+    height: auto;
+    padding: 8px 6px;
+    touch-action: none; /* 터치 홀드 중 스크롤/제스처 방지 */
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.jog-shape {
+    cursor: pointer;
+    transition: filter .08s ease;
+}
+
+    .jog-shape:hover {
+        filter: brightness(1.08);
+    }
+
+    .jog-shape:active {
+        filter: brightness(0.9);
+    }
+
+.jog-svg.disabled .jog-shape {
+    opacity: 0.4;
+    pointer-events: none;
+}
+
+.jog-lb {
+    fill: #16324f;
+    font-weight: 700;
+    font-size: 15px;
+    pointer-events: none;
+}
+
+/* 관절(J1~J6) 조그 버튼 */
+.jog-arrow {
+    border: none;
+    border-radius: 8px;
+    color: #fff;
+    font-weight: 700;
+    cursor: pointer;
+    user-select: none;
+    touch-action: none;
+    transition: filter .08s ease;
+}
+
+    .jog-arrow:hover:not(:disabled) {
+        filter: brightness(1.08);
+    }
+
+    .jog-arrow:active:not(:disabled) {
+        filter: brightness(0.9);
+    }
+
+    .jog-arrow:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+    }
+
+.jog-joints {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 0.5rem;
+    max-width: 300px;
+    zoom: 0.7; /* 관절(J1~J6) 조그 버튼만 70% 축소 */
+}
+
+.jog-joint-row {
+    display: grid;
+    grid-template-columns: 1fr 56px 1fr;
+    gap: 8px;
+    align-items: center;
+}
+
+.jog-joint-lb {
+    text-align: center;
+    font-weight: 700;
+    color: #374151;
+}
+
+.jog-joint {
+    width: 100%;
+    height: 42px;
+    background: #6b7280;
+}

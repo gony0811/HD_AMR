@@ -1,0 +1,13 @@
+@page "/jog"
+@rendermode InteractiveServer
+@using HD_AMR.Web.Components.Layout
+@layout PopupLayout
+
+<PageTitle>코봇 조그</PageTitle>
+
+@* window.open 으로 열리는 별도 팝업 창 전용 페이지. 같은 CobotService 싱글톤을 공유해 동일 로봇을 제어.
+   ShowSafetyHeader 기본 true → 팝업 단독으로도 연결 상태 + 서보/E-STOP/오류해제 헤더가 함께 렌더된다. *@
+
+<h1 class="h4 mb-3">코봇 조그</h1>
+
+<CobotJogRibbon />

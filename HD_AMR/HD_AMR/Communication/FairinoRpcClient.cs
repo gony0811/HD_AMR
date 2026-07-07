@@ -400,6 +400,14 @@ public class FairinoRpcClient : IDisposable
     public Task<int> MoveByOffsetAsync(double[] anchorPose, int user, double[] offset, int? tool = null, double? vel = null, CancellationToken ct = default)
         => MoveLAsync(anchorPose, tool: tool, user: user, vel: vel, offsetFlag: 1, offsetPos: offset, ct: ct);
 
+    /// <summary>
+    /// tool 좌표계 기준으로 앵커 포즈에서 offset만큼 이동. offset_flag=2(tool 좌표 오프셋) 사용.
+    /// 회전 오프셋이 tool 프레임 축으로 적용되므로, 툴 프레임에서 측정한 자세 보정에 쓴다.
+    /// anchorPose는 베이스 기준 유효 TCP 포즈(IK 계산용). offset=[dx,dy,dz,drx,dry,drz].
+    /// </summary>
+    public Task<int> MoveByToolOffsetAsync(double[] anchorPose, int user, double[] offset, int? tool = null, double? vel = null, CancellationToken ct = default)
+        => MoveLAsync(anchorPose, tool: tool, user: user, vel: vel, offsetFlag: 2, offsetPos: offset, ct: ct);
+
     /// <summary>관절 이동(MoveJ). jointPos = 6축 각도, descPose = 대응 직교 포즈.
     /// ⚠ 실물 펌웨어는 desc_pos=0(전부 0)을 rc=154(관절 지령점 오류)로 거부한다 — joint_pos 에 대응하는
     /// 유효 pose 가 필요하므로, 0 배열/미제공이면 정기구학(GetForwardKin)으로 채워 보낸다.</summary>
