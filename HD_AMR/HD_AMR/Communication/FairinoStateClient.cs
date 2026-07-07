@@ -17,14 +17,22 @@ public class FairinoStateClient
 {
     private const byte FrameHead = 0x5A;
 
-    // payload(프레임 헤더 5바이트 이후) 기준 오프셋 — ⚠ 캡처로 확정 필요.
+    // payload(프레임 헤더 5바이트 이후) 기준 오프셋 — 공식 FAIRINO RobotStatePkg(_pack_=1) 필드 순서.
+    // program_state,robot_state,main_code(i32),sub_code(i32),robot_mode,jt_cur_pos[6],tl_cur_pos[6],
+    // flange[6],actual_qd[6],actual_qdd[6],target_TCP_CmpSpeed[2],target_TCP_Speed[6],
+    // actual_TCP_CmpSpeed[2],actual_TCP_Speed[6],jt_cur_tor[6],tool(i32),user(i32),...
+    // ⚠ 펌웨어 버전차로 tool/user 오프셋이 어긋나면 배지 검증으로 판정 후 보정(SeedActiveFrames 범위검증이 차단).
     private static class Offsets
     {
         public const int ProgramState = 0;   // uint8
-        public const int RobotMode = 1;       // uint8
-        public const int ErrorCode = 2;       // int16 (LE)
-        public const int JointPos = 16;       // double[6]
-        public const int TcpPose = 64;        // double[6]
+        public const int RobotState = 1;      // uint8
+        public const int MainCode = 2;        // int32 (LE) — 주 결함 코드(ErrorCode로 노출)
+        public const int SubCode = 6;         // int32 (LE)
+        public const int RobotMode = 10;      // uint8 (0=자동,1=수동)
+        public const int JointPos = 11;       // double[6]
+        public const int TcpPose = 59;        // double[6]
+        public const int Tool = 427;          // int32 (LE) — 활성 공구 좌표계 번호
+        public const int User = 431;          // int32 (LE) — 활성 작업물 좌표계 번호
     }
 
     private readonly FairinoRpcSettings _settings;
@@ -133,10 +141,14 @@ public class FairinoStateClient
         var state = new FairinoState
         {
             ProgramState = ReadU8(payload, Offsets.ProgramState),
+            RobotState = ReadU8(payload, Offsets.RobotState),
             RobotMode = ReadU8(payload, Offsets.RobotMode),
-            ErrorCode = ReadI16(payload, Offsets.ErrorCode),
+            ErrorCode = ReadI32(payload, Offsets.MainCode),
+            SubCode = ReadI32(payload, Offsets.SubCode),
             JointPos = ReadDoubles(payload, Offsets.JointPos, 6),
             TcpPose = ReadDoubles(payload, Offsets.TcpPose, 6),
+            Tool = ReadI32(payload, Offsets.Tool),
+            User = ReadI32(payload, Offsets.User),
             UpdatedAt = DateTime.UtcNow,
         };
         _latest = state;
@@ -145,8 +157,8 @@ public class FairinoStateClient
     private static int ReadU8(ReadOnlySpan<byte> p, int off)
         => off >= 0 && off < p.Length ? p[off] : 0;
 
-    private static int ReadI16(ReadOnlySpan<byte> p, int off)
-        => off >= 0 && off + 2 <= p.Length ? BinaryPrimitives.ReadInt16LittleEndian(p.Slice(off, 2)) : 0;
+    private static int ReadI32(ReadOnlySpan<byte> p, int off)
+        => off >= 0 && off + 4 <= p.Length ? BinaryPrimitives.ReadInt32LittleEndian(p.Slice(off, 4)) : 0;
 
     private static double[] ReadDoubles(ReadOnlySpan<byte> p, int off, int count)
     {

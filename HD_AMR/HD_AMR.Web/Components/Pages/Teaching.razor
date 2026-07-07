@@ -1,5 +1,6 @@
 @page "/teaching"
 @rendermode InteractiveServer
+@using HD_AMR.Communication
 @using HD_AMR.Data.Entities
 @using HD_AMR.Service
 @inject TeachingService Service
@@ -22,6 +23,11 @@
             <label class="form-label">공구(tool)</label>
             <input class="form-control" type="number" min="0" max="15" style="width:90px"
                    @bind="_runTool" disabled="@_isBusy" />
+        </div>
+        <div class="col-auto">
+            <label class="form-label">작업물(user, 0=베이스)</label>
+            <input class="form-control" type="number" min="0" max="14" style="width:150px"
+                   @bind="_capUser" disabled="@_isBusy" />
         </div>
         <div class="col-auto">
             <label class="form-label">속도(%)</label>
@@ -75,7 +81,13 @@
                 @foreach (var p in _positions)
                 {
                     <tr class="@(p.Id == _busyId ? "selected" : "")">
-                        <td>@p.Name</td>
+                        <td>
+                            @p.Name
+                            @if (p.UserFrame is int n && n > 0)
+                            {
+                                <span class="badge bg-info ms-1" title="작업물 좌표계 기준(추종)">작업물 #@n</span>
+                            }
+                        </td>
                         <td class="num">@Fmt(p.X)</td>
                         <td class="num">@Fmt(p.Y)</td>
                         <td class="num">@Fmt(p.Z)</td>
@@ -109,6 +121,7 @@
 @code {
     private List<TeachingPosition>? _positions;
     private int _runTool = 1;
+    private int _capUser;   // 캡처 시 작업물 좌표계 번호(0=베이스). N>0이면 그 프레임 기준 상대 pose로 저장.
     private int _vel = 20;
     private bool _isBusy;
     private int _busyId = -1;
@@ -135,10 +148,23 @@
         {
             var pose = await Cobot.Rpc.GetTcpPoseInBaseAsync(_runTool);
             var joints = await Cobot.Rpc.GetActualJointPosAsync();
-            await Service.SaveCaptureAsync(id, pose, joints, _runTool);
+
+            if (_capUser > 0)
+            {
+                // 작업물 좌표계 N 기준으로 고정: 현재 프레임 T_N을 읽어 상대 pose로 변환해 저장.
+                // 이후 프레임 N을 재등록하면 이동 목표가 따라간다.
+                var tN = await Cobot.Rpc.GetWObjCoordAsync(_capUser);
+                var relPose = FrameMath.ToFrame(pose, tN);
+                await Service.SaveCaptureAsync(id, pose, joints, _runTool, _capUser, relPose);
+                _msg = $"현재 위치를 작업물 #{_capUser} 좌표계 기준으로 저장했습니다.";
+            }
+            else
+            {
+                await Service.SaveCaptureAsync(id, pose, joints, _runTool);
+                _msg = "현재 위치를 베이스 기준으로 저장했습니다.";
+            }
             await ReloadAsync();
             _isErr = false;
-            _msg = "현재 위치를 저장했습니다.";
         }
         catch (Exception ex)
         {
@@ -163,8 +189,19 @@
         _moveCts = new CancellationTokenSource();
         try
         {
-            var pose = new[] { p.X!.Value, p.Y!.Value, p.Z!.Value, p.Rx!.Value, p.Ry!.Value, p.Rz!.Value };
-            var rc = await Cobot.Rpc.MoveLAsync(pose, tool: _runTool, user: 0, vel: _vel, ct: _moveCts.Token);
+            double[] target;
+            if (p.UserFrame is int n && n > 0 && p.RelX.HasValue)
+            {
+                // 작업물 추종: 현재(재등록된) 프레임 T_N에 상대 pose를 적용해 베이스 목표 계산.
+                var tN = await Cobot.Rpc.GetWObjCoordAsync(n, _moveCts.Token);
+                var rel = new[] { p.RelX!.Value, p.RelY!.Value, p.RelZ!.Value, p.RelRx!.Value, p.RelRy!.Value, p.RelRz!.Value };
+                target = FrameMath.FromFrame(rel, tN);
+            }
+            else
+            {
+                target = new[] { p.X!.Value, p.Y!.Value, p.Z!.Value, p.Rx!.Value, p.Ry!.Value, p.Rz!.Value };
+            }
+            var rc = await Cobot.Rpc.MoveLAsync(target, tool: _runTool, user: 0, vel: _vel, ct: _moveCts.Token);
             _isErr = rc != 0;
             _msg = rc == 0 ? $"'{p.Name}' 위치로 이동 완료." : $"이동 실패 (rc={rc}).";
         }

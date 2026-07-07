@@ -49,8 +49,8 @@ public static class FrameDescriber
         var surfaceType = data[0] switch
         {
             0x00 => "Flat",
-            0x01 => "Corrugation",
-            0x02 => "Corner",
+            0x01 => "Corner",
+            0x02 => "Corrugation",
             _    => $"0x{data[0]:X2}",
         };
         ushort surfaceId = (ushort)(data[1] | (data[2] << 8));

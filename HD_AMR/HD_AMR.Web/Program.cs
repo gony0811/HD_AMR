@@ -182,10 +182,25 @@ CREATE TABLE IF NOT EXISTS TeachingPositions (
     Tool INTEGER NOT NULL DEFAULT 1,
     CapturedAt TEXT NULL,
     CreatedAt TEXT NOT NULL,
-    UpdatedAt TEXT NOT NULL
+    UpdatedAt TEXT NOT NULL,
+    UserFrame INTEGER NULL,
+    RelX REAL NULL, RelY REAL NULL, RelZ REAL NULL,
+    RelRx REAL NULL, RelRy REAL NULL, RelRz REAL NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS IX_TeachingPositions_Key ON TeachingPositions (""Key"");
 ");
+
+    // 기존 TeachingPositions 에 작업물 좌표계(추종 절대위치) 컬럼이 없으면 추가(기존 데이터 보존).
+    // SQLite는 ADD COLUMN IF NOT EXISTS 미지원 → pragma 로 확인 후에만 ALTER.
+    foreach (var col in new[] { "UserFrame INTEGER", "RelX REAL", "RelY REAL", "RelZ REAL", "RelRx REAL", "RelRy REAL", "RelRz REAL" })
+    {
+        var name = col.Split(' ')[0];
+        var exists = db.Database
+            .SqlQueryRaw<long>($"SELECT COUNT(*) AS Value FROM pragma_table_info('TeachingPositions') WHERE name = '{name}'")
+            .AsEnumerable().First() > 0;
+        if (!exists)
+            db.Database.ExecuteSqlRaw($"ALTER TABLE TeachingPositions ADD COLUMN {col} NULL;");
+    }
 
     // Backward-compatible schema add for Parameters (범용 key/value 설정 저장소; 기존 데이터 보존).
     db.Database.ExecuteSqlRaw(@"

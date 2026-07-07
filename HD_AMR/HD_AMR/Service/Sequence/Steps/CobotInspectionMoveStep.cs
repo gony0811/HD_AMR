@@ -36,17 +36,36 @@ public class CobotInspectionMoveStep : ISequenceStep
     {
         var inspection = context.Positions["inspectionReady"];
 
-        var pose = new[]
+        double[] target;
+        string where;
+        if (inspection.UserFrame is int n && n > 0 && inspection.RelX.HasValue)
         {
-            inspection.X!.Value, inspection.Y!.Value, inspection.Z!.Value,
-            inspection.Rx!.Value, inspection.Ry!.Value, inspection.Rz!.Value,
-        };
+            // 작업물 추종: 현재(재등록된) 프레임 T_N에 저장된 상대 pose를 적용해 베이스 목표 계산.
+            // 최종 이동은 계산된 베이스 목표로 user:0 → rc=74(좌표계 불일치) 회피.
+            var tN = await _cobot.Rpc.GetWObjCoordAsync(n, ct);
+            var rel = new[]
+            {
+                inspection.RelX!.Value, inspection.RelY!.Value, inspection.RelZ!.Value,
+                inspection.RelRx!.Value, inspection.RelRy!.Value, inspection.RelRz!.Value,
+            };
+            target = FrameMath.FromFrame(rel, tN);
+            where = $"검사 준비 위치(작업물 #{n} 추종)로";
+        }
+        else
+        {
+            target = new[]
+            {
+                inspection.X!.Value, inspection.Y!.Value, inspection.Z!.Value,
+                inspection.Rx!.Value, inspection.Ry!.Value, inspection.Rz!.Value,
+            };
+            where = "검사 준비 위치로";
+        }
 
-        var rc = await _cobot.Rpc.MoveLAsync(pose,
+        var rc = await _cobot.Rpc.MoveLAsync(target,
             tool: context.Tool, user: 0, vel: context.Velocity, ct: ct);
 
         return rc == 0
-            ? StepResult.Ok("검사 준비 위치로 이동 완료.")
+            ? StepResult.Ok($"{where} 이동 완료.")
             : StepResult.Fail($"이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.");
     }
 }
