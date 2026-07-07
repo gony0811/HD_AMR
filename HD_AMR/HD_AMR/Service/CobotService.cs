@@ -77,6 +77,17 @@ public class CobotService : BackgroundService
 
         var stateTask = _state.RunAsync(stoppingToken);
 
+        // 이동 직전 프레임 해석이 컨트롤러의 실시간 활성 좌표계를 따르도록, 20004 스트림을 RPC 클라이언트에
+        // 연결한다(라이브 우선). 소켓 단절/미수신/스테일(>2초)/미상(-1)이면 null → 추적 캐시로 안전하게 폴백.
+        _rpc.SetLiveActiveFrameProvider(() =>
+        {
+            if (!_state.IsConnected) return null;                                    // 소켓 단절 → 스냅샷 고착 방지
+            if (_state.Latest is not { } s) return null;                             // 미수신
+            if (s.Tool < 0 || s.User < 0) return null;                               // -1 = 미상
+            if (DateTime.UtcNow - s.UpdatedAt > TimeSpan.FromSeconds(2)) return null; // 스테일 방어
+            return (s.Tool, s.User);
+        });
+
         while (!stoppingToken.IsCancellationRequested)
         {
             try

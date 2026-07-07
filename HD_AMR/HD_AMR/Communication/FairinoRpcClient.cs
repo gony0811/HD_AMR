@@ -36,6 +36,19 @@ public class FairinoRpcClient : IDisposable
     // (GetForwardKinInBaseAsync)에 쓴다. -1 = 미상(연결 직후). 연결/해제 시 재설정된다.
     private int _activeUser = -1;
 
+    // 20004 상태 스트림에서 컨트롤러의 실시간 활성 좌표계(tool,user)를 읽어오는 제공자(느슨한 결합 —
+    // 상태 클라이언트를 직접 참조하지 않는다). CobotService 가 _state.Latest 로 연결한다.
+    // 반환 null = 미수신/스테일/소켓단절/범위밖 → ResolveActive*Async 가 기존 추적 캐시 폴백을 그대로 탄다.
+    // 이동은 블로킹이라 rc=0 반환 시점엔 컨트롤러가 이미 새 활성 프레임을 반영·완료한 상태이므로,
+    // 다음 앵커 계산 시 라이브 스트림은 안정된 최신 프레임을 준다(자기 명령과의 레이스 없음).
+    private Func<(int tool, int user)?>? _liveActiveFrameProvider;
+
+    /// <summary>20004 상태 스트림의 실시간 활성 좌표계 제공자를 등록한다(CobotService 배선용).
+    /// <see cref="ResolveActiveUserAsync"/>/<see cref="ResolveActiveToolAsync"/> 가 RPC 실측 다음,
+    /// 추적 캐시보다 <b>우선</b>하여 이 값을 쓴다.</summary>
+    public void SetLiveActiveFrameProvider(Func<(int tool, int user)?> provider)
+        => _liveActiveFrameProvider = provider;
+
     public FairinoRpcClient(FairinoRpcSettings settings, ILogger<FairinoRpcClient> logger)
     {
         _settings = settings;
@@ -310,27 +323,34 @@ public class FairinoRpcClient : IDisposable
     private async Task<double[]> GetToolOffsetAsync(int id, CancellationToken ct)
         => id == 0 ? new double[6] : await GetToolCoordAsync(id, ct);
 
-    /// <summary>현재 활성 공구 번호를 확정한다: GetActualTCPNum 실측(read-only) 우선 → 추적 캐시
-    /// <see cref="_activeTool"/> → 기본값(DefaultToolId). 실측이 되면 캐시도 갱신한다.</summary>
+    /// <summary>현재 활성 공구 번호를 확정한다: GetActualTCPNum 실측(read-only) → 라이브 20004 스트림 →
+    /// 추적 캐시 <see cref="_activeTool"/> → 기본값(DefaultToolId). 실측/라이브가 되면 캐시도 갱신한다.
+    /// 라이브를 캐시보다 우선해, 펜던트 등 외부에서 활성 공구가 바뀌어도 앵커 계산이 실제 프레임을 따른다.</summary>
     private async Task<int> ResolveActiveToolAsync(CancellationToken ct)
     {
         var actual = await TryGetActualToolNumAsync(ct: ct);   // 미지원 시 null
         if (actual is int a) { _activeTool = a; return a; }
+        // 라이브 20004 스트림(신선/범위검증 통과 시)을 캐시보다 우선. 범위는 SeedActiveFrames 의 tool 0~15 와 동일.
+        var live = _liveActiveFrameProvider?.Invoke();
+        if (live is { tool: var lt } && lt is >= 0 and <= 15) { _activeTool = lt; return lt; }
         if (_activeTool >= 0) return _activeTool;
         _logger.LogWarning("{Name} 활성 공구 미상 — 기본 공구 #{Def} 가정(실제와 다르면 앵커가 틀어질 수 있음).",
             _settings.Name, _settings.DefaultToolId);
         return _settings.DefaultToolId;
     }
 
-    /// <summary>현재 활성 작업물(User) 프레임 번호를 확정한다: GetActualWObjNum 실측(read-only) 우선 →
-    /// 추적 캐시 <see cref="_activeUser"/> → 기본값(DefaultUserId, 통상 0=베이스). 실측이 되면 캐시도 갱신한다.
-    /// ⚠ 콜드스타트(앱 재시작 직후 _activeUser=-1)에 GetActualWObjNum 이 미지원(null)이면 활성 프레임을
-    /// 알 수 없어 0으로 가정한다. 실제 컨트롤러 활성 프레임이 0이 아니면 베이스 변환이 틀어지므로,
-    /// 그때는 '활성 좌표계 초기화(베이스)' 버튼으로 강제 정렬(MoveJ user=0)한다.</summary>
+    /// <summary>현재 활성 작업물(User) 프레임 번호를 확정한다: GetActualWObjNum 실측(read-only) →
+    /// 라이브 20004 스트림 → 추적 캐시 <see cref="_activeUser"/> → 기본값(DefaultUserId, 통상 0=베이스).
+    /// 실측/라이브가 되면 캐시도 갱신한다. 라이브를 캐시보다 우선해, 펜던트 등 외부에서 활성 프레임이
+    /// 바뀌어도 FK→베이스 변환이 실제 프레임을 따라 좌표계 불일치(rc=154/38)를 막는다.
+    /// ⚠ 라이브 미수신(콜드스타트/소켓단절)이고 GetActualWObjNum 미지원이면 캐시→0 가정으로 폴백한다.</summary>
     private async Task<int> ResolveActiveUserAsync(CancellationToken ct)
     {
         var actual = await GetActualWObjNumAsync(ct: ct);   // 미지원 시 null
         if (actual is int u) { _activeUser = u; return u; }
+        // 라이브 20004 스트림(신선/범위검증 통과 시)을 캐시보다 우선. 범위는 SeedActiveFrames 의 user 0~14 와 동일.
+        var live = _liveActiveFrameProvider?.Invoke();
+        if (live is { user: var lu } && lu is >= 0 and <= 14) { _activeUser = lu; return lu; }
         if (_activeUser >= 0) return _activeUser;
         _logger.LogWarning("{Name} 활성 작업물 프레임 미상 — 기본 #{Def} 가정(실제와 다르면 베이스 변환이 틀어질 수 있음).",
             _settings.Name, _settings.DefaultUserId);
