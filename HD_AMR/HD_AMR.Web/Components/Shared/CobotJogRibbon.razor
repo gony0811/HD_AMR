@@ -153,14 +153,14 @@ else
                 <g class="jog-shape" @onclick="() => JogStep(5, +1)"
                    @onpointerdown="() => JogHoldStart(5, +1)" @onpointerup="JogHoldStop"
                    @onpointerleave="JogHoldStop" @onpointercancel="JogHoldStop">
-                    <path fill="none" stroke="@ClrZ" stroke-width="26" stroke-linecap="round" d="@RzArcLeftD"></path>
+                    <path fill="none" stroke="@ClrZ" stroke-width="20" stroke-linecap="square" d="@RzArcLeftD"></path>
                     <polygon fill="@ClrZ" points="@RzHeadLeft"></polygon>
                     <text class="jog-lb" x="46" y="90" text-anchor="middle" dominant-baseline="central">RZ+</text>
                 </g>
                 <g class="jog-shape" @onclick="() => JogStep(5, -1)"
                    @onpointerdown="() => JogHoldStart(5, -1)" @onpointerup="JogHoldStop"
                    @onpointerleave="JogHoldStop" @onpointercancel="JogHoldStop">
-                    <path fill="none" stroke="@ClrZ" stroke-width="26" stroke-linecap="round" d="@RzArcRightD"></path>
+                    <path fill="none" stroke="@ClrZ" stroke-width="20" stroke-linecap="square" d="@RzArcRightD"></path>
                     <polygon fill="@ClrZ" points="@RzHeadRight"></polygon>
                     <text class="jog-lb" x="154" y="90" text-anchor="middle" dominant-baseline="central">RZ−</text>
                 </g>
@@ -241,10 +241,11 @@ else
         new(3, -1, "right", ClrX, "RX−", 150, 190, 1.0),
     };
     // RZ 곡선 아치(파랑) — 상단 무지개, 좌=RZ+, 우=RZ−. 아치 + 화살촉.
+    // 화살촉을 키움: 밑변 30→32(뷰포트 폭 안 최대), 길이 34→48로 길게 뾰족하게(아치 끝 y=124에 겹치게 base y=114).
     private const string RzArcLeftD  = "M 100 40 A 84 84 0 0 0 16 124";
     private const string RzArcRightD = "M 100 40 A 84 84 0 0 1 184 124";
-    private const string RzHeadLeft  = "1,116 31,116 16,150";
-    private const string RzHeadRight = "169,116 199,116 184,150";
+    private const string RzHeadLeft  = "0,114 32,114 16,162";
+    private const string RzHeadRight = "168,114 200,114 184,162";
 
     private static string N(double v) => v.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture);
 
