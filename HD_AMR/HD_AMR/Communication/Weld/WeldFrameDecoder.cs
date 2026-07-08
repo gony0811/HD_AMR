@@ -50,6 +50,27 @@ public static class WeldFrameDecoder
         }
     }
 
+    /// <summary>
+    /// 현재 프레임을 <b>원본</b> PNG 바이트로 인코딩(검출 오버레이 아님). IR=8bit gray, RGB=BGR 로 저장해
+    /// 캡처 이미지 규약과 정렬한다. 검출 실패 프레임을 학습셋에 추가할 때 사용. 실패하면 null.
+    /// </summary>
+    public static byte[]? ToPng(CameraFrame f, WeldImageMode mode)
+    {
+        var (bgr, gray) = Decode(f, mode);
+        try
+        {
+            var src = mode == WeldImageMode.Ir ? (gray ?? bgr) : (bgr ?? gray);
+            if (src is null || src.Empty()) return null;
+            Cv2.ImEncode(".png", src, out byte[] png);
+            return png;
+        }
+        finally
+        {
+            bgr?.Dispose();
+            gray?.Dispose();
+        }
+    }
+
     /// <summary>원시 픽셀 바이트를 Mat 으로 래핑(새 버퍼에 복사). 버전 간 안전한 방식.</summary>
     private static Mat WrapBytes(int rows, int cols, MatType type, byte[] data)
     {
