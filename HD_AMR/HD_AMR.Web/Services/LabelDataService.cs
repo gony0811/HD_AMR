@@ -89,10 +89,12 @@ public class LabelDataService
         modality = modality == "ir" ? "ir" : "rgb";
         Directory.CreateDirectory(dir);
 
-        // 실패 케이스 식별용 접두어 hard_. 초까지의 타임스탬프 + 충돌 시 일련번호.
+        // 카메라 캡처와 동일한 일련번호 접두("NNN_")를 붙이고, 실패 케이스 식별용 hard_ 표식을 유지.
+        // → "NNN_hard_yyyyMMdd_HHmmss". 충돌 시 _2, _3… 를 덧붙여 덮어쓰기를 막는다.
+        var prefix = CaptureNaming.Prefix(CaptureNaming.NextSeq(dir));
         var ts = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-        var stem = "hard_" + ts;
-        for (int k = 2; Directory.GetFiles(dir, stem + "_*").Length > 0; k++) stem = $"hard_{ts}_{k}";
+        var stem = $"{prefix}hard_{ts}";
+        for (int k = 2; Directory.GetFiles(dir, stem + "_*").Length > 0; k++) stem = $"{prefix}hard_{ts}_{k}";
 
         var target = Path.Combine(dir, $"{stem}_{modality}.png");
         await Task.Run(() =>
