@@ -325,8 +325,8 @@
                                         value="@((int)EffectiveSurfaceType(idx))"
                                         @onchange="e => SetWpSurfaceType(idx, e.Value)" @onclick:stopPropagation="true">
                                     <option value="0">Flat</option>
-                                    <option value="1">Corrugation</option>
-                                    <option value="2">Corner</option>
+                                    <option value="1">Corner</option>
+                                    <option value="2">Corrugation</option>
                                 </select>
                             </td>
                             <td>@(included ? "○" : "제외(>th_max)")</td>

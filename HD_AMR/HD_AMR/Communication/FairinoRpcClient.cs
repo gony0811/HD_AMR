@@ -29,6 +29,26 @@ public class FairinoRpcClient : IDisposable
     // 폴백 소스로 쓰인다(ResolveActiveToolAsync). -1 = 미상(연결 직후). 연결/해제 시 재설정된다.
     private int _activeTool = -1;
 
+    // 컨트롤러의 현재 활성 작업물(User) 좌표계 번호 추적값. MoveL/MoveJ의 user 인자가 활성 프레임을
+    // 바꾸므로(세터 RPC 부재 → per-move user 가 유일한 수단) 성공 시 갱신한다.
+    // GetActualWObjNum 실측을 못 읽는 펌웨어에서 활성 프레임의 폴백 소스로 쓰인다(ResolveActiveUserAsync).
+    // 이 펌웨어의 GetForwardKin 은 '활성 작업물 프레임' 기준 pose 를 주므로, 이 값으로 베이스 변환
+    // (GetForwardKinInBaseAsync)에 쓴다. -1 = 미상(연결 직후). 연결/해제 시 재설정된다.
+    private int _activeUser = -1;
+
+    // 20004 상태 스트림에서 컨트롤러의 실시간 활성 좌표계(tool,user)를 읽어오는 제공자(느슨한 결합 —
+    // 상태 클라이언트를 직접 참조하지 않는다). CobotService 가 _state.Latest 로 연결한다.
+    // 반환 null = 미수신/스테일/소켓단절/범위밖 → ResolveActive*Async 가 기존 추적 캐시 폴백을 그대로 탄다.
+    // 이동은 블로킹이라 rc=0 반환 시점엔 컨트롤러가 이미 새 활성 프레임을 반영·완료한 상태이므로,
+    // 다음 앵커 계산 시 라이브 스트림은 안정된 최신 프레임을 준다(자기 명령과의 레이스 없음).
+    private Func<(int tool, int user)?>? _liveActiveFrameProvider;
+
+    /// <summary>20004 상태 스트림의 실시간 활성 좌표계 제공자를 등록한다(CobotService 배선용).
+    /// <see cref="ResolveActiveUserAsync"/>/<see cref="ResolveActiveToolAsync"/> 가 RPC 실측 다음,
+    /// 추적 캐시보다 <b>우선</b>하여 이 값을 쓴다.</summary>
+    public void SetLiveActiveFrameProvider(Func<(int tool, int user)?> provider)
+        => _liveActiveFrameProvider = provider;
+
     public FairinoRpcClient(FairinoRpcSettings settings, ILogger<FairinoRpcClient> logger)
     {
         _settings = settings;
@@ -82,6 +102,7 @@ public class FairinoRpcClient : IDisposable
             _proxy = proxy;
             _stopProxy = stopProxy;
             _activeTool = -1;   // 새 연결: 활성 공구 추적값 초기화(다음 Ensure 호출이 강제 동기화).
+            _activeUser = -1;   // 새 연결: 활성 작업물 프레임 추적값 초기화.
             _connected = true;
             _logger.LogInformation("{Name} XML-RPC 연결 완료 ({Url})", _settings.Name, proxy.Url);
         }
@@ -106,6 +127,7 @@ public class FairinoRpcClient : IDisposable
         _proxy = null;
         _stopProxy = null;
         _activeTool = -1;
+        _activeUser = -1;
     }
 
     // ── 좌표계 ─────────────────────────────────────────────────────
@@ -245,10 +267,36 @@ public class FairinoRpcClient : IDisposable
         throw new InvalidOperationException($"정기구학(GetForwardKin) 실패 (errcode={err}). 컨트롤러 펌웨어 미지원일 수 있습니다.");
     }
 
+    /// <summary>정기구학 결과를 <b>베이스 좌표계</b> 기준 pose 로 반환한다.
+    /// ⚠ 이 펌웨어의 <see cref="GetForwardKinAsync"/> 은 베이스가 아니라 '현재 활성 작업물 프레임'
+    /// 기준 pose 를 준다(실물 확인: 활성 user=5 에서 원점 근처 값 반환). 활성 프레임 N&gt;0 이면 등록된
+    /// 좌표계 T_N(베이스 기준)으로 되돌린다: P_base = T_N · P_N. 활성 프레임 0(베이스)이면 그대로 반환.</summary>
+    private async Task<double[]> GetForwardKinInBaseAsync(double[] jointPos, CancellationToken ct = default)
+    {
+        var pFk = await GetForwardKinAsync(jointPos, ct);      // 활성 작업물 프레임 기준
+        int n = await ResolveActiveUserAsync(ct);
+        if (n <= 0)
+        {
+            _logger.LogInformation("{Name} FK→베이스: 활성 작업물 #{N}(≤0) → 변환 없음. fk=[{Fk}]",
+                _settings.Name, n, string.Join(",", pFk.Select(x => x.ToString("0.##"))));
+            return pFk;                                        // 이미 베이스(또는 활성 프레임 미상)
+        }
+        var tN = await GetWObjCoordAsync(n, ct);               // 베이스 기준 좌표계 pose
+        var pBase = FrameMath.FromFrame(pFk, tN);              // = T_N · pFk → 베이스
+        _logger.LogInformation("{Name} FK→베이스: 활성 작업물 #{N}, T=[{T}], fk=[{Fk}] → base=[{B}]",
+            _settings.Name, n,
+            string.Join(",", tN.Select(x => x.ToString("0.##"))),
+            string.Join(",", pFk.Select(x => x.ToString("0.##"))),
+            string.Join(",", pBase.Select(x => x.ToString("0.##"))));
+        return pBase;
+    }
+
     /// <summary>
     /// 베이스 좌표계 기준, 이동 공구 <paramref name="tool"/> 프레임의 현재 TCP 포즈 [x,y,z,rx,ry,rz].
-    /// GetActualTCPPose는 활성 작업물 좌표계 기준이므로, 현재 관절각을 읽어 정기구학(GetForwardKin)으로
-    /// BASE 기준 포즈를 구한다.
+    /// GetActualTCPPose는 활성 작업물 좌표계 기준이므로, 현재 관절각을 읽어 정기구학으로 BASE 기준 포즈를 구한다.
+    /// ⚠ 이 펌웨어의 GetForwardKin 은 베이스가 아니라 '현재 활성 작업물 프레임' 기준이므로,
+    /// <see cref="GetForwardKinInBaseAsync"/> 로 활성 프레임 N&gt;0 이면 T_N 으로 베이스로 변환한다
+    /// (변환 없이 쓰면 활성 user≠0 에서 앵커가 원점 근처로 오염됨 → MoveL rc=38).
     /// ⚠ FK는 <b>현재 활성 공구</b> 프레임 기준이다. 과거에는 무변위 MoveJ로 활성 공구를 tool로 바꿔
     /// 프레임을 맞췄으나(실물에서 rc=154로 거부), 이제는 <b>모션을 전혀 보내지 않고</b> 공구 오프셋으로
     /// 클라이언트에서 재프레임한다: P_T = P_active ∘ inv(offset_active) ∘ offset_T.
@@ -258,7 +306,7 @@ public class FairinoRpcClient : IDisposable
     public async Task<double[]> GetTcpPoseInBaseAsync(int tool, CancellationToken ct = default)
     {
         var joints = await GetActualJointPosAsync(ct: ct);
-        var pActive = await GetForwardKinAsync(joints, ct);   // BASE, 현재 활성 공구 프레임
+        var pActive = await GetForwardKinInBaseAsync(joints, ct);   // BASE, 현재 활성 공구 프레임(활성 작업물 프레임 → 베이스 변환)
         int active = await ResolveActiveToolAsync(ct);
         if (active == tool) return pActive;                    // 재프레임 불필요 → 공구 좌표 조회 생략.
 
@@ -275,16 +323,38 @@ public class FairinoRpcClient : IDisposable
     private async Task<double[]> GetToolOffsetAsync(int id, CancellationToken ct)
         => id == 0 ? new double[6] : await GetToolCoordAsync(id, ct);
 
-    /// <summary>현재 활성 공구 번호를 확정한다: GetActualTCPNum 실측(read-only) 우선 → 추적 캐시
-    /// <see cref="_activeTool"/> → 기본값(DefaultToolId). 실측이 되면 캐시도 갱신한다.</summary>
+    /// <summary>현재 활성 공구 번호를 확정한다: GetActualTCPNum 실측(read-only) → 라이브 20004 스트림 →
+    /// 추적 캐시 <see cref="_activeTool"/> → 기본값(DefaultToolId). 실측/라이브가 되면 캐시도 갱신한다.
+    /// 라이브를 캐시보다 우선해, 펜던트 등 외부에서 활성 공구가 바뀌어도 앵커 계산이 실제 프레임을 따른다.</summary>
     private async Task<int> ResolveActiveToolAsync(CancellationToken ct)
     {
         var actual = await TryGetActualToolNumAsync(ct: ct);   // 미지원 시 null
         if (actual is int a) { _activeTool = a; return a; }
+        // 라이브 20004 스트림(신선/범위검증 통과 시)을 캐시보다 우선. 범위는 SeedActiveFrames 의 tool 0~15 와 동일.
+        var live = _liveActiveFrameProvider?.Invoke();
+        if (live is { tool: var lt } && lt is >= 0 and <= 15) { _activeTool = lt; return lt; }
         if (_activeTool >= 0) return _activeTool;
         _logger.LogWarning("{Name} 활성 공구 미상 — 기본 공구 #{Def} 가정(실제와 다르면 앵커가 틀어질 수 있음).",
             _settings.Name, _settings.DefaultToolId);
         return _settings.DefaultToolId;
+    }
+
+    /// <summary>현재 활성 작업물(User) 프레임 번호를 확정한다: GetActualWObjNum 실측(read-only) →
+    /// 라이브 20004 스트림 → 추적 캐시 <see cref="_activeUser"/> → 기본값(DefaultUserId, 통상 0=베이스).
+    /// 실측/라이브가 되면 캐시도 갱신한다. 라이브를 캐시보다 우선해, 펜던트 등 외부에서 활성 프레임이
+    /// 바뀌어도 FK→베이스 변환이 실제 프레임을 따라 좌표계 불일치(rc=154/38)를 막는다.
+    /// ⚠ 라이브 미수신(콜드스타트/소켓단절)이고 GetActualWObjNum 미지원이면 캐시→0 가정으로 폴백한다.</summary>
+    private async Task<int> ResolveActiveUserAsync(CancellationToken ct)
+    {
+        var actual = await GetActualWObjNumAsync(ct: ct);   // 미지원 시 null
+        if (actual is int u) { _activeUser = u; return u; }
+        // 라이브 20004 스트림(신선/범위검증 통과 시)을 캐시보다 우선. 범위는 SeedActiveFrames 의 user 0~14 와 동일.
+        var live = _liveActiveFrameProvider?.Invoke();
+        if (live is { user: var lu } && lu is >= 0 and <= 14) { _activeUser = lu; return lu; }
+        if (_activeUser >= 0) return _activeUser;
+        _logger.LogWarning("{Name} 활성 작업물 프레임 미상 — 기본 #{Def} 가정(실제와 다르면 베이스 변환이 틀어질 수 있음).",
+            _settings.Name, _settings.DefaultUserId);
+        return _settings.DefaultUserId;
     }
 
     // ── 이동 ───────────────────────────────────────────────────────
@@ -317,7 +387,7 @@ public class FairinoRpcClient : IDisposable
             0,                                  // velAccParamMode
         };
         var rc = await InvokeAsync("MoveL", p => ToErr(p.MoveL(args)), ct, faultRecovery: false);
-        if (rc == 0) _activeTool = t;   // MoveL의 tool 인자가 컨트롤러 활성 공구를 바꾸므로 추적값 동기.
+        if (rc == 0) { _activeTool = t; _activeUser = u; }   // tool/user 인자가 컨트롤러 활성 프레임을 바꾸므로 추적값 동기.
         return rc;
     }
 
@@ -330,19 +400,105 @@ public class FairinoRpcClient : IDisposable
     public Task<int> MoveByOffsetAsync(double[] anchorPose, int user, double[] offset, int? tool = null, double? vel = null, CancellationToken ct = default)
         => MoveLAsync(anchorPose, tool: tool, user: user, vel: vel, offsetFlag: 1, offsetPos: offset, ct: ct);
 
-    /// <summary>관절 이동(MoveJ). jointPos = 6축 각도, descPose = 대응 직교 포즈(0이면 컨트롤러가 정기구학 계산).</summary>
+    /// <summary>
+    /// tool 좌표계 기준으로 앵커 포즈에서 offset만큼 이동. offset_flag=2(tool 좌표 오프셋) 사용.
+    /// 회전 오프셋이 tool 프레임 축으로 적용되므로, 툴 프레임에서 측정한 자세 보정에 쓴다.
+    /// anchorPose는 베이스 기준 유효 TCP 포즈(IK 계산용). offset=[dx,dy,dz,drx,dry,drz].
+    /// </summary>
+    public Task<int> MoveByToolOffsetAsync(double[] anchorPose, int user, double[] offset, int? tool = null, double? vel = null, CancellationToken ct = default)
+        => MoveLAsync(anchorPose, tool: tool, user: user, vel: vel, offsetFlag: 2, offsetPos: offset, ct: ct);
+
+    /// <summary>관절 이동(MoveJ). jointPos = 6축 각도, descPose = 대응 직교 포즈.
+    /// ⚠ 실물 펌웨어는 desc_pos=0(전부 0)을 rc=154(관절 지령점 오류)로 거부한다 — joint_pos 에 대응하는
+    /// 유효 pose 가 필요하므로, 0 배열/미제공이면 정기구학(GetForwardKin)으로 채워 보낸다.</summary>
     public async Task<int> MoveJAsync(double[] jointPos, double[] descPose, int? tool = null, int? user = null,
                                       double? vel = null, double acc = 0, double ovl = 100, double blendT = -1,
                                       CancellationToken ct = default)
     {
         int t = tool ?? _settings.DefaultToolId;
+        int u = user ?? _settings.DefaultUserId;
+        if (descPose is null || descPose.All(v => v == 0.0))
+        {
+            // descPose 를 정기구학으로 채운다. 이 펌웨어의 GetForwardKin 은 '현재 활성 작업물 프레임'
+            // 기준 pose 를 주므로, GetForwardKinInBaseAsync 로 베이스 pose 를 만들어 desc_pos↔user
+            // 프레임을 일치시킨다. FK-채움 호출부(관절 조그·ResetActiveFrameAsync)는 모두 user=0(베이스)
+            // 이므로 베이스 desc 가 맞다(불일치 시 rc=154). 관절 이동이라 tool 값은 물리 결과와 무관하나,
+            // FK 는 활성 공구 기준이므로 tool 도 활성 공구로 맞춘다.
+            t = await ResolveActiveToolAsync(ct);
+            descPose = await GetForwardKinInBaseAsync(jointPos, ct);
+        }
         var rc = await InvokeAsync("MoveJ", p => ToErr(p.MoveJ(
                 jointPos, descPose,
-                t, user ?? _settings.DefaultUserId,
+                t, u,
                 vel ?? _settings.DefaultVelPct, acc, ovl,
                 new double[4], blendT, 0, new double[6])), ct, faultRecovery: false);
-        if (rc == 0) _activeTool = t;   // MoveJ의 tool 인자가 컨트롤러 활성 공구를 바꾸므로 추적값 동기.
+        if (rc != 0)
+            _logger.LogWarning("{Name} MoveJ rc={Rc} (tool={T}, user={U}, j=[{J}], desc=[{D}])",
+                _settings.Name, rc, t, u,
+                string.Join(",", jointPos.Select(x => x.ToString("0.##"))),
+                string.Join(",", descPose.Select(x => x.ToString("0.##"))));
+        if (rc == 0) { _activeTool = t; _activeUser = u; }   // tool/user 인자가 컨트롤러 활성 프레임을 바꾸므로 추적값 동기.
         return rc;
+    }
+
+    /// <summary>현재 활성 작업물(User) 좌표계 번호. flag 0=블로킹,1=논블로킹. 미지원 펌웨어면 null.
+    /// GetActualTCPNum 처럼 이 펌웨어는 미지원일 수 있어(errcode=-1) 예외/형식불일치를 null로 흡수하고
+    /// 실패 사유를 로그로 남긴다(추적 캐시 _activeUser 로 폴백하게 함).</summary>
+    public async Task<int?> GetActualWObjNumAsync(int flag = 1, CancellationToken ct = default)
+    {
+        try
+        {
+            var raw = await InvokeAsync("GetActualWObjNum", p => p.GetActualWObjNum(flag), ct);
+            if (raw is object[] a && a.Length >= 2 && ToErr(a[0]) == 0) return (int)ToDouble(a[1]);
+            var err = raw is object[] arr && arr.Length > 0 ? ToErr(arr[0]) : -1;
+            _logger.LogWarning("{Name} 활성 작업물 번호 조회(GetActualWObjNum) 실패 (errcode={Err}) — 추적 캐시로 폴백", _settings.Name, err);
+            return null;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "{Name} 활성 작업물 번호 조회(GetActualWObjNum) 예외 — 추적 캐시로 폴백", _settings.Name);
+            return null;
+        }
+    }
+
+    /// <summary>컨트롤러의 현재 활성 작업물(User) 프레임 번호를 클라이언트 추적값에 <b>수동으로</b> 알린다.
+    /// 이 펌웨어는 활성 프레임 실측 조회(GetActualWObjNum)가 미지원이라, 앱 재시작 후 컨트롤러가 0이 아닌
+    /// 프레임에 있을 때(콜드스타트) 사용자가 알려주는 유일한 경로다. 이후 <see cref="GetForwardKinInBaseAsync"/>
+    /// 가 이 값으로 FK pose 를 베이스로 변환해 조그/초기화의 rc=154(프레임 불일치)를 막는다.</summary>
+    public void SetAssumedActiveUser(int n)
+    {
+        _activeUser = n;
+        _logger.LogInformation("{Name} 활성 작업물 프레임 추적값 수동 설정 → #{N}", _settings.Name, n);
+    }
+
+    /// <summary>시작(연결) 시 20004 상태 패킷에서 읽은 활성 공구/작업물 번호로 추적값을 시딩한다
+    /// (RPC 실측 조회 GetActualTCPNum/WObjNum 이 이 펌웨어에서 errcode=-1/미지원이므로 상태 패킷이 유일한 자동 소스).
+    /// ⚠ 상태 패킷 오프셋이 펌웨어 버전차로 어긋나면 garbage 값이 올 수 있어 <b>범위 검증</b> 후에만 반영한다
+    /// (tool 0~15, user 0~14). 범위 밖이면 무시하고 기존 폴백(0 가정 + 수동 알려주기)을 유지한다.</summary>
+    public void SeedActiveFrames(int tool, int user)
+    {
+        bool okT = tool is >= 0 and <= 15;
+        bool okU = user is >= 0 and <= 14;
+        if (okT) _activeTool = tool;
+        if (okU) _activeUser = user;
+        _logger.LogInformation("{Name} 시작 시 활성 좌표계 시딩(상태 패킷): tool=#{T}{Tok}, user=#{U}{Uok}",
+            _settings.Name, tool, okT ? "" : "(범위밖·무시)", user, okU ? "" : "(범위밖·무시)");
+    }
+
+    /// <summary>
+    /// MoveJ 로 컨트롤러의 활성 tool/user 좌표계를 재설정한다(활성 프레임 전환 세터 RPC가 없어 이동
+    /// 명령의 user 파라미터가 유일한 수단). MoveJ 는 IK를 쓰지 않아 활성 프레임이 어긋나 있어도 성공한다.
+    /// 현재 관절각을 그대로 지령하므로 실질 무변위. descPose 는 MoveJAsync 가 정기구학으로 채운다.
+    /// 이미 원하는 user 면(GetActualWObjNum 확인 가능 시) 건너뛴다.
+    /// </summary>
+    public async Task<int> ResetActiveFrameAsync(int tool, int user, CancellationToken ct = default)
+    {
+        var cur = await GetActualWObjNumAsync(ct: ct);   // 미지원이면 null → 무조건 재설정
+        if (cur == user) return 0;
+
+        var joints = await GetActualJointPosAsync(ct: ct);
+        return await MoveJAsync(joints, new double[6], tool: tool, user: user, vel: 5, ct: ct);
     }
 
     // ── 점동(JOG) ──────────────────────────────────────────────────
@@ -588,6 +744,8 @@ public class FairinoRpcClient : IDisposable
         _connected = false;
         _proxy = null;
         _stopProxy = null;
+        _activeTool = -1;
+        _activeUser = -1;
         _semaphore.Dispose();
     }
 }

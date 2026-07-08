@@ -32,6 +32,12 @@
     <button class="btn btn-success" @onclick="StartStream" disabled="@(_busy || !Svc.IsConnected || Svc.IsStreaming)">시작</button>
     <button class="btn btn-warning" @onclick="StopStream" disabled="@(_busy || !Svc.IsStreaming)">정지</button>
     <button class="btn btn-outline-secondary" @onclick="Reconnect" disabled="@_busy">재연결</button>
+    @* 조그를 별도 브라우저 팝업 창으로 연다. 네이티브 onclick(직접 사용자 제스처)이라 팝업 차단기에 막히지 않는다.
+       같은 창 이름(cobotJog)이라 이미 열려 있으면 그 창을 재사용/포커스한다. *@
+    <button class="btn btn-outline-primary" type="button"
+            onclick="window.open('/jog','cobotJog','width=1040,height=820,menubar=no,toolbar=no,location=no,resizable=yes')">
+        코봇 조그 (팝업)
+    </button>
 </div>
 
 @* 학습 데이터 캡처 — 현재 RGB·IR·Depth 프레임을 한 폴더에 무손실 저장. *@
@@ -122,6 +128,25 @@
                         </div>
                     </div>
                     <button class="btn btn-sm btn-primary" @onclick="SaveRoi" disabled="@_busy">저장</button>
+                    <button class="btn btn-sm btn-outline-primary" @onclick="VerifyPlane"
+                            disabled="@(_busy || !Svc.IsStreaming || !_roiEnabled || _roiW <= 0 || _roiH <= 0)">
+                        평면 검출 확인
+                    </button>
+
+                    @if (_flatness is { } fr)
+                    {
+                        <div class="mt-2 p-2 border rounded" style="font-size:.85rem">
+                            <div><b>평면 검출 결과</b> <span class="text-muted">(FindFlattest · 5×5 그리드)</span></div>
+                            <div>
+                                가장 평평한 셀: U=<b>@fr.U.ToString("0.000")</b> V=<b>@fr.V.ToString("0.000")</b> ·
+                                σ=<b>@fr.SigmaMm.ToString("0.0")</b> mm
+                                @if (_flatnessStats is { ValidCount: > 0 } s)
+                                {
+                                    <text> · 평균 <b>@s.AvgMm.ToString("0")</b> mm · 유효율 <b>@((s.ValidRatio * 100).ToString("0.0"))</b>%</text>
+                                }
+                            </div>
+                        </div>
+                    }
 
                     <div class="mt-2" style="font-size:.85rem">
                         @if (!_roiEnabled)
@@ -198,6 +223,10 @@ else
     private bool _roiEnabled;
     private double _roiX, _roiY, _roiW, _roiH;
     private DepthRoiStats? _roiStats;
+
+    // 평면 검출(FindFlattest) 단독 검증 결과 — 로봇 이동 없이 깊이 카메라만으로 계산.
+    private CameraService.DepthFlatnessResult? _flatness;
+    private DepthRoiStats? _flatnessStats;
 
     // 최소 깊이값 노이즈 평활용 이동평균 윈도우(최근 10개 샘플).
     private const int MinWindowSize = 10;
@@ -290,6 +319,38 @@ else
             Notify($"캡처 완료: {r.Files.Count}개 파일 저장 ({r.Dir}){extra}", false);
         }
         catch (Exception ex) { Notify($"캡처 실패: {ex.Message}", true); }
+        finally { _busy = false; }
+    }
+
+    // 깊이 카메라 단독으로 ROI 내 가장 평평한 셀을 찾는다(FlatSurfaceAlignStep Phase A와 동일 로직).
+    // 로봇 이동 없음 — 읽기 전용 검증.
+    private async Task VerifyPlane()
+    {
+        if (_busy) return;
+        _busy = true;
+        _message = null;
+        try
+        {
+            ClampRoi();
+            _flatness = Svc.FindFlattest(_roiX, _roiY, _roiW, _roiH);   // 기본 gridSize=5
+            _flatnessStats = Svc.ComputeDepthRoiStats(_roiX, _roiY, _roiW, _roiH);
+            if (_flatness is { } fr)
+            {
+                // FindFlattest 는 셀 중심(U,V)만 반환 → 셀 크기를 ROI/gridSize(5)로 역산해 좌상단 계산.
+                double cellW = _roiW / 5.0, cellH = _roiH / 5.0;
+                double bx = fr.U - cellW / 2, by = fr.V - cellH / 2;
+                try { await JS.InvokeVoidAsync("hdAmrCamera.setFlatCell", _roiCanvas, bx, by, cellW, cellH); }
+                catch { /* 미준비/회로 종료 무시 */ }
+                Notify($"평면 검출 완료: σ={fr.SigmaMm:0.0}mm, 셀({fr.U:0.000},{fr.V:0.000})", false);
+            }
+            else
+            {
+                try { await JS.InvokeVoidAsync("hdAmrCamera.setFlatCell", _roiCanvas, -1.0, -1.0, 0.0, 0.0); }
+                catch { /* 미준비/회로 종료 무시 */ }
+                Notify("평면 검출 실패: 유효 픽셀 부족 또는 ROI가 너무 작습니다(프레임/ROI 확인).", true);
+            }
+        }
+        catch (Exception ex) { Notify($"평면 검출 실패: {ex.Message}", true); }
         finally { _busy = false; }
     }
 
@@ -439,7 +500,17 @@ else
         try { await JS.InvokeVoidAsync("hdAmrCamera.setRoi", _roiCanvas, _roiX, _roiY, _roiW, _roiH, _roiEnabled); }
         catch { /* 미준비/회로 종료 무시 */ }
         _minMmWindow.Clear();   // ROI 변경 → 이전 영역 최소값이 섞이지 않게 평균 재시작.
+        await ClearFlatnessAsync();   // ROI 변경 → 이전 평면 검출 결과/오버레이 무효화.
         UpdateRoiStats();
+    }
+
+    // 평면 검출 결과와 시안 오버레이를 함께 제거(ROI 변경 시 낡은 위치 방지).
+    private async Task ClearFlatnessAsync()
+    {
+        _flatness = null;
+        _flatnessStats = null;
+        try { await JS.InvokeVoidAsync("hdAmrCamera.setFlatCell", _roiCanvas, -1.0, -1.0, 0.0, 0.0); }
+        catch { /* 미준비/회로 종료 무시 */ }
     }
 
     // 캔버스에서 드래그로 ROI 가 그려졌을 때(정규화 좌표) JS 가 호출.
@@ -450,6 +521,7 @@ else
         _roiEnabled = true;
         ClampRoi();
         _minMmWindow.Clear();   // ROI 변경 → 이전 영역 최소값이 섞이지 않게 평균 재시작.
+        _ = ClearFlatnessAsync();   // ROI 변경 → 이전 평면 검출 결과/오버레이 무효화.
         UpdateRoiStats();
         InvokeAsync(StateHasChanged);
     }

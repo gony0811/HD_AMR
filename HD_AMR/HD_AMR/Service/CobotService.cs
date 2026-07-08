@@ -77,6 +77,17 @@ public class CobotService : BackgroundService
 
         var stateTask = _state.RunAsync(stoppingToken);
 
+        // 이동 직전 프레임 해석이 컨트롤러의 실시간 활성 좌표계를 따르도록, 20004 스트림을 RPC 클라이언트에
+        // 연결한다(라이브 우선). 소켓 단절/미수신/스테일(>2초)/미상(-1)이면 null → 추적 캐시로 안전하게 폴백.
+        _rpc.SetLiveActiveFrameProvider(() =>
+        {
+            if (!_state.IsConnected) return null;                                    // 소켓 단절 → 스냅샷 고착 방지
+            if (_state.Latest is not { } s) return null;                             // 미수신
+            if (s.Tool < 0 || s.User < 0) return null;                               // -1 = 미상
+            if (DateTime.UtcNow - s.UpdatedAt > TimeSpan.FromSeconds(2)) return null; // 스테일 방어
+            return (s.Tool, s.User);
+        });
+
         while (!stoppingToken.IsCancellationRequested)
         {
             try
@@ -101,6 +112,17 @@ public class CobotService : BackgroundService
                     // 활성 공구 동기화를 위한 모션은 보내지 않는다. GetTcpPoseInBaseAsync가 공구 오프셋으로
                     // 클라이언트에서 재프레임하므로, FK 앵커와 이동(MoveL)의 공구 프레임은 모션 없이 일치한다
                     // (과거 연결 시 무변위 MoveJ가 rc=154로 거부되던 문제 제거).
+
+                    // 시작 시 활성 좌표계(툴/작업물) 읽기: RPC 실측(GetActualTCPNum/WObjNum)은 이 펌웨어에서
+                    // 미지원(errcode=-1)이므로, 지속 수신 중인 20004 상태 패킷의 tool/user 로 추적값을 시딩한다.
+                    // 첫 패킷 도착까지 최대 ~2초 대기(상태 소켓은 line 78 RunAsync로 이미 구동 중).
+                    for (int k = 0; k < 20 && _state.Latest is null; k++)
+                        await Task.Delay(100, stoppingToken);
+                    if (_state.Latest is { } s)
+                        _rpc.SeedActiveFrames(s.Tool, s.User);
+                    else
+                        _logger.LogWarning("코봇 상태 패킷 미수신 — 활성 좌표계 시딩 생략(수동 확인 필요)");
+
                     _logger.LogInformation("코봇 XML-RPC 연결 완료");
                 }
             }

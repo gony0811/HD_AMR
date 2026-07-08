@@ -170,6 +170,93 @@ public class CameraService : BackgroundService
         return new DepthRoiStats(min, max, avg, validCount, total, ratio, minU, minV);
     }
 
+    /// <summary>
+    /// ROI를 gridSize×gridSize 그리드로 나눠 각 셀의 깊이 표준편차(σ)를 계산하고,
+    /// σ가 최소인 셀(= 가장 평평한 영역)의 정규화 중심 좌표를 반환한다.
+    /// 유효 픽셀이 부족한 셀은 후보에서 제외된다.
+    /// </summary>
+    /// <param name="roiX">ROI 좌상단 X (정규화 0~1).</param>
+    /// <param name="roiY">ROI 좌상단 Y (정규화 0~1).</param>
+    /// <param name="roiW">ROI 폭 (정규화 0~1).</param>
+    /// <param name="roiH">ROI 높이 (정규화 0~1).</param>
+    /// <param name="gridSize">그리드 한 변 셀 수 (예: 5 → 5×5=25셀).</param>
+    /// <param name="minValidRatio">셀 내 유효 픽셀 비율 최소 기준 (0~1). 기본 0.5.</param>
+    /// <returns>가장 평평한 셀의 정규화 중심 (u,v), σ(mm), 유효 여부. 프레임 없거나 후보 없으면 null.</returns>
+    public DepthFlatnessResult? FindFlattest(
+        double roiX, double roiY, double roiW, double roiH,
+        int gridSize = 5, double minValidRatio = 0.5)
+    {
+        var f = _client.LatestDepth;
+        if (f is null) return null;
+
+        var span = MemoryMarshal.Cast<byte, ushort>(f.Pixels);
+        int rx0 = Math.Clamp((int)(roiX * f.Width), 0, f.Width);
+        int ry0 = Math.Clamp((int)(roiY * f.Height), 0, f.Height);
+        int rx1 = Math.Clamp((int)((roiX + roiW) * f.Width), 0, f.Width);
+        int ry1 = Math.Clamp((int)((roiY + roiH) * f.Height), 0, f.Height);
+
+        int roiPxW = rx1 - rx0, roiPxH = ry1 - ry0;
+        if (roiPxW < gridSize || roiPxH < gridSize) return null;
+
+        double bestSigma = double.MaxValue;
+        double bestU = 0.5, bestV = 0.5;
+        bool found = false;
+
+        for (int gy = 0; gy < gridSize; gy++)
+        for (int gx = 0; gx < gridSize; gx++)
+        {
+            int cx0 = rx0 + roiPxW * gx / gridSize;
+            int cy0 = ry0 + roiPxH * gy / gridSize;
+            int cx1 = rx0 + roiPxW * (gx + 1) / gridSize;
+            int cy1 = ry0 + roiPxH * (gy + 1) / gridSize;
+
+            int total = (cx1 - cx0) * (cy1 - cy0);
+            if (total == 0) continue;
+
+            long sum = 0;
+            long sumSq = 0;
+            int valid = 0;
+
+            for (int py = cy0; py < cy1; py++)
+            {
+                int rowBase = py * f.Width;
+                for (int px = cx0; px < cx1; px++)
+                {
+                    int idx = rowBase + px;
+                    if ((uint)idx >= (uint)span.Length) continue;
+                    int d = span[idx];
+                    if (d == 0) continue;
+                    sum += d;
+                    sumSq += (long)d * d;
+                    valid++;
+                }
+            }
+
+            if (valid < total * minValidRatio) continue;
+
+            double mean = (double)sum / valid;
+            double variance = (double)sumSq / valid - mean * mean;
+            double sigma = Math.Sqrt(Math.Max(0, variance));
+
+            if (sigma < bestSigma)
+            {
+                bestSigma = sigma;
+                // 셀 중심의 정규화 좌표
+                bestU = ((cx0 + cx1) / 2.0) / f.Width;
+                bestV = ((cy0 + cy1) / 2.0) / f.Height;
+                found = true;
+            }
+        }
+
+        return found ? new DepthFlatnessResult(bestU, bestV, bestSigma) : null;
+    }
+
+    /// <summary>깊이 그리드 평탄도 분석 결과.</summary>
+    /// <param name="U">가장 평평한 셀 중심의 정규화 X (0~1).</param>
+    /// <param name="V">가장 평평한 셀 중심의 정규화 Y (0~1).</param>
+    /// <param name="SigmaMm">해당 셀의 깊이 표준편차(mm). 작을수록 평평.</param>
+    public sealed record DepthFlatnessResult(double U, double V, double SigmaMm);
+
     /// <summary>최신 깊이 프레임을 컬러라이즈 → JPEG 인코딩한다. 프레임이 없으면 null.</summary>
     public Task<byte[]?> GetLatestDepthJpegAsync(int quality, CancellationToken ct = default)
     {
