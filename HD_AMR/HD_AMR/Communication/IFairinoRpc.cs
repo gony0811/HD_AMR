@@ -104,6 +104,10 @@ public interface IFairinoRpc : IXmlRpcProxy
     [XmlRpcMethod("GetActualTCPNum")]
     object GetActualTCPNum(int flag);
 
+    /// <summary>현재 활성 작업물(User) 좌표계 번호 조회. flag: 0=블로킹,1=논블로킹. 반환 [errcode, wobjNum].</summary>
+    [XmlRpcMethod("GetActualWObjNum")]
+    object GetActualWObjNum(int flag);
+
     /// <summary>
     /// 현재 TCP 직교 포즈 조회. flag: 0=블로킹,1=논블로킹(좌표계 선택 아님).
     /// ⚠ 반환 포즈는 현재 활성 작업물(user) 좌표계 기준이다. BASE 기준 포즈는 GetForwardKin으로 구할 것.

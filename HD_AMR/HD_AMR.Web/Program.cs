@@ -4,6 +4,8 @@ using HD_AMR.Communication.Vision;
 using HD_AMR.Communication.Weld;
 using HD_AMR.Data;
 using HD_AMR.Service;
+using HD_AMR.Service.Sequence;
+using HD_AMR.Service.Sequence.Steps;
 using HD_AMR.Web.Components;
 using Microsoft.EntityFrameworkCore;
 
@@ -44,8 +46,7 @@ builder.Services.Configure<VisionInterfaceSettings>(
 builder.Services.AddSingleton<VisionInterfaceService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<VisionInterfaceService>());
 
-// 레이저 변위 센서(EtherNet/IP). 싱글톤 + 호스티드. 다른 장치와 달리 상시 자동 접속이 아니라
-// 페이지의 [연결]/[해제] 버튼으로 켜고 끄는 재접속 루프(_enabled 게이팅) — appsettings 의 AutoConnect 로 초기값 결정.
+// 레이저 변위 센서(EtherNet/IP). AMR/Cobot/Camera 와 동일 패턴(싱글톤 + 호스티드) — 기동 시 상시 자동 접속, 실패 시 재시도.
 builder.Services.Configure<LaserDisplacementSensorSettings>(
     builder.Configuration.GetSection("LaserDisplacementSensor"));
 builder.Services.AddSingleton<LaserDisplacementSensorService>();
@@ -92,6 +93,13 @@ builder.Services.AddDbContext<HdAmrDbContext>(opt =>
 builder.Services.AddScoped<DrawingService>();
 builder.Services.AddScoped<TeachingService>();
 builder.Services.AddScoped<ParameterService>();
+
+// 시퀀스 단계 등록 (ISequenceStep). 새 단계 추가 시 여기에 한 줄만 추가.
+builder.Services.AddScoped<ISequenceStep, AmrMoveStep>();
+builder.Services.AddScoped<ISequenceStep, CobotInspectionMoveStep>();
+builder.Services.AddScoped<ISequenceStep, CameraAlignStep>();
+builder.Services.AddScoped<ISequenceStep, FlatSurfaceAlignStep>();
+builder.Services.AddScoped<SequenceService>();
 builder.Services.AddScoped<HD_AMR.Web.Services.LabelDataService>();
 // DL 학습 오케스트레이터 — 학습 프로세스가 페이지 이동/서킷과 무관하게 살아 있어야 하므로 싱글톤.
 builder.Services.AddSingleton<HD_AMR.Web.Services.WeldTrainingService>();
@@ -181,10 +189,25 @@ CREATE TABLE IF NOT EXISTS TeachingPositions (
     Tool INTEGER NOT NULL DEFAULT 1,
     CapturedAt TEXT NULL,
     CreatedAt TEXT NOT NULL,
-    UpdatedAt TEXT NOT NULL
+    UpdatedAt TEXT NOT NULL,
+    UserFrame INTEGER NULL,
+    RelX REAL NULL, RelY REAL NULL, RelZ REAL NULL,
+    RelRx REAL NULL, RelRy REAL NULL, RelRz REAL NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS IX_TeachingPositions_Key ON TeachingPositions (""Key"");
 ");
+
+    // 기존 TeachingPositions 에 작업물 좌표계(추종 절대위치) 컬럼이 없으면 추가(기존 데이터 보존).
+    // SQLite는 ADD COLUMN IF NOT EXISTS 미지원 → pragma 로 확인 후에만 ALTER.
+    foreach (var col in new[] { "UserFrame INTEGER", "RelX REAL", "RelY REAL", "RelZ REAL", "RelRx REAL", "RelRy REAL", "RelRz REAL" })
+    {
+        var name = col.Split(' ')[0];
+        var exists = db.Database
+            .SqlQueryRaw<long>($"SELECT COUNT(*) AS Value FROM pragma_table_info('TeachingPositions') WHERE name = '{name}'")
+            .AsEnumerable().First() > 0;
+        if (!exists)
+            db.Database.ExecuteSqlRaw($"ALTER TABLE TeachingPositions ADD COLUMN {col} NULL;");
+    }
 
     // Backward-compatible schema add for Parameters (범용 key/value 설정 저장소; 기존 데이터 보존).
     db.Database.ExecuteSqlRaw(@"

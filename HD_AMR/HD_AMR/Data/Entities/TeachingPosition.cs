@@ -37,6 +37,19 @@ public class TeachingPosition
     /// <summary>캡처 시 활성 tool id(BASE 자세를 읽고 이동할 때 동일 tool을 사용해야 일관성 유지).</summary>
     public int Tool { get; set; }
 
+    /// <summary>작업물(User) 좌표계 번호. null/0 = 베이스 기준(기존 동작). N&gt;0 이면
+    /// 이 위치는 작업물 좌표계 N 기준으로 고정되어, 프레임 N 재등록 시 목표가 따라간다.
+    /// 상대 pose는 <see cref="RelX"/>..<see cref="RelRz"/>에 보관.</summary>
+    public int? UserFrame { get; set; }
+
+    // 작업물 좌표계 N 기준 상대 pose (mm/deg) — UserFrame&gt;0 일 때만 채워짐.
+    public double? RelX { get; set; }
+    public double? RelY { get; set; }
+    public double? RelZ { get; set; }
+    public double? RelRx { get; set; }
+    public double? RelRy { get; set; }
+    public double? RelRz { get; set; }
+
     /// <summary>마지막 티칭(현재 위치 저장) 시각. 미티칭이면 null.</summary>
     public DateTime? CapturedAt { get; set; }
 

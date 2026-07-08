@@ -65,8 +65,12 @@ public class TeachingService
     public Task<TeachingPosition?> GetAsync(int id, CancellationToken ct = default) =>
         _db.TeachingPositions.AsNoTracking().FirstOrDefaultAsync(p => p.Id == id, ct);
 
-    /// <summary>해당 슬롯에 현재 BASE 자세(pose[6]: x,y,z,rx,ry,rz)와 관절각(joints[6])을 저장한다.</summary>
-    public async Task SaveCaptureAsync(int id, double[] pose, double[] joints, int tool, CancellationToken ct = default)
+    /// <summary>해당 슬롯에 현재 BASE 자세(pose[6]: x,y,z,rx,ry,rz)와 관절각(joints[6])을 저장한다.
+    /// <paramref name="userFrame"/>&gt;0 이면 작업물 좌표계 N 기준으로 고정하고, 그 프레임 기준 상대
+    /// pose(<paramref name="relPose"/>[6])를 함께 저장한다(프레임 N 재등록 시 목표가 따라감).
+    /// 0/null 이면 베이스 기준(기존 동작).</summary>
+    public async Task SaveCaptureAsync(int id, double[] pose, double[] joints, int tool,
+        int? userFrame = null, double[]? relPose = null, CancellationToken ct = default)
     {
         var p = await _db.TeachingPositions.FirstOrDefaultAsync(x => x.Id == id, ct);
         if (p == null) throw new InvalidOperationException($"Teaching slot {id} not found.");
@@ -76,6 +80,19 @@ public class TeachingService
         p.J1 = joints[0]; p.J2 = joints[1]; p.J3 = joints[2];
         p.J4 = joints[3]; p.J5 = joints[4]; p.J6 = joints[5];
         p.Tool = tool;
+
+        if (userFrame is int n && n > 0 && relPose is { Length: >= 6 })
+        {
+            p.UserFrame = n;
+            p.RelX = relPose[0]; p.RelY = relPose[1]; p.RelZ = relPose[2];
+            p.RelRx = relPose[3]; p.RelRy = relPose[4]; p.RelRz = relPose[5];
+        }
+        else
+        {
+            p.UserFrame = null;
+            p.RelX = p.RelY = p.RelZ = p.RelRx = p.RelRy = p.RelRz = null;
+        }
+
         var now = DateTime.UtcNow;
         p.CapturedAt = now;
         p.UpdatedAt = now;
@@ -90,6 +107,8 @@ public class TeachingService
 
         p.X = p.Y = p.Z = p.Rx = p.Ry = p.Rz = null;
         p.J1 = p.J2 = p.J3 = p.J4 = p.J5 = p.J6 = null;
+        p.UserFrame = null;
+        p.RelX = p.RelY = p.RelZ = p.RelRx = p.RelRy = p.RelRz = null;
         p.CapturedAt = null;
         p.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);

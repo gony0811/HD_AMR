@@ -2,14 +2,15 @@
 @rendermode InteractiveServer
 @using HD_AMR.Models
 @using HD_AMR.Service
+@using HD_AMR.Communication
 @implements IDisposable
 @inject LaserDisplacementSensorService Svc
-@inject ILogger<LaserDisplacementSensor> Logger
+@inject CobotService Cobot
 
 <PageTitle>Laser Displacement Sensor</PageTitle>
 
 <h1 class="page-title">Laser Displacement Sensor</h1>
-<p class="page-subtitle">레이저 변위 센서 — EtherNet/IP 통신 연결 및 3채널 변위 측정</p>
+<p class="page-subtitle">레이저 변위 센서 — EtherNet/IP 통신 연결 및 3채널 거리 측정</p>
 
 <div class="card card-surface mb-3" style="max-width: 720px;">
     <div class="card-body">
@@ -20,37 +21,11 @@
             </span>
         </div>
 
-        <div class="row g-2 align-items-end">
-            <div class="col-sm-7">
-                <label class="form-label mb-1">IP 주소</label>
-                <input class="form-control" @bind="Svc.Settings.IpAddress"
-                       disabled="@(_busy || Svc.IsConnected)" />
-            </div>
-            <div class="col-sm-5">
-                <label class="form-label mb-1">포트</label>
-                <input type="number" class="form-control" @bind="Svc.Settings.Port"
-                       disabled="@(_busy || Svc.IsConnected)" />
-            </div>
-        </div>
+        @* 다른 모듈(AMR/Camera 등)과 동일하게 상시 자동 접속 — 수동 연결/해제 없이 상태만 표시.
+           대상 IP/포트는 appsettings 로 설정하며 여기서는 참고용으로만 노출한다. *@
+        <div class="text-muted small">대상: @Svc.Settings.IpAddress:@Svc.Settings.Port</div>
 
-        <div class="d-flex gap-2 mt-3">
-            <button class="btn btn-primary" @onclick="Connect"
-                    disabled="@(_busy || Svc.IsConnected)">
-                연결
-            </button>
-            <button class="btn btn-outline-secondary" @onclick="Disconnect"
-                    disabled="@(_busy || !Svc.IsConnected)">
-                연결 해제
-            </button>
-        </div>
-
-        @if (!string.IsNullOrEmpty(_message))
-        {
-            <div class="alert @(_isError ? "alert-danger" : "alert-success") mt-3 mb-0 py-2">
-                @_message
-            </div>
-        }
-        else if (!string.IsNullOrEmpty(Svc.LastError))
+        @if (!string.IsNullOrEmpty(Svc.LastError))
         {
             <div class="alert alert-warning mt-3 mb-0 py-2">
                 마지막 연결 오류: @Svc.LastError
@@ -62,7 +37,7 @@
 <div class="card card-surface" style="max-width: 720px;">
     <div class="card-body">
         <div class="d-flex align-items-center justify-content-between mb-3">
-            <h5 class="card-title mb-0">측정값 (변위)</h5>
+            <h5 class="card-title mb-0">측정값 (거리)</h5>
             <div class="d-flex gap-2">
                 <button class="btn btn-sm btn-outline-primary" @onclick="ZeroSetAll"
                         disabled="@(!Svc.IsConnected)">전체 영점 설정</button>
@@ -73,7 +48,7 @@
 
         @if (!Svc.IsConnected)
         {
-            <div class="text-muted">연결되면 채널별 변위가 실시간으로 표시됩니다.</div>
+            <div class="text-muted">연결되면 채널별 거리가 실시간으로 표시됩니다.</div>
         }
         else
         {
@@ -81,7 +56,7 @@
                 <thead>
                     <tr>
                         <th style="width: 70px;">채널</th>
-                        <th class="text-end">변위</th>
+                        <th class="text-end">거리</th>
                         <th>상태</th>
                         <th style="width: 190px;">영점</th>
                     </tr>
@@ -92,7 +67,7 @@
                         <tr>
                             <td><strong>CH@(r.Channel)</strong></td>
                             <td class="text-end">
-                                @* 변위 숫자는 Enabled 여부와 무관하게 항상 표시(범위밖이면 흐리게).
+                                @* 거리 숫자는 Enabled 여부와 무관하게 항상 표시(범위밖이면 흐리게).
                                    유효성은 옆의 "상태" 배지로 구분한다. *@
                                 <span class="fs-5 fw-semibold @(r.Enabled ? "" : "text-muted")">@r.Value.ToString("F3")</span>
                                 <span class="text-muted ms-1">@Svc.Settings.MeasurementUnit</span>
@@ -135,44 +110,8 @@
                 </tbody>
             </table>
 
-            @* 평면 기울기(3점 측정 → cobot base 기준 rx/ry/rz). 3점 거리는 법선(2 DOF)만 결정하므로
-               rz 는 항상 0(요각 미관측). 헤드 기하/부호는 appsettings 로 튜닝. *@
-            <div class="mt-3 pt-3 border-top">
-                <div class="d-flex align-items-center justify-content-between mb-2">
-                    <h6 class="mb-0">평면 기울기 (cobot base 기준)</h6>
-                    <span class="badge @(_tilt.Valid ? "bg-success" : "bg-secondary")">
-                        @(_tilt.Valid ? "계산됨" : "대기")
-                    </span>
-                </div>
-
-                @if (_tilt.Valid)
-                {
-                    <div class="row g-2 text-center">
-                        <div class="col-4">
-                            <div class="small text-muted">Rx</div>
-                            <div class="fs-5 fw-semibold">@_tilt.RxDeg.ToString("F3")<span class="small text-muted">°</span></div>
-                        </div>
-                        <div class="col-4">
-                            <div class="small text-muted">Ry</div>
-                            <div class="fs-5 fw-semibold">@_tilt.RyDeg.ToString("F3")<span class="small text-muted">°</span></div>
-                        </div>
-                        <div class="col-4" title="3점 거리로는 요각(법선축 둘레 회전) 미관측 → 0 고정">
-                            <div class="small text-muted">Rz</div>
-                            <div class="fs-5 fw-semibold text-muted">@_tilt.RzDeg.ToString("F3")<span class="small">°</span></div>
-                        </div>
-                    </div>
-                    <div class="small text-muted mt-2">
-                        법선(base): (@_tilt.Normal[0].ToString("F4"), @_tilt.Normal[1].ToString("F4"), @_tilt.Normal[2].ToString("F4"))
-                    </div>
-                }
-                else
-                {
-                    <div class="text-muted small">@_tilt.Note</div>
-                }
-            </div>
-
             @* 삼각형 평면 중심 pose (툴 좌표계). 헤드가 툴에 고정되어 로봇 자세 없이 계산.
-               x,y=헤드 XY 평균, z=standoff+변위평균, rx/ry/rz=평면 자세(X=Ch1→Ch3). *@
+               x,y=헤드 XY 평균, z=standoff+거리평균, rx/ry/rz=평면 기울기(Rz=0, 툴축 기준). *@
             <div class="mt-3 pt-3 border-top">
                 <div class="d-flex align-items-center justify-content-between mb-2">
                     <h6 class="mb-0">삼각형 평면 중심 (툴 좌표계)</h6>
@@ -184,12 +123,11 @@
                 @if (_pose.Valid)
                 {
                     <div class="row g-2 text-center">
-                        <div class="col-2"><div class="small text-muted">X</div><div class="fw-semibold">@_pose.X.ToString("F3")</div></div>
-                        <div class="col-2"><div class="small text-muted">Y</div><div class="fw-semibold">@_pose.Y.ToString("F3")</div></div>
-                        <div class="col-2"><div class="small text-muted">Z</div><div class="fw-semibold">@_pose.Z.ToString("F3")</div></div>
-                        <div class="col-2"><div class="small text-muted">Rx</div><div class="fw-semibold">@_pose.Rx.ToString("F3")<span class="small text-muted">°</span></div></div>
-                        <div class="col-2"><div class="small text-muted">Ry</div><div class="fw-semibold">@_pose.Ry.ToString("F3")<span class="small text-muted">°</span></div></div>
-                        <div class="col-2"><div class="small text-muted">Rz</div><div class="fw-semibold">@_pose.Rz.ToString("F3")<span class="small text-muted">°</span></div></div>
+                        <div class="col"><div class="small text-muted">X</div><div class="fw-semibold">@_pose.X.ToString("F3")</div></div>
+                        <div class="col"><div class="small text-muted">Y</div><div class="fw-semibold">@_pose.Y.ToString("F3")</div></div>
+                        <div class="col"><div class="small text-muted">Z</div><div class="fw-semibold">@_pose.Z.ToString("F3")</div></div>
+                        <div class="col"><div class="small text-muted">Rx</div><div class="fw-semibold">@_pose.Rx.ToString("F3")<span class="small text-muted">°</span></div></div>
+                        <div class="col"><div class="small text-muted">Ry</div><div class="fw-semibold">@_pose.Ry.ToString("F3")<span class="small text-muted">°</span></div></div>
                     </div>
                     <div class="small text-muted mt-2">
                         위치 mm · 회전 도(ZYX) · 법선(툴): (@_pose.Normal[0].ToString("F4"), @_pose.Normal[1].ToString("F4"), @_pose.Normal[2].ToString("F4"))
@@ -198,6 +136,65 @@
                 else
                 {
                     <div class="text-muted small">@_pose.Note</div>
+                }
+            </div>
+
+            @* 툴 자세 보정: 측정 평면 기울기(Rx, Ry)를 tool=1 프레임 회전 오프셋으로 실제 로봇에 적용한다.
+               위치는 고정, Rz 는 적용하지 않는다(3점 거리로 yaw 미결정). 로봇을 물리적으로 움직이므로
+               서보 ON + 연결 상태에서만 활성화하고 저속으로 적용한다. *@
+            <div class="mt-3 pt-3 border-top">
+                <div class="d-flex align-items-center justify-content-between mb-2">
+                    <h6 class="mb-0">툴 자세 보정 (Rx, Ry)</h6>
+                    <span class="badge @(Cobot.IsConnected ? "bg-success" : "bg-secondary")">
+                        @(Cobot.IsConnected ? "로봇 연결됨" : "로봇 끊김")
+                    </span>
+                </div>
+
+                @if (_pose.Valid)
+                {
+                    <div class="row g-2 text-center mb-2" style="max-width: 300px;">
+                        <div class="col-6">
+                            <div class="small text-muted">적용 Rx</div>
+                            <div class="fs-5 fw-semibold">@AppliedRx.ToString("F3")<span class="small text-muted">°</span></div>
+                        </div>
+                        <div class="col-6">
+                            <div class="small text-muted">적용 Ry</div>
+                            <div class="fs-5 fw-semibold">@AppliedRy.ToString("F3")<span class="small text-muted">°</span></div>
+                        </div>
+                    </div>
+                }
+                else
+                {
+                    <div class="text-muted small mb-2">평면이 계산되면 적용할 Rx, Ry 가 표시됩니다.</div>
+                }
+
+                <div class="d-flex align-items-center gap-2">
+                    <label class="small text-muted mb-0">속도(%)</label>
+                    <input type="number" class="form-control form-control-sm" style="width: 90px;"
+                           min="1" max="30" step="1" @bind="_velPct" />
+                    <button class="btn btn-sm btn-warning" @onclick="ApplyCorrectionAsync"
+                            disabled="@(!Cobot.IsConnected || !Cobot.IsServoEnabled || !_pose.Valid || _applying)">
+                        @if (_applying)
+                        {
+                            <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
+                            <span>적용 중…</span>
+                        }
+                        else
+                        {
+                            <span>보정 적용</span>
+                        }
+                    </button>
+                    @if (!Cobot.IsServoEnabled)
+                    {
+                        <span class="small text-muted">서보 ON 필요</span>
+                    }
+                </div>
+
+                @if (!string.IsNullOrEmpty(_cobotMsg))
+                {
+                    <div class="alert @(_cobotMsg!.Contains("완료") ? "alert-success" : "alert-warning") mt-2 mb-0 py-2 small">
+                        @_cobotMsg
+                    </div>
                 }
             </div>
 
@@ -232,17 +229,20 @@
 </div>
 
 @code {
-    private bool _busy;
-    private bool _isError;
-    private string? _message;
-
     private IReadOnlyList<LaserChannelReading> _readings = Array.Empty<LaserChannelReading>();
-
-    // 평면 기울기(base 기준 rx/ry/rz). 매 폴링마다 3채널 측정으로 갱신.
-    private PlaneTilt _tilt = PlaneTilt.Invalid("연결 대기 중.");
 
     // 삼각형 평면 중심 pose(툴 좌표계 x,y,z,rx,ry,rz). 매 폴링마다 갱신.
     private PlanePose _pose = PlanePose.Invalid("연결 대기 중.");
+
+    // 툴 자세 보정: 측정 평면 기울기(Rx, Ry)를 툴프레임 회전 오프셋으로 적용.
+    private double _velPct = 5;        // 보정 이동 속도(%) — 안전 기본 저속.
+    private bool _applying;
+    private string? _cobotMsg;
+
+    // 실장비 검증 부호: 툴을 +Rx 회전 → 측정 Rx 가 −로 수렴(gain≈−1)이므로 offset=+Rx.
+    // 툴을 +Ry 회전 → 측정 Ry 가 +로 발산(gain≈+1)이므로 offset=−Ry(반전).
+    private double AppliedRx => _pose.Rx;
+    private double AppliedRy => -_pose.Ry;
 
     // 진단(Input Assembly 원본 hex) 상태.
     private byte[]? _dumpBytes;
@@ -269,7 +269,6 @@
                 if (Svc.IsConnected)
                 {
                     _readings = Svc.GetReadings();
-                    _tilt = Svc.GetPlaneTilt();
                     _pose = Svc.GetPlanePose();
                     _dumpBytes = Svc.SnapshotInputAssembly();
                     _hexDump = FormatHex(_dumpBytes);
@@ -280,59 +279,6 @@
         catch (OperationCanceledException)
         {
             // 페이지 폐기 — 정상 종료.
-        }
-    }
-
-    private async Task Connect()
-    {
-        if (_busy) return;
-        _busy = true;
-        _message = null;
-        try
-        {
-            await Svc.ConnectAsync();
-            _isError = false;
-            _message = $"{Svc.Settings.IpAddress}:{Svc.Settings.Port} 연결됨.";
-        }
-        catch (Exception ex)
-        {
-            Logger.LogError(ex, "레이저 변위 센서 연결 실패");
-            _isError = true;
-            _message = $"연결 실패: {ex.Message}";
-        }
-        finally
-        {
-            _busy = false;
-            await InvokeAsync(StateHasChanged);
-        }
-    }
-
-    private async Task Disconnect()
-    {
-        if (_busy) return;
-        _busy = true;
-        _message = null;
-        try
-        {
-            await Svc.DisconnectAsync();
-            _readings = Array.Empty<LaserChannelReading>();
-            _tilt = PlaneTilt.Invalid("연결 대기 중.");
-            _pose = PlanePose.Invalid("연결 대기 중.");
-            _dumpBytes = null;
-            _hexDump = "(프레임 없음)";
-            _isError = false;
-            _message = "연결이 해제되었습니다.";
-        }
-        catch (Exception ex)
-        {
-            Logger.LogError(ex, "레이저 변위 센서 연결 해제 실패");
-            _isError = true;
-            _message = $"연결 해제 실패: {ex.Message}";
-        }
-        finally
-        {
-            _busy = false;
-            await InvokeAsync(StateHasChanged);
         }
     }
 
@@ -381,6 +327,40 @@
     {
         Svc.ZeroResetAll();
         _readings = Svc.GetReadings();
+    }
+
+    // 측정 평면 기울기(Rx, Ry)를 tool=1 프레임의 회전 오프셋으로 실제 로봇에 적용(자세 보정 이동).
+    // 위치는 고정, Rz=0(3점 거리로 yaw 미결정). anchor 는 모션 없이 조회한 베이스 기준 TCP pose.
+    private async Task ApplyCorrectionAsync()
+    {
+        if (_applying) return;
+        if (!_pose.Valid)
+        {
+            _cobotMsg = "평면 계산이 필요합니다.";
+            return;
+        }
+
+        _applying = true;
+        _cobotMsg = null;
+        try
+        {
+            var offset = new[] { 0.0, 0.0, 0.0, AppliedRx, AppliedRy, 0.0 };
+            var anchor = await Cobot.Rpc.GetTcpPoseInBaseAsync(1);
+            var rc = await Cobot.Rpc.MoveByToolOffsetAsync(anchor, user: 0, offset,
+                tool: 1, vel: Math.Clamp(_velPct, 1, 30));
+
+            _cobotMsg = rc == 0
+                ? $"보정 적용 완료 (Rx={AppliedRx:0.###}°, Ry={AppliedRy:0.###}°)."
+                : $"보정 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.";
+        }
+        catch (Exception ex)
+        {
+            _cobotMsg = $"보정 적용 오류: {ex.Message}";
+        }
+        finally
+        {
+            _applying = false;
+        }
     }
 
     public void Dispose()
