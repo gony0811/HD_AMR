@@ -35,7 +35,8 @@ public sealed class DlWeldVisionDetector : IDlWeldVisionDetector
         double? peakCrossStart = null, double? peakCrossEnd = null)
     {
         var modality = p.Mode == WeldImageMode.Ir ? "ir" : "rgb";
-        var modelPath = p.DlModelPath ?? ResolveModelPath(modality);
+        // 명시 경로가 있으면 그걸, 없으면(빈 문자열 포함) 모달리티로 자동 해석.
+        var modelPath = string.IsNullOrWhiteSpace(p.DlModelPath) ? ResolveModelPath(modality) : p.DlModelPath;
         if (modelPath is null || !File.Exists(modelPath))
             return WeldDetectionResult.Fail(
                 $"DL 모델이 없습니다: weld_seg_{modality}.onnx — 비전 학습에서 ② 학습 → ③ 내보내기({modality})를 먼저 완료하세요.");

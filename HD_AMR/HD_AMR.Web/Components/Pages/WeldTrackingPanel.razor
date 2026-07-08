@@ -5,6 +5,7 @@
 @inject WeldTrackingService Svc
 @inject CameraService Cam
 @inject LabelDataService Lbl
+@inject WeldTrainingService Train
 @inject NavigationManager Nav
 @inject IJSRuntime JS
 @implements IAsyncDisposable
@@ -149,6 +150,22 @@
                     </span>
                 </div>
                 <div class="card-body">
+                    @* 사용할 .onnx 모델 선택. '자동'이면 입력 모달리티로 weld_seg_{ir|rgb}.onnx 를 찾는다. *@
+                    <div class="row g-2 align-items-end mb-1">
+                        <div class="col-auto" title="이 검출에 쓸 학습 모델(.onnx). '자동'은 입력 모달리티에 맞춰 weld_seg_ir/rgb.onnx 사용.">
+                            <label class="form-label mb-0 small">모델 ⓘ</label>
+                            <div class="d-flex gap-1">
+                                <select class="form-select form-select-sm" style="min-width:210px" @bind="Svc.Params.DlModelPath" @bind:after="LivePreview">
+                                    <option value="">자동 (weld_seg_@(Svc.Params.Mode == WeldImageMode.Ir ? "ir" : "rgb").onnx)</option>
+                                    @foreach (var m in _models)
+                                    {
+                                        <option value="@m.Path">@m.Name</option>
+                                    }
+                                </select>
+                                <button class="btn btn-sm btn-outline-secondary" @onclick="LoadModels" title="모델 목록 새로고침">⟳</button>
+                            </div>
+                        </div>
+                    </div>
                     <div class="row g-2 align-items-end">
                         <div class="col-auto" title="검출 입력 영상 = 학습한 모델의 모달리티와 맞춰야 함. IR이면 weld_seg_ir.onnx 사용.">
                             <label class="form-label mb-0 small">입력 ⓘ</label>
@@ -183,7 +200,7 @@
                         </div>
                     </div>
                     <div class="small mt-2 @(Svc.DetectorAvailable ? "text-muted" : "text-danger")">
-                        모델: <code>weld_seg_@(Svc.Params.Mode == WeldImageMode.Ir ? "ir" : "rgb").onnx</code>
+                        사용 모델: <code>@EffectiveModelName</code>
                         — <a href="/vision-training">비전 학습</a>에서 ①변환→②학습→③내보내기로 생성/갱신합니다.
                     </div>
                     <div class="small text-muted mt-1">위치 오차 <b>d</b> 의 기준선: <b>FOV 중심</b>(회색 센터선) 고정.</div>
@@ -457,7 +474,23 @@
     private string EditorStreamSrc =>
         (Svc.Params.Mode == WeldImageMode.Ir ? "/camera/ir.mjpeg" : "/camera/color.mjpeg") + "?k=" + _editorKey;
 
+    private List<ModelInfo> _models = new();
+
+    /// <summary>현재 검출에 실제로 쓰이는 모델 표시명. 선택 없으면 모달리티 자동 이름.</summary>
+    private string EffectiveModelName => string.IsNullOrWhiteSpace(Svc.Params.DlModelPath)
+        ? $"weld_seg_{(Svc.Params.Mode == WeldImageMode.Ir ? "ir" : "rgb")}.onnx (자동)"
+        : System.IO.Path.GetFileName(Svc.Params.DlModelPath);
+
     protected override void OnInitialized() => _ref = DotNetObjectReference.Create(this);
+
+    protected override async Task OnInitializedAsync() => await LoadModels();
+
+    /// <summary>DL 카드 모델 드롭다운 목록 로드(모델 폴더의 .onnx). 내보내기 후 ⟳ 로 갱신.</summary>
+    private async Task LoadModels()
+    {
+        try { _models = await Train.ListModelsAsync(); }
+        catch { _models = new(); }
+    }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
