@@ -145,6 +145,17 @@
                                     <text> · 평균 <b>@s.AvgMm.ToString("0")</b> mm · 유효율 <b>@((s.ValidRatio * 100).ToString("0.0"))</b>%</text>
                                 }
                             </div>
+                            @if (_centerOffset is { } co)
+                            {
+                                <div>
+                                    중심 정렬 이동량: ΔX=<b>@co.XMm.ToString("+0.0;−0.0")</b> mm ·
+                                    ΔY=<b>@co.YMm.ToString("+0.0;−0.0")</b> mm
+                                    <span class="text-muted">
+                                        (Z=@co.ZMm.ToString("0") mm · @(co.UsedIntrinsics ? "SDK 내상수" : "FOV 91°/66° 근사")
+                                        · +X=오른쪽, +Y=아래)
+                                    </span>
+                                </div>
+                            }
                         </div>
                     }
 
@@ -227,6 +238,8 @@ else
     // 평면 검출(FindFlattest) 단독 검증 결과 — 로봇 이동 없이 깊이 카메라만으로 계산.
     private CameraService.DepthFlatnessResult? _flatness;
     private DepthRoiStats? _flatnessStats;
+    // 평탄면 중심을 화면 중심으로 가져오기 위한 이동량(mm) — 핀홀 모델 기반, 표시 전용.
+    private CameraService.CenterOffsetResult? _centerOffset;
 
     // 최소 깊이값 노이즈 평활용 이동평균 윈도우(최근 10개 샘플).
     private const int MinWindowSize = 10;
@@ -334,8 +347,13 @@ else
             ClampRoi();
             _flatness = Svc.FindFlattest(_roiX, _roiY, _roiW, _roiH);   // 기본 gridSize=5
             _flatnessStats = Svc.ComputeDepthRoiStats(_roiX, _roiY, _roiW, _roiH);
+            _centerOffset = null;
             if (_flatness is { } fr)
             {
+                // 평탄면 셀의 평균 깊이(Z)로 화면 중심 정렬에 필요한 이동량(mm) 계산.
+                _centerOffset = fr.MeanMm > 0
+                    ? Svc.ComputeCenterOffsetMm(fr.U, fr.V, fr.MeanMm)
+                    : Svc.ComputeCenterOffsetMm(fr.U, fr.V);
                 // FindFlattest 는 셀 중심(U,V)만 반환 → 셀 크기를 ROI/gridSize(5)로 역산해 좌상단 계산.
                 double cellW = _roiW / 5.0, cellH = _roiH / 5.0;
                 double bx = fr.U - cellW / 2, by = fr.V - cellH / 2;

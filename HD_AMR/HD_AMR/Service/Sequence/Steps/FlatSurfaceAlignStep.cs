@@ -236,31 +236,11 @@ public class FlatSurfaceAlignStep : ISequenceStep
     }
 
     /// <summary>
-    /// 정규화 픽셀 오프셋(Δu, Δv)을 mm로 변환. depth intrinsics가 있으면 정확하게,
-    /// 없으면 Gemini 2 공칭 FOV(H≈82°, V≈56°)와 현재 거리(~400mm)로 근사.
+    /// 정규화 픽셀 오프셋(Δu, Δv)을 현재 거리 기준 mm로 변환.
+    /// 변환 자체는 <see cref="CameraService.PixelDeltaToMm"/>(intrinsics 우선, FOV 근사 폴백)에 위임.
     /// </summary>
     private (double DxMm, double DyMm) PixelOffsetToMm(double deltaU, double deltaV)
-    {
-        var d2c = _camera.GetD2CParams();
-        var depth = _camera.LatestDepth;
-
-        if (d2c is { IsValid: true } && depth is not null)
-        {
-            // intrinsics 기반: Δpx = Δu × Width, Δmm = Δpx × depth / fx
-            double avgDepthMm = EstimateAvgDepth();
-            double dxPx = deltaU * depth.Width;
-            double dyPx = deltaV * depth.Height;
-            return (dxPx * avgDepthMm / d2c.DepthFx, dyPx * avgDepthMm / d2c.DepthFy);
-        }
-
-        // 공칭 FOV 근사 (Orbbec Gemini 2: H≈82°, V≈56°)
-        double distMm = EstimateAvgDepth();
-        double fovH = 82.0 * Math.PI / 180.0;
-        double fovV = 56.0 * Math.PI / 180.0;
-        double widthMm = 2.0 * distMm * Math.Tan(fovH / 2.0);
-        double heightMm = 2.0 * distMm * Math.Tan(fovV / 2.0);
-        return (deltaU * widthMm, deltaV * heightMm);
-    }
+        => _camera.PixelDeltaToMm(deltaU, deltaV, EstimateAvgDepth());
 
     /// <summary>현재 깊이 ROI 평균 거리 추정. 실패 시 400mm 기본값.</summary>
     private double EstimateAvgDepth()
