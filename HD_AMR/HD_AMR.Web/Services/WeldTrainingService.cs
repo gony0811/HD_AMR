@@ -235,11 +235,11 @@ public sealed class WeldTrainingService
                     {
                         var src = Path.Combine(dir, $"{stem}_{kind}.png");
                         if (!File.Exists(src)) continue;
-                        using var m = Cv2.ImRead(src, ImreadModes.Unchanged);
+                        using var m = CvIo.ReadMat(src, ImreadModes.Unchanged);   // 한글 경로 안전
                         if (m.Empty()) continue;
                         using var r = new Mat();
                         Cv2.Rotate(m, r, flag);
-                        Cv2.ImWrite(Path.Combine(dir, $"{newStem}_{kind}.png"), r);
+                        CvIo.WriteMat(Path.Combine(dir, $"{newStem}_{kind}.png"), r);
                         any = true;
                     }
                     if (any) created++; else skipped++;
@@ -252,7 +252,7 @@ public sealed class WeldTrainingService
     /// <summary>마스크 PNG → YOLO-seg 라벨 텍스트(클래스0 정규화 폴리곤). 반환: (텍스트, 폴리곤 수).</summary>
     private static (string Text, int Count) MaskToYoloLabel(string maskPath)
     {
-        using var gray = Cv2.ImRead(maskPath, ImreadModes.Grayscale);
+        using var gray = CvIo.ReadMat(maskPath, ImreadModes.Grayscale);   // 한글 경로 안전
         if (gray.Empty()) return ("", 0);
         int w = gray.Width, h = gray.Height;
         using var bin = new Mat();

@@ -37,7 +37,8 @@ public sealed class OnnxBeadSegmentationService
 
         return await Task.Run(() =>
         {
-            using var bgr = Cv2.ImRead(imgPath, ImreadModes.Color);
+            // Cv2.ImRead 는 한글 경로에서 마샬링 실패 → CvIo(유니코드 안전)로 읽는다.
+            using var bgr = CvIo.ReadMat(imgPath, ImreadModes.Color);
             if (bgr.Empty()) throw new InvalidOperationException("이미지를 읽지 못했습니다.");
             return Infer(modelPath, bgr, conf, maskThr);
         });

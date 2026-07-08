@@ -76,19 +76,36 @@ public sealed class LaserDisplacementSensorClient : IDisposable
 
             _logger.LogInformation("레이저 변위 센서 접속 시도 {Ip}:{Port} (RPI={Rpi}ms)", ip, port, _settings.RpiMs);
 
+            // 동기 EEIP 접속을 Task.Run 으로 감싸되, 예외를 람다 <b>안에서</b> 잡아 Task 경계 밖으로 던지지 않는다.
+            // Task 경계로 예외를 전파하면 상위 await 가 잡더라도 디버거가 'user-unhandled' 로 오탐해 중단시키기 때문.
+            Exception? connectError = null;
             await Task.Run(() =>
             {
-                client.RegisterSession(ip, port);
-                ConfigureConnection(client);
-                client.ForwardOpen();
-
-                // 우리가 소유하는 24B 출력 프레임을 0으로 초기화해 송신 시작. (기존 영점 상태 초기화)
-                lock (_outLock)
+                try
                 {
-                    Array.Clear(_out, 0, _out.Length);
-                    client.O_T_IOData = (byte[])_out.Clone();
+                    client.RegisterSession(ip, port);
+                    ConfigureConnection(client);
+                    client.ForwardOpen();
+
+                    // 우리가 소유하는 24B 출력 프레임을 0으로 초기화해 송신 시작. (기존 영점 상태 초기화)
+                    lock (_outLock)
+                    {
+                        Array.Clear(_out, 0, _out.Length);
+                        client.O_T_IOData = (byte[])_out.Clone();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    connectError = ex;
                 }
             }, timeoutCts.Token).ConfigureAwait(false);
+
+            if (connectError is not null)
+            {
+                // 반쯤 열린 세션(RegisterSession 성공 후 ForwardOpen 실패 등)을 정리한 뒤 상위 서비스로 전달 → 재시도.
+                TryCloseQuietly(client);
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(connectError).Throw();
+            }
 
             _eeip = client;
             _forwardOpen = true;
@@ -150,6 +167,13 @@ public sealed class LaserDisplacementSensorClient : IDisposable
     {
         // 종료 경로에서는 세마포어 대기 없이 곧바로 정리한다.
         CloseSession();
+    }
+
+    /// <summary>접속 실패 시 반쯤 열린 세션을 조용히 정리한다(모든 예외 무시). 재시도 전 리소스 누수 방지.</summary>
+    private static void TryCloseQuietly(EEIPClient client)
+    {
+        try { client.ForwardClose(); } catch { /* 세션 미완성 — 무시 */ }
+        try { client.UnRegisterSession(); } catch { /* 무시 */ }
     }
 
     private void CloseSession()

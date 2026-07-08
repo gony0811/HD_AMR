@@ -98,9 +98,10 @@ public class LabelDataService
         await Task.Run(() =>
         {
             // 디코드 후 PNG 로 재인코딩(채널/포맷 정규화). 실패하면 원본 바이트를 그대로 기록.
+            // Cv2.ImWrite 는 한글 경로에서 마샬링 실패하므로 CvIo(유니코드 안전)로 기록한다.
             using var m = Cv2.ImDecode(bytes, ImreadModes.Unchanged);
             if (m.Empty()) File.WriteAllBytes(target, bytes);
-            else Cv2.ImWrite(target, m);
+            else CvIo.WriteMat(target, m);
         });
         return stem;
     }
