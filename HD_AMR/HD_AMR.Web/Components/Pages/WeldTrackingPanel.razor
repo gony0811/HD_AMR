@@ -333,11 +333,11 @@
                     <div class="alert @(Svc.LastDetect is { Success: false } ? "alert-warning" : "alert-info") py-1 mb-0">@Svc.Message</div>
                 }
 
-                @* 검출 실패 시: 현재 프레임을 학습셋에 추가하고 라벨링으로 바로 이동(추가 학습용). *@
+                @* 검출 실패 시: 캡처 버튼과 동일하게 전체 세트(RGB+IR+Depth)를 저장하고 라벨링으로 이동. *@
                 @if (Svc.LastDetect is { Success: false })
                 {
                     <div class="mt-2 d-flex align-items-center gap-2 flex-wrap">
-                        <span class="text-muted small">비드를 못 찾았나요? 현재 프레임(@Svc.Params.Mode)을 학습에 추가 →</span>
+                        <span class="text-muted small">비드를 못 찾았나요? 전체 캡처(RGB+IR+Depth)를 학습에 추가 →</span>
                         <button class="btn btn-sm btn-warning" @onclick="AddFrameToTrainingAndLabel" disabled="@(_busy || !Cam.IsStreaming)">
                             학습셋에 추가 + 라벨링
                         </button>
@@ -626,16 +626,20 @@
 
     private string? _addMsg;
 
-    /// <summary>검출 실패한 현재 프레임을 캡처 폴더에 학습 데이터로 저장하고 라벨링 화면으로 이동.</summary>
+    /// <summary>
+    /// 검출 실패 시 <b>캡처 버튼과 동일하게</b> 전체 세트(RGB+IR+Depth16+Depth_vis)를 캡처 폴더에 저장하고
+    /// 라벨링 화면으로 이동한다. 입력 모달 한 장만 저장하던 반쪽 동작을 통일한 것.
+    /// </summary>
     private async Task AddFrameToTrainingAndLabel()
     {
         _addMsg = null;
         try
         {
-            var grab = Svc.GrabCurrentFramePng();
-            if (grab is null) { _addMsg = "현재 프레임을 가져오지 못했습니다(스트림/IR 활성 확인)."; return; }
-            var stem = await Lbl.SaveCaptureImageAsync(grab.Value.Png, grab.Value.Modality);
-            Nav.NavigateTo($"/label?sel={Uri.EscapeDataString(stem)}&mod={grab.Value.Modality}");
+            var dir = await Lbl.GetDirAsync();
+            if (string.IsNullOrWhiteSpace(dir)) { _addMsg = "캡처 저장 폴더가 설정되지 않았습니다."; return; }
+            var result = await Cam.SaveCaptureAsync(dir);   // NNN_ts 로 전체 세트 저장
+            var mod = Svc.Params.Mode == WeldImageMode.Ir ? "ir" : "rgb";
+            Nav.NavigateTo($"/label?sel={Uri.EscapeDataString(result.Timestamp)}&mod={mod}");
         }
         catch (Exception ex) { _addMsg = $"학습셋 추가 실패: {ex.Message}"; }
     }

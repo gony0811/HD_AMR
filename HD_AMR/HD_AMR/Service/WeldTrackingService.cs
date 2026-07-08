@@ -140,19 +140,6 @@ public class WeldTrackingService
         }
     }
 
-    /// <summary>
-    /// 현재 검출 프레임(원본, 오버레이 아님)을 PNG 로 굽는다. 검출 실패 프레임을 학습셋에 추가할 때 사용.
-    /// 모달리티는 현재 검출 모드(Params.Mode)를 따른다. 프레임/인코딩 실패면 null.
-    /// </summary>
-    public (byte[] Png, string Modality)? GrabCurrentFramePng()
-    {
-        var frame = Params.Mode == WeldImageMode.Ir ? _camera.LatestIr : _camera.LatestColor;
-        if (frame is null) return null;
-        var png = WeldFrameDecoder.ToPng(frame, Params.Mode);
-        if (png is null) return null;
-        return (png, Params.Mode == WeldImageMode.Ir ? "ir" : "rgb");
-    }
-
     // ── 검출/측정 ───────────────────────────────────────────────────
     /// <summary>현재 프레임 한 장 검출(파라미터 튜닝용). 측정 슬롯에는 저장하지 않음.</summary>
     public WeldDetectionResult DetectOnce()
