@@ -173,6 +173,17 @@ public static class WeldMaskAnalyzer
     }
 
     /// <summary>
+    /// ① Peak 찾기 단계 전용 오버레이 — FOV 센터선(회색) + Weld ROI(노랑) + 자홍 Peak 선만 그린다.
+    /// 비드 중심선·빨간 중심점·d 텍스트는 그리지 않는다(아직 비드를 찾기 전 단계).
+    /// </summary>
+    public static byte[]? EncodePeakOverlay(
+        Mat bgr, RoiRect roi, WeldDetectionParams p,
+        double? peakProgressPos, string? peakLabel = null, RoiRect? peakRoi = null,
+        double? peakCrossStart = null, double? peakCrossEnd = null)
+        => EncodeOverlay(bgr, roi, p, null, double.NaN, double.NaN, double.NaN,
+            peakProgressPos, peakLabel, peakRoi, peakCrossStart, peakCrossEnd);
+
+    /// <summary>
     /// 유효 (s, cross) 점들에 최소제곱 직선(cross = a·s + b)을 피팅한다. 비드 중심선을 '일직선'으로
     /// 그리고, 임의의 진행 위치에서 중심 cross 를 안정적으로 얻기 위함. 점&lt;2 또는 특이(수직)면 ok=false.
     /// </summary>

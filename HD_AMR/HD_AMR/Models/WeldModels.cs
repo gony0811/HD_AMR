@@ -148,6 +148,34 @@ public sealed class PeakInfo
     public double CrossEnd { get; init; }
 }
 
+/// <summary>
+/// ① Peak 찾기 단계 결과 — Depth 로 찾은 Peak 의 <b>진행축</b> 위치와 FOV 센터로부터의 거리.
+/// 운영자는 이 거리만큼 로봇을 이동해 Peak 를 FOV 센터에 맞춘 뒤 ② 비드 찾기를 수행한다.
+/// </summary>
+public sealed class PeakFindResult
+{
+    public bool Found { get; init; }
+    public string? Message { get; init; }
+
+    /// <summary>Peak 의 진행축 좌표(픽셀, 검출 프레임 기준).</summary>
+    public double ProgressPos { get; init; }
+
+    /// <summary>Peak − FOV 센터 (진행축, 픽셀). 진행축=가로면 X 거리, 세로면 Y 거리.</summary>
+    public double OffsetPx { get; init; }
+
+    /// <summary>위 거리를 Depth 스케일로 환산한 mm. <see cref="ScaleAvailable"/>=false 면 무의미.</summary>
+    public double OffsetMm { get; init; }
+
+    /// <summary>Peak 지점의 깊이(mm). mm 환산에 사용.</summary>
+    public int DepthMm { get; init; }
+    public double Confidence { get; init; }
+
+    /// <summary>mm 환산 가능 여부(fx·깊이 확보). false 면 픽셀 값만 신뢰.</summary>
+    public bool ScaleAvailable { get; init; }
+
+    public static PeakFindResult Fail(string msg) => new() { Found = false, Message = msg };
+}
+
 /// <summary>Peak #1/#2 한 곳의 측정 스냅샷(수동 트리거 결과).</summary>
 public sealed class PeakMeasurement
 {
