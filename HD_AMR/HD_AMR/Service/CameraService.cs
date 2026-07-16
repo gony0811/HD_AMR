@@ -199,7 +199,7 @@ public class CameraService : BackgroundService
         if (roiPxW < gridSize || roiPxH < gridSize) return null;
 
         double bestSigma = double.MaxValue;
-        double bestU = 0.5, bestV = 0.5;
+        double bestU = 0.5, bestV = 0.5, bestMean = 0;
         bool found = false;
 
         for (int gy = 0; gy < gridSize; gy++)
@@ -244,18 +244,83 @@ public class CameraService : BackgroundService
                 // 셀 중심의 정규화 좌표
                 bestU = ((cx0 + cx1) / 2.0) / f.Width;
                 bestV = ((cy0 + cy1) / 2.0) / f.Height;
+                bestMean = mean;
                 found = true;
             }
         }
 
-        return found ? new DepthFlatnessResult(bestU, bestV, bestSigma) : null;
+        return found ? new DepthFlatnessResult(bestU, bestV, bestSigma, bestMean) : null;
     }
 
     /// <summary>깊이 그리드 평탄도 분석 결과.</summary>
     /// <param name="U">가장 평평한 셀 중심의 정규화 X (0~1).</param>
     /// <param name="V">가장 평평한 셀 중심의 정규화 Y (0~1).</param>
     /// <param name="SigmaMm">해당 셀의 깊이 표준편차(mm). 작을수록 평평.</param>
-    public sealed record DepthFlatnessResult(double U, double V, double SigmaMm);
+    /// <param name="MeanMm">해당 셀의 평균 깊이(mm) — 평탄면까지의 거리 Z.</param>
+    public sealed record DepthFlatnessResult(double U, double V, double SigmaMm, double MeanMm);
+
+    // SDK 내상수를 읽지 못할 때 쓰는 Gemini 2 Depth 공칭 FOV (데이터시트: H 91° / V 66°).
+    private const double FallbackHFovDeg = 91.0;
+    private const double FallbackVFovDeg = 66.0;
+
+    /// <summary>
+    /// 정규화 픽셀 오프셋(Δu, Δv ∈ [-1,1])을 거리 <paramref name="zMm"/> 평면에서의 물리 이동량(mm)으로
+    /// 변환한다. depth intrinsics(fx, fy)가 있으면 핀홀 모델로 정확하게, 없으면 공칭 FOV(91°/66°)로 근사.
+    /// intrinsics 가 프레임과 다른 해상도 기준이면(예: 1280×800 vs 640×400) 비율로 스케일해 보정한다.
+    /// </summary>
+    public (double DxMm, double DyMm) PixelDeltaToMm(double deltaU, double deltaV, double zMm)
+    {
+        var d2c = GetD2CParams();
+        var f = _client.LatestDepth;
+
+        if (d2c is { IsValid: true } && f is not null && d2c.DepthW > 0 && d2c.DepthH > 0)
+        {
+            // Δmm = Δpx × Z / fx. fx 는 intrinsics 해상도 기준이므로 프레임 해상도로 스케일.
+            double fx = d2c.DepthFx * f.Width / d2c.DepthW;
+            double fy = d2c.DepthFy * f.Height / d2c.DepthH;
+            return (deltaU * f.Width * zMm / fx, deltaV * f.Height * zMm / fy);
+        }
+
+        double widthMm = 2.0 * zMm * Math.Tan(FallbackHFovDeg * Math.PI / 360.0);
+        double heightMm = 2.0 * zMm * Math.Tan(FallbackVFovDeg * Math.PI / 360.0);
+        return (deltaU * widthMm, deltaV * heightMm);
+    }
+
+    /// <summary>
+    /// 정규화 좌표 (u,v)의 타겟을 화면 중심으로 가져오기 위한 카메라 좌표계 기준 이동량(mm)을 계산한다.
+    /// intrinsics 가 있으면 주점(cx, cy) 기준 X=(u·W−cx)·Z/fx, 없으면 이미지 중심(0.5, 0.5) 기준 FOV 근사.
+    /// Z 는 <paramref name="zMm"/> 인자 → (u,v) 지점 깊이 순으로 사용하며 확보 실패 시 null.
+    /// </summary>
+    public CenterOffsetResult? ComputeCenterOffsetMm(double u, double v, double? zMm = null)
+    {
+        double? z = zMm is > 0 ? zMm : GetLatestDepthMmAt(u, v);
+        if (z is not > 0) return null;
+
+        var d2c = GetD2CParams();
+        var f = _client.LatestDepth;
+
+        if (d2c is { IsValid: true } && f is not null && d2c.DepthW > 0 && d2c.DepthH > 0)
+        {
+            // intrinsics 해상도 ↔ 프레임 해상도 불일치 보정 후 주점 기준 핀홀 변환.
+            double sx = (double)f.Width / d2c.DepthW;
+            double sy = (double)f.Height / d2c.DepthH;
+            double fx = d2c.DepthFx * sx, cx = d2c.DepthCx * sx;
+            double fy = d2c.DepthFy * sy, cy = d2c.DepthCy * sy;
+            double xMm = (u * f.Width - cx) * z.Value / fx;
+            double yMm = (v * f.Height - cy) * z.Value / fy;
+            return new CenterOffsetResult(xMm, yMm, z.Value, true);
+        }
+
+        var (dx, dy) = PixelDeltaToMm(u - 0.5, v - 0.5, z.Value);
+        return new CenterOffsetResult(dx, dy, z.Value, false);
+    }
+
+    /// <summary>화면 중심 정렬 이동량 계산 결과.</summary>
+    /// <param name="XMm">타겟의 카메라 X 방향 오프셋(mm). +는 화면 중심 기준 오른쪽.</param>
+    /// <param name="YMm">타겟의 카메라 Y 방향 오프셋(mm). +는 화면 중심 기준 아래쪽.</param>
+    /// <param name="ZMm">계산에 사용한 타겟까지의 거리(mm).</param>
+    /// <param name="UsedIntrinsics">true=SDK 내상수(fx·fy·cx·cy) 기반, false=공칭 FOV 근사.</param>
+    public sealed record CenterOffsetResult(double XMm, double YMm, double ZMm, bool UsedIntrinsics);
 
     /// <summary>최신 깊이 프레임을 컬러라이즈 → JPEG 인코딩한다. 프레임이 없으면 null.</summary>
     public Task<byte[]?> GetLatestDepthJpegAsync(int quality, CancellationToken ct = default)
