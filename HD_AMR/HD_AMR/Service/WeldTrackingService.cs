@@ -79,11 +79,17 @@ public class WeldTrackingService
     public WeldTrackingState State { get; private set; } = WeldTrackingState.Idle;
     public string? Message { get; private set; }
     public WeldDetectionResult? LastDetect { get; private set; }
+
+    /// <summary>① Peak 찾기 최근 결과(진행축 FOV 센터 거리). 없으면 null.</summary>
+    public PeakFindResult? LastPeakFind { get; private set; }
+
     public PeakMeasurement? M1 { get; private set; }
     public PeakMeasurement? M2 { get; private set; }
     public AngleResult? Angle { get; private set; }
 
-    public byte[]? LastOverlay => LastDetect?.OverlayJpeg;
+    // 최근 오버레이 — Peak 찾기/1회 검출/비드 찾기 어느 단계든 마지막 결과를 여기에 담는다.
+    private byte[]? _lastOverlay;
+    public byte[]? LastOverlay => _lastOverlay;
     public byte[]? Peak1Overlay => M1?.OverlayJpeg;
     public byte[]? Peak2Overlay => M2?.OverlayJpeg;
 
@@ -141,11 +147,88 @@ public class WeldTrackingService
     }
 
     // ── 검출/측정 ───────────────────────────────────────────────────
+    /// <summary>
+    /// ① Peak 찾기 — Depth 에서 코루게이션 Peak 를 찾아, <b>진행축</b> FOV 센터로부터의 거리(px·mm)를
+    /// 구한다. 비드 검출은 하지 않는다. 운영자는 이 거리만큼 로봇을 이동해 Peak 를 FOV 센터에 맞춘 뒤
+    /// ② 비드 찾기(<see cref="CapturePeak"/>)를 수행한다.
+    /// </summary>
+    public PeakFindResult FindPeak()
+    {
+        var frame = Params.Mode == WeldImageMode.Ir ? _camera.LatestIr : _camera.LatestColor;
+        if (frame is null)
+            return SetPeakFind(PeakFindResult.Fail(Params.Mode == WeldImageMode.Ir
+                ? "IR 프레임 없음 — 스트림/IR 활성 확인."
+                : "컬러 프레임 없음 — 스트림 시작/연결 확인."));
+        if (PeakRoi is null)
+            return SetPeakFind(PeakFindResult.Fail("Peak ROI 를 먼저 지정하세요."));
+
+        var peak = ComputePeak();
+
+        OpenCvSharp.Mat? bgr = null, gray = null;
+        try
+        {
+            (bgr, gray) = WeldFrameDecoder.Decode(frame, Params.Mode);
+            gray?.Dispose();
+            gray = null;
+            if (bgr is null || bgr.Empty())
+                return SetPeakFind(PeakFindResult.Fail("프레임 디코드 실패"));
+
+            bool horiz = Params.ProgressAxis == WeldProgressAxis.Horizontal;
+            var weldRoi = WeldRoi ?? RoiRect.Full(bgr.Width, bgr.Height);
+
+            if (peak is not { Found: true })
+            {
+                _lastOverlay = WeldMaskAnalyzer.EncodePeakOverlay(bgr, weldRoi, Params, null, null, PeakRoi);
+                return SetPeakFind(PeakFindResult.Fail("Peak 미검출 — Peak ROI 위치/Depth 스트림을 확인하세요."));
+            }
+
+            // 진행축 FOV 센터(= 회색 센터선)로부터의 부호 있는 거리.
+            double fovCenter = (horiz ? bgr.Width : bgr.Height) / 2.0;
+            double offsetPx = peak.ProgressPos - fovCenter;
+            double mmpp = EffectiveMmPerPixel(peak.DepthValue);
+
+            _lastOverlay = WeldMaskAnalyzer.EncodePeakOverlay(
+                bgr, weldRoi, Params, peak.ProgressPos, "PEAK", PeakRoi,
+                peak.HasCrossSpan ? peak.CrossStart : null,
+                peak.HasCrossSpan ? peak.CrossEnd : null);
+
+            var r = new PeakFindResult
+            {
+                Found = true,
+                ProgressPos = peak.ProgressPos,
+                OffsetPx = offsetPx,
+                OffsetMm = offsetPx * mmpp,
+                DepthMm = peak.DepthValue,
+                Confidence = peak.Confidence,
+                ScaleAvailable = mmpp > 0,
+            };
+            LastPeakFind = r;
+            string axis = horiz ? "X" : "Y";
+            Message = $"① Peak 찾음: {axis} 거리 {offsetPx:+0.0;-0.0}px"
+                + (r.ScaleAvailable ? $" ({r.OffsetMm:+0.0;-0.0}mm)" : " (스케일 없음 — px만)")
+                + $", depth {peak.DepthValue}mm";
+            return r;
+        }
+        finally
+        {
+            bgr?.Dispose();
+            gray?.Dispose();
+        }
+    }
+
+    private PeakFindResult SetPeakFind(PeakFindResult r)
+    {
+        LastPeakFind = r;
+        Message = $"① Peak 찾기 실패: {r.Message}";
+        return r;
+    }
+
     /// <summary>현재 프레임 한 장 검출(파라미터 튜닝용). 측정 슬롯에는 저장하지 않음.</summary>
     public WeldDetectionResult DetectOnce()
     {
         var r = RunDetect();
         LastDetect = r;
+        _lastOverlay = r.OverlayJpeg;
         State = r.Success ? WeldTrackingState.WeldDetected
             : (Detector.IsAvailable ? State : WeldTrackingState.DetectUnavailable);
         Message = r.Success ? $"검출 성공 (d={Fmt(r.DPixel)}, conf={r.Confidence:P0})" : $"검출 실패: {r.Message}";
@@ -165,9 +248,10 @@ public class WeldTrackingService
             peak is { Found: true, HasCrossSpan: true } ? peak.CrossStart : null,
             peak is { Found: true, HasCrossSpan: true } ? peak.CrossEnd : null);
         LastDetect = r;
+        _lastOverlay = r.OverlayJpeg;
         if (!r.Success)
         {
-            Message = $"Peak #{id} 캡처 실패: {r.Message}";
+            Message = $"② 비드 찾기 #{id} 실패: {r.Message}";
             return;
         }
 
@@ -187,7 +271,7 @@ public class WeldTrackingService
         };
         if (id == 1) { M1 = m; State = WeldTrackingState.Peak1Captured; }
         else { M2 = m; State = WeldTrackingState.Peak2Captured; }
-        Message = $"Peak #{id} 캡처: d={DMm(m):0.0}mm ({r.DPixel:0.0}px)"
+        Message = $"② 비드 찾기 #{id}: d={DMm(m):0.0}mm ({r.DPixel:0.0}px)"
             + (peak is { Found: true } ? $", peak@{peak.ProgressPos:0}px / {peak.DepthValue}mm" : "");
 
         // Pitch(mm)·두 측정이 있고 스케일이 사용 가능할 때만 자동 각도 산출.
@@ -295,7 +379,8 @@ public class WeldTrackingService
 
     public void ResetMeasurements()
     {
-        M1 = M2 = null; Angle = null; State = WeldTrackingState.Idle; Message = "측정 초기화됨";
+        M1 = M2 = null; Angle = null; LastPeakFind = null;
+        State = WeldTrackingState.Idle; Message = "측정 초기화됨";
     }
 
     // ── 내부 ────────────────────────────────────────────────────────
