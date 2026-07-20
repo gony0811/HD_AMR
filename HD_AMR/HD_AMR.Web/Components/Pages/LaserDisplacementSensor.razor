@@ -6,6 +6,7 @@
 @implements IDisposable
 @inject LaserDisplacementSensorService Svc
 @inject CobotService Cobot
+@inject LaserHeadCalibrationRoutine Routine
 
 <PageTitle>Laser Displacement Sensor</PageTitle>
 
@@ -173,7 +174,7 @@
                     <input type="number" class="form-control form-control-sm" style="width: 90px;"
                            min="1" max="30" step="1" @bind="_velPct" />
                     <button class="btn btn-sm btn-warning" @onclick="ApplyCorrectionAsync"
-                            disabled="@(!Cobot.IsConnected || !Cobot.IsServoEnabled || !_pose.Valid || _applying)">
+                            disabled="@(!Cobot.IsConnected || !Cobot.IsServoEnabled || !_pose.Valid || _applying || _calibrating)">
                         @if (_applying)
                         {
                             <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
@@ -197,6 +198,149 @@
                     </div>
                 }
             </div>
+
+            @* 헤드 위치 캘리브레이션(틸트 응답): 로봇이 수평면 위에서 툴프레임 ±θ 회전을 자동 수행,
+               각 헤드의 거리 변화 기울기에서 헤드 XY(툴 좌표, appsettings 규약)를 부호 포함 역산한다.
+               결과는 표시만 하며 설정 파일에 쓰지 않는다 — JSON 스니펫을 수동 반영 후 앱 재시작. *@
+            <details class="mt-3 pt-3 border-top">
+                <summary style="cursor: pointer;">
+                    <strong>헤드 위치 캘리브레이션</strong>
+                    <span class="text-muted small">(틸트 응답 자동측정 — 로봇이 움직입니다)</span>
+                </summary>
+                <div class="mt-2">
+                    <div class="small text-muted mb-2">
+                        평평한 면 위에서 실행하세요. '자동 수평'이 켜져 있으면 기울어진 상태에서 시작해도 됩니다 —
+                        로봇이 측정값 기반으로 자세를 보정(최대 ±15°×3회)한 뒤 수평에서 최종 산출합니다.
+                    </div>
+
+                    <div class="d-flex align-items-center flex-wrap gap-2 mb-2">
+                        <label class="small text-muted mb-0">틸트(°)</label>
+                        <input type="number" class="form-control form-control-sm" style="width: 80px;"
+                               min="0.5" max="5" step="0.5" @bind="_calTiltDeg" disabled="@_calibrating" />
+                        <label class="small text-muted mb-0">샘플</label>
+                        <input type="number" class="form-control form-control-sm" style="width: 70px;"
+                               min="3" max="20" step="1" @bind="_calSamples" disabled="@_calibrating" />
+                        <label class="small text-muted mb-0">속도(%)</label>
+                        <input type="number" class="form-control form-control-sm" style="width: 80px;"
+                               min="1" max="30" step="1" @bind="_calVelPct" disabled="@_calibrating" />
+                        <div class="form-check mb-0">
+                            <input class="form-check-input" type="checkbox" id="calSignCheck"
+                                   @bind="_calSignCheck" disabled="@_calibrating" />
+                            <label class="form-check-label small" for="calSignCheck">부호 검증(+Z 2mm)</label>
+                        </div>
+                        <div class="form-check mb-0">
+                            <input class="form-check-input" type="checkbox" id="calAutoLevel"
+                                   @bind="_calAutoLevel" disabled="@_calibrating" />
+                            <label class="form-check-label small" for="calAutoLevel">자동 수평</label>
+                        </div>
+                    </div>
+
+                    <div class="d-flex align-items-center gap-2 mb-2">
+                        <button class="btn btn-sm btn-warning" @onclick="StartCalibrationAsync"
+                                disabled="@(!Svc.IsConnected || !Cobot.IsConnected || !Cobot.IsServoEnabled || !_pose.Valid || _calibrating || _applying)">
+                            @if (_calibrating)
+                            {
+                                <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
+                                <span>캘리브레이션 중…</span>
+                            }
+                            else
+                            {
+                                <span>캘리브레이션 시작</span>
+                            }
+                        </button>
+                        @if (_calibrating)
+                        {
+                            <button class="btn btn-sm btn-outline-danger" @onclick="AbortCalibration">중단</button>
+                        }
+                        @if (!Cobot.IsServoEnabled)
+                        {
+                            <span class="small text-muted">서보 ON 필요</span>
+                        }
+                    </div>
+
+                    @if (_calLog.Count > 0)
+                    {
+                        <pre class="small bg-body-secondary p-2 rounded mb-2"
+                             style="max-height: 180px; overflow-y: auto; white-space: pre-wrap;">@string.Join("\n", _calLog)</pre>
+                    }
+
+                    @if (_calResult is { } cr)
+                    {
+                        @if (!cr.ReturnedToAnchor)
+                        {
+                            <div class="alert alert-danger py-2 small mb-2">
+                                로봇이 앵커 pose 로 복귀하지 못했습니다 — 위치를 수동 확인하세요.
+                            </div>
+                        }
+                        @if (!cr.Success)
+                        {
+                            <div class="alert alert-warning py-2 small mb-0">캘리브레이션 실패: @cr.Error</div>
+                        }
+                        else
+                        {
+                            <table class="table table-sm align-middle mb-2">
+                                <thead>
+                                    <tr>
+                                        <th>CH</th>
+                                        <th class="text-end">현재 X</th>
+                                        <th class="text-end">측정 X</th>
+                                        <th class="text-end">ΔX</th>
+                                        <th class="text-end">현재 Y</th>
+                                        <th class="text-end">측정 Y</th>
+                                        <th class="text-end">ΔY</th>
+                                        <th>신뢰도</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var h in cr.Heads)
+                                    {
+                                        <tr>
+                                            <td><strong>CH@(h.Channel)</strong></td>
+                                            <td class="text-end">@h.CurrentX.ToString("F2")</td>
+                                            <td class="text-end fw-semibold">@h.MeasuredX.ToString("F2")</td>
+                                            <td class="text-end text-muted">@((h.MeasuredX - h.CurrentX).ToString("+0.00;-0.00"))</td>
+                                            <td class="text-end">@h.CurrentY.ToString("F2")</td>
+                                            <td class="text-end fw-semibold">@h.MeasuredY.ToString("F2")</td>
+                                            <td class="text-end text-muted">@((h.MeasuredY - h.CurrentY).ToString("+0.00;-0.00"))</td>
+                                            <td>
+                                                <span class="badge @(h.Confidence == "양호" ? "bg-success" : h.Confidence == "주의" ? "bg-warning text-dark" : "bg-danger")">
+                                                    @h.Confidence
+                                                </span>
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+
+                            <div class="small text-muted mb-2">
+                                단위 mm(툴 좌표) · 프로브 @(cr.LevelIterations)회 · 최종 잔여 기울기 @cr.FinalTiltDeg.ToString("F3")°
+                                (Rx=@cr.BaselineRxDeg.ToString("F3")°, Ry=@cr.BaselineRyDeg.ToString("F3")°)
+                                · 평균거리 @cr.MeanDistanceMm.ToString("F1")mm
+                                · 삼각형 면적 @cr.TriangleAreaMm2.ToString("F0")mm²
+                                @if (cr.SignCheckPassed)
+                                {
+                                    <span> · 부호 검증 통과</span>
+                                }
+                                @if (cr.XAxisFlipped || cr.YAxisFlipped)
+                                {
+                                    <span class="text-danger"> · 축 반전 발생(X:@cr.XAxisFlipped, Y:@cr.YAxisFlipped)</span>
+                                }
+                            </div>
+
+                            @foreach (var w in cr.Warnings)
+                            {
+                                <div class="alert alert-warning py-1 px-2 small mb-2">@w</div>
+                            }
+
+                            <div class="small text-muted mb-1">
+                                적용: 아래 6줄을 appsettings.json 의 LaserDisplacementSensor 섹션에 덮어쓰고 앱을 재시작하세요.
+                            </div>
+                            <textarea class="form-control form-control-sm font-monospace" rows="6" readonly
+                                      style="font-size: 0.8rem;">@cr.AppSettingsJsonSnippet</textarea>
+                        }
+                    }
+                </div>
+            </details>
 
             @* 진단: 실장비에서 상태 비트 오프셋 확정용. 측정 중일 때 아래 각 상태 byte 의 실제 값을 보고
                어느 byte 의 CH비트가 ON 되는지 확인해 appsettings 의 *ByteOffset 을 확정한다. *@
@@ -243,6 +387,17 @@
     // 툴을 +Ry 회전 → 측정 Ry 가 +로 발산(gain≈+1)이므로 offset=−Ry(반전).
     private double AppliedRx => _pose.Rx;
     private double AppliedRy => -_pose.Ry;
+
+    // 헤드 위치 캘리브레이션(틸트 응답) 상태.
+    private double _calTiltDeg = 2.0;
+    private int _calSamples = 5;
+    private double _calVelPct = 5;
+    private bool _calSignCheck = true;
+    private bool _calAutoLevel = true;
+    private bool _calibrating;
+    private CancellationTokenSource? _calCts;
+    private readonly List<string> _calLog = new();
+    private LaserHeadCalibrationResult? _calResult;
 
     // 진단(Input Assembly 원본 hex) 상태.
     private byte[]? _dumpBytes;
@@ -363,8 +518,46 @@
         }
     }
 
+    // 헤드 위치 캘리브레이션 실행. 루틴이 예외 대신 결과 객체를 반환하므로 여기 catch 는 안전망.
+    private async Task StartCalibrationAsync()
+    {
+        if (_calibrating) return;
+
+        _calibrating = true;
+        _calResult = null;
+        _calLog.Clear();
+        _calCts = new CancellationTokenSource();
+        try
+        {
+            var opts = new LaserHeadCalibrationOptions
+            {
+                TiltDeg = _calTiltDeg,
+                SamplesPerPoint = _calSamples,
+                VelPct = _calVelPct,
+                VerifyReadingSign = _calSignCheck,
+                AutoLevel = _calAutoLevel,
+            };
+            _calResult = await Routine.RunAsync(opts,
+                msg => { _calLog.Add(msg); _ = InvokeAsync(StateHasChanged); },
+                _calCts.Token);
+        }
+        catch (Exception ex)
+        {
+            _calResult = LaserHeadCalibrationResult.Fail($"예기치 못한 오류: {ex.Message}");
+        }
+        finally
+        {
+            _calibrating = false;
+            _calCts.Dispose();
+            _calCts = null;
+        }
+    }
+
+    private void AbortCalibration() => _calCts?.Cancel();
+
     public void Dispose()
     {
+        _calCts?.Cancel();
         _cts?.Cancel();
         _timer?.Dispose();
         _cts?.Dispose();

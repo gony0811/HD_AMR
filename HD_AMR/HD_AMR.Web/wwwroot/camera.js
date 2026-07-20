@@ -1,4 +1,4 @@
-// Gemini 2 Depth 영상 hover 프로브. 깊이 원본값(mm)은 브라우저에 없고 서버 LatestDepth 버퍼에만
+// RealSense Depth 영상 hover 프로브. 깊이 원본값(mm)은 브라우저에 없고 서버 LatestDepth 버퍼에만
 // 있으므로, 커서 위치를 정규화 좌표(u,v)로 /camera/depth/value 에 조회해 mm 라벨을 띄운다.
 window.hdAmrCamera = {
   initDepthProbe(img, label) {

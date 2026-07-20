@@ -4,8 +4,8 @@ namespace HD_AMR.Communication.Weld;
 
 /// <summary>
 /// 용접라인 검출기 추상화. 실제 구현은 OpenCvSharp(네이티브 OpenCV) 기반이며, 네이티브 런타임이
-/// 없는 플랫폼(예: Jetson linux-arm64, 미설치 환경)에서는 <see cref="NoopWeldVisionDetector"/> 가
-/// 주입되어 앱이 죽지 않고 "검출 비활성" 으로 동작한다.
+/// 없는 환경에서는 <see cref="NoopWeldVisionDetector"/> 가 주입되어 앱이 죽지 않고
+/// "검출 비활성" 으로 동작한다.
 /// </summary>
 public interface IWeldVisionDetector
 {

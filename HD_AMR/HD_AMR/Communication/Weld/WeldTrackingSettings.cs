@@ -22,11 +22,11 @@ public class WeldTrackingSettings
     public int PitchCorrectionSign { get; set; } = -1;
 
     // ── 스케일(mm 환산) ─────────────────────────────────────────────
-    /// <summary>IR/Depth 센서 수평 화각(°). fx = (영상폭/2)/tan(HFov/2) 산출에 사용. Gemini 2 기본 91°.</summary>
-    public double IrHFovDeg { get; set; } = 91.0;
+    /// <summary>IR/Depth 센서 수평 화각(°). fx = (영상폭/2)/tan(HFov/2) 산출에 사용. RealSense D435 기본 90°.</summary>
+    public double IrHFovDeg { get; set; } = 90.0;
 
-    /// <summary>컬러(RGB) 센서 수평 화각(°). Gemini 2 기본 86°.</summary>
-    public double ColorHFovDeg { get; set; } = 86.0;
+    /// <summary>컬러(RGB) 센서 수평 화각(°). RealSense D435 기본 69°.</summary>
+    public double ColorHFovDeg { get; set; } = 69.0;
 
     /// <summary>깊이 값이 없을 때 Depth 자동 스케일에 쓰는 기본 작업거리(mm).</summary>
     public double DefaultWorkDistanceMm { get; set; } = 500.0;

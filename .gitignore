@@ -70,7 +70,4 @@ HD_AMR/HD_AMR.Web/*.db-wal
 *.sln.DotSettings.user
 *.DotSettings.user
 
-# Orbbec SDK 네이티브 라이브러리 (BeforeBuild 가 GitHub Release 에서 자동 다운로드)
-HD_AMR/HD_AMR/libs/orbbec/runtimes/
-HD_AMR/HD_AMR/libs/orbbec/downloads/
 .aider*

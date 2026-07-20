@@ -62,7 +62,7 @@
                     @(Camera.IsConnected ? "연결" : "미연결")
                 </span>
             </div>
-            <div class="stat-value">Gemini 2 깊이</div>
+            <div class="stat-value">RealSense D435 깊이</div>
             <div class="stat-chips">
                 <span class="pill @(Camera.IsStreaming ? "pill-on" : "pill-off")">스트림 @(Camera.IsStreaming ? "활성" : "정지")</span>
                 @if (!string.IsNullOrEmpty(Camera.ConnectionType))

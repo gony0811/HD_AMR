@@ -4,7 +4,7 @@
 
 ## 1. 개요
 
-HD_AMR 시스템의 검사 시퀀스는 AMR(자율주행 이동체), 코봇(FAIRINO 협동로봇), 뎁스 카메라(Orbbec Gemini 2), 3점 레이저 변위센서(OMRON ZP-LS300S)를 순차적으로 제어하여 검사 대상물의 정밀 초점거리를 확보하는 자동화 워크플로우이다.
+HD_AMR 시스템의 검사 시퀀스는 AMR(자율주행 이동체), 코봇(FAIRINO 협동로봇), 뎁스 카메라(Intel RealSense D435), 3점 레이저 변위센서(OMRON ZP-LS300S)를 순차적으로 제어하여 검사 대상물의 정밀 초점거리를 확보하는 자동화 워크플로우이다.
 
 ### 시퀀스 구성
 
@@ -185,7 +185,7 @@ builder.Services.AddScoped<SequenceService>();
 1. 카메라 intrinsics 사용 가능 시 (CameraD2CParams):
    Δmm = Δpx × depth / fx
 2. intrinsics 미사용 시 (FOV 근사):
-   Orbbec Gemini 2 공칭 FOV: H≈82°, V≈56°
+   Intel RealSense D435 Depth 공칭 FOV: H≈87°, V≈58°
    Δmm = Δu × 2 × depth × tan(FOV/2)
 ```
 
@@ -235,7 +235,7 @@ builder.Services.AddScoped<SequenceService>();
 |------|----------|--------|-----------------|
 | AMR | Modbus TCP (10.10.100.200:502) | AMRService | ① |
 | FAIRINO 코봇 | XML-RPC (10.10.100.11:20003) | CobotService | ①②③④ |
-| Orbbec Gemini 2 | P/Invoke USB | CameraService | ③④ |
+| Intel RealSense D435 | librealsense USB | CameraService | ③④ |
 | OMRON ZP-LS300S | EtherNet/IP (192.168.0.1:44818) | LaserDisplacementSensorService | ④ |
 
 ### 레이저 변위센서 헤드 배치 (툴 좌표계)
