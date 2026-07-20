@@ -33,8 +33,8 @@ builder.Services.Configure<FairinoRpcSettings>(
 builder.Services.AddSingleton<CobotService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<CobotService>());
 
-// Orbbec Gemini 2 깊이 카메라. CobotService 와 동일 패턴(싱글톤 + 호스티드).
-builder.Services.Configure<OrbbecGeminiSettings>(
+// Intel RealSense D435 깊이 카메라. CobotService 와 동일 패턴(싱글톤 + 호스티드).
+builder.Services.Configure<RealSenseSettings>(
     builder.Configuration.GetSection("Camera"));
 builder.Services.AddSingleton<CameraService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<CameraService>());

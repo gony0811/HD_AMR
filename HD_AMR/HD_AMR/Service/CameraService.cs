@@ -12,27 +12,27 @@ using SixLabors.ImageSharp.PixelFormats;
 namespace HD_AMR.Service;
 
 /// <summary>
-/// Orbbec Gemini 2 깊이 카메라 연결을 유지하는 백그라운드 서비스. <see cref="CobotService"/>·
+/// Intel RealSense D435/D435i 깊이 카메라 연결을 유지하는 백그라운드 서비스. <see cref="CobotService"/>·
 /// <see cref="AMRService"/> 와 동일하게 5초 재연결 루프. 컬러/깊이 최신 프레임을
-/// <see cref="OrbbecGeminiClient"/> 에서 노출하고, JPEG 인코딩(컬러: ImageSharp 로 RGB24→JPEG,
+/// <see cref="RealSenseClient"/> 에서 노출하고, JPEG 인코딩(컬러: ImageSharp 로 RGB24→JPEG,
 /// 깊이: 선형 cold→hot LUT 적용 후 JPEG) 헬퍼를 MJPEG 엔드포인트에 제공한다.
 /// </summary>
 public class CameraService : BackgroundService
 {
-    private readonly OrbbecGeminiSettings _settings;
-    private readonly OrbbecGeminiClient _client;
+    private readonly RealSenseSettings _settings;
+    private readonly RealSenseClient _client;
     private readonly ILogger<CameraService> _logger;
 
-    public CameraService(IOptions<OrbbecGeminiSettings> options, ILoggerFactory loggerFactory)
+    public CameraService(IOptions<RealSenseSettings> options, ILoggerFactory loggerFactory)
     {
         _settings = options.Value;
         _logger = loggerFactory.CreateLogger<CameraService>();
-        _client = new OrbbecGeminiClient(_settings, loggerFactory.CreateLogger<OrbbecGeminiClient>());
+        _client = new RealSenseClient(_settings, loggerFactory.CreateLogger<RealSenseClient>());
     }
 
     public bool IsConnected => _client.IsConnected;
     public bool IsStreaming => _client.IsStreaming;
-    public OrbbecGeminiSettings Settings => _settings;
+    public RealSenseSettings Settings => _settings;
     public CameraFrame? LatestColor => _client.LatestColor;
     public CameraFrame? LatestDepth => _client.LatestDepth;
     public CameraFrame? LatestIr => _client.LatestIr;
@@ -55,7 +55,7 @@ public class CameraService : BackgroundService
             {
                 if (!_client.IsConnected)
                 {
-                    _logger.LogWarning("Orbbec 카메라 연결 시도");
+                    _logger.LogWarning("RealSense 카메라 연결 시도");
                     await _client.ConnectAsync(stoppingToken);
                 }
                 if (_client.IsConnected && !_client.IsStreaming)
@@ -73,14 +73,14 @@ public class CameraService : BackgroundService
             catch (DllNotFoundException ex)
             {
                 _logger.LogError(ex,
-                    "Orbbec 네이티브 라이브러리(libOrbbecSDK)를 찾을 수 없습니다 — 카메라는 비활성 상태로 유지됩니다.");
+                    "RealSense 네이티브 라이브러리(realsense2.dll)를 찾을 수 없습니다 — 카메라는 비활성 상태로 유지됩니다.");
                 // 네이티브가 없으면 재시도해도 결과가 같으므로 한 박자 길게 쉰다.
                 await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
                 continue;
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Orbbec 카메라 연결 실패 — {Sec}초 후 재시도",
+                _logger.LogWarning(ex, "RealSense 카메라 연결 실패 — {Sec}초 후 재시도",
                     _settings.ReconnectDelayMs / 1000);
             }
 
@@ -259,13 +259,13 @@ public class CameraService : BackgroundService
     /// <param name="MeanMm">해당 셀의 평균 깊이(mm) — 평탄면까지의 거리 Z.</param>
     public sealed record DepthFlatnessResult(double U, double V, double SigmaMm, double MeanMm);
 
-    // SDK 내상수를 읽지 못할 때 쓰는 Gemini 2 Depth 공칭 FOV (데이터시트: H 91° / V 66°).
-    private const double FallbackHFovDeg = 91.0;
-    private const double FallbackVFovDeg = 66.0;
+    // SDK 내상수를 읽지 못할 때 쓰는 RealSense D435 Depth 공칭 FOV (데이터시트: H 87° / V 58°).
+    private const double FallbackHFovDeg = 87.0;
+    private const double FallbackVFovDeg = 58.0;
 
     /// <summary>
     /// 정규화 픽셀 오프셋(Δu, Δv ∈ [-1,1])을 거리 <paramref name="zMm"/> 평면에서의 물리 이동량(mm)으로
-    /// 변환한다. depth intrinsics(fx, fy)가 있으면 핀홀 모델로 정확하게, 없으면 공칭 FOV(91°/66°)로 근사.
+    /// 변환한다. depth intrinsics(fx, fy)가 있으면 핀홀 모델로 정확하게, 없으면 공칭 FOV(87°/58°)로 근사.
     /// intrinsics 가 프레임과 다른 해상도 기준이면(예: 1280×800 vs 640×400) 비율로 스케일해 보정한다.
     /// </summary>
     public (double DxMm, double DyMm) PixelDeltaToMm(double deltaU, double deltaV, double zMm)

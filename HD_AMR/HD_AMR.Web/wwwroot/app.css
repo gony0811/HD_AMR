@@ -1,4 +1,4 @@
-/* ── Self-hosted font (no external CDN; works offline on Jetson) ──────────── */
+/* ── Self-hosted font (no external CDN; works offline) ────────────────────── */
 @font-face {
     font-family: 'Inter';
     font-style: normal;
