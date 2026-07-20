@@ -51,6 +51,8 @@ builder.Services.Configure<LaserDisplacementSensorSettings>(
     builder.Configuration.GetSection("LaserDisplacementSensor"));
 builder.Services.AddSingleton<LaserDisplacementSensorService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<LaserDisplacementSensorService>());
+// 헤드 XY 오프셋 틸트 응답 캘리브레이션 — /laser 페이지에서 실행하는 무상태 루틴.
+builder.Services.AddTransient<LaserHeadCalibrationRoutine>();
 
 // LS산전 IO Module(ModbusTCP). AMR/Cobot 과 동일 패턴(싱글톤 + 호스티드) — 기동 시 상시 자동 접속, 실패 시 5초마다 재시도.
 builder.Services.Configure<IoModuleModbusTcpSettings>(
