@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Sockets;
 using HD_AMR.Models;
 using Microsoft.Extensions.Logging;
 using Sres.Net.EEIP;
@@ -76,19 +78,51 @@ public sealed class LaserDisplacementSensorClient : IDisposable
 
             _logger.LogInformation("레이저 변위 센서 접속 시도 {Ip}:{Port} (RPI={Rpi}ms)", ip, port, _settings.RpiMs);
 
-            await Task.Run(() =>
+            // 1) 예외를 던지지 않는 도달성 사전 점검. 센서가 꺼져 있으면 여기서 조용히 false 를 받고
+            //    RegisterSession 을 아예 호출하지 않는다 → 소켓 예외(first-chance) 자체가 발생하지 않음.
+            //    (TcpClient.ConnectAsync 는 실패 시 SocketException 을 던지므로 쓰지 않는다.)
+            if (!await CanReachAsync(ip, port, _settings.ConnectTimeoutMs, timeoutCts.Token).ConfigureAwait(false))
             {
-                client.RegisterSession(ip, port);
-                ConfigureConnection(client);
-                client.ForwardOpen();
+                _connected = false;
+                _logger.LogDebug("레이저 변위 센서 도달 불가 {Ip}:{Port} (미연결 상태 유지, 자동 재시도)", ip, port);
+                return;
+            }
 
-                // 우리가 소유하는 24B 출력 프레임을 0으로 초기화해 송신 시작. (기존 영점 상태 초기화)
-                lock (_outLock)
+            // 2) 포트가 열려 있으면 실제 세션/연결을 연다. 만약을 위해 예외는 람다 안에서 처리한다
+            //    (바깥에서 잡으면 예외가 람다 프레임을 빠져나가 디버거가 브레이크를 걸기 때문).
+            bool ok = await Task.Run(() =>
+            {
+                bool registered = false;
+                try
                 {
-                    Array.Clear(_out, 0, _out.Length);
-                    client.O_T_IOData = (byte[])_out.Clone();
+                    client.RegisterSession(ip, port);
+                    registered = true;
+                    ConfigureConnection(client);
+                    client.ForwardOpen();
+
+                    // 우리가 소유하는 24B 출력 프레임을 0으로 초기화해 송신 시작. (기존 영점 상태 초기화)
+                    lock (_outLock)
+                    {
+                        Array.Clear(_out, 0, _out.Length);
+                        client.O_T_IOData = (byte[])_out.Clone();
+                    }
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    // 사전 점검 후 실패는 드문 경우(경합·프로토콜 오류 등): 세션이 등록된 뒤 실패했을 때만
+                    // 정리한다. 등록 전 실패면 내부 소켓이 없어 UnRegisterSession 이 NRE 를 던지므로 건드리지 않는다.
+                    if (registered) TryCleanupFailedConnect(client);
+                    _logger.LogWarning(ex, "레이저 변위 센서 연결 실패 {Ip}:{Port} (미연결 상태 유지)", ip, port);
+                    return false;
                 }
             }, timeoutCts.Token).ConfigureAwait(false);
+
+            if (!ok)
+            {
+                _connected = false;
+                return;
+            }
 
             _eeip = client;
             _forwardOpen = true;
@@ -98,6 +132,76 @@ public sealed class LaserDisplacementSensorClient : IDisposable
         finally
         {
             _gate.Release();
+        }
+    }
+
+    /// <summary>연결 시도 중 실패했을 때 부분적으로 열린 세션을 조용히 정리한다(모든 오류 무시).</summary>
+    private void TryCleanupFailedConnect(EEIPClient client)
+    {
+        try { client.UnRegisterSession(); }
+        catch (Exception ex) { _logger.LogDebug(ex, "레이저 변위 센서 실패한 연결 정리 중 오류(무시)"); }
+    }
+
+    /// <summary>
+    /// TCP 포트 도달성을 <b>예외 없이</b> 확인한다. <see cref="Socket.ConnectAsync(SocketAsyncEventArgs)"/> 는
+    /// 연결 실패를 예외가 아니라 <see cref="SocketAsyncEventArgs.SocketError"/> 로 보고하므로, 센서가 꺼져
+    /// 있어도 <see cref="SocketException"/> 이 발생하지 않는다(디버거 first-chance 브레이크 방지).
+    /// </summary>
+    private async Task<bool> CanReachAsync(string host, int port, int timeoutMs, CancellationToken ct)
+    {
+        if (port is < 1 or > 65535) return false;
+
+        // IP 우선. 호스트명이면 DNS 조회(실패는 조용히 도달 불가로 처리).
+        IPAddress? addr;
+        if (!IPAddress.TryParse(host, out addr))
+        {
+            try
+            {
+                var addrs = await Dns.GetHostAddressesAsync(host).ConfigureAwait(false);
+                addr = addrs.Length > 0 ? addrs[0] : null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "레이저 변위 센서 호스트 조회 실패 {Host}", host);
+                addr = null;
+            }
+        }
+        if (addr is null) return false;
+
+        var socket = new Socket(addr.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+        var args = new SocketAsyncEventArgs { RemoteEndPoint = new IPEndPoint(addr, port) };
+        try
+        {
+            var tcs = new TaskCompletionSource<SocketError>(TaskCreationOptions.RunContinuationsAsynchronously);
+            args.Completed += (_, e) => tcs.TrySetResult(e.SocketError);
+
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(timeoutMs);
+            using var reg = timeoutCts.Token.Register(() => tcs.TrySetResult(SocketError.TimedOut));
+
+            // 동기 완료면 이벤트가 발생하지 않으므로 즉시 결과 반영.
+            if (!socket.ConnectAsync(args))
+                tcs.TrySetResult(args.SocketError);
+
+            var result = await tcs.Task.ConfigureAwait(false);
+            if (result == SocketError.Success)
+            {
+                try { socket.Shutdown(SocketShutdown.Both); } catch { /* 이미 닫힘 등 무시 */ }
+                return true;
+            }
+            return false;
+        }
+        catch (Exception ex)
+        {
+            // ConnectAsync 자체가 던지는 드문 경우(잘못된 인자 등)도 도달 불가로 처리.
+            _logger.LogDebug(ex, "레이저 변위 센서 도달성 점검 오류 {Host}:{Port}", host, port);
+            return false;
+        }
+        finally
+        {
+            // 진행 중 connect 가 있으면 소켓을 먼저 닫아 중단시킨 뒤 args 를 해제한다(사용 중 args dispose 회피).
+            socket.Dispose();
+            args.Dispose();
         }
     }
 
