@@ -67,7 +67,7 @@
             <tr>
                 <th style="width:3rem">#</th>
                 <th>단계</th>
-                <th>이동 오프셋 (mm)</th>
+                <th>파라미터 (mm)</th>
                 <th>상태</th>
                 <th>Operate</th>
             </tr>
@@ -87,6 +87,14 @@
                         @if (step.Key == "cobotInspection")
                         {
                             <div class="uv-inputs">
+                                <label>방향
+                                    <select class="form-select form-select-sm"
+                                            @bind="_context.InspectionDirection" @bind:after="SaveOffsetsAsync"
+                                            disabled="@Seq.IsBusy">
+                                        <option value="@InspectionMoveDirection.Horizontal">수평</option>
+                                        <option value="@InspectionMoveDirection.Vertical">수직</option>
+                                    </select>
+                                </label>
                                 <label>U <span class="dir">좌+/우−</span>
                                     <input class="form-control form-control-sm" type="number" step="any"
                                            @bind="_context.InspectionOffsetU" @bind:after="SaveOffsetsAsync"
@@ -95,6 +103,16 @@
                                 <label>V <span class="dir">상+/하−</span>
                                     <input class="form-control form-control-sm" type="number" step="any"
                                            @bind="_context.InspectionOffsetV" @bind:after="SaveOffsetsAsync"
+                                           disabled="@Seq.IsBusy" />
+                                </label>
+                            </div>
+                        }
+                        else if (step.Key == "cameraAlign")
+                        {
+                            <div class="uv-inputs">
+                                <label>목표거리
+                                    <input class="form-control form-control-sm" type="number" step="any"
+                                           @bind="_context.CameraTargetDistanceMm" @bind:after="SaveOffsetsAsync"
                                            disabled="@Seq.IsBusy" />
                                 </label>
                             </div>
@@ -149,6 +167,8 @@
 
     private const string OffsetUKey = "Sequence.Inspection.OffsetU";
     private const string OffsetVKey = "Sequence.Inspection.OffsetV";
+    private const string DirectionKey = "Sequence.Inspection.Direction";
+    private const string CameraDistKey = "Sequence.Camera.TargetDistance";
 
     protected override async Task OnInitializedAsync()
     {
@@ -156,6 +176,8 @@
         await LoadPositionsAsync();
         _context.InspectionOffsetU = await Param.GetDoubleAsync(OffsetUKey) ?? 0;
         _context.InspectionOffsetV = await Param.GetDoubleAsync(OffsetVKey) ?? 0;
+        _context.InspectionDirection = (InspectionMoveDirection)(int)(await Param.GetDoubleAsync(DirectionKey) ?? 0);
+        _context.CameraTargetDistanceMm = await Param.GetDoubleAsync(CameraDistKey) ?? 400;
         _ = RefreshLoopAsync();
     }
 
@@ -169,6 +191,8 @@
     {
         await Param.SetDoubleAsync(OffsetUKey, _context.InspectionOffsetU, "검사위치 이동 수평 오프셋 u (mm), 좌+/우− → TOOL Y");
         await Param.SetDoubleAsync(OffsetVKey, _context.InspectionOffsetV, "검사위치 이동 수직 오프셋 v (mm), 상+/하− → TOOL X");
+        await Param.SetDoubleAsync(DirectionKey, (int)_context.InspectionDirection, "검사위치 이동 방향 (0=수평, 1=수직/RZ-90°)");
+        await Param.SetDoubleAsync(CameraDistKey, _context.CameraTargetDistanceMm, "③ 카메라 거리 정렬 목표 거리 (mm)");
     }
 
     private async void OnSequenceStateChanged()

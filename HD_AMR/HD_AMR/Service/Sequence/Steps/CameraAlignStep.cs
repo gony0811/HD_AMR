@@ -4,7 +4,8 @@ using Microsoft.Extensions.Logging;
 namespace HD_AMR.Service.Sequence.Steps;
 
 /// <summary>
-/// ③ 카메라 거리 정렬 (400mm) — 깊이 ROI 10회 샘플링 후 툴 광축(설정 가능, 기본 +Z)으로 접근 보정.
+/// ③ 카메라 거리 정렬 — 깊이 ROI 10회 샘플링 후 툴 광축(설정 가능, 기본 +Z)으로 접근 보정.
+/// 목표 거리는 시퀀스 페이지 파라미터(SequenceContext.CameraTargetDistanceMm, 기본 400mm)로 설정.
 /// 이동은 <see cref="FlatSurfaceCenteringService.MoveToDistanceAsync"/> 공용 루틴(툴 프레임) 사용 —
 /// 과거 BASE -Y 하드코딩은 헤드 방향과 무관하게 BASE Y로 움직이는 좌표계 오류였음.
 /// 선행조건: 현재 자세가 ② 단계의 목표점(검사 준비 위치 ⊕ u/v 툴 오프셋)이어야 함.
@@ -17,7 +18,6 @@ public class CameraAlignStep : ISequenceStep
     private readonly ParameterService _param;
     private readonly ILogger<CameraAlignStep> _logger;
 
-    private const double TargetDistanceMm = 400;
     private const double MaxAlignTravelMm = 600;
     private const double PoseTolMm = 3.0;
     private const double PoseTolDeg = 2.0;
@@ -44,7 +44,7 @@ public class CameraAlignStep : ISequenceStep
     }
 
     public string Key => "cameraAlign";
-    public string DisplayName => "카메라 거리 정렬 (400mm)";
+    public string DisplayName => "카메라 거리 정렬";
     public int DefaultOrder => 300;
 
     public StepValidation Validate(SequenceContext context)
@@ -57,6 +57,9 @@ public class CameraAlignStep : ISequenceStep
 
         if (!context.Positions.TryGetValue("inspectionReady", out var pos) || !pos.IsTaught)
             return StepValidation.Fail("검사 준비 위치 미티칭 — Teaching에서 먼저 저장하세요.");
+
+        if (context.CameraTargetDistanceMm is < 100 or > 1000)
+            return StepValidation.Fail("카메라 목표 거리 범위 초과 (100~1000mm).");
 
         return StepValidation.Ok();
     }
@@ -71,7 +74,8 @@ public class CameraAlignStep : ISequenceStep
         // 1) 현재 자세가 ②의 목표점(검사 준비 위치 ⊕ u/v 툴 오프셋)인지 TCP 포즈로 검증.
         //    티칭 관절 비교는 u/v 오프셋·작업물 추종 시 목표가 티칭 자세와 달라져 오판한다.
         var (anchor, _) = await CobotInspectionMoveStep.ComputeTargetPoseAsync(_cobot, inspection, ct);
-        var uvOffset = new[] { context.InspectionOffsetV, context.InspectionOffsetU, 0.0, 0.0, 0.0, 0.0 };
+        var rz = context.InspectionDirection == InspectionMoveDirection.Vertical ? -90.0 : 0.0;
+        var uvOffset = new[] { context.InspectionOffsetV, context.InspectionOffsetU, 0.0, 0.0, 0.0, rz };
         var expected = FrameMath.FromFrame(uvOffset, anchor);   // T_anchor · T_offset (툴프레임 합성)
         var cur = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
         if (!IsAtPose(cur, expected))
@@ -81,13 +85,13 @@ public class CameraAlignStep : ISequenceStep
         var (rx, ry, rw, rh, roiSrc) = await GetDepthRoiAsync();
         var depthAxis = await GetDepthAxisAsync();
         _logger.LogInformation(
-            "Sequence ③ 거리 정렬: ROI={Roi}({Rx:0.00},{Ry:0.00},{Rw:0.00},{Rh:0.00}), 광축=툴{Axis}",
-            roiSrc, rx, ry, rw, rh, depthAxis);
+            "Sequence ③ 거리 정렬: 목표={Dist}mm, ROI={Roi}({Rx:0.00},{Ry:0.00},{Rw:0.00},{Rh:0.00}), 광축=툴{Axis}",
+            context.CameraTargetDistanceMm, roiSrc, rx, ry, rw, rh, depthAxis);
 
         var r = await _centering.MoveToDistanceAsync(new DepthDistanceMoveOptions
         {
             RoiX = rx, RoiY = ry, RoiW = rw, RoiH = rh,
-            TargetDistanceMm = TargetDistanceMm,
+            TargetDistanceMm = context.CameraTargetDistanceMm,
             ToleranceMm = 1.0,
             MaxTravelMm = MaxAlignTravelMm,
             DepthAxis = depthAxis,

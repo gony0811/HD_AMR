@@ -101,6 +101,10 @@
     width: 75px;
 }
 
+.step-params .uv-inputs select {
+    width: 80px;
+}
+
 .segment-table td.ops {
     white-space: nowrap;
 }
