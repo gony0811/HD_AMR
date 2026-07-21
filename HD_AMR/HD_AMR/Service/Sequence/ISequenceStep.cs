@@ -45,6 +45,12 @@ public class SequenceContext
     /// <summary>이동 속도 (%).</summary>
     public int Velocity { get; set; } = 20;
 
+    /// <summary>검사위치 이동 수평 오프셋 u (mm). 좌(+)/우(−) → TOOL Y+/Y−.</summary>
+    public double InspectionOffsetU { get; set; }
+
+    /// <summary>검사위치 이동 수직 오프셋 v (mm). 상(+)/하(−) → TOOL X+/X−.</summary>
+    public double InspectionOffsetV { get; set; }
+
     /// <summary>티칭된 위치 목록 (Key → TeachingPosition). 시퀀스 시작 시 로드.</summary>
     public Dictionary<string, Data.Entities.TeachingPosition> Positions { get; set; } = new();
 

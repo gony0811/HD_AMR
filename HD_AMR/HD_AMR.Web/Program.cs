@@ -54,6 +54,9 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<LaserDisplacementS
 // 헤드 XY 오프셋 틸트 응답 캘리브레이션 — /laser 페이지에서 실행하는 무상태 루틴.
 builder.Services.AddTransient<LaserHeadCalibrationRoutine>();
 
+// 평탄 중심 정렬 — 카메라 페이지와 FlatSurfaceAlignStep 이 공유하는 무상태 루틴.
+builder.Services.AddTransient<FlatSurfaceCenteringService>();
+
 // LS산전 IO Module(ModbusTCP). AMR/Cobot 과 동일 패턴(싱글톤 + 호스티드) — 기동 시 상시 자동 접속, 실패 시 5초마다 재시도.
 builder.Services.Configure<IoModuleModbusTcpSettings>(
     builder.Configuration.GetSection("IoModule"));

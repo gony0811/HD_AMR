@@ -73,6 +73,34 @@
     color: #842029;
 }
 
+.segment-table td.step-params {
+    white-space: nowrap;
+}
+
+.step-params .uv-inputs {
+    display: flex;
+    gap: 0.75rem;
+    align-items: center;
+}
+
+.step-params .uv-inputs label {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    margin: 0;
+    font-size: 0.82rem;
+    white-space: nowrap;
+}
+
+.step-params .uv-inputs .dir {
+    color: #6c757d;
+    font-size: 0.65rem;
+}
+
+.step-params .uv-inputs input {
+    width: 75px;
+}
+
 .segment-table td.ops {
     white-space: nowrap;
 }

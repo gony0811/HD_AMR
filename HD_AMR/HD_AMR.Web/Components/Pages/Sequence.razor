@@ -7,6 +7,7 @@
 @inject TeachingService Teaching
 @inject CobotService Cobot
 @inject CameraService Camera
+@inject ParameterService Param
 @inject ILogger<Sequence> Logger
 @implements IDisposable
 
@@ -66,6 +67,7 @@
             <tr>
                 <th style="width:3rem">#</th>
                 <th>단계</th>
+                <th>이동 오프셋 (mm)</th>
                 <th>상태</th>
                 <th>Operate</th>
             </tr>
@@ -81,6 +83,23 @@
                 <tr class="@(isCurrent ? "selected" : "")">
                     <td class="step-no">@StepCircle(idx)</td>
                     <td class="step-name">@step.DisplayName</td>
+                    <td class="step-params">
+                        @if (step.Key == "cobotInspection")
+                        {
+                            <div class="uv-inputs">
+                                <label>U <span class="dir">좌+/우−</span>
+                                    <input class="form-control form-control-sm" type="number" step="any"
+                                           @bind="_context.InspectionOffsetU" @bind:after="SaveOffsetsAsync"
+                                           disabled="@Seq.IsBusy" />
+                                </label>
+                                <label>V <span class="dir">상+/하−</span>
+                                    <input class="form-control form-control-sm" type="number" step="any"
+                                           @bind="_context.InspectionOffsetV" @bind:after="SaveOffsetsAsync"
+                                           disabled="@Seq.IsBusy" />
+                                </label>
+                            </div>
+                        }
+                    </td>
                     <td class="step-note">
                         @if (status?.State == StepState.Running)
                         {
@@ -128,10 +147,15 @@
     private bool _isErr;
     private readonly CancellationTokenSource _cts = new();
 
+    private const string OffsetUKey = "Sequence.Inspection.OffsetU";
+    private const string OffsetVKey = "Sequence.Inspection.OffsetV";
+
     protected override async Task OnInitializedAsync()
     {
         Seq.StateChanged += OnSequenceStateChanged;
         await LoadPositionsAsync();
+        _context.InspectionOffsetU = await Param.GetDoubleAsync(OffsetUKey) ?? 0;
+        _context.InspectionOffsetV = await Param.GetDoubleAsync(OffsetVKey) ?? 0;
         _ = RefreshLoopAsync();
     }
 
@@ -139,6 +163,12 @@
     {
         var list = await Teaching.ListAsync();
         _context.Positions = list.ToDictionary(p => p.Key, p => p);
+    }
+
+    private async Task SaveOffsetsAsync()
+    {
+        await Param.SetDoubleAsync(OffsetUKey, _context.InspectionOffsetU, "검사위치 이동 수평 오프셋 u (mm), 좌+/우− → TOOL Y");
+        await Param.SetDoubleAsync(OffsetVKey, _context.InspectionOffsetV, "검사위치 이동 수직 오프셋 v (mm), 상+/하− → TOOL X");
     }
 
     private async void OnSequenceStateChanged()

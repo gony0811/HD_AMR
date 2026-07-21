@@ -4,19 +4,23 @@ using Microsoft.Extensions.Logging;
 namespace HD_AMR.Service.Sequence.Steps;
 
 /// <summary>
-/// ③ 카메라 거리 정렬 (400mm) — 깊이 ROI 10회 샘플링 후 tool 1을 BASE -Y로 보정.
-/// 선행조건: 현재 자세가 검사 준비 위치여야 함.
+/// ③ 카메라 거리 정렬 (400mm) — 깊이 ROI 10회 샘플링 후 툴 광축(설정 가능, 기본 +Z)으로 접근 보정.
+/// 이동은 <see cref="FlatSurfaceCenteringService.MoveToDistanceAsync"/> 공용 루틴(툴 프레임) 사용 —
+/// 과거 BASE -Y 하드코딩은 헤드 방향과 무관하게 BASE Y로 움직이는 좌표계 오류였음.
+/// 선행조건: 현재 자세가 ② 단계의 목표점(검사 준비 위치 ⊕ u/v 툴 오프셋)이어야 함.
 /// </summary>
 public class CameraAlignStep : ISequenceStep
 {
     private readonly CobotService _cobot;
     private readonly CameraService _camera;
+    private readonly FlatSurfaceCenteringService _centering;
     private readonly ParameterService _param;
     private readonly ILogger<CameraAlignStep> _logger;
 
     private const double TargetDistanceMm = 400;
     private const double MaxAlignTravelMm = 600;
-    private const double HomeToleranceDeg = 0.5;
+    private const double PoseTolMm = 3.0;
+    private const double PoseTolDeg = 2.0;
 
     // 깊이 ROI 파라미터 키 — CameraView 페이지와 공유.
     private const string RoiEnabledKey = "Camera.Depth.Roi.Enabled";
@@ -25,11 +29,16 @@ public class CameraAlignStep : ISequenceStep
     private const string RoiWKey = "Camera.Depth.Roi.W";
     private const string RoiHKey = "Camera.Depth.Roi.H";
 
+    // 광축(전방) → 툴축 매핑 키 — CameraView 에서 실측 확인 후 저장한 값을 공유.
+    private const string AlignDepthAxisKey = "Camera.Align.DepthAxis";
+
     public CameraAlignStep(CobotService cobot, CameraService camera,
+        FlatSurfaceCenteringService centering,
         ParameterService param, ILogger<CameraAlignStep> logger)
     {
         _cobot = cobot;
         _camera = camera;
+        _centering = centering;
         _param = param;
         _logger = logger;
     }
@@ -59,65 +68,54 @@ public class CameraAlignStep : ISequenceStep
 
         var inspection = context.Positions["inspectionReady"];
 
-        // 1) 현재 자세가 검사 준비 위치인지 검증
-        var inspJoints = new[]
-        {
-            inspection.J1!.Value, inspection.J2!.Value, inspection.J3!.Value,
-            inspection.J4!.Value, inspection.J5!.Value, inspection.J6!.Value,
-        };
-        var cur = await _cobot.Rpc.GetActualJointPosAsync(ct: ct);
-        if (!IsWithinJointTolerance(cur, inspJoints))
-            return StepResult.Fail("검사 준비 위치가 아닙니다 — 먼저 ② 단계를 실행하세요.");
+        // 1) 현재 자세가 ②의 목표점(검사 준비 위치 ⊕ u/v 툴 오프셋)인지 TCP 포즈로 검증.
+        //    티칭 관절 비교는 u/v 오프셋·작업물 추종 시 목표가 티칭 자세와 달라져 오판한다.
+        var (anchor, _) = await CobotInspectionMoveStep.ComputeTargetPoseAsync(_cobot, inspection, ct);
+        var uvOffset = new[] { context.InspectionOffsetV, context.InspectionOffsetU, 0.0, 0.0, 0.0, 0.0 };
+        var expected = FrameMath.FromFrame(uvOffset, anchor);   // T_anchor · T_offset (툴프레임 합성)
+        var cur = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
+        if (!IsAtPose(cur, expected))
+            return StepResult.Fail("② 단계 목표 위치(검사 준비 ⊕ u/v 오프셋)가 아닙니다 — 먼저 ② 단계를 실행하세요.");
 
-        // 2) 깊이 ROI 10회 샘플링
+        // 2) 거리 측정 + 툴 광축 접근 보정 (공용 루틴 — 툴 프레임)
         var (rx, ry, rw, rh, roiSrc) = await GetDepthRoiAsync();
-        var samples = new List<int>(10);
-        for (var i = 0; i < 10; i++)
-        {
-            var mm = _camera.ComputeDepthRoiStats(rx, ry, rw, rh)?.MinMm ?? 0;
-            if (mm > 0) samples.Add(mm);
-            if (i < 9) await Task.Delay(100, ct);
-        }
-
-        if (samples.Count == 0)
-            return StepResult.Fail("유효한 깊이 측정값이 없습니다.");
-
-        var d = samples.Average();
-        var delta = d - TargetDistanceMm;
-
-        // 3) 안전 가드
-        if (Math.Abs(delta) > MaxAlignTravelMm)
-            return StepResult.Fail(
-                $"측정 {d:0.#}mm — 보정량 {Math.Abs(delta):0.#}mm가 한계({MaxAlignTravelMm:0}mm) 초과로 중단.");
-
-        // 4) 이미 목표 범위이면 생략
-        if (Math.Abs(delta) < 1.0)
-            return StepResult.Ok($"측정 {d:0.#}mm — 이미 목표 {TargetDistanceMm:0}mm 범위(이동 생략).");
-
-        // 5) 원샷 보정
-        var anchor = await _cobot.Rpc.GetTcpPoseInBaseAsync(1, ct);
-        var offset = new[] { 0.0, TargetDistanceMm - d, 0.0, 0.0, 0.0, 0.0 };
-
+        var depthAxis = await GetDepthAxisAsync();
         _logger.LogInformation(
-            "Sequence ③ 정렬 이동: ROI={Roi}({Rx:0.00},{Ry:0.00},{Rw:0.00},{Rh:0.00}) " +
-            "측정 d={D:0.#}mm, BASE Y보정={OffY:+0.#;-0.#}mm, " +
-            "anchor=[{Ax:0.#},{Ay:0.#},{Az:0.#},{Arx:0.#},{Ary:0.#},{Arz:0.#}]",
-            roiSrc, rx, ry, rw, rh, d, offset[1],
-            anchor[0], anchor[1], anchor[2], anchor[3], anchor[4], anchor[5]);
+            "Sequence ③ 거리 정렬: ROI={Roi}({Rx:0.00},{Ry:0.00},{Rw:0.00},{Rh:0.00}), 광축=툴{Axis}",
+            roiSrc, rx, ry, rw, rh, depthAxis);
 
-        var rc = await _cobot.Rpc.MoveByOffsetAsync(anchor, user: 0, offset,
-            tool: 1, vel: context.Velocity, ct: ct);
+        var r = await _centering.MoveToDistanceAsync(new DepthDistanceMoveOptions
+        {
+            RoiX = rx, RoiY = ry, RoiW = rw, RoiH = rh,
+            TargetDistanceMm = TargetDistanceMm,
+            ToleranceMm = 1.0,
+            MaxTravelMm = MaxAlignTravelMm,
+            DepthAxis = depthAxis,
+            Tool = 1,
+            Velocity = context.Velocity,
+        }, progress: null, ct);
 
-        if (rc == 0)
-            return StepResult.Ok(
-                $"측정 {d:0.#}mm → -Y {Math.Abs(delta):0.#}mm 이동, 목표 {TargetDistanceMm:0}mm 정렬 완료.");
+        // 공용 루틴은 취소를 삼키고 실패 결과로 반환 — 스텝은 기존처럼 취소 예외로 전파한다.
+        ct.ThrowIfCancellationRequested();
+        return r.Success ? StepResult.Ok(r.Message) : StepResult.Fail(r.Message);
+    }
 
-        if (rc == 112)
-            return StepResult.Fail(
-                $"정렬 이동 실패 (rc=112: 목표 자세 도달 불가). 측정 {d:0.#}mm, " +
-                $"BASE Y {offset[1]:+0.#;-0.#}mm 보정 목표가 작업영역 밖입니다 — 측정값/방향 확인 필요.");
-
-        return StepResult.Fail($"정렬 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.");
+    /// <summary>카메라 페이지에서 저장한 광축(전방)→툴축 매핑이 있으면 사용, 없으면 기본(+Z).
+    /// 폴백은 침묵시키지 않고 경고 로그로 드러낸다 — 방향 오동작 원인 판별용.</summary>
+    private async Task<ToolAxisDir> GetDepthAxisAsync()
+    {
+        try
+        {
+            var v = await _param.GetDoubleAsync(AlignDepthAxisKey);
+            if (v is >= 0 and <= 5) return (ToolAxisDir)(int)v.Value;
+            _logger.LogWarning(
+                "광축 매핑 파라미터 없음/범위 밖 (값={V}) — 기본 +Z 사용. 카메라 페이지에서 광축을 설정·저장하세요.", v);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "광축 매핑 파라미터 읽기 실패 — 기본 +Z 사용.");
+        }
+        return ToolAxisDir.PlusZ;
     }
 
     /// <summary>카메라 페이지에서 저장한 ROI가 있으면 사용, 없으면 중앙 30% 기본영역.</summary>
@@ -139,10 +137,19 @@ public class CameraAlignStep : ISequenceStep
         return (0.35, 0.35, 0.30, 0.30, "중앙 기본 ROI");
     }
 
-    private static bool IsWithinJointTolerance(double[] cur, double[] target)
+    /// <summary>현재 TCP 포즈가 기대 포즈와 위치 ≤ <see cref="PoseTolMm"/>mm,
+    /// 자세 축별 ≤ <see cref="PoseTolDeg"/>° (±180° 랩어라운드 처리) 이내인지.</summary>
+    private static bool IsAtPose(double[] cur, double[] expected)
     {
-        for (var i = 0; i < 6; i++)
-            if (Math.Abs(cur[i] - target[i]) > HomeToleranceDeg) return false;
+        double dx = cur[0] - expected[0], dy = cur[1] - expected[1], dz = cur[2] - expected[2];
+        if (Math.Sqrt(dx * dx + dy * dy + dz * dz) > PoseTolMm) return false;
+
+        for (var i = 3; i < 6; i++)
+        {
+            var d = Math.Abs(cur[i] - expected[i]) % 360.0;
+            if (d > 180.0) d = 360.0 - d;
+            if (d > PoseTolDeg) return false;
+        }
         return true;
     }
 }
