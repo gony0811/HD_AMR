@@ -1,0 +1,232 @@
+@page "/calibration"
+@rendermode InteractiveServer
+@using HD_AMR.Service
+@inject CalibrationService Calib
+@inject AMRService Amr
+@inject CobotService Cobot
+@inject ILogger<Calibration> Logger
+@implements IDisposable
+
+<PageTitle>Calibration</PageTitle>
+
+<h1 class="page-title">맵 정합 캘리브레이션</h1>
+
+<p class="text-muted">
+    ① 코봇 장착 오프셋(T_A_B)을 넣고 → ② 도면 기준점 좌표(p_G)를 입력 → ③ 각 점의 맵 좌표(p_W)를
+    코봇 터치/AMR/수동으로 캡처 → ④ 정합 계산(T_W_G)·저장. 도면(mm)·맵(mm) 기준.
+</p>
+
+@if (!string.IsNullOrEmpty(_msg))
+{
+    <div class="alert @(_isErr ? "alert-danger" : "alert-success") py-2">@_msg</div>
+}
+
+<!-- ① 코봇 장착 오프셋 T_A_B -->
+<section class="card mb-3">
+    <div class="card-header"><strong>① 코봇 장착 오프셋 T_A_B</strong> <span class="text-muted">(AMR 차체 → 코봇 BASE, mm/도, 상수)</span></div>
+    <div class="card-body">
+        <div class="row g-2">
+            @for (var i = 0; i < 6; i++)
+            {
+                var idx = i;
+                <div class="col-auto">
+                    <label class="form-label mb-0">@MountLabels[idx]</label>
+                    <input class="form-control form-control-sm" style="width:110px" type="number" step="any"
+                           @bind="_mount[idx]" />
+                </div>
+            }
+            <div class="col-auto d-flex align-items-end">
+                <button class="btn btn-sm btn-primary" @onclick="SaveMountAsync">저장</button>
+            </div>
+        </div>
+        <div class="form-text">브래킷 도면(CAD)에서 AMR 회전중심 기준 코봇 BASE의 6-DoF를 입력하세요. 코봇 터치 캡처에 사용됩니다.</div>
+    </div>
+</section>
+
+<!-- ② + ③ 기준점 대응 -->
+<section class="card mb-3">
+    <div class="card-header d-flex align-items-center gap-3">
+        <strong>② 기준점 대응 (도면 p_G ↔ 맵 p_W)</strong>
+        <span class="ms-auto">공구(tool)
+            <input class="form-control form-control-sm d-inline-block" style="width:70px" type="number" min="0" max="15" @bind="_tool" />
+        </span>
+        <button class="btn btn-sm btn-outline-secondary" @onclick="AddPoint">+ 점 추가</button>
+    </div>
+    <div class="card-body">
+        <table class="table table-sm align-middle">
+            <thead>
+                <tr>
+                    <th style="width:3rem">#</th>
+                    <th>도면 Gx (mm)</th>
+                    <th>도면 Gy (mm)</th>
+                    <th>맵 Wx (mm)</th>
+                    <th>맵 Wy (mm)</th>
+                    <th>캡처</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var p in _points)
+                {
+                    var pt = p;
+                    <tr>
+                        <td>@pt.Index</td>
+                        <td><input class="form-control form-control-sm" type="number" step="any" @bind="pt.Gx" /></td>
+                        <td><input class="form-control form-control-sm" type="number" step="any" @bind="pt.Gy" /></td>
+                        <td><input class="form-control form-control-sm @(pt.HasW ? "" : "bg-light")" type="number" step="any"
+                                   @bind="pt.Wx" @bind:after="() => pt.HasW = true" /></td>
+                        <td><input class="form-control form-control-sm @(pt.HasW ? "" : "bg-light")" type="number" step="any"
+                                   @bind="pt.Wy" @bind:after="() => pt.HasW = true" /></td>
+                        <td class="d-flex gap-1">
+                            <button class="btn btn-sm btn-outline-success" title="코봇 TCP로 이 점을 터치한 상태에서 캡처"
+                                    @onclick="() => CaptureCobotAsync(pt)"
+                                    disabled="@(!Cobot.IsConnected)">코봇</button>
+                            <button class="btn btn-sm btn-outline-info" title="AMR을 이 점에 정차시킨 상태에서 캡처(간이)"
+                                    @onclick="() => CaptureAmr(pt)"
+                                    disabled="@(!Amr.IsConnected)">AMR</button>
+                        </td>
+                        <td><button class="btn btn-sm btn-outline-danger" @onclick="() => RemovePoint(pt)">✕</button></td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+        <button class="btn btn-sm btn-secondary" @onclick="SavePointsAsync">점 저장</button>
+        <span class="form-text ms-2">코봇 캡처 = T_W_A·T_A_B·(TCP in BASE). AMR 캡처 = AMR 현재 맵 위치. 값 직접 입력도 가능.</span>
+    </div>
+</section>
+
+<!-- ④ 정합 계산 T_W_G -->
+<section class="card mb-3">
+    <div class="card-header"><strong>③ 정합 계산 · 저장 (T_W_G)</strong></div>
+    <div class="card-body">
+        <button class="btn btn-primary" @onclick="ComputeAndSaveAsync">정합 계산 & 저장</button>
+        @if (_reg is not null)
+        {
+            <div class="mt-3">
+                <table class="table table-sm w-auto">
+                    <tr><th>회전 θ (도)</th><td>@_reg.ThetaDeg.ToString("0.####")</td></tr>
+                    <tr><th>평행이동 Tx (mm)</th><td>@_reg.Tx.ToString("0.###")</td></tr>
+                    <tr><th>평행이동 Ty (mm)</th><td>@_reg.Ty.ToString("0.###")</td></tr>
+                    <tr><th>잔차 RMS (mm)</th><td>@_reg.RmsMm.ToString("0.###") <span class="text-muted">(@_reg.PointCount점)</span></td></tr>
+                </table>
+            </div>
+        }
+    </div>
+</section>
+
+<!-- 검증 -->
+<section class="card mb-3">
+    <div class="card-header"><strong>검증</strong> <span class="text-muted">도면 좌표 → 예측 맵 좌표</span></div>
+    <div class="card-body">
+        <div class="row g-2 align-items-end">
+            <div class="col-auto"><label class="form-label mb-0">Gx (mm)</label>
+                <input class="form-control form-control-sm" style="width:120px" type="number" step="any" @bind="_vGx" /></div>
+            <div class="col-auto"><label class="form-label mb-0">Gy (mm)</label>
+                <input class="form-control form-control-sm" style="width:120px" type="number" step="any" @bind="_vGy" /></div>
+            <div class="col-auto"><button class="btn btn-sm btn-outline-primary" @onclick="Verify" disabled="@(_reg is null)">변환</button></div>
+            @if (_vResult is not null)
+            {
+                <div class="col-auto">→ 맵 (mm): <strong>@_vResult.Value.X.ToString("0.###"), @_vResult.Value.Y.ToString("0.###")</strong></div>
+            }
+        </div>
+    </div>
+</section>
+
+@code {
+    private static readonly string[] MountLabels = { "X", "Y", "Z", "Rx", "Ry", "Rz" };
+
+    private double[] _mount = new double[6];
+    private List<MapRefPoint> _points = new();
+    private int _tool = 1;
+    private MapRegistration? _reg;
+
+    private double _vGx, _vGy;
+    private (double X, double Y)? _vResult;
+
+    private string? _msg;
+    private bool _isErr;
+    private readonly CancellationTokenSource _cts = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        _mount = await Calib.GetMountAsync();
+        _points = await Calib.GetRefPointsAsync();
+        _reg = await Calib.GetRegistrationAsync();
+    }
+
+    private async Task SaveMountAsync()
+    {
+        try
+        {
+            await Calib.SaveMountAsync(_mount);
+            Ok("장착 오프셋 저장 완료.");
+        }
+        catch (Exception ex) { Fail($"저장 실패: {ex.Message}"); }
+    }
+
+    private async Task CaptureCobotAsync(MapRefPoint pt)
+    {
+        try
+        {
+            if (!Cobot.IsConnected) { Fail("코봇 미연결."); return; }
+            if (Amr.LatestStatus is not { } st) { Fail("AMR 상태 없음 — 맵 pose를 읽을 수 없습니다."); return; }
+
+            var tcp = await Cobot.Rpc.GetTcpPoseInBaseAsync(_tool, _cts.Token);  // BASE, mm/도
+            var amrPose = MapCalibration.AmrPoseToMmDeg(st.Pose.X, st.Pose.Y, st.Pose.Angle);
+            var (wx, wy) = MapCalibration.BasePointToMap(amrPose, _mount, new[] { tcp[0], tcp[1], tcp[2] });
+            pt.Wx = wx; pt.Wy = wy; pt.HasW = true;
+            Ok($"#{pt.Index} 코봇 캡처: 맵({wx:0.#}, {wy:0.#}) mm.");
+        }
+        catch (Exception ex) { Fail($"코봇 캡처 실패: {ex.Message}"); }
+    }
+
+    private void CaptureAmr(MapRefPoint pt)
+    {
+        if (Amr.LatestStatus is not { } st) { Fail("AMR 상태 없음."); return; }
+        pt.Wx = st.Pose.X * 1000.0; pt.Wy = st.Pose.Y * 1000.0; pt.HasW = true;
+        Ok($"#{pt.Index} AMR 캡처: 맵({pt.Wx:0.#}, {pt.Wy:0.#}) mm.");
+    }
+
+    private void AddPoint()
+    {
+        var next = _points.Count == 0 ? 1 : _points.Max(p => p.Index) + 1;
+        _points.Add(new MapRefPoint(next));
+    }
+
+    private void RemovePoint(MapRefPoint pt) => _points.Remove(pt);
+
+    private async Task SavePointsAsync()
+    {
+        try { await Calib.SaveRefPointsAsync(_points); Ok("기준점 저장 완료."); }
+        catch (Exception ex) { Fail($"저장 실패: {ex.Message}"); }
+    }
+
+    private async Task ComputeAndSaveAsync()
+    {
+        try
+        {
+            var reg = Calib.Compute(_points);
+            if (reg is null) { Fail("맵 좌표가 채워진 대응점이 2개 이상 필요합니다."); return; }
+            _reg = reg;
+            await Calib.SaveRefPointsAsync(_points);
+            await Calib.SaveRegistrationAsync(reg);
+            Ok($"정합 완료 — θ={reg.ThetaDeg:0.###}°, RMS={reg.RmsMm:0.###}mm.");
+        }
+        catch (Exception ex) { Fail($"정합 실패: {ex.Message}"); }
+    }
+
+    private void Verify()
+    {
+        if (_reg is null) return;
+        _vResult = MapCalibration.Apply(_reg.ThetaDeg, _reg.Tx, _reg.Ty, _vGx, _vGy);
+    }
+
+    private void Ok(string m) { _msg = m; _isErr = false; }
+    private void Fail(string m) { _msg = m; _isErr = true; Logger.LogWarning("Calibration: {Msg}", m); }
+
+    public void Dispose()
+    {
+        _cts.Cancel();
+        _cts.Dispose();
+    }
+}

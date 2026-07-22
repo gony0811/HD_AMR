@@ -98,6 +98,8 @@ builder.Services.AddDbContext<HdAmrDbContext>(opt =>
 builder.Services.AddScoped<DrawingService>();
 builder.Services.AddScoped<TeachingService>();
 builder.Services.AddScoped<ParameterService>();
+// 맵 정합 캘리브레이션(장착 오프셋 T_A_B, 맵↔도면 T_W_G). Parameter 저장소만 사용.
+builder.Services.AddScoped<CalibrationService>();
 
 // 시퀀스 단계 등록 (ISequenceStep). 새 단계 추가 시 여기에 한 줄만 추가.
 builder.Services.AddScoped<ISequenceStep, AmrMoveStep>();
