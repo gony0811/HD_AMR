@@ -25,6 +25,12 @@ public class WeldTrackingService
     private readonly WeldTrackingSettings _settings;
     private readonly ILogger<WeldTrackingService> _logger;
 
+    /// <summary>
+    /// 시퀀스(자동)와 Weld 페이지(수동)의 동시 접근 직렬화. 신규 *Async 메서드에서만 획득한다.
+    /// 기존 동기 메서드는 UI 단독 사용 전제라 그대로 둔다.
+    /// </summary>
+    private readonly SemaphoreSlim _gate = new(1, 1);
+
     public WeldTrackingService(
         CameraService camera,
         IWeldVisionDetector detector,
@@ -381,6 +387,69 @@ public class WeldTrackingService
     {
         M1 = M2 = null; Angle = null; LastPeakFind = null;
         State = WeldTrackingState.Idle; Message = "측정 초기화됨";
+    }
+
+    // ── 시퀀스용 비동기 API ──────────────────────────────────────────
+    // 시퀀스는 ROI 를 스스로 계산해 넘긴다(깊이 ROI 파라미터 기준). 여기서는 그 ROI 를 일시 적용하고
+    // finally 에서 반드시 원복해, 운영자가 Weld 페이지에서 튜닝·저장한 프로파일을 덮어쓰지 않는다.
+    // 검출 자체는 수백 ms 걸릴 수 있어 Task.Run 으로 Blazor 서킷 스레드를 막지 않는다.
+    // (기존 동기 메서드 내부는 취소할 수 없다. 한 호출이 수 초 이내라 허용 범위로 본다.)
+
+    /// <summary>시퀀스용 Peak 찾기. <paramref name="peakRoi"/> 를 일시 적용해 <see cref="FindPeak"/> 수행.</summary>
+    public async Task<PeakFindResult> FindPeakAsync(RoiRect peakRoi, CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct);
+        var savedPeak = PeakRoi;
+        var savedWeld = WeldRoi;
+        try
+        {
+            PeakRoi = peakRoi;
+            return await Task.Run(FindPeak, ct);
+        }
+        finally
+        {
+            PeakRoi = savedPeak;
+            WeldRoi = savedWeld;
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// 시퀀스용 비드 찾기. ROI 를 일시 적용해 <see cref="CapturePeak"/> 를 수행하고 측정 슬롯
+    /// (<see cref="M1"/>/<see cref="M2"/>)과 검출 결과를 함께 반환한다. 오버레이는 UI 에서 확인 가능하다.
+    /// </summary>
+    public async Task<(PeakMeasurement? Measurement, WeldDetectionResult? Detect)> CapturePeakAsync(
+        int id, RoiRect peakRoi, RoiRect weldRoi, CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct);
+        var savedPeak = PeakRoi;
+        var savedWeld = WeldRoi;
+        try
+        {
+            PeakRoi = peakRoi;
+            WeldRoi = weldRoi;
+            await Task.Run(() => CapturePeak(id), ct);
+            return (id == 1 ? M1 : M2, LastDetect);
+        }
+        finally
+        {
+            PeakRoi = savedPeak;
+            WeldRoi = savedWeld;
+            _gate.Release();
+        }
+    }
+
+    /// <summary>시퀀스용 각도 산출. <see cref="Pitch"/> 는 기본 0·비영속이라 여기서 설정하고 계산한다.</summary>
+    public async Task<AngleResult?> ComputeAngleAsync(double pitchMm, CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            Pitch = pitchMm;
+            await Task.Run(ComputeAngle, ct);
+            return Angle;
+        }
+        finally { _gate.Release(); }
     }
 
     // ── 내부 ────────────────────────────────────────────────────────

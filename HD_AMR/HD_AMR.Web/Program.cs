@@ -101,6 +101,16 @@ builder.Services.AddScoped<ISequenceStep, AmrMoveStep>();
 builder.Services.AddScoped<ISequenceStep, CobotInspectionMoveStep>();
 builder.Services.AddScoped<ISequenceStep, CameraAlignStep>();
 builder.Services.AddScoped<ISequenceStep, FlatSurfaceAlignStep>();
+// ⑤~⑫ Peak/Bead 측정 — ⑤⑨·⑥⑩·⑦⑪은 peakId 만 다른 동일 동작이라 한 클래스를 두 번 등록한다.
+// ActivatorUtilities.CreateInstance 는 명시 인자를 생성자 앞쪽부터 매칭하므로 peakId 가 첫 파라미터여야 한다.
+builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<PeakFindStep>(sp, 1));
+builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<PeakCenteringStep>(sp, 1));
+builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<BeadFindStep>(sp, 1));
+builder.Services.AddScoped<ISequenceStep, PeakApproachStep>();
+builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<PeakFindStep>(sp, 2));
+builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<PeakCenteringStep>(sp, 2));
+builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<BeadFindStep>(sp, 2));
+builder.Services.AddScoped<ISequenceStep, WeldAngleStep>();
 builder.Services.AddScoped<SequenceService>();
 builder.Services.AddScoped<HD_AMR.Web.Services.LabelDataService>();
 // DL 학습 오케스트레이터 — 학습 프로세스가 페이지 이동/서킷과 무관하게 살아 있어야 하므로 싱글톤.

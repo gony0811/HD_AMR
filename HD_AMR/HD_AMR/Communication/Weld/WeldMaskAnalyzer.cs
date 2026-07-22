@@ -161,6 +161,7 @@ public static class WeldMaskAnalyzer
         {
             Success = true,
             Confidence = Math.Clamp(coverage, 0, 1),
+            LineFitOk = fitOk,
             Centerline = pts,
             ReferencePos = refPos,
             WeldCenterAtTarget = weldCenterFull,

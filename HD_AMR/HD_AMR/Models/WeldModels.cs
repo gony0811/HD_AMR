@@ -103,6 +103,13 @@ public sealed class WeldDetectionResult
     public string? Message { get; init; }
     public double Confidence { get; init; }
 
+    /// <summary>
+    /// 비드 중심선을 최소제곱 <b>직선</b>으로 피팅했는지 여부. false 면 피팅 실패로 중앙값 폴백을
+    /// 사용했다는 뜻이고, 이때 빨간 교점은 Peak 진행위치와 무관한 값이라 각도 산출 근거로 쓸 수 없다.
+    /// <see cref="Success"/>=false 인 결과에서는 의미가 없으므로 Success 를 먼저 확인할 것.
+    /// </summary>
+    public bool LineFitOk { get; init; } = true;
+
     /// <summary>비드 중심선 점들(전체 이미지 좌표). 진행 방향을 따라 정렬.</summary>
     public IReadOnlyList<PixelPoint> Centerline { get; init; } = Array.Empty<PixelPoint>();
 
