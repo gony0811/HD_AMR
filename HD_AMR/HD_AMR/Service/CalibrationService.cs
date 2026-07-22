@@ -8,9 +8,9 @@ namespace HD_AMR.Service;
 /// 맵 정합 캘리브레이션 저장/계산 서비스. 값은 별도 테이블 없이 범용 key/value 저장소
 /// (<see cref="ParameterService"/> = Parameters 테이블)에 보관해 재시작 후에도 복원한다.
 ///
-/// 다루는 것: 코봇 장착 오프셋 <b>T_A_B</b>(AMR 차체→코봇 BASE, 상수), 기준점 대응
-/// (도면 p_G ↔ 맵 p_W), 정합 결과 <b>T_W_G</b>(맵↔도면 2D 강체). 계산은
-/// <see cref="MapCalibration"/> 순수 함수에 위임한다.
+/// 다루는 것: 코봇 장착 오프셋 <b>T_A_B</b>(AMR 차체→코봇 BASE, 상수)와 그 측정 표본,
+/// 기준점 대응(도면 p_G ↔ 맵 p_W), 정합 결과 <b>T_W_G</b>(맵↔도면 2D 강체).
+/// 계산은 <see cref="MapCalibration"/> 순수 함수에 위임한다.
 /// </summary>
 public class CalibrationService
 {
@@ -25,6 +25,7 @@ public class CalibrationService
 
     // 파라미터 키
     private const string MountKey = "Calib.Mount.Pose";          // JSON double[6] = [x,y,z,rx,ry,rz]
+    private const string MountSamplesKey = "Calib.Mount.SamplesJson";
     private const string RefPointsKey = "Calib.MapRef.PointsJson";
     private const string RegThetaKey = "Calib.MapReg.ThetaDeg";
     private const string RegTxKey = "Calib.MapReg.Tx";
@@ -54,6 +55,36 @@ public class CalibrationService
     public Task SaveMountAsync(double[] pose)
         => _param.SetAsync(MountKey, JsonSerializer.Serialize(pose),
             "코봇 장착 오프셋 T_A_B [x,y,z,rx,ry,rz] (mm/도, AMR 차체→코봇 BASE)");
+
+    // ── 장착 측정 표본 ──────────────────────────────────────────────
+    public async Task<List<MountSample>> GetMountSamplesAsync()
+    {
+        var raw = await _param.GetAsync(MountSamplesKey);
+        if (raw is not null)
+        {
+            try
+            {
+                var list = JsonSerializer.Deserialize<List<MountSample>>(raw, JsonOpts);
+                if (list is not null) return list;
+            }
+            catch (Exception ex) { _logger.LogWarning(ex, "장착 표본 역직렬화 실패 — 빈 목록"); }
+        }
+        return new List<MountSample>();
+    }
+
+    public Task SaveMountSamplesAsync(List<MountSample> samples)
+        => _param.SetAsync(MountSamplesKey, JsonSerializer.Serialize(samples),
+            "장착 캘리브레이션 표본(AMR 맵 pose + 코봇 BASE 터치점)");
+
+    /// <summary>표본으로 장착 오프셋의 평면 성분(rz, tx, ty)을 추정. 표본 3개 미만이면 null.</summary>
+    public MountSolveResult? SolveMount(IEnumerable<MountSample> samples)
+    {
+        var list = samples.ToList();
+        if (list.Count < 3) return null;
+        var s = list.Select(m => (m.AmrXmm, m.AmrYmm, m.AmrYawDeg, m.Bx, m.By)).ToList();
+        var (phi, tx, ty, rms, n) = MapCalibration.SolveMount2D(s);
+        return new MountSolveResult(phi, tx, ty, rms, n);
+    }
 
     // ── 기준점 대응 ─────────────────────────────────────────────────
     /// <summary>저장된 기준점 대응 목록. 없으면 빈 값 3점.</summary>
@@ -124,6 +155,21 @@ public class MapRefPoint
     public double Wy { get; set; }
     public bool HasW { get; set; }
 }
+
+/// <summary>장착 캘리브레이션 표본 한 개. AMR 맵 pose(x,y[mm], yaw[도])와 코봇 BASE 기준 터치점(mm).</summary>
+public class MountSample
+{
+    public int Index { get; set; }
+    public double AmrXmm { get; set; }
+    public double AmrYmm { get; set; }
+    public double AmrYawDeg { get; set; }
+    public double Bx { get; set; }
+    public double By { get; set; }
+    public double Bz { get; set; }
+}
+
+/// <summary>장착 오프셋 평면 측정 결과 (rz=φ, tx, ty, 잔차, 표본수).</summary>
+public record MountSolveResult(double PhiDeg, double Tx, double Ty, double RmsMm, int N);
 
 /// <summary>맵↔도면 2D 강체 정합 결과 T_W_G. w = R(θ)·g + t.</summary>
 public record MapRegistration(double ThetaDeg, double Tx, double Ty, double RmsMm, int PointCount);
