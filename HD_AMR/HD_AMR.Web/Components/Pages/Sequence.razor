@@ -117,6 +117,38 @@
                                 </label>
                             </div>
                         }
+                        else if (step.Key is "peak1Center" or "peak2Center")
+                        {
+                            @* 두 행이 같은 값을 편집한다(카메라 장착 방향은 하나뿐). *@
+                            <div class="uv-inputs">
+                                <label>X부호 <span class="dir">센터링 방향</span>
+                                    <select class="form-select form-select-sm"
+                                            @bind="_xSign" @bind:after="SaveWeldParamsAsync"
+                                            disabled="@Seq.IsBusy">
+                                        <option value="1">+1</option>
+                                        <option value="-1">−1</option>
+                                    </select>
+                                </label>
+                            </div>
+                        }
+                        else if (step.Key == "peak2Approach")
+                        {
+                            <div class="uv-inputs">
+                                <label>Pitch
+                                    <input class="form-control form-control-sm" type="number" step="any" min="1"
+                                           @bind="_pitchMm" @bind:after="SaveWeldParamsAsync"
+                                           disabled="@Seq.IsBusy" />
+                                </label>
+                                <label>방향 <span class="dir">Peak1→2</span>
+                                    <select class="form-select form-select-sm"
+                                            @bind="_pitchDir" @bind:after="SaveWeldParamsAsync"
+                                            disabled="@Seq.IsBusy">
+                                        <option value="1">+1</option>
+                                        <option value="-1">−1</option>
+                                    </select>
+                                </label>
+                            </div>
+                        }
                     </td>
                     <td class="step-note">
                         @if (status?.State == StepState.Running)
@@ -170,6 +202,15 @@
     private const string DirectionKey = "Sequence.Inspection.Direction";
     private const string CameraDistKey = "Sequence.Camera.TargetDistance";
 
+    // ⑤~⑫ Peak/Bead 파라미터 — 스텝(WeldSequenceSupport)이 실행 시 같은 키를 DB에서 읽는다.
+    private const string XSignKey = "Camera.Axis.XSign";
+    private const string PitchMmKey = "Weld.Peak.PitchMm";
+    private const string PitchDirKey = "Weld.Peak.PitchDir";
+
+    private int _xSign = 1;          // 영상 +X → BASE X 부호 (⑥⑩ 센터링)
+    private double _pitchMm = 370;   // Peak 간 pitch (mm)
+    private int _pitchDir = 1;       // Peak2 이동 방향 (⑧)
+
     protected override async Task OnInitializedAsync()
     {
         Seq.StateChanged += OnSequenceStateChanged;
@@ -178,6 +219,9 @@
         _context.InspectionOffsetV = await Param.GetDoubleAsync(OffsetVKey) ?? 0;
         _context.InspectionDirection = (InspectionMoveDirection)(int)(await Param.GetDoubleAsync(DirectionKey) ?? 0);
         _context.CameraTargetDistanceMm = await Param.GetDoubleAsync(CameraDistKey) ?? 400;
+        _xSign = Math.Sign(await Param.GetDoubleAsync(XSignKey) ?? 1) is -1 ? -1 : 1;
+        _pitchMm = await Param.GetDoubleAsync(PitchMmKey) ?? 370;
+        _pitchDir = Math.Sign(await Param.GetDoubleAsync(PitchDirKey) ?? 1) is -1 ? -1 : 1;
         _ = RefreshLoopAsync();
     }
 
@@ -193,6 +237,13 @@
         await Param.SetDoubleAsync(OffsetVKey, _context.InspectionOffsetV, "검사위치 이동 수직 오프셋 v (mm), 상+/하− → TOOL X");
         await Param.SetDoubleAsync(DirectionKey, (int)_context.InspectionDirection, "검사위치 이동 방향 (0=수평, 1=수직/RZ-90°)");
         await Param.SetDoubleAsync(CameraDistKey, _context.CameraTargetDistanceMm, "③ 카메라 거리 정렬 목표 거리 (mm)");
+    }
+
+    private async Task SaveWeldParamsAsync()
+    {
+        await Param.SetDoubleAsync(XSignKey, _xSign, "영상 +X → BASE X 부호 (⑥⑩ Peak 센터링 방향, +1/−1)");
+        await Param.SetDoubleAsync(PitchMmKey, _pitchMm, "Peak 간 pitch (mm) — ⑧ 이동량, ⑫ 각도식 분모");
+        await Param.SetDoubleAsync(PitchDirKey, _pitchDir, "⑧ Peak2 이동 방향 (+1/−1)");
     }
 
     private async void OnSequenceStateChanged()

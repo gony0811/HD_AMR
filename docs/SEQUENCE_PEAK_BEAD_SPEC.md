@@ -508,10 +508,19 @@ double offsetMm = result.OffsetPx * mmPerPx;
 | `Weld.Peak.PitchDir` | double | `+1` | Peak2 이동 방향. `+1` 또는 `−1` |
 | `Camera.Axis.XSign` | double | `+1` | 영상 +X → BASE ±X. `+1` 또는 `−1` |
 
-> `GetDoubleAsync`로 읽고, 값이 없으면 기본값을 사용한다. **DB에 자동 생성하지 않는다**
-> (기존 `Camera.Depth.Roi.*`와 동일한 폴백 패턴).
->
+> `GetDoubleAsync`로 읽고, 값이 없으면 기본값을 사용한다.
 > 부호 파라미터는 `Math.Sign()`으로 정규화한다. `0`이면 `+1`로 간주.
+
+**입력 UI (구현됨)**: Sequence 페이지의 각 행 `파라미터 (mm)` 컬럼에서 인라인 편집한다
+(main 머지로 들어온 ②③ 패턴과 동일 — `@bind:after`로 즉시 DB 저장).
+
+| 행 | 입력 | 바인딩 키 |
+|---|---|---|
+| ⑥⑩ Peak 센터링 | `X부호` 셀렉트 (+1/−1) — 두 행이 같은 값 공유 | `Camera.Axis.XSign` |
+| ⑧ Peak2 이동 | `Pitch` 숫자 + `방향` 셀렉트 (+1/−1) | `Weld.Peak.PitchMm`, `Weld.Peak.PitchDir` |
+
+스텝 코드는 UI 와 무관하게 실행 시마다 DB 에서 읽으므로, Parameters 페이지(`/parameters`)에서
+수정해도 동일하게 반영된다. 두 화면은 같은 키를 편집한다.
 
 ### 6.2 기존 ParameterService 키 (재사용)
 
@@ -1326,8 +1335,9 @@ dotnet run --project HD_AMR.Web --launch-profile https   # https://localhost:727
 
 ### 11.5 파라미터 변경 방법
 
-파라미터는 `Parameters` 페이지(`/parameters`)에서 직접 수정하거나,
-SQLite DB(`hd_amr.db`)의 `Parameters` 테이블에서 수정한다.
+XSign·PitchMm·PitchDir 은 **Sequence 페이지의 해당 행(⑥⑧⑩) 파라미터 컬럼**에서 바로 수정하는
+것이 가장 빠르다(§6.1 입력 UI 참조). `Parameters` 페이지(`/parameters`)나
+SQLite DB(`hd_amr.db`)의 `Parameters` 테이블에서 수정해도 동일하게 반영된다.
 
 ---
 
