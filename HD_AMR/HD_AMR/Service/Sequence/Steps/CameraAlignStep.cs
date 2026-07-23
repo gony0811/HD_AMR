@@ -29,9 +29,6 @@ public class CameraAlignStep : ISequenceStep
     private const string RoiWKey = "Camera.Depth.Roi.W";
     private const string RoiHKey = "Camera.Depth.Roi.H";
 
-    // 광축(전방) → 툴축 매핑 키 — CameraView 에서 실측 확인 후 저장한 값을 공유.
-    private const string AlignDepthAxisKey = "Camera.Align.DepthAxis";
-
     public CameraAlignStep(CobotService cobot, CameraService camera,
         FlatSurfaceCenteringService centering,
         ParameterService param, ILogger<CameraAlignStep> logger)
@@ -83,7 +80,11 @@ public class CameraAlignStep : ISequenceStep
 
         // 2) 거리 측정 + 툴 광축 접근 보정 (공용 루틴 — 툴 프레임)
         var (rx, ry, rw, rh, roiSrc) = await GetDepthRoiAsync();
-        var depthAxis = await GetDepthAxisAsync();
+        var (depthAxis, axisFromParam) = await WeldSequenceSupport.GetDepthAxisAsync(_param);
+        if (!axisFromParam)
+            _logger.LogWarning(
+                "'{Key}' 광축 매핑 파라미터 없음/범위 밖 — 기본 +Z 사용. 카메라 페이지에서 광축을 설정·저장하세요.",
+                WeldSequenceSupport.DepthAxisKey);
         _logger.LogInformation(
             "Sequence ③ 거리 정렬: 목표={Dist}mm, ROI={Roi}({Rx:0.00},{Ry:0.00},{Rw:0.00},{Rh:0.00}), 광축=툴{Axis}",
             context.CameraTargetDistanceMm, roiSrc, rx, ry, rw, rh, depthAxis);
@@ -102,24 +103,6 @@ public class CameraAlignStep : ISequenceStep
         // 공용 루틴은 취소를 삼키고 실패 결과로 반환 — 스텝은 기존처럼 취소 예외로 전파한다.
         ct.ThrowIfCancellationRequested();
         return r.Success ? StepResult.Ok(r.Message) : StepResult.Fail(r.Message);
-    }
-
-    /// <summary>카메라 페이지에서 저장한 광축(전방)→툴축 매핑이 있으면 사용, 없으면 기본(+Z).
-    /// 폴백은 침묵시키지 않고 경고 로그로 드러낸다 — 방향 오동작 원인 판별용.</summary>
-    private async Task<ToolAxisDir> GetDepthAxisAsync()
-    {
-        try
-        {
-            var v = await _param.GetDoubleAsync(AlignDepthAxisKey);
-            if (v is >= 0 and <= 5) return (ToolAxisDir)(int)v.Value;
-            _logger.LogWarning(
-                "광축 매핑 파라미터 없음/범위 밖 (값={V}) — 기본 +Z 사용. 카메라 페이지에서 광축을 설정·저장하세요.", v);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "광축 매핑 파라미터 읽기 실패 — 기본 +Z 사용.");
-        }
-        return ToolAxisDir.PlusZ;
     }
 
     /// <summary>카메라 페이지에서 저장한 ROI가 있으면 사용, 없으면 중앙 30% 기본영역.</summary>

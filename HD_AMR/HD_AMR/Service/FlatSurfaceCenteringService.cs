@@ -140,8 +140,12 @@ public class FlatSurfaceCenteringService
 
     private static readonly string[] AxisNames = { "+X", "-X", "+Y", "-Y", "+Z", "-Z" };
 
-    /// <summary>이동량(mm)을 매핑된 툴축 성분에 더한다. enum 값/2 = 축 인덱스, 짝수=+/홀수=−.</summary>
-    private static void ApplyAxis(double[] offset, ToolAxisDir dir, double mm)
+    /// <summary>매핑 축의 표시명("+X" 등) — 진행 로그·오류 메시지용.</summary>
+    public static string AxisName(ToolAxisDir dir) => AxisNames[(int)dir];
+
+    /// <summary>이동량(mm)을 매핑된 툴축 성분에 더한다. enum 값/2 = 축 인덱스, 짝수=+/홀수=−.
+    /// 툴 프레임 이동을 쓰는 다른 스텝(⑥⑧⑩ 등)도 공유한다.</summary>
+    public static void ApplyAxis(double[] offset, ToolAxisDir dir, double mm)
         => offset[(int)dir / 2] += ((int)dir % 2 == 0 ? 1.0 : -1.0) * mm;
 
     public FlatSurfaceCenteringService(

@@ -14,6 +14,9 @@ namespace HD_AMR.Service.Sequence.Steps;
 ///      이동 후 레이저 측정 중심 보정 횡이동(툴 −Y 65mm — 레이저 중심이 카메라보다 좌측 장착).
 ///   C) 레이저 변위센서 3점 측정으로 평면 틸트(rx, ry) 검증. 임계값 초과 시 측정 틸트만큼
 ///      툴 헤드를 회전 보정(위치 고정, /laser '보정 적용'과 동일 부호 규약) 후 재검증.
+///
+/// 시작 시점 TCP 포즈를 <see cref="WeldSequenceSupport.InspectAnchorPoseBagKey"/> 로 저장한다 —
+/// ④⁺(레이저 WD)가 초점거리 조정 후 이 위치로 툴 X/Y 횡복귀한다(자세·초점거리는 유지).
 /// </summary>
 public class FlatSurfaceAlignStep : ISequenceStep
 {
@@ -89,6 +92,11 @@ public class FlatSurfaceAlignStep : ISequenceStep
 
     public async Task<StepResult> ExecuteAsync(SequenceContext context, CancellationToken ct)
     {
+        // 시작 포즈(= ② 목표 ⊕ ③ 거리 정렬 지점)를 앵커로 저장 — ④⁺가 WD 조정 후
+        // 이 위치로 툴 X/Y 횡복귀한다(⑤가 검사 준비 위치 정면에서 시작하도록).
+        var startPose = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
+        context.Bag[WeldSequenceSupport.InspectAnchorPoseBagKey] = startPose;
+
         // ── Phase A+B: 평탄영역 탐색 + 코봇 횡이동 (공용 루틴) ─────────
         var (roiX, roiY, roiW, roiH, roiSrc) = await GetDepthRoiAsync();
         _logger.LogInformation("④ Phase A/B: 평탄영역 탐색+횡이동 시작 (grid={Grid}×{Grid}, ROI={Roi})",

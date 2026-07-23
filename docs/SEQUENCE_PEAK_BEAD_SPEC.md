@@ -354,35 +354,55 @@ if (Params.Mode == WeldImageMode.Ir)
 
 ### 4.1 기존 시퀀스의 축 사용
 
+모든 카메라 기반 이동은 **툴 좌표계**(`MoveByToolOffsetAsync`, offset_flag=2)를 쓴다.
+카메라는 툴에 강체 고정이라 이미지 평면이 툴 좌표계의 고정 축 쌍과 일치하고,
+BASE 축 이동은 헤드 방향에 따라 광축(툴 ±Z) 성분이 섞이는 좌표계 오류를 낳는다
+(③의 과거 BASE −Y 하드코딩 버그, ⑥⑧⑩의 과거 BASE X 하드코딩 버그 — 모두 수정됨).
+
 | 스텝 | 축 매핑 |
 |---|---|
-| ③ `CameraAlignStep` | **BASE Y** = 카메라 시선(standoff). 400mm 정렬을 −Y 방향으로 |
-| ④ `FlatSurfaceAlignStep` Phase B | **BASE X** = 영상 가로, **BASE −Z** = 영상 세로 |
+| ③ `CameraAlignStep` | 광축 = **툴 +Z** (기본, `GetDepthAxisAsync`). standoff 접근을 툴 프레임으로 |
+| ④ `FlatSurfaceAlignStep` Phase B | 영상 가로 → `Camera.Align.ImageXAxis` 툴축, 영상 세로 → `Camera.Align.ImageYAxis` 툴축 |
 
-### 4.2 이번 구현의 축 사용
+### 4.2 이번 구현의 축 사용 — 진행축은 ② 검사방향에서 자동 결정
 
-- **진행축(progress axis) = 영상 가로 = BASE X**
-  (`Params.ProgressAxis == WeldProgressAxis.Horizontal` 전제)
-- Peak는 BASE X 방향으로 pitch(370mm) 간격 배열
-- 센터링 이동과 Peak2 이동 모두 **BASE X** 단일 축
+- **진행축(progress axis)** = 코로게이션 Peak 배열 방향의 영상 축. ② `InspectionDirection` 에서
+  시퀀스가 자동 결정한다 (`WeldSequenceSupport.GetProgressAxis`, 측정 전 `ApplyProgressAxis` 로
+  `WeldTrackingService.Params.ProgressAxis` 에 반영 — Weld 패널 수동 설정과 무관):
+  - **수직 용접라인**(`Vertical`, RZ−90° 합성) → 진행축 = **영상 가로** → 이동 매핑 `Camera.Align.ImageXAxis` (실기 검증된 기준 케이스)
+  - **수평 용접라인**(`Horizontal`, RZ 0) → 진행축 = **영상 세로** → 이동 매핑 `Camera.Align.ImageYAxis`
+- **cross 축** = 진행축과 수직인 영상 축(반대 매핑). 비드 위치오차 d 는 cross 축으로 측정되며,
+  비드 센터링(⑦⁺⑪⁺)은 cross 툴축으로 이동한다.
+- Peak는 진행축 방향으로 pitch(370mm) 간격 배열. Peak 센터링(⑥⑩)·Peak2 이동(⑧)은 진행축, 툴 프레임.
+- mm 환산(`ResolveOffsetMm`/`PitchToPixels`)도 진행축에 따라 가로(fx/Width)·세로(fy/Height)를 선택한다.
+- **검사 카메라 설치 오프셋 — "검증 후 시프트" (④ 패턴)**: 오프셋(`Sequence.InspectCam.OffsetXMm/YMm`,
+  검사 카메라 시야 중심이 depth 영상에서 보이는 위치 − 영상 중심)을 센터링 수식에 합성하면 오프셋이
+  클 때 타깃이 depth 시야를 벗어나 재측정 검증이 불가능하다. 따라서:
+  - ⑥⑩⑦⁺⑪⁺ 센터링·검증은 전부 **depth 영상 중심 기준**(오프셋 미개입, 잔차→0).
+  - ⑦⁺⑪⁺가 검증까지 끝낸 뒤 **2D 개루프 시프트**(카메라를 영상 (−X, −Y) 방향으로 이동 → 타깃이
+    화면상 (+X, +Y) = 검사 카메라 아래)를 수행한다 — ④의 레이저 중심 −65mm 시프트와 동일 신뢰 모델.
+  - ⑦⁺는 `Bag["inspectCam.shifted"]` 플래그를 세우고, **⑧이 역보정(+off 2D)을 pitch 이동에 합성**해
+    ⑨⑪이 타깃을 다시 시야 중앙 근처에서 측정한다. 오프셋은 어떤 측정값에도 개입하지 않는다.
 
-### 4.3 두 개의 독립적인 부호 파라미터
-
-**절대로 하나로 합치지 말 것.** 서로 독립된 미지수다.
+### 4.3 방향 파라미터
 
 | 파라미터 | 의미 | 결정 요인 |
 |---|---|---|
-| `Camera.Axis.XSign` | 영상 +X 픽셀 → BASE ±X | **카메라 장착 방향** (물리적 고정) |
-| `Weld.Peak.PitchDir` | Peak2가 Peak1의 어느 쪽인가 | **측정 방향 선택** (설비 배치) |
+| `Camera.Align.ImageXAxis` | 영상 +X(화면 오른쪽) 이동량을 실을 툴축(부호 포함, ±X/±Y/±Z) | **카메라 장착 방향** (물리적 고정) — 카메라 페이지에서 실측 확인 후 저장 |
+| `Weld.Peak.PitchDir` | Peak2가 영상 +X 쪽이면 +1, 반대면 −1 | **측정 방향 선택** (설비 배치) |
 
-**연산식**:
+> 과거의 `Camera.Axis.XSign`(영상 +X → BASE ±X)은 BASE X 하드코딩 전용 부호였으므로 **폐기**.
+> ImageXAxis 매핑이 부호까지 포함하므로 별도 부호 파라미터가 필요 없다.
+
+**연산식** (④ `FlatSurfaceCenteringService`와 동일 규약 — `deltaU = 타깃 − 센터`, 양수=오른쪽,
+부호 반전 없이 `ApplyAxis(offset, ImageXAxis, mm)`로 적용):
 
 ```
-⑥⑩ 센터링 이동량(BASE X, mm) = (−1) × offsetMm × XSign
-⑧   Peak2 이동량(BASE X, mm) = PitchMm × PitchDir
+⑥⑩ 센터링 이동량(ImageXAxis 툴축, mm) = (+1) × offsetMm
+⑧   Peak2 이동량(ImageXAxis 툴축, mm) = PitchMm × PitchDir
 ```
 
-> `XSign`과 `PitchDir`을 **곱하지 않는다.** 하나를 뒤집어도 다른 쪽 동작에 영향이 없어야 한다.
+> `ImageXAxis`(카메라 장착)와 `PitchDir`(설비 배치)을 **곱하지 않는다.** 서로 독립된 미지수다.
 > 합쳐놓으면 ⑧의 방향을 바꾸려 할 때 ⑥⑩ 센터링이 같이 뒤집혀 발산한다.
 
 ### 4.4 mm 환산 방식 (하이브리드)
@@ -433,18 +453,26 @@ double offsetMm = result.OffsetPx * mmPerPx;
 | ① | `amrMove` | 100 | `AmrMoveStep` | — | (기존) AMR 검사위치 이동 |
 | ② | `cobotInspection` | 200 | `CobotInspectionMoveStep` | — | (기존) Cobot 검사위치 이동 |
 | ③ | `cameraAlign` | 300 | `CameraAlignStep` | — | (기존) 카메라 거리 정렬 400mm |
-| ④ | `flatSurfaceAlign` | 400 | `FlatSurfaceAlignStep` | — | (기존) 평탄면 센터링 |
-| **⑤** | `peak1Find` | **500** | `PeakFindStep` | 1 | Peak1 찾기 |
-| **⑥** | `peak1Center` | **600** | `PeakCenteringStep` | 1 | Peak1 센터링 |
+| ④ | `flatSurfaceAlign` | 400 | `FlatSurfaceAlignStep` | — | (기존) 평탄면 센터링 — 시작 포즈를 앵커로 Bag 저장 |
+| ④⁺ | `laserWorkingDistance` | 450 | `LaserWorkingDistanceStep` | — | 레이저 3점 평균 → WD 초점거리 조정 후 **앵커로 툴 X/Y 횡복귀**(Z·자세 유지) |
+| **⑤** | `peak1Find` | **500** | `PeakFindStep` | 1 | Peak1 찾기 — 검사 준비 위치 정면에서 시작 |
+| **⑥** | `peak1Center` | **600** | `PeakCenteringStep` | 1 | Peak1 센터링 (진행축) |
 | **⑦** | `bead1Find` | **700** | `BeadFindStep` | 1 | Bead1 찾기 |
-| **⑧** | `peak2Approach` | **800** | `PeakApproachStep` | 2 | Peak2 이동 (pitch) |
+| **⑦⁺** | `bead1Center` | **750** | `BeadCenteringStep` | 1 | Bead1 센터링 (cross 축, 재측정으로 M1 갱신 → 검사캠 시프트) |
+| **⑧** | `peak2Approach` | **800** | `PeakApproachStep` | 2 | Peak2 이동 (pitch, 진행축) |
 | **⑨** | `peak2Find` | **900** | `PeakFindStep` | 2 | Peak2 찾기 |
-| **⑩** | `peak2Center` | **1000** | `PeakCenteringStep` | 2 | Peak2 센터링 |
+| **⑩** | `peak2Center` | **1000** | `PeakCenteringStep` | 2 | Peak2 센터링 (진행축) |
 | **⑪** | `bead2Find` | **1100** | `BeadFindStep` | 2 | Bead2 찾기 |
+| **⑪⁺** | `bead2Center` | **1150** | `BeadCenteringStep` | 2 | Bead2 센터링 (cross 축, 이동만 — 재측정 없음 → 검사캠 시프트) |
 | **⑫** | `weldAngle` | **1200** | `WeldAngleStep` | — | 각도 산출 |
 
-> 클래스는 8개가 아니라 **5개**다. ⑤⑨, ⑥⑩, ⑦⑪은 `peakId`만 다른 동일 동작이므로
+> ⑤⑨, ⑥⑩, ⑦⑪, ⑦⁺⑪⁺은 `peakId`만 다른 동일 동작이므로
 > 생성자 파라미터로 구분하고 DI에 두 번 등록한다.
+>
+> **⑫ 정합 규칙**: ⑦⁺(750)는 센터링 이동 후(검사캠 시프트 **전**) 재측정해 M1 을 잔차(≈0)로 갱신한다 —
+> 갱신하지 않으면 이동으로 FOV 기준선이 d1 만큼 옮겨져 ⑫의 (d2−d1)/pitch 에 d1 이 이중 반영된다.
+> ⑪⁺(1150)는 이동만 한다 — 재측정하면 M2 가 잔차≈0 으로 덮여 θ≈0 으로 오염된다(⑫는 이동 전 M2 사용).
+> 검사캠 시프트는 측정 완료 후 수행되고 ⑧이 역보정하므로 어떤 측정값에도 개입하지 않는다.
 
 ### 5.2 각 단계 동작 요약
 
@@ -461,16 +489,17 @@ double offsetMm = result.OffsetPx * mmPerPx;
 #### ⑥⑩ Peak 센터링 (`PeakCenteringStep`)
 
 1. `Bag["peak{id}.find"]`에서 `offsetMm`을 읽음
-2. 이동량 = `(−1) × offsetMm × XSign`, **±100mm로 클램프**
-3. `GetTcpPoseInBaseAsync(tool)` → `MoveByOffsetAsync(anchor, user:0, [move,0,0,0,0,0], tool, vel)`
+2. 이동량 = `(+1) × offsetMm`, **±100mm로 클램프** (④ 규약 — §4.3. 검사캠 오프셋 미개입 — §4.2)
+3. `GetTcpPoseInBaseAsync(tool)` → `ApplyAxis(offset, ImageXAxis, move)` →
+   `MoveByToolOffsetAsync(anchor, user:0, offset, tool, vel)` (**툴 프레임**)
 4. **이동 후 `FindPeakAsync` 1회 재측정** (모션 없음)
 5. 잔차 판정:
    - `|잔차| < |초기 offset|` → 성공
-   - `|잔차| >= |초기 offset|` → **실패**, `"이격거리 증가 — Camera.Axis.XSign 확인 필요"` 메시지
+   - `|잔차| >= |초기 offset|` → **실패**, `"이격거리 증가 — Camera.Align.ImageXAxis 확인 필요"` 메시지
 6. `Bag["peak{id}.find"]`를 재측정 결과로 **갱신** (⑦⑪이 최신 값을 쓰도록)
 
 > **반복 루프 없음, 수렴 임계 없음.** 개루프 1회 이동 + 검증 1회.
-> 재측정의 목적은 정밀도가 아니라 **XSign 오설정 조기 발견**이다.
+> 재측정의 목적은 정밀도가 아니라 **ImageXAxis 매핑 오설정 조기 발견**이다.
 
 #### ⑦⑪ Bead 찾기 (`BeadFindStep`)
 
@@ -484,8 +513,8 @@ double offsetMm = result.OffsetPx * mmPerPx;
 #### ⑧ Peak2 이동 (`PeakApproachStep`)
 
 1. `PitchMm`(370)과 `PitchDir`(±1)을 읽음
-2. 이동량 = `PitchMm × PitchDir` (BASE X)
-3. `MoveByOffsetAsync` 실행
+2. 이동량 = `PitchMm × PitchDir` (진행축 = `ImageXAxis` 툴축)
+3. `ApplyAxis(offset, ImageXAxis, move)` → `MoveByToolOffsetAsync` 실행 (**툴 프레임**)
 4. 안정화 대기 `await Task.Delay(500, ct)`
 
 #### ⑫ 각도 산출 (`WeldAngleStep`)
@@ -505,8 +534,10 @@ double offsetMm = result.OffsetPx * mmPerPx;
 | 키 | 타입 | 기본값 | 설명 |
 |---|---|---|---|
 | `Weld.Peak.PitchMm` | double | `370` | Peak 간 pitch(mm). ⑧ 이동량 및 ⑫ 각도식 분모 |
-| `Weld.Peak.PitchDir` | double | `+1` | Peak2 이동 방향. `+1` 또는 `−1` |
-| `Camera.Axis.XSign` | double | `+1` | 영상 +X → BASE ±X. `+1` 또는 `−1` |
+| `Weld.Peak.PitchDir` | double | `+1` | Peak2 이동 방향(진행축 + 기준). `+1` 또는 `−1` |
+| `Sequence.InspectCam.OffsetXMm` | double | `0` | 검사 카메라 시야 중심의 depth 영상 기준 오프셋 X(mm, 화면 오른쪽 +) — ⑦⁺⑪⁺ 검증 후 시프트에 사용 (§4.2) |
+| `Sequence.InspectCam.OffsetYMm` | double | `0` | 위 오프셋의 Y 성분(mm, 화면 아래 +) |
+| ~~`Camera.Axis.XSign`~~ | double | — | **폐기** — 방향은 ④와 공유하는 `Camera.Align.ImageXAxis` 매핑(부호 포함)이 담당 (§4.3) |
 
 > `GetDoubleAsync`로 읽고, 값이 없으면 기본값을 사용한다.
 > 부호 파라미터는 `Math.Sign()`으로 정규화한다. `0`이면 `+1`로 간주.
@@ -618,7 +649,7 @@ internal static class WeldSequenceSupport
 
     public const string PitchMmKey    = "Weld.Peak.PitchMm";
     public const string PitchDirKey   = "Weld.Peak.PitchDir";
-    public const string XSignKey      = "Camera.Axis.XSign";
+    public const string ImageXAxisKey = "Camera.Align.ImageXAxis";  // ④와 공유하는 영상→툴축 매핑
 
     public const double DefaultPitchMm = 370.0;
 
@@ -944,24 +975,25 @@ private const double MaxCenteringMoveMm = 100.0;   // 1회 이동 클램프
 
 ```
  1. Bag에서 initialOffsetMm 읽기
- 2. xSign = await GetSignAsync(param, XSignKey)
- 3. moveMm = -initialOffsetMm * xSign
- 4. |moveMm| < 0.5 → Ok("이미 센터 근방 — 이동 생략") 후 종료
- 5. clamped = Math.Clamp(moveMm, -MaxCenteringMoveMm, +MaxCenteringMoveMm)
+ 2. moveMm = initialOffsetMm            // ④ 규약 — 부호 반전·부호 파라미터 없음 (§4.3)
+ 3. |moveMm| < 0.5 → Ok("이미 센터 근방 — 이동 생략") 후 종료
+ 4. clamped = Math.Clamp(moveMm, -MaxCenteringMoveMm, +MaxCenteringMoveMm)
     clamped != moveMm 이면 LogWarning (클램프 발생)
+ 5. (axisX, fromParam) = await GetImageXAxisAsync(param)   // 없으면 +X 폴백 + LogWarning
  6. anchor = await cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct)
- 7. offset = new[] { clamped, 0.0, 0.0, 0.0, 0.0, 0.0 }
- 8. rc = await cobot.Rpc.MoveByOffsetAsync(anchor, user: 0, offset,
-                                            tool: context.Tool, vel: context.Velocity, ct: ct)
+ 7. offset = new double[6];
+    FlatSurfaceCenteringService.ApplyAxis(offset, axisX, clamped)
+ 8. rc = await cobot.Rpc.MoveByToolOffsetAsync(anchor, user: 0, offset,     // 툴 프레임
+                                               tool: context.Tool, vel: context.Velocity, ct: ct)
     rc != 0 → Fail($"센터링 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}")
  9. await Task.Delay(500, ct)                      // 모션 안정화
 10. (roi, _) = await GetRoiAsync(param, camera)
 11. r2 = await weld.FindPeakAsync(roi, ct)
-    !r2.Found → Fail("이동 후 Peak 미검출 — Camera.Axis.XSign 또는 ROI 확인 필요.")
+    !r2.Found → Fail("이동 후 Peak 미검출 — Camera.Align.ImageXAxis 매핑 또는 ROI 확인 필요.")
 12. (residualMm, _) = ResolveOffsetMm(r2, weld, camera)
 13. if (Math.Abs(residualMm) >= Math.Abs(initialOffsetMm))
         return Fail($"이격거리 증가 ({initialOffsetMm:+0.0;-0.0} → {residualMm:+0.0;-0.0}mm) — " +
-                    $"Camera.Axis.XSign(현재 {xSign:+0;-0}) 부호를 반대로 설정해 보세요.");
+                    $"Camera.Align.ImageXAxis 를 현재 축의 반대 부호 축으로 설정해 보세요.");
 14. context.Bag[PeakFindBagKey(_peakId)] = r2;            // 최신값으로 갱신
     context.Bag[$"peak{_peakId}.offsetMm"] = residualMm;
 15. return Ok($"Peak{_peakId} 센터링 완료 — {clamped:+0.0;-0.0}mm 이동, " +
@@ -1059,13 +1091,15 @@ public int DefaultOrder => 800;
 1. pitchMm = await GetPitchMmAsync(param);  <= 0 → Fail
 2. pitchDir = await GetSignAsync(param, PitchDirKey)
 3. moveMm = pitchMm * pitchDir
-4. anchor = await cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct)
-5. offset = new[] { moveMm, 0.0, 0.0, 0.0, 0.0, 0.0 }
-6. rc = await cobot.Rpc.MoveByOffsetAsync(anchor, user: 0, offset,
-                                           tool: context.Tool, vel: context.Velocity, ct: ct)
+4. (axisX, fromParam) = await GetImageXAxisAsync(param)   // 없으면 +X 폴백 + LogWarning
+5. anchor = await cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct)
+6. offset = new double[6];
+   FlatSurfaceCenteringService.ApplyAxis(offset, axisX, moveMm)
+7. rc = await cobot.Rpc.MoveByToolOffsetAsync(anchor, user: 0, offset,     // 툴 프레임
+                                              tool: context.Tool, vel: context.Velocity, ct: ct)
    rc != 0 → Fail($"Peak2 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}")
-7. await Task.Delay(500, ct)     // 모션 안정화
-8. return Ok($"Peak2 위치로 {moveMm:+0.0;-0.0}mm 이동 완료 (pitch={pitchMm:0.#}mm, dir={pitchDir:+0;-0})")
+8. await Task.Delay(500, ct)     // 모션 안정화
+9. return Ok($"Peak2 위치로 툴{축} {moveMm:+0.0;-0.0}mm 이동 완료 (pitch={pitchMm:0.#}mm, dir={pitchDir:+0;-0})")
 ```
 
 ### 8.9 `WeldAngleStep.cs` (⑫)
@@ -1222,9 +1256,9 @@ private static string StepCircle(int n) => n switch
 
 | 조건 | 처리 |
 |---|---|
-| `MoveByOffsetAsync` rc != 0 | 즉시 실패 + `FairinoErrorCodes.Suffix(rc)` |
-| 이동 후 Peak 미검출 | 즉시 실패 — XSign 확인 안내 |
-| `\|잔차\| >= \|초기 offset\|` | 즉시 실패 — **XSign 부호 반대 안내** |
+| `MoveByToolOffsetAsync` rc != 0 | 즉시 실패 + `FairinoErrorCodes.Suffix(rc)` |
+| 이동 후 Peak 미검출 | 즉시 실패 — ImageXAxis 매핑 확인 안내 |
+| `\|잔차\| >= \|초기 offset\|` | 즉시 실패 — **ImageXAxis 반대 부호 축 안내** |
 
 ### 9.5 외삽 (허용)
 
@@ -1282,7 +1316,7 @@ dotnet run --project HD_AMR.Web --launch-profile https   # https://localhost:727
 
 ## 11. 브링업 절차
 
-`Camera.Axis.XSign`과 `Weld.Peak.PitchDir`은 **실측으로 확정**해야 한다.
+`Camera.Align.ImageXAxis`(④와 공유)와 `Weld.Peak.PitchDir`은 **실측으로 확정**해야 한다.
 두 파라미터는 서로 간섭하지 않으므로 **순서대로** 진행한다.
 
 ### 11.1 사전 준비
@@ -1291,12 +1325,15 @@ dotnet run --project HD_AMR.Web --launch-profile https   # https://localhost:727
 2. Weld 페이지에서 **2점 스케일 보정** 수행 (권장 — 안 하면 intrinsics 폴백)
 3. Camera 페이지에서 **Depth ROI를 370mm 이상 폭**으로 설정하고 저장
    (400mm 스탠드오프 기준 프레임 폭의 약 46% 이상)
-4. 파라미터 화면에서 다음 값 확인/생성
+4. Camera 페이지에서 **이미지→툴축 매핑**(`Camera.Align.ImageXAxis`/`ImageYAxis`)을
+   조그 실측으로 확인·저장 (④ 평탄면 센터링이 정상 동작하면 이미 확정된 것)
+5. 파라미터 화면에서 다음 값 확인/생성
    - `Weld.Peak.PitchMm` = `370`
    - `Weld.Peak.PitchDir` = `1`
-   - `Camera.Axis.XSign` = `1`
 
-### 11.2 1단계 — `Camera.Axis.XSign` 확정
+### 11.2 1단계 — `Camera.Align.ImageXAxis` 확정
+
+④ 평탄면 센터링이 이미 같은 매핑으로 정상 동작하면 이 단계는 확인만 하면 된다.
 
 1. ①~④를 실행해 검사 위치·평탄면 정렬 완료
 2. **⑤ → ⑥만 반복 실행** (세미오토)
@@ -1304,15 +1341,16 @@ dotnet run --project HD_AMR.Web --launch-profile https   # https://localhost:727
 
 | ⑥ 결과 | 조치 |
 |---|---|
-| 성공, 잔차가 초기값보다 **작음** | `XSign` 현재 값이 정답 ✅ |
-| 실패, `"이격거리 증가"` 메시지 | `XSign`을 **반대 부호로** 변경 후 재시도 |
-| 실패, `"이동 후 Peak 미검출"` | `XSign` 반대로 시도. 그래도 실패면 ROI 폭 확인 |
+| 성공, 잔차가 초기값보다 **작음** | `ImageXAxis` 현재 값이 정답 ✅ |
+| 실패, `"이격거리 증가"` 메시지 | `ImageXAxis`를 **반대 부호 축으로** 변경 후 재시도 (예: +X → −X) |
+| 실패, `"이동 후 Peak 미검출"` | `ImageXAxis` 반대 부호로 시도. 그래도 실패면 ROI 폭 확인 |
 
 > 안전장치: 1회 이동이 ±100mm로 클램프되고 반복 루프가 없으므로 폭주하지 않는다.
+> 주의: `ImageXAxis`는 ④와 공유하므로, ⑥ 때문에 바꿨는데 ④가 발산하면 매핑이 아니라 다른 원인이다.
 
 ### 11.3 2단계 — `Weld.Peak.PitchDir` 확정
 
-`XSign` 확정 후 진행한다.
+`ImageXAxis` 확정 후 진행한다.
 
 1. ⑤⑥⑦ 실행 (Peak1 측정 완료)
 2. **⑧ → ⑨ 실행**
@@ -1351,8 +1389,8 @@ SQLite DB(`hd_amr.db`)의 `Parameters` 테이블에서 수정해도 동일하게
 | 2 | 클래스 8개가 아닌 **5개** + `peakId` 파라미터화 | ⑤⑨, ⑥⑩, ⑦⑪이 파라미터만 다른 동일 동작. 중복 제거 |
 | 3 | mm 환산 **하이브리드** (2점 보정 우선) | `WeldTrackingService`는 간이 FOV intrinsic이지만 **2점 실측 보정**이 있고, `CameraService`는 실제 intrinsics지만 실측 보정이 없음. 실측 보정이 있으면 그쪽이 신뢰도 높음 |
 | 4 | **IR 모드 전제**, RGB 모드 차단 | IR(848×480) = Depth(848×480) 해상도 동일 → 좌표 변환 불필요. RGB(1280×720)는 D2C 재투영 필요 |
-| 5 | `XSign`과 `PitchDir` **분리** | 카메라 장착 방향(물리)과 측정 방향 선택(설비)은 독립 미지수. 합치면 한쪽을 뒤집을 때 다른 쪽이 발산 |
-| 6 | 센터링 **개루프 1회 + 재측정 검증** | 정밀도 불필요(⑦⑪이 Peak를 재측정하므로). 재측정의 목적은 **XSign 오설정 조기 발견** |
+| 5 | `ImageXAxis`(장착 매핑)와 `PitchDir` **분리** | 카메라 장착 방향(물리)과 측정 방향 선택(설비)은 독립 미지수. 합치면 한쪽을 뒤집을 때 다른 쪽이 발산 |
+| 6 | 센터링 **개루프 1회 + 재측정 검증** | 정밀도 불필요(⑦⑪이 Peak를 재측정하므로). 재측정의 목적은 **ImageXAxis 매핑 오설정 조기 발견** |
 | 7 | **단일샷** (다중 샘플링 없음) | 사전 검증에서 단일샷으로도 Peak를 잘 찾았고, Peak 위치의 정밀도 요구가 낮음 |
 | 8 | **재시도 없음** | 1회 실패 확정. 재시도는 문제를 가릴 뿐 |
 | 9 | **Depth ROI를 Peak/Bead ROI로 그대로 사용** | IR 모드에서 좌표계 동일. 운영자에게 "370mm 이상으로 설정"을 전달하는 것으로 대응 |

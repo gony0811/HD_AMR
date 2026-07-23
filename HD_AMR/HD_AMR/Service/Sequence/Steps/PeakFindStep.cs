@@ -1,10 +1,12 @@
+using HD_AMR.Models;
 using Microsoft.Extensions.Logging;
 
 namespace HD_AMR.Service.Sequence.Steps;
 
 /// <summary>
 /// ⑤/⑨ Peak 찾기 — 깊이 영상에서 코루게이션 Peak(마루)를 찾아 자홍색 선으로 표시하고,
-/// 진행축(BASE X) FOV 센터로부터의 이격거리를 mm 로 환산해 <see cref="SequenceContext.Bag"/> 에 담는다.
+/// 진행축(② 검사방향에서 자동 결정 — <see cref="WeldSequenceSupport.GetProgressAxis"/>) FOV 센터로부터의
+/// 이격거리를 mm 로 환산해 <see cref="SequenceContext.Bag"/> 에 담는다.
 /// 이동은 하지 않는다. 후속 센터링 단계(⑥/⑩)가 이 값을 소비한다.
 /// </summary>
 public class PeakFindStep : ISequenceStep
@@ -54,13 +56,17 @@ public class PeakFindStep : ISequenceStep
         if (roi is null)
             return StepResult.Fail("깊이 ROI 를 만들 수 없습니다 — IR 프레임/ROI 설정을 확인하세요.");
 
-        // ROI 폭이 pitch 를 넘으면 ROI 안에 Peak 가 2개 들어올 수 있고, 분석기는 더 가까운 쪽을
+        // 측정 축을 ② 검사방향과 정합시킨다 — Weld 패널 수동 설정과 무관하게 시퀀스가 소유.
+        var progressAxis = WeldSequenceSupport.ApplyProgressAxis(_weld, context);
+
+        // 진행축 ROI 길이가 pitch 를 넘으면 ROI 안에 Peak 가 2개 들어올 수 있고, 분석기는 더 가까운 쪽을
         // 고른다. 판이 기울어 있으면 중앙이 아닌 Peak 를 잡을 수 있어 경고만 남긴다(차단하지 않음).
-        var pitchPx = WeldSequenceSupport.PitchToPixels(pitchMm, AssumedStandoffMm, _camera);
-        if (pitchPx > 0 && roi.Width > pitchPx)
+        var pitchPx = WeldSequenceSupport.PitchToPixels(pitchMm, AssumedStandoffMm, _camera, progressAxis);
+        var roiProgressLen = progressAxis == WeldProgressAxis.Horizontal ? roi.Width : roi.Height;
+        if (pitchPx > 0 && roiProgressLen > pitchPx)
             _logger.LogWarning(
-                "Peak{Id} ROI 폭 {W}px 가 pitch 환산 {P:0}px 를 초과 — ROI 안에 Peak 가 2개 들어올 수 있습니다.",
-                _peakId, roi.Width, pitchPx);
+                "Peak{Id} ROI 진행축 길이 {W}px 가 pitch 환산 {P:0}px 를 초과 — ROI 안에 Peak 가 2개 들어올 수 있습니다.",
+                _peakId, roiProgressLen, pitchPx);
 
         var r = await _weld.FindPeakAsync(roi, ct);
         if (!r.Found)

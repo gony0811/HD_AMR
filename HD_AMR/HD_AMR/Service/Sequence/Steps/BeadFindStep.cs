@@ -61,6 +61,9 @@ public class BeadFindStep : ISequenceStep
         if (roi is null)
             return StepResult.Fail("깊이 ROI 를 만들 수 없습니다 — IR 프레임/ROI 설정을 확인하세요.");
 
+        // 측정 축을 ② 검사방향과 정합시킨다 — d 는 진행축과 수직(cross) 방향으로 측정된다.
+        var progressAxis = WeldSequenceSupport.ApplyProgressAxis(_weld, context);
+
         // Peak ROI 와 Weld ROI 에 동일한 깊이 ROI 를 사용한다.
         var (m, detect) = await _weld.CapturePeakAsync(_peakId, roi, roi, ct);
 
@@ -79,7 +82,10 @@ public class BeadFindStep : ISequenceStep
             return StepResult.Fail($"Bead{_peakId} 측정 슬롯 저장 실패.");
 
         var dMm = _weld.DMm(m);
-        var extrapPx = ComputeExtrapolation(detect);
+        var extrapPx = ComputeExtrapolation(detect, progressAxis == WeldProgressAxis.Horizontal);
+
+        // 비드 센터링(⑦⁺/⑪⁺)이 cross 축 이동량으로 소비한다.
+        context.Bag[WeldSequenceSupport.BeadDMmBagKey(_peakId)] = dMm;
 
         _logger.LogInformation(
             "⑦/⑪ Bead{Id} 찾음: d={DMm:0.0}mm ({DPx:0.0}px), coverage={Cov:P0}, 외삽={Ex:0}px, ROI={Roi}",
@@ -98,17 +104,17 @@ public class BeadFindStep : ISequenceStep
     /// 다만 외삽 거리가 클수록 기울기 오차가 증폭되므로, ⑦⑪ 두 측정의 외삽 거리가 크게 다르면
     /// 각도 왜곡의 유력한 원인이 된다. 그 판별을 위해 수치만 기록한다.
     /// </summary>
-    private static double ComputeExtrapolation(WeldDetectionResult r)
+    private static double ComputeExtrapolation(WeldDetectionResult r, bool horiz)
     {
         if (r.Centerline.Count == 0 || r.WeldPoint is null) return 0;
 
-        // ProgressAxis == Horizontal 전제 — 진행축은 X.
+        // 진행축 좌표(가로면 X, 세로면 Y)로 비교한다.
         // 피팅 성공 시 Centerline 은 유효 구간의 시작·끝 2점이다(WeldMaskAnalyzer).
-        var first = r.Centerline[0].X;
-        var last = r.Centerline[^1].X;
+        var first = horiz ? r.Centerline[0].X : r.Centerline[0].Y;
+        var last = horiz ? r.Centerline[^1].X : r.Centerline[^1].Y;
         var lo = Math.Min(first, last);
         var hi = Math.Max(first, last);
-        var t = r.WeldPoint.X;
+        var t = horiz ? r.WeldPoint.X : r.WeldPoint.Y;
 
         if (t < lo) return lo - t;
         if (t > hi) return t - hi;
