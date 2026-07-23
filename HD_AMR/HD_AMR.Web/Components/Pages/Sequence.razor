@@ -54,6 +54,12 @@
                 오류 해제 (Reset Error)
             </button>
         </div>
+        <div class="col-auto">
+            <button class="btn btn-outline-secondary" title="모든 단계 상태·측정값 초기화"
+                    @onclick="ResetStatuses" disabled="@Seq.IsBusy">
+                ↺ 상태 초기화
+            </button>
+        </div>
     </div>
     @if (!string.IsNullOrEmpty(_msg))
     {
@@ -280,6 +286,15 @@
 
     // ── 정지 ─────────────────────────────────────────────────────────
     private async Task StopAsync() => await Seq.StopAsync();
+
+    // ── 상태 초기화 ──────────────────────────────────────────────────
+    private void ResetStatuses()
+    {
+        Seq.Reset();
+        _context.Bag.Clear();   // 측정값·앵커·플래그도 초기화 — 새 사이클 시작
+        _isErr = false;
+        _msg = "시퀀스 상태 초기화 완료.";
+    }
 
     // ── 오류 해제 ────────────────────────────────────────────────────
     private async Task ResetFaultAsync()

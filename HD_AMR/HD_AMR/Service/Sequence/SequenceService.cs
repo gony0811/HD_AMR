@@ -127,6 +127,14 @@ public class SequenceService
         return result;
     }
 
+    /// <summary>모든 단계 상태를 대기(Pending)로 초기화. 실행 중에는 무시한다.</summary>
+    public void Reset()
+    {
+        if (IsBusy) return;
+        ResetStatuses();
+        RaiseStateChanged();
+    }
+
     /// <summary>즉시 정지: 현재 실행을 취소하고 코봇 모션을 정지.</summary>
     public async Task StopAsync()
     {
