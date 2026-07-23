@@ -7,6 +7,8 @@
 @inject CameraService Svc
 @inject WeldTrackingService Weld
 @inject ParameterService Param
+@inject CobotService Cobot
+@inject FlatSurfaceCenteringService Centering
 @inject IJSRuntime JS
 @implements IDisposable
 
@@ -132,6 +134,68 @@
                             disabled="@(_busy || !Svc.IsStreaming || !_roiEnabled || _roiW <= 0 || _roiH <= 0)">
                         평면 검출 확인
                     </button>
+                    @* 코봇을 실제로 움직여 카메라(ROI) 중심을 평탄 셀 중심에 반복 수렴 정렬한다. *@
+                    <button class="btn btn-sm btn-outline-danger" @onclick="AlignToFlatCenter"
+                            disabled="@(_busy || _aligning || !Svc.IsStreaming || !_roiEnabled || _roiW <= 0 || _roiH <= 0 || !Cobot.IsConnected)">
+                        평탄 중심으로 이동@(Cobot.IsConnected ? "" : " (코봇 미연결)")
+                    </button>
+                    <button class="btn btn-sm btn-outline-secondary" @onclick="AbortAlign" disabled="@(!_aligning)">
+                        중지
+                    </button>
+
+                    @* 깊이 거리 접근 — 툴 광축으로 목표 거리까지 1회 이동. *@
+                    <div class="input-group input-group-sm mt-2" style="max-width:420px">
+                        <span class="input-group-text">목표 거리 mm</span>
+                        <input type="number" class="form-control" min="100" max="2000" step="10"
+                               @bind="_targetDistMm" @bind:after="SaveAlignSettingsAsync" disabled="@_aligning" />
+                        <button class="btn btn-outline-danger" @onclick="MoveToTargetDistance"
+                                disabled="@(_busy || _aligning || !Svc.IsStreaming || !_roiEnabled || _roiW <= 0 || _roiH <= 0 || !Cobot.IsConnected)">
+                            지정 거리로 이동@(Cobot.IsConnected ? "" : " (코봇 미연결)")
+                        </button>
+                    </div>
+
+                    @* 이미지/광축 → 로봇 툴축 매핑. 장착 방향/툴 정의에 따라 달라 실측으로 지정한다(변경 즉시 저장). *@
+                    <div class="row g-2 mt-1" style="max-width:640px;font-size:.8rem">
+                        <div class="col-3">
+                            <label class="form-label mb-0" style="font-size:.75rem">이미지 X(오른쪽) → 툴축</label>
+                            <select class="form-select form-select-sm" @bind="_alignImageXAxis" @bind:after="SaveAlignSettingsAsync" disabled="@_aligning">
+                                @foreach (var (v, name) in AxisOptions) { <option value="@v">툴 @name</option> }
+                            </select>
+                        </div>
+                        <div class="col-3">
+                            <label class="form-label mb-0" style="font-size:.75rem">이미지 Y(아래) → 툴축</label>
+                            <select class="form-select form-select-sm" @bind="_alignImageYAxis" @bind:after="SaveAlignSettingsAsync" disabled="@_aligning">
+                                @foreach (var (v, name) in AxisOptions) { <option value="@v">툴 @name</option> }
+                            </select>
+                        </div>
+                        <div class="col-3">
+                            <label class="form-label mb-0" style="font-size:.75rem">광축(전방) → 툴축</label>
+                            <select class="form-select form-select-sm" @bind="_alignDepthAxis" @bind:after="SaveAlignSettingsAsync" disabled="@_aligning">
+                                @foreach (var (v, name) in AxisOptions) { <option value="@v">툴 @name</option> }
+                            </select>
+                        </div>
+                        <div class="col-3">
+                            <label class="form-label mb-0" style="font-size:.75rem">툴 번호</label>
+                            <input type="number" class="form-control form-control-sm" min="0" max="14"
+                                   @bind="_alignTool" @bind:after="SaveAlignSettingsAsync" disabled="@_aligning" />
+                        </div>
+                        <div class="col-12 text-muted">
+                            조그 팝업에서 <b>툴 프레임</b> +X/+Y/+Z로 소량 조그하며 depth 화면으로 매핑을 확인하세요.
+                            카메라가 +X로 움직이면 화면 내용은 왼쪽으로 흐르고, 광축(전방) 조그 시 거리(mm)가 줄어듭니다.
+                        </div>
+                    </div>
+
+                    @if (_alignLog.Count > 0)
+                    {
+                        <div class="mt-2 p-2 border rounded" style="font-size:.8rem;max-height:9rem;overflow-y:auto">
+                            <div><b>평탄 중심 정렬 진행</b>
+                                <span class="text-muted">(ROI 중심 기준 — 이미지 주점 기준인 "중심 정렬 이동량"과 다를 수 있음)</span></div>
+                            @foreach (var line in _alignLog)
+                            {
+                                <div>@line</div>
+                            }
+                        </div>
+                    }
 
                     @if (_flatness is { } fr)
                     {
@@ -241,6 +305,26 @@ else
     // 평탄면 중심을 화면 중심으로 가져오기 위한 이동량(mm) — 핀홀 모델 기반, 표시 전용.
     private CameraService.CenterOffsetResult? _centerOffset;
 
+    // 평탄 중심 정렬(코봇 실이동) 상태 — 반복 수렴 진행 로그와 취소 토큰.
+    private bool _aligning;
+    private CancellationTokenSource? _alignCts;
+    private readonly List<string> _alignLog = new();
+
+    // 이미지/광축 → 툴축 매핑 설정 (ToolAxisDir enum 값) + 툴 번호 + 목표 거리. 변경 즉시 DB 영속화.
+    private int _alignImageXAxis = (int)ToolAxisDir.PlusX;
+    private int _alignImageYAxis = (int)ToolAxisDir.PlusY;
+    private int _alignDepthAxis = (int)ToolAxisDir.PlusZ;
+    private int _alignTool = 1;
+    private double _targetDistMm = 400;
+    private static readonly (int Value, string Name)[] AxisOptions =
+        { (0, "+X"), (1, "−X"), (2, "+Y"), (3, "−Y"), (4, "+Z"), (5, "−Z") };
+
+    private const string AlignImageXAxisKey = "Camera.Align.ImageXAxis";
+    private const string AlignImageYAxisKey = "Camera.Align.ImageYAxis";
+    private const string AlignDepthAxisKey = "Camera.Align.DepthAxis";
+    private const string AlignToolKey = "Camera.Align.Tool";
+    private const string AlignTargetDistKey = "Camera.Align.TargetDistanceMm";
+
     // 최소 깊이값 노이즈 평활용 이동평균 윈도우(최근 10개 샘플).
     private const int MinWindowSize = 10;
     private readonly Queue<int> _minMmWindow = new();
@@ -267,6 +351,7 @@ else
         _cts = new CancellationTokenSource();
         await LoadRoiAsync();
         await LoadCaptureDirAsync();
+        await LoadAlignSettingsAsync();
         _ = PollLoop(_cts.Token);
     }
 
@@ -370,6 +455,144 @@ else
         }
         catch (Exception ex) { Notify($"평면 검출 실패: {ex.Message}", true); }
         finally { _busy = false; }
+    }
+
+    // 저장된 축 매핑/툴 번호 설정 로드(없으면 기본값 유지).
+    private async Task LoadAlignSettingsAsync()
+    {
+        try
+        {
+            if (await Param.GetDoubleAsync(AlignImageXAxisKey) is { } x and >= 0 and <= 5) _alignImageXAxis = (int)x;
+            if (await Param.GetDoubleAsync(AlignImageYAxisKey) is { } y and >= 0 and <= 5) _alignImageYAxis = (int)y;
+            if (await Param.GetDoubleAsync(AlignDepthAxisKey) is { } z and >= 0 and <= 5) _alignDepthAxis = (int)z;
+            if (await Param.GetDoubleAsync(AlignToolKey) is { } t and >= 0) _alignTool = (int)t;
+            if (await Param.GetDoubleAsync(AlignTargetDistKey) is { } dist and > 0) _targetDistMm = dist;
+        }
+        catch { /* DB 미준비 — 기본값 유지 */ }
+    }
+
+    // 축 매핑/툴 번호 변경 즉시 영속화 — 시퀀스 스텝 ④도 같은 키를 읽는다.
+    private async Task SaveAlignSettingsAsync()
+    {
+        try
+        {
+            await Param.SetDoubleAsync(AlignImageXAxisKey, _alignImageXAxis, "평탄 정렬: 이미지 X→툴축 (ToolAxisDir)");
+            await Param.SetDoubleAsync(AlignImageYAxisKey, _alignImageYAxis, "평탄 정렬: 이미지 Y→툴축 (ToolAxisDir)");
+            await Param.SetDoubleAsync(AlignDepthAxisKey, _alignDepthAxis, "거리 접근: 광축(전방)→툴축 (ToolAxisDir)");
+            await Param.SetDoubleAsync(AlignToolKey, _alignTool, "평탄 정렬: 툴 번호");
+            await Param.SetDoubleAsync(AlignTargetDistKey, _targetDistMm, "거리 접근: 목표 거리(mm)");
+        }
+        catch (Exception ex) { Notify($"정렬 설정 저장 실패: {ex.Message}", true); }
+    }
+
+    // 가장 평탄한 셀 1개를 검출해 그 중심이 ROI 중심에 오도록 코봇을 1회만 이동(개루프 — 재검출/재이동 없음).
+    private async Task AlignToFlatCenter()
+    {
+        if (_busy || _aligning) return;
+        _busy = true;
+        _aligning = true;
+        _message = null;
+        _alignLog.Clear();
+        _alignCts = new CancellationTokenSource();
+        try
+        {
+            ClampRoi();
+            var r = await Centering.RunAsync(new FlatCenterAlignOptions
+            {
+                RoiX = _roiX, RoiY = _roiY, RoiW = _roiW, RoiH = _roiH,
+                ToleranceMm = 2.0,          // 이동 전 잔차가 이미 2mm 이하면 이동 생략
+                MaxIterations = 1,
+                VerifyAfterMove = false,    // 1회 개루프 이동 — 이동 후 재검출/재이동 없음
+                MaxLateralMoveMm = 0,   // 절대 상한 해제 — ROI 물리 크기 기반 동적 한계만 적용 (시퀀스 스텝은 100mm 유지)
+                ImageXAxis = (ToolAxisDir)_alignImageXAxis,
+                ImageYAxis = (ToolAxisDir)_alignImageYAxis,
+                Tool = _alignTool,
+                Velocity = 10,   // 보수적 저속 — 카메라 페이지 수동 실행용
+            },
+            msg =>
+            {
+                _alignLog.Add(msg);
+                _ = InvokeAsync(StateHasChanged);
+            },
+            _alignCts.Token);
+
+            // 최종 검출 셀을 결과 패널/시안 오버레이에 반영(VerifyPlane 와 동일 표시 경로).
+            if (r is { FlatU: not null, FlatV: not null })
+            {
+                _flatness = new CameraService.DepthFlatnessResult(
+                    r.FlatU.Value, r.FlatV.Value, r.SigmaMm ?? 0, r.MeanDepthMm ?? 0);
+                _flatnessStats = Svc.ComputeDepthRoiStats(_roiX, _roiY, _roiW, _roiH);
+                _centerOffset = r.MeanDepthMm is > 0
+                    ? Svc.ComputeCenterOffsetMm(r.FlatU.Value, r.FlatV.Value, r.MeanDepthMm)
+                    : Svc.ComputeCenterOffsetMm(r.FlatU.Value, r.FlatV.Value);
+                double cellW = _roiW / 5.0, cellH = _roiH / 5.0;
+                double bx = r.FlatU.Value - cellW / 2, by = r.FlatV.Value - cellH / 2;
+                try { await JS.InvokeVoidAsync("hdAmrCamera.setFlatCell", _roiCanvas, bx, by, cellW, cellH); }
+                catch { /* 미준비/회로 종료 무시 */ }
+            }
+
+            Notify(r.Success
+                ? $"평탄 중심 정렬 완료: {r.Message}"
+                : $"평탄 중심 정렬 실패: {r.Message}", !r.Success);
+        }
+        catch (Exception ex) { Notify($"평탄 중심 정렬 오류: {ex.Message}", true); }
+        finally
+        {
+            _busy = false;
+            _aligning = false;
+            _alignCts?.Dispose();
+            _alignCts = null;
+        }
+    }
+
+    // 깊이 ROI 측정 거리가 목표(_targetDistMm)가 되도록 툴 광축으로 1회 접근 이동.
+    private async Task MoveToTargetDistance()
+    {
+        if (_busy || _aligning) return;
+        _busy = true;
+        _aligning = true;
+        _message = null;
+        _alignLog.Clear();
+        _alignCts = new CancellationTokenSource();
+        try
+        {
+            ClampRoi();
+            var r = await Centering.MoveToDistanceAsync(new DepthDistanceMoveOptions
+            {
+                RoiX = _roiX, RoiY = _roiY, RoiW = _roiW, RoiH = _roiH,
+                TargetDistanceMm = _targetDistMm,
+                MaxTravelMm = 1500,   // 수동 실행 — 초기 거리가 멀 수 있어 한계 완화
+                DepthAxis = (ToolAxisDir)_alignDepthAxis,
+                Tool = _alignTool,
+                Velocity = 10,        // 보수적 저속
+            },
+            msg =>
+            {
+                _alignLog.Add(msg);
+                _ = InvokeAsync(StateHasChanged);
+            },
+            _alignCts.Token);
+
+            Notify(r.Success
+                ? $"거리 접근 완료: {r.Message}"
+                : $"거리 접근 실패: {r.Message}", !r.Success);
+        }
+        catch (Exception ex) { Notify($"거리 접근 오류: {ex.Message}", true); }
+        finally
+        {
+            _busy = false;
+            _aligning = false;
+            _alignCts?.Dispose();
+            _alignCts = null;
+        }
+    }
+
+    // 정렬 중지 — 취소 토큰만으로는 진행 중인 블로킹 MoveL 이 멈추지 않으므로 즉시 정지도 함께 전송.
+    private void AbortAlign()
+    {
+        _alignCts?.Cancel();
+        if (Cobot.IsConnected)
+            _ = Cobot.StopMotionImmediateAsync();
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -597,6 +820,7 @@ else
     {
         _cts?.Cancel();
         _cts?.Dispose();
+        _alignCts?.Cancel();   // 진행 중 정렬 루프 중단(회로 종료 시 로봇 추가 이동 방지)
         _selfRef?.Dispose();
     }
 }

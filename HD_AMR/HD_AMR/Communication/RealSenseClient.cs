@@ -319,10 +319,49 @@ public class RealSenseClient : IDisposable
                         _logger.LogInformation("{Name} 깊이 스케일 {Scale}m/unit — mm 변환 적용",
                             _settings.Name, metersPerUnit);
 
+                    // Visual Preset 은 EmitterEnabled/LaserPower 등 다수 옵션을 덮어쓰므로 가장 먼저 적용.
+                    if (!string.IsNullOrWhiteSpace(_settings.VisualPreset) &&
+                        sensor.Options.Supports(Option.VisualPreset))
+                    {
+                        if (Enum.TryParse<Rs400VisualPreset>(_settings.VisualPreset, true, out var preset))
+                        {
+                            try
+                            {
+                                sensor.Options[Option.VisualPreset].Value = (float)preset;
+                                _logger.LogInformation("{Name} Visual Preset = {Preset}", _settings.Name, preset);
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogWarning(ex, "{Name} Visual Preset({Preset}) 적용 실패 — 계속 진행",
+                                    _settings.Name, preset);
+                            }
+                        }
+                        else
+                        {
+                            _logger.LogWarning("{Name} 알 수 없는 VisualPreset '{Value}' — 무시",
+                                _settings.Name, _settings.VisualPreset);
+                        }
+                    }
+
                     if (sensor.Options.Supports(Option.EmitterEnabled))
                     {
                         sensor.Options[Option.EmitterEnabled].Value = _settings.EnableEmitter ? 1f : 0f;
                         _logger.LogInformation("{Name} IR 이미터 = {On}", _settings.Name, _settings.EnableEmitter);
+                    }
+
+                    if (_settings.LaserPower >= 0f && sensor.Options.Supports(Option.LaserPower))
+                    {
+                        try
+                        {
+                            var lp = sensor.Options[Option.LaserPower];
+                            var v = Math.Clamp(_settings.LaserPower, lp.Min, lp.Max);   // D435: 0~360
+                            lp.Value = v;
+                            _logger.LogInformation("{Name} 레이저 파워 = {Power}", _settings.Name, v);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "{Name} LaserPower 적용 실패 — 계속 진행", _settings.Name);
+                        }
                     }
                 }
             }
@@ -364,80 +403,107 @@ public class RealSenseClient : IDisposable
     {
         return Task.Run(() =>
         {
-            int consecutiveTimeouts = 0;
-            // 워치독: 마지막으로 프레임을 성공 수신한 시점. 이 시점 이후 일정 시간 프레임이 끊기면
-            // (USB 재열거 등으로 TryWaitForFrames 가 예외 없이 타임아웃만 반복) 강제 재연결한다.
-            var lastOk = DateTime.UtcNow;
-            bool receivedAny = false;
-            while (!ct.IsCancellationRequested && _streaming)
+            // 깊이 후처리(홀 복원) 체인. 세션(RunAsync 1회)마다 새로 만들어 TemporalFilter
+            // 히스토리를 리셋하고, 이 스레드에서만 접근한다. 생성 실패는 치명적이지 않게 —
+            // 원시 깊이로 진행한다.
+            DepthFilterChain? depthFilters = null;
+            try
             {
-                try
-                {
-                    if (!_pipeline!.TryWaitForFrames(out var frames, (uint)_settings.FrameWaitTimeoutMs))
-                    {
-                        // 타임아웃 — 프레임이 한동안 안 오면 주기적으로 한 번씩 경고(매 30회 ≈ 60초).
-                        if (++consecutiveTimeouts % 30 == 0)
-                            _logger.LogWarning("{Name} TryWaitForFrames {Count}회 연속 타임아웃 — 프레임 미수신",
-                                _settings.Name, consecutiveTimeouts);
+                depthFilters = DepthFilterChain.TryCreate(_settings.DepthFilters);
+                if (depthFilters is not null)
+                    _logger.LogInformation(
+                        "{Name} 깊이 후처리 체인 활성 (threshold={Th}, spatial={Sp}, temporal={Tp}, holeFill={Hf})",
+                        _settings.Name, _settings.DepthFilters.UseThreshold,
+                        _settings.DepthFilters.UseSpatial,
+                        _settings.DepthFilters.UseTemporal, _settings.DepthFilters.UseHoleFilling);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "{Name} 깊이 필터 체인 생성 실패 — 원시 깊이로 진행", _settings.Name);
+            }
 
-                        // 프레임 기아 감지 → 강제 teardown 후 종료. 첫 프레임 수신 전(콜드스타트)에는
-                        // 카메라 초기화에 시간이 걸리므로 더 넉넉히 기다린다.
-                        var idleMs = (DateTime.UtcNow - lastOk).TotalMilliseconds;
-                        var limitMs = receivedAny
-                            ? _settings.FrameStarvationReconnectMs
-                            : Math.Max(_settings.FrameStarvationReconnectMs, 8000);
-                        if (idleMs >= limitMs)
+            try
+            {
+                int consecutiveTimeouts = 0;
+                // 워치독: 마지막으로 프레임을 성공 수신한 시점. 이 시점 이후 일정 시간 프레임이 끊기면
+                // (USB 재열거 등으로 TryWaitForFrames 가 예외 없이 타임아웃만 반복) 강제 재연결한다.
+                var lastOk = DateTime.UtcNow;
+                bool receivedAny = false;
+                while (!ct.IsCancellationRequested && _streaming)
+                {
+                    try
+                    {
+                        if (!_pipeline!.TryWaitForFrames(out var frames, (uint)_settings.FrameWaitTimeoutMs))
                         {
-                            _logger.LogWarning(
-                                "{Name} {Idle:F0}ms 동안 프레임 끊김 — 강제 재연결(USB 재열거 추정)",
-                                _settings.Name, idleMs);
-                            Disconnect();   // _connected/_streaming=false + 프레임 스냅샷 비움 → 상위 루프가 재연결
-                            return;
+                            // 타임아웃 — 프레임이 한동안 안 오면 주기적으로 한 번씩 경고(매 30회 ≈ 60초).
+                            if (++consecutiveTimeouts % 30 == 0)
+                                _logger.LogWarning("{Name} TryWaitForFrames {Count}회 연속 타임아웃 — 프레임 미수신",
+                                    _settings.Name, consecutiveTimeouts);
+
+                            // 프레임 기아 감지 → 강제 teardown 후 종료. 첫 프레임 수신 전(콜드스타트)에는
+                            // 카메라 초기화에 시간이 걸리므로 더 넉넉히 기다린다.
+                            var idleMs = (DateTime.UtcNow - lastOk).TotalMilliseconds;
+                            var limitMs = receivedAny
+                                ? _settings.FrameStarvationReconnectMs
+                                : Math.Max(_settings.FrameStarvationReconnectMs, 8000);
+                            if (idleMs >= limitMs)
+                            {
+                                _logger.LogWarning(
+                                    "{Name} {Idle:F0}ms 동안 프레임 끊김 — 강제 재연결(USB 재열거 추정)",
+                                    _settings.Name, idleMs);
+                                Disconnect();   // _connected/_streaming=false + 프레임 스냅샷 비움 → 상위 루프가 재연결
+                                return;
+                            }
+                            continue;
                         }
-                        continue;
-                    }
-                    consecutiveTimeouts = 0;
-                    lastOk = DateTime.UtcNow;
-                    receivedAny = true;
+                        consecutiveTimeouts = 0;
+                        lastOk = DateTime.UtcNow;
+                        receivedAny = true;
 
-                    // 래퍼 Frame/FrameSet 은 매 반복 즉시 dispose — librealsense 내부 프레임 풀(16개)
-                    // 고갈 시 스트림이 조용히 멈춘다.
-                    using (frames)
-                    {
-                        if (_settings.EnableColor) TrySwapColor(frames);
-                        if (_settings.EnableDepth) TrySwapDepth(frames);
-                        if (_irActive) TrySwapIr(frames);
-                    }
+                        // 래퍼 Frame/FrameSet 은 매 반복 즉시 dispose — librealsense 내부 프레임 풀(16개)
+                        // 고갈 시 스트림이 조용히 멈춘다.
+                        using (frames)
+                        {
+                            if (_settings.EnableColor) TrySwapColor(frames);
+                            if (_settings.EnableDepth) TrySwapDepth(frames, ref depthFilters);
+                            if (_irActive) TrySwapIr(frames);
+                        }
 
-                    // 첫 color/depth/ir 프레임을 1회씩 로그 — 어느 스트림이 실제로 들어오는지,
-                    // 해상도/사이즈가 정상인지 즉시 확인용.
-                    if (!_loggedFirstColor && _latestColor is { } c)
-                    {
-                        _loggedFirstColor = true;
-                        _logger.LogInformation("{Name} 첫 color 프레임 수신: {W}x{H} fmt={Fmt} size={Size}",
-                            _settings.Name, c.Width, c.Height, c.PixelFormat, c.Pixels.Length);
-                    }
-                    if (!_loggedFirstDepth && _latestDepth is { } d)
-                    {
-                        _loggedFirstDepth = true;
-                        _logger.LogInformation("{Name} 첫 depth 프레임 수신: {W}x{H} size={Size}",
-                            _settings.Name, d.Width, d.Height, d.Pixels.Length);
-                    }
-                    if (!_loggedFirstIr && _latestIr is { } ir)
-                    {
-                        _loggedFirstIr = true;
-                        _logger.LogInformation("{Name} 첫 IR 프레임 수신: {W}x{H} fmt={Fmt} size={Size}",
-                            _settings.Name, ir.Width, ir.Height, ir.PixelFormat, ir.Pixels.Length);
-                    }
+                        // 첫 color/depth/ir 프레임을 1회씩 로그 — 어느 스트림이 실제로 들어오는지,
+                        // 해상도/사이즈가 정상인지 즉시 확인용.
+                        if (!_loggedFirstColor && _latestColor is { } c)
+                        {
+                            _loggedFirstColor = true;
+                            _logger.LogInformation("{Name} 첫 color 프레임 수신: {W}x{H} fmt={Fmt} size={Size}",
+                                _settings.Name, c.Width, c.Height, c.PixelFormat, c.Pixels.Length);
+                        }
+                        if (!_loggedFirstDepth && _latestDepth is { } d)
+                        {
+                            _loggedFirstDepth = true;
+                            _logger.LogInformation("{Name} 첫 depth 프레임 수신: {W}x{H} size={Size}",
+                                _settings.Name, d.Width, d.Height, d.Pixels.Length);
+                        }
+                        if (!_loggedFirstIr && _latestIr is { } ir)
+                        {
+                            _loggedFirstIr = true;
+                            _logger.LogInformation("{Name} 첫 IR 프레임 수신: {W}x{H} fmt={Fmt} size={Size}",
+                                _settings.Name, ir.Width, ir.Height, ir.PixelFormat, ir.Pixels.Length);
+                        }
 
-                    _lastFrameAt = DateTime.UtcNow;
+                        _lastFrameAt = DateTime.UtcNow;
+                    }
+                    catch (Exception ex)
+                    {
+                        // 장치 분리 등으로 TryWaitForFrames 가 예외를 던지면 종료 → 상위 재연결 루프에 위임.
+                        _logger.LogWarning(ex, "{Name} 프레임 수신 오류 — 루프 종료", _settings.Name);
+                        return;
+                    }
                 }
-                catch (Exception ex)
-                {
-                    // 장치 분리 등으로 TryWaitForFrames 가 예외를 던지면 종료 → 상위 재연결 루프에 위임.
-                    _logger.LogWarning(ex, "{Name} 프레임 수신 오류 — 루프 종료", _settings.Name);
-                    return;
-                }
+            }
+            finally
+            {
+                // 재연결 시 RunAsync 가 다시 돌며 TryCreate 가 새로 실행 → temporal 히스토리 자동 리셋.
+                depthFilters?.Dispose();
             }
         }, ct);
     }
@@ -450,11 +516,37 @@ public class RealSenseClient : IDisposable
         if (snap is not null) Interlocked.Exchange(ref _latestColor, snap);
     }
 
-    private void TrySwapDepth(FrameSet frames)
+    private void TrySwapDepth(FrameSet frames, ref DepthFilterChain? filters)
     {
-        using var frame = frames.DepthFrame;
-        if (frame is null) return;
-        var snap = ExtractTightRows(frame, bytesPerPixel: 2, "depth16");
+        using var raw = frames.DepthFrame;
+        if (raw is null) return;
+
+        CameraFrame? snap;
+        if (filters is not null)
+        {
+            VideoFrame? filtered = null;
+            try
+            {
+                filtered = filters.Process(raw);
+                snap = ExtractTightRows(filtered, bytesPerPixel: 2, "depth16");
+            }
+            catch (Exception ex)
+            {
+                // 런타임 필터 실패는 세션 나머지 동안 원시 깊이로 폴백(스트림은 유지).
+                _logger.LogWarning(ex, "{Name} 깊이 필터 처리 실패 — 원시 깊이로 폴백", _settings.Name);
+                filters.Dispose();
+                filters = null;
+                snap = ExtractTightRows(raw, bytesPerPixel: 2, "depth16");
+            }
+            finally
+            {
+                filtered?.Dispose();   // 최종 필터 프레임도 네이티브 풀에 반환
+            }
+        }
+        else
+        {
+            snap = ExtractTightRows(raw, bytesPerPixel: 2, "depth16");
+        }
         if (snap is null) return;
 
         // Z16 원시값 → mm. 기본 스케일(0.001m = 1mm/unit)이면 무변환.

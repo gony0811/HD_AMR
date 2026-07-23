@@ -36,6 +36,13 @@ public record StepResult(bool Success, string Message)
     public static StepResult Fail(string message) => new(false, message);
 }
 
+/// <summary>② 검사위치 이동 방향. Vertical 이면 대기위치 기준 툴 RZ −90° 회전을 합성.</summary>
+public enum InspectionMoveDirection
+{
+    Horizontal = 0,
+    Vertical = 1,
+}
+
 /// <summary>단계 간 공유 컨텍스트. 공용 파라미터와 티칭 위치를 담는다.</summary>
 public class SequenceContext
 {
@@ -44,6 +51,18 @@ public class SequenceContext
 
     /// <summary>이동 속도 (%).</summary>
     public int Velocity { get; set; } = 20;
+
+    /// <summary>검사위치 이동 수평 오프셋 u (mm). 좌(+)/우(−) → TOOL Y+/Y−.</summary>
+    public double InspectionOffsetU { get; set; }
+
+    /// <summary>검사위치 이동 수직 오프셋 v (mm). 상(+)/하(−) → TOOL X+/X−.</summary>
+    public double InspectionOffsetV { get; set; }
+
+    /// <summary>검사위치 이동 방향 (수평/수직). 수직이면 툴 RZ −90° 회전 합성.</summary>
+    public InspectionMoveDirection InspectionDirection { get; set; } = InspectionMoveDirection.Horizontal;
+
+    /// <summary>③ 카메라 거리 정렬 목표 거리(mm).</summary>
+    public double CameraTargetDistanceMm { get; set; } = 400;
 
     /// <summary>티칭된 위치 목록 (Key → TeachingPosition). 시퀀스 시작 시 로드.</summary>
     public Dictionary<string, Data.Entities.TeachingPosition> Positions { get; set; } = new();
