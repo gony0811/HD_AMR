@@ -68,6 +68,15 @@ public class SequenceContext
     /// 레이저 중심이 카메라보다 좌측(툴 +Y)에 장착된 만큼 센터링 후 툴 −Y로 이동. 기본 −65mm.</summary>
     public double CameraToLaserShiftYmm { get; set; } = -65.0;
 
+    /// <summary>⑱ 검사 수행: 대상 도면 id (드롭박스 선택값, 티칭설정 목록 필터용).</summary>
+    public int InspectionDrawingId { get; set; }
+
+    /// <summary>⑱ 검사 수행: 실행할 티칭설정(InspectionProfile) id — 웨이포인트·솎기/실행 파라미터 소스.</summary>
+    public int InspectionProfileId { get; set; }
+
+    /// <summary>⑱ 검사 수행: 비전 CAPTURE_REQ Surface ID (SurfaceCatalog, 기본 0x01 바닥).</summary>
+    public int InspectionSurfaceId { get; set; } = 0x01;
+
     /// <summary>티칭된 위치 목록 (Key → TeachingPosition). 시퀀스 시작 시 로드.</summary>
     public Dictionary<string, Data.Entities.TeachingPosition> Positions { get; set; } = new();
 

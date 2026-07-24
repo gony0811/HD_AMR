@@ -121,7 +121,7 @@ builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstanc
 builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<BeadCenteringStep>(sp, 2));   // 1150
 builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<WObjPointStep>(sp, 2));   // 1160: 작업물 좌표계 점2(X방향)
 builder.Services.AddScoped<ISequenceStep, WObjRegisterStep>();   // 1170: 가상 점3(툴Z+50mm) + 좌표계 등록
-builder.Services.AddScoped<ISequenceStep, WeldAngleStep>();
+builder.Services.AddScoped<ISequenceStep, InspectionRunStep>();  // 1200: ⑱ 검사 수행(도면 경유점 순회 + 비전 캡처)
 builder.Services.AddScoped<SequenceService>();
 builder.Services.AddScoped<HD_AMR.Web.Services.LabelDataService>();
 // DL 학습 오케스트레이터 — 학습 프로세스가 페이지 이동/서킷과 무관하게 살아 있어야 하므로 싱글톤.

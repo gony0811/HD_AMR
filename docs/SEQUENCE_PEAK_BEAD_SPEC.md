@@ -467,14 +467,18 @@ double offsetMm = result.OffsetPx * mmPerPx;
 | **⑪⁺** | `bead2Center` | **1150** | `BeadCenteringStep` | 2 | Bead2 센터링 (cross 축, 이동만 — 재측정 없음 → 검사캠 시프트) |
 | **⑪⁺⁺** | `wobjPoint2` | **1160** | `WObjPointStep` | 2 | Bead2 위치를 3점법 **점2(X축 방향)** 로 기록 — 비드1→비드2 = 작업물 X축(용접 진행 방향) |
 | **⑪⁺⁺⁺** | `wobjRegister` | **1170** | `WObjRegisterStep` | — | **가상 점3**(현재 TCP + 툴Z 50mm, 이동 없음)으로 좌표계 계산·등록 — 클라이언트 계산 경로(`RegisterWObjFromPointsAsync`, 계산법 0) |
-| **⑫** | `weldAngle` | **1200** | `WeldAngleStep` | — | 각도 산출 |
+| **⑫** | `inspectionRun` | **1200** | `InspectionRunStep` | — | 검사 수행 — 등록된 작업물 좌표계 기준으로 티칭설정 경유점 순회 + 비전 CAPTURE_REQ |
 
 > ⑤⑨, ⑥⑩, ⑦⑪, ⑦⁺⑪⁺은 `peakId`만 다른 동일 동작이므로
 > 생성자 파라미터로 구분하고 DI에 두 번 등록한다.
 >
-> **⑫ 정합 규칙**: ⑦⁺(750)는 센터링 이동 후(검사캠 시프트 **전**) 재측정해 M1 을 잔차(≈0)로 갱신한다 —
-> 갱신하지 않으면 이동으로 FOV 기준선이 d1 만큼 옮겨져 ⑫의 (d2−d1)/pitch 에 d1 이 이중 반영된다.
-> ⑪⁺(1150)는 이동만 한다 — 재측정하면 M2 가 잔차≈0 으로 덮여 θ≈0 으로 오염된다(⑫는 이동 전 M2 사용).
+> **각도 산출(구 ⑫ `WeldAngleStep`, order 1200) 제거됨** — 화면 표시 전용 단계라 시퀀스에서 삭제하고
+> 같은 order 1200 에 검사 수행(`InspectionRunStep`)을 배치했다. 각도 계산 기능 자체는
+> Weld 추적 패널(`WeldTrackingPanel`)의 `WeldTrackingService.ComputeAngle()` 로 그대로 남아 있다.
+>
+> **M1/M2 측정 정합 규칙**(각도 산출 제거 후에도 유지): ⑦⁺(750)는 센터링 이동 후(검사캠 시프트 **전**)
+> 재측정해 M1 을 잔차(≈0)로 갱신하고, ⑪⁺(1150)는 이동만 한다. 현재는 각도식에 쓰이지 않지만,
+> ⑦⁺의 재측정은 cross 축 매핑 오설정을 조기에 잡는 검증 역할을 계속 수행한다.
 > 검사캠 시프트는 측정 완료 후 수행되고 ⑧이 역보정하므로 어떤 측정값에도 개입하지 않는다.
 
 ### 5.2 각 단계 동작 요약
@@ -520,13 +524,17 @@ double offsetMm = result.OffsetPx * mmPerPx;
 3. `ApplyAxis(offset, ImageXAxis, move)` → `MoveByToolOffsetAsync` 실행 (**툴 프레임**)
 4. 안정화 대기 `await Task.Delay(500, ct)`
 
-#### ⑫ 각도 산출 (`WeldAngleStep`)
+#### ⑫ 검사 수행 (`InspectionRunStep`)
 
-1. `M1`, `M2` 존재 확인
-2. `WeldTrackingService.Pitch = PitchMm` 설정 (기본값 0이므로 **반드시 설정 필요**)
-3. `ComputeAngle()` 호출
-4. `Angle` 결과를 메시지로 표시
-5. `M1`/`M2`의 품질 지표(coverage, 외삽 거리)를 종합해 신뢰도 경고 병기
+1. 작업물 좌표계 번호 = `Sequence.WObj.Id`(⑦⁺⁺/⑪⁺⁺/⑪⁺⁺⁺ 등록에 쓴 값), tool = `context.Tool`
+2. 티칭설정(`InspectionProfile`) 로드 → `WaypointsJson` 역직렬화(2점 이상). θ·솎기/실행 파라미터는 프로필 값 사용
+3. `GetWObjCoordAsync(wobjId)` 로 좌표계 등록 확인(원점=0 이면 실패 — ⑪⁺⁺⁺ 먼저 실행)
+4. 작업물 좌표계 **원점**(프레임 기준 `[0,0,0,0,0,0]`)으로 MoveL — 검사 시작 스테이징
+5. 경유점 순회: `|θ| ≤ ThMax` 인 점만 pose=`[x,0,z,0,θ,0]` 로 `MoveL(tool, user=wobjId, vel=context.Velocity)`
+6. 각 점 이동 후 `SettleDelaySec` 대기 → surface type(`|θ| ≥ CorrugThresholdDeg ? Corrugation : Flat`)과
+   Surface ID 로 `CaptureReqPayload.Build` → `VisionInterfaceService.Client.RequestCaptureAsync`
+7. MoveL 실패는 즉시 중단, 비전 실패/무응답은 집계만 하고 계속(=/inspection 페이지 동작)
+8. 도면·티칭설정·Surface ID 는 Sequence 페이지 ⑱행 드롭박스에서 선택(DB 영속: `Sequence.Inspection.*`)
 
 ---
 
@@ -616,7 +624,7 @@ var roi = new RoiRect(
 | `HD_AMR/HD_AMR/Service/Sequence/Steps/PeakCenteringStep.cs` | ⑥⑩ |
 | `HD_AMR/HD_AMR/Service/Sequence/Steps/BeadFindStep.cs` | ⑦⑪ |
 | `HD_AMR/HD_AMR/Service/Sequence/Steps/PeakApproachStep.cs` | ⑧ |
-| `HD_AMR/HD_AMR/Service/Sequence/Steps/WeldAngleStep.cs` | ⑫ |
+| `HD_AMR/HD_AMR/Service/Sequence/Steps/InspectionRunStep.cs` | ⑫ 검사 수행 (구 `WeldAngleStep` 제거) |
 
 ### 7.2 수정 파일
 
@@ -867,18 +875,8 @@ public async Task<(PeakMeasurement? Measurement, WeldDetectionResult? Detect)> C
     }
 }
 
-/// <summary>시퀀스용 각도 산출. pitch(mm)를 설정한 뒤 <see cref="ComputeAngle"/>를 수행한다.</summary>
-public async Task<AngleResult?> ComputeAngleAsync(double pitchMm, CancellationToken ct = default)
-{
-    await _gate.WaitAsync(ct);
-    try
-    {
-        Pitch = pitchMm;
-        await Task.Run(ComputeAngle, ct);
-        return Angle;
-    }
-    finally { _gate.Release(); }
-}
+// (구 시퀀스용 ComputeAngleAsync 래퍼는 ⑫ 각도 산출 단계 제거와 함께 삭제됨.
+//  동기 ComputeAngle()·AngleResult·Angle 프로퍼티는 WeldTrackingPanel 에서 계속 사용한다.)
 ```
 
 **구현 주의사항**:
@@ -1105,49 +1103,52 @@ public int DefaultOrder => 800;
 9. return Ok($"Peak2 위치로 툴{축} {moveMm:+0.0;-0.0}mm 이동 완료 (pitch={pitchMm:0.#}mm, dir={pitchDir:+0;-0})")
 ```
 
-### 8.9 `WeldAngleStep.cs` (⑫)
+### 8.9 `InspectionRunStep.cs` (⑫ 검사 수행)
 
 ```csharp
-public string Key => "weldAngle";
-public string DisplayName => "각도 산출";
+public string Key => "inspectionRun";
+public string DisplayName => "검사 수행 (도면 순회)";
 public int DefaultOrder => 1200;
 ```
+
+의존성: `CobotService`, `VisionInterfaceService`, `DrawingService`, `ParameterService`.
+선택값(도면/티칭설정/Surface ID)은 `SequenceContext.Inspection*` 필드로 전달되며,
+Sequence 페이지가 DB(`Sequence.Inspection.DrawingId/ProfileId/SurfaceId`)에서 로드해 채운다.
 
 #### `Validate()`
 
 ```
-1. _weld.M1 is null → Fail("Peak1 측정값 없음 — ⑦ 단계를 먼저 실행하세요.")
-2. _weld.M2 is null → Fail("Peak2 측정값 없음 — ⑪ 단계를 먼저 실행하세요.")
-3. !_weld.ScaleAvailable → Fail("스케일(fx) 없음 — 해상도/FOV 설정 확인")
+1. !_cobot.IsConnected → Fail("코봇 RPC 미연결")
+2. context.InspectionProfileId <= 0 → Fail("티칭설정 미선택 — 파라미터 칸에서 도면·티칭설정을 선택하세요.")
 ```
 
 #### `ExecuteAsync()`
 
 ```
-1. pitchMm = await GetPitchMmAsync(param);  <= 0 → Fail
-2. angle = await weld.ComputeAngleAsync(pitchMm, ct)
-3. angle is null → Fail($"각도 산출 실패 — {weld.Message}")
-4. 신뢰도 경고 조합:
-     warn = ""
-     M1/M2의 Confidence(coverage)가 낮으면 (예: < 0.3) "⚠ coverage 낮음" 추가
-     (임계값은 공정 검증 전이므로 로그·메시지 표기용으로만 사용, 실패 처리하지 않음)
-5. return Ok($"θ = {angle.ThetaDeg:0.00}° " +
-             $"(d1={angle.D1:+0.0;-0.0}mm, d2={angle.D2:+0.0;-0.0}mm, pitch={angle.Pitch:0.#}mm){warn}")
+1. wobjId = Sequence.WObj.Id (0~14). 범위 밖 → Fail
+2. profile = await drawing.GetProfileAsync(context.InspectionProfileId); null → Fail
+3. waypoints = Deserialize(profile.WaypointsJson); < 2점 → Fail
+4. frame = await cobot.Rpc.GetWObjCoordAsync(wobjId); 원점 all-zero → Fail("좌표계 미등록")
+5. 원점 이동: MoveL([0,0,0,0,0,0], tool: context.Tool, user: wobjId, vel: context.Velocity, acc:100, ovl:100, blendR:-1)
+6. for w in waypoints:
+     if |w.Theta| > profile.ThMax: skip
+     rc = MoveL([w.X,0,w.Z,0,w.Theta,0], tool: context.Tool, user: wobjId, vel: context.Velocity, ...); rc!=0 → Fail(중단)
+     await Task.Delay(profile.SettleDelaySec)
+     surfaceType = |w.Theta| >= profile.CorrugThresholdDeg ? Corrugation : Flat
+     data = CaptureReqPayload.Build(surfaceType, (ushort)context.InspectionSurfaceId, round(w.X), round(w.Z))
+     outcome = await vision.Client.RequestCaptureAsync(data, TimeSpan(profile.DelaySec)); 실패해도 계속
+7. return Ok($"검사 수행 완료 — 이동 N점, 비전 OK M/N …")
 ```
 
 **메시지 예시**:
 ```
-θ = 1.23° (d1=-4.1mm, d2=+3.8mm, pitch=370.0mm)
+검사 수행 완료 — 티칭설정 'MEMBRANE-C 전벽', 이동 24점(θ 초과 3점 제외), 비전 OK 22/24 (실패 2) [wobj #5, tool 1, SurfaceID 0x05].
 ```
 
-> **주의**: `WeldTrackingService.Pitch`는 기본값이 0이고 영속화되지 않는다.
-> `ComputeAngleAsync(pitchMm)`가 이를 설정하므로 별도 처리는 불필요하다.
-> 부수효과로 Weld 페이지의 Pitch 입력란에도 이 값이 반영된다(의도된 동작).
->
-> 또한 `CapturePeak()`은 `M1`,`M2`,`Pitch>0`,`ScaleAvailable`이 모두 충족되면
-> **자동으로 `ComputeAngle()`을 호출**한다(`WeldTrackingService.cs:278`).
-> ⑫를 실행하기 전에 이미 `Angle`이 채워져 있을 수 있으나, ⑫가 pitch를 명시적으로
-> 설정하고 재계산하므로 문제되지 않는다.
+> **주의**: /inspection 페이지의 솎기(thinning)·θ 계산은 재사용하지 않는다 —
+> 티칭설정 저장 시 확정된 `WaypointsJson`(X, Z, Theta)을 그대로 순회하므로 스텝은 최종 경유점만 소비한다.
+> surface type 수동 오버라이드는 프로필에 영속되지 않으므로(페이지도 로드 후 재계산) θ 기준으로 재판정한다.
+> 좌표계 원점 이동은 프레임 축 정렬 자세(`[0,0,0,0,0,0]`)로 접근하므로, 실장비에서 재지향 폭이 크면 확인이 필요하다.
 
 ### 8.10 `Program.cs` DI 등록
 
@@ -1174,7 +1175,8 @@ builder.Services.AddScoped<ISequenceStep>(sp =>
     ActivatorUtilities.CreateInstance<PeakCenteringStep>(sp, 2));   // ⑩ order 1000
 builder.Services.AddScoped<ISequenceStep>(sp =>
     ActivatorUtilities.CreateInstance<BeadFindStep>(sp, 2));        // ⑪ order 1100
-builder.Services.AddScoped<ISequenceStep, WeldAngleStep>();         // ⑫ order 1200
+// … 이하 ⑦⁺/⑦⁺⁺ · ⑪⁺/⑪⁺⁺/⑪⁺⁺⁺ (BeadCenteringStep, WObjPointStep, WObjRegisterStep) 등록 …
+builder.Services.AddScoped<ISequenceStep, InspectionRunStep>();     // ⑫ order 1200 검사 수행
 
 builder.Services.AddScoped<SequenceService>();
 ```

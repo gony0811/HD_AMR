@@ -439,19 +439,6 @@ public class WeldTrackingService
         }
     }
 
-    /// <summary>시퀀스용 각도 산출. <see cref="Pitch"/> 는 기본 0·비영속이라 여기서 설정하고 계산한다.</summary>
-    public async Task<AngleResult?> ComputeAngleAsync(double pitchMm, CancellationToken ct = default)
-    {
-        await _gate.WaitAsync(ct);
-        try
-        {
-            Pitch = pitchMm;
-            await Task.Run(ComputeAngle, ct);
-            return Angle;
-        }
-        finally { _gate.Release(); }
-    }
-
     // ── 내부 ────────────────────────────────────────────────────────
     private WeldDetectionResult RunDetect(double? peakProgressPos = null, string? peakLabel = null,
         double? peakCrossStart = null, double? peakCrossEnd = null)

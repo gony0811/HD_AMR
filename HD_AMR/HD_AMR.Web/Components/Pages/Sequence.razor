@@ -1,14 +1,17 @@
 @page "/sequence"
 @rendermode InteractiveServer
 @using HD_AMR.Communication
+@using HD_AMR.Communication.Vision
 @using HD_AMR.Service
 @using HD_AMR.Service.Sequence
 @using HD_AMR.Service.Sequence.Steps
+@using HD_AMR.Data.Entities
 @inject SequenceService Seq
 @inject TeachingService Teaching
 @inject CobotService Cobot
 @inject CameraService Camera
 @inject ParameterService Param
+@inject DrawingService DrawingSvc
 @inject ILogger<Sequence> Logger
 @implements IDisposable
 
@@ -192,6 +195,43 @@
                                 </label>
                             </div>
                         }
+                        else if (step.Key == "inspectionRun")
+                        {
+                            <div class="uv-inputs">
+                                <label>도면
+                                    <select class="form-select form-select-sm"
+                                            @bind="_context.InspectionDrawingId" @bind:after="OnInspectionDrawingChangedAsync"
+                                            disabled="@Seq.IsBusy">
+                                        <option value="0">— 선택 —</option>
+                                        @foreach (var d in _drawings)
+                                        {
+                                            <option value="@d.Id">@d.Name</option>
+                                        }
+                                    </select>
+                                </label>
+                                <label>티칭설정
+                                    <select class="form-select form-select-sm"
+                                            @bind="_context.InspectionProfileId" @bind:after="SaveInspectionAsync"
+                                            disabled="@(Seq.IsBusy || _inspectionProfiles.Count == 0)">
+                                        <option value="0">— 선택 —</option>
+                                        @foreach (var p in _inspectionProfiles)
+                                        {
+                                            <option value="@p.Id">@p.Name</option>
+                                        }
+                                    </select>
+                                </label>
+                                <label>Surface ID
+                                    <select class="form-select form-select-sm"
+                                            @bind="_context.InspectionSurfaceId" @bind:after="SaveInspectionAsync"
+                                            disabled="@Seq.IsBusy">
+                                        @foreach (var s in SurfaceCatalog.All)
+                                        {
+                                            <option value="@s.Id">@($"0x{s.Id:X2}") @s.Name</option>
+                                        }
+                                    </select>
+                                </label>
+                            </div>
+                        }
                     </td>
                     <td class="step-note">
                         @if (status?.State == StepState.Running)
@@ -246,6 +286,11 @@
     private const string CameraDistKey = "Sequence.Camera.TargetDistance";
     private const string CameraToLaserShiftKey = "Sequence.FlatSurface.CameraToLaserShiftYmm";
 
+    // ⑱ 검사 수행 — 스텝(InspectionRunStep)이 실행 시 context 값을 사용. 선택값은 DB에 영속.
+    private const string InspectionDrawingKey = "Sequence.Inspection.DrawingId";
+    private const string InspectionProfileKey = "Sequence.Inspection.ProfileId";
+    private const string InspectionSurfaceKey = "Sequence.Inspection.SurfaceId";
+
     // ⑤~⑫ Peak/Bead 파라미터 — 스텝(WeldSequenceSupport)이 실행 시 같은 키를 DB에서 읽는다.
     private const string XSignKey = "Camera.Axis.XSign";
     private const string PitchMmKey = "Weld.Peak.PitchMm";
@@ -263,6 +308,10 @@
     private double _inspectCamOffsetY;  // 검사캠 오프셋 영상 +Y(화면 아래) 성분 (mm)
     private int _wobjId = 1;         // 작업물 좌표계 번호 (3점법 등록 대상, 0~14)
 
+    // ⑱ 검사 수행 드롭박스 소스.
+    private List<Drawing> _drawings = new();
+    private List<InspectionProfile> _inspectionProfiles = new();
+
     protected override async Task OnInitializedAsync()
     {
         Seq.StateChanged += OnSequenceStateChanged;
@@ -278,7 +327,40 @@
         _inspectCamOffsetX = await Param.GetDoubleAsync(InspectCamOffsetXKey) ?? 0;
         _inspectCamOffsetY = await Param.GetDoubleAsync(InspectCamOffsetYKey) ?? 0;
         _wobjId = (int)(await Param.GetDoubleAsync(WObjPointStep.WObjIdKey) ?? 1);
+
+        // ⑱ 검사 수행: 도면 목록 + 저장된 선택값 복원.
+        _drawings = await DrawingSvc.ListAsync();
+        _context.InspectionDrawingId = (int)(await Param.GetDoubleAsync(InspectionDrawingKey) ?? 0);
+        _context.InspectionProfileId = (int)(await Param.GetDoubleAsync(InspectionProfileKey) ?? 0);
+        _context.InspectionSurfaceId = (int)(await Param.GetDoubleAsync(InspectionSurfaceKey) ?? 0x01);
+        await LoadInspectionProfilesAsync();
+
         _ = RefreshLoopAsync();
+    }
+
+    /// <summary>선택된 도면의 티칭설정(InspectionProfile) 목록을 로드. 도면 미선택이면 비운다.</summary>
+    private async Task LoadInspectionProfilesAsync()
+    {
+        _inspectionProfiles = _context.InspectionDrawingId > 0
+            ? await DrawingSvc.ListProfilesAsync(_context.InspectionDrawingId)
+            : new();
+        // 현재 선택된 티칭설정이 목록에 없으면(도면 변경 등) 선택 해제.
+        if (_inspectionProfiles.All(p => p.Id != _context.InspectionProfileId))
+            _context.InspectionProfileId = 0;
+    }
+
+    /// <summary>도면 드롭박스 변경 시: 티칭설정 목록 갱신 + 선택값 저장.</summary>
+    private async Task OnInspectionDrawingChangedAsync()
+    {
+        await LoadInspectionProfilesAsync();
+        await SaveInspectionAsync();
+    }
+
+    private async Task SaveInspectionAsync()
+    {
+        await Param.SetDoubleAsync(InspectionDrawingKey, _context.InspectionDrawingId, "⑱ 검사 수행: 대상 도면 id");
+        await Param.SetDoubleAsync(InspectionProfileKey, _context.InspectionProfileId, "⑱ 검사 수행: 티칭설정(InspectionProfile) id");
+        await Param.SetDoubleAsync(InspectionSurfaceKey, _context.InspectionSurfaceId, "⑱ 검사 수행: 비전 CAPTURE_REQ Surface ID");
     }
 
     private async Task LoadPositionsAsync()
