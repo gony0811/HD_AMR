@@ -164,9 +164,15 @@ public class BeadCenteringStep : ISequenceStep
     /// 검사 카메라 설치 오프셋만큼 2D 개루프 시프트 — 카메라가 영상 (−X, −Y) 방향으로 움직여
     /// 타깃이 화면상 (+X, +Y) 위치(= 검사 카메라 시야 중심)에 온다. 오프셋이 0 이면 아무것도 안 한다.
     /// 성공 시 <see cref="WeldSequenceSupport.InspectShiftedBagKey"/> 를 세워 ⑧이 역보정하게 한다.
+    /// peakId=1 이면 시프트 <b>전</b> 포즈(= 센터링 완료 지점)를 앵커로 저장한다 — ⑧이 이 포즈 기준으로
+    /// pitch 이동해 시프트·작업물 좌표계 교시용 이동을 자동 원복한다.
     /// </summary>
     private async Task<(bool Ok, string Note)> ShiftToInspectCamAsync(SequenceContext context, CancellationToken ct)
     {
+        if (_peakId == 1)
+            context.Bag[WeldSequenceSupport.Bead1CenteredPoseBagKey] =
+                await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
+
         var (offX, offY) = await WeldSequenceSupport.GetInspectCamOffsetAsync(_param);
         if (Math.Abs(offX) < SkipMoveMm && Math.Abs(offY) < SkipMoveMm)
             return (true, "");

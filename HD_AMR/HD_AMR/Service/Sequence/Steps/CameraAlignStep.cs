@@ -72,7 +72,8 @@ public class CameraAlignStep : ISequenceStep
         //    티칭 관절 비교는 u/v 오프셋·작업물 추종 시 목표가 티칭 자세와 달라져 오판한다.
         var (anchor, _) = await CobotInspectionMoveStep.ComputeTargetPoseAsync(_cobot, inspection, ct);
         var rz = context.InspectionDirection == InspectionMoveDirection.Vertical ? -90.0 : 0.0;
-        var uvOffset = new[] { context.InspectionOffsetV, context.InspectionOffsetU, 0.0, 0.0, 0.0, rz };
+        // ② 와 동일 합성 순서 유지: [u(툴 X), v(툴 Y)] — CobotInspectionMoveStep 참조.
+        var uvOffset = new[] { context.InspectionOffsetU, context.InspectionOffsetV, 0.0, 0.0, 0.0, rz };
         var expected = FrameMath.FromFrame(uvOffset, anchor);   // T_anchor · T_offset (툴프레임 합성)
         var cur = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
         if (!IsAtPose(cur, expected))

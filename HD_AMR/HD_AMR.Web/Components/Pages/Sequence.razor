@@ -3,6 +3,7 @@
 @using HD_AMR.Communication
 @using HD_AMR.Service
 @using HD_AMR.Service.Sequence
+@using HD_AMR.Service.Sequence.Steps
 @inject SequenceService Seq
 @inject TeachingService Teaching
 @inject CobotService Cobot
@@ -163,6 +164,16 @@
                                 </label>
                             </div>
                         }
+                        else if (step.Key == "wobjPoint1")
+                        {
+                            <div class="uv-inputs">
+                                <label>작업물 번호 <span class="dir">0~14</span>
+                                    <input class="form-control form-control-sm" type="number" min="0" max="14"
+                                           @bind="_wobjId" @bind:after="SaveWObjIdAsync"
+                                           disabled="@Seq.IsBusy" />
+                                </label>
+                            </div>
+                        }
                         else if (step.Key == "peak2Approach")
                         {
                             <div class="uv-inputs">
@@ -250,6 +261,7 @@
     private int _pitchDir = 1;       // Peak2 이동 방향 (⑧)
     private double _inspectCamOffsetX;  // 검사캠 오프셋 영상 +X(화면 오른쪽) 성분 (mm)
     private double _inspectCamOffsetY;  // 검사캠 오프셋 영상 +Y(화면 아래) 성분 (mm)
+    private int _wobjId = 1;         // 작업물 좌표계 번호 (3점법 등록 대상, 0~14)
 
     protected override async Task OnInitializedAsync()
     {
@@ -265,6 +277,7 @@
         _pitchDir = Math.Sign(await Param.GetDoubleAsync(PitchDirKey) ?? 1) is -1 ? -1 : 1;
         _inspectCamOffsetX = await Param.GetDoubleAsync(InspectCamOffsetXKey) ?? 0;
         _inspectCamOffsetY = await Param.GetDoubleAsync(InspectCamOffsetYKey) ?? 0;
+        _wobjId = (int)(await Param.GetDoubleAsync(WObjPointStep.WObjIdKey) ?? 1);
         _ = RefreshLoopAsync();
     }
 
@@ -282,6 +295,10 @@
         await Param.SetDoubleAsync(CameraDistKey, _context.CameraTargetDistanceMm, "③ 카메라 거리 정렬 목표 거리 (mm)");
         await Param.SetDoubleAsync(CameraToLaserShiftKey, _context.CameraToLaserShiftYmm, "④ 평탄면 센터링: 카메라→레이저 중심 보정 횡이동 (mm, 툴 Y). 레이저 장착 오프셋");
     }
+
+    private async Task SaveWObjIdAsync()
+        => await Param.SetDoubleAsync(WObjPointStep.WObjIdKey, _wobjId,
+            "작업물 좌표계 번호 (3점법 등록 대상, 0~14)");
 
     private async Task SaveWeldParamsAsync()
     {
@@ -354,11 +371,12 @@
         }
     }
 
+    /// <summary>원형 숫자 표기 — 유니코드 블록 3개로 1~50 커버 (①~⑳, ㉑~㉟, ㊱~㊿).</summary>
     private static string StepCircle(int n) => n switch
     {
-        1 => "①", 2 => "②", 3 => "③", 4 => "④", 5 => "⑤",
-        6 => "⑥", 7 => "⑦", 8 => "⑧", 9 => "⑨", 10 => "⑩",
-        11 => "⑪", 12 => "⑫", 13 => "⑬", 14 => "⑭", 15 => "⑮",
+        >= 1 and <= 20 => char.ConvertFromUtf32(0x2460 + n - 1),    // ①~⑳
+        >= 21 and <= 35 => char.ConvertFromUtf32(0x3251 + n - 21),  // ㉑~㉟
+        >= 36 and <= 50 => char.ConvertFromUtf32(0x32B1 + n - 36),  // ㊱~㊿
         _ => $"({n})"
     };
 

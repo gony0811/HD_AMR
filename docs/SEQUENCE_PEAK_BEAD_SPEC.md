@@ -459,11 +459,14 @@ double offsetMm = result.OffsetPx * mmPerPx;
 | **⑥** | `peak1Center` | **600** | `PeakCenteringStep` | 1 | Peak1 센터링 (진행축) |
 | **⑦** | `bead1Find` | **700** | `BeadFindStep` | 1 | Bead1 찾기 |
 | **⑦⁺** | `bead1Center` | **750** | `BeadCenteringStep` | 1 | Bead1 센터링 (cross 축, 재측정으로 M1 갱신 → 검사캠 시프트) |
-| **⑧** | `peak2Approach` | **800** | `PeakApproachStep` | 2 | Peak2 이동 (pitch, 진행축) |
+| **⑦⁺⁺** | `wobjPoint1` | **760** | `WObjPointStep` | 1 | 현재 위치를 작업물 좌표계 3점법 **점1(원점)** 로 기록 — 번호는 `Sequence.WObj.Id`, 계산법 0(원점-X축-Z축) 고정 |
+| **⑧** | `peak2Approach` | **800** | `PeakApproachStep` | 2 | Peak2 이동 — ⑦⁺ 앵커(센터링 완료·시프트 전 포즈) 기준 pitch 절대 이동. 검사캠 시프트·교시용 이동 자동 원복 (앵커 없으면 현재 위치 + 플래그 역보정 폴백) |
 | **⑨** | `peak2Find` | **900** | `PeakFindStep` | 2 | Peak2 찾기 |
 | **⑩** | `peak2Center` | **1000** | `PeakCenteringStep` | 2 | Peak2 센터링 (진행축) |
 | **⑪** | `bead2Find` | **1100** | `BeadFindStep` | 2 | Bead2 찾기 |
 | **⑪⁺** | `bead2Center` | **1150** | `BeadCenteringStep` | 2 | Bead2 센터링 (cross 축, 이동만 — 재측정 없음 → 검사캠 시프트) |
+| **⑪⁺⁺** | `wobjPoint2` | **1160** | `WObjPointStep` | 2 | Bead2 위치를 3점법 **점2(X축 방향)** 로 기록 — 비드1→비드2 = 작업물 X축(용접 진행 방향) |
+| **⑪⁺⁺⁺** | `wobjRegister` | **1170** | `WObjRegisterStep` | — | **가상 점3**(현재 TCP + 툴Z 50mm, 이동 없음)으로 좌표계 계산·등록 — 클라이언트 계산 경로(`RegisterWObjFromPointsAsync`, 계산법 0) |
 | **⑫** | `weldAngle` | **1200** | `WeldAngleStep` | — | 각도 산출 |
 
 > ⑤⑨, ⑥⑩, ⑦⑪, ⑦⁺⑪⁺은 `peakId`만 다른 동일 동작이므로

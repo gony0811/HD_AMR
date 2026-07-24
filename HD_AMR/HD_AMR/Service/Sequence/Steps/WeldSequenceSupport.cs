@@ -60,6 +60,10 @@ public static class WeldSequenceSupport
     /// ④⁺가 WD 조정 후 이 위치로 툴 X/Y 횡복귀할 때 기준 앵커로 쓴다(초점거리·자세는 유지).</summary>
     public const string InspectAnchorPoseBagKey = "inspect.anchorPose";
 
+    /// <summary>⑦⁺ Bead1 센터링 완료 직후(검사캠 시프트 <b>전</b>) TCP 포즈(double[6])를 담는 Bag 키.
+    /// ⑧이 이 포즈를 앵커로 pitch 이동해, 검사캠 시프트·작업물 좌표계 교시용 이동을 자동 원복한다.</summary>
+    public const string Bead1CenteredPoseBagKey = "bead1.centeredPose";
+
     /// <summary>
     /// 정규화 깊이 ROI(0~1)를 읽어 IR 프레임 픽셀 ROI 로 변환한다.
     /// IR 해상도 = Depth 해상도(848×480)라 IR 모드에서는 좌표 변환이 이 스케일링뿐이다.

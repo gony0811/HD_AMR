@@ -4,9 +4,12 @@ using Microsoft.Extensions.Logging;
 namespace HD_AMR.Service.Sequence.Steps;
 
 /// <summary>
-/// ⑧ Peak2 이동 — Peak1 센터링 위치에서 pitch(공칭 370mm)만큼 진행축(② 검사방향에서 자동 결정 —
-/// 영상 가로면 ImageX, 세로면 ImageY 툴축 매핑, ⑥⑩과 동일)으로 개루프 이동해
-/// 인접 Peak 근처로 옮긴다 — 과거 BASE X 하드코딩은 헤드 방향에 따라 광축 성분이 섞이는 좌표계 오류였음.
+/// ⑧ Peak2 이동 — <b>⑦⁺가 저장한 앵커(Bead1 센터링 완료·검사캠 시프트 전 포즈)</b> 기준으로
+/// pitch(공칭 370mm)만큼 진행축(② 검사방향에서 자동 결정 — 영상 가로면 ImageX, 세로면 ImageY
+/// 툴축 매핑, ⑥⑩과 동일)으로 개루프 이동해 인접 Peak 근처로 옮긴다. 앵커 기준 이동이므로
+/// 검사캠 시프트·작업물 좌표계 교시용 이동 등 ⑦⁺ 이후 변위가 자동 원복된다
+/// (앵커 없으면 현재 포즈 기준 + 시프트 플래그 역보정 폴백).
+/// 과거 BASE X 하드코딩은 헤드 방향에 따라 광축 성분이 섞이는 좌표계 오류였음.
 /// 이동 방향은 <see cref="WeldSequenceSupport.PitchDirKey"/> 로 결정한다:
 /// "Peak2 가 진행축 + 방향이면 +1, 반대면 −1"(설비 배치의 선택)로,
 /// 카메라 장착 방향(영상→툴축 매핑)과는 독립된 미지수다.
@@ -51,22 +54,36 @@ public class PeakApproachStep : ISequenceStep
                 "'{Key}' 매핑 파라미터 없음/범위 밖 — 기본값 사용. 카메라 페이지에서 매핑을 설정·저장하세요.",
                 WeldSequenceSupport.ProgressToolAxisKey(progressAxis));
 
-        var anchor = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
         var offset = new double[6];
         FlatSurfaceCenteringService.ApplyAxis(offset, toolAxis, moveMm);
 
-        // ⑦⁺가 검사캠 오프셋 시프트를 적용한 상태면, 역보정(+off)을 pitch 이동에 합성해
-        // ⑨⑪이 타깃을 depth 시야 중앙 근처에서 다시 측정할 수 있게 한다.
+        // 앵커 선택: ⑦⁺가 저장한 "센터링 완료·검사캠 시프트 전" 포즈가 있으면 그 포즈 기준으로 이동한다 —
+        // 검사캠 시프트·작업물 좌표계 교시용 이동 등 ⑦⁺ 이후의 모든 변위가 자동 원복되어
+        // ⑨⑪이 대상 코로게이션/비드를 depth ROI 중앙 근처에서 측정할 수 있다.
+        double[] anchor;
         var unshiftNote = "";
-        if (context.Bag.TryGetValue(WeldSequenceSupport.InspectShiftedBagKey, out var shifted) && shifted is true)
+        if (context.Bag.TryGetValue(WeldSequenceSupport.Bead1CenteredPoseBagKey, out var ap)
+            && ap is double[] anchorPose && anchorPose.Length == 6)
         {
-            var (offX, offY) = await WeldSequenceSupport.GetInspectCamOffsetAsync(_param);
-            var (axX, _) = await WeldSequenceSupport.GetImageXAxisAsync(_param);
-            var (axY, _) = await WeldSequenceSupport.GetImageYAxisAsync(_param);
-            FlatSurfaceCenteringService.ApplyAxis(offset, axX, offX);
-            FlatSurfaceCenteringService.ApplyAxis(offset, axY, offY);
-            context.Bag.Remove(WeldSequenceSupport.InspectShiftedBagKey);
-            unshiftNote = $", 검사캠 시프트 역보정(영상 {offX:+0.0;-0.0}/{offY:+0.0;-0.0}mm)";
+            anchor = anchorPose;
+            context.Bag.Remove(WeldSequenceSupport.InspectShiftedBagKey);   // 앵커 복귀로 시프트 상태 해소
+            unshiftNote = ", 앵커 기준(교시 이동 원복)";
+        }
+        else
+        {
+            // 폴백: 앵커 없음(상태 초기화 후 단독 실행 등) — 현재 포즈 기준 + 플래그 기반 시프트 역보정.
+            _logger.LogWarning("⑧ Bead1 센터링 앵커 없음 — 현재 위치 기준으로 pitch 이동합니다.");
+            anchor = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
+            if (context.Bag.TryGetValue(WeldSequenceSupport.InspectShiftedBagKey, out var shifted) && shifted is true)
+            {
+                var (offX, offY) = await WeldSequenceSupport.GetInspectCamOffsetAsync(_param);
+                var (axX, _) = await WeldSequenceSupport.GetImageXAxisAsync(_param);
+                var (axY, _) = await WeldSequenceSupport.GetImageYAxisAsync(_param);
+                FlatSurfaceCenteringService.ApplyAxis(offset, axX, offX);
+                FlatSurfaceCenteringService.ApplyAxis(offset, axY, offY);
+                context.Bag.Remove(WeldSequenceSupport.InspectShiftedBagKey);
+                unshiftNote = $", 검사캠 시프트 역보정(영상 {offX:+0.0;-0.0}/{offY:+0.0;-0.0}mm)";
+            }
         }
 
         _logger.LogInformation(

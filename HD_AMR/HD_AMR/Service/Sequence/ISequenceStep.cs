@@ -52,10 +52,10 @@ public class SequenceContext
     /// <summary>이동 속도 (%).</summary>
     public int Velocity { get; set; } = 20;
 
-    /// <summary>검사위치 이동 수평 오프셋 u (mm). 좌(+)/우(−) → TOOL Y+/Y−.</summary>
+    /// <summary>검사위치 이동 수평 오프셋 u (mm). 좌(+)/우(−) → TOOL X+/X− (실측 확인 매핑).</summary>
     public double InspectionOffsetU { get; set; }
 
-    /// <summary>검사위치 이동 수직 오프셋 v (mm). 상(+)/하(−) → TOOL X+/X−.</summary>
+    /// <summary>검사위치 이동 수직 오프셋 v (mm). 상(+)/하(−) → TOOL Y+/Y− (실측 확인 매핑).</summary>
     public double InspectionOffsetV { get; set; }
 
     /// <summary>검사위치 이동 방향 (수평/수직). 수직이면 툴 RZ −90° 회전 합성.</summary>
