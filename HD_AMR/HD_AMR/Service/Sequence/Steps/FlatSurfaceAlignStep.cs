@@ -31,9 +31,10 @@ public class FlatSurfaceAlignStep : ISequenceStep
     /// <summary>평탄 판정 틸트 임계값(도). |rx|, |ry| 모두 이 값 이내이면 정렬 완료.</summary>
     private const double TiltThresholdDeg = 1.0;
 
-    /// <summary>카메라 광축 → 레이저 3점 측정 중심 보정 횡이동(mm, 툴 Y).
-    /// 레이저 중심이 카메라보다 65mm 좌측(툴 +Y)에 장착 → 센터링 후 툴 −Y로 65mm 이동.</summary>
-    private const double CameraToLaserShiftYmm = -65.0;
+    /// <summary>카메라→레이저 중심 보정 이동량 절대 상한(mm). 파라미터 오입력 가드.
+    /// 실제 이동량은 시퀀스 페이지 파라미터(<see cref="SequenceContext.CameraToLaserShiftYmm"/>, 기본 −65mm)로 설정 —
+    /// 레이저 중심이 카메라 대비 얼마나 좌측(툴 +Y)에 장착됐는지에 따른 장착 오프셋이라 DB로 외부화한다.</summary>
+    private const double MaxCameraToLaserShiftMm = 200.0;
 
     /// <summary>틸트 회전 보정 최대 시도 횟수 (측정 노이즈 대비 재시도).</summary>
     private const int MaxTiltCorrections = 3;
@@ -122,10 +123,16 @@ public class FlatSurfaceAlignStep : ISequenceStep
 
         // ── 카메라 중심 → 레이저 측정 중심 횡이동 ─────────────────────
         // Phase B는 평탄영역을 카메라 중심에 맞추므로, 레이저 3점 중심이 그 지점 위에
-        // 오도록 장착 오프셋만큼 이동한 뒤 측정한다.
-        _logger.LogInformation("④ 레이저 중심 보정 횡이동: 툴 Y {Shift}mm", CameraToLaserShiftYmm);
+        // 오도록 장착 오프셋만큼 이동한 뒤 측정한다. 이동량은 시퀀스 페이지 파라미터
+        // (SequenceContext.CameraToLaserShiftYmm, 기본 −65mm)로 설정 — 장착 위치 종속이라 DB 영속.
+        var shiftY = context.CameraToLaserShiftYmm;
+        if (Math.Abs(shiftY) > MaxCameraToLaserShiftMm)
+            return StepResult.Fail(
+                $"카메라→레이저 중심 보정 이동량 {shiftY:+0.#;-0.#}mm 가 한계 ±{MaxCameraToLaserShiftMm:0}mm 초과 — " +
+                "시퀀스 페이지 ④ '레이저중심 Y' 파라미터를 확인하세요.");
+        _logger.LogInformation("④ 레이저 중심 보정 횡이동: 툴 Y {Shift}mm", shiftY);
         var shiftAnchor = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
-        var shiftOffset = new[] { 0.0, CameraToLaserShiftYmm, 0.0, 0.0, 0.0, 0.0 };
+        var shiftOffset = new[] { 0.0, shiftY, 0.0, 0.0, 0.0, 0.0 };
         var shiftRc = await _cobot.Rpc.MoveByToolOffsetAsync(shiftAnchor, user: 0, shiftOffset,
             tool: context.Tool, vel: context.Velocity, ct: ct);
         if (shiftRc != 0)

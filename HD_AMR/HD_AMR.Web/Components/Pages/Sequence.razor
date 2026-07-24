@@ -123,6 +123,16 @@
                                 </label>
                             </div>
                         }
+                        else if (step.Key == "flatSurfaceAlign")
+                        {
+                            <div class="uv-inputs">
+                                <label>레이저중심 Y <span class="dir">카메라→레이저</span>
+                                    <input class="form-control form-control-sm" type="number" step="any"
+                                           @bind="_context.CameraToLaserShiftYmm" @bind:after="SaveOffsetsAsync"
+                                           disabled="@Seq.IsBusy" />
+                                </label>
+                            </div>
+                        }
                         else if (step.Key is "peak1Center" or "peak2Center")
                         {
                             @* 두 행이 같은 값을 편집한다(카메라 장착 방향은 하나뿐). *@
@@ -134,6 +144,22 @@
                                         <option value="1">+1</option>
                                         <option value="-1">−1</option>
                                     </select>
+                                </label>
+                            </div>
+                        }
+                        else if (step.Key is "bead1Center" or "bead2Center")
+                        {
+                            @* 두 행이 같은 값을 편집한다 — 검사캠 장착 오프셋은 하나뿐. *@
+                            <div class="uv-inputs">
+                                <label>검사캠 X <span class="dir">영상 →오른쪽</span>
+                                    <input class="form-control form-control-sm" type="number" step="any"
+                                           @bind="_inspectCamOffsetX" @bind:after="SaveWeldParamsAsync"
+                                           disabled="@Seq.IsBusy" />
+                                </label>
+                                <label>검사캠 Y <span class="dir">영상 →아래</span>
+                                    <input class="form-control form-control-sm" type="number" step="any"
+                                           @bind="_inspectCamOffsetY" @bind:after="SaveWeldParamsAsync"
+                                           disabled="@Seq.IsBusy" />
                                 </label>
                             </div>
                         }
@@ -207,15 +233,23 @@
     private const string OffsetVKey = "Sequence.Inspection.OffsetV";
     private const string DirectionKey = "Sequence.Inspection.Direction";
     private const string CameraDistKey = "Sequence.Camera.TargetDistance";
+    private const string CameraToLaserShiftKey = "Sequence.FlatSurface.CameraToLaserShiftYmm";
 
     // ⑤~⑫ Peak/Bead 파라미터 — 스텝(WeldSequenceSupport)이 실행 시 같은 키를 DB에서 읽는다.
     private const string XSignKey = "Camera.Axis.XSign";
     private const string PitchMmKey = "Weld.Peak.PitchMm";
     private const string PitchDirKey = "Weld.Peak.PitchDir";
 
+    // 검사캠 장착 오프셋(영상 X/Y, mm) — ⑨/⑬ Bead 센터링이 공유하는 하나의 물리값.
+    // 키는 WeldSequenceSupport.InspectCamOffsetX/YKey 와 동일해야 한다(스텝이 실행 시 읽음).
+    private const string InspectCamOffsetXKey = "Sequence.InspectCam.OffsetXMm";
+    private const string InspectCamOffsetYKey = "Sequence.InspectCam.OffsetYMm";
+
     private int _xSign = 1;          // 영상 +X → BASE X 부호 (⑥⑩ 센터링)
     private double _pitchMm = 370;   // Peak 간 pitch (mm)
     private int _pitchDir = 1;       // Peak2 이동 방향 (⑧)
+    private double _inspectCamOffsetX;  // 검사캠 오프셋 영상 +X(화면 오른쪽) 성분 (mm)
+    private double _inspectCamOffsetY;  // 검사캠 오프셋 영상 +Y(화면 아래) 성분 (mm)
 
     protected override async Task OnInitializedAsync()
     {
@@ -225,9 +259,12 @@
         _context.InspectionOffsetV = await Param.GetDoubleAsync(OffsetVKey) ?? 0;
         _context.InspectionDirection = (InspectionMoveDirection)(int)(await Param.GetDoubleAsync(DirectionKey) ?? 0);
         _context.CameraTargetDistanceMm = await Param.GetDoubleAsync(CameraDistKey) ?? 400;
+        _context.CameraToLaserShiftYmm = await Param.GetDoubleAsync(CameraToLaserShiftKey) ?? -65;
         _xSign = Math.Sign(await Param.GetDoubleAsync(XSignKey) ?? 1) is -1 ? -1 : 1;
         _pitchMm = await Param.GetDoubleAsync(PitchMmKey) ?? 370;
         _pitchDir = Math.Sign(await Param.GetDoubleAsync(PitchDirKey) ?? 1) is -1 ? -1 : 1;
+        _inspectCamOffsetX = await Param.GetDoubleAsync(InspectCamOffsetXKey) ?? 0;
+        _inspectCamOffsetY = await Param.GetDoubleAsync(InspectCamOffsetYKey) ?? 0;
         _ = RefreshLoopAsync();
     }
 
@@ -243,6 +280,7 @@
         await Param.SetDoubleAsync(OffsetVKey, _context.InspectionOffsetV, "검사위치 이동 수직 오프셋 v (mm), 상+/하− → TOOL X");
         await Param.SetDoubleAsync(DirectionKey, (int)_context.InspectionDirection, "검사위치 이동 방향 (0=수평, 1=수직/RZ-90°)");
         await Param.SetDoubleAsync(CameraDistKey, _context.CameraTargetDistanceMm, "③ 카메라 거리 정렬 목표 거리 (mm)");
+        await Param.SetDoubleAsync(CameraToLaserShiftKey, _context.CameraToLaserShiftYmm, "④ 평탄면 센터링: 카메라→레이저 중심 보정 횡이동 (mm, 툴 Y). 레이저 장착 오프셋");
     }
 
     private async Task SaveWeldParamsAsync()
@@ -250,6 +288,8 @@
         await Param.SetDoubleAsync(XSignKey, _xSign, "영상 +X → BASE X 부호 (⑥⑩ Peak 센터링 방향, +1/−1)");
         await Param.SetDoubleAsync(PitchMmKey, _pitchMm, "Peak 간 pitch (mm) — ⑧ 이동량, ⑫ 각도식 분모");
         await Param.SetDoubleAsync(PitchDirKey, _pitchDir, "⑧ Peak2 이동 방향 (+1/−1)");
+        await Param.SetDoubleAsync(InspectCamOffsetXKey, _inspectCamOffsetX, "⑨/⑬ 검사캠 장착 오프셋 영상 +X(화면 오른쪽) 성분 (mm)");
+        await Param.SetDoubleAsync(InspectCamOffsetYKey, _inspectCamOffsetY, "⑨/⑬ 검사캠 장착 오프셋 영상 +Y(화면 아래) 성분 (mm)");
     }
 
     private async void OnSequenceStateChanged()

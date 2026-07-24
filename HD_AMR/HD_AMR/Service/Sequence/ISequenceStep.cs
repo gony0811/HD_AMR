@@ -64,6 +64,10 @@ public class SequenceContext
     /// <summary>③ 카메라 거리 정렬 목표 거리(mm).</summary>
     public double CameraTargetDistanceMm { get; set; } = 400;
 
+    /// <summary>④ 평탄면 센터링: 카메라 광축 → 레이저 3점 측정 중심 보정 횡이동(mm, 툴 Y).
+    /// 레이저 중심이 카메라보다 좌측(툴 +Y)에 장착된 만큼 센터링 후 툴 −Y로 이동. 기본 −65mm.</summary>
+    public double CameraToLaserShiftYmm { get; set; } = -65.0;
+
     /// <summary>티칭된 위치 목록 (Key → TeachingPosition). 시퀀스 시작 시 로드.</summary>
     public Dictionary<string, Data.Entities.TeachingPosition> Positions { get; set; } = new();
 
