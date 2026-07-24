@@ -467,7 +467,7 @@ double offsetMm = result.OffsetPx * mmPerPx;
 | **⑪⁺** | `bead2Center` | **1150** | `BeadCenteringStep` | 2 | Bead2 센터링 (cross 축, 이동만 — 재측정 없음 → 검사캠 시프트) |
 | **⑪⁺⁺** | `wobjPoint2` | **1160** | `WObjPointStep` | 2 | Bead2 위치를 3점법 **점2(X축 방향)** 로 기록 — 비드1→비드2 = 작업물 X축(용접 진행 방향) |
 | **⑪⁺⁺⁺** | `wobjRegister` | **1170** | `WObjRegisterStep` | — | **가상 점3**(현재 TCP + 툴Z 50mm, 이동 없음)으로 좌표계 계산·등록 — 클라이언트 계산 경로(`RegisterWObjFromPointsAsync`, 계산법 0) |
-| **⑫** | `inspectionRun` | **1200** | `InspectionRunStep` | — | 검사 수행 — 등록된 작업물 좌표계 기준으로 티칭설정 경유점 순회 + 비전 CAPTURE_REQ |
+| **⑫** | `inspectionRun` | **1200** | `InspectionRunStep` | — | 검사 수행 — 등록된 작업물 좌표계 기준으로 티칭설정 경유점 순회 + 비전 CAPTURE_REQ. **RZ 는 현재 자세 유지**(rz0, 회전 없이 검사 — 프레임이 툴 대비 RZ 180° 회전일 수 있음), 틸트 부호 = sign(cos rz0), **종료 시 활성 wobj 0 복귀**(성공/실패/취소 공통, 무이동 MoveL user:0) |
 
 > ⑤⑨, ⑥⑩, ⑦⑪, ⑦⁺⑪⁺은 `peakId`만 다른 동일 동작이므로
 > 생성자 파라미터로 구분하고 DI에 두 번 등록한다.
