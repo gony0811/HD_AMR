@@ -1,7 +1,11 @@
 @page "/calibration"
 @rendermode InteractiveServer
+@using System.Globalization
 @using HD_AMR.Service
+@using HD_AMR.Data.Entities
+@using Microsoft.AspNetCore.Components.Forms
 @inject CalibrationService Calib
+@inject DrawingService Drawing
 @inject AMRService Amr
 @inject CobotService Cobot
 @inject ILogger<Calibration> Logger
@@ -12,8 +16,8 @@
 <h1 class="page-title">맵 정합 캘리브레이션</h1>
 
 <p class="text-muted">
-    ① 코봇 장착 오프셋(T_A_B)을 입력/측정 → ② 도면 기준점(p_G) 입력 → 각 점의 맵 좌표(p_W)를
-    코봇 터치/AMR/수동으로 캡처 → ③ 정합 계산(T_W_G)·저장. 도면(mm)·맵(mm) 기준.
+    ① 코봇 장착 오프셋(T_A_B) 입력/측정 → ② 도면 로드·랜드마크 클릭으로 p_G 추출 + 맵 p_W 캡처 →
+    ③ 정합 계산(T_W_G)·저장. 도면(mm)·맵(mm) 기준.
 </p>
 
 @if (!string.IsNullOrEmpty(_msg))
@@ -60,7 +64,7 @@
             <div class="col-auto">
                 <button class="btn btn-sm btn-outline-danger" @onclick="ClearMountSamplesAsync" disabled="@(_mountSamples.Count == 0)">샘플 지우기</button>
             </div>
-            <div class="col-auto text-muted">표본 @_mountSamples.Count <span class="small">(≥3, AMR yaw를 크게 바꿔가며 같은 점을 터치)</span></div>
+            <div class="col-auto text-muted">표본 @_mountSamples.Count개 <span class="small">(≥3, AMR yaw를 크게 바꿔가며 같은 점을 터치)</span></div>
         </div>
         @if (_mountSamples.Count > 0)
         {
@@ -88,9 +92,63 @@
             <div class="mt-1">→ 계산: rz=<strong>@_mountResult.PhiDeg.ToString("0.###")</strong>°,
                 X=<strong>@_mountResult.Tx.ToString("0.#")</strong>mm,
                 Y=<strong>@_mountResult.Ty.ToString("0.#")</strong>mm,
-                잔차 RMS=@_mountResult.RmsMm.ToString("0.###")mm (@_mountResult.N).
+                잔차 RMS=@_mountResult.RmsMm.ToString("0.###")mm (@_mountResult.N표본).
                 <span class="text-muted">위 6칸에 반영됨 — '저장'을 눌러 확정하세요.</span>
             </div>
+        }
+    </div>
+</section>
+
+<!-- 도면 로드 & 랜드마크 좌표 추출 -->
+<section class="card mb-3">
+    <div class="card-header"><strong>도면 로드 · 랜드마크 좌표 추출</strong> <span class="text-muted">(작업공간 도면 G — 꼭짓점을 클릭해 p_G로)</span></div>
+    <div class="card-body">
+        <div class="row g-2 align-items-end">
+            <div class="col-auto">
+                <label class="form-label mb-0">저장된 도면</label>
+                <select class="form-select form-select-sm" style="min-width:220px" @bind="_selectedDrawingId">
+                    <option value="">— 선택 —</option>
+                    @foreach (var d in _drawings)
+                    {
+                        <option value="@d.Id">@d.Name</option>
+                    }
+                </select>
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-sm btn-outline-primary" @onclick="LoadDrawingAsync" disabled="@(_selectedDrawingId is null)">불러오기</button>
+            </div>
+            <div class="col-auto">
+                <label class="form-label mb-0">새 도면 업로드 (.dxf 권장)</label>
+                <InputFile class="form-control form-control-sm" style="width:260px" OnChange="OnUploadAsync" />
+            </div>
+        </div>
+
+        @if (_hasGeom)
+        {
+            <div class="mt-2 text-muted small">
+                꼭짓점 @_vertices.Count개 표시. 먼저 아래 ②에서 채울 행의 <b>도면지정</b>을 누른 뒤, 도면의 점을 클릭하세요.
+                @if (_pickRow is int pr) { <span class="badge bg-warning text-dark">현재 지정: 기준점 #@pr</span> }
+                @if (_picked is { } pk) { <span> · 최근 선택 (@pk.X.ToString("0.#"), @pk.Y.ToString("0.#"))</span> }
+            </div>
+            <svg viewBox="@_viewBox" style="width:100%;max-height:440px;border:1px solid #E2E8F0;background:#fff" preserveAspectRatio="xMidYMid meet">
+                @foreach (var ln in _renderLines)
+                {
+                    <line x1="@F(ln.X1)" y1="@F(Flip(ln.Y1))" x2="@F(ln.X2)" y2="@F(Flip(ln.Y2))"
+                          stroke="#94a3b8" stroke-width="@F(_sw)" />
+                }
+                @foreach (var v in _vertices)
+                {
+                    var vv = v;
+                    <circle cx="@F(vv.X)" cy="@F(Flip(vv.Y))" r="@F(_r)" fill="#1C7293" fill-opacity="0.75"
+                            style="cursor:pointer" @onclick="() => PickVertex(vv.X, vv.Y)">
+                        <title>@vv.X.ToString("0.#"), @vv.Y.ToString("0.#")</title>
+                    </circle>
+                }
+            </svg>
+            @if (_renderTruncated)
+            {
+                <div class="form-text text-warning">도면이 커서 선 일부만 표시했습니다(좌표 추출에는 영향 없음).</div>
+            }
         }
     </div>
 </section>
@@ -110,7 +168,8 @@
                     <th>도면 Gy (mm)</th>
                     <th>맵 Wx (mm)</th>
                     <th>맵 Wy (mm)</th>
-                    <th>캡처</th>
+                    <th>도면지정</th>
+                    <th>맵 캡처</th>
                     <th></th>
                 </tr>
             </thead>
@@ -118,7 +177,7 @@
                 @foreach (var p in _points)
                 {
                     var pt = p;
-                    <tr>
+                    <tr class="@(_pickRow == pt.Index ? "table-warning" : "")">
                         <td>@pt.Index</td>
                         <td><input class="form-control form-control-sm" type="number" step="any" @bind="pt.Gx" /></td>
                         <td><input class="form-control form-control-sm" type="number" step="any" @bind="pt.Gy" /></td>
@@ -126,6 +185,11 @@
                                    @bind="pt.Wx" @bind:after="() => pt.HasW = true" /></td>
                         <td><input class="form-control form-control-sm @(pt.HasW ? "" : "bg-light")" type="number" step="any"
                                    @bind="pt.Wy" @bind:after="() => pt.HasW = true" /></td>
+                        <td>
+                            <button class="btn btn-sm @(_pickRow == pt.Index ? "btn-warning" : "btn-outline-warning")"
+                                    title="도면에서 이 행의 Gx/Gy를 지정" @onclick="() => ArmPick(pt.Index)"
+                                    disabled="@(!_hasGeom)">도면지정</button>
+                        </td>
                         <td class="d-flex gap-1">
                             <button class="btn btn-sm btn-outline-success" title="코봇 TCP로 이 점을 터치한 상태에서 캡처"
                                     @onclick="() => CaptureCobotAsync(pt)"
@@ -140,7 +204,7 @@
             </tbody>
         </table>
         <button class="btn btn-sm btn-secondary" @onclick="SavePointsAsync">점 저장</button>
-        <span class="form-text ms-2">코봇 캡처 = T_W_A·T_A_B·(TCP in BASE). AMR 캡처 = AMR 현재 맵 위치. 값 직접 입력도 가능.</span>
+        <span class="form-text ms-2">Gx/Gy = 도면지정(도면 클릭) 또는 직접 입력. Wx/Wy = 코봇/AMR 캡처 또는 직접 입력.</span>
     </div>
 </section>
 
@@ -156,7 +220,7 @@
                     <tr><th>회전 θ (도)</th><td>@_reg.ThetaDeg.ToString("0.####")</td></tr>
                     <tr><th>평행이동 Tx (mm)</th><td>@_reg.Tx.ToString("0.###")</td></tr>
                     <tr><th>평행이동 Ty (mm)</th><td>@_reg.Ty.ToString("0.###")</td></tr>
-                    <tr><th>잔차 RMS (mm)</th><td>@_reg.RmsMm.ToString("0.###") <span class="text-muted">(@_reg.PointCount)</span></td></tr>
+                    <tr><th>잔차 RMS (mm)</th><td>@_reg.RmsMm.ToString("0.###") <span class="text-muted">(@_reg.PointCount점)</span></td></tr>
                 </table>
             </div>
         }
@@ -192,6 +256,18 @@
     private int _tool = 1;
     private MapRegistration? _reg;
 
+    // 도면 로드/추출
+    private List<Drawing> _drawings = new();
+    private int? _selectedDrawingId;
+    private List<LineSegment> _renderLines = new();
+    private List<(double X, double Y)> _vertices = new();
+    private double _minX, _maxX, _minY, _maxY, _sw = 1, _r = 1;
+    private string _viewBox = "0 0 100 100";
+    private bool _hasGeom;
+    private bool _renderTruncated;
+    private int? _pickRow;
+    private (double X, double Y)? _picked;
+
     private double _vGx, _vGy;
     private (double X, double Y)? _vResult;
 
@@ -199,12 +275,93 @@
     private bool _isErr;
     private readonly CancellationTokenSource _cts = new();
 
+    private const int MaxRenderLines = 4000;
+    private const int MaxVertices = 3000;
+
     protected override async Task OnInitializedAsync()
     {
         _mount = await Calib.GetMountAsync();
         _mountSamples = await Calib.GetMountSamplesAsync();
         _points = await Calib.GetRefPointsAsync();
         _reg = await Calib.GetRegistrationAsync();
+        _drawings = await Drawing.ListAsync(_cts.Token);
+    }
+
+    private static string F(double v) => v.ToString(CultureInfo.InvariantCulture);
+    private double Flip(double y) => (_minY + _maxY) - y;
+
+    // ── 도면 로드/추출 ──
+    private async Task LoadDrawingAsync()
+    {
+        try
+        {
+            if (_selectedDrawingId is not int id) return;
+            var dr = await Drawing.GetAsync(id, _cts.Token);
+            if (dr is null) { Fail("도면을 찾을 수 없습니다."); return; }
+
+            var lines = Drawing.GetLines(dr);
+            var points = Drawing.GetPoints(dr);
+
+            var verts = new List<(double X, double Y)>();
+            var seen = new HashSet<(long, long)>();
+            void Add(double x, double y)
+            {
+                var k = ((long)Math.Round(x), (long)Math.Round(y));
+                if (seen.Add(k)) verts.Add((x, y));
+            }
+            foreach (var ln in lines) { Add(ln.X1, ln.Y1); Add(ln.X2, ln.Y2); }
+            foreach (var p in points) Add(p.X, p.Y);
+
+            if (verts.Count == 0) { _hasGeom = false; Fail("도면에서 선/점을 찾지 못했습니다(.dxf인지, 변환 성공했는지 확인)."); return; }
+
+            _minX = verts.Min(v => v.X); _maxX = verts.Max(v => v.X);
+            _minY = verts.Min(v => v.Y); _maxY = verts.Max(v => v.Y);
+            double w = Math.Max(1e-6, _maxX - _minX), h = Math.Max(1e-6, _maxY - _minY);
+            double maxDim = Math.Max(w, h), pad = maxDim * 0.03;
+            _sw = maxDim / 400.0; _r = maxDim / 150.0;
+            _viewBox = $"{F(_minX - pad)} {F(_minY - pad)} {F(w + 2 * pad)} {F(h + 2 * pad)}";
+
+            _renderTruncated = lines.Count > MaxRenderLines;
+            _renderLines = _renderTruncated ? lines.Take(MaxRenderLines).ToList() : lines;
+            _vertices = verts.Count > MaxVertices ? verts.Take(MaxVertices).ToList() : verts;
+            _hasGeom = true;
+            Ok($"'{dr.Name}' 로드 — 꼭짓점 {verts.Count}개.");
+        }
+        catch (Exception ex) { Fail($"도면 로드 실패: {ex.Message}"); }
+    }
+
+    private async Task OnUploadAsync(InputFileChangeEventArgs e)
+    {
+        try
+        {
+            var file = e.File;
+            await using var stream = file.OpenReadStream(maxAllowedSize: 64L * 1024 * 1024);
+            await Drawing.SaveAsync(file.Name, file.Name, stream, _cts.Token);
+            _drawings = await Drawing.ListAsync(_cts.Token);
+            _selectedDrawingId = _drawings.FirstOrDefault()?.Id;
+            Ok($"'{file.Name}' 업로드 완료 — 목록에서 선택 후 불러오기 하세요.");
+        }
+        catch (Exception ex) { Fail($"업로드 실패: {ex.Message}"); }
+    }
+
+    private void ArmPick(int index) => _pickRow = _pickRow == index ? null : index;
+
+    private void PickVertex(double x, double y)
+    {
+        _picked = (x, y);
+        if (_pickRow is int idx)
+        {
+            var pt = _points.FirstOrDefault(p => p.Index == idx);
+            if (pt is not null)
+            {
+                pt.Gx = x; pt.Gy = y;
+                Ok($"기준점 #{idx} 도면좌표 = ({x:0.#}, {y:0.#}) mm.");
+            }
+        }
+        else
+        {
+            Ok($"선택 ({x:0.#}, {y:0.#}) — 넣을 행의 '도면지정'을 먼저 누르세요.");
+        }
     }
 
     // ── ① 장착 오프셋 ──
@@ -296,7 +453,11 @@
         _points.Add(new MapRefPoint(next));
     }
 
-    private void RemovePoint(MapRefPoint pt) => _points.Remove(pt);
+    private void RemovePoint(MapRefPoint pt)
+    {
+        _points.Remove(pt);
+        if (_pickRow == pt.Index) _pickRow = null;
+    }
 
     private async Task SavePointsAsync()
     {
