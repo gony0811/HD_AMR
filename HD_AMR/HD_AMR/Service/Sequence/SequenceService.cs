@@ -13,6 +13,7 @@ public class SequenceService
     private readonly ILogger<SequenceService> _logger;
     private readonly TeachingService _teachingService;
     private readonly CobotService _cobotService;
+    private readonly SequenceMonitorService _monitor;
 
     /// <summary>등록된 전체 단계 (DefaultOrder 순).</summary>
     private readonly List<ISequenceStep> _steps;
@@ -26,10 +27,12 @@ public class SequenceService
         IEnumerable<ISequenceStep> steps,
         TeachingService teachingService,
         CobotService cobotService,
+        SequenceMonitorService monitor,
         ILogger<SequenceService> logger)
     {
         _teachingService = teachingService;
         _cobotService = cobotService;
+        _monitor = monitor;
         _logger = logger;
         _steps = steps.OrderBy(s => s.DefaultOrder).ToList();
 
@@ -68,6 +71,8 @@ public class SequenceService
         RunState = SequenceRunState.Running;
         ResetStatuses();
         await LoadPositionsAsync(context, ct);
+        context.Progress = _monitor.Log;   // 스텝 진행 라인 → 모니터 창 콘솔
+        _monitor.BeginRun();
         RaiseStateChanged();
 
         _logger.LogInformation("시퀀스 풀오토 시작 (단계 {Count}개, tool={Tool}, vel={Vel})",
@@ -91,6 +96,7 @@ public class SequenceService
         CurrentStepKey = null;
         _runCts?.Dispose();
         _runCts = null;
+        _monitor.EndRun(anyFailure: !allSuccess);
         RaiseStateChanged();
 
         _logger.LogInformation("시퀀스 풀오토 종료 (성공={Success})", allSuccess);
@@ -114,6 +120,8 @@ public class SequenceService
 
         RunState = SequenceRunState.Running;
         await LoadPositionsAsync(context, ct);
+        context.Progress = _monitor.Log;   // 스텝 진행 라인 → 모니터 창 콘솔
+        _monitor.BeginRun();
         RaiseStateChanged();
 
         var result = await RunSingleStepAsync(step, context, ct);
@@ -122,9 +130,18 @@ public class SequenceService
         CurrentStepKey = null;
         _runCts?.Dispose();
         _runCts = null;
+        _monitor.EndRun(anyFailure: !result.Success);
         RaiseStateChanged();
 
         return result;
+    }
+
+    /// <summary>모든 단계 상태를 대기(Pending)로 초기화. 실행 중에는 무시한다.</summary>
+    public void Reset()
+    {
+        if (IsBusy) return;
+        ResetStatuses();
+        RaiseStateChanged();
     }
 
     /// <summary>즉시 정지: 현재 실행을 취소하고 코봇 모션을 정지.</summary>
@@ -157,6 +174,8 @@ public class SequenceService
         {
             var msg = validation.Message ?? "선행조건 미충족";
             UpdateStatus(step.Key, StepState.Failed, msg);
+            _monitor.StartStep(step.Key, step.DisplayName, _steps.IndexOf(step) + 1, context.CameraTargetDistanceMm);
+            _monitor.EndStep(false, msg);
             _logger.LogWarning("단계 '{Step}' 검증 실패: {Msg}", step.Key, msg);
             return StepResult.Fail(msg);
         }
@@ -164,12 +183,14 @@ public class SequenceService
         // 2) Execute
         CurrentStepKey = step.Key;
         UpdateStatus(step.Key, StepState.Running);
+        _monitor.StartStep(step.Key, step.DisplayName, _steps.IndexOf(step) + 1, context.CameraTargetDistanceMm);
 
         try
         {
             var result = await step.ExecuteAsync(context, ct);
 
             UpdateStatus(step.Key, result.Success ? StepState.Completed : StepState.Failed, result.Message);
+            _monitor.EndStep(result.Success, result.Message);
             _logger.LogInformation("단계 '{Step}' {Result}: {Msg}",
                 step.Key, result.Success ? "완료" : "실패", result.Message);
 
@@ -178,6 +199,7 @@ public class SequenceService
         catch (OperationCanceledException)
         {
             UpdateStatus(step.Key, StepState.Failed, "사용자 정지");
+            _monitor.EndStep(false, "사용자 정지");
             _logger.LogInformation("단계 '{Step}' 사용자 정지", step.Key);
             return StepResult.Fail("사용자 정지");
         }
@@ -185,6 +207,7 @@ public class SequenceService
         {
             var errMsg = $"실행 실패: {ex.Message}{StateErrSuffix()}";
             UpdateStatus(step.Key, StepState.Failed, errMsg);
+            _monitor.EndStep(false, errMsg);
             _logger.LogError(ex, "단계 '{Step}' 예외", step.Key);
             return StepResult.Fail(errMsg);
         }

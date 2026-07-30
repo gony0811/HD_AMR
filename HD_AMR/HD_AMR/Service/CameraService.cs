@@ -91,6 +91,10 @@ public class CameraService : BackgroundService
     public Task StartStreamAsync(CancellationToken ct = default) => _client.StartStreamAsync(ct);
     public Task StopStreamAsync(CancellationToken ct = default) => _client.StopStreamAsync(ct);
 
+    /// <summary>IR 노출/게인 변경 — 스트리밍 중이면 스트림 유지한 채 즉시 반영, 정지 상태면 다음 시작 시 적용.</summary>
+    public bool SetIrExposure(bool autoExposure, float exposureUs, float gain)
+        => _client.TrySetIrExposure(autoExposure, exposureUs, gain);
+
     /// <summary>최신 컬러 프레임을 JPEG 바이트로 반환한다. 프레임이 없으면 null.
     /// PixelFormat 이 <c>"mjpg"</c> 이면 카메라가 이미 JPEG 으로 인코딩해 보내준 것이므로
     /// 바이트를 그대로 패스스루(추가 인코딩 비용 없음). <c>"rgb24"</c> 이면 ImageSharp 로

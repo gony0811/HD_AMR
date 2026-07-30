@@ -52,10 +52,10 @@ public class SequenceContext
     /// <summary>이동 속도 (%).</summary>
     public int Velocity { get; set; } = 20;
 
-    /// <summary>검사위치 이동 수평 오프셋 u (mm). 좌(+)/우(−) → TOOL Y+/Y−.</summary>
+    /// <summary>검사위치 이동 수평 오프셋 u (mm). 좌(+)/우(−) → TOOL X+/X− (실측 확인 매핑).</summary>
     public double InspectionOffsetU { get; set; }
 
-    /// <summary>검사위치 이동 수직 오프셋 v (mm). 상(+)/하(−) → TOOL X+/X−.</summary>
+    /// <summary>검사위치 이동 수직 오프셋 v (mm). 상(+)/하(−) → TOOL Y+/Y− (실측 확인 매핑).</summary>
     public double InspectionOffsetV { get; set; }
 
     /// <summary>검사위치 이동 방향 (수평/수직). 수직이면 툴 RZ −90° 회전 합성.</summary>
@@ -63,6 +63,23 @@ public class SequenceContext
 
     /// <summary>③ 카메라 거리 정렬 목표 거리(mm).</summary>
     public double CameraTargetDistanceMm { get; set; } = 400;
+
+    /// <summary>④ 평탄면 센터링: 카메라 광축 → 레이저 3점 측정 중심 보정 횡이동(mm, 툴 Y).
+    /// 레이저 중심이 카메라보다 좌측(툴 +Y)에 장착된 만큼 센터링 후 툴 −Y로 이동. 기본 −65mm.</summary>
+    public double CameraToLaserShiftYmm { get; set; } = -65.0;
+
+    /// <summary>⑱ 검사 수행: 대상 도면 id (드롭박스 선택값, 티칭설정 목록 필터용).</summary>
+    public int InspectionDrawingId { get; set; }
+
+    /// <summary>⑱ 검사 수행: 실행할 티칭설정(InspectionProfile) id — 웨이포인트·솎기/실행 파라미터 소스.</summary>
+    public int InspectionProfileId { get; set; }
+
+    /// <summary>⑱ 검사 수행: 비전 CAPTURE_REQ Surface ID (SurfaceCatalog, 기본 0x01 바닥).</summary>
+    public int InspectionSurfaceId { get; set; } = 0x01;
+
+    /// <summary>UI 진행 로그 sink — 모니터링 팝업 콘솔용. 스텝은 사람이 읽을 진행 라인을
+    /// <c>context.Progress?.Invoke(msg)</c> 로 남긴다 (ILogger 와 별개, 페이지가 연결/해제).</summary>
+    public Action<string>? Progress { get; set; }
 
     /// <summary>티칭된 위치 목록 (Key → TeachingPosition). 시퀀스 시작 시 로드.</summary>
     public Dictionary<string, Data.Entities.TeachingPosition> Positions { get; set; } = new();

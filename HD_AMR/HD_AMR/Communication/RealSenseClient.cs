@@ -363,12 +363,89 @@ public class RealSenseClient : IDisposable
                             _logger.LogWarning(ex, "{Name} LaserPower 적용 실패 — 계속 진행", _settings.Name);
                         }
                     }
+
+                    // IR 노출/게인은 Visual Preset 이 AE 상태를 덮을 수 있으므로 블록 마지막에 적용.
+                    ApplyIrExposureOptions(sensor, _settings.IrAutoExposure, _settings.IrExposureUs, _settings.IrGain);
                 }
             }
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "{Name} 깊이 센서 옵션 적용 실패 — 기본값으로 진행", _settings.Name);
+        }
+    }
+
+    /// <summary>
+    /// 스테레오(depth) 센서의 IR 노출 옵션 적용 — AE on/off, 수동 노출(µs)/게인(옵션 범위로 클램프).
+    /// 수동값(&gt;0)은 AE=off 일 때만 의미가 있다. 항목별 실패는 경고만 남기고 진행(펌웨어 편차 대비).
+    /// </summary>
+    private void ApplyIrExposureOptions(Sensor sensor, bool autoExposure, float exposureUs, float gain)
+    {
+        try
+        {
+            if (sensor.Options.Supports(Option.EnableAutoExposure))
+            {
+                sensor.Options[Option.EnableAutoExposure].Value = autoExposure ? 1f : 0f;
+                _logger.LogInformation("{Name} IR 자동노출 = {On}", _settings.Name, autoExposure);
+            }
+
+            if (!autoExposure && exposureUs > 0f && sensor.Options.Supports(Option.Exposure))
+            {
+                var opt = sensor.Options[Option.Exposure];
+                var v = Math.Clamp(exposureUs, opt.Min, opt.Max);   // D435 스테레오: 약 1~165000µs
+                opt.Value = v;
+                _logger.LogInformation("{Name} IR 노출 = {Exp}µs", _settings.Name, v);
+            }
+
+            if (!autoExposure && gain > 0f && sensor.Options.Supports(Option.Gain))
+            {
+                var opt = sensor.Options[Option.Gain];
+                var v = Math.Clamp(gain, opt.Min, opt.Max);         // D435 스테레오: 약 16~248
+                opt.Value = v;
+                _logger.LogInformation("{Name} IR 게인 = {Gain}", _settings.Name, v);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "{Name} IR 노출/게인 적용 실패 — 계속 진행", _settings.Name);
+        }
+    }
+
+    /// <summary>
+    /// IR 노출/게인 런타임 변경 — 설정을 갱신하고, 스트리밍 중이면 스트림을 유지한 채 센서 옵션에
+    /// 즉시 반영한다(라이브). 정지 상태면 설정만 갱신되어 다음 시작 시 적용된다.
+    /// 반환: 라이브 적용 성공(스트리밍 중) 또는 설정 갱신 완료(정지 상태) 시 true.
+    /// </summary>
+    public bool TrySetIrExposure(bool autoExposure, float exposureUs, float gain)
+    {
+        _settings.IrAutoExposure = autoExposure;
+        _settings.IrExposureUs = exposureUs;
+        _settings.IrGain = gain;
+
+        _gate.Wait();
+        try
+        {
+            if (!_streaming || _profile is null) return true;   // 다음 StartStream 에서 적용
+
+            using var dev = _profile.Device;
+            foreach (var sensor in dev.Sensors)
+            {
+                using (sensor)
+                {
+                    if (!sensor.Options.Supports(Option.DepthUnits)) continue;
+                    ApplyIrExposureOptions(sensor, autoExposure, exposureUs, gain);
+                }
+            }
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "{Name} IR 노출/게인 라이브 적용 실패", _settings.Name);
+            return false;
+        }
+        finally
+        {
+            _gate.Release();
         }
     }
 

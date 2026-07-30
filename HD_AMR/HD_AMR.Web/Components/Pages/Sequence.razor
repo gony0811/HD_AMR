@@ -1,14 +1,19 @@
 @page "/sequence"
 @rendermode InteractiveServer
 @using HD_AMR.Communication
+@using HD_AMR.Communication.Vision
 @using HD_AMR.Service
 @using HD_AMR.Service.Sequence
+@using HD_AMR.Service.Sequence.Steps
+@using HD_AMR.Data.Entities
 @inject SequenceService Seq
 @inject TeachingService Teaching
 @inject CobotService Cobot
 @inject CameraService Camera
 @inject ParameterService Param
+@inject DrawingService DrawingSvc
 @inject ILogger<Sequence> Logger
+@inject IJSRuntime JS
 @implements IDisposable
 
 <PageTitle>Sequence</PageTitle>
@@ -52,6 +57,12 @@
             <button class="btn btn-outline-warning" @onclick="ResetFaultAsync"
                     disabled="@(Seq.IsBusy || !Cobot.IsConnected)">
                 오류 해제 (Reset Error)
+            </button>
+        </div>
+        <div class="col-auto">
+            <button class="btn btn-outline-secondary" title="모든 단계 상태·측정값 초기화"
+                    @onclick="ResetStatuses" disabled="@Seq.IsBusy">
+                ↺ 상태 초기화
             </button>
         </div>
     </div>
@@ -117,6 +128,111 @@
                                 </label>
                             </div>
                         }
+                        else if (step.Key == "flatSurfaceAlign")
+                        {
+                            <div class="uv-inputs">
+                                <label>레이저중심 Y <span class="dir">카메라→레이저</span>
+                                    <input class="form-control form-control-sm" type="number" step="any"
+                                           @bind="_context.CameraToLaserShiftYmm" @bind:after="SaveOffsetsAsync"
+                                           disabled="@Seq.IsBusy" />
+                                </label>
+                            </div>
+                        }
+                        else if (step.Key is "peak1Center" or "peak2Center")
+                        {
+                            @* 두 행이 같은 값을 편집한다(카메라 장착 방향은 하나뿐). *@
+                            <div class="uv-inputs">
+                                <label>X부호 <span class="dir">센터링 방향</span>
+                                    <select class="form-select form-select-sm"
+                                            @bind="_xSign" @bind:after="SaveWeldParamsAsync"
+                                            disabled="@Seq.IsBusy">
+                                        <option value="1">+1</option>
+                                        <option value="-1">−1</option>
+                                    </select>
+                                </label>
+                            </div>
+                        }
+                        else if (step.Key is "bead1Center" or "bead2Center")
+                        {
+                            @* 두 행이 같은 값을 편집한다 — 검사캠 장착 오프셋은 하나뿐. *@
+                            <div class="uv-inputs">
+                                <label>검사캠 X <span class="dir">영상 →오른쪽</span>
+                                    <input class="form-control form-control-sm" type="number" step="any"
+                                           @bind="_inspectCamOffsetX" @bind:after="SaveWeldParamsAsync"
+                                           disabled="@Seq.IsBusy" />
+                                </label>
+                                <label>검사캠 Y <span class="dir">영상 →아래</span>
+                                    <input class="form-control form-control-sm" type="number" step="any"
+                                           @bind="_inspectCamOffsetY" @bind:after="SaveWeldParamsAsync"
+                                           disabled="@Seq.IsBusy" />
+                                </label>
+                            </div>
+                        }
+                        else if (step.Key == "wobjPoint1")
+                        {
+                            <div class="uv-inputs">
+                                <label>작업물 번호 <span class="dir">0~14</span>
+                                    <input class="form-control form-control-sm" type="number" min="0" max="14"
+                                           @bind="_wobjId" @bind:after="SaveWObjIdAsync"
+                                           disabled="@Seq.IsBusy" />
+                                </label>
+                            </div>
+                        }
+                        else if (step.Key == "peak2Approach")
+                        {
+                            <div class="uv-inputs">
+                                <label>Pitch
+                                    <input class="form-control form-control-sm" type="number" step="any" min="1"
+                                           @bind="_pitchMm" @bind:after="SaveWeldParamsAsync"
+                                           disabled="@Seq.IsBusy" />
+                                </label>
+                                <label>방향 <span class="dir">Peak1→2</span>
+                                    <select class="form-select form-select-sm"
+                                            @bind="_pitchDir" @bind:after="SaveWeldParamsAsync"
+                                            disabled="@Seq.IsBusy">
+                                        <option value="1">+1</option>
+                                        <option value="-1">−1</option>
+                                    </select>
+                                </label>
+                            </div>
+                        }
+                        else if (step.Key == "inspectionRun")
+                        {
+                            <div class="uv-inputs">
+                                <label>도면
+                                    <select class="form-select form-select-sm"
+                                            @bind="_context.InspectionDrawingId" @bind:after="OnInspectionDrawingChangedAsync"
+                                            disabled="@Seq.IsBusy">
+                                        <option value="0">— 선택 —</option>
+                                        @foreach (var d in _drawings)
+                                        {
+                                            <option value="@d.Id">@d.Name</option>
+                                        }
+                                    </select>
+                                </label>
+                                <label>티칭설정
+                                    <select class="form-select form-select-sm"
+                                            @bind="_context.InspectionProfileId" @bind:after="SaveInspectionAsync"
+                                            disabled="@(Seq.IsBusy || _inspectionProfiles.Count == 0)">
+                                        <option value="0">— 선택 —</option>
+                                        @foreach (var p in _inspectionProfiles)
+                                        {
+                                            <option value="@p.Id">@p.Name</option>
+                                        }
+                                    </select>
+                                </label>
+                                <label>Surface ID
+                                    <select class="form-select form-select-sm"
+                                            @bind="_context.InspectionSurfaceId" @bind:after="SaveInspectionAsync"
+                                            disabled="@Seq.IsBusy">
+                                        @foreach (var s in SurfaceCatalog.All)
+                                        {
+                                            <option value="@s.Id">@($"0x{s.Id:X2}") @s.Name</option>
+                                        }
+                                    </select>
+                                </label>
+                            </div>
+                        }
                     </td>
                     <td class="step-note">
                         @if (status?.State == StepState.Running)
@@ -169,6 +285,33 @@
     private const string OffsetVKey = "Sequence.Inspection.OffsetV";
     private const string DirectionKey = "Sequence.Inspection.Direction";
     private const string CameraDistKey = "Sequence.Camera.TargetDistance";
+    private const string CameraToLaserShiftKey = "Sequence.FlatSurface.CameraToLaserShiftYmm";
+
+    // ⑱ 검사 수행 — 스텝(InspectionRunStep)이 실행 시 context 값을 사용. 선택값은 DB에 영속.
+    private const string InspectionDrawingKey = "Sequence.Inspection.DrawingId";
+    private const string InspectionProfileKey = "Sequence.Inspection.ProfileId";
+    private const string InspectionSurfaceKey = "Sequence.Inspection.SurfaceId";
+
+    // ⑤~⑫ Peak/Bead 파라미터 — 스텝(WeldSequenceSupport)이 실행 시 같은 키를 DB에서 읽는다.
+    private const string XSignKey = "Camera.Axis.XSign";
+    private const string PitchMmKey = "Weld.Peak.PitchMm";
+    private const string PitchDirKey = "Weld.Peak.PitchDir";
+
+    // 검사캠 장착 오프셋(영상 X/Y, mm) — ⑨/⑬ Bead 센터링이 공유하는 하나의 물리값.
+    // 키는 WeldSequenceSupport.InspectCamOffsetX/YKey 와 동일해야 한다(스텝이 실행 시 읽음).
+    private const string InspectCamOffsetXKey = "Sequence.InspectCam.OffsetXMm";
+    private const string InspectCamOffsetYKey = "Sequence.InspectCam.OffsetYMm";
+
+    private int _xSign = 1;          // 영상 +X → BASE X 부호 (⑥⑩ 센터링)
+    private double _pitchMm = 370;   // Peak 간 pitch (mm)
+    private int _pitchDir = 1;       // Peak2 이동 방향 (⑧)
+    private double _inspectCamOffsetX;  // 검사캠 오프셋 영상 +X(화면 오른쪽) 성분 (mm)
+    private double _inspectCamOffsetY;  // 검사캠 오프셋 영상 +Y(화면 아래) 성분 (mm)
+    private int _wobjId = 1;         // 작업물 좌표계 번호 (3점법 등록 대상, 0~14)
+
+    // ⑱ 검사 수행 드롭박스 소스.
+    private List<Drawing> _drawings = new();
+    private List<InspectionProfile> _inspectionProfiles = new();
 
     protected override async Task OnInitializedAsync()
     {
@@ -178,7 +321,47 @@
         _context.InspectionOffsetV = await Param.GetDoubleAsync(OffsetVKey) ?? 0;
         _context.InspectionDirection = (InspectionMoveDirection)(int)(await Param.GetDoubleAsync(DirectionKey) ?? 0);
         _context.CameraTargetDistanceMm = await Param.GetDoubleAsync(CameraDistKey) ?? 400;
+        _context.CameraToLaserShiftYmm = await Param.GetDoubleAsync(CameraToLaserShiftKey) ?? -65;
+        _xSign = Math.Sign(await Param.GetDoubleAsync(XSignKey) ?? 1) is -1 ? -1 : 1;
+        _pitchMm = await Param.GetDoubleAsync(PitchMmKey) ?? 370;
+        _pitchDir = Math.Sign(await Param.GetDoubleAsync(PitchDirKey) ?? 1) is -1 ? -1 : 1;
+        _inspectCamOffsetX = await Param.GetDoubleAsync(InspectCamOffsetXKey) ?? 0;
+        _inspectCamOffsetY = await Param.GetDoubleAsync(InspectCamOffsetYKey) ?? 0;
+        _wobjId = (int)(await Param.GetDoubleAsync(WObjPointStep.WObjIdKey) ?? 1);
+
+        // ⑱ 검사 수행: 도면 목록 + 저장된 선택값 복원.
+        _drawings = await DrawingSvc.ListAsync();
+        _context.InspectionDrawingId = (int)(await Param.GetDoubleAsync(InspectionDrawingKey) ?? 0);
+        _context.InspectionProfileId = (int)(await Param.GetDoubleAsync(InspectionProfileKey) ?? 0);
+        _context.InspectionSurfaceId = (int)(await Param.GetDoubleAsync(InspectionSurfaceKey) ?? 0x01);
+        await LoadInspectionProfilesAsync();
+
         _ = RefreshLoopAsync();
+    }
+
+    /// <summary>선택된 도면의 티칭설정(InspectionProfile) 목록을 로드. 도면 미선택이면 비운다.</summary>
+    private async Task LoadInspectionProfilesAsync()
+    {
+        _inspectionProfiles = _context.InspectionDrawingId > 0
+            ? await DrawingSvc.ListProfilesAsync(_context.InspectionDrawingId)
+            : new();
+        // 현재 선택된 티칭설정이 목록에 없으면(도면 변경 등) 선택 해제.
+        if (_inspectionProfiles.All(p => p.Id != _context.InspectionProfileId))
+            _context.InspectionProfileId = 0;
+    }
+
+    /// <summary>도면 드롭박스 변경 시: 티칭설정 목록 갱신 + 선택값 저장.</summary>
+    private async Task OnInspectionDrawingChangedAsync()
+    {
+        await LoadInspectionProfilesAsync();
+        await SaveInspectionAsync();
+    }
+
+    private async Task SaveInspectionAsync()
+    {
+        await Param.SetDoubleAsync(InspectionDrawingKey, _context.InspectionDrawingId, "⑱ 검사 수행: 대상 도면 id");
+        await Param.SetDoubleAsync(InspectionProfileKey, _context.InspectionProfileId, "⑱ 검사 수행: 티칭설정(InspectionProfile) id");
+        await Param.SetDoubleAsync(InspectionSurfaceKey, _context.InspectionSurfaceId, "⑱ 검사 수행: 비전 CAPTURE_REQ Surface ID");
     }
 
     private async Task LoadPositionsAsync()
@@ -193,6 +376,20 @@
         await Param.SetDoubleAsync(OffsetVKey, _context.InspectionOffsetV, "검사위치 이동 수직 오프셋 v (mm), 상+/하− → TOOL X");
         await Param.SetDoubleAsync(DirectionKey, (int)_context.InspectionDirection, "검사위치 이동 방향 (0=수평, 1=수직/RZ-90°)");
         await Param.SetDoubleAsync(CameraDistKey, _context.CameraTargetDistanceMm, "③ 카메라 거리 정렬 목표 거리 (mm)");
+        await Param.SetDoubleAsync(CameraToLaserShiftKey, _context.CameraToLaserShiftYmm, "④ 평탄면 센터링: 카메라→레이저 중심 보정 횡이동 (mm, 툴 Y). 레이저 장착 오프셋");
+    }
+
+    private async Task SaveWObjIdAsync()
+        => await Param.SetDoubleAsync(WObjPointStep.WObjIdKey, _wobjId,
+            "작업물 좌표계 번호 (3점법 등록 대상, 0~14)");
+
+    private async Task SaveWeldParamsAsync()
+    {
+        await Param.SetDoubleAsync(XSignKey, _xSign, "영상 +X → BASE X 부호 (⑥⑩ Peak 센터링 방향, +1/−1)");
+        await Param.SetDoubleAsync(PitchMmKey, _pitchMm, "Peak 간 pitch (mm) — ⑧ 이동량, ⑫ 각도식 분모");
+        await Param.SetDoubleAsync(PitchDirKey, _pitchDir, "⑧ Peak2 이동 방향 (+1/−1)");
+        await Param.SetDoubleAsync(InspectCamOffsetXKey, _inspectCamOffsetX, "⑨/⑬ 검사캠 장착 오프셋 영상 +X(화면 오른쪽) 성분 (mm)");
+        await Param.SetDoubleAsync(InspectCamOffsetYKey, _inspectCamOffsetY, "⑨/⑬ 검사캠 장착 오프셋 영상 +Y(화면 아래) 성분 (mm)");
     }
 
     private async void OnSequenceStateChanged()
@@ -209,10 +406,19 @@
         catch (OperationCanceledException) { }
     }
 
+    /// <summary>모니터링 창 열기 — 실행 버튼 클릭 핸들러(사용자 제스처) 안에서 호출해 팝업 차단을 피한다.
+    /// 같은 이름(seqMonitor)이라 이미 열려 있으면 재사용된다.</summary>
+    private async Task OpenMonitorWindowAsync()
+    {
+        try { await JS.InvokeVoidAsync("open", "/sequence-monitor", "seqMonitor", "width=1150,height=850"); }
+        catch { /* 팝업 차단 등 — 시퀀스 실행은 계속 */ }
+    }
+
     // ── 풀오토 ───────────────────────────────────────────────────────
     private async Task RunAllAsync()
     {
         _msg = null;
+        await OpenMonitorWindowAsync();
         var success = await Seq.RunAllAsync(_context, _cts.Token);
         _isErr = !success;
         _msg = success ? "풀오토 시퀀스 완료." : "시퀀스 중단 — 위 상태를 확인하세요.";
@@ -222,6 +428,7 @@
     private async Task RunStepAsync(string stepKey)
     {
         _msg = null;
+        await OpenMonitorWindowAsync();
         var result = await Seq.RunStepAsync(stepKey, _context, _cts.Token);
         _isErr = !result.Success;
         _msg = result.Message;
@@ -229,6 +436,15 @@
 
     // ── 정지 ─────────────────────────────────────────────────────────
     private async Task StopAsync() => await Seq.StopAsync();
+
+    // ── 상태 초기화 ──────────────────────────────────────────────────
+    private void ResetStatuses()
+    {
+        Seq.Reset();
+        _context.Bag.Clear();   // 측정값·앵커·플래그도 초기화 — 새 사이클 시작
+        _isErr = false;
+        _msg = "시퀀스 상태 초기화 완료.";
+    }
 
     // ── 오류 해제 ────────────────────────────────────────────────────
     private async Task ResetFaultAsync()
@@ -248,10 +464,12 @@
         }
     }
 
+    /// <summary>원형 숫자 표기 — 유니코드 블록 3개로 1~50 커버 (①~⑳, ㉑~㉟, ㊱~㊿).</summary>
     private static string StepCircle(int n) => n switch
     {
-        1 => "①", 2 => "②", 3 => "③", 4 => "④", 5 => "⑤",
-        6 => "⑥", 7 => "⑦", 8 => "⑧", 9 => "⑨", 10 => "⑩",
+        >= 1 and <= 20 => char.ConvertFromUtf32(0x2460 + n - 1),    // ①~⑳
+        >= 21 and <= 35 => char.ConvertFromUtf32(0x3251 + n - 21),  // ㉑~㉟
+        >= 36 and <= 50 => char.ConvertFromUtf32(0x32B1 + n - 36),  // ㊱~㊿
         _ => $"({n})"
     };
 

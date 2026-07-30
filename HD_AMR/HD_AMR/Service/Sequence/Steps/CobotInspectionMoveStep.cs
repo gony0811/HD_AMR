@@ -66,10 +66,11 @@ public class CobotInspectionMoveStep : ISequenceStep
         var inspection = context.Positions["inspectionReady"];
         var (target, where) = await ComputeTargetPoseAsync(_cobot, inspection, ct);
 
-        // 툴프레임 오프셋: offset[0]=v(툴 X, 상+/하−), offset[1]=u(툴 Y, 좌+/우−).
+        // 툴프레임 오프셋: offset[0]=u(툴 X = 수평, 좌+/우−), offset[1]=v(툴 Y = 수직, 상+/하−).
+        // 실측 확인 매핑 — 과거 [v, u] 순서는 v 가 수평으로 나가는 축 교차 오류였음.
         // 수직 검사 방향이면 툴 RZ −90° 회전을 합성 (병진 u/v는 회전 전 대기자세 축 기준이라 의미 불변).
         var rz = context.InspectionDirection == InspectionMoveDirection.Vertical ? -90.0 : 0.0;
-        var offset = new[] { context.InspectionOffsetV, context.InspectionOffsetU, 0.0, 0.0, 0.0, rz };
+        var offset = new[] { context.InspectionOffsetU, context.InspectionOffsetV, 0.0, 0.0, 0.0, rz };
         var hasOffset = context.InspectionOffsetU != 0 || context.InspectionOffsetV != 0;
 
         var rc = await _cobot.Rpc.MoveByToolOffsetAsync(target, user: 0, offset,

@@ -75,11 +75,50 @@
                  style="width:100%;max-width:640px;border:1px solid #ccc;border-radius:4px" />
         </div>
         <div class="col-lg-4">
-            <h5 class="text-muted">IR</h5>
+            <h5 class="text-muted">IR <span class="text-muted" style="font-size:.8rem">(드래그로 Bead ROI 지정)</span></h5>
             @if (Svc.IsIrActive)
             {
-                <img src="/camera/ir.mjpeg?k=@_streamKey" alt="IR stream"
-                     style="width:100%;max-width:640px;border:1px solid #ccc;border-radius:4px;background:#000" />
+                <div style="position:relative; display:inline-block; width:100%; max-width:640px">
+                    <img @ref="_irImg" src="/camera/ir.mjpeg?k=@_streamKey" alt="IR stream"
+                         style="width:100%;display:block;border:1px solid #ccc;border-radius:4px;background:#000" />
+                    <canvas @ref="_beadCanvas"
+                            style="position:absolute;left:0;top:0;width:100%;height:100%;cursor:crosshair"></canvas>
+                </div>
+
+                @* Bead(용접비드) ROI — 비드는 IR 영상에서 보이므로 여기서 설정한다. ⑦⑪ 비드 검출이 사용. *@
+                <div class="card mt-2" style="max-width:640px">
+                    <div class="card-body p-2">
+                        <h6 class="mb-2">Bead ROI <span class="text-muted" style="font-size:.75rem">(⑦⑪ 비드 검출 영역)</span></h6>
+                        <div class="form-check form-switch mb-2">
+                            <input class="form-check-input" type="checkbox" id="beadRoiEnabled"
+                                   @bind="_beadEnabled" @bind:after="OnBeadRoiNumericChanged" />
+                            <label class="form-check-label" for="beadRoiEnabled">ROI 사용</label>
+                        </div>
+                        <div class="row g-2 mb-2">
+                            <div class="col-3">
+                                <label class="form-label mb-0" style="font-size:.75rem">X %</label>
+                                <input type="number" class="form-control form-control-sm" min="0" max="100" step="0.5"
+                                       @bind="BeadXPct" @bind:after="OnBeadRoiNumericChanged" />
+                            </div>
+                            <div class="col-3">
+                                <label class="form-label mb-0" style="font-size:.75rem">Y %</label>
+                                <input type="number" class="form-control form-control-sm" min="0" max="100" step="0.5"
+                                       @bind="BeadYPct" @bind:after="OnBeadRoiNumericChanged" />
+                            </div>
+                            <div class="col-3">
+                                <label class="form-label mb-0" style="font-size:.75rem">너비 %</label>
+                                <input type="number" class="form-control form-control-sm" min="0" max="100" step="0.5"
+                                       @bind="BeadWPct" @bind:after="OnBeadRoiNumericChanged" />
+                            </div>
+                            <div class="col-3">
+                                <label class="form-label mb-0" style="font-size:.75rem">높이 %</label>
+                                <input type="number" class="form-control form-control-sm" min="0" max="100" step="0.5"
+                                       @bind="BeadHPct" @bind:after="OnBeadRoiNumericChanged" />
+                            </div>
+                        </div>
+                        <button class="btn btn-sm btn-primary" @onclick="SaveBeadRoi" disabled="@_busy">저장 (Bead)</button>
+                    </div>
+                </div>
             }
             else
             {
@@ -87,6 +126,33 @@
                     IR 스트림이 이 카메라/설정에서 활성화되지 않았습니다.
                 </div>
             }
+
+            @* IR 밝기(노출/게인) 튜닝 — 스트림 유지한 채 즉시 반영. 검출기 입력(LatestIr)도 함께 밝아진다. *@
+            <div class="card mt-2" style="max-width:640px">
+                <div class="card-body p-2">
+                    <h6 class="mb-2">IR 밝기 (노출/게인)</h6>
+                    <div class="form-check form-switch mb-2">
+                        <input class="form-check-input" type="checkbox" id="irAutoExp"
+                               @bind="_irAutoExposure" @bind:after="ApplyIrExposureAsync" />
+                        <label class="form-check-label" for="irAutoExp">자동노출</label>
+                    </div>
+                    <div class="d-flex gap-2 align-items-end">
+                        <label style="font-size:.85rem">노출(µs)
+                            <input class="form-control form-control-sm" type="number" min="1" max="165000" step="1000"
+                                   @bind="_irExposureUs" @bind:after="ApplyIrExposureAsync"
+                                   disabled="@_irAutoExposure" />
+                        </label>
+                        <label style="font-size:.85rem">게인 (16~248)
+                            <input class="form-control form-control-sm" type="number" min="16" max="248"
+                                   @bind="_irGain" @bind:after="ApplyIrExposureAsync"
+                                   disabled="@_irAutoExposure" />
+                        </label>
+                    </div>
+                    <div class="text-muted mt-1" style="font-size:.78rem">
+                        @(_irExpMsg ?? "변경 즉시 적용. 앱 재시작 시 초기화 — 확정값은 appsettings.json \"Camera\" 에 기입.")
+                    </div>
+                </div>
+            </div>
         </div>
         <div class="col-lg-4">
             <h5 class="text-muted">Depth <span class="text-muted" style="font-size:.8rem">(드래그로 ROI 지정 · 마우스 올리면 거리 mm)</span></h5>
@@ -99,9 +165,19 @@
                      style="display:none;position:absolute;pointer-events:none;padding:2px 6px;background:rgba(0,0,0,.7);color:#fff;font-size:12px;border-radius:3px;white-space:nowrap"></div>
             </div>
 
-            @* 깊이 ROI 설정/계산 패널 — 값은 정규화([0,1]) 보관, 화면은 % 표시. *@
+            @* 깊이 ROI 설정/계산 패널 — 값은 정규화([0,1]) 보관, 화면은 % 표시.
+               대상 선택: 평탄면(Camera.Depth.Roi.*, ③④용) / Peak·Bead(Camera.Weld.Roi.*, ⑤~⑪용). *@
             <div class="card mt-2" style="max-width:640px">
                 <div class="card-body p-2">
+                    <div class="d-flex align-items-center gap-2 mb-2">
+                        <label class="mb-0" style="font-size:.8rem;white-space:nowrap">ROI 대상</label>
+                        <select class="form-select form-select-sm" style="width:auto"
+                                @bind="_roiTarget" @bind:after="OnRoiTargetChangedAsync" disabled="@_busy">
+                            <option value="0">평탄면 (③④)</option>
+                            <option value="1">Peak (⑤~⑪ 코로게이션)</option>
+                        </select>
+                        <span class="text-muted" style="font-size:.72rem">저장 전 전환 시 편집 내용은 폐기됩니다</span>
+                    </div>
                     <div class="form-check form-switch mb-2">
                         <input class="form-check-input" type="checkbox" id="roiEnabled"
                                @bind="_roiEnabled" @bind:after="OnRoiNumericChanged" />
@@ -129,14 +205,14 @@
                                    @bind="RoiHPct" @bind:after="OnRoiNumericChanged" />
                         </div>
                     </div>
-                    <button class="btn btn-sm btn-primary" @onclick="SaveRoi" disabled="@_busy">저장</button>
+                    <button class="btn btn-sm btn-primary" @onclick="SaveRoi" disabled="@_busy">저장 (@(_roiTarget == 0 ? "평탄면" : "Peak·Bead"))</button>
                     <button class="btn btn-sm btn-outline-primary" @onclick="VerifyPlane"
-                            disabled="@(_busy || !Svc.IsStreaming || !_roiEnabled || _roiW <= 0 || _roiH <= 0)">
+                            disabled="@(_busy || _roiTarget != 0 || !Svc.IsStreaming || !_roiEnabled || _roiW <= 0 || _roiH <= 0)">
                         평면 검출 확인
                     </button>
-                    @* 코봇을 실제로 움직여 카메라(ROI) 중심을 평탄 셀 중심에 반복 수렴 정렬한다. *@
+                    @* 코봇을 실제로 움직여 카메라(ROI) 중심을 평탄 셀 중심에 반복 수렴 정렬한다. (평탄면 대상 전용) *@
                     <button class="btn btn-sm btn-outline-danger" @onclick="AlignToFlatCenter"
-                            disabled="@(_busy || _aligning || !Svc.IsStreaming || !_roiEnabled || _roiW <= 0 || _roiH <= 0 || !Cobot.IsConnected)">
+                            disabled="@(_busy || _aligning || _roiTarget != 0 || !Svc.IsStreaming || !_roiEnabled || _roiW <= 0 || _roiH <= 0 || !Cobot.IsConnected)">
                         평탄 중심으로 이동@(Cobot.IsConnected ? "" : " (코봇 미연결)")
                     </button>
                     <button class="btn btn-sm btn-outline-secondary" @onclick="AbortAlign" disabled="@(!_aligning)">
@@ -149,7 +225,7 @@
                         <input type="number" class="form-control" min="100" max="2000" step="10"
                                @bind="_targetDistMm" @bind:after="SaveAlignSettingsAsync" disabled="@_aligning" />
                         <button class="btn btn-outline-danger" @onclick="MoveToTargetDistance"
-                                disabled="@(_busy || _aligning || !Svc.IsStreaming || !_roiEnabled || _roiW <= 0 || _roiH <= 0 || !Cobot.IsConnected)">
+                                disabled="@(_busy || _aligning || _roiTarget != 0 || !Svc.IsStreaming || !_roiEnabled || _roiW <= 0 || _roiH <= 0 || !Cobot.IsConnected)">
                             지정 거리로 이동@(Cobot.IsConnected ? "" : " (코봇 미연결)")
                         </button>
                     </div>
@@ -299,6 +375,17 @@ else
     private double _roiX, _roiY, _roiW, _roiH;
     private DepthRoiStats? _roiStats;
 
+    // Bead ROI 상태 — IR 뷰 캔버스에서 편집. 정규화([0,1]) 보관.
+    private ElementReference _irImg;
+    private ElementReference _beadCanvas;
+    private bool _beadEnabled;
+    private double _beadX, _beadY, _beadW, _beadH;
+
+    private double BeadXPct { get => Math.Round(_beadX * 100, 1); set => _beadX = Clamp01(value / 100); }
+    private double BeadYPct { get => Math.Round(_beadY * 100, 1); set => _beadY = Clamp01(value / 100); }
+    private double BeadWPct { get => Math.Round(_beadW * 100, 1); set => _beadW = Clamp01(value / 100); }
+    private double BeadHPct { get => Math.Round(_beadH * 100, 1); set => _beadH = Clamp01(value / 100); }
+
     // 평면 검출(FindFlattest) 단독 검증 결과 — 로봇 이동 없이 깊이 카메라만으로 계산.
     private CameraService.DepthFlatnessResult? _flatness;
     private DepthRoiStats? _flatnessStats;
@@ -341,18 +428,63 @@ else
     private const string RoiWKey = "Camera.Depth.Roi.W";
     private const string RoiHKey = "Camera.Depth.Roi.H";
 
+    // Peak(코로게이션) 탐색 ROI — WeldSequenceSupport.PeakRoi*Key 와 동일 문자열. Depth 뷰에서 편집.
+    private const string PeakRoiEnabledKey = "Camera.Peak.Roi.Enabled";
+    private const string PeakRoiXKey = "Camera.Peak.Roi.X";
+    private const string PeakRoiYKey = "Camera.Peak.Roi.Y";
+    private const string PeakRoiWKey = "Camera.Peak.Roi.W";
+    private const string PeakRoiHKey = "Camera.Peak.Roi.H";
+
+    // Bead(용접비드) 검출 ROI — WeldSequenceSupport.BeadRoi*Key 와 동일 문자열. IR 뷰에서 편집(비드는 IR 에서 보임).
+    private const string BeadRoiEnabledKey = "Camera.Bead.Roi.Enabled";
+    private const string BeadRoiXKey = "Camera.Bead.Roi.X";
+    private const string BeadRoiYKey = "Camera.Bead.Roi.Y";
+    private const string BeadRoiWKey = "Camera.Bead.Roi.W";
+    private const string BeadRoiHKey = "Camera.Bead.Roi.H";
+
+    /// <summary>Depth 뷰 ROI 편집 대상: 0=평탄면(③④, Camera.Depth.Roi.*), 1=Peak(⑤~⑪ 코로게이션, Camera.Peak.Roi.*).</summary>
+    private int _roiTarget;
+
+    private (string En, string X, string Y, string W, string H) RoiKeys => _roiTarget == 0
+        ? (RoiEnabledKey, RoiXKey, RoiYKey, RoiWKey, RoiHKey)
+        : (PeakRoiEnabledKey, PeakRoiXKey, PeakRoiYKey, PeakRoiWKey, PeakRoiHKey);
+
+    private string RoiTargetName => _roiTarget == 0 ? "평탄면" : "Peak";
+
     private double RoiXPct { get => Math.Round(_roiX * 100, 1); set => _roiX = Clamp01(value / 100); }
     private double RoiYPct { get => Math.Round(_roiY * 100, 1); set => _roiY = Clamp01(value / 100); }
     private double RoiWPct { get => Math.Round(_roiW * 100, 1); set => _roiW = Clamp01(value / 100); }
     private double RoiHPct { get => Math.Round(_roiH * 100, 1); set => _roiH = Clamp01(value / 100); }
 
+    // ── IR 밝기(노출/게인) — 값은 RealSenseSettings(인메모리)와 동기, 영구값은 appsettings.
+    private bool _irAutoExposure = true;
+    private double _irExposureUs = 33000;
+    private double _irGain = 16;
+    private string? _irExpMsg;
+
     protected override async Task OnInitializedAsync()
     {
         _cts = new CancellationTokenSource();
+        _irAutoExposure = Svc.Settings.IrAutoExposure;
+        _irExposureUs = Svc.Settings.IrExposureUs > 0 ? Svc.Settings.IrExposureUs : 33000;
+        _irGain = Svc.Settings.IrGain > 0 ? Svc.Settings.IrGain : 16;
         await LoadRoiAsync();
+        await LoadBeadRoiAsync();
         await LoadCaptureDirAsync();
         await LoadAlignSettingsAsync();
         _ = PollLoop(_cts.Token);
+    }
+
+    /// <summary>IR 노출/게인 즉시 적용 — 스트림 유지, 검출기 입력(LatestIr)도 함께 변경된다.</summary>
+    private Task ApplyIrExposureAsync()
+    {
+        var ok = Svc.SetIrExposure(_irAutoExposure, (float)_irExposureUs, (float)_irGain);
+        _irExpMsg = ok
+            ? (_irAutoExposure
+                ? "자동노출 적용됨."
+                : $"수동 적용됨 — 노출 {_irExposureUs:0}µs, 게인 {_irGain:0}. (확정값은 appsettings 에 기입)")
+            : "적용 실패 — 스트림/센서 상태를 확인하세요.";
+        return Task.CompletedTask;
     }
 
     // 저장된 캡처 폴더 불러오기(없으면 내문서\weld_captures 기본).
@@ -606,9 +738,16 @@ else
                 _selfRef ??= DotNetObjectReference.Create(this);
                 // 캔버스가 이미지 위를 덮으므로 hover 프로브도 캔버스에 바인딩(rect/이벤트 동일).
                 await JS.InvokeVoidAsync("hdAmrCamera.initDepthProbe", _roiCanvas, _depthLabel);
-                await JS.InvokeVoidAsync("hdAmrCamera.initDepthRoi", _depthImg, _roiCanvas, _selfRef);
+                await JS.InvokeVoidAsync("hdAmrCamera.initDepthRoi", _depthImg, _roiCanvas, _selfRef, "OnRoiDrawn");
                 // 저장/로드된 ROI 를 캔버스에 반영.
                 await JS.InvokeVoidAsync("hdAmrCamera.setRoi", _roiCanvas, _roiX, _roiY, _roiW, _roiH, _roiEnabled);
+
+                // IR 뷰 Bead ROI 캔버스 — 비드는 IR 에서 보이므로 여기서 드래그 편집.
+                if (Svc.IsIrActive)
+                {
+                    await JS.InvokeVoidAsync("hdAmrCamera.initDepthRoi", _irImg, _beadCanvas, _selfRef, "OnBeadRoiDrawn");
+                    await JS.InvokeVoidAsync("hdAmrCamera.setRoi", _beadCanvas, _beadX, _beadY, _beadW, _beadH, _beadEnabled);
+                }
             }
             catch (Microsoft.JSInterop.JSDisconnectedException) { /* 회로 종료 — 정상 종료 시 무시 */ }
             catch (Exception ex)
@@ -774,12 +913,14 @@ else
         try
         {
             ClampRoi();
-            await Param.SetBoolAsync(RoiEnabledKey, _roiEnabled, "깊이 ROI 사용 여부");
-            await Param.SetDoubleAsync(RoiXKey, _roiX, "깊이 ROI 좌상단 X (정규화 0~1)");
-            await Param.SetDoubleAsync(RoiYKey, _roiY, "깊이 ROI 좌상단 Y (정규화 0~1)");
-            await Param.SetDoubleAsync(RoiWKey, _roiW, "깊이 ROI 너비 (정규화 0~1)");
-            await Param.SetDoubleAsync(RoiHKey, _roiH, "깊이 ROI 높이 (정규화 0~1)");
-            Notify("ROI 설정 저장 완료", false);
+            var k = RoiKeys;
+            var t = RoiTargetName;
+            await Param.SetBoolAsync(k.En, _roiEnabled, $"{t} ROI 사용 여부");
+            await Param.SetDoubleAsync(k.X, _roiX, $"{t} ROI 좌상단 X (정규화 0~1)");
+            await Param.SetDoubleAsync(k.Y, _roiY, $"{t} ROI 좌상단 Y (정규화 0~1)");
+            await Param.SetDoubleAsync(k.W, _roiW, $"{t} ROI 너비 (정규화 0~1)");
+            await Param.SetDoubleAsync(k.H, _roiH, $"{t} ROI 높이 (정규화 0~1)");
+            Notify($"{t} ROI 설정 저장 완료", false);
         }
         catch (Exception ex)
         {
@@ -791,19 +932,92 @@ else
         }
     }
 
-    // 저장된 ROI 파라미터를 불러와 상태에 반영(없으면 비활성·빈 영역).
+    // 저장된 ROI 파라미터(현재 편집 대상 키 세트)를 불러와 상태에 반영(없으면 비활성·빈 영역).
     private async Task LoadRoiAsync()
     {
         try
         {
-            _roiEnabled = await Param.GetBoolAsync(RoiEnabledKey) ?? false;
-            _roiX = await Param.GetDoubleAsync(RoiXKey) ?? 0;
-            _roiY = await Param.GetDoubleAsync(RoiYKey) ?? 0;
-            _roiW = await Param.GetDoubleAsync(RoiWKey) ?? 0;
-            _roiH = await Param.GetDoubleAsync(RoiHKey) ?? 0;
+            var k = RoiKeys;
+            _roiEnabled = await Param.GetBoolAsync(k.En) ?? false;
+            _roiX = await Param.GetDoubleAsync(k.X) ?? 0;
+            _roiY = await Param.GetDoubleAsync(k.Y) ?? 0;
+            _roiW = await Param.GetDoubleAsync(k.W) ?? 0;
+            _roiH = await Param.GetDoubleAsync(k.H) ?? 0;
             ClampRoi();
         }
         catch { /* DB 미준비 등 — 기본값 유지 */ }
+    }
+
+    // ROI 편집 대상 전환: 선택 대상의 저장값을 로드해 편집기·캔버스에 반영(미저장 편집 폐기).
+    private async Task OnRoiTargetChangedAsync()
+    {
+        await LoadRoiAsync();
+        await OnRoiNumericChanged();   // 캔버스 갱신 + 통계/평면 검출 결과 리셋
+    }
+
+    // ── Bead ROI (IR 뷰) ─────────────────────────────────────────────
+
+    private async Task LoadBeadRoiAsync()
+    {
+        try
+        {
+            _beadEnabled = await Param.GetBoolAsync(BeadRoiEnabledKey) ?? false;
+            _beadX = await Param.GetDoubleAsync(BeadRoiXKey) ?? 0;
+            _beadY = await Param.GetDoubleAsync(BeadRoiYKey) ?? 0;
+            _beadW = await Param.GetDoubleAsync(BeadRoiWKey) ?? 0;
+            _beadH = await Param.GetDoubleAsync(BeadRoiHKey) ?? 0;
+            ClampBead();
+        }
+        catch { /* DB 미준비 등 — 기본값 유지 */ }
+    }
+
+    private async Task OnBeadRoiNumericChanged()
+    {
+        ClampBead();
+        try { await JS.InvokeVoidAsync("hdAmrCamera.setRoi", _beadCanvas, _beadX, _beadY, _beadW, _beadH, _beadEnabled); }
+        catch { /* 미준비/회로 종료 무시 */ }
+    }
+
+    // IR 캔버스에서 드래그로 Bead ROI 가 그려졌을 때(정규화 좌표) JS 가 호출.
+    [JSInvokable]
+    public void OnBeadRoiDrawn(double x, double y, double w, double h)
+    {
+        _beadX = x; _beadY = y; _beadW = w; _beadH = h;
+        _beadEnabled = true;
+        ClampBead();
+        InvokeAsync(StateHasChanged);
+    }
+
+    private async Task SaveBeadRoi()
+    {
+        if (_busy) return;
+        _busy = true;
+        try
+        {
+            ClampBead();
+            await Param.SetBoolAsync(BeadRoiEnabledKey, _beadEnabled, "Bead ROI 사용 여부 (⑦⑪ 비드 검출, IR 뷰 기준)");
+            await Param.SetDoubleAsync(BeadRoiXKey, _beadX, "Bead ROI 좌상단 X (정규화 0~1)");
+            await Param.SetDoubleAsync(BeadRoiYKey, _beadY, "Bead ROI 좌상단 Y (정규화 0~1)");
+            await Param.SetDoubleAsync(BeadRoiWKey, _beadW, "Bead ROI 너비 (정규화 0~1)");
+            await Param.SetDoubleAsync(BeadRoiHKey, _beadH, "Bead ROI 높이 (정규화 0~1)");
+            Notify("Bead ROI 설정 저장 완료", false);
+        }
+        catch (Exception ex)
+        {
+            Notify($"Bead ROI 저장 실패: {ex.Message}", true);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void ClampBead()
+    {
+        _beadX = Clamp01(_beadX); _beadY = Clamp01(_beadY);
+        _beadW = Clamp01(_beadW); _beadH = Clamp01(_beadH);
+        if (_beadX + _beadW > 1) _beadW = 1 - _beadX;
+        if (_beadY + _beadH > 1) _beadH = 1 - _beadY;
     }
 
     private static double Clamp01(double v) => Math.Clamp(v, 0, 1);

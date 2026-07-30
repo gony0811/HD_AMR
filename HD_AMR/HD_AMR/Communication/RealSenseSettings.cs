@@ -75,6 +75,19 @@ public class RealSenseSettings
     /// </summary>
     public float LaserPower { get; set; } = -1f;
 
+    /// <summary>
+    /// IR(스테레오 센서) 자동노출. 기본 true(펌웨어 AE). false 면 <see cref="IrExposureUs"/>/<see cref="IrGain"/>
+    /// 수동값을 적용한다 — IR 영상이 어두워 비드 검출이 실패할 때 수동 상향으로 밝기를 확보.
+    /// </summary>
+    public bool IrAutoExposure { get; set; } = true;
+
+    /// <summary>수동 IR 노출(µs). −1 = 미설정(펌웨어 값 유지). D435 스테레오 센서 약 1~165000.
+    /// <see cref="IrAutoExposure"/>=false 일 때만 적용. 노출을 올리면 밝아지지만 프레임레이트가 제한될 수 있다.</summary>
+    public float IrExposureUs { get; set; } = -1f;
+
+    /// <summary>수동 IR 게인. −1 = 미설정. D435 약 16~248. 게인 상향은 노이즈도 증폭하므로 노출 우선 권장.</summary>
+    public float IrGain { get; set; } = -1f;
+
     /// <summary>깊이 후처리(홀 복원/스무딩) 필터 체인 설정. <see cref="DepthFilterSettings"/> 참고.</summary>
     public DepthFilterSettings DepthFilters { get; set; } = new();
 }
