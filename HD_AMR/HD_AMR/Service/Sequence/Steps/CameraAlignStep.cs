@@ -89,6 +89,8 @@ public class CameraAlignStep : ISequenceStep
         _logger.LogInformation(
             "Sequence ③ 거리 정렬: 목표={Dist}mm, ROI={Roi}({Rx:0.00},{Ry:0.00},{Rw:0.00},{Rh:0.00}), 광축=툴{Axis}",
             context.CameraTargetDistanceMm, roiSrc, rx, ry, rw, rh, depthAxis);
+        context.Progress?.Invoke(
+            $"거리 정렬 시작 — 목표 {context.CameraTargetDistanceMm:0}mm (ROI={roiSrc}, 광축=툴{depthAxis})");
 
         var r = await _centering.MoveToDistanceAsync(new DepthDistanceMoveOptions
         {
@@ -99,7 +101,7 @@ public class CameraAlignStep : ISequenceStep
             DepthAxis = depthAxis,
             Tool = 1,
             Velocity = context.Velocity,
-        }, progress: null, ct);
+        }, progress: context.Progress, ct);
 
         // 공용 루틴은 취소를 삼키고 실패 결과로 반환 — 스텝은 기존처럼 취소 예외로 전파한다.
         ct.ThrowIfCancellationRequested();

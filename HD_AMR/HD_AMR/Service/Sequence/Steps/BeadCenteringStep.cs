@@ -129,11 +129,13 @@ public class BeadCenteringStep : ISequenceStep
         }
 
         // ── peakId=1: 재측정으로 M1 을 잔차로 갱신 (⑫ 정합) + 매핑 검증 ──
-        var (roi, _) = await WeldSequenceSupport.GetRoiAsync(_param, _camera);
-        if (roi is null)
-            return StepResult.Fail("재측정용 깊이 ROI 를 만들 수 없습니다.");
+        var (peakRoi, _) = await WeldSequenceSupport.GetPeakRoiAsync(_param, _camera);
+        var (beadRoi, _) = await WeldSequenceSupport.GetBeadRoiAsync(_param, _camera);
+        if (peakRoi is null || beadRoi is null)
+            return StepResult.Fail("재측정용 ROI 를 만들 수 없습니다.");
 
-        var (m2, detect2) = await _weld.CapturePeakAsync(_peakId, roi, roi, ct);
+        await WeldSequenceSupport.ApplyDlModelAsync(_param, _weld);   // 저장된 DL 모델 선택 적용
+        var (m2, detect2) = await _weld.CapturePeakAsync(_peakId, peakRoi, beadRoi, ct);
         if (detect2 is null || !detect2.Success || m2 is null)
             return StepResult.Fail(
                 $"이동 후 Bead{_peakId} 재검출 실패 — '{axisKey}' 매핑" +

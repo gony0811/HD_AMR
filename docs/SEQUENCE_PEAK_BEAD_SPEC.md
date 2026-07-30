@@ -467,7 +467,9 @@ double offsetMm = result.OffsetPx * mmPerPx;
 | **⑪⁺** | `bead2Center` | **1150** | `BeadCenteringStep` | 2 | Bead2 센터링 (cross 축, 이동만 — 재측정 없음 → 검사캠 시프트) |
 | **⑪⁺⁺** | `wobjPoint2` | **1160** | `WObjPointStep` | 2 | Bead2 위치를 3점법 **점2(X축 방향)** 로 기록 — 비드1→비드2 = 작업물 X축(용접 진행 방향) |
 | **⑪⁺⁺⁺** | `wobjRegister` | **1170** | `WObjRegisterStep` | — | **가상 점3**(현재 TCP + 툴Z 50mm, 이동 없음)으로 좌표계 계산·등록 — 클라이언트 계산 경로(`RegisterWObjFromPointsAsync`, 계산법 0) |
-| **⑫** | `inspectionRun` | **1200** | `InspectionRunStep` | — | 검사 수행 — 등록된 작업물 좌표계 기준으로 티칭설정 경유점 순회 + 비전 CAPTURE_REQ. **RZ 는 현재 자세 유지**(rz0, 회전 없이 검사 — 프레임이 툴 대비 RZ 180° 회전일 수 있음), 틸트 부호 = sign(cos rz0), **종료 시 활성 wobj 0 복귀**(성공/실패/취소 공통, 무이동 MoveL user:0) |
+| **⑫** | `inspectionRun` | **1200** | `InspectionRunStep` | — | 검사 수행 — 등록된 작업물 좌표계 기준으로 티칭설정 경유점 순회 + 비전 CAPTURE_REQ. **RZ 는 현재 자세 유지**(rz0, 회전 없이 검사 — 프레임이 툴 대비 RZ 180° 회전일 수 있음), 틸트 부호 = sign(cos rz0) |
+| **⑫⁺** | `wobjReset` | **1300** | `WObjResetStep` | — | **활성 작업물 좌표계 0(베이스) 복귀** — 무이동 MoveL(user:0). ⑫ 실패/정지로 미실행 시 단독 실행 |
+| **⑫⁺⁺** | `monitorClose` | **1400** | `MonitorCloseStep` | — | **모니터링 창 닫기** — 정상 완주 시에만 도달(실패 시 창 유지). 세미오토 단독 실행으로 수동 닫기 가능 |
 
 > ⑤⑨, ⑥⑩, ⑦⑪, ⑦⁺⑪⁺은 `peakId`만 다른 동일 동작이므로
 > 생성자 파라미터로 구분하고 DI에 두 번 등록한다.
@@ -480,6 +482,17 @@ double offsetMm = result.OffsetPx * mmPerPx;
 > 재측정해 M1 을 잔차(≈0)로 갱신하고, ⑪⁺(1150)는 이동만 한다. 현재는 각도식에 쓰이지 않지만,
 > ⑦⁺의 재측정은 cross 축 매핑 오설정을 조기에 잡는 검증 역할을 계속 수행한다.
 > 검사캠 시프트는 측정 완료 후 수행되고 ⑧이 역보정하므로 어떤 측정값에도 개입하지 않는다.
+>
+> **모니터링 창**: 실행 버튼(풀오토/단일 스텝) 클릭 시 별도 브라우저 창 `/sequence-monitor` 가
+> `window.open` 으로 열린다(사용자 제스처 시점 1회 — 팝업 차단 회피, 런 종료까지 유지·스텝마다 내용 전환).
+> 상태 허브는 싱글톤 `SequenceMonitorService`(다른 서킷에서도 구독 가능) — `SequenceService` 가
+> BeginRun/StartStep/Log/EndStep/EndRun 을 발행하고 `SequenceContext.Progress` 를 이 허브의 Log 로 연결한다
+> (③④가 공용 루틴 progress·Phase C 측정/보정 라인을 방출). 창 내용(`SequenceMonitorView`) = 스텝별 라이브 뷰
+> (MJPEG: ②·⑫ RGB / ③④·④⁺ Depth / peak·bead IR) + 데이터 패널(③ 목표/현재/잔차 거리, ④·④⁺ 레이저 3채널 +
+> rx/ry/z) + 진행 로그 콘솔. peak/bead 스텝은 검출 오버레이(`/camera/weld/overlay.jpg`, 자홍 Peak 선 등)를
+> 우선 표시하고(없으면 IR 라이브 폴백) 새 로그 라인마다 리프레시한다. **런이 끝나도 창은 자동으로 닫지 않고
+> 마지막 상태(오버레이·데이터·로그)를 유지**하며, 상태/오류 메시지는 배너 없이 헤더 배지와 로그 콘솔로만
+> 표시해 뷰·로그 레이아웃이 고정된다.
 
 ### 5.2 각 단계 동작 요약
 
@@ -546,6 +559,7 @@ double offsetMm = result.OffsetPx * mmPerPx;
 |---|---|---|---|
 | `Weld.Peak.PitchMm` | double | `370` | Peak 간 pitch(mm). ⑧ 이동량 및 ⑫ 각도식 분모 |
 | `Weld.Peak.PitchDir` | double | `+1` | Peak2 이동 방향(진행축 + 기준). `+1` 또는 `−1` |
+| `Weld.Dl.ModelPath` | string | `""`(자동) | 비드 검출 DL 모델 전체 경로 — 카메라 페이지 모델 드롭다운이 저장, ⑦⑪·⑦⁺가 측정 전 적용. 빈값=자동(`weld_seg_{ir\|rgb}.onnx` 고정 파일명) |
 | `Sequence.InspectCam.OffsetXMm` | double | `0` | 검사 카메라 시야 중심의 depth 영상 기준 오프셋 X(mm, 화면 오른쪽 +) — ⑦⁺⑪⁺ 검증 후 시프트에 사용 (§4.2) |
 | `Sequence.InspectCam.OffsetYMm` | double | `0` | 위 오프셋의 Y 성분(mm, 화면 아래 +) |
 | ~~`Camera.Axis.XSign`~~ | double | — | **폐기** — 방향은 ④와 공유하는 `Camera.Align.ImageXAxis` 매핑(부호 포함)이 담당 (§4.3) |
@@ -568,11 +582,13 @@ double offsetMm = result.OffsetPx * mmPerPx;
 
 | 키 | 타입 | 폴백 | 설명 |
 |---|---|---|---|
-| `Camera.Depth.Roi.Enabled` | bool | `false` | 저장된 ROI 사용 여부 |
+| `Camera.Depth.Roi.Enabled` | bool | `false` | 평탄면(③④) ROI 사용 여부 — ⑤~⑪의 **폴백** |
 | `Camera.Depth.Roi.X` | double | `0.35` | 정규화 0~1 |
 | `Camera.Depth.Roi.Y` | double | `0.35` | 정규화 0~1 |
 | `Camera.Depth.Roi.W` | double | `0.30` | 정규화 0~1 |
 | `Camera.Depth.Roi.H` | double | `0.30` | 정규화 0~1 |
+| `Camera.Peak.Roi.{Enabled,X,Y,W,H}` | — | 미설정 | **Peak(코로게이션) 탐색 ROI** — 카메라 페이지 Depth 뷰 "ROI 대상=Peak" 로 저장. `GetPeakRoiAsync`: Peak → 평탄면 폴백 → 중앙 30%. ⑤⑥⑨⑩ + ⑦⑪ Peak ROI |
+| `Camera.Bead.Roi.{Enabled,X,Y,W,H}` | — | 미설정 | **Bead(용접비드) 검출 ROI** — 비드는 IR 에서 보이므로 카메라 페이지 IR 뷰에서 드래그·저장. `GetBeadRoiAsync`: Bead → Peak 폴백 → 평탄면 → 중앙. ⑦⑪ Weld ROI |
 
 **Depth ROI를 Peak ROI / Weld ROI로 그대로 사용한다.**
 정규화 → 픽셀 변환은 IR 프레임 크기 기준:

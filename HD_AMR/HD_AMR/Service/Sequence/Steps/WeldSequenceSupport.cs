@@ -10,12 +10,30 @@ namespace HD_AMR.Service.Sequence.Steps;
 public static class WeldSequenceSupport
 {
     // ── 파라미터 키 ─────────────────────────────────────────────────
-    // 깊이 ROI — CameraView / CameraAlignStep / FlatSurfaceAlignStep 과 공유.
+    // 평탄면(깊이) ROI — CameraView / CameraAlignStep / FlatSurfaceAlignStep 과 공유. ⑤~⑪의 폴백.
     public const string RoiEnabledKey = "Camera.Depth.Roi.Enabled";
     public const string RoiXKey = "Camera.Depth.Roi.X";
     public const string RoiYKey = "Camera.Depth.Roi.Y";
     public const string RoiWKey = "Camera.Depth.Roi.W";
     public const string RoiHKey = "Camera.Depth.Roi.H";
+
+    // Peak(코로게이션) 탐색 ROI — 카메라 페이지 Depth 뷰에서 "Peak" 대상으로 저장. ⑤⑥⑨⑩ + ⑦⑪의 Peak ROI.
+    public const string PeakRoiEnabledKey = "Camera.Peak.Roi.Enabled";
+    public const string PeakRoiXKey = "Camera.Peak.Roi.X";
+    public const string PeakRoiYKey = "Camera.Peak.Roi.Y";
+    public const string PeakRoiWKey = "Camera.Peak.Roi.W";
+    public const string PeakRoiHKey = "Camera.Peak.Roi.H";
+
+    // Bead(용접비드) 검출 ROI — 비드는 IR 영상에서 보이므로 카메라 페이지 IR 뷰에서 저장. ⑦⑪의 Weld ROI.
+    public const string BeadRoiEnabledKey = "Camera.Bead.Roi.Enabled";
+    public const string BeadRoiXKey = "Camera.Bead.Roi.X";
+    public const string BeadRoiYKey = "Camera.Bead.Roi.Y";
+    public const string BeadRoiWKey = "Camera.Bead.Roi.W";
+    public const string BeadRoiHKey = "Camera.Bead.Roi.H";
+
+    /// <summary>비드 검출 DL 모델 전체 경로. 빈 문자열 = 자동(weld_seg_{ir|rgb}.onnx).
+    /// 카메라 페이지 드롭다운이 저장하고, ⑦⑪·⑦⁺ 가 측정 전 <see cref="ApplyDlModelAsync"/> 로 적용한다.</summary>
+    public const string DlModelPathKey = "Weld.Dl.ModelPath";
 
     /// <summary>Peak 간 pitch(mm). ⑧ 이동량이자 ⑫ 각도식의 분모.</summary>
     public const string PitchMmKey = "Weld.Peak.PitchMm";
@@ -65,10 +83,11 @@ public static class WeldSequenceSupport
     public const string Bead1CenteredPoseBagKey = "bead1.centeredPose";
 
     /// <summary>
-    /// 정규화 깊이 ROI(0~1)를 읽어 IR 프레임 픽셀 ROI 로 변환한다.
-    /// IR 해상도 = Depth 해상도(848×480)라 IR 모드에서는 좌표 변환이 이 스케일링뿐이다.
+    /// Peak(코로게이션) 탐색용 ROI — 우선순위: Peak ROI(Depth 뷰에서 저장) → 평탄면 ROI 폴백 → 중앙 30%.
+    /// ⑤⑥⑨⑩ 측정과 ⑦⑪의 Peak ROI 인자로 쓴다. 어느 것을 썼는지 Src 로 반환.
+    /// IR 해상도 = Depth 해상도(848×480)라 IR 모드에서는 좌표 변환이 정규화→픽셀 스케일링뿐이다.
     /// </summary>
-    public static async Task<(RoiRect? Roi, string Src)> GetRoiAsync(
+    public static async Task<(RoiRect? Roi, string Src)> GetPeakRoiAsync(
         ParameterService param, CameraService camera)
     {
         var f = camera.LatestIr;
@@ -76,30 +95,81 @@ public static class WeldSequenceSupport
 
         double x = 0.35, y = 0.35, w = 0.30, h = 0.30;
         var src = "중앙 기본 ROI";
-        try
-        {
-            if (await param.GetBoolAsync(RoiEnabledKey) == true)
-            {
-                var px = await param.GetDoubleAsync(RoiXKey) ?? 0;
-                var py = await param.GetDoubleAsync(RoiYKey) ?? 0;
-                var pw = await param.GetDoubleAsync(RoiWKey) ?? 0;
-                var ph = await param.GetDoubleAsync(RoiHKey) ?? 0;
-                if (pw > 0 && ph > 0 && px + pw <= 1.0001 && py + ph <= 1.0001)
-                {
-                    x = px; y = py; w = pw; h = ph;
-                    src = "저장 ROI";
-                }
-            }
-        }
-        catch { /* DB 미준비 등 — 기본값 폴백 */ }
 
-        var roi = new RoiRect(
+        if (await TryReadRoiAsync(param, PeakRoiEnabledKey, PeakRoiXKey, PeakRoiYKey, PeakRoiWKey, PeakRoiHKey)
+            is { } peak)
+        {
+            (x, y, w, h) = peak;
+            src = "Peak ROI";
+        }
+        else if (await TryReadRoiAsync(param, RoiEnabledKey, RoiXKey, RoiYKey, RoiWKey, RoiHKey)
+                 is { } depth)
+        {
+            (x, y, w, h) = depth;
+            src = "평탄면 ROI 폴백";
+        }
+
+        return (ToPixelRoi(f, x, y, w, h), src);
+    }
+
+    /// <summary>
+    /// Bead(용접비드) 검출용 ROI — 우선순위: Bead ROI(IR 뷰에서 저장) → Peak ROI 폴백 → 평탄면 ROI → 중앙 30%.
+    /// ⑦⑪의 Weld ROI 인자로 쓴다.
+    /// </summary>
+    public static async Task<(RoiRect? Roi, string Src)> GetBeadRoiAsync(
+        ParameterService param, CameraService camera)
+    {
+        var f = camera.LatestIr;
+        if (f is null) return (null, "IR 프레임 없음");
+
+        double x = 0.35, y = 0.35, w = 0.30, h = 0.30;
+        var src = "중앙 기본 ROI";
+
+        if (await TryReadRoiAsync(param, BeadRoiEnabledKey, BeadRoiXKey, BeadRoiYKey, BeadRoiWKey, BeadRoiHKey)
+            is { } bead)
+        {
+            (x, y, w, h) = bead;
+            src = "Bead ROI";
+        }
+        else if (await TryReadRoiAsync(param, PeakRoiEnabledKey, PeakRoiXKey, PeakRoiYKey, PeakRoiWKey, PeakRoiHKey)
+                 is { } peak)
+        {
+            (x, y, w, h) = peak;
+            src = "Peak ROI 폴백";
+        }
+        else if (await TryReadRoiAsync(param, RoiEnabledKey, RoiXKey, RoiYKey, RoiWKey, RoiHKey)
+                 is { } depth)
+        {
+            (x, y, w, h) = depth;
+            src = "평탄면 ROI 폴백";
+        }
+
+        return (ToPixelRoi(f, x, y, w, h), src);
+    }
+
+    private static RoiRect ToPixelRoi(CameraFrame f, double x, double y, double w, double h)
+        => new RoiRect(
             (int)Math.Round(x * f.Width),
             (int)Math.Round(y * f.Height),
             (int)Math.Round(w * f.Width),
             (int)Math.Round(h * f.Height)).ClampTo(f.Width, f.Height);
 
-        return (roi, src);
+    /// <summary>키 세트 하나의 정규화 ROI 를 읽는다. 비활성/무효/DB 미준비면 null.</summary>
+    private static async Task<(double X, double Y, double W, double H)?> TryReadRoiAsync(
+        ParameterService param, string enabledKey, string xKey, string yKey, string wKey, string hKey)
+    {
+        try
+        {
+            if (await param.GetBoolAsync(enabledKey) != true) return null;
+            var x = await param.GetDoubleAsync(xKey) ?? 0;
+            var y = await param.GetDoubleAsync(yKey) ?? 0;
+            var w = await param.GetDoubleAsync(wKey) ?? 0;
+            var h = await param.GetDoubleAsync(hKey) ?? 0;
+            if (w > 0 && h > 0 && x + w <= 1.0001 && y + h <= 1.0001)
+                return (x, y, w, h);
+        }
+        catch { /* DB 미준비 등 — 폴백 */ }
+        return null;
     }
 
     /// <summary>부호 파라미터(+1/−1) 읽기. 값이 없거나 0이면 +1.</summary>
@@ -119,6 +189,21 @@ public static class WeldSequenceSupport
     {
         try { return await param.GetDoubleAsync(PitchMmKey) ?? DefaultPitchMm; }
         catch { return DefaultPitchMm; }
+    }
+
+    /// <summary>저장된 비드 검출 DL 모델 선택을 <see cref="WeldTrackingService.Params"/> 에 적용한다.
+    /// 키 미존재/DB 미준비면 현재 인메모리 선택을 유지한다. 적용된 모델 표시명을 반환("자동"/파일명).</summary>
+    public static async Task<string> ApplyDlModelAsync(ParameterService param, WeldTrackingService weld)
+    {
+        try
+        {
+            if (await param.GetAsync(DlModelPathKey) is { } v)
+                weld.Params.DlModelPath = v;
+        }
+        catch { /* DB 미준비 — 인메모리 선택 유지 */ }
+
+        var path = weld.Params.DlModelPath;
+        return string.IsNullOrWhiteSpace(path) ? "자동" : Path.GetFileName(path);
     }
 
     /// <summary>

@@ -52,9 +52,9 @@ public class PeakFindStep : ISequenceStep
         if (pitchMm <= 0)
             return StepResult.Fail($"'{WeldSequenceSupport.PitchMmKey}' 파라미터가 0 이하입니다.");
 
-        var (roi, roiSrc) = await WeldSequenceSupport.GetRoiAsync(_param, _camera);
+        var (roi, roiSrc) = await WeldSequenceSupport.GetPeakRoiAsync(_param, _camera);
         if (roi is null)
-            return StepResult.Fail("깊이 ROI 를 만들 수 없습니다 — IR 프레임/ROI 설정을 확인하세요.");
+            return StepResult.Fail("Peak ROI 를 만들 수 없습니다 — IR 프레임/ROI 설정을 확인하세요.");
 
         // 측정 축을 ② 검사방향과 정합시킨다 — Weld 패널 수동 설정과 무관하게 시퀀스가 소유.
         var progressAxis = WeldSequenceSupport.ApplyProgressAxis(_weld, context);

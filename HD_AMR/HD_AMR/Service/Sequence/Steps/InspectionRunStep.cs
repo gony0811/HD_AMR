@@ -21,7 +21,8 @@ namespace HD_AMR.Service.Sequence.Steps;
 ///      진동 흡수 대기 → surface type(θ 로 재판정) 과 Surface ID 로 CAPTURE_REQ 전송/응답 대기.
 ///      틸트 부호: ZYX 규약에서 Ry_frame(θ)·Rz(rz0) = Rz(rz0)·Ry(±θ) — rz0≈±180 이면 ry 부호가 반전되므로
 ///      tiltSign = sign(cos rz0) 을 곱한다.
-///   4) 종료 시(성공/실패/취소 모두) 무이동 MoveL(user:0)로 <b>활성 작업물 좌표계를 0(베이스)으로 복귀</b>한다.
+///   4) 활성 작업물 좌표계 0(베이스) 복귀는 별도 마지막 스텝(<see cref="WObjResetStep"/>)이 수행한다 —
+///      ⑱ 실패/정지로 풀오토가 중단된 경우 그 스텝만 단독 실행하면 된다.
 ///
 /// 프레임: MoveL 의 tool = 시퀀스 페이지 상단 공구 번호(<see cref="SequenceContext.Tool"/>),
 ///         user = 위 작업물 좌표계 번호. 속도 = 시퀀스 페이지 속도(<see cref="SequenceContext.Velocity"/>).
@@ -118,94 +119,64 @@ public class InspectionRunStep : ISequenceStep
             frame[0], frame[1], frame[2], context.Tool, context.Velocity, context.InspectionSurfaceId,
             rz0, tiltSign);
 
-        try
+        // ── 작업물 좌표계 원점으로 이동 — RZ 는 현재값 유지(회전 없음) ──
+        var originRc = await _cobot.Rpc.MoveLAsync(
+            new[] { 0.0, 0.0, 0.0, 0.0, 0.0, rz0 }, tool: context.Tool, user: wobjId,
+            vel: context.Velocity, acc: MoveAcc, ovl: MoveOvl, blendR: -1, ct: ct);
+        if (originRc != 0)
+            return StepResult.Fail(
+                $"작업물 좌표계 #{wobjId} 원점 이동 실패 (rc={originRc}){FairinoErrorCodes.Suffix(originRc)}.");
+
+        // ── 경유점 순회 + 비전 캡처 ────────────────────────────────────
+        var visionTimeout = TimeSpan.FromSeconds(Math.Max(0, profile.DelaySec));
+        var settle = TimeSpan.FromSeconds(Math.Max(0, profile.SettleDelaySec));
+        int moved = 0, skipped = 0, visOk = 0, visFail = 0;
+
+        for (var i = 0; i < waypoints.Count; i++)
         {
-            // ── 작업물 좌표계 원점으로 이동 — RZ 는 현재값 유지(회전 없음) ──
-            var originRc = await _cobot.Rpc.MoveLAsync(
-                new[] { 0.0, 0.0, 0.0, 0.0, 0.0, rz0 }, tool: context.Tool, user: wobjId,
+            ct.ThrowIfCancellationRequested();
+
+            var w = waypoints[i];
+            // th_max 초과 점은 /inspection 과 동일하게 제외.
+            if (Math.Abs(w.Theta) > profile.ThMax) { skipped++; continue; }
+
+            var pose = new[] { w.X, 0.0, w.Z, 0.0, tiltSign * w.Theta, rz0 };
+            var rc = await _cobot.Rpc.MoveLAsync(pose, tool: context.Tool, user: wobjId,
                 vel: context.Velocity, acc: MoveAcc, ovl: MoveOvl, blendR: -1, ct: ct);
-            if (originRc != 0)
+            if (rc != 0)
                 return StepResult.Fail(
-                    $"작업물 좌표계 #{wobjId} 원점 이동 실패 (rc={originRc}){FairinoErrorCodes.Suffix(originRc)}.");
+                    $"경유점 #{i + 1} 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)} — {moved}점 이동 후 중단.");
+            moved++;
 
-            // ── 경유점 순회 + 비전 캡처 ────────────────────────────────────
-            var visionTimeout = TimeSpan.FromSeconds(Math.Max(0, profile.DelaySec));
-            var settle = TimeSpan.FromSeconds(Math.Max(0, profile.SettleDelaySec));
-            int moved = 0, skipped = 0, visOk = 0, visFail = 0;
+            if (settle > TimeSpan.Zero)
+                await Task.Delay(settle, ct);
 
-            for (var i = 0; i < waypoints.Count; i++)
-            {
-                ct.ThrowIfCancellationRequested();
+            // surface type: 프로필 로드 후 페이지와 동일 규칙(|θ| ≥ 코로게이션 판정각 → Corrugation).
+            var surfaceType = Math.Abs(w.Theta) >= profile.CorrugThresholdDeg
+                ? SurfaceType.Corrugation
+                : SurfaceType.Flat;
+            var data = CaptureReqPayload.Build(surfaceType, (ushort)context.InspectionSurfaceId,
+                (int)Math.Round(w.X), (int)Math.Round(w.Z));
 
-                var w = waypoints[i];
-                // th_max 초과 점은 /inspection 과 동일하게 제외.
-                if (Math.Abs(w.Theta) > profile.ThMax) { skipped++; continue; }
-
-                var pose = new[] { w.X, 0.0, w.Z, 0.0, tiltSign * w.Theta, rz0 };
-                var rc = await _cobot.Rpc.MoveLAsync(pose, tool: context.Tool, user: wobjId,
-                    vel: context.Velocity, acc: MoveAcc, ovl: MoveOvl, blendR: -1, ct: ct);
-                if (rc != 0)
-                    return StepResult.Fail(
-                        $"경유점 #{i + 1} 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)} — {moved}점 이동 후 중단.");
-                moved++;
-
-                if (settle > TimeSpan.Zero)
-                    await Task.Delay(settle, ct);
-
-                // surface type: 프로필 로드 후 페이지와 동일 규칙(|θ| ≥ 코로게이션 판정각 → Corrugation).
-                var surfaceType = Math.Abs(w.Theta) >= profile.CorrugThresholdDeg
-                    ? SurfaceType.Corrugation
-                    : SurfaceType.Flat;
-                var data = CaptureReqPayload.Build(surfaceType, (ushort)context.InspectionSurfaceId,
-                    (int)Math.Round(w.X), (int)Math.Round(w.Z));
-
-                var outcome = await _vision.Client.RequestCaptureAsync(data, visionTimeout, ct);
-                if (outcome.Success) visOk++;
-                else
-                {
-                    visFail++;
-                    _logger.LogWarning("⑱ 경유점 #{Idx} 비전 실패: sent={Sent}, responded={Resp}, code={Code}",
-                        i + 1, outcome.Sent, outcome.Responded,
-                        outcome.Code is { } c ? ResultCodeNames.NameOf((ushort)c) : "—");
-                }
-            }
-
-            var msg =
-                $"검사 수행 완료 — 티칭설정 '{profile.Name}', 이동 {moved}점" +
-                (skipped > 0 ? $"(θ 초과 {skipped}점 제외)" : "") +
-                $", 비전 OK {visOk}/{moved}" +
-                (visFail > 0 ? $" (실패 {visFail})" : "") +
-                $" [wobj #{wobjId}, tool {context.Tool}, SurfaceID 0x{context.InspectionSurfaceId:X2}]. " +
-                "활성 작업물 좌표계 0 복귀.";
-            _logger.LogInformation("⑱ {Msg}", msg);
-            return StepResult.Ok(msg);
-        }
-        finally
-        {
-            // user=wobjId MoveL 로 활성 프레임이 바뀐 상태 — 성공/실패/취소 모두에서 0(베이스)으로 복귀.
-            await RestoreBaseFrameAsync(context);
-        }
-    }
-
-    /// <summary>무이동 MoveL(user:0)로 컨트롤러 활성 작업물 좌표계를 베이스(0)로 복귀.
-    /// 취소 중에도 실행돼야 하므로 CancellationToken.None 사용. 실패는 경고 로그만.</summary>
-    private async Task RestoreBaseFrameAsync(SequenceContext context)
-    {
-        try
-        {
-            var end = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, CancellationToken.None);
-            var rc = await _cobot.Rpc.MoveByToolOffsetAsync(end, user: 0, new double[6],
-                tool: context.Tool, vel: context.Velocity, ct: CancellationToken.None);
-            if (rc == 0)
-                _logger.LogInformation("⑱ 활성 작업물 좌표계 0(베이스) 복귀 완료.");
+            var outcome = await _vision.Client.RequestCaptureAsync(data, visionTimeout, ct);
+            if (outcome.Success) visOk++;
             else
-                _logger.LogWarning("⑱ 활성 작업물 좌표계 0 복귀 실패 (rc={Rc}){Sfx} — 티치펜던트에서 확인하세요.",
-                    rc, FairinoErrorCodes.Suffix(rc));
+            {
+                visFail++;
+                _logger.LogWarning("⑱ 경유점 #{Idx} 비전 실패: sent={Sent}, responded={Resp}, code={Code}",
+                    i + 1, outcome.Sent, outcome.Responded,
+                    outcome.Code is { } c ? ResultCodeNames.NameOf((ushort)c) : "—");
+            }
         }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "⑱ 활성 작업물 좌표계 0 복귀 중 예외 — 티치펜던트에서 확인하세요.");
-        }
+
+        var msg =
+            $"검사 수행 완료 — 티칭설정 '{profile.Name}', 이동 {moved}점" +
+            (skipped > 0 ? $"(θ 초과 {skipped}점 제외)" : "") +
+            $", 비전 OK {visOk}/{moved}" +
+            (visFail > 0 ? $" (실패 {visFail})" : "") +
+            $" [wobj #{wobjId}, tool {context.Tool}, SurfaceID 0x{context.InspectionSurfaceId:X2}].";
+        _logger.LogInformation("⑱ {Msg}", msg);
+        return StepResult.Ok(msg);
     }
 
     private async Task<double> GetWObjIdAsync()

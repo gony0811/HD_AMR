@@ -103,6 +103,8 @@ public class FlatSurfaceAlignStep : ISequenceStep
         _logger.LogInformation("④ Phase A/B: 평탄영역 탐색+횡이동 시작 (grid={Grid}×{Grid}, ROI={Roi})",
             GridSize, GridSize, roiSrc);
 
+        context.Progress?.Invoke($"평탄영역 탐색 시작 (grid={GridSize}×{GridSize}, ROI={roiSrc})");
+
         var (axisX, axisY) = await GetAxisMapAsync();
         var align = await _centering.RunAsync(new FlatCenterAlignOptions
         {
@@ -114,7 +116,7 @@ public class FlatSurfaceAlignStep : ISequenceStep
             MaxLateralMoveMm = MaxLateralMoveMm,
             ImageXAxis = axisX, ImageYAxis = axisY,
             Tool = context.Tool, Velocity = context.Velocity,
-        }, progress: null, ct);
+        }, progress: context.Progress, ct);
 
         // 공용 루틴은 취소를 삼키고 실패 결과로 반환 — 스텝은 기존처럼 취소 예외로 전파한다.
         ct.ThrowIfCancellationRequested();
@@ -131,6 +133,7 @@ public class FlatSurfaceAlignStep : ISequenceStep
                 $"카메라→레이저 중심 보정 이동량 {shiftY:+0.#;-0.#}mm 가 한계 ±{MaxCameraToLaserShiftMm:0}mm 초과 — " +
                 "시퀀스 페이지 ④ '레이저중심 Y' 파라미터를 확인하세요.");
         _logger.LogInformation("④ 레이저 중심 보정 횡이동: 툴 Y {Shift}mm", shiftY);
+        context.Progress?.Invoke($"레이저 중심 보정 횡이동: 툴 Y {shiftY:+0.#;-0.#}mm");
         var shiftAnchor = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
         var shiftOffset = new[] { 0.0, shiftY, 0.0, 0.0, 0.0, 0.0 };
         var shiftRc = await _cobot.Rpc.MoveByToolOffsetAsync(shiftAnchor, user: 0, shiftOffset,
@@ -154,10 +157,14 @@ public class FlatSurfaceAlignStep : ISequenceStep
             _logger.LogInformation(
                 "④ Phase C iter={Iter}: rx={Rx:0.###}°, ry={Ry:0.###}°, z={Z:0.#}mm",
                 iter, pose.Rx, pose.Ry, pose.Z);
+            context.Progress?.Invoke(
+                $"레이저 3점 측정 {iter + 1}: rx={pose.Rx:0.###}°, ry={pose.Ry:0.###}°, z={pose.Z:0.#}mm");
 
             // 판정: 두 축 모두 임계값 이내면 완료
             if (Math.Abs(pose.Rx) < TiltThresholdDeg && Math.Abs(pose.Ry) < TiltThresholdDeg)
             {
+                context.Progress?.Invoke(
+                    $"틸트 기준 통과 (|rx|,|ry| < {TiltThresholdDeg}°) — 보정 {iter}회로 정렬 완료");
                 return StepResult.Ok(
                     $"평탄면 정렬 완료 (rx={pose.Rx:0.###}°, ry={pose.Ry:0.###}°, " +
                     $"z={pose.Z:0.#}mm, 틸트 보정={iter}회, σ={align.SigmaMm:0.##}mm).");
@@ -181,6 +188,7 @@ public class FlatSurfaceAlignStep : ISequenceStep
             _logger.LogInformation(
                 "④ Phase C 틸트 보정 iter={Iter}: 적용 Rx={Ax:0.###}°, Ry={Ay:0.###}°",
                 iter, applyRx, applyRy);
+            context.Progress?.Invoke($"틸트 보정각 적용: Rx={applyRx:+0.###;-0.###}°, Ry={applyRy:+0.###;-0.###}° → 재측정");
 
             var corrRc = await _cobot.Rpc.MoveByToolOffsetAsync(corrAnchor, user: 0, corrOffset,
                 tool: context.Tool, vel: Math.Min(context.Velocity, 10), ct: ct);

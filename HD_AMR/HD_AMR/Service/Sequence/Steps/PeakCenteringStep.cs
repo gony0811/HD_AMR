@@ -110,9 +110,9 @@ public class PeakCenteringStep : ISequenceStep
         await Task.Delay(SettleMs, ct);
 
         // ── 재측정(모션 없음) — ImageXAxis 매핑 검증용 ─────────────────
-        var (roi, _) = await WeldSequenceSupport.GetRoiAsync(_param, _camera);
+        var (roi, _) = await WeldSequenceSupport.GetPeakRoiAsync(_param, _camera);
         if (roi is null)
-            return StepResult.Fail("재측정용 깊이 ROI 를 만들 수 없습니다.");
+            return StepResult.Fail("재측정용 Peak ROI 를 만들 수 없습니다.");
 
         var r2 = await _weld.FindPeakAsync(roi, ct);
         if (!r2.Found)

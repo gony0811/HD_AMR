@@ -30,13 +30,14 @@ window.hdAmrCamera = {
     img.addEventListener('mouseleave', () => { label.style.display = 'none'; });
   },
 
-  // Depth <img> 위에 <canvas> 를 겹쳐 ROI 사각형을 드래그/표시한다. weld.js initRoiEditor 의 단순화 버전으로,
-  // 좌표는 표시 스케일과 무관하도록 정규화([0,1]) 로 .NET 에 콜백한다(OnRoiDrawn).
-  initDepthRoi(img, canvas, dotnetRef) {
+  // <img> 위에 <canvas> 를 겹쳐 ROI 사각형을 드래그/표시한다. weld.js initRoiEditor 의 단순화 버전으로,
+  // 좌표는 표시 스케일과 무관하도록 정규화([0,1]) 로 .NET 에 콜백한다.
+  // cbName 으로 콜백 메서드명을 지정해 여러 캔버스(Depth ROI / IR Bead ROI)를 한 페이지에서 구분한다.
+  initDepthRoi(img, canvas, dotnetRef, cbName) {
     if (!img || !canvas || canvas._roiInit) return;
     canvas._roiInit = true;
-    console.debug('[hdAmrCamera] initDepthRoi bound — drag to set depth ROI');
-    const st = canvas._roi = { img, dotnetRef, roi: null, enabled: true, drag: null };
+    console.debug('[hdAmrCamera] initDepthRoi bound — drag to set ROI (' + (cbName || 'OnRoiDrawn') + ')');
+    const st = canvas._roi = { img, dotnetRef, cb: cbName || 'OnRoiDrawn', roi: null, enabled: true, drag: null };
 
     // clientX/Y → 이미지 박스 기준 정규화 좌표(0..1, 박스 밖은 클램프).
     const toNorm = (clientX, clientY) => {
@@ -65,7 +66,7 @@ window.hdAmrCamera = {
       const w = Math.abs(d.x1 - d.x0), h = Math.abs(d.y1 - d.y0);
       if (w < 0.01 || h < 0.01) return;   // 너무 작은 드래그는 무시(오클릭)
       st.roi = { x, y, w, h };
-      st.dotnetRef.invokeMethodAsync('OnRoiDrawn', x, y, w, h);
+      st.dotnetRef.invokeMethodAsync(st.cb, x, y, w, h);
     });
 
     const draw = () => {

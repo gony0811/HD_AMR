@@ -77,6 +77,10 @@ public class SequenceContext
     /// <summary>⑱ 검사 수행: 비전 CAPTURE_REQ Surface ID (SurfaceCatalog, 기본 0x01 바닥).</summary>
     public int InspectionSurfaceId { get; set; } = 0x01;
 
+    /// <summary>UI 진행 로그 sink — 모니터링 팝업 콘솔용. 스텝은 사람이 읽을 진행 라인을
+    /// <c>context.Progress?.Invoke(msg)</c> 로 남긴다 (ILogger 와 별개, 페이지가 연결/해제).</summary>
+    public Action<string>? Progress { get; set; }
+
     /// <summary>티칭된 위치 목록 (Key → TeachingPosition). 시퀀스 시작 시 로드.</summary>
     public Dictionary<string, Data.Entities.TeachingPosition> Positions { get; set; } = new();
 

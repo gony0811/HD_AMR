@@ -1,0 +1,26 @@
+{
+  "Name": "default",
+  "PeakRoi": {
+    "X": 224,
+    "Y": 19,
+    "Width": 448,
+    "Height": 398,
+    "Right": 672,
+    "Bottom": 417,
+    "IsEmpty": false
+  },
+  "WeldRoi": {
+    "X": 46,
+    "Y": 21,
+    "Width": 779,
+    "Height": 386,
+    "Right": 825,
+    "Bottom": 407,
+    "IsEmpty": false
+  },
+  "FrameWidth": 1280,
+  "FrameHeight": 720,
+  "SavedAt": "2026-07-25T02:25:12.1882206+09:00",
+  "ScaleCorrection": 1,
+  "ScaleCorrectionEnabled": false
+}

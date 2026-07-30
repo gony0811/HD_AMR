@@ -57,15 +57,21 @@ public class BeadFindStep : ISequenceStep
 
     public async Task<StepResult> ExecuteAsync(SequenceContext context, CancellationToken ct)
     {
-        var (roi, roiSrc) = await WeldSequenceSupport.GetRoiAsync(_param, _camera);
-        if (roi is null)
-            return StepResult.Fail("깊이 ROI 를 만들 수 없습니다 — IR 프레임/ROI 설정을 확인하세요.");
+        // Peak ROI(코로게이션, Depth 뷰 저장)와 Bead ROI(비드, IR 뷰 저장)를 각각 사용한다.
+        var (peakRoi, peakSrc) = await WeldSequenceSupport.GetPeakRoiAsync(_param, _camera);
+        var (beadRoi, beadSrc) = await WeldSequenceSupport.GetBeadRoiAsync(_param, _camera);
+        if (peakRoi is null || beadRoi is null)
+            return StepResult.Fail("ROI 를 만들 수 없습니다 — IR 프레임/ROI 설정을 확인하세요.");
+        var roiSrc = $"Peak={peakSrc}, Bead={beadSrc}";
 
         // 측정 축을 ② 검사방향과 정합시킨다 — d 는 진행축과 수직(cross) 방향으로 측정된다.
         var progressAxis = WeldSequenceSupport.ApplyProgressAxis(_weld, context);
 
-        // Peak ROI 와 Weld ROI 에 동일한 깊이 ROI 를 사용한다.
-        var (m, detect) = await _weld.CapturePeakAsync(_peakId, roi, roi, ct);
+        // 저장된 DL 모델 선택 적용 — 카메라 페이지에서 고른 모델(예: 0722)을 재시작 후에도 사용.
+        var modelName = await WeldSequenceSupport.ApplyDlModelAsync(_param, _weld);
+        context.Progress?.Invoke($"비드 검출 시작 — DL 모델: {modelName}");
+
+        var (m, detect) = await _weld.CapturePeakAsync(_peakId, peakRoi, beadRoi, ct);
 
         if (detect is null)
             return StepResult.Fail($"Bead{_peakId} 검출 결과가 없습니다.");

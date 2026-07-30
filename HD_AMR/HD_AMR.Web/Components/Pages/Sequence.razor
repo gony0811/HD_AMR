@@ -13,6 +13,7 @@
 @inject ParameterService Param
 @inject DrawingService DrawingSvc
 @inject ILogger<Sequence> Logger
+@inject IJSRuntime JS
 @implements IDisposable
 
 <PageTitle>Sequence</PageTitle>
@@ -405,10 +406,19 @@
         catch (OperationCanceledException) { }
     }
 
+    /// <summary>모니터링 창 열기 — 실행 버튼 클릭 핸들러(사용자 제스처) 안에서 호출해 팝업 차단을 피한다.
+    /// 같은 이름(seqMonitor)이라 이미 열려 있으면 재사용된다.</summary>
+    private async Task OpenMonitorWindowAsync()
+    {
+        try { await JS.InvokeVoidAsync("open", "/sequence-monitor", "seqMonitor", "width=1150,height=850"); }
+        catch { /* 팝업 차단 등 — 시퀀스 실행은 계속 */ }
+    }
+
     // ── 풀오토 ───────────────────────────────────────────────────────
     private async Task RunAllAsync()
     {
         _msg = null;
+        await OpenMonitorWindowAsync();
         var success = await Seq.RunAllAsync(_context, _cts.Token);
         _isErr = !success;
         _msg = success ? "풀오토 시퀀스 완료." : "시퀀스 중단 — 위 상태를 확인하세요.";
@@ -418,6 +428,7 @@
     private async Task RunStepAsync(string stepKey)
     {
         _msg = null;
+        await OpenMonitorWindowAsync();
         var result = await Seq.RunStepAsync(stepKey, _context, _cts.Token);
         _isErr = !result.Success;
         _msg = result.Message;
