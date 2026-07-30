@@ -64,7 +64,7 @@
             <div class="col-auto">
                 <button class="btn btn-sm btn-outline-danger" @onclick="ClearMountSamplesAsync" disabled="@(_mountSamples.Count == 0)">샘플 지우기</button>
             </div>
-            <div class="col-auto text-muted">표본 @_mountSamples.Count개 <span class="small">(≥3, AMR yaw를 크게 바꿔가며 같은 점을 터치)</span></div>
+            <div class="col-auto text-muted">표본 @_mountSamples.Count <span class="small">(≥3, AMR yaw를 크게 바꿔가며 같은 점을 터치)</span></div>
         </div>
         @if (_mountSamples.Count > 0)
         {
@@ -92,7 +92,7 @@
             <div class="mt-1">→ 계산: rz=<strong>@_mountResult.PhiDeg.ToString("0.###")</strong>°,
                 X=<strong>@_mountResult.Tx.ToString("0.#")</strong>mm,
                 Y=<strong>@_mountResult.Ty.ToString("0.#")</strong>mm,
-                잔차 RMS=@_mountResult.RmsMm.ToString("0.###")mm (@_mountResult.N표본).
+                잔차 RMS=@_mountResult.RmsMm.ToString("0.###")mm (@_mountResult.N).
                 <span class="text-muted">위 6칸에 반영됨 — '저장'을 눌러 확정하세요.</span>
             </div>
         }
@@ -126,7 +126,7 @@
         @if (_hasGeom)
         {
             <div class="mt-2 text-muted small">
-                꼭짓점 @_vertices.Count개 표시. 먼저 아래 ②에서 채울 행의 <b>도면지정</b>을 누른 뒤, 도면의 점을 클릭하세요.
+                꼭짓점 @_vertices.Count 표시. 먼저 아래 ②에서 채울 행의 <b>도면지정</b>을 누른 뒤, 도면의 점을 클릭하세요.
                 @if (_pickRow is int pr) { <span class="badge bg-warning text-dark">현재 지정: 기준점 #@pr</span> }
                 @if (_picked is { } pk) { <span> · 최근 선택 (@pk.X.ToString("0.#"), @pk.Y.ToString("0.#"))</span> }
             </div>
@@ -220,7 +220,7 @@
                     <tr><th>회전 θ (도)</th><td>@_reg.ThetaDeg.ToString("0.####")</td></tr>
                     <tr><th>평행이동 Tx (mm)</th><td>@_reg.Tx.ToString("0.###")</td></tr>
                     <tr><th>평행이동 Ty (mm)</th><td>@_reg.Ty.ToString("0.###")</td></tr>
-                    <tr><th>잔차 RMS (mm)</th><td>@_reg.RmsMm.ToString("0.###") <span class="text-muted">(@_reg.PointCount점)</span></td></tr>
+                    <tr><th>잔차 RMS (mm)</th><td>@_reg.RmsMm.ToString("0.###") <span class="text-muted">(@_reg.PointCount)</span></td></tr>
                 </table>
             </div>
         }
