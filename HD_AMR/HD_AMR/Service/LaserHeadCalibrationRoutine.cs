@@ -20,6 +20,10 @@ public sealed class LaserHeadCalibrationOptions
     /// <summary>모션 완료 후 진동 안정화 대기(ms).</summary>
     public int SettleMs { get; set; } = 500;
 
+    /// <summary>모션 후 판독 안정화 대기 한도(ms). 앰프 평균화 필터 지연 대응 —
+    /// 연속 미니평균(3샘플)의 전 채널 변화가 0.05mm 미만이면 안정 판정, 한도 초과 시 경고 후 진행.</summary>
+    public int StabilizeTimeoutMs { get; set; } = 3000;
+
     /// <summary>이동 속도(%, 1~30).</summary>
     public double VelPct { get; set; } = 5;
 
@@ -95,6 +99,7 @@ public sealed class LaserHeadCalibrationRoutine
         int samples = Math.Clamp(options.SamplesPerPoint, 3, 20);
         int intervalMs = Math.Max(50, options.SampleIntervalMs);
         int settleMs = Math.Max(100, options.SettleMs);
+        int stabilizeMs = Math.Clamp(options.StabilizeTimeoutMs, 0, 15000);
         double vel = Math.Clamp(options.VelPct, 1, 30);
         int tool = options.Tool;
 
@@ -143,8 +148,9 @@ public sealed class LaserHeadCalibrationRoutine
             if (cfgPose.Valid)
                 Report($"(참고) 현재 설정 기준 자세: Rx={cfgPose.Rx:0.###}°, Ry={cfgPose.Ry:0.###}° — 설정이 틀리면 부정확.");
 
-            // ── (옵션) 부호 검증: 툴 +Z 이동 시 전 채널 Δd = −σ·Δz ───────
-            // 오프셋과 무관한 검증이므로 표면이 기울어도 유효하다.
+            // ── (옵션) 부호 검증: 툴 +Z 이동 시 전 채널 Δd = −σ·beamSign·Δz ──
+            // 오프셋과 무관한 검증이므로 표면이 기울어도 유효하다. beamSign 은 빔 출사 방향
+            // (BeamAlongPlusZ, 빔=−Z 하향 장착이면 +Z 이동 시 거리 증가)을 기대치에 반영한다.
             bool signCheckPassed = false;
             if (options.VerifyReadingSign)
             {
@@ -153,20 +159,29 @@ public sealed class LaserHeadCalibrationRoutine
                 atAnchor = false;
                 await MoveOffsetAsync(anchor, new[] { 0.0, 0.0, zmm, 0.0, 0.0, 0.0 }, tool, vel, "부호 검증(+Z)", ct);
                 await Task.Delay(settleMs, ct);
+                await WaitForStableAsync(intervalMs, stabilizeMs, Report, ct);
                 var (dz, _) = await SampleDistancesAsync(samples, intervalMs, ct);
                 await MoveOffsetAsync(anchor, new double[6], tool, vel, "앵커 복귀", ct);
                 atAnchor = true;
                 await Task.Delay(settleMs, ct);
 
-                double expected = -sigma * zmm;
+                double beamSign = s.BeamAlongPlusZ ? 1.0 : -1.0;
+                double expected = -sigma * beamSign * zmm;
+                var deltas = new double[3];
+                bool anyFail = false;
                 for (int i = 0; i < 3; i++)
                 {
-                    double delta = dz[i] - d0[i];
-                    if (Math.Abs(delta - expected) > 0.5)
-                        throw new InvalidOperationException(
-                            $"부호 검증 실패: CH{i + 1} Δd={delta:+0.###;-0.###}mm (기대 {expected:+0.###;-0.###}mm) — " +
-                            "TiltReadingSignForUp 설정이 실측과 불일치하거나 측정이 불안정합니다.");
+                    deltas[i] = dz[i] - d0[i];
+                    if (Math.Abs(deltas[i] - expected) > 0.5) anyFail = true;
                 }
+                string deltaStr =
+                    $"CH1={deltas[0]:+0.###;-0.###}, CH2={deltas[1]:+0.###;-0.###}, CH3={deltas[2]:+0.###;-0.###} mm";
+                Report($"부호 검증 Δd: {deltaStr} (기대 {expected:+0.###;-0.###}mm)");
+                if (anyFail)
+                    throw new InvalidOperationException(
+                        $"부호 검증 실패: Δd {deltaStr} (기대 {expected:+0.###;-0.###}mm) — " +
+                        "3채널 공통 편차면 TiltReadingSignForUp/BeamAlongPlusZ/MeasurementScale 설정, " +
+                        "특정 채널만 편차면 해당 빔 스팟의 표면 상태를 확인하세요.");
                 signCheckPassed = true;
                 Report("부호 검증 통과.");
             }
@@ -190,13 +205,13 @@ public sealed class LaserHeadCalibrationRoutine
                 // 4자세 프로브: Rx±θ → Ry±θ → 앵커 복귀.
                 atAnchor = false;
                 (dxp, var vxp) = await TiltAndSampleAsync(anchor, new[] { 0.0, 0.0, 0.0, +tiltDeg, 0.0, 0.0 },
-                    $"[{iter}] Rx +{tiltDeg:0.#}°", d0, samples, intervalMs, settleMs, tool, vel, Report, ct);
+                    $"[{iter}] Rx +{tiltDeg:0.#}°", d0, samples, intervalMs, settleMs, stabilizeMs, tool, vel, Report, ct);
                 (dxm, var vxm) = await TiltAndSampleAsync(anchor, new[] { 0.0, 0.0, 0.0, -tiltDeg, 0.0, 0.0 },
-                    $"[{iter}] Rx −{tiltDeg:0.#}°", d0, samples, intervalMs, settleMs, tool, vel, Report, ct);
+                    $"[{iter}] Rx −{tiltDeg:0.#}°", d0, samples, intervalMs, settleMs, stabilizeMs, tool, vel, Report, ct);
                 (dyp, var vyp) = await TiltAndSampleAsync(anchor, new[] { 0.0, 0.0, 0.0, 0.0, +tiltDeg, 0.0 },
-                    $"[{iter}] Ry +{tiltDeg:0.#}°", d0, samples, intervalMs, settleMs, tool, vel, Report, ct);
+                    $"[{iter}] Ry +{tiltDeg:0.#}°", d0, samples, intervalMs, settleMs, stabilizeMs, tool, vel, Report, ct);
                 (dym, var vym) = await TiltAndSampleAsync(anchor, new[] { 0.0, 0.0, 0.0, 0.0, -tiltDeg, 0.0 },
-                    $"[{iter}] Ry −{tiltDeg:0.#}°", d0, samples, intervalMs, settleMs, tool, vel, Report, ct);
+                    $"[{iter}] Ry −{tiltDeg:0.#}°", d0, samples, intervalMs, settleMs, stabilizeMs, tool, vel, Report, ct);
                 await MoveOffsetAsync(anchor, new double[6], tool, vel, "앵커 복귀", ct);
                 atAnchor = true;
                 await Task.Delay(settleMs, ct);
@@ -297,6 +312,7 @@ public sealed class LaserHeadCalibrationRoutine
                 anchor = await _cobot.Rpc.GetTcpPoseInBaseAsync(tool, ct);
                 atAnchor = true;
                 Report($"[{iter}] 기준 재측정…");
+                await WaitForStableAsync(intervalMs, stabilizeMs, Report, ct);
                 (d0, _) = await SampleDistancesAsync(samples, intervalMs, ct);
                 meanDist = Mean3(d0);
             }
@@ -407,19 +423,67 @@ public sealed class LaserHeadCalibrationRoutine
             throw new InvalidOperationException($"{what} 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.");
     }
 
-    /// <summary>틸트 자세로 이동 → 안정화 → 샘플링. 기준 대비 Δd 를 진행 로그로 남긴다.</summary>
+    /// <summary>틸트 자세로 이동 → 안정화(진동 + 판독 수렴) → 샘플링. 기준 대비 Δd 를 진행 로그로 남긴다.</summary>
     private async Task<(double[] Mean, double[] Var)> TiltAndSampleAsync(
         double[] anchor, double[] offset, string label, double[] d0,
-        int samples, int intervalMs, int settleMs, int tool, double vel,
+        int samples, int intervalMs, int settleMs, int stabilizeMs, int tool, double vel,
         Action<string> report, CancellationToken ct)
     {
         report($"{label} 틸트…");
         await MoveOffsetAsync(anchor, offset, tool, vel, label, ct);
         await Task.Delay(settleMs, ct);
+        await WaitForStableAsync(intervalMs, stabilizeMs, report, ct);
         var (mean, var_) = await SampleDistancesAsync(samples, intervalMs, ct);
         report($"{label}: Δd CH1={mean[0] - d0[0]:+0.000;-0.000}, CH2={mean[1] - d0[1]:+0.000;-0.000}, " +
                $"CH3={mean[2] - d0[2]:+0.000;-0.000} mm");
         return (mean, var_);
+    }
+
+    /// <summary>
+    /// 모션 후 판독이 수렴할 때까지 대기 — 앰프 평균화 필터가 실변화를 따라오는 지연 대응.
+    /// 3샘플 미니평균을 반복 측정해 직전 미니평균 대비 전 채널 |Δ| &lt; 0.05mm 면 안정 판정.
+    /// <paramref name="timeoutMs"/> 초과 시 경고만 남기고 진행한다(최종 판정은 호출부 검증식이 함).
+    /// 무효 스냅샷은 SampleDistancesAsync 와 동일하게 건너뛴다.
+    /// </summary>
+    private async Task WaitForStableAsync(
+        int intervalMs, int timeoutMs, Action<string> report, CancellationToken ct)
+    {
+        if (timeoutMs <= 0) return;
+
+        const double StableThresholdMm = 0.05;
+        const int MiniSamples = 3;
+        int elapsedMs = 0;
+        double[]? prev = null;
+
+        while (elapsedMs < timeoutMs)
+        {
+            var mini = new double[3];
+            int got = 0;
+            while (got < MiniSamples && elapsedMs < timeoutMs)
+            {
+                ct.ThrowIfCancellationRequested();
+                var r = _laser.GetReadings();
+                if (r.Count >= 3 && r[0].Enabled && r[1].Enabled && r[2].Enabled)
+                {
+                    for (int i = 0; i < 3; i++) mini[i] += r[i].Value;
+                    got++;
+                }
+                await Task.Delay(intervalMs, ct);
+                elapsedMs += intervalMs;
+            }
+            if (got < MiniSamples) break;   // 타임아웃/무효 지속 — 아래 경고로.
+
+            for (int i = 0; i < 3; i++) mini[i] /= MiniSamples;
+            if (prev is not null)
+            {
+                double maxDelta = Math.Max(Math.Abs(mini[0] - prev[0]),
+                    Math.Max(Math.Abs(mini[1] - prev[1]), Math.Abs(mini[2] - prev[2])));
+                if (maxDelta < StableThresholdMm) return;
+            }
+            prev = mini;
+        }
+
+        report($"판독 안정화 한도({timeoutMs}ms) 초과 — 필터 지연/진동 가능, 측정을 계속합니다.");
     }
 
     /// <summary>

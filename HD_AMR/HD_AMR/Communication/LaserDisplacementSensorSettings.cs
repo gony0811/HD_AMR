@@ -108,6 +108,11 @@ public class LaserDisplacementSensorSettings
     /// 실장비 극성이 반대로 나오면 false 로 뒤집는다(통신 매뉴얼에 극성 미확정).</summary>
     public bool TiltReadingSignForUp { get; set; } = true;
 
+    /// <summary>빔 출사 방향이 툴 +Z 인지. false = 툴 −Z(예: 툴 +Z가 바닥 반대 방향인 하향 장착 —
+    /// +Z 이동 시 거리가 증가한다). 헤드 캘리브레이션의 부호 검증 기대치에만 사용한다 — pose 계산은
+    /// 기존 미러 규약(빔=+Z)을 유지하므로(레벨링·거리 부호 실기 검증됨) ComputePose 에는 넣지 않는다.</summary>
+    public bool BeamAlongPlusZ { get; set; } = true;
+
     // ── 삼각형 평면 중심 pose(툴 좌표계) — standoff·법선 방향 ──────────────────
 
     /// <summary>헤드(출사부) 평면의 툴 Z 오프셋(mm). 중심 pose 의 z = Standoff + 거리평균. 측정값이 이미
