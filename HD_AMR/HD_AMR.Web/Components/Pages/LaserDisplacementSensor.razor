@@ -133,10 +133,66 @@
                     <div class="small text-muted mt-2">
                         위치 mm · 회전 도(ZYX) · 법선(툴): (@_pose.Normal[0].ToString("F4"), @_pose.Normal[1].ToString("F4"), @_pose.Normal[2].ToString("F4"))
                     </div>
+                    @if (Svc.TiltRef is { } tr && _rawPose.Valid)
+                    {
+                        <div class="small text-muted">
+                            원시(보정 전): Rx=@_rawPose.Rx.ToString("F3")° Ry=@_rawPose.Ry.ToString("F3")°
+                            · 기준 Rx=@tr.RxDeg.ToString("F3")° Ry=@tr.RyDeg.ToString("F3")°
+                            (@tr.CapturedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm"))
+                        </div>
+                    }
                 }
                 else
                 {
                     <div class="text-muted small">@_pose.Note</div>
+                }
+            </div>
+
+            @* 평행 기준: 센서가 툴에 완전 평면으로 장착되지 않은 오차(장착 틸트)를 보정한다.
+               툴을 물리적으로 평행하게 맞춘 자세에서 원시 Rx/Ry 를 캡처해 바이어스로 저장하면
+               이후 pose·시퀀스 레벨링이 모두 이 기준 대비로 동작한다. Z(절대 거리)는 불변. *@
+            <div class="mt-3 pt-3 border-top">
+                <div class="d-flex align-items-center justify-content-between mb-2">
+                    <h6 class="mb-0">평행 기준 (센서 장착 틸트 보정)</h6>
+                    <span class="badge @(Svc.TiltRef is not null ? "bg-success" : "bg-secondary")">
+                        @(Svc.TiltRef is not null ? "기준 적용중" : "미설정")
+                    </span>
+                </div>
+
+                <div class="small text-muted mb-2">
+                    툴을 대상면과 <strong>물리적으로 평행</strong>하게 맞춘 뒤 저장하세요.
+                    이후 모든 틸트(Rx/Ry)는 이 기준 대비로 표시·보정됩니다.
+                    헤드 위치 캘리브레이션을 다시 하면 기준도 재저장해야 합니다.
+                </div>
+
+                <div class="d-flex align-items-center gap-2">
+                    <button class="btn btn-sm btn-primary" @onclick="CaptureReferenceAsync"
+                            disabled="@(!Svc.IsConnected || !_rawPose.Valid || _capturingRef || _applying || _calibrating)">
+                        @if (_capturingRef)
+                        {
+                            <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
+                            <span>샘플링 중…</span>
+                        }
+                        else
+                        {
+                            <span>현재 자세를 평행 기준으로 저장</span>
+                        }
+                    </button>
+                    <button class="btn btn-sm btn-outline-secondary" @onclick="ClearReferenceAsync"
+                            disabled="@(Svc.TiltRef is null || _capturingRef)">
+                        기준 해제
+                    </button>
+                </div>
+
+                @if (!string.IsNullOrEmpty(_refMsg))
+                {
+                    <div class="alert @(_refOk ? "alert-success" : "alert-warning") mt-2 mb-0 py-2 small">
+                        @_refMsg
+                        @if (!string.IsNullOrEmpty(_refWarn))
+                        {
+                            <br /><span>⚠ @_refWarn</span>
+                        }
+                    </div>
                 }
             </div>
 
@@ -375,8 +431,17 @@
 @code {
     private IReadOnlyList<LaserChannelReading> _readings = Array.Empty<LaserChannelReading>();
 
-    // 삼각형 평면 중심 pose(툴 좌표계 x,y,z,rx,ry,rz). 매 폴링마다 갱신.
+    // 삼각형 평면 중심 pose(툴 좌표계 x,y,z,rx,ry,rz). 매 폴링마다 갱신. 평행 기준이 있으면 보정된 값.
     private PlanePose _pose = PlanePose.Invalid("연결 대기 중.");
+
+    // 보정 전 원시 pose — 평행 기준 캡처·진단 표시용.
+    private PlanePose _rawPose = PlanePose.Invalid("연결 대기 중.");
+
+    // 평행 기준(장착 틸트 바이어스) 캡처 상태.
+    private bool _capturingRef;
+    private bool _refOk;
+    private string? _refMsg;
+    private string? _refWarn;
 
     // 툴 자세 보정: 측정 평면 기울기(Rx, Ry)를 툴프레임 회전 오프셋으로 적용.
     private double _velPct = 5;        // 보정 이동 속도(%) — 안전 기본 저속.
@@ -425,6 +490,7 @@
                 {
                     _readings = Svc.GetReadings();
                     _pose = Svc.GetPlanePose();
+                    _rawPose = Svc.GetRawPlanePose();
                     _dumpBytes = Svc.SnapshotInputAssembly();
                     _hexDump = FormatHex(_dumpBytes);
                     await InvokeAsync(StateHasChanged);
@@ -482,6 +548,49 @@
     {
         Svc.ZeroResetAll();
         _readings = Svc.GetReadings();
+    }
+
+    // 현재(물리적으로 평행하게 맞춘) 자세의 원시 틸트를 평행 기준으로 저장.
+    private async Task CaptureReferenceAsync()
+    {
+        if (_capturingRef) return;
+
+        _capturingRef = true;
+        _refMsg = null;
+        _refWarn = null;
+        try
+        {
+            var (ok, msg, warn) = await Svc.CaptureTiltReferenceAsync();
+            _refOk = ok;
+            _refMsg = msg;
+            _refWarn = warn;
+        }
+        catch (Exception ex)
+        {
+            _refOk = false;
+            _refMsg = $"기준 저장 오류: {ex.Message}";
+        }
+        finally
+        {
+            _capturingRef = false;
+        }
+    }
+
+    // 평행 기준 해제(보정 없는 원시 틸트로 복귀).
+    private async Task ClearReferenceAsync()
+    {
+        try
+        {
+            await Svc.ClearTiltReferenceAsync();
+            _refOk = true;
+            _refMsg = "평행 기준을 해제했습니다.";
+            _refWarn = null;
+        }
+        catch (Exception ex)
+        {
+            _refOk = false;
+            _refMsg = $"기준 해제 오류: {ex.Message}";
+        }
     }
 
     // 측정 평면 기울기(Rx, Ry)를 tool=1 프레임의 회전 오프셋으로 실제 로봇에 적용(자세 보정 이동).
