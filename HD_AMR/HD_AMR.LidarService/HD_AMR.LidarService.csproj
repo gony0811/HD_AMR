@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+    <PropertyGroup>
+        <TargetFramework>net8.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <!-- Jetson Orin Nano(Ubuntu 22.04, aarch64) 배포 대상.
+             RID 는 csproj 에 고정하지 않고 퍼블리시 시점에 준다. csproj 에 박아두면
+             일상적인 빌드에서도 런타임 팩 복원이 걸려 오프라인/사설 피드 환경에서
+             불필요하게 실패한다. 배포 명령은 deploy/publish.ps1 참고.
+             젯슨에는 .NET 런타임 설치가 필요 없다(self contained 퍼블리시). -->
+        <InvariantGlobalization>true</InvariantGlobalization>
+        <!-- NslNative 의 포인터 산술. 15MB 짜리 NslPCD 를 구조체로 마샬링하지 않고
+             언매니지드 버퍼를 오프셋으로 직접 읽기 위해 필요하다. -->
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <!-- HD_AMR.Web 과 공유하는 DTO. 이 프로젝트는 의존성 0이므로 linux-arm64 로
+             안전하게 따라온다. HD_AMR(클래스 라이브러리)은 참조하지 않는다.
+             거기엔 NModbus/OpenCvSharp.runtime.win/RealSense 같은 Windows 전용
+             패키지가 들어 있어 젯슨 빌드가 깨진다. -->
+        <ProjectReference Include="..\HD_AMR.Contracts\HD_AMR.Contracts.csproj" />
+    </ItemGroup>
+
+</Project>

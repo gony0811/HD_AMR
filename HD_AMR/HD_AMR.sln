@@ -4,6 +4,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HD_AMR", "HD_AMR\HD_AMR.csp
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HD_AMR.Web", "HD_AMR.Web\HD_AMR.Web.csproj", "{D0C25A8E-282D-47D8-B272-7B298F129558}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HD_AMR.Contracts", "HD_AMR.Contracts\HD_AMR.Contracts.csproj", "{8F3D2A61-4C7B-4E19-9A5D-2B6E1F0C7D84}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HD_AMR.LidarService", "HD_AMR.LidarService\HD_AMR.LidarService.csproj", "{C4A17E9B-6D30-4F52-8B71-3E9A5C2D8F60}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -18,5 +22,13 @@ Global
 		{D0C25A8E-282D-47D8-B272-7B298F129558}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{D0C25A8E-282D-47D8-B272-7B298F129558}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{D0C25A8E-282D-47D8-B272-7B298F129558}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8F3D2A61-4C7B-4E19-9A5D-2B6E1F0C7D84}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8F3D2A61-4C7B-4E19-9A5D-2B6E1F0C7D84}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8F3D2A61-4C7B-4E19-9A5D-2B6E1F0C7D84}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8F3D2A61-4C7B-4E19-9A5D-2B6E1F0C7D84}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C4A17E9B-6D30-4F52-8B71-3E9A5C2D8F60}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C4A17E9B-6D30-4F52-8B71-3E9A5C2D8F60}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C4A17E9B-6D30-4F52-8B71-3E9A5C2D8F60}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C4A17E9B-6D30-4F52-8B71-3E9A5C2D8F60}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

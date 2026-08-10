@@ -7,6 +7,13 @@
     </PropertyGroup>
 
     <ItemGroup>
+      <!-- Jetson LiDAR 서비스와 공유하는 DTO. 의존성 0으로 유지되므로 이쪽 패키지들이
+           Jetson(linux-arm64) 빌드로 새어 나가지 않는다. HD_AMR.Web 은 이 프로젝트를
+           참조하고 있어 전이적으로 함께 얻는다. -->
+      <ProjectReference Include="..\HD_AMR.Contracts\HD_AMR.Contracts.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
       <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="8.0.10" />
       <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.5" />
       <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.5" />

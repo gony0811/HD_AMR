@@ -1,0 +1,221 @@
+/*
+ * 젯슨 모니터링 화면.
+ *
+ * 빌드 도구 없이 정적 파일 세 개로 끝낸다. 젯슨은 서비스가 24시간 도는 장비이고
+ * 여기서 npm 을 돌릴 일도, 번들을 다시 만들 일도 없어야 한다 — 현장에서 화면 한 줄
+ * 고치려고 툴체인을 깔게 되면 그 시점에 아무도 못 고친다.
+ *
+ * 어두운 배경은 취향이 아니라 필요다. 거리 의사색상과 적외선 회색조를 눈으로
+ * 판독하는 화면이라, 밝은 배경이면 어두운 픽셀(진폭 부족)의 대비가 죽는다.
+ */
+
+:root {
+    --bg: #0d1017;
+    --panel: #161b26;
+    --panel-2: #1d2331;
+    --line: #2a3140;
+    --text: #dfe5ef;
+    --muted: #8b94a7;
+    --accent: #4da3ff;
+    --ok: #35c46b;
+    --warn: #ffb020;
+    --bad: #ff4d4d;
+}
+
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 "Segoe UI", system-ui, -apple-system, "Noto Sans KR", sans-serif;
+}
+
+header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 18px;
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel);
+}
+
+h1 { margin: 0; font-size: 16px; letter-spacing: .2px; }
+h2 { margin: 0 0 8px; font-size: 13px; color: var(--muted); font-weight: 600; }
+h2 small { color: var(--muted); font-weight: 400; margin-left: 6px; }
+h3 { margin: 0 0 10px; font-size: 13px; }
+h4 { margin: 14px 0 6px; font-size: 12px; color: var(--muted); }
+
+.status-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
+
+.pill {
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+}
+.pill.ok   { background: rgba(53,196,107,.15); border-color: rgba(53,196,107,.5); color: var(--ok); }
+.pill.bad  { background: rgba(255,77,77,.15);  border-color: rgba(255,77,77,.5);  color: var(--bad); }
+.pill.warn { background: rgba(255,176,32,.15); border-color: rgba(255,176,32,.5); color: var(--warn); }
+
+.stat { font-size: 12px; color: var(--muted); }
+.stat label { margin-right: 5px; }
+.stat b { color: var(--text); font-variant-numeric: tabular-nums; }
+
+.banner {
+    margin: 0;
+    padding: 9px 20px;
+    background: rgba(255,77,77,.12);
+    border-bottom: 1px solid rgba(255,77,77,.35);
+    color: #ffb3b3;
+    font-size: 13px;
+}
+
+main {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 340px;
+    gap: 16px;
+    padding: 16px 20px 40px;
+    align-items: start;
+}
+
+@media (max-width: 1100px) {
+    main { grid-template-columns: minmax(0, 1fr); }
+}
+
+.views { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.views .legend, .views .panel { grid-column: 1 / -1; }
+
+@media (max-width: 720px) {
+    .views { grid-template-columns: minmax(0, 1fr); }
+}
+
+.view { min-width: 0; }
+
+/*
+ * 원본 픽셀 해상도는 320x240 이고 확대는 여기서만 한다. image-rendering: pixelated 가
+ * 핵심이다 — 보간을 켜면 인접한 무효 픽셀 색이 섞여서, 실제로는 포화가 아닌 곳이
+ * 붉게 번져 보인다. 이 화면은 픽셀 하나가 곧 하나의 판정이라 뭉개면 안 된다.
+ */
+.canvas-stack {
+    position: relative;
+    line-height: 0;
+    background: #000;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.canvas-stack img {
+    display: block;
+    width: 100%;
+    image-rendering: pixelated;
+}
+
+.canvas-stack .overlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+}
+
+.legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 16px;
+    padding: 10px 12px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    font-size: 12px;
+    color: var(--muted);
+}
+.legend span { display: flex; align-items: center; gap: 6px; }
+.legend i { width: 12px; height: 12px; border-radius: 3px; border: 1px solid rgba(255,255,255,.18); }
+
+.panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 14px;
+}
+
+aside { display: grid; gap: 16px; }
+
+.hint { margin: -4px 0 12px; font-size: 12px; color: var(--muted); }
+
+.grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 8px 18px;
+}
+.grid div { display: flex; justify-content: space-between; gap: 10px; border-bottom: 1px dotted var(--line); padding-bottom: 3px; }
+.grid span { color: var(--muted); font-size: 12px; }
+.grid b { font-variant-numeric: tabular-nums; font-weight: 600; }
+.grid b.ok  { color: var(--ok); }
+.grid b.warn { color: var(--warn); }
+.grid b.bad { color: var(--bad); }
+
+.verdict { margin: 0 0 12px; font-size: 13px; font-weight: 600; }
+.verdict.ok  { color: var(--ok); }
+.verdict.bad { color: var(--warn); }
+
+.row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 8px;
+    font-size: 12px;
+    color: var(--muted);
+}
+.row input[type="number"], .row select { width: 110px; }
+
+.roi { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
+.roi label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
+.roi input { width: 100%; }
+
+input[type="number"], select {
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 5px 7px;
+    font: inherit;
+    font-variant-numeric: tabular-nums;
+}
+input:focus, select:focus { outline: 1px solid var(--accent); }
+input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent); }
+
+button {
+    width: 100%;
+    margin-top: 8px;
+    padding: 8px 12px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: var(--accent);
+    color: #06121f;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+}
+button:hover { filter: brightness(1.1); }
+button:disabled { opacity: .5; cursor: default; }
+button.secondary { background: var(--panel-2); color: var(--text); }
+button.danger { background: transparent; color: var(--bad); border-color: rgba(255,77,77,.5); }
+
+pre {
+    margin: 12px 0 0;
+    padding: 10px;
+    background: #0a0d13;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    font-size: 11px;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 260px;
+    overflow: auto;
+}

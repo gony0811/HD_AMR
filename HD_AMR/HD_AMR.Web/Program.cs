@@ -57,6 +57,15 @@ builder.Services.AddTransient<LaserHeadCalibrationRoutine>();
 // 평탄 중심 정렬 — 카메라 페이지와 FlatSurfaceAlignStep 이 공유하는 무상태 루틴.
 builder.Services.AddTransient<FlatSurfaceCenteringService>();
 
+// Jetson LiDAR 비전(HTTP). 다른 장치와 달리 상시 접속도 호스티드 서비스도 없다 —
+// 정지 상태에서 요청/응답 1회로 끝나므로 유지할 연결 자체가 없다.
+// 젯슨이 영상 분석과 모니터링 화면을 모두 담당하고, 여기로는 검출된 위치 데이터만 온다.
+builder.Services.Configure<LidarVisionSettings>(
+    builder.Configuration.GetSection("LidarVision"));
+// 타입드 클라이언트로 등록해 HttpMessageHandler 수명을 런타임이 관리하게 한다.
+// HttpClient 를 직접 new 하면 소켓이 고갈되고, 싱글톤으로 들고 있으면 DNS 변경을 놓친다.
+builder.Services.AddHttpClient<LidarVisionClient>();
+
 // LS산전 IO Module(ModbusTCP). AMR/Cobot 과 동일 패턴(싱글톤 + 호스티드) — 기동 시 상시 자동 접속, 실패 시 5초마다 재시도.
 builder.Services.Configure<IoModuleModbusTcpSettings>(
     builder.Configuration.GetSection("IoModule"));

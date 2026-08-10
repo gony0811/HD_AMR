@@ -1,0 +1,38 @@
+# Jetson Orin Nano 용 systemd 유닛.
+#
+# 설치:
+#   sudo cp nsl-lidar.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now nsl-lidar
+#
+# 로그:
+#   journalctl -u nsl-lidar -f
+
+[Unit]
+Description=HD_AMR NSL LiDAR Service
+# LAN 구성이므로 네트워크가 올라온 뒤에 기동한다.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=eggplant
+WorkingDirectory=/opt/nsl-lidar
+ExecStart=/opt/nsl-lidar/HD_AMR.LidarService
+
+# nanolib(libnanolib.so)을 실행 파일과 같은 디렉터리에 두고 찾게 한다.
+Environment=LD_LIBRARY_PATH=/opt/nsl-lidar
+Environment=DOTNET_EnableDiagnostics=0
+Environment=ASPNETCORE_ENVIRONMENT=Production
+
+# 센서 연결 실패로 프로세스가 죽더라도 계속 되살린다. 서비스가 떠 있어야
+# /api/lidar/status 로 원격 진단이 가능하다.
+Restart=always
+RestartSec=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nsl-lidar
+
+[Install]
+WantedBy=multi-user.target
