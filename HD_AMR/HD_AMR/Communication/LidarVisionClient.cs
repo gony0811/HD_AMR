@@ -58,15 +58,21 @@ public sealed class LidarVisionClient
     /// ⚠ 호출 측은 반드시 <see cref="MeasureResponse.Valid"/> 를 확인할 것. 검출 실패를
     ///   "직전 값 유지"로 숨기면 잘못된 위치로 제어가 나간다.
     /// </summary>
+    /// <param name="target">
+    /// 목표 위치(센서 좌표계). 시야에 코러게이션이 여러 개일 때 어느 것을 잴지 정한다.
+    /// null 이면 광축에 가장 가까운 것이 선택된다. 후보 전체는 응답의
+    /// <see cref="MeasureResponse.Candidates"/> 로 온다.
+    /// </param>
     /// <exception cref="LidarVisionException">통신에 실패했거나 응답을 해석할 수 없을 때.</exception>
     public Task<MeasureResponse> MeasureAsync(
-        int? frames = null, bool includeSamples = false, CancellationToken ct = default)
+        int? frames = null, Vec3? target = null, bool includeSamples = false, CancellationToken ct = default)
     {
         var request = new MeasureRequest
         {
             Frames = frames ?? _settings.MeasureFrames,
             TimeoutMs = _settings.MeasureTimeoutMs,
             IncludeSamples = includeSamples,
+            Target = target,
         };
 
         return SendAsync(

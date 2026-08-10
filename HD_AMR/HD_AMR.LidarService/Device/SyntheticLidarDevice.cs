@@ -49,7 +49,9 @@ internal sealed class SyntheticLidarDevice : ILidarDevice
         IsOpen = true;
         Info = new LidarDeviceInfo
         {
-            Model = "synthetic-wedge",
+            // 형상을 이름에 담는다. 화면에 뜨는 값이라, 쐐기로 돌면서 비드라고 표시되면
+            // 무엇을 검증하고 있는지 헷갈린다.
+            Model = _options.Shape == SyntheticShape.Bead ? "synthetic-corrugation" : "synthetic-wedge",
             LidarType = NslNative.LidarTypeOption.TypeA,
             LensType = LidarLensType.StandardField,
             FirmwareRelease = 0,

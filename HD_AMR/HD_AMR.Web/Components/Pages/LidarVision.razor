@@ -1,0 +1,410 @@
+@page "/lidar"
+@rendermode InteractiveServer
+@using HD_AMR.Communication
+@using HD_AMR.Contracts.Lidar
+@using HD_AMR.Models
+@using HD_AMR.Service
+@implements IDisposable
+@inject LidarVisionClient Lidar
+@inject CobotService Cobot
+
+<PageTitle>3D LiDAR</PageTitle>
+
+<h1 class="page-title">3D LiDAR</h1>
+<p class="page-subtitle">
+    Jetson Orin Nano 의 ToF 센서(NSL-1110AV)에서 코러게이션 피크선 위치를 가져온다.
+</p>
+
+@* 영상은 의도적으로 가져오지 않는다. 젯슨이 영상 분석과 모니터링 화면을 모두 담당하고,
+   제어 프로그램은 검출된 위치 데이터만 받는 설계다. 영상 스트림을 여기로 끌어오면 네트워크와
+   SignalR 회선을 잡아먹으면서 제어에는 아무것도 보태지 못한다. *@
+<div class="card card-surface mb-3" style="max-width: 960px;">
+    <div class="card-body">
+        <div class="d-flex align-items-center justify-content-between mb-3">
+            <h5 class="card-title mb-0">연결</h5>
+            <div class="d-flex gap-2 align-items-center">
+                <span class="badge @(_alive ? "bg-success" : "bg-secondary")">
+                    @(_alive ? "서비스 응답" : "서비스 무응답")
+                </span>
+                <span class="badge @(_status?.Connected == true ? "bg-success" : "bg-secondary")">
+                    @(_status?.Connected == true ? "센서 연결됨" : "센서 끊김")
+                </span>
+            </div>
+        </div>
+
+        <div class="row g-3 small">
+            <div class="col-auto text-muted">대상: <span class="text-body">@Lidar.Settings.BaseUrl</span></div>
+            <div class="col-auto text-muted">모델: <span class="text-body">@(_status?.Model ?? "—")</span></div>
+            <div class="col-auto text-muted">
+                링크:
+                <span class="text-body">
+                    @(_status?.LinkUp switch { true => "정상", false => "없음 — 케이블 확인", _ => "확인 불가" })
+                </span>
+            </div>
+            <div class="col-auto text-muted">온도: <span class="text-body">@Fmt(_status?.SensorTemperatureC, 1) ℃</span></div>
+            <div class="col-auto text-muted">전압: <span class="text-body">@Fmt(_status?.VoltageV, 2) V</span></div>
+            <div class="col-auto text-muted">프레임: <span class="text-body">@Fmt(_status?.MeasuredFps, 1) fps</span></div>
+        </div>
+
+        @if (!string.IsNullOrEmpty(_status?.LastError))
+        {
+            <div class="alert alert-warning mt-3 mb-0 py-2">센서 오류: @_status.LastError</div>
+        }
+        @if (_statusError is not null)
+        {
+            <div class="alert alert-danger mt-3 mb-0 py-2">@_statusError</div>
+        }
+
+        <div class="mt-3">
+            <a class="btn btn-sm btn-outline-secondary" href="@MonitorUrl" target="_blank" rel="noopener">
+                젯슨 모니터링 화면 열기 →
+            </a>
+            <span class="text-muted small ms-2">
+                영상·오버레이·센서 파라미터 튜닝은 젯슨 화면에서 한다.
+            </span>
+        </div>
+    </div>
+</div>
+
+<div class="card card-surface mb-3" style="max-width: 960px;">
+    <div class="card-body">
+        <div class="d-flex align-items-center justify-content-between mb-3">
+            <h5 class="card-title mb-0">측정</h5>
+            <div class="d-flex gap-2 align-items-center">
+                <label class="text-muted small mb-0">평균 프레임</label>
+                <input type="number" class="form-control form-control-sm" style="width: 90px;"
+                       min="1" max="50" @bind="_frames" disabled="@_busy" />
+                <button class="btn btn-sm btn-primary" @onclick="() => MeasureAsync(null)" disabled="@_busy">
+                    @(_busy ? "측정 중…" : "측정")
+                </button>
+            </div>
+        </div>
+
+        <p class="text-muted small mb-3">
+            정지 상태를 전제로 한 1회 측정이다. 코봇이 멈춘 뒤에 실행할 것 —
+            움직이는 중에 재면 캡처 시각과 로봇 자세가 어긋난다.
+        </p>
+
+        @if (_measureError is not null)
+        {
+            <div class="alert alert-danger py-2">@_measureError</div>
+        }
+
+        @if (_result is { } r)
+        {
+            @if (!r.Valid)
+            {
+                @* 검출 실패를 "직전 값 유지"로 숨기지 않는다. 실패를 모른 채 좌표를 쓰면
+                   잘못된 위치로 제어가 나간다. *@
+                <div class="alert alert-warning py-2 mb-3">
+                    <strong>검출 실패 (@r.Failure)</strong>
+                    <div class="small mt-1">@r.FailureDetail</div>
+                </div>
+            }
+            else
+            {
+                <div class="alert alert-success py-2 mb-3">
+                    <strong>검출 성공</strong> — 신뢰도 @r.Confidence.ToString("F3"),
+                    길이 @r.Ridge!.LengthMm.ToString("F0")mm,
+                    RMS @r.Ridge.RmsMm.ToString("F2")mm
+                </div>
+
+                <h6 class="text-muted small">센서 좌표계 (젯슨이 준 원본)</h6>
+                <table class="table table-sm align-middle mb-3" style="max-width: 620px;">
+                    <tbody>
+                        <tr><th style="width: 120px;">중점</th><td>@Vec(r.Ridge.Point)</td></tr>
+                        <tr><th>방향</th><td>@Dir(r.Ridge.Direction)</td></tr>
+                        <tr><th>인라이어</th><td>@r.Ridge.InlierCount.ToString("N0") 점</td></tr>
+                    </tbody>
+                </table>
+            }
+
+            @if (r.Quality is { } q)
+            {
+                <h6 class="text-muted small">측정 품질</h6>
+                <div class="row g-3 small mb-3">
+                    <div class="col-auto text-muted">프레임: <span class="text-body">@q.FramesUsed / @q.FramesRequested</span></div>
+                    <div class="col-auto text-muted">유효 픽셀: <span class="text-body">@q.ValidPixels.ToString("N0")</span></div>
+                    <div class="col-auto text-muted">진폭 부족: <span class="text-body">@q.LowAmplitudePixels.ToString("N0")</span></div>
+                    <div class="col-auto text-muted">포화: <span class="text-body">@q.SaturatedPixels.ToString("N0")</span></div>
+                    <div class="col-auto text-muted">ADC 오버플로: <span class="text-body">@q.AdcOverflowPixels.ToString("N0")</span></div>
+                    @if (q.IncompleteFramesDropped > 0)
+                    {
+                        <div class="col-auto text-danger">불완전 프레임 @q.IncompleteFramesDropped 개 버림</div>
+                    }
+                </div>
+            }
+        }
+    </div>
+</div>
+
+@if (_result?.Candidates is { Count: > 0 } candidates)
+{
+    <div class="card card-surface mb-3" style="max-width: 960px;">
+        <div class="card-body">
+            <h5 class="card-title">코러게이션 후보 (@candidates.Count 개)</h5>
+
+            @* 판에는 코러게이션이 370mm 간격으로 여러 개 있고, 어느 것을 용접할지는 작업 계획이
+               정하는 것이지 기하만으로 결정되지 않는다. 그래서 서비스가 고른 하나만 쓰지 않고
+               후보를 전부 보여주고, 목표를 지정해 다시 잴 수 있게 한다. *@
+            @if (candidates.Count > 1 && _target is null)
+            {
+                <div class="alert alert-warning py-2 small">
+                    후보가 여럿이다. 목표를 지정하지 않으면 <strong>광축에 가장 가까운 것</strong>이
+                    선택된다 — 어느 것을 잴지는 조준이 정한다.
+                </div>
+            }
+
+            <table class="table table-sm align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th style="width: 60px;">선택</th>
+                        <th>중점 (센서 좌표, mm)</th>
+                        <th class="text-end">길이</th>
+                        <th class="text-end">RMS</th>
+                        <th style="width: 140px;"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var c in candidates)
+                    {
+                        var chosen = _result.Ridge is { } sel && Same(sel.Point, c.Point);
+                        <tr class="@(chosen ? "table-primary" : null)">
+                            <td>@(chosen ? "◀" : "")</td>
+                            <td>@Vec(c.Point)</td>
+                            <td class="text-end">@c.LengthMm.ToString("F0") mm</td>
+                            <td class="text-end">@c.RmsMm.ToString("F2") mm</td>
+                            <td>
+                                <button class="btn btn-sm btn-outline-primary"
+                                        @onclick="() => MeasureAsync(c.Point)" disabled="@_busy">
+                                    이걸로 재측정
+                                </button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+
+            @if (_target is { } t)
+            {
+                <div class="mt-2 small text-muted">
+                    목표 지정됨: @Vec(t)
+                    <button class="btn btn-sm btn-link p-0 ms-2" @onclick="ClearTarget" disabled="@_busy">해제</button>
+                </div>
+            }
+        </div>
+    </div>
+}
+
+<div class="card card-surface" style="max-width: 960px;">
+    <div class="card-body">
+        <div class="d-flex align-items-center justify-content-between mb-3">
+            <h5 class="card-title mb-0">로봇 좌표 변환</h5>
+            <div class="d-flex gap-2 align-items-center">
+                <label class="text-muted small mb-0">공구 번호</label>
+                <input type="number" class="form-control form-control-sm" style="width: 80px;"
+                       min="0" max="15" @bind="_tool" disabled="@_busy" />
+                <button class="btn btn-sm btn-outline-primary" @onclick="TransformAsync"
+                        disabled="@(_busy || _result?.Valid != true || !Cobot.IsConnected)">
+                    코봇 자세 읽어 변환
+                </button>
+            </div>
+        </div>
+
+        @* hand-eye 캘리브레이션이 안 된 상태에서 조용히 계산하면 센서 좌표를 툴 좌표로 착각한
+           그럴듯한 숫자가 나오고, 그 숫자가 코봇을 움직인다. 화면에서도 못 보고 지나치지
+           않도록 상태를 항상 띄운다. *@
+        @if (!Lidar.Settings.HandEyeCalibrated)
+        {
+            <div class="alert alert-danger py-2">
+                <strong>hand-eye 캘리브레이션 미완료</strong>
+                <div class="small mt-1">
+                    <code>LidarVision:HandEyeCalibrated</code> 가 false 라 좌표 변환이 실패를 반환한다.
+                    장착 오프셋 없이 변환하면 센서 좌표를 툴 좌표로 착각한 값이 나오므로, 실제 값이
+                    확정될 때까지 의도적으로 막아둔 것이다.
+                </div>
+            </div>
+        }
+
+        @if (!Cobot.IsConnected)
+        {
+            <div class="text-muted small">코봇이 연결되면 현재 자세를 읽어 베이스 좌표로 변환한다.</div>
+        }
+
+        @if (_transformError is not null)
+        {
+            <div class="alert alert-danger py-2">@_transformError</div>
+        }
+
+        @if (_toolPose is { } pose)
+        {
+            <h6 class="text-muted small">코봇 자세 (베이스 기준, 공구 @_tool)</h6>
+            <div class="small text-body mb-3 font-monospace">
+                [@string.Join(", ", pose.Select(v => v.ToString("F2")))]
+            </div>
+        }
+
+        @if (_pose is { } rp)
+        {
+            @if (!rp.Valid)
+            {
+                <div class="alert alert-warning py-2 mb-0">
+                    <strong>변환 불가</strong>
+                    <div class="small mt-1">@rp.Note</div>
+                </div>
+            }
+            else
+            {
+                <h6 class="text-muted small">@rp.Frame 좌표계</h6>
+                <table class="table table-sm align-middle mb-0" style="max-width: 620px;">
+                    <tbody>
+                        <tr><th style="width: 120px;">중점</th><td>@Vec(rp.Ridge!.Point)</td></tr>
+                        <tr><th>방향</th><td>@Dir(rp.Ridge.Direction)</td></tr>
+                        <tr><th>시작</th><td>@(rp.Ridge.Start is { } s ? Vec(s) : "—")</td></tr>
+                        <tr><th>끝</th><td>@(rp.Ridge.End is { } e ? Vec(e) : "—")</td></tr>
+                        <tr><th>길이</th><td>@rp.Ridge.LengthMm.ToString("F1") mm</td></tr>
+                    </tbody>
+                </table>
+            }
+        }
+    </div>
+</div>
+
+@code {
+    private LidarStatus? _status;
+    private string? _statusError;
+    private bool _alive;
+
+    private MeasureResponse? _result;
+    private string? _measureError;
+    private Vec3? _target;
+
+    private RidgePose? _pose;
+    private double[]? _toolPose;
+    private string? _transformError;
+
+    private int _frames = 10;
+    private int _tool;
+    private bool _busy;
+
+    private PeriodicTimer? _timer;
+    private CancellationTokenSource? _cts;
+
+    /// <summary>젯슨 자체 모니터링 화면. 영상과 파라미터 튜닝은 그쪽에서 한다.</summary>
+    private string MonitorUrl => Lidar.Settings.BaseUrl.TrimEnd('/') + "/";
+
+    protected override void OnInitialized()
+    {
+        _cts = new CancellationTokenSource();
+        _timer = new PeriodicTimer(TimeSpan.FromSeconds(2));
+        _ = PollAsync(_cts.Token);
+    }
+
+    /// <summary>
+    /// 상태 폴링. 연결이 끊겨 있는 동안에도 화면은 계속 떠 있어야 하므로 실패를 흡수한다 —
+    /// 여기서 예외가 올라오면 회로가 끊겨 페이지 자체가 죽는다.
+    /// </summary>
+    private async Task PollAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                _alive = await Lidar.IsAliveAsync(ct);
+                _status = _alive ? await Lidar.GetStatusAsync(ct) : null;
+                _statusError = null;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                _status = null;
+                _statusError = ex.Message;
+            }
+
+            await InvokeAsync(StateHasChanged);
+
+            try { if (!await _timer!.WaitForNextTickAsync(ct)) return; }
+            catch (OperationCanceledException) { return; }
+        }
+    }
+
+    private async Task MeasureAsync(Vec3? target)
+    {
+        if (_busy) return;
+
+        _busy = true;
+        _measureError = null;
+        _pose = null;
+        _toolPose = null;
+        _transformError = null;
+        _target = target;
+
+        try
+        {
+            _result = await Lidar.MeasureAsync(
+                frames: Math.Clamp(_frames, 1, 50),
+                target: target,
+                ct: _cts?.Token ?? CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _result = null;
+            _measureError = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void ClearTarget() => _target = null;
+
+    private async Task TransformAsync()
+    {
+        if (_busy || _result is null) return;
+
+        _busy = true;
+        _transformError = null;
+
+        try
+        {
+            // 공구 0 은 플랜지다. 장착 오프셋을 어느 프레임 기준으로 쟀는지와 반드시 같아야
+            // 하므로, TCP 설정에 영향받지 않는 플랜지를 기본으로 둔다.
+            _toolPose = await Cobot.Rpc.GetTcpPoseInBaseAsync(_tool, _cts?.Token ?? CancellationToken.None);
+            _pose = LidarRidgeTransform.ToBaseFrame(_result, Lidar.Settings, _toolPose);
+        }
+        catch (Exception ex)
+        {
+            _toolPose = null;
+            _pose = null;
+            _transformError = $"코봇 자세를 읽지 못했다: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private static string Vec(Vec3 v) =>
+        $"({v.X:F1}, {v.Y:F1}, {v.Z:F1})";
+
+    private static string Dir(Vec3 v) =>
+        $"({v.X:F3}, {v.Y:F3}, {v.Z:F3})";
+
+    private static string Fmt(double? value, int digits) =>
+        value is { } v && v != 0 ? v.ToString($"F{digits}") : "—";
+
+    /// <summary>후보 표에서 선택된 행을 표시하기 위한 동일성 판정. 부동소수 비교라 여유를 둔다.</summary>
+    private static bool Same(Vec3 a, Vec3 b) =>
+        Math.Abs(a.X - b.X) < 1e-6 && Math.Abs(a.Y - b.Y) < 1e-6 && Math.Abs(a.Z - b.Z) < 1e-6;
+
+    public void Dispose()
+    {
+        _cts?.Cancel();
+        _timer?.Dispose();
+        _cts?.Dispose();
+    }
+}
