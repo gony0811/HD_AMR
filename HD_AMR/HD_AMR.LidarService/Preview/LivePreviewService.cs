@@ -71,7 +71,15 @@ internal sealed class LivePreviewService : BackgroundService
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var stopwatch = Stopwatch.StartNew();
-        var lastTickMs = 0.0;
+
+        // 직전 주기의 시작 시각. null 은 "직전 주기가 없다"는 뜻이고, 그때는 fps 표본을
+        // 만들지 않는다.
+        //
+        // 이걸 0 으로 두면 첫 주기의 간격이 "서비스 기동 이후 경과 시간"이 되어버린다. 루프는
+        // 보는 사람이 생길 때까지 잠들어 있으므로 그 값이 몇 분일 수도 있고, 그러면 화면을 처음
+        // 연 순간 — 정확히 정상 동작을 확인하려는 순간 — fps 가 0 에 가깝게 뜬다.
+        // 대기·재연결로 루프가 끊긴 뒤에도 같은 일이 생기므로 건너뛰는 경로마다 비운다.
+        double? lastTickMs = null;
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -79,6 +87,7 @@ internal sealed class LivePreviewService : BackgroundService
             {
                 if (!IsWatched())
                 {
+                    lastTickMs = null;
                     await Task.Delay(250, stoppingToken);
                     continue;
                 }
@@ -87,6 +96,7 @@ internal sealed class LivePreviewService : BackgroundService
                 {
                     // 센서가 없는 동안에도 화면은 상태를 계속 보여줘야 하므로 서비스는 살려 둔다.
                     // 마지막 프레임은 지우지 않는다 — 끊기기 직전 화면이 원인 파악에 쓸모가 있다.
+                    lastTickMs = null;
                     await Task.Delay(500, stoppingToken);
                     continue;
                 }
@@ -96,11 +106,12 @@ internal sealed class LivePreviewService : BackgroundService
 
                 if (frame is null)
                 {
+                    lastTickMs = null;
                     await Task.Delay(200, stoppingToken);
                     continue;
                 }
 
-                Publish(frame, started - lastTickMs);
+                Publish(frame, lastTickMs is { } previous ? started - previous : 0);
                 lastTickMs = started;
 
                 var elapsed = stopwatch.Elapsed.TotalMilliseconds - started;

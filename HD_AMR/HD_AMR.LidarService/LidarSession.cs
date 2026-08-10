@@ -24,6 +24,7 @@ internal sealed class LidarSession : IAsyncDisposable
 
     private long _seq;
     private DateTimeOffset? _lastFrameAt;
+    private double _measuredFps;
     private volatile string? _lastError;
 
     /// <summary>
@@ -53,6 +54,31 @@ internal sealed class LidarSession : IAsyncDisposable
             IsBackground = true,
         };
         _worker.Start();
+    }
+
+    /// <summary>
+    /// 프레임 수신을 기록하고 실측 프레임 레이트를 갱신한다.
+    ///
+    /// <b>측정 사이의 공백은 프레임 레이트가 아니다.</b> 정지 측정이라 측정 요청 간격이 수 분씩
+    /// 벌어지는 것이 정상인데, 그 간격을 그대로 넣으면 fps 가 0.003 같은 값으로 표시된다.
+    /// 스트리밍 주기로 볼 수 없는 간격(1초 초과)은 표본에서 버린다 — 15fps 에서 프레임 주기는
+    /// 64ms 이고, 손실이 있어도 667ms 를 넘은 관측이 없다.
+    ///
+    /// 워커 스레드에서만 호출되므로 동기화가 필요 없다. 상태 조회도 같은 스레드를 탄다.
+    /// </summary>
+    private void NoteFrame(DateTimeOffset at)
+    {
+        if (_lastFrameAt is { } previous)
+        {
+            var intervalMs = (at - previous).TotalMilliseconds;
+            if (intervalMs is > 0 and < 1000)
+            {
+                var instant = 1000.0 / intervalMs;
+                _measuredFps = _measuredFps <= 0 ? instant : _measuredFps * 0.8 + instant * 0.2;
+            }
+        }
+
+        _lastFrameAt = at;
     }
 
     private void WorkerLoop()
@@ -121,7 +147,7 @@ internal sealed class LidarSession : IAsyncDisposable
         try
         {
             var frame = _device.Capture(_options.PerFrameTimeoutMs);
-            if (frame is not null) _lastFrameAt = frame.CapturedAt;
+            if (frame is not null) NoteFrame(frame.CapturedAt);
             return frame;
         }
         catch (LidarDeviceException ex)
@@ -186,7 +212,7 @@ internal sealed class LidarSession : IAsyncDisposable
                 continue;
             }
 
-            _lastFrameAt = frame.CapturedAt;
+            NoteFrame(frame.CapturedAt);
 
             // 불완전 프레임은 평균에 넣지 않는다. nanolib 은 손상을 알려주는 수단이 전혀
             // 없어서 데이터로 판정할 수밖에 없고, 섞이면 평균이 조용히 오염된다.
@@ -256,7 +282,17 @@ internal sealed class LidarSession : IAsyncDisposable
     public Task<LidarStatus> GetStatusAsync(CancellationToken ct = default) => RunAsync(() =>
     {
         var status = _device.ReadStatus();
-        return status with { LastFrameAt = _lastFrameAt, LastError = status.LastError ?? _lastError };
+
+        // 프레임 레이트는 장치 구현이 아니라 세션이 채운다. 실장비 구현은 이 값을 알 방법이
+        // 없어서 늘 0 이었고(nanolib 이 프레임 레이트를 보고하지 않는다), 재생/합성 구현은
+        // 반대로 고정값 15 를 넣어 실제와 무관한 숫자를 보고했다. 어느 쪽이든 화면에 뜨는
+        // 값이 거짓이라, 프레임 도착 간격을 직접 재는 이쪽에서 덮어쓴다.
+        return status with
+        {
+            LastFrameAt = _lastFrameAt,
+            MeasuredFps = Math.Round(_measuredFps, 2),
+            LastError = status.LastError ?? _lastError,
+        };
     }, ct);
 
     public Task<LidarConfig> GetConfigAsync(CancellationToken ct = default) =>
