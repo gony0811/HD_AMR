@@ -195,6 +195,7 @@ app.MapMethods(LidarApiRoutes.Detector, ["PATCH"],
         if (patch.MinPlaneAngleDeg is { } ang) options.MinPlaneAngleDeg = Math.Clamp(ang, 0, 89);
         if (patch.MaxRmsMm is { } rms) options.MaxRmsMm = Math.Max(0.1, rms);
         if (patch.MinRidgeLengthMm is { } len) options.MinRidgeLengthMm = Math.Max(0, len);
+        if (patch.MaxRidgeLengthMm is { } maxLen) options.MaxRidgeLengthMm = Math.Max(0, maxLen);
         if (patch.MinSampleFraction is { } frac) options.MinSampleFraction = Math.Clamp(frac, 0, 1);
 
         // 반원 코러게이션 검출 전용
@@ -204,6 +205,8 @@ app.MapMethods(LidarApiRoutes.Detector, ["PATCH"],
         if (patch.CorrugationWidthMm is { } cw) options.CorrugationWidthMm = Math.Max(1, cw);
         if (patch.CorrugationBandMarginMm is { } cb) options.CorrugationBandMarginMm = Math.Max(0, cb);
         if (patch.MinCorrugationPoints is { } cp) options.MinCorrugationPoints = Math.Max(3, cp);
+        if (patch.MinArcPoints is { } ap) options.MinArcPoints = Math.Max(3, ap);
+        if (patch.CorrugationGapMm is { } gap) options.CorrugationGapMm = Math.Max(1, gap);
         if (patch.MaxCandidates is { } mc) options.MaxCandidates = Math.Clamp(mc, 1, 20);
         if (patch.ArcInlierThresholdMm is { } at) options.ArcInlierThresholdMm = Math.Max(0.1, at);
         if (patch.ExpectedRadiusMm is { } er) options.ExpectedRadiusMm = Math.Max(0, er);

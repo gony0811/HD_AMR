@@ -124,6 +124,23 @@ internal sealed record ArcDiagnostics
     /// <summary>높이 구간을 통과한 코러게이션 후보 점 수(코러게이션 여러 개 포함).</summary>
     public int CorrugationPointCount { get; init; }
 
-    /// <summary>평판 위 최대 높이(mm). 비드가 안 보일 때 원인을 좁히는 근거다.</summary>
+    /// <summary>평판 위 최대 높이(mm). 코러게이션이 안 보일 때 원인을 좁히는 근거다.</summary>
     public double MaxHeightMm { get; init; }
+
+    /// <summary>
+    /// 가로 위치로 가른 무리의 개수. 보이는 코러게이션 수와 같아야 한다.
+    ///
+    /// 1 이면 무리가 안 갈린 것이고, 그때는 방향 추정이 코러게이션과 나란하지 않다는 뜻이다 —
+    /// 가로축이 코러게이션을 가로지르지 않고 따라가면 가로 위치가 연속으로 퍼진다.
+    /// </summary>
+    public int ClusterCount { get; init; }
+
+    /// <summary>
+    /// 무리들의 가로 위치 중심(mm)과 점 수. 간격이 실물 피치(370mm)와 맞는지, 하한에 얼마나
+    /// 못 미쳐 탈락했는지를 한 번에 보여준다.
+    /// </summary>
+    public IReadOnlyList<ClusterSummary>? Clusters { get; init; }
 }
+
+/// <summary>가로 위치로 가른 무리 하나의 요약.</summary>
+internal sealed record ClusterSummary(double CenterMm, double WidthMm, int Points);

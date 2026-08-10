@@ -159,6 +159,7 @@ internal sealed record DetectorOptionsPatch
     public double? MinPlaneAngleDeg { get; init; }
     public double? MaxRmsMm { get; init; }
     public double? MinRidgeLengthMm { get; init; }
+    public double? MaxRidgeLengthMm { get; init; }
     public double? MinSampleFraction { get; init; }
 
     // 반원 코러게이션 검출 전용
@@ -168,6 +169,8 @@ internal sealed record DetectorOptionsPatch
     public double? CorrugationWidthMm { get; init; }
     public double? CorrugationBandMarginMm { get; init; }
     public int? MinCorrugationPoints { get; init; }
+    public int? MinArcPoints { get; init; }
+    public double? CorrugationGapMm { get; init; }
     public int? MaxCandidates { get; init; }
     public double? ArcInlierThresholdMm { get; init; }
     public double? ExpectedRadiusMm { get; init; }

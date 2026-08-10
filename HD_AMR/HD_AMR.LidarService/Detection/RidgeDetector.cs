@@ -368,6 +368,18 @@ internal sealed class RidgeDetectorOptions
     public double MinRidgeLengthMm { get; set; } = 100.0;
 
     /// <summary>
+    /// 능선 길이 상한(mm). 0 이면 제한 없음.
+    ///
+    /// 실물 치수를 아는 대상에서 가장 값싼 오검출 차단이다. 배경을 잡으면 길이가 실물을
+    /// 크게 넘는데(실측에서 대상 최대 치수 1000mm 인데 1557mm 가 나왔다), 인라이어 수·잔차·
+    /// 반경은 그때도 정상으로 보인다.
+    ///
+    /// 다만 실물 치수에 바짝 붙이지 말 것. 양 끝 2% 잘라내기와 측정 오차 때문에 정상
+    /// 검출도 몇 %는 넘길 수 있다(실측에서 350mm 코러게이션이 376mm 로 나왔다).
+    /// </summary>
+    public double MaxRidgeLengthMm { get; set; } = 0;
+
+    /// <summary>
     /// 픽셀을 쓰기 위해 필요한 유효 샘플 비율(0~1). 대부분의 프레임에서 무효였던 픽셀은
     /// 평균값 자체를 신뢰할 수 없다.
     ///
@@ -419,8 +431,32 @@ internal sealed class RidgeDetectorOptions
     /// <summary>코러게이션 폭에 더하는 띠 여유(mm). 장착 기울기와 노이즈를 흡수한다.</summary>
     public double CorrugationBandMarginMm { get; set; } = 15.0;
 
-    /// <summary>코러게이션 하나로 인정할 최소 점 수.</summary>
-    public int MinCorrugationPoints { get; set; } = 300;
+    /// <summary>
+    /// 코러게이션 하나(가로 위치로 가른 무리)로 인정할 최소 점 수.
+    ///
+    /// ROI 를 대상 판에 맞추면 화면이 작아진다(실측 84x88 = 7,392px). 코러게이션 하나가
+    /// 차지하는 몫은 그중 수백 점이라, 이 값을 높게 두면 정상 코러게이션이 노이즈에 따라
+    /// 통과·탈락을 오간다. 실제로 300 이었을 때 광축 최근접 코러게이션이 10회 중 4회만
+    /// 후보에 올라왔다.
+    /// </summary>
+    public int MinCorrugationPoints { get; set; } = 120;
+
+    /// <summary>
+    /// 단면 원 피팅에 필요한 최소 인라이어 수.
+    ///
+    /// 무리 하한과 분리한다. 무리에 든 점이 전부 원 위에 있는 것은 아니라서(뿌리 부근은
+    /// 곡률이 다르고 노이즈도 크다), 같은 값을 쓰면 무리는 통과했는데 원에서 탈락한다.
+    /// </summary>
+    public int MinArcPoints { get; set; } = 80;
+
+    /// <summary>
+    /// 코러게이션을 가르는 가로 방향 간격(mm).
+    ///
+    /// 폭(70mm)보다 넉넉히 크고 피치에서 폭을 뺀 값(370−70=300mm)보다는 작아야 한다.
+    /// 정점이 정반사로 포화되면 한 코러게이션 안에도 가로 방향 구멍이 생기므로, 폭에 바짝
+    /// 붙이면 하나가 둘로 쪼개진다.
+    /// </summary>
+    public double CorrugationGapMm { get; set; } = 150.0;
 
     /// <summary>
     /// 찾을 코러게이션 후보의 최대 개수.

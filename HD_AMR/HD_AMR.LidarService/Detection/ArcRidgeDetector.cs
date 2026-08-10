@@ -24,6 +24,12 @@ namespace HD_AMR.LidarService.Detection;
 /// </summary>
 internal sealed class ArcRidgeDetector : IRidgeDetector
 {
+    /// <summary>방향 훑기 각도 눈금 수. 180°를 이만큼 나눈다(5° 간격).</summary>
+    private const int AxisSteps = 36;
+
+    /// <summary>방향 훑기에 쓸 최대 표본 점 수. 점수 비교만 하므로 전수가 필요 없다.</summary>
+    private const int AxisSampleMax = 3000;
+
     private readonly RidgeDetectorOptions _options;
     private readonly ILogger<ArcRidgeDetector> _log;
 
@@ -130,33 +136,78 @@ internal sealed class ArcRidgeDetector : IRidgeDetector
             b[i] = e2[0] * dx + e2[1] * dy + e2[2] * dz;
         }
 
-        // ── 4. 코러게이션을 하나씩 벗겨낸다 ─────────────────────────────────
-        // 띠 하나를 찾아 원을 맞추고, 그 점들을 빼고 다시 찾는다. 실패한 띠도 반드시 빼야
-        // 한다 — 안 그러면 같은 띠를 무한히 다시 찾는다.
-        var remaining = raised.ToArray();
+        // ── 4. 방향을 한 번만 정하고, 가로 위치로 코러게이션을 가른다 ────────
+        //
+        // 예전에는 "띠 하나를 RANSAC 으로 찾고 그 점들을 뺀 뒤 다시 찾기"를 반복했는데,
+        // 실측에서 검출 재현율이 무너졌다 — 광축에 가장 가까운 코러게이션이 10회 중 4회만
+        // 후보에 올라왔다. 매 반복이 독립적인 RANSAC 추첨이라, 앞 단계가 조금만 어긋나도
+        // 뒤가 연쇄로 무너지는 구조였다.
+        //
+        // 코러게이션은 모두 <b>평행</b>하다는 사실을 쓰면 추첨을 한 번으로 줄일 수 있다.
+        // 방향을 한 번 정하고 나면 각 점의 가로 위치가 정해지고, 코러게이션은 그 축에서
+        // 피치(370mm)만큼 떨어진 무리로 나타난다. 무리를 가르는 것은 추첨이 아니라 정렬이라
+        // 결정적이고, 약한 코러게이션도 빠지지 않는다.
+        var raisedArray = raised.ToArray();
+        var (dirA, dirB) = FindAxis(a, b, raisedArray);
+
+        var vA = -dirB;
+        var vB = dirA;
+
+        var w = new double[n];
+        foreach (var i in raisedArray) w[i] = a[i] * vA + b[i] * vB;
+
+        var clusters = Cluster(w, raisedArray);
+
+        // 방향을 세밀하게 다시 잡는다. 각도 훑기는 5° 간격이라, 350mm 길이 코러게이션에서
+        // 가로 위치가 최대 30mm 번진다. 가장 큰 무리의 주성분으로 맞추면 그 번짐이 사라진다.
+        if (clusters.Count > 0)
+        {
+            var largest = clusters.MaxBy(c => c.Count)!;
+            (dirA, dirB) = PrincipalDirection(a, b, largest);
+
+            vA = -dirB;
+            vB = dirA;
+            foreach (var i in raisedArray) w[i] = a[i] * vA + b[i] * vB;
+
+            clusters = Cluster(w, raisedArray);
+        }
+
+        // 무리의 점은 가로 위치 순서로 담기지 않으므로(밀도 구간에 배정하는 방식이라 원래
+        // 인덱스 순서다) 양 끝을 직접 찾아야 한다.
+        var summaries = clusters
+            .Select(c =>
+            {
+                double lo = double.MaxValue, hi = double.MinValue;
+                foreach (var i in c)
+                {
+                    if (w[i] < lo) lo = w[i];
+                    if (w[i] > hi) hi = w[i];
+                }
+                return new ClusterSummary(Math.Round((lo + hi) / 2, 1), Math.Round(hi - lo, 1), c.Count);
+            })
+            .OrderBy(c => c.CenterMm)
+            .ToArray();
+
+        baseline = baseline with
+        {
+            Arc = baseline.Arc! with { ClusterCount = clusters.Count, Clusters = summaries },
+        };
+
         var found = new List<RidgeCandidate>();
         string? firstFailure = null;
-
-        var band = _options.CorrugationWidthMm / 2 + _options.CorrugationBandMarginMm;
         var allInliers = new List<int>();
 
-        for (int k = 0; k < _options.MaxCandidates && remaining.Length >= _options.MinCorrugationPoints; k++)
+        foreach (var cluster in clusters.OrderByDescending(c => c.Count).Take(_options.MaxCandidates))
         {
-            var strip = LineRansac(a, b, remaining, band,
-                _options.RansacIterations, _options.MinCorrugationPoints, rng);
-
-            if (strip is null)
+            if (cluster.Count < _options.MinCorrugationPoints)
             {
                 firstFailure ??=
-                    $"코러게이션 점 {remaining.Length}개에서 띠 형태를 찾지 못했다. " +
-                    "높이 구간이 넓어 잡음을 포함했거나, 코러게이션이 부분적으로만 보일 수 있다.";
-                break;
+                    $"가장 큰 무리가 {cluster.Count}점으로 최소 요구치 {_options.MinCorrugationPoints}점에 못 미친다.";
+                continue;
             }
 
-            var (dirA, dirB, stripInliers) = strip.Value;
-
             var candidate = BuildCandidate(
-                plane, origin, e1, e2, a, b, h, dirA, dirB, stripInliers, sheet, rng, out var reason);
+                plane, origin, e1, e2, a, b, h, dirA, dirB, cluster.ToArray(), sheet, rng, out var reason);
 
             if (candidate is not null)
             {
@@ -167,9 +218,6 @@ internal sealed class ArcRidgeDetector : IRidgeDetector
             {
                 firstFailure ??= reason;
             }
-
-            var used = new HashSet<int>(stripInliers);
-            remaining = remaining.Where(i => !used.Contains(i)).ToArray();
         }
 
         if (found.Count == 0)
@@ -201,6 +249,8 @@ internal sealed class ArcRidgeDetector : IRidgeDetector
                 PlaneRmsMm = baseline.Arc!.PlaneRmsMm,
                 CorrugationPointCount = raised.Count,
                 MaxHeightMm = baseline.Arc.MaxHeightMm,
+                ClusterCount = baseline.Arc.ClusterCount,
+                Clusters = baseline.Arc.Clusters,
             },
             Candidates = found,
             // 오버레이에는 후보 전부를 칠한다. 하나만 칠하면 "고를 수 있는 게 여럿"이라는
@@ -222,20 +272,23 @@ internal sealed class ArcRidgeDetector : IRidgeDetector
     {
         reason = null;
 
-        // 단면 좌표: 피크선 방향 s, 그에 수직인 가로 방향 w, 높이 h.
+        // 단면 좌표: 피크선 방향 s, 그에 수직인 가로 방향 lateral, 높이 h.
         var vA = -dirB;
         var vB = dirA;
 
         var s = new double[a.Length];
-        var w = new double[a.Length];
+        var lateral = new double[a.Length];
         foreach (var i in stripInliers)
         {
             s[i] = a[i] * dirA + b[i] * dirB;
-            w[i] = a[i] * vA + b[i] * vB;
+            lateral[i] = a[i] * vA + b[i] * vB;
         }
 
-        var circle = CircleFit.Ransac(w, h, stripInliers,
-            _options.ArcInlierThresholdMm, _options.RansacIterations, _options.MinCorrugationPoints, rng);
+        // 원 인라이어 하한을 무리 자체의 하한과 분리한다. 무리에 든 점이 전부 원 위에 있는
+        // 것은 아니라서(뿌리 부근은 곡률이 다르고 노이즈도 크다), 같은 값을 쓰면 무리는
+        // 통과했는데 원에서 탈락하는 일이 생긴다.
+        var circle = CircleFit.Ransac(lateral, h, stripInliers,
+            _options.ArcInlierThresholdMm, _options.RansacIterations, _options.MinArcPoints, rng);
 
         if (circle is null)
         {
@@ -276,6 +329,17 @@ internal sealed class ArcRidgeDetector : IRidgeDetector
         if (lengthMm < _options.MinRidgeLengthMm)
         {
             reason = $"피크선 길이가 {lengthMm:F0}mm 로 최소 요구치 {_options.MinRidgeLengthMm}mm 에 못 미친다.";
+            return null;
+        }
+
+        // 길이 상한은 실물 치수를 아는 대상에서 가장 값싼 오검출 차단이다. 배경을 잡으면
+        // 길이가 실물을 크게 넘는데(실측에서 대상 최대 치수 1000mm 인데 1557mm 가 나왔다),
+        // 인라이어 수·잔차·반경은 그때도 정상으로 보인다.
+        if (_options.MaxRidgeLengthMm > 0 && lengthMm > _options.MaxRidgeLengthMm)
+        {
+            reason =
+                $"피크선 길이가 {lengthMm:F0}mm 로 상한 {_options.MaxRidgeLengthMm}mm 를 넘었다. " +
+                "대상 밖까지 이어 붙였을 수 있다.";
             return null;
         }
 
@@ -352,70 +416,157 @@ internal sealed class ArcRidgeDetector : IRidgeDetector
     }
 
     /// <summary>
-    /// 평면 안의 2차원 직선 RANSAC. 폭 <paramref name="bandMm"/> 안에 가장 많은 점을 담는
-    /// 띠를 찾는다. 코러게이션이 여러 개일 때 하나씩 벗겨내는 수단이다.
+    /// 코러게이션이 뻗은 방향을 찾는다.
+    ///
+    /// <b>RANSAC 으로 띠를 찾아 그 주성분을 쓰는 방식은 쓰지 않는다.</b> 실측과 합성 양쪽에서
+    /// 방향이 90° 뒤집히는 일이 재현됐다 — 추첨이 코러게이션을 <i>가로지르는</i> 선을 고르면
+    /// 가로축이 코러게이션을 <i>따라가게</i> 되고, 그러면 모든 코러게이션이 하나의 무리로
+    /// 뭉쳐 원 적합이 통째로 무너진다.
+    ///
+    /// 대신 <b>원하는 성질을 직접 최적화한다.</b> 올바른 방향이란 "그 축에 수직으로 투영했을 때
+    /// 점들이 좁은 무리로 갈라지는" 방향이다. 각도를 훑으며 가장 큰 무리의 폭이 최소가 되는
+    /// 방향을 고르면 된다 — 맞는 방향에서는 코러게이션 폭(70mm), 틀린 방향에서는 코러게이션
+    /// 길이(수백 mm)가 나오므로 차이가 압도적이라 오판이 없다.
+    ///
+    /// 코러게이션이 하나뿐이어도 동작한다. 무리는 하나지만 폭은 여전히 가로 방향에서 최소다.
     /// </summary>
-    private static (double DirA, double DirB, int[] Inliers)? LineRansac(
-        double[] a, double[] b, int[] candidates, double bandMm, int iterations, int minInliers, Random rng)
+    private (double DirA, double DirB) FindAxis(double[] a, double[] b, int[] points)
     {
-        if (candidates.Length < Math.Max(2, minInliers)) return null;
-
-        var bestCount = 0;
-        double bestDirA = 0, bestDirB = 0, bestOriginA = 0, bestOriginB = 0;
-
-        for (int iter = 0; iter < iterations; iter++)
+        // 각도 훑기는 점수 비교만 하므로 표본으로 충분하다. 전체를 매 각도마다 세면
+        // 미리보기 주기를 넘긴다.
+        var sample = points;
+        if (points.Length > AxisSampleMax)
         {
-            var i0 = candidates[rng.Next(candidates.Length)];
-            var i1 = candidates[rng.Next(candidates.Length)];
-
-            var da = a[i1] - a[i0];
-            var db = b[i1] - b[i0];
-            var len = Math.Sqrt(da * da + db * db);
-
-            // 두 점이 너무 가까우면 방향이 노이즈로 정해진다.
-            if (len < bandMm) continue;
-
-            da /= len; db /= len;
-
-            var count = 0;
-            foreach (var i in candidates)
-            {
-                if (Math.Abs((a[i] - a[i0]) * -db + (b[i] - b[i0]) * da) <= bandMm) count++;
-            }
-
-            if (count > bestCount)
-            {
-                bestCount = count;
-                bestDirA = da; bestDirB = db;
-                bestOriginA = a[i0]; bestOriginB = b[i0];
-            }
+            var stride = points.Length / AxisSampleMax;
+            sample = new int[AxisSampleMax];
+            for (int k = 0; k < AxisSampleMax; k++) sample[k] = points[k * stride];
         }
 
-        if (bestCount < minInliers) return null;
+        var w = new double[a.Length];
+        var best = double.MaxValue;
+        double bestA = 1, bestB = 0;
 
-        var inliers = new List<int>(bestCount);
-        foreach (var i in candidates)
+        for (int step = 0; step < AxisSteps; step++)
         {
-            if (Math.Abs((a[i] - bestOriginA) * -bestDirB + (b[i] - bestOriginB) * bestDirA) <= bandMm)
-                inliers.Add(i);
+            // 직선의 방향은 180° 주기이므로 절반만 훑으면 된다.
+            var theta = step * Math.PI / AxisSteps;
+            var dirA = Math.Cos(theta);
+            var dirB = Math.Sin(theta);
+
+            foreach (var i in sample) w[i] = a[i] * -dirB + b[i] * dirA;
+
+            // 실제 무리 짓기와 같은 방법으로 점수를 매긴다. 여기서만 다른 기준을 쓰면
+            // "훑기는 통과했는데 본 계산에서 무너지는" 어긋남이 생긴다.
+            var widest = 0.0;
+            foreach (var cluster in Cluster(w, sample))
+            {
+                double lo = double.MaxValue, hi = double.MinValue;
+                foreach (var i in cluster)
+                {
+                    if (w[i] < lo) lo = w[i];
+                    if (w[i] > hi) hi = w[i];
+                }
+                widest = Math.Max(widest, hi - lo);
+            }
+
+            if (widest >= best) continue;
+            best = widest;
+            bestA = dirA;
+            bestB = dirB;
         }
 
-        // 인라이어 전체로 방향을 다시 정한다(2차원 주성분). 두 점으로 정한 방향은 각도 오차가
-        // 커서, 그대로 두면 단면 투영이 비스듬해진다.
+        return (bestA, bestB);
+    }
+
+    /// <summary>점들의 2차원 주성분 방향. 각도 훑기의 눈금 오차를 없애는 마무리에 쓴다.</summary>
+    private static (double DirA, double DirB) PrincipalDirection(double[] a, double[] b, List<int> points)
+    {
         double ma = 0, mb = 0;
-        foreach (var i in inliers) { ma += a[i]; mb += b[i]; }
-        ma /= inliers.Count; mb /= inliers.Count;
+        foreach (var i in points) { ma += a[i]; mb += b[i]; }
+        ma /= points.Count; mb /= points.Count;
 
         double caa = 0, cab = 0, cbb = 0;
-        foreach (var i in inliers)
+        foreach (var i in points)
         {
-            var da2 = a[i] - ma;
-            var db2 = b[i] - mb;
-            caa += da2 * da2; cab += da2 * db2; cbb += db2 * db2;
+            var da = a[i] - ma;
+            var db = b[i] - mb;
+            caa += da * da; cab += da * db; cbb += db * db;
         }
 
         var theta = 0.5 * Math.Atan2(2 * cab, caa - cbb);
-        return (Math.Cos(theta), Math.Sin(theta), inliers.ToArray());
+        return (Math.Cos(theta), Math.Sin(theta));
+    }
+
+    /// <summary>
+    /// 가로 위치로 코러게이션을 가른다. <b>간격이 아니라 밀도</b>로 나눈다.
+    ///
+    /// <b>왜 간격으로 나누면 안 되는가.</b> 평판은 완벽히 평평하지 않고 측정 노이즈도 있어서,
+    /// 높이 하한을 조금만 낮게 잡아도 평판 전역에 산발적인 점이 남는다. 실측 규모로는 수천
+    /// 개다. 이 점들이 코러게이션 사이의 빈 구간을 촘촘히 메우기 때문에, 정렬해서 간격을 봐도
+    /// <b>끊기는 곳이 없다</b> — 실제로 이 방식은 어느 방향에서도 무리를 하나로만 냈다.
+    ///
+    /// 밀도로 보면 구분이 압도적이다. 코러게이션이 있는 구간은 산발 점의 수십 배가 모여 있다.
+    /// 평균 이상인 구간만 남기면 산발 점은 자연히 떨어져 나간다.
+    ///
+    /// 마지막에 가까운 구간을 병합하는 이유는 <b>정점 포화</b> 때문이다. 광택 금속의 정점이
+    /// 정반사로 날아가면 코러게이션 한가운데에 빈 칸이 생기는데, 병합하지 않으면 코러게이션
+    /// 하나가 둘로 쪼개진다.
+    /// </summary>
+    private List<List<int>> Cluster(double[] w, int[] points)
+    {
+        var binWidth = Math.Max(1.0, _options.CorrugationWidthMm / 4);
+
+        double min = double.MaxValue, max = double.MinValue;
+        foreach (var i in points)
+        {
+            if (w[i] < min) min = w[i];
+            if (w[i] > max) max = w[i];
+        }
+
+        var binCount = Math.Clamp((int)Math.Ceiling((max - min) / binWidth) + 1, 1, 20000);
+        var counts = new int[binCount];
+
+        foreach (var i in points) counts[BinOf(w[i])]++;
+
+        // 평균을 임계로 쓴다. 신호가 좁은 구간에 몰려 있는 형상이라, 코러게이션 칸은 평균의
+        // 몇 배, 산발 점 칸은 평균의 몇 분의 일로 갈라져 별도 파라미터가 필요 없다.
+        var threshold = (double)points.Length / binCount;
+
+        var ranges = new List<(int Lo, int Hi)>();
+        int? open = null;
+
+        for (int k = 0; k < binCount; k++)
+        {
+            if (counts[k] >= threshold) open ??= k;
+            else if (open is { } lo) { ranges.Add((lo, k - 1)); open = null; }
+        }
+        if (open is { } last) ranges.Add((last, binCount - 1));
+
+        // 정점 포화로 생긴 구멍을 메운다.
+        var merged = new List<(int Lo, int Hi)>();
+        foreach (var range in ranges)
+        {
+            if (merged.Count > 0 && (range.Lo - merged[^1].Hi - 1) * binWidth < _options.CorrugationGapMm)
+                merged[^1] = (merged[^1].Lo, range.Hi);
+            else
+                merged.Add(range);
+        }
+
+        var clusters = merged.Select(_ => new List<int>()).ToList();
+        foreach (var i in points)
+        {
+            var bin = BinOf(w[i]);
+            for (int r = 0; r < merged.Count; r++)
+            {
+                if (bin < merged[r].Lo || bin > merged[r].Hi) continue;
+                clusters[r].Add(i);
+                break;
+            }
+        }
+
+        return clusters.Where(c => c.Count > 0).ToList();
+
+        int BinOf(double value) => Math.Clamp((int)((value - min) / binWidth), 0, binCount - 1);
     }
 
     /// <summary>평면 법선으로부터 평면 내 정규직교 기저를 만든다.</summary>
