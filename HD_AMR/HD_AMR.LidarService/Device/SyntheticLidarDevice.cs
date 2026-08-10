@@ -34,9 +34,15 @@ internal sealed class SyntheticLidarDevice : ILidarDevice
 
     public LidarDeviceInfo? Info { get; private set; }
 
-    /// <summary>정답 능선. 검증 시 검출 결과와 대조한다.</summary>
-    public (Vec3 Point, Vec3 Direction) GroundTruth =>
-        (new Vec3(0, 0, _options.RidgeDistanceMm), new Vec3(0, 1, 0));
+    /// <summary>
+    /// 정답 능선. 검증 시 검출 결과와 대조한다.
+    ///
+    /// 쐐기는 두 면이 만나는 모서리가, 비드는 반원 정점이 능선이다. 비드의 정점은 평판보다
+    /// 반경만큼 센서 쪽(−Z)에 있다.
+    /// </summary>
+    public (Vec3 Point, Vec3 Direction) GroundTruth => _options.Shape == SyntheticShape.Bead
+        ? (new Vec3(0, 0, _options.RidgeDistanceMm - _options.BeadRadiusMm), new Vec3(0, 1, 0))
+        : (new Vec3(0, 0, _options.RidgeDistanceMm), new Vec3(0, 1, 0));
 
     public void Open()
     {
@@ -53,9 +59,20 @@ internal sealed class SyntheticLidarDevice : ILidarDevice
             Height = NslNative.TypeAHeight,
         };
 
-        _log.LogInformation(
-            "합성 쐐기 생성: 능선 거리 {Dist}mm, 반각 {Half}°, 노이즈 σ {Sigma}mm",
-            _options.RidgeDistanceMm, _options.HalfAngleDeg, _options.NoiseSigmaMm);
+        if (_options.Shape == SyntheticShape.Bead)
+        {
+            _log.LogInformation(
+                "합성 비드 생성: 평판 거리 {Dist}mm, 반경 {Radius}mm, 피치 {Pitch}mm, " +
+                "정반사 <{Spec}°, 스침 >{Graze}°, 노이즈 σ {Sigma}mm",
+                _options.RidgeDistanceMm, _options.BeadRadiusMm, _options.BeadPitchMm,
+                _options.SpecularAngleDeg, _options.GrazingAngleDeg, _options.NoiseSigmaMm);
+        }
+        else
+        {
+            _log.LogInformation(
+                "합성 쐐기 생성: 능선 거리 {Dist}mm, 반각 {Half}°, 노이즈 σ {Sigma}mm",
+                _options.RidgeDistanceMm, _options.HalfAngleDeg, _options.NoiseSigmaMm);
+        }
     }
 
     public void StartStreaming() { }
@@ -99,16 +116,26 @@ internal sealed class SyntheticLidarDevice : ILidarDevice
                 rx /= len; ry /= len;
                 double rz = 1 / len;
 
-                // 볼록 쐐기가 센서를 향하므로, 두 면의 교점 중 가까운 쪽이 보이는 표면이다.
-                var tA = RayPlane(sin, 0, -cos, -cos * z0, rx, ry, rz);
-                var tB = RayPlane(sin, 0, cos, cos * z0, rx, ry, rz);
+                double? t;
+                int invalidCode = NslNative.LowAmplitude;
 
-                var t = Nearest(tA, tB);
+                if (_options.Shape == SyntheticShape.Bead)
+                {
+                    t = TraceBead(rx, ry, rz, out invalidCode);
+                }
+                else
+                {
+                    // 볼록 쐐기가 센서를 향하므로, 두 면의 교점 중 가까운 쪽이 보이는 표면이다.
+                    var tA = RayPlane(sin, 0, -cos, -cos * z0, rx, ry, rz);
+                    var tB = RayPlane(sin, 0, cos, cos * z0, rx, ry, rz);
+                    t = Nearest(tA, tB);
+                }
+
                 if (t is null || t > _options.MaxRangeMm)
                 {
-                    dist[i] = NslNative.LowAmplitude;
-                    ampl[i] = NslNative.LowAmplitude;
-                    xs[i] = ys[i] = zs[i] = NslNative.LowAmplitude;
+                    dist[i] = invalidCode;
+                    ampl[i] = invalidCode;
+                    xs[i] = ys[i] = zs[i] = invalidCode;
                     continue;
                 }
 
@@ -136,6 +163,83 @@ internal sealed class SyntheticLidarDevice : ILidarDevice
             Z = zs,
             IsComplete = true,
         };
+    }
+
+    /// <summary>
+    /// 평판 + 반원 비드에 광선을 쏜다. 실제 측정 대상의 형상이다 — 평평한 스테인리스 판에
+    /// 반경 <see cref="SyntheticDeviceOptions.BeadRadiusMm"/> 반원 리브가 성형되어 있다.
+    ///
+    /// <b>정반사 포화와 스침각 신호부족을 함께 재현한다.</b> 광택 금속에서 실제로 관측된
+    /// 현상이고, 이 검출기의 존재 이유가 "정점이 포화로 사라져도 위치를 낸다"이기 때문에
+    /// 그 조건을 재현하지 않으면 검증이 무의미하다.
+    /// </summary>
+    /// <param name="invalidCode">표면을 맞췄지만 유효하지 않을 때의 무효 코드.</param>
+    private double? TraceBead(double rx, double ry, double rz, out int invalidCode)
+    {
+        invalidCode = NslNative.LowAmplitude;
+
+        var z0 = _options.RidgeDistanceMm;
+        var r = _options.BeadRadiusMm;
+
+        double? hit = null;
+        double nx = 0, ny = 0, nz = -1;   // 평판 법선(센서 쪽)
+
+        // 반원 비드는 축이 Y 와 나란한 반원기둥이다. 피치가 있으면 X 방향으로 반복된다.
+        var repeats = _options.BeadPitchMm > 0 ? 1 : 0;
+        for (int k = -repeats; k <= repeats; k++)
+        {
+            var cx = k * _options.BeadPitchMm;
+
+            // (x-cx)² + (z-z0)² = r², z < z0
+            var ox = -cx;
+            var a = rx * rx + rz * rz;
+            var b = 2 * (rx * ox - rz * z0);
+            var c = ox * ox + z0 * z0 - r * r;
+
+            var disc = b * b - 4 * a * c;
+            if (disc < 0 || a < 1e-12) continue;
+
+            var t = (-b - Math.Sqrt(disc)) / (2 * a);
+            if (t <= 0 || t * rz >= z0) continue;
+
+            if (hit is null || t < hit)
+            {
+                hit = t;
+                var px = t * rx - cx;
+                var pz = t * rz - z0;
+                var len = Math.Sqrt(px * px + pz * pz);
+                nx = px / len; ny = 0; nz = pz / len;
+            }
+        }
+
+        // 비드를 빗나간 광선은 평판에 닿는다.
+        if (hit is null)
+        {
+            if (rz <= 1e-9) return null;
+            hit = z0 / rz;
+            nx = 0; ny = 0; nz = -1;
+        }
+
+        // 입사각(표면 법선과 시선 사이). 0°면 정면 반사다.
+        var cosIncidence = Math.Clamp(-(rx * nx + ry * ny + rz * nz), -1, 1);
+        var incidenceDeg = Math.Acos(cosIncidence) * 180.0 / Math.PI;
+
+        if (incidenceDeg < _options.SpecularAngleDeg)
+        {
+            // 정면에 가까우면 광택면이 되쏘아 ADC 가 넘친다. 실측에서 비드 정점 부근에
+            // 나타난 현상이다.
+            invalidCode = NslNative.AdcOverflow;
+            return null;
+        }
+
+        if (incidenceDeg > _options.GrazingAngleDeg)
+        {
+            // 스치는 각도에서는 되돌아오는 빛이 부족하다. 비드 뿌리 쪽이 여기 해당한다.
+            invalidCode = NslNative.LowAmplitude;
+            return null;
+        }
+
+        return hit;
     }
 
     private static double? RayPlane(double nx, double ny, double nz, double d,
@@ -182,12 +286,48 @@ internal sealed class SyntheticLidarDevice : ILidarDevice
     public void Dispose() => Close();
 }
 
+/// <summary>합성할 형상.</summary>
+internal enum SyntheticShape
+{
+    /// <summary>볼록 쐐기. 두 평면 교선 검출기 검증용.</summary>
+    Wedge = 0,
+
+    /// <summary>평판 + 반원 비드. 실제 측정 대상의 형상이다.</summary>
+    Bead = 1,
+}
+
 internal sealed class SyntheticDeviceOptions
 {
-    /// <summary>능선까지의 거리(mm). 코봇 작업 스탠드오프를 흉내낸다.</summary>
+    /// <summary>생성할 형상.</summary>
+    public SyntheticShape Shape { get; set; } = SyntheticShape.Bead;
+
+    /// <summary>
+    /// 기준면까지의 거리(mm). 쐐기면 능선까지, 비드면 <b>평판까지</b>의 거리다
+    /// (비드 정점은 여기서 반경만큼 더 가깝다).
+    /// </summary>
     public double RidgeDistanceMm { get; set; } = 800;
 
-    /// <summary>각 면이 광축 수직면에서 기울어진 각(도). 45°면 두 면 사잇각이 90°.</summary>
+    /// <summary>비드 반경(mm). 실물 35mm(폭 70mm, 돌출 35mm 의 반원).</summary>
+    public double BeadRadiusMm { get; set; } = 35;
+
+    /// <summary>
+    /// 비드 간격(mm). 0 이면 비드 하나만, 양수면 좌우로 하나씩 더 놓는다.
+    /// 여러 비드 중 하나만 골라내는 동작을 검증하기 위한 것이다. 실물 피치는 370mm.
+    /// </summary>
+    public double BeadPitchMm { get; set; } = 0;
+
+    /// <summary>
+    /// 이 각도보다 정면에 가까우면 정반사로 포화시킨다(도).
+    ///
+    /// 광택 금속 비드의 정점 부근에서 실제로 관측된 현상이라 재현한다. 이 값이 0 이면
+    /// 정점에 데이터가 남아, 검출기가 <b>정점 없이도 동작하는지</b>를 검증할 수 없다.
+    /// </summary>
+    public double SpecularAngleDeg { get; set; } = 8;
+
+    /// <summary>이 각도보다 스치면 신호 부족으로 무효 처리한다(도). 비드 뿌리 쪽이 해당한다.</summary>
+    public double GrazingAngleDeg { get; set; } = 75;
+
+    /// <summary>각 면이 광축 수직면에서 기울어진 각(도). 45°면 두 면 사잇각이 90°. 쐐기 전용.</summary>
     public double HalfAngleDeg { get; set; } = 45;
 
     /// <summary>단일 프레임 거리 노이즈 σ(mm). 실측 8~12mm.</summary>

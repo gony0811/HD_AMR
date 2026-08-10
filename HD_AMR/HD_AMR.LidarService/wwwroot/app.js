@@ -198,9 +198,7 @@ function renderDetection(info) {
             ['방향', `(${fmt(r.direction.x, 3)}, ${fmt(r.direction.y, 3)}, ${fmt(r.direction.z, 3)})`],
             ['길이', `${fmt(r.lengthMm, 0)} mm`],
             ['피팅 RMS', `${fmt(r.rmsMm, 2)} mm`, r.rmsMm < 8 ? 'ok' : 'warn'],
-            ['평면 사잇각', `${fmt(info.planeAngleDeg, 1)}°`],
-            ['평면 A 인라이어', info.planeAInlierCount.toLocaleString()],
-            ['평면 B 인라이어', info.planeBInlierCount.toLocaleString()],
+            ...shapeRows(info),
             ['후보 점', info.candidateCount.toLocaleString()],
             ['검출 소요', `${fmt(info.detectMs, 0)} ms`],
         ]);
@@ -210,16 +208,47 @@ function renderDetection(info) {
     el.detectVerdict.textContent = info.failureDetail || '검출 실패.';
     el.detectVerdict.className = 'verdict bad';
 
-    // 실패했을 때도 어디까지 갔는지 보여준다. 후보 점이 0 인 것과 평면 두 개를 찾고
-    // 각도에서 걸린 것은 대응이 전혀 다르다.
+    // 실패했을 때도 어디까지 갔는지 보여준다. 후보 점이 0 인 것과, 평판은 찾았는데
+    // 비드를 못 찾은 것은 대응이 전혀 다르다.
     rows(el.detectStats, [
         ['실패 사유', info.failure || '—'],
         ['후보 점', info.candidateCount.toLocaleString()],
-        ['평면 A 인라이어', info.planeAInlierCount.toLocaleString()],
-        ['평면 B 인라이어', info.planeBInlierCount.toLocaleString()],
-        ['평면 사잇각', info.planeAngleDeg ? `${fmt(info.planeAngleDeg, 1)}°` : '—'],
+        ...shapeRows(info),
         ['검출 소요', `${fmt(info.detectMs, 0)} ms`],
     ]);
+}
+
+/**
+ * 검출 방식에 따라 다른 진단값을 낸다.
+ *
+ * 반원 비드에서 가장 중요한 건 추정 반경이다. 배경이나 엉뚱한 곡면을 잡으면 반경이
+ * 실물과 전혀 다르게 나오는데, 인라이어 수나 잔차는 그때도 정상으로 보인다.
+ */
+function shapeRows(info) {
+    if (!info.arc) {
+        return [
+            ['평면 사잇각', info.planeAngleDeg ? `${fmt(info.planeAngleDeg, 1)}°` : '—'],
+            ['평면 A 인라이어', info.planeAInlierCount.toLocaleString()],
+            ['평면 B 인라이어', info.planeBInlierCount.toLocaleString()],
+        ];
+    }
+
+    const a = info.arc;
+    const expected = 35;   // 실물 반경. 화면에서는 참고용 색 판정에만 쓴다.
+    const radiusOff = a.radiusMm ? Math.abs(a.radiusMm - expected) / expected : 1;
+
+    return [
+        ['추정 반경', a.radiusMm ? `${fmt(a.radiusMm, 1)} mm` : '—',
+            a.radiusMm ? (radiusOff < 0.2 ? 'ok' : 'warn') : ''],
+        ['원 중심 높이', a.radiusMm ? `${fmt(a.centerHeightMm, 1)} mm` : '—',
+            a.radiusMm && Math.abs(a.centerHeightMm) < 10 ? 'ok' : 'warn'],
+        ['원 피팅 RMS', a.circleRmsMm ? `${fmt(a.circleRmsMm, 2)} mm` : '—'],
+        ['평판 RMS', `${fmt(a.planeRmsMm, 2)} mm`],
+        ['평판 인라이어', info.planeAInlierCount.toLocaleString()],
+        ['비드 점', a.beadPointCount.toLocaleString(), a.beadPointCount > 300 ? 'ok' : 'warn'],
+        ['채택된 비드 점', info.planeBInlierCount.toLocaleString()],
+        ['최대 높이', `${fmt(a.maxHeightMm, 1)} mm`],
+    ];
 }
 
 // ── 설정 폼 ─────────────────────────────────────────────────────────────────

@@ -217,6 +217,7 @@ internal sealed class LivePreviewService : BackgroundService
             PlaneAInlierCount = detection?.PlaneAInliers?.Length ?? 0,
             PlaneBInlierCount = detection?.PlaneBInliers?.Length ?? 0,
             PlaneAngleDeg = Math.Round(detection?.PlaneAngleDeg ?? 0, 2),
+            Arc = detection?.Arc,
         };
 
         Volatile.Write(ref _latest, new PreviewFrame

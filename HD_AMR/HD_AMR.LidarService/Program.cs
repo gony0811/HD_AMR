@@ -55,7 +55,18 @@ else if (string.Equals(deviceKind, "Synthetic", StringComparison.OrdinalIgnoreCa
 else
     builder.Services.AddSingleton<ILidarDevice, NslLidarDevice>();
 
-builder.Services.AddSingleton<IRidgeDetector, RidgeDetector>();
+// 능선 검출 방식 선택.
+//   Arc      : 평판 위 반원 비드의 정점선 (실제 측정 대상의 형상)
+//   TwoPlane : 두 경사면의 교선 (뾰족한 마루용. 이 대상에는 맞지 않는다)
+//
+// 실물은 평판에 성형된 반경 35mm 반원 리브라, 교차하는 두 평면이 존재하지 않는다.
+// TwoPlane 을 실물에 돌리면 판 안에서 두 번째 평면을 못 찾고 배경을 집어 오검출을 낸다.
+var detectorKind = builder.Configuration["Lidar:Detector:Kind"] ?? "Arc";
+
+if (string.Equals(detectorKind, "TwoPlane", StringComparison.OrdinalIgnoreCase))
+    builder.Services.AddSingleton<IRidgeDetector, RidgeDetector>();
+else
+    builder.Services.AddSingleton<IRidgeDetector, ArcRidgeDetector>();
 
 builder.Services.AddSingleton<LidarSession>();
 
@@ -170,6 +181,17 @@ app.MapMethods(LidarApiRoutes.Detector, ["PATCH"],
         if (patch.MaxRmsMm is { } rms) options.MaxRmsMm = Math.Max(0.1, rms);
         if (patch.MinRidgeLengthMm is { } len) options.MinRidgeLengthMm = Math.Max(0, len);
         if (patch.MinSampleFraction is { } frac) options.MinSampleFraction = Math.Clamp(frac, 0, 1);
+
+        // 반원 비드 검출 전용
+        if (patch.PlaneInlierThresholdMm is { } pt) options.PlaneInlierThresholdMm = Math.Max(0.1, pt);
+        if (patch.BeadMinHeightMm is { } bmin) options.BeadMinHeightMm = Math.Max(0, bmin);
+        if (patch.BeadMaxHeightMm is { } bmax) options.BeadMaxHeightMm = Math.Max(1, bmax);
+        if (patch.BeadWidthMm is { } bw) options.BeadWidthMm = Math.Max(1, bw);
+        if (patch.BeadBandMarginMm is { } bm) options.BeadBandMarginMm = Math.Max(0, bm);
+        if (patch.MinBeadPoints is { } bp) options.MinBeadPoints = Math.Max(3, bp);
+        if (patch.ArcInlierThresholdMm is { } at) options.ArcInlierThresholdMm = Math.Max(0.1, at);
+        if (patch.ExpectedRadiusMm is { } er) options.ExpectedRadiusMm = Math.Max(0, er);
+        if (patch.RadiusTolerance is { } rt) options.RadiusTolerance = Math.Clamp(rt, 0.01, 1);
 
         return Results.Ok(options);
     });
