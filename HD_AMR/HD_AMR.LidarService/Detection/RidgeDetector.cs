@@ -383,40 +383,58 @@ internal sealed class RidgeDetectorOptions
 
     public int MaxInlierSamples { get; set; } = 500;
 
-    // ── 반원 비드 검출(ArcRidgeDetector) 전용 ────────────────────────────────
-    // 실제 측정 대상은 평판에 성형된 반경 35mm 반원 리브다. 두 평면 교선 방식은 이 형상에
-    // 맞지 않아(비드 양옆이 같은 평면이라 교선이 존재하지 않는다) 별도 검출기를 쓴다.
+    // ── 반원 코러게이션 검출(ArcRidgeDetector) 전용 ──────────────────────────
+    // 실제 측정 대상은 평판에 성형된 반경 35mm 반원 돌기다. 두 평면 교선 방식은 이 형상에
+    // 맞지 않아(코러게이션 양옆이 같은 평면이라 교선이 존재하지 않는다) 별도 검출기를 쓴다.
+    //
+    // ⚠ 이름을 "비드"로 쓰지 않는다. 이 시스템의 최종 목적이 용접이고, 용접 비드(수 mm)
+    //   검출이 들어오면 코러게이션 폭(70mm)과 이름이 정면 충돌한다. 자릿수가 달라서
+    //   잘못 읽으면 조용히 틀린 결과를 낸다.
+    //
     // 옵션 클래스를 나누지 않은 것은 깊이 게이트·시드처럼 공통 항목이 많고, 설정 API 와
     // 화면이 둘로 갈라지면 현장 튜닝이 번거로워지기 때문이다.
 
     /// <summary>
     /// 평판 평면의 인라이어 판정 거리(mm).
     ///
-    /// 교선 방식의 <see cref="InlierThresholdMm"/> 보다 좁게 잡는다. 넓으면 비드 뿌리까지
-    /// 평판으로 빨아들여 높이 계산이 무뎌지고, 비드 점군의 아래쪽이 잘려나간다.
+    /// 교선 방식의 <see cref="InlierThresholdMm"/> 보다 좁게 잡는다. 넓으면 코러게이션
+    /// 뿌리까지 평판으로 빨아들여 높이 계산이 무뎌지고, 점군의 아래쪽이 잘려나간다.
     /// </summary>
     public double PlaneInlierThresholdMm { get; set; } = 8.0;
 
-    /// <summary>비드로 인정할 평판 위 높이 하한(mm). 판 자체의 굴곡과 노이즈를 넘어야 한다.</summary>
-    public double BeadMinHeightMm { get; set; } = 5.0;
+    /// <summary>코러게이션으로 인정할 평판 위 높이 하한(mm). 판 자체의 굴곡과 노이즈를 넘어야 한다.</summary>
+    public double CorrugationMinHeightMm { get; set; } = 5.0;
 
-    /// <summary>비드 높이 상한(mm). 실물 돌출 35mm 에 여유를 더한 값. 이상점 차단용.</summary>
-    public double BeadMaxHeightMm { get; set; } = 60.0;
+    /// <summary>
+    /// 코러게이션 높이 상한(mm). 실물 돌출 35mm.
+    ///
+    /// 이 상한이 <b>받침 구조물과 배경을 걸러내는 역할</b>을 겸한다. 실측에서 판 뒤에 세워둔
+    /// 박스 때문에 평판 위 85~277mm 지점에 점이 잡혔는데, 상한이 없으면 그게 전부 후보가 된다.
+    /// </summary>
+    public double CorrugationMaxHeightMm { get; set; } = 60.0;
 
-    /// <summary>비드 폭(mm). 평면 내 직선 RANSAC 의 띠 폭을 정한다. 실물 70mm.</summary>
-    public double BeadWidthMm { get; set; } = 70.0;
+    /// <summary>코러게이션 폭(mm). 평면 내 직선 RANSAC 의 띠 폭을 정한다. 실물 70mm.</summary>
+    public double CorrugationWidthMm { get; set; } = 70.0;
 
-    /// <summary>비드 폭에 더하는 띠 여유(mm). 장착 기울기와 노이즈를 흡수한다.</summary>
-    public double BeadBandMarginMm { get; set; } = 15.0;
+    /// <summary>코러게이션 폭에 더하는 띠 여유(mm). 장착 기울기와 노이즈를 흡수한다.</summary>
+    public double CorrugationBandMarginMm { get; set; } = 15.0;
 
-    /// <summary>비드 하나로 인정할 최소 점 수.</summary>
-    public int MinBeadPoints { get; set; } = 300;
+    /// <summary>코러게이션 하나로 인정할 최소 점 수.</summary>
+    public int MinCorrugationPoints { get; set; } = 300;
+
+    /// <summary>
+    /// 찾을 코러게이션 후보의 최대 개수.
+    ///
+    /// 실물 판(1000mm)에 피치 370mm 면 2~3개가 보인다. 여유를 두되 무한정 훑지는 않는다 —
+    /// 후보를 하나 찾을 때마다 RANSAC 을 한 번 더 돌리므로 검출 시간이 비례해 늘어난다.
+    /// </summary>
+    public int MaxCandidates { get; set; } = 5;
 
     /// <summary>단면 원 피팅의 인라이어 판정 거리(mm).</summary>
     public double ArcInlierThresholdMm { get; set; } = 8.0;
 
     /// <summary>
-    /// 실물 비드 반경(mm). 0 이면 검증하지 않는다.
+    /// 실물 코러게이션 반경(mm). 0 이면 검증하지 않는다.
     ///
     /// 이 검사가 이 검출기의 핵심 안전장치다. 배경이나 엉뚱한 곡면을 잡으면 반경이 전혀
     /// 다르게 나오는데, 인라이어 수와 잔차는 그때도 정상으로 보인다.

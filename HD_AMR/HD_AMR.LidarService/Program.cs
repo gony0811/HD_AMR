@@ -82,6 +82,21 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<LivePreviewService
 
 var app = builder.Build();
 
+// 기동 시 실제로 바인딩된 초기 설정을 남긴다. "설정 파일을 고쳤는데 반영이 안 된다"는
+// 상황에서 파일을 아무리 들여다봐도 답이 안 나오는데, 저널에 이 한 줄이 있으면 즉시 갈린다.
+// 특히 ROI 는 값이 없으면 전체 화면으로 도는데 그 상태가 겉으로는 정상처럼 보인다.
+{
+    var deviceOptions = app.Services.GetRequiredService<NslDeviceOptions>();
+    var roi = deviceOptions.InitialConfig?.Roi;
+
+    app.Logger.LogInformation(
+        "초기 설정: device={Kind}, detector={Detector}, 노출={Exposure}us, minAmp={MinAmp}, ROI={Roi}",
+        deviceKind, detectorKind,
+        deviceOptions.InitialConfig?.IntegrationTime3D,
+        deviceOptions.InitialConfig?.MinAmplitude,
+        roi is null ? "전체 화면" : $"({roi.XMin},{roi.YMin})-({roi.XMax},{roi.YMax})");
+}
+
 var session = app.Services.GetRequiredService<LidarSession>();
 app.Lifetime.ApplicationStopping.Register(() => session.DisposeAsync().AsTask().GetAwaiter().GetResult());
 
@@ -167,7 +182,7 @@ app.MapMethods(LidarApiRoutes.PreviewOptions, ["PATCH"],
 // 옮겨 적어야 살아남는다 — 화면에서 맞춘 값이 슬그머니 영구화되면, 나중에 왜 이렇게
 // 동작하는지 설정 파일만 보고는 알 수 없게 된다.
 
-app.MapGet(LidarApiRoutes.Detector, (RidgeDetectorOptions options) => Results.Ok(options));
+app.MapGet(LidarApiRoutes.Detector, (RidgeDetectorOptions options) => DetectorView(options));
 
 app.MapMethods(LidarApiRoutes.Detector, ["PATCH"],
     (DetectorOptionsPatch patch, RidgeDetectorOptions options) =>
@@ -182,18 +197,19 @@ app.MapMethods(LidarApiRoutes.Detector, ["PATCH"],
         if (patch.MinRidgeLengthMm is { } len) options.MinRidgeLengthMm = Math.Max(0, len);
         if (patch.MinSampleFraction is { } frac) options.MinSampleFraction = Math.Clamp(frac, 0, 1);
 
-        // 반원 비드 검출 전용
+        // 반원 코러게이션 검출 전용
         if (patch.PlaneInlierThresholdMm is { } pt) options.PlaneInlierThresholdMm = Math.Max(0.1, pt);
-        if (patch.BeadMinHeightMm is { } bmin) options.BeadMinHeightMm = Math.Max(0, bmin);
-        if (patch.BeadMaxHeightMm is { } bmax) options.BeadMaxHeightMm = Math.Max(1, bmax);
-        if (patch.BeadWidthMm is { } bw) options.BeadWidthMm = Math.Max(1, bw);
-        if (patch.BeadBandMarginMm is { } bm) options.BeadBandMarginMm = Math.Max(0, bm);
-        if (patch.MinBeadPoints is { } bp) options.MinBeadPoints = Math.Max(3, bp);
+        if (patch.CorrugationMinHeightMm is { } cmin) options.CorrugationMinHeightMm = Math.Max(0, cmin);
+        if (patch.CorrugationMaxHeightMm is { } cmax) options.CorrugationMaxHeightMm = Math.Max(1, cmax);
+        if (patch.CorrugationWidthMm is { } cw) options.CorrugationWidthMm = Math.Max(1, cw);
+        if (patch.CorrugationBandMarginMm is { } cb) options.CorrugationBandMarginMm = Math.Max(0, cb);
+        if (patch.MinCorrugationPoints is { } cp) options.MinCorrugationPoints = Math.Max(3, cp);
+        if (patch.MaxCandidates is { } mc) options.MaxCandidates = Math.Clamp(mc, 1, 20);
         if (patch.ArcInlierThresholdMm is { } at) options.ArcInlierThresholdMm = Math.Max(0.1, at);
         if (patch.ExpectedRadiusMm is { } er) options.ExpectedRadiusMm = Math.Max(0, er);
         if (patch.RadiusTolerance is { } rt) options.RadiusTolerance = Math.Clamp(rt, 0.01, 1);
 
-        return Results.Ok(options);
+        return DetectorView(options);
     });
 
 // Jetson 자체 모니터링 프론트엔드. wwwroot 의 정적 파일로 서비스한다.
@@ -208,3 +224,9 @@ static IResult Png(byte[]? bytes) =>
     bytes is null
         ? Results.StatusCode(StatusCodes.Status503ServiceUnavailable)
         : Results.Bytes(bytes, "image/png");
+
+// 검출기 설정 응답에 어느 방식으로 도는지(kind)를 함께 싣는다. 옵션 값만으로는 Arc 인지
+// TwoPlane 인지 구분할 수 없어서, 파라미터를 아무리 맞춰도 반영이 안 되는 상황에서
+// 원인을 좁힐 수 없다.
+IResult DetectorView(RidgeDetectorOptions options) =>
+    Results.Ok(new { kind = detectorKind, options });

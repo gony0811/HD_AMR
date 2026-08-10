@@ -29,6 +29,23 @@ public sealed record MeasureRequest
     public string? Profile { get; init; }
 
     /// <summary>
+    /// 목표 위치(센서 좌표계, mm). 여러 코러게이션이 시야에 들어올 때 <b>어느 것을 잴지</b>
+    /// 정하는 힌트다. 가장 가까운 후보를 골라 <see cref="MeasureResponse.Ridge"/> 로 낸다.
+    ///
+    /// <b>왜 필요한가.</b> 대상 판에는 코러게이션이 370mm 간격으로 여러 개 있고, 검출기는
+    /// 그중 어느 것이 "그" 코러게이션인지 알 방법이 없다. 크기가 비슷해서 프레임마다 다른
+    /// 것이 선택되는 현상이 실측에서 확인됐다(10회 측정이 세 덩어리로 갈렸다). 코봇은 어디를
+    /// 용접할지 이미 알고 있으므로, 그 정보를 여기로 넘기는 것이 가장 확실하다.
+    ///
+    /// null 이면 <b>광축에 가장 가까운</b> 후보를 고른다 — 조준한 것을 잰다는 뜻이라
+    /// 운영자의 직관과 맞고, 프레임마다 흔들리지 않는다.
+    ///
+    /// 후보 전체는 <see cref="MeasureResponse.Candidates"/> 에 실려 오므로, 이 힌트를 쓰지 않고
+    /// 소비 측에서 직접 고르는 것도 가능하다.
+    /// </summary>
+    public Vec3? Target { get; init; }
+
+    /// <summary>
     /// true 면 응답에 피팅 인라이어 점군(<see cref="MeasureResponse.Samples"/>)을 포함한다.
     /// 진단용이며 응답 크기가 커지므로 평상시에는 끈다.
     /// </summary>
@@ -61,8 +78,23 @@ public sealed record MeasureResponse
     /// </summary>
     public required LidarFrame Frame { get; init; }
 
-    /// <summary>검출된 능선. <see cref="Valid"/> 가 true 일 때만 채워진다.</summary>
+    /// <summary>
+    /// 선택된 능선. <see cref="Valid"/> 가 true 일 때만 채워진다.
+    /// 선택 규칙은 <see cref="MeasureRequest.Target"/> 참고.
+    /// </summary>
     public RidgeLine? Ridge { get; init; }
+
+    /// <summary>
+    /// 검출된 <b>모든</b> 코러게이션 후보. <see cref="Ridge"/> 도 이 안에 들어 있다.
+    ///
+    /// 서비스가 하나를 고르지만 그 선택이 항상 옳다고 볼 수는 없다 — 어느 코러게이션을
+    /// 용접할지는 작업 계획이 정하는 것이지 기하만으로 결정되지 않는다. 후보를 통째로
+    /// 넘겨 소비 측이 다시 판단할 수 있게 한다.
+    ///
+    /// 개수가 2 이상이면 <see cref="MeasureRequest.Target"/> 을 주지 않는 한 프레임마다
+    /// 다른 것이 선택될 수 있다는 뜻이므로, 소비 측은 이 개수를 확인하는 편이 안전하다.
+    /// </summary>
+    public IReadOnlyList<RidgeLine>? Candidates { get; init; }
 
     /// <summary>검출 신뢰도 0.0~1.0. 인라이어 비율과 피팅 잔차로부터 서비스가 산출한다.</summary>
     public double Confidence { get; init; }

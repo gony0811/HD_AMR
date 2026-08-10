@@ -68,8 +68,14 @@ internal sealed record PreviewInfo
     public int PlaneBInlierCount { get; init; }
     public double PlaneAngleDeg { get; init; }
 
-    /// <summary>반원 비드 검출의 중간값. 다른 검출 방식에서는 null.</summary>
+    /// <summary>반원 코러게이션 검출의 중간값. 다른 검출 방식에서는 null.</summary>
     public Detection.ArcDiagnostics? Arc { get; init; }
+
+    /// <summary>
+    /// 검출된 코러게이션 후보 수. 2 이상이면 목표 위치를 주지 않는 한 프레임마다 다른 것이
+    /// 선택될 수 있다는 뜻이라, 화면에서 바로 보여야 한다.
+    /// </summary>
+    public int CandidateRidgeCount { get; init; }
 }
 
 internal sealed record PreviewPixelCounts
@@ -155,13 +161,14 @@ internal sealed record DetectorOptionsPatch
     public double? MinRidgeLengthMm { get; init; }
     public double? MinSampleFraction { get; init; }
 
-    // 반원 비드 검출 전용
+    // 반원 코러게이션 검출 전용
     public double? PlaneInlierThresholdMm { get; init; }
-    public double? BeadMinHeightMm { get; init; }
-    public double? BeadMaxHeightMm { get; init; }
-    public double? BeadWidthMm { get; init; }
-    public double? BeadBandMarginMm { get; init; }
-    public int? MinBeadPoints { get; init; }
+    public double? CorrugationMinHeightMm { get; init; }
+    public double? CorrugationMaxHeightMm { get; init; }
+    public double? CorrugationWidthMm { get; init; }
+    public double? CorrugationBandMarginMm { get; init; }
+    public int? MinCorrugationPoints { get; init; }
+    public int? MaxCandidates { get; init; }
     public double? ArcInlierThresholdMm { get; init; }
     public double? ExpectedRadiusMm { get; init; }
     public double? RadiusTolerance { get; init; }

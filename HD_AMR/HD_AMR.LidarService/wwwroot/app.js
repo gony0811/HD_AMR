@@ -237,7 +237,13 @@ function shapeRows(info) {
     const expected = 35;   // 실물 반경. 화면에서는 참고용 색 판정에만 쓴다.
     const radiusOff = a.radiusMm ? Math.abs(a.radiusMm - expected) / expected : 1;
 
+    // 후보가 여럿이면 목표 위치를 주지 않는 한 프레임마다 다른 것이 선택될 수 있다.
+    // 이게 실측에서 재현성을 무너뜨린 원인이라 눈에 띄게 표시한다.
+    const candidates = info.candidateRidgeCount || 0;
+
     return [
+        ['코러게이션 후보', candidates ? `${candidates}개` : '—',
+            candidates === 1 ? 'ok' : candidates > 1 ? 'warn' : ''],
         ['추정 반경', a.radiusMm ? `${fmt(a.radiusMm, 1)} mm` : '—',
             a.radiusMm ? (radiusOff < 0.2 ? 'ok' : 'warn') : ''],
         ['원 중심 높이', a.radiusMm ? `${fmt(a.centerHeightMm, 1)} mm` : '—',
@@ -245,8 +251,9 @@ function shapeRows(info) {
         ['원 피팅 RMS', a.circleRmsMm ? `${fmt(a.circleRmsMm, 2)} mm` : '—'],
         ['평판 RMS', `${fmt(a.planeRmsMm, 2)} mm`],
         ['평판 인라이어', info.planeAInlierCount.toLocaleString()],
-        ['비드 점', a.beadPointCount.toLocaleString(), a.beadPointCount > 300 ? 'ok' : 'warn'],
-        ['채택된 비드 점', info.planeBInlierCount.toLocaleString()],
+        ['코러게이션 점', a.corrugationPointCount.toLocaleString(),
+            a.corrugationPointCount > 300 ? 'ok' : 'warn'],
+        ['후보 인라이어 합', info.planeBInlierCount.toLocaleString()],
         ['최대 높이', `${fmt(a.maxHeightMm, 1)} mm`],
     ];
 }

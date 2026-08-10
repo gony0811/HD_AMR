@@ -254,6 +254,18 @@ internal sealed class LidarSession : IAsyncDisposable
                 result.FailureDetail ?? "능선 검출 실패.", quality);
         }
 
+        // 목표 위치가 주어지면 그에 가장 가까운 후보로 바꾼다. 대상 판에는 코러게이션이
+        // 여러 개 있는데 크기가 비슷해서, 기하만으로는 매번 같은 것을 고를 수 없다 —
+        // 실측에서 10회 측정이 세 덩어리로 갈렸다. 어느 것을 용접할지는 코봇이 안다.
+        if (request.Target is { } target) result = result.SelectNearest(target);
+
+        if (result.Candidates is { Count: > 1 } && request.Target is null)
+        {
+            _log.LogInformation(
+                "코러게이션 후보가 {Count}개다. 목표 위치(MeasureRequest.Target) 없이 광축 최근접을 골랐다.",
+                result.Candidates.Count);
+        }
+
         return new MeasureResponse
         {
             Seq = seq,
@@ -261,6 +273,7 @@ internal sealed class LidarSession : IAsyncDisposable
             Valid = true,
             Frame = LidarFrame.SensorOptical,
             Ridge = result.Ridge,
+            Candidates = result.Candidates?.Select(c => c.Ridge).ToArray(),
             Confidence = result.Confidence,
             Quality = quality,
             Samples = request.IncludeSamples ? result.Inliers : null,
