@@ -224,6 +224,38 @@ function renderDetection(info) {
  * 반원 비드에서 가장 중요한 건 추정 반경이다. 배경이나 엉뚱한 곡면을 잡으면 반경이
  * 실물과 전혀 다르게 나오는데, 인라이어 수나 잔차는 그때도 정상으로 보인다.
  */
+/**
+ * 가로 위치 분포를 막대로 그린다. 무리 분리의 입력이라, 봉우리가 몇 개인지·골이 얼마나
+ * 깊은지를 숫자로 추측하지 않고 바로 볼 수 있다. 무리에 들어간 칸은 색으로 구분해서
+ * "분리가 분포와 맞게 됐는가"를 한눈에 대조한다.
+ */
+function renderHistogram(hist, clusters) {
+    const box = $('histogram');
+    if (!hist || !hist.counts || !hist.counts.length) {
+        box.hidden = true;
+        return;
+    }
+
+    box.hidden = false;
+
+    const peak = Math.max(...hist.counts, 1);
+    const ranges = (clusters || []).map(c => [c.centerMm - c.widthMm / 2, c.centerMm + c.widthMm / 2]);
+
+    box.innerHTML = '';
+    hist.counts.forEach((n, k) => {
+        const mm = hist.startMm + (k + 0.5) * hist.binWidthMm;
+        const bar = document.createElement('i');
+        bar.style.height = `${Math.max(1, n * 100 / peak)}%`;
+        if (ranges.some(([lo, hi]) => mm >= lo && mm <= hi)) bar.className = 'in';
+        bar.title = `${mm.toFixed(0)} mm — ${n} 점`;
+        box.append(bar);
+    });
+
+    $('histogram-legend').textContent =
+        `${hist.startMm.toFixed(0)} ~ ${(hist.startMm + hist.counts.length * hist.binWidthMm).toFixed(0)} mm, ` +
+        `칸 ${hist.binWidthMm.toFixed(0)}mm, 최대 ${peak}점`;
+}
+
 function shapeRows(info) {
     if (!info.arc) {
         return [
@@ -236,6 +268,8 @@ function shapeRows(info) {
     const a = info.arc;
     const expected = 35;   // 실물 반경. 화면에서는 참고용 색 판정에만 쓴다.
     const radiusOff = a.radiusMm ? Math.abs(a.radiusMm - expected) / expected : 1;
+
+    renderHistogram(a.histogram, a.clusters);
 
     // 후보가 여럿이면 목표 위치를 주지 않는 한 프레임마다 다른 것이 선택될 수 있다.
     // 이게 실측에서 재현성을 무너뜨린 원인이라 눈에 띄게 표시한다.

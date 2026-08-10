@@ -149,7 +149,24 @@ internal sealed record ArcDiagnostics
     /// 정상적으로는 2 이상이 나온다.
     /// </summary>
     public double AxisScore { get; init; }
+
+    /// <summary>
+    /// 가로 위치 분포 원본. 무리 분리의 <b>입력</b>이다.
+    ///
+    /// 무리 결과만 보면 "왜 그렇게 갈렸는지"를 추측할 수밖에 없다. 실제로 무리 분리가 두 번
+    /// 무너졌는데(간격 기준, 평균 임계) 두 번 다 원인은 이 분포에 있었고, 결과값만으로는
+    /// 짚을 수 없었다.
+    ///
+    /// 분리 방식이 바뀌어도 분포 자체는 바뀌지 않으므로, 방식을 갈아엎은 뒤에도 같은
+    /// 데이터로 이전 결과와 대조할 수 있다.
+    /// </summary>
+    public ArcHistogram? Histogram { get; init; }
 }
+
+/// <summary>
+/// 가로 위치 히스토그램. 칸 <c>k</c> 는 <c>StartMm + k * BinWidthMm</c> 에서 시작한다.
+/// </summary>
+internal sealed record ArcHistogram(double BinWidthMm, double StartMm, int[] Counts);
 
 /// <summary>가로 위치로 가른 무리 하나의 요약.</summary>
 internal sealed record ClusterSummary(double CenterMm, double WidthMm, int Points);

@@ -30,6 +30,9 @@ internal sealed class ArcRidgeDetector : IRidgeDetector
     /// <summary>방향 훑기에 쓸 최대 표본 점 수. 점수 비교만 하므로 전수가 필요 없다.</summary>
     private const int AxisSampleMax = 3000;
 
+    /// <summary>진단 히스토그램의 최대 칸 수. 응답 크기 상한이다.</summary>
+    private const int MaxHistogramBins = 300;
+
     private readonly RidgeDetectorOptions _options;
     private readonly ILogger<ArcRidgeDetector> _log;
 
@@ -195,6 +198,7 @@ internal sealed class ArcRidgeDetector : IRidgeDetector
                 ClusterCount = clusters.Count,
                 Clusters = summaries,
                 AxisScore = axisScore,
+                Histogram = BuildHistogram(w, raisedArray),
             },
         };
 
@@ -257,6 +261,7 @@ internal sealed class ArcRidgeDetector : IRidgeDetector
                 ClusterCount = baseline.Arc.ClusterCount,
                 Clusters = baseline.Arc.Clusters,
                 AxisScore = baseline.Arc.AxisScore,
+                Histogram = baseline.Arc.Histogram,
             },
             Candidates = found,
             // 오버레이에는 후보 전부를 칠한다. 하나만 칠하면 "고를 수 있는 게 여럿"이라는
@@ -492,6 +497,40 @@ internal sealed class ArcRidgeDetector : IRidgeDetector
         }
 
         return (bestA, bestB, Math.Round(best, 2));
+    }
+
+    /// <summary>
+    /// 가로 위치 분포를 히스토그램으로 만든다. 계산에는 쓰지 않고 진단으로만 내보낸다.
+    ///
+    /// 칸 폭은 코러게이션 폭의 1/7 로 잡는다 — 대상이 바뀌어도 코러게이션 하나가 일곱 칸쯤
+    /// 차지하게 되어, 봉우리 모양과 골 깊이를 같은 눈으로 읽을 수 있다.
+    /// </summary>
+    private ArcHistogram BuildHistogram(double[] w, int[] points)
+    {
+        double min = double.MaxValue, max = double.MinValue;
+        foreach (var i in points)
+        {
+            if (w[i] < min) min = w[i];
+            if (w[i] > max) max = w[i];
+        }
+
+        var binWidth = Math.Max(2.0, _options.CorrugationWidthMm / 7);
+        var span = Math.Max(binWidth, max - min);
+
+        // 응답이 비대해지지 않도록 칸 수를 묶는다. 깊이 게이트가 넓게 열려 배경까지
+        // 들어오면 가로 범위가 수 미터가 될 수 있다.
+        var binCount = (int)Math.Ceiling(span / binWidth) + 1;
+        if (binCount > MaxHistogramBins)
+        {
+            binWidth = span / MaxHistogramBins;
+            binCount = MaxHistogramBins + 1;
+        }
+
+        var counts = new int[binCount];
+        foreach (var i in points)
+            counts[Math.Clamp((int)((w[i] - min) / binWidth), 0, binCount - 1)]++;
+
+        return new ArcHistogram(Math.Round(binWidth, 2), Math.Round(min, 1), counts);
     }
 
     /// <summary>점들의 2차원 주성분 방향. 각도 훑기의 눈금 오차를 없애는 마무리에 쓴다.</summary>

@@ -158,6 +158,33 @@ aside { display: grid; gap: 16px; }
 .grid b.warn { color: var(--warn); }
 .grid b.bad { color: var(--bad); }
 
+/*
+ * 가로 위치 분포. 무리 분리의 입력을 그대로 보여준다 — 봉우리가 몇 개이고 사이의 골이
+ * 얼마나 깊은지는 무리 결과 숫자만으로는 알 수 없고, 실제로 그것 때문에 분리가 두 번
+ * 무너졌다.
+ */
+.histogram {
+    display: flex;
+    align-items: flex-end;
+    gap: 1px;
+    height: 90px;
+    margin-top: 6px;
+    padding: 4px;
+    background: #0a0d13;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+}
+
+.histogram i {
+    flex: 1 1 0;
+    min-width: 0;
+    background: var(--line);
+    border-radius: 1px 1px 0 0;
+}
+
+/* 무리에 포함된 칸. 분리가 분포와 맞는지 바로 대조된다. */
+.histogram i.in { background: var(--accent); }
+
 .verdict { margin: 0 0 12px; font-size: 13px; font-weight: 600; }
 .verdict.ok  { color: var(--ok); }
 .verdict.bad { color: var(--warn); }
