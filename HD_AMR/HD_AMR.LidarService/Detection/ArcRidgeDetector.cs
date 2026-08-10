@@ -549,8 +549,19 @@ internal sealed class ArcRidgeDetector : IRidgeDetector
         }
 
         var theta = 0.5 * Math.Atan2(2 * cab, caa - cbb);
-        return (Math.Cos(theta), Math.Sin(theta));
+        return Canonical(Math.Cos(theta), Math.Sin(theta));
     }
+
+    /// <summary>
+    /// 방향의 ± 부호를 고정한다.
+    ///
+    /// 직선의 방향은 본질적으로 두 가지로 표현되는데, 어느 쪽이 나오느냐에 따라 가로 위치가
+    /// 통째로 부호를 바꾼다. 계산 결과는 같지만 <b>진단값이 회차마다 뒤집혀 비교가 안 된다</b> —
+    /// 실측에서 히스토그램 시작 위치가 −389 와 −59 사이를 오갔는데, 축이 흔들린 게 아니라
+    /// 부호가 뒤집힌 것이었다.
+    /// </summary>
+    private static (double DirA, double DirB) Canonical(double dirA, double dirB) =>
+        dirB < 0 || (dirB == 0 && dirA < 0) ? (-dirA, -dirB) : (dirA, dirB);
 
     /// <summary>
     /// 가로 위치로 코러게이션을 가른다. <b>간격이 아니라 밀도</b>로 나눈다.
@@ -571,6 +582,18 @@ internal sealed class ArcRidgeDetector : IRidgeDetector
     {
         // 코러게이션 하나가 담길 창의 폭. 실물 폭에 장착 기울기와 노이즈 여유를 더한 값이다.
         var window = _options.CorrugationWidthMm + 2 * _options.CorrugationBandMarginMm;
+
+        // 다음 창을 찾을 때 이미 뗀 창에서 최소 이만큼 떨어져야 한다.
+        //
+        // <b>이게 없으면 같은 코러게이션을 두 번 센다.</b> 봉우리 폭이 창보다 넓으면 창을
+        // 떼어낸 뒤 어깨가 남고, 그 어깨가 바로 옆 창으로 채택된다. 실측에서 무리 간격 11개
+        // 중 10개가 창 폭(100mm)과 정확히 일치했다 — 피치 370mm 인 실물에서 나올 수 없는 값이다.
+        //
+        // 물리적으로 두 코러게이션은 피치만큼 떨어져 있으므로, 그 절반보다 가까운 두 봉우리는
+        // 같은 것의 다른 부분이다.
+        var separation = _options.CorrugationPitchMm > 0
+            ? Math.Max(window, _options.CorrugationPitchMm / 2)
+            : window;
 
         var pool = points.OrderBy(i => w[i]).ToList();
         var clusters = new List<List<int>>();
@@ -596,8 +619,13 @@ internal sealed class ArcRidgeDetector : IRidgeDetector
             if (tallest == 0) tallest = bestCount;
             else if (bestCount < tallest * _options.PeakRelativeThreshold) break;
 
-            clusters.Add(pool.GetRange(bestLo, bestHi - bestLo + 1));
-            pool.RemoveRange(bestLo, bestHi - bestLo + 1);
+            var taken = pool.GetRange(bestLo, bestHi - bestLo + 1);
+            clusters.Add(taken);
+
+            // 창 안의 점만 빼면 어깨가 남아 바로 옆이 다음 봉우리가 된다. 중심에서
+            // separation 안쪽을 통째로 비워야 다음 후보가 진짜 다른 코러게이션이 된다.
+            var center = (w[taken[0]] + w[taken[^1]]) / 2;
+            pool.RemoveAll(i => Math.Abs(w[i] - center) < separation);
         }
 
         return clusters;

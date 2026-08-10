@@ -204,6 +204,7 @@ app.MapMethods(LidarApiRoutes.Detector, ["PATCH"],
         if (patch.CorrugationMaxHeightMm is { } cmax) options.CorrugationMaxHeightMm = Math.Max(1, cmax);
         if (patch.CorrugationWidthMm is { } cw) options.CorrugationWidthMm = Math.Max(1, cw);
         if (patch.CorrugationBandMarginMm is { } cb) options.CorrugationBandMarginMm = Math.Max(0, cb);
+        if (patch.CorrugationPitchMm is { } cpitch) options.CorrugationPitchMm = Math.Max(0, cpitch);
         if (patch.MinCorrugationPoints is { } cp) options.MinCorrugationPoints = Math.Max(3, cp);
         if (patch.MinArcPoints is { } ap) options.MinArcPoints = Math.Max(3, ap);
         if (patch.PeakRelativeThreshold is { } prt) options.PeakRelativeThreshold = Math.Clamp(prt, 0.01, 1);
