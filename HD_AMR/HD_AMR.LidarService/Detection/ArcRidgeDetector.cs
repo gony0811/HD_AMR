@@ -323,18 +323,55 @@ internal sealed class ArcRidgeDetector : IRidgeDetector
             }
         }
 
-        if (circle.RmsMm > _options.MaxRmsMm)
+        // ── 반경을 고정하고 중심만 다시 맞춘다 ──────────────────────────────
+        // 위 자유 적합은 "이게 코러게이션인가"를 가리는 검증용이다. 정점 위치를 낼 때는
+        // 반경을 미지수로 두면 안 된다 — 정점 = 중심 + 반경이라 반경 오차가 그대로 정점
+        // 오차가 되고, 실측에서 그것이 깊이 방향 26mm 흔들림으로 나타났다.
+        var fitted = circle.Circle;
+        var inliers = circle.Inliers;
+        var rms = circle.RmsMm;
+
+        if (_options.LockRadiusToExpected && _options.ExpectedRadiusMm > 0)
         {
-            reason = $"원 피팅 잔차 RMS 가 {circle.RmsMm:F1}mm 로 허용치 {_options.MaxRmsMm}mm 를 넘었다.";
+            fitted = CircleFit.FixedRadius(lateral, h, inliers, _options.ExpectedRadiusMm, circle.Circle);
+
+            // 원이 움직였으니 인라이어와 잔차를 다시 판정한다. 여기서 잔차가 커지면 형상이
+            // 실물 반경의 원호가 아니라는 뜻이라, 자유 적합의 반경 검사보다 강한 증거다.
+            var refreshed = new List<int>(inliers.Length);
+            double sumSq = 0;
+
+            foreach (var i in stripInliers)
+            {
+                var d = CircleFit.Residual(fitted, lateral[i], h[i]);
+                if (d > _options.ArcInlierThresholdMm) continue;
+                refreshed.Add(i);
+                sumSq += d * d;
+            }
+
+            if (refreshed.Count < _options.MinArcPoints)
+            {
+                reason =
+                    $"반경을 {_options.ExpectedRadiusMm}mm 로 고정하니 인라이어가 {refreshed.Count}개로 " +
+                    $"줄었다(최소 {_options.MinArcPoints}개). 형상이 실물 원호와 맞지 않는다.";
+                return null;
+            }
+
+            inliers = refreshed.ToArray();
+            rms = Math.Sqrt(sumSq / refreshed.Count);
+        }
+
+        if (rms > _options.MaxRmsMm)
+        {
+            reason = $"원 피팅 잔차 RMS 가 {rms:F1}mm 로 허용치 {_options.MaxRmsMm}mm 를 넘었다.";
             return null;
         }
 
         // 정점은 원 중심에서 판 바깥쪽(센서 쪽)으로 반경만큼 간 점이다. 정점 자체에 유효
         // 픽셀이 없어도 여기서 나온다 — 이 검출기를 만든 이유가 그것이다.
-        var apexW = circle.Circle.CenterX;
-        var apexH = circle.Circle.CenterY + circle.Circle.Radius;
+        var apexW = fitted.CenterX;
+        var apexH = fitted.CenterY + fitted.Radius;
 
-        var (sMin, sMax) = Extent(s, circle.Inliers);
+        var (sMin, sMax) = Extent(s, inliers);
         var lengthMm = sMax - sMin;
 
         if (lengthMm < _options.MinRidgeLengthMm)
@@ -376,21 +413,26 @@ internal sealed class ArcRidgeDetector : IRidgeDetector
             Start = start,
             End = end,
             LengthMm = lengthMm,
-            InlierCount = circle.Inliers.Length,
-            RmsMm = circle.RmsMm,
+            InlierCount = inliers.Length,
+            RmsMm = rms,
         };
 
         var arc = new ArcDiagnostics
         {
+            // 자유 적합의 반경을 그대로 보고한다. 정점 계산에는 고정 반경을 쓰지만, 이 값이
+            // "정말 코러게이션인가"를 가리는 진단이라 감추면 안 된다. 실물과 크게 다르면
+            // 잔차가 통과하더라도 대상을 의심해야 한다.
             RadiusMm = Math.Round(circle.Circle.Radius, 2),
-            CenterHeightMm = Math.Round(circle.Circle.CenterY, 2),
-            CircleRmsMm = Math.Round(circle.RmsMm, 2),
+            RadiusLocked = _options.LockRadiusToExpected && _options.ExpectedRadiusMm > 0,
+            CenterHeightMm = Math.Round(fitted.CenterY, 2),
+            CircleRmsMm = Math.Round(rms, 2),
             PlaneRmsMm = Math.Round(sheet.RmsMm, 2),
             CorrugationPointCount = stripInliers.Length,
             MaxHeightMm = Math.Round(apexH, 1),
         };
 
-        return new RidgeCandidate(ridge, Confidence(circle, sheet, stripInliers.Length), circle.Inliers, arc);
+        return new RidgeCandidate(
+            ridge, Confidence(circle.Circle.Radius, rms, inliers.Length, sheet, stripInliers.Length), inliers, arc);
 
         Vec3 ApexAt(double along)
         {
@@ -689,16 +731,18 @@ internal sealed class ArcRidgeDetector : IRidgeDetector
     /// 반경 일치도의 비중이 가장 크다 — 이 형상에서 "엉뚱한 것을 잡았는가"를 가르는 가장
     /// 강한 신호이기 때문이다.
     /// </summary>
-    private double Confidence(CircleFitResult circle, PlaneFitResult sheet, int stripPoints)
+    private double Confidence(double freeRadiusMm, double rmsMm, int inliers, PlaneFitResult sheet, int stripPoints)
     {
-        var fit = Math.Clamp(1.0 - circle.RmsMm / _options.MaxRmsMm, 0, 1);
-        var coverage = Math.Clamp((double)circle.Inliers.Length / Math.Max(stripPoints, 1), 0, 1);
+        var fit = Math.Clamp(1.0 - rmsMm / _options.MaxRmsMm, 0, 1);
+        var coverage = Math.Clamp((double)inliers / Math.Max(stripPoints, 1), 0, 1);
         var planeQuality = Math.Clamp(1.0 - sheet.RmsMm / _options.PlaneInlierThresholdMm, 0, 1);
 
+        // 반경을 고정해 쓰더라도 신뢰도에는 자유 추정치를 반영한다. 고정값은 우리가 넣은
+        // 가정이라 그것으로 신뢰도를 매기면 항상 만점이 나온다.
         var radius = 1.0;
         if (_options.ExpectedRadiusMm > 0)
         {
-            var error = Math.Abs(circle.Circle.Radius - _options.ExpectedRadiusMm) / _options.ExpectedRadiusMm;
+            var error = Math.Abs(freeRadiusMm - _options.ExpectedRadiusMm) / _options.ExpectedRadiusMm;
             radius = Math.Clamp(1.0 - error / Math.Max(_options.RadiusTolerance, 1e-6), 0, 1);
         }
 

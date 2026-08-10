@@ -176,4 +176,5 @@ internal sealed record DetectorOptionsPatch
     public double? ArcInlierThresholdMm { get; init; }
     public double? ExpectedRadiusMm { get; init; }
     public double? RadiusTolerance { get; init; }
+    public bool? LockRadiusToExpected { get; init; }
 }

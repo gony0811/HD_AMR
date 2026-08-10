@@ -212,6 +212,7 @@ app.MapMethods(LidarApiRoutes.Detector, ["PATCH"],
         if (patch.ArcInlierThresholdMm is { } at) options.ArcInlierThresholdMm = Math.Max(0.1, at);
         if (patch.ExpectedRadiusMm is { } er) options.ExpectedRadiusMm = Math.Max(0, er);
         if (patch.RadiusTolerance is { } rt) options.RadiusTolerance = Math.Clamp(rt, 0.01, 1);
+        if (patch.LockRadiusToExpected is { } lockR) options.LockRadiusToExpected = lockR;
 
         return DetectorView(options);
     });

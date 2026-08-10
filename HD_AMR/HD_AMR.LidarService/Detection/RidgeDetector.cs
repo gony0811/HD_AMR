@@ -492,6 +492,26 @@ internal sealed class RidgeDetectorOptions
     /// </summary>
     public double ExpectedRadiusMm { get; set; } = 35.0;
 
-    /// <summary>반경 허용 오차 비율(0~1). 0.4 면 실물 35mm 에 대해 21~49mm 를 통과시킨다.</summary>
-    public double RadiusTolerance { get; set; } = 0.4;
+    /// <summary>
+    /// 반경 허용 오차 비율(0~1). 0.5 면 실물 35mm 에 대해 17.5~52.5mm 를 통과시킨다.
+    ///
+    /// <see cref="LockRadiusToExpected"/> 를 켜면 이 검사는 <b>대상 판별용</b>이 되고 정밀도와는
+    /// 무관해진다. 그래서 넉넉하게 잡는다 — 부분 원호에서 자유 추정치가 실물보다 크게 나오는
+    /// 것은 알려진 편향이고, 그걸로 정상 검출을 떨어뜨리면 손해다(실측에서 49.1mm 가 상한
+    /// 49.0mm 를 0.1mm 차이로 넘겨 탈락한 사례가 있다).
+    /// </summary>
+    public double RadiusTolerance { get; set; } = 0.5;
+
+    /// <summary>
+    /// 정점을 계산할 때 반경을 실물값(<see cref="ExpectedRadiusMm"/>)으로 고정할지.
+    ///
+    /// <b>이것이 정밀도를 좌우한다.</b> 정점 = 원 중심 + 반경이므로 반경 오차가 그대로 정점
+    /// 오차가 된다. 광택 금속은 정점이 정반사로, 뿌리가 스침각으로 날아가 곡률이 완만한 구간만
+    /// 남는데, 그런 부분 원호에서는 반경이 원리적으로 잘 정해지지 않는다 — 실측에서 실물 35mm 에
+    /// 대해 32.0~49.1mm 로 흔들렸고 그것이 깊이 방향 26mm 편차로 나타났다.
+    ///
+    /// 대상 제원이 확정되어 있으면 반경을 미지수로 둘 이유가 없다. 자유 적합은 검증용으로만
+    /// 쓰고, 정점은 고정 반경으로 다시 맞춘 중심에서 계산한다.
+    /// </summary>
+    public bool LockRadiusToExpected { get; set; } = true;
 }

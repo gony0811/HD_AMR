@@ -106,8 +106,17 @@ internal sealed record RidgeCandidate(
 /// </summary>
 internal sealed record ArcDiagnostics
 {
-    /// <summary>추정된 코러게이션 반경(mm). 실물과 대조하는 것이 가장 강력한 검증이다.</summary>
+    /// <summary>
+    /// <b>자유 적합</b>으로 추정한 코러게이션 반경(mm). 실물과 대조하는 것이 가장 강력한 검증이다.
+    ///
+    /// <see cref="RadiusLocked"/> 가 true 면 정점 계산에는 이 값이 아니라 설정된 실물 반경을
+    /// 쓴다. 그래도 이 추정치를 보고하는 이유는, 실물과 크게 다를 때 "잔차는 통과했지만 대상이
+    /// 의심스럽다"는 판단이 가능해야 하기 때문이다.
+    /// </summary>
     public double RadiusMm { get; init; }
+
+    /// <summary>정점 계산에 실물 반경을 고정해 썼는지.</summary>
+    public bool RadiusLocked { get; init; }
 
     /// <summary>
     /// 원 중심의 평판 위 높이(mm). 반원이면 0 에 가까워야 한다 — 중심이 판 위에 있기 때문이다.

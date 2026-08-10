@@ -140,6 +140,64 @@ internal static class CircleFit
         return new Circle(cx + mx, cy + my, Math.Sqrt(rSq));
     }
 
+    /// <summary>
+    /// 반경을 <b>고정</b>하고 중심만 맞춘다. 가우스-뉴턴 2변수 최소화.
+    ///
+    /// <b>왜 반경을 미지수로 두면 안 되는가.</b> 반원 단면에서 정점 부근만 보이면 — 광택 금속은
+    /// 정점이 정반사로, 뿌리가 스침각으로 날아가 실제로 그렇게 된다 — 곡률이 완만한 구간만 남아
+    /// 반경이 원리적으로 잘 정해지지 않는다. 실측에서 실물 35mm 에 대해 회차마다 32.0~49.1mm 로
+    /// 나왔고, 평균적으로 크게 치우쳤다(9회 중 6회가 40mm 이상).
+    ///
+    /// 그 흔들림이 그대로 정밀도가 된다. 정점 = 중심 + 반경이므로, 반경이 14mm 틀리면 정점이
+    /// 14mm 틀린다. 실측 수직 편차 27.8mm 중 최대 성분이 깊이 방향 26.1mm 였던 이유다.
+    ///
+    /// <b>반경은 이미 아는 값이다.</b> 대상 제원이 확정되어 있으므로 자유도를 하나 줄이면
+    /// 정점 높이가 훨씬 안정된다. 다만 자유 적합의 반경 추정은 <b>"이게 정말 코러게이션인가"</b>
+    /// 를 가리는 안전장치로 여전히 필요하므로, 자유 적합으로 검증한 뒤 고정 반경으로 다시
+    /// 맞추는 2단 구조를 쓴다.
+    /// </summary>
+    /// <param name="seed">시작 중심. 자유 적합 결과를 넣으면 몇 번 만에 수렴한다.</param>
+    public static Circle FixedRadius(
+        ReadOnlySpan<double> xs, ReadOnlySpan<double> ys, int[] indices, double radius, in Circle seed)
+    {
+        double cx = seed.CenterX, cy = seed.CenterY;
+
+        for (int iter = 0; iter < 30; iter++)
+        {
+            double a = 0, b = 0, c = 0, p = 0, q = 0;
+
+            foreach (var i in indices)
+            {
+                var dx = xs[i] - cx;
+                var dy = ys[i] - cy;
+                var d = Math.Sqrt(dx * dx + dy * dy);
+                if (d < 1e-9) continue;
+
+                // 잔차 r = d - R, 편미분 ∂r/∂cx = -dx/d, ∂r/∂cy = -dy/d
+                var r = d - radius;
+                var j0 = -dx / d;
+                var j1 = -dy / d;
+
+                a += j0 * j0; b += j0 * j1; c += j1 * j1;
+                p += j0 * r; q += j1 * r;
+            }
+
+            var det = a * c - b * b;
+            if (Math.Abs(det) < 1e-12) break;
+
+            // JᵀJ Δ = -Jᵀr 의 2x2 해
+            var dcx = (-p * c + q * b) / det;
+            var dcy = (-a * q + b * p) / det;
+
+            cx += dcx;
+            cy += dcy;
+
+            if (Math.Abs(dcx) + Math.Abs(dcy) < 1e-6) break;
+        }
+
+        return new Circle(cx, cy, radius);
+    }
+
     /// <summary>점에서 원둘레까지의 거리(mm).</summary>
     public static double Residual(in Circle circle, double x, double y)
     {
