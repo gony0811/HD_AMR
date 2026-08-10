@@ -170,7 +170,7 @@ internal sealed record DetectorOptionsPatch
     public double? CorrugationBandMarginMm { get; init; }
     public int? MinCorrugationPoints { get; init; }
     public int? MinArcPoints { get; init; }
-    public double? CorrugationGapMm { get; init; }
+    public double? PeakRelativeThreshold { get; init; }
     public int? MaxCandidates { get; init; }
     public double? ArcInlierThresholdMm { get; init; }
     public double? ExpectedRadiusMm { get; init; }

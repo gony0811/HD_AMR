@@ -148,7 +148,7 @@ internal sealed class ArcRidgeDetector : IRidgeDetector
         // 피치(370mm)만큼 떨어진 무리로 나타난다. 무리를 가르는 것은 추첨이 아니라 정렬이라
         // 결정적이고, 약한 코러게이션도 빠지지 않는다.
         var raisedArray = raised.ToArray();
-        var (dirA, dirB) = FindAxis(a, b, raisedArray);
+        var (dirA, dirB, axisScore) = FindAxis(a, b, raisedArray);
 
         var vA = -dirB;
         var vB = dirA;
@@ -190,7 +190,12 @@ internal sealed class ArcRidgeDetector : IRidgeDetector
 
         baseline = baseline with
         {
-            Arc = baseline.Arc! with { ClusterCount = clusters.Count, Clusters = summaries },
+            Arc = baseline.Arc! with
+            {
+                ClusterCount = clusters.Count,
+                Clusters = summaries,
+                AxisScore = axisScore,
+            },
         };
 
         var found = new List<RidgeCandidate>();
@@ -251,6 +256,7 @@ internal sealed class ArcRidgeDetector : IRidgeDetector
                 MaxHeightMm = baseline.Arc.MaxHeightMm,
                 ClusterCount = baseline.Arc.ClusterCount,
                 Clusters = baseline.Arc.Clusters,
+                AxisScore = baseline.Arc.AxisScore,
             },
             Candidates = found,
             // 오버레이에는 후보 전부를 칠한다. 하나만 칠하면 "고를 수 있는 게 여럿"이라는
@@ -423,16 +429,22 @@ internal sealed class ArcRidgeDetector : IRidgeDetector
     /// 가로축이 코러게이션을 <i>따라가게</i> 되고, 그러면 모든 코러게이션이 하나의 무리로
     /// 뭉쳐 원 적합이 통째로 무너진다.
     ///
-    /// 대신 <b>원하는 성질을 직접 최적화한다.</b> 올바른 방향이란 "그 축에 수직으로 투영했을 때
-    /// 점들이 좁은 무리로 갈라지는" 방향이다. 각도를 훑으며 가장 큰 무리의 폭이 최소가 되는
-    /// 방향을 고르면 된다 — 맞는 방향에서는 코러게이션 폭(70mm), 틀린 방향에서는 코러게이션
-    /// 길이(수백 mm)가 나오므로 차이가 압도적이라 오판이 없다.
+    /// 대신 <b>밀도 집중도를 직접 최적화한다.</b> 각도를 훑으며, 코러게이션 폭짜리 창 하나에
+    /// 담기는 점의 비율이 <b>균등 분포일 때보다 몇 배인지</b>를 점수로 쓴다. 맞는 방향에서는
+    /// 코러게이션이 그 창에 통째로 들어가 몇 배가 나오고, 틀린 방향에서는 점이 코러게이션
+    /// 길이 전체로 퍼져 1배에 가까워진다.
     ///
-    /// 코러게이션이 하나뿐이어도 동작한다. 무리는 하나지만 폭은 여전히 가로 방향에서 최소다.
+    /// <b>"무리 폭 최소" 같은 기준은 쓸 수 없다.</b> 틀린 방향에서 점이 고르게 퍼지면 임계
+    /// 근처에서 잘게 쪼개져 오히려 좁은 조각이 여럿 나오고, 그게 맞는 방향의 정상 무리보다
+    /// 좋은 점수를 받는다. 실제로 이 함정에 걸려 방향이 90° 뒤집힌 적이 있다.
+    ///
+    /// 폭 대신 <b>비율</b>을 쓰는 이유는 이 대상의 점군이 가로로 더 길기 때문이다 — 코러게이션
+    /// 길이는 350mm 인데 피치 370mm 로 여러 개가 늘어서면 가로 폭이 1000mm 에 이른다. 퍼짐의
+    /// 크기로 방향을 고르면 정확히 반대를 고른다(주성분 분석도 같은 이유로 못 쓴다).
     /// </summary>
-    private (double DirA, double DirB) FindAxis(double[] a, double[] b, int[] points)
+    private (double DirA, double DirB, double Score) FindAxis(double[] a, double[] b, int[] points)
     {
-        // 각도 훑기는 점수 비교만 하므로 표본으로 충분하다. 전체를 매 각도마다 세면
+        // 각도 훑기는 점수 비교만 하므로 표본으로 충분하다. 전체를 매 각도마다 정렬하면
         // 미리보기 주기를 넘긴다.
         var sample = points;
         if (points.Length > AxisSampleMax)
@@ -442,8 +454,9 @@ internal sealed class ArcRidgeDetector : IRidgeDetector
             for (int k = 0; k < AxisSampleMax; k++) sample[k] = points[k * stride];
         }
 
-        var w = new double[a.Length];
-        var best = double.MaxValue;
+        var window = _options.CorrugationWidthMm + 2 * _options.CorrugationBandMarginMm;
+        var buffer = new double[sample.Length];
+        var best = 0.0;
         double bestA = 1, bestB = 0;
 
         for (int step = 0; step < AxisSteps; step++)
@@ -453,29 +466,32 @@ internal sealed class ArcRidgeDetector : IRidgeDetector
             var dirA = Math.Cos(theta);
             var dirB = Math.Sin(theta);
 
-            foreach (var i in sample) w[i] = a[i] * -dirB + b[i] * dirA;
+            for (int k = 0; k < sample.Length; k++)
+                buffer[k] = a[sample[k]] * -dirB + b[sample[k]] * dirA;
 
-            // 실제 무리 짓기와 같은 방법으로 점수를 매긴다. 여기서만 다른 기준을 쓰면
-            // "훑기는 통과했는데 본 계산에서 무너지는" 어긋남이 생긴다.
-            var widest = 0.0;
-            foreach (var cluster in Cluster(w, sample))
+            Array.Sort(buffer);
+
+            var span = buffer[^1] - buffer[0];
+            if (span <= window) continue;   // 전부 창 하나에 들어가면 방향을 가릴 수 없다
+
+            var most = 0;
+            var lo = 0;
+            for (int hi = 0; hi < buffer.Length; hi++)
             {
-                double lo = double.MaxValue, hi = double.MinValue;
-                foreach (var i in cluster)
-                {
-                    if (w[i] < lo) lo = w[i];
-                    if (w[i] > hi) hi = w[i];
-                }
-                widest = Math.Max(widest, hi - lo);
+                while (buffer[hi] - buffer[lo] > window) lo++;
+                most = Math.Max(most, hi - lo + 1);
             }
 
-            if (widest >= best) continue;
-            best = widest;
+            // 균등 분포 대비 밀도 배수. 1 이면 방향을 못 가린 것이다.
+            var score = (double)most / buffer.Length / (window / span);
+
+            if (score <= best) continue;
+            best = score;
             bestA = dirA;
             bestB = dirB;
         }
 
-        return (bestA, bestB);
+        return (bestA, bestB, Math.Round(best, 2));
     }
 
     /// <summary>점들의 2차원 주성분 방향. 각도 훑기의 눈금 오차를 없애는 마무리에 쓴다.</summary>
@@ -514,59 +530,38 @@ internal sealed class ArcRidgeDetector : IRidgeDetector
     /// </summary>
     private List<List<int>> Cluster(double[] w, int[] points)
     {
-        var binWidth = Math.Max(1.0, _options.CorrugationWidthMm / 4);
+        // 코러게이션 하나가 담길 창의 폭. 실물 폭에 장착 기울기와 노이즈 여유를 더한 값이다.
+        var window = _options.CorrugationWidthMm + 2 * _options.CorrugationBandMarginMm;
 
-        double min = double.MaxValue, max = double.MinValue;
-        foreach (var i in points)
+        var pool = points.OrderBy(i => w[i]).ToList();
+        var clusters = new List<List<int>>();
+        var tallest = 0;
+
+        while (clusters.Count < _options.MaxCandidates && pool.Count >= _options.MinCorrugationPoints)
         {
-            if (w[i] < min) min = w[i];
-            if (w[i] > max) max = w[i];
-        }
+            // 두 포인터로 폭 window 인 창을 훑어 가장 많이 담기는 위치를 찾는다.
+            int bestLo = 0, bestHi = -1, bestCount = 0, lo = 0;
 
-        var binCount = Math.Clamp((int)Math.Ceiling((max - min) / binWidth) + 1, 1, 20000);
-        var counts = new int[binCount];
-
-        foreach (var i in points) counts[BinOf(w[i])]++;
-
-        // 평균을 임계로 쓴다. 신호가 좁은 구간에 몰려 있는 형상이라, 코러게이션 칸은 평균의
-        // 몇 배, 산발 점 칸은 평균의 몇 분의 일로 갈라져 별도 파라미터가 필요 없다.
-        var threshold = (double)points.Length / binCount;
-
-        var ranges = new List<(int Lo, int Hi)>();
-        int? open = null;
-
-        for (int k = 0; k < binCount; k++)
-        {
-            if (counts[k] >= threshold) open ??= k;
-            else if (open is { } lo) { ranges.Add((lo, k - 1)); open = null; }
-        }
-        if (open is { } last) ranges.Add((last, binCount - 1));
-
-        // 정점 포화로 생긴 구멍을 메운다.
-        var merged = new List<(int Lo, int Hi)>();
-        foreach (var range in ranges)
-        {
-            if (merged.Count > 0 && (range.Lo - merged[^1].Hi - 1) * binWidth < _options.CorrugationGapMm)
-                merged[^1] = (merged[^1].Lo, range.Hi);
-            else
-                merged.Add(range);
-        }
-
-        var clusters = merged.Select(_ => new List<int>()).ToList();
-        foreach (var i in points)
-        {
-            var bin = BinOf(w[i]);
-            for (int r = 0; r < merged.Count; r++)
+            for (int hi = 0; hi < pool.Count; hi++)
             {
-                if (bin < merged[r].Lo || bin > merged[r].Hi) continue;
-                clusters[r].Add(i);
-                break;
+                while (w[pool[hi]] - w[pool[lo]] > window) lo++;
+
+                var count = hi - lo + 1;
+                if (count <= bestCount) continue;
+                bestCount = count; bestLo = lo; bestHi = hi;
             }
+
+            if (bestCount < _options.MinCorrugationPoints) break;
+
+            // 가장 큰 봉우리 대비 너무 낮으면 코러게이션이 아니라 잔여 산발 점이다.
+            if (tallest == 0) tallest = bestCount;
+            else if (bestCount < tallest * _options.PeakRelativeThreshold) break;
+
+            clusters.Add(pool.GetRange(bestLo, bestHi - bestLo + 1));
+            pool.RemoveRange(bestLo, bestHi - bestLo + 1);
         }
 
-        return clusters.Where(c => c.Count > 0).ToList();
-
-        int BinOf(double value) => Math.Clamp((int)((value - min) / binWidth), 0, binCount - 1);
+        return clusters;
     }
 
     /// <summary>평면 법선으로부터 평면 내 정규직교 기저를 만든다.</summary>

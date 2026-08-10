@@ -140,6 +140,15 @@ internal sealed record ArcDiagnostics
     /// 못 미쳐 탈락했는지를 한 번에 보여준다.
     /// </summary>
     public IReadOnlyList<ClusterSummary>? Clusters { get; init; }
+
+    /// <summary>
+    /// 코러게이션 방향을 얼마나 확실하게 가렸는지. 균등 분포 대비 밀도 배수다.
+    ///
+    /// 1 에 가까우면 어느 방향으로 봐도 점이 고르게 퍼져 있다는 뜻이고, 그때 나온 방향은
+    /// 신뢰할 수 없다 — 대상이 코러게이션이 아니거나 높이 구간이 잘못 잡혀 잡음만 보고 있다.
+    /// 정상적으로는 2 이상이 나온다.
+    /// </summary>
+    public double AxisScore { get; init; }
 }
 
 /// <summary>가로 위치로 가른 무리 하나의 요약.</summary>
