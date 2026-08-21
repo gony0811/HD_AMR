@@ -57,6 +57,13 @@ builder.Services.AddTransient<LaserHeadCalibrationRoutine>();
 // 평탄 중심 정렬 — 카메라 페이지와 FlatSurfaceAlignStep 이 공유하는 무상태 루틴.
 builder.Services.AddTransient<FlatSurfaceCenteringService>();
 
+// VDA 5050 어댑터(ACS↔AMR) — 스켈레톤: connection/state 발행 + order/instantActions 수신 스텁.
+// AMRService(Modbus 상태)를 참조해 state를 매핑. Enabled=false 면 유휴. AMR/Cobot 과 동일 패턴.
+builder.Services.Configure<HD_AMR.Communication.Vda5050.Vda5050AdapterSettings>(
+    builder.Configuration.GetSection("Vda5050"));
+builder.Services.AddSingleton<Vda5050AdapterService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<Vda5050AdapterService>());
+
 // LS산전 IO Module(ModbusTCP). AMR/Cobot 과 동일 패턴(싱글톤 + 호스티드) — 기동 시 상시 자동 접속, 실패 시 5초마다 재시도.
 builder.Services.Configure<IoModuleModbusTcpSettings>(
     builder.Configuration.GetSection("IoModule"));
