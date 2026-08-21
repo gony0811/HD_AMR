@@ -57,6 +57,9 @@ builder.Services.AddTransient<LaserHeadCalibrationRoutine>();
 // 평탄 중심 정렬 — 카메라 페이지와 FlatSurfaceAlignStep 이 공유하는 무상태 루틴.
 builder.Services.AddTransient<FlatSurfaceCenteringService>();
 
+// 노드↔AMR Job/Task 인덱스 로컬 매핑 저장소(JSON). /amr-job-mapping 편집 화면 + (향후)어댑터 조회.
+builder.Services.AddSingleton<AmrJobMappingStore>();
+
 // LS산전 IO Module(ModbusTCP). AMR/Cobot 과 동일 패턴(싱글톤 + 호스티드) — 기동 시 상시 자동 접속, 실패 시 5초마다 재시도.
 builder.Services.Configure<IoModuleModbusTcpSettings>(
     builder.Configuration.GetSection("IoModule"));
