@@ -1,3 +1,5 @@
+using System.Buffers.Binary;
+
 namespace HD_AMR.Communication.Vision;
 
 public enum LogDirection { Tx, Rx, Info, Error }
@@ -43,33 +45,64 @@ public static class FrameDescriber
         return $"ts={ts}";
     }
 
+    private static string SurfaceTypeName(byte t) => t switch
+    {
+        0x00 => "Flat",
+        0x01 => "Corner",
+        0x02 => "Corrugation",
+        _    => $"0x{t:X2}",
+    };
+
+    /// <summary>GUID 앞 8자리만 요약(0 GUID 는 '-').</summary>
+    private static string ShortId(Guid id) =>
+        id == Guid.Empty ? "-" : id.ToString("D").Substring(0, 8);
+
     private static string DescribeCaptureReq(byte[] data)
     {
-        if (data.Length < 15) return $"REQ DATA({data.Length}B 부족)";
-        var surfaceType = data[0] switch
+        // v3: 115B (Run/Task/Job + 면·위치)
+        if (data.Length >= CaptureReqPayload.Length)
         {
-            0x00 => "Flat",
-            0x01 => "Corner",
-            0x02 => "Corrugation",
-            _    => $"0x{data[0]:X2}",
-        };
-        ushort surfaceId = (ushort)(data[1] | (data[2] << 8));
-        int posX = data[3] | (data[4] << 8) | (data[5] << 16) | (data[6] << 24);
-        int posY = data[7] | (data[8] << 8) | (data[9] << 16) | (data[10] << 24);
-        return $"Surface={surfaceType}/0x{surfaceId:X2}({SurfaceCatalog.NameOf(surfaceId)}), Pos=({posX},{posY})mm";
+            var runId  = GuidAscii.Read(data.AsSpan(CaptureReqPayload.RunIdOff, 36));
+            var taskId = GuidAscii.Read(data.AsSpan(CaptureReqPayload.TaskIdOff, 36));
+            var st  = data[CaptureReqPayload.SurfaceTypeOff];
+            var sid = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(CaptureReqPayload.SurfaceIdOff, 2));
+            var px  = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(CaptureReqPayload.PosXOff, 4));
+            var py  = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(CaptureReqPayload.PosYOff, 4));
+            return $"Run={ShortId(runId)} Task={ShortId(taskId)} " +
+                   $"Surface={SurfaceTypeName(st)}/0x{sid:X2}({SurfaceCatalog.NameOf(sid)}), Pos=({px},{py})mm";
+        }
+        // v2 레거시: 15B (면·위치)
+        if (data.Length >= 15)
+        {
+            var sid = (ushort)(data[1] | (data[2] << 8));
+            var px = data[3] | (data[4] << 8) | (data[5] << 16) | (data[6] << 24);
+            var py = data[7] | (data[8] << 8) | (data[9] << 16) | (data[10] << 24);
+            return $"[v2] Surface={SurfaceTypeName(data[0])}/0x{sid:X2}({SurfaceCatalog.NameOf(sid)}), Pos=({px},{py})mm";
+        }
+        return $"REQ DATA({data.Length}B 부족)";
     }
 
     private static string DescribeCaptureRes(byte[] data)
     {
-        if (data.Length < 2) return $"RES DATA({data.Length}B 부족)";
-        ushort code = (ushort)(data[0] | (data[1] << 8));
-        return $"Result=0x{code:X4} {ResultCodeNames.NameOf(code)}";
+        if (!CaptureResPayload.TryReadCode(data, out var code)) return $"RES DATA({data.Length}B 부족)";
+        var idPart = "";
+        if (data.Length >= CaptureResPayload.Length)
+        {
+            var (r, t) = CaptureResPayload.ReadIds(data);
+            idPart = $"Run={ShortId(r)} Task={ShortId(t)} ";
+        }
+        return $"{idPart}Result=0x{code:X4} {ResultCodeNames.NameOf(code)}";
     }
 
     private static string DescribeErrorNoti(byte[] data)
     {
-        if (data.Length < 2) return $"ERR DATA({data.Length}B 부족)";
-        ushort code = (ushort)(data[0] | (data[1] << 8));
-        return $"Error=0x{code:X4} {ResultCodeNames.NameOf(code)}";
+        if (!CaptureResPayload.TryReadCode(data, out var code)) return $"ERR DATA({data.Length}B 부족)";
+        var idPart = "";
+        if (data.Length >= CaptureResPayload.Length)
+        {
+            var (r, t) = CaptureResPayload.ReadIds(data);
+            idPart = $"Run={ShortId(r)} Task={ShortId(t)} ";
+        }
+        return $"{idPart}Error=0x{code:X4} {ResultCodeNames.NameOf(code)}";
     }
 }

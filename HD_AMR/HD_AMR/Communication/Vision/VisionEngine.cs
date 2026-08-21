@@ -199,9 +199,9 @@ public sealed class VisionEngine : IAsyncDisposable
             if (winner == tcs.Task)
             {
                 var f = await tcs.Task.ConfigureAwait(false);
-                if (f.Command == (byte)CommandCode.CaptureRes && f.Data.Length >= 2)
+                if (f.Command == (byte)CommandCode.CaptureRes && CaptureResPayload.TryReadCode(f.Data, out var code))
                 {
-                    var code = (ushort)(f.Data[0] | (f.Data[1] << 8));
+                    // v3: 결과 코드는 [72-73], Run/Task ID(에코)는 [0-71]. v2(2B)는 [0-1] 폴백.
                     return new CaptureOutcome(true, true, (ResultCode)code);
                 }
                 // ERROR_NOTI 등: 응답은 왔으나 성공 코드가 아님.
