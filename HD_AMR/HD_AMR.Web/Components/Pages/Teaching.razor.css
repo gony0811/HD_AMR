@@ -70,3 +70,14 @@
 .segment-table td.ops button {
     margin-right: 0.25rem;
 }
+
+/* 동일 크기 아이콘 버튼 — 설명은 title 호버 캡션으로 제공 */
+.segment-table td.ops .icon-btn {
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    vertical-align: middle;
+}

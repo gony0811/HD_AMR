@@ -18,7 +18,7 @@ public class CameraAlignStep : ISequenceStep
     private readonly ParameterService _param;
     private readonly ILogger<CameraAlignStep> _logger;
 
-    private const double MaxAlignTravelMm = 600;
+    private const double MaxAlignTravelMm = 1000;
     private const double PoseTolMm = 3.0;
     private const double PoseTolDeg = 2.0;
 
@@ -52,8 +52,9 @@ public class CameraAlignStep : ISequenceStep
         if (!_camera.IsConnected)
             return StepValidation.Fail("카메라 미연결 — depth 측정 불가");
 
-        if (!context.Positions.TryGetValue("inspectionReady", out var pos) || !pos.IsTaught)
-            return StepValidation.Fail("검사 준비 위치 미티칭 — Teaching에서 먼저 저장하세요.");
+        if (CobotInspectionMoveStep.FindBySurfaceId(context) is not { IsTaught: true })
+            return StepValidation.Fail(
+                $"Surface 0x{context.InspectionSurfaceId:X2} 검사 위치 미티칭/없음 — Teaching에서 먼저 저장하세요.");
 
         if (context.CameraTargetDistanceMm is < 100 or > 1000)
             return StepValidation.Fail("카메라 목표 거리 범위 초과 (100~1000mm).");
@@ -66,7 +67,8 @@ public class CameraAlignStep : ISequenceStep
         if (_camera.LatestDepth is null)
             return StepResult.Fail("깊이 프레임이 없습니다.");
 
-        var inspection = context.Positions["inspectionReady"];
+        var inspection = CobotInspectionMoveStep.FindBySurfaceId(context)
+            ?? throw new InvalidOperationException($"Surface 0x{context.InspectionSurfaceId:X2} 티칭 위치 없음");
 
         // 1) 현재 자세가 ②의 목표점(검사 준비 위치 ⊕ u/v 툴 오프셋)인지 TCP 포즈로 검증.
         //    티칭 관절 비교는 u/v 오프셋·작업물 추종 시 목표가 티칭 자세와 달라져 오판한다.

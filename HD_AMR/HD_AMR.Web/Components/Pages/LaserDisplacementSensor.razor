@@ -7,6 +7,7 @@
 @inject LaserDisplacementSensorService Svc
 @inject CobotService Cobot
 @inject LaserHeadCalibrationRoutine Routine
+@inject ParameterService Params
 
 <PageTitle>Laser Displacement Sensor</PageTitle>
 
@@ -398,6 +399,223 @@
                 </div>
             </details>
 
+            @* 토치 팁 TCP 캘리브레이션(레이저 보조 터치): 오퍼레이터가 팁을 평판에 여러 자세로 접촉시키고
+               매 접촉마다 레이저 평면 실측 → "팁은 평면 위" 제약(플랜지 좌표)으로 팁 위치 최소자승 산출.
+               로봇 자동 모션 없음(수동 조그). 결과는 표시만 하며 명시적 버튼으로만 컨트롤러 공구에 쓴다. *@
+            <details class="mt-3 pt-3 border-top">
+                <summary style="cursor: pointer;">
+                    <strong>로봇 TCP 캘리브레이션</strong>
+                    <span class="text-muted small">(레이저 보조 터치 — 로봇은 수동 조그)</span>
+                </summary>
+                <div class="mt-2">
+                    <div class="small text-muted mb-2">
+                        평판에 공구 팁을 <strong>물리적으로 접촉</strong>시킨 상태에서 "터치 기록"을 누르세요.
+                        서로 다른 기울기(±15~25°, Rx/Ry <strong>양쪽 부호</strong> 혼합)로 최소 3회, 권장 4~6회.
+                        팁 Z와 출사면 높이 h는 동시에 관측 불가(빔이 툴 Z와 평행) — 아래 모드로 하나를 고정합니다.
+                        정밀도는 접촉 정밀도가 지배합니다(±0.5~1.5mm).
+                    </div>
+                    <div class="d-flex align-items-center flex-wrap gap-2 mb-2">
+                        <select class="form-select form-select-sm" style="width: 300px;"
+                                @bind="_tcpMode" @bind:after="ResolveTcp" disabled="@_tcpRecording">
+                            <option value="refz">기준 Z 고정 — 팁 X/Y 산출 + h 추정 (기본)</option>
+                            <option value="fixh">출사면 h 고정 — 팁 X/Y/Z 전부 산출</option>
+                        </select>
+                        @if (!_tcpFixH)
+                        {
+                            <label class="small text-muted mb-0">기준 Z(mm, 플랜지)</label>
+                            <input type="number" class="form-control form-control-sm" style="width: 110px;"
+                                   step="0.1" @bind="_tcpRefZ" @bind:after="ResolveTcp" disabled="@_tcpRecording" />
+                            <span class="small text-muted">미입력 시 첫 기록 때 tool-1 Z로 자동 설정</span>
+                        }
+                        else
+                        {
+                            <label class="small text-muted mb-0">출사면 h(mm)</label>
+                            <input type="number" class="form-control form-control-sm" style="width: 110px;"
+                                   step="0.1" @bind="_tcpFixedH" @bind:after="ResolveTcp" disabled="@_tcpRecording" />
+                        }
+                    </div>
+                    @if (_tcpFixH)
+                    {
+                        <div class="d-flex align-items-center flex-wrap gap-2 mb-2">
+                            <button class="btn btn-sm btn-outline-primary" @onclick="CaptureHeadPlaneAsync"
+                                    disabled="@(!Svc.IsConnected || !_pose.Valid || _tcpRecording || _tcpCapturingH)">
+                                @if (_tcpCapturingH)
+                                {
+                                    <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
+                                    <span>캡처 중…</span>
+                                }
+                                else
+                                {
+                                    <span>현재 측정거리를 h로 저장</span>
+                                }
+                            </button>
+                            <span class="small text-muted">
+                                평면 보정으로 수평(Rx/Ry≈0)을 맞추고 <strong>팁을 평면에 접촉</strong>시킨 상태에서 누르세요.
+                            </span>
+                        </div>
+                        <div class="small text-muted mb-2">
+                            h는 위 캡처 또는 "기준 Z 고정" 모드로 1회 산출·저장한 추정치 사용을 권장합니다
+                            (센서 브래킷 불변 — 토치 교체 후 재캘리브레이션에 유용). h 오차는 팁 Z에 그대로 전파됩니다.
+                        </div>
+                    }
+                    @if (Svc.TiltRef is null)
+                    {
+                        <div class="alert alert-warning py-1 px-2 small mb-2">
+                            평행 기준 미설정 — 먼저 평행 기준을 저장하면 정확도가 향상됩니다(법선 오차가 레버암으로 증폭).
+                        </div>
+                    }
+
+                    <div class="d-flex align-items-center gap-2 mb-2">
+                        <button class="btn btn-sm btn-primary" @onclick="RecordTouchAsync"
+                                disabled="@(!Svc.IsConnected || !Cobot.IsConnected || !_pose.Valid || _tcpRecording || _applying || _calibrating)">
+                            @if (_tcpRecording)
+                            {
+                                <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
+                                <span>샘플링 중…</span>
+                            }
+                            else
+                            {
+                                <span>터치 기록</span>
+                            }
+                        </button>
+                        <button class="btn btn-sm btn-outline-secondary" @onclick="ClearTouches"
+                                disabled="@(_tcpCal.Touches.Count == 0 || _tcpRecording)">전체 삭제</button>
+                        @* 네이티브 onclick(Blazor @onclick 아님) — 사용자 제스처 직접 전달로 팝업 차단 회피,
+                           창 이름 공유(cobotJog)로 다른 페이지에서 연 조그 창을 재사용/포커스한다. *@
+                        <button class="btn btn-sm btn-outline-primary" type="button"
+                                onclick="window.open('/jog','cobotJog','width=1040,height=820,menubar=no,toolbar=no,location=no,resizable=yes')">
+                            조그 팝업
+                        </button>
+                        <span class="small text-muted">기록 @(_tcpCal.Touches.Count)개</span>
+                    </div>
+
+                    @if (_tcpCal.Touches.Count > 0)
+                    {
+                        <table class="table table-sm align-middle mb-2" style="max-width: 560px;">
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th class="text-end">Rx(°)</th>
+                                    <th class="text-end">Ry(°)</th>
+                                    <th class="text-end">거리(mm)</th>
+                                    <th class="text-end">잔차(mm)</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @for (int i = 0; i < _tcpCal.Touches.Count; i++)
+                                {
+                                    var idx = i;
+                                    var t = _tcpCal.Touches[i];
+                                    double? res = _tcpResult is { Success: true } rr && i < rr.ResidualsMm.Count
+                                        ? rr.ResidualsMm[i] : null;
+                                    <tr>
+                                        <td>@(i + 1)</td>
+                                        <td class="text-end">@t.RxDeg.ToString("F2")</td>
+                                        <td class="text-end">@t.RyDeg.ToString("F2")</td>
+                                        <td class="text-end">@t.MeanDistanceMm.ToString("F1")</td>
+                                        <td class="text-end">
+                                            @if (res is { } rv)
+                                            {
+                                                <span class="@(Math.Abs(rv) > 1.0 ? "badge bg-danger" : "")">@rv.ToString("+0.00;-0.00")</span>
+                                            }
+                                            else
+                                            {
+                                                <span class="text-muted">—</span>
+                                            }
+                                        </td>
+                                        <td>
+                                            <button class="btn btn-sm btn-outline-secondary py-0" @onclick="() => RemoveTouch(idx)"
+                                                    disabled="@_tcpRecording">삭제</button>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    }
+
+                    @if (_tcpResult is { } tr2)
+                    {
+                        @if (!tr2.Success)
+                        {
+                            <div class="alert alert-warning py-2 small mb-2">산출 실패: @tr2.Error</div>
+                        }
+                        else
+                        {
+                            <div class="row g-2 text-center mb-2" style="max-width: 480px;">
+                                <div class="col"><div class="small text-muted">Tip X (산출)</div><div class="fw-semibold">@tr2.TipX.ToString("F2")</div></div>
+                                <div class="col"><div class="small text-muted">Tip Y (산출)</div><div class="fw-semibold">@tr2.TipY.ToString("F2")</div></div>
+                                <div class="col"><div class="small text-muted">Tip Z (@(_tcpFixH ? "산출" : "기준값"))</div><div class="fw-semibold">@tr2.TipZ.ToString("F2")</div></div>
+                                <div class="col"><div class="small text-muted">h (@(_tcpFixH ? "고정값" : "추정"))</div><div class="fw-semibold">@tr2.HeadPlaneZmm.ToString("F1")</div></div>
+                            </div>
+                            <div class="small text-muted mb-2">
+                                플랜지 좌표 mm · 잔차 RMS @tr2.RmsMm.ToString("F3")mm (최대 @tr2.MaxAbsMm.ToString("F3")mm)
+                                · 컨디셔닝 @tr2.SpreadDeg.ToString("F1")°
+                                · h는 터치 평균거리(~@(_tcpCal.Touches.Count > 0 ? _tcpCal.Touches.Average(t => t.MeanDistanceMm).ToString("F0") : "—")mm)와 비슷해야 정상
+                                @if (!_tcpFixH)
+                                {
+                                    <button class="btn btn-sm btn-outline-primary py-0 ms-1" @onclick="() => SaveHeadPlaneAsync(tr2.HeadPlaneZmm)">
+                                        h 저장
+                                    </button>
+                                }
+                                @if (tr2.DeltaFromTool1 is { } d)
+                                {
+                                    <span>
+                                        · tool-1 대비 Δ=(@d[0].ToString("F1"), @d[1].ToString("F1"), @d[2].ToString("F1"))
+                                        |Δ|=@Math.Sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).ToString("F1")mm
+                                    </span>
+                                }
+                            </div>
+                            @foreach (var w in tr2.Warnings)
+                            {
+                                <div class="alert alert-warning py-1 px-2 small mb-2">@w</div>
+                            }
+
+                            <div class="d-flex align-items-center flex-wrap gap-2 mb-2">
+                                <label class="small text-muted mb-0">공구 번호</label>
+                                <input type="number" class="form-control form-control-sm" style="width: 70px;"
+                                       min="1" max="14" step="1" @bind="_tcpWriteId" disabled="@_tcpWriting" />
+                                <div class="form-check mb-0">
+                                    <input class="form-check-input" type="checkbox" id="tcpConfirm" @bind="_tcpConfirm" />
+                                    <label class="form-check-label small" for="tcpConfirm">결과를 확인했습니다</label>
+                                </div>
+                                <button class="btn btn-sm btn-warning" @onclick="WriteTcpToolAsync"
+                                        disabled="@(!Cobot.IsConnected || !_tcpConfirm || _tcpWriting || (_tcpWriteId == 1 && !_tcpAllowTool1))">
+                                    @if (_tcpWriting)
+                                    {
+                                        <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
+                                        <span>쓰는 중…</span>
+                                    }
+                                    else
+                                    {
+                                        <span>tool @(_tcpWriteId)에 쓰기</span>
+                                    }
+                                </button>
+                            </div>
+                            @if (_tcpWriteId == 1)
+                            {
+                                <div class="alert alert-danger py-2 small mb-2">
+                                    tool 1은 레이저 센서 프레임입니다 — 덮어쓰면 헤드 기하·평행 기준 등 센서 기하 전체가 무효화됩니다.
+                                    <div class="form-check mt-1 mb-0">
+                                        <input class="form-check-input" type="checkbox" id="tcpAllowTool1" @bind="_tcpAllowTool1" />
+                                        <label class="form-check-label" for="tcpAllowTool1">위험을 이해하고 tool 1을 덮어씁니다</label>
+                                    </div>
+                                </div>
+                            }
+                            <div class="small text-muted mb-2">
+                                회전은 tool-1 정의를 복사하고 위치만 산출값으로 설정합니다.
+                                쓰기 후 팁을 기준점에 대고 새 공구 기준 ±10° 회전으로 팁 고정 여부를 검증하세요.
+                            </div>
+                        }
+                    }
+
+                    @if (!string.IsNullOrEmpty(_tcpMsg))
+                    {
+                        <div class="alert @(_tcpMsgOk ? "alert-success" : "alert-warning") py-2 small mb-0">@_tcpMsg</div>
+                    }
+                </div>
+            </details>
+
             @* 진단: 실장비에서 상태 비트 오프셋 확정용. 측정 중일 때 아래 각 상태 byte 의 실제 값을 보고
                어느 byte 의 CH비트가 ON 되는지 확인해 appsettings 의 *ByteOffset 을 확정한다. *@
             <details class="mt-3">
@@ -453,6 +671,30 @@
     private double AppliedRx => _pose.Rx;
     private double AppliedRy => -_pose.Ry;
 
+    // 토치 팁 TCP 캘리브레이션(레이저 보조 터치) 상태 — 서킷당 수집기 1개, 저장 없음.
+    private readonly TcpTouchCalibrator _tcpCal = new();
+    private bool _tcpRecording;
+    private bool _tcpWriting;
+    private TcpTouchCalibrationResult? _tcpResult;
+    private string? _tcpMsg;
+    private bool _tcpMsgOk;
+    private int _tcpWriteId = 3;
+    private bool _tcpConfirm;
+    private bool _tcpAllowTool1;
+
+    // 기준 Z(플랜지 mm) — 팁 Z는 레이저로 관측 불가 DOF 라서 외부 기준(펜던트/도면)으로 고정.
+    // null 이면 첫 기록 시 tool-1 Z 로 자동 설정.
+    private double? _tcpRefZ;
+
+    // 모드: "refz"=기준 Z 고정(팁 X/Y 산출 + h 추정), "fixh"=출사면 h 고정(팁 X/Y/Z 산출).
+    // select 바인딩은 bool 대신 문자열 사용 — bool 은 "True/False"(대문자)로 렌더되어
+    // 소문자 option value 와 불일치 → 선택 표시가 비는 함정 회피.
+    private string _tcpMode = "refz";
+    private bool _tcpFixH => _tcpMode == "fixh";
+    private double? _tcpFixedH;
+    private bool _tcpCapturingH;
+    private const string HeadPlaneParamKey = "Laser.TouchTcp.HeadPlaneZmm";
+
     // 헤드 위치 캘리브레이션(틸트 응답) 상태.
     private double _calTiltDeg = 2.0;
     private int _calSamples = 5;
@@ -471,10 +713,20 @@
     private PeriodicTimer? _timer;
     private CancellationTokenSource? _cts;
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
         _cts = new CancellationTokenSource();
         _ = RefreshLoopAsync(_cts.Token);
+
+        // 저장된 출사면 h(경험적 앵커) 로드 — 없거나 DB 미준비면 미입력 상태 유지.
+        try
+        {
+            _tcpFixedH = await Params.GetDoubleAsync(HeadPlaneParamKey);
+        }
+        catch
+        {
+            // 페이지 표시를 막지 않는다 — h 고정 모드 사용 시 직접 입력하면 된다.
+        }
     }
 
     // 연결 상태일 때 UiRefreshMs 주기로 측정 스냅샷을 갱신한다.
@@ -624,6 +876,179 @@
         finally
         {
             _applying = false;
+        }
+    }
+
+    // 터치 기록: 팁이 평판에 접촉한 상태에서 보정 pose 5샘플 평균 + 기록 시점 tool-1 정의로
+    // 플랜지 좌표 평면 제약 1건 생성. 3개 이상이면 자동 산출.
+    private async Task RecordTouchAsync()
+    {
+        if (_tcpRecording) return;
+
+        _tcpRecording = true;
+        _tcpMsg = null;
+        try
+        {
+            double sx = 0, sy = 0, sz = 0, srx = 0, sry = 0;
+            int valid = 0;
+            string? note = null;
+            for (int i = 0; i < 5; i++)
+            {
+                if (i > 0) await Task.Delay(100);
+                var p = Svc.GetPlanePose();
+                if (p.Valid) { sx += p.X; sy += p.Y; sz += p.Z; srx += p.Rx; sry += p.Ry; valid++; }
+                else note = p.Note;
+            }
+            if (valid < 3)
+            {
+                _tcpMsgOk = false;
+                _tcpMsg = $"유효 샘플 부족({valid}/5) — {note ?? "센서 상태를 확인하세요."}";
+                return;
+            }
+
+            // 기록마다 tool-1 정의 조회 — 기록 사이 변경되면 Solve 가 경고한다.
+            var t1 = await Cobot.Rpc.GetToolCoordAsync(1);
+            _tcpRefZ ??= t1[2];   // 기준 Z 미입력이면 기존 tool-1 Z 를 기본값으로.
+            var rec = TcpTouchCalibrator.BuildRecord(
+                sx / valid, sy / valid, sz / valid, srx / valid, sry / valid, t1, DateTime.UtcNow);
+            _tcpCal.Add(rec);
+            ResolveTcp();
+            _tcpMsgOk = true;
+            _tcpMsg = $"터치 #{_tcpCal.Touches.Count} 기록됨 (Rx={rec.RxDeg:F2}°, Ry={rec.RyDeg:F2}°, 거리 {rec.MeanDistanceMm:F1}mm)";
+        }
+        catch (Exception ex)
+        {
+            _tcpMsgOk = false;
+            _tcpMsg = $"터치 기록 오류: {ex.Message}";
+        }
+        finally
+        {
+            _tcpRecording = false;
+        }
+    }
+
+    private void RemoveTouch(int index)
+    {
+        _tcpCal.RemoveAt(index);
+        ResolveTcp();
+    }
+
+    // 모드/기준값 변경·기록 추가·삭제 시 재산출. 기록 3개 미만이거나 고정값 미입력이면 결과 제거.
+    private void ResolveTcp()
+    {
+        var t1 = _tcpCal.Touches.Count > 0 ? _tcpCal.Touches[0].ToolCoord1 : null;
+        _tcpResult = (_tcpCal.Touches.Count, _tcpFixH, _tcpRefZ, _tcpFixedH) switch
+        {
+            ( >= 3, false, { } refZ, _) => _tcpCal.Solve(refZ, t1),
+            ( >= 3, true, _, { } fixH) => _tcpCal.SolveWithFixedHeadPlane(fixH, t1),
+            _ => null,
+        };
+        _tcpConfirm = false;
+    }
+
+    // 수평(빔⊥평면) + 팁 접촉 상태에서는 측정거리 = h 가 성립 — 그 순간의 평균 측정거리를
+    // h 앵커로 캡처한다. 잔여 틸트 ε는 헤드중심↔팁 레버암(~138mm)으로 h 오차 ≈ 138·tanε 를
+    // 만들므로 0.5° 이상이면 경고(저장은 진행).
+    private async Task CaptureHeadPlaneAsync()
+    {
+        if (_tcpCapturingH) return;
+
+        _tcpCapturingH = true;
+        _tcpMsg = null;
+        try
+        {
+            double sz = 0, srx = 0, sry = 0;
+            int valid = 0;
+            string? note = null;
+            for (int i = 0; i < 5; i++)
+            {
+                if (i > 0) await Task.Delay(100);
+                var p = Svc.GetPlanePose();
+                if (p.Valid) { sz += p.Z; srx += p.Rx; sry += p.Ry; valid++; }
+                else note = p.Note;
+            }
+            if (valid < 3)
+            {
+                _tcpMsgOk = false;
+                _tcpMsg = $"유효 샘플 부족({valid}/5) — {note ?? "센서 상태를 확인하세요."}";
+                return;
+            }
+
+            double h = sz / valid;
+            double maxTilt = Math.Max(Math.Abs(srx / valid), Math.Abs(sry / valid));
+
+            await Params.SetDoubleAsync(HeadPlaneParamKey, h, "터치 TCP — 출사면 높이 h(수평+팁 접촉 캡처)");
+            _tcpFixedH = h;
+            ResolveTcp();
+            _tcpMsgOk = maxTilt < 0.5;
+            _tcpMsg = $"출사면 h={h:F1}mm 저장됨 (잔여 틸트 {maxTilt:F2}°).";
+            if (maxTilt >= 0.5)
+            {
+                double errMm = 138.0 * Math.Tan(maxTilt * Math.PI / 180.0);
+                _tcpMsg += $" ⚠ 잔여 틸트가 큽니다 — h 오차 ≈ {errMm:F1}mm 가능, '보정 적용'으로 수평을 맞춘 뒤 재캡처를 권장합니다.";
+            }
+        }
+        catch (Exception ex)
+        {
+            _tcpMsgOk = false;
+            _tcpMsg = $"h 캡처 오류: {ex.Message}";
+        }
+        finally
+        {
+            _tcpCapturingH = false;
+        }
+    }
+
+    // 모드 1 산출 h 를 DB에 저장 — 이후 h 고정 모드(토치 교체 재캘리브레이션)의 앵커로 사용.
+    private async Task SaveHeadPlaneAsync(double h)
+    {
+        try
+        {
+            await Params.SetDoubleAsync(HeadPlaneParamKey, h, "터치 TCP — 출사면 높이 h(경험적 앵커, 기준 Z 모드 산출)");
+            _tcpFixedH = h;
+            _tcpMsgOk = true;
+            _tcpMsg = $"출사면 h={h:F1}mm 저장됨 — 'h 고정' 모드에서 자동 사용됩니다.";
+        }
+        catch (Exception ex)
+        {
+            _tcpMsgOk = false;
+            _tcpMsg = $"h 저장 실패: {ex.Message}";
+        }
+    }
+
+    private void ClearTouches()
+    {
+        _tcpCal.Clear();
+        _tcpResult = null;
+        _tcpMsg = null;
+        _tcpConfirm = false;
+    }
+
+    // 산출된 팁 위치를 컨트롤러 공구 좌표계에 쓴다 — 위치만 산출값, 회전은 tool-1 정의 복사.
+    private async Task WriteTcpToolAsync()
+    {
+        if (_tcpWriting || _tcpResult is not { Success: true } r) return;
+
+        _tcpWriting = true;
+        _tcpMsg = null;
+        try
+        {
+            var t1 = await Cobot.Rpc.GetToolCoordAsync(1);
+            var coord = new[] { r.TipX, r.TipY, r.TipZ, t1[3], t1[4], t1[5] };
+            var rc = await Cobot.Rpc.SetToolCoordAsync(_tcpWriteId, coord);
+            _tcpMsgOk = rc == 0;
+            _tcpMsg = rc == 0
+                ? $"tool {_tcpWriteId} 설정 완료: ({r.TipX:F2}, {r.TipY:F2}, {r.TipZ:F2}) + tool-1 회전."
+                : $"tool {_tcpWriteId} 설정 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.";
+        }
+        catch (Exception ex)
+        {
+            _tcpMsgOk = false;
+            _tcpMsg = $"공구 설정 오류: {ex.Message}";
+        }
+        finally
+        {
+            _tcpWriting = false;
         }
     }
 

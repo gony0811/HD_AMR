@@ -219,7 +219,8 @@ CREATE TABLE IF NOT EXISTS TeachingPositions (
     UpdatedAt TEXT NOT NULL,
     UserFrame INTEGER NULL,
     RelX REAL NULL, RelY REAL NULL, RelZ REAL NULL,
-    RelRx REAL NULL, RelRy REAL NULL, RelRz REAL NULL
+    RelRx REAL NULL, RelRy REAL NULL, RelRz REAL NULL,
+    SurfaceId INTEGER NOT NULL DEFAULT 0
 );
 CREATE UNIQUE INDEX IF NOT EXISTS IX_TeachingPositions_Key ON TeachingPositions (""Key"");
 ");
@@ -235,6 +236,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS IX_TeachingPositions_Key ON TeachingPositions 
         if (!exists)
             db.Database.ExecuteSqlRaw($"ALTER TABLE TeachingPositions ADD COLUMN {col} NULL;");
     }
+
+    // 기존 TeachingPositions 에 SurfaceId(0x00~0xFF, 0=디폴트 위치) 컬럼이 없으면 추가(기존 데이터 보존).
+    var hasSurfaceId = db.Database
+        .SqlQueryRaw<long>("SELECT COUNT(*) AS Value FROM pragma_table_info('TeachingPositions') WHERE name = 'SurfaceId'")
+        .AsEnumerable().First() > 0;
+    if (!hasSurfaceId)
+        db.Database.ExecuteSqlRaw("ALTER TABLE TeachingPositions ADD COLUMN SurfaceId INTEGER NOT NULL DEFAULT 0;");
 
     // Backward-compatible schema add for Parameters (범용 key/value 설정 저장소; 기존 데이터 보존).
     db.Database.ExecuteSqlRaw(@"

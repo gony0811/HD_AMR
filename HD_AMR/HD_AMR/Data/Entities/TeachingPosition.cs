@@ -15,6 +15,10 @@ public class TeachingPosition
     /// <summary>표시 이름(홈 위치, 검사 준비 위치 …).</summary>
     public string Name { get; set; } = "";
 
+    /// <summary>Surface ID (0x00~0xFF). 0x00 = 홈/회피 등 디폴트 위치(검사 대상 아님).
+    /// 그 외 값 = 검사 위치 — 시퀀스 ②의 이동 목표 선택 및 촬영(CAPTURE_REQ) 시 보고 id 로 쓰인다.</summary>
+    public int SurfaceId { get; set; }
+
     /// <summary>테이블 표시 순서.</summary>
     public int SortOrder { get; set; }
 

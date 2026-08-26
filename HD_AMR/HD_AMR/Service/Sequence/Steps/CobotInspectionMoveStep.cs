@@ -21,13 +21,32 @@ public class CobotInspectionMoveStep : ISequenceStep
     public string DisplayName => "Cobot 검사위치 이동";
     public int DefaultOrder => 200;
 
+    /// <summary>context.InspectionSurfaceId(0x01~0xFF)에 해당하는 티칭 위치를 찾는다 —
+    /// ②의 이동 목표이자 ③(CameraAlign)/④(FlatSurfaceAlign)의 검증에도 동일 규칙 사용.
+    /// 같은 SurfaceId 가 여러 행이면 표시 순서(SortOrder→Id) 첫 행. 범위 밖/0 이면 null.</summary>
+    public static Data.Entities.TeachingPosition? FindBySurfaceId(SequenceContext context) =>
+        context.InspectionSurfaceId is > 0x00 and <= 0xFF
+            ? context.Positions.Values
+                .Where(p => p.SurfaceId == context.InspectionSurfaceId)
+                .OrderBy(p => p.SortOrder).ThenBy(p => p.Id)
+                .FirstOrDefault()
+            : null;
+
     public StepValidation Validate(SequenceContext context)
     {
         if (!_cobot.IsConnected)
             return StepValidation.Fail("코봇 RPC 미연결");
 
-        if (!context.Positions.TryGetValue("inspectionReady", out var pos) || !pos.IsTaught)
-            return StepValidation.Fail("검사 준비 위치 미티칭 — Teaching에서 먼저 저장하세요.");
+        if (context.InspectionSurfaceId is <= 0x00 or > 0xFF)
+            return StepValidation.Fail("검사 Surface ID 미설정 (0x01~0xFF) — ② 파라미터에서 선택하세요.");
+
+        var pos = FindBySurfaceId(context);
+        if (pos is null)
+            return StepValidation.Fail(
+                $"Surface 0x{context.InspectionSurfaceId:X2}에 해당하는 티칭 위치가 없습니다 — Teaching에서 Surface ID를 지정하세요.");
+        if (!pos.IsTaught)
+            return StepValidation.Fail(
+                $"Surface 0x{context.InspectionSurfaceId:X2} '{pos.Name}' 미티칭 — Teaching에서 먼저 저장하세요.");
 
         if (Math.Abs(context.InspectionOffsetU) > 500 || Math.Abs(context.InspectionOffsetV) > 500)
             return StepValidation.Fail("검사 오프셋 u/v 범위 초과 (±500 mm 이내).");
@@ -63,8 +82,10 @@ public class CobotInspectionMoveStep : ISequenceStep
 
     public async Task<StepResult> ExecuteAsync(SequenceContext context, CancellationToken ct)
     {
-        var inspection = context.Positions["inspectionReady"];
+        var inspection = FindBySurfaceId(context)
+            ?? throw new InvalidOperationException($"Surface 0x{context.InspectionSurfaceId:X2} 티칭 위치 없음");
         var (target, where) = await ComputeTargetPoseAsync(_cobot, inspection, ct);
+        where = $"[0x{context.InspectionSurfaceId:X2} {inspection.Name}] {where}";
 
         // 툴프레임 오프셋: offset[0]=u(툴 X = 수평, 좌+/우−), offset[1]=v(툴 Y = 수직, 상+/하−).
         // 실측 확인 매핑 — 과거 [v, u] 순서는 v 가 수평으로 나가는 축 교차 오류였음.

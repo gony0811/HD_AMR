@@ -17,27 +17,37 @@ public class TeachingService
         _db = db;
     }
 
-    /// <summary>고정 슬롯 정의(키, 표시 이름). 슬롯을 추가하려면 이 목록에 항목을 더하면 된다.</summary>
+    /// <summary>고정 슬롯 정의(키, 표시 이름) — 삭제 불가·코드가 키로 직접 참조하는 위치만.
+    /// 검사 위치는 고정 슬롯이 아니라 사용자가 행을 추가하고 SurfaceId(0x01~0xFF)를 부여해 만든다
+    /// (시퀀스 ②가 SurfaceId 로 목표를 결정). 과거 시드였던 inspectionReady 등 기존 행은 DB에
+    /// 남아 사용자 행처럼 편집/삭제할 수 있다.</summary>
     public static readonly (string Key, string Name)[] Slots =
     {
         ("home", "홈 위치"),
-        ("inspectionReady", "검사 준비 위치"),
     };
 
-    /// <summary><see cref="Slots"/> 중 DB에 없는 슬롯을 생성한다(좌표는 null). 멱등.</summary>
+    /// <summary><see cref="Slots"/> 중 DB에 없는 슬롯을 생성하고(좌표는 null), 표시 이름이
+    /// 시드 정의와 다른 기존 슬롯은 이름만 갱신한다. 멱등.</summary>
     public async Task EnsureSeededAsync(CancellationToken ct = default)
     {
-        var existingKeys = await _db.TeachingPositions
-            .Select(p => p.Key)
-            .ToListAsync(ct);
-        var existing = new HashSet<string>(existingKeys);
+        var rows = await _db.TeachingPositions.ToListAsync(ct);
+        var byKey = rows.ToDictionary(p => p.Key, p => p);
 
         var now = DateTime.UtcNow;
-        var added = false;
+        var changed = false;
         for (var i = 0; i < Slots.Length; i++)
         {
             var (key, name) = Slots[i];
-            if (existing.Contains(key)) continue;
+            if (byKey.TryGetValue(key, out var row))
+            {
+                if (row.Name != name)
+                {
+                    row.Name = name;
+                    row.UpdatedAt = now;
+                    changed = true;
+                }
+                continue;
+            }
             _db.TeachingPositions.Add(new TeachingPosition
             {
                 Key = key,
@@ -47,9 +57,9 @@ public class TeachingService
                 CreatedAt = now,
                 UpdatedAt = now,
             });
-            added = true;
+            changed = true;
         }
-        if (added) await _db.SaveChangesAsync(ct);
+        if (changed) await _db.SaveChangesAsync(ct);
     }
 
     /// <summary>시드 보장 후 전체 슬롯을 표시 순서대로 반환.</summary>
@@ -64,6 +74,50 @@ public class TeachingService
 
     public Task<TeachingPosition?> GetAsync(int id, CancellationToken ct = default) =>
         _db.TeachingPositions.AsNoTracking().FirstOrDefaultAsync(p => p.Id == id, ct);
+
+    /// <summary>시드 슬롯(삭제/이름·Surface 편집 불가) 여부.</summary>
+    public static bool IsSeedSlot(string key) => Slots.Any(s => s.Key == key);
+
+    /// <summary>사용자 정의 위치 행 추가. Key 는 자동 생성, 좌표는 비운 채(미티칭) 생성된다.</summary>
+    public async Task<TeachingPosition> AddAsync(string name, int surfaceId, CancellationToken ct = default)
+    {
+        var now = DateTime.UtcNow;
+        var maxOrder = await _db.TeachingPositions.MaxAsync(p => (int?)p.SortOrder, ct) ?? -1;
+        var row = new TeachingPosition
+        {
+            Key = $"user-{Guid.NewGuid():N}",
+            Name = string.IsNullOrWhiteSpace(name) ? "새 위치" : name.Trim(),
+            SurfaceId = Math.Clamp(surfaceId, 0x00, 0xFF),
+            SortOrder = maxOrder + 1,
+            Tool = 1,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.TeachingPositions.Add(row);
+        await _db.SaveChangesAsync(ct);
+        return row;
+    }
+
+    /// <summary>사용자 행 삭제. 시드 슬롯(home 등)은 무시하고 false 반환.</summary>
+    public async Task<bool> DeleteAsync(int id, CancellationToken ct = default)
+    {
+        var row = await _db.TeachingPositions.FirstOrDefaultAsync(p => p.Id == id, ct);
+        if (row is null || IsSeedSlot(row.Key)) return false;
+        _db.TeachingPositions.Remove(row);
+        await _db.SaveChangesAsync(ct);
+        return true;
+    }
+
+    /// <summary>이름/Surface ID(0x00~0xFF) 갱신. 시드 슬롯은 무시(이름·Surface 고정).</summary>
+    public async Task UpdateInfoAsync(int id, string name, int surfaceId, CancellationToken ct = default)
+    {
+        var row = await _db.TeachingPositions.FirstOrDefaultAsync(p => p.Id == id, ct);
+        if (row is null || IsSeedSlot(row.Key)) return;
+        row.Name = string.IsNullOrWhiteSpace(name) ? row.Name : name.Trim();
+        row.SurfaceId = Math.Clamp(surfaceId, 0x00, 0xFF);
+        row.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+    }
 
     /// <summary>해당 슬롯에 현재 BASE 자세(pose[6]: x,y,z,rx,ry,rz)와 관절각(joints[6])을 저장한다.
     /// <paramref name="userFrame"/>&gt;0 이면 작업물 좌표계 N 기준으로 고정하고, 그 프레임 기준 상대

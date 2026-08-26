@@ -74,7 +74,9 @@ public class SequenceContext
     /// <summary>⑱ 검사 수행: 실행할 티칭설정(InspectionProfile) id — 웨이포인트·솎기/실행 파라미터 소스.</summary>
     public int InspectionProfileId { get; set; }
 
-    /// <summary>⑱ 검사 수행: 비전 CAPTURE_REQ Surface ID (SurfaceCatalog, 기본 0x01 바닥).</summary>
+    /// <summary>검사 Surface ID (0x01~0xFF) — 두 용도 공용: ② 이동 목표가 되는 티칭 위치 결정
+    /// (SurfaceId 매칭, <see cref="Steps.CobotInspectionMoveStep.FindBySurfaceId"/>) 및
+    /// ⑱ 검사 순회 시 비전 CAPTURE_REQ 에 보고할 Surface ID. 기본 0x01.</summary>
     public int InspectionSurfaceId { get; set; } = 0x01;
 
     /// <summary>UI 진행 로그 sink — 모니터링 팝업 콘솔용. 스텝은 사람이 읽을 진행 라인을

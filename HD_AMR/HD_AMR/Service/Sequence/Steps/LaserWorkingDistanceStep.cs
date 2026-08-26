@@ -37,7 +37,7 @@ public class LaserWorkingDistanceStep : ISequenceStep
     private const double DefaultWorkingDistanceMm = 300.0;
 
     /// <summary>수렴 판정 허용오차(mm).</summary>
-    private const double ToleranceMm = 0.5;
+    private const double ToleranceMm = 1.0;
 
     /// <summary>1회 이동 절대 한계(mm). 초과 시 이동하지 않고 실패 — 센서 범위/설정 이상 가드.</summary>
     private const double MaxTravelMm = 200.0;

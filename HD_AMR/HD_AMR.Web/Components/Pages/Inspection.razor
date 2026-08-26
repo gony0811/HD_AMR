@@ -639,7 +639,9 @@
             if (selected != null)
             {
                 previewPoints = Service.GetPoints(selected);
-                RecomputeThinned();
+                // 전체 재솎기(RecomputeThinned)는 수동 편집·불러온 프로파일을 초기화하므로,
+                // 마스크 추가 시에는 현재 경유점 중 영역 안의 것만 제거한다.
+                RemoveWaypointsInRect(minX, worldMinY, maxX, worldMaxY);
                 ComputeViewBox();
             }
         }
@@ -667,7 +669,12 @@
             if (selected != null)
             {
                 previewPoints = Service.GetPoints(selected);
-                RecomputeThinned();
+                // 이번 세션에서 마스크로 지운 행이 있으면 그 행만 되살린다(수동 편집·프로파일 보존).
+                // 기억된 행이 없으면(이전 세션의 마스크 등) 기존처럼 전체 재솎기로 폴백.
+                if (_maskRemoved.Count > 0)
+                    RestoreMaskRemovedWaypoints();
+                else
+                    RecomputeThinned();
                 ComputeViewBox();
             }
         }
@@ -703,6 +710,8 @@
         _thinned = ThinHybrid(ordered);
         _selectedWpIndex = -1;
         _thetaOverrides.Clear();
+        _surfaceTypeOverrides.Clear();
+        _maskRemoved.Clear();   // 표가 통째로 바뀌면 마스크 복원 목록은 무효
     }
 
     // 직선/코로게이션 구간을 구분해 분할한다.
@@ -826,6 +835,79 @@
 
         if (_selectedWpIndex == i) _selectedWpIndex = -1;
         else if (_selectedWpIndex > i) _selectedWpIndex--;
+    }
+
+    // 마스크(제외 영역) 추가 시 영역 안의 경유점만 제거. 인덱스 키 상태(_thetaOverrides,
+    // _surfaceTypeOverrides, _selectedWpIndex)를 남는 점 기준으로 재매핑해 수동 편집을 보존한다.
+    // 지운 행은 _maskRemoved 에 기억해 두었다가 '선택 마스크 초기화' 시 복원한다.
+    private void RemoveWaypointsInRect(double minX, double minY, double maxX, double maxY)
+    {
+        var keep = new List<int>();
+        for (int i = 0; i < _thinned.Count; i++)
+        {
+            var p = _thinned[i];
+            var inside = p.X >= minX && p.X <= maxX && p.Y >= minY && p.Y <= maxY;
+            if (inside)
+                _maskRemoved.Add(new RemovedWaypoint(p,
+                    _thetaOverrides.TryGetValue(i, out var rt) ? rt : null,
+                    _surfaceTypeOverrides.TryGetValue(i, out var rs) ? rs : null));
+            else
+                keep.Add(i);
+        }
+        if (keep.Count == _thinned.Count) return;
+
+        var newThinned = new List<PointMarker>(keep.Count);
+        var newTheta = new Dictionary<int, double>();
+        var newSurface = new Dictionary<int, SurfaceType>();
+        var newSelected = -1;
+        for (int ni = 0; ni < keep.Count; ni++)
+        {
+            var oi = keep[ni];
+            newThinned.Add(_thinned[oi]);
+            if (_thetaOverrides.TryGetValue(oi, out var t)) newTheta[ni] = t;
+            if (_surfaceTypeOverrides.TryGetValue(oi, out var s)) newSurface[ni] = s;
+            if (_selectedWpIndex == oi) newSelected = ni;
+        }
+        _thinned = newThinned;
+        _thetaOverrides.Clear();
+        foreach (var kv in newTheta) _thetaOverrides[kv.Key] = kv.Value;
+        _surfaceTypeOverrides.Clear();
+        foreach (var kv in newSurface) _surfaceTypeOverrides[kv.Key] = kv.Value;
+        _selectedWpIndex = newSelected;
+    }
+
+    private readonly record struct RemovedWaypoint(PointMarker Point, double? Theta, SurfaceType? Surface);
+    private readonly List<RemovedWaypoint> _maskRemoved = new();
+
+    // '선택 마스크 초기화' 시 마스크로 지웠던 경유점을 X(같으면 Y) 정렬 위치에 되돌려 넣는다.
+    // 남아 있는 행과 수동 편집값은 건드리지 않는다.
+    private void RestoreMaskRemovedWaypoints()
+    {
+        foreach (var e in _maskRemoved)
+        {
+            int at = 0;
+            while (at < _thinned.Count &&
+                   (_thinned[at].X < e.Point.X ||
+                    (_thinned[at].X == e.Point.X && _thinned[at].Y <= e.Point.Y)))
+                at++;
+            _thinned.Insert(at, e.Point);
+            ShiftOverridesForInsert(at);
+            if (e.Theta is double t) _thetaOverrides[at] = t;
+            if (e.Surface is SurfaceType s) _surfaceTypeOverrides[at] = s;
+            if (_selectedWpIndex >= at) _selectedWpIndex++;
+        }
+        _maskRemoved.Clear();
+    }
+
+    // at 위치 삽입에 맞춰 인덱스 키 딕셔너리(θ·Surface 수동값)를 한 칸씩 민다.
+    private void ShiftOverridesForInsert(int at)
+    {
+        var t = _thetaOverrides.ToDictionary(kv => kv.Key >= at ? kv.Key + 1 : kv.Key, kv => kv.Value);
+        _thetaOverrides.Clear();
+        foreach (var kv in t) _thetaOverrides[kv.Key] = kv.Value;
+        var s = _surfaceTypeOverrides.ToDictionary(kv => kv.Key >= at ? kv.Key + 1 : kv.Key, kv => kv.Value);
+        _surfaceTypeOverrides.Clear();
+        foreach (var kv in s) _surfaceTypeOverrides[kv.Key] = kv.Value;
     }
 
     // 현재 행 바로 아래에 새 경유점 삽입. 기본 좌표는 다음 점과의 중점(마지막 행이면 현재 점 복사).
@@ -1042,7 +1124,8 @@
             var waypoints = new List<InspectionWaypoint>(_thinned.Count);
             for (int i = 0; i < _thinned.Count; i++)
                 waypoints.Add(new InspectionWaypoint(
-                    _thinned[i].X, _thinned[i].Y, EffectiveThetaDeg(i), _thetaOverrides.ContainsKey(i)));
+                    _thinned[i].X, _thinned[i].Y, EffectiveThetaDeg(i), _thetaOverrides.ContainsKey(i),
+                    (byte)EffectiveSurfaceType(i), _surfaceTypeOverrides.ContainsKey(i)));
 
             // 같은 도면에 같은 이름이 있으면 그 프로파일을 갱신(덮어쓰기).
             var name = _profileName.Trim();
@@ -1121,9 +1204,14 @@
             _thinned = waypoints.Select(w => new PointMarker(w.X, w.Z)).ToList();
             _thetaOverrides.Clear();
             _surfaceTypeOverrides.Clear();
+            _maskRemoved.Clear();   // 프로파일 경유점으로 교체 — 이전 마스크 복원 목록은 무효
             _visionResults.Clear();
             for (int i = 0; i < waypoints.Count; i++)
+            {
                 if (waypoints[i].ThetaManual) _thetaOverrides[i] = waypoints[i].Theta;
+                if (waypoints[i].SurfaceManual && Enum.IsDefined(typeof(SurfaceType), waypoints[i].Surface))
+                    _surfaceTypeOverrides[i] = (SurfaceType)waypoints[i].Surface;
+            }
 
             _selectedWpIndex = -1;
             _profileName = p.Name;
@@ -1192,12 +1280,17 @@
             maxX = Math.Max(maxX, p.X);
             maxY = Math.Max(maxY, p.Y);
         }
-        foreach (var r in selected!.ExcludedRegions)
+        // 화면 맞춤 범위는 점군 기준으로만 잡는다 — 마스크(제외 영역)를 포함하면 드래그할 때마다
+        // 범위가 커져 그림이 밀리거나 축소되어 보인다. 점이 하나도 없을 때만 영역으로 범위를 잡는다.
+        if (previewPoints.Count == 0)
         {
-            minX = Math.Min(minX, r.MinX);
-            minY = Math.Min(minY, r.MinY);
-            maxX = Math.Max(maxX, r.MaxX);
-            maxY = Math.Max(maxY, r.MaxY);
+            foreach (var r in selected!.ExcludedRegions)
+            {
+                minX = Math.Min(minX, r.MinX);
+                minY = Math.Min(minY, r.MinY);
+                maxX = Math.Max(maxX, r.MaxX);
+                maxY = Math.Max(maxY, r.MaxY);
+            }
         }
 
         if (double.IsInfinity(minX) || double.IsInfinity(minY))

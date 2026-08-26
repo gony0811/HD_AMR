@@ -98,6 +98,23 @@
                         @if (step.Key == "cobotInspection")
                         {
                             <div class="uv-inputs">
+                                <label>검사 Surface
+                                    <select class="form-select form-select-sm"
+                                            @bind="_context.InspectionSurfaceId" @bind:after="SaveInspectionAsync"
+                                            disabled="@Seq.IsBusy">
+                                        @foreach (var p in InspectionPositionOptions())
+                                        {
+                                            <option value="@p.SurfaceId">
+                                                0x@(p.SurfaceId.ToString("X2")) @p.Name@(p.IsTaught ? "" : " (미티칭)")
+                                            </option>
+                                        }
+                                    </select>
+                                </label>
+                                @if (!IsInspectionPositionTaught())
+                                {
+                                    <span class="badge bg-warning text-dark align-self-center"
+                                          title="선택한 Surface ID의 티칭 위치가 없거나 좌표 미저장">미티칭</span>
+                                }
                                 <label>방향
                                     <select class="form-select form-select-sm"
                                             @bind="_context.InspectionDirection" @bind:after="SaveOffsetsAsync"
@@ -221,15 +238,12 @@
                                         }
                                     </select>
                                 </label>
+                                @* Surface ID는 ② 검사위치 이동의 "검사 Surface" 선택과 공용 — 여기서는 표시만. *@
                                 <label>Surface ID
-                                    <select class="form-select form-select-sm"
-                                            @bind="_context.InspectionSurfaceId" @bind:after="SaveInspectionAsync"
-                                            disabled="@Seq.IsBusy">
-                                        @foreach (var s in SurfaceCatalog.All)
-                                        {
-                                            <option value="@s.Id">@($"0x{s.Id:X2}") @s.Name</option>
-                                        }
-                                    </select>
+                                    <span class="form-control form-control-sm bg-body-secondary"
+                                          title="② Cobot 검사위치 이동의 '검사 Surface'에서 설정">
+                                        0x@(_context.InspectionSurfaceId.ToString("X2"))@(InspectionSurfaceName() is { } sn ? $" {sn}" : "") (②에서 설정)
+                                    </span>
                                 </label>
                             </div>
                         }
@@ -369,6 +383,27 @@
         var list = await Teaching.ListAsync();
         _context.Positions = list.ToDictionary(p => p.Key, p => p);
     }
+
+    // ② "검사 Surface" 드롭다운 소스 — SurfaceId>0 인 티칭 행(표시 순서). 현재 선택값이 목록에
+    // 없으면(행 삭제 등) 선택 유지 표시를 위해 가상 항목을 앞에 추가한다.
+    private IEnumerable<TeachingPosition> InspectionPositionOptions()
+    {
+        var rows = _context.Positions.Values
+            .Where(p => p.SurfaceId > 0)
+            .OrderBy(p => p.SortOrder).ThenBy(p => p.Id)
+            .ToList();
+        if (_context.InspectionSurfaceId > 0 && rows.All(p => p.SurfaceId != _context.InspectionSurfaceId))
+            rows.Insert(0, new TeachingPosition { SurfaceId = _context.InspectionSurfaceId, Name = "(티칭 위치 없음)" });
+        return rows;
+    }
+
+    // 선택된 Surface ID의 티칭 여부 — ② 파라미터 옆 경고 배지용(스텝 검증과 동일 규칙).
+    private bool IsInspectionPositionTaught()
+        => CobotInspectionMoveStep.FindBySurfaceId(_context) is { IsTaught: true };
+
+    // ⑱ 읽기 전용 표시용 — 선택된 Surface ID에 매칭되는 티칭 위치 이름(없으면 null).
+    private string? InspectionSurfaceName()
+        => CobotInspectionMoveStep.FindBySurfaceId(_context)?.Name;
 
     private async Task SaveOffsetsAsync()
     {
