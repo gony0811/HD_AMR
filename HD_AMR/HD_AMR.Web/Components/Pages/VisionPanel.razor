@@ -361,11 +361,8 @@
         => CaptureReqPayload.Build((SurfaceType)_surfaceType, (ushort)_surfaceId, _posX, _posY);
 
     private byte[] BuildResultData()
-    {
-        var data = new byte[6];
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(0, 2), (ushort)_resultCode);
-        return data;
-    }
+        // v3: [0-35]Run ID·[36-71]Task ID(에코, 수동 테스트는 0 GUID)·[72-73]코드.
+        => CaptureResPayload.Build(Guid.Empty, Guid.Empty, (ResultCode)_resultCode);
 
     private async Task SendRaw()
     {

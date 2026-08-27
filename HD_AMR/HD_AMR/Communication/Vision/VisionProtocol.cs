@@ -3,20 +3,121 @@ using System.Buffers.Binary;
 namespace HD_AMR.Communication.Vision;
 
 /// <summary>
-/// CAPTURE_REQ 의 15바이트 DATA 페이로드 생성.
-/// 레이아웃: [0]Surface Type, [1-2]Surface ID(LE), [3-6]PosX(LE,mm), [7-10]PosY(LE,mm), [11-14]예약(0).
+/// CAPTURE_REQ 의 115바이트 DATA 페이로드 생성 [v3]. 레이아웃:
+///   [0-35]  Run ID   (ASCII 36, ACS 실행 GUID 정규형)
+///   [36-71] Task ID  (ASCII 36, ACS 검사 TASK GUID 정규형)
+///   [72-103]Job Ref  (ASCII 32, null 0x00 패딩)
+///   [104]   Surface Type
+///   [105-106]Surface ID (UInt16 LE)
+///   [107-110]PosX (Int32 LE, mm)
+///   [111-114]PosY (Int32 LE, mm)
+/// Run/Task ID 는 ACS 상관 식별자로, 비전 S/W 가 이를 결과에 에코하면 엔터프라이즈가
+/// 검사 결과를 ACS TASK 진행현황(inspection_result / progress)과 매칭할 수 있다.
 /// </summary>
 public static class CaptureReqPayload
 {
-    public static byte[] Build(SurfaceType type, ushort surfaceId, int posX, int posY)
+    public const int RunIdLen  = 36;
+    public const int TaskIdLen = 36;
+    public const int JobRefLen = 32;
+    public const int RunIdOff       = 0;
+    public const int TaskIdOff      = RunIdOff + RunIdLen;        // 36
+    public const int JobRefOff      = TaskIdOff + TaskIdLen;      // 72
+    public const int SurfaceTypeOff = JobRefOff + JobRefLen;      // 104
+    public const int SurfaceIdOff   = SurfaceTypeOff + 1;         // 105
+    public const int PosXOff        = SurfaceIdOff + 2;           // 107
+    public const int PosYOff        = PosXOff + 4;                // 111
+    public const int Length         = PosYOff + 4;               // 115
+
+    /// <summary>v3: ACS 상관 식별자(Run ID·Task ID·Job Ref) 포함.</summary>
+    public static byte[] Build(Guid runId, Guid taskId, string? jobRef,
+        SurfaceType type, ushort surfaceId, int posX, int posY)
     {
-        var data = new byte[15];
-        data[0] = (byte)type;
-        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(1, 2), surfaceId);
-        BinaryPrimitives.WriteInt32LittleEndian(data.AsSpan(3, 4), posX);
-        BinaryPrimitives.WriteInt32LittleEndian(data.AsSpan(7, 4), posY);
-        // bytes 11..14 reserved → 0x00
+        var data = new byte[Length];
+        GuidAscii.Write(data.AsSpan(RunIdOff, RunIdLen), runId);
+        GuidAscii.Write(data.AsSpan(TaskIdOff, TaskIdLen), taskId);
+        AsciiField.Write(data.AsSpan(JobRefOff, JobRefLen), jobRef);
+        data[SurfaceTypeOff] = (byte)type;
+        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(SurfaceIdOff, 2), surfaceId);
+        BinaryPrimitives.WriteInt32LittleEndian(data.AsSpan(PosXOff, 4), posX);
+        BinaryPrimitives.WriteInt32LittleEndian(data.AsSpan(PosYOff, 4), posY);
         return data;
+    }
+
+    /// <summary>상관 식별자 없이(수동 테스트·비ACS 경로) 생성 — Run/Task ID = 0 GUID, Job Ref = 공란.</summary>
+    public static byte[] Build(SurfaceType type, ushort surfaceId, int posX, int posY)
+        => Build(Guid.Empty, Guid.Empty, null, type, surfaceId, posX, posY);
+}
+
+/// <summary>
+/// CAPTURE_RES / ERROR_NOTI 의 74바이트 DATA 페이로드 [v3]. 레이아웃:
+///   [0-35]  Run ID  (ASCII 36, 요청 값 에코)
+///   [36-71] Task ID (ASCII 36, 요청 값 에코)
+///   [72-73] 결과/오류 코드 (UInt16 LE)
+/// </summary>
+public static class CaptureResPayload
+{
+    public const int RunIdOff  = 0;
+    public const int TaskIdOff = 36;
+    public const int CodeOff   = 72;
+    public const int Length    = 74;
+
+    public static byte[] Build(Guid runId, Guid taskId, ResultCode code)
+    {
+        var data = new byte[Length];
+        GuidAscii.Write(data.AsSpan(RunIdOff, 36), runId);
+        GuidAscii.Write(data.AsSpan(TaskIdOff, 36), taskId);
+        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(CodeOff, 2), (ushort)code);
+        return data;
+    }
+
+    /// <summary>결과 코드 추출. v3(≥74B)는 [72], v2(정확히 2B) 레거시는 [0]. 부족하면 false.</summary>
+    public static bool TryReadCode(ReadOnlySpan<byte> data, out ushort code)
+    {
+        if (data.Length >= Length) { code = BinaryPrimitives.ReadUInt16LittleEndian(data.Slice(CodeOff, 2)); return true; }
+        if (data.Length >= 2)      { code = BinaryPrimitives.ReadUInt16LittleEndian(data.Slice(0, 2)); return true; }
+        code = 0; return false;
+    }
+
+    /// <summary>에코된 Run/Task ID 추출(v3, ≥74B). 파싱 실패 시 Guid.Empty.</summary>
+    public static (Guid RunId, Guid TaskId) ReadIds(ReadOnlySpan<byte> data)
+    {
+        if (data.Length < Length) return (Guid.Empty, Guid.Empty);
+        return (GuidAscii.Read(data.Slice(RunIdOff, 36)), GuidAscii.Read(data.Slice(TaskIdOff, 36)));
+    }
+}
+
+/// <summary>GUID ↔ 36바이트 ASCII 정규형(소문자, 하이픈) 변환. 엔디안 모호성 제거용.</summary>
+internal static class GuidAscii
+{
+    public static void Write(Span<byte> dst, Guid id)
+    {
+        // dst.Length == 36. Guid "D" 포맷 = 36자 ASCII.
+        Span<char> chars = stackalloc char[36];
+        id.TryFormat(chars, out _, "D");
+        for (var i = 0; i < 36; i++) dst[i] = (byte)chars[i];
+    }
+
+    public static Guid Read(ReadOnlySpan<byte> src)
+    {
+        Span<char> chars = stackalloc char[src.Length];
+        for (var i = 0; i < src.Length; i++) chars[i] = (char)src[i];
+        return Guid.TryParse(chars, out var g) ? g : Guid.Empty;
+    }
+}
+
+/// <summary>고정 길이 ASCII 필드(null 0x00 패딩) 쓰기/읽기.</summary>
+internal static class AsciiField
+{
+    public static void Write(Span<byte> dst, string? text)
+    {
+        dst.Clear();
+        if (string.IsNullOrEmpty(text)) return;
+        var n = 0;
+        foreach (var ch in text)
+        {
+            if (n >= dst.Length) break;
+            dst[n++] = ch < 0x80 ? (byte)ch : (byte)'?';   // ASCII 전용
+        }
     }
 }
 
