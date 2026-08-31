@@ -210,6 +210,11 @@
                     <input class="form-control" type="number" min="1" max="100" style="width:80px" @bind="_runVel" /></div>
                 <div class="col-auto"><label class="form-label">응답 대기 제한(초)</label>
                     <input class="form-control" type="number" step="0.1" min="0" style="width:120px" @bind="_visionTimeoutSec" /></div>
+                <div class="col-auto form-check form-switch align-self-end mb-2 ms-2">
+                    <input class="form-check-input" type="checkbox" id="visionCheckToggle" @bind="_visionCheckEnabled" />
+                    <label class="form-check-label" for="visionCheckToggle"
+                           title="끄면 CAPTURE_REQ를 보내지 않고 로봇 이동만으로 완료 처리합니다 (비전 PC 미가동 시 사용)">비전 응답 확인</label>
+                </div>
                 <div class="col-auto"><label class="form-label">th_max(°)</label>
                     <input class="form-control" type="number" step="1" min="0" style="width:80px" @bind="_thMax" /></div>
                 <div class="col-auto"><label class="form-label">DELAY TIME(초)</label>
@@ -371,6 +376,7 @@
     private int _runUser = 0;
     private int _runVel = 5;
     private double _visionTimeoutSec = 10;     // CAPTURE_REQ 응답 대기 제한(초)
+    private bool _visionCheckEnabled = true;   // off면 CAPTURE_REQ 자체를 생략하고 이동만으로 완료 처리
     private double _settleDelaySec = 0.5;       // 이동 후 진동 흡수 대기(초)
     private bool _moveHomeFirst = false;       // (UI 제거됨) 프로필 호환을 위해 필드는 유지, 항상 false
     private int _surfaceId = 1;                // CAPTURE_REQ Surface ID(콤보박스)
@@ -990,23 +996,30 @@
                     return;
                 }
 
-                // 이동 후 진동 흡수 대기 → 비전으로 CAPTURE_REQ 전송 후 응답 대기.
+                // 이동 후 진동 흡수 대기 → (비전 응답 확인 토글 on일 때만) CAPTURE_REQ 전송 후 응답 대기.
                 if (_settleDelaySec > 0)
                     await Task.Delay(TimeSpan.FromSeconds(_settleDelaySec), ct);
 
-                var data = CaptureReqPayload.Build(EffectiveSurfaceType(i), (ushort)_surfaceId,
-                    (int)Math.Round(x), (int)Math.Round(z));
-                var outcome = await Vision.Client.RequestCaptureAsync(data, visionTimeout, ct);
-                var result = outcome switch
+                if (_visionCheckEnabled)
                 {
-                    { Sent: false }      => "비전 미연결",
-                    { Responded: false } => "응답 없음(타임아웃)",
-                    { Success: true }    => "비전 OK",
-                    _                    => $"비전 실패({ResultCodeNames.NameOf((ushort)outcome.Code!)})",
-                };
-                _visionResults[i] = result;
-                // 실패/무응답이어도 중단하지 않고 다음 점으로 진행.
-                _runMessage = $"#{i + 1} 이동 완료 · {result}";
+                    var data = CaptureReqPayload.Build(EffectiveSurfaceType(i), (ushort)_surfaceId,
+                        (int)Math.Round(x), (int)Math.Round(z));
+                    var outcome = await Vision.Client.RequestCaptureAsync(data, visionTimeout, ct);
+                    var result = outcome switch
+                    {
+                        { Sent: false }      => "비전 미연결",
+                        { Responded: false } => "응답 없음(타임아웃)",
+                        { Success: true }    => "비전 OK",
+                        _                    => $"비전 실패({ResultCodeNames.NameOf((ushort)outcome.Code!)})",
+                    };
+                    _visionResults[i] = result;
+                    // 실패/무응답이어도 중단하지 않고 다음 점으로 진행.
+                    _runMessage = $"#{i + 1} 이동 완료 · {result}";
+                }
+                else
+                {
+                    _runMessage = $"#{i + 1} 이동 완료 (비전 생략)";
+                }
                 await InvokeAsync(StateHasChanged);
             }
 
@@ -1081,24 +1094,32 @@
                 return; // finally에서 _isRunning 해제
             }
 
-            // 이동 성공 → 진동 흡수 대기 → 비전으로 CAPTURE_REQ 전송 후 응답 대기 (RunWaypoints와 동일 패턴).
+            // 이동 성공 → 진동 흡수 대기 → (비전 응답 확인 토글 on일 때만) CAPTURE_REQ 전송 후 응답 대기.
             if (_settleDelaySec > 0)
                 await Task.Delay(TimeSpan.FromSeconds(_settleDelaySec));
 
-            var visionTimeout = TimeSpan.FromSeconds(Math.Max(0, _visionTimeoutSec));
-            var data = CaptureReqPayload.Build(EffectiveSurfaceType(i), (ushort)_surfaceId,
-                (int)Math.Round(x), (int)Math.Round(z));
-            var outcome = await Vision.Client.RequestCaptureAsync(data, visionTimeout, CancellationToken.None);
-            var result = outcome switch
+            if (_visionCheckEnabled)
             {
-                { Sent: false }      => "비전 미연결",
-                { Responded: false } => "응답 없음(타임아웃)",
-                { Success: true }    => "비전 OK",
-                _                    => $"비전 실패({ResultCodeNames.NameOf((ushort)outcome.Code!)})",
-            };
-            _visionResults[i] = result;
-            _runIsError = false;
-            _runMessage = $"#{i + 1} 이동 완료 · {result}";
+                var visionTimeout = TimeSpan.FromSeconds(Math.Max(0, _visionTimeoutSec));
+                var data = CaptureReqPayload.Build(EffectiveSurfaceType(i), (ushort)_surfaceId,
+                    (int)Math.Round(x), (int)Math.Round(z));
+                var outcome = await Vision.Client.RequestCaptureAsync(data, visionTimeout, CancellationToken.None);
+                var result = outcome switch
+                {
+                    { Sent: false }      => "비전 미연결",
+                    { Responded: false } => "응답 없음(타임아웃)",
+                    { Success: true }    => "비전 OK",
+                    _                    => $"비전 실패({ResultCodeNames.NameOf((ushort)outcome.Code!)})",
+                };
+                _visionResults[i] = result;
+                _runIsError = false;
+                _runMessage = $"#{i + 1} 이동 완료 · {result}";
+            }
+            else
+            {
+                _runIsError = false;
+                _runMessage = $"#{i + 1} 이동 완료 (비전 생략)";
+            }
         }
         catch (Exception ex)
         {
