@@ -1,0 +1,181 @@
+@page "/amr-job-mapping"
+@rendermode InteractiveServer
+@using HD_AMR.Models
+@using HD_AMR.Service
+@inject AmrJobMappingStore Store
+
+<PageTitle>AMR Job 매핑</PageTitle>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="page-title mb-0">AMR Job 매핑</h1>
+</div>
+
+<p class="text-muted">
+    order 노드(nodeId) ↔ TARS-M 사전 티칭 Job/Task 인덱스 매핑입니다. ACS에서 내려받은 티칭 테이블 CSV를
+    가져와 좌표를 채우고, 수동 티칭 후 회수한 <strong>Job Index</strong>를 입력·저장하세요.
+    어댑터는 order 수신 시 이 표로 nodeId를 조회해 이동을 실행합니다.
+    (TARS-M은 좌표 goto가 없어 인덱스로 이동 — VDA5050_NODE_INDEX_TRANSMISSION 사양)
+</p>
+
+@* ── 툴바 ── *@
+<div class="card mb-3">
+    <div class="card-body py-2">
+        <div class="row g-2 align-items-end">
+            <div class="col-auto">
+                <label class="form-label mb-0">ACS 티칭 테이블 CSV 경로</label>
+                <input class="form-control form-control-sm" style="width:360px" @bind="_csvPath"
+                       placeholder="예: C:\HD\CT1_amr_teaching_table.csv" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-sm btn-primary" @onclick="ImportCsv">CSV 가져오기(병합)</button>
+            </div>
+            <div class="col-auto ms-3">
+                <button class="btn btn-sm btn-outline-secondary" @onclick="AddRow">행 추가</button>
+            </div>
+            <div class="col-auto flex-grow-1 text-end">
+                <span class="text-muted">@_status</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+@* ── 표 ── *@
+<div class="table-responsive">
+    <table class="table table-sm table-hover align-middle">
+        <thead>
+            <tr>
+                <th>Node ID</th><th>맵(층)</th><th>이름</th>
+                <th class="text-end">X (m)</th><th class="text-end">Y (m)</th><th class="text-end">θ (rad)</th>
+                <th style="width:110px">Job Index</th><th style="width:110px">Task Index</th>
+                <th>출처</th><th></th>
+            </tr>
+        </thead>
+        <tbody>
+            @if (_rows.Count == 0)
+            {
+                <tr><td colspan="10" class="text-center text-muted py-3">매핑이 없습니다. CSV를 가져오거나 '행 추가'로 등록하세요.</td></tr>
+            }
+            @foreach (var r in _rows)
+            {
+                <tr>
+                    <td>
+                        @if (r.IsNew)
+                        {
+                            <input class="form-control form-control-sm" @bind="r.NodeId" placeholder="nodeId" />
+                        }
+                        else { <code>@r.NodeId</code> }
+                    </td>
+                    <td>@r.MapId</td>
+                    <td>@r.Name</td>
+                    <td class="text-end">@r.MapX.ToString("0.####")</td>
+                    <td class="text-end">@r.MapY.ToString("0.####")</td>
+                    <td class="text-end">@r.ThetaRad.ToString("0.#####")</td>
+                    <td><input class="form-control form-control-sm" type="number" @bind="r.JobIndex" /></td>
+                    <td><input class="form-control form-control-sm" type="number" @bind="r.TaskIndex" /></td>
+                    <td><span class="badge @(r.Source == "LOCAL" ? "bg-warning text-dark" : "bg-secondary")">@r.Source</span></td>
+                    <td class="text-end">
+                        <button class="btn btn-sm btn-primary" @onclick="() => SaveRow(r)">저장</button>
+                        <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteRow(r)">삭제</button>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>
+
+@code {
+    private sealed class Row
+    {
+        public string NodeId = "";
+        public string MapId = "";
+        public string Name = "";
+        public double MapX, MapY, ThetaRad;
+        public int? JobIndex, TaskIndex;
+        public string GotoMode = "INDEX";
+        public string Source = "LOCAL";
+        public bool IsNew;
+    }
+
+    private readonly List<Row> _rows = new();
+    private string _csvPath = "";
+    private string _status = "";
+
+    protected override void OnInitialized() => Reload();
+
+    private void Reload()
+    {
+        _rows.Clear();
+        foreach (var m in Store.All())
+            _rows.Add(new Row
+            {
+                NodeId = m.NodeId, MapId = m.MapId, Name = m.Name,
+                MapX = m.MapX, MapY = m.MapY, ThetaRad = m.ThetaRad,
+                JobIndex = m.JobIndex, TaskIndex = m.TaskIndex, GotoMode = m.GotoMode, Source = m.Source,
+            });
+    }
+
+    private void AddRow() => _rows.Insert(0, new Row { IsNew = true, Source = "LOCAL" });
+
+    private void SaveRow(Row r)
+    {
+        if (string.IsNullOrWhiteSpace(r.NodeId)) { _status = "Node ID를 입력하세요."; return; }
+        Store.Upsert(new AmrNodeMapping
+        {
+            NodeId = r.NodeId.Trim(), MapId = r.MapId, Name = r.Name,
+            MapX = r.MapX, MapY = r.MapY, ThetaRad = r.ThetaRad,
+            JobIndex = r.JobIndex, TaskIndex = r.TaskIndex, GotoMode = r.GotoMode,
+            Source = "LOCAL", UpdatedAt = DateTime.Now,
+        });
+        _status = $"'{r.NodeId}' 저장됨.";
+        Reload();
+    }
+
+    private void DeleteRow(Row r)
+    {
+        if (!r.IsNew) Store.Remove(r.NodeId);
+        _rows.Remove(r);
+        _status = $"'{r.NodeId}' 삭제됨.";
+    }
+
+    private void ImportCsv()
+    {
+        var path = _csvPath?.Trim();
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) { _status = "CSV 파일 경로가 유효하지 않습니다."; return; }
+        try
+        {
+            var rows = ParseTeachingCsv(File.ReadAllLines(path));
+            var (added, updated) = Store.MergeFromAcs(rows);
+            Reload();
+            _status = $"CSV 병합 완료 — 추가 {added}, 갱신 {updated}.";
+        }
+        catch (Exception ex)
+        {
+            _status = $"CSV 가져오기 실패: {ex.Message}";
+        }
+    }
+
+    /// <summary>ACS teaching-table.csv 파싱. 헤더:
+    /// node_id,map_id,name,map_x,map_y,theta_rad,theta_deg,allowed_dev_xy,allowed_dev_theta,amr_job_index</summary>
+    private static List<AmrNodeMapping> ParseTeachingCsv(string[] lines)
+    {
+        var list = new List<AmrNodeMapping>();
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            if (i == 0 && line.Contains("node_id")) continue;              // 헤더
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            line = line.TrimStart('\uFEFF');                                // BOM
+            var c = line.Split(',');
+            if (c.Length < 6 || string.IsNullOrWhiteSpace(c[0])) continue;
+            double D(int idx) => idx < c.Length && double.TryParse(c[idx], out var v) ? v : 0;
+            int? I(int idx) => idx < c.Length && int.TryParse(c[idx], out var v) ? v : null;
+            list.Add(new AmrNodeMapping
+            {
+                NodeId = c[0].Trim(), MapId = c.ElementAtOrDefault(1) ?? "", Name = c.ElementAtOrDefault(2) ?? "",
+                MapX = D(3), MapY = D(4), ThetaRad = D(5),
+                JobIndex = I(9), GotoMode = "INDEX", Source = "ACS", UpdatedAt = DateTime.Now,
+            });
+        }
+        return list;
+    }
+}

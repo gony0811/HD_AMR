@@ -132,6 +132,12 @@ public class InspectionRunStep : ISequenceStep
         var settle = TimeSpan.FromSeconds(Math.Max(0, profile.SettleDelaySec));
         int moved = 0, skipped = 0, visOk = 0, visFail = 0;
 
+        // v3: 검사 세션 1회 = Run ID 1개(GUID). 각 경유점 캡처 = Task ID 1개.
+        // ACS 연동 시에는 작업지시(VDA 5050)에서 받은 값을 사용하고, 단독 실행에서는 여기서 발급한다.
+        // 이 식별자는 CAPTURE_REQ 로 비전에 전달되어, 결과 에코를 통해 엔터프라이즈가 ACS 진행현황과 매칭한다.
+        var runId = Guid.NewGuid();
+        _logger.LogInformation("⑱ 검사 Run ID = {RunId}", runId);
+
         for (var i = 0; i < waypoints.Count; i++)
         {
             ct.ThrowIfCancellationRequested();
@@ -155,16 +161,19 @@ public class InspectionRunStep : ISequenceStep
             var surfaceType = Math.Abs(w.Theta) >= profile.CorrugThresholdDeg
                 ? SurfaceType.Corrugation
                 : SurfaceType.Flat;
-            var data = CaptureReqPayload.Build(surfaceType, (ushort)context.InspectionSurfaceId,
-                (int)Math.Round(w.X), (int)Math.Round(w.Z));
+            // v3: 경유점 캡처 1건 = TASK 1개. Task ID(GUID) 발급 + 사람이 읽는 Job Ref(ASCII).
+            var taskId = Guid.NewGuid();
+            var jobRef = $"P{context.InspectionProfileId}-W{i + 1}";
+            var data = CaptureReqPayload.Build(runId, taskId, jobRef, surfaceType,
+                (ushort)context.InspectionSurfaceId, (int)Math.Round(w.X), (int)Math.Round(w.Z));
 
             var outcome = await _vision.Client.RequestCaptureAsync(data, visionTimeout, ct);
             if (outcome.Success) visOk++;
             else
             {
                 visFail++;
-                _logger.LogWarning("⑱ 경유점 #{Idx} 비전 실패: sent={Sent}, responded={Resp}, code={Code}",
-                    i + 1, outcome.Sent, outcome.Responded,
+                _logger.LogWarning("⑱ 경유점 #{Idx} 비전 실패: task={Task}, sent={Sent}, responded={Resp}, code={Code}",
+                    i + 1, taskId, outcome.Sent, outcome.Responded,
                     outcome.Code is { } c ? ResultCodeNames.NameOf((ushort)c) : "—");
             }
         }
@@ -174,7 +183,7 @@ public class InspectionRunStep : ISequenceStep
             (skipped > 0 ? $"(θ 초과 {skipped}점 제외)" : "") +
             $", 비전 OK {visOk}/{moved}" +
             (visFail > 0 ? $" (실패 {visFail})" : "") +
-            $" [wobj #{wobjId}, tool {context.Tool}, SurfaceID 0x{context.InspectionSurfaceId:X2}].";
+            $" [wobj #{wobjId}, tool {context.Tool}, SurfaceID 0x{context.InspectionSurfaceId:X2}, Run {runId}].";
         _logger.LogInformation("⑱ {Msg}", msg);
         return StepResult.Ok(msg);
     }
