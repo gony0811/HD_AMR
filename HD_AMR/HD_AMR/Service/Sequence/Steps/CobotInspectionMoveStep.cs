@@ -80,11 +80,32 @@ public class CobotInspectionMoveStep : ISequenceStep
         return (target, "검사 준비 위치로");
     }
 
+    /// <summary>u/v 오프셋 합성용 앵커 정규화 — 티칭 자세가 광축(툴 Z) 둘레로 비틀려 저장돼 있어도
+    /// (예: 수직 모드 RZ−90° 상태에서 재티칭) 툴 +Y가 베이스 상방(+Z)을 향하도록 트위스트를 제거한다.
+    /// u=수평/v=수직 매핑과 수평/수직(RZ) 회전, ④의 이미지↔툴 축 매핑은 모두 이 표준 자세를 전제하므로,
+    /// 정규화 없이는 비틀린 티칭에서 u/v가 90° 돌아간 축으로 움직인다.
+    /// 광축이 연직에 가까우면(상방 성분의 XY 투영이 미소) 기준이 모호해 티칭 자세를 그대로 둔다.</summary>
+    internal static double[] NormalizeUvAnchor(double[] target, ILogger? logger = null)
+    {
+        var m = FrameMath.PoseToMatrix(target);
+        // 베이스 +Z(상방)의 툴 X/Y축 성분: up·x̂_t = R[2,0], up·ŷ_t = R[2,1]
+        double ux = m[2, 0], uy = m[2, 1];
+        var n = Math.Sqrt(ux * ux + uy * uy);
+        if (n < 0.2) return target;                       // 광축이 연직 근방 — 정규화 불가, 티칭 자세 유지
+        // T' = T·Rz(θ): 새 툴 Y=(−sinθ, cosθ)가 상방 투영(ux,uy)와 나란하도록 θ = atan2(−ux, uy)
+        var theta = Math.Atan2(-ux, uy) * 180.0 / Math.PI;
+        if (Math.Abs(theta) < 1.0) return target;         // 이미 정렬(±1°)
+        logger?.LogInformation(
+            "② u/v 앵커 정규화: 티칭 자세 광축 트위스트 {Theta:0.#}° 제거 (툴 +Y → 베이스 상방 정렬)", theta);
+        return FrameMath.FromFrame(new[] { 0.0, 0.0, 0.0, 0.0, 0.0, theta }, target);
+    }
+
     public async Task<StepResult> ExecuteAsync(SequenceContext context, CancellationToken ct)
     {
         var inspection = FindBySurfaceId(context)
             ?? throw new InvalidOperationException($"Surface 0x{context.InspectionSurfaceId:X2} 티칭 위치 없음");
         var (target, where) = await ComputeTargetPoseAsync(_cobot, inspection, ct);
+        target = NormalizeUvAnchor(target, _logger);
         where = $"[0x{context.InspectionSurfaceId:X2} {inspection.Name}] {where}";
 
         // 툴프레임 오프셋: offset[0]=u(툴 X = 수평, 좌+/우−), offset[1]=v(툴 Y = 수직, 상+/하−).

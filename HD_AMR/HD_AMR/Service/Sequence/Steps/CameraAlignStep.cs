@@ -73,6 +73,7 @@ public class CameraAlignStep : ISequenceStep
         // 1) 현재 자세가 ②의 목표점(검사 준비 위치 ⊕ u/v 툴 오프셋)인지 TCP 포즈로 검증.
         //    티칭 관절 비교는 u/v 오프셋·작업물 추종 시 목표가 티칭 자세와 달라져 오판한다.
         var (anchor, _) = await CobotInspectionMoveStep.ComputeTargetPoseAsync(_cobot, inspection, ct);
+        anchor = CobotInspectionMoveStep.NormalizeUvAnchor(anchor);   // ② 와 동일한 앵커 정규화 유지
         var rz = context.InspectionDirection == InspectionMoveDirection.Vertical ? -90.0 : 0.0;
         // ② 와 동일 합성 순서 유지: [u(툴 X), v(툴 Y)] — CobotInspectionMoveStep 참조.
         var uvOffset = new[] { context.InspectionOffsetU, context.InspectionOffsetV, 0.0, 0.0, 0.0, rz };
