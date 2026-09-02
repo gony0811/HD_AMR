@@ -18,8 +18,12 @@ public class Vda5050AdapterSettings
     // ── 토픽 요소(ACS와 일치해야 함) ──
     public string TopicPrefix { get; set; } = "uagv";
     public string TopicVersion { get; set; } = "v2";
-    public string Manufacturer { get; set; } = "adentrobot";
-    public string SerialNumber { get; set; } = "TARS-M-01";
+    public string Manufacturer { get; set; } = "HHI";
+    public string SerialNumber { get; set; } = "AMR-01";
+
+    // ── ACS 생존 신호 identity(§7.2 N12) — ACS 인스턴스당 1개, 로봇 토픽과 별개 ──
+    public string AcsManufacturer { get; set; } = "HD_ACS";
+    public string AcsSerialNumber { get; set; } = "hd-acs-master";
 
     // ── 발행 정책 ──
     /// <summary>state 주기 발행 간격(ms). 사양 2초. (변화 시 즉시 발행은 후속.)</summary>
@@ -27,6 +31,12 @@ public class Vda5050AdapterSettings
 
     /// <summary>재접속 재시도 간격(ms).</summary>
     public int ReconnectDelayMs { get; set; } = 5000;
+
+    /// <summary>
+    /// ACS "최근 활동" 판정 창(초). 마지막 order/instantActions 수신이 이 시간 이내면 활동 중으로 표시.
+    /// VDA5050 에는 ACS 하트비트가 없어 경과해도 두절 단정은 불가 — UI 표시용.
+    /// </summary>
+    public int AcsActiveWindowSec { get; set; } = 60;
 
     // ── 상태 매핑 파라미터 ──
     /// <summary>현재 층 mapId(`{tank}-L{level}`). AMR이 맵ID를 미노출하므로 어댑터가 보유(수동/설정). </summary>

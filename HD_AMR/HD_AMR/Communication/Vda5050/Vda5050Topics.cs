@@ -11,4 +11,8 @@ public static class Vda5050Topics
         => $"{s.TopicPrefix}/{s.TopicVersion}/{s.Manufacturer}/{s.SerialNumber}/state";
     public static string Connection(Vda5050AdapterSettings s)
         => $"{s.TopicPrefix}/{s.TopicVersion}/{s.Manufacturer}/{s.SerialNumber}/connection";
+
+    /// <summary>ACS 생존 신호 토픽(§7.2 N12) — ACS 전용 identity, 모든 AMR이 공유 구독.</summary>
+    public static string AcsConnection(Vda5050AdapterSettings s)
+        => $"{s.TopicPrefix}/{s.TopicVersion}/{s.AcsManufacturer}/{s.AcsSerialNumber}/connection";
 }

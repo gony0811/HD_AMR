@@ -8,7 +8,9 @@ namespace HD_AMR.Communication.Vda5050;
 public abstract class Vda5050Header
 {
     [JsonPropertyName("headerId")] public int HeaderId { get; set; }
-    [JsonPropertyName("timestamp")] public string Timestamp { get; set; } = DateTimeOffset.UtcNow.ToString("O");
+    // 사양 §3(N2): ISO 8601 UTC 밀리초 3자리 + 'Z'. 메시지는 발행 직전 생성되므로 생성 시각 = 발행 시각.
+    [JsonPropertyName("timestamp")] public string Timestamp { get; set; } =
+        DateTime.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'");
     [JsonPropertyName("version")] public string Version { get; set; } = "2.0.0";
     [JsonPropertyName("manufacturer")] public string Manufacturer { get; set; } = "";
     [JsonPropertyName("serialNumber")] public string SerialNumber { get; set; } = "";
@@ -30,6 +32,7 @@ public sealed class Vda5050State : Vda5050Header
     [JsonPropertyName("lastNodeSequenceId")] public int LastNodeSequenceId { get; set; }
     [JsonPropertyName("driving")] public bool Driving { get; set; }
     [JsonPropertyName("paused")] public bool Paused { get; set; }
+    [JsonPropertyName("newBaseRequest")] public bool NewBaseRequest { get; set; }
     [JsonPropertyName("operatingMode")] public string OperatingMode { get; set; } = "AUTOMATIC";
     [JsonPropertyName("agvPosition")] public AgvPosition? AgvPosition { get; set; }
     [JsonPropertyName("batteryState")] public BatteryState? BatteryState { get; set; }
@@ -122,6 +125,10 @@ public sealed class NodePosition
     [JsonPropertyName("x")] public double X { get; set; }
     [JsonPropertyName("y")] public double Y { get; set; }
     [JsonPropertyName("theta")] public double? Theta { get; set; }
+    // 도착 판정 허용 오차(사양 §4.2/부록 D-4) — 로봇 이동 명령에는 전달 수단이 없어 온보드 자체 판정 전용.
+    // 미지정 시 0.1 m / 0.1 rad.
+    [JsonPropertyName("allowedDeviationXY")] public double? AllowedDeviationXY { get; set; }
+    [JsonPropertyName("allowedDeviationTheta")] public double? AllowedDeviationTheta { get; set; }
     [JsonPropertyName("mapId")] public string MapId { get; set; } = "";
 }
 

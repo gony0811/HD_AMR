@@ -60,10 +60,16 @@ builder.Services.AddTransient<FlatSurfaceCenteringService>();
 // 노드↔AMR Job/Task 인덱스 로컬 매핑 저장소(JSON). /amr-job-mapping 편집 화면 + (향후)어댑터 조회.
 builder.Services.AddSingleton<AmrJobMappingStore>();
 
-// VDA 5050 어댑터(ACS↔AMR) — connection/state 발행 + order/instantActions 수신.
+// TARS-M v3 REST 클라이언트 — VDA5050 order 의 이동 실현 경로(/robot/go·state·status).
+builder.Services.Configure<AmrRestSettings>(
+    builder.Configuration.GetSection("AmrRest"));
+builder.Services.AddSingleton<AmrRestClient>();
+
+// VDA 5050 어댑터(ACS↔AMR) — connection/state 발행 + order 실행(REST 이동) + instantActions.
 // AMRService(Modbus 상태)를 참조해 state를 매핑. Enabled=false 면 유휴. AMR/Cobot 과 동일 패턴.
 builder.Services.Configure<HD_AMR.Communication.Vda5050.Vda5050AdapterSettings>(
     builder.Configuration.GetSection("Vda5050"));
+builder.Services.AddSingleton<Vda5050OrderExecutor>();
 builder.Services.AddSingleton<Vda5050AdapterService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<Vda5050AdapterService>());
 

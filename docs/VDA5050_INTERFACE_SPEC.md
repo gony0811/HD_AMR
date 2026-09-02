@@ -2,11 +2,13 @@
 
 | 항목 | 내용 |
 |---|---|
-| 문서 버전 | 1.0 (draft — HD_AMR 협의 전) |
-| 작성일 | 2026-08-27 |
+| 문서 버전 | **1.2** |
+| 작성일 | 2026-08-27 (최종 개정 2026-09-03) |
 | 대상 | HD_AMR 통합 운영 S/W 개발팀 (로봇 온보드) |
 | 기준 표준 | **VDA 5050 v2.0** (Interface for the communication between AGV and master control) |
-| 상태 | ACS 측 계약 확정판 — `[협의]` 표시 항목은 §10에서 HD_AMR 회신 대기 |
+| 상태 | **확정** (2026-08-28 HD_AMR 회신 반영, `VDA5050_AMR_REPLY.md`) — N10(정차 이격)은 잠정값, N12(ACS 생존 신호)는 신규 협의 대기 |
+| 개정 1.1 | 2026-09-01 — 로봇(TARS-M) REST 실물 스펙 확보분 반영. **ACS↔AMR 계약(§1~§9·부록 A~C)은 무변경**이며, AMR 온보드가 그 계약을 로봇 REST로 어떻게 이행하는지를 **부록 D**로 신설하고 관련 절에 각주를 달았다. 에러코드 매핑·층 전환 절차는 로봇측 정보 미확보로 **보류**(§6.4·§5.2·§9.2 그대로 유효, 구현만 유보) |
+| 개정 1.2 | 2026-09-03 — ACS 프로세스 생존 상태를 HD_AMR에 알리는 ACS 전용 `connection` 토픽과 Last Will 사양 추가. **VDA 5050 표준 확장·HD_AMR 협의 전 항목** `[협의 N12]` |
 
 > **이 문서가 인터페이스 계약의 단일 출처(single source of truth)다.**
 > 다른 문서(ARCHITECTURE.md, GRAPH_DATA_MODEL.md, SPEC_PHASE2_ACS.md 등)와 기술이 다를 경우 본 사양서가 우선한다.
@@ -69,6 +71,7 @@ ACS는 AMR 플랫폼·협동로봇·검사장비를 개별 제어하지 않으�
 | `instantActions` | ACS → AMR | 1 | false | 즉시 액션 (§5) |
 | `state` | AMR → ACS | 1 | false | **2초 주기** + 이벤트 시 즉시 (§6) |
 | `connection` | AMR → ACS | 1 | **true** | 생존 신호 + MQTT Last Will (§7) |
+| `connection` (ACS identity) | ACS → AMR | 1 | **true** | ACS 전용 identity의 생존 신호 + MQTT Last Will (§7.2) `[협의 N12]` |
 | `factsheet` | AMR → ACS | — | — | **예약 채널 (현행 미사용)** — 향후 로봇 능력 조회용. 현행 ACS는 발행/구독하지 않음 |
 | `visualization` | — | — | — | **미사용** — 위치는 state.agvPosition으로 충분 (2초 주기) |
 
@@ -83,6 +86,15 @@ AMR은 MQTT 접속 시 다음 Will을 반드시 설정한다:
 → Wi-Fi 두절·프로세스 사망 시 브로커가 대신 CONNECTIONBROKEN을 발행하여 ACS가 두절을 감지한다 [ADR-002].
 
 > ※구현: 시뮬레이터(`HD.Acs.Simulator/Program.cs:46-51`)가 이 규약대로 동작. Will payload의 headerId/timestamp는 접속 시점 값이어도 무방(ACS는 connectionState만 소비).
+
+ACS도 MQTT 접속 시 ACS 전용 `connection` 토픽에 다음 Will을 설정한다 `[협의 N12]`:
+
+- Will 토픽: `uagv/v2/HD_ACS/hd-acs-master/connection`
+- Will payload: `connectionState: "CONNECTIONBROKEN"` 인 §7.2 메시지
+- Will retain: **true**, QoS 1
+
+ACS 생존 토픽은 로봇별 토픽이 아니라 **ACS 인스턴스당 하나**다. 따라서 여러 AMR이 동일 토픽을 구독하며,
+AMR 수가 늘어나도 ACS MQTT 연결과 Will은 추가하지 않는다.
 
 ---
 
@@ -129,6 +141,9 @@ ACS는 **greedy 최근접 동적 배차**를 사용한다. 층(맵) 안의 미�
 
 복수 노드 Order(경로형: sequenceId 노드=짝수 0,2,4… / 엣지=홀수 1,3,5…)는 ACS `OrderBuilder`에 구현되어 있으나 **현행 운영 계약은 단일 노드형**이다. 향후 경로형 전환 시 본 절을 개정한다.
 
+> **액션 없는 Order(수동 이동)**: ACS는 이동 테스트·수동 이동용으로 `actions: []`(빈 배열)인 단일 노드 Order를 발행할 수 있다.
+> AMR은 **노드 도달만으로 완결** 처리한다(actionStates는 빈 배열 유지).
+
 ### 4.2 메시지 스키마 (ACS 발행 필드)
 
 ```jsonc
@@ -147,8 +162,8 @@ ACS는 **greedy 최근접 동적 배차**를 사용한다. 층(맵) 안의 미�
       "nodePosition": {
         "x": 12.482, "y": 5.117,            // 맵 좌표 [m]
         "theta": 1.571,                     // [rad], 맵 X축 기준 CCW (부록 B)
-        "allowedDeviationXY": 0.08,         // [m]
-        "allowedDeviationTheta": 0.07,      // [rad]
+        "allowedDeviationXY": 0.08,         // [m] — 도착 판정 허용 오차 (AMR 확정: 주행 정밀도 제어 아님, 미지정 시 0.1)
+        "allowedDeviationTheta": 0.07,      // [rad] — 동일 (미지정 시 0.1)
         "mapId": "CT1-L2"                   // 층 = 맵 (§4.3)
       },
       "actions": [ /* §8 커스텀 액션 */ ]
@@ -159,6 +174,10 @@ ACS는 **greedy 최근접 동적 배차**를 사용한다. 층(맵) 안의 미�
 ```
 
 - 노드의 `actions`는 검사 액션 배열 — 같은 정차점의 작업 N개가 액션 N개로 실린다. **배열 순서 = 실행 순서.**
+> **각주 (1.1)** — 로봇 REST의 이동 명령(`POST /api/v3/robot/go`)은 `{x, y, rz, stopFlag}` 4개만 받으며 **허용 오차 파라미터가 없다**.
+> 즉 `allowedDeviationXY`/`allowedDeviationTheta`는 로봇에 그대로 전달할 수단이 없고, **AMR 온보드가 자체 도착 판정에만 쓰는 값**이다 —
+> 2026-08-28 회신("주행 정밀도 제어가 아니라 도착 판정 허용 오차")과 정합한다. 계약 무변경. 상세는 부록 D.
+
 - `edges`는 단일 노드형에서 항상 빈 배열. 엣지 객체가 실리는 경우 각 엣지에도 `actions: []`(빈 배열)를 포함한다 `[협의 N3]`
   (※구현 2026-08-28: OrderEdge 모델에 actions 필드 반영 완료 — 빈 배열 직렬화).
 
@@ -182,6 +201,14 @@ theta       = 벽을 정면으로 바라보는 방향
 - 바닥(B)/천장(T) 영역은 수평 법선이 없어 이격 없이 중심 투영이 오며, 운영자 수동 지정 좌표가 올 수도 있다.
 - **책임 경계**: ACS의 정차점은 "목표"일 뿐이며, 접근 경로 계획·장애물(벽 포함) 충돌 회피는 **AMR 자율 주행 책임**이다.
   목표점이 도달 불가하면 진입을 강행하지 말고 `state.errors`(주행 실패 유형)로 보고할 것 (§6.4, §9.5 실패 정책으로 처리).
+- **검사 방향(툴 회전각) 유도 전제** (2026-08-29 AMR 회신 §5.2): AMR은 `seamStartW→seamEndW` 벡터를
+  **노드 `theta`(벽 정면 방향)** 기준 벽면-로컬로 투영해 촬상 기울기를 액션별 자동 계산한다 — ACS는 방향 정보를 추가로 보내지 않는다.
+  따라서 **`station_theta` 수동 오버라이드 시에도 theta는 벽 정면 방향을 유지해야** 이 유도가 성립한다.
+
+> **각주 (1.1) — theta 보정은 로봇 이동 명령의 옵션이다.**
+> `POST /robot/go` 의 `stopFlag` 는 `true` 일 때만 **정차 후 rz(=노드 theta)까지 보정**하고, `false` 면 근처를 지나며 각도를 보정하지 않는다.
+> 본 절의 "벽을 정면으로 바라보는 theta" 전제와 §8.1 의 검사 방향(툴 회전각) 자동 유도는 **각도가 실제로 보정된 것을 전제**하므로,
+> AMR 온보드는 **검사 정차점 주행을 항상 `stopFlag: true` 로 발행해야 한다**(부록 D). 경유점 개념은 현 계약에 없다.
 
 > AMR 요건: 로봇 실물 치수 확정 시 적정 기본 이격을 ACS에 회신 — 코봇 리치(용접선까지 도달)와 차체-벽 안전 여유를 동시에 만족하는 값 `[협의 N10]`.
 
@@ -208,6 +235,13 @@ stateDiagram-v2
 | 실행중 | ACS | state의 `orderId` 일치 + `driving`/`actionStates` 진행 보고 |
 | 완결 | ACS | `lastNodeSequenceId` ≥ 목표 노드 seq **AND** 해당 Order의 전 액션이 FINISHED/FAILED (§6.2 대조 규칙) — "전 액션 성공"이 아니라 **전 액션 종결**이 완결 조건이며, FAILED 포함 여부는 실패 정책(§9.5)이 처리 |
 | 폐기 | AMR | **신규 orderId 수신 = 이전 Order 즉시 폐기** (ACS는 이전 Order 완결 후에만 새 Order를 보내는 것을 보증하나, 비상정지·수동 개입 후 재배차 경로에서는 미완결 상태의 교체가 발생할 수 있음) |
+
+> **각주 (1.1) — "이전 Order 폐기"는 로봇에서 자동으로 일어나지 않는다.**
+> 로봇의 이동 명령 `POST /robot/go` 는 **현재 목적지를 대체하지 않고 큐에 추가(append)** 된다(벤더 회신 2.6).
+> 따라서 AMR 온보드가 신규 orderId 수신 시 새 좌표로 `/robot/go` 를 곧바로 재발행하면
+> 로봇은 **이전 목적지를 먼저 경유한 뒤** 새 목적지로 간다. 로봇·통신 모두 정상 동작하므로 오류로 드러나지 않고
+> **검사 위치만 틀리는 형태로 조용히 실패**한다(가장 위험한 실패 유형).
+> → 폐기 경로는 반드시 **`POST /robot/state`(정지) → `POST /robot/go`(신규 좌표)** 순서로 구현한다. 부록 D 참조.
 
 **4.5.2 Order 거부(rejection)** `[협의 N11]`
 
@@ -261,6 +295,10 @@ Order가 "어디서 오는지": run 시작 시 ACS는 계획(검사 영역·용�
 > ⚠️ **기능적 정지(functional stop)이며 안전 규격(PL/SIL) 정지가 아니다** [ADR-007].
 > Wi-Fi/MQTT 경유이므로 지연·유실 가능 — 안전은 로봇 자체 안전 체인이 책임진다.
 
+> **각주 (1.1)** — 온보드 구현체는 `POST /api/v3/robot/state {"state": "stop"}` 이다(REST 단독 정지 가능 확인).
+> Modbus 주행 정지(Holding 12) 경유가 **필수가 아니다** — 통신 경로를 REST 하나로 유지할 수 있다.
+> 다만 정지가 큐까지 비우는지는 미확인이므로, 비상정지 후 재배차는 §4.5.1 각주의 순서(정지 → go)를 그대로 따른다.
+
 ### 5.2 `initPosition` — 수동 층 전환 후 재측위
 
 | 항목 | 값 |
@@ -277,6 +315,11 @@ Order가 "어디서 오는지": run 시작 시 ACS는 계획(검사 영역·용�
     { "key": "x", "value": 1.20 }, { "key": "y", "value": 0.80 }, { "key": "theta", "value": 0.0 }
   ] }
 ```
+
+> **각주 (1.1) — 구현 보류.** 로봇에 REST 재측위 경로(`POST /api/v3/robot/pose {x,y,rz,tuneFlag}`)가 **존재함은 확인**되어,
+> 층 전환을 Modbus 없이 구현할 수 있는 길이 열렸다. 다만 `tuneFlag` 의 의미(전역 탐색 수행 여부 / 미세 보정 여부)와
+> 수렴 성공 판정 방법이 미확인이라 **온보드 구현은 벤더 회신(2차 B-1) 후로 유보**한다.
+> **본 절의 ACS↔AMR 계약은 그대로 유효**하다 — 파라미터·성공 판정(mapId 변경 보고) 모두 무변경.
 
 > `[협의 N5]` VDA 5050 표준 관례는 `pose` 객체 1개(x,y,theta,mapId,lastNodeId)를 파라미터로 쓰는 경우가 많다. ACS 제안은 위의 평면 key 4개 — AMR 파서 선호에 따라 확정한다.
 
@@ -338,18 +381,39 @@ AMR이 표준 준수 구현(전체 필드 발행)을 하는 것을 **권장**하
 ### 6.4 errors
 
 ```json
-{ "errorType": "INSPECTION_FAILED", "errorLevel": "WARNING", "errorDescription": "..." }
+{ "errorType": "drivingFailed", "errorLevel": "WARNING", "errorDescription": "..." }
 ```
 
 - `errorLevel`: `WARNING`(운영 계속 가능) | `FATAL`(임무 수행 불가)
-- `errorType` **코드 체계는 HD_AMR이 목록을 제시** `[협의 N6]` — 최소 분류 제안: 주행 실패 / 검사(액션) 실패 / 장비 오류 / 측위 상실.
+- `errorType` 코드 체계 — **확정 (N6, 2026-08-28 HD_AMR 회신)**. 같은 errorType은 최신 1건만 유지 보고하며 해소 시 목록에서 제거한다:
+
+| errorType | 의미 / 발생 조건 | errorLevel |
+|---|---|---|
+| `orderValidationError` | Order 검증 실패로 폐기 — description에 orderId·사유 (§4.5.2) | WARNING |
+| `drivingFailed` | 목표 도달 불가·이동 미시작·주행 타임아웃 — **해당 Order의 전 액션을 FAILED로 종결 처리**(노드 미도달 상태) | WARNING |
+| `inspectionFailed` | 검사 액션 실패 — description에 actionId·사유 (actionStatus FAILED와 병기) | WARNING |
+| `equipmentError` | 코봇/카메라/레이저/비전 등 온보드 장비 이상 | WARNING (지속 불가 시 FATAL) |
+| `localizationLost` | 맵 일치율 저하·재측위 실패·initPosition 거부 | WARNING |
+| `emergencyStopActive` | emergencyStop 수신에 의한 기능 정지 중 | WARNING |
+| `batteryLow` | 배터리 부족 (선택 보고) | WARNING/FATAL |
+
 - ACS 정책: 액션 FAILED·errors 기준 **재시도 N회 → 스킵 → 알람** (§9.5).
+  주행 실패로 노드 미도달 + 전 액션 FAILED인 정차도 종결로 판정해 동일 정책을 태운다(※구현 2026-08-28 반영).
+
+> **각주 (1.1) — 매핑 구현 보류.** AMR 온보드가 이 7종을 채우려면 로봇의 오류 값(코드 목록, `status` 의 `error` 필드 형태)이 필요한데,
+> 로봇 REST 스펙에는 **응답 스키마가 전혀 없어**(전 엔드포인트 `200 OK`) 확보되지 않았다.
+> 따라서 **errorType 매핑 테이블 구현은 벤더 회신(2차 A-1/A-2) 후로 유보**한다.
+> **본 절의 계약(7종·errorLevel·최신 1건 유지)은 확정 그대로**이며 변경 없다.
+> 회신 전까지 온보드는 확실히 판별 가능한 것만 보고한다 — `emergencyStopActive`(자기가 정지시켰으므로 자명),
+> `orderValidationError`(온보드 자체 검증), `inspectionFailed`(검사 S/W 결과). 주행·측위 계열은 회신 후 채운다.
 
 > ※구현: 재시도 N회→스킵→알람 정책은 **actionStatus=FAILED 기준으로 동작**(2026-08-28 E2E 검증 — 재큐잉·SKIPPED·INSPECTION_SKIPPED 알람). errors의 **유형 코드별** 정책 분기는 코드 체계 협의(N6) 후 구현 예정 — 현행은 건수만 UI 전파. 계약상 AMR은 위 형식으로 보고하면 된다.
 
 ---
 
-## 7. connection (AMR → ACS)
+## 7. connection 생존 신호
+
+### 7.1 AMR → ACS
 
 ```json
 { "headerId": 3, "timestamp": "...", "version": "2.0.0",
@@ -364,6 +428,45 @@ AMR이 표준 준수 구현(전체 필드 발행)을 하는 것을 **권장**하
 | `CONNECTIONBROKEN` | **브로커** — Last Will (비정상 두절) | true |
 
 ACS 반응: ONLINE → 미션 `ConnectionRestored`(RUNNING 복귀 + state 재동기화) / OFFLINE·CONNECTIONBROKEN → 미션 `DISCONNECTED` 표시. **두절 중에도 AMR은 진행 중 Order를 자율 계속 수행한다** — 재접속 후 최신 state 1건으로 ACS가 따라잡는다(robot-is-truth) [ADR-002].
+
+### 7.2 ACS → AMR `[협의 N12]`
+
+ACS 생존신호는 VDA 5050 표준 로봇 `connection` 메시지의 상태 모델을 재사용하는 **프로젝트 확장**이다.
+로봇 `connection` retained 값을 덮어쓰지 않도록 ACS에 별도 identity를 부여한다.
+
+| 항목 | 값 |
+|---|---|
+| 토픽 | `uagv/v2/HD_ACS/hd-acs-master/connection` |
+| 발행 | HD_ACS |
+| 구독 | 모든 HD_AMR 인스턴스 |
+| QoS / retain | **1 / true** |
+| ACS identity | `manufacturer: "HD_ACS"`, `serialNumber: "hd-acs-master"` |
+
+```json
+{ "headerId": 1, "timestamp": "2026-09-03T00:00:00.000Z", "version": "2.0.0",
+  "manufacturer": "HD_ACS", "serialNumber": "hd-acs-master",
+  "connectionState": "ONLINE" }
+```
+
+| connectionState | 발행 주체·시점 | retain |
+|---|---|---|
+| `ONLINE` | ACS — MQTT 접속·재접속 직후 | true |
+| `OFFLINE` | ACS — 정상 종료 직전 | true |
+| `CONNECTIONBROKEN` | **브로커** — ACS Last Will(프로세스 사망·네트워크 두절) | true |
+
+- ACS는 주기 heartbeat 메시지를 추가 발행하지 않는다. MQTT 세션과 Last Will이 생존 판정의 근거이며,
+  재접속 때마다 최신 `ONLINE` retained 메시지를 갱신한다.
+- `headerId`는 ACS 프로세스 세션 내에서 이 토픽 기준 단조 증가한다. 재기동 시 1부터 시작할 수 있다.
+- Last Will의 `timestamp`와 `headerId`는 MQTT 접속 시 생성한 값이어도 된다. 수신 측은
+  `CONNECTIONBROKEN` 수신 시각을 실제 두절 감지 시각으로 사용한다.
+- HD_AMR은 `OFFLINE` 또는 `CONNECTIONBROKEN` 수신 후 **신규 Order 수신을 기대하지 않되**, 이미 릴리즈된
+  Order는 §9.3에 따라 자율 계속한다. 로봇 안전 정지의 근거로 사용하지 않는다.
+- HD_AMR은 `ONLINE` 수신 시 별도 복구 명령을 요구하지 않고, 이후 수신되는 Order를 정상 처리한다.
+- 브로커 자체 장애 중에는 Will을 전달할 수 없으므로 HD_AMR은 MQTT 연결 끊김도 ACS 통신 두절로 동일 취급한다.
+
+> ※구현 상태(2026-09-03): **HD_AMR 구독·UI 반영 구현 완료** (`Vda5050AdapterService` 구독 + 상태바 ACS 배지 4-상태:
+> 미연결/두절/대기/연결 — 생존 신호 미수신 시 기존 3-상태 폴백. 검증용 `tools/virtual_acs.py`도 §7.2 발행 구현).
+> ACS 쪽 발행 구현은 N12 합의 후 반영한다.
 
 ---
 
@@ -387,7 +490,7 @@ ACS 반응: ONLINE → 미션 `ConnectionRestored`(RUNNING 복귀 + state 재동
 | `jobRef` | 작업 역추적 키 (사람이 읽는 ID — AMR은 로깅 외 해석 불요) |
 | `position.seamStartW/seamEndW` | 용접선 시작/끝 **맵(월드) 좌표** [x,y,z] m — 도면 좌표에 릴리즈 시점 유효 T_W_D(도면→맵 강체변환) 적용, z는 통과 |
 | `position.drawingPos` | 도면 좌표 echo — tank/level/wall_code + **u,v(벽면-로컬)** + x,y,z(도면). `wall_code`가 **티칭 자세 선택 키** |
-| `params.seamType` | `LINE` \| `POLYLINE` |
+| `params.seamType` | **`LINE` 한정** (2026-08-29 AMR 회신 §5.1 — POLYLINE은 2점 계약으로 세그먼트 방향 불명이라 AMR이 액션 FAILED 처리). 꺾인 용접선은 ACS가 **세그먼트별 LINE 액션 N개로 분할**(같은 정차·같은 anchorGroupId → 정렬 공유). `params.points` 기반 POLYLINE 확장은 후속 협의 |
 | `params.sectionDxfId` | 단면 프로파일 참조 ID |
 | `params.inspectionProfileId` | 검사(촬영/측정) 프로파일 ID |
 | `params.standoffMm` | 표면 이격 거리 [mm] |
@@ -513,6 +616,13 @@ sequenceDiagram
     ACS->>AMR: order (새 층 첫 정차)
 ```
 
+> **각주 (1.1) — 구현 보류(계약 유지).** 로봇 REST에 이 시퀀스를 이행할 수단이 모두 존재함은 확인되었다 —
+> 맵 전환 `POST /map/load {name}`, 재측위 `POST /robot/pose`, 검증 지표는 `GET /robot/pose` 응답의 **맵 일치율**.
+> 그러나 ① 일치율의 스케일과 **"얼마 이상이면 신뢰"인 임계값**, ② `tuneFlag` 의미, ③ 맵 로드 소요·후속 절차가 미확인이라
+> **온보드 구현은 벤더 회신(2차 A-3/B-1/D-1) 후로 유보**한다.
+> 부수적으로, 로봇이 층별 맵을 REST로 전환할 수 있다는 사실은 **"AMR 내부 통합맵" 외에 "층별 맵 4장 전환"도 선택지**임을 뜻한다 —
+> 어느 쪽을 택하든 **본 사양서의 계약(층별 `mapId` + 층별 좌표)은 무변경**이며, 선택은 AMR 온보드 내부 사항이다(회신 §3.2 그대로).
+
 ### 9.3 두절 / 재접속 [ADR-002]
 
 1. 두절 → 브로커가 Last Will `CONNECTIONBROKEN`(retain) 발행 → ACS: 미션 DISCONNECTED 표시.
@@ -523,7 +633,9 @@ sequenceDiagram
 
 ### 9.4 비상정지
 
-ACS `emergencyStop` instantAction 발행(§5.1) → AMR 즉시 정지 + state로 정지 상태 보고. 재개는 운영자 판단으로 신규 Order 재배차 (order update 아님).
+ACS `emergencyStop` instantAction 발행(§5.1) → AMR 즉시 기능 정지 + **진행 중 액션 FAILED("stopped by emergencyStop") + `emergencyStopActive` 오류 보고**(AMR 확정 §3.4).
+ACS는 비상정지와 동시에 **해당 로봇의 활성 run을 자동 중단(ABORTED)** 하여 정지 중 재배차를 차단한다(※구현 2026-08-28) —
+재개는 운영자 판단으로 "이어하기"(resume, 완료분 보존) 또는 신규 run (order update 아님).
 
 ### 9.5 실패 처리
 
@@ -534,21 +646,24 @@ ACS `emergencyStop` instantAction 발행(§5.1) → AMR 즉시 정지 + state로
 
 ## 10. 협의 항목 (HD_AMR 회신 요청)
 
-본문에서 `[협의]`로 표시한 항목. **회신 전까지는 "ACS 제안"이 잠정 계약**이다.
+**2026-08-28 HD_AMR 회신 수령(`VDA5050_AMR_REPLY.md`) — N10 보류. 2026-09-03 추가한 N12는 신규 협의 대기.**
 
-| # | 항목 | ACS 제안 | 배경 | HD_AMR 회신 |
-|---|---|---|---|---|
-| N1 | headerId 채번 | 토픽별 단조 증가 (ACS 구현 완료) | 표준은 토픽별 증가 | |
-| N2 | timestamp 포맷 | ISO 8601 UTC 밀리초+`Z` (ACS 구현 완료, 수신은 오프셋 표기도 수용) | 표준 예시 포맷 | |
-| N3 | edge.actions | 엣지 실릴 경우 빈 배열 포함 (ACS 구현 완료, 단일 노드형에선 무관) | 표준 required 필드 | |
-| N4 | state 표준 필수 필드 (operatingMode/safetyState/edgeStates/information 등) | AMR 표준대로 발행 권장, ACS는 §6.2 최소 계약만 소비 | ACS 파서는 미지 필드 무시 | |
-| N5 | initPosition 파라미터 | 평면 key: mapId/x/y/theta | 표준 관례는 pose 객체 | |
-| N6 | errors.errorType 코드 체계 | AMR이 코드 목록 제시 (최소: 주행/검사/장비/측위) | 재시도·스킵 정책 분기 근거 | |
-| N7 | actionParameters.value 직렬화 | JSON object 그대로 (문자열 아님) | AMR 파서 제약 시 문자열 폴백 협의 | |
-| N8 | 두절 구간 상세 이력 | 최신 state 스냅샷으로 충분 (소급 재전송 없음) | 표준 범위 밖 확장 | |
-| N9 | MQTT 보안 | 평문 :1883 (폐쇄망 전제) | TLS/계정 필요 여부 | |
-| N10 | 정차 이격(standoff) 적정값 | 기본 0.8 m (벽면↔로봇 중심, 영역별 조정 가능) | 로봇 실물 치수·코봇 리치 기준으로 AMR이 적정값 회신 (§4.4) | |
-| N11 | Order 거부 보고 방식 | 폐기 + errors에 `orderValidationError`(orderId·사유 명시), 액션 단위 문제는 actionStatus FAILED로 구분 (§4.5.2) | N6 코드 체계와 함께 확정 | |
+| # | 항목 | ACS 제안 | HD_AMR 회신 (2026-08-28) |
+|---|---|---|---|
+| N1 | headerId 채번 | 토픽별 단조 증가 | ✅ 동의. AMR은 세션(프로세스) 단위 채번 — 재기동 시 1부터 리셋. **ACS는 headerId 미소비라 무해 확인** |
+| N2 | timestamp 포맷 | ISO 8601 UTC 밀리초+`Z` | ✅ 동의 (수신은 오프셋 표기도 상호 수용) |
+| N3 | edge.actions | 엣지 실릴 경우 빈 배열 포함 | ✅ 동의 |
+| N4 | state 표준 필수 필드 | AMR 표준대로 발행 권장, ACS는 §6.2 최소 계약만 소비 | ✅ 표준 전체 필드 발행 (safetyState.eStop은 기능값) |
+| N5 | initPosition 파라미터 | 평면 key: mapId/x/y/theta | ✅ 채택 (+pose 객체 형태도 방어적 수용) |
+| N6 | errors.errorType 코드 체계 | AMR이 코드 목록 제시 | ✅ **7종 확정** — §6.4 표 (같은 유형 최신 1건 유지, 해소 시 제거) |
+| N7 | actionParameters.value 직렬화 | JSON object 그대로 | ✅ object 수용 + 문자열 재파싱도 수용 — **폴백 스위치 불요 확정** |
+| N8 | 두절 구간 상세 이력 | 최신 state 스냅샷으로 충분 | ✅ 동의 (소급 재전송 미구현) |
+| N9 | MQTT 보안 | 평문 :1883 (폐쇄망) | ✅ 동의 (TLS 필요 판단 시 재협의) |
+| N10 | 정차 이격(standoff) 적정값 | 기본 0.8 m (영역별 조정) | ⏸ **보류** — 로봇 치수·코봇 리치 확정 후 회신, 잠정 0.8 m 수용 |
+| N11 | Order 거부 보고 방식 | 폐기 + `orderValidationError` | ✅ 동의 (§4.5.2 그대로 구현) |
+| N12 | ACS 생존 신호 | ACS 전용 `connection` 토픽 + ONLINE/OFFLINE/Last Will, QoS 1·retain (§7.2) | ⏳ **신규 협의 요청** — HD_AMR 구독·상태 처리 확인 필요 |
+
+**AMR 구현 방식 고지 요약** (상세는 `VDA5050_AMR_REPLY.md` §3): allowedDeviation은 **도착 판정 허용 오차로만** 사용(미지정 시 0.1 m/0.1 rad) · 층별 맵은 AMR 내부 통합 맵으로 운용하되 계약(층별 mapId·좌표)은 그대로 준수 · **새 mapId는 재측위 검증 통과 시에만 보고**(실패 시 `localizationLost`) · 주행 실패 시 미도달 상태로 전 액션 FAILED+`drivingFailed` · 비상정지 시 진행 액션 FAILED+`emergencyStopActive`.
 
 ---
 
@@ -631,6 +746,7 @@ ACS `emergencyStop` instantAction 발행(§5.1) → AMR 즉시 정지 + state로
 
 - [ ] MQTT 접속: clientId 고유, **Last Will = connection/CONNECTIONBROKEN/retain** (§2.4)
 - [ ] 접속 직후 `connection ONLINE`(retain) 발행 (§7)
+- [ ] ACS 전용 `uagv/v2/HD_ACS/hd-acs-master/connection` 구독 및 ONLINE/OFFLINE/CONNECTIONBROKEN 처리 (§7.2, **N12 합의 후**)
 - [ ] `order`·`instantActions` 구독 (QoS 1) — manufacturer/serialNumber 자기 토픽 (§2.2)
 - [ ] `state` 2초 주기 + 이벤트 즉시 발행, **agvPosition.mapId 필수** (§6.1)
 - [ ] orderId 변경 = 새 임무, actionId/nodeId **echo만** (재발급 금지) (§4.1, §6.2)
@@ -640,4 +756,57 @@ ACS `emergencyStop` instantAction 발행(§5.1) → AMR 즉시 정지 + state로
 - [ ] 실패 시 actionStatus FAILED + resultDescription (+ errors 유형 코드) (§9.5)
 - [ ] 두절 중 진행 Order 자율 계속 + 재접속 시 최신 state 즉시 발행 (§9.3)
 - [ ] orderId 수명주기: 신규 orderId=이전 폐기, 완결 후 마지막 orderId·actionStates 유지 보고, 거부 시 errors 보고 (§4.5)
+- [ ] **주행 발행은 `POST /robot/go` 에 `stopFlag: true` 고정** — false면 노드 theta가 보정되지 않아 검사 정렬 전제가 깨짐 (부록 D)
+- [ ] **신규 orderId 처리 = `POST /robot/state`(정지) → `POST /robot/go`(신규 좌표) 순서** — `/go` 단독 재발행은 이전 목적지를 먼저 경유(조용한 오검사) (§4.5.1 각주, 부록 D)
+- [ ] `emergencyStop` 구현체 = `POST /robot/state {"state":"stop"}` (Modbus Holding 12 불요) (§5.1 각주)
+- [ ] allowedDeviationXY/Theta는 **온보드 도착 판정 전용** — 로봇 이동 명령에 전달할 파라미터가 없음 (§4.2 각주)
+- [ ] ⏸ 보류: errorType 7종 매핑 / `initPosition` 구현 / 층 전환 게이트 — 로봇측 회신 후 (부록 D 하단)
 - [ ] §10 협의 항목 N1~N11 회신
+
+---
+
+## 부록 D. AMR 온보드 구현 요건 — TARS-M v3 REST 매핑 `(1.1 신설, 2026-09-01)`
+
+> **이 부록은 계약이 아니라 구현 지침이다.** ACS↔AMR 의 VDA 5050 계약(§1~§9, 부록 A~C)은 이 부록과 무관하게 그대로 유지된다.
+> 여기 적는 것은 **AMR 온보드 S/W 가 그 계약을 로봇(TARS-M) REST 로 이행할 때 반드시 지켜야 할 사항**이며,
+> 로봇 REST 스펙을 확보(2026-09-01)하면서 계약 이행에 영향을 주는 사실이 드러났기에 사양서에 남긴다.
+>
+> 근거 문서: `ADENT_TARSM_V3_ENDPOINTS.md`(실물 전수 목록) · `ADENT_TARSM_V3_OPENAPI.yaml`(대조본) ·
+> `ADENT_VENDOR_INQUIRY.md`(1차+회신) · `ADENT_VENDOR_INQUIRY_2.md`(미확인 항목)
+>
+> 로봇 REST 전역 규약: basePath `/api/v3`, **인증 없음·80 포트**, 응답 envelope `{code:0, data:{}}` / `{code:N, message:""}`,
+> 좌표계는 **맵 좌측 하단 원점 · rz = 맵 X축 기준 CCW 라디안** — **부록 B의 VDA 좌표 규약과 동일**하므로 좌표 변환 없이 그대로 전달한다.
+
+### D.1 지금 구현하는 것 (확정)
+
+| # | VDA 계약 (본문) | 로봇 REST 구현체 | 요건 |
+|---|---|---|---|
+| D-1 | 노드 주행 (§4.2 `nodePosition`) | `POST /robot/go` `{x, y, rz, stopFlag}` | `x`→`x`, `y`→`y`, `theta`→`rz` 그대로(단위·기준 동일). 변환 불요 |
+| D-2 | 정차각 전제 (§4.4, §8.1 검사 방향 유도) | 같은 API 의 `stopFlag` | **항상 `true`**. `false` 는 각도를 보정하지 않아 벽 정면 전제가 깨진다. 경유점 개념은 계약에 없다 |
+| D-3 | **신규 orderId = 이전 Order 폐기 (§4.5.1)** | `POST /robot/state` → `POST /robot/go` | **`/go` 는 대체가 아니라 큐 추가(append)**. 정지를 선행하지 않으면 이전 목적지를 먼저 경유하고, 로봇은 정상 동작하므로 **검사 위치만 틀린 채 조용히 실패**한다. 비상정지·수동 개입 후 재배차 경로에 반드시 적용 |
+| D-4 | 도착 판정 (§4.2 `allowedDeviation*`) | — (해당 파라미터 없음) | 로봇 이동 명령은 허용 오차를 받지 않는다. **온보드 자체 판정 값**으로만 사용(2026-08-28 회신과 정합). 미지정 시 0.1 m / 0.1 rad |
+| D-5 | `emergencyStop` (§5.1) | `POST /robot/state {"state":"stop"}` | REST 단독 정지 가능 → **Modbus Holding 12 경유 불요**. 정지 후 재배차는 D-3 순서를 따른다 |
+| D-6 | 진행 상태 보고 (§6.1 state 2초) | `GET /robot/status` (`schedule`·`error`) | 폴링 주기는 온보드 재량(ACS 검토값 200~500 ms). **응답 필드값 해석은 D.2 로 유보** |
+| D-7 | 정차점 좌표 (§4.4) | 좌표 직접 발행 | 거점을 미리 등록해 둘 필요가 없다. 필요 시 `POST /plan/waypoint {name, pose}` 로 REST 등록도 가능(맵 에디터 수작업 불요) |
+| D-8 | 레지스터 기반 기능 | `POST /robot/modbus {address, value}` | Modbus TCP 세션 없이 REST 로 레지스터를 쓸 수 있다 → **통신 경로를 REST 하나로 통일 가능**. 단 전용 REST 경로가 있는 기능은 그쪽을 우선한다 |
+
+> ⚠️ 운영 중 호출 금지: `POST /robot/recover`(맵·계획 초기화), `DELETE /map/{name}`(맵 삭제).
+
+### D.2 구현을 유보하는 것 (계약은 유효, 로봇측 회신 대기)
+
+로봇 REST 스펙에는 **응답 스키마가 하나도 없다**(전 엔드포인트 `200 OK`). 아래는 그 때문에 "무엇을 호출할지"는 알지만
+"돌아온 값을 어떻게 해석할지"를 모르는 항목이다. **본문의 계약은 확정 그대로이며 변경하지 않는다** — 온보드 구현만 미룬다.
+
+| # | 대상 (본문) | 확인된 경로 | 막힌 지점 | 질의 |
+|---|---|---|---|---|
+| D-9 | `errors[]` errorType 7종 (§6.4) | `GET /robot/status` 의 `error`, `GET /robot/brief`(Modbus 정보 포함) | 로봇 오류 **코드 목록과 필드 형태 미확보**. 매핑 테이블을 만들 수 없다 | 2차 A-1 / A-2 |
+| D-10 | `initPosition` (§5.2) | `POST /robot/pose {x,y,rz,tuneFlag}` | **`tuneFlag` 의미 미확인**(전역 탐색 vs 미세 보정), 수렴 성공 판정 방법 없음 | 2차 B-1 |
+| D-11 | 층 전환 게이트 (§9.2) | `POST /map/load`, `GET /robot/pose`(맵 일치율 포함) | 일치율 **스케일과 신뢰 임계값 미확인**, 맵 로드 소요·후속 절차 미확인 | 2차 A-3 / D-1 |
+| D-12 | 완결 판정의 로봇측 근거 (§4.5.1) | `GET /robot/status` 의 `schedule` | **값 목록 미확인** — "이동 중 / 도착 / 큐 비었음" 을 구분할 수 없다 | 2차 A-2 |
+| D-13 | 큐 비우기 (D-3 의 정지 단계) | `POST /robot/state`, `POST /robot/task/clear` | 정지가 큐까지 비우는지, `task/clear` 가 `/go` 큐에도 적용되는지 불명 | 2차 C-1 / C-2 |
+
+**유보 기간의 온보드 동작 원칙**
+
+- `errors[]` 는 **확실히 판별 가능한 것만** 보고한다 — `emergencyStopActive`(온보드가 스스로 정지시킨 경우), `orderValidationError`(온보드 자체 검증), `inspectionFailed`(검사 S/W 결과). 주행·측위 계열(`drivingFailed`·`localizationLost`)은 D-9 회신 후 채운다.
+- 층 전환은 **현행 수동 절차(§9.2 시퀀스)를 그대로 유지**하되 `initPosition` 이행부만 비워 둔다. 게이트 자체(ACS 가 `mapId` 일치 확인 후에만 Order 발행)는 계약이므로 변경 없다.
+- D-13 이 확정될 때까지 **`POST /robot/task/clear` 를 Order 교체 시퀀스에 넣지 않는다** — 동작이 불명확한 호출을 안전 경로에 두는 것은 안전 쪽이 아니다.
