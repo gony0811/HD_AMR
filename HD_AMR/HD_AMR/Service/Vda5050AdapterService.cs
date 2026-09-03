@@ -83,7 +83,30 @@ public sealed class Vda5050AdapterService : BackgroundService
 
     // 현재 층 mapId — 로봇이 맵ID 미노출이라 어댑터가 보유(§4.3). 초기값은 설정,
     // initPosition 이행(D-10 유보) 확정 후 재측위 검증 통과 시에만 갱신한다.
+    // D-10 유보 기간에는 대시보드의 수동 층 전환(SetMapId)이 유일한 갱신 경로.
     private volatile string _mapId;
+
+    /// <summary>현재 층 mapId — state.agvPosition.mapId 로 발행되는 값.</summary>
+    public string CurrentMapId => _mapId;
+
+    /// <summary>수동 층 전환 UI 선택지(설정 <see cref="Vda5050AdapterSettings.AvailableMapIds"/>).</summary>
+    public IReadOnlyList<string> AvailableMapIds => _s.AvailableMapIds;
+
+    /// <summary>
+    /// 수동 층 전환(운영자 UI). 재측위 검증 없이 mapId 만 바꾸는 임시 운영 경로 —
+    /// initPosition 이행(D-10) 구현 전까지 사용. 변경 즉시 state 를 발행해 ACS에 회신한다(§6.1).
+    /// </summary>
+    public void SetMapId(string mapId)
+    {
+        mapId = mapId?.Trim() ?? "";
+        if (mapId.Length == 0 || mapId == _mapId) return;
+
+        var prev = _mapId;
+        _mapId = mapId;
+        _logger.LogWarning("수동 층 전환: mapId {Prev} → {New} — 재측위 검증 없이 변경(D-10 유보 기간 임시 운영). " +
+                           "실제 층·맵 일치 여부는 운영자 책임.", prev, mapId);
+        NudgeState();
+    }
 
     // 이벤트 즉시 발행 트리거(§6.1) — 주기 대기를 깨우는 nudge.
     private TaskCompletionSource _stateNudge = NewNudge();

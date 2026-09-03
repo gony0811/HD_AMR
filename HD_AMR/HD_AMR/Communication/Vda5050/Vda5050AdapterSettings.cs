@@ -42,6 +42,9 @@ public class Vda5050AdapterSettings
     /// <summary>현재 층 mapId(`{tank}-L{level}`). AMR이 맵ID를 미노출하므로 어댑터가 보유(수동/설정). </summary>
     public string MapId { get; set; } = "CT1-L1";
 
+    /// <summary>수동 층 전환 UI(대시보드)의 선택지 목록. 비우면 현재 MapId 단일 항목만 표시.</summary>
+    public string[] AvailableMapIds { get; set; } = ["CT1-L1", "CT1-L2", "CT1-L3", "CT1-L4"];
+
     /// <summary>측위 완료 판정 임계(맵 일치율 %). 이상이면 positionInitialized=true.</summary>
     public double LocalizedThresholdPercent { get; set; } = 80.0;
 }

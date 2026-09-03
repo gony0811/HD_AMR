@@ -58,17 +58,18 @@
     private int? BatteryPercent => Amr.LatestStatus is { } s ? (int)Math.Round(s.Battery.LevelPercent) : null;
     private bool IsCharging => Amr.LatestStatus?.Battery.ChargingState == ChargingState.Charging;
 
-    // ACS 배지 4-상태: 브로커 미접속 → 미연결 / ACS 생존 신호(§7.2 N12) 두절 → 상태값 그대로(OFFLINE·CONNECTIONBROKEN) /
-    // 최근 수신 → 연결 / 그 외 → 대기. 생존 신호 수신 이력이 없으면(Unknown, ACS 미구현) 기존 3-상태로 폴백.
+    // ACS 배지는 생존 신호(§7.2 N12) 기준: 브로커 미접속 → 미연결 / OFFLINE·CONNECTIONBROKEN → 상태값 그대로 /
+    // ONLINE → 연결(명령 유무 무관 — 마지막 수신 시각은 툴팁으로만). 생존 신호 수신 이력이 없으면(Unknown, ACS 미구현)
+    // 기존 활동 기반 폴백: 최근 60초 수신 있으면 연결, 없으면 대기.
     private string AcsBadgeClass =>
         !Vda.IsBrokerConnected ? "tb-badge-off"
         : Vda.AcsConnectionLiveness is AcsLiveness.Offline or AcsLiveness.Broken ? "tb-badge-alert"
-        : Vda.AcsRecentlyActive ? "tb-badge-on" : "tb-badge-idle";
+        : Vda.AcsConnectionLiveness == AcsLiveness.Online || Vda.AcsRecentlyActive ? "tb-badge-on" : "tb-badge-idle";
     private string AcsBadgeText =>
         !Vda.IsBrokerConnected ? "미연결"
         : Vda.AcsConnectionLiveness == AcsLiveness.Offline ? "OFFLINE"
         : Vda.AcsConnectionLiveness == AcsLiveness.Broken ? "CONNECTIONBROKEN"
-        : Vda.AcsRecentlyActive ? "연결" : "대기";
+        : Vda.AcsConnectionLiveness == AcsLiveness.Online || Vda.AcsRecentlyActive ? "연결" : "대기";
     private string AcsTooltip
     {
         get
