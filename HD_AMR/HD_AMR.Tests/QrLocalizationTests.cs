@@ -34,7 +34,7 @@ public class QrLocalizationTests
     public void SolveAmrPose_RoundTrip_RecoversPlanarPose()
     {
         var reg = new MapRegistration(12.5, 3000, -2000, 0, 3);
-        var marker = new QrMarkerReg { Text = "QR1", Gx = 1500, Gy = 800, Zmm = 1200, AzimuthDegG = 30, SizeMm = 150 };
+        var marker = new QrMarkerReg { Text = "QR1", Gx = 1500, Gy = 800, Zmm = 1200, YawDegG = 30, SizeMm = 150 };
         var tWQ = QrLocalization.MarkerWorldPose(reg, marker);
 
         var tWA = new[] { 3200.0, -1500, 0, 0, 0, 137 };
@@ -65,7 +65,7 @@ public class QrLocalizationTests
             var marker = new QrMarkerReg
             {
                 Gx = R(-3000, 3000), Gy = R(-3000, 3000), Zmm = R(500, 2000),
-                AzimuthDegG = R(-180, 180), SizeMm = 150,
+                YawDegG = R(-180, 180), SizeMm = 150,
             };
             var tWQ = QrLocalization.MarkerWorldPose(reg, marker);
             var tWA = new[] { R(-5000, 5000), R(-5000, 5000), 0, 0, 0, R(-180, 180) };
@@ -86,7 +86,7 @@ public class QrLocalizationTests
     public void SolveAmrPose_ThetaWraparound()
     {
         var reg = new MapRegistration(0, 0, 0, 0, 2);
-        var marker = new QrMarkerReg { Gx = 1000, Gy = 0, Zmm = 1000, AzimuthDegG = 180, SizeMm = 150 };
+        var marker = new QrMarkerReg { Gx = 1000, Gy = 0, Zmm = 1000, YawDegG = 180, SizeMm = 150 };
         var tWQ = QrLocalization.MarkerWorldPose(reg, marker);
 
         var tWA = new[] { 0.0, 0, 0, 0, 0, 179.7 };
@@ -102,45 +102,50 @@ public class QrLocalizationTests
     [Fact]
     public void MarkerWorldPose_AxisConvention()
     {
-        // 정합 항등(θ=0,t=0), 방위각 ψ=0: Z축=맵 +X(법선), Y축=맵 +Z(코드 위쪽), X축=맵 +Y.
+        // 바닥 수평 부착. 정합 항등(θ=0,t=0), 코드방향 ψ=0:
+        // Z축=맵 +Z(위, 법선), Y축=맵 +X(코드 위쪽), X축=맵 −Y(코드 오른쪽).
         var reg = new MapRegistration(0, 0, 0, 0, 2);
         var m0 = FrameMath.PoseToMatrix(QrLocalization.MarkerWorldPose(
-            reg, new QrMarkerReg { Gx = 100, Gy = 200, Zmm = 1500, AzimuthDegG = 0 }));
+            reg, new QrMarkerReg { Gx = 100, Gy = 200, Zmm = 0, YawDegG = 0 }));
 
-        Assert.Equal(1, m0[0, 2], Tol);  // Z축 = (1,0,0)
+        Assert.Equal(0, m0[0, 2], Tol);   // Z축 = (0,0,1)
         Assert.Equal(0, m0[1, 2], Tol);
-        Assert.Equal(0, m0[2, 2], Tol);
-        Assert.Equal(1, m0[2, 1], Tol);  // Y축 = (0,0,1)
-        Assert.Equal(0, m0[0, 0], Tol);  // X축 = (0,1,0)
-        Assert.Equal(1, m0[1, 0], Tol);
+        Assert.Equal(1, m0[2, 2], Tol);
+        Assert.Equal(1, m0[0, 1], Tol);   // Y축 = (1,0,0)
+        Assert.Equal(0, m0[1, 1], Tol);
+        Assert.Equal(0, m0[0, 0], Tol);   // X축 = (0,−1,0)
+        Assert.Equal(-1, m0[1, 0], Tol);
         Assert.Equal(100, m0[0, 3], Tol);
         Assert.Equal(200, m0[1, 3], Tol);
-        Assert.Equal(1500, m0[2, 3], Tol);
+        Assert.Equal(0, m0[2, 3], Tol);
 
-        // ψ=90°: Z축 = (0,1,0)
+        // ψ=90°: 코드 위쪽 = 맵 +Y, 코드 오른쪽 = 맵 +X
         var m90 = FrameMath.PoseToMatrix(QrLocalization.MarkerWorldPose(
-            reg, new QrMarkerReg { AzimuthDegG = 90 }));
-        Assert.Equal(0, m90[0, 2], Tol);
-        Assert.Equal(1, m90[1, 2], Tol);
+            reg, new QrMarkerReg { YawDegG = 90 }));
+        Assert.Equal(0, m90[0, 1], Tol);
+        Assert.Equal(1, m90[1, 1], Tol);
+        Assert.Equal(1, m90[0, 0], Tol);
+        Assert.Equal(0, m90[1, 0], Tol);
 
-        // ψ=180°: Z축 = (−1,0,0)
+        // ψ=180°: 코드 위쪽 = 맵 −X
         var m180 = FrameMath.PoseToMatrix(QrLocalization.MarkerWorldPose(
-            reg, new QrMarkerReg { AzimuthDegG = 180 }));
-        Assert.Equal(-1, m180[0, 2], Tol);
+            reg, new QrMarkerReg { YawDegG = 180 }));
+        Assert.Equal(-1, m180[0, 1], Tol);
+        Assert.Equal(1, m180[2, 2], Tol);
 
-        // 정합 회전 θ 가 방위각에 더해진다: az=10 + θ=20 → ψ=30 → Z=(cos30,sin30,0)
+        // 정합 회전 θ 가 코드방향에 더해진다: yaw=10 + θ=20 → ψ=30 → Y축=(cos30,sin30,0)
         var reg2 = new MapRegistration(20, 0, 0, 0, 2);
         var m30 = FrameMath.PoseToMatrix(QrLocalization.MarkerWorldPose(
-            reg2, new QrMarkerReg { AzimuthDegG = 10 }));
-        Assert.Equal(Math.Cos(30 * Math.PI / 180), m30[0, 2], Tol);
-        Assert.Equal(Math.Sin(30 * Math.PI / 180), m30[1, 2], Tol);
+            reg2, new QrMarkerReg { YawDegG = 10 }));
+        Assert.Equal(Math.Cos(30 * Math.PI / 180), m30[0, 1], Tol);
+        Assert.Equal(Math.Sin(30 * Math.PI / 180), m30[1, 1], Tol);
     }
 
     [Fact]
     public void SolveHandEye_RecoversGroundTruth()
     {
         var reg = new MapRegistration(-8, 1000, 500, 0, 3);
-        var marker = new QrMarkerReg { Gx = -500, Gy = 1200, Zmm = 900, AzimuthDegG = -45, SizeMm = 200 };
+        var marker = new QrMarkerReg { Gx = -500, Gy = 1200, Zmm = 900, YawDegG = -45, SizeMm = 200 };
         var tWQ = QrLocalization.MarkerWorldPose(reg, marker);
 
         var tWA = new[] { 700.0, -300, 0, 0, 0, -60 };
@@ -166,5 +171,37 @@ public class QrLocalizationTests
     {
         var mean = QrLocalization.CircularMeanDeg(new[] { 179.0, -179.0 });
         Assert.Equal(0, Math.Abs(QrLocalization.AngleDiffDeg(mean, 180)), 1e-9);
+    }
+
+    [Fact]
+    public void SolveMapTransform_RecoversDrawingToSlamTransform()
+    {
+        var tWG = new[] { 1500.0, -800, 0, 0, 0, 17 };
+        var marker = new QrMarkerReg
+        {
+            Gx = 4200, Gy = 900, Zmm = 0, YawDegG = 35,
+            Surface = QrMountSurface.Floor,
+        };
+        var tGQ = QrLocalization.MarkerDrawingPose(marker);
+        var tWQ = FrameMath.MatrixToPose(FrameMath.Multiply(
+            FrameMath.PoseToMatrix(tWG), FrameMath.PoseToMatrix(tGQ)));
+
+        var tWA = new[] { 800.0, 300, 0, 0, 0, -25 };
+        var tAB = new[] { 120.0, -40, 250, 0, 0, 5 };
+        var tBT = new[] { 500.0, 100, 700, 10, -15, 40 };
+        var tTC = new[] { 30.0, -20, 60, 2, -3, 90 };
+        var tWC = FrameMath.Multiply(
+            FrameMath.Multiply(FrameMath.PoseToMatrix(tWA), FrameMath.PoseToMatrix(tAB)),
+            FrameMath.Multiply(FrameMath.PoseToMatrix(tBT), FrameMath.PoseToMatrix(tTC)));
+        var tCQ = FrameMath.MatrixToPose(FrameMath.Multiply(
+            FrameMath.Invert(tWC), FrameMath.PoseToMatrix(tWQ)));
+
+        var solved = QrLocalization.SolveMapTransform(tWA, tAB, tBT, tTC, tCQ, tGQ);
+        Assert.Equal(tWG[0], solved.TxMm, 1e-6);
+        Assert.Equal(tWG[1], solved.TyMm, 1e-6);
+        Assert.Equal(0, QrLocalization.AngleDiffDeg(solved.ThetaDeg, tWG[5]), 1e-6);
+        Assert.Equal(0, solved.ZResidMm, 1e-6);
+        Assert.Equal(0, solved.RollDeg, 1e-6);
+        Assert.Equal(0, solved.PitchDeg, 1e-6);
     }
 }

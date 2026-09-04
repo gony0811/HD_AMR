@@ -116,7 +116,7 @@ builder.Services.AddScoped<TeachingService>();
 builder.Services.AddScoped<ParameterService>();
 // 맵 정합 캘리브레이션(장착 오프셋 T_A_B, 맵↔도면 T_W_G). Parameter 저장소만 사용.
 builder.Services.AddScoped<CalibrationService>();
-// QR 마커 기반 SLAM 위치 검증(캘리브레이션 카드 ⑤). 온디맨드 측정 — 호스티드 불필요.
+// 도면 좌표 QR 4점 기반 T_W_G 정합. 온디맨드 측정 — 호스티드 불필요.
 builder.Services.AddScoped<QrLocalizationService>();
 
 // 시퀀스 단계 등록 (ISequenceStep). 새 단계 추가 시 여기에 한 줄만 추가.

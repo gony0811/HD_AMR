@@ -18,8 +18,8 @@
 <h1 class="page-title">맵 정합 캘리브레이션</h1>
 
 <p class="text-muted">
-    ① 코봇 장착 오프셋(T_A_B) 입력/측정 → ② 도면 로드·랜드마크 클릭으로 p_G 추출 + 맵 p_W 캡처 →
-    ③ 정합 계산(T_W_G)·저장. 도면(mm)·맵(mm) 기준.
+    ① 코봇 장착 오프셋(T_A_B)과 카메라 오프셋(T_T_C) 확인 → ② 도면에서 QR 4개의 좌표 등록 →
+    ③ 각 QR 촬영 → ④ 도면(G)→SLAM(W) 정합(T_W_G) 계산·저장. 수동 기준점 정합도 보조 방식으로 사용할 수 있습니다.
 </p>
 
 @if (!string.IsNullOrEmpty(_msg))
@@ -229,14 +229,14 @@
     </div>
 </section>
 
-<!-- ⑤ QR 위치 검증 -->
+<!-- QR 4점 기반 T_W_G 캘리브레이션 -->
 <section class="card mb-3">
-    <div class="card-header"><strong>⑤ QR 위치 검증 (SLAM ↔ QR 측정)</strong>
-        <span class="text-muted">(코봇 카메라로 벽면 QR 검출 → AMR 맵 좌표 역산 · QR은 벽면 수직·정방향 부착 가정)</span></div>
+    <div class="card-header"><strong>④ QR 4점 자동 정합 (T_W_G)</strong>
+        <span class="text-muted">도면 좌표가 등록된 QR을 순서대로 촬영하여 도면(G)→SLAM(W) 변환을 계산합니다.</span></div>
     <div class="card-body">
         <div>
-            <strong>핸드아이 오프셋 T_F_C</strong>
-            <span class="text-muted">(코봇 플랜지 → 카메라 광학 프레임, mm/도. 광학 프레임: X=우, Y=하, Z=전방)</span>
+            <strong>핸드아이 오프셋 T_T_C</strong>
+            <span class="text-muted">(코봇 툴 TCP → 카메라 광학 프레임, mm/도 · 기준 공구 번호 @_tool)</span>
         </div>
         <div class="row g-2 mt-1">
             @for (var i = 0; i < 6; i++)
@@ -250,11 +250,9 @@
             }
             <div class="col-auto d-flex align-items-end gap-1">
                 <button class="btn btn-sm btn-primary" @onclick="SaveHandEyeAsync">저장</button>
-                <button class="btn btn-sm btn-outline-primary" @onclick="BootstrapHandEyeAsync"
-                        disabled="@(!QrReady || _qrBusy)">T_F_C 역산 (현재 SLAM 신뢰, 5회 평균)</button>
             </div>
         </div>
-        <div class="form-text">브래킷 CAD 값을 입력하거나, SLAM을 신뢰할 수 있는 지점에 정차 후 등록 QR을 비추고 역산하세요. 역산 결과는 '저장'으로 확정.</div>
+        <div class="form-text">이 값은 QR 맵 정합과 독립된 카메라 장착값입니다. 브래킷 CAD 또는 별도 hand-eye calibration 결과를 입력하세요.</div>
 
         <hr />
         @if (Camera.IsStreaming)
@@ -267,9 +265,8 @@
         }
 
         <div class="d-flex align-items-center gap-3 mt-3">
-            <strong>마커 등록</strong>
-            <span class="text-muted small">위치는 도면(G) 좌표 — 정합 T_W_G로 맵 좌표 변환. 한 변 ≥150mm, 무광 인쇄, 페이로드는 짧게(예: "QR1") 권장.</span>
-            <button class="btn btn-sm btn-outline-secondary ms-auto" @onclick="AddQrMarker">+ 마커 추가</button>
+            <strong>기준 QR 등록 및 측정</strong>
+            <span class="text-muted small">4개를 선창 전체에 분산 배치하고, 설치 후 실측한 중심 좌표·방향을 입력하세요.</span>
         </div>
         <table class="table table-sm align-middle mt-1">
             <thead>
@@ -278,11 +275,12 @@
                     <th>마커 ID (QR 텍스트)</th>
                     <th>도면 Gx (mm)</th>
                     <th>도면 Gy (mm)</th>
-                    <th>높이 Z (mm)</th>
-                    <th>법선 방위각 (도, 도면기준)</th>
+                    <th>Gz (mm)</th>
+                    <th>부착면</th>
+                    <th>방위각 (도)</th>
                     <th>크기 (mm)</th>
-                    <th>도면지정</th>
-                    <th></th>
+                    <th>작업</th>
+                    <th>측정 결과 T_W_G</th>
                 </tr>
             </thead>
             <tbody>
@@ -299,47 +297,45 @@
                         <td><input class="form-control form-control-sm" type="number" step="any" @bind="mk.Gx" /></td>
                         <td><input class="form-control form-control-sm" type="number" step="any" @bind="mk.Gy" /></td>
                         <td><input class="form-control form-control-sm" type="number" step="any" @bind="mk.Zmm" /></td>
-                        <td><input class="form-control form-control-sm" type="number" step="any" @bind="mk.AzimuthDegG" /></td>
+                        <td><select class="form-select form-select-sm" @bind="mk.Surface">
+                            <option value="@QrMountSurface.Floor">바닥</option>
+                            <option value="@QrMountSurface.Wall">벽면</option>
+                        </select></td>
+                        <td><input class="form-control form-control-sm" type="number" step="any" @bind="mk.YawDegG" /></td>
                         <td><input class="form-control form-control-sm" type="number" step="any" @bind="mk.SizeMm" /></td>
-                        <td>
+                        <td class="d-flex gap-1">
                             <button class="btn btn-sm @(_qrPickRow == mk.Index ? "btn-warning" : "btn-outline-warning")"
                                     title="도면에서 이 마커의 Gx/Gy를 지정" @onclick="() => ArmQrPick(mk.Index)"
                                     disabled="@(!_hasGeom)">도면지정</button>
+                            <button class="btn btn-sm btn-success" @onclick="() => CaptureQrMapAsync(mk)"
+                                    disabled="@(!QrReady || _qrBusy)">촬영</button>
                         </td>
-                        <td><button class="btn btn-sm btn-outline-danger" @onclick="() => RemoveQrMarker(mk)">✕</button></td>
+                        <td>
+                            @if (_qrObservations.TryGetValue(mk.Index, out var obs))
+                            {
+                                <span>θ @obs.Transform.ThetaDeg.ToString("0.###")° · (@obs.Transform.TxMm.ToString("0.#"), @obs.Transform.TyMm.ToString("0.#")) mm</span>
+                                <div class="small text-muted">재투영 @obs.ReprojectionRmsPx.ToString("0.##") px · σ @obs.StdTxMm.ToString("0.#")/@obs.StdTyMm.ToString("0.#") mm, @obs.StdThetaDeg.ToString("0.###")°</div>
+                            }
+                            else { <span class="text-muted">미측정</span> }
+                        </td>
                     </tr>
                 }
             </tbody>
         </table>
-        <button class="btn btn-sm btn-secondary" @onclick="SaveQrMarkersAsync">마커 저장</button>
+        <button class="btn btn-sm btn-secondary" @onclick="SaveQrMarkersAsync">QR 좌표 저장</button>
+        <button class="btn btn-sm btn-outline-danger ms-1" @onclick="ClearQrObservations" disabled="@(_qrObservations.Count == 0)">측정 초기화</button>
 
         <hr />
-        <button class="btn btn-primary" @onclick="MeasureQrAsync" disabled="@(!QrReady || _qrBusy)">
-            @(_qrBusy ? "측정 중…" : "QR 검출·측정 (5회 평균)")
+        <button class="btn btn-primary" @onclick="SolveQrMapAsync" disabled="@(_qrObservations.Count < 4 || _qrBusy)">
+            4점 정합 계산 · T_W_G 저장
         </button>
-        <span class="form-text ms-2">AMR 정차 상태에서 QR이 화면 중앙에 보이게 코봇 자세를 잡고 실행. 촬영각 10–35° 사선 권장(정면은 θ 정밀도 저하).</span>
-
-        @if (_qrResult is { } qr)
+        <span class="form-text ms-2">각 QR 앞에서 AMR을 완전히 정차하고 해당 행의 촬영을 누르세요. 한 QR당 5프레임을 평균합니다.</span>
+        @if (_qrSolvePreview is { } qrReg)
         {
-            <div class="mt-3">
-                <table class="table table-sm w-auto">
-                    <thead><tr><th></th><th>X (mm)</th><th>Y (mm)</th><th>θ (도)</th></tr></thead>
-                    <tbody>
-                        <tr><th>SLAM</th><td>@qr.SlamXmm.ToString("0.#")</td><td>@qr.SlamYmm.ToString("0.#")</td><td>@qr.SlamThetaDeg.ToString("0.##")</td></tr>
-                        <tr><th>QR 측정</th><td>@qr.MeasXmm.ToString("0.#")</td><td>@qr.MeasYmm.ToString("0.#")</td><td>@qr.MeasThetaDeg.ToString("0.##")</td></tr>
-                        <tr class="table-info"><th>Δ (SLAM−QR)</th><td><strong>@qr.DXmm.ToString("0.#")</strong></td><td><strong>@qr.DYmm.ToString("0.#")</strong></td><td><strong>@qr.DThetaDeg.ToString("0.##")</strong></td></tr>
-                    </tbody>
-                </table>
-                <div class="small text-muted">
-                    마커 "@qr.MarkerText" · @qr.SamplesUsed 회 · @qr.MeasuredAt.ToString("HH:mm:ss")
-                    · σ = @qr.StdXmm.ToString("0.#")/@qr.StdYmm.ToString("0.#")mm, @qr.StdThetaDeg.ToString("0.##")°
-                    @if (qr.DepthVsPnpMm is { } dz) { <span> · 깊이−PnP = @dz.ToString("0.#")mm</span> }
-                    @if (Amr.LatestStatus is { } ast) { <span> · 맵 일치율 @ast.MapStatusPercent.ToString("0.#")%</span> }
-                </div>
-                <div class="small @(QrResidualBad(qr) ? "text-danger" : "text-muted")">
-                    면외 잔차: z=@qr.ZResidMm.ToString("0.#")mm, roll=@qr.RollDeg.ToString("0.##")°, pitch=@qr.PitchDeg.ToString("0.##")°
-                    @if (QrResidualBad(qr)) { <strong> — T_F_C/장착 오프셋 점검 필요</strong> }
-                </div>
+            <div class="alert @(qrReg.RmsMm <= 30 ? "alert-success" : "alert-warning") mt-3 mb-0 py-2">
+                저장된 T_W_G: θ=<strong>@qrReg.ThetaDeg.ToString("0.####")°</strong>,
+                Tx=<strong>@qrReg.Tx.ToString("0.##") mm</strong>, Ty=<strong>@qrReg.Ty.ToString("0.##") mm</strong>,
+                4점 위치 산포 RMS=<strong>@qrReg.RmsMm.ToString("0.##") mm</strong>
             </div>
         }
     </div>
@@ -389,18 +385,16 @@
     private double _vGx, _vGy;
     private (double X, double Y)? _vResult;
 
-    // ⑤ QR 위치 검증
+    // QR 4점 기반 도면(G)→SLAM(W) 정합
     private double[] _handEye = new double[6];
     private List<QrMarkerReg> _qrMarkers = new();
     private int? _qrPickRow;
-    private QrVerificationResult? _qrResult;
+    private readonly Dictionary<int, QrMapObservation> _qrObservations = new();
+    private MapRegistration? _qrSolvePreview;
     private bool _qrBusy;
 
     private bool QrReady => Camera.IsStreaming && Cobot.IsConnected && Amr.IsConnected
-                            && _reg is not null && _qrMarkers.Count > 0;
-
-    private static bool QrResidualBad(QrVerificationResult r)
-        => Math.Abs(r.ZResidMm) > 30 || Math.Abs(r.RollDeg) > 2 || Math.Abs(r.PitchDeg) > 2;
+                            && _qrMarkers.Count > 0 && !_handEye.All(v => v == 0);
 
     private string? _msg;
     private bool _isErr;
@@ -418,6 +412,11 @@
         _drawings = await Drawing.ListAsync(_cts.Token);
         _handEye = await Calib.GetHandEyeAsync();
         _qrMarkers = await Calib.GetQrMarkersAsync();
+        while (_qrMarkers.Count < 4)
+        {
+            var index = _qrMarkers.Count == 0 ? 1 : _qrMarkers.Max(m => m.Index) + 1;
+            _qrMarkers.Add(new QrMarkerReg(index) { Text = $"QR{index}" });
+        }
     }
 
     private static string F(double v) => v.ToString(CultureInfo.InvariantCulture);
@@ -645,34 +644,20 @@
         catch (Exception ex) { Fail($"저장 실패: {ex.Message}"); }
     }
 
-    private async Task BootstrapHandEyeAsync()
-    {
-        if (_reg is null) return;
-        _qrBusy = true;
-        try
-        {
-            _handEye = await QrLoc.BootstrapHandEyeAsync(_qrMarkers, _reg, 5, _cts.Token);
-            Ok("T_F_C 역산 완료 — 위 6칸에 반영됨. '저장'으로 확정하세요. 같은 지점에서 바로 측정 시 Δ≈0 이어야 정상입니다.");
-        }
-        catch (Exception ex) { Fail($"T_F_C 역산 실패: {ex.Message}"); }
-        finally { _qrBusy = false; }
-    }
-
-    private void AddQrMarker()
-    {
-        var next = _qrMarkers.Count == 0 ? 1 : _qrMarkers.Max(m => m.Index) + 1;
-        _qrMarkers.Add(new QrMarkerReg(next));
-    }
-
-    private void RemoveQrMarker(QrMarkerReg mk)
-    {
-        _qrMarkers.Remove(mk);
-        if (_qrPickRow == mk.Index) _qrPickRow = null;
-    }
-
     private async Task SaveQrMarkersAsync()
     {
-        try { await Calib.SaveQrMarkersAsync(_qrMarkers); Ok("QR 마커 저장 완료."); }
+        try
+        {
+            if (_qrMarkers.Count < 4) { Fail("QR 기준점은 최소 4개가 필요합니다."); return; }
+            if (_qrMarkers.Any(m => string.IsNullOrWhiteSpace(m.Text)) ||
+                _qrMarkers.Select(m => m.Text.Trim()).Distinct(StringComparer.Ordinal).Count() != _qrMarkers.Count)
+            { Fail("QR ID는 비어 있지 않고 서로 달라야 합니다."); return; }
+            if (_qrMarkers.Any(m => m.SizeMm <= 0)) { Fail("모든 QR의 실측 크기를 입력하세요."); return; }
+            await Calib.SaveQrMarkersAsync(_qrMarkers);
+            _qrObservations.Clear();
+            _qrSolvePreview = null;
+            Ok("QR 좌표 저장 완료 — 좌표 변경으로 기존 촬영값은 초기화했습니다.");
+        }
         catch (Exception ex) { Fail($"저장 실패: {ex.Message}"); }
     }
 
@@ -690,17 +675,42 @@
         finally { _qrBusy = false; }
     }
 
-    private async Task MeasureQrAsync()
+    private async Task CaptureQrMapAsync(QrMarkerReg marker)
     {
-        if (_reg is null) return;
         _qrBusy = true;
         try
         {
-            _qrResult = await QrLoc.MeasureAsync(_qrMarkers, _reg, 5, _cts.Token);
-            Ok($"QR 측정 완료 — Δ=({_qrResult.DXmm:0.#}, {_qrResult.DYmm:0.#})mm, {_qrResult.DThetaDeg:0.##}°.");
+            var obs = await QrLoc.CaptureMapObservationAsync(marker, _tool, 5, _cts.Token);
+            _qrObservations[marker.Index] = obs;
+            _qrSolvePreview = null;
+            Ok($"{marker.Text} 측정 완료 ({_qrObservations.Count}/4) — T_W_G θ={obs.Transform.ThetaDeg:0.###}°.");
         }
-        catch (Exception ex) { Fail($"QR 측정 실패: {ex.Message}"); }
+        catch (Exception ex) { Fail($"QR 촬영 실패: {ex.Message}"); }
         finally { _qrBusy = false; }
+    }
+
+    private async Task SolveQrMapAsync()
+    {
+        try
+        {
+            var distinct = _qrMarkers.Where(m => _qrObservations.ContainsKey(m.Index))
+                .Select(m => _qrObservations[m.Index].Transform).ToList();
+            if (distinct.Count < 4) { Fail("서로 다른 QR 4개를 모두 촬영해야 합니다."); return; }
+            var reg = QrLocalization.AverageMapTransforms(distinct);
+            await Calib.SaveQrMarkersAsync(_qrMarkers);
+            await Calib.SaveRegistrationAsync(reg);
+            _reg = reg;
+            _qrSolvePreview = reg;
+            Ok($"QR 4점 정합 저장 완료 — θ={reg.ThetaDeg:0.###}°, 위치 산포 RMS={reg.RmsMm:0.##}mm.");
+        }
+        catch (Exception ex) { Fail($"QR 정합 실패: {ex.Message}"); }
+    }
+
+    private void ClearQrObservations()
+    {
+        _qrObservations.Clear();
+        _qrSolvePreview = null;
+        Ok("QR 측정값을 초기화했습니다.");
     }
 
     private void Ok(string m) { _msg = m; _isErr = false; }

@@ -10,7 +10,7 @@ namespace HD_AMR.Communication.Vision;
 ///
 /// solvePnP(IPPE_SQUARE) 오브젝트 포인트 순서(TL,TR,BR,BL ↔ (−s/2,+s/2), (+s/2,+s/2),
 /// (+s/2,−s/2), (−s/2,−s/2))에서 유도되는 마커 좌표계: X=코드 오른쪽, Y=코드 위쪽,
-/// Z=코드 면에서 카메라 쪽 법선. <c>QrLocalization.MarkerWorldPose</c> 와 동일 규약이어야 한다.
+/// Z=코드 면에서 카메라 쪽 법선. <c>QrLocalization.MarkerDrawingPose</c> 와 동일 규약이어야 한다.
 ///
 /// 한계: <see cref="CameraD2CParams"/> 에 왜곡 계수가 없어 무왜곡 가정
 /// (D435 컬러 왜곡은 작아 수 mm 수준 바이어스). OpenCV 네이티브는 Windows 전용 —

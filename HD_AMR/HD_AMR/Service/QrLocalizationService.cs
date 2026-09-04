@@ -6,9 +6,9 @@ using Microsoft.Extensions.Logging;
 namespace HD_AMR.Service;
 
 /// <summary>
-/// QR 마커 기반 SLAM 위치 검증 오케스트레이션. 버튼 클릭 시 온디맨드로:
+/// QR 마커 기반 도면(G)→SLAM(W) 정합 오케스트레이션. 버튼 클릭 시 온디맨드로:
 /// 컬러 프레임에서 QR 검출(<see cref="QrPoseEstimator"/>) → 등록 마커 매칭 →
-/// 변환 체인 역산(<see cref="QrLocalization"/>) → SLAM pose 와 비교(Δx/Δy/Δθ).
+/// 변환 체인 계산(<see cref="QrLocalization"/>) → 마커별 T_W_G 후보 산출.
 /// N 프레임 평균으로 잡음을 줄이고, 측정 중 AMR 이동을 감지하면 실패 처리한다.
 /// 실패는 한국어 메시지의 <see cref="InvalidOperationException"/> 으로 던진다(UI 에서 표시).
 /// </summary>
@@ -39,10 +39,56 @@ public class QrLocalizationService
         return det?.Text;
     }
 
+    /// <summary>지정 마커를 여러 프레임 측정해 도면→SLAM 변환 T_W_G 후보 하나를 만든다.</summary>
+    public async Task<QrMapObservation> CaptureMapObservationAsync(
+        QrMarkerReg expectedMarker, int tool, int samples = 5, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(expectedMarker.Text))
+            throw new InvalidOperationException("마커 ID를 먼저 입력하거나 읽어 주세요.");
+
+        var (d2c, handEye, mount, poseBefore) =
+            await PrepareAsync(new[] { expectedMarker }, ct);
+        var candidates = new List<QrMapTransform>();
+        var reprojectionErrors = new List<double>();
+        double? depthVsPnp = null;
+
+        for (int i = 0; i < samples; i++)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (i > 0) await Task.Delay(SampleDelayMs, ct);
+
+            var (marker, pose, tBT) = await DetectOneAsync(new[] { expectedMarker }, d2c, tool, ct);
+            var st = _amr.LatestStatus ?? throw new InvalidOperationException("AMR 상태 없음.");
+            var tWA = MapCalibration.AmrPoseToMmDeg(st.Pose.X, st.Pose.Y, st.Pose.Angle);
+            candidates.Add(QrLocalization.SolveMapTransform(
+                tWA, mount, tBT, handEye, pose.PoseCQ, QrLocalization.MarkerDrawingPose(marker)));
+            reprojectionErrors.Add(pose.ReprojErrPx);
+            depthVsPnp ??= DepthMinusPnpMm(d2c, pose);
+        }
+
+        EnsureStationary(poseBefore);
+        double theta = QrLocalization.CircularMeanDeg(candidates.Select(x => x.ThetaDeg).ToList());
+        var mean = new QrMapTransform(
+            theta,
+            candidates.Average(x => x.TxMm), candidates.Average(x => x.TyMm),
+            candidates.Average(x => x.ZResidMm),
+            candidates.Average(x => x.RollDeg), candidates.Average(x => x.PitchDeg));
+        double stdTheta = Math.Sqrt(candidates
+            .Select(x => QrLocalization.AngleDiffDeg(x.ThetaDeg, theta))
+            .Average(x => x * x));
+
+        return new QrMapObservation(expectedMarker.Text, mean, samples,
+            reprojectionErrors.Average(),
+            Std(candidates.Select(x => x.TxMm).ToList(), mean.TxMm),
+            Std(candidates.Select(x => x.TyMm).ToList(), mean.TyMm),
+            stdTheta, depthVsPnp, DateTime.Now);
+    }
+
     /// <summary>측정 1버스트: ~200ms 간격 <paramref name="samples"/>회 검출·역산 후 평균.
-    /// 등록 마커 중 검출된 QR(디코딩 텍스트 일치)을 사용한다.</summary>
+    /// 등록 마커 중 검출된 QR(디코딩 텍스트 일치)을 사용한다.
+    /// <paramref name="tool"/> = 카메라 오프셋 T_T_C 의 기준이 되는 코봇 공구 번호.</summary>
     public async Task<QrVerificationResult> MeasureAsync(
-        IReadOnlyList<QrMarkerReg> markers, MapRegistration reg,
+        IReadOnlyList<QrMarkerReg> markers, MapRegistration reg, int tool,
         int samples = 5, CancellationToken ct = default)
     {
         var (d2c, handEye, mount, poseBefore) = await PrepareAsync(markers, ct);
@@ -61,11 +107,11 @@ public class QrLocalizationService
             ct.ThrowIfCancellationRequested();
             if (i > 0) await Task.Delay(SampleDelayMs, ct);
 
-            var (marker, pose, tBF) = await DetectOneAsync(markers, d2c, ct);
+            var (marker, pose, tBT) = await DetectOneAsync(markers, d2c, tool, ct);
             markerText = marker.Text;
 
             var tWQ = QrLocalization.MarkerWorldPose(reg, marker);
-            var r = QrLocalization.SolveAmrPose(tWQ, pose.PoseCQ, handEye, tBF, mount);
+            var r = QrLocalization.SolveAmrPose(tWQ, pose.PoseCQ, handEye, tBT, mount);
             xs.Add(r.Xmm); ys.Add(r.Ymm); ths.Add(r.ThetaDeg);
             zResids.Add(r.ZResidMm); rolls.Add(r.RollDeg); pitches.Add(r.PitchDeg);
 
@@ -90,10 +136,10 @@ public class QrLocalizationService
             depthVsPnp, DateTime.Now);
     }
 
-    /// <summary>핸드아이 부트스트랩: 현 지점의 SLAM 을 참으로 놓고 T_F_C 를 N 회 평균 역산.
+    /// <summary>핸드아이 부트스트랩: 현 지점의 SLAM 을 참으로 놓고 T_T_C 를 N 회 평균 역산.
     /// 결과는 저장하지 않는다 — UI 입력칸에 채우고 사용자가 저장으로 확정.</summary>
     public async Task<double[]> BootstrapHandEyeAsync(
-        IReadOnlyList<QrMarkerReg> markers, MapRegistration reg,
+        IReadOnlyList<QrMarkerReg> markers, MapRegistration reg, int tool,
         int samples = 5, CancellationToken ct = default)
     {
         var (d2c, _, mount, poseBefore) = await PrepareAsync(markers, ct, requireHandEye: false);
@@ -104,11 +150,11 @@ public class QrLocalizationService
             ct.ThrowIfCancellationRequested();
             if (i > 0) await Task.Delay(SampleDelayMs, ct);
 
-            var (marker, pose, tBF) = await DetectOneAsync(markers, d2c, ct);
+            var (marker, pose, tBT) = await DetectOneAsync(markers, d2c, tool, ct);
             var tWQ = QrLocalization.MarkerWorldPose(reg, marker);
             var st = _amr.LatestStatus ?? throw new InvalidOperationException("AMR 상태 없음.");
             var tWA = MapCalibration.AmrPoseToMmDeg(st.Pose.X, st.Pose.Y, st.Pose.Angle);
-            comp.Add(QrLocalization.SolveHandEye(tWQ, pose.PoseCQ, tBF, mount, tWA));
+            comp.Add(QrLocalization.SolveHandEye(tWQ, pose.PoseCQ, tBT, mount, tWA));
         }
 
         EnsureStationary(poseBefore);
@@ -119,7 +165,7 @@ public class QrLocalizationService
         return result;
     }
 
-    /// <summary>공통 전제 검사 후 (D2C 파라미터, T_F_C, T_A_B, 시작 시점 SLAM pose[mm/deg])를 반환.</summary>
+    /// <summary>공통 전제 검사 후 (D2C 파라미터, T_T_C, T_A_B, 시작 시점 SLAM pose[mm/deg])를 반환.</summary>
     private async Task<(CameraD2CParams d2c, double[] handEye, double[] mount, double[] poseBefore)>
         PrepareAsync(IReadOnlyList<QrMarkerReg> markers, CancellationToken ct, bool requireHandEye = true)
     {
@@ -138,7 +184,7 @@ public class QrLocalizationService
 
         var handEye = await _calib.GetHandEyeAsync();
         if (requireHandEye && handEye.All(v => v == 0))
-            throw new InvalidOperationException("핸드아이 T_F_C 가 미설정입니다 — 값을 입력하거나 역산을 먼저 실행하세요.");
+            throw new InvalidOperationException("핸드아이 T_T_C 가 미설정입니다 — 값을 입력하거나 역산을 먼저 실행하세요.");
 
         var mount = await _calib.GetMountAsync();
         var st = _amr.LatestStatus ?? throw new InvalidOperationException("AMR 상태 없음 — 맵 pose를 읽을 수 없습니다.");
@@ -146,9 +192,9 @@ public class QrLocalizationService
         return (d2c, handEye, mount, poseBefore);
     }
 
-    /// <summary>프레임 1장 검출 + 등록 마커 매칭 + 플랜지 pose 조회.</summary>
-    private async Task<(QrMarkerReg marker, QrPoseResult pose, double[] tBF)> DetectOneAsync(
-        IReadOnlyList<QrMarkerReg> markers, CameraD2CParams d2c, CancellationToken ct)
+    /// <summary>프레임 1장 검출 + 등록 마커 매칭 + 툴 TCP pose 조회.</summary>
+    private async Task<(QrMarkerReg marker, QrPoseResult pose, double[] tBT)> DetectOneAsync(
+        IReadOnlyList<QrMarkerReg> markers, CameraD2CParams d2c, int tool, CancellationToken ct)
     {
         var color = _cam.LatestColor;
         if (color is null || DateTime.UtcNow - _cam.LastFrameAt > TimeSpan.FromSeconds(1))
@@ -162,8 +208,8 @@ public class QrLocalizationService
             throw new InvalidOperationException($"마커 \"{marker.Text}\" 의 크기(mm)가 유효하지 않습니다.");
 
         var pose = QrPoseEstimator.EstimatePose(det, color.Width, color.Height, d2c, marker.SizeMm);
-        var tBF = await _cobot.Rpc.GetTcpPoseInBaseAsync(0, ct);   // tool 0 = 플랜지
-        return (marker, pose, tBF);
+        var tBT = await _cobot.Rpc.GetTcpPoseInBaseAsync(tool, ct);   // 카메라 오프셋 기준 공구
+        return (marker, pose, tBT);
     }
 
     /// <summary>버스트 종료 시점 SLAM pose 가 시작 시점 대비 이동했으면 측정 무효.</summary>
@@ -195,7 +241,7 @@ public class QrLocalizationService
 }
 
 /// <summary>QR 검증 결과. Δ = SLAM − QR 측정. σ = 버스트 내 표본 산포(코봇 진동/검출 잡음 지표).
-/// 면외 잔차(z/roll/pitch)는 0 근처가 정상 — 크면 T_F_C/장착 오프셋 점검 필요.</summary>
+/// 면외 잔차(z/roll/pitch)는 0 근처가 정상 — 크면 T_T_C/장착 오프셋 점검 필요.</summary>
 public sealed record QrVerificationResult(
     string MarkerText, int SamplesUsed,
     double MeasXmm, double MeasYmm, double MeasThetaDeg,
@@ -203,4 +249,9 @@ public sealed record QrVerificationResult(
     double DXmm, double DYmm, double DThetaDeg,
     double StdXmm, double StdYmm, double StdThetaDeg,
     double ZResidMm, double RollDeg, double PitchDeg,
+    double? DepthVsPnpMm, DateTime MeasuredAt);
+
+public sealed record QrMapObservation(
+    string MarkerText, QrMapTransform Transform, int SamplesUsed,
+    double ReprojectionRmsPx, double StdTxMm, double StdTyMm, double StdThetaDeg,
     double? DepthVsPnpMm, DateTime MeasuredAt);

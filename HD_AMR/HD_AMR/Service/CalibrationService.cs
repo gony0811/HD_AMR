@@ -88,7 +88,7 @@ public class CalibrationService
         return new MountSolveResult(phi, tx, ty, rms, n);
     }
 
-    // ── 핸드아이 오프셋 T_F_C (플랜지→카메라 광학 프레임) ───────────
+    // ── 핸드아이 오프셋 T_T_C (툴 TCP→카메라 광학 프레임) ───────────
     /// <summary>저장된 핸드아이 오프셋 [x,y,z,rx,ry,rz](mm/도). 없으면 0 배열.</summary>
     public async Task<double[]> GetHandEyeAsync()
     {
@@ -107,7 +107,7 @@ public class CalibrationService
 
     public Task SaveHandEyeAsync(double[] pose)
         => _param.SetAsync(HandEyeKey, JsonSerializer.Serialize(pose),
-            "핸드아이 오프셋 T_F_C [x,y,z,rx,ry,rz] (mm/도, 코봇 플랜지→컬러카메라 광학 프레임)");
+            "핸드아이 오프셋 T_T_C [x,y,z,rx,ry,rz] (mm/도, 코봇 툴 TCP→컬러카메라 광학 프레임)");
 
     // ── QR 마커 등록 ────────────────────────────────────────────────
     public async Task<List<QrMarkerReg>> GetQrMarkersAsync()
@@ -127,7 +127,7 @@ public class CalibrationService
 
     public Task SaveQrMarkersAsync(List<QrMarkerReg> markers)
         => _param.SetAsync(QrMarkersKey, JsonSerializer.Serialize(markers),
-            "QR 위치 검증 마커 등록(디코딩 텍스트, 도면 좌표, 높이, 법선 방위각, 크기)");
+            "QR 맵 정합 기준 마커(디코딩 텍스트, 도면 좌표, 바닥/벽, 방위각, 크기)");
 
     // ── 기준점 대응 ─────────────────────────────────────────────────
     /// <summary>저장된 기준점 대응 목록. 없으면 빈 값 3점.</summary>
