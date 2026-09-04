@@ -27,6 +27,8 @@ public class CalibrationService
     private const string MountKey = "Calib.Mount.Pose";          // JSON double[6] = [x,y,z,rx,ry,rz]
     private const string MountSamplesKey = "Calib.Mount.SamplesJson";
     private const string RefPointsKey = "Calib.MapRef.PointsJson";
+    private const string HandEyeKey = "Calib.HandEye.Pose";      // JSON double[6] = [x,y,z,rx,ry,rz]
+    private const string QrMarkersKey = "Calib.Qr.MarkersJson";
     private const string RegThetaKey = "Calib.MapReg.ThetaDeg";
     private const string RegTxKey = "Calib.MapReg.Tx";
     private const string RegTyKey = "Calib.MapReg.Ty";
@@ -85,6 +87,47 @@ public class CalibrationService
         var (phi, tx, ty, rms, n) = MapCalibration.SolveMount2D(s);
         return new MountSolveResult(phi, tx, ty, rms, n);
     }
+
+    // ── 핸드아이 오프셋 T_F_C (플랜지→카메라 광학 프레임) ───────────
+    /// <summary>저장된 핸드아이 오프셋 [x,y,z,rx,ry,rz](mm/도). 없으면 0 배열.</summary>
+    public async Task<double[]> GetHandEyeAsync()
+    {
+        var raw = await _param.GetAsync(HandEyeKey);
+        if (raw is not null)
+        {
+            try
+            {
+                var arr = JsonSerializer.Deserialize<double[]>(raw, JsonOpts);
+                if (arr is { Length: 6 }) return arr;
+            }
+            catch (Exception ex) { _logger.LogWarning(ex, "핸드아이 오프셋 역직렬화 실패 — 0으로 폴백"); }
+        }
+        return new double[6];
+    }
+
+    public Task SaveHandEyeAsync(double[] pose)
+        => _param.SetAsync(HandEyeKey, JsonSerializer.Serialize(pose),
+            "핸드아이 오프셋 T_F_C [x,y,z,rx,ry,rz] (mm/도, 코봇 플랜지→컬러카메라 광학 프레임)");
+
+    // ── QR 마커 등록 ────────────────────────────────────────────────
+    public async Task<List<QrMarkerReg>> GetQrMarkersAsync()
+    {
+        var raw = await _param.GetAsync(QrMarkersKey);
+        if (raw is not null)
+        {
+            try
+            {
+                var list = JsonSerializer.Deserialize<List<QrMarkerReg>>(raw, JsonOpts);
+                if (list is not null) return list;
+            }
+            catch (Exception ex) { _logger.LogWarning(ex, "QR 마커 역직렬화 실패 — 빈 목록"); }
+        }
+        return new List<QrMarkerReg>();
+    }
+
+    public Task SaveQrMarkersAsync(List<QrMarkerReg> markers)
+        => _param.SetAsync(QrMarkersKey, JsonSerializer.Serialize(markers),
+            "QR 위치 검증 마커 등록(디코딩 텍스트, 도면 좌표, 높이, 법선 방위각, 크기)");
 
     // ── 기준점 대응 ─────────────────────────────────────────────────
     /// <summary>저장된 기준점 대응 목록. 없으면 빈 값 3점.</summary>
