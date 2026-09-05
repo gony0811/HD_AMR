@@ -114,9 +114,9 @@ builder.Services.AddDbContext<HdAmrDbContext>(opt =>
 builder.Services.AddScoped<DrawingService>();
 builder.Services.AddScoped<TeachingService>();
 builder.Services.AddScoped<ParameterService>();
-// 맵 정합 캘리브레이션(장착 오프셋 T_A_B, 맵↔도면 T_W_G). Parameter 저장소만 사용.
+// QR 정차 pose 티칭에 필요한 T_A_B, T_T_C, 목표 T_A_Q 및 기존 정합값 저장.
 builder.Services.AddScoped<CalibrationService>();
-// 도면 좌표 QR 4점 기반 T_W_G 정합. 온디맨드 측정 — 호스티드 불필요.
+// 바닥 QR 기준 목표 AMR SLAM 정차 pose 계산. 온디맨드 측정 — 호스티드 불필요.
 builder.Services.AddScoped<QrLocalizationService>();
 
 // 시퀀스 단계 등록 (ISequenceStep). 새 단계 추가 시 여기에 한 줄만 추가.

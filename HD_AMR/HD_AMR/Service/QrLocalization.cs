@@ -61,6 +61,41 @@ public static class QrLocalization
         return new QrMapTransform(pose[5], pose[0], pose[1], pose[2], pose[3], pose[4]);
     }
 
+    /// <summary>바닥 QR pose를 만든다. X/Y는 QR 중심, yaw는 코드 위쪽(+Y_Q)의 방위각이다.</summary>
+    public static double[] FloorMarkerPose(double xMm, double yMm, double zMm, double yawDeg)
+        => MarkerDrawingPose(new QrMarkerReg
+        {
+            Gx = xMm, Gy = yMm, Zmm = zMm, YawDegG = yawDeg,
+            Surface = QrMountSurface.Floor,
+        });
+
+    /// <summary>
+    /// 현재 SLAM pose와 QR 상대 관측으로 QR 기준 목표 정차 SLAM pose를 계산한다.
+    /// T_W_A(target) = T_W_A(current) · T_A_Q(measured) · inv(T_A_Q(target)).
+    /// </summary>
+    public static QrStopPoseSolution SolveStopPose(
+        double[] tWA, double[] tAB, double[] tBT, double[] tTC, double[] tCQ, double[] tAQTarget)
+    {
+        var tAQ = FrameMath.Multiply(FrameMath.PoseToMatrix(tAB), FrameMath.PoseToMatrix(tBT));
+        tAQ = FrameMath.Multiply(tAQ, FrameMath.PoseToMatrix(tTC));
+        tAQ = FrameMath.Multiply(tAQ, FrameMath.PoseToMatrix(tCQ));
+
+        var tWATarget = FrameMath.Multiply(FrameMath.PoseToMatrix(tWA), tAQ);
+        tWATarget = FrameMath.Multiply(tWATarget, FrameMath.Invert(FrameMath.PoseToMatrix(tAQTarget)));
+        var target = FrameMath.MatrixToPose(tWATarget);
+        var measured = FrameMath.MatrixToPose(tAQ);
+        var desired = FrameMath.PoseToMatrix(tAQTarget);
+
+        // 바닥 QR 방위각은 QR의 +Y(코드 위쪽) 열벡터로 계산한다.
+        double measuredYaw = Math.Atan2(tAQ[1, 1], tAQ[0, 1]) * Rad2Deg;
+        double desiredYaw = Math.Atan2(desired[1, 1], desired[0, 1]) * Rad2Deg;
+        return new QrStopPoseSolution(
+            measured[0], measured[1], measured[2], measuredYaw,
+            target[0], target[1], target[5],
+            measured[0] - tAQTarget[0], measured[1] - tAQTarget[1],
+            AngleDiffDeg(measuredYaw, desiredYaw));
+    }
+
     /// <summary>여러 마커에서 얻은 T_W_G 후보를 원형평균하고 후보 간 산포를 RMS로 반환한다.</summary>
     public static MapRegistration AverageMapTransforms(IReadOnlyList<QrMapTransform> samples)
     {
@@ -151,10 +186,27 @@ public sealed record QrMapTransform(
     double ThetaDeg, double TxMm, double TyMm,
     double ZResidMm, double RollDeg, double PitchDeg);
 
+public sealed record QrStopPoseSolution(
+    double MeasuredQrXmm, double MeasuredQrYmm, double MeasuredQrZmm, double MeasuredQrYawDeg,
+    double TargetSlamXmm, double TargetSlamYmm, double TargetSlamYawDeg,
+    double ErrorXmm, double ErrorYmm, double ErrorYawDeg);
+
 public enum QrMountSurface
 {
     Floor,
     Wall,
+}
+
+public sealed class QrStopReference
+{
+    public string Text { get; set; } = "STOP-QR";
+    public double SizeMm { get; set; } = 150;
+    public double TargetXmm { get; set; }
+    public double TargetYmm { get; set; }
+    public double TargetZmm { get; set; }
+    public double TargetYawDeg { get; set; }
+    public double PositionToleranceMm { get; set; } = 10;
+    public double YawToleranceDeg { get; set; } = 0.5;
 }
 
 /// <summary>QR 마커 등록값 한 개(@bind 용 mutable — <see cref="MapRefPoint"/> 패턴).

@@ -204,4 +204,27 @@ public class QrLocalizationTests
         Assert.Equal(0, solved.RollDeg, 1e-6);
         Assert.Equal(0, solved.PitchDeg, 1e-6);
     }
+
+    [Fact]
+    public void SolveStopPose_RecoversDesiredSlamPoseWithoutCenteringFirst()
+    {
+        var currentWA = new[] { 1000.0, 500, 0, 0, 0, 20 };
+        var targetWA = new[] { 1800.0, -300, 0, 0, 0, -15 };
+        var targetAQ = QrLocalization.FloorMarkerPose(600, 50, -300, 5);
+        // 고정 QR의 W pose = 원하는 AMR 정차 pose · 목표 A→Q.
+        var worldQ = FrameMath.Multiply(FrameMath.PoseToMatrix(targetWA), FrameMath.PoseToMatrix(targetAQ));
+
+        var tAB = new[] { 100.0, 20, 250, 0, 0, 3 };
+        var tBT = new[] { 450.0, -80, 650, 5, -12, 35 };
+        var tTC = new[] { 25.0, -10, 40, 1, -2, 90 };
+        var currentWC = FrameMath.Multiply(
+            FrameMath.Multiply(FrameMath.PoseToMatrix(currentWA), FrameMath.PoseToMatrix(tAB)),
+            FrameMath.Multiply(FrameMath.PoseToMatrix(tBT), FrameMath.PoseToMatrix(tTC)));
+        var tCQ = FrameMath.MatrixToPose(FrameMath.Multiply(FrameMath.Invert(currentWC), worldQ));
+
+        var solved = QrLocalization.SolveStopPose(currentWA, tAB, tBT, tTC, tCQ, targetAQ);
+        Assert.Equal(targetWA[0], solved.TargetSlamXmm, 1e-6);
+        Assert.Equal(targetWA[1], solved.TargetSlamYmm, 1e-6);
+        Assert.Equal(0, QrLocalization.AngleDiffDeg(solved.TargetSlamYawDeg, targetWA[5]), 1e-6);
+    }
 }

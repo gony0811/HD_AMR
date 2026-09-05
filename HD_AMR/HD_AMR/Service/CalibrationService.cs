@@ -29,6 +29,7 @@ public class CalibrationService
     private const string RefPointsKey = "Calib.MapRef.PointsJson";
     private const string HandEyeKey = "Calib.HandEye.Pose";      // JSON double[6] = [x,y,z,rx,ry,rz]
     private const string QrMarkersKey = "Calib.Qr.MarkersJson";
+    private const string QrStopReferenceKey = "Calib.Qr.StopReferenceJson";
     private const string RegThetaKey = "Calib.MapReg.ThetaDeg";
     private const string RegTxKey = "Calib.MapReg.Tx";
     private const string RegTyKey = "Calib.MapReg.Ty";
@@ -128,6 +129,25 @@ public class CalibrationService
     public Task SaveQrMarkersAsync(List<QrMarkerReg> markers)
         => _param.SetAsync(QrMarkersKey, JsonSerializer.Serialize(markers),
             "QR 맵 정합 기준 마커(디코딩 텍스트, 도면 좌표, 바닥/벽, 방위각, 크기)");
+
+    public async Task<QrStopReference> GetQrStopReferenceAsync()
+    {
+        var raw = await _param.GetAsync(QrStopReferenceKey);
+        if (raw is not null)
+        {
+            try
+            {
+                var value = JsonSerializer.Deserialize<QrStopReference>(raw, JsonOpts);
+                if (value is not null) return value;
+            }
+            catch (Exception ex) { _logger.LogWarning(ex, "QR 정차 기준 역직렬화 실패 — 기본값 사용"); }
+        }
+        return new QrStopReference();
+    }
+
+    public Task SaveQrStopReferenceAsync(QrStopReference reference)
+        => _param.SetAsync(QrStopReferenceKey, JsonSerializer.Serialize(reference),
+            "QR 기준 AMR 정차 pose 계산 설정(ID, 크기, 목표 T_A_Q, 허용오차)");
 
     // ── 기준점 대응 ─────────────────────────────────────────────────
     /// <summary>저장된 기준점 대응 목록. 없으면 빈 값 3점.</summary>

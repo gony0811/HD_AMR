@@ -6,9 +6,8 @@ using Microsoft.Extensions.Logging;
 namespace HD_AMR.Service;
 
 /// <summary>
-/// QR 마커 기반 도면(G)→SLAM(W) 정합 오케스트레이션. 버튼 클릭 시 온디맨드로:
-/// 컬러 프레임에서 QR 검출(<see cref="QrPoseEstimator"/>) → 등록 마커 매칭 →
-/// 변환 체인 계산(<see cref="QrLocalization"/>) → 마커별 T_W_G 후보 산출.
+/// QR 기준 AMR 정차 SLAM pose 계산 오케스트레이션. 버튼 클릭 시 온디맨드로
+/// 컬러 프레임 QR 검출(<see cref="QrPoseEstimator"/>)과 현재 로봇 pose를 결합해 목표 pose를 산출한다.
 /// N 프레임 평균으로 잡음을 줄이고, 측정 중 AMR 이동을 감지하면 실패 처리한다.
 /// 실패는 한국어 메시지의 <see cref="InvalidOperationException"/> 으로 던진다(UI 에서 표시).
 /// </summary>
@@ -37,6 +36,58 @@ public class QrLocalizationService
         var color = _cam.LatestColor ?? throw new InvalidOperationException("카메라 컬러 프레임 없음 — 스트리밍 상태를 확인하세요.");
         var det = await Task.Run(() => QrPoseEstimator.Detect(color), ct);
         return det?.Text;
+    }
+
+    /// <summary>바닥 QR을 버스트 측정해 해당 QR 기준 목표 AMR SLAM 정차 pose를 계산한다.</summary>
+    public async Task<QrStopPoseMeasurement> MeasureStopPoseAsync(
+        QrStopReference reference, int tool, int samples = 5, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(reference.Text))
+            throw new InvalidOperationException("QR ID를 입력하거나 카메라로 읽어 주세요.");
+        if (reference.SizeMm <= 0)
+            throw new InvalidOperationException("QR 한 변의 실측 크기를 입력하세요.");
+
+        var marker = new QrMarkerReg { Text = reference.Text, SizeMm = reference.SizeMm };
+        var (d2c, handEye, mount, poseBefore) = await PrepareAsync(new[] { marker }, ct);
+        var targetAQ = QrLocalization.FloorMarkerPose(
+            reference.TargetXmm, reference.TargetYmm, reference.TargetZmm, reference.TargetYawDeg);
+        var solved = new List<QrStopPoseSolution>();
+        var reprojectionErrors = new List<double>();
+        double? depthVsPnp = null;
+
+        for (int i = 0; i < samples; i++)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (i > 0) await Task.Delay(SampleDelayMs, ct);
+            var (_, pose, tBT) = await DetectOneAsync(new[] { marker }, d2c, tool, ct);
+            var st = _amr.LatestStatus ?? throw new InvalidOperationException("AMR 상태 없음.");
+            var tWA = MapCalibration.AmrPoseToMmDeg(st.Pose.X, st.Pose.Y, st.Pose.Angle);
+            solved.Add(QrLocalization.SolveStopPose(tWA, mount, tBT, handEye, pose.PoseCQ, targetAQ));
+            reprojectionErrors.Add(pose.ReprojErrPx);
+            depthVsPnp ??= DepthMinusPnpMm(d2c, pose);
+        }
+
+        EnsureStationary(poseBefore);
+        double MeanAngle(Func<QrStopPoseSolution, double> selector) =>
+            QrLocalization.CircularMeanDeg(solved.Select(selector).ToList());
+        double targetYaw = MeanAngle(x => x.TargetSlamYawDeg);
+        double measuredYaw = MeanAngle(x => x.MeasuredQrYawDeg);
+        double errorYaw = MeanAngle(x => x.ErrorYawDeg);
+        double targetX = solved.Average(x => x.TargetSlamXmm);
+        double targetY = solved.Average(x => x.TargetSlamYmm);
+
+        return new QrStopPoseMeasurement(
+            reference.Text, samples,
+            poseBefore[0], poseBefore[1], poseBefore[5],
+            solved.Average(x => x.MeasuredQrXmm), solved.Average(x => x.MeasuredQrYmm),
+            solved.Average(x => x.MeasuredQrZmm), measuredYaw,
+            solved.Average(x => x.ErrorXmm), solved.Average(x => x.ErrorYmm), errorYaw,
+            targetX, targetY, targetYaw,
+            Std(solved.Select(x => x.TargetSlamXmm).ToList(), targetX),
+            Std(solved.Select(x => x.TargetSlamYmm).ToList(), targetY),
+            Math.Sqrt(solved.Select(x => QrLocalization.AngleDiffDeg(x.TargetSlamYawDeg, targetYaw))
+                .Average(x => x * x)),
+            reprojectionErrors.Average(), depthVsPnp, DateTime.Now);
     }
 
     /// <summary>지정 마커를 여러 프레임 측정해 도면→SLAM 변환 T_W_G 후보 하나를 만든다.</summary>
@@ -255,3 +306,12 @@ public sealed record QrMapObservation(
     string MarkerText, QrMapTransform Transform, int SamplesUsed,
     double ReprojectionRmsPx, double StdTxMm, double StdTyMm, double StdThetaDeg,
     double? DepthVsPnpMm, DateTime MeasuredAt);
+
+public sealed record QrStopPoseMeasurement(
+    string MarkerText, int SamplesUsed,
+    double CurrentSlamXmm, double CurrentSlamYmm, double CurrentSlamYawDeg,
+    double MeasuredQrXmm, double MeasuredQrYmm, double MeasuredQrZmm, double MeasuredQrYawDeg,
+    double ErrorXmm, double ErrorYmm, double ErrorYawDeg,
+    double TargetSlamXmm, double TargetSlamYmm, double TargetSlamYawDeg,
+    double StdTargetXmm, double StdTargetYmm, double StdTargetYawDeg,
+    double ReprojectionRmsPx, double? DepthVsPnpMm, DateTime MeasuredAt);
