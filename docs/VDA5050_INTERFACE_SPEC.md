@@ -2,13 +2,15 @@
 
 | 항목 | 내용 |
 |---|---|
-| 문서 버전 | **1.2** |
+| 문서 버전 | **1.3** |
 | 작성일 | 2026-08-27 (최종 개정 2026-09-03) |
 | 대상 | HD_AMR 통합 운영 S/W 개발팀 (로봇 온보드) |
 | 기준 표준 | **VDA 5050 v2.0** (Interface for the communication between AGV and master control) |
-| 상태 | **확정** (2026-08-28 HD_AMR 회신 반영, `VDA5050_AMR_REPLY.md`) — N10(정차 이격)은 잠정값, N12(ACS 생존 신호)는 신규 협의 대기 |
+| 상태 | **확정** — N10(정차 이격)만 잠정값 유지. N12(ACS 생존 신호)는 2026-09-03 승인. N13(검사 타입 카탈로그)은 2026-09-14 제안(계약 무변경) |
 | 개정 1.1 | 2026-09-01 — 로봇(TARS-M) REST 실물 스펙 확보분 반영. **ACS↔AMR 계약(§1~§9·부록 A~C)은 무변경**이며, AMR 온보드가 그 계약을 로봇 REST로 어떻게 이행하는지를 **부록 D**로 신설하고 관련 절에 각주를 달았다. 에러코드 매핑·층 전환 절차는 로봇측 정보 미확보로 **보류**(§6.4·§5.2·§9.2 그대로 유효, 구현만 유보) |
-| 개정 1.2 | 2026-09-03 — ACS 프로세스 생존 상태를 HD_AMR에 알리는 ACS 전용 `connection` 토픽과 Last Will 사양 추가. **VDA 5050 표준 확장·HD_AMR 협의 전 항목** `[협의 N12]` |
+| 개정 1.2 | 2026-09-03 — ACS 프로세스 생존 상태를 HD_AMR에 알리는 ACS 전용 `connection` 토픽과 Last Will 사양 추가. **VDA 5050 표준 확장·승인 완료** `[N12]` |
+| 개정 1.3 | 2026-09-14 — §8.5 검사 타입 카탈로그·레시피 계약(제안) 신설 + **§8.5.1 `seamType`×`wall_code`→레시피 매핑 규칙(제안)**, §10 `[N13]` 등재 + **부록 D.3 경유점 `Surface` 유도(온보드 구현, HD_AMR 코드 근거)** |
+| 개정 1.3a | 2026-09-14 — **`seamType` enum 확장 ACS 선반영**: 계획 UI(③ 검사 작업 등록) seamType 드롭다운 추가에 맞춰 §8.1/§8.2·등록 게이트·`param_schema`가 `LINE`·`CROSS`·`CORNER`를 수용·발행(`POLYLINE` 거부). **`CROSS`/`CORNER`는 HD_AMR 실행 미구현(스텁) — 계획 데이터 전달만**, 레시피 실행은 N13 확정 후 2차 연동 |
 
 > **이 문서가 인터페이스 계약의 단일 출처(single source of truth)다.**
 > 다른 문서(ARCHITECTURE.md, GRAPH_DATA_MODEL.md, SPEC_PHASE2_ACS.md 등)와 기술이 다를 경우 본 사양서가 우선한다.
@@ -71,7 +73,7 @@ ACS는 AMR 플랫폼·협동로봇·검사장비를 개별 제어하지 않으�
 | `instantActions` | ACS → AMR | 1 | false | 즉시 액션 (§5) |
 | `state` | AMR → ACS | 1 | false | **2초 주기** + 이벤트 시 즉시 (§6) |
 | `connection` | AMR → ACS | 1 | **true** | 생존 신호 + MQTT Last Will (§7) |
-| `connection` (ACS identity) | ACS → AMR | 1 | **true** | ACS 전용 identity의 생존 신호 + MQTT Last Will (§7.2) `[협의 N12]` |
+| `connection` (ACS identity) | ACS → AMR | 1 | **true** | ACS 전용 identity의 생존 신호 + MQTT Last Will (§7.2) `[N12]` |
 | `factsheet` | AMR → ACS | — | — | **예약 채널 (현행 미사용)** — 향후 로봇 능력 조회용. 현행 ACS는 발행/구독하지 않음 |
 | `visualization` | — | — | — | **미사용** — 위치는 state.agvPosition으로 충분 (2초 주기) |
 
@@ -87,7 +89,7 @@ AMR은 MQTT 접속 시 다음 Will을 반드시 설정한다:
 
 > ※구현: 시뮬레이터(`HD.Acs.Simulator/Program.cs:46-51`)가 이 규약대로 동작. Will payload의 headerId/timestamp는 접속 시점 값이어도 무방(ACS는 connectionState만 소비).
 
-ACS도 MQTT 접속 시 ACS 전용 `connection` 토픽에 다음 Will을 설정한다 `[협의 N12]`:
+ACS도 MQTT 접속 시 ACS 전용 `connection` 토픽에 다음 Will을 설정한다 `[N12]`:
 
 - Will 토픽: `uagv/v2/HD_ACS/hd-acs-master/connection`
 - Will payload: `connectionState: "CONNECTIONBROKEN"` 인 §7.2 메시지
@@ -143,6 +145,7 @@ ACS는 **greedy 최근접 동적 배차**를 사용한다. 층(맵) 안의 미�
 
 > **액션 없는 Order(수동 이동)**: ACS는 이동 테스트·수동 이동용으로 `actions: []`(빈 배열)인 단일 노드 Order를 발행할 수 있다.
 > AMR은 **노드 도달만으로 완결** 처리한다(actionStates는 빈 배열 유지).
+> 이 경우 `theta`는 **미지정(null) 가능** — 검사 정차가 아니므로 §4.4의 "벽 정면 방향" 전제가 적용되지 않으며, 도착 방향은 자유다.
 
 ### 4.2 메시지 스키마 (ACS 발행 필드)
 
@@ -251,7 +254,9 @@ AMR이 수신한 Order를 실행할 수 없는 경우(모르는 `mapId`, 필수 
 - `state.errors[]`에 거부 사실을 보고한다 — ACS 제안: `errorType: "orderValidationError"`(N6 코드 체계와 함께 확정), `errorLevel: "WARNING"`, `errorDescription`에 거부된 orderId와 사유.
 - 개별 **액션** 파라미터만 문제인 경우는 Order 거부가 아니라 해당 액션을 `actionStatus: "FAILED"`로 보고한다 (§9.5 재시도 정책 경로 — 시뮬레이터의 `FAIL;reason=PARAM(...)` 계약이 이 케이스).
 
-> ※구현: 현행 ACS는 Order 거부의 자동 감지·재배차가 미구현이다(거부되면 해당 정차가 DISPATCHED로 남음 — 운영자 개입 필요). N11 확정 후 errors 기반 자동 처리 추가 예정. AMR은 위 계약대로 보고하면 된다.
+> ※구현(2026-09-01 반영 완료): ACS는 `orderValidationError` 수신 시 description의 orderId를 현재 배차와 대조해
+> **거부된 정차를 자동으로 실패 집계**(재시도→스킵 정책 + ORDER_REJECTED 알람)한다 — DISPATCHED 정체 없음.
+> N11 계약대로 **description에 거부된 orderId를 반드시 명시**할 것(대조 키).
 
 **4.5.3 취소(cancelOrder) — 미사용**
 
@@ -407,7 +412,10 @@ AMR이 표준 준수 구현(전체 필드 발행)을 하는 것을 **권장**하
 > 회신 전까지 온보드는 확실히 판별 가능한 것만 보고한다 — `emergencyStopActive`(자기가 정지시켰으므로 자명),
 > `orderValidationError`(온보드 자체 검증), `inspectionFailed`(검사 S/W 결과). 주행·측위 계열은 회신 후 채운다.
 
-> ※구현: 재시도 N회→스킵→알람 정책은 **actionStatus=FAILED 기준으로 동작**(2026-08-28 E2E 검증 — 재큐잉·SKIPPED·INSPECTION_SKIPPED 알람). errors의 **유형 코드별** 정책 분기는 코드 체계 협의(N6) 후 구현 예정 — 현행은 건수만 UI 전파. 계약상 AMR은 위 형식으로 보고하면 된다.
+> ※구현(2026-09-01 유형별 분기 반영 완료): 재시도→스킵→알람은 actionStatus=FAILED 기준으로 동작하고, 추가로 errors를 유형별로 소비한다 —
+> `orderValidationError`→거부 정차 자동 실패 집계(§4.5.2) / `emergencyStopActive`→**활성 run 자동 중단**(보고 지속 중 시작된 run 포함) /
+> `localizationLost`·`equipmentError`·`batteryLow`→알람 기록(같은 유형의 반복 보고는 1회만 — "최신 1건 유지" 규칙에 edge 검출로 대응) /
+> `drivingFailed`·`inspectionFailed`→액션 FAILED 종결 경로가 정책 수행. E2E 검증 완료.
 
 ---
 
@@ -429,7 +437,7 @@ AMR이 표준 준수 구현(전체 필드 발행)을 하는 것을 **권장**하
 
 ACS 반응: ONLINE → 미션 `ConnectionRestored`(RUNNING 복귀 + state 재동기화) / OFFLINE·CONNECTIONBROKEN → 미션 `DISCONNECTED` 표시. **두절 중에도 AMR은 진행 중 Order를 자율 계속 수행한다** — 재접속 후 최신 state 1건으로 ACS가 따라잡는다(robot-is-truth) [ADR-002].
 
-### 7.2 ACS → AMR `[협의 N12]`
+### 7.2 ACS → AMR `[N12]`
 
 ACS 생존신호는 VDA 5050 표준 로봇 `connection` 메시지의 상태 모델을 재사용하는 **프로젝트 확장**이다.
 로봇 `connection` retained 값을 덮어쓰지 않도록 ACS에 별도 identity를 부여한다.
@@ -464,9 +472,10 @@ ACS 생존신호는 VDA 5050 표준 로봇 `connection` 메시지의 상태 모�
 - HD_AMR은 `ONLINE` 수신 시 별도 복구 명령을 요구하지 않고, 이후 수신되는 Order를 정상 처리한다.
 - 브로커 자체 장애 중에는 Will을 전달할 수 없으므로 HD_AMR은 MQTT 연결 끊김도 ACS 통신 두절로 동일 취급한다.
 
-> ※구현 상태(2026-09-03): **HD_AMR 구독·UI 반영 구현 완료** (`Vda5050AdapterService` 구독 + 상태바 ACS 배지 4-상태:
-> 미연결/두절/대기/연결 — 생존 신호 미수신 시 기존 3-상태 폴백. 검증용 `tools/virtual_acs.py`도 §7.2 발행 구현).
-> ACS 쪽 발행 구현은 N12 합의 후 반영한다.
+> ※구현(2026-09-03 반영 완료): ACS는 MQTT CONNECT에 위 Last Will을 설정하고, 접속·재접속 직후
+> `ONLINE`(QoS 1, retain), 정상 종료 직전 `OFFLINE`(QoS 1, retain)을 발행한다.
+> 운전 중 브로커/네트워크 연결이 끊기면 5초 간격으로 재접속하고, CleanSession에 맞춰 등록된 로봇의
+> `state`·`connection` 토픽을 모두 재구독한다. HD_AMR의 ACS 생존 토픽 구독·상태 처리는 로봇측 구현 항목이다.
 
 ---
 
@@ -490,9 +499,9 @@ ACS 생존신호는 VDA 5050 표준 로봇 `connection` 메시지의 상태 모�
 | `jobRef` | 작업 역추적 키 (사람이 읽는 ID — AMR은 로깅 외 해석 불요) |
 | `position.seamStartW/seamEndW` | 용접선 시작/끝 **맵(월드) 좌표** [x,y,z] m — 도면 좌표에 릴리즈 시점 유효 T_W_D(도면→맵 강체변환) 적용, z는 통과 |
 | `position.drawingPos` | 도면 좌표 echo — tank/level/wall_code + **u,v(벽면-로컬)** + x,y,z(도면). `wall_code`가 **티칭 자세 선택 키** |
-| `params.seamType` | **`LINE` 한정** (2026-08-29 AMR 회신 §5.1 — POLYLINE은 2점 계약으로 세그먼트 방향 불명이라 AMR이 액션 FAILED 처리). 꺾인 용접선은 ACS가 **세그먼트별 LINE 액션 N개로 분할**(같은 정차·같은 anchorGroupId → 정렬 공유). `params.points` 기반 POLYLINE 확장은 후속 협의 |
+| `params.seamType` | 용접라인 형태 — **`LINE`·`CROSS`·`CORNER`** (2026-09-14 ACS 선반영, §8.5.1). `LINE`=직선 구간(현행), `CROSS`=4점 십자, `CORNER`=3점 코너. **`CROSS`/`CORNER`는 HD_AMR 실행 미구현(스텁) — 계획 데이터로 전달만**, 레시피 실행은 N13 확정 후 2차 연동. `POLYLINE`은 여전히 거부(2026-08-29 AMR 회신 §5.1 — 2점 계약으로 세그먼트 방향 불명이라 AMR이 FAILED). 꺾인 직선은 ACS가 **세그먼트별 LINE 액션 N개로 분할**(같은 정차·같은 anchorGroupId → 정렬 공유). `wall_code` 조합 레시피 매핑은 §8.5.1 |
 | `params.sectionDxfId` | 단면 프로파일 참조 ID |
-| `params.inspectionProfileId` | 검사(촬영/측정) 프로파일 ID |
+| `params.inspectionProfileId` | 검사(촬영/측정) 프로파일 ID (검사 타입 분류·레시피 계약은 §8.5 참고 — 제안, 현행 자유 문자열 무변경) |
 | `params.standoffMm` | 표면 이격 거리 [mm] |
 | `params.workingDistanceMm` | (선택) 작업 거리 [mm] |
 | `params.anchorGroupId` | 정렬(anchor) 공유 그룹 — **같은 그룹의 연속 액션은 사이에 주행이 없었다면 정렬 재수행 생략 가능** |
@@ -530,7 +539,7 @@ ACS 생존신호는 VDA 5050 표준 로봇 `connection` 메시지의 상태 모�
       "type": "object",
       "required": ["seamType", "sectionDxfId", "inspectionProfileId", "standoffMm", "anchorGroupId", "seqInGroup"],
       "properties": {
-        "seamType": { "enum": ["LINE", "POLYLINE"] },
+        "seamType": { "enum": ["LINE", "CROSS", "CORNER"] },
         "points": { "type": "array" },
         "sectionDxfId": { "type": "string" },
         "inspectionProfileId": { "type": "string" },
@@ -549,7 +558,7 @@ ACS 생존신호는 VDA 5050 표준 로봇 `connection` 메시지의 상태 모�
 ### 8.3 직렬화 규칙
 
 - `actionParameters[].value`는 **JSON object/number/string 그대로** 직렬화가 기본.
-- AMR 파서가 문자열 value만 수용한다면 `position`/`params`를 JSON 문자열로 발행하는 폴백을 협의로 채택할 수 있다 `[협의 N7]` (※구현: 폴백 스위치는 ACS 미구현 — 필요 판정 시 추가).
+- 문자열 폴백은 **불요 확정**(N7 회신 — AMR이 object·문자열 재파싱 모두 수용). ACS는 항상 object로 발행하며 폴백 스위치는 구현하지 않는다.
 
 ### 8.4 골든 예시 (액션 전문)
 
@@ -579,6 +588,99 @@ ACS 생존신호는 VDA 5050 표준 로봇 `connection` 메시지의 상태 모�
 ```
 
 노드측 `nodePosition`: `{ "x": 12.482, "y": 5.117, "theta": 1.571, "mapId": "CT1-L2", "allowedDeviationXY": 0.08, "allowedDeviationTheta": 0.07 }`
+
+### 8.5 검사 타입 카탈로그 및 레시피 계약 (제안) `[협의 N13]`
+
+> ※ 제안(미확정) — **계약 강제가 아니다.** 본 절은 검사 타입 분류와 레시피 운용 방식을 제안한다. 실제 계약 반영(필드·enum)은 N13 협의 확정 후 §8.1/§8.2에 넣으며, 그 전까지 §8.1/§8.2/§8.4 계약은 **무변경**이다. 상세 카탈로그는 [INSPECTION_TYPES](INSPECTION_TYPES.md).
+
+**책임 2분할.** 검사 타입은 *무엇을*(HD_ACS)과 *어떻게*(HD_AMR)로 나뉜다.
+
+| 주체 | 역할 | 내용 |
+|---|---|---|
+| HD_ACS | 검사 타입 ID 전달 | 용접선 기하 + 검사 타입 식별자를 액션으로 전달(무엇을) |
+| HD_AMR | 타입별 실행 레시피 정의 | 타입 ID → 레시피(접근 자세·스캔 패턴·촬영/측정)를 온보드 UI에서 티칭(어떻게) |
+
+→ HD_AMR inspection UI는 현재의 **수직/수평 단일 토글**을 **타입별 레시피 라이브러리**로 확장하는 것을 권장한다. ACS는 타입 ID만 보내고, 실행 방법은 AMR이 레시피로 결정한다.
+
+**검사 타입 11종** (면 자세 × 용접 형상 — 상세·근거는 INSPECTION_TYPES.md):
+
+| 형상 \ 면자세 | 바닥 `B` | 천장 `T` | 수직벽 `SM`/`PM`/`F`/`A` | 하부챔퍼 `SL`/`PL` | 상부챔퍼 `SU`/`PU` | 코너 |
+|---|:--:|:--:|:--:|:--:|:--:|:--:|
+| 직선 seam | `LINE-FLOOR` | `LINE-CEIL` | `LINE-WALL` | `LINE-CHMR-LO` | `LINE-CHMR-UP` | — |
+| 4점 십자 | `CROSS4-FLOOR` | `CROSS4-CEIL` | `CROSS4-WALL` | `CROSS4-CHMR-LO` | `CROSS4-CHMR-UP` | — |
+| 3점 코너 | — | — | — | — | — | `CORNER3` (±거울) |
+
+= **11종**(코너 거울 L/R 분리 시 12). 3점 코너가 1종인 근거: 마구리 도면 실측상 삼면 코너 각도가 전부 (135°·90°·90°)로 동일 — INSPECTION_TYPES.md §7.
+
+**개념 구분(중요).** 이 "검사 타입(형상·면)"은 기존 `params.inspectionProfileId`(§8.1 — 촬영/측정 프리셋)와 **다른 축**이다. 계약에 싣는 방식은 N13에서 확정한다:
+- (a) `inspectionProfileId`를 이 타입 enum으로 재정의(통합), 또는
+- (b) 신규 `params.inspectionType` 필드 분리(`inspectionProfileId`는 촬영/측정 유지), 또는
+- (c) 본 문서 참조만(계약 무변경).
+
+확정 전에는 ACS가 자유 문자열 `inspectionProfileId`로 계속 발행한다(현행 무변경).
+
+**레시피가 담을 실행 속성** (전부 HD_AMR 도메인 — ACS는 전달하지 않음):
+
+| 레시피 속성 | 예 |
+|---|---|
+| 면 접근 자세 | 바닥/천장/벽/챔퍼별 접근 (standoff·정차각은 ACS가 액션으로 전달) |
+| 스캔 패턴 | 직선 / 4점 십자 / 3점 코너 |
+| 툴 회전 | seam 벡터(start→end)에서 **자동 유도**(§4.4·§8.1) — 예외만 고정 종/횡 |
+| 카메라·측정 프리셋 | 노출·초점·조명 등 |
+| 코너 시퀀스 | `CORNER3` 3면 접근 순서 |
+
+#### 8.5.1 검사 레시피 매핑 규칙 (`seamType` × `wall_code`) — 제안 `[협의 N13]`
+
+> ※ 제안 — HD_AMR이 ACS가 **이미 보내는 두 필드** `params.seamType` + `position.drawingPos.wall_code` **조합만으로** 검사 레시피를 선택하도록 하는 규칙. **신규 필드 없음.** 현재 `startWeldInspection`은 HD_AMR에서 스텁(미실행 — `Vda5050OrderExecutor`가 `actionParameters`를 읽지 않고 `FINISHED "stub"` 보고)이므로, 본 규칙은 그 **2차 연동(검사 시퀀스 실행)의 목표 규격**이다.
+
+**(1) `seamType` 확장 제안.** 현행 `LINE`(§8.1 — POLYLINE은 FAILED)에 용접 형상 값을 추가한다.
+
+| `seamType` | 의미 | 상태 |
+|---|---|---|
+| `LINE` | 직선 용접선 구간 | 현행 |
+| `CROSS` | 4점 십자 교차 | ACS 수용·발행(2026-09-14) / AMR 실행 미구현 |
+| `CORNER` | 3점 코너(삼면) | ACS 수용·발행(2026-09-14) / AMR 실행 미구현 |
+
+> **ACS 선반영(2026-09-14).** 계획 UI(③ 검사 작업 등록)에 seamType 드롭다운을 추가하면서 ACS 측은 이 enum 확장을 **먼저 적용**했다 — 등록 게이트·`param_schema`(§8.2)가 `LINE`·`CROSS`·`CORNER`를 수용하고 그 값을 그대로 발행한다(`POLYLINE`은 거부). 단 HD_AMR의 `startWeldInspection`은 여전히 **스텁**이라 `CROSS`/`CORNER`의 실제 검사 시퀀스는 미실행 — 값은 **계획 데이터로 저장·전달만** 된다. 레시피 매핑·실행(2차 연동)은 아래 규칙대로 **N13 확정 후** HD_AMR이 구현한다.
+
+**(2) `wall_code` → 면 자세 매핑.** `wall_code`는 10개 면 코드(`B`/`SL`/`PL`/`SM`/`PM`/`SU`/`PU`/`T`/`F`/`A`, `TankGeometry` 정본).
+
+| `wall_code` | 면 자세 |
+|---|---|
+| `B` | 바닥 |
+| `T` | 천장 |
+| `SM` `PM` `F` `A` | 수직 평면벽 |
+| `SL` `PL` | 하부 챔퍼 |
+| `SU` `PU` | 상부 챔퍼 |
+
+**(3) 레시피 매핑표 — HD_AMR이 `(seamType, 면 자세)`로 레시피를 선택한다.** 레시피 id는 [INSPECTION_TYPES](INSPECTION_TYPES.md) §5와 동일.
+
+| `seamType` \ 면자세 | 바닥 | 천장 | 수직벽 | 하부챔퍼 | 상부챔퍼 |
+|---|---|---|---|---|---|
+| `LINE` | `LINE-FLOOR` | `LINE-CEIL` | `LINE-WALL` | `LINE-CHMR-LO` | `LINE-CHMR-UP` |
+| `CROSS` | `CROSS4-FLOOR` | `CROSS4-CEIL` | `CROSS4-WALL` | `CROSS4-CHMR-LO` | `CROSS4-CHMR-UP` |
+
+- `CORNER`: 삼면 코너 각도가 전부 (135°·90°·90°)로 균일 → **면 자세 무관 단일 레시피 `CORNER3`**. 좌/우 거울이 필요하면 `wall_code`(옆면)로 판별(`CORNER3-L`/`CORNER3-R`, 선택).
+- = 총 11종(코너 거울 분리 시 12) — §8.5 카탈로그와 동일.
+
+**(4) HD_AMR 측 구현 요건.**
+- 수신한 `(wall_code, seamType)`로 위 표의 레시피 id를 유도하고, 그 id에 대응하는 **로컬 검사 레시피**(접근 자세·스캔 패턴·촬영/측정·경유점)를 선택·실행한다.
+- 툴 수직/수평 회전은 여전히 `seamStartW→seamEndW` 벡터에서 **자동 유도**(§4.4·§8.1) — 본 매핑표는 **스캔 패턴·면 접근**만 결정한다.
+- 미지원/모순 조합(예: `CORNER` + 평면 `wall_code`, 미정의 `seamType`) 처리는 N13에서 확정. 기본: 액션 FAILED + `orderValidationError`(계약 위반) 또는 `inspectionFailed`(실행 불가).
+
+**(5) 현행 상태 각주.** HD_AMR `Vda5050OrderExecutor`는 노드 도달 후 액션을 `RUNNING → FINISHED "stub"`로만 보고하며 `actionParameters`를 해석하지 않는다. 실제 검사는 HD_AMR 자체 로컬 `InspectionProfile`(온보드 UI 티칭)로 수행된다. 본 §8.5.1 반영 = **HD_AMR 2차 과제**이며, 그때 ACS `(wall_code, seamType)` → 로컬 레시피 매핑을 붙인다.
+
+**(6) `seamType`(라인 형태) vs `Surface`(경유점 촬영 키) — 레벨 구분.** 둘은 다른 개념이며 계층이 다르다. **혼동 금지.**
+
+| 구분 | `seamType` | `Surface` |
+|---|---|---|
+| 의미 | 용접라인의 **형태**(`LINE`/`CROSS`/`CORNER`) | 경유점의 **표면 형상**(Flat/Corner/Corrugation) |
+| 단위 | 용접라인 1개 | 레시피 내 **경유점 1개** |
+| 결정 주체 | **HD_ACS** — 계획 단계에서 **도면으로 추출** → 액션 전달 | **HD_AMR** — 레시피 내부(티칭/유도) |
+| 용도 | AMR이 **어떤 레시피를 로딩**할지 선택 | 경유점마다 **촬영/조명 선택** |
+| 전송 | VDA `params.seamType`로 전송 | **전송 안 함**(AMR 내부 값) |
+
+→ ACS 책임은 `seamType`(+`wall_code`)까지다. 레시피를 로딩한 뒤 각 경유점의 `Surface`(Flat/Corner/Corrugation)에 따라 **조명·촬영을 선택**하는 것은 전적으로 HD_AMR 몫이며, ACS는 `Surface`를 알 필요도 보낼 필요도 없다.
 
 ---
 
@@ -646,7 +748,7 @@ ACS는 비상정지와 동시에 **해당 로봇의 활성 run을 자동 중단(
 
 ## 10. 협의 항목 (HD_AMR 회신 요청)
 
-**2026-08-28 HD_AMR 회신 수령(`VDA5050_AMR_REPLY.md`) — N10 보류. 2026-09-03 추가한 N12는 신규 협의 대기.**
+**2026-08-28 HD_AMR 회신 수령(`VDA5050_AMR_REPLY.md`) — N10 보류. 2026-09-03 추가한 N12는 승인 완료. N13(검사 타입 카탈로그)은 2026-09-14 신규 제안 — 계약 무변경.**
 
 | # | 항목 | ACS 제안 | HD_AMR 회신 (2026-08-28) |
 |---|---|---|---|
@@ -661,7 +763,8 @@ ACS는 비상정지와 동시에 **해당 로봇의 활성 run을 자동 중단(
 | N9 | MQTT 보안 | 평문 :1883 (폐쇄망) | ✅ 동의 (TLS 필요 판단 시 재협의) |
 | N10 | 정차 이격(standoff) 적정값 | 기본 0.8 m (영역별 조정) | ⏸ **보류** — 로봇 치수·코봇 리치 확정 후 회신, 잠정 0.8 m 수용 |
 | N11 | Order 거부 보고 방식 | 폐기 + `orderValidationError` | ✅ 동의 (§4.5.2 그대로 구현) |
-| N12 | ACS 생존 신호 | ACS 전용 `connection` 토픽 + ONLINE/OFFLINE/Last Will, QoS 1·retain (§7.2) | ⏳ **신규 협의 요청** — HD_AMR 구독·상태 처리 확인 필요 |
+| N12 | ACS 생존 신호 | ACS 전용 `connection` 토픽 + ONLINE/OFFLINE/Last Will, QoS 1·retain (§7.2) | ✅ **승인** (2026-09-03) |
+| N13 | 검사 타입 카탈로그·레시피 계약 | 검사 타입 11종(§8.5) + **`seamType`(LINE/CROSS/CORNER 확장) × `wall_code` → 레시피 매핑(§8.5.1)** + HD_AMR 타입별 레시피 라이브러리 운용 | ⏳ **대기** — `seamType` enum 확장은 **ACS 선반영(2026-09-14, §8.1/§8.2)**: ACS가 3종 수용·발행(POLYLINE 거부). HD_AMR **레시피 매핑·실행은 미구현**(스텁) — `CROSS`/`CORNER`는 계획 데이터 전달만, 2차 연동 대기 |
 
 **AMR 구현 방식 고지 요약** (상세는 `VDA5050_AMR_REPLY.md` §3): allowedDeviation은 **도착 판정 허용 오차로만** 사용(미지정 시 0.1 m/0.1 rad) · 층별 맵은 AMR 내부 통합 맵으로 운용하되 계약(층별 mapId·좌표)은 그대로 준수 · **새 mapId는 재측위 검증 통과 시에만 보고**(실패 시 `localizationLost`) · 주행 실패 시 미도달 상태로 전 액션 FAILED+`drivingFailed` · 비상정지 시 진행 액션 FAILED+`emergencyStopActive`.
 
@@ -746,7 +849,7 @@ ACS는 비상정지와 동시에 **해당 로봇의 활성 run을 자동 중단(
 
 - [ ] MQTT 접속: clientId 고유, **Last Will = connection/CONNECTIONBROKEN/retain** (§2.4)
 - [ ] 접속 직후 `connection ONLINE`(retain) 발행 (§7)
-- [ ] ACS 전용 `uagv/v2/HD_ACS/hd-acs-master/connection` 구독 및 ONLINE/OFFLINE/CONNECTIONBROKEN 처리 (§7.2, **N12 합의 후**)
+- [ ] ACS 전용 `uagv/v2/HD_ACS/hd-acs-master/connection` 구독 및 ONLINE/OFFLINE/CONNECTIONBROKEN 처리 (§7.2, N12)
 - [ ] `order`·`instantActions` 구독 (QoS 1) — manufacturer/serialNumber 자기 토픽 (§2.2)
 - [ ] `state` 2초 주기 + 이벤트 즉시 발행, **agvPosition.mapId 필수** (§6.1)
 - [ ] orderId 변경 = 새 임무, actionId/nodeId **echo만** (재발급 금지) (§4.1, §6.2)
@@ -810,3 +913,23 @@ ACS는 비상정지와 동시에 **해당 로봇의 활성 run을 자동 중단(
 - `errors[]` 는 **확실히 판별 가능한 것만** 보고한다 — `emergencyStopActive`(온보드가 스스로 정지시킨 경우), `orderValidationError`(온보드 자체 검증), `inspectionFailed`(검사 S/W 결과). 주행·측위 계열(`drivingFailed`·`localizationLost`)은 D-9 회신 후 채운다.
 - 층 전환은 **현행 수동 절차(§9.2 시퀀스)를 그대로 유지**하되 `initPosition` 이행부만 비워 둔다. 게이트 자체(ACS 가 `mapId` 일치 확인 후에만 Order 발행)는 계약이므로 변경 없다.
 - D-13 이 확정될 때까지 **`POST /robot/task/clear` 를 Order 교체 시퀀스에 넣지 않는다** — 동작이 불명확한 호출을 안전 경로에 두는 것은 안전 쪽이 아니다.
+
+### D.3 검사 레시피 경유점 `Surface` 유도 (온보드 구현 — 비계약)
+
+> `Surface`(Flat/Corner/Corrugation)는 §8.5.1 (6)에서 정리한 대로 **AMR 레시피 내부의 경유점별 촬영/조명 선택 키**이며 **ACS 계약과 무관**하다(ACS는 보내지 않는다). 본 절은 HD_AMR 온보드가 이를 유도하는 **현행 규칙**을 근거와 함께 남긴다. — 근거: `gony0811/HD_AMR` `Communication/Vision/VisionProtocol.cs`·`Service/Sequence/Steps/InspectionRunStep.cs`.
+
+**두 층의 "Surface"** — 이름은 비슷하나 역할이 다르다.
+
+| 구분 | 값 | 단위 | 산출 | 용도 |
+|---|---|---|---|---|
+| **SurfaceType** | `Flat`(0x00) / `Corner`(0x01) / `Corrugation`(0x02) | **경유점** | 아래 규칙(θ) + 수동 오버라이드 | 촬영/조명 프리셋 선택 |
+| **Surface ID** | 0x01~0x0A (바닥·천장·좌현벽·우현벽·전벽·후벽·하부좌/우챔퍼·상부좌/우챔퍼) | **면(작업물)** | 면 선택 | 면 식별·(u,v) 축 규약 (현재 전부 Type=Flat) |
+
+**SurfaceType 자동 유도 규칙 (현행 코드).**
+- 경유점 툴 각 **`|θ| ≥ CorrugThresholdDeg`**(프로필 파라미터) → **`Corrugation`**, 아니면 **`Flat`**.
+  - 근거: `InspectionRunStep.cs` — `Math.Abs(w.Theta) >= profile.CorrugThresholdDeg ? SurfaceType.Corrugation : SurfaceType.Flat`.
+  - 의미: 코로게이션 마루는 툴을 기울여(큰 |θ|) 대면하고, 평탄부는 θ≈0. 임계각은 프로필별 값(`CorrugThresholdDeg`, 짝 파라미터 `CorrugStepDeg`).
+- **`Corner`(0x01)** 는 enum에 정의돼 있으나 **현 자동 규칙은 Flat/Corrugation 이진 판정만** 한다. Corner는 **수동 오버라이드**(`SurfaceManual`, Inspection 페이지)로 지정.
+- 캡처 요청마다 `SurfaceType`(경유점) + `Surface ID`(면)를 함께 실어 비전 S/W로 전송한다(`CaptureReqPayload`).
+
+**연동 관점 (2차 과제).** ACS가 `seamType`(§8.5.1)로 **레시피를 선택**하면, 그 레시피의 **경유점들이 위 규칙으로 각자 `SurfaceType`을 얻어 촬영/조명을 고른다**. 즉 **`seamType`(라인) → 레시피 로딩 / `Surface`(경유점) → 촬영** 의 2단계가 성립한다(§8.5.1 (6)).
