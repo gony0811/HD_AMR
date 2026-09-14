@@ -1,0 +1,185 @@
+@page "/calibration"
+@rendermode InteractiveServer
+@using HD.AMR.App.Service
+@inject CalibrationService Calib
+@inject AMRService Amr
+@inject CobotService Cobot
+@inject CameraService Camera
+@inject QrLocalizationService QrLoc
+@inject ILogger<Calibration> Logger
+@implements IDisposable
+
+<PageTitle>QR 정차 Pose 티칭</PageTitle>
+
+<h1 class="page-title">QR 기준 AMR 정차 Pose 티칭</h1>
+<p class="text-muted">AMR을 정확히 센터에 맞춰 놓지 않아도 됩니다. 바닥 QR을 촬영하면 현재 상대 오차와 QR 기준 위치에 정차했을 때의 SLAM 목표 Pose를 계산합니다.</p>
+
+@if (!string.IsNullOrEmpty(_message))
+{
+    <div class="alert @(_isError ? "alert-danger" : "alert-success") py-2">@_message</div>
+}
+
+<section class="card mb-3">
+    <div class="card-header"><strong>① 고정 좌표변환 확인</strong></div>
+    <div class="card-body">
+        <div class="mb-2"><strong>T_A_B</strong> <span class="text-muted">AMR 중심 → 코봇 Base (mm/도)</span></div>
+        <div class="row g-2">
+            @for (var i = 0; i < 6; i++)
+            {
+                var index = i;
+                <div class="col-auto"><label class="form-label mb-0">@PoseLabels[index]</label><input class="form-control form-control-sm" style="width:105px" type="number" step="any" @bind="_mount[index]" /></div>
+            }
+            <div class="col-auto d-flex align-items-end"><button class="btn btn-sm btn-primary" @onclick="SaveMountAsync">T_A_B 저장</button></div>
+        </div>
+
+        <hr />
+        <div class="mb-2"><strong>T_T_C</strong> <span class="text-muted">선택 Tool TCP → 카메라 광학 프레임 (mm/도)</span></div>
+        <div class="row g-2">
+            <div class="col-auto"><label class="form-label mb-0">Tool 번호</label><input class="form-control form-control-sm" style="width:90px" type="number" min="0" max="15" @bind="_tool" /></div>
+            @for (var i = 0; i < 6; i++)
+            {
+                var index = i;
+                <div class="col-auto"><label class="form-label mb-0">@PoseLabels[index]</label><input class="form-control form-control-sm" style="width:105px" type="number" step="any" @bind="_handEye[index]" /></div>
+            }
+            <div class="col-auto d-flex align-items-end"><button class="btn btn-sm btn-primary" @onclick="SaveHandEyeAsync">T_T_C 저장</button></div>
+        </div>
+        <div class="form-text">Tool 번호는 T_T_C를 측정할 때 사용한 공구 번호와 같아야 합니다.</div>
+    </div>
+</section>
+
+<section class="card mb-3">
+    <div class="card-header"><strong>② QR 정차 기준 설정</strong> <span class="text-muted">목표 T_A_Q</span></div>
+    <div class="card-body">
+        <div class="row g-2 align-items-end">
+            <div class="col-auto"><label class="form-label mb-0">QR ID</label><div class="input-group input-group-sm" style="width:210px"><input class="form-control" @bind="_reference.Text" /><button class="btn btn-outline-success" @onclick="ReadQrIdAsync" disabled="@(!Camera.IsStreaming || _busy)">ID 읽기</button></div></div>
+            <div class="col-auto"><label class="form-label mb-0">QR 크기 (mm)</label><input class="form-control form-control-sm" style="width:120px" type="number" min="1" step="any" @bind="_reference.SizeMm" /></div>
+            <div class="col-auto"><label class="form-label mb-0">목표 X (mm)</label><input class="form-control form-control-sm" style="width:110px" type="number" step="any" @bind="_reference.TargetXmm" /></div>
+            <div class="col-auto"><label class="form-label mb-0">목표 Y (mm)</label><input class="form-control form-control-sm" style="width:110px" type="number" step="any" @bind="_reference.TargetYmm" /></div>
+            <div class="col-auto"><label class="form-label mb-0">목표 Z (mm)</label><input class="form-control form-control-sm" style="width:110px" type="number" step="any" @bind="_reference.TargetZmm" /></div>
+            <div class="col-auto"><label class="form-label mb-0">목표 Yaw (도)</label><input class="form-control form-control-sm" style="width:110px" type="number" step="any" @bind="_reference.TargetYawDeg" /></div>
+        </div>
+        <div class="row g-2 align-items-end mt-1">
+            <div class="col-auto"><label class="form-label mb-0">위치 허용오차 (mm)</label><input class="form-control form-control-sm" style="width:140px" type="number" min="0" step="any" @bind="_reference.PositionToleranceMm" /></div>
+            <div class="col-auto"><label class="form-label mb-0">Yaw 허용오차 (도)</label><input class="form-control form-control-sm" style="width:140px" type="number" min="0" step="any" @bind="_reference.YawToleranceDeg" /></div>
+            <div class="col-auto"><button class="btn btn-sm btn-secondary" @onclick="SaveReferenceAsync">기준 저장</button></div>
+        </div>
+        <div class="form-text">목표 X/Y/Z/Yaw는 정상 정차 상태에서 QR 중심이 AMR 좌표계에서 보여야 할 값입니다. QR이 AMR 전방에 있다면 그 고정 오프셋을 입력하세요.</div>
+    </div>
+</section>
+
+<section class="card mb-3">
+    <div class="card-header"><strong>③ QR 촬영 · 목표 SLAM Pose 계산</strong></div>
+    <div class="card-body">
+        <div class="row g-3">
+            <div class="col-lg-6">
+                @if (Camera.IsStreaming) { <img src="/camera/color.mjpeg" alt="카메라 컬러" style="width:100%;max-width:640px;border:1px solid #E2E8F0" /> }
+                else { <div class="alert alert-secondary">카메라 스트리밍이 중지되어 있습니다.</div> }
+            </div>
+            <div class="col-lg-6">
+                <table class="table table-sm"><tbody>
+                    <tr><th>AMR 연결</th><td>@Connected(Amr.IsConnected)</td></tr>
+                    <tr><th>코봇 연결</th><td>@Connected(Cobot.IsConnected)</td></tr>
+                    <tr><th>카메라</th><td>@Connected(Camera.IsStreaming)</td></tr>
+                    @if (Amr.LatestStatus is { } status)
+                    {
+                        <tr><th>현재 SLAM X</th><td>@((status.Pose.X * 1000).ToString("0.0")) mm</td></tr>
+                        <tr><th>현재 SLAM Y</th><td>@((status.Pose.Y * 1000).ToString("0.0")) mm</td></tr>
+                        <tr><th>현재 SLAM Yaw</th><td>@((status.Pose.Angle * 180 / Math.PI).ToString("0.000"))°</td></tr>
+                    }
+                </tbody></table>
+                <button class="btn btn-primary" @onclick="MeasureAsync" disabled="@(!Ready || _busy)">@(_busy ? "측정 중…" : "QR 촬영 · 목표 Pose 계산")</button>
+                <div class="form-text">AMR을 정차한 뒤 실행합니다. 5프레임을 측정하며 촬영 중 이동하면 결과를 폐기합니다.</div>
+            </div>
+        </div>
+
+        @if (_measurement is { } m)
+        {
+            var centered = IsCentered(m);
+            <hr />
+            <div class="alert @(centered ? "alert-success" : "alert-info") py-2"><strong>@(centered ? "현재 위치가 QR 정차 허용오차 이내입니다." : "현재 위치에서 계산한 HD_ACS 등록용 목표 SLAM Pose입니다.")</strong></div>
+            <div class="row g-3">
+                <div class="col-lg-6">
+                    <h6>QR 상대 측정 및 정차 오차</h6>
+                    <table class="table table-sm">
+                        <thead><tr><th></th><th>X (mm)</th><th>Y (mm)</th><th>Yaw (도)</th></tr></thead>
+                        <tbody>
+                            <tr><th>측정 T_A_Q</th><td>@m.MeasuredQrXmm.ToString("0.0")</td><td>@m.MeasuredQrYmm.ToString("0.0")</td><td>@m.MeasuredQrYawDeg.ToString("0.000")</td></tr>
+                            <tr><th>목표 T_A_Q</th><td>@_reference.TargetXmm.ToString("0.0")</td><td>@_reference.TargetYmm.ToString("0.0")</td><td>@_reference.TargetYawDeg.ToString("0.000")</td></tr>
+                            <tr class="@(centered ? "table-success" : "table-warning")"><th>오차</th><td>@m.ErrorXmm.ToString("+0.0;-0.0;0.0")</td><td>@m.ErrorYmm.ToString("+0.0;-0.0;0.0")</td><td>@m.ErrorYawDeg.ToString("+0.000;-0.000;0.000")</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="col-lg-6">
+                    <h6>HD_ACS 등록용 목표 SLAM Pose</h6>
+                    <table class="table table-sm table-bordered"><tbody>
+                        <tr><th>X</th><td><strong>@m.TargetSlamXmm.ToString("0.000") mm</strong></td><td>@(m.TargetSlamXmm / 1000.0).ToString("0.000000") m</td></tr>
+                        <tr><th>Y</th><td><strong>@m.TargetSlamYmm.ToString("0.000") mm</strong></td><td>@(m.TargetSlamYmm / 1000.0).ToString("0.000000") m</td></tr>
+                        <tr><th>Yaw</th><td><strong>@m.TargetSlamYawDeg.ToString("0.000000")°</strong></td><td>@(m.TargetSlamYawDeg * Math.PI / 180.0).ToString("0.000000") rad</td></tr>
+                    </tbody></table>
+                    <div class="small text-muted">표본 @m.SamplesUsed · 목표 pose σ=@m.StdTargetXmm.ToString("0.00")/@m.StdTargetYmm.ToString("0.00") mm, @m.StdTargetYawDeg.ToString("0.000")° · 재투영 RMS=@m.ReprojectionRmsPx.ToString("0.00") px @if (m.DepthVsPnpMm is { } dz) { <span> · Depth−PnP=@dz.ToString("0.0") mm</span> }</div>
+                </div>
+            </div>
+        }
+    </div>
+</section>
+
+<div class="alert alert-warning small">이 페이지는 목표 Pose를 계산하지만 AMR을 자동 이동시키거나 HD_ACS에 직접 저장하지 않습니다. 계산값을 HD_ACS에 등록해 시험 이동한 뒤 같은 QR을 재촬영하여 허용오차를 확인하세요.</div>
+
+@code {
+    private static readonly string[] PoseLabels = { "X", "Y", "Z", "Rx", "Ry", "Rz" };
+    private double[] _mount = new double[6];
+    private double[] _handEye = new double[6];
+    private int _tool = 1;
+    private QrStopReference _reference = new();
+    private QrStopPoseMeasurement? _measurement;
+    private bool _busy;
+    private string? _message;
+    private bool _isError;
+    private readonly CancellationTokenSource _cts = new();
+    private bool Ready => Amr.IsConnected && Cobot.IsConnected && Camera.IsStreaming && !_handEye.All(v => v == 0);
+
+    protected override async Task OnInitializedAsync()
+    {
+        _mount = await Calib.GetMountAsync();
+        _handEye = await Calib.GetHandEyeAsync();
+        _reference = await Calib.GetQrStopReferenceAsync();
+    }
+
+    private async Task SaveMountAsync() { try { await Calib.SaveMountAsync(_mount); Success("T_A_B를 저장했습니다."); } catch (Exception ex) { Failure($"T_A_B 저장 실패: {ex.Message}"); } }
+    private async Task SaveHandEyeAsync() { try { await Calib.SaveHandEyeAsync(_handEye); Success("T_T_C를 저장했습니다."); } catch (Exception ex) { Failure($"T_T_C 저장 실패: {ex.Message}"); } }
+
+    private async Task SaveReferenceAsync()
+    {
+        try { ValidateReference(); await Calib.SaveQrStopReferenceAsync(_reference); _measurement = null; Success("QR 정차 기준을 저장했습니다. 기존 측정 결과는 초기화했습니다."); }
+        catch (Exception ex) { Failure($"기준 저장 실패: {ex.Message}"); }
+    }
+
+    private async Task ReadQrIdAsync()
+    {
+        _busy = true;
+        try { var text = await QrLoc.ReadQrTextAsync(_cts.Token); if (string.IsNullOrWhiteSpace(text)) throw new InvalidOperationException("QR을 검출하지 못했습니다."); _reference.Text = text; Success($"QR ID를 읽었습니다: {text}"); }
+        catch (Exception ex) { Failure($"QR ID 읽기 실패: {ex.Message}"); }
+        finally { _busy = false; }
+    }
+
+    private async Task MeasureAsync()
+    {
+        _busy = true;
+        try { ValidateReference(); _measurement = await QrLoc.MeasureStopPoseAsync(_reference, _tool, 5, _cts.Token); Success($"목표 SLAM Pose 계산 완료: X={_measurement.TargetSlamXmm:0.0}mm, Y={_measurement.TargetSlamYmm:0.0}mm, Yaw={_measurement.TargetSlamYawDeg:0.000}°"); }
+        catch (Exception ex) { Failure($"QR 측정 실패: {ex.Message}"); }
+        finally { _busy = false; }
+    }
+
+    private void ValidateReference()
+    {
+        if (string.IsNullOrWhiteSpace(_reference.Text)) throw new InvalidOperationException("QR ID를 입력하세요.");
+        if (_reference.SizeMm <= 0) throw new InvalidOperationException("QR 실측 크기는 0보다 커야 합니다.");
+        if (_reference.PositionToleranceMm < 0 || _reference.YawToleranceDeg < 0) throw new InvalidOperationException("허용오차는 음수일 수 없습니다.");
+    }
+
+    private bool IsCentered(QrStopPoseMeasurement m) => Math.Sqrt(m.ErrorXmm * m.ErrorXmm + m.ErrorYmm * m.ErrorYmm) <= _reference.PositionToleranceMm && Math.Abs(m.ErrorYawDeg) <= _reference.YawToleranceDeg;
+    private static string Connected(bool value) => value ? "연결됨" : "미연결";
+    private void Success(string text) { _message = text; _isError = false; }
+    private void Failure(string text) { _message = text; _isError = true; Logger.LogWarning("Calibration: {Message}", text); }
+    public void Dispose() { _cts.Cancel(); _cts.Dispose(); }
+}

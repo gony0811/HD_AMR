@@ -1,0 +1,117 @@
+@using HD.AMR.App.Service
+@using HD.AMR.App.Enums
+@inject AMRService Amr
+@inject CobotService Cobot
+@inject VisionInterfaceService Vision
+@inject Vda5050AdapterService Vda
+@implements IDisposable
+
+<div class="tb-root px-4">
+    <div class="tb-left">
+        <div class="tb-group">
+            <span class="tb-icon tb-icon-robot" aria-hidden="true"></span>
+            <span class="tb-label">AMR</span>
+            <span class="tb-badge @(Amr.IsConnected ? "tb-badge-on" : "tb-badge-off")">@(Amr.IsConnected ? "연결" : "미연결")</span>
+        </div>
+
+        <div class="tb-group">
+            <span class="tb-icon tb-icon-gear" aria-hidden="true"></span>
+            <span class="tb-label">Cobot</span>
+            <span class="tb-badge @(Cobot.IsConnected ? "tb-badge-on" : "tb-badge-off")">@(Cobot.IsConnected ? "연결" : "미연결")</span>
+        </div>
+
+        <div class="tb-group">
+            <span class="tb-icon tb-icon-vision" aria-hidden="true"></span>
+            <span class="tb-label">Vision</span>
+            <span class="tb-badge @(Vision.Client.IsConnected ? "tb-badge-on" : "tb-badge-off")">@(Vision.Client.IsConnected ? "연결" : "미연결")</span>
+        </div>
+
+        <div class="tb-group">
+            <span class="tb-icon tb-icon-robot" aria-hidden="true"></span>
+            <span class="tb-label">ACS</span>
+            <span class="tb-badge @AcsBadgeClass" title="@AcsTooltip">@AcsBadgeText</span>
+        </div>
+
+        <div class="tb-group tb-lamp">
+            <span class="tb-icon tb-icon-lightbulb" aria-hidden="true"></span>
+            <span class="tb-lamp-dot @(LampRed ? "is-red-on" : "")"></span>
+            <span class="tb-lamp-dot @(LampYellow ? "is-yellow-on" : "")"></span>
+            <span class="tb-lamp-dot @(LampGreen ? "is-green-on" : "")"></span>
+        </div>
+
+        <div class="tb-group tb-battery">
+            <BatteryIndicator Percent="BatteryPercent" Charging="IsCharging" HeightRem="1.35" />
+            <span class="tb-battery-text">@(BatteryPercent?.ToString() ?? "--")%</span>
+        </div>
+    </div>
+
+    <div class="tb-right">
+        <a href="https://www.naver.com" target="_blank">About</a>
+    </div>
+</div>
+
+@code {
+    [Parameter] public bool LampRed { get; set; }
+    [Parameter] public bool LampYellow { get; set; }
+    [Parameter] public bool LampGreen { get; set; }
+
+    private int? BatteryPercent => Amr.LatestStatus is { } s ? (int)Math.Round(s.Battery.LevelPercent) : null;
+    private bool IsCharging => Amr.LatestStatus?.Battery.ChargingState == ChargingState.Charging;
+
+    // ACS 배지는 생존 신호(§7.2 N12) 기준: 브로커 미접속 → 미연결 / OFFLINE·CONNECTIONBROKEN → 상태값 그대로 /
+    // ONLINE → 연결(명령 유무 무관 — 마지막 수신 시각은 툴팁으로만). 생존 신호 수신 이력이 없으면(Unknown, ACS 미구현)
+    // 기존 활동 기반 폴백: 최근 60초 수신 있으면 연결, 없으면 대기.
+    private string AcsBadgeClass =>
+        !Vda.IsBrokerConnected ? "tb-badge-off"
+        : Vda.AcsConnectionLiveness is AcsLiveness.Offline or AcsLiveness.Broken ? "tb-badge-alert"
+        : Vda.AcsConnectionLiveness == AcsLiveness.Online || Vda.AcsRecentlyActive ? "tb-badge-on" : "tb-badge-idle";
+    private string AcsBadgeText =>
+        !Vda.IsBrokerConnected ? "미연결"
+        : Vda.AcsConnectionLiveness == AcsLiveness.Offline ? "OFFLINE"
+        : Vda.AcsConnectionLiveness == AcsLiveness.Broken ? "CONNECTIONBROKEN"
+        : Vda.AcsConnectionLiveness == AcsLiveness.Online || Vda.AcsRecentlyActive ? "연결" : "대기";
+    private string AcsTooltip
+    {
+        get
+        {
+            var liveness = Vda.AcsConnectionLiveness switch
+            {
+                AcsLiveness.Online => "ONLINE",
+                AcsLiveness.Offline => "OFFLINE (정상 종료)",
+                AcsLiveness.Broken => "CONNECTIONBROKEN (비정상 두절)",
+                _ => "신호 없음 (N12 미구현)",
+            };
+            if (Vda.AcsLivenessChangedUtc is { } c)
+                liveness += $" · {c.ToLocalTime():MM-dd HH:mm:ss}";
+            var lastMsg = Vda.LastAcsMessageUtc is { } t
+                ? $"마지막 수신: {t.ToLocalTime():yyyy-MM-dd HH:mm:ss}"
+                : "수신 이력 없음";
+            return $"ACS 생존: {liveness} / {lastMsg}";
+        }
+    }
+
+    private CancellationTokenSource? _cts;
+
+    protected override void OnInitialized()
+    {
+        _cts = new CancellationTokenSource();
+        _ = PollLoop(_cts.Token);
+    }
+
+    private async Task PollLoop(CancellationToken ct)
+    {
+        try
+        {
+            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+            while (await timer.WaitForNextTickAsync(ct))
+                await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    public void Dispose()
+    {
+        _cts?.Cancel();
+        _cts?.Dispose();
+    }
+}

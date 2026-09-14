@@ -4,29 +4,30 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Commands
 
-All commands run from the solution folder (`/Users/sean/Documents/GitHub/HD_AMR/HD_AMR`), which sits one level below this file — `cd HD_AMR` from the git root before running the commands below.
+All commands run from the solution folder (`/Users/sean/Documents/GitHub/HD_AMR/HD.AMR`), which sits one level below this file — `cd HD.AMR` from the git root before running the commands below.
 
-- **Run the web app (dev)**: `dotnet run --project HD_AMR.Web` — defaults to the `http` profile (`http://localhost:5253`). Use `--launch-profile https` for `https://localhost:7278`.
-- **Build the whole solution**: `dotnet build HD_AMR.sln`
-- **Restore**: `dotnet restore HD_AMR.sln`
-- **Clean**: `dotnet clean HD_AMR.sln`
-- **Watch (hot reload)**: `dotnet watch --project HD_AMR.Web`
+- **Run the web app (dev)**: `dotnet run --project HD.AMR.Web` — defaults to the `http` profile (`http://localhost:5253`). Use `--launch-profile https` for `https://localhost:7278`.
+- **Build the whole solution**: `dotnet build HD.AMR.sln`
+- **Restore**: `dotnet restore HD.AMR.sln`
+- **Clean**: `dotnet clean HD.AMR.sln`
+- **Watch (hot reload)**: `dotnet watch --project HD.AMR.Web`
 
-No test project exists yet. When one is added, `dotnet test` from the root will pick it up; a single test runs with `dotnet test --filter "FullyQualifiedName~MyTest"`.
+Tests live in `HD.AMR.Tests` (xUnit). Run them with `dotnet test HD.AMR.sln`; a single test runs with `dotnet test --filter "FullyQualifiedName~MyTest"`.
 
-The SDK is pinned by `HD_AMR/global.json` to `8.0.0` with `rollForward: latestMinor` — install .NET 8 SDK 8.0.x.
+The SDK is pinned by `HD.AMR/global.json` to `8.0.0` with `rollForward: latestMinor` — install .NET 8 SDK 8.0.x.
 
 ### Intel RealSense SDK (D435/D435i depth camera)
 
-The depth camera is an Intel RealSense D435/D435i, integrated via the `Intel.RealSenseWithNativeDll` NuGet package (official `Intel.RealSense` C# wrapper + native `realsense2.dll` for win-x64, librealsense 2.51.1). No manual SDK install is needed — the native DLL is copied to the build output automatically. The package is referenced by both `HD_AMR` and `HD_AMR.Web` (the native DLL flows via a `build/` .targets file, which is not transitive through ProjectReference). Target platform is **Windows x64 only**; the camera wrapper lives in `HD_AMR/HD_AMR/Communication/RealSenseClient.cs` and requires a USB 3.0 port (USB 2.x falls back to reduced SDK-default modes with a logged warning).
+The depth camera is an Intel RealSense D435/D435i, integrated via the `Intel.RealSenseWithNativeDll` NuGet package (official `Intel.RealSense` C# wrapper + native `realsense2.dll` for win-x64, librealsense 2.51.1). No manual SDK install is needed — the native DLL is copied to the build output automatically. The package is referenced by both `HD.AMR.App` and `HD.AMR.Web` (the native DLL flows via a `build/` .targets file, which is not transitive through ProjectReference). Target platform is **Windows x64 only**; the camera wrapper lives in `HD.AMR/HD.AMR.App/Communication/RealSenseClient.cs` and requires a USB 3.0 port (USB 2.x falls back to reduced SDK-default modes with a logged warning).
 
 ## Architecture
 
-Two projects in `HD_AMR.sln`:
+Three projects in `HD.AMR.sln`:
 
-- **`HD_AMR.Web/`** — Blazor Server app (.NET 8). Uses the unified Razor Components hosting model with `InteractiveServer` render mode (`Program.cs`). Components live under `HD_AMR.Web/Components/` split into `Layout/` and `Pages/`; the root is `Components/App.razor` and routing is in `Components/Routes.razor`. Because the render mode is `InteractiveServer`, all interactivity runs on the server over a SignalR circuit — UI events round-trip and component state lives in server memory per circuit.
-- **`HD_AMR/`** — empty class library intended for domain/business logic. **It is not currently referenced by `HD_AMR.Web`.** When you put code here that the web app needs, add a `<ProjectReference Include="..\HD_AMR\HD_AMR.csproj" />` to `HD_AMR.Web/HD_AMR.Web.csproj`, otherwise the web project won't see the types.
-### HD_AMR project structure
+- **`HD.AMR.Web/`** — Blazor Server app (.NET 8). Uses the unified Razor Components hosting model with `InteractiveServer` render mode (`Program.cs`). Components live under `HD.AMR.Web/Components/` split into `Layout/` and `Pages/`; the root is `Components/App.razor` and routing is in `Components/Routes.razor`. Because the render mode is `InteractiveServer`, all interactivity runs on the server over a SignalR circuit — UI events round-trip and component state lives in server memory per circuit.
+- **`HD.AMR.App/`** — class library holding the domain/business logic (communication clients, data layer, services). Referenced by `HD.AMR.Web` and `HD.AMR.Tests` via `<ProjectReference Include="..\HD.AMR.App\HD.AMR.App.csproj" />`.
+- **`HD.AMR.Tests/`** — xUnit test project referencing `HD.AMR.App`.
+### HD.AMR.App project structure
 - Class library
 - Communication layer (e.g. MQTT client, Modbus client, RS232C)
     . AMR : ModbusTCP
@@ -46,4 +47,4 @@ The repo is at template-stage: no data access, no authentication, no third-party
 
 Both `.csproj` files have `Nullable` and `ImplicitUsings` enabled — write nullable-aware C# and rely on the implicit `global using` set rather than per-file `using` directives for common BCL namespaces.
 
-`HD_AMR/.idea/` and `HD_AMR/HD_AMR.sln.DotSettings.user` (both inside the solution folder) indicate the project is developed in JetBrains Rider; the `.idea/` directory should generally not be committed but currently is.
+`HD.AMR/.idea/` and `HD.AMR/HD.AMR.sln.DotSettings.user` (both inside the solution folder) indicate the project is developed in JetBrains Rider; both are gitignored.

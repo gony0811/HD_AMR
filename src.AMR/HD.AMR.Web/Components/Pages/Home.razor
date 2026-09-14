@@ -1,0 +1,217 @@
+@page "/"
+@rendermode InteractiveServer
+@using HD.AMR.App.Service
+@using HD.AMR.App.Enums
+@inject AMRService Amr
+@inject CobotService Cobot
+@inject CameraService Camera
+@inject Vda5050AdapterService Vda
+@implements IDisposable
+
+<PageTitle>대시보드</PageTitle>
+
+<div class="dash-head">
+    <div>
+        <h1 class="page-title">상태 개요</h1>
+        <p class="page-subtitle">HD현대 AMR 통합 제어 콘솔 · 실시간 장비 상태</p>
+    </div>
+    <span class="pill">@DateTime.Now.ToString("yyyy-MM-dd HH:mm")</span>
+</div>
+
+<div class="row g-3">
+    <!-- AMR -->
+    <div class="col-12 col-md-6 col-xl-4">
+        <div class="card-surface stat">
+            <div class="stat-head">
+                <span class="stat-icon stat-icon-amr"></span>
+                <span class="stat-title">AMR</span>
+                <span class="pill @(Amr.IsConnected ? "pill-on" : "pill-off") ms-auto">
+                    @(Amr.IsConnected ? "연결" : "미연결")
+                </span>
+            </div>
+            <div class="stat-value">@(Amr.IsConnected ? "주행 대기" : "오프라인")</div>
+            <div class="stat-sub">자율주행 모듈 (Modbus TCP)</div>
+        </div>
+    </div>
+
+    <!-- Cobot -->
+    <div class="col-12 col-md-6 col-xl-4">
+        <div class="card-surface stat">
+            <div class="stat-head">
+                <span class="stat-icon stat-icon-cobot"></span>
+                <span class="stat-title">Cobot</span>
+                <span class="pill @(Cobot.IsConnected ? "pill-on" : "pill-off") ms-auto">
+                    @(Cobot.IsConnected ? "연결" : "미연결")
+                </span>
+            </div>
+            <div class="stat-value">페어리노 코봇</div>
+            <div class="stat-chips">
+                <span class="pill @(Cobot.IsConnected ? "pill-on" : "pill-off")">명령 @(Cobot.IsConnected ? "ON" : "OFF")</span>
+                <span class="pill @(Cobot.IsStateConnected ? "pill-on" : "pill-off")">상태 @(Cobot.IsStateConnected ? "수신" : "끊김")</span>
+            </div>
+            <a class="stat-link" href="cobot">코봇 제어 →</a>
+        </div>
+    </div>
+
+    <!-- Camera -->
+    <div class="col-12 col-md-6 col-xl-4">
+        <div class="card-surface stat">
+            <div class="stat-head">
+                <span class="stat-icon stat-icon-camera"></span>
+                <span class="stat-title">Camera</span>
+                <span class="pill @(Camera.IsConnected ? "pill-on" : "pill-off") ms-auto">
+                    @(Camera.IsConnected ? "연결" : "미연결")
+                </span>
+            </div>
+            <div class="stat-value">RealSense D435 깊이</div>
+            <div class="stat-chips">
+                <span class="pill @(Camera.IsStreaming ? "pill-on" : "pill-off")">스트림 @(Camera.IsStreaming ? "활성" : "정지")</span>
+                @if (!string.IsNullOrEmpty(Camera.ConnectionType))
+                {
+                    <span class="pill">@Camera.ConnectionType</span>
+                }
+            </div>
+            <a class="stat-link" href="camera">실시간 영상 →</a>
+        </div>
+    </div>
+
+    <!-- Battery -->
+    <div class="col-12 col-md-6 col-xl-4">
+        <div class="card-surface stat">
+            <div class="stat-head">
+                <span class="stat-icon stat-icon-battery"></span>
+                <span class="stat-title">배터리</span>
+                <span class="pill @BatteryPillClass ms-auto">@(BatteryPercent?.ToString() ?? "--")%</span>
+            </div>
+            <div class="battery-vis">
+                <BatteryIndicator Percent="BatteryPercent" Charging="IsCharging" HeightRem="2.4" />
+            </div>
+            <div class="stat-sub">@BatterySubText</div>
+        </div>
+    </div>
+
+    <!-- Safety lamp -->
+    <div class="col-12 col-md-6 col-xl-4">
+        <div class="card-surface stat">
+            <div class="stat-head">
+                <span class="stat-icon stat-icon-lamp"></span>
+                <span class="stat-title">안전 신호등</span>
+            </div>
+            <div class="lamp-row">
+                <span class="lamp-dot @(LampRed ? "is-red-on" : "")"></span>
+                <span class="lamp-dot @(LampYellow ? "is-yellow-on" : "")"></span>
+                <span class="lamp-dot @(LampGreen ? "is-green-on" : "")"></span>
+            </div>
+            <div class="stat-sub">적색 정지 · 황색 주의 · 녹색 정상</div>
+        </div>
+    </div>
+
+    <!-- ACS / 수동 층 전환 -->
+    <div class="col-12 col-md-6 col-xl-4">
+        <div class="card-surface stat">
+            <div class="stat-head">
+                <span class="stat-icon stat-icon-amr"></span>
+                <span class="stat-title">ACS</span>
+                <span class="pill @AcsPillClass ms-auto">@AcsPillText</span>
+            </div>
+            <div class="stat-value">현재 맵 @Vda.CurrentMapId</div>
+            <div class="input-group input-group-sm">
+                <select class="form-select form-select-sm" @bind="_selectedMapId">
+                    @foreach (var id in MapIdOptions)
+                    {
+                        <option value="@id">@id</option>
+                    }
+                </select>
+                <button class="btn btn-warning btn-sm" disabled="@(_selectedMapId == Vda.CurrentMapId)"
+                        @onclick="ApplyMapId">층 전환</button>
+            </div>
+            <div class="stat-sub">@(_mapIdStatus ?? "재측위 검증 없이 mapId만 변경 — 실제 층 일치는 운영자 확인")</div>
+        </div>
+    </div>
+
+    <!-- Inspection shortcut -->
+    <div class="col-12 col-md-6 col-xl-4">
+        <div class="card-surface stat stat-accent">
+            <div class="stat-head">
+                <span class="stat-icon stat-icon-teach"></span>
+                <span class="stat-title">Inspection</span>
+            </div>
+            <div class="stat-value">도면 기반 검사 설정</div>
+            <div class="stat-sub">DXF 업로드 → 경유점 생성 → 코봇 실행</div>
+            <a class="stat-link" href="inspection">검사 설정 →</a>
+        </div>
+    </div>
+</div>
+
+@code {
+    // 배터리는 AMRService 캐시에서, 램프는 현재 텔레메트리 연동 전이라 플레이스홀더.
+    private int? BatteryPercent => Amr.LatestStatus is { } s ? (int)Math.Round(s.Battery.LevelPercent) : null;
+    private bool IsCharging => Amr.LatestStatus?.Battery.ChargingState == ChargingState.Charging;
+    private bool LampRed;
+    private bool LampYellow;
+    private bool LampGreen = true;
+
+    private string BatteryPillClass => BatteryPercent switch
+    {
+        null => "pill-off",
+        < 20 => "pill-danger",
+        < 50 => "pill-warn",
+        _ => "pill-on"
+    };
+
+    private string BatterySubText => BatteryPercent is null
+        ? "텔레메트리 연동 예정"
+        : IsCharging ? "AMR 배터리 충전 중" : "AMR 배터리 잔량";
+
+    // ACS 카드 — 상태 pill 은 TopBar 배지와 동일 기준(생존 신호 우선, 신호 없으면 활동 폴백).
+    private string AcsPillClass =>
+        !Vda.IsBrokerConnected ? "pill-off"
+        : Vda.AcsConnectionLiveness is AcsLiveness.Offline or AcsLiveness.Broken ? "pill-danger"
+        : Vda.AcsConnectionLiveness == AcsLiveness.Online || Vda.AcsRecentlyActive ? "pill-on" : "pill-warn";
+    private string AcsPillText =>
+        !Vda.IsBrokerConnected ? "미연결"
+        : Vda.AcsConnectionLiveness == AcsLiveness.Offline ? "OFFLINE"
+        : Vda.AcsConnectionLiveness == AcsLiveness.Broken ? "CONNECTIONBROKEN"
+        : Vda.AcsConnectionLiveness == AcsLiveness.Online || Vda.AcsRecentlyActive ? "연결" : "대기";
+
+    // 수동 층 전환(D-10 유보 기간 임시 운영) — 적용 시 어댑터 mapId 변경 + state 즉시 발행으로 ACS 회신.
+    private string _selectedMapId = "";
+    private string? _mapIdStatus;
+
+    private IEnumerable<string> MapIdOptions =>
+        Vda.AvailableMapIds.Contains(Vda.CurrentMapId)
+            ? Vda.AvailableMapIds
+            : Vda.AvailableMapIds.Prepend(Vda.CurrentMapId);
+
+    private void ApplyMapId()
+    {
+        Vda.SetMapId(_selectedMapId);
+        _mapIdStatus = $"적용됨 {DateTime.Now:HH:mm:ss} — 현재 맵 {Vda.CurrentMapId} (state 즉시 발행)";
+    }
+
+    private CancellationTokenSource? _cts;
+
+    protected override void OnInitialized()
+    {
+        _selectedMapId = Vda.CurrentMapId;
+        _cts = new CancellationTokenSource();
+        _ = PollLoop(_cts.Token);
+    }
+
+    private async Task PollLoop(CancellationToken ct)
+    {
+        try
+        {
+            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+            while (await timer.WaitForNextTickAsync(ct))
+                await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    public void Dispose()
+    {
+        _cts?.Cancel();
+        _cts?.Dispose();
+    }
+}

@@ -1,0 +1,224 @@
+@using HD.AMR.App.Models
+@using HD.AMR.App.Service
+@inject CameraService Camera
+@inject LaserDisplacementSensorService Laser
+@inject WeldTrackingService Weld
+@inject ParameterService Param
+@inject IJSRuntime JS
+@implements IDisposable
+
+@* 시퀀스 모니터링 콘텐츠 — 별도 브라우저 창(/sequence-monitor)이 호스팅한다.
+   스텝별 라이브 뷰(MJPEG) 또는 검출 오버레이 + 데이터 패널 + 진행 로그 콘솔.
+   상태 메시지는 배너를 쓰지 않는다(헤더 배지·캡션·로그만) — 뷰/로그 위치 고정. *@
+
+<div class="smon">
+    <div class="smon-header">
+        <strong>@StepNo @StepName</strong>
+        @if (Running)
+        {
+            <span class="badge bg-primary">실행 중…</span>
+        }
+        else if (Failed)
+        {
+            <span class="badge bg-danger">실패 — 마지막 상태 유지</span>
+        }
+        else
+        {
+            <span class="badge bg-secondary">종료</span>
+        }
+    </div>
+
+    <div class="smon-body">
+        @if (ViewUrl is not null)
+        {
+            <div class="smon-view">
+                <img src="@ViewUrl" alt="view" />
+                <div class="smon-caption">@ViewCaption</div>
+            </div>
+        }
+
+        @if (ShowDistancePanel || ShowLaserPanel)
+        {
+            <div class="smon-data">
+                @if (ShowDistancePanel)
+                {
+                    <h6>거리 정렬</h6>
+                    <table class="table table-sm mb-2">
+                        <tbody>
+                        <tr><th>목표 거리</th><td>@TargetDistanceMm.ToString("0") mm</td></tr>
+                        <tr><th>현재(최소)</th><td>@(_roiStats is { } s1 ? $"{s1.MinMm} mm" : "—")</td></tr>
+                        <tr><th>현재(평균)</th><td>@(_roiStats is { } s2 ? $"{s2.AvgMm:0.0} mm" : "—")</td></tr>
+                        <tr><th>잔차</th>
+                            <td class="@(ResidualMm is { } r0 && Math.Abs(r0) <= 1.0 ? "text-success fw-bold" : "")">
+                                @(ResidualMm is { } r ? $"{r:+0.0;-0.0} mm" : "—")
+                            </td></tr>
+                        </tbody>
+                    </table>
+                }
+                @if (ShowLaserPanel)
+                {
+                    <h6>레이저 변위센서 @(Laser.IsConnected ? "" : "(미연결)")</h6>
+                    <table class="table table-sm mb-2">
+                        <thead><tr><th>CH</th><th>측정값 (mm)</th><th></th></tr></thead>
+                        <tbody>
+                        @foreach (var r in _readings)
+                        {
+                            <tr>
+                                <td>@r.Channel</td>
+                                <td>@r.Value.ToString("F3")</td>
+                                <td>
+                                    @if (r.Enabled) { <span class="badge bg-success">측정중</span> }
+                                    else { <span class="badge bg-secondary">범위 밖</span> }
+                                </td>
+                            </tr>
+                        }
+                        </tbody>
+                    </table>
+                    <table class="table table-sm mb-0">
+                        <tbody>
+                        <tr><th>rx</th><td>@(_pose is { Valid: true } p1 ? $"{p1.Rx:0.###}°" : "—")</td></tr>
+                        <tr><th>ry</th><td>@(_pose is { Valid: true } p2 ? $"{p2.Ry:0.###}°" : "—")</td></tr>
+                        <tr><th>z</th><td>@(_pose is { Valid: true } p3 ? $"{p3.Z:0.#} mm" : "—")</td></tr>
+                        </tbody>
+                    </table>
+                }
+            </div>
+        }
+    </div>
+
+    <div class="smon-log">
+        <pre @ref="_logEl"></pre>
+    </div>
+</div>
+
+@code {
+    [Parameter] public string StepKey { get; set; } = "";
+    [Parameter] public string StepName { get; set; } = "";
+    [Parameter] public string StepNo { get; set; } = "";
+    [Parameter] public IReadOnlyList<string> LogLines { get; set; } = Array.Empty<string>();
+    [Parameter] public double TargetDistanceMm { get; set; } = 400;
+    [Parameter] public bool Running { get; set; }
+    [Parameter] public bool Failed { get; set; }
+
+    private static int _streamSeq;   // MJPEG 캐시버스터 — 창이 열릴 때마다 새 연결.
+    private int _streamKey;
+    private int _overlayKey;         // 검출 오버레이 리프레시 — 새 로그(=새 측정)마다 증가.
+    private readonly CancellationTokenSource _cts = new();
+    private ElementReference _logEl;
+    private string _lastLogText = "\0";   // 첫 렌더에서 빈 로그도 반영되도록 실제 불가값으로 초기화.
+
+    private DepthRoiStats? _roiStats;
+    private (double X, double Y, double W, double H) _roi = (0.35, 0.35, 0.30, 0.30);
+    private IReadOnlyList<LaserChannelReading> _readings = Array.Empty<LaserChannelReading>();
+    private PlanePose? _pose;
+
+    // ── 스텝별 콘텐츠 매핑 ───────────────────────────────────────────
+    // 찾기(측정) 스텝: 검출 오버레이(자홍 Peak 선 등) 우선, 없으면 IR 라이브 폴백. 1번·2번 동일.
+    private bool IsFindStep => StepKey is "peak1Find" or "peak2Find" or "bead1Find" or "bead2Find";
+
+    // 이동 스텝(센터링·pitch): 로봇 이동이 보이도록 RGB 라이브. 1번·2번 동일.
+    private bool IsMoveStep => StepKey is "peak1Center" or "peak2Center"
+        or "bead1Center" or "bead2Center" or "peak2Approach";
+
+    private string? ViewUrl => StepKey switch
+    {
+        "cobotInspection" or "inspectionRun" => $"/camera/color.mjpeg?k=m{_streamKey}",
+        "cameraAlign" or "flatSurfaceAlign" or "laserWorkingDistance" => $"/camera/depth.mjpeg?k=m{_streamKey}",
+        _ when IsFindStep => Weld.LastOverlay is not null
+            ? $"/camera/weld/overlay.jpg?k=o{_overlayKey}"
+            : $"/camera/ir.mjpeg?k=m{_streamKey}",
+        _ when IsMoveStep => $"/camera/color.mjpeg?k=m{_streamKey}",
+        _ => null,
+    };
+
+    private string ViewCaption
+    {
+        get
+        {
+            var disc = Camera.IsConnected ? "" : " (카메라 미연결)";
+            if (IsFindStep && Weld.LastOverlay is not null) return "Peak/Bead 검출 오버레이" + disc;
+            if (IsMoveStep) return "RGB 카메라 (이동 모니터링)" + disc;
+            return ViewUrl switch
+            {
+                { } u when u.Contains("color") => "RGB 카메라" + disc,
+                { } u when u.Contains("depth") => "Depth 카메라 (컬러라이즈)" + disc,
+                { } u when u.Contains("ir") => "IR 카메라" + disc,
+                _ => "",
+            };
+        }
+    }
+
+    private bool ShowDistancePanel => StepKey == "cameraAlign";
+    private bool ShowLaserPanel => StepKey is "flatSurfaceAlign" or "laserWorkingDistance";
+
+    private double? ResidualMm => _roiStats is { } s && s.MinMm > 0
+        ? s.MinMm - TargetDistanceMm
+        : null;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _streamKey = Interlocked.Increment(ref _streamSeq);
+        await LoadRoiAsync();
+        _ = PollLoopAsync();
+    }
+
+    /// <summary>③ 거리 패널용 ROI — 스텝과 동일한 Camera.Depth.Roi.* 파라미터, 없으면 중앙 30%.</summary>
+    private async Task LoadRoiAsync()
+    {
+        try
+        {
+            if (await Param.GetBoolAsync("Camera.Depth.Roi.Enabled") == true)
+            {
+                var x = await Param.GetDoubleAsync("Camera.Depth.Roi.X") ?? 0;
+                var y = await Param.GetDoubleAsync("Camera.Depth.Roi.Y") ?? 0;
+                var w = await Param.GetDoubleAsync("Camera.Depth.Roi.W") ?? 0;
+                var h = await Param.GetDoubleAsync("Camera.Depth.Roi.H") ?? 0;
+                if (w > 0 && h > 0 && x + w <= 1.0001 && y + h <= 1.0001)
+                    _roi = (x, y, w, h);
+            }
+        }
+        catch { /* DB 미준비 등 — 기본 ROI 유지 */ }
+    }
+
+    /// <summary>라이브 데이터 폴링 (500ms) — /laser·CameraView 페이지와 동일한 pull 패턴.
+    /// 창이 살아있는 동안(종료 후 유지 상태 포함) 계속 돌며, 스텝이 바뀌면 해당 패널만 갱신한다.</summary>
+    private async Task PollLoopAsync()
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(500));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(_cts.Token))
+            {
+                if (ShowDistancePanel)
+                    _roiStats = Camera.ComputeDepthRoiStats(_roi.X, _roi.Y, _roi.W, _roi.H);
+                if (ShowLaserPanel)
+                {
+                    _readings = Laser.GetReadings();
+                    _pose = Laser.GetPlanePose();
+                }
+                if (ShowDistancePanel || ShowLaserPanel)
+                    await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // 로그 콘솔은 JS(hdAmrLog.set — 하단 고정 자동 스크롤)로 채운다.
+        // 새 로그 = 새 측정 가능성이므로 오버레이 캐시버스터도 함께 증가시킨다.
+        var text = string.Join("\n", LogLines);
+        if (text == _lastLogText) return;
+        _lastLogText = text;
+        _overlayKey++;
+        try { await JS.InvokeVoidAsync("hdAmrLog.set", _logEl, text); }
+        catch { /* prerender/해제 경합 무시 */ }
+        StateHasChanged();   // 갱신된 오버레이 키 반영
+    }
+
+    public void Dispose()
+    {
+        _cts.Cancel();
+        _cts.Dispose();
+    }
+}

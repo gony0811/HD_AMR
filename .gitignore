@@ -53,11 +53,11 @@ CodeCoverage/
 TestResult.xml
 nunit-*.xml
 
-# HD_AMR.Web local data
-HD_AMR/HD_AMR.Web/UploadedDrawings/
-HD_AMR/HD_AMR.Web/*.db
-HD_AMR/HD_AMR.Web/*.db-shm
-HD_AMR/HD_AMR.Web/*.db-wal
+# HD.AMR.Web local data
+HD.AMR/HD.AMR.Web/UploadedDrawings/
+HD.AMR/HD.AMR.Web/*.db
+HD.AMR/HD.AMR.Web/*.db-shm
+HD.AMR/HD.AMR.Web/*.db-wal
 
 # Visual Studio 캐시/사용자 폴더
 .vs/

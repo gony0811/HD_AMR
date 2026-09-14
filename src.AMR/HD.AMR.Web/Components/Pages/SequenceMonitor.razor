@@ -1,0 +1,55 @@
+@page "/sequence-monitor"
+@layout HD.AMR.Web.Components.Layout.PopupLayout
+@rendermode InteractiveServer
+@using HD.AMR.App.Service.Sequence
+@inject SequenceMonitorService Monitor
+@inject IJSRuntime JS
+@implements IDisposable
+
+@* 시퀀스 모니터링 창 — Sequence 페이지가 실행 버튼 클릭 시 window.open 으로 연다.
+   싱글톤 SequenceMonitorService 를 구독하므로 다른 서킷에서도 시퀀스 진행을 본다.
+   런이 끝나도 창은 자동으로 닫지 않고 마지막 상태(오버레이·데이터·로그)를 유지한다.
+   상태/오류 메시지는 배너 대신 로그 콘솔로만 전달해 뷰·로그 레이아웃이 고정된다. *@
+
+<PageTitle>시퀀스 모니터</PageTitle>
+
+@if (Monitor.StepKey is not null)
+{
+    <SequenceMonitorView StepKey="@Monitor.StepKey"
+                         StepName="@Monitor.StepName"
+                         StepNo="@Monitor.StepNo"
+                         LogLines="@Monitor.SnapshotLines()"
+                         TargetDistanceMm="@Monitor.CameraTargetDistanceMm"
+                         Running="@Monitor.RunActive"
+                         Failed="@Monitor.LastEndedInFailure" />
+}
+else
+{
+    <div class="text-secondary p-2">시퀀스 대기 중… 시퀀스 페이지에서 실행하면 진행 상황이 여기에 표시됩니다.</div>
+}
+
+@code {
+    private bool _closing;
+
+    protected override void OnInitialized() => Monitor.Changed += OnMonitorChanged;
+
+    private async void OnMonitorChanged()
+    {
+        try
+        {
+            // 마지막 스텝(모니터링 창 닫기)의 요청 감지 — 마지막 로그가 보이도록 잠시 후 self-close.
+            if (Monitor.CloseRequested && !_closing)
+            {
+                _closing = true;
+                await InvokeAsync(StateHasChanged);
+                await Task.Delay(500);
+                try { await JS.InvokeVoidAsync("window.close"); } catch { }
+                return;
+            }
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (ObjectDisposedException) { }
+    }
+
+    public void Dispose() => Monitor.Changed -= OnMonitorChanged;
+}
