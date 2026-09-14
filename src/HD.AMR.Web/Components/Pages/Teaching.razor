@@ -90,7 +90,7 @@
             <thead>
                 <tr>
                     <th>이름</th>
-                    <th title="0x00=홈/회피 등 디폴트, 0x01~0xFF=검사 위치(촬영 시 보고 id)">Surface ID</th>
+                    <th title="0x00=홈/회피 등 디폴트, 0x01~0xFF=검사 위치(촬영 시 보고 id)">Wall ID</th>
                     <th>X</th>
                     <th>Y</th>
                     <th>Z</th>
@@ -133,7 +133,7 @@
                         <td>
                             @if (TeachingService.IsSeedSlot(p.Key))
                             {
-                                <span class="text-muted" title="디폴트 위치 — Surface ID 고정">0x00</span>
+                                <span class="text-muted" title="디폴트 위치 — Wall ID 고정">0x00</span>
                             }
                             else if (p.Id == _editId)
                             {
@@ -173,7 +173,7 @@
                                 }
                                 else
                                 {
-                                    <button class="btn btn-sm btn-outline-secondary icon-btn" title="이름/Surface ID 수정"
+                                    <button class="btn btn-sm btn-outline-secondary icon-btn" title="이름/Wall ID 수정"
                                             @onclick="() => BeginEdit(p)" disabled="@_isBusy">@Icon(IconPencil)</button>
                                 }
                             }
@@ -207,7 +207,7 @@
             <input class="form-control" style="width:200px" @bind="_newName" disabled="@_isBusy" />
         </div>
         <div class="col-auto">
-            <label class="form-label">Surface ID (0~255)</label>
+            <label class="form-label">Wall ID (0~255)</label>
             <input class="form-control" type="number" min="0" max="255" style="width:110px"
                    @bind="_newSurfaceId" disabled="@_isBusy" />
         </div>
@@ -215,7 +215,7 @@
             <button class="btn btn-primary" @onclick="AddAsync" disabled="@_isBusy">항목 추가</button>
         </div>
         <div class="col-auto text-muted small align-self-center">
-            0x00 = 홈/회피 등 디폴트 · 0x01~0xFF = 검사 위치(촬영 시 보고 Surface ID)
+            0x00 = 홈/회피 등 디폴트 · 0x01~0xFF = 검사 위치(촬영 시 보고 Wall ID)
         </div>
     </div>
 </section>
@@ -421,7 +421,7 @@
             _newSurfaceId = 0;
             await ReloadAsync();
             _isErr = false;
-            _msg = $"'{row.Name}' 항목을 추가했습니다 (Surface 0x{row.SurfaceId:X2}). '현재 위치 저장'으로 좌표를 채우세요.";
+            _msg = $"'{row.Name}' 항목을 추가했습니다 (Wall 0x{row.SurfaceId:X2}). '현재 위치 저장'으로 좌표를 채우세요.";
         }
         catch (Exception ex)
         {
@@ -471,7 +471,7 @@
             await Service.UpdateInfoAsync(_editId, _editName, _editSurfaceId);
             await ReloadAsync();
             _isErr = false;
-            _msg = $"'{_editName}' 항목을 저장했습니다 (Surface 0x{Math.Clamp(_editSurfaceId, 0, 255):X2}).";
+            _msg = $"'{_editName}' 항목을 저장했습니다 (Wall 0x{Math.Clamp(_editSurfaceId, 0, 255):X2}).";
             _editId = -1;
         }
         catch (Exception ex)

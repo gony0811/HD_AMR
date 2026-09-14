@@ -38,15 +38,15 @@ public class CobotInspectionMoveStep : ISequenceStep
             return StepValidation.Fail("코봇 RPC 미연결");
 
         if (context.InspectionSurfaceId is <= 0x00 or > 0xFF)
-            return StepValidation.Fail("검사 Surface ID 미설정 (0x01~0xFF) — ② 파라미터에서 선택하세요.");
+            return StepValidation.Fail("검사 Wall ID 미설정 (0x01~0xFF) — ② 파라미터에서 선택하세요.");
 
         var pos = FindBySurfaceId(context);
         if (pos is null)
             return StepValidation.Fail(
-                $"Surface 0x{context.InspectionSurfaceId:X2}에 해당하는 티칭 위치가 없습니다 — Teaching에서 Surface ID를 지정하세요.");
+                $"Wall 0x{context.InspectionSurfaceId:X2}에 해당하는 티칭 위치가 없습니다 — Teaching에서 Wall ID를 지정하세요.");
         if (!pos.IsTaught)
             return StepValidation.Fail(
-                $"Surface 0x{context.InspectionSurfaceId:X2} '{pos.Name}' 미티칭 — Teaching에서 먼저 저장하세요.");
+                $"Wall 0x{context.InspectionSurfaceId:X2} '{pos.Name}' 미티칭 — Teaching에서 먼저 저장하세요.");
 
         if (Math.Abs(context.InspectionOffsetU) > 500 || Math.Abs(context.InspectionOffsetV) > 500)
             return StepValidation.Fail("검사 오프셋 u/v 범위 초과 (±500 mm 이내).");
@@ -103,7 +103,7 @@ public class CobotInspectionMoveStep : ISequenceStep
     public async Task<StepResult> ExecuteAsync(SequenceContext context, CancellationToken ct)
     {
         var inspection = FindBySurfaceId(context)
-            ?? throw new InvalidOperationException($"Surface 0x{context.InspectionSurfaceId:X2} 티칭 위치 없음");
+            ?? throw new InvalidOperationException($"Wall 0x{context.InspectionSurfaceId:X2} 티칭 위치 없음");
         var (target, where) = await ComputeTargetPoseAsync(_cobot, inspection, ct);
         target = NormalizeUvAnchor(target, _logger);
         where = $"[0x{context.InspectionSurfaceId:X2} {inspection.Name}] {where}";

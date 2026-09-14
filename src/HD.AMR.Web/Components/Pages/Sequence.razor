@@ -98,7 +98,7 @@
                         @if (step.Key == "cobotInspection")
                         {
                             <div class="uv-inputs">
-                                <label>검사 Surface
+                                <label>검사 Wall
                                     <select class="form-select form-select-sm"
                                             @bind="_context.InspectionSurfaceId" @bind:after="SaveInspectionAsync"
                                             disabled="@Seq.IsBusy">
@@ -113,7 +113,7 @@
                                 @if (!IsInspectionPositionTaught())
                                 {
                                     <span class="badge bg-warning text-dark align-self-center"
-                                          title="선택한 Surface ID의 티칭 위치가 없거나 좌표 미저장">미티칭</span>
+                                          title="선택한 Wall ID의 티칭 위치가 없거나 좌표 미저장">미티칭</span>
                                 }
                                 <label>방향
                                     <select class="form-select form-select-sm"
@@ -238,10 +238,10 @@
                                         }
                                     </select>
                                 </label>
-                                @* Surface ID는 ② 검사위치 이동의 "검사 Surface" 선택과 공용 — 여기서는 표시만. *@
-                                <label>Surface ID
+                                @* Wall ID는 ② 검사위치 이동의 "검사 Wall" 선택과 공용 — 여기서는 표시만. *@
+                                <label>Wall ID
                                     <span class="form-control form-control-sm bg-body-secondary"
-                                          title="② Cobot 검사위치 이동의 '검사 Surface'에서 설정">
+                                          title="② Cobot 검사위치 이동의 '검사 Wall'에서 설정">
                                         0x@(_context.InspectionSurfaceId.ToString("X2"))@(InspectionSurfaceName() is { } sn ? $" {sn}" : "") (②에서 설정)
                                     </span>
                                 </label>

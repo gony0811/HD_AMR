@@ -87,7 +87,7 @@ public class FlatSurfaceAlignStep : ISequenceStep
             return StepValidation.Fail("레이저 변위센서 미연결 — 3점 측량 불가");
         if (CobotInspectionMoveStep.FindBySurfaceId(context) is not { IsTaught: true })
             return StepValidation.Fail(
-                $"Surface 0x{context.InspectionSurfaceId:X2} 검사 위치 미티칭/없음");
+                $"Wall 0x{context.InspectionSurfaceId:X2} 검사 위치 미티칭/없음");
 
         return StepValidation.Ok();
     }

@@ -146,7 +146,7 @@ public class InspectionRunStep : ISequenceStep
             // th_max 초과 점은 /inspection 과 동일하게 제외.
             if (Math.Abs(w.Theta) > profile.ThMax) { skipped++; continue; }
 
-            var pose = new[] { w.X, 0.0, w.Z, 0.0, tiltSign * w.Theta, rz0 };
+            var pose = new[] { w.X, w.Y, w.Z, 0.0, tiltSign * w.Theta, rz0 };
             var rc = await _cobot.Rpc.MoveLAsync(pose, tool: context.Tool, user: wobjId,
                 vel: context.Velocity, acc: MoveAcc, ovl: MoveOvl, blendR: -1, ct: ct);
             if (rc != 0)
@@ -183,7 +183,7 @@ public class InspectionRunStep : ISequenceStep
             (skipped > 0 ? $"(θ 초과 {skipped}점 제외)" : "") +
             $", 비전 OK {visOk}/{moved}" +
             (visFail > 0 ? $" (실패 {visFail})" : "") +
-            $" [wobj #{wobjId}, tool {context.Tool}, SurfaceID 0x{context.InspectionSurfaceId:X2}, Run {runId}].";
+            $" [wobj #{wobjId}, tool {context.Tool}, WallID 0x{context.InspectionSurfaceId:X2}, Run {runId}].";
         _logger.LogInformation("⑱ {Msg}", msg);
         return StepResult.Ok(msg);
     }

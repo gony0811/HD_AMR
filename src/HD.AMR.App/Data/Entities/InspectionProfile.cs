@@ -37,9 +37,11 @@ public class InspectionProfile
 /// 저장용 경유점 한 점. X=로봇 x, Z=로봇 z(=DXF Y), Theta=적용 θ(도),
 /// ThetaManual=θ가 자동 계산값이 아니라 수동 입력값인지 여부.
 /// Surface=적용 표면 타입(SurfaceType 기저값: 0=Flat, 1=Corner, 2=Corrugation),
-/// SurfaceManual=자동 규칙이 아니라 수동 선택값인지 여부. 기본값은 구버전 저장분(필드 없음)과의
+/// SurfaceManual=자동 규칙이 아니라 수동 선택값인지 여부.
+/// Y=로봇 y(mm). 기본값은 구버전 저장분(필드 없음)과의
 /// 하위 호환용 — 역직렬화 시 누락 파라미터는 기본값으로 채워진다.
 /// </summary>
 public record InspectionWaypoint(
     double X, double Z, double Theta, bool ThetaManual,
-    byte Surface = 0, bool SurfaceManual = false);
+    byte Surface = 0, bool SurfaceManual = false,
+    double Y = 0);
