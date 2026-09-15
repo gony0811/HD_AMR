@@ -117,11 +117,6 @@ public class SequenceContext
     /// null(UI 단독 실행)이면 현행대로 집계만 하고 실패 처리 안 함.</summary>
     public double? VisionFailRatioMax { get; set; }
 
-    /// <summary>⑱ 경유점 오버라이드 — null 이면 현행대로 티칭 프로필(WaypointsJson) 사용.
-    /// CROSS4 는 오케스트레이터가 <see cref="Inspection.CrossPatternGenerator"/> 로 생성한
-    /// 십자 경유점(wobj 프레임 기준)을 여기로 주입한다.</summary>
-    public List<Data.Entities.InspectionWaypoint>? WaypointsOverride { get; set; }
-
     /// <summary>CORNER3 좌/우 거울 side ("L"/"R") — 코너 스텝의 티칭 슬롯 키 접두사 선택
     /// (corner3.L.* / corner3.R.*). CORNER 외 경로에서는 null.</summary>
     public string? CornerSide { get; set; }

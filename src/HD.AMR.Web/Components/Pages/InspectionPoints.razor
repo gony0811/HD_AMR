@@ -18,8 +18,8 @@
     각 경유점은 6-DOF <code>[X, Y, Z, Rx, Ry, Rz]</code> — 코로게이션 등 굴곡면은 코봇을 검사 자세로
     <b>조그한 뒤 '현재 자세 캡처'</b> 로 Rx/Ry/Z 실측을 그대로 담으세요(눈으로 계산 불가).
     아래 캔버스는 X-Y 평면이며 각 점의 카메라 FOV(@F(_fovMm)×@F(_fovMm)mm)를 사각형으로 표시합니다.
-    <br /><span class="text-success-emphasis">✔ CROSS: 여기서 저장한 절대 6-DOF 프로필은 ACS 자동검사에서도 그대로 실행됩니다(Rx 포함) —
-    레시피 <code>Enabled</code> 를 켜면 됨. (PatternJson 수식 생성은 절대 프로필이 없을 때만 폴백)</span>
+    <br /><span class="text-success-emphasis">✔ CROSS3/CROSS4: 여기서 저장한 절대 6-DOF 프로필이 ACS 자동검사의 유일한 경유점 소스입니다(Rx 포함) —
+    레시피 <code>Enabled</code> 를 켜면 됨. (십자 패턴 런타임 생성은 폐기 — '십자 패턴 채우기'는 교시 시작 템플릿일 뿐)</span>
     <br /><span class="text-warning-emphasis">⚠ CORNER: 현재 ACS 런타임은 3면 코너를 BASE 좌표계 고정 슬롯(corner3.*)으로 검사합니다 —
     이 X-Y(wobj) 프로필은 아직 CORNER ACS 실행에 쓰이지 않습니다(프레임 규약 결정 필요).</span>
 </p>

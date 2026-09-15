@@ -319,18 +319,13 @@ CREATE TABLE IF NOT EXISTS InspectionRecipes (
     SurfaceOverride INTEGER NULL,
     AlignRetryCount INTEGER NOT NULL DEFAULT 0,
     VisionFailRatioMax REAL NOT NULL DEFAULT 1.0,
-    PatternJson TEXT NULL,
     CreatedAt TEXT NOT NULL,
     UpdatedAt TEXT NOT NULL
 );
 ");
 
-    // 기존 InspectionRecipes 에 PatternJson(CROSS4 십자 패턴 파라미터) 컬럼이 없으면 추가(기존 데이터 보존).
-    var hasPatternJson = db.Database
-        .SqlQueryRaw<long>("SELECT COUNT(*) AS Value FROM pragma_table_info('InspectionRecipes') WHERE name = 'PatternJson'")
-        .AsEnumerable().First() > 0;
-    if (!hasPatternJson)
-        db.Database.ExecuteSqlRaw("ALTER TABLE InspectionRecipes ADD COLUMN PatternJson TEXT NULL;");
+    // (PatternJson 컬럼 제거 — CROSS 십자 패턴 런타임 생성 폐기, 캡처 교시 단일화. 기존 DB 의 잔여 컬럼은
+    //  EF 모델에서 매핑하지 않으므로 무해하게 무시된다.)
 
     // 레시피 카탈로그 시드 — 없는 행만 추가(현장 조정값 보존). LINE-* 5종만 Enabled.
     scope.ServiceProvider.GetRequiredService<InspectionRecipeService>()
