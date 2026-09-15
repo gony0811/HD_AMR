@@ -4,7 +4,7 @@ namespace HD.AMR.App.Service.Inspection;
 /// 검사 레시피 매핑(사양 §8.5.1, INSPECTION_TYPES.md §5) — 순수 함수 2단:
 /// ① `wall_code` → 면 자세 5군, ② `(seamType, 면 자세)` → 레시피 id 11종.
 ///
-/// 미정의 wall_code(예: 골든 예시의 "W03" — §8.4↔§8.5.1 불일치, ACS 협의 대기)는 계약 위반으로
+/// 정본 10코드(B/T/SM/PM/F/A/SL/PL/SU/PU, ACS 확정 2026-09-15) 외 wall_code 는 계약 위반으로
 /// 실패를 반환한다 — 호출측이 액션 FAILED + orderValidationError 로 보고.
 /// CORNER 는 면 자세 무관 단일 `CORNER3`(삼면 코너 각도 전부 135°·90°·90° 균일 — INSPECTION_TYPES.md §7).
 /// 거울 L/R 분리(§9-4)는 N13 확정 시 wall_code 판별 추가.

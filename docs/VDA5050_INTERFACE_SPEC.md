@@ -568,11 +568,11 @@ ACS 생존신호는 VDA 5050 표준 로봇 `connection` 메시지의 상태 모�
   "actionId": "8f3c19aa-0000-4000-8000-0000000000e2",
   "blockingType": "HARD",
   "actionParameters": [
-    { "key": "jobRef", "value": "JOB-CT1-L2-W03-S07-2" },
+    { "key": "jobRef", "value": "JOB-CT1-L2-SM-S07-2" },
     { "key": "position", "value": {
         "seamStartW": [12.510, 5.980, 1.420],
         "seamEndW":   [13.310, 5.980, 1.420],
-        "drawingPos": { "tank": "CT1", "level": 2, "wall_code": "W03",
+        "drawingPos": { "tank": "CT1", "level": 2, "wall_code": "SM",
                         "u": 3.120, "v": 1.420,
                         "x": 3.120, "y": 0.0, "z": 1.420 } } },
     { "key": "params", "value": {
@@ -581,7 +581,7 @@ ACS 생존신호는 VDA 5050 표준 로봇 `connection` 메시지의 상태 모�
         "inspectionProfileId": "INSPECT-STD-01",
         "standoffMm": 400,
         "workingDistanceMm": 400,
-        "anchorGroupId": "CT1-L2-W03-ST04",
+        "anchorGroupId": "CT1-L2-SM-ST04",
         "seqInGroup": 2 } }
   ]
 }
@@ -668,7 +668,7 @@ ACS 생존신호는 VDA 5050 표준 로봇 `connection` 메시지의 상태 모�
 - 툴 수직/수평 회전은 여전히 `seamStartW→seamEndW` 벡터에서 **자동 유도**(§4.4·§8.1) — 본 매핑표는 **스캔 패턴·면 접근**만 결정한다.
 - 미지원/모순 조합(예: `CORNER` + 평면 `wall_code`, 미정의 `seamType`) 처리는 N13에서 확정. 기본: 액션 FAILED + `orderValidationError`(계약 위반) 또는 `inspectionFailed`(실행 불가).
 
-**(5) 현행 상태 각주 (2026-09-15 갱신).** HD_AMR 2차 연동 배선 **구현 완료** — `Vda5050OrderExecutor`가 노드 도달 후 `startWeldInspection`을 검사 실행기(`WeldInspectionOrchestrator`)에 위임한다: `actionParameters` 해석(파서, §8.4 골든 예시 검증) → `(seamType, wall_code)` → 레시피 매핑(위 (3) 표) → 레시피(DB `InspectionRecipes` 11종, 기동 시드) 로드 → `sectionDxfId`→로컬 `Drawing`→티칭 `InspectionProfile` 경유점으로 검사 시퀀스 실행 → `FINISHED`/`FAILED` + errorType(`orderValidationError`/`equipmentError`/`inspectionFailed`) 보고. `anchorGroupId` 정렬 공유(§8.1)·`emergencyStop` 검사 중단 포함. **현행 게이트**: `LINE-*` 5종만 실행 활성(Enabled) — `CROSS4-*`/`CORNER3`은 매핑은 되나 실행 미구현이라 `FAILED + inspectionFailed`("resolved but not enabled") 보고, N13 확정 후 활성화. 미정의 `wall_code`(예: §8.4 예시의 `W03` — 정본 10코드와 불일치, ACS 협의 필요)·미정의 `seamType`은 액션 `FAILED + orderValidationError`. 실기 E2E 검증은 대기.
+**(5) 현행 상태 각주 (2026-09-15 갱신).** HD_AMR 2차 연동 배선 **구현 완료** — `Vda5050OrderExecutor`가 노드 도달 후 `startWeldInspection`을 검사 실행기(`WeldInspectionOrchestrator`)에 위임한다: `actionParameters` 해석(파서, §8.4 골든 예시 검증) → `(seamType, wall_code)` → 레시피 매핑(위 (3) 표) → 레시피(DB `InspectionRecipes` 11종, 기동 시드) 로드 → `sectionDxfId`→로컬 `Drawing`→티칭 `InspectionProfile` 경유점으로 검사 시퀀스 실행 → `FINISHED`/`FAILED` + errorType(`orderValidationError`/`equipmentError`/`inspectionFailed`) 보고. `anchorGroupId` 정렬 공유(§8.1)·`emergencyStop` 검사 중단 포함. **현행 게이트**: `LINE-*` 5종만 실행 활성(Enabled) — `CROSS4-*`/`CORNER3`은 매핑은 되나 실행 미구현이라 `FAILED + inspectionFailed`("resolved but not enabled") 보고, N13 확정 후 활성화. 미정의 `wall_code`·미정의 `seamType`은 액션 `FAILED + orderValidationError`. `wall_code` 규약은 **ACS 확정(2026-09-15)** — ACS는 정본 10코드(`B`/`SL`/`PL`/`SM`/`PM`/`SU`/`PU`/`T`/`F`/`A`)를 그대로 발행하며 AMR 수용값과 일치한다(과거 §8.4 예시의 `W03`은 정본화 전 오기였고 `SM`으로 교정). 실기 E2E 검증은 대기.
 
 **(6) `seamType`(라인 형태) vs `Surface`(경유점 촬영 키) — 레벨 구분.** 둘은 다른 개념이며 계층이 다르다. **혼동 금지.**
 
@@ -764,7 +764,7 @@ ACS는 비상정지와 동시에 **해당 로봇의 활성 run을 자동 중단(
 | N10 | 정차 이격(standoff) 적정값 | 기본 0.8 m (영역별 조정) | ⏸ **보류** — 로봇 치수·코봇 리치 확정 후 회신, 잠정 0.8 m 수용 |
 | N11 | Order 거부 보고 방식 | 폐기 + `orderValidationError` | ✅ 동의 (§4.5.2 그대로 구현) |
 | N12 | ACS 생존 신호 | ACS 전용 `connection` 토픽 + ONLINE/OFFLINE/Last Will, QoS 1·retain (§7.2) | ✅ **승인** (2026-09-03) |
-| N13 | 검사 타입 카탈로그·레시피 계약 | 검사 타입 11종(§8.5) + **`seamType`(LINE/CROSS/CORNER 확장) × `wall_code` → 레시피 매핑(§8.5.1)** + HD_AMR 타입별 레시피 라이브러리 운용 | ⏳ **대기** — `seamType` enum 확장은 **ACS 선반영(2026-09-14, §8.1/§8.2)**: ACS가 3종 수용·발행(POLYLINE 거부). HD_AMR **레시피 매핑·실행 배선 구현 완료(2026-09-15, §8.5.1 (5))** — `LINE-*` 5종 실행 활성, `CROSS4-*`/`CORNER3`은 매핑 후 `FAILED+inspectionFailed`(실행은 N13 확정 후). §8.4 예시 `wall_code:"W03"` ↔ §8.5.1 정본 10코드 불일치 정리 필요 |
+| N13 | 검사 타입 카탈로그·레시피 계약 | 검사 타입 11종(§8.5) + **`seamType`(LINE/CROSS/CORNER 확장) × `wall_code` → 레시피 매핑(§8.5.1)** + HD_AMR 타입별 레시피 라이브러리 운용 | ⏳ **대기** — `seamType` enum 확장은 **ACS 선반영(2026-09-14, §8.1/§8.2)**: ACS가 3종 수용·발행(POLYLINE 거부). HD_AMR **레시피 매핑·실행 배선 구현 완료(2026-09-15, §8.5.1 (5))** — `LINE-*` 5종 실행 활성, `CROSS4-*`/`CORNER3`은 매핑 후 `FAILED+inspectionFailed`(실행은 N13 확정 후). `wall_code` 규약 ACS 확정(2026-09-15) — 정본 10코드 발행, AMR 수용값과 일치(§8.4 예시 `W03`→`SM` 교정 완료) |
 
 **AMR 구현 방식 고지 요약** (상세는 `VDA5050_AMR_REPLY.md` §3): allowedDeviation은 **도착 판정 허용 오차로만** 사용(미지정 시 0.1 m/0.1 rad) · 층별 맵은 AMR 내부 통합 맵으로 운용하되 계약(층별 mapId·좌표)은 그대로 준수 · **새 mapId는 재측위 검증 통과 시에만 보고**(실패 시 `localizationLost`) · 주행 실패 시 미도달 상태로 전 액션 FAILED+`drivingFailed` · 비상정지 시 진행 액션 FAILED+`emergencyStopActive`.
 
