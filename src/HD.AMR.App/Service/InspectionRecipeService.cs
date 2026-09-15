@@ -186,11 +186,8 @@ public class InspectionRecipeService
                 SurfaceOverride = c.Id is RecipeIds.Corner3 or RecipeIds.Corner2 ? (byte)1 : null,   // 코너 = Corner 고정
                 AlignRetryCount = 0,
                 VisionFailRatioMax = 1.0,          // 판정 안 함 — 정책 확정 시 하향
-                // CROSS4: 십자 4-arm 경유점 생성 파라미터(CrossPatternParams) — 교차점 ±180mm, 30mm 간격,
-                // 교차 arm 촬상 회전 −90°. 현장 튜닝은 레시피 관리 UI 에서.
-                PatternJson = c.Seam == SeamTypeKind.Cross
-                    ? """{"ArmMm":180,"SpacingMm":30,"PerpRzDeg":-90}"""
-                    : null,
+                // (PatternJson 제거) CROSS3/CROSS4 는 /inspection-points 6-DOF 캡처 프로필 경유점을 실행 —
+                // 십자 패턴 런타임 생성은 폐기(캡처 교시 단일화).
             };
         }
     }

@@ -11,7 +11,7 @@
 
 <h1>검사 레시피 관리</h1>
 <p class="text-muted" style="max-width:1100px">
-    ACS <code>startWeldInspection</code> 의 <code>(seamType, wall_code)</code> 조합으로 선택되는 검사 타입 11종
+    ACS <code>startWeldInspection</code> 의 <code>(seamType, wall_code)</code> 조합으로 선택되는 검사 타입 17종
     (사양 §8.5.1, INSPECTION_TYPES.md §5)의 실행 구성입니다.
     <b>Enabled</b> 가 꺼진 레시피로 매핑된 액션은 FAILED + inspectionFailed 로 보고됩니다 —
     실기 E2E 검증 후에만 켜세요. 경유점(어디를)은 여기 없습니다 — 도면별 티칭(<code>InspectionProfile</code>) 소관이며,
@@ -38,7 +38,6 @@
                 <th style="min-width:180px">표시명</th>
                 <th style="width:70px" class="text-center">Enabled</th>
                 <th style="min-width:200px">StepKeysJson</th>
-                <th style="min-width:200px">PatternJson</th>
                 <th style="width:110px">비전 실패율 상한</th>
                 <th style="width:190px"></th>
             </tr>
@@ -60,8 +59,6 @@
                     </td>
                     <td><input class="form-control form-control-sm font-monospace" style="font-size:.75rem"
                                placeholder="(null = 풀시퀀스)" @bind="row.StepKeysJson" /></td>
-                    <td><input class="form-control form-control-sm font-monospace" style="font-size:.75rem"
-                               placeholder="(CROSS4 만 사용)" @bind="row.PatternJson" /></td>
                     <td><input type="number" step="0.05" min="0" max="1"
                                class="form-control form-control-sm" @bind="row.VisionFailRatioMax" /></td>
                     <td style="white-space:nowrap">
@@ -76,7 +73,7 @@
                 {
                     <tr @key="@(row.Id + "-adv")" class="table-light">
                         <td></td>
-                        <td colspan="7">
+                        <td colspan="6">
                             <div class="row g-3 py-2" style="font-size:.8rem">
                                 <div class="col-auto">
                                     <label class="form-label mb-1 text-muted">접근 자세 티칭 키</label>
@@ -126,7 +123,7 @@
             }
             @if (_rows.Count == 0)
             {
-                <tr><td colspan="8" class="text-center text-muted py-3">레시피가 없습니다 — 앱 재기동 시 자동 시드됩니다.</td></tr>
+                <tr><td colspan="7" class="text-center text-muted py-3">레시피가 없습니다 — 앱 재기동 시 자동 시드됩니다.</td></tr>
             }
         </tbody>
     </table>
@@ -173,7 +170,6 @@
     private static string? ValidateRow(InspectionRecipe row)
     {
         row.StepKeysJson = string.IsNullOrWhiteSpace(row.StepKeysJson) ? null : row.StepKeysJson.Trim();
-        row.PatternJson = string.IsNullOrWhiteSpace(row.PatternJson) ? null : row.PatternJson.Trim();
         row.ApproachTeachingKey = row.ApproachTeachingKey?.Trim() ?? "";
 
         if (row.StepKeysJson is not null)
@@ -184,16 +180,6 @@
                     return "StepKeysJson 은 비어 있지 않은 문자열 배열이어야 합니다.";
             }
             catch (JsonException ex) { return $"StepKeysJson 파싱 실패: {ex.Message}"; }
-        }
-        if (row.PatternJson is not null)
-        {
-            try
-            {
-                var p = JsonSerializer.Deserialize<CrossPatternParams>(row.PatternJson);
-                if (p is null) return "PatternJson 이 null 로 역직렬화됩니다.";
-                if (!CrossPatternGenerator.TryGenerate(p, out _, out var err)) return err;
-            }
-            catch (JsonException ex) { return $"PatternJson 파싱 실패: {ex.Message}"; }
         }
         if (row.VisionFailRatioMax is < 0 or > 1)
             return "비전 실패율 상한은 0~1 범위여야 합니다.";

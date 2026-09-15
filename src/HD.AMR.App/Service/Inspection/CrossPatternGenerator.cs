@@ -2,7 +2,9 @@ using HD.AMR.App.Data.Entities;
 
 namespace HD.AMR.App.Service.Inspection;
 
-/// <summary>CROSS4 스캔 패턴 파라미터 — <see cref="InspectionRecipe.PatternJson"/> 역직렬화 대상.</summary>
+/// <summary>CROSS 십자 스캔 패턴 파라미터. <b>교시 시작 템플릿 전용</b> — 런타임 실행 경로는 폐기(캡처
+/// 교시 단일화). `/inspection`·`/inspection-points`의 "십자 패턴 채우기"가 이 파라미터로 초기 경유점을
+/// 채운 뒤, 운영자가 6-DOF 로 조정·캡처한다.</summary>
 /// <param name="ArmMm">교차점에서 각 arm 끝까지 길이 [mm].</param>
 /// <param name="SpacingMm">arm 위 경유점 간격 [mm].</param>
 /// <param name="PerpRzDeg">교차 arm 촬상 시 툴 RZ 추가 회전 [deg] — 세로 비드 대면(기본 −90).</param>

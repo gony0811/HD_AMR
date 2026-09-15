@@ -176,10 +176,10 @@
    > (게이트는 실기 검증 전이라 여전히 OFF, 온보드 `/recipes` 페이지에서 활성화):
    > - **검사 방향 자동 유도**: seam 벡터(start→end)를 노드 theta 기준 벽면-로컬 투영해 수평/수직 자동 판정
    >   (`SeamDirectionResolver`) — §1 의 "ACS 가 명령하지 않음" 원칙이 ACS 경로에 실제 배선됨. LINE 포함 공통.
-   > - **CROSS4** (캡처 교시로 단일화, 2026-09-15): 정렬 1회(wobj 프레임 등록) 후, `/inspection-points`에서 교시한
-   >   6-DOF 절대 프로필(`PoseAbsolute`)의 경유점을 그대로 실행(코로게이션 법선·깊이 반영). **패턴 수식 생성
-   >   (`CrossPatternGenerator`/레시피 `PatternJson`)은 폐기** — 현행 코드는 절대 프로필이 없을 때만 4-arm 평면
-   >   패턴을 폴백 생성하나(교차 arm RZ −90°), 이 폴백 경로는 후속 제거 예정(§9-6). CROSS3 도 동일.
+   > - **CROSS3·CROSS4** (캡처 교시로 단일화, 2026-09-15): 정렬 1회(wobj 프레임 등록) 후, `/inspection-points`에서
+   >   교시한 6-DOF 절대 프로필(`PoseAbsolute`)의 경유점을 그대로 실행(코로게이션 법선·깊이 반영). **패턴 수식 런타임
+   >   생성 경로는 제거 완료**(레시피 `PatternJson` 필드·오케스트레이터 생성·`WaypointsOverride` 삭제). `CrossPatternGenerator`
+   >   는 `/inspection-points`·`/inspection`의 "십자 패턴 채우기" **교시 시작 템플릿**으로만 잔존.
    > - **CORNER3**: 평탄면 정렬 미적용 — 고정 티칭 슬롯 `corner3.{L|R}.{approach,face1..3,retreat}` 직접 순회
    >   (`cornerInspectionRunStep`), SurfaceType=Corner 촬상. 거울 L/R 은 별도 티칭 2세트,
    >   side 판별 P*→L / S*→R (F/A 코너의 side 규칙은 N13 협의 필요 — 기본 L).
@@ -187,7 +187,7 @@
 6. **신규 타입(CROSS3·CORNER2) 구현** `[대부분 완료]` — 정본화 + 계약 enum 확장 반영 완료(2026-09-15):
    - **CROSS3(3갈래)** ✅ **완료**: `SeamTypeKind.Cross3` + resolver(`CROSS3-{면자세}`) + `CROSS3-*` 5종 시드(게이트 OFF) + `/inspection-points` 교시 옵션 + 오케스트레이터 배선(캡처 절대 프로필 실행). **파서 수용**(계약 enum 확장, §9-7) — ACS 도달 가능.
    - **CORNER2(2면)** 🔶 **부분**: `SeamTypeKind.Corner2` + resolver(`CORNER2`) + 레시피 시드(게이트 OFF) + 파서 수용 완료. **실행 스텝 미구현** — corner2 슬롯/캡처 배선은 KC-2B 코너 부재 사양(거울 규칙·브릿지 플레이트 자세) 확정 후 후속.
-   - **CROSS4 수식 경로 폐기**: 현행 코드는 `PatternJson` 생성을 폴백으로 유지 중 — 캡처 단일화에 맞춰 **오케스트레이터 `PatternJson` 실행 경로 제거** 후속 정리 필요.
+   - **CROSS4 수식 경로 폐기** ✅ **완료(2026-09-15)**: 레시피 `PatternJson` 필드·오케스트레이터 런타임 생성·`WaypointsOverride` 주입·`/recipes` PatternJson 컬럼·DB 스키마 컬럼 제거. `CrossPatternGenerator`는 교시 템플릿 전용으로 잔존. (기존 DB 의 PatternJson 컬럼은 EF 미매핑으로 무해)
    - **CORNER3(3면)**: 현행 고정 슬롯 유지(옵션1) — 추후 재정의.
 7. **`seamType` enum 계약 확장** ✅ **반영(2026-09-15)** `[협의 N13]` — 계약 enum = `LINE`/`CROSS3`/`CROSS4`/`CORNER2`/`CORNER3`.
    AMR 파서·resolver·17종 시드 구현 완료(legacy `CROSS`→CROSS4·`CORNER`→CORNER3 수용). **ACS 는 canonical 5값으로 발행 전환 필요** — 값 합의·전환 시점은 N13. (VDA5050_INTERFACE_SPEC §8.1/§8.2/§8.5.1·개정 1.5)

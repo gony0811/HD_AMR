@@ -77,27 +77,19 @@ public class InspectionRunStep : ISequenceStep
         if (profile is null)
             return StepResult.Fail($"티칭설정(id={context.InspectionProfileId})을 찾을 수 없습니다 — 다시 선택하세요.");
 
-        // 경유점 소스: 오케스트레이터 주입 오버라이드(CROSS4 십자 패턴 등) > 티칭 프로필 저장분.
+        // 경유점 소스: 티칭 프로필 저장분(LINE 도면 솎기 / CROSS3·CROSS4 X-Y 캡처 교시).
         List<InspectionWaypoint> waypoints;
-        if (context.WaypointsOverride is { } overrideWaypoints)
+        try
         {
-            waypoints = overrideWaypoints;
+            waypoints = JsonSerializer.Deserialize<List<InspectionWaypoint>>(profile.WaypointsJson) ?? new();
         }
-        else
+        catch (JsonException ex)
         {
-            try
-            {
-                waypoints = JsonSerializer.Deserialize<List<InspectionWaypoint>>(profile.WaypointsJson) ?? new();
-            }
-            catch (JsonException ex)
-            {
-                return StepResult.Fail($"티칭설정 '{profile.Name}' 경유점 파싱 실패: {ex.Message}");
-            }
+            return StepResult.Fail($"티칭설정 '{profile.Name}' 경유점 파싱 실패: {ex.Message}");
         }
         if (waypoints.Count < 2)
             return StepResult.Fail(
-                $"{(context.WaypointsOverride is null ? $"티칭설정 '{profile.Name}'" : "주입된 패턴")} " +
-                $"경유점이 부족합니다({waypoints.Count}개, 2개 이상 필요).");
+                $"티칭설정 '{profile.Name}' 경유점이 부족합니다({waypoints.Count}개, 2개 이상 필요).");
 
         // ── 작업물 좌표계 등록 확인 ─────────────────────────────────────
         double[] frame;
