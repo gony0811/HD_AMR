@@ -13,10 +13,13 @@
 
 <h1>검사 포인트 티칭 (X-Y 평면)</h1>
 <p class="text-muted" style="max-width:1050px">
-    CROSS·CORNER 등 <b>X-Y 검사평면</b> 레시피의 경유점을 도면 추출 없이 직접 입력합니다. 좌표 규약:
+    CROSS·CORNER 등 <b>X-Y 검사평면</b> 레시피의 경유점을 도면 추출 없이 직접 교시합니다. 좌표 규약:
     <b>X-Y = 검사평면</b>, <b>Z = 검사면 법선(선창 내부로 들어가는 방향이 +) = 카메라 Working Distance</b>.
-    저장 시 로봇 pose <code>[X, Y, Z]</code> 로 그대로 실행됩니다(작업물 좌표계 교시가 이 규약과 일치해야 함).
+    각 경유점은 6-DOF <code>[X, Y, Z, Rx, Ry, Rz]</code> — 코로게이션 등 굴곡면은 코봇을 검사 자세로
+    <b>조그한 뒤 '현재 자세 캡처'</b> 로 Rx/Ry/Z 실측을 그대로 담으세요(눈으로 계산 불가).
     아래 캔버스는 X-Y 평면이며 각 점의 카메라 FOV(@F(_fovMm)×@F(_fovMm)mm)를 사각형으로 표시합니다.
+    <br /><span class="text-warning-emphasis">⚠ 이 페이지의 '실행'·저장은 6-DOF(Rx 포함)를 씁니다. 단, ACS 런타임(InspectionRunStep)은
+    아직 Rx=0 고정이라 ACS 자동검사에는 Rx 가 반영되지 않습니다(과제 (a) — 별도 배선 필요).</span>
 </p>
 
 @if (!string.IsNullOrEmpty(_msg))
@@ -82,10 +85,16 @@
 
     @* ── 우: 포인트 표 ── *@
     <div class="col-lg-6">
-        <div class="d-flex gap-2 mb-1">
+        <div class="d-flex gap-2 mb-1 flex-wrap">
             <button class="btn btn-sm btn-primary" @onclick="AddPoint" disabled="@_isRunning">＋ 포인트 추가</button>
+            <button class="btn btn-sm btn-success" @onclick="CaptureCurrentPose"
+                    disabled="@(_isRunning || !Cobot.IsConnected)"
+                    title="코봇을 검사 자세로 조그한 뒤 현재 작업물 좌표계 6-DOF(x,y,z,rx,ry,rz)를 새 포인트로 캡처">◉ 현재 자세 캡처</button>
+            <button class="btn btn-sm btn-outline-success" @onclick="CaptureIntoSelected"
+                    disabled="@(_isRunning || !Cobot.IsConnected || _selected < 0 || _selected >= _points.Count)"
+                    title="선택한 포인트를 현재 코봇 자세로 갱신">선택점 갱신</button>
             <button class="btn btn-sm btn-outline-secondary" @onclick="FillCrossPattern" disabled="@_isRunning"
-                    title="선택점(없으면 원점) 기준 십자 4-arm 패턴을 X-Y 로 채웁니다">십자 패턴 채우기</button>
+                    title="선택점(없으면 원점) 기준 십자 4-arm 패턴을 X-Y 로 채웁니다(평면 · Rx=0)">십자 패턴 채우기</button>
             <span class="ms-auto text-muted align-self-center">@_points.Count 점</span>
         </div>
         <div class="table-responsive">
@@ -93,7 +102,7 @@
                 <thead class="table-light">
                     <tr>
                         <th style="width:40px">#</th>
-                        <th>X</th><th>Y</th><th>Z(WD)</th><th>θ°</th><th>Rz°</th>
+                        <th>X</th><th>Y</th><th>Z(WD)</th><th>Rx°</th><th>Ry°(θ)</th><th>Rz°</th>
                         <th style="width:110px">Surface</th>
                         <th style="width:120px"></th>
                     </tr>
@@ -108,6 +117,7 @@
                             <td><input type="number" step="0.1" style="width:80px" value="@F(p.X)" @onchange="e => { p.X = D(e.Value); RecomputeViewBox(); }" @onclick:stopPropagation="true" /></td>
                             <td><input type="number" step="0.1" style="width:80px" value="@F(p.Y)" @onchange="e => { p.Y = D(e.Value); RecomputeViewBox(); }" @onclick:stopPropagation="true" /></td>
                             <td><input type="number" step="0.1" style="width:80px" value="@F(p.Z)" @onchange="e => p.Z = D(e.Value)" @onclick:stopPropagation="true" /></td>
+                            <td><input type="number" step="1" style="width:64px" value="@F(p.Rx)" @onchange="e => p.Rx = D(e.Value)" @onclick:stopPropagation="true" /></td>
                             <td><input type="number" step="1" style="width:64px" value="@F(p.Theta)" @onchange="e => p.Theta = D(e.Value)" @onclick:stopPropagation="true" /></td>
                             <td><input type="number" step="1" style="width:64px" value="@F(p.Rz)" @onchange="e => p.Rz = D(e.Value)" @onclick:stopPropagation="true" /></td>
                             <td>
@@ -126,7 +136,7 @@
                     }
                     @if (_points.Count == 0)
                     {
-                        <tr><td colspan="8" class="text-center text-muted py-2">포인트가 없습니다 — '포인트 추가' 또는 '십자 패턴 채우기'.</td></tr>
+                        <tr><td colspan="9" class="text-center text-muted py-2">포인트가 없습니다 — '포인트 추가', '현재 자세 캡처' 또는 '십자 패턴 채우기'.</td></tr>
                     }
                 </tbody>
             </table>
@@ -198,8 +208,9 @@
         public double X { get; set; }
         public double Y { get; set; }
         public double Z { get; set; }        // Working Distance (검사면 법선, +선창 내부)
-        public double Theta { get; set; }
-        public double Rz { get; set; }
+        public double Rx { get; set; }       // 툴 RX (deg) — 굴곡면 법선 추종
+        public double Theta { get; set; }    // = 툴 RY (deg)
+        public double Rz { get; set; }       // 툴 RZ (deg)
         public byte Surface { get; set; }
     }
 
@@ -270,6 +281,48 @@
         RecomputeViewBox();
     }
 
+    /// <summary>현재 코봇 TCP 자세(활성 작업물 좌표계 6-DOF: x,y,z,rx,ry,rz)를 읽어 XyPoint 로 변환.
+    /// 실패 시 null + 메시지. 조그+캡처 교시의 핵심 — 굴곡면 Rx/Ry/Z 를 실측 그대로 담는다.</summary>
+    private async Task<XyPoint?> ReadCurrentPoseAsync()
+    {
+        if (!Cobot.IsConnected) { Notify("코봇 RPC 미연결 — 캡처 불가.", true); return null; }
+        try
+        {
+            var pose = await Cobot.Rpc!.GetTcpPoseAsync();   // [x,y,z,rx,ry,rz] (활성 user 좌표계)
+            if (pose is not { Length: 6 }) { Notify("자세 읽기 실패 — 응답 형식 이상.", true); return null; }
+            return new XyPoint { X = pose[0], Y = pose[1], Z = pose[2], Rx = pose[3], Theta = pose[4], Rz = pose[5] };
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "현재 자세 캡처 실패");
+            Notify($"캡처 실패: {ex.Message}", true);
+            return null;
+        }
+    }
+
+    // 현재 자세를 새 포인트로 추가.
+    private async Task CaptureCurrentPose()
+    {
+        if (_isRunning) return;
+        if (await ReadCurrentPoseAsync() is not { } p) return;
+        _points.Add(p);
+        _selected = _points.Count - 1;
+        RecomputeViewBox();
+        Notify($"현재 자세 캡처: #{_points.Count} (X{F(p.X)} Y{F(p.Y)} Z{F(p.Z)} Rx{F(p.Rx)} Ry{F(p.Theta)} Rz{F(p.Rz)})", false);
+    }
+
+    // 선택 포인트를 현재 자세로 덮어쓰기(위치 미세조정 재교시).
+    private async Task CaptureIntoSelected()
+    {
+        if (_isRunning || _selected < 0 || _selected >= _points.Count) return;
+        if (await ReadCurrentPoseAsync() is not { } p) return;
+        var keepSurface = _points[_selected].Surface;
+        p.Surface = keepSurface;
+        _points[_selected] = p;
+        RecomputeViewBox();
+        Notify($"#{_selected + 1} 갱신: 현재 자세로 재교시", false);
+    }
+
     // 십자 4-arm 패턴을 X-Y 로 채운다 — 생성기의 프레임 X→X, Z→Y 로 매핑, Rz 는 그대로, Z=기본 WD.
     private void FillCrossPattern()
     {
@@ -333,7 +386,7 @@
                 ct.ThrowIfCancellationRequested();
                 _selected = i;
                 var p = _points[i];
-                var pose = new[] { p.X, p.Y, p.Z, 0.0, p.Theta, p.Rz };
+                var pose = new[] { p.X, p.Y, p.Z, p.Rx, p.Theta, p.Rz };
                 var rc = await rpc.MoveLAsync(pose, tool: _runTool, user: _runUser, vel: _runVel,
                     acc: 100, ovl: 100, blendR: -1, ct: ct);
                 _runMsg = $"#{i + 1} 이동 (rc={rc})";
@@ -357,7 +410,7 @@
         try
         {
             var p = _points[i];
-            var pose = new[] { p.X, p.Y, p.Z, 0.0, p.Theta, p.Rz };
+            var pose = new[] { p.X, p.Y, p.Z, p.Rx, p.Theta, p.Rz };
             var rc = await Cobot.Rpc!.MoveLAsync(pose, tool: _runTool, user: _runUser, vel: _runVel,
                 acc: 100, ovl: 100, blendR: -1);
             _runErr = rc != 0;
@@ -374,7 +427,7 @@
             // X-Y 규약: 경유점을 pose[X,Y,Z] 로 실행하려면 InspectionWaypoint(X=평면X, Y=평면Y, Z=WD).
             var wps = _points.Select(p => new InspectionWaypoint(
                 X: p.X, Z: p.Z, Theta: p.Theta, ThetaManual: true,
-                Surface: p.Surface, SurfaceManual: true, Y: p.Y, RzDeg: p.Rz)).ToList();
+                Surface: p.Surface, SurfaceManual: true, Y: p.Y, RzDeg: p.Rz, RxDeg: p.Rx)).ToList();
 
             var name = _profileName.Trim();
             var existing = _profiles.FirstOrDefault(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)
@@ -413,7 +466,7 @@
             var wps = System.Text.Json.JsonSerializer.Deserialize<List<InspectionWaypoint>>(p.WaypointsJson) ?? new();
             _points.Clear();
             foreach (var w in wps)
-                _points.Add(new XyPoint { X = w.X, Y = w.Y, Z = w.Z, Theta = w.Theta, Rz = w.RzDeg, Surface = w.Surface });
+                _points.Add(new XyPoint { X = w.X, Y = w.Y, Z = w.Z, Rx = w.RxDeg, Theta = w.Theta, Rz = w.RzDeg, Surface = w.Surface });
             _selected = -1;
             RecomputeViewBox();
             Notify($"불러오기 완료: {p.Name} ({_points.Count}점)", false);

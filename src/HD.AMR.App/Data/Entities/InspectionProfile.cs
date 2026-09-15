@@ -49,4 +49,6 @@ public class InspectionProfile
 public record InspectionWaypoint(
     double X, double Z, double Theta, bool ThetaManual,
     byte Surface = 0, bool SurfaceManual = false,
-    double Y = 0, double RzDeg = 0);
+    double Y = 0, double RzDeg = 0, double RxDeg = 0);
+// RxDeg=툴 RX 회전(도). 코로게이션 등 굴곡면 법선 추종에 필요 — 6-DOF 조그+캡처 교시로 채운다.
+// ⚠ 런타임 InspectionRunStep 은 아직 Rx=0 고정(과제 (a)). 현재는 교시/저장/페이지 수동실행에만 반영.
