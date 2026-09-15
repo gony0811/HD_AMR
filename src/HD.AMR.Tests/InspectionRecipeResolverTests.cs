@@ -62,9 +62,9 @@ public class InspectionRecipeResolverTests
         Assert.Equal("CORNER3", recipeId);
     }
 
-    // 미정의 wall_code — 골든 예시의 "W03" 포함(§8.4↔§8.5.1 불일치 방어).
+    // 정본 10코드(B/T/SM/PM/F/A/SL/PL/SU/PU) 외 값은 거부 — 방어적 처리.
     [Theory]
-    [InlineData("W03")]
+    [InlineData("W03")]   // 번호식 표기(구 골든 예시 오기) — ACS 실발행값 아님
     [InlineData("")]
     [InlineData("b")]     // 대소문자 구분 — 정본은 대문자
     [InlineData("XX")]

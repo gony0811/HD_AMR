@@ -13,11 +13,11 @@ public class WeldInspectionActionParserTests
       "actionId": "8f3c19aa-0000-4000-8000-0000000000e2",
       "blockingType": "HARD",
       "actionParameters": [
-        { "key": "jobRef", "value": "JOB-CT1-L2-W03-S07-2" },
+        { "key": "jobRef", "value": "JOB-CT1-L2-SM-S07-2" },
         { "key": "position", "value": {
             "seamStartW": [12.510, 5.980, 1.420],
             "seamEndW":   [13.310, 5.980, 1.420],
-            "drawingPos": { "tank": "CT1", "level": 2, "wall_code": "W03",
+            "drawingPos": { "tank": "CT1", "level": 2, "wall_code": "SM",
                             "u": 3.120, "v": 1.420,
                             "x": 3.120, "y": 0.0, "z": 1.420 } } },
         { "key": "params", "value": {
@@ -26,7 +26,7 @@ public class WeldInspectionActionParserTests
             "inspectionProfileId": "INSPECT-STD-01",
             "standoffMm": 400,
             "workingDistanceMm": 400,
-            "anchorGroupId": "CT1-L2-W03-ST04",
+            "anchorGroupId": "CT1-L2-SM-ST04",
             "seqInGroup": 2 } }
       ]
     }
@@ -44,19 +44,19 @@ public class WeldInspectionActionParserTests
 
         Assert.True(ok, error);
         Assert.NotNull(req);
-        Assert.Equal("JOB-CT1-L2-W03-S07-2", req!.JobRef);
+        Assert.Equal("JOB-CT1-L2-SM-S07-2", req!.JobRef);
         Assert.Equal(new[] { 12.510, 5.980, 1.420 }, req.SeamStartW);
         Assert.Equal(new[] { 13.310, 5.980, 1.420 }, req.SeamEndW);
         Assert.Equal("CT1", req.DrawingPos.Tank);
         Assert.Equal(2, req.DrawingPos.Level);
-        Assert.Equal("W03", req.DrawingPos.WallCode);
+        Assert.Equal("SM", req.DrawingPos.WallCode);
         Assert.Equal(3.120, req.DrawingPos.U);
         Assert.Equal(SeamTypeKind.Line, req.SeamType);
         Assert.Equal("DXF-CORR-T12", req.SectionDxfId);
         Assert.Equal("INSPECT-STD-01", req.InspectionProfileId);
         Assert.Equal(400, req.StandoffMm);
         Assert.Equal(400, req.WorkingDistanceMm);
-        Assert.Equal("CT1-L2-W03-ST04", req.AnchorGroupId);
+        Assert.Equal("CT1-L2-SM-ST04", req.AnchorGroupId);
         Assert.Equal(2, req.SeqInGroup);
     }
 
