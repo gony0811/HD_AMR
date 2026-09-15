@@ -47,6 +47,23 @@ public class InspectionRecipeResolverTests
         Assert.Equal(expected, recipeId);
     }
 
+    // 경량 헬퍼 ResolveRecipeId(seam, wallCode) — request 없이 매핑(§8.5.1). UI 매핑 레퍼런스가 사용.
+    [Theory]
+    [InlineData(SeamTypeKind.Line, "B", "LINE-FLOOR")]
+    [InlineData(SeamTypeKind.Line, "F", "LINE-WALL")]      // 마구리 → 수직벽
+    [InlineData(SeamTypeKind.Cross, "T", "CROSS4-CEIL")]
+    [InlineData(SeamTypeKind.Corner, "PM", "CORNER3")]
+    public void ResolveRecipeId_MatchesTryResolve(SeamTypeKind seamType, string wallCode, string expected)
+    {
+        Assert.Equal(expected, InspectionRecipeResolver.ResolveRecipeId(seamType, wallCode));
+    }
+
+    [Fact]
+    public void ResolveRecipeId_UndefinedWallCode_ReturnsNull()
+    {
+        Assert.Null(InspectionRecipeResolver.ResolveRecipeId(SeamTypeKind.Line, "W03"));
+    }
+
     // CORNER: 면 자세 무관 단일 CORNER3 (§8.5.1 (3)).
     [Theory]
     [InlineData("B")]

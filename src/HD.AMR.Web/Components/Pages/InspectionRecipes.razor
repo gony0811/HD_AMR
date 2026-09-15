@@ -14,8 +14,9 @@
     ACS <code>startWeldInspection</code> 의 <code>(seamType, wall_code)</code> 조합으로 선택되는 검사 타입 11종
     (사양 §8.5.1, INSPECTION_TYPES.md §5)의 실행 구성입니다.
     <b>Enabled</b> 가 꺼진 레시피로 매핑된 액션은 FAILED + inspectionFailed 로 보고됩니다 —
-    실기 E2E 검증 후에만 켜세요. CROSS4-* 의 <b>PatternJson</b> 은 십자 경유점 생성 파라미터
-    (<code>{"ArmMm":180,"SpacingMm":30,"PerpRzDeg":-90}</code>), CORNER3 은 티칭 슬롯(corner3.*)을 순회합니다.
+    실기 E2E 검증 후에만 켜세요. 경유점(어디를)은 여기 없습니다 — 도면별 티칭(<code>InspectionProfile</code>) 소관이며,
+    <a href="inspection-map">검사 매핑 요약</a> 에서 레시피↔티칭 연결을 확인하세요.
+    행의 <b>고급</b> 을 펼치면 접근 자세 키·standoff·Surface 강제 등 세부 실행값을 편집할 수 있습니다.
 </p>
 
 @if (!string.IsNullOrEmpty(_msg))
@@ -32,11 +33,12 @@
     <table class="table table-sm align-middle">
         <thead>
             <tr>
+                <th style="width:34px"></th>
                 <th style="min-width:130px">레시피 ID</th>
                 <th style="min-width:180px">표시명</th>
                 <th style="width:70px" class="text-center">Enabled</th>
-                <th style="min-width:220px">StepKeysJson</th>
-                <th style="min-width:220px">PatternJson</th>
+                <th style="min-width:200px">StepKeysJson</th>
+                <th style="min-width:200px">PatternJson</th>
                 <th style="width:110px">비전 실패율 상한</th>
                 <th style="width:190px"></th>
             </tr>
@@ -45,6 +47,12 @@
             @foreach (var row in _rows)
             {
                 <tr @key="row.Id">
+                    <td class="text-center">
+                        <button class="btn btn-sm btn-link p-0 text-decoration-none" title="고급 설정 펼치기/접기"
+                                @onclick="() => ToggleExpand(row.Id)">
+                            @(IsExpanded(row.Id) ? "▾" : "▸")
+                        </button>
+                    </td>
                     <td><code>@row.Id</code></td>
                     <td style="font-size:.85rem">@row.DisplayName</td>
                     <td class="text-center">
@@ -64,10 +72,61 @@
                         </button>
                     </td>
                 </tr>
+                @if (IsExpanded(row.Id))
+                {
+                    <tr @key="@(row.Id + "-adv")" class="table-light">
+                        <td></td>
+                        <td colspan="7">
+                            <div class="row g-3 py-2" style="font-size:.8rem">
+                                <div class="col-auto">
+                                    <label class="form-label mb-1 text-muted">접근 자세 티칭 키</label>
+                                    <input class="form-control form-control-sm font-monospace" style="width:200px"
+                                           placeholder="(빈 값 = 스텝 기본)" @bind="row.ApproachTeachingKey" />
+                                    <div class="form-text">면 접근 코봇 자세(<code>TeachingPosition.Key</code>) 참조</div>
+                                </div>
+                                <div class="col-auto">
+                                    <label class="form-label mb-1 text-muted">Standoff 폴백 [mm]</label>
+                                    <input type="number" step="10" min="0" style="width:130px"
+                                           class="form-control form-control-sm" @bind="row.DefaultStandoffMm" />
+                                    <div class="form-text">action.standoffMm 부재/0 시</div>
+                                </div>
+                                <div class="col-auto">
+                                    <label class="form-label mb-1 text-muted">카메라 목표거리 [mm]</label>
+                                    <input type="number" step="10" min="0" style="width:150px"
+                                           class="form-control form-control-sm" placeholder="(빈 값 = 전역 400)"
+                                           @bind="row.CameraTargetDistanceMm" />
+                                    <div class="form-text">action.workingDistanceMm 부재 시</div>
+                                </div>
+                                <div class="col-auto">
+                                    <label class="form-label mb-1 text-muted">Surface 강제</label>
+                                    <select class="form-select form-select-sm" style="width:160px"
+                                            value="@SurfaceValue(row)"
+                                            @onchange="e => SetSurface(row, e.Value?.ToString())">
+                                        <option value="">자동(|θ| 판정)</option>
+                                        <option value="0">0 · Flat</option>
+                                        <option value="1">1 · Corner</option>
+                                        <option value="2">2 · Corrugation</option>
+                                    </select>
+                                    <div class="form-text">경유점 촬영/조명 키 (부록 D.3)</div>
+                                </div>
+                                <div class="col-auto">
+                                    <label class="form-label mb-1 text-muted">정렬 재시도</label>
+                                    <input type="number" step="1" min="0" style="width:110px"
+                                           class="form-control form-control-sm" @bind="row.AlignRetryCount" />
+                                    <div class="form-text">정렬 스텝 실패 시 (0=없음)</div>
+                                </div>
+                                <div class="col-12 text-muted">
+                                    seamType=<b>@row.SeamType</b>, 면자세=<b>@row.Orientation</b> ·
+                                    세부값 편집 후 위 행의 <b>저장</b> 을 누르세요(같은 레시피).
+                                </div>
+                            </div>
+                        </td>
+                    </tr>
+                }
             }
             @if (_rows.Count == 0)
             {
-                <tr><td colspan="7" class="text-center text-muted py-3">레시피가 없습니다 — 앱 재기동 시 자동 시드됩니다.</td></tr>
+                <tr><td colspan="8" class="text-center text-muted py-3">레시피가 없습니다 — 앱 재기동 시 자동 시드됩니다.</td></tr>
             }
         </tbody>
     </table>
@@ -75,11 +134,26 @@
 
 @code {
     private List<InspectionRecipe> _rows = new();
+    private readonly HashSet<string> _expanded = new();
     private bool _busy;
     private string? _msg;
     private bool _isErr;
 
     protected override async Task OnInitializedAsync() => await Reload();
+
+    private bool IsExpanded(string id) => _expanded.Contains(id);
+
+    private void ToggleExpand(string id)
+    {
+        if (!_expanded.Remove(id)) _expanded.Add(id);
+    }
+
+    private static string SurfaceValue(InspectionRecipe row) =>
+        row.SurfaceOverride?.ToString() ?? "";
+
+    /// <summary>Surface 강제 select → byte?(빈 값=자동). 0/1/2 외 값은 자동으로 정규화.</summary>
+    private static void SetSurface(InspectionRecipe row, string? raw) =>
+        row.SurfaceOverride = byte.TryParse(raw, out var b) && b <= 2 ? b : null;
 
     private async Task Reload()
     {
@@ -94,12 +168,13 @@
         }
     }
 
-    /// <summary>저장 전 JSON 필드 형식 검증 — 잘못된 JSON 이 DB 에 들어가 실행 시점(액션 FAILED)에야
+    /// <summary>저장 전 JSON·수치 필드 형식 검증 — 잘못된 값이 DB 에 들어가 실행 시점(액션 FAILED)에야
     /// 드러나는 것을 막는다. 빈 문자열은 null 로 정규화.</summary>
     private static string? ValidateRow(InspectionRecipe row)
     {
         row.StepKeysJson = string.IsNullOrWhiteSpace(row.StepKeysJson) ? null : row.StepKeysJson.Trim();
         row.PatternJson = string.IsNullOrWhiteSpace(row.PatternJson) ? null : row.PatternJson.Trim();
+        row.ApproachTeachingKey = row.ApproachTeachingKey?.Trim() ?? "";
 
         if (row.StepKeysJson is not null)
         {
@@ -122,6 +197,14 @@
         }
         if (row.VisionFailRatioMax is < 0 or > 1)
             return "비전 실패율 상한은 0~1 범위여야 합니다.";
+        if (row.DefaultStandoffMm < 0)
+            return "Standoff 폴백은 0 이상이어야 합니다.";
+        if (row.CameraTargetDistanceMm is <= 0)
+            return "카메라 목표거리는 0 보다 커야 합니다(빈 값 = 전역 기본).";
+        if (row.SurfaceOverride is > 2)
+            return "Surface 강제값은 0(Flat)/1(Corner)/2(Corrugation) 또는 자동(빈 값)만 허용합니다.";
+        if (row.AlignRetryCount < 0)
+            return "정렬 재시도 횟수는 0 이상이어야 합니다.";
         return null;
     }
 

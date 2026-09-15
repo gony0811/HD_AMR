@@ -1,3 +1,4 @@
+using System.Text.Json;
 using HD.AMR.App.Data;
 using HD.AMR.App.Data.Entities;
 using HD.AMR.App.Service.Inspection;
@@ -5,6 +6,20 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
 namespace HD.AMR.App.Service;
+
+/// <summary>
+/// 검사 매핑 요약 뷰(레시피 관리 UI)용 읽기 모델 — 도면 1건과 그 <b>최신</b> 티칭 프로필의 상태.
+/// 실기 액션의 경유점 조회 경로(<c>sectionDxfId → Drawing → 최신 InspectionProfile</c>)와 동일한 규칙으로
+/// 산출한다 — 어느 도면이 검사 실행 가능한 경유점을 갖췄는지(HasProfile·WaypointCount) 한눈에 본다.
+/// </summary>
+public record DrawingTeachingSummary(
+    int DrawingId,
+    string DrawingName,
+    string FileName,
+    bool HasProfile,
+    string? ProfileName,
+    int WaypointCount,
+    DateTime? TaughtAt);
 
 /// <summary>
 /// 검사 레시피(<see cref="InspectionRecipe"/>, 11종 카탈로그) CRUD + 기동 시드.
@@ -27,6 +42,50 @@ public class InspectionRecipeService
 
     public Task<InspectionRecipe?> GetAsync(string id, CancellationToken ct = default) =>
         _db.InspectionRecipes.AsNoTracking().FirstOrDefaultAsync(r => r.Id == id, ct);
+
+    /// <summary>도면별 최신 티칭 프로필 요약(검사 매핑 요약 뷰용). 실기 경유점 조회와 같은 규칙:
+    /// 도면당 <see cref="InspectionProfile.UpdatedAt"/> 최신 1건 = 액션이 실제로 사용할 프로필.
+    /// 경유점 수는 <see cref="InspectionProfile.WaypointsJson"/> 배열 길이로 센다(파싱 실패 시 0).</summary>
+    public async Task<List<DrawingTeachingSummary>> ListTeachingSummaryAsync(CancellationToken ct = default)
+    {
+        var drawings = await _db.Drawings.AsNoTracking()
+            .OrderBy(d => d.Name).ThenBy(d => d.FileName)
+            .Select(d => new { d.Id, d.Name, d.FileName })
+            .ToListAsync(ct);
+
+        var result = new List<DrawingTeachingSummary>(drawings.Count);
+        foreach (var d in drawings)
+        {
+            var profile = await _db.InspectionProfiles.AsNoTracking()
+                .Where(p => p.DrawingId == d.Id)
+                .OrderByDescending(p => p.UpdatedAt)
+                .Select(p => new { p.Name, p.WaypointsJson, p.UpdatedAt })
+                .FirstOrDefaultAsync(ct);
+
+            result.Add(new DrawingTeachingSummary(
+                d.Id, d.Name, d.FileName,
+                HasProfile: profile is not null,
+                ProfileName: profile?.Name,
+                WaypointCount: CountWaypoints(profile?.WaypointsJson),
+                TaughtAt: profile?.UpdatedAt));
+        }
+        return result;
+    }
+
+    /// <summary>WaypointsJson(배열) 원소 수. null/빈/비배열/파싱 실패는 0.</summary>
+    private static int CountWaypoints(string? waypointsJson)
+    {
+        if (string.IsNullOrWhiteSpace(waypointsJson)) return 0;
+        try
+        {
+            using var doc = JsonDocument.Parse(waypointsJson);
+            return doc.RootElement.ValueKind == JsonValueKind.Array ? doc.RootElement.GetArrayLength() : 0;
+        }
+        catch (JsonException)
+        {
+            return 0;
+        }
+    }
 
     public async Task SaveAsync(InspectionRecipe recipe, CancellationToken ct = default)
     {

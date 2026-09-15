@@ -25,25 +25,24 @@ public static class InspectionRecipeResolver
     /// <summary>레시피 id 유도. 실패 시 error 에 사유(계약 위반 — orderValidationError 계열).</summary>
     public static bool TryResolve(WeldInspectionRequest request, out string? recipeId, out string? error)
     {
-        recipeId = null;
-        error = null;
+        recipeId = ResolveRecipeId(request.SeamType, request.DrawingPos.WallCode);
+        error = recipeId is null
+            ? $"미정의 wall_code '{request.DrawingPos.WallCode}' — 정본 10코드(B/T/SM/PM/F/A/SL/PL/SU/PU)만 수용 (§8.5.1)"
+            : null;
+        return recipeId is not null;
+    }
 
+    /// <summary>(seamType × wall_code) → 레시피 id (§8.5.1 매핑표). 미정의 wall_code 는 null.
+    /// UI 매핑 레퍼런스 등 request 없이 조회할 때 쓰는 경량 경로 — <see cref="TryResolve"/> 가 위임한다.</summary>
+    public static string? ResolveRecipeId(SeamTypeKind seamType, string wallCode)
+    {
         // CORNER: 면 자세 무관 단일 레시피(§8.5.1 (3)) — wall_code 는 여전히 정의 코드여야 한다.
-        var orientation = ResolveOrientation(request.DrawingPos.WallCode);
-        if (orientation is null)
-        {
-            error = $"미정의 wall_code '{request.DrawingPos.WallCode}' — 정본 10코드(B/T/SM/PM/F/A/SL/PL/SU/PU)만 수용 (§8.5.1)";
-            return false;
-        }
+        var orientation = ResolveOrientation(wallCode);
+        if (orientation is null) return null;
+        if (seamType == SeamTypeKind.Corner) return RecipeIds.Corner3;
 
-        if (request.SeamType == SeamTypeKind.Corner)
-        {
-            recipeId = RecipeIds.Corner3;
-            return true;
-        }
-
-        var prefix = request.SeamType == SeamTypeKind.Line ? "LINE" : "CROSS4";
-        recipeId = orientation switch
+        var prefix = seamType == SeamTypeKind.Line ? "LINE" : "CROSS4";
+        return orientation switch
         {
             SurfaceOrientation.Floor => $"{prefix}-FLOOR",
             SurfaceOrientation.Ceiling => $"{prefix}-CEIL",
@@ -52,7 +51,6 @@ public static class InspectionRecipeResolver
             SurfaceOrientation.ChamferUpper => $"{prefix}-CHMR-UP",
             _ => null,
         };
-        return recipeId is not null;
     }
 
     /// <summary>CORNER3 좌/우 거울 side 판별 — 코너 스텝의 티칭 슬롯 접두사(corner3.L/R) 선택 키.
