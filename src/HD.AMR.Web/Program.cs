@@ -210,6 +210,7 @@ CREATE TABLE IF NOT EXISTS InspectionProfiles (
     ThMax REAL NOT NULL,
     SettleDelaySec REAL NOT NULL DEFAULT 0,
     MoveHomeFirst INTEGER NOT NULL,
+    SeamType TEXT NOT NULL DEFAULT 'LINE',
     WaypointsJson TEXT NOT NULL,
     CreatedAt TEXT NOT NULL,
     UpdatedAt TEXT NOT NULL,
@@ -227,6 +228,16 @@ CREATE INDEX IF NOT EXISTS IX_InspectionProfiles_DrawingId ON InspectionProfiles
     {
         db.Database.ExecuteSqlRaw(
             "ALTER TABLE InspectionProfiles ADD COLUMN SettleDelaySec REAL NOT NULL DEFAULT 0;");
+    }
+
+    // SeamType 컬럼(LINE/CROSS 티칭 구분)도 동일 패턴으로 후방호환 추가.
+    var hasSeamType = db.Database
+        .SqlQueryRaw<long>("SELECT COUNT(*) AS Value FROM pragma_table_info('InspectionProfiles') WHERE name = 'SeamType'")
+        .AsEnumerable().First() > 0;
+    if (!hasSeamType)
+    {
+        db.Database.ExecuteSqlRaw(
+            "ALTER TABLE InspectionProfiles ADD COLUMN SeamType TEXT NOT NULL DEFAULT 'LINE';");
     }
 
     // Backward-compatible schema add for TeachingPositions (고정 슬롯형 티칭 위치; 기존 데이터 보존).

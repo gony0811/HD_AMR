@@ -109,9 +109,12 @@
                         }
                     </td>
                     <td class="text-muted">
-                        @(r.SeamType == SeamTypeKind.Corner
-                            ? "고정 티칭 슬롯 corner3.* (도면 무관)"
-                            : "도면 티칭 프로필 (sectionDxfId → 최신 InspectionProfile)")
+                        @(r.SeamType switch
+                        {
+                            SeamTypeKind.Corner => "고정 티칭 슬롯 corner3.* (도면 무관)",
+                            SeamTypeKind.Cross => "레시피 PatternJson 생성 (교차점=정렬 검출) · 도면 CROSS 프로필 필요",
+                            _ => "도면 LINE 티칭 프로필 (sectionDxfId → 최신 InspectionProfile)"
+                        })
                     </td>
                 </tr>
             }
@@ -136,6 +139,7 @@
                 <th style="min-width:150px">도면명 (Name)</th>
                 <th style="min-width:150px">파일명</th>
                 <th style="min-width:150px">최신 프로필</th>
+                <th class="text-center" style="width:80px">타입</th>
                 <th class="text-center" style="width:90px">경유점 수</th>
                 <th style="width:160px">티칭 시각(UTC)</th>
                 <th class="text-center" style="width:110px">상태</th>
@@ -148,6 +152,7 @@
                     <td><code>@d.DrawingName</code></td>
                     <td class="text-muted">@d.FileName</td>
                     <td>@(d.ProfileName ?? "—")</td>
+                    <td class="text-center">@(d.HasProfile ? (string.IsNullOrWhiteSpace(d.SeamType) ? "LINE" : d.SeamType) : "—")</td>
                     <td class="text-center">@d.WaypointCount</td>
                     <td class="text-muted">@(d.TaughtAt?.ToString("yyyy-MM-dd HH:mm") ?? "—")</td>
                     <td class="text-center">
@@ -168,7 +173,7 @@
             }
             @if (_teaching.Count == 0)
             {
-                <tr><td colspan="6" class="text-center text-muted py-3">등록된 도면이 없습니다 — 도면 업로드/티칭 후 표시됩니다.</td></tr>
+                <tr><td colspan="7" class="text-center text-muted py-3">등록된 도면이 없습니다 — 도면 업로드/티칭 후 표시됩니다.</td></tr>
             }
         </tbody>
     </table>

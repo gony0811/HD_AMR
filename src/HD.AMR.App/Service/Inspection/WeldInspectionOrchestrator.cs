@@ -128,10 +128,12 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
 
         // 6) 사전 티칭 경유점 조회: sectionDxfId → Drawing(이름 매칭) → 최신 InspectionProfile.
         //    CORNER 는 도면 프로필을 쓰지 않는다(고정 티칭 슬롯 corner3.* 직접 순회) — 조회 생략.
+        //    seamType(LINE/CROSS)로 필터해 LINE 액션이 CROSS 티칭 프로필을 잡는 혼선을 막는다.
         InspectionProfile? profile = null;
         if (recipe.SeamType != SeamTypeKind.Corner)
         {
-            var (found, profileError) = await FindProfileAsync(db, req.SectionDxfId, ct);
+            var wantSeam = recipe.SeamType == SeamTypeKind.Cross ? "CROSS" : "LINE";
+            var (found, profileError) = await FindProfileAsync(db, req.SectionDxfId, wantSeam, ct);
             if (found is null)
                 return InspectionActionResult.Fail("inspectionFailed", profileError!);
             profile = found;
@@ -283,7 +285,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
     /// <summary>sectionDxfId 로 로컬 Drawing 을 찾고(이름 정확 일치 → 파일명 매칭 순), 그 도면의
     /// 최신 티칭설정(InspectionProfile)을 반환. 없으면 (null, 사유).</summary>
     private static async Task<(InspectionProfile? Profile, string? Error)> FindProfileAsync(
-        HdAmrDbContext db, string sectionDxfId, CancellationToken ct)
+        HdAmrDbContext db, string sectionDxfId, string seamType, CancellationToken ct)
     {
         var drawing = await db.Drawings.AsNoTracking()
                           .FirstOrDefaultAsync(d => d.Name == sectionDxfId, ct)
@@ -295,11 +297,11 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             return (null, $"no local drawing for sectionDxfId='{sectionDxfId}' — 도면 업로드/이름 정합 필요");
 
         var profile = await db.InspectionProfiles.AsNoTracking()
-            .Where(p => p.DrawingId == drawing.Id)
+            .Where(p => p.DrawingId == drawing.Id && p.SeamType == seamType)
             .OrderByDescending(p => p.UpdatedAt)
             .FirstOrDefaultAsync(ct);
         if (profile is null)
-            return (null, $"no taught profile for sectionDxfId='{sectionDxfId}' (drawing '{drawing.Name}') — 온보드 티칭 필요");
+            return (null, $"no taught {seamType} profile for sectionDxfId='{sectionDxfId}' (drawing '{drawing.Name}') — 온보드 {seamType} 티칭 필요");
 
         return (profile, null);
     }

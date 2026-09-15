@@ -24,6 +24,10 @@ public class InspectionProfile
     public double SettleDelaySec { get; set; }   // 이동 후 진동 흡수 대기(초)
     public bool MoveHomeFirst { get; set; }
 
+    /// <summary>티칭 타입 — "LINE"(직선 seam 폴리라인 솎기) 또는 "CROSS"(십자 4-arm 생성).
+    /// §8.5.1 seamType 과 정합. CORNER 는 도면 프로필을 쓰지 않으므로 여기 없음. 기본 "LINE".</summary>
+    public string SeamType { get; set; } = "LINE";
+
     /// <summary>경유점 목록(<see cref="InspectionWaypoint"/>)을 JSON 직렬화한 문자열.</summary>
     public string WaypointsJson { get; set; } = "[]";
 

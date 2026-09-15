@@ -10,7 +10,9 @@ namespace HD.AMR.App.Service;
 
 public record LineSegment(double X1, double Y1, double X2, double Y2);
 
-public record PointMarker(double X, double Y);
+/// <summary>도면 평면 점. X=로봇 x, Y=로봇 z(=DXF Y). RzDeg=툴 RZ 추가 회전[deg]
+/// (LINE 은 0, CROSS 교차 arm 은 −90 등) — CROSS 티칭 경유점이 회전값을 함께 나른다.</summary>
+public record PointMarker(double X, double Y, double RzDeg = 0);
 
 public class DrawingService
 {
@@ -181,6 +183,7 @@ public class DrawingService
                 existing.ThMax = profile.ThMax;
                 existing.SettleDelaySec = profile.SettleDelaySec;
                 existing.MoveHomeFirst = profile.MoveHomeFirst;
+                existing.SeamType = profile.SeamType;
                 existing.WaypointsJson = profile.WaypointsJson;
                 existing.UpdatedAt = now;
                 profile = existing;

@@ -18,6 +18,7 @@ public record DrawingTeachingSummary(
     string FileName,
     bool HasProfile,
     string? ProfileName,
+    string? SeamType,
     int WaypointCount,
     DateTime? TaughtAt);
 
@@ -59,13 +60,14 @@ public class InspectionRecipeService
             var profile = await _db.InspectionProfiles.AsNoTracking()
                 .Where(p => p.DrawingId == d.Id)
                 .OrderByDescending(p => p.UpdatedAt)
-                .Select(p => new { p.Name, p.WaypointsJson, p.UpdatedAt })
+                .Select(p => new { p.Name, p.SeamType, p.WaypointsJson, p.UpdatedAt })
                 .FirstOrDefaultAsync(ct);
 
             result.Add(new DrawingTeachingSummary(
                 d.Id, d.Name, d.FileName,
                 HasProfile: profile is not null,
                 ProfileName: profile?.Name,
+                SeamType: profile?.SeamType,
                 WaypointCount: CountWaypoints(profile?.WaypointsJson),
                 TaughtAt: profile?.UpdatedAt));
         }

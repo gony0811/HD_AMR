@@ -2,6 +2,7 @@
 @rendermode InteractiveServer
 @using HD.AMR.App.Data.Entities
 @using HD.AMR.App.Service
+@using HD.AMR.App.Service.Inspection
 @using HD.AMR.App.Communication
 @using HD.AMR.App.Communication.Vision
 @using Microsoft.JSInterop
@@ -178,21 +179,75 @@
         </div>
 
         <h3>경유점 (Inspection Waypoints)</h3>
+
+        @* ── 티칭 타입(seamType) 선택 ── *@
         <div class="actions">
-            <label class="form-label me-1">직선 간격(mm)</label>
-            <input type="number" step="1" min="0" style="width:80px" @bind="_spacingMm" @bind:after="RecomputeThinned" />
-            <label class="form-label ms-3 me-1">코로게이션 판정각(°)</label>
-            <input type="number" step="1" min="0" style="width:80px" @bind="_corrugThresholdDeg" @bind:after="RecomputeThinned" />
-            <label class="form-label ms-3 me-1">코로게이션 분할각(°)</label>
-            <input type="number" step="1" min="0" style="width:80px" @bind="_corrugStepDeg" @bind:after="RecomputeThinned" />
-            <span class="ms-2">전체 @(previewPoints.Count)개 → 솎은 @(_thinned.Count)개 → 실행 @(IncludedCount())개 (|θ| ≤ @F(_thMax)° 만)</span>
-        </div>
-        <p class="hint">분할: 직선 구간은 '직선 간격(mm)' 거리로, 코로게이션 구간(이전 점↔앞 점 선분의 |수평 대비 기울기| ≥ '판정각')은 '분할각(°)'(그 기울기가 그만큼 바뀔 때마다)으로 솎습니다. 표의 행을 클릭하면 도면에 빨간색으로 표시되고, X/Y/Z/θ 칸은 직접 수정할 수 있습니다. θ를 직접 입력하면 자동 계산값 대신 그 값이 적용됩니다(실행·ry에 즉시 반영). 각 행의 '이동' 버튼으로 해당 경유점으로 개별 이동합니다. ⚠ 간격·판정각·분할각을 바꾸면 다시 솎여 수정값(θ 포함)이 초기화됩니다.
-            @if (_selectedWpIndex >= 0 && _selectedWpIndex < _thinned.Count)
+            <label class="form-label me-1">티칭 타입</label>
+            <select class="form-select d-inline-block" style="width:220px" @bind="_seamType" @bind:after="OnSeamTypeChanged">
+                <option value="LINE">LINE — 직선 seam(폴리라인 솎기)</option>
+                <option value="CROSS">CROSS — 십자 4-arm(패턴 생성)</option>
+            </select>
+            @if (_seamType == "CROSS")
             {
-                <span> — 선택: #@(_selectedWpIndex + 1) (X=@F(_thinned[_selectedWpIndex].X), Y=@F(EffectiveY(_selectedWpIndex)), Z=@F(_thinned[_selectedWpIndex].Y))</span>
+                <span class="ms-2 text-muted">교차점 중심으로 십자 경유점을 생성합니다. 런타임(ACS)은 레시피 PatternJson·정렬 검출점을 사용하며, 이 티칭은 도면 기준 미리보기·수동 실행·프로필 저장용입니다.</span>
             }
-        </p>
+        </div>
+
+        @if (_seamType == "LINE")
+        {
+            <div class="actions">
+                <label class="form-label me-1">직선 간격(mm)</label>
+                <input type="number" step="1" min="0" style="width:80px" @bind="_spacingMm" @bind:after="RecomputeThinned" />
+                <label class="form-label ms-3 me-1">코로게이션 판정각(°)</label>
+                <input type="number" step="1" min="0" style="width:80px" @bind="_corrugThresholdDeg" @bind:after="RecomputeThinned" />
+                <label class="form-label ms-3 me-1">코로게이션 분할각(°)</label>
+                <input type="number" step="1" min="0" style="width:80px" @bind="_corrugStepDeg" @bind:after="RecomputeThinned" />
+                <span class="ms-2">전체 @(previewPoints.Count)개 → 솎은 @(_thinned.Count)개 → 실행 @(IncludedCount())개 (|θ| ≤ @F(_thMax)° 만)</span>
+            </div>
+            <p class="hint">분할: 직선 구간은 '직선 간격(mm)' 거리로, 코로게이션 구간(이전 점↔앞 점 선분의 |수평 대비 기울기| ≥ '판정각')은 '분할각(°)'(그 기울기가 그만큼 바뀔 때마다)으로 솎습니다. 표의 행을 클릭하면 도면에 빨간색으로 표시되고, X/Y/Z/θ 칸은 직접 수정할 수 있습니다. θ를 직접 입력하면 자동 계산값 대신 그 값이 적용됩니다(실행·ry에 즉시 반영). 각 행의 '이동' 버튼으로 해당 경유점으로 개별 이동합니다. ⚠ 간격·판정각·분할각을 바꾸면 다시 솎여 수정값(θ 포함)이 초기화됩니다.
+                @if (_selectedWpIndex >= 0 && _selectedWpIndex < _thinned.Count)
+                {
+                    <span> — 선택: #@(_selectedWpIndex + 1) (X=@F(_thinned[_selectedWpIndex].X), Y=@F(EffectiveY(_selectedWpIndex)), Z=@F(_thinned[_selectedWpIndex].Y))</span>
+                }
+            </p>
+        }
+        else
+        {
+            @* ── CROSS 십자 생성 패널 ── *@
+            <div class="actions" style="border:1px dashed #999; border-radius:6px; padding:8px; max-width:900px">
+                <div class="row g-2 align-items-end">
+                    <div class="col-auto"><label class="form-label">교차점 X(mm)</label>
+                        <input class="form-control" type="number" step="0.1" style="width:120px" @bind="_crossCenterX" /></div>
+                    <div class="col-auto"><label class="form-label">교차점 Z(mm)</label>
+                        <input class="form-control" type="number" step="0.1" style="width:120px" @bind="_crossCenterZ" /></div>
+                    <div class="col-auto">
+                        <button class="btn btn-outline-secondary" @onclick="SetCrossCenterFromSelection"
+                                disabled="@(_selectedWpIndex < 0 || _selectedWpIndex >= _thinned.Count)"
+                                title="표에서 선택한 경유점 좌표를 교차점 중심으로">선택점을 중심으로</button>
+                    </div>
+                </div>
+                <div class="row g-2 align-items-end mt-1">
+                    <div class="col-auto"><label class="form-label">arm 길이(mm)</label>
+                        <input class="form-control" type="number" step="1" min="1" style="width:110px" @bind="_crossArmMm" /></div>
+                    <div class="col-auto"><label class="form-label">arm 간격(mm)</label>
+                        <input class="form-control" type="number" step="1" min="1" style="width:110px" @bind="_crossSpacingMm" /></div>
+                    <div class="col-auto"><label class="form-label">교차 arm 회전 Rz(°)</label>
+                        <input class="form-control" type="number" step="1" style="width:130px" @bind="_crossPerpRzDeg" /></div>
+                    <div class="col-auto">
+                        <button class="btn btn-primary" @onclick="GenerateCrossWaypoints">십자 경유점 생성</button>
+                    </div>
+                    <div class="col-auto">
+                        <span class="ms-1">생성 @(_thinned.Count)개 · 실행 @(IncludedCount())개</span>
+                    </div>
+                </div>
+            </div>
+            <p class="hint">주 arm(X축)은 −arm→+arm, 교차 arm(Z축)은 회전 Rz 적용 후 −arm→+arm 으로 생성됩니다(중심 교차점은 3회 촬영). 생성 후 표에서 개별 X/Y/Z·Surface 를 조정할 수 있습니다. ⚠ '생성'을 다시 누르면 표가 새로 채워집니다(수동 편집 초기화). 각 arm 회전값(Rz)은 경유점에 함께 저장되어 수동 실행 시 pose 에 반영됩니다.
+                @if (_selectedWpIndex >= 0 && _selectedWpIndex < _thinned.Count)
+                {
+                    <span> — 선택: #@(_selectedWpIndex + 1) (X=@F(_thinned[_selectedWpIndex].X), Y=@F(EffectiveY(_selectedWpIndex)), Z=@F(_thinned[_selectedWpIndex].Y), Rz=@F(_thinned[_selectedWpIndex].RzDeg))</span>
+                }
+            </p>
+        }
 
         @* ── 코봇 실행 패널 ── *@
         <div class="cobot-run" style="margin:10px 0; padding:10px; border:1px solid #ccc; border-radius:6px; max-width:900px">
@@ -266,7 +321,7 @@
                         <option value="">— 저장된 설정 선택 —</option>
                         @foreach (var p in _profiles)
                         {
-                            <option value="@p.Id">@p.Name</option>
+                            <option value="@p.Id">[@(string.IsNullOrWhiteSpace(p.SeamType) ? "LINE" : p.SeamType)] @p.Name</option>
                         }
                     </select>
                 </div>
@@ -282,7 +337,7 @@
                 @if (sel is not null)
                 {
                     <div class="col-auto">
-                        <span class="hint">경유점 @WaypointCount(sel)개 · 저장 @sel.UpdatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</span>
+                        <span class="hint">[@(string.IsNullOrWhiteSpace(sel.SeamType) ? "LINE" : sel.SeamType)] 경유점 @WaypointCount(sel)개 · 저장 @sel.UpdatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</span>
                     </div>
                 }
             </div>
@@ -369,6 +424,15 @@
     private string svgViewBox = "0 0 100 100";
     private double strokeWidth = 0.5;
     private double pointRadius = 1.0;
+
+    // 티칭 타입 — "LINE"(폴리라인 솎기) / "CROSS"(십자 4-arm 생성). §8.5.1 seamType 정합.
+    private string _seamType = "LINE";
+    // CROSS 생성 파라미터(레시피 PatternJson 기본값과 동일 의미). 도면 좌표계 교차점 중심.
+    private double _crossArmMm = 180;          // 교차점에서 각 arm 끝까지 [mm]
+    private double _crossSpacingMm = 30;       // arm 위 경유점 간격 [mm]
+    private double _crossPerpRzDeg = -90;      // 교차 arm 촬상 툴 RZ 추가 회전 [deg]
+    private double _crossCenterX;              // 교차점 X (로봇 x, mm)
+    private double _crossCenterZ;              // 교차점 Z (로봇 z = DXF Y, mm)
 
     // 경유점 솎기 + 코봇 실행
     private double _spacingMm = 10;            // 직선 구간 분할 간격(mm)
@@ -726,6 +790,52 @@
         _maskRemoved.Clear();   // 표가 통째로 바뀌면 마스크 복원 목록은 무효
     }
 
+    // 티칭 타입 전환. LINE 으로 돌아가면 도면 미리보기로 재솎기, CROSS 로 가면 생성 대기(표 유지).
+    private void OnSeamTypeChanged()
+    {
+        if (_seamType == "LINE")
+            RecomputeThinned();
+    }
+
+    // 표에서 선택한 경유점 좌표를 십자 교차점 중심으로 채운다.
+    private void SetCrossCenterFromSelection()
+    {
+        if (_selectedWpIndex < 0 || _selectedWpIndex >= _thinned.Count) return;
+        _crossCenterX = _thinned[_selectedWpIndex].X;
+        _crossCenterZ = _thinned[_selectedWpIndex].Y;
+    }
+
+    // CROSS 십자 4-arm 경유점 생성 — CrossPatternGenerator(프레임 원점 기준)를 교차점 중심으로 평행이동.
+    // 생성점은 RzDeg 를 PointMarker 에 실어 저장/실행에 그대로 전달한다.
+    private void GenerateCrossWaypoints()
+    {
+        _profileMessage = null;
+        _profileIsError = false;
+        var pattern = new CrossPatternParams(_crossArmMm, _crossSpacingMm, _crossPerpRzDeg);
+        if (!CrossPatternGenerator.TryGenerate(pattern, out var wps, out var err))
+        {
+            _profileIsError = true;
+            _profileMessage = $"십자 생성 실패: {err}";
+            return;
+        }
+
+        _thinned = wps.Select(w => new PointMarker(_crossCenterX + w.X, _crossCenterZ + w.Z, w.RzDeg)).ToList();
+        _selectedWpIndex = -1;
+        _thetaOverrides.Clear();
+        _yOverrides.Clear();
+        _surfaceTypeOverrides.Clear();
+        _maskRemoved.Clear();
+        _visionResults.Clear();
+        // 십자 경유점은 θ(pose ry)=0 고정 — 툴 정렬은 프레임+Rz 가 담당한다. 자동 heading 계산을 막기 위해
+        // θ 를 수동 0 으로 박아 실행 대상(|θ|≤th_max)에 항상 포함되게 한다.
+        for (int i = 0; i < _thinned.Count; i++) _thetaOverrides[i] = 0.0;
+        ComputeViewBox();
+        _profileMessage = $"십자 경유점 {_thinned.Count}개 생성 (arm={F(_crossArmMm)}mm, 간격={F(_crossSpacingMm)}mm, Rz={F(_crossPerpRzDeg)}°)";
+    }
+
+    // 경유점 RzDeg(툴 RZ 추가 회전). PointMarker 가 값을 나른다(없으면 0).
+    private double EffectiveRz(int i) => (i >= 0 && i < _thinned.Count) ? _thinned[i].RzDeg : 0.0;
+
     // 직선/코로게이션 구간을 구분해 분할한다.
     //  · 코로게이션 판정: 현재 점 i의 이전 점(i-1)과 앞 점(i+1)이 이루는 선분 i-1→i+1 이 수평(X축)과
     //    이루는 각(중앙차분 기울기)의 절댓값이 _corrugThresholdDeg 이상.
@@ -1014,7 +1124,7 @@
                 _runIndex = i;
                 double x = _thinned[i].X;
                 double z = _thinned[i].Y;
-                var pose = new[] { x, EffectiveY(i), z, 0.0, theta, 0.0 };
+                var pose = new[] { x, EffectiveY(i), z, 0.0, theta, EffectiveRz(i) };
 
                 var rc = await rpc.MoveLAsync(pose, tool: _runTool, user: _runUser,
                     vel: _runVel, acc: 100, ovl: 100, blendR: -1, ct: ct);
@@ -1116,7 +1226,7 @@
             double x = _thinned[i].X;
             double z = _thinned[i].Y;
             double theta = EffectiveThetaDeg(i);
-            var pose = new[] { x, EffectiveY(i), z, 0.0, theta, 0.0 };
+            var pose = new[] { x, EffectiveY(i), z, 0.0, theta, EffectiveRz(i) };
 
             var rc = await rpc.MoveLAsync(pose, tool: _runTool, user: _runUser,
                 vel: _runVel, acc: 100, ovl: 100, blendR: -1);
@@ -1181,7 +1291,7 @@
                 waypoints.Add(new InspectionWaypoint(
                     _thinned[i].X, _thinned[i].Y, EffectiveThetaDeg(i), _thetaOverrides.ContainsKey(i),
                     (byte)EffectiveSurfaceType(i), _surfaceTypeOverrides.ContainsKey(i),
-                    Y: EffectiveY(i)));
+                    Y: EffectiveY(i), RzDeg: _thinned[i].RzDeg));
 
             // 같은 도면에 같은 이름이 있으면 그 프로파일을 갱신(덮어쓰기).
             var name = _profileName.Trim();
@@ -1201,6 +1311,7 @@
                 ThMax = _thMax,
                 SettleDelaySec = _settleDelaySec,
                 MoveHomeFirst = _moveHomeFirst,
+                SeamType = _seamType,
                 WaypointsJson = System.Text.Json.JsonSerializer.Serialize(waypoints)
             };
             var saved = await Service.SaveProfileAsync(profile);
@@ -1255,9 +1366,10 @@
             _thMax = p.ThMax;
             _settleDelaySec = p.SettleDelaySec;
             _moveHomeFirst = p.MoveHomeFirst;
+            _seamType = string.IsNullOrWhiteSpace(p.SeamType) ? "LINE" : p.SeamType;
 
             var waypoints = System.Text.Json.JsonSerializer.Deserialize<List<InspectionWaypoint>>(p.WaypointsJson) ?? new();
-            _thinned = waypoints.Select(w => new PointMarker(w.X, w.Z)).ToList();
+            _thinned = waypoints.Select(w => new PointMarker(w.X, w.Z, w.RzDeg)).ToList();
             _thetaOverrides.Clear();
             _yOverrides.Clear();
             _surfaceTypeOverrides.Clear();
