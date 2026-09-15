@@ -14,6 +14,7 @@ public class SequenceService
     private readonly TeachingService _teachingService;
     private readonly CobotService _cobotService;
     private readonly SequenceMonitorService _monitor;
+    private readonly SequenceRunGate _gate;
 
     /// <summary>등록된 전체 단계 (DefaultOrder 순).</summary>
     private readonly List<ISequenceStep> _steps;
@@ -28,11 +29,13 @@ public class SequenceService
         TeachingService teachingService,
         CobotService cobotService,
         SequenceMonitorService monitor,
+        SequenceRunGate gate,
         ILogger<SequenceService> logger)
     {
         _teachingService = teachingService;
         _cobotService = cobotService;
         _monitor = monitor;
+        _gate = gate;
         _logger = logger;
         _steps = steps.OrderBy(s => s.DefaultOrder).ToList();
 
@@ -62,45 +65,74 @@ public class SequenceService
     /// 풀오토: 모든 활성 단계를 순서대로 실행. 실패 시 즉시 중단.
     /// </summary>
     public async Task<bool> RunAllAsync(SequenceContext context, CancellationToken externalCt = default)
+        => (await RunSequenceAsync(context, stepKeys: null, externalCt)).Outcome == SequenceRunOutcome.Completed;
+
+    /// <summary>
+    /// 단계 부분 실행 — <paramref name="stepKeys"/>에 포함된 단계만 DefaultOrder 순으로 실행
+    /// (null이면 전체). ACS(VDA5050) 경로용: Busy/Failed를 구분해 보고해야 하므로 결과를 구조체로 반환.
+    /// </summary>
+    public async Task<SequenceRunResult> RunSequenceAsync(
+        SequenceContext context, IReadOnlyCollection<string>? stepKeys, CancellationToken externalCt = default)
     {
-        if (IsBusy) return false;
+        if (IsBusy || !_gate.TryEnter())
+            return new SequenceRunResult(SequenceRunOutcome.Busy, null, "다른 시퀀스가 실행 중입니다.");
 
-        _runCts = CancellationTokenSource.CreateLinkedTokenSource(externalCt);
-        var ct = _runCts.Token;
-
-        RunState = SequenceRunState.Running;
-        ResetStatuses();
-        await LoadPositionsAsync(context, ct);
-        context.Progress = _monitor.Log;   // 스텝 진행 라인 → 모니터 창 콘솔
-        _monitor.BeginRun();
-        RaiseStateChanged();
-
-        _logger.LogInformation("시퀀스 풀오토 시작 (단계 {Count}개, tool={Tool}, vel={Vel})",
-            _steps.Count, context.Tool, context.Velocity);
-
-        var allSuccess = true;
-
-        foreach (var step in _steps)
+        try
         {
-            if (ct.IsCancellationRequested) break;
+            _runCts = CancellationTokenSource.CreateLinkedTokenSource(externalCt);
+            var ct = _runCts.Token;
 
-            var result = await RunSingleStepAsync(step, context, ct);
-            if (!result.Success)
+            var selected = stepKeys is null
+                ? _steps
+                : _steps.Where(s => stepKeys.Contains(s.Key)).ToList();
+            if (selected.Count == 0)
+                return new SequenceRunResult(SequenceRunOutcome.Failed, null,
+                    $"실행할 단계가 없습니다 (요청 키: {string.Join(",", stepKeys ?? Array.Empty<string>())}).");
+
+            RunState = SequenceRunState.Running;
+            ResetStatuses();
+            await LoadPositionsAsync(context, ct);
+            context.Progress = _monitor.Log;   // 스텝 진행 라인 → 모니터 창 콘솔
+            _monitor.BeginRun();
+            RaiseStateChanged();
+
+            _logger.LogInformation("시퀀스 시작 (단계 {Count}/{Total}개, tool={Tool}, vel={Vel})",
+                selected.Count, _steps.Count, context.Tool, context.Velocity);
+
+            SequenceRunResult runResult = new(SequenceRunOutcome.Completed);
+
+            foreach (var step in selected)
             {
-                allSuccess = false;
-                break;
+                if (ct.IsCancellationRequested)
+                {
+                    runResult = new SequenceRunResult(SequenceRunOutcome.Failed, step.Key, "실행 취소됨");
+                    break;
+                }
+
+                var result = await RunSingleStepAsync(step, context, ct);
+                if (!result.Success)
+                {
+                    runResult = new SequenceRunResult(SequenceRunOutcome.Failed, step.Key, result.Message);
+                    break;
+                }
             }
+
+            RunState = SequenceRunState.Idle;
+            CurrentStepKey = null;
+            _runCts?.Dispose();
+            _runCts = null;
+            _monitor.EndRun(anyFailure: runResult.Outcome != SequenceRunOutcome.Completed);
+            RaiseStateChanged();
+
+            _logger.LogInformation("시퀀스 종료 (결과={Outcome}{Detail})",
+                runResult.Outcome,
+                runResult.FailedStepKey is null ? "" : $", 실패단계={runResult.FailedStepKey}");
+            return runResult;
         }
-
-        RunState = SequenceRunState.Idle;
-        CurrentStepKey = null;
-        _runCts?.Dispose();
-        _runCts = null;
-        _monitor.EndRun(anyFailure: !allSuccess);
-        RaiseStateChanged();
-
-        _logger.LogInformation("시퀀스 풀오토 종료 (성공={Success})", allSuccess);
-        return allSuccess;
+        finally
+        {
+            _gate.Exit();
+        }
     }
 
     /// <summary>
@@ -108,32 +140,39 @@ public class SequenceService
     /// </summary>
     public async Task<StepResult> RunStepAsync(string stepKey, SequenceContext context, CancellationToken externalCt = default)
     {
-        if (IsBusy)
+        if (IsBusy || !_gate.TryEnter())
             return StepResult.Fail("이미 실행 중입니다.");
 
-        var step = _steps.FirstOrDefault(s => s.Key == stepKey);
-        if (step is null)
-            return StepResult.Fail($"단계 '{stepKey}'를 찾을 수 없습니다.");
+        try
+        {
+            var step = _steps.FirstOrDefault(s => s.Key == stepKey);
+            if (step is null)
+                return StepResult.Fail($"단계 '{stepKey}'를 찾을 수 없습니다.");
 
-        _runCts = CancellationTokenSource.CreateLinkedTokenSource(externalCt);
-        var ct = _runCts.Token;
+            _runCts = CancellationTokenSource.CreateLinkedTokenSource(externalCt);
+            var ct = _runCts.Token;
 
-        RunState = SequenceRunState.Running;
-        await LoadPositionsAsync(context, ct);
-        context.Progress = _monitor.Log;   // 스텝 진행 라인 → 모니터 창 콘솔
-        _monitor.BeginRun();
-        RaiseStateChanged();
+            RunState = SequenceRunState.Running;
+            await LoadPositionsAsync(context, ct);
+            context.Progress = _monitor.Log;   // 스텝 진행 라인 → 모니터 창 콘솔
+            _monitor.BeginRun();
+            RaiseStateChanged();
 
-        var result = await RunSingleStepAsync(step, context, ct);
+            var result = await RunSingleStepAsync(step, context, ct);
 
-        RunState = SequenceRunState.Idle;
-        CurrentStepKey = null;
-        _runCts?.Dispose();
-        _runCts = null;
-        _monitor.EndRun(anyFailure: !result.Success);
-        RaiseStateChanged();
+            RunState = SequenceRunState.Idle;
+            CurrentStepKey = null;
+            _runCts?.Dispose();
+            _runCts = null;
+            _monitor.EndRun(anyFailure: !result.Success);
+            RaiseStateChanged();
 
-        return result;
+            return result;
+        }
+        finally
+        {
+            _gate.Exit();
+        }
     }
 
     /// <summary>모든 단계 상태를 대기(Pending)로 초기화. 실행 중에는 무시한다.</summary>
@@ -240,3 +279,14 @@ public class SequenceService
         return sc is not null and not 0 ? $" (상태코드={sc})" : "";
     }
 }
+
+/// <summary>시퀀스(부분) 실행 종합 결과 — ACS 경로에서 Busy(장비 점유)와 Failed(실행 실패)를 구분한다.</summary>
+public enum SequenceRunOutcome
+{
+    Completed,
+    Busy,
+    Failed,
+}
+
+/// <summary><see cref="SequenceService.RunSequenceAsync"/> 결과. 실패 시 어느 단계에서 왜 실패했는지 포함.</summary>
+public record SequenceRunResult(SequenceRunOutcome Outcome, string? FailedStepKey = null, string? Message = null);

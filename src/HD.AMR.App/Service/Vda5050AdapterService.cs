@@ -23,7 +23,8 @@ public enum AcsLiveness { Unknown, Online, Offline, Broken }
 /// 범위(1차): connection(ONLINE/OFFLINE/Last Will) + state 2초 주기·이벤트 즉시 발행 +
 /// order 수신 → REST 이동·도달 보고(<see cref="Vda5050OrderExecutor"/>) +
 /// instantActions(emergencyStop 이행 / initPosition 파싱만 — 이행은 벤더 회신 D-10 대기).
-/// startWeldInspection 은 스텁 보고(FINISHED "stub") — 검사 시퀀스 연동은 2차.
+/// startWeldInspection 은 검사 실행기(<see cref="Inspection.IWeldInspectionExecutor"/>) 위임(2차 연동, §8.5.1)
+/// — 레시피 매핑·검사 시퀀스 실행 후 FINISHED/FAILED + errorType 보고.
 ///
 /// 유보(부록 D.2): errorType 주행·측위 매핑(D-9), initPosition(D-10), 층 게이트(D-11),
 /// schedule 해석(D-12), 큐 비우기(D-13) — 계약은 유효, 온보드 이행만 벤더 2차 회신 후.
@@ -33,6 +34,7 @@ public sealed class Vda5050AdapterService : BackgroundService
     private readonly Vda5050AdapterSettings _s;
     private readonly AMRService _amr;
     private readonly Vda5050OrderExecutor _executor;
+    private readonly Inspection.IWeldInspectionExecutor _inspection;
     private readonly CobotService _cobot;
     private readonly ILogger<Vda5050AdapterService> _logger;
 
@@ -115,11 +117,13 @@ public sealed class Vda5050AdapterService : BackgroundService
         => new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public Vda5050AdapterService(IOptions<Vda5050AdapterSettings> options, AMRService amr,
-        Vda5050OrderExecutor executor, CobotService cobot, ILoggerFactory loggerFactory)
+        Vda5050OrderExecutor executor, Inspection.IWeldInspectionExecutor inspection,
+        CobotService cobot, ILoggerFactory loggerFactory)
     {
         _s = options.Value;
         _amr = amr;
         _executor = executor;
+        _inspection = inspection;
         _cobot = cobot;
         _mapId = _s.MapId;
         _logger = loggerFactory.CreateLogger<Vda5050AdapterService>();
@@ -298,8 +302,10 @@ public sealed class Vda5050AdapterService : BackgroundService
                 switch (action.ActionType)
                 {
                     case "emergencyStop":
-                        // §5.1: 주행·협동로봇·검사 즉시 정지. 주행은 REST(부록 D-5), 코봇은 온보드 즉시 정지.
+                        // §5.1: 주행·협동로봇·검사 즉시 정지. 주행은 REST(부록 D-5), 코봇은 온보드 즉시 정지,
+                        // 진행 중 검사 시퀀스는 실행기 취소(AbortAsync — 내부에서 코봇 정지도 재시도).
                         await _executor.EmergencyStopAsync();
+                        await _inspection.AbortAsync();
                         try
                         {
                             await _cobot.StopMotionImmediateAsync();

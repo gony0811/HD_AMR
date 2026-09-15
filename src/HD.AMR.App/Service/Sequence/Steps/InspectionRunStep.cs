@@ -133,10 +133,15 @@ public class InspectionRunStep : ISequenceStep
         int moved = 0, skipped = 0, visOk = 0, visFail = 0;
 
         // v3: 검사 세션 1회 = Run ID 1개(GUID). 각 경유점 캡처 = Task ID 1개.
-        // ACS 연동 시에는 작업지시(VDA 5050)에서 받은 값을 사용하고, 단독 실행에서는 여기서 발급한다.
+        // ACS 연동 실행이면 jobRef 는 작업지시(VDA5050 action jobRef) 기반으로 발급하고,
+        // 단독 실행에서는 현행대로 "P{프로필}-W{순번}" 자기발급.
         // 이 식별자는 CAPTURE_REQ 로 비전에 전달되어, 결과 에코를 통해 엔터프라이즈가 ACS 진행현황과 매칭한다.
         var runId = Guid.NewGuid();
-        _logger.LogInformation("⑱ 검사 Run ID = {RunId}", runId);
+        if (context.AcsOrderId is not null)
+            _logger.LogInformation("⑱ 검사 Run ID = {RunId} (ACS order={OrderId}, action={ActionId}, jobRef={JobRef})",
+                runId, context.AcsOrderId, context.AcsActionId, context.AcsJobRef);
+        else
+            _logger.LogInformation("⑱ 검사 Run ID = {RunId}", runId);
 
         for (var i = 0; i < waypoints.Count; i++)
         {
@@ -157,13 +162,20 @@ public class InspectionRunStep : ISequenceStep
             if (settle > TimeSpan.Zero)
                 await Task.Delay(settle, ct);
 
-            // surface type: 프로필 로드 후 페이지와 동일 규칙(|θ| ≥ 코로게이션 판정각 → Corrugation).
-            var surfaceType = Math.Abs(w.Theta) >= profile.CorrugThresholdDeg
-                ? SurfaceType.Corrugation
-                : SurfaceType.Flat;
+            // surface type 우선순위: 경유점 수동 지정 > 레시피 강제값(ACS 경로) > |θ| 자동 규칙.
+            var surfaceType = w.SurfaceManual
+                ? (SurfaceType)w.Surface
+                : context.SurfaceOverride is { } ovr
+                    ? (SurfaceType)ovr
+                    : Math.Abs(w.Theta) >= profile.CorrugThresholdDeg
+                        ? SurfaceType.Corrugation
+                        : SurfaceType.Flat;
             // v3: 경유점 캡처 1건 = TASK 1개. Task ID(GUID) 발급 + 사람이 읽는 Job Ref(ASCII).
+            // ACS 연동 시 jobRef = "{action jobRef}-W{순번}" (사양 §8.1 — 역추적 키 유지).
             var taskId = Guid.NewGuid();
-            var jobRef = $"P{context.InspectionProfileId}-W{i + 1}";
+            var jobRef = context.AcsJobRef is not null
+                ? $"{context.AcsJobRef}-W{i + 1}"
+                : $"P{context.InspectionProfileId}-W{i + 1}";
             var data = CaptureReqPayload.Build(runId, taskId, jobRef, surfaceType,
                 (ushort)context.InspectionSurfaceId, (int)Math.Round(w.X), (int)Math.Round(w.Z));
 
@@ -185,6 +197,17 @@ public class InspectionRunStep : ISequenceStep
             (visFail > 0 ? $" (실패 {visFail})" : "") +
             $" [wobj #{wobjId}, tool {context.Tool}, WallID 0x{context.InspectionSurfaceId:X2}, Run {runId}].";
         _logger.LogInformation("⑱ {Msg}", msg);
+
+        // ACS 경로: 비전 실패율 상한 초과 시 스텝 실패로 승격(→ 액션 FAILED + inspectionFailed, §6.4 재시도 정책).
+        // UI 단독 실행(VisionFailRatioMax=null)은 현행대로 집계만 하고 성공 반환.
+        if (context.VisionFailRatioMax is { } maxRatio && moved > 0)
+        {
+            var failRatio = (double)visFail / moved;
+            if (failRatio > maxRatio)
+                return StepResult.Fail(
+                    $"비전 실패율 초과 — {visFail}/{moved} ({failRatio:P0} > 허용 {maxRatio:P0}). {msg}");
+        }
+
         return StepResult.Ok(msg);
     }
 

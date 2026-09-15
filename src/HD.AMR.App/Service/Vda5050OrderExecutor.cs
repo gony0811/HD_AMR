@@ -17,17 +17,20 @@ namespace HD.AMR.App.Service;
 /// 자체 비교한다 — allowedDeviationXY/Theta, 미지정 시 0.1 m / 0.1 rad. status.schedule 값 해석은
 /// 미확정(D-12)이라 error 필드 감시만 보조로 쓴다.
 ///
-/// 검사 액션(startWeldInspection)은 1차 스텁 — RUNNING → FINISHED("stub") 순서 보고만 하고
-/// 시퀀스 연동은 2차 과제. 액션 없는 Order(actions:[])는 노드 도달만으로 완결(§4.1).
+/// 검사 액션(startWeldInspection)은 <see cref="Inspection.IWeldInspectionExecutor"/>에 위임한다
+/// (2차 연동, §8.5.1) — 파라미터 해석·레시피 매핑·검사 시퀀스 실행은 그쪽 책임이고, 이 클래스는
+/// 액션 상태(RUNNING→FINISHED/FAILED)와 errors 보고만 담당한다.
+/// 액션 없는 Order(actions:[])는 노드 도달만으로 완결(§4.1).
 ///
-/// errors 는 확정 7종 중 유보 기간(D-9) 판별 가능한 것만 보고: orderValidationError / emergencyStopActive.
-/// (inspectionFailed 는 검사 연동 후, drivingFailed/localizationLost 는 로봇 오류 코드 회신 후.)
+/// errors 는 확정 7종 중 판별 가능한 것을 보고: orderValidationError / emergencyStopActive /
+/// inspectionFailed / equipmentError. (drivingFailed/localizationLost 는 로봇 오류 코드 회신 D-9 후.)
 /// 같은 errorType 은 최신 1건만 유지, 해소 시 제거(§6.4).
 /// </summary>
 public sealed class Vda5050OrderExecutor
 {
     private readonly AmrRestClient _rest;
     private readonly AMRService _amr;
+    private readonly Inspection.IWeldInspectionExecutor _inspection;
     private readonly AmrRestSettings _restSettings;
     private readonly ILogger<Vda5050OrderExecutor> _logger;
 
@@ -52,10 +55,12 @@ public sealed class Vda5050OrderExecutor
     public event Action? StateChanged;
 
     public Vda5050OrderExecutor(AmrRestClient rest, AMRService amr,
+        Inspection.IWeldInspectionExecutor inspection,
         IOptions<AmrRestSettings> restOptions, ILogger<Vda5050OrderExecutor> logger)
     {
         _rest = rest;
         _amr = amr;
+        _inspection = inspection;
         _restSettings = restOptions.Value;
         _logger = logger;
     }
@@ -137,18 +142,22 @@ public sealed class Vda5050OrderExecutor
             }));
             _nodeStates.Clear();
             _nodeStates.Add(new NodeState { NodeId = node.NodeId, SequenceId = node.SequenceId, Released = node.Released });
-            // 새 임무 수신 = 이전 거부/비상정지 상태 해소(§6.4: 해소 시 제거)
+            // 새 임무 수신 = 이전 거부/비상정지/검사 실패 상태 해소(§6.4: 해소 시 제거)
             _errors.Remove("orderValidationError");
             _errors.Remove("emergencyStopActive");
+            _errors.Remove("inspectionFailed");
+            _errors.Remove("equipmentError");
 
             _missionCts = new CancellationTokenSource();
             ct = _missionCts.Token;
         }
+        // 신규 order = 정렬(anchor) 캐시 무효(사양 §8.1 — 그룹 캐시는 order 내에서만 유효).
+        _inspection.InvalidateAnchor();
         _logger.LogInformation("VDA5050 order 수리: {OrderId}, node={NodeId} → ({X:0.###}, {Y:0.###}, θ={Theta:0.###})",
             order.OrderId, node.NodeId, node.NodePosition!.X, node.NodePosition.Y, node.NodePosition.Theta);
         StateChanged?.Invoke();
 
-        var task = RunMissionAsync(node, ct);
+        var task = RunMissionAsync(order.OrderId, node, ct);
         lock (_gate) _missionTask = task;
         _ = task.ContinueWith(
             t => _logger.LogError(t.Exception, "VDA5050 임무 태스크 미처리 예외"),
@@ -172,12 +181,14 @@ public sealed class Vda5050OrderExecutor
 
     // ── 임무 실행 ─────────────────────────────────────────────────────
 
-    private async Task RunMissionAsync(OrderNode node, CancellationToken ct)
+    private async Task RunMissionAsync(string orderId, OrderNode node, CancellationToken ct)
     {
         var pos = node.NodePosition!;
         try
         {
             // 1) 이동 명령 — 검사 정차는 항상 stopFlag=true (부록 D-2: false 면 각도 미보정).
+            //    주행 발생 = 정렬(anchor) 캐시 무효(사양 §8.1 — 정차점이 바뀌면 정렬 재수행).
+            _inspection.InvalidateAnchor();
             lock (_gate) _driving = true;
             StateChanged?.Invoke();
 
@@ -206,15 +217,44 @@ public sealed class Vda5050OrderExecutor
             _logger.LogInformation("VDA5050 노드 도달: {NodeId} (seq={Seq})", node.NodeId, node.SequenceId);
             StateChanged?.Invoke();
 
-            // 3) 액션 순차 실행 — 1차 스텁: RUNNING → FINISHED("stub"). 배열 순서 = 실행 순서(§4.2).
-            //    액션 없는 Order(actions:[])는 노드 도달만으로 완결(§4.1).
+            // 3) 액션 순차 실행 — 배열 순서 = 실행 순서(§4.2). 액션 없는 Order(actions:[])는
+            //    노드 도달만으로 완결(§4.1). startWeldInspection 은 검사 실행기에 위임(§8.5.1 2차 연동).
+            //    개별 액션 실패는 다음 액션 계속 — 단 equipmentError(설비 불능)면 잔여 전건 FAILED(§6.4).
+            var equipmentDown = false;
             foreach (var action in node.Actions)
             {
                 ct.ThrowIfCancellationRequested();
+
+                if (equipmentDown)
+                {
+                    SetActionStatus(action.ActionId, "FAILED", "설비 불능(equipmentError)으로 잔여 액션 중단");
+                    StateChanged?.Invoke();
+                    continue;
+                }
+
                 SetActionStatus(action.ActionId, "RUNNING", null);
                 StateChanged?.Invoke();
-                _logger.LogInformation("VDA5050 액션 스텁 실행: {Type} ({ActionId})", action.ActionType, action.ActionId);
-                SetActionStatus(action.ActionId, "FINISHED", "stub");
+
+                if (action.ActionType == "startWeldInspection")
+                {
+                    var result = await _inspection.ExecuteAsync(action, orderId, ct);
+                    SetActionStatus(action.ActionId, result.Success ? "FINISHED" : "FAILED", result.ResultDescription);
+                    if (!result.Success && result.ErrorType is not null)
+                    {
+                        ReportError(result.ErrorType, result.ErrorDescription ?? result.ResultDescription);
+                        if (result.ErrorType == "equipmentError") equipmentDown = true;
+                    }
+                    _logger.LogInformation("VDA5050 액션 {Result}: {Type} ({ActionId}) — {Desc}",
+                        result.Success ? "완료" : "실패", action.ActionType, action.ActionId, result.ResultDescription);
+                }
+                else
+                {
+                    // 카탈로그(§8) 외 노드 액션 — 계약 위반: 액션 FAILED + orderValidationError.
+                    var desc = $"미지원 노드 액션 타입 '{action.ActionType}'";
+                    SetActionStatus(action.ActionId, "FAILED", desc);
+                    ReportError("orderValidationError", $"actionId={action.ActionId}: {desc}");
+                    _logger.LogWarning("VDA5050 {Desc} ({ActionId})", desc, action.ActionId);
+                }
                 StateChanged?.Invoke();
             }
             _logger.LogInformation("VDA5050 order 완결: {OrderId} (액션 {N}건)", _orderId, node.Actions.Count);
@@ -318,6 +358,20 @@ public sealed class Vda5050OrderExecutor
             if (a is null) return;
             a.ActionStatus = status;
             if (result is not null) a.ResultDescription = result;
+        }
+    }
+
+    /// <summary>errors 갱신 — 같은 errorType 은 최신 1건만 유지(§6.4). 해소는 다음 order 수신 시.</summary>
+    private void ReportError(string errorType, string description)
+    {
+        lock (_gate)
+        {
+            _errors[errorType] = new VdaError
+            {
+                ErrorType = errorType,
+                ErrorLevel = "WARNING",
+                ErrorDescription = description,
+            };
         }
     }
 

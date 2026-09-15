@@ -10,6 +10,10 @@ Usage:
   python tools/virtual_acs.py order        send order to the AMR's current position, watch until finished
   python tools/virtual_acs.py order X Y TH send order to explicit coordinates
   python tools/virtual_acs.py bad          send invalid order (wrong mapId) to test rejection
+  python tools/virtual_acs.py inspect [SEAM [WALL [N]]]
+                                           send order with N startWeldInspection actions
+                                           (SEAM: LINE|CROSS|CORNER, WALL: B/T/SM/PM/F/A/SL/PL/SU/PU
+                                           or an undefined code like W03; default LINE SM 2)
   python tools/virtual_acs.py estop        send emergencyStop instant action
   python tools/virtual_acs.py die          exit without MQTT DISCONNECT so the broker
                                            publishes the ACS Last Will (CONNECTIONBROKEN)
@@ -62,7 +66,7 @@ def _header():
     }
 
 
-def build_order(x, y, theta, map_id=MAP_ID, node_id="TEST-N1"):
+def build_order(x, y, theta, map_id=MAP_ID, node_id="TEST-N1", actions=None):
     return {
         **_header(),
         "orderId": str(uuid.uuid4()),
@@ -80,10 +84,37 @@ def build_order(x, y, theta, map_id=MAP_ID, node_id="TEST-N1"):
                     "allowedDeviationTheta": 0.5,
                     "mapId": map_id,
                 },
-                "actions": [],
+                "actions": actions or [],
             }
         ],
         "edges": [],
+    }
+
+
+def build_weld_inspection_action(seam_type="LINE", wall_code="SM", seq_in_group=1,
+                                 anchor_group="CT1-L1-TEST-ST01", dxf_id="DXF-TEST-01"):
+    """startWeldInspection action per spec §8.1/§8.4 (golden example shape)."""
+    return {
+        "actionType": "startWeldInspection",
+        "actionId": str(uuid.uuid4()),
+        "blockingType": "HARD",
+        "actionParameters": [
+            {"key": "jobRef", "value": f"JOB-CT1-L1-{wall_code}-S{seq_in_group:02d}"},
+            {"key": "position", "value": {
+                "seamStartW": [12.510, 5.980, 1.420],
+                "seamEndW": [13.310, 5.980, 1.420],
+                "drawingPos": {"tank": "CT1", "level": 1, "wall_code": wall_code,
+                               "u": 3.120, "v": 1.420,
+                               "x": 3.120, "y": 0.0, "z": 1.420}}},
+            {"key": "params", "value": {
+                "seamType": seam_type,
+                "sectionDxfId": dxf_id,
+                "inspectionProfileId": "INSPECT-STD-01",
+                "standoffMm": 400,
+                "workingDistanceMm": 400,
+                "anchorGroupId": anchor_group,
+                "seqInGroup": seq_in_group}},
+        ],
     }
 
 
@@ -192,6 +223,42 @@ def send_order(client, coords=None, map_id=MAP_ID, watch=True):
     return order
 
 
+def send_inspect(client, seam="LINE", wall="SM", count=2, watch=True):
+    """Order to current position carrying N startWeldInspection actions (shared anchorGroup)."""
+    pos = wait_for_position()
+    if pos is None:
+        print("[acs] no agvPosition seen in state yet - cannot target current position")
+        return None
+    actions = [build_weld_inspection_action(seam, wall, seq_in_group=i + 1) for i in range(count)]
+    order = build_order(pos["x"], pos["y"], pos.get("theta") or 0.0, actions=actions)
+    publish(client, "order", order)
+    if watch:
+        watch_actions(order["orderId"], [a["actionId"] for a in actions])
+    return order
+
+
+def watch_actions(order_id, action_ids, timeout=600):
+    """Wait until every listed action reaches FINISHED/FAILED, then print the outcome."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        _state_event.clear()
+        _state_event.wait(timeout=5)
+        s = _last_state
+        if not s or s.get("orderId") != order_id:
+            continue
+        states = {a.get("actionId"): a for a in s.get("actionStates") or []}
+        done = [states.get(aid) for aid in action_ids]
+        if all(a and a.get("actionStatus") in ("FINISHED", "FAILED") for a in done):
+            print("[acs] ALL ACTIONS TERMINAL:")
+            for a in done:
+                print(f"  - {a['actionId'][:8]}… {a['actionStatus']}: {a.get('resultDescription')}")
+            errors = s.get("errors") or []
+            print(f"  errors: {errors if errors else '-'}")
+            return True
+    print("[acs] timed out waiting for action completion")
+    return False
+
+
 def watch_order(order_id, timeout=120):
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -213,7 +280,7 @@ def watch_order(order_id, timeout=120):
 
 def interactive(client):
     print(
-        "commands: order | order X Y TH | bad | estop | die | quit"
+        "commands: order | order X Y TH | bad | inspect [SEAM [WALL [N]]] | estop | die | quit"
     )
     for line in sys.stdin:
         parts = line.split()
@@ -226,6 +293,11 @@ def interactive(client):
             send_order(client, watch=False)
         elif cmd == "bad":
             send_order(client, map_id="WRONG-MAP", watch=False)
+        elif cmd == "inspect":
+            seam = parts[1].upper() if len(parts) > 1 else "LINE"
+            wall = parts[2] if len(parts) > 2 else "SM"
+            count = int(parts[3]) if len(parts) > 3 else 2
+            send_inspect(client, seam=seam, wall=wall, count=count, watch=False)
         elif cmd == "estop":
             publish(client, "instantActions", build_estop())
         elif cmd == "die":
@@ -252,6 +324,11 @@ def main():
             order = send_order(client, map_id="WRONG-MAP", watch=False)
             if order:
                 watch_order(order["orderId"], timeout=15)
+        elif args[0] == "inspect":
+            seam = args[1].upper() if len(args) > 1 else "LINE"
+            wall = args[2] if len(args) > 2 else "SM"
+            count = int(args[3]) if len(args) > 3 else 2
+            send_inspect(client, seam=seam, wall=wall, count=count)
         elif args[0] == "estop":
             time.sleep(1)  # let subscriptions settle so the resulting state is visible
             publish(client, "instantActions", build_estop())

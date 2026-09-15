@@ -13,6 +13,7 @@ public class HdAmrDbContext : DbContext
     public DbSet<DrawingSegment> DrawingSegments => Set<DrawingSegment>();
     public DbSet<ExcludedRegion> ExcludedRegions => Set<ExcludedRegion>();
     public DbSet<InspectionProfile> InspectionProfiles => Set<InspectionProfile>();
+    public DbSet<InspectionRecipe> InspectionRecipes => Set<InspectionRecipe>();
     public DbSet<TeachingPosition> TeachingPositions => Set<TeachingPosition>();
     public DbSet<Parameter> Parameters => Set<Parameter>();
 
@@ -58,6 +59,17 @@ public class HdAmrDbContext : DbContext
             b.Property(p => p.Name).IsRequired().HasMaxLength(200);
             b.Property(p => p.WaypointsJson).IsRequired();
             b.HasIndex(p => p.DrawingId);
+        });
+
+        modelBuilder.Entity<InspectionRecipe>(b =>
+        {
+            b.HasKey(r => r.Id);
+            b.Property(r => r.Id).HasMaxLength(40);
+            b.Property(r => r.DisplayName).IsRequired().HasMaxLength(200);
+            b.Property(r => r.ApproachTeachingKey).HasMaxLength(100);
+            // enum 은 문자열 저장 — DB 를 사람이 직접 볼 때 판독 가능하도록.
+            b.Property(r => r.SeamType).HasConversion<string>().HasMaxLength(20);
+            b.Property(r => r.Orientation).HasConversion<string>().HasMaxLength(20);
         });
 
         modelBuilder.Entity<TeachingPosition>(b =>

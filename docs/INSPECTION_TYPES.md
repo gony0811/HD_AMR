@@ -127,5 +127,9 @@
 3. **4점 십자를 직선 seam과 별도 타입으로 둘지** — 교차 검사 요구가 직선과 다르면 유지, 같으면 통합(→ 6종).
 4. **코너 거울(L/R) 분리 여부** — AMR 접근이 좌우 대칭이면 1종 유지, 아니면 2종.
 5. **profileId enum 구현** — `ref.area_task.profile_id` / 액션 `param_schema` 반영.
+   > HD_AMR 측 진행(2026-09-15): 본 카탈로그 11종이 온보드 DB(`InspectionRecipes`, id = §5 문자열 그대로)로
+   > 구현되어 `(seamType, wall_code)` → 레시피 매핑·실행 배선 완료(VDA5050_INTERFACE_SPEC §8.5.1 (5)).
+   > `LINE-*` 5종 실행 활성, `CROSS4-*`/`CORNER3`은 실행 게이트 OFF(N13 확정 후 활성화).
+   > 계약(`param_schema`) 반영 방식은 여전히 N13 미확정 — ACS는 자유 문자열 `inspectionProfileId` 유지.
 
 > 결정이 내려지면 본 문서와 `startWeldInspection` `param_schema`, 관련 코드/DB를 함께 갱신한다.

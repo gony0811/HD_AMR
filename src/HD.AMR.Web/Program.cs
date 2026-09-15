@@ -72,6 +72,9 @@ builder.Services.Configure<HD.AMR.App.Communication.Vda5050.Vda5050AdapterSettin
 builder.Services.AddSingleton<Vda5050OrderExecutor>();
 builder.Services.AddSingleton<Vda5050AdapterService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<Vda5050AdapterService>());
+// startWeldInspection 실행 총괄(2차 검사 연동) — singleton, 액션마다 scope 생성해 시퀀스 실행.
+builder.Services.AddSingleton<HD.AMR.App.Service.Inspection.IWeldInspectionExecutor,
+    HD.AMR.App.Service.Inspection.WeldInspectionOrchestrator>();
 
 // LS산전 IO Module(ModbusTCP). AMR/Cobot 과 동일 패턴(싱글톤 + 호스티드) — 기동 시 상시 자동 접속, 실패 시 5초마다 재시도.
 builder.Services.Configure<IoModuleModbusTcpSettings>(
@@ -114,6 +117,8 @@ builder.Services.AddDbContext<HdAmrDbContext>(opt =>
 builder.Services.AddScoped<DrawingService>();
 builder.Services.AddScoped<TeachingService>();
 builder.Services.AddScoped<ParameterService>();
+// 검사 타입 11종 레시피(사양 §8.5.1) CRUD + 기동 시드 — ACS startWeldInspection 매핑 대상.
+builder.Services.AddScoped<InspectionRecipeService>();
 // QR 정차 pose 티칭에 필요한 T_A_B, T_T_C, 목표 T_A_Q 및 기존 정합값 저장.
 builder.Services.AddScoped<CalibrationService>();
 // 바닥 QR 기준 목표 AMR SLAM 정차 pose 계산. 온디맨드 측정 — 호스티드 불필요.
@@ -144,6 +149,8 @@ builder.Services.AddScoped<ISequenceStep, WObjResetStep>();   // 1300: 활성 �
 builder.Services.AddScoped<ISequenceStep, MonitorCloseStep>();   // 1400: 모니터링 창 닫기 (최종)
 // 시퀀스 모니터링 허브 — 별도 브라우저 창(/sequence-monitor, 다른 서킷)이 구독하므로 싱글톤.
 builder.Services.AddSingleton<SequenceMonitorService>();  // 1200: ⑱ 검사 수행(도면 경유점 순회 + 비전 캡처)
+// 시퀀스 전역 실행 잠금 — SequenceService 는 서킷별 scoped 라 UI/ACS 동시 실행을 막으려면 전역 게이트가 필요.
+builder.Services.AddSingleton<SequenceRunGate>();
 builder.Services.AddScoped<SequenceService>();
 builder.Services.AddScoped<HD.AMR.Web.Services.LabelDataService>();
 // DL 학습 오케스트레이터 — 학습 프로세스가 페이지 이동/서킷과 무관하게 살아 있어야 하므로 싱글톤.
@@ -273,6 +280,30 @@ CREATE TABLE IF NOT EXISTS Parameters (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS IX_Parameters_Name ON Parameters (Name);
 ");
+
+    // Backward-compatible schema add for InspectionRecipes (검사 타입 11종 레시피, 사양 §8.5.1; 기존 데이터 보존).
+    db.Database.ExecuteSqlRaw(@"
+CREATE TABLE IF NOT EXISTS InspectionRecipes (
+    Id TEXT NOT NULL PRIMARY KEY,
+    DisplayName TEXT NOT NULL,
+    SeamType TEXT NOT NULL,
+    Orientation TEXT NOT NULL,
+    Enabled INTEGER NOT NULL,
+    StepKeysJson TEXT NULL,
+    ApproachTeachingKey TEXT NOT NULL DEFAULT '',
+    DefaultStandoffMm REAL NOT NULL DEFAULT 400,
+    CameraTargetDistanceMm REAL NULL,
+    SurfaceOverride INTEGER NULL,
+    AlignRetryCount INTEGER NOT NULL DEFAULT 0,
+    VisionFailRatioMax REAL NOT NULL DEFAULT 1.0,
+    CreatedAt TEXT NOT NULL,
+    UpdatedAt TEXT NOT NULL
+);
+");
+
+    // 레시피 카탈로그 시드 — 없는 행만 추가(현장 조정값 보존). LINE-* 5종만 Enabled.
+    scope.ServiceProvider.GetRequiredService<InspectionRecipeService>()
+        .SeedDefaultsAsync().GetAwaiter().GetResult();
 
     var converter = scope.ServiceProvider.GetRequiredService<IDwgConverter>();
     if (!converter.IsAvailable)

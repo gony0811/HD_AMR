@@ -88,6 +88,34 @@ public class SequenceContext
 
     /// <summary>단계 간 임시 데이터 전달용.</summary>
     public Dictionary<string, object> Bag { get; set; } = new();
+
+    // ── ACS(VDA5050) 연동 필드 — UI 단독 실행 경로에서는 전부 null 유지 ──────────
+
+    /// <summary>ACS 작업 역추적 키(action jobRef). 있으면 ⑱이 자기발급 대신 "{jobRef}-W{i}"를 비전에 전달.</summary>
+    public string? AcsJobRef { get; set; }
+
+    /// <summary>수신 VDA5050 orderId — 로깅/추적용.</summary>
+    public string? AcsOrderId { get; set; }
+
+    /// <summary>수신 액션 actionId — 로깅/추적용.</summary>
+    public string? AcsActionId { get; set; }
+
+    /// <summary>정렬(anchor) 공유 그룹 id (params.anchorGroupId).</summary>
+    public string? AnchorGroupId { get; set; }
+
+    /// <summary>그룹 내 순번 (params.seqInGroup, 1부터).</summary>
+    public int? SeqInGroup { get; set; }
+
+    /// <summary>비전 Surface 강제값(0=Flat,1=Corner,2=Corrugation). null=|θ| 자동 판정.
+    /// 레시피(<see cref="Data.Entities.InspectionRecipe.SurfaceOverride"/>)에서 주입.</summary>
+    public byte? SurfaceOverride { get; set; }
+
+    /// <summary>ACS standoffMm — 로깅/검증용(정차점 산출은 ACS 책임, AMR은 참고만).</summary>
+    public double? StandoffMmOverride { get; set; }
+
+    /// <summary>⑱ 경유점 비전 실패율 상한(0~1). 초과 시 스텝 Fail — ACS 경로에서 inspectionFailed 승격.
+    /// null(UI 단독 실행)이면 현행대로 집계만 하고 실패 처리 안 함.</summary>
+    public double? VisionFailRatioMax { get; set; }
 }
 
 /// <summary>시퀀스 전체 실행 상태.</summary>
