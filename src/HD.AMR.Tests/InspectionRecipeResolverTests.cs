@@ -76,6 +76,31 @@ public class InspectionRecipeResolverTests
         Assert.Contains("wall_code", error);
     }
 
+    // CORNER3 좌/우 거울 side — P*(좌현)→L, S*(우현)→R, 그 외(F/A/B/T)는 규칙 미확정으로 기본 L.
+    [Theory]
+    [InlineData("PM", "L")]
+    [InlineData("PL", "L")]
+    [InlineData("PU", "L")]
+    [InlineData("SM", "R")]
+    [InlineData("SL", "R")]
+    [InlineData("SU", "R")]
+    [InlineData("F", "L")]
+    [InlineData("A", "L")]
+    [InlineData("B", "L")]
+    [InlineData("T", "L")]
+    public void ResolveCornerSide_MatchesRule(string wallCode, string expected)
+    {
+        Assert.Equal(expected, InspectionRecipeResolver.ResolveCornerSide(wallCode, out _));
+    }
+
+    // 미확정 코드(F/A 등)는 note 에 사유가 남아야 한다 — N13 협의 전 폴백 가시화.
+    [Fact]
+    public void ResolveCornerSide_UndecidedCode_NotesFallback()
+    {
+        InspectionRecipeResolver.ResolveCornerSide("F", out var note);
+        Assert.Contains("미확정", note);
+    }
+
     [Fact]
     public void RecipeIds_CatalogHasElevenEntries()
     {

@@ -54,6 +54,25 @@ public static class InspectionRecipeResolver
         };
         return recipeId is not null;
     }
+
+    /// <summary>CORNER3 좌/우 거울 side 판별 — 코너 스텝의 티칭 슬롯 접두사(corner3.L/R) 선택 키.
+    /// wall_code 는 코너에 접한 옆면 코드: P*(좌현) → "L", S*(우현) → "R".
+    /// F/A(마구리)·B/T 는 side 규칙 미확정(N13 협의 대상) — 기본 "L" 로 두고 note 에 사유를 남긴다.</summary>
+    public static string ResolveCornerSide(string wallCode, out string note)
+    {
+        if (wallCode.StartsWith('P'))
+        {
+            note = "좌현(P*) → L";
+            return "L";
+        }
+        if (wallCode.StartsWith('S'))
+        {
+            note = "우현(S*) → R";
+            return "R";
+        }
+        note = $"wall_code '{wallCode}' 의 side 규칙 미확정(N13) — 기본 L 적용";
+        return "L";
+    }
 }
 
 /// <summary>레시피 id 상수 — INSPECTION_TYPES.md §5 카탈로그 11종과 동일 문자열.</summary>

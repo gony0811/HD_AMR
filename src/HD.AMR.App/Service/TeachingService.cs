@@ -24,6 +24,18 @@ public class TeachingService
     public static readonly (string Key, string Name)[] Slots =
     {
         ("home", "홈 위치"),
+        // CORNER3 삼면 코너 검사(cornerInspectionRun 스텝)가 키로 직접 순회하는 고정 슬롯 —
+        // 좌(L)/우(R) 거울 각 5점: 접근(via, 촬영 없음) → 3면 촬영 → 복귀(via). 좌표는 현장 티칭.
+        ("corner3.L.approach", "코너3 L — 접근"),
+        ("corner3.L.face1", "코너3 L — 면1 (135°)"),
+        ("corner3.L.face2", "코너3 L — 면2 (90°)"),
+        ("corner3.L.face3", "코너3 L — 면3 (90°)"),
+        ("corner3.L.retreat", "코너3 L — 복귀"),
+        ("corner3.R.approach", "코너3 R — 접근"),
+        ("corner3.R.face1", "코너3 R — 면1 (135°)"),
+        ("corner3.R.face2", "코너3 R — 면2 (90°)"),
+        ("corner3.R.face3", "코너3 R — 면3 (90°)"),
+        ("corner3.R.retreat", "코너3 R — 복귀"),
     };
 
     /// <summary><see cref="Slots"/> 중 DB에 없는 슬롯을 생성하고(좌표는 null), 표시 이름이

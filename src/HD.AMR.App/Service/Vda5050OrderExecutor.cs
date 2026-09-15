@@ -237,7 +237,7 @@ public sealed class Vda5050OrderExecutor
 
                 if (action.ActionType == "startWeldInspection")
                 {
-                    var result = await _inspection.ExecuteAsync(action, orderId, ct);
+                    var result = await _inspection.ExecuteAsync(action, orderId, pos.Theta, ct);
                     SetActionStatus(action.ActionId, result.Success ? "FINISHED" : "FAILED", result.ResultDescription);
                     if (!result.Success && result.ErrorType is not null)
                     {

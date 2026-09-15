@@ -26,7 +26,9 @@ public sealed record InspectionActionResult(
 public interface IWeldInspectionExecutor
 {
     /// <summary>액션 1건 실행 — 파싱→레시피 매핑→프로필 조회→시퀀스 실행→결과. 예외를 던지지 않는다.</summary>
-    Task<InspectionActionResult> ExecuteAsync(VdaAction action, string orderId, CancellationToken ct);
+    /// <param name="nodeThetaRad">정차 노드 theta(벽 정면 방향, rad) — seam 벡터→검사 방향 자동 유도(§4.4)의
+    /// 기준. null(액션 없는 Order 등)이면 현행 기본(Horizontal)으로 폴백.</param>
+    Task<InspectionActionResult> ExecuteAsync(VdaAction action, string orderId, double? nodeThetaRad, CancellationToken ct);
 
     /// <summary>정렬(anchor) 캐시 무효화 — 주행 발생·신규 order 시 호출(사양 §8.1 anchorGroupId 계약).</summary>
     void InvalidateAnchor();

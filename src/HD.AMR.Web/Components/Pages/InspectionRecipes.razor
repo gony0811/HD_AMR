@@ -1,0 +1,182 @@
+@page "/recipes"
+@rendermode InteractiveServer
+@using System.Text.Json
+@using HD.AMR.App.Data.Entities
+@using HD.AMR.App.Service
+@using HD.AMR.App.Service.Inspection
+@inject InspectionRecipeService Service
+@inject ILogger<InspectionRecipes> Logger
+
+<PageTitle>검사 레시피</PageTitle>
+
+<h1>검사 레시피 관리</h1>
+<p class="text-muted" style="max-width:1100px">
+    ACS <code>startWeldInspection</code> 의 <code>(seamType, wall_code)</code> 조합으로 선택되는 검사 타입 11종
+    (사양 §8.5.1, INSPECTION_TYPES.md §5)의 실행 구성입니다.
+    <b>Enabled</b> 가 꺼진 레시피로 매핑된 액션은 FAILED + inspectionFailed 로 보고됩니다 —
+    실기 E2E 검증 후에만 켜세요. CROSS4-* 의 <b>PatternJson</b> 은 십자 경유점 생성 파라미터
+    (<code>{"ArmMm":180,"SpacingMm":30,"PerpRzDeg":-90}</code>), CORNER3 은 티칭 슬롯(corner3.*)을 순회합니다.
+</p>
+
+@if (!string.IsNullOrEmpty(_msg))
+{
+    <div class="alert @(_isErr ? "alert-danger" : "alert-info") py-2" style="max-width:1300px">@_msg</div>
+}
+
+<div class="mb-2 d-flex gap-2 align-items-center" style="max-width:1300px">
+    <button class="btn btn-sm btn-outline-secondary" @onclick="Reload" disabled="@_busy">새로고침</button>
+    <span class="text-muted ms-auto">총 @_rows.Count 종</span>
+</div>
+
+<div class="table-responsive" style="max-width:1300px">
+    <table class="table table-sm align-middle">
+        <thead>
+            <tr>
+                <th style="min-width:130px">레시피 ID</th>
+                <th style="min-width:180px">표시명</th>
+                <th style="width:70px" class="text-center">Enabled</th>
+                <th style="min-width:220px">StepKeysJson</th>
+                <th style="min-width:220px">PatternJson</th>
+                <th style="width:110px">비전 실패율 상한</th>
+                <th style="width:190px"></th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var row in _rows)
+            {
+                <tr @key="row.Id">
+                    <td><code>@row.Id</code></td>
+                    <td style="font-size:.85rem">@row.DisplayName</td>
+                    <td class="text-center">
+                        <input type="checkbox" class="form-check-input" @bind="row.Enabled" />
+                    </td>
+                    <td><input class="form-control form-control-sm font-monospace" style="font-size:.75rem"
+                               placeholder="(null = 풀시퀀스)" @bind="row.StepKeysJson" /></td>
+                    <td><input class="form-control form-control-sm font-monospace" style="font-size:.75rem"
+                               placeholder="(CROSS4 만 사용)" @bind="row.PatternJson" /></td>
+                    <td><input type="number" step="0.05" min="0" max="1"
+                               class="form-control form-control-sm" @bind="row.VisionFailRatioMax" /></td>
+                    <td style="white-space:nowrap">
+                        <button class="btn btn-sm btn-primary" @onclick="() => Save(row)" disabled="@_busy">저장</button>
+                        <button class="btn btn-sm btn-outline-warning" @onclick="() => ResetToDefault(row)"
+                                disabled="@_busy" title="코드 기본값(시드)으로 되돌림 — 현장 조정값을 덮어씁니다">
+                            기본값
+                        </button>
+                    </td>
+                </tr>
+            }
+            @if (_rows.Count == 0)
+            {
+                <tr><td colspan="7" class="text-center text-muted py-3">레시피가 없습니다 — 앱 재기동 시 자동 시드됩니다.</td></tr>
+            }
+        </tbody>
+    </table>
+</div>
+
+@code {
+    private List<InspectionRecipe> _rows = new();
+    private bool _busy;
+    private string? _msg;
+    private bool _isErr;
+
+    protected override async Task OnInitializedAsync() => await Reload();
+
+    private async Task Reload()
+    {
+        try
+        {
+            _rows = await Service.ListAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "레시피 목록 로드 실패");
+            Notify($"목록 로드 실패: {ex.Message}", true);
+        }
+    }
+
+    /// <summary>저장 전 JSON 필드 형식 검증 — 잘못된 JSON 이 DB 에 들어가 실행 시점(액션 FAILED)에야
+    /// 드러나는 것을 막는다. 빈 문자열은 null 로 정규화.</summary>
+    private static string? ValidateRow(InspectionRecipe row)
+    {
+        row.StepKeysJson = string.IsNullOrWhiteSpace(row.StepKeysJson) ? null : row.StepKeysJson.Trim();
+        row.PatternJson = string.IsNullOrWhiteSpace(row.PatternJson) ? null : row.PatternJson.Trim();
+
+        if (row.StepKeysJson is not null)
+        {
+            try
+            {
+                if (JsonSerializer.Deserialize<string[]>(row.StepKeysJson) is not { Length: > 0 })
+                    return "StepKeysJson 은 비어 있지 않은 문자열 배열이어야 합니다.";
+            }
+            catch (JsonException ex) { return $"StepKeysJson 파싱 실패: {ex.Message}"; }
+        }
+        if (row.PatternJson is not null)
+        {
+            try
+            {
+                var p = JsonSerializer.Deserialize<CrossPatternParams>(row.PatternJson);
+                if (p is null) return "PatternJson 이 null 로 역직렬화됩니다.";
+                if (!CrossPatternGenerator.TryGenerate(p, out _, out var err)) return err;
+            }
+            catch (JsonException ex) { return $"PatternJson 파싱 실패: {ex.Message}"; }
+        }
+        if (row.VisionFailRatioMax is < 0 or > 1)
+            return "비전 실패율 상한은 0~1 범위여야 합니다.";
+        return null;
+    }
+
+    private async Task Save(InspectionRecipe row)
+    {
+        if (_busy) return;
+        if (ValidateRow(row) is { } error)
+        {
+            Notify($"'{row.Id}' 저장 거부 — {error}", true);
+            return;
+        }
+        _busy = true;
+        try
+        {
+            await Service.SaveAsync(row);
+            await Reload();
+            Notify($"'{row.Id}' 저장 완료", false);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "레시피 저장 실패 (id={Id})", row.Id);
+            Notify($"저장 실패: {ex.Message}", true);
+        }
+        finally
+        {
+            _busy = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task ResetToDefault(InspectionRecipe row)
+    {
+        if (_busy) return;
+        _busy = true;
+        try
+        {
+            var ok = await Service.ResetToDefaultAsync(row.Id);
+            await Reload();
+            Notify(ok ? $"'{row.Id}' 기본값 재적용 완료 (Enabled 포함 시드값으로 복원)" : $"'{row.Id}' 는 카탈로그에 없는 레시피입니다.", !ok);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "레시피 기본값 재적용 실패 (id={Id})", row.Id);
+            Notify($"기본값 재적용 실패: {ex.Message}", true);
+        }
+        finally
+        {
+            _busy = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void Notify(string msg, bool error)
+    {
+        _msg = msg;
+        _isErr = error;
+    }
+}

@@ -131,5 +131,16 @@
    > 구현되어 `(seamType, wall_code)` → 레시피 매핑·실행 배선 완료(VDA5050_INTERFACE_SPEC §8.5.1 (5)).
    > `LINE-*` 5종 실행 활성, `CROSS4-*`/`CORNER3`은 실행 게이트 OFF(N13 확정 후 활성화).
    > 계약(`param_schema`) 반영 방식은 여전히 N13 미확정 — ACS는 자유 문자열 `inspectionProfileId` 유지.
+   >
+   > **HD_AMR 실행 시퀀스 구현(2026-09-15 추가)** — `CROSS4-*`/`CORNER3`의 온보드 실행 방법이 구현됨
+   > (게이트는 실기 검증 전이라 여전히 OFF, 온보드 `/recipes` 페이지에서 활성화):
+   > - **검사 방향 자동 유도**: seam 벡터(start→end)를 노드 theta 기준 벽면-로컬 투영해 수평/수직 자동 판정
+   >   (`SeamDirectionResolver`) — §1 의 "ACS 가 명령하지 않음" 원칙이 ACS 경로에 실제 배선됨. LINE 포함 공통.
+   > - **CROSS4**: 정렬 1회(wobj 프레임 등록) 후 교차점(=프레임 원점) 중심 4-arm 십자 경유점을 런타임 생성해
+   >   단일 검사 순회로 실행(`CrossPatternGenerator`, 레시피 `PatternJson`: ArmMm/SpacingMm/PerpRzDeg).
+   >   교차 arm 은 툴 RZ −90° 회전 촬상. 경유점 티칭 불요.
+   > - **CORNER3**: 평탄면 정렬 미적용 — 고정 티칭 슬롯 `corner3.{L|R}.{approach,face1..3,retreat}` 직접 순회
+   >   (`cornerInspectionRunStep`), SurfaceType=Corner 촬상. 거울 L/R 은 별도 티칭 2세트,
+   >   side 판별 P*→L / S*→R (F/A 코너의 side 규칙은 N13 협의 필요 — 기본 L).
 
 > 결정이 내려지면 본 문서와 `startWeldInspection` `param_schema`, 관련 코드/DB를 함께 갱신한다.

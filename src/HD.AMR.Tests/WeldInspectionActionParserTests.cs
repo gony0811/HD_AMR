@@ -112,6 +112,33 @@ public class WeldInspectionActionParserTests
         Assert.Equal(SeamTypeKind.Cross, req.SeamType);
     }
 
+    [Fact]
+    public void Parse_WithPointsArray_IgnoredAndSucceeds()
+    {
+        // §8.2: params.points 는 스키마에 존재하나 의미 미정의(N13) — 파서는 무시하고 통과해야 한다.
+        var action = Deserialize("""
+        {
+          "actionType": "startWeldInspection",
+          "actionId": "a3",
+          "actionParameters": [
+            { "key": "jobRef", "value": "JOB-3" },
+            { "key": "position", "value": {
+                "seamStartW": [1,2,3], "seamEndW": [4,5,6],
+                "drawingPos": { "tank": "CT1", "level": 1, "wall_code": "SM", "x": 1, "y": 2, "z": 3 } } },
+            { "key": "params", "value": {
+                "seamType": "CROSS", "points": [[1,2,3],[4,5,6],[7,8,9],[10,11,12]],
+                "sectionDxfId": "D3", "inspectionProfileId": "P3",
+                "standoffMm": 400, "anchorGroupId": "G3", "seqInGroup": 1 } }
+          ]
+        }
+        """);
+
+        var ok = WeldInspectionActionParser.TryParse(action, out var req, out var error);
+
+        Assert.True(ok, error);
+        Assert.Equal(SeamTypeKind.Cross, req!.SeamType);
+    }
+
     [Theory]
     [InlineData("POLYLINE")]   // §8.1: POLYLINE 은 거부
     [InlineData("ARC")]

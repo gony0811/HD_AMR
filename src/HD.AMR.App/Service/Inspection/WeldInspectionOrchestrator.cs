@@ -70,11 +70,11 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         }
     }
 
-    public async Task<InspectionActionResult> ExecuteAsync(VdaAction action, string orderId, CancellationToken ct)
+    public async Task<InspectionActionResult> ExecuteAsync(VdaAction action, string orderId, double? nodeThetaRad, CancellationToken ct)
     {
         try
         {
-            return await ExecuteCoreAsync(action, orderId, ct);
+            return await ExecuteCoreAsync(action, orderId, nodeThetaRad, ct);
         }
         catch (OperationCanceledException)
         {
@@ -88,7 +88,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         }
     }
 
-    private async Task<InspectionActionResult> ExecuteCoreAsync(VdaAction action, string orderId, CancellationToken ct)
+    private async Task<InspectionActionResult> ExecuteCoreAsync(VdaAction action, string orderId, double? nodeThetaRad, CancellationToken ct)
     {
         // 1) 파싱 — 실패는 계약 위반(orderValidationError).
         if (!WeldInspectionActionParser.TryParse(action, out var request, out var parseError))
@@ -127,26 +127,59 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                 $"recipe {recipeId} resolved but not enabled (실행 미구현 — N13/2차 대기)");
 
         // 6) 사전 티칭 경유점 조회: sectionDxfId → Drawing(이름 매칭) → 최신 InspectionProfile.
-        var (profile, profileError) = await FindProfileAsync(db, req.SectionDxfId, ct);
-        if (profile is null)
-            return InspectionActionResult.Fail("inspectionFailed", profileError!);
+        //    CORNER 는 도면 프로필을 쓰지 않는다(고정 티칭 슬롯 corner3.* 직접 순회) — 조회 생략.
+        InspectionProfile? profile = null;
+        if (recipe.SeamType != SeamTypeKind.Corner)
+        {
+            var (found, profileError) = await FindProfileAsync(db, req.SectionDxfId, ct);
+            if (found is null)
+                return InspectionActionResult.Fail("inspectionFailed", profileError!);
+            profile = found;
+        }
 
         // 7) anchor 캐시 판정 — 같은 (orderId, anchorGroupId) 연속이고 주행 없음 → ⑱만 실행.
+        //    CORNER 는 정렬 스텝이 없어 캐시 비적용(항상 레시피 스텝 전체 실행, 캐시 갱신도 안 함).
         bool anchorHit;
         lock (_sync)
-            anchorHit = _lastAnchor == (orderId, req.AnchorGroupId);
+            anchorHit = recipe.SeamType != SeamTypeKind.Corner
+                        && _lastAnchor == (orderId, req.AnchorGroupId);
 
         var stepKeys = anchorHit
             ? AnchorHitStepKeys
             : ParseStepKeys(recipe.StepKeysJson);
 
-        // 8) SequenceContext 구성 — 파라미터 우선순위: ① ACS action → ② 티칭 프로필 → ③ 레시피 → ④ 전역 기본.
+        // 8) 검사 방향 자동 유도(§4.4·§8.1) — seam 벡터를 노드 theta(벽 정면) 기준 벽면-로컬 투영.
+        //    theta 미상(방어적)이면 현행 기본 Horizontal 폴백. 판정 근거는 로그로 남긴다.
+        var direction = InspectionMoveDirection.Horizontal;
+        if (nodeThetaRad is { } theta)
+        {
+            direction = SeamDirectionResolver.Resolve(req.SeamStartW, req.SeamEndW, theta, out var dirReason);
+            _logger.LogInformation("검사 방향 유도: {Reason} (jobRef={JobRef})", dirReason, req.JobRef);
+        }
+        else
+        {
+            _logger.LogWarning("노드 theta 미상 — 검사 방향 Horizontal 폴백 (jobRef={JobRef})", req.JobRef);
+        }
+
+        // 8.5) CORNER3 좌/우 거울 side 판별 — 티칭 슬롯 접두사(corner3.L/R) 선택 키.
+        string? cornerSide = null;
+        if (recipe.SeamType == SeamTypeKind.Corner)
+        {
+            cornerSide = InspectionRecipeResolver.ResolveCornerSide(req.DrawingPos.WallCode, out var sideNote);
+            _logger.LogInformation("CORNER3 side={Side} — {Note} (wall={Wall})",
+                cornerSide, sideNote, req.DrawingPos.WallCode);
+        }
+
+        // 9) SequenceContext 구성 — 파라미터 우선순위: ① ACS action → ② 티칭 프로필 → ③ 레시피 → ④ 전역 기본.
+        //    CORNER 는 profile 이 없다 — Tool/Velocity 는 SequenceContext 기본값(단독 실행과 동일).
         var context = new SequenceContext
         {
-            Tool = profile.RunTool,
-            Velocity = profile.RunVel,
-            InspectionDrawingId = profile.DrawingId,
-            InspectionProfileId = profile.Id,
+            InspectionDirection = direction,
+            Tool = profile?.RunTool ?? 1,
+            Velocity = profile?.RunVel ?? 20,
+            InspectionDrawingId = profile?.DrawingId ?? 0,
+            InspectionProfileId = profile?.Id ?? 0,
+            CornerSide = cornerSide,
             InspectionSurfaceId = WallCodeToSurfaceId(req.DrawingPos.WallCode),
             CameraTargetDistanceMm = req.WorkingDistanceMm
                                      ?? recipe.CameraTargetDistanceMm
@@ -161,14 +194,46 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             VisionFailRatioMax = recipe.VisionFailRatioMax < 1.0 ? recipe.VisionFailRatioMax : null,
         };
 
+        // CROSS4: 레시피 PatternJson → 십자 4-arm 경유점 생성(wobj 프레임, 교차점=원점) → ⑱ 오버라이드 주입.
+        // 정렬 체인은 LINE 과 동일하게 1회만 수행되고, anchor 캐시 적중 시에도 오버라이드가 다시 주입되므로
+        // ⑱ 단독 재실행 경로가 그대로 동작한다.
+        if (recipe.SeamType == SeamTypeKind.Cross)
+        {
+            if (string.IsNullOrWhiteSpace(recipe.PatternJson))
+                return InspectionActionResult.Fail("inspectionFailed",
+                    $"recipe {recipeId} 십자 패턴 미구성(PatternJson 없음) — 레시피 관리에서 설정 필요");
+
+            CrossPatternParams? pattern;
+            try
+            {
+                pattern = JsonSerializer.Deserialize<CrossPatternParams>(recipe.PatternJson);
+            }
+            catch (JsonException ex)
+            {
+                return InspectionActionResult.Fail("inspectionFailed",
+                    $"recipe {recipeId} PatternJson 파싱 실패: {ex.Message}");
+            }
+            if (pattern is null)
+                return InspectionActionResult.Fail("inspectionFailed",
+                    $"recipe {recipeId} PatternJson 이 null 로 역직렬화됨");
+            if (!CrossPatternGenerator.TryGenerate(pattern, out var crossWaypoints, out var patternError))
+                return InspectionActionResult.Fail("inspectionFailed",
+                    $"recipe {recipeId} 십자 패턴 생성 실패: {patternError}");
+
+            context.WaypointsOverride = crossWaypoints;
+            _logger.LogInformation(
+                "CROSS4 십자 경유점 {N}점 생성 (arm={Arm}mm, spacing={Spacing}mm, perpRz={Rz}°)",
+                crossWaypoints.Count, pattern.ArmMm, pattern.SpacingMm, pattern.PerpRzDeg);
+        }
+
         _logger.LogInformation(
             "검사 시퀀스 시작: recipe={Recipe}, profile='{Profile}'(id={ProfileId}, drawing={DrawingId}), " +
             "anchor {AnchorState}, steps={Steps}",
-            recipeId, profile.Name, profile.Id, profile.DrawingId,
+            recipeId, profile?.Name ?? "(미사용 — CORNER 티칭 슬롯)", profile?.Id ?? 0, profile?.DrawingId ?? 0,
             anchorHit ? "적중(정렬 생략)" : "신규(풀시퀀스)",
             stepKeys is null ? "(전체)" : string.Join(",", stepKeys));
 
-        // 9) 실행 — 취소 전파용 CTS 를 보관(AbortAsync 가 취소).
+        // 10) 실행 — 취소 전파용 CTS 를 보관(AbortAsync 가 취소).
         CancellationTokenSource runCts;
         lock (_sync)
         {
@@ -190,7 +255,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             }
         }
 
-        // 10) 결과 매핑.
+        // 11) 결과 매핑.
         switch (runResult.Outcome)
         {
             case SequenceRunOutcome.Busy:
@@ -204,9 +269,12 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
 
             case SequenceRunOutcome.Completed:
             default:
-                lock (_sync) _lastAnchor = (orderId, req.AnchorGroupId);
+                // CORNER 는 정렬을 수행하지 않으므로 anchor 캐시를 갱신하지 않는다(기존 정렬도 훼손 안 함 —
+                // wobj 프레임은 컨트롤러에 유지).
+                if (recipe.SeamType != SeamTypeKind.Corner)
+                    lock (_sync) _lastAnchor = (orderId, req.AnchorGroupId);
                 return InspectionActionResult.Ok(
-                    $"recipe={recipeId} profile='{profile.Name}' anchor={req.AnchorGroupId}#{req.SeqInGroup}" +
+                    $"recipe={recipeId} profile='{profile?.Name ?? $"corner3.{cornerSide}"}' anchor={req.AnchorGroupId}#{req.SeqInGroup}" +
                     (anchorHit ? " (정렬 공유)" : "") +
                     $" jobRef={req.JobRef}");
         }

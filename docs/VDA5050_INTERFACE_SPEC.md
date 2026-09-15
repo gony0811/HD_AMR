@@ -670,6 +670,12 @@ ACS 생존신호는 VDA 5050 표준 로봇 `connection` 메시지의 상태 모�
 
 **(5) 현행 상태 각주 (2026-09-15 갱신).** HD_AMR 2차 연동 배선 **구현 완료** — `Vda5050OrderExecutor`가 노드 도달 후 `startWeldInspection`을 검사 실행기(`WeldInspectionOrchestrator`)에 위임한다: `actionParameters` 해석(파서, §8.4 골든 예시 검증) → `(seamType, wall_code)` → 레시피 매핑(위 (3) 표) → 레시피(DB `InspectionRecipes` 11종, 기동 시드) 로드 → `sectionDxfId`→로컬 `Drawing`→티칭 `InspectionProfile` 경유점으로 검사 시퀀스 실행 → `FINISHED`/`FAILED` + errorType(`orderValidationError`/`equipmentError`/`inspectionFailed`) 보고. `anchorGroupId` 정렬 공유(§8.1)·`emergencyStop` 검사 중단 포함. **현행 게이트**: `LINE-*` 5종만 실행 활성(Enabled) — `CROSS4-*`/`CORNER3`은 매핑은 되나 실행 미구현이라 `FAILED + inspectionFailed`("resolved but not enabled") 보고, N13 확정 후 활성화. 미정의 `wall_code`(예: §8.4 예시의 `W03` — 정본 10코드와 불일치, ACS 협의 필요)·미정의 `seamType`은 액션 `FAILED + orderValidationError`. 실기 E2E 검증은 대기.
 
+**(5-1) `CROSS4-*`/`CORNER3` 실행 시퀀스 구현 (2026-09-15 추가, 온보드 — 계약 무변경).** 위 (5)의 "실행 미구현" 부분이 해소됨. 게이트(Enabled)는 실기 검증 전이라 여전히 OFF 이며, 온보드 레시피 관리 UI(`/recipes`)에서 활성화한다.
+- **검사 방향 자동 유도 배선**: §4.4·§8.1 의 계약(seam 벡터 → 수평/수직 유도)이 ACS 경로에 실제 구현됨 — 노드 `theta` 를 검사 실행기에 전달, `SeamDirectionResolver` 가 벽면-로컬 투영으로 판정(45°±10° 경계·10mm 미만 seam 은 수평 폴백 + 로그). LINE 포함 전 타입 공통.
+- **`CROSS4-*`**: 정렬 1회로 등록된 작업물 좌표계(원점 = 교차부 정면 비드) 안에서 4-arm 십자 경유점을 런타임 생성(레시피 `PatternJson`: `ArmMm`/`SpacingMm`/`PerpRzDeg`)해 단일 순회로 실행. 교차 arm 은 툴 RZ −90° 촬상. 십자 중심 = 좌표계 원점 전제 — **ACS 정차점이 교차부 중심 정면**이라는 §4.4 산출 규칙에 의존(협의 항목 ③). `anchorGroupId` 정렬 공유는 LINE 과 동일하게 동작.
+- **`CORNER3`**: 평탄면 정렬 체인 미적용 — 고정 티칭 슬롯(`corner3.{L|R}.{approach,face1..3,retreat}`, 좌/우 거울 별도 티칭) 직접 순회, SurfaceType=Corner 촬상. side 판별은 `wall_code` P*→L / S*→R. **F/A(마구리) 코너의 side 규칙 미확정** — N13 협의 필요(아래 ②).
+- **N13 잔여 협의 항목**: ① `params.points` 의미 확정(CROSS 4-arm 끝점 4개 제안 — arm 별 길이 개별화), ② CORNER 거울 side 의 F/A 판별 규칙, ③ CROSS 정차점 = 교차부 중심 정면 / CORNER 정차점 재현성 보장 여부, ④ CROSS 교차 arm 의 90° 회전 영상에 대한 비전측 메타 구분 필요 여부.
+
 **(6) `seamType`(라인 형태) vs `Surface`(경유점 촬영 키) — 레벨 구분.** 둘은 다른 개념이며 계층이 다르다. **혼동 금지.**
 
 | 구분 | `seamType` | `Surface` |

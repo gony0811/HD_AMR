@@ -77,17 +77,27 @@ public class InspectionRunStep : ISequenceStep
         if (profile is null)
             return StepResult.Fail($"티칭설정(id={context.InspectionProfileId})을 찾을 수 없습니다 — 다시 선택하세요.");
 
+        // 경유점 소스: 오케스트레이터 주입 오버라이드(CROSS4 십자 패턴 등) > 티칭 프로필 저장분.
         List<InspectionWaypoint> waypoints;
-        try
+        if (context.WaypointsOverride is { } overrideWaypoints)
         {
-            waypoints = JsonSerializer.Deserialize<List<InspectionWaypoint>>(profile.WaypointsJson) ?? new();
+            waypoints = overrideWaypoints;
         }
-        catch (JsonException ex)
+        else
         {
-            return StepResult.Fail($"티칭설정 '{profile.Name}' 경유점 파싱 실패: {ex.Message}");
+            try
+            {
+                waypoints = JsonSerializer.Deserialize<List<InspectionWaypoint>>(profile.WaypointsJson) ?? new();
+            }
+            catch (JsonException ex)
+            {
+                return StepResult.Fail($"티칭설정 '{profile.Name}' 경유점 파싱 실패: {ex.Message}");
+            }
         }
         if (waypoints.Count < 2)
-            return StepResult.Fail($"티칭설정 '{profile.Name}' 경유점이 부족합니다({waypoints.Count}개, 2개 이상 필요).");
+            return StepResult.Fail(
+                $"{(context.WaypointsOverride is null ? $"티칭설정 '{profile.Name}'" : "주입된 패턴")} " +
+                $"경유점이 부족합니다({waypoints.Count}개, 2개 이상 필요).");
 
         // ── 작업물 좌표계 등록 확인 ─────────────────────────────────────
         double[] frame;
@@ -151,7 +161,8 @@ public class InspectionRunStep : ISequenceStep
             // th_max 초과 점은 /inspection 과 동일하게 제외.
             if (Math.Abs(w.Theta) > profile.ThMax) { skipped++; continue; }
 
-            var pose = new[] { w.X, w.Y, w.Z, 0.0, tiltSign * w.Theta, rz0 };
+            // RzDeg: 경유점별 툴 RZ 추가 회전(CROSS4 교차 arm −90°) — 프레임 유지값 rz0 에 가산.
+            var pose = new[] { w.X, w.Y, w.Z, 0.0, tiltSign * w.Theta, rz0 + w.RzDeg };
             var rc = await _cobot.Rpc.MoveLAsync(pose, tool: context.Tool, user: wobjId,
                 vel: context.Velocity, acc: MoveAcc, ovl: MoveOvl, blendR: -1, ct: ct);
             if (rc != 0)

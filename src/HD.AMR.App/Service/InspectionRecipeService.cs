@@ -46,6 +46,17 @@ public class InspectionRecipeService
         await _db.SaveChangesAsync(ct);
     }
 
+    /// <summary>레시피 1건을 코드 기본값(<see cref="BuildDefaults"/>)으로 재적용 — 기존 행이 있어도 덮어쓴다.
+    /// 시드가 upsert-if-missing 이라 기본값 변경이 기존 DB 에 반영되지 않을 때 쓰는 명시적 경로(레시피 관리 UI).</summary>
+    public async Task<bool> ResetToDefaultAsync(string id, CancellationToken ct = default)
+    {
+        var seed = BuildDefaults().FirstOrDefault(r => r.Id == id);
+        if (seed is null) return false;
+        await SaveAsync(seed, ct);
+        _logger.LogInformation("검사 레시피 {Id} 기본값 재적용", id);
+        return true;
+    }
+
     /// <summary>기동 시드 — 카탈로그 11종 중 없는 행만 추가(현장 수정값 보존).</summary>
     public async Task SeedDefaultsAsync(CancellationToken ct = default)
     {
@@ -96,13 +107,22 @@ public class InspectionRecipeService
                 SeamType = c.Seam,
                 Orientation = c.Orient,
                 Enabled = c.Enabled,
-                StepKeysJson = null,               // 풀시퀀스 — 타입별 부분 구성은 현장 튜닝으로 조정
+                // CORNER3 은 평탄면 정렬 체인 미적용 — 티칭 슬롯(corner3.*) 직접 순회 스텝만 실행.
+                // 그 외는 풀시퀀스(null) — 타입별 부분 구성은 현장 튜닝으로 조정.
+                StepKeysJson = c.Seam == SeamTypeKind.Corner
+                    ? """["amrMove","cornerInspectionRun","wObjReset","monitorClose"]"""
+                    : null,
                 ApproachTeachingKey = "",
                 DefaultStandoffMm = 400,
                 CameraTargetDistanceMm = null,     // 전역 기본(400mm) 사용
                 SurfaceOverride = c.Id == RecipeIds.Corner3 ? (byte)1 : null,   // CORNER3 = Corner 고정
                 AlignRetryCount = 0,
                 VisionFailRatioMax = 1.0,          // 판정 안 함 — 정책 확정 시 하향
+                // CROSS4: 십자 4-arm 경유점 생성 파라미터(CrossPatternParams) — 교차점 ±180mm, 30mm 간격,
+                // 교차 arm 촬상 회전 −90°. 현장 튜닝은 레시피 관리 UI 에서.
+                PatternJson = c.Seam == SeamTypeKind.Cross
+                    ? """{"ArmMm":180,"SpacingMm":30,"PerpRzDeg":-90}"""
+                    : null,
             };
         }
     }

@@ -43,6 +43,11 @@ public class InspectionRecipe
     /// CORNER3 은 1(Corner) 고정 시드.</summary>
     public byte? SurfaceOverride { get; set; }
 
+    /// <summary>타입별 스캔 패턴 파라미터(JSON). null=패턴 없음(LINE — 프로필 경유점 사용).
+    /// CROSS4-*: <see cref="Service.Inspection.CrossPatternParams"/> 직렬화
+    /// (<c>{"ArmMm":180,"SpacingMm":30,"PerpRzDeg":-90}</c>) — 교차점(wobj 원점) 중심 4-arm 경유점 생성.</summary>
+    public string? PatternJson { get; set; }
+
     /// <summary>정렬 스텝군 실패 시 재시도 횟수 (0=재시도 없음).</summary>
     public int AlignRetryCount { get; set; }
 

@@ -145,6 +145,7 @@ builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstanc
 builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<WObjPointStep>(sp, 2));   // 1160: 작업물 좌표계 점2(X방향)
 builder.Services.AddScoped<ISequenceStep, WObjRegisterStep>();   // 1170: 가상 점3(툴Z+50mm) + 좌표계 등록
 builder.Services.AddScoped<ISequenceStep, InspectionRunStep>();
+builder.Services.AddScoped<ISequenceStep, CornerInspectionRunStep>();   // 1250: ⑱ᶜ CORNER3 티칭 슬롯 순회
 builder.Services.AddScoped<ISequenceStep, WObjResetStep>();   // 1300: 활성 작업물 좌표계 0 복귀
 builder.Services.AddScoped<ISequenceStep, MonitorCloseStep>();   // 1400: 모니터링 창 닫기 (최종)
 // 시퀀스 모니터링 허브 — 별도 브라우저 창(/sequence-monitor, 다른 서킷)이 구독하므로 싱글톤.
@@ -296,10 +297,18 @@ CREATE TABLE IF NOT EXISTS InspectionRecipes (
     SurfaceOverride INTEGER NULL,
     AlignRetryCount INTEGER NOT NULL DEFAULT 0,
     VisionFailRatioMax REAL NOT NULL DEFAULT 1.0,
+    PatternJson TEXT NULL,
     CreatedAt TEXT NOT NULL,
     UpdatedAt TEXT NOT NULL
 );
 ");
+
+    // 기존 InspectionRecipes 에 PatternJson(CROSS4 십자 패턴 파라미터) 컬럼이 없으면 추가(기존 데이터 보존).
+    var hasPatternJson = db.Database
+        .SqlQueryRaw<long>("SELECT COUNT(*) AS Value FROM pragma_table_info('InspectionRecipes') WHERE name = 'PatternJson'")
+        .AsEnumerable().First() > 0;
+    if (!hasPatternJson)
+        db.Database.ExecuteSqlRaw("ALTER TABLE InspectionRecipes ADD COLUMN PatternJson TEXT NULL;");
 
     // 레시피 카탈로그 시드 — 없는 행만 추가(현장 조정값 보존). LINE-* 5종만 Enabled.
     scope.ServiceProvider.GetRequiredService<InspectionRecipeService>()
