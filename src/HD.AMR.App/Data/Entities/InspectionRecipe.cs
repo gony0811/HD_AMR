@@ -43,10 +43,8 @@ public class InspectionRecipe
     /// CORNER3 은 1(Corner) 고정 시드.</summary>
     public byte? SurfaceOverride { get; set; }
 
-    /// <summary>타입별 스캔 패턴 파라미터(JSON). null=패턴 없음(LINE — 프로필 경유점 사용).
-    /// CROSS4-*: <see cref="Service.Inspection.CrossPatternParams"/> 직렬화
-    /// (<c>{"ArmMm":180,"SpacingMm":30,"PerpRzDeg":-90}</c>) — 교차점(wobj 원점) 중심 4-arm 경유점 생성.</summary>
-    public string? PatternJson { get; set; }
+    // (제거됨) PatternJson — CROSS4 십자 패턴 런타임 생성 파라미터. 캡처 교시 단일화로 폐기(2026-09-15).
+    //   CROSS3/CROSS4 는 /inspection-points 6-DOF 캡처 프로필 경유점을 실행한다.
 
     /// <summary>정렬 스텝군 실패 시 재시도 횟수 (0=재시도 없음).</summary>
     public int AlignRetryCount { get; set; }

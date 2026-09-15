@@ -201,39 +201,9 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             VisionFailRatioMax = recipe.VisionFailRatioMax < 1.0 ? recipe.VisionFailRatioMax : null,
         };
 
-        // CROSS4 경유점 소스 (2택):
-        //  · 교시 우선: profile.PoseAbsolute(=/inspection-points 조그+캡처 절대 6-DOF)면 그 경유점을
-        //    그대로 실행한다(코로게이션 법선 추종). 오버라이드 주입 안 함 → ⑱이 프로필 절대자세로 명령.
-        //  · 폴백: 절대 프로필이 아니면 레시피 PatternJson 으로 평면 십자 4-arm 을 생성(구 방식, 상대 틸트).
-        //    정렬 체인은 LINE 과 동일하게 1회, anchor 캐시 적중 시에도 오버라이드가 재주입돼 ⑱ 단독 재실행 동작.
-        if (recipe.SeamType == SeamTypeKind.Cross && !(profile?.PoseAbsolute ?? false))
-        {
-            if (string.IsNullOrWhiteSpace(recipe.PatternJson))
-                return InspectionActionResult.Fail("inspectionFailed",
-                    $"recipe {recipeId} 십자 패턴 미구성(PatternJson 없음) — 레시피 관리에서 설정 필요");
-
-            CrossPatternParams? pattern;
-            try
-            {
-                pattern = JsonSerializer.Deserialize<CrossPatternParams>(recipe.PatternJson);
-            }
-            catch (JsonException ex)
-            {
-                return InspectionActionResult.Fail("inspectionFailed",
-                    $"recipe {recipeId} PatternJson 파싱 실패: {ex.Message}");
-            }
-            if (pattern is null)
-                return InspectionActionResult.Fail("inspectionFailed",
-                    $"recipe {recipeId} PatternJson 이 null 로 역직렬화됨");
-            if (!CrossPatternGenerator.TryGenerate(pattern, out var crossWaypoints, out var patternError))
-                return InspectionActionResult.Fail("inspectionFailed",
-                    $"recipe {recipeId} 십자 패턴 생성 실패: {patternError}");
-
-            context.WaypointsOverride = crossWaypoints;
-            _logger.LogInformation(
-                "CROSS4 십자 경유점 {N}점 생성 (arm={Arm}mm, spacing={Spacing}mm, perpRz={Rz}°)",
-                crossWaypoints.Count, pattern.ArmMm, pattern.SpacingMm, pattern.PerpRzDeg);
-        }
+        // CROSS3/CROSS4 는 LINE 과 동일하게 티칭 프로필 경유점을 실행한다 — 코로게이션 격자 교차부는
+        // 평탄하지 않아 수식 생성으로 법선·깊이를 담을 수 없으므로 6-DOF 캡처 교시(/inspection-points)로
+        // 단일화했다. (구 PatternJson 런타임 생성 경로는 폐기 — CrossPatternGenerator 는 교시 시작 템플릿 전용.)
 
         _logger.LogInformation(
             "검사 시퀀스 시작: recipe={Recipe}, profile='{Profile}'(id={ProfileId}, drawing={DrawingId}), " +
