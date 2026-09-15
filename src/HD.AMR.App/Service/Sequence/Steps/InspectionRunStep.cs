@@ -158,11 +158,16 @@ public class InspectionRunStep : ISequenceStep
             ct.ThrowIfCancellationRequested();
 
             var w = waypoints[i];
-            // th_max 초과 점은 /inspection 과 동일하게 제외.
-            if (Math.Abs(w.Theta) > profile.ThMax) { skipped++; continue; }
+            // th_max 초과 점은 /inspection 과 동일하게 제외 (절대 6-DOF 모드는 θ=절대 Ry 라 필터 미적용).
+            if (!profile.PoseAbsolute && Math.Abs(w.Theta) > profile.ThMax) { skipped++; continue; }
 
-            // RzDeg: 경유점별 툴 RZ 추가 회전(CROSS4 교차 arm −90°) — 프레임 유지값 rz0 에 가산.
-            var pose = new[] { w.X, w.Y, w.Z, 0.0, tiltSign * w.Theta, rz0 + w.RzDeg };
+            // 자세 해석 — profile.PoseAbsolute:
+            //  · false(상대 틸트): θ/RzDeg 를 프레임 유지값 rz0 에 합성. Rx=0 (LINE 도면 솎기·CROSS 패턴).
+            //  · true(절대 6-DOF): 캡처한 X/Y/Z/Rx/Ry(θ)/Rz 를 작업물 좌표계 기준 그대로 명령
+            //    (/inspection-points 조그+캡처 — 코로게이션 법선 추종). rz0/tiltSign 합성 금지.
+            var pose = profile.PoseAbsolute
+                ? new[] { w.X, w.Y, w.Z, w.RxDeg, w.Theta, w.RzDeg }
+                : new[] { w.X, w.Y, w.Z, 0.0, tiltSign * w.Theta, rz0 + w.RzDeg };
             var rc = await _cobot.Rpc.MoveLAsync(pose, tool: context.Tool, user: wobjId,
                 vel: context.Velocity, acc: MoveAcc, ovl: MoveOvl, blendR: -1, ct: ct);
             if (rc != 0)

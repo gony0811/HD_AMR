@@ -54,8 +54,10 @@
                 <th style="width:90px">wall_code</th>
                 <th style="min-width:150px">면</th>
                 <th>LINE</th>
-                <th>CROSS</th>
-                <th>CORNER</th>
+                <th>CROSS3</th>
+                <th>CROSS4</th>
+                <th>CORNER2</th>
+                <th>CORNER3</th>
             </tr>
         </thead>
         <tbody>
@@ -65,7 +67,9 @@
                     <td><code>@w.Code</code></td>
                     <td>@w.Label</td>
                     <td>@RecipeCell(SeamTypeKind.Line, w.Code)</td>
+                    <td>@RecipeCell(SeamTypeKind.Cross3, w.Code)</td>
                     <td>@RecipeCell(SeamTypeKind.Cross, w.Code)</td>
+                    <td>@RecipeCell(SeamTypeKind.Corner2, w.Code)</td>
                     <td>@RecipeCell(SeamTypeKind.Corner, w.Code)</td>
                 </tr>
             }
@@ -109,9 +113,14 @@
                         }
                     </td>
                     <td class="text-muted">
-                        @(r.SeamType == SeamTypeKind.Corner
-                            ? "고정 티칭 슬롯 corner3.* (도면 무관)"
-                            : "도면 티칭 프로필 (sectionDxfId → 최신 InspectionProfile)")
+                        @(r.SeamType switch
+                        {
+                            SeamTypeKind.Corner => "고정 티칭 슬롯 corner3.* (도면 무관)",
+                            SeamTypeKind.Corner2 => "실행 스텝 미구현 (게이트 OFF) — corner2 슬롯/캡처 후속",
+                            SeamTypeKind.Cross => "X-Y 6-DOF 캡처 교시 프로필 (/inspection-points, CROSS4) · PatternJson 폴백",
+                            SeamTypeKind.Cross3 => "X-Y 6-DOF 캡처 교시 프로필 (/inspection-points, CROSS3)",
+                            _ => "도면 LINE 티칭 프로필 (sectionDxfId → 최신 InspectionProfile)"
+                        })
                     </td>
                 </tr>
             }
@@ -136,6 +145,7 @@
                 <th style="min-width:150px">도면명 (Name)</th>
                 <th style="min-width:150px">파일명</th>
                 <th style="min-width:150px">최신 프로필</th>
+                <th class="text-center" style="width:80px">타입</th>
                 <th class="text-center" style="width:90px">경유점 수</th>
                 <th style="width:160px">티칭 시각(UTC)</th>
                 <th class="text-center" style="width:110px">상태</th>
@@ -148,6 +158,7 @@
                     <td><code>@d.DrawingName</code></td>
                     <td class="text-muted">@d.FileName</td>
                     <td>@(d.ProfileName ?? "—")</td>
+                    <td class="text-center">@(d.HasProfile ? (string.IsNullOrWhiteSpace(d.SeamType) ? "LINE" : d.SeamType) : "—")</td>
                     <td class="text-center">@d.WaypointCount</td>
                     <td class="text-muted">@(d.TaughtAt?.ToString("yyyy-MM-dd HH:mm") ?? "—")</td>
                     <td class="text-center">
@@ -168,7 +179,7 @@
             }
             @if (_teaching.Count == 0)
             {
-                <tr><td colspan="6" class="text-center text-muted py-3">등록된 도면이 없습니다 — 도면 업로드/티칭 후 표시됩니다.</td></tr>
+                <tr><td colspan="7" class="text-center text-muted py-3">등록된 도면이 없습니다 — 도면 업로드/티칭 후 표시됩니다.</td></tr>
             }
         </tbody>
     </table>
@@ -229,7 +240,7 @@
         var recipeId = InspectionRecipeResolver.ResolveRecipeId(seam, wallCode);
         var enabled = recipeId is not null && _enabledById.TryGetValue(recipeId, out var e) && e;
         var label = recipeId ?? "—";
-        if (seam == SeamTypeKind.Corner && recipeId is not null)
+        if (seam is SeamTypeKind.Corner or SeamTypeKind.Corner2 && recipeId is not null)
             label += $" ({InspectionRecipeResolver.ResolveCornerSide(wallCode, out _)})";
 
         builder.OpenElement(0, "span");

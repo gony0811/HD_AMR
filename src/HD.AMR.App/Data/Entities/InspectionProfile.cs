@@ -24,6 +24,15 @@ public class InspectionProfile
     public double SettleDelaySec { get; set; }   // 이동 후 진동 흡수 대기(초)
     public bool MoveHomeFirst { get; set; }
 
+    /// <summary>티칭 타입 — "LINE"(직선 seam 폴리라인 솎기) 또는 "CROSS"(십자 4-arm 생성).
+    /// §8.5.1 seamType 과 정합. CORNER 는 도면 프로필을 쓰지 않으므로 여기 없음. 기본 "LINE".</summary>
+    public string SeamType { get; set; } = "LINE";
+
+    /// <summary>경유점 자세 해석 방식. false(기본)=상대 틸트 — 경유점의 θ/RzDeg 를 프레임 유지값(rz0)에
+    /// 합성(LINE 도면 솎기·CROSS 패턴 생성). true=절대 6-DOF — 경유점의 X/Y/Z/Rx/Ry(θ)/Rz 를 작업물
+    /// 좌표계 기준 자세로 그대로 명령(/inspection-points 조그+캡처 교시, 코로게이션 법선 추종).</summary>
+    public bool PoseAbsolute { get; set; }
+
     /// <summary>경유점 목록(<see cref="InspectionWaypoint"/>)을 JSON 직렬화한 문자열.</summary>
     public string WaypointsJson { get; set; } = "[]";
 
@@ -45,4 +54,6 @@ public class InspectionProfile
 public record InspectionWaypoint(
     double X, double Z, double Theta, bool ThetaManual,
     byte Surface = 0, bool SurfaceManual = false,
-    double Y = 0, double RzDeg = 0);
+    double Y = 0, double RzDeg = 0, double RxDeg = 0);
+// RxDeg=툴 RX 회전(도). 코로게이션 등 굴곡면 법선 추종에 필요 — 6-DOF 조그+캡처 교시로 채운다.
+// ⚠ 런타임 InspectionRunStep 은 아직 Rx=0 고정(과제 (a)). 현재는 교시/저장/페이지 수동실행에만 반영.

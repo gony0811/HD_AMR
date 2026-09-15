@@ -117,7 +117,7 @@ builder.Services.AddDbContext<HdAmrDbContext>(opt =>
 builder.Services.AddScoped<DrawingService>();
 builder.Services.AddScoped<TeachingService>();
 builder.Services.AddScoped<ParameterService>();
-// 검사 타입 11종 레시피(사양 §8.5.1) CRUD + 기동 시드 — ACS startWeldInspection 매핑 대상.
+// 검사 타입 17종 레시피(사양 §8.5.1) CRUD + 기동 시드 — ACS startWeldInspection 매핑 대상.
 builder.Services.AddScoped<InspectionRecipeService>();
 // QR 정차 pose 티칭에 필요한 T_A_B, T_T_C, 목표 T_A_Q 및 기존 정합값 저장.
 builder.Services.AddScoped<CalibrationService>();
@@ -210,6 +210,8 @@ CREATE TABLE IF NOT EXISTS InspectionProfiles (
     ThMax REAL NOT NULL,
     SettleDelaySec REAL NOT NULL DEFAULT 0,
     MoveHomeFirst INTEGER NOT NULL,
+    SeamType TEXT NOT NULL DEFAULT 'LINE',
+    PoseAbsolute INTEGER NOT NULL DEFAULT 0,
     WaypointsJson TEXT NOT NULL,
     CreatedAt TEXT NOT NULL,
     UpdatedAt TEXT NOT NULL,
@@ -227,6 +229,26 @@ CREATE INDEX IF NOT EXISTS IX_InspectionProfiles_DrawingId ON InspectionProfiles
     {
         db.Database.ExecuteSqlRaw(
             "ALTER TABLE InspectionProfiles ADD COLUMN SettleDelaySec REAL NOT NULL DEFAULT 0;");
+    }
+
+    // SeamType 컬럼(LINE/CROSS 티칭 구분)도 동일 패턴으로 후방호환 추가.
+    var hasSeamType = db.Database
+        .SqlQueryRaw<long>("SELECT COUNT(*) AS Value FROM pragma_table_info('InspectionProfiles') WHERE name = 'SeamType'")
+        .AsEnumerable().First() > 0;
+    if (!hasSeamType)
+    {
+        db.Database.ExecuteSqlRaw(
+            "ALTER TABLE InspectionProfiles ADD COLUMN SeamType TEXT NOT NULL DEFAULT 'LINE';");
+    }
+
+    // PoseAbsolute 컬럼(절대 6-DOF 자세 모드)도 동일 패턴으로 후방호환 추가.
+    var hasPoseAbsolute = db.Database
+        .SqlQueryRaw<long>("SELECT COUNT(*) AS Value FROM pragma_table_info('InspectionProfiles') WHERE name = 'PoseAbsolute'")
+        .AsEnumerable().First() > 0;
+    if (!hasPoseAbsolute)
+    {
+        db.Database.ExecuteSqlRaw(
+            "ALTER TABLE InspectionProfiles ADD COLUMN PoseAbsolute INTEGER NOT NULL DEFAULT 0;");
     }
 
     // Backward-compatible schema add for TeachingPositions (고정 슬롯형 티칭 위치; 기존 데이터 보존).
@@ -282,7 +304,7 @@ CREATE TABLE IF NOT EXISTS Parameters (
 CREATE UNIQUE INDEX IF NOT EXISTS IX_Parameters_Name ON Parameters (Name);
 ");
 
-    // Backward-compatible schema add for InspectionRecipes (검사 타입 11종 레시피, 사양 §8.5.1; 기존 데이터 보존).
+    // Backward-compatible schema add for InspectionRecipes (검사 타입 17종 레시피, 사양 §8.5.1; 기존 데이터 보존).
     db.Database.ExecuteSqlRaw(@"
 CREATE TABLE IF NOT EXISTS InspectionRecipes (
     Id TEXT NOT NULL PRIMARY KEY,

@@ -1,11 +1,15 @@
 namespace HD.AMR.App.Service.Inspection;
 
-/// <summary>`params.seamType` — 용접라인 형태 (사양 §8.1/§8.5.1). POLYLINE 등 미정의 값은 파싱 단계에서 거부.</summary>
+/// <summary>`params.seamType` — 용접 형상 (사양 §8.1/§8.5.1, 독립 5종). 계약 enum(N13 확장):
+/// `LINE`/`CROSS3`/`CROSS4`/`CORNER2`/`CORNER3`. 파서는 하위호환으로 legacy `CROSS`(→CROSS4)·`CORNER`(→CORNER3)도
+/// 수용한다. POLYLINE 등 미정의 값은 거부. 내부 enum 이름은 계약 문자열과 다음처럼 대응한다(주석 참조).</summary>
 public enum SeamTypeKind
 {
-    Line,
-    Cross,
-    Corner,
+    Line,       // 직선 1갈래 (계약 "LINE")
+    Cross,      // 십자 4갈래 (계약 "CROSS4", legacy "CROSS") → 레시피 CROSS4-*
+    Cross3,     // T자 3갈래 (계약 "CROSS3") → 레시피 CROSS3-*
+    Corner,     // 3면 코너 (계약 "CORNER3", legacy "CORNER") → 레시피 CORNER3
+    Corner2,    // 2면 코너 (계약 "CORNER2") → 레시피 CORNER2 (실행 미구현 — Enabled=false)
 }
 
 /// <summary>`wall_code` → 면 자세 5군 (사양 §8.5.1 (2), INSPECTION_TYPES.md §2).</summary>

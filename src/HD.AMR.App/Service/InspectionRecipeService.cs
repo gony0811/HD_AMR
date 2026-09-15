@@ -18,13 +18,14 @@ public record DrawingTeachingSummary(
     string FileName,
     bool HasProfile,
     string? ProfileName,
+    string? SeamType,
     int WaypointCount,
     DateTime? TaughtAt);
 
 /// <summary>
-/// 검사 레시피(<see cref="InspectionRecipe"/>, 11종 카탈로그) CRUD + 기동 시드.
+/// 검사 레시피(<see cref="InspectionRecipe"/>, 17종 카탈로그) CRUD + 기동 시드.
 /// 시드는 upsert-if-missing — 기본값은 코드(git)로 버전 관리하되, 이미 존재하는 행(현장 조정값)은
-/// 건드리지 않는다. LINE-* 5종만 Enabled=true (CROSS4-*/CORNER3 은 실행 미구현 — Phase 2/3).
+/// 건드리지 않는다. LINE-* 5종만 Enabled=true (CROSS3-*/CROSS4-*/CORNER2/CORNER3 은 실행 게이트 OFF — N13/캡처 교시 대기).
 /// </summary>
 public class InspectionRecipeService
 {
@@ -59,13 +60,14 @@ public class InspectionRecipeService
             var profile = await _db.InspectionProfiles.AsNoTracking()
                 .Where(p => p.DrawingId == d.Id)
                 .OrderByDescending(p => p.UpdatedAt)
-                .Select(p => new { p.Name, p.WaypointsJson, p.UpdatedAt })
+                .Select(p => new { p.Name, p.SeamType, p.WaypointsJson, p.UpdatedAt })
                 .FirstOrDefaultAsync(ct);
 
             result.Add(new DrawingTeachingSummary(
                 d.Id, d.Name, d.FileName,
                 HasProfile: profile is not null,
                 ProfileName: profile?.Name,
+                SeamType: profile?.SeamType,
                 WaypointCount: CountWaypoints(profile?.WaypointsJson),
                 TaughtAt: profile?.UpdatedAt));
         }
@@ -116,7 +118,7 @@ public class InspectionRecipeService
         return true;
     }
 
-    /// <summary>기동 시드 — 카탈로그 11종 중 없는 행만 추가(현장 수정값 보존).</summary>
+    /// <summary>기동 시드 — 카탈로그 17종 중 없는 행만 추가(현장 수정값 보존).</summary>
     public async Task SeedDefaultsAsync(CancellationToken ct = default)
     {
         var existingIds = await _db.InspectionRecipes.Select(r => r.Id).ToListAsync(ct);
@@ -138,7 +140,7 @@ public class InspectionRecipeService
         }
     }
 
-    /// <summary>카탈로그 11종 기본값 (INSPECTION_TYPES.md §5 / 사양 §8.5.1).</summary>
+    /// <summary>카탈로그 17종 기본값 (INSPECTION_TYPES.md §5 / 사양 §8.5.1).</summary>
     private static IEnumerable<InspectionRecipe> BuildDefaults()
     {
         // (id, 표시명, seamType, 면자세, 실행 가능 여부)
@@ -149,12 +151,18 @@ public class InspectionRecipeService
             (RecipeIds.LineWall, "직선 seam — 수직벽(SM/PM/F/A)", SeamTypeKind.Line, SurfaceOrientation.Wall, true),
             (RecipeIds.LineChamferLower, "직선 seam — 하부챔퍼(SL/PL)", SeamTypeKind.Line, SurfaceOrientation.ChamferLower, true),
             (RecipeIds.LineChamferUpper, "직선 seam — 상부챔퍼(SU/PU)", SeamTypeKind.Line, SurfaceOrientation.ChamferUpper, true),
+            (RecipeIds.Cross3Floor, "T자 3갈래 — 바닥(B)", SeamTypeKind.Cross3, SurfaceOrientation.Floor, false),
+            (RecipeIds.Cross3Ceil, "T자 3갈래 — 천장(T)", SeamTypeKind.Cross3, SurfaceOrientation.Ceiling, false),
+            (RecipeIds.Cross3Wall, "T자 3갈래 — 수직벽(SM/PM/F/A)", SeamTypeKind.Cross3, SurfaceOrientation.Wall, false),
+            (RecipeIds.Cross3ChamferLower, "T자 3갈래 — 하부챔퍼(SL/PL)", SeamTypeKind.Cross3, SurfaceOrientation.ChamferLower, false),
+            (RecipeIds.Cross3ChamferUpper, "T자 3갈래 — 상부챔퍼(SU/PU)", SeamTypeKind.Cross3, SurfaceOrientation.ChamferUpper, false),
             (RecipeIds.Cross4Floor, "4점 십자 — 바닥(B)", SeamTypeKind.Cross, SurfaceOrientation.Floor, false),
             (RecipeIds.Cross4Ceil, "4점 십자 — 천장(T)", SeamTypeKind.Cross, SurfaceOrientation.Ceiling, false),
             (RecipeIds.Cross4Wall, "4점 십자 — 수직벽(SM/PM/F/A)", SeamTypeKind.Cross, SurfaceOrientation.Wall, false),
             (RecipeIds.Cross4ChamferLower, "4점 십자 — 하부챔퍼(SL/PL)", SeamTypeKind.Cross, SurfaceOrientation.ChamferLower, false),
             (RecipeIds.Cross4ChamferUpper, "4점 십자 — 상부챔퍼(SU/PU)", SeamTypeKind.Cross, SurfaceOrientation.ChamferUpper, false),
-            (RecipeIds.Corner3, "3점 코너 (삼면, 135°·90°·90°)", SeamTypeKind.Corner, SurfaceOrientation.Any, false),
+            (RecipeIds.Corner2, "2면 코너 (이면, 브릿지 플레이트)", SeamTypeKind.Corner2, SurfaceOrientation.Any, false),
+            (RecipeIds.Corner3, "3면 코너 (삼면, 135°·90°·90°, 브릿지 플레이트)", SeamTypeKind.Corner, SurfaceOrientation.Any, false),
         };
 
         foreach (var c in catalog)
@@ -167,6 +175,7 @@ public class InspectionRecipeService
                 Orientation = c.Orient,
                 Enabled = c.Enabled,
                 // CORNER3 은 평탄면 정렬 체인 미적용 — 티칭 슬롯(corner3.*) 직접 순회 스텝만 실행.
+                // CORNER2 는 실행 스텝 미구현(Enabled=false 로 게이트) — 후속에서 corner2 슬롯/캡처 스텝 배선.
                 // 그 외는 풀시퀀스(null) — 타입별 부분 구성은 현장 튜닝으로 조정.
                 StepKeysJson = c.Seam == SeamTypeKind.Corner
                     ? """["amrMove","cornerInspectionRun","wObjReset","monitorClose"]"""
@@ -174,7 +183,7 @@ public class InspectionRecipeService
                 ApproachTeachingKey = "",
                 DefaultStandoffMm = 400,
                 CameraTargetDistanceMm = null,     // 전역 기본(400mm) 사용
-                SurfaceOverride = c.Id == RecipeIds.Corner3 ? (byte)1 : null,   // CORNER3 = Corner 고정
+                SurfaceOverride = c.Id is RecipeIds.Corner3 or RecipeIds.Corner2 ? (byte)1 : null,   // 코너 = Corner 고정
                 AlignRetryCount = 0,
                 VisionFailRatioMax = 1.0,          // 판정 안 함 — 정책 확정 시 하향
                 // CROSS4: 십자 4-arm 경유점 생성 파라미터(CrossPatternParams) — 교차점 ±180mm, 30mm 간격,

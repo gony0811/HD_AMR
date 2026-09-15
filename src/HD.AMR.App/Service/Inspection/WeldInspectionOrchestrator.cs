@@ -128,10 +128,17 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
 
         // 6) 사전 티칭 경유점 조회: sectionDxfId → Drawing(이름 매칭) → 최신 InspectionProfile.
         //    CORNER 는 도면 프로필을 쓰지 않는다(고정 티칭 슬롯 corner3.* 직접 순회) — 조회 생략.
+        //    seamType(LINE/CROSS)로 필터해 LINE 액션이 CROSS 티칭 프로필을 잡는 혼선을 막는다.
         InspectionProfile? profile = null;
         if (recipe.SeamType != SeamTypeKind.Corner)
         {
-            var (found, profileError) = await FindProfileAsync(db, req.SectionDxfId, ct);
+            var wantSeam = recipe.SeamType switch
+            {
+                SeamTypeKind.Cross => "CROSS",
+                SeamTypeKind.Cross3 => "CROSS3",
+                _ => "LINE",
+            };
+            var (found, profileError) = await FindProfileAsync(db, req.SectionDxfId, wantSeam, ct);
             if (found is null)
                 return InspectionActionResult.Fail("inspectionFailed", profileError!);
             profile = found;
@@ -194,10 +201,12 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             VisionFailRatioMax = recipe.VisionFailRatioMax < 1.0 ? recipe.VisionFailRatioMax : null,
         };
 
-        // CROSS4: 레시피 PatternJson → 십자 4-arm 경유점 생성(wobj 프레임, 교차점=원점) → ⑱ 오버라이드 주입.
-        // 정렬 체인은 LINE 과 동일하게 1회만 수행되고, anchor 캐시 적중 시에도 오버라이드가 다시 주입되므로
-        // ⑱ 단독 재실행 경로가 그대로 동작한다.
-        if (recipe.SeamType == SeamTypeKind.Cross)
+        // CROSS4 경유점 소스 (2택):
+        //  · 교시 우선: profile.PoseAbsolute(=/inspection-points 조그+캡처 절대 6-DOF)면 그 경유점을
+        //    그대로 실행한다(코로게이션 법선 추종). 오버라이드 주입 안 함 → ⑱이 프로필 절대자세로 명령.
+        //  · 폴백: 절대 프로필이 아니면 레시피 PatternJson 으로 평면 십자 4-arm 을 생성(구 방식, 상대 틸트).
+        //    정렬 체인은 LINE 과 동일하게 1회, anchor 캐시 적중 시에도 오버라이드가 재주입돼 ⑱ 단독 재실행 동작.
+        if (recipe.SeamType == SeamTypeKind.Cross && !(profile?.PoseAbsolute ?? false))
         {
             if (string.IsNullOrWhiteSpace(recipe.PatternJson))
                 return InspectionActionResult.Fail("inspectionFailed",
@@ -283,7 +292,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
     /// <summary>sectionDxfId 로 로컬 Drawing 을 찾고(이름 정확 일치 → 파일명 매칭 순), 그 도면의
     /// 최신 티칭설정(InspectionProfile)을 반환. 없으면 (null, 사유).</summary>
     private static async Task<(InspectionProfile? Profile, string? Error)> FindProfileAsync(
-        HdAmrDbContext db, string sectionDxfId, CancellationToken ct)
+        HdAmrDbContext db, string sectionDxfId, string seamType, CancellationToken ct)
     {
         var drawing = await db.Drawings.AsNoTracking()
                           .FirstOrDefaultAsync(d => d.Name == sectionDxfId, ct)
@@ -295,11 +304,11 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             return (null, $"no local drawing for sectionDxfId='{sectionDxfId}' — 도면 업로드/이름 정합 필요");
 
         var profile = await db.InspectionProfiles.AsNoTracking()
-            .Where(p => p.DrawingId == drawing.Id)
+            .Where(p => p.DrawingId == drawing.Id && p.SeamType == seamType)
             .OrderByDescending(p => p.UpdatedAt)
             .FirstOrDefaultAsync(ct);
         if (profile is null)
-            return (null, $"no taught profile for sectionDxfId='{sectionDxfId}' (drawing '{drawing.Name}') — 온보드 티칭 필요");
+            return (null, $"no taught {seamType} profile for sectionDxfId='{sectionDxfId}' (drawing '{drawing.Name}') — 온보드 {seamType} 티칭 필요");
 
         return (profile, null);
     }

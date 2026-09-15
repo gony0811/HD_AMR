@@ -1,0 +1,513 @@
+@page "/inspection-points"
+@rendermode InteractiveServer
+@using System.Globalization
+@using HD.AMR.App.Data.Entities
+@using HD.AMR.App.Service
+@using HD.AMR.App.Service.Inspection
+@inject DrawingService Service
+@inject CobotService Cobot
+@inject ILogger<InspectionPoints> Logger
+@implements IDisposable
+
+<PageTitle>검사 포인트 티칭 (X-Y)</PageTitle>
+
+<h1>검사 포인트 티칭 (X-Y 평면)</h1>
+<p class="text-muted" style="max-width:1050px">
+    CROSS·CORNER 등 <b>X-Y 검사평면</b> 레시피의 경유점을 도면 추출 없이 직접 교시합니다. 좌표 규약:
+    <b>X-Y = 검사평면</b>, <b>Z = 검사면 법선(선창 내부로 들어가는 방향이 +) = 카메라 Working Distance</b>.
+    각 경유점은 6-DOF <code>[X, Y, Z, Rx, Ry, Rz]</code> — 코로게이션 등 굴곡면은 코봇을 검사 자세로
+    <b>조그한 뒤 '현재 자세 캡처'</b> 로 Rx/Ry/Z 실측을 그대로 담으세요(눈으로 계산 불가).
+    아래 캔버스는 X-Y 평면이며 각 점의 카메라 FOV(@F(_fovMm)×@F(_fovMm)mm)를 사각형으로 표시합니다.
+    <br /><span class="text-success-emphasis">✔ CROSS: 여기서 저장한 절대 6-DOF 프로필은 ACS 자동검사에서도 그대로 실행됩니다(Rx 포함) —
+    레시피 <code>Enabled</code> 를 켜면 됨. (PatternJson 수식 생성은 절대 프로필이 없을 때만 폴백)</span>
+    <br /><span class="text-warning-emphasis">⚠ CORNER: 현재 ACS 런타임은 3면 코너를 BASE 좌표계 고정 슬롯(corner3.*)으로 검사합니다 —
+    이 X-Y(wobj) 프로필은 아직 CORNER ACS 실행에 쓰이지 않습니다(프레임 규약 결정 필요).</span>
+</p>
+
+@if (!string.IsNullOrEmpty(_msg))
+{
+    <div class="alert @(_isErr ? "alert-danger" : "alert-info") py-2" style="max-width:1300px">@_msg</div>
+}
+
+@* ── 섹션(도면) 연결 · 타입 · 이름 ── *@
+<div class="row g-2 align-items-end mb-2" style="max-width:1300px">
+    <div class="col-auto">
+        <label class="form-label mb-0">섹션(도면) 연결</label>
+        <select class="form-select form-select-sm" style="width:230px" @bind="_drawingId" @bind:after="OnDrawingChanged">
+            <option value="0">— 도면 선택(ACS sectionDxfId 매칭용) —</option>
+            @foreach (var d in _drawings)
+            {
+                <option value="@d.Id">@d.Name (@d.FileName)</option>
+            }
+        </select>
+    </div>
+    <div class="col-auto">
+        <label class="form-label mb-0">검사 타입</label>
+        <select class="form-select form-select-sm" style="width:190px" @bind="_seamType">
+            <option value="CROSS">CROSS4 (4갈래)</option>
+            <option value="CROSS3">CROSS3 (3갈래)</option>
+            <option value="CORNER2">CORNER2 (2면·수동/미리보기)</option>
+            <option value="CORNER3">CORNER3 (3면·수동/미리보기)</option>
+        </select>
+    </div>
+    <div class="col-auto">
+        <label class="form-label mb-0">FOV(mm)</label>
+        <input type="number" step="1" min="1" class="form-control form-control-sm" style="width:90px" @bind="_fovMm" @bind:after="RecomputeViewBox" />
+    </div>
+    <div class="col-auto">
+        <label class="form-label mb-0">기본 Z(WD, mm)</label>
+        <input type="number" step="1" class="form-control form-control-sm" style="width:120px" @bind="_defaultZ" />
+    </div>
+</div>
+
+<div class="row" style="max-width:1300px">
+    @* ── 좌: X-Y 캔버스 뷰어 ── *@
+    <div class="col-lg-6">
+        <div style="border:1px solid #ccc; border-radius:6px; background:#fff">
+            <svg width="100%" viewBox="@ViewBox" preserveAspectRatio="xMidYMid meet" style="display:block; aspect-ratio:1/1">
+                @* 격자·축 *@
+                <line x1="@F(_vbMinX)" y1="0" x2="@F(_vbMinX + _vbW)" y2="0" stroke="#e0a0a0" stroke-width="@F(_stroke)" />
+                <line x1="0" y1="@F(_vbMinY)" x2="0" y2="@F(_vbMinY + _vbH)" stroke="#a0c0e0" stroke-width="@F(_stroke)" />
+                @for (int i = 0; i < _points.Count; i++)
+                {
+                    var p = _points[i];
+                    var cx = p.X;
+                    var cy = -p.Y;      // 화면 y 아래로 → 세계 Y 위로
+                    var half = _fovMm / 2.0;
+                    var isSel = i == _selected;
+                    <rect x="@F(cx - half)" y="@F(cy - half)" width="@F(_fovMm)" height="@F(_fovMm)"
+                          fill="@(isSel ? "rgba(13,110,253,0.12)" : "rgba(120,120,120,0.06)")"
+                          stroke="@(isSel ? "#0d6efd" : "#888")" stroke-width="@F(_stroke)" />
+                    <circle cx="@F(cx)" cy="@F(cy)" r="@F(_dotR)" fill="@(isSel ? "#dc3545" : "#0d6efd")" />
+                    <text x="@F(cx + half + _stroke * 3)" y="@F(cy)" font-size="@F(_font)" fill="#333"
+                          dominant-baseline="middle">#@(i + 1) (Z@F(p.Z))</text>
+                }
+            </svg>
+        </div>
+        <p class="hint text-muted" style="font-size:.78rem">가로축 = X, 세로축 = Y(위 +). 빨간 축선 = X축(Y=0), 파란 축선 = Y축(X=0). 사각형 = 카메라 FOV. Z(WD)는 라벨에 표시.</p>
+    </div>
+
+    @* ── 우: 포인트 표 ── *@
+    <div class="col-lg-6">
+        <div class="d-flex gap-2 mb-1 flex-wrap">
+            <button class="btn btn-sm btn-primary" @onclick="AddPoint" disabled="@_isRunning">＋ 포인트 추가</button>
+            <button class="btn btn-sm btn-success" @onclick="CaptureCurrentPose"
+                    disabled="@(_isRunning || !Cobot.IsConnected)"
+                    title="코봇을 검사 자세로 조그한 뒤 현재 작업물 좌표계 6-DOF(x,y,z,rx,ry,rz)를 새 포인트로 캡처">◉ 현재 자세 캡처</button>
+            <button class="btn btn-sm btn-outline-success" @onclick="CaptureIntoSelected"
+                    disabled="@(_isRunning || !Cobot.IsConnected || _selected < 0 || _selected >= _points.Count)"
+                    title="선택한 포인트를 현재 코봇 자세로 갱신">선택점 갱신</button>
+            <button class="btn btn-sm btn-outline-secondary" @onclick="FillCrossPattern" disabled="@_isRunning"
+                    title="선택점(없으면 원점) 기준 십자 4-arm 패턴을 X-Y 로 채웁니다(평면 · Rx=0)">십자 패턴 채우기</button>
+            <span class="ms-auto text-muted align-self-center">@_points.Count 점</span>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-sm align-middle" style="font-size:.8rem">
+                <thead class="table-light">
+                    <tr>
+                        <th style="width:40px">#</th>
+                        <th>X</th><th>Y</th><th>Z(WD)</th><th>Rx°</th><th>Ry°(θ)</th><th>Rz°</th>
+                        <th style="width:110px">Surface</th>
+                        <th style="width:120px"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @for (int i = 0; i < _points.Count; i++)
+                    {
+                        var idx = i;
+                        var p = _points[idx];
+                        <tr class="@(idx == _selected ? "table-primary" : "")" @onclick="() => _selected = idx" style="cursor:pointer">
+                            <td>@(idx + 1)</td>
+                            <td><input type="number" step="0.1" style="width:80px" value="@F(p.X)" @onchange="e => { p.X = D(e.Value); RecomputeViewBox(); }" @onclick:stopPropagation="true" /></td>
+                            <td><input type="number" step="0.1" style="width:80px" value="@F(p.Y)" @onchange="e => { p.Y = D(e.Value); RecomputeViewBox(); }" @onclick:stopPropagation="true" /></td>
+                            <td><input type="number" step="0.1" style="width:80px" value="@F(p.Z)" @onchange="e => p.Z = D(e.Value)" @onclick:stopPropagation="true" /></td>
+                            <td><input type="number" step="1" style="width:64px" value="@F(p.Rx)" @onchange="e => p.Rx = D(e.Value)" @onclick:stopPropagation="true" /></td>
+                            <td><input type="number" step="1" style="width:64px" value="@F(p.Theta)" @onchange="e => p.Theta = D(e.Value)" @onclick:stopPropagation="true" /></td>
+                            <td><input type="number" step="1" style="width:64px" value="@F(p.Rz)" @onchange="e => p.Rz = D(e.Value)" @onclick:stopPropagation="true" /></td>
+                            <td>
+                                <select class="form-select form-select-sm" value="@p.Surface" @onchange="e => p.Surface = (byte)IntOr(e.Value, 0)" @onclick:stopPropagation="true">
+                                    <option value="0">Flat</option>
+                                    <option value="1">Corner</option>
+                                    <option value="2">Corrugation</option>
+                                </select>
+                            </td>
+                            <td @onclick:stopPropagation="true">
+                                <button class="btn btn-sm btn-outline-primary" @onclick="() => MoveToPointAsync(idx)"
+                                        disabled="@(_isRunning || !Cobot.IsConnected)">이동</button>
+                                <button class="btn btn-sm btn-outline-danger" @onclick="() => RemovePoint(idx)" disabled="@_isRunning">－</button>
+                            </td>
+                        </tr>
+                    }
+                    @if (_points.Count == 0)
+                    {
+                        <tr><td colspan="9" class="text-center text-muted py-2">포인트가 없습니다 — '포인트 추가', '현재 자세 캡처' 또는 '십자 패턴 채우기'.</td></tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+@* ── 코봇 실행 ── *@
+<div class="cobot-run mt-2" style="padding:10px; border:1px solid #ccc; border-radius:6px; max-width:1300px">
+    <strong>코봇 실행 (작업물 좌표계, pose=[X,Y,Z])</strong>
+    @if (!Cobot.IsConnected)
+    {
+        <div class="hint text-danger">⚠ 코봇 RPC 미연결.</div>
+    }
+    <div class="row g-2 align-items-end mt-1">
+        <div class="col-auto"><label class="form-label mb-0">공구(tool)</label>
+            <input class="form-control form-control-sm" type="number" min="0" max="15" style="width:80px" @bind="_runTool" /></div>
+        <div class="col-auto"><label class="form-label mb-0">작업물(user)</label>
+            <input class="form-control form-control-sm" type="number" min="0" max="14" style="width:80px" @bind="_runUser" /></div>
+        <div class="col-auto"><label class="form-label mb-0">속도(%)</label>
+            <input class="form-control form-control-sm" type="number" min="1" max="100" style="width:80px" @bind="_runVel" /></div>
+        <div class="col-auto"><label class="form-label mb-0">정착 대기(초)</label>
+            <input class="form-control form-control-sm" type="number" step="0.1" min="0" style="width:110px" @bind="_settleSec" /></div>
+        <div class="col-auto">
+            <button class="btn btn-success" @onclick="RunPoints" disabled="@(_isRunning || _points.Count < 1 || !Cobot.IsConnected)">
+                @(_isRunning ? "실행 중..." : "실행")
+            </button>
+            <button class="btn btn-danger" @onclick="StopRun" disabled="@(!_isRunning)">■ 정지</button>
+        </div>
+    </div>
+    @if (!string.IsNullOrEmpty(_runMsg))
+    {
+        <div class="mt-1 @(_runErr ? "text-danger" : "text-success")">@_runMsg</div>
+    }
+</div>
+
+@* ── 프로필 저장/불러오기 ── *@
+<div class="teaching-profiles mt-2" style="padding:10px; border:1px solid #ccc; border-radius:6px; max-width:1300px">
+    <strong>프로필 저장 / 불러오기</strong>
+    <p class="hint text-muted mb-1">선택한 섹션(도면)에 이 포인트 세트를 이름붙여 저장합니다. 런타임은 sectionDxfId→도면→seamType 일치 최신 프로필을 사용합니다.</p>
+    <div class="row g-2 align-items-end">
+        <div class="col-auto">
+            <input class="form-control form-control-sm" type="text" placeholder="프로필 이름" style="width:220px" @bind="_profileName" />
+        </div>
+        <div class="col-auto">
+            <button class="btn btn-sm btn-primary" @onclick="SaveProfileAsync"
+                    disabled="@(_drawingId == 0 || string.IsNullOrWhiteSpace(_profileName) || _points.Count == 0)">저장</button>
+        </div>
+        <div class="col-auto">
+            <label class="form-label mb-0">저장된 프로필</label>
+            <select class="form-select form-select-sm" style="width:260px" @bind="_selectedProfileId">
+                <option value="">— 선택 —</option>
+                @foreach (var p in _profiles)
+                {
+                    <option value="@p.Id">[@(string.IsNullOrWhiteSpace(p.SeamType) ? "LINE" : p.SeamType)] @p.Name (@WaypointCount(p)점)</option>
+                }
+            </select>
+        </div>
+        <div class="col-auto">
+            <button class="btn btn-sm btn-outline-primary" @onclick="LoadSelected" disabled="@(_selectedProfileId is null)">불러오기</button>
+            <button class="btn btn-sm btn-outline-danger" @onclick="DeleteSelectedAsync" disabled="@(_selectedProfileId is null)">삭제</button>
+        </div>
+    </div>
+</div>
+
+@code {
+    private sealed class XyPoint
+    {
+        public double X { get; set; }
+        public double Y { get; set; }
+        public double Z { get; set; }        // Working Distance (검사면 법선, +선창 내부)
+        public double Rx { get; set; }       // 툴 RX (deg) — 굴곡면 법선 추종
+        public double Theta { get; set; }    // = 툴 RY (deg)
+        public double Rz { get; set; }       // 툴 RZ (deg)
+        public byte Surface { get; set; }
+    }
+
+    private List<Drawing> _drawings = new();
+    private int _drawingId;
+    private string _seamType = "CROSS";
+    private double _fovMm = 30;
+    private double _defaultZ = 400;          // 기본 WD
+
+    private readonly List<XyPoint> _points = new();
+    private int _selected = -1;
+
+    private List<InspectionProfile> _profiles = new();
+    private int? _selectedProfileId;
+    private string _profileName = "";
+
+    // 십자 패턴 파라미터(간이)
+    private double _crossArmMm = 180;
+    private double _crossSpacingMm = 30;
+    private double _crossPerpRzDeg = -90;
+
+    // 코봇 실행
+    private int _runTool = 1, _runUser = 0, _runVel = 5;
+    private double _settleSec = 0.5;
+    private bool _isRunning;
+    private bool _runErr;
+    private string? _runMsg;
+    private CancellationTokenSource? _runCts;
+
+    private string? _msg;
+    private bool _isErr;
+
+    // 뷰박스(캔버스) — RecomputeViewBox 로 갱신
+    private double _vbMinX = -50, _vbMinY = -50, _vbW = 100, _vbH = 100;
+    private double _stroke = 0.5, _dotR = 1.5, _font = 3;
+    private string ViewBox => $"{F(_vbMinX)} {F(_vbMinY)} {F(_vbW)} {F(_vbH)}";
+
+    protected override async Task OnInitializedAsync()
+    {
+        try { _drawings = await Service.ListAsync(); }
+        catch (Exception ex) { Logger.LogError(ex, "도면 목록 로드 실패"); Notify($"도면 목록 로드 실패: {ex.Message}", true); }
+        RecomputeViewBox();
+    }
+
+    private async Task OnDrawingChanged()
+    {
+        _selectedProfileId = null;
+        if (_drawingId == 0) { _profiles = new(); return; }
+        try { _profiles = await Service.ListProfilesAsync(_drawingId); }
+        catch (Exception ex) { Logger.LogError(ex, "프로필 목록 로드 실패"); Notify($"프로필 목록 로드 실패: {ex.Message}", true); }
+    }
+
+    private void AddPoint()
+    {
+        var p = _selected >= 0 && _selected < _points.Count
+            ? new XyPoint { X = _points[_selected].X, Y = _points[_selected].Y, Z = _points[_selected].Z }
+            : new XyPoint { X = 0, Y = 0, Z = _defaultZ };
+        _points.Add(p);
+        _selected = _points.Count - 1;
+        RecomputeViewBox();
+    }
+
+    private void RemovePoint(int i)
+    {
+        if (i < 0 || i >= _points.Count) return;
+        _points.RemoveAt(i);
+        if (_selected >= _points.Count) _selected = _points.Count - 1;
+        RecomputeViewBox();
+    }
+
+    /// <summary>현재 코봇 TCP 자세(활성 작업물 좌표계 6-DOF: x,y,z,rx,ry,rz)를 읽어 XyPoint 로 변환.
+    /// 실패 시 null + 메시지. 조그+캡처 교시의 핵심 — 굴곡면 Rx/Ry/Z 를 실측 그대로 담는다.</summary>
+    private async Task<XyPoint?> ReadCurrentPoseAsync()
+    {
+        if (!Cobot.IsConnected) { Notify("코봇 RPC 미연결 — 캡처 불가.", true); return null; }
+        try
+        {
+            var pose = await Cobot.Rpc!.GetTcpPoseAsync();   // [x,y,z,rx,ry,rz] (활성 user 좌표계)
+            if (pose is not { Length: 6 }) { Notify("자세 읽기 실패 — 응답 형식 이상.", true); return null; }
+            return new XyPoint { X = pose[0], Y = pose[1], Z = pose[2], Rx = pose[3], Theta = pose[4], Rz = pose[5] };
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "현재 자세 캡처 실패");
+            Notify($"캡처 실패: {ex.Message}", true);
+            return null;
+        }
+    }
+
+    // 현재 자세를 새 포인트로 추가.
+    private async Task CaptureCurrentPose()
+    {
+        if (_isRunning) return;
+        if (await ReadCurrentPoseAsync() is not { } p) return;
+        _points.Add(p);
+        _selected = _points.Count - 1;
+        RecomputeViewBox();
+        Notify($"현재 자세 캡처: #{_points.Count} (X{F(p.X)} Y{F(p.Y)} Z{F(p.Z)} Rx{F(p.Rx)} Ry{F(p.Theta)} Rz{F(p.Rz)})", false);
+    }
+
+    // 선택 포인트를 현재 자세로 덮어쓰기(위치 미세조정 재교시).
+    private async Task CaptureIntoSelected()
+    {
+        if (_isRunning || _selected < 0 || _selected >= _points.Count) return;
+        if (await ReadCurrentPoseAsync() is not { } p) return;
+        var keepSurface = _points[_selected].Surface;
+        p.Surface = keepSurface;
+        _points[_selected] = p;
+        RecomputeViewBox();
+        Notify($"#{_selected + 1} 갱신: 현재 자세로 재교시", false);
+    }
+
+    // 십자 4-arm 패턴을 X-Y 로 채운다 — 생성기의 프레임 X→X, Z→Y 로 매핑, Rz 는 그대로, Z=기본 WD.
+    private void FillCrossPattern()
+    {
+        var center = _selected >= 0 && _selected < _points.Count
+            ? (_points[_selected].X, _points[_selected].Y)
+            : (0.0, 0.0);
+        if (!CrossPatternGenerator.TryGenerate(new CrossPatternParams(_crossArmMm, _crossSpacingMm, _crossPerpRzDeg),
+                out var wps, out var err))
+        {
+            Notify($"십자 생성 실패: {err}", true);
+            return;
+        }
+        _points.Clear();
+        foreach (var w in wps)
+            _points.Add(new XyPoint { X = center.Item1 + w.X, Y = center.Item2 + w.Z, Z = _defaultZ, Rz = w.RzDeg });
+        _selected = -1;
+        RecomputeViewBox();
+        Notify($"십자 {_points.Count}점 채움 (arm={F(_crossArmMm)}mm, 간격={F(_crossSpacingMm)}mm)", false);
+    }
+
+    private void RecomputeViewBox()
+    {
+        if (_points.Count == 0)
+        {
+            var h0 = Math.Max(_fovMm, 50);
+            _vbMinX = -h0; _vbMinY = -h0; _vbW = 2 * h0; _vbH = 2 * h0;
+        }
+        else
+        {
+            double minX = double.PositiveInfinity, maxX = double.NegativeInfinity;
+            double minPY = double.PositiveInfinity, maxPY = double.NegativeInfinity;   // plotted y = -Y
+            foreach (var p in _points)
+            {
+                minX = Math.Min(minX, p.X); maxX = Math.Max(maxX, p.X);
+                minPY = Math.Min(minPY, -p.Y); maxPY = Math.Max(maxPY, -p.Y);
+            }
+            var pad = _fovMm * 0.75 + 10;
+            // 원점(0,0)도 항상 포함해 축선이 보이게 한다.
+            minX = Math.Min(minX, 0); maxX = Math.Max(maxX, 0);
+            minPY = Math.Min(minPY, 0); maxPY = Math.Max(maxPY, 0);
+            _vbMinX = minX - pad; _vbW = (maxX - minX) + 2 * pad;
+            _vbMinY = minPY - pad; _vbH = (maxPY - minPY) + 2 * pad;
+        }
+        var scale = Math.Max(_vbW, _vbH);
+        _stroke = scale / 400.0;
+        _dotR = scale / 120.0;
+        _font = scale / 45.0;
+    }
+
+    private async Task RunPoints()
+    {
+        if (_isRunning || !Cobot.IsConnected || _points.Count < 1) return;
+        _isRunning = true; _runErr = false; _runMsg = null;
+        _runCts = new CancellationTokenSource();
+        var ct = _runCts.Token;
+        try
+        {
+            var rpc = Cobot.Rpc!;
+            for (int i = 0; i < _points.Count; i++)
+            {
+                ct.ThrowIfCancellationRequested();
+                _selected = i;
+                var p = _points[i];
+                var pose = new[] { p.X, p.Y, p.Z, p.Rx, p.Theta, p.Rz };
+                var rc = await rpc.MoveLAsync(pose, tool: _runTool, user: _runUser, vel: _runVel,
+                    acc: 100, ovl: 100, blendR: -1, ct: ct);
+                _runMsg = $"#{i + 1} 이동 (rc={rc})";
+                await InvokeAsync(StateHasChanged);
+                if (rc != 0) { _runErr = true; _runMsg = $"#{i + 1} 이동 실패 (rc={rc}) — 중단"; return; }
+                if (_settleSec > 0) await Task.Delay(TimeSpan.FromSeconds(_settleSec), ct);
+            }
+            _runMsg = $"완료 — {_points.Count}점 이동";
+        }
+        catch (OperationCanceledException) { _runMsg = "정지됨"; }
+        catch (Exception ex) { Logger.LogError(ex, "RunPoints 실패"); _runErr = true; _runMsg = $"실행 실패: {ex.Message}"; }
+        finally { _isRunning = false; _runCts?.Dispose(); _runCts = null; await InvokeAsync(StateHasChanged); }
+    }
+
+    private void StopRun() => _runCts?.Cancel();
+
+    private async Task MoveToPointAsync(int i)
+    {
+        if (_isRunning || !Cobot.IsConnected || i < 0 || i >= _points.Count) return;
+        _selected = i;
+        try
+        {
+            var p = _points[i];
+            var pose = new[] { p.X, p.Y, p.Z, p.Rx, p.Theta, p.Rz };
+            var rc = await Cobot.Rpc!.MoveLAsync(pose, tool: _runTool, user: _runUser, vel: _runVel,
+                acc: 100, ovl: 100, blendR: -1);
+            _runErr = rc != 0;
+            _runMsg = $"#{i + 1} 이동 (rc={rc})";
+        }
+        catch (Exception ex) { Logger.LogError(ex, "MoveToPoint 실패"); _runErr = true; _runMsg = $"이동 실패: {ex.Message}"; }
+    }
+
+    private async Task SaveProfileAsync()
+    {
+        if (_drawingId == 0 || string.IsNullOrWhiteSpace(_profileName) || _points.Count == 0) return;
+        try
+        {
+            // X-Y 규약: 경유점을 pose[X,Y,Z] 로 실행하려면 InspectionWaypoint(X=평면X, Y=평면Y, Z=WD).
+            var wps = _points.Select(p => new InspectionWaypoint(
+                X: p.X, Z: p.Z, Theta: p.Theta, ThetaManual: true,
+                Surface: p.Surface, SurfaceManual: true, Y: p.Y, RzDeg: p.Rz, RxDeg: p.Rx)).ToList();
+
+            var name = _profileName.Trim();
+            var existing = _profiles.FirstOrDefault(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)
+                                                          && string.Equals(p.SeamType, _seamType, StringComparison.OrdinalIgnoreCase));
+            var profile = new InspectionProfile
+            {
+                Id = existing?.Id ?? 0,
+                DrawingId = _drawingId,
+                Name = name,
+                SeamType = _seamType,
+                PoseAbsolute = true,      // 절대 6-DOF 자세 — 런타임이 rz0/tiltSign 합성 없이 그대로 명령
+
+                RunTool = _runTool,
+                RunUser = _runUser,
+                RunVel = _runVel,
+                SettleDelaySec = _settleSec,
+                ThMax = 180,             // X-Y 포인트는 θ 필터 미적용(전부 실행)
+                WaypointsJson = System.Text.Json.JsonSerializer.Serialize(wps),
+            };
+            var saved = await Service.SaveProfileAsync(profile);
+            _profiles = await Service.ListProfilesAsync(_drawingId);
+            _selectedProfileId = saved.Id;
+            Notify($"저장 완료: [{_seamType}] {name} ({wps.Count}점)", false);
+        }
+        catch (Exception ex) { Logger.LogError(ex, "SaveProfile 실패"); Notify($"저장 실패: {ex.Message}", true); }
+    }
+
+    private async Task LoadSelected()
+    {
+        if (_selectedProfileId is not int id) return;
+        try
+        {
+            var p = await Service.GetProfileAsync(id);
+            if (p is null) { Notify("프로필을 찾을 수 없습니다.", true); return; }
+            _seamType = p.SeamType is "CROSS" or "CROSS3" or "CORNER2" or "CORNER3" ? p.SeamType : "CROSS";
+            _profileName = p.Name;
+            _runTool = p.RunTool; _runUser = p.RunUser; _runVel = p.RunVel; _settleSec = p.SettleDelaySec;
+            var wps = System.Text.Json.JsonSerializer.Deserialize<List<InspectionWaypoint>>(p.WaypointsJson) ?? new();
+            _points.Clear();
+            foreach (var w in wps)
+                _points.Add(new XyPoint { X = w.X, Y = w.Y, Z = w.Z, Rx = w.RxDeg, Theta = w.Theta, Rz = w.RzDeg, Surface = w.Surface });
+            _selected = -1;
+            RecomputeViewBox();
+            Notify($"불러오기 완료: {p.Name} ({_points.Count}점)", false);
+        }
+        catch (Exception ex) { Logger.LogError(ex, "LoadProfile 실패"); Notify($"불러오기 실패: {ex.Message}", true); }
+    }
+
+    private async Task DeleteSelectedAsync()
+    {
+        if (_selectedProfileId is not int id) return;
+        try
+        {
+            await Service.DeleteProfileAsync(id);
+            _profiles = await Service.ListProfilesAsync(_drawingId);
+            _selectedProfileId = null;
+            Notify("삭제 완료", false);
+        }
+        catch (Exception ex) { Logger.LogError(ex, "DeleteProfile 실패"); Notify($"삭제 실패: {ex.Message}", true); }
+    }
+
+    private static int WaypointCount(InspectionProfile p)
+    {
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(p.WaypointsJson);
+            return doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Array ? doc.RootElement.GetArrayLength() : 0;
+        }
+        catch { return 0; }
+    }
+
+    private void Notify(string msg, bool error) { _msg = msg; _isErr = error; }
+
+    private static string F(double v) => v.ToString("0.###", CultureInfo.InvariantCulture);
+    private static double D(object? v) => double.TryParse(v?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var d) ? d : 0.0;
+    private static int IntOr(object? v, int fallback) => int.TryParse(v?.ToString(), out var i) ? i : fallback;
+
+    public void Dispose() => _runCts?.Cancel();
+}

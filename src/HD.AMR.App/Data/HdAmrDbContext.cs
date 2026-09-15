@@ -58,6 +58,8 @@ public class HdAmrDbContext : DbContext
             b.HasKey(p => p.Id);
             b.Property(p => p.Name).IsRequired().HasMaxLength(200);
             b.Property(p => p.WaypointsJson).IsRequired();
+            b.Property(p => p.SeamType).IsRequired().HasMaxLength(20).HasDefaultValue("LINE");
+            b.Property(p => p.PoseAbsolute).HasDefaultValue(false);
             b.HasIndex(p => p.DrawingId);
         });
 
