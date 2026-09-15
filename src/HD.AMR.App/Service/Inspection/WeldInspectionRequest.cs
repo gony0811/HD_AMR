@@ -1,10 +1,13 @@
 namespace HD.AMR.App.Service.Inspection;
 
-/// <summary>`params.seamType` — 용접라인 형태 (사양 §8.1/§8.5.1). POLYLINE 등 미정의 값은 파싱 단계에서 거부.</summary>
+/// <summary>`params.seamType` — 용접라인 형태 (사양 §8.1/§8.5.1). POLYLINE 등 미정의 값은 파싱 단계에서 거부.
+/// <see cref="Cross3"/>(3갈래 T자)는 <b>온보드 카탈로그 전용</b> — ACS 계약 enum(LINE/CROSS/CORNER)에는 없으므로
+/// 파서는 CROSS3 을 수용하지 않는다(계약 확장은 N13). CROSS3 레시피는 온보드 교시/실행 경로로만 도달한다.</summary>
 public enum SeamTypeKind
 {
     Line,
-    Cross,
+    Cross,      // 4갈래 십자 (계약 "CROSS")
+    Cross3,     // 3갈래 T자 (온보드 전용, N13 계약 확장 전까지 ACS 미발행)
     Corner,
 }
 

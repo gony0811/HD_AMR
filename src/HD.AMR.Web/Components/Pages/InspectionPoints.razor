@@ -43,9 +43,10 @@
     </div>
     <div class="col-auto">
         <label class="form-label mb-0">검사 타입</label>
-        <select class="form-select form-select-sm" style="width:130px" @bind="_seamType">
-            <option value="CROSS">CROSS</option>
-            <option value="CORNER">CORNER</option>
+        <select class="form-select form-select-sm" style="width:170px" @bind="_seamType">
+            <option value="CROSS">CROSS4 (4갈래)</option>
+            <option value="CROSS3">CROSS3 (3갈래)</option>
+            <option value="CORNER">CORNER (수동/미리보기)</option>
         </select>
     </div>
     <div class="col-auto">
@@ -464,7 +465,7 @@
         {
             var p = await Service.GetProfileAsync(id);
             if (p is null) { Notify("프로필을 찾을 수 없습니다.", true); return; }
-            _seamType = string.IsNullOrWhiteSpace(p.SeamType) || p.SeamType == "LINE" ? "CROSS" : p.SeamType;
+            _seamType = p.SeamType is "CROSS" or "CROSS3" or "CORNER" ? p.SeamType : "CROSS";
             _profileName = p.Name;
             _runTool = p.RunTool; _runUser = p.RunUser; _runVel = p.RunVel; _settleSec = p.SettleDelaySec;
             var wps = System.Text.Json.JsonSerializer.Deserialize<List<InspectionWaypoint>>(p.WaypointsJson) ?? new();

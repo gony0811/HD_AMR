@@ -132,7 +132,12 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         InspectionProfile? profile = null;
         if (recipe.SeamType != SeamTypeKind.Corner)
         {
-            var wantSeam = recipe.SeamType == SeamTypeKind.Cross ? "CROSS" : "LINE";
+            var wantSeam = recipe.SeamType switch
+            {
+                SeamTypeKind.Cross => "CROSS",
+                SeamTypeKind.Cross3 => "CROSS3",
+                _ => "LINE",
+            };
             var (found, profileError) = await FindProfileAsync(db, req.SectionDxfId, wantSeam, ct);
             if (found is null)
                 return InspectionActionResult.Fail("inspectionFailed", profileError!);

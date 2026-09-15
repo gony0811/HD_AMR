@@ -2,7 +2,7 @@ namespace HD.AMR.App.Service.Inspection;
 
 /// <summary>
 /// 검사 레시피 매핑(사양 §8.5.1, INSPECTION_TYPES.md §5) — 순수 함수 2단:
-/// ① `wall_code` → 면 자세 5군, ② `(seamType, 면 자세)` → 레시피 id 11종.
+/// ① `wall_code` → 면 자세 5군, ② `(seamType, 면 자세)` → 레시피 id 16종.
 ///
 /// 정본 10코드(B/T/SM/PM/F/A/SL/PL/SU/PU, ACS 확정 2026-09-15) 외 wall_code 는 계약 위반으로
 /// 실패를 반환한다 — 호출측이 액션 FAILED + orderValidationError 로 보고.
@@ -41,7 +41,12 @@ public static class InspectionRecipeResolver
         if (orientation is null) return null;
         if (seamType == SeamTypeKind.Corner) return RecipeIds.Corner3;
 
-        var prefix = seamType == SeamTypeKind.Line ? "LINE" : "CROSS4";
+        var prefix = seamType switch
+        {
+            SeamTypeKind.Line => "LINE",
+            SeamTypeKind.Cross3 => "CROSS3",   // 3갈래 T자
+            _ => "CROSS4",                       // Cross(4갈래)
+        };
         return orientation switch
         {
             SurfaceOrientation.Floor => $"{prefix}-FLOOR",
@@ -73,7 +78,7 @@ public static class InspectionRecipeResolver
     }
 }
 
-/// <summary>레시피 id 상수 — INSPECTION_TYPES.md §5 카탈로그 11종과 동일 문자열.</summary>
+/// <summary>레시피 id 상수 — INSPECTION_TYPES.md §5 카탈로그 16종과 동일 문자열.</summary>
 public static class RecipeIds
 {
     public const string LineFloor = "LINE-FLOOR";
@@ -81,6 +86,11 @@ public static class RecipeIds
     public const string LineWall = "LINE-WALL";
     public const string LineChamferLower = "LINE-CHMR-LO";
     public const string LineChamferUpper = "LINE-CHMR-UP";
+    public const string Cross3Floor = "CROSS3-FLOOR";
+    public const string Cross3Ceil = "CROSS3-CEIL";
+    public const string Cross3Wall = "CROSS3-WALL";
+    public const string Cross3ChamferLower = "CROSS3-CHMR-LO";
+    public const string Cross3ChamferUpper = "CROSS3-CHMR-UP";
     public const string Cross4Floor = "CROSS4-FLOOR";
     public const string Cross4Ceil = "CROSS4-CEIL";
     public const string Cross4Wall = "CROSS4-WALL";
@@ -91,6 +101,7 @@ public static class RecipeIds
     public static readonly IReadOnlyList<string> All = new[]
     {
         LineFloor, LineCeil, LineWall, LineChamferLower, LineChamferUpper,
+        Cross3Floor, Cross3Ceil, Cross3Wall, Cross3ChamferLower, Cross3ChamferUpper,
         Cross4Floor, Cross4Ceil, Cross4Wall, Cross4ChamferLower, Cross4ChamferUpper,
         Corner3,
     };

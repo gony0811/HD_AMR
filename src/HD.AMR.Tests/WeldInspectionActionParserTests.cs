@@ -142,6 +142,7 @@ public class WeldInspectionActionParserTests
     [Theory]
     [InlineData("POLYLINE")]   // §8.1: POLYLINE 은 거부
     [InlineData("ARC")]
+    [InlineData("CROSS3")]     // 온보드 전용 타입 — 계약 enum(LINE/CROSS/CORNER)에 없어 ACS 발행 시 거부(N13 전)
     [InlineData("")]
     public void Parse_UndefinedSeamType_Fails(string seamType)
     {

@@ -39,6 +39,12 @@ public class InspectionRecipeResolverTests
     [InlineData(SeamTypeKind.Cross, "PL", "CROSS4-CHMR-LO")]
     [InlineData(SeamTypeKind.Cross, "SU", "CROSS4-CHMR-UP")]
     [InlineData(SeamTypeKind.Cross, "PU", "CROSS4-CHMR-UP")]
+    [InlineData(SeamTypeKind.Cross3, "B", "CROSS3-FLOOR")]
+    [InlineData(SeamTypeKind.Cross3, "T", "CROSS3-CEIL")]
+    [InlineData(SeamTypeKind.Cross3, "SM", "CROSS3-WALL")]
+    [InlineData(SeamTypeKind.Cross3, "F", "CROSS3-WALL")]
+    [InlineData(SeamTypeKind.Cross3, "SL", "CROSS3-CHMR-LO")]
+    [InlineData(SeamTypeKind.Cross3, "SU", "CROSS3-CHMR-UP")]
     public void Resolve_LineAndCross_MatchesSpecTable(SeamTypeKind seamType, string wallCode, string expected)
     {
         var ok = InspectionRecipeResolver.TryResolve(MakeRequest(seamType, wallCode), out var recipeId, out var error);
@@ -52,6 +58,7 @@ public class InspectionRecipeResolverTests
     [InlineData(SeamTypeKind.Line, "B", "LINE-FLOOR")]
     [InlineData(SeamTypeKind.Line, "F", "LINE-WALL")]      // 마구리 → 수직벽
     [InlineData(SeamTypeKind.Cross, "T", "CROSS4-CEIL")]
+    [InlineData(SeamTypeKind.Cross3, "SM", "CROSS3-WALL")]
     [InlineData(SeamTypeKind.Corner, "PM", "CORNER3")]
     public void ResolveRecipeId_MatchesTryResolve(SeamTypeKind seamType, string wallCode, string expected)
     {
@@ -119,9 +126,10 @@ public class InspectionRecipeResolverTests
     }
 
     [Fact]
-    public void RecipeIds_CatalogHasElevenEntries()
+    public void RecipeIds_CatalogHasSixteenEntries()
     {
-        Assert.Equal(11, RecipeIds.All.Count);
+        // LINE 5 + CROSS3 5 + CROSS4 5 + CORNER3 1 = 16 (독립 5종 카탈로그, CORNER2 는 미시드).
+        Assert.Equal(16, RecipeIds.All.Count);
         Assert.Equal(RecipeIds.All.Count, RecipeIds.All.Distinct().Count());
     }
 }
