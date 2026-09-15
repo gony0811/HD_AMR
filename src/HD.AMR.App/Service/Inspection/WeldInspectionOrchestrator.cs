@@ -196,10 +196,12 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             VisionFailRatioMax = recipe.VisionFailRatioMax < 1.0 ? recipe.VisionFailRatioMax : null,
         };
 
-        // CROSS4: 레시피 PatternJson → 십자 4-arm 경유점 생성(wobj 프레임, 교차점=원점) → ⑱ 오버라이드 주입.
-        // 정렬 체인은 LINE 과 동일하게 1회만 수행되고, anchor 캐시 적중 시에도 오버라이드가 다시 주입되므로
-        // ⑱ 단독 재실행 경로가 그대로 동작한다.
-        if (recipe.SeamType == SeamTypeKind.Cross)
+        // CROSS4 경유점 소스 (2택):
+        //  · 교시 우선: profile.PoseAbsolute(=/inspection-points 조그+캡처 절대 6-DOF)면 그 경유점을
+        //    그대로 실행한다(코로게이션 법선 추종). 오버라이드 주입 안 함 → ⑱이 프로필 절대자세로 명령.
+        //  · 폴백: 절대 프로필이 아니면 레시피 PatternJson 으로 평면 십자 4-arm 을 생성(구 방식, 상대 틸트).
+        //    정렬 체인은 LINE 과 동일하게 1회, anchor 캐시 적중 시에도 오버라이드가 재주입돼 ⑱ 단독 재실행 동작.
+        if (recipe.SeamType == SeamTypeKind.Cross && !(profile?.PoseAbsolute ?? false))
         {
             if (string.IsNullOrWhiteSpace(recipe.PatternJson))
                 return InspectionActionResult.Fail("inspectionFailed",

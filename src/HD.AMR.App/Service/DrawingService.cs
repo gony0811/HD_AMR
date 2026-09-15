@@ -184,6 +184,7 @@ public class DrawingService
                 existing.SettleDelaySec = profile.SettleDelaySec;
                 existing.MoveHomeFirst = profile.MoveHomeFirst;
                 existing.SeamType = profile.SeamType;
+                existing.PoseAbsolute = profile.PoseAbsolute;
                 existing.WaypointsJson = profile.WaypointsJson;
                 existing.UpdatedAt = now;
                 profile = existing;

@@ -211,6 +211,7 @@ CREATE TABLE IF NOT EXISTS InspectionProfiles (
     SettleDelaySec REAL NOT NULL DEFAULT 0,
     MoveHomeFirst INTEGER NOT NULL,
     SeamType TEXT NOT NULL DEFAULT 'LINE',
+    PoseAbsolute INTEGER NOT NULL DEFAULT 0,
     WaypointsJson TEXT NOT NULL,
     CreatedAt TEXT NOT NULL,
     UpdatedAt TEXT NOT NULL,
@@ -238,6 +239,16 @@ CREATE INDEX IF NOT EXISTS IX_InspectionProfiles_DrawingId ON InspectionProfiles
     {
         db.Database.ExecuteSqlRaw(
             "ALTER TABLE InspectionProfiles ADD COLUMN SeamType TEXT NOT NULL DEFAULT 'LINE';");
+    }
+
+    // PoseAbsolute 컬럼(절대 6-DOF 자세 모드)도 동일 패턴으로 후방호환 추가.
+    var hasPoseAbsolute = db.Database
+        .SqlQueryRaw<long>("SELECT COUNT(*) AS Value FROM pragma_table_info('InspectionProfiles') WHERE name = 'PoseAbsolute'")
+        .AsEnumerable().First() > 0;
+    if (!hasPoseAbsolute)
+    {
+        db.Database.ExecuteSqlRaw(
+            "ALTER TABLE InspectionProfiles ADD COLUMN PoseAbsolute INTEGER NOT NULL DEFAULT 0;");
     }
 
     // Backward-compatible schema add for TeachingPositions (고정 슬롯형 티칭 위치; 기존 데이터 보존).
