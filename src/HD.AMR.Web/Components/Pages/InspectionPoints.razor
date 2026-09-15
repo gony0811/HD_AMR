@@ -75,12 +75,16 @@
                     var cy = -p.Y;      // 화면 y 아래로 → 세계 Y 위로
                     var half = _fovMm / 2.0;
                     var isSel = i == _selected;
-                    <rect x="@F(cx - half)" y="@F(cy - half)" width="@F(_fovMm)" height="@F(_fovMm)"
-                          fill="@(isSel ? "rgba(13,110,253,0.12)" : "rgba(120,120,120,0.06)")"
-                          stroke="@(isSel ? "#0d6efd" : "#888")" stroke-width="@F(_stroke)" />
-                    <circle cx="@F(cx)" cy="@F(cy)" r="@F(_dotR)" fill="@(isSel ? "#dc3545" : "#0d6efd")" />
-                    <text x="@F(cx + half + _stroke * 3)" y="@F(cy)" font-size="@F(_font)" fill="#333"
-                          dominant-baseline="middle">#@(i + 1) (Z@F(p.Z))</text>
+                    @* <g> 래핑 필수: 코드 블록 바로 아래의 SVG <text>는 Razor 예약 전환 태그로
+                       파싱되어 RZ1023(속성 불가)이 난다 — 마크업 안쪽으로 중첩시키면 일반 요소로 파싱. *@
+                    <g>
+                        <rect x="@F(cx - half)" y="@F(cy - half)" width="@F(_fovMm)" height="@F(_fovMm)"
+                              fill="@(isSel ? "rgba(13,110,253,0.12)" : "rgba(120,120,120,0.06)")"
+                              stroke="@(isSel ? "#0d6efd" : "#888")" stroke-width="@F(_stroke)" />
+                        <circle cx="@F(cx)" cy="@F(cy)" r="@F(_dotR)" fill="@(isSel ? "#dc3545" : "#0d6efd")" />
+                        <text x="@F(cx + half + _stroke * 3)" y="@F(cy)" font-size="@F(_font)" fill="#333"
+                              dominant-baseline="middle">#@(i + 1) (Z@F(p.Z))</text>
+                    </g>
                 }
             </svg>
         </div>
