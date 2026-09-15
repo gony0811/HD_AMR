@@ -45,5 +45,21 @@ window.hdAmrInspection = {
         var w0 = p0.matrixTransform(inv);
         var w1 = p1.matrixTransform(inv);
         return Math.hypot(w1.x - w0.x, w1.y - w0.y);
+    },
+
+    // Trigger a client-side file download of a text payload (CSV etc.). A UTF-8 BOM is
+    // prepended so Excel opens the CSV with correct encoding (Korean headers stay readable).
+    // The object URL is revoked after the click so the blob is not leaked.
+    download: function (filename, text) {
+        var bom = "﻿";
+        var blob = new Blob([bom + text], { type: "text/csv;charset=utf-8;" });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement("a");
+        a.href = url;
+        a.download = filename || "download.csv";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(function () { URL.revokeObjectURL(url); }, 0);
     }
 };
