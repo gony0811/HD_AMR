@@ -75,11 +75,13 @@ public static class WeldInspectionActionParser
         switch (seamTypeRaw)
         {
             case "LINE": seamType = SeamTypeKind.Line; break;
-            case "CROSS": seamType = SeamTypeKind.Cross; break;
-            case "CORNER": seamType = SeamTypeKind.Corner; break;
+            case "CROSS4": case "CROSS": seamType = SeamTypeKind.Cross; break;   // 십자 4갈래 (legacy "CROSS" 수용)
+            case "CROSS3": seamType = SeamTypeKind.Cross3; break;                 // T자 3갈래
+            case "CORNER3": case "CORNER": seamType = SeamTypeKind.Corner; break; // 3면 코너 (legacy "CORNER" 수용)
+            case "CORNER2": seamType = SeamTypeKind.Corner2; break;               // 2면 코너
             default:
                 // POLYLINE 포함 미정의 값은 계약 위반으로 거부(§8.1 — 2점 계약이라 세그먼트 방향 불명).
-                error = $"미정의 seamType '{seamTypeRaw ?? "(누락)"}' — LINE/CROSS/CORNER 만 수용";
+                error = $"미정의 seamType '{seamTypeRaw ?? "(누락)"}' — LINE/CROSS3/CROSS4/CORNER2/CORNER3 만 수용(legacy CROSS/CORNER 허용)";
                 return false;
         }
 

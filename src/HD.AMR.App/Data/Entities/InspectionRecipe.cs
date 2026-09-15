@@ -3,7 +3,7 @@ using HD.AMR.App.Service.Inspection;
 namespace HD.AMR.App.Data.Entities;
 
 /// <summary>
-/// 검사 타입(16종, 사양 §8.5.1·INSPECTION_TYPES.md §5)별 <b>실행 방법</b> 한 세트.
+/// 검사 타입(17종, 사양 §8.5.1·INSPECTION_TYPES.md §5)별 <b>실행 방법</b> 한 세트.
 /// ACS `startWeldInspection` 액션의 `(seamType, wall_code)` 조합으로 선택된다.
 ///
 /// 경유점은 담지 않는다 — 경유점·코봇 튜닝값은 도면별 티칭 <see cref="InspectionProfile"/> 소관이며,
@@ -12,7 +12,7 @@ namespace HD.AMR.App.Data.Entities;
 /// </summary>
 public class InspectionRecipe
 {
-    /// <summary>레시피 id — "LINE-WALL" 등 16종 문자열 그대로 (사양 §8.5.1, FK 없음).</summary>
+    /// <summary>레시피 id — "LINE-WALL" 등 17종 문자열 그대로 (사양 §8.5.1, FK 없음).</summary>
     public string Id { get; set; } = "";
 
     public string DisplayName { get; set; } = "";

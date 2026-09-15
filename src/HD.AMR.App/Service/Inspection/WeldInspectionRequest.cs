@@ -1,14 +1,15 @@
 namespace HD.AMR.App.Service.Inspection;
 
-/// <summary>`params.seamType` — 용접라인 형태 (사양 §8.1/§8.5.1). POLYLINE 등 미정의 값은 파싱 단계에서 거부.
-/// <see cref="Cross3"/>(3갈래 T자)는 <b>온보드 카탈로그 전용</b> — ACS 계약 enum(LINE/CROSS/CORNER)에는 없으므로
-/// 파서는 CROSS3 을 수용하지 않는다(계약 확장은 N13). CROSS3 레시피는 온보드 교시/실행 경로로만 도달한다.</summary>
+/// <summary>`params.seamType` — 용접 형상 (사양 §8.1/§8.5.1, 독립 5종). 계약 enum(N13 확장):
+/// `LINE`/`CROSS3`/`CROSS4`/`CORNER2`/`CORNER3`. 파서는 하위호환으로 legacy `CROSS`(→CROSS4)·`CORNER`(→CORNER3)도
+/// 수용한다. POLYLINE 등 미정의 값은 거부. 내부 enum 이름은 계약 문자열과 다음처럼 대응한다(주석 참조).</summary>
 public enum SeamTypeKind
 {
-    Line,
-    Cross,      // 4갈래 십자 (계약 "CROSS")
-    Cross3,     // 3갈래 T자 (온보드 전용, N13 계약 확장 전까지 ACS 미발행)
-    Corner,
+    Line,       // 직선 1갈래 (계약 "LINE")
+    Cross,      // 십자 4갈래 (계약 "CROSS4", legacy "CROSS") → 레시피 CROSS4-*
+    Cross3,     // T자 3갈래 (계약 "CROSS3") → 레시피 CROSS3-*
+    Corner,     // 3면 코너 (계약 "CORNER3", legacy "CORNER") → 레시피 CORNER3
+    Corner2,    // 2면 코너 (계약 "CORNER2") → 레시피 CORNER2 (실행 미구현 — Enabled=false)
 }
 
 /// <summary>`wall_code` → 면 자세 5군 (사양 §8.5.1 (2), INSPECTION_TYPES.md §2).</summary>

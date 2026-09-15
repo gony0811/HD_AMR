@@ -165,10 +165,11 @@
 3. **~~4점 십자를 직선과 별도 타입으로 둘지~~** — **확정(2026-09-15): 독립 5종**(LINE·CROSS3·CROSS4·CORNER2·CORNER3). T자(3갈래)를 신규 추가, 코너를 2면/3면으로 분리.
 4. **코너 거울(L/R) 분리 여부** — AMR 접근이 좌우 대칭이면 1종 유지, 아니면 2종. CORNER2/CORNER3 각각 해당.
 5. **profileId enum 구현** — `ref.area_task.profile_id` / 액션 `param_schema` 반영.
-   > HD_AMR 측 진행: 정본 카탈로그(§5) 중 **현행 16종**(`LINE-*` 5 + `CROSS3-*` 5 + `CROSS4-*` 5 + `CORNER3`)이
-   > 온보드 DB(`InspectionRecipes`, id = §5 문자열 그대로)로 구현되어 `(seamType, wall_code)` → 레시피 매핑·실행
-   > 배선 완료(VDA5050_INTERFACE_SPEC §8.5.1 (5)). **`CORNER2` 는 미시드(신규 — §9-6 후속).**
-   > `LINE-*` 5종만 실행 활성, `CROSS3-*`/`CROSS4-*`/`CORNER3`은 실행 게이트 OFF(캡처 교시·N13 확정 후 활성화).
+   > HD_AMR 측 진행: 정본 카탈로그(§5) **17종 전체**(`LINE-*` 5 + `CROSS3-*` 5 + `CROSS4-*` 5 + `CORNER2` + `CORNER3`)가
+   > 온보드 DB(`InspectionRecipes`, id = §5 문자열 그대로)로 시드되어 `(seamType, wall_code)` → 레시피 매핑·실행
+   > 배선 완료(VDA5050_INTERFACE_SPEC §8.5.1 (5)).
+   > `LINE-*` 5종만 실행 활성, `CROSS3-*`/`CROSS4-*`/`CORNER2`/`CORNER3`은 실행 게이트 OFF(캡처 교시·실기 검증 후 활성화).
+   > **`CORNER2` 는 실행 스텝 미구현(게이트 OFF 로 차단) — corner2 슬롯/캡처 배선은 §9-6 후속.**
    > 계약(`param_schema`) 반영 방식은 여전히 N13 미확정 — ACS는 자유 문자열 `inspectionProfileId` 유지.
    >
    > **HD_AMR 실행 시퀀스 구현(2026-09-15 추가)** — `CROSS4-*`/`CORNER3`의 온보드 실행 방법이 구현됨
@@ -183,12 +184,12 @@
    >   (`cornerInspectionRunStep`), SurfaceType=Corner 촬상. 거울 L/R 은 별도 티칭 2세트,
    >   side 판별 P*→L / S*→R (F/A 코너의 side 규칙은 N13 협의 필요 — 기본 L).
 
-6. **신규 타입(CROSS3·CORNER2) 구현** `[진행 중]` — 카탈로그 정본화(2026-09-15, 독립 5종) 완료. 후속:
-   - **CROSS3(3갈래)** ✅ **구현(2026-09-15)**: `SeamTypeKind.Cross3` + resolver(`CROSS3-{면자세}`) + `CROSS3-*` 5종 시드(게이트 OFF) + `/inspection-points` 교시 옵션 + 오케스트레이터 배선(캡처 절대 프로필 실행, PatternJson 미사용). **계약 미도달**: ACS `seamType` enum 에 `CROSS3` 없어 파서 미수용 — N13 확정 후 파서 1줄 추가로 ACS 경로 개통(§9-7). 그 전엔 온보드 교시·수동 실행·`/recipes` 관리만 가능.
-   - **CROSS4 수식 경로 폐기**: 현행 코드는 `PatternJson` 생성을 폴백으로 유지 중 — 캡처 단일화에 맞춰 **오케스트레이터 `PatternJson` 실행 경로 제거**(캡처 절대 프로필만 실행) 후속 정리 필요.
-   - **CORNER2(2면)**: 캡처 교시 전용. 대상 코너 목록·거울 규칙·브릿지 플레이트 자세는 KC-2B 코너 부재 사양 확정 후.
+6. **신규 타입(CROSS3·CORNER2) 구현** `[대부분 완료]` — 정본화 + 계약 enum 확장 반영 완료(2026-09-15):
+   - **CROSS3(3갈래)** ✅ **완료**: `SeamTypeKind.Cross3` + resolver(`CROSS3-{면자세}`) + `CROSS3-*` 5종 시드(게이트 OFF) + `/inspection-points` 교시 옵션 + 오케스트레이터 배선(캡처 절대 프로필 실행). **파서 수용**(계약 enum 확장, §9-7) — ACS 도달 가능.
+   - **CORNER2(2면)** 🔶 **부분**: `SeamTypeKind.Corner2` + resolver(`CORNER2`) + 레시피 시드(게이트 OFF) + 파서 수용 완료. **실행 스텝 미구현** — corner2 슬롯/캡처 배선은 KC-2B 코너 부재 사양(거울 규칙·브릿지 플레이트 자세) 확정 후 후속.
+   - **CROSS4 수식 경로 폐기**: 현행 코드는 `PatternJson` 생성을 폴백으로 유지 중 — 캡처 단일화에 맞춰 **오케스트레이터 `PatternJson` 실행 경로 제거** 후속 정리 필요.
    - **CORNER3(3면)**: 현행 고정 슬롯 유지(옵션1) — 추후 재정의.
-7. **`seamType` enum 계약 확장** `[협의 N13]` — 현행 계약 enum 은 `LINE`/`CROSS`/`CORNER` 3값. 본 5종을 계약에 싣는다면
-   `CROSS3`(3갈래) 추가 + `CORNER` → `CORNER2`/`CORNER3` 분리가 필요하다(ACS 발행값 변경 = 계약 변경). 반영 방식·시점은 N13 협의. 그 전까지 온보드 카탈로그(§5)만 5종으로 정본화하고, ACS 계약 enum 은 무변경.
+7. **`seamType` enum 계약 확장** ✅ **반영(2026-09-15)** `[협의 N13]` — 계약 enum = `LINE`/`CROSS3`/`CROSS4`/`CORNER2`/`CORNER3`.
+   AMR 파서·resolver·17종 시드 구현 완료(legacy `CROSS`→CROSS4·`CORNER`→CORNER3 수용). **ACS 는 canonical 5값으로 발행 전환 필요** — 값 합의·전환 시점은 N13. (VDA5050_INTERFACE_SPEC §8.1/§8.2/§8.5.1·개정 1.5)
 
 > 결정이 내려지면 본 문서와 `startWeldInspection` `param_schema`, 관련 코드/DB를 함께 갱신한다.

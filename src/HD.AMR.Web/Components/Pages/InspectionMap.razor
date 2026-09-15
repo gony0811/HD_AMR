@@ -56,7 +56,8 @@
                 <th>LINE</th>
                 <th>CROSS3</th>
                 <th>CROSS4</th>
-                <th>CORNER</th>
+                <th>CORNER2</th>
+                <th>CORNER3</th>
             </tr>
         </thead>
         <tbody>
@@ -68,6 +69,7 @@
                     <td>@RecipeCell(SeamTypeKind.Line, w.Code)</td>
                     <td>@RecipeCell(SeamTypeKind.Cross3, w.Code)</td>
                     <td>@RecipeCell(SeamTypeKind.Cross, w.Code)</td>
+                    <td>@RecipeCell(SeamTypeKind.Corner2, w.Code)</td>
                     <td>@RecipeCell(SeamTypeKind.Corner, w.Code)</td>
                 </tr>
             }
@@ -114,6 +116,7 @@
                         @(r.SeamType switch
                         {
                             SeamTypeKind.Corner => "고정 티칭 슬롯 corner3.* (도면 무관)",
+                            SeamTypeKind.Corner2 => "실행 스텝 미구현 (게이트 OFF) — corner2 슬롯/캡처 후속",
                             SeamTypeKind.Cross => "X-Y 6-DOF 캡처 교시 프로필 (/inspection-points, CROSS4) · PatternJson 폴백",
                             SeamTypeKind.Cross3 => "X-Y 6-DOF 캡처 교시 프로필 (/inspection-points, CROSS3)",
                             _ => "도면 LINE 티칭 프로필 (sectionDxfId → 최신 InspectionProfile)"
@@ -237,7 +240,7 @@
         var recipeId = InspectionRecipeResolver.ResolveRecipeId(seam, wallCode);
         var enabled = recipeId is not null && _enabledById.TryGetValue(recipeId, out var e) && e;
         var label = recipeId ?? "—";
-        if (seam == SeamTypeKind.Corner && recipeId is not null)
+        if (seam is SeamTypeKind.Corner or SeamTypeKind.Corner2 && recipeId is not null)
             label += $" ({InspectionRecipeResolver.ResolveCornerSide(wallCode, out _)})";
 
         builder.OpenElement(0, "span");

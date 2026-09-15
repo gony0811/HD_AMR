@@ -60,6 +60,8 @@ public class InspectionRecipeResolverTests
     [InlineData(SeamTypeKind.Cross, "T", "CROSS4-CEIL")]
     [InlineData(SeamTypeKind.Cross3, "SM", "CROSS3-WALL")]
     [InlineData(SeamTypeKind.Corner, "PM", "CORNER3")]
+    [InlineData(SeamTypeKind.Corner2, "PM", "CORNER2")]
+    [InlineData(SeamTypeKind.Corner2, "SM", "CORNER2")]
     public void ResolveRecipeId_MatchesTryResolve(SeamTypeKind seamType, string wallCode, string expected)
     {
         Assert.Equal(expected, InspectionRecipeResolver.ResolveRecipeId(seamType, wallCode));
@@ -126,10 +128,10 @@ public class InspectionRecipeResolverTests
     }
 
     [Fact]
-    public void RecipeIds_CatalogHasSixteenEntries()
+    public void RecipeIds_CatalogHasSeventeenEntries()
     {
-        // LINE 5 + CROSS3 5 + CROSS4 5 + CORNER3 1 = 16 (독립 5종 카탈로그, CORNER2 는 미시드).
-        Assert.Equal(16, RecipeIds.All.Count);
+        // LINE 5 + CROSS3 5 + CROSS4 5 + CORNER2 1 + CORNER3 1 = 17 (독립 5종 카탈로그).
+        Assert.Equal(17, RecipeIds.All.Count);
         Assert.Equal(RecipeIds.All.Count, RecipeIds.All.Distinct().Count());
     }
 }

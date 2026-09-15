@@ -142,7 +142,6 @@ public class WeldInspectionActionParserTests
     [Theory]
     [InlineData("POLYLINE")]   // §8.1: POLYLINE 은 거부
     [InlineData("ARC")]
-    [InlineData("CROSS3")]     // 온보드 전용 타입 — 계약 enum(LINE/CROSS/CORNER)에 없어 ACS 발행 시 거부(N13 전)
     [InlineData("")]
     public void Parse_UndefinedSeamType_Fails(string seamType)
     {
@@ -166,6 +165,39 @@ public class WeldInspectionActionParserTests
 
         Assert.False(ok);
         Assert.Contains("seamType", error);
+    }
+
+    // 계약 enum 확장(N13): LINE/CROSS3/CROSS4/CORNER2/CORNER3 + legacy CROSS→Cross·CORNER→Corner 수용.
+    [Theory]
+    [InlineData("LINE", SeamTypeKind.Line)]
+    [InlineData("CROSS4", SeamTypeKind.Cross)]
+    [InlineData("CROSS", SeamTypeKind.Cross)]      // legacy
+    [InlineData("CROSS3", SeamTypeKind.Cross3)]
+    [InlineData("CORNER3", SeamTypeKind.Corner)]
+    [InlineData("CORNER", SeamTypeKind.Corner)]    // legacy
+    [InlineData("CORNER2", SeamTypeKind.Corner2)]
+    public void Parse_SeamTypeEnum_MapsToKind(string seamType, SeamTypeKind expected)
+    {
+        var action = Deserialize($$"""
+        {
+          "actionType": "startWeldInspection",
+          "actionId": "a3",
+          "actionParameters": [
+            { "key": "jobRef", "value": "JOB-3" },
+            { "key": "position", "value": {
+                "seamStartW": [1,2,3], "seamEndW": [4,5,6],
+                "drawingPos": { "tank": "CT1", "level": 1, "wall_code": "B", "x": 0, "y": 0, "z": 0 } } },
+            { "key": "params", "value": {
+                "seamType": "{{seamType}}", "sectionDxfId": "D3", "inspectionProfileId": "P3",
+                "standoffMm": 400, "anchorGroupId": "G3", "seqInGroup": 1 } }
+          ]
+        }
+        """);
+
+        var ok = WeldInspectionActionParser.TryParse(action, out var req, out var error);
+
+        Assert.True(ok, error);
+        Assert.Equal(expected, req!.SeamType);
     }
 
     [Fact]
