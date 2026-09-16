@@ -32,6 +32,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             new("Cobot",         "🤖", typeof(CobotViewModel)),
             new("Sequence",      "🔀", typeof(SequenceViewModel)),
             new("Camera",        "🎥", typeof(CameraViewModel)),
+            new("용접 추적",     "📈", typeof(WeldTrackingViewModel)),
             new("Vision Interface", "🖧", typeof(VisionInterfaceViewModel)),
             new("비드 라벨링",   "🏷", null),
             new("비전 학습",     "🧠", null),
