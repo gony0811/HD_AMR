@@ -1,0 +1,73 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:HD.AMR.Desktop.ViewModels"
+             x:Class="HD.AMR.Desktop.Views.IoModuleView"
+             x:DataType="vm:IoModuleViewModel">
+    <StackPanel MaxWidth="820" HorizontalAlignment="Left">
+        <TextBlock Classes="page-title" Text="IO Module" />
+        <TextBlock Classes="page-subtitle" Text="LS산전 IO Module — 접점 모니터링 / 출력 제어" />
+
+        <!-- 통신 연결 -->
+        <Border Classes="card">
+            <StackPanel Spacing="6">
+                <Grid ColumnDefinitions="*,Auto">
+                    <TextBlock Grid.Column="0" Text="통신 연결 (ModbusTCP)" FontWeight="SemiBold" VerticalAlignment="Center" />
+                    <Border Grid.Column="1" Classes="badge" Classes.on="{Binding IsConnected}" Classes.off="{Binding !IsConnected}">
+                        <TextBlock Text="{Binding IsConnected, Converter={x:Static vm:BoolTextConverters.Connection}}" />
+                    </Border>
+                </Grid>
+                <TextBlock Classes="muted" FontSize="12" Text="{Binding ConnectionSummary}" TextWrapping="Wrap" />
+                <TextBlock Classes="muted" FontSize="12" Text="{Binding AdapterLedSummary, StringFormat='어댑터 LED: {0}'}"
+                           IsVisible="{Binding AdapterLedSummary, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                <TextBlock Classes="muted" FontSize="12" Text="{Binding LastUpdateText}" />
+                <Border Classes="alert" IsVisible="{Binding LastError, Converter={x:Static ObjectConverters.IsNotNull}}">
+                    <TextBlock Text="{Binding LastError, StringFormat='통신 오류: {0}'}" TextWrapping="Wrap" />
+                </Border>
+            </StackPanel>
+        </Border>
+
+        <!-- 입력 접점 -->
+        <Border Classes="card">
+            <StackPanel Spacing="10">
+                <TextBlock Text="입력 접점" FontWeight="SemiBold" />
+                <ItemsControl ItemsSource="{Binding Inputs}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <WrapPanel />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:IoBit">
+                            <Border Classes="badge" Classes.on="{Binding On}" Classes.off="{Binding !On}"
+                                    MinWidth="88" Margin="0,0,8,8" Padding="8,6">
+                                <TextBlock Text="{Binding Label, StringFormat='{}{0}'}" HorizontalAlignment="Center" />
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
+        </Border>
+
+        <!-- 출력 접점 -->
+        <Border Classes="card">
+            <StackPanel Spacing="10">
+                <TextBlock Text="출력 접점" FontWeight="SemiBold" />
+                <ItemsControl ItemsSource="{Binding Outputs}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <WrapPanel />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:IoBit">
+                            <Border Classes="badge" Classes.on="{Binding On}" Classes.off="{Binding !On}"
+                                    MinWidth="88" Margin="0,0,8,8" Padding="8,6">
+                                <TextBlock Text="{Binding Label}" HorizontalAlignment="Center" />
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
+        </Border>
+    </StackPanel>
+</UserControl>

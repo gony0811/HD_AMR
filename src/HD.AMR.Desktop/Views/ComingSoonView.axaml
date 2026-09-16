@@ -1,0 +1,12 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:HD.AMR.Desktop.ViewModels"
+             x:Class="HD.AMR.Desktop.Views.ComingSoonView"
+             x:DataType="vm:ComingSoonViewModel">
+    <Border Classes="card">
+        <StackPanel Spacing="8">
+            <TextBlock Text="🚧 준비 중" FontSize="18" FontWeight="SemiBold" />
+            <TextBlock Classes="muted" TextWrapping="Wrap" Text="{Binding Message}" />
+        </StackPanel>
+    </Border>
+</UserControl>

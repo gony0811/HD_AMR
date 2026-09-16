@@ -1,0 +1,208 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:HD.AMR.Desktop.ViewModels"
+             x:Class="HD.AMR.Desktop.Views.AmrView"
+             x:DataType="vm:AmrViewModel">
+    <UserControl.Styles>
+        <!-- 상태 표 한 줄: 라벨(muted) + 값 -->
+        <Style Selector="Grid.kv > TextBlock:nth-child(1)">
+            <Setter Property="Foreground" Value="{DynamicResource TextMuted}" />
+        </Style>
+    </UserControl.Styles>
+
+    <StackPanel>
+        <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,12">
+            <TextBlock Grid.Column="0" Classes="page-title" Text="자율주행 로봇 (AMR)" VerticalAlignment="Center" />
+            <Border Grid.Column="1" Classes="badge" Classes.on="{Binding IsConnected}" Classes.off="{Binding !IsConnected}">
+                <TextBlock Text="{Binding ConnectionText, StringFormat='Modbus: {0}'}" />
+            </Border>
+        </Grid>
+
+        <Grid ColumnDefinitions="*,*">
+
+            <!-- ═══ 왼쪽: 상태 읽기 ═══ -->
+            <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                <TextBlock Text="상태 읽기 (Input Register)" FontWeight="SemiBold" Margin="0,0,0,8" />
+
+                <Border Classes="card">
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="기본 상태" FontWeight="SemiBold" Margin="0,0,0,4" />
+                        <Grid Classes="kv" ColumnDefinitions="140,*"><TextBlock Text="Power State" /><TextBlock Grid.Column="1" Text="{Binding PowerStateText}" /></Grid>
+                        <Grid Classes="kv" ColumnDefinitions="140,*"><TextBlock Text="Robot State" /><TextBlock Grid.Column="1" Text="{Binding RobotStateText}" /></Grid>
+                        <Grid Classes="kv" ColumnDefinitions="140,*"><TextBlock Text="Error Code" /><TextBlock Grid.Column="1" Text="{Binding ErrorCodeText}" /></Grid>
+                        <Grid Classes="kv" ColumnDefinitions="140,*"><TextBlock Text="Robot Stop" /><TextBlock Grid.Column="1" Text="{Binding RobotStopText}" /></Grid>
+                        <Grid Classes="kv" ColumnDefinitions="140,*"><TextBlock Text="WiFi" /><TextBlock Grid.Column="1" Text="{Binding WiFiText}" /></Grid>
+                        <Grid Classes="kv" ColumnDefinitions="140,*"><TextBlock Text="Work Status" /><TextBlock Grid.Column="1" Text="{Binding WorkStatusText}" /></Grid>
+                        <Grid Classes="kv" ColumnDefinitions="140,*"><TextBlock Text="Driving Mode" /><TextBlock Grid.Column="1" Text="{Binding DrivingModeText}" /></Grid>
+                    </StackPanel>
+                </Border>
+
+                <Border Classes="card">
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="위치 (Pose)" FontWeight="SemiBold" Margin="0,0,0,4" />
+                        <Grid Classes="kv" ColumnDefinitions="140,*"><TextBlock Text="X (m)" /><TextBlock Grid.Column="1" Text="{Binding PoseXText}" /></Grid>
+                        <Grid Classes="kv" ColumnDefinitions="140,*"><TextBlock Text="Y (m)" /><TextBlock Grid.Column="1" Text="{Binding PoseYText}" /></Grid>
+                        <Grid Classes="kv" ColumnDefinitions="140,*"><TextBlock Text="Angle (rad)" /><TextBlock Grid.Column="1" Text="{Binding PoseAngleText}" /></Grid>
+                    </StackPanel>
+                </Border>
+
+                <Border Classes="card">
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="배터리" FontWeight="SemiBold" Margin="0,0,0,4" />
+                        <Grid Classes="kv" ColumnDefinitions="140,*"><TextBlock Text="Level" /><TextBlock Grid.Column="1" Text="{Binding BatteryLevelText}" /></Grid>
+                        <Grid Classes="kv" ColumnDefinitions="140,*"><TextBlock Text="Voltage (V)" /><TextBlock Grid.Column="1" Text="{Binding BatteryVoltageText}" /></Grid>
+                        <Grid Classes="kv" ColumnDefinitions="140,*"><TextBlock Text="Current (A)" /><TextBlock Grid.Column="1" Text="{Binding BatteryCurrentText}" /></Grid>
+                        <Grid Classes="kv" ColumnDefinitions="140,*"><TextBlock Text="Temp (°C)" /><TextBlock Grid.Column="1" Text="{Binding BatteryTempText}" /></Grid>
+                        <Grid Classes="kv" ColumnDefinitions="140,*"><TextBlock Text="Charging" /><TextBlock Grid.Column="1" Text="{Binding ChargingText}" /></Grid>
+                    </StackPanel>
+                </Border>
+
+                <Border Classes="card">
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="맵 / Task 진행" FontWeight="SemiBold" Margin="0,0,0,4" />
+                        <Grid Classes="kv" ColumnDefinitions="140,*"><TextBlock Text="Map Status (%)" /><TextBlock Grid.Column="1" Text="{Binding MapStatusText}" /></Grid>
+                        <Grid Classes="kv" ColumnDefinitions="140,*"><TextBlock Text="Total Task" /><TextBlock Grid.Column="1" Text="{Binding TotalTaskText}" /></Grid>
+                        <Grid Classes="kv" ColumnDefinitions="140,*"><TextBlock Text="Current Task" /><TextBlock Grid.Column="1" Text="{Binding CurrentTaskText}" /></Grid>
+                        <Grid Classes="kv" ColumnDefinitions="140,*"><TextBlock Text="Total Job" /><TextBlock Grid.Column="1" Text="{Binding TotalJobText}" /></Grid>
+                        <Grid Classes="kv" ColumnDefinitions="140,*"><TextBlock Text="Current Job" /><TextBlock Grid.Column="1" Text="{Binding CurrentJobText}" /></Grid>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+
+            <!-- ═══ 오른쪽: 제어 쓰기 ═══ -->
+            <StackPanel Grid.Column="1" Margin="8,0,0,0">
+                <TextBlock Text="제어 쓰기 (Holding Register)" FontWeight="SemiBold" Margin="0,0,0,8" />
+
+                <Border Classes="card">
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="전원 제어" FontWeight="SemiBold" />
+                        <Grid ColumnDefinitions="*,Auto">
+                            <ComboBox Grid.Column="0" SelectedIndex="{Binding PowerSel}" HorizontalAlignment="Stretch">
+                                <ComboBoxItem>None (0)</ComboBoxItem>
+                                <ComboBoxItem>PowerOff (1)</ComboBoxItem>
+                                <ComboBoxItem>Restart (2)</ComboBoxItem>
+                                <ComboBoxItem>QuickRestart (3)</ComboBoxItem>
+                            </ComboBox>
+                            <Button Grid.Column="1" Margin="6,0,0,0" Content="쓰기"
+                                    Command="{Binding WriteCommand}" CommandParameter="power" />
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <Border Classes="card">
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="주행 모드" FontWeight="SemiBold" />
+                        <Grid ColumnDefinitions="*,Auto">
+                            <ComboBox Grid.Column="0" SelectedIndex="{Binding DrivingModeIndex}" HorizontalAlignment="Stretch">
+                                <ComboBoxItem>Drive (1)</ComboBoxItem>
+                                <ComboBoxItem>Cart (2)</ComboBoxItem>
+                            </ComboBox>
+                            <Button Grid.Column="1" Margin="6,0,0,0" Content="쓰기"
+                                    Command="{Binding WriteCommand}" CommandParameter="driving" />
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <Border Classes="card">
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="상태 제어 (Execution)" FontWeight="SemiBold" />
+                        <Grid ColumnDefinitions="*,Auto">
+                            <ComboBox Grid.Column="0" SelectedIndex="{Binding ExecutionIndex}" HorizontalAlignment="Stretch">
+                                <ComboBoxItem>Stop (1)</ComboBoxItem>
+                                <ComboBoxItem>Start (2)</ComboBoxItem>
+                                <ComboBoxItem>Pause (3)</ComboBoxItem>
+                            </ComboBox>
+                            <Button Grid.Column="1" Margin="6,0,0,0" Content="쓰기"
+                                    Command="{Binding WriteCommand}" CommandParameter="execution" />
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <Border Classes="card">
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="로봇 주행 정지" FontWeight="SemiBold" />
+                        <Grid ColumnDefinitions="*,Auto">
+                            <ComboBox Grid.Column="0" SelectedIndex="{Binding RobotStopIndex}" HorizontalAlignment="Stretch">
+                                <ComboBoxItem>활성화 (1)</ComboBoxItem>
+                                <ComboBoxItem>비활성화 (2)</ComboBoxItem>
+                            </ComboBox>
+                            <Button Grid.Column="1" Margin="6,0,0,0" Content="쓰기"
+                                    Command="{Binding WriteCommand}" CommandParameter="robotstop" />
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <Border Classes="card">
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="Error Reset" FontWeight="SemiBold" />
+                        <Button Content="Error Reset" Command="{Binding WriteCommand}" CommandParameter="errorreset" />
+                    </StackPanel>
+                </Border>
+
+                <Border Classes="card">
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="Task / Job 제어" FontWeight="SemiBold" />
+                        <Grid ColumnDefinitions="*,*,Auto">
+                            <StackPanel Grid.Column="0" Margin="0,0,6,0">
+                                <TextBlock Classes="muted" FontSize="12" Text="Task Index" />
+                                <NumericUpDown Value="{Binding TaskIndex}" Minimum="0" Increment="1" FormatString="0" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Margin="0,0,6,0">
+                                <TextBlock Classes="muted" FontSize="12" Text="Job Index" />
+                                <NumericUpDown Value="{Binding JobIndex}" Minimum="0" Increment="1" FormatString="0" />
+                            </StackPanel>
+                            <Button Grid.Column="2" VerticalAlignment="Bottom" Content="쓰기"
+                                    Command="{Binding WriteCommand}" CommandParameter="taskjob" />
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <Border Classes="card">
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="포즈 탐색" FontWeight="SemiBold" />
+                        <Button Content="포즈 탐색 활성화" Command="{Binding WriteCommand}" CommandParameter="posesearch" />
+                        <Grid ColumnDefinitions="*,*,*">
+                            <StackPanel Grid.Column="0" Margin="0,0,4,0">
+                                <TextBlock Classes="muted" FontSize="12" Text="X (m)" />
+                                <NumericUpDown Value="{Binding PoseX}" Increment="0.001" FormatString="0.000" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Margin="0,0,4,0">
+                                <TextBlock Classes="muted" FontSize="12" Text="Y (m)" />
+                                <NumericUpDown Value="{Binding PoseY}" Increment="0.001" FormatString="0.000" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Classes="muted" FontSize="12" Text="Angle (rad)" />
+                                <NumericUpDown Value="{Binding PoseAngle}" Increment="0.001" FormatString="0.000" />
+                            </StackPanel>
+                        </Grid>
+                        <Button Content="포즈 좌표 쓰기" Command="{Binding WriteCommand}" CommandParameter="posetarget" />
+                    </StackPanel>
+                </Border>
+
+                <Border Classes="card">
+                    <StackPanel Spacing="6">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock Grid.Column="0" Text="쓰기 로그" FontWeight="SemiBold" VerticalAlignment="Center" />
+                            <Button Grid.Column="1" Content="지우기" Command="{Binding ClearLogCommand}" />
+                        </Grid>
+                        <ScrollViewer MaxHeight="220">
+                            <ItemsControl ItemsSource="{Binding Log}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:AmrLogEntry">
+                                        <Grid ColumnDefinitions="70,*,Auto" Margin="0,2">
+                                            <TextBlock Grid.Column="0" Classes="muted" FontSize="12" Text="{Binding Time}" />
+                                            <TextBlock Grid.Column="1" FontSize="12" Text="{Binding Command}" TextWrapping="Wrap" />
+                                            <Border Grid.Column="2" Classes="badge" Classes.on="{Binding Ok}" Classes.off="{Binding !Ok}">
+                                                <TextBlock Text="{Binding ResultText}" />
+                                            </Border>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </Grid>
+    </StackPanel>
+</UserControl>

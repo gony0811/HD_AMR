@@ -1,0 +1,48 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:HD.AMR.Desktop.ViewModels"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d" d:DesignWidth="1280" d:DesignHeight="800"
+        x:Class="HD.AMR.Desktop.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Width="1280" Height="800"
+        Title="HD현대 AMR — 통합 제어 콘솔">
+
+    <Grid ColumnDefinitions="250,*">
+
+        <!-- ── 좌: 네비게이션 사이드바 ── -->
+        <Grid Column="0" Background="{DynamicResource NavBackground}" RowDefinitions="Auto,*,Auto">
+            <StackPanel Grid.Row="0" Margin="16,18,16,10">
+                <TextBlock Text="HD현대 AMR" Foreground="White" FontSize="18" FontWeight="Bold" />
+                <TextBlock Text="자율주행 로봇 통합 제어 콘솔" Foreground="#9AA4B2" FontSize="11" />
+            </StackPanel>
+
+            <ListBox Grid.Row="1"
+                     Background="Transparent"
+                     ItemsSource="{Binding NavItems}"
+                     SelectedItem="{Binding SelectedItem}">
+                <ListBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:NavItem">
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                            <TextBlock Text="{Binding Icon}" FontSize="15" Width="20" />
+                            <TextBlock Text="{Binding Label}" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+
+            <Border Grid.Row="2" Margin="12" Padding="12" CornerRadius="8" Background="#2A3242">
+                <StackPanel Spacing="2">
+                    <TextBlock Text="HD현대 AMR" Foreground="White" FontWeight="SemiBold" FontSize="12" />
+                    <TextBlock Text="Avalonia 데스크톱 (이관 중)" Foreground="#9AA4B2" FontSize="11" TextWrapping="Wrap" />
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <!-- ── 우: 현재 페이지 ── -->
+        <ScrollViewer Grid.Column="1" Padding="24">
+            <ContentControl Content="{Binding Navigation.CurrentViewModel}" />
+        </ScrollViewer>
+    </Grid>
+</Window>

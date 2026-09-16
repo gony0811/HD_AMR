@@ -1,0 +1,81 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:HD.AMR.Desktop.ViewModels"
+             x:Class="HD.AMR.Desktop.Views.ParametersView"
+             x:DataType="vm:ParametersViewModel">
+    <StackPanel MaxWidth="1000" HorizontalAlignment="Left">
+        <TextBlock Classes="page-title" Text="파라미터 관리" />
+        <TextBlock Classes="page-subtitle" TextWrapping="Wrap"
+                   Text="각 페이지에서 저장한 설정(파라미터)을 한 화면에서 조회·수정·삭제합니다." />
+
+        <Grid ColumnDefinitions="Auto,Auto,*" Margin="0,0,0,10">
+            <TextBox Grid.Column="0" Width="320" Watermark="이름/설명 검색…" Text="{Binding Filter}" />
+            <Button Grid.Column="1" Margin="8,0,0,0" Content="새로고침" Command="{Binding ReloadCommand}" IsEnabled="{Binding !Busy}" />
+            <TextBlock Grid.Column="2" HorizontalAlignment="Right" VerticalAlignment="Center"
+                       Classes="muted" Text="{Binding TotalCount, StringFormat='총 {0} 개'}" />
+        </Grid>
+
+        <Border Classes="alert" IsVisible="{Binding Message, Converter={x:Static ObjectConverters.IsNotNull}}">
+            <TextBlock Text="{Binding Message}" TextWrapping="Wrap" />
+        </Border>
+
+        <!-- 목록 -->
+        <Border Classes="card">
+            <StackPanel Spacing="6">
+                <Grid ColumnDefinitions="2*,1.5*,2*,1.4*,Auto">
+                    <TextBlock Grid.Column="0" Text="이름" FontWeight="SemiBold" />
+                    <TextBlock Grid.Column="1" Text="값" FontWeight="SemiBold" />
+                    <TextBlock Grid.Column="2" Text="설명" FontWeight="SemiBold" />
+                    <TextBlock Grid.Column="3" Text="수정시각" FontWeight="SemiBold" />
+                    <TextBlock Grid.Column="4" Text="" />
+                </Grid>
+                <ItemsControl ItemsSource="{Binding Rows}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:ParameterRow">
+                            <Grid ColumnDefinitions="2*,1.5*,2*,1.4*,Auto" Margin="0,3">
+                                <TextBlock Grid.Column="0" Text="{Binding Name}" FontFamily="monospace" VerticalAlignment="Center" TextWrapping="Wrap" />
+                                <TextBox Grid.Column="1" Margin="4,0" Text="{Binding Value}" />
+                                <TextBox Grid.Column="2" Margin="4,0" Text="{Binding Description}" />
+                                <TextBlock Grid.Column="3" Classes="muted" FontSize="12" VerticalAlignment="Center" Text="{Binding UpdatedText}" />
+                                <StackPanel Grid.Column="4" Orientation="Horizontal" Spacing="4">
+                                    <Button Content="저장" Classes="accent"
+                                            Command="{Binding $parent[ItemsControl].((vm:ParametersViewModel)DataContext).SaveCommand}"
+                                            CommandParameter="{Binding}" />
+                                    <Button Content="삭제"
+                                            Command="{Binding $parent[ItemsControl].((vm:ParametersViewModel)DataContext).DeleteCommand}"
+                                            CommandParameter="{Binding}" />
+                                </StackPanel>
+                            </Grid>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <TextBlock Classes="muted" HorizontalAlignment="Center" Margin="0,10"
+                           Text="표시할 파라미터가 없습니다."
+                           IsVisible="{Binding Rows.Count, Converter={x:Static vm:CountConverters.IsZero}}" />
+            </StackPanel>
+        </Border>
+
+        <!-- 새 파라미터 추가 -->
+        <Border Classes="card">
+            <StackPanel Spacing="8">
+                <TextBlock Text="새 파라미터 추가" FontWeight="SemiBold" />
+                <Grid ColumnDefinitions="2*,1.5*,2*,Auto" >
+                    <StackPanel Grid.Column="0" Margin="0,0,6,0">
+                        <TextBlock Classes="muted" FontSize="12" Text="이름" />
+                        <TextBox Watermark="예: Camera.Depth.Roi.X" Text="{Binding NewName}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Margin="0,0,6,0">
+                        <TextBlock Classes="muted" FontSize="12" Text="값" />
+                        <TextBox Text="{Binding NewValue}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="2" Margin="0,0,6,0">
+                        <TextBlock Classes="muted" FontSize="12" Text="설명" />
+                        <TextBox Text="{Binding NewDescription}" />
+                    </StackPanel>
+                    <Button Grid.Column="3" VerticalAlignment="Bottom" Content="추가" Classes="accent"
+                            Command="{Binding AddCommand}" IsEnabled="{Binding !Busy}" />
+                </Grid>
+            </StackPanel>
+        </Border>
+    </StackPanel>
+</UserControl>

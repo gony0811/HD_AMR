@@ -1,0 +1,80 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- Bootstrap card/badge/alert 를 대체하는 공용 스타일. 페이지 포팅 시 재사용. -->
+
+    <!-- 카드: .card.card-surface -->
+    <Style Selector="Border.card">
+        <Setter Property="Background" Value="{DynamicResource CardBackground}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource CardBorder}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="Padding" Value="16" />
+        <Setter Property="Margin" Value="0,0,0,12" />
+    </Style>
+
+    <!-- 페이지 제목/부제 -->
+    <Style Selector="TextBlock.page-title">
+        <Setter Property="FontSize" Value="22" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Margin" Value="0,0,0,2" />
+    </Style>
+    <Style Selector="TextBlock.page-subtitle">
+        <Setter Property="Foreground" Value="{DynamicResource TextMuted}" />
+        <Setter Property="Margin" Value="0,0,0,14" />
+    </Style>
+    <Style Selector="TextBlock.muted">
+        <Setter Property="Foreground" Value="{DynamicResource TextMuted}" />
+    </Style>
+
+    <!-- 상태 뱃지: .badge (기본) / .badge.on / .badge.off -->
+    <Style Selector="Border.badge">
+        <Setter Property="CornerRadius" Value="4" />
+        <Setter Property="Padding" Value="8,4" />
+        <Setter Property="Background" Value="{DynamicResource BadgeNeutral}" />
+    </Style>
+    <Style Selector="Border.badge > TextBlock">
+        <Setter Property="Foreground" Value="White" />
+        <Setter Property="FontSize" Value="12" />
+    </Style>
+    <Style Selector="Border.badge.on">
+        <Setter Property="Background" Value="{DynamicResource BadgeSuccess}" />
+    </Style>
+    <Style Selector="Border.badge.off">
+        <Setter Property="Background" Value="{DynamicResource BadgeNeutral}" />
+    </Style>
+
+    <!-- 경고 배너: .alert.warning -->
+    <Style Selector="Border.alert">
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="Padding" Value="12,8" />
+        <Setter Property="Margin" Value="0,8,0,0" />
+        <Setter Property="Background" Value="{DynamicResource AlertWarningBg}" />
+    </Style>
+
+    <Styles.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Light">
+                    <SolidColorBrush x:Key="CardBackground" Color="#FFFFFF" />
+                    <SolidColorBrush x:Key="CardBorder" Color="#E2E5EA" />
+                    <SolidColorBrush x:Key="TextMuted" Color="#6C757D" />
+                    <SolidColorBrush x:Key="BadgeNeutral" Color="#6C757D" />
+                    <SolidColorBrush x:Key="BadgeSuccess" Color="#198754" />
+                    <SolidColorBrush x:Key="AlertWarningBg" Color="#FFF3CD" />
+                    <SolidColorBrush x:Key="NavBackground" Color="#1F2633" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="Dark">
+                    <SolidColorBrush x:Key="CardBackground" Color="#252A33" />
+                    <SolidColorBrush x:Key="CardBorder" Color="#3A414D" />
+                    <SolidColorBrush x:Key="TextMuted" Color="#9AA4B2" />
+                    <SolidColorBrush x:Key="BadgeNeutral" Color="#5A6473" />
+                    <SolidColorBrush x:Key="BadgeSuccess" Color="#2FA36B" />
+                    <SolidColorBrush x:Key="AlertWarningBg" Color="#4A3F1E" />
+                    <SolidColorBrush x:Key="NavBackground" Color="#161B24" />
+                </ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
+        </ResourceDictionary>
+    </Styles.Resources>
+
+</Styles>

@@ -1,0 +1,128 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:HD.AMR.Desktop.ViewModels"
+             x:Class="HD.AMR.Desktop.Views.HomeView"
+             x:DataType="vm:HomeViewModel">
+    <StackPanel>
+        <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,14">
+            <StackPanel Grid.Column="0">
+                <TextBlock Classes="page-title" Text="상태 개요" />
+                <TextBlock Classes="page-subtitle" Text="HD현대 AMR 통합 제어 콘솔 · 실시간 장비 상태" />
+            </StackPanel>
+            <Border Grid.Column="1" Classes="badge" VerticalAlignment="Top">
+                <TextBlock Text="{Binding NowText}" />
+            </Border>
+        </Grid>
+
+        <WrapPanel>
+            <WrapPanel.Styles>
+                <Style Selector="Border.stat">
+                    <Setter Property="Width" Value="300" />
+                    <Setter Property="Margin" Value="0,0,12,12" />
+                </Style>
+            </WrapPanel.Styles>
+
+            <!-- AMR -->
+            <Border Classes="card stat">
+                <StackPanel Spacing="6">
+                    <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Grid.Column="0" Text="🚚  AMR" FontWeight="SemiBold" />
+                        <Border Grid.Column="1" Classes="badge" Classes.on="{Binding AmrConnected}" Classes.off="{Binding !AmrConnected}">
+                            <TextBlock Text="{Binding AmrConnected, Converter={x:Static vm:BoolTextConverters.Connect}}" />
+                        </Border>
+                    </Grid>
+                    <TextBlock Text="{Binding AmrStatusText}" FontSize="18" FontWeight="Bold" />
+                    <TextBlock Classes="muted" FontSize="12" Text="자율주행 모듈 (Modbus TCP)" />
+                </StackPanel>
+            </Border>
+
+            <!-- Cobot -->
+            <Border Classes="card stat">
+                <StackPanel Spacing="6">
+                    <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Grid.Column="0" Text="🤖  Cobot" FontWeight="SemiBold" />
+                        <Border Grid.Column="1" Classes="badge" Classes.on="{Binding CobotConnected}" Classes.off="{Binding !CobotConnected}">
+                            <TextBlock Text="{Binding CobotConnected, Converter={x:Static vm:BoolTextConverters.Connect}}" />
+                        </Border>
+                    </Grid>
+                    <TextBlock Text="페어리노 코봇" FontSize="18" FontWeight="Bold" />
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <Border Classes="badge" Classes.on="{Binding CobotConnected}" Classes.off="{Binding !CobotConnected}">
+                            <TextBlock Text="{Binding CobotConnected, Converter={x:Static vm:BoolTextConverters.OnOff}, StringFormat='명령 {0}'}" />
+                        </Border>
+                        <Border Classes="badge" Classes.on="{Binding CobotStateConnected}" Classes.off="{Binding !CobotStateConnected}">
+                            <TextBlock Text="{Binding CobotStateConnected, Converter={x:Static vm:BoolTextConverters.Recv}, StringFormat='상태 {0}'}" />
+                        </Border>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <!-- Camera -->
+            <Border Classes="card stat">
+                <StackPanel Spacing="6">
+                    <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Grid.Column="0" Text="🎥  Camera" FontWeight="SemiBold" />
+                        <Border Grid.Column="1" Classes="badge" Classes.on="{Binding CameraConnected}" Classes.off="{Binding !CameraConnected}">
+                            <TextBlock Text="{Binding CameraConnected, Converter={x:Static vm:BoolTextConverters.Connect}}" />
+                        </Border>
+                    </Grid>
+                    <TextBlock Text="RealSense D435 깊이" FontSize="18" FontWeight="Bold" />
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <Border Classes="badge" Classes.on="{Binding CameraStreaming}" Classes.off="{Binding !CameraStreaming}">
+                            <TextBlock Text="{Binding CameraStreaming, Converter={x:Static vm:BoolTextConverters.Stream}, StringFormat='스트림 {0}'}" />
+                        </Border>
+                        <Border Classes="badge" IsVisible="{Binding CameraConnectionType, Converter={x:Static ObjectConverters.IsNotNull}}">
+                            <TextBlock Text="{Binding CameraConnectionType}" />
+                        </Border>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <!-- Battery -->
+            <Border Classes="card stat">
+                <StackPanel Spacing="8">
+                    <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Grid.Column="0" Text="🔋  배터리" FontWeight="SemiBold" />
+                        <Border Grid.Column="1" Classes="badge" Classes.on="{Binding BatteryPercent, Converter={x:Static ObjectConverters.IsNotNull}}">
+                            <TextBlock Text="{Binding BatteryPercentText, StringFormat='{}{0}%'}" />
+                        </Border>
+                    </Grid>
+                    <!-- 간단 배터리 바(퍼센트 폭). null 이면 0 폭. -->
+                    <Border Height="20" CornerRadius="4" Background="{DynamicResource CardBorder}">
+                        <Border HorizontalAlignment="Left" CornerRadius="4" Background="{DynamicResource BadgeSuccess}"
+                                Width="{Binding BatteryPercent}" MinWidth="0" />
+                    </Border>
+                    <TextBlock Classes="muted" FontSize="12" Text="{Binding BatterySubText}" />
+                </StackPanel>
+            </Border>
+
+            <!-- Safety lamp -->
+            <Border Classes="card stat">
+                <StackPanel Spacing="8">
+                    <TextBlock Text="🚦  안전 신호등" FontWeight="SemiBold" />
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <Ellipse Width="26" Height="26" Fill="{Binding LampRed, Converter={x:Static vm:LampConverters.Red}}" />
+                        <Ellipse Width="26" Height="26" Fill="{Binding LampYellow, Converter={x:Static vm:LampConverters.Yellow}}" />
+                        <Ellipse Width="26" Height="26" Fill="{Binding LampGreen, Converter={x:Static vm:LampConverters.Green}}" />
+                    </StackPanel>
+                    <TextBlock Classes="muted" FontSize="12" Text="적색 정지 · 황색 주의 · 녹색 정상" />
+                </StackPanel>
+            </Border>
+
+            <!-- ACS placeholder -->
+            <Border Classes="card stat">
+                <StackPanel Spacing="6">
+                    <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Grid.Column="0" Text="🛰  ACS" FontWeight="SemiBold" />
+                        <Border Grid.Column="1" Classes="badge off">
+                            <TextBlock Text="미연동" />
+                        </Border>
+                    </Grid>
+                    <TextBlock Text="VDA5050 어댑터" FontSize="18" FontWeight="Bold" />
+                    <TextBlock Classes="muted" FontSize="12" TextWrapping="Wrap"
+                               Text="ACS 카드/층 전환은 후속 티어에서 배선됩니다(Vda5050 서비스 등록 후)." />
+                </StackPanel>
+            </Border>
+        </WrapPanel>
+    </StackPanel>
+</UserControl>
