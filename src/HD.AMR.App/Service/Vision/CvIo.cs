@@ -1,6 +1,6 @@
 using OpenCvSharp;
 
-namespace HD.AMR.Web.Services;
+namespace HD.AMR.App.Service.Vision;
 
 /// <summary>
 /// 유니코드 안전 OpenCV 파일 I/O. <see cref="Cv2.ImRead(string,ImreadModes)"/>·

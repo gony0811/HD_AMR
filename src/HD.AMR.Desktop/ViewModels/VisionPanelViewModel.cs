@@ -57,8 +57,8 @@ public sealed partial class VisionPanelViewModel : ObservableObject
     public bool IsHeartbeat => CommandIndex == 0;
     public bool IsCaptureReq => CommandIndex == 1;
     public bool IsResult => CommandIndex >= 2;
-    partial void OnTabIndexChanged(int v) => OnPropertyChanged(nameof(IsFrameTab));
-    partial void OnCommandIndexChanged(int v)
+    partial void OnTabIndexChanged(int value) => OnPropertyChanged(nameof(IsFrameTab));
+    partial void OnCommandIndexChanged(int value)
     {
         OnPropertyChanged(nameof(IsHeartbeat));
         OnPropertyChanged(nameof(IsCaptureReq));

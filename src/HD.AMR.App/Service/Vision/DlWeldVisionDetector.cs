@@ -2,8 +2,9 @@ using HD.AMR.App.Communication.Weld;
 using HD.AMR.App.Models;
 using Microsoft.ML.OnnxRuntime;
 using OpenCvSharp;
+using Microsoft.Extensions.Logging;
 
-namespace HD.AMR.Web.Services;
+namespace HD.AMR.App.Service.Vision;
 
 /// <summary>
 /// 학습된 YOLOv8-seg(.onnx)로 비드 마스크를 추론하고, 그 마스크를 <see cref="WeldMaskAnalyzer"/> 공유

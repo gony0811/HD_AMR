@@ -1,7 +1,7 @@
 using HD.AMR.App.Service;
 using OpenCvSharp;
 
-namespace HD.AMR.Web.Services;
+namespace HD.AMR.App.Service.Vision;
 
 /// <summary>
 /// DL 라벨링용 캡처 폴더 접근 서비스. 캡처 저장 폴더(ParameterService 의 Camera.Capture.Dir)에서

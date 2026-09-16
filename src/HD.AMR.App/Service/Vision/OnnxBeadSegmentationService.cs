@@ -1,8 +1,9 @@
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 using OpenCvSharp;
+using Microsoft.Extensions.Logging;
 
-namespace HD.AMR.Web.Services;
+namespace HD.AMR.App.Service.Vision;
 
 /// <summary>
 /// 학습 산출물(weld_seg.onnx, YOLOv8-seg)을 CPU EP 로 네이티브 추론해 비드 마스크를 얻는 서비스.

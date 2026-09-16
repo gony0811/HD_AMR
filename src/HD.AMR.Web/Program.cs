@@ -90,7 +90,7 @@ builder.Services.Configure<WeldTrackingSettings>(
 if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
 {
     builder.Services.AddSingleton<IWeldVisionDetector, WeldVisionDetector>();
-    builder.Services.AddSingleton<IDlWeldVisionDetector, HD.AMR.Web.Services.DlWeldVisionDetector>();
+    builder.Services.AddSingleton<IDlWeldVisionDetector, HD.AMR.App.Service.Vision.DlWeldVisionDetector>();
 }
 else
 {
@@ -153,11 +153,11 @@ builder.Services.AddSingleton<SequenceMonitorService>();  // 1200: ⑱ 검사 �
 // 시퀀스 전역 실행 잠금 — SequenceService 는 서킷별 scoped 라 UI/ACS 동시 실행을 막으려면 전역 게이트가 필요.
 builder.Services.AddSingleton<SequenceRunGate>();
 builder.Services.AddScoped<SequenceService>();
-builder.Services.AddScoped<HD.AMR.Web.Services.LabelDataService>();
+builder.Services.AddScoped<HD.AMR.App.Service.Vision.LabelDataService>();
 // DL 학습 오케스트레이터 — 학습 프로세스가 페이지 이동/서킷과 무관하게 살아 있어야 하므로 싱글톤.
-builder.Services.AddSingleton<HD.AMR.Web.Services.WeldTrainingService>();
+builder.Services.AddSingleton<HD.AMR.App.Service.Vision.WeldTrainingService>();
 // DL 비드 세그멘테이션 추론(ONNX CPU) — 세션 캐시 유지 위해 싱글톤.
-builder.Services.AddSingleton<HD.AMR.Web.Services.OnnxBeadSegmentationService>();
+builder.Services.AddSingleton<HD.AMR.App.Service.Vision.OnnxBeadSegmentationService>();
 
 var app = builder.Build();
 
@@ -418,7 +418,7 @@ static IResult JpegOrNoContent(byte[]? jpeg)
 
 // DL 라벨 에디터용 — 캡처 폴더의 이미지/마스크 파일을 이름으로 서빙(폴더는 서버 설정값, 경로 탈출 차단).
 // UI 는 <img src="/camera/label/image?name=STEM_rgb.png"> 로 로드. 캐시 방지 위해 no-store.
-app.MapGet("/camera/label/image", async (string name, HD.AMR.Web.Services.LabelDataService lbl) =>
+app.MapGet("/camera/label/image", async (string name, HD.AMR.App.Service.Vision.LabelDataService lbl) =>
 {
     var bytes = await lbl.ReadAsync(name);
     return bytes is null ? Results.NotFound() : Results.File(bytes, "image/png");
@@ -426,7 +426,7 @@ app.MapGet("/camera/label/image", async (string name, HD.AMR.Web.Services.LabelD
 
 // DL 추론 결과 오버레이(비드 마스크) — 수동 트리거라 단일 JPEG. 없으면 204.
 app.MapGet("/vision/infer/overlay.jpg",
-    (HD.AMR.Web.Services.OnnxBeadSegmentationService seg) => JpegOrNoContent(seg.LastOverlay));
+    (HD.AMR.App.Service.Vision.OnnxBeadSegmentationService seg) => JpegOrNoContent(seg.LastOverlay));
 
 static async Task StreamMjpegAsync(HttpContext http, CancellationToken ct, int fps,
     Func<Task<byte[]?>> getJpeg)

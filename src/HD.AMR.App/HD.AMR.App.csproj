@@ -8,6 +8,9 @@
 
     <ItemGroup>
       <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="8.0.10" />
+      <!-- DL 비드 세그멘테이션 추론(CPU EP). DlWeldVisionDetector/OnnxBeadSegmentationService 가 사용.
+           HD.AMR.Web 에서 이관되며, Web/Desktop 양쪽 실행 프로젝트가 App 을 통해 공유한다. -->
+      <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.20.1" />
       <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.5" />
       <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.5" />
       <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.5" />

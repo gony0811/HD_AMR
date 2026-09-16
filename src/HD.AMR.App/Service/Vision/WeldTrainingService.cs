@@ -1,8 +1,10 @@
 using System.Diagnostics;
 using HD.AMR.App.Service;
 using OpenCvSharp;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.DependencyInjection;
 
-namespace HD.AMR.Web.Services;
+namespace HD.AMR.App.Service.Vision;
 
 /// <summary>
 /// DL 비드 세그멘테이션(YOLOv8-seg, CPU) 학습 파이프라인의 UI 오케스트레이터.
