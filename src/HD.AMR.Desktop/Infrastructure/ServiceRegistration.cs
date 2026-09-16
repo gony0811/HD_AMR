@@ -122,6 +122,7 @@ internal static class ServiceRegistration
         services.AddTransient<SequenceViewModel>();
         services.AddTransient<CameraViewModel>();
         services.AddTransient<WeldTrackingViewModel>();
+        services.AddTransient<InspectionPointsViewModel>();
 
         return services;
     }
