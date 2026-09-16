@@ -222,7 +222,9 @@
     <strong>경유점 엑셀(CSV) 내보내기 / 불러오기</strong>
     <p class="hint text-muted mb-1">
         현재 경유점 리스트를 <b>CSV(엑셀 호환)</b> 로 내보내거나, 빈 템플릿을 받아 자세를 채운 뒤 다시 불러올 수 있습니다.
-        열: <code>X, Y, Z, Rx, Ry, Rz, Surface</code> (mm/deg, Surface=0 Flat·1 Corner·2 Corrugation).
+        열: <code>X_mm, Y_mm, Z_mm(WD), Rx_deg, Ry_deg, Rz_deg, Surface</code> —
+        <b>좌표=mm, 각도=deg</b>, <b>Surface: 0=Flat(평면) · 1=Corner(코너) · 2=Corrugation(코로게이션)</b>.
+        파일 상단 <code>#</code> 주석에도 단위·규약이 적혀 있으며 불러오기 시 무시됩니다.
         불러오기는 현재 목록을 <b>덮어씁니다</b>. (엑셀에서 저장 시 <b>CSV UTF-8</b> 형식 사용)
     </p>
     <div class="d-flex gap-2 align-items-center flex-wrap">
@@ -286,7 +288,8 @@
     private string? _csvMsg;
     private bool _csvErr;
     private const long CsvMaxBytes = 5L * 1024 * 1024;   // 5 MB 상한
-    private static readonly string[] CsvHeader = { "X", "Y", "Z", "Rx", "Ry", "Rz", "Surface" };
+    private static readonly string[] CsvHeader =
+        { "X_mm", "Y_mm", "Z_mm(WD)", "Rx_deg", "Ry_deg", "Rz_deg", "Surface(0=Flat,1=Corner,2=Corrugation)" };
 
     // 뷰박스(캔버스) — RecomputeViewBox 로 갱신
     private double _vbMinX = -50, _vbMinY = -50, _vbW = 100, _vbH = 100;
@@ -551,6 +554,12 @@
     private string BuildCsv(bool includeRows)
     {
         var sb = new StringBuilder();
+        // 자기설명 주석 블록 — 단위·좌표규약·Surface enum. '#' 행은 불러오기에서 무시된다.
+        sb.Append("# HD.AMR 검사 경유점 · 좌표=mm, 각도=deg\r\n");
+        sb.Append("# X,Y = 검사평면 좌표(mm) | Z = Working Distance = 검사면 법선거리(mm, +선창 내부)\r\n");
+        sb.Append("# Rx,Ry,Rz = 툴 자세 오일러각(deg) | Ry = 틸트(θ)\r\n");
+        sb.Append("# Surface: 0=Flat(평면), 1=Corner(코너), 2=Corrugation(코로게이션)\r\n");
+        sb.Append("# '#' 주석행/헤더행은 무시됩니다. 데이터 행만 편집하세요.\r\n");
         sb.Append(string.Join(",", CsvHeader)).Append("\r\n");
         if (includeRows)
         {
@@ -620,19 +629,16 @@
         warn = "";
         var list = new List<XyPoint>();
         var lines = text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
-        int skipped = 0, lineNo = 0;
+        int skipped = 0;
         foreach (var raw in lines)
         {
-            lineNo++;
             var line = raw.Trim();
             if (line.Length == 0) continue;
+            if (line.StartsWith("#")) continue;   // 주석 행(단위·규약 설명)
             var cells = line.Split(',');
-            // 헤더/주석 행: 첫 셀이 숫자로 파싱되지 않으면 건너뜀.
+            // 헤더/라벨 행: 첫 셀이 숫자로 파싱되지 않으면 조용히 건너뜀(단위 표기 헤더 포함).
             if (!double.TryParse(cells[0].Trim(), NumberStyles.Any, CultureInfo.InvariantCulture, out var x))
-            {
-                if (lineNo == 1) continue;   // 헤더
-                skipped++; continue;
-            }
+                continue;
             if (cells.Length < 6) { skipped++; continue; }
             list.Add(new XyPoint
             {
