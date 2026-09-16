@@ -53,6 +53,8 @@ internal static class ServiceRegistration
         // ── DB 백엔드 서비스 (Scoped) ───────────────────────────────
         services.AddScoped<ParameterService>();
         services.AddScoped<InspectionRecipeService>();
+        services.AddScoped<CalibrationService>();
+        services.AddScoped<QrLocalizationService>();
 
         // ── UI(네비게이션 + 뷰모델) ─────────────────────────────────
         services.AddSingleton<INavigationService, NavigationService>();
@@ -66,6 +68,7 @@ internal static class ServiceRegistration
         services.AddTransient<ParametersViewModel>();
         services.AddTransient<InspectionRecipesViewModel>();
         services.AddTransient<CobotViewModel>();
+        services.AddTransient<CalibrationViewModel>();
 
         return services;
     }

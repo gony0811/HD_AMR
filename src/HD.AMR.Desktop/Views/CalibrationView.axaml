@@ -1,0 +1,142 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:HD.AMR.Desktop.ViewModels"
+             x:Class="HD.AMR.Desktop.Views.CalibrationView"
+             x:DataType="vm:CalibrationViewModel">
+    <UserControl.Styles>
+        <Style Selector="NumericUpDown.pose"><Setter Property="Width" Value="105" /><Setter Property="Margin" Value="0,0,6,0" /></Style>
+        <Style Selector="TextBlock.axis"><Setter Property="Foreground" Value="{DynamicResource TextMuted}" /><Setter Property="FontSize" Value="12" /></Style>
+    </UserControl.Styles>
+
+    <StackPanel MaxWidth="1000" HorizontalAlignment="Left">
+        <TextBlock Classes="page-title" Text="QR 기준 AMR 정차 Pose 티칭" />
+        <TextBlock Classes="page-subtitle" TextWrapping="Wrap"
+                   Text="바닥 QR을 촬영하면 현재 상대 오차와 QR 기준 위치에 정차했을 때의 SLAM 목표 Pose를 계산합니다." />
+
+        <Border Classes="alert" IsVisible="{Binding Message, Converter={x:Static ObjectConverters.IsNotNull}}">
+            <TextBlock Text="{Binding Message}" TextWrapping="Wrap" />
+        </Border>
+
+        <!-- ① 고정 좌표변환 -->
+        <Border Classes="card">
+            <StackPanel Spacing="8">
+                <TextBlock Text="① 고정 좌표변환 확인" FontWeight="SemiBold" />
+                <TextBlock Classes="axis" Text="T_A_B — AMR 중심 → 코봇 Base (mm/도)" />
+                <StackPanel Orientation="Horizontal">
+                    <StackPanel><TextBlock Classes="axis" Text="X" /><NumericUpDown Classes="pose" Value="{Binding Mount.V0}" Increment="0.1" /></StackPanel>
+                    <StackPanel><TextBlock Classes="axis" Text="Y" /><NumericUpDown Classes="pose" Value="{Binding Mount.V1}" Increment="0.1" /></StackPanel>
+                    <StackPanel><TextBlock Classes="axis" Text="Z" /><NumericUpDown Classes="pose" Value="{Binding Mount.V2}" Increment="0.1" /></StackPanel>
+                    <StackPanel><TextBlock Classes="axis" Text="Rx" /><NumericUpDown Classes="pose" Value="{Binding Mount.V3}" Increment="0.1" /></StackPanel>
+                    <StackPanel><TextBlock Classes="axis" Text="Ry" /><NumericUpDown Classes="pose" Value="{Binding Mount.V4}" Increment="0.1" /></StackPanel>
+                    <StackPanel><TextBlock Classes="axis" Text="Rz" /><NumericUpDown Classes="pose" Value="{Binding Mount.V5}" Increment="0.1" /></StackPanel>
+                    <Button VerticalAlignment="Bottom" Content="T_A_B 저장" Classes="accent" Command="{Binding SaveMountCommand}" />
+                </StackPanel>
+                <TextBlock Classes="axis" Text="T_T_C — 선택 Tool TCP → 카메라 광학 프레임 (mm/도)" Margin="0,6,0,0" />
+                <StackPanel Orientation="Horizontal">
+                    <StackPanel Margin="0,0,10,0"><TextBlock Classes="axis" Text="Tool 번호" /><NumericUpDown Width="90" Value="{Binding Tool}" Minimum="0" Maximum="15" Increment="1" FormatString="0" /></StackPanel>
+                    <StackPanel><TextBlock Classes="axis" Text="X" /><NumericUpDown Classes="pose" Value="{Binding HandEye.V0}" Increment="0.1" /></StackPanel>
+                    <StackPanel><TextBlock Classes="axis" Text="Y" /><NumericUpDown Classes="pose" Value="{Binding HandEye.V1}" Increment="0.1" /></StackPanel>
+                    <StackPanel><TextBlock Classes="axis" Text="Z" /><NumericUpDown Classes="pose" Value="{Binding HandEye.V2}" Increment="0.1" /></StackPanel>
+                    <StackPanel><TextBlock Classes="axis" Text="Rx" /><NumericUpDown Classes="pose" Value="{Binding HandEye.V3}" Increment="0.1" /></StackPanel>
+                    <StackPanel><TextBlock Classes="axis" Text="Ry" /><NumericUpDown Classes="pose" Value="{Binding HandEye.V4}" Increment="0.1" /></StackPanel>
+                    <StackPanel><TextBlock Classes="axis" Text="Rz" /><NumericUpDown Classes="pose" Value="{Binding HandEye.V5}" Increment="0.1" /></StackPanel>
+                    <Button VerticalAlignment="Bottom" Content="T_T_C 저장" Classes="accent" Command="{Binding SaveHandEyeCommand}" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <!-- ② QR 정차 기준 -->
+        <Border Classes="card">
+            <StackPanel Spacing="8">
+                <TextBlock Text="② QR 정차 기준 설정 (목표 T_A_Q)" FontWeight="SemiBold" />
+                <WrapPanel>
+                    <StackPanel Width="230" Margin="0,0,10,8">
+                        <TextBlock Classes="axis" Text="QR ID" />
+                        <StackPanel Orientation="Horizontal" Spacing="4">
+                            <TextBox Width="150" Text="{Binding QrText}" />
+                            <Button Content="ID 읽기" Command="{Binding ReadQrIdCommand}" IsEnabled="{Binding CameraStreaming}" />
+                        </StackPanel>
+                    </StackPanel>
+                    <StackPanel Width="120" Margin="0,0,10,8"><TextBlock Classes="axis" Text="QR 크기(mm)" /><NumericUpDown Value="{Binding QrSizeMm}" Minimum="1" Increment="1" /></StackPanel>
+                    <StackPanel Width="110" Margin="0,0,10,8"><TextBlock Classes="axis" Text="목표 X(mm)" /><NumericUpDown Value="{Binding TargetXmm}" Increment="0.1" /></StackPanel>
+                    <StackPanel Width="110" Margin="0,0,10,8"><TextBlock Classes="axis" Text="목표 Y(mm)" /><NumericUpDown Value="{Binding TargetYmm}" Increment="0.1" /></StackPanel>
+                    <StackPanel Width="110" Margin="0,0,10,8"><TextBlock Classes="axis" Text="목표 Z(mm)" /><NumericUpDown Value="{Binding TargetZmm}" Increment="0.1" /></StackPanel>
+                    <StackPanel Width="110" Margin="0,0,10,8"><TextBlock Classes="axis" Text="목표 Yaw(도)" /><NumericUpDown Value="{Binding TargetYawDeg}" Increment="0.1" /></StackPanel>
+                    <StackPanel Width="140" Margin="0,0,10,8"><TextBlock Classes="axis" Text="위치 허용오차(mm)" /><NumericUpDown Value="{Binding PositionToleranceMm}" Minimum="0" Increment="0.1" /></StackPanel>
+                    <StackPanel Width="140" Margin="0,0,10,8"><TextBlock Classes="axis" Text="Yaw 허용오차(도)" /><NumericUpDown Value="{Binding YawToleranceDeg}" Minimum="0" Increment="0.1" /></StackPanel>
+                    <Button VerticalAlignment="Bottom" Margin="0,0,0,8" Content="기준 저장" Command="{Binding SaveReferenceCommand}" />
+                </WrapPanel>
+            </StackPanel>
+        </Border>
+
+        <!-- ③ 촬영 · 계산 -->
+        <Border Classes="card">
+            <StackPanel Spacing="8">
+                <TextBlock Text="③ QR 촬영 · 목표 SLAM Pose 계산" FontWeight="SemiBold" />
+                <Grid ColumnDefinitions="*,*">
+                    <Border Grid.Column="0" Margin="0,0,8,0" MinHeight="200" CornerRadius="6"
+                            Background="{DynamicResource CardBorder}">
+                        <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" Classes="muted" TextWrapping="Wrap" TextAlignment="Center"
+                                   Text="카메라 스트리밍 미표시 — 라이브 영상은 Tier 3(CameraView)에서 배선 예정" />
+                    </Border>
+                    <StackPanel Grid.Column="1" Spacing="4">
+                        <Grid ColumnDefinitions="120,*"><TextBlock Text="AMR 연결" Classes="axis" /><TextBlock Grid.Column="1" Text="{Binding AmrConnected, Converter={x:Static vm:BoolTextConverters.Connection}}" /></Grid>
+                        <Grid ColumnDefinitions="120,*"><TextBlock Text="코봇 연결" Classes="axis" /><TextBlock Grid.Column="1" Text="{Binding CobotConnected, Converter={x:Static vm:BoolTextConverters.Connection}}" /></Grid>
+                        <Grid ColumnDefinitions="120,*"><TextBlock Text="카메라" Classes="axis" /><TextBlock Grid.Column="1" Text="{Binding CameraStreaming, Converter={x:Static vm:BoolTextConverters.Stream}}" /></Grid>
+                        <Grid ColumnDefinitions="120,*"><TextBlock Text="현재 SLAM X" Classes="axis" /><TextBlock Grid.Column="1" Text="{Binding SlamXText}" /></Grid>
+                        <Grid ColumnDefinitions="120,*"><TextBlock Text="현재 SLAM Y" Classes="axis" /><TextBlock Grid.Column="1" Text="{Binding SlamYText}" /></Grid>
+                        <Grid ColumnDefinitions="120,*"><TextBlock Text="현재 SLAM Yaw" Classes="axis" /><TextBlock Grid.Column="1" Text="{Binding SlamYawText}" /></Grid>
+                        <Button Margin="0,8,0,0" Content="QR 촬영 · 목표 Pose 계산" Classes="accent"
+                                Command="{Binding MeasureCommand}" IsEnabled="{Binding Ready}" />
+                    </StackPanel>
+                </Grid>
+
+                <!-- 결과 -->
+                <StackPanel IsVisible="{Binding Measurement, Converter={x:Static ObjectConverters.IsNotNull}}">
+                <StackPanel DataContext="{Binding Measurement}" x:DataType="vm:MeasurementVm" Spacing="8">
+                    <Border Classes="alert"><TextBlock Text="{Binding Headline}" FontWeight="SemiBold" /></Border>
+                    <Grid ColumnDefinitions="*,*">
+                        <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                            <TextBlock Text="QR 상대 측정 및 정차 오차" FontWeight="SemiBold" Margin="0,0,0,4" />
+                            <Grid ColumnDefinitions="120,*,*,*" RowDefinitions="Auto,Auto,Auto,Auto">
+                                <TextBlock Grid.Row="0" Grid.Column="1" Text="X(mm)" Classes="axis" />
+                                <TextBlock Grid.Row="0" Grid.Column="2" Text="Y(mm)" Classes="axis" />
+                                <TextBlock Grid.Row="0" Grid.Column="3" Text="Yaw(도)" Classes="axis" />
+                                <TextBlock Grid.Row="1" Grid.Column="0" Text="측정 T_A_Q" Classes="axis" />
+                                <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding MeasuredX}" />
+                                <TextBlock Grid.Row="1" Grid.Column="2" Text="{Binding MeasuredY}" />
+                                <TextBlock Grid.Row="1" Grid.Column="3" Text="{Binding MeasuredYaw}" />
+                                <TextBlock Grid.Row="2" Grid.Column="0" Text="목표 T_A_Q" Classes="axis" />
+                                <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding TargetX}" />
+                                <TextBlock Grid.Row="2" Grid.Column="2" Text="{Binding TargetY}" />
+                                <TextBlock Grid.Row="2" Grid.Column="3" Text="{Binding TargetYaw}" />
+                                <TextBlock Grid.Row="3" Grid.Column="0" Text="오차" Classes="axis" />
+                                <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding ErrX}" />
+                                <TextBlock Grid.Row="3" Grid.Column="2" Text="{Binding ErrY}" />
+                                <TextBlock Grid.Row="3" Grid.Column="3" Text="{Binding ErrYaw}" />
+                            </Grid>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1">
+                            <TextBlock Text="HD_ACS 등록용 목표 SLAM Pose" FontWeight="SemiBold" Margin="0,0,0,4" />
+                            <Grid ColumnDefinitions="60,*" RowDefinitions="Auto,Auto,Auto">
+                                <TextBlock Grid.Row="0" Grid.Column="0" Text="X" Classes="axis" />
+                                <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding SlamX, StringFormat='{}{0} mm'}" FontWeight="SemiBold" />
+                                <TextBlock Grid.Row="1" Grid.Column="0" Text="Y" Classes="axis" />
+                                <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding SlamY, StringFormat='{}{0} mm'}" FontWeight="SemiBold" />
+                                <TextBlock Grid.Row="2" Grid.Column="0" Text="Yaw" Classes="axis" />
+                                <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding SlamYaw, StringFormat='{}{0}°'}" FontWeight="SemiBold" />
+                            </Grid>
+                            <TextBlock Classes="muted" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0" Text="{Binding Stats}" />
+                        </StackPanel>
+                    </Grid>
+                </StackPanel>
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <Border Classes="alert">
+            <TextBlock TextWrapping="Wrap" FontSize="12"
+                       Text="이 페이지는 목표 Pose를 계산하지만 AMR을 자동 이동시키거나 HD_ACS에 직접 저장하지 않습니다. 계산값을 HD_ACS에 등록해 시험 이동한 뒤 같은 QR을 재촬영하여 허용오차를 확인하세요." />
+        </Border>
+    </StackPanel>
+</UserControl>
