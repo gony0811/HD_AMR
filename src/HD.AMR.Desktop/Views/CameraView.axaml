@@ -1,0 +1,99 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:HD.AMR.Desktop.ViewModels"
+             x:Class="HD.AMR.Desktop.Views.CameraView"
+             x:DataType="vm:CameraViewModel">
+    <UserControl.Styles>
+        <Style Selector="TextBlock.axis"><Setter Property="Foreground" Value="{DynamicResource TextMuted}" /><Setter Property="FontSize" Value="12" /></Style>
+        <Style Selector="Image.stream"><Setter Property="Stretch" Value="Fill" /></Style>
+        <Style Selector="Border.streambox"><Setter Property="BorderBrush" Value="{DynamicResource CardBorder}" /><Setter Property="BorderThickness" Value="1" /><Setter Property="CornerRadius" Value="4" /><Setter Property="Background" Value="Black" /><Setter Property="Height" Value="240" /></Style>
+    </UserControl.Styles>
+
+    <StackPanel MaxWidth="1100" HorizontalAlignment="Left">
+        <TextBlock Classes="page-title" Text="RealSense D435 깊이 카메라" />
+
+        <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,0,0,8">
+            <Border Classes="badge" Classes.on="{Binding IsConnected}" Classes.off="{Binding !IsConnected}">
+                <TextBlock Text="{Binding IsConnected, Converter={x:Static vm:BoolTextConverters.Connection}, StringFormat='연결 {0}'}" />
+            </Border>
+            <Border Classes="badge" Classes.on="{Binding IsStreaming}" Classes.off="{Binding !IsStreaming}">
+                <TextBlock Text="{Binding IsStreaming, Converter={x:Static vm:BoolTextConverters.Stream}, StringFormat='스트림 {0}'}" />
+            </Border>
+            <TextBlock Classes="axis" VerticalAlignment="Center" Text="{Binding SettingsSummary}" />
+        </StackPanel>
+
+        <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,0,0,10">
+            <Button Content="시작" Classes="accent" Command="{Binding StartStreamCommand}" IsEnabled="{Binding !IsStreaming}" />
+            <Button Content="정지" Classes="danger" Command="{Binding StopStreamCommand}" IsEnabled="{Binding IsStreaming}" />
+        </StackPanel>
+
+        <!-- 캡처 -->
+        <Border Classes="card">
+            <StackPanel Spacing="8">
+                <TextBlock Text="학습 데이터 캡처 (RGB·IR·Depth · PNG 무손실)" FontWeight="SemiBold" />
+                <Grid ColumnDefinitions="Auto,*,Auto">
+                    <TextBlock Grid.Column="0" Text="저장 폴더" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <TextBox Grid.Column="1" Text="{Binding CaptureDir}" IsReadOnly="True" Watermark="폴더 선택… 버튼으로 지정" />
+                    <Button Grid.Column="2" Name="BrowseButton" Margin="8,0,0,0" Content="📁 폴더 선택…" />
+                </Grid>
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                    <Button Content="📷 캡처" Classes="accent" Command="{Binding CaptureCommand}" IsEnabled="{Binding IsStreaming}" />
+                    <TextBlock Classes="axis" VerticalAlignment="Center" Text="{Binding CaptureCount, StringFormat='세션 누적 {0}회'}" />
+                    <TextBlock Classes="axis" VerticalAlignment="Center" Text="{Binding LastCaptureInfo}" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <Border Classes="alert" IsVisible="{Binding Message, Converter={x:Static ObjectConverters.IsNotNull}}">
+            <TextBlock Text="{Binding Message}" TextWrapping="Wrap" />
+        </Border>
+
+        <!-- 영상 -->
+        <Grid ColumnDefinitions="*,*,*" Margin="0,4,0,0">
+            <StackPanel Grid.Column="0" Margin="0,0,6,0">
+                <TextBlock Classes="axis" Text="RGB" />
+                <Border Classes="streambox"><Image Classes="stream" Source="{Binding ColorImage}" /></Border>
+            </StackPanel>
+            <StackPanel Grid.Column="1" Margin="0,0,6,0">
+                <TextBlock Classes="axis" Text="IR" />
+                <Border Classes="streambox"><Image Classes="stream" Source="{Binding IrImage}" /></Border>
+            </StackPanel>
+            <StackPanel Grid.Column="2">
+                <TextBlock Classes="axis" Text="Depth (hover=거리, 드래그=ROI)" />
+                <Border Classes="streambox">
+                    <Grid Name="DepthHost" Background="Transparent">
+                        <Image Classes="stream" Source="{Binding DepthImage}" />
+                        <Canvas Name="DepthOverlay" Background="Transparent">
+                            <Rectangle Name="RoiRect" Stroke="#FFD000" StrokeThickness="2" IsVisible="False" />
+                            <Border Name="ProbeLabel" Background="#CC000000" CornerRadius="3" Padding="4,2" IsVisible="False">
+                                <TextBlock Text="{Binding ProbeText}" Foreground="White" FontSize="11" />
+                            </Border>
+                        </Canvas>
+                    </Grid>
+                </Border>
+            </StackPanel>
+        </Grid>
+
+        <!-- 깊이 ROI -->
+        <Border Classes="card" Margin="0,10,0,0" MaxWidth="640" HorizontalAlignment="Left">
+            <StackPanel Spacing="8">
+                <TextBlock Text="깊이 ROI (평탄면 통계)" FontWeight="SemiBold" />
+                <CheckBox Content="ROI 사용(관심영역만 계산)" IsChecked="{Binding RoiEnabled}" />
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <StackPanel Width="90"><TextBlock Classes="axis" Text="X %" /><NumericUpDown Value="{Binding RoiXPct}" Minimum="0" Maximum="100" Increment="0.5" FormatString="0.0" /></StackPanel>
+                    <StackPanel Width="90"><TextBlock Classes="axis" Text="Y %" /><NumericUpDown Value="{Binding RoiYPct}" Minimum="0" Maximum="100" Increment="0.5" FormatString="0.0" /></StackPanel>
+                    <StackPanel Width="90"><TextBlock Classes="axis" Text="너비 %" /><NumericUpDown Value="{Binding RoiWPct}" Minimum="0" Maximum="100" Increment="0.5" FormatString="0.0" /></StackPanel>
+                    <StackPanel Width="90"><TextBlock Classes="axis" Text="높이 %" /><NumericUpDown Value="{Binding RoiHPct}" Minimum="0" Maximum="100" Increment="0.5" FormatString="0.0" /></StackPanel>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button Content="저장 (ROI)" Classes="accent" Command="{Binding SaveRoiCommand}" />
+                    <Button Content="평탄 검증" Command="{Binding VerifyPlaneCommand}" IsEnabled="{Binding IsStreaming}" />
+                    <TextBlock Classes="axis" VerticalAlignment="Center" Text="{Binding StatsText}" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <TextBlock Classes="axis" Margin="0,10,0,0" TextWrapping="Wrap"
+                   Text="후속(Tier 3 확장): Bead/Peak ROI 영속, IR 노출 튜닝, 평탄면 자동 정렬, 코봇 조그 팝업. macOS 는 카메라 하드웨어가 없어 영상이 비어 있습니다(Windows 실장비에서 표시)." />
+    </StackPanel>
+</UserControl>

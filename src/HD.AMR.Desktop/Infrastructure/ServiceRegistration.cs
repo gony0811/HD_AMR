@@ -120,6 +120,7 @@ internal static class ServiceRegistration
         services.AddTransient<CalibrationViewModel>();
         services.AddTransient<VisionInterfaceViewModel>();
         services.AddTransient<SequenceViewModel>();
+        services.AddTransient<CameraViewModel>();
 
         return services;
     }
