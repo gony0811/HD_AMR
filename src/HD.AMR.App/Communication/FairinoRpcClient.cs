@@ -372,7 +372,7 @@ public class FairinoRpcClient : IDisposable
         double v = vel ?? _settings.DefaultVelPct;
         double[] off = (offsetPos is { Length: >= 6 }) ? offsetPos : new double[6];
 
-        double[] j = jointPos ?? await GetInverseKinAsync(descPose, ct: ct);
+        double[] j = jointPos ?? await GetInverseKinForUserAsync(descPose, u, ct);
 
         var args = new object[]
         {
@@ -389,6 +389,35 @@ public class FairinoRpcClient : IDisposable
         var rc = await InvokeAsync("MoveL", p => ToErr(p.MoveL(args)), ct, faultRecovery: false);
         if (rc == 0) { _activeTool = t; _activeUser = u; }   // tool/user 인자가 컨트롤러 활성 프레임을 바꾸므로 추적값 동기.
         return rc;
+    }
+
+    /// <summary>이동 목표 프레임(user)에 맞춘 역기구학 관절 시드. 이 펌웨어의 GetInverseKin 은 입력 pose 를
+    /// <b>현재 활성 작업물 프레임</b> 기준으로 해석한다(GetForwardKin 과 대칭 — WObjResetStep 의 112 순환에서
+    /// 확인). 따라서 활성 프레임(M)과 이동 목표 프레임(user)이 다르면 입력을 활성 프레임 기준으로 변환해
+    /// IK 를 부른다: P_M = T_M⁻¹ · T_user · P_user (T_0 = identity). 변환 없이 부르면 예컨대 활성=0(베이스)
+    /// 상태에서 작업물 좌표(원점 근처 값)를 베이스로 오해석해 rc=38(특이/도달불가)·112 가 난다 —
+    /// 과거에는 활성 프레임이 목표 프레임으로 '잔류'해 있어 우연히 맞았던 경로다.</summary>
+    private async Task<double[]> GetInverseKinForUserAsync(double[] descPose, int user, CancellationToken ct)
+    {
+        int active = await ResolveActiveUserAsync(ct);
+        if (active == user)
+            return await GetInverseKinAsync(descPose, ct: ct);
+
+        double[] pBase = descPose;
+        if (user > 0)
+        {
+            var tUser = await GetWObjCoordAsync(user, ct);
+            if (tUser.All(v => v == 0))
+                _logger.LogWarning("{Name} IK 프레임 보정: 목표 작업물 #{U} 가 미등록(원점=0) — pose 를 베이스로 간주. " +
+                                   "좌표계 등록을 먼저 확인하세요.", _settings.Name, user);
+            pBase = FrameMath.FromFrame(descPose, tUser);
+        }
+        var pActive = active > 0 ? FrameMath.ToFrame(pBase, await GetWObjCoordAsync(active, ct)) : pBase;
+        _logger.LogInformation("{Name} IK 프레임 보정: 목표 user=#{U}, 활성=#{M} — pose=[{P}] → IK 입력=[{Q}]",
+            _settings.Name, user, active,
+            string.Join(",", descPose.Select(x => x.ToString("0.##"))),
+            string.Join(",", pActive.Select(x => x.ToString("0.##"))));
+        return await GetInverseKinAsync(pActive, ct: ct);
     }
 
     /// <summary>

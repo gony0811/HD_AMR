@@ -1183,6 +1183,28 @@
         {
             _isRunning = false;
             _runIndex = -1;
+            // 활성 작업물 좌표계 반납: user≠0 배치 실행 후 컨트롤러 활성 프레임이 N 으로 남으면
+            // 이후 조그/코봇 페이지가 프레임 불일치(rc=154/38 계열)를 낸다 → 베이스(0) 복귀.
+            // 사용자 정지 직후에는 모션 명령(무변위 MoveJ)을 보내지 않는다.
+            if (_runUser != 0 && !(_runCts?.IsCancellationRequested ?? false))
+                await TryReturnBaseFrameAsync();
+        }
+    }
+
+    /// <summary>활성 작업물 좌표계를 베이스(0)로 반납(무변위 MoveJ) — 실패는 로그/메시지로만 알린다.
+    /// 좌표계 등록(T_N) 자체는 유지되므로 이후 user:N 명시 이동에는 영향 없다.</summary>
+    private async Task TryReturnBaseFrameAsync()
+    {
+        if (!Cobot.IsConnected) return;
+        try
+        {
+            var rc = await Cobot.Rpc!.ResetActiveFrameAsync(_runTool, 0);
+            if (rc != 0)
+                _runMessage += $" · 활성 좌표계 베이스 반납 실패 (rc={rc}){HD.AMR.App.Communication.FairinoErrorCodes.Suffix(rc)}";
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "활성 작업물 좌표계 베이스 반납 실패");
         }
     }
 
