@@ -30,7 +30,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             new("검사 포인트(X-Y)", "📍", null),
             new("검사 매핑 요약", "🗂", null),
             new("Cobot",         "🤖", typeof(CobotViewModel)),
-            new("Sequence",      "🔀", null),
+            new("Sequence",      "🔀", typeof(SequenceViewModel)),
             new("Camera",        "🎥", null),
             new("Vision Interface", "🖧", typeof(VisionInterfaceViewModel)),
             new("비드 라벨링",   "🏷", null),

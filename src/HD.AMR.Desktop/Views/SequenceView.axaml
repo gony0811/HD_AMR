@@ -1,0 +1,122 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:HD.AMR.Desktop.ViewModels"
+             xmlns:ent="using:HD.AMR.App.Data.Entities"
+             x:Class="HD.AMR.Desktop.Views.SequenceView"
+             x:DataType="vm:SequenceViewModel">
+    <UserControl.Styles>
+        <Style Selector="TextBlock.axis"><Setter Property="Foreground" Value="{DynamicResource TextMuted}" /><Setter Property="FontSize" Value="12" /></Style>
+    </UserControl.Styles>
+
+    <StackPanel MaxWidth="1100" HorizontalAlignment="Left">
+        <TextBlock Classes="page-title" Text="Sequence" />
+
+        <!-- 실행 제어 -->
+        <Border Classes="card">
+            <StackPanel Spacing="8">
+                <TextBlock Text="시퀀스 실행" FontWeight="SemiBold" />
+                <Border Classes="alert" IsVisible="{Binding !CobotConnected}">
+                    <TextBlock Text="⚠ 코봇 RPC 미연결 — 시퀀스 실행 불가." />
+                </Border>
+                <Border Classes="alert" IsVisible="{Binding FaultText, Converter={x:Static ObjectConverters.IsNotNull}}">
+                    <TextBlock Text="{Binding FaultText}" />
+                </Border>
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                    <StackPanel><TextBlock Classes="axis" Text="공구(tool)" /><NumericUpDown Width="90" Value="{Binding Tool}" Minimum="0" Maximum="15" Increment="1" FormatString="0" IsEnabled="{Binding !Busy}" /></StackPanel>
+                    <StackPanel><TextBlock Classes="axis" Text="속도(%)" /><NumericUpDown Width="90" Value="{Binding Velocity}" Minimum="1" Maximum="100" Increment="1" FormatString="0" IsEnabled="{Binding !Busy}" /></StackPanel>
+                    <Button VerticalAlignment="Bottom" Content="▶▶ 풀오토" Classes="accent" Command="{Binding RunAllCommand}" />
+                    <Button VerticalAlignment="Bottom" Content="■ 정지" Classes="danger" Command="{Binding StopCommand}" />
+                    <Button VerticalAlignment="Bottom" Content="오류 해제" Command="{Binding ResetFaultCommand}" IsEnabled="{Binding CobotConnected}" />
+                    <Button VerticalAlignment="Bottom" Content="↺ 상태 초기화" Command="{Binding ResetStatusesCommand}" IsEnabled="{Binding !Busy}" />
+                </StackPanel>
+                <Border Classes="alert" IsVisible="{Binding Message, Converter={x:Static ObjectConverters.IsNotNull}}">
+                    <TextBlock Text="{Binding Message}" TextWrapping="Wrap" />
+                </Border>
+            </StackPanel>
+        </Border>
+
+        <!-- 실행 파라미터 -->
+        <Border Classes="card">
+            <StackPanel Spacing="8">
+                <TextBlock Text="실행 파라미터" FontWeight="SemiBold" />
+                <WrapPanel>
+                    <StackPanel Width="230" Margin="0,0,12,8">
+                        <TextBlock Classes="axis" Text="검사 Wall (Surface)" />
+                        <ComboBox HorizontalAlignment="Stretch" ItemsSource="{Binding SurfaceOptions}"
+                                  SelectedValue="{Binding InspectionSurfaceId}" SelectedValueBinding="{Binding SurfaceId}"
+                                  IsEnabled="{Binding !Busy}">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate x:DataType="vm:SurfaceOption"><TextBlock Text="{Binding Label}" /></DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                    </StackPanel>
+                    <StackPanel Width="130" Margin="0,0,12,8">
+                        <TextBlock Classes="axis" Text="방향" />
+                        <ComboBox HorizontalAlignment="Stretch" SelectedIndex="{Binding DirectionIndex}" IsEnabled="{Binding !Busy}">
+                            <ComboBoxItem>수평</ComboBoxItem><ComboBoxItem>수직</ComboBoxItem>
+                        </ComboBox>
+                    </StackPanel>
+                    <StackPanel Width="120" Margin="0,0,12,8"><TextBlock Classes="axis" Text="U (좌+/우−)" /><NumericUpDown Value="{Binding OffsetU}" Increment="0.1" IsEnabled="{Binding !Busy}" /></StackPanel>
+                    <StackPanel Width="120" Margin="0,0,12,8"><TextBlock Classes="axis" Text="V (상+/하−)" /><NumericUpDown Value="{Binding OffsetV}" Increment="0.1" IsEnabled="{Binding !Busy}" /></StackPanel>
+                    <StackPanel Width="130" Margin="0,0,12,8"><TextBlock Classes="axis" Text="카메라 목표거리" /><NumericUpDown Value="{Binding CameraTargetDistanceMm}" Increment="1" IsEnabled="{Binding !Busy}" /></StackPanel>
+                    <StackPanel Width="150" Margin="0,0,12,8"><TextBlock Classes="axis" Text="레이저중심 Y" /><NumericUpDown Value="{Binding CameraToLaserShiftYmm}" Increment="0.1" IsEnabled="{Binding !Busy}" /></StackPanel>
+                    <StackPanel Width="110" Margin="0,0,12,8">
+                        <TextBlock Classes="axis" Text="Peak X부호" />
+                        <ComboBox HorizontalAlignment="Stretch" SelectedIndex="{Binding XSignIndex}" IsEnabled="{Binding !Busy}"><ComboBoxItem>+1</ComboBoxItem><ComboBoxItem>−1</ComboBoxItem></ComboBox>
+                    </StackPanel>
+                    <StackPanel Width="120" Margin="0,0,12,8"><TextBlock Classes="axis" Text="검사캠 X" /><NumericUpDown Value="{Binding InspectCamOffsetX}" Increment="0.1" IsEnabled="{Binding !Busy}" /></StackPanel>
+                    <StackPanel Width="120" Margin="0,0,12,8"><TextBlock Classes="axis" Text="검사캠 Y" /><NumericUpDown Value="{Binding InspectCamOffsetY}" Increment="0.1" IsEnabled="{Binding !Busy}" /></StackPanel>
+                    <StackPanel Width="110" Margin="0,0,12,8"><TextBlock Classes="axis" Text="작업물 번호" /><NumericUpDown Value="{Binding WobjId}" Minimum="0" Maximum="14" Increment="1" FormatString="0" IsEnabled="{Binding !Busy}" /></StackPanel>
+                    <StackPanel Width="110" Margin="0,0,12,8"><TextBlock Classes="axis" Text="Pitch" /><NumericUpDown Value="{Binding PitchMm}" Minimum="1" Increment="1" IsEnabled="{Binding !Busy}" /></StackPanel>
+                    <StackPanel Width="130" Margin="0,0,12,8">
+                        <TextBlock Classes="axis" Text="Peak1→2 방향" />
+                        <ComboBox HorizontalAlignment="Stretch" SelectedIndex="{Binding PitchDirIndex}" IsEnabled="{Binding !Busy}"><ComboBoxItem>+1</ComboBoxItem><ComboBoxItem>−1</ComboBoxItem></ComboBox>
+                    </StackPanel>
+                    <StackPanel Width="200" Margin="0,0,12,8">
+                        <TextBlock Classes="axis" Text="검사 도면" />
+                        <ComboBox HorizontalAlignment="Stretch" ItemsSource="{Binding Drawings}"
+                                  SelectedValue="{Binding InspectionDrawingId}" SelectedValueBinding="{Binding Id}" IsEnabled="{Binding !Busy}">
+                            <ComboBox.ItemTemplate><DataTemplate x:DataType="ent:Drawing"><TextBlock Text="{Binding Name}" /></DataTemplate></ComboBox.ItemTemplate>
+                        </ComboBox>
+                    </StackPanel>
+                    <StackPanel Width="200" Margin="0,0,12,8">
+                        <TextBlock Classes="axis" Text="티칭설정" />
+                        <ComboBox HorizontalAlignment="Stretch" ItemsSource="{Binding Profiles}"
+                                  SelectedValue="{Binding InspectionProfileId}" SelectedValueBinding="{Binding Id}" IsEnabled="{Binding !Busy}">
+                            <ComboBox.ItemTemplate><DataTemplate x:DataType="ent:InspectionProfile"><TextBlock Text="{Binding Name}" /></DataTemplate></ComboBox.ItemTemplate>
+                        </ComboBox>
+                    </StackPanel>
+                </WrapPanel>
+            </StackPanel>
+        </Border>
+
+        <!-- 단계 목록 -->
+        <Border Classes="card">
+            <StackPanel Spacing="4">
+                <Grid ColumnDefinitions="40,*,150,Auto">
+                    <TextBlock Grid.Column="0" Text="#" Classes="axis" />
+                    <TextBlock Grid.Column="1" Text="단계" Classes="axis" />
+                    <TextBlock Grid.Column="2" Text="상태" Classes="axis" />
+                    <TextBlock Grid.Column="3" Text="Operate" Classes="axis" />
+                </Grid>
+                <ItemsControl ItemsSource="{Binding Steps}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:SeqStepVm">
+                            <Border Padding="0,4" Background="{Binding IsCurrent, Converter={x:Static vm:SeqRowConverters.CurrentBrush}}">
+                                <Grid ColumnDefinitions="40,*,150,Auto">
+                                    <TextBlock Grid.Column="0" Text="{Binding No}" FontSize="16" VerticalAlignment="Center" />
+                                    <TextBlock Grid.Column="1" Text="{Binding DisplayName}" VerticalAlignment="Center" TextWrapping="Wrap" />
+                                    <TextBlock Grid.Column="2" Text="{Binding StatusText}" VerticalAlignment="Center" TextWrapping="Wrap"
+                                               Foreground="{Binding StatusKind, Converter={x:Static vm:SeqConverters.StatusBrush}}" />
+                                    <Button Grid.Column="3" Content="▶ 실행"
+                                            Command="{Binding $parent[ItemsControl].((vm:SequenceViewModel)DataContext).RunStepCommand}"
+                                            CommandParameter="{Binding Key}" IsEnabled="{Binding CanRun}" />
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
+        </Border>
+    </StackPanel>
+</UserControl>

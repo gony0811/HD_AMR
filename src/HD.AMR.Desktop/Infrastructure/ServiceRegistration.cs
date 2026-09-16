@@ -1,5 +1,9 @@
 using HD.AMR.App.Communication;
+using HD.AMR.App.Communication.Weld;
 using HD.AMR.App.Service;
+using HD.AMR.App.Service.Sequence;
+using HD.AMR.App.Service.Sequence.Steps;
+using HD.AMR.App.Service.Vision;
 using HD.AMR.App.Data;
 using HD.AMR.Desktop.ViewModels;
 using Microsoft.EntityFrameworkCore;
@@ -50,6 +54,39 @@ internal static class ServiceRegistration
         AddHostedSingleton<VisionInterfaceService>(services);
         services.Configure<HD.AMR.App.Communication.Vision.VisionInterfaceSettings>(config.GetSection("Vision"));
 
+        AddHostedSingleton<LaserDisplacementSensorService>(services);
+        services.Configure<LaserDisplacementSensorSettings>(config.GetSection("LaserDisplacementSensor"));
+
+        // ── 시퀀스 그래프 지원 서비스 ───────────────────────────────
+        // 평탄 중심 정렬(무상태 루틴) — 카메라 페이지/FlatSurfaceAlignStep 공유.
+        services.AddTransient<FlatSurfaceCenteringService>();
+
+        // 용접라인 추적 — 검출기는 Windows 에서만 실제(OpenCV/ONNX), 그 외 no-op 폴백.
+        services.Configure<WeldTrackingSettings>(config.GetSection("WeldTracking"));
+        if (OperatingSystem.IsWindows())
+        {
+            services.AddSingleton<IWeldVisionDetector, WeldVisionDetector>();
+            services.AddSingleton<IDlWeldVisionDetector, DlWeldVisionDetector>();
+        }
+        else
+        {
+            services.AddSingleton<IWeldVisionDetector, NoopWeldVisionDetector>();
+            services.AddSingleton<IDlWeldVisionDetector, NoopWeldVisionDetector>();
+        }
+        services.AddSingleton(sp =>
+        {
+            var dir = config.GetSection("WeldTracking")["ProfileDirectory"] ?? "RoiProfiles";
+            return new RoiProfileStore(Path.IsPathRooted(dir) ? dir : Path.Combine(AppDataDir(), dir));
+        });
+        services.AddSingleton<WeldTrackingService>();
+
+        // 도면 저장/변환(DrawingService 의존성).
+        var uploadDir = Path.Combine(AppDataDir(), "UploadedDrawings");
+        Directory.CreateDirectory(uploadDir);
+        services.Configure<DrawingStorageOptions>(opt => opt.UploadDirectory = uploadDir);
+        services.Configure<DwgConversionOptions>(config.GetSection("DwgConversion"));
+        services.AddSingleton<IDwgConverter, OdaFileConverter>();
+
         // ── 시퀀스 전역 실행 잠금(UI/ACS 동시 실행 방지) — 조그 리본이 참조 ──
         services.AddSingleton<HD.AMR.App.Service.Sequence.SequenceRunGate>();
 
@@ -58,6 +95,15 @@ internal static class ServiceRegistration
         services.AddScoped<InspectionRecipeService>();
         services.AddScoped<CalibrationService>();
         services.AddScoped<QrLocalizationService>();
+        services.AddScoped<DrawingService>();
+        services.AddScoped<TeachingService>();
+
+        // ── 시퀀스(스텝 그래프 + 실행/모니터) ───────────────────────
+        // SequenceMonitorService 는 별도 모니터 창과 공유하므로 싱글톤.
+        services.AddSingleton<SequenceMonitorService>();
+        AddSequenceSteps(services);
+        // SequenceService 는 스텝/상태를 보유 — 페이지 수명 scope 에서 해석(뷰모델이 scope 개방).
+        services.AddScoped<SequenceService>();
 
         // ── UI(네비게이션 + 뷰모델) ─────────────────────────────────
         services.AddSingleton<INavigationService, NavigationService>();
@@ -73,8 +119,45 @@ internal static class ServiceRegistration
         services.AddTransient<CobotViewModel>();
         services.AddTransient<CalibrationViewModel>();
         services.AddTransient<VisionInterfaceViewModel>();
+        services.AddTransient<SequenceViewModel>();
 
         return services;
+    }
+
+    /// <summary>시퀀스 스텝 그래프 등록 — 기존 HD.AMR.Web/Program.cs 와 동일(순서/peakId 포함).
+    /// PeakFind/PeakCentering/BeadFind/BeadCentering/WObjPoint 는 peakId 만 다른 동일 클래스라
+    /// ActivatorUtilities 로 명시 인자(첫 파라미터)를 넣어 두 번 등록한다.</summary>
+    private static void AddSequenceSteps(IServiceCollection services)
+    {
+        services.AddScoped<ISequenceStep, AmrMoveStep>();
+        services.AddScoped<ISequenceStep, CobotInspectionMoveStep>();
+        services.AddScoped<ISequenceStep, CameraAlignStep>();
+        services.AddScoped<ISequenceStep, FlatSurfaceAlignStep>();
+        services.AddScoped<ISequenceStep, LaserWorkingDistanceStep>();
+        services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<PeakFindStep>(sp, 1));
+        services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<PeakCenteringStep>(sp, 1));
+        services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<BeadFindStep>(sp, 1));
+        services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<BeadCenteringStep>(sp, 1));
+        services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<WObjPointStep>(sp, 1));
+        services.AddScoped<ISequenceStep, PeakApproachStep>();
+        services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<PeakFindStep>(sp, 2));
+        services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<PeakCenteringStep>(sp, 2));
+        services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<BeadFindStep>(sp, 2));
+        services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<BeadCenteringStep>(sp, 2));
+        services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<WObjPointStep>(sp, 2));
+        services.AddScoped<ISequenceStep, WObjRegisterStep>();
+        services.AddScoped<ISequenceStep, InspectionRunStep>();
+        services.AddScoped<ISequenceStep, CornerInspectionRunStep>();
+        services.AddScoped<ISequenceStep, WObjResetStep>();
+        services.AddScoped<ISequenceStep, MonitorCloseStep>();
+    }
+
+    /// <summary>%LocalAppData%/HD.AMR (macOS: ~/Library/Application Support/HD.AMR).</summary>
+    private static string AppDataDir()
+    {
+        var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "HD.AMR");
+        Directory.CreateDirectory(dir);
+        return dir;
     }
 
     /// <summary>싱글톤으로 등록하고 동일 인스턴스를 HostedService 로도 노출(주입 공유 + 자동 기동).</summary>
