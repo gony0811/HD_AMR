@@ -25,6 +25,7 @@
         <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,0,0,10">
             <Button Content="시작" Classes="accent" Command="{Binding StartStreamCommand}" IsEnabled="{Binding !IsStreaming}" />
             <Button Content="정지" Classes="danger" Command="{Binding StopStreamCommand}" IsEnabled="{Binding IsStreaming}" />
+            <Button Name="JogPopupBtn" Content="코봇 조그 (팝업)" />
         </StackPanel>
 
         <!-- 캡처 -->

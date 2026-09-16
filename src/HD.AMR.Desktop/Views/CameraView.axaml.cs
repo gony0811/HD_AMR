@@ -32,6 +32,7 @@ public partial class CameraView : UserControl
         _depthHost.SizeChanged += (_, _) => DrawRoiFromVm();
 
         this.FindControl<Button>("BrowseButton")!.Click += OnBrowseClick;
+        this.FindControl<Button>("JogPopupBtn")!.Click += (_, _) => JogWindow.Open();
         DataContextChanged += OnDataContextChanged;
     }
 

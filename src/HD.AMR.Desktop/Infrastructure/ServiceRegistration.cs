@@ -90,6 +90,18 @@ internal static class ServiceRegistration
         // ── 시퀀스 전역 실행 잠금(UI/ACS 동시 실행 방지) — 조그 리본이 참조 ──
         services.AddSingleton<HD.AMR.App.Service.Sequence.SequenceRunGate>();
 
+        // ── ACS(VDA 5050) 스택 — 기존 Web 과 동일 ─────────────────────
+        // TARS-M v3 REST 클라이언트(VDA5050 order 의 이동 실현 경로).
+        services.Configure<AmrRestSettings>(config.GetSection("AmrRest"));
+        services.AddSingleton<AmrRestClient>();
+        // startWeldInspection 실행 총괄 — 싱글톤, 액션마다 scope 생성해 시퀀스 실행.
+        services.AddSingleton<HD.AMR.App.Service.Inspection.IWeldInspectionExecutor,
+            HD.AMR.App.Service.Inspection.WeldInspectionOrchestrator>();
+        // VDA 5050 어댑터(ACS↔AMR) — connection/state 발행 + order 실행 + instantActions. Enabled=false 면 유휴.
+        services.Configure<HD.AMR.App.Communication.Vda5050.Vda5050AdapterSettings>(config.GetSection("Vda5050"));
+        services.AddSingleton<Vda5050OrderExecutor>();
+        AddHostedSingleton<Vda5050AdapterService>(services);
+
         // ── DB 백엔드 서비스 (Scoped) ───────────────────────────────
         services.AddScoped<ParameterService>();
         services.AddScoped<InspectionRecipeService>();

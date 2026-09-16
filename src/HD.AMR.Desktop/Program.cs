@@ -19,7 +19,13 @@ internal static class Program
     public static void Main(string[] args)
     {
         // 기존 HD.AMR.Web 과 동일하게 Generic Host 위에 하드웨어 서비스(싱글톤 + HostedService)를 얹는다.
-        var builder = Host.CreateApplicationBuilder(args);
+        // ContentRoot 를 실행 파일 폴더로 고정한다 — 기본값(현재 작업 디렉터리)이면 다른 폴더에서 실행할 때
+        // 출력 폴더의 appsettings.json 을 찾지 못해 모든 장비 설정(IP/포트, Vda5050.Enabled 등)이 기본값이 된다.
+        var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
+        {
+            Args = args,
+            ContentRootPath = AppContext.BaseDirectory,
+        });
         // 종료 시 호스티드 서비스(AMR/Cobot 등) 정리가 길어져도 프로세스가 매달리지 않도록
         // 호스트 종료 제한 시간을 짧게 둔다(기본 30초 → 2초). 초과분은 강제 진행.
         builder.Services.Configure<HostOptions>(o => o.ShutdownTimeout = TimeSpan.FromSeconds(2));

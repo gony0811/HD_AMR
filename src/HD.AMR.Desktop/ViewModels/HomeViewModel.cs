@@ -1,30 +1,46 @@
+using System.Collections.ObjectModel;
 using Avalonia.Threading;
+using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
 using HD.AMR.App.Enums;
 using HD.AMR.App.Service;
 
 namespace HD.AMR.Desktop.ViewModels;
 
 /// <summary>
-/// 대시보드(상태 개요). 기존 Home.razor 이식 — AMR/Cobot/Camera/배터리/안전등 카드.
-/// ACS(Vda5050) 카드는 어댑터 의존성 체인이 커서 후속 티어에서 배선 예정(현재 플레이스홀더).
+/// 대시보드(상태 개요). 기존 Home.razor 이식 — AMR/Cobot/Camera/배터리/안전등/ACS 카드.
+/// ACS 카드는 Vda5050AdapterService 의 브로커 접속·생존 신호를 표시하고 수동 층 전환(mapId)을 제공한다.
 /// </summary>
 public sealed partial class HomeViewModel : ViewModelBase
 {
     private readonly AMRService _amr;
     private readonly CobotService _cobot;
     private readonly CameraService _camera;
+    private readonly Vda5050AdapterService _vda;
     private readonly DispatcherTimer _timer;
 
-    public HomeViewModel(AMRService amr, CobotService cobot, CameraService camera)
+    public ObservableCollection<string> MapIdOptions { get; } = new();
+    [ObservableProperty] private string _selectedMapId = "";
+    [ObservableProperty] private string? _mapIdStatus;
+
+    public HomeViewModel(AMRService amr, CobotService cobot, CameraService camera, Vda5050AdapterService vda)
     {
         _amr = amr;
         _cobot = cobot;
         _camera = camera;
+        _vda = vda;
         _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _timer.Tick += (_, _) => OnPropertyChanged(string.Empty);
     }
 
-    public override void OnActivated() { OnPropertyChanged(string.Empty); _timer.Start(); }
+    public override void OnActivated()
+    {
+        RebuildMapOptions();
+        SelectedMapId = _vda.CurrentMapId;
+        OnPropertyChanged(string.Empty);
+        _timer.Start();
+    }
+
     public override void OnDeactivated() => _timer.Stop();
 
     public string NowText => DateTime.Now.ToString("yyyy-MM-dd HH:mm");
@@ -55,4 +71,36 @@ public sealed partial class HomeViewModel : ViewModelBase
     public bool LampRed => false;
     public bool LampYellow => false;
     public bool LampGreen => true;
+
+    // ACS — TopBar 배지와 동일 기준(생존 신호 우선, 신호 없으면 활동 폴백).
+    public bool AcsOn =>
+        _vda.IsBrokerConnected &&
+        _vda.AcsConnectionLiveness is not (AcsLiveness.Offline or AcsLiveness.Broken) &&
+        (_vda.AcsConnectionLiveness == AcsLiveness.Online || _vda.AcsRecentlyActive);
+    public string AcsPillText =>
+        !_vda.IsBrokerConnected ? "미연결"
+        : _vda.AcsConnectionLiveness == AcsLiveness.Offline ? "OFFLINE"
+        : _vda.AcsConnectionLiveness == AcsLiveness.Broken ? "CONNECTIONBROKEN"
+        : _vda.AcsConnectionLiveness == AcsLiveness.Online || _vda.AcsRecentlyActive ? "연결" : "대기";
+    public string CurrentMapText => $"현재 맵 {_vda.CurrentMapId}";
+    public string MapIdHint => MapIdStatus ?? "재측위 검증 없이 mapId만 변경 — 실제 층 일치는 운영자 확인";
+    public bool CanApplyMap => !string.IsNullOrEmpty(SelectedMapId) && SelectedMapId != _vda.CurrentMapId;
+
+    partial void OnSelectedMapIdChanged(string value) => ApplyMapIdCommand.NotifyCanExecuteChanged();
+
+    private void RebuildMapOptions()
+    {
+        MapIdOptions.Clear();
+        if (!_vda.AvailableMapIds.Contains(_vda.CurrentMapId)) MapIdOptions.Add(_vda.CurrentMapId);
+        foreach (var id in _vda.AvailableMapIds) MapIdOptions.Add(id);
+    }
+
+    // 수동 층 전환(D-10 유보 기간 임시 운영) — 어댑터 mapId 변경 + state 즉시 발행으로 ACS 회신.
+    [RelayCommand(CanExecute = nameof(CanApplyMap))]
+    private void ApplyMapId()
+    {
+        _vda.SetMapId(SelectedMapId);
+        MapIdStatus = $"적용됨 {DateTime.Now:HH:mm:ss} — 현재 맵 {_vda.CurrentMapId} (state 즉시 발행)";
+        OnPropertyChanged(string.Empty);
+    }
 }

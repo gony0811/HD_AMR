@@ -109,18 +109,22 @@
                 </StackPanel>
             </Border>
 
-            <!-- ACS placeholder -->
+            <!-- ACS / 수동 층 전환 -->
             <Border Classes="card stat">
                 <StackPanel Spacing="6">
                     <Grid ColumnDefinitions="*,Auto">
                         <TextBlock Grid.Column="0" Text="🛰  ACS" FontWeight="SemiBold" />
-                        <Border Grid.Column="1" Classes="badge off">
-                            <TextBlock Text="미연동" />
+                        <Border Grid.Column="1" Classes="badge" Classes.on="{Binding AcsOn}" Classes.off="{Binding !AcsOn}">
+                            <TextBlock Text="{Binding AcsPillText}" />
                         </Border>
                     </Grid>
-                    <TextBlock Text="VDA5050 어댑터" FontSize="18" FontWeight="Bold" />
-                    <TextBlock Classes="muted" FontSize="12" TextWrapping="Wrap"
-                               Text="ACS 카드/층 전환은 후속 티어에서 배선됩니다(Vda5050 서비스 등록 후)." />
+                    <TextBlock Text="{Binding CurrentMapText}" FontSize="18" FontWeight="Bold" />
+                    <Grid ColumnDefinitions="*,Auto">
+                        <ComboBox Grid.Column="0" ItemsSource="{Binding MapIdOptions}" SelectedItem="{Binding SelectedMapId}"
+                                  HorizontalAlignment="Stretch" />
+                        <Button Grid.Column="1" Margin="6,0,0,0" Content="층 전환" Command="{Binding ApplyMapIdCommand}" />
+                    </Grid>
+                    <TextBlock Classes="muted" FontSize="12" TextWrapping="Wrap" Text="{Binding MapIdHint}" />
                 </StackPanel>
             </Border>
         </WrapPanel>

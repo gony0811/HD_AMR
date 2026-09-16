@@ -18,6 +18,7 @@
                 <Button Content="{Binding ServoText}" Command="{Binding ToggleServoCommand}" IsEnabled="{Binding IsConnected}" />
                 <Button Content="■ 긴급 정지 (E-STOP)" Classes="danger" Command="{Binding EmergencyStopCommand}" IsEnabled="{Binding IsConnected}" />
                 <Button Content="오류 해제" Command="{Binding ResetErrorCommand}" IsEnabled="{Binding IsConnected}" />
+                <Button Name="JogPopupBtn" Content="코봇 조그 (팝업)" />
             </StackPanel>
         </Border>
 
