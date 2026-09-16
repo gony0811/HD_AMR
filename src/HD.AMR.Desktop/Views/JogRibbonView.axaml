@@ -1,0 +1,147 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:HD.AMR.Desktop.ViewModels"
+             x:Class="HD.AMR.Desktop.Views.JogRibbonView"
+             x:DataType="vm:JogRibbonViewModel">
+    <StackPanel Spacing="8">
+
+        <!-- 안전 헤더(옵션) -->
+        <Border Classes="card" Padding="10" IsVisible="{Binding ShowSafetyHeader}">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <Border Classes="badge" Classes.on="{Binding IsConnected}" Classes.off="{Binding !IsConnected}">
+                    <TextBlock Text="{Binding IsConnected, Converter={x:Static vm:BoolTextConverters.Connection}, StringFormat='명령 {0}'}" />
+                </Border>
+                <Border Classes="badge" Classes.on="{Binding IsStateConnected}" Classes.off="{Binding !IsStateConnected}">
+                    <TextBlock Text="{Binding IsStateConnected, Converter={x:Static vm:BoolTextConverters.Recv}, StringFormat='상태 {0}'}" />
+                </Border>
+                <Border Classes="badge" IsVisible="{Binding HasActiveFrame}"><TextBlock Text="{Binding ActiveFrameText}" /></Border>
+                <Border Classes="badge off" IsVisible="{Binding HasError}"><TextBlock Text="{Binding ErrorText}" /></Border>
+                <Button Content="{Binding ServoText}" Command="{Binding ToggleServoCommand}" IsEnabled="{Binding IsConnected}" />
+                <Button Content="■ 긴급 정지" Classes="danger" Command="{Binding EmergencyStopCommand}" IsEnabled="{Binding IsConnected}" />
+                <Button Content="오류 해제" Command="{Binding ResetErrorCommand}" IsEnabled="{Binding IsConnected}" />
+            </StackPanel>
+        </Border>
+
+        <!-- 파라미터 -->
+        <WrapPanel>
+            <StackPanel Width="150" Margin="0,0,10,8">
+                <TextBlock Classes="muted" FontSize="12" Text="모드" />
+                <ComboBox SelectedIndex="{Binding JogModeIndex}" HorizontalAlignment="Stretch">
+                    <ComboBoxItem>미세 증분</ComboBoxItem>
+                    <ComboBoxItem>연속(누름)</ComboBoxItem>
+                </ComboBox>
+            </StackPanel>
+            <StackPanel Width="130" Margin="0,0,10,8">
+                <TextBlock Classes="muted" FontSize="12" Text="좌표계" />
+                <ComboBox SelectedIndex="{Binding JogFrameIndex}" HorizontalAlignment="Stretch">
+                    <ComboBoxItem>관절</ComboBoxItem>
+                    <ComboBoxItem>베이스</ComboBoxItem>
+                    <ComboBoxItem>툴</ComboBoxItem>
+                    <ComboBoxItem>작업물</ComboBoxItem>
+                </ComboBox>
+            </StackPanel>
+            <StackPanel Width="90" Margin="0,0,10,8">
+                <TextBlock Classes="muted" FontSize="12" Text="공구(tool)" />
+                <NumericUpDown Value="{Binding JogTool}" Minimum="0" Maximum="15" Increment="1" FormatString="0" />
+            </StackPanel>
+            <StackPanel Width="120" Margin="0,0,10,8" IsVisible="{Binding IsWorkpieceFrame}">
+                <TextBlock Classes="muted" FontSize="12" Text="작업물(user)" />
+                <NumericUpDown Value="{Binding JogUser}" Minimum="0" Maximum="14" Increment="1" FormatString="0" />
+            </StackPanel>
+            <StackPanel Width="120" Margin="0,0,10,8">
+                <TextBlock Classes="muted" FontSize="12" Text="이동량(mm)" />
+                <NumericUpDown Value="{Binding JogMaxMm}" Minimum="0.1" Increment="0.1" FormatString="0.0" />
+            </StackPanel>
+            <StackPanel Width="120" Margin="0,0,10,8">
+                <TextBlock Classes="muted" FontSize="12" Text="회전량(°)" />
+                <NumericUpDown Value="{Binding JogMaxDeg}" Minimum="0.1" Increment="0.1" FormatString="0.0" />
+            </StackPanel>
+            <StackPanel Width="130" Margin="0,0,10,8" IsVisible="{Binding IsHoldMode}">
+                <TextBlock Classes="muted" FontSize="12" Text="연속 상한(mm)" />
+                <NumericUpDown Value="{Binding JogHoldMaxMm}" Minimum="1" Increment="1" FormatString="0" />
+            </StackPanel>
+            <StackPanel Width="130" Margin="0,0,10,8" IsVisible="{Binding IsHoldMode}">
+                <TextBlock Classes="muted" FontSize="12" Text="연속 상한(°)" />
+                <NumericUpDown Value="{Binding JogHoldMaxDeg}" Minimum="1" Increment="1" FormatString="0" />
+            </StackPanel>
+            <StackPanel Width="180" Margin="0,0,10,8">
+                <TextBlock Classes="muted" FontSize="12" Text="{Binding JogVel, StringFormat='속도(%) : {0}'}" />
+                <Slider Value="{Binding JogVel}" Minimum="1" Maximum="100" />
+            </StackPanel>
+        </WrapPanel>
+
+        <StackPanel Orientation="Horizontal" Spacing="8">
+            <NumericUpDown Value="{Binding AssumedUser}" Minimum="0" Maximum="14" Increment="1" FormatString="0" Width="110" />
+            <Button Content="활성 프레임 알려주기" Command="{Binding ApplyAssumedUserCommand}" IsEnabled="{Binding IsConnected}" />
+            <Button Content="활성 좌표계 초기화(베이스)" Command="{Binding ResetToBaseFrameCommand}" IsEnabled="{Binding IsConnected}" />
+        </StackPanel>
+
+        <!-- 관절 조그 -->
+        <Border Classes="card" Padding="10" IsVisible="{Binding IsJointFrame}">
+            <UniformGrid Columns="3" >
+                <UniformGrid.Styles>
+                    <Style Selector="Button.jog"><Setter Property="Margin" Value="3" /><Setter Property="MinWidth" Value="70" /></Style>
+                </UniformGrid.Styles>
+                <Button Classes="jog" Tag="0,-1" Content="J1 −" Command="{Binding JogStepCommand}" CommandParameter="0,-1" />
+                <TextBlock Text="J1" VerticalAlignment="Center" HorizontalAlignment="Center" />
+                <Button Classes="jog" Tag="0,1" Content="J1 +" Command="{Binding JogStepCommand}" CommandParameter="0,1" />
+                <Button Classes="jog" Tag="1,-1" Content="J2 −" Command="{Binding JogStepCommand}" CommandParameter="1,-1" />
+                <TextBlock Text="J2" VerticalAlignment="Center" HorizontalAlignment="Center" />
+                <Button Classes="jog" Tag="1,1" Content="J2 +" Command="{Binding JogStepCommand}" CommandParameter="1,1" />
+                <Button Classes="jog" Tag="2,-1" Content="J3 −" Command="{Binding JogStepCommand}" CommandParameter="2,-1" />
+                <TextBlock Text="J3" VerticalAlignment="Center" HorizontalAlignment="Center" />
+                <Button Classes="jog" Tag="2,1" Content="J3 +" Command="{Binding JogStepCommand}" CommandParameter="2,1" />
+                <Button Classes="jog" Tag="3,-1" Content="J4 −" Command="{Binding JogStepCommand}" CommandParameter="3,-1" />
+                <TextBlock Text="J4" VerticalAlignment="Center" HorizontalAlignment="Center" />
+                <Button Classes="jog" Tag="3,1" Content="J4 +" Command="{Binding JogStepCommand}" CommandParameter="3,1" />
+                <Button Classes="jog" Tag="4,-1" Content="J5 −" Command="{Binding JogStepCommand}" CommandParameter="4,-1" />
+                <TextBlock Text="J5" VerticalAlignment="Center" HorizontalAlignment="Center" />
+                <Button Classes="jog" Tag="4,1" Content="J5 +" Command="{Binding JogStepCommand}" CommandParameter="4,1" />
+                <Button Classes="jog" Tag="5,-1" Content="J6 −" Command="{Binding JogStepCommand}" CommandParameter="5,-1" />
+                <TextBlock Text="J6" VerticalAlignment="Center" HorizontalAlignment="Center" />
+                <Button Classes="jog" Tag="5,1" Content="J6 +" Command="{Binding JogStepCommand}" CommandParameter="5,1" />
+            </UniformGrid>
+        </Border>
+
+        <!-- 직교 조그(위치 + 자세) -->
+        <Border Classes="card" Padding="10" IsVisible="{Binding !IsJointFrame}">
+            <StackPanel Orientation="Horizontal" Spacing="24">
+                <StackPanel>
+                    <TextBlock Text="TCP Position" FontWeight="SemiBold" Margin="0,0,0,6" />
+                    <UniformGrid Columns="2">
+                        <UniformGrid.Styles>
+                            <Style Selector="Button.jog"><Setter Property="Margin" Value="3" /><Setter Property="MinWidth" Value="66" /></Style>
+                        </UniformGrid.Styles>
+                        <Button Classes="jog" Tag="2,1" Content="Z +" Command="{Binding JogStepCommand}" CommandParameter="2,1" />
+                        <Button Classes="jog" Tag="2,-1" Content="Z −" Command="{Binding JogStepCommand}" CommandParameter="2,-1" />
+                        <Button Classes="jog" Tag="0,1" Content="X +" Command="{Binding JogStepCommand}" CommandParameter="0,1" />
+                        <Button Classes="jog" Tag="0,-1" Content="X −" Command="{Binding JogStepCommand}" CommandParameter="0,-1" />
+                        <Button Classes="jog" Tag="1,1" Content="Y +" Command="{Binding JogStepCommand}" CommandParameter="1,1" />
+                        <Button Classes="jog" Tag="1,-1" Content="Y −" Command="{Binding JogStepCommand}" CommandParameter="1,-1" />
+                    </UniformGrid>
+                </StackPanel>
+                <StackPanel>
+                    <TextBlock Text="TCP Orientation" FontWeight="SemiBold" Margin="0,0,0,6" />
+                    <UniformGrid Columns="2">
+                        <UniformGrid.Styles>
+                            <Style Selector="Button.jog"><Setter Property="Margin" Value="3" /><Setter Property="MinWidth" Value="66" /></Style>
+                        </UniformGrid.Styles>
+                        <Button Classes="jog" Tag="3,1" Content="RX +" Command="{Binding JogStepCommand}" CommandParameter="3,1" />
+                        <Button Classes="jog" Tag="3,-1" Content="RX −" Command="{Binding JogStepCommand}" CommandParameter="3,-1" />
+                        <Button Classes="jog" Tag="4,1" Content="RY +" Command="{Binding JogStepCommand}" CommandParameter="4,1" />
+                        <Button Classes="jog" Tag="4,-1" Content="RY −" Command="{Binding JogStepCommand}" CommandParameter="4,-1" />
+                        <Button Classes="jog" Tag="5,1" Content="RZ +" Command="{Binding JogStepCommand}" CommandParameter="5,1" />
+                        <Button Classes="jog" Tag="5,-1" Content="RZ −" Command="{Binding JogStepCommand}" CommandParameter="5,-1" />
+                    </UniformGrid>
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <TextBlock Classes="muted" FontSize="12" TextWrapping="Wrap"
+                   Text="⚠ 미세 증분: 클릭 1회 = 입력 이동량/회전량. 연속(누름): 누르는 동안 이동, 떼면 정지(연속 상한까지). 저속으로 시작하고 정지가 안 되면 E-STOP." />
+
+        <Border Classes="alert" IsVisible="{Binding Message, Converter={x:Static ObjectConverters.IsNotNull}}">
+            <TextBlock Text="{Binding Message}" TextWrapping="Wrap" />
+        </Border>
+    </StackPanel>
+</UserControl>

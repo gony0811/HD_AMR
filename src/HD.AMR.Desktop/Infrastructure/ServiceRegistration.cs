@@ -47,6 +47,9 @@ internal static class ServiceRegistration
         AddHostedSingleton<IoModuleService>(services);
         services.Configure<IoModuleModbusTcpSettings>(config.GetSection("IoModule"));
 
+        // ── 시퀀스 전역 실행 잠금(UI/ACS 동시 실행 방지) — 조그 리본이 참조 ──
+        services.AddSingleton<HD.AMR.App.Service.Sequence.SequenceRunGate>();
+
         // ── DB 백엔드 서비스 (Scoped) ───────────────────────────────
         services.AddScoped<ParameterService>();
         services.AddScoped<InspectionRecipeService>();
@@ -62,6 +65,7 @@ internal static class ServiceRegistration
         services.AddTransient<AmrViewModel>();
         services.AddTransient<ParametersViewModel>();
         services.AddTransient<InspectionRecipesViewModel>();
+        services.AddTransient<CobotViewModel>();
 
         return services;
     }
