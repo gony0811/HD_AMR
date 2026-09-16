@@ -47,6 +47,9 @@ internal static class ServiceRegistration
         AddHostedSingleton<IoModuleService>(services);
         services.Configure<IoModuleModbusTcpSettings>(config.GetSection("IoModule"));
 
+        AddHostedSingleton<VisionInterfaceService>(services);
+        services.Configure<HD.AMR.App.Communication.Vision.VisionInterfaceSettings>(config.GetSection("Vision"));
+
         // ── 시퀀스 전역 실행 잠금(UI/ACS 동시 실행 방지) — 조그 리본이 참조 ──
         services.AddSingleton<HD.AMR.App.Service.Sequence.SequenceRunGate>();
 
@@ -69,6 +72,7 @@ internal static class ServiceRegistration
         services.AddTransient<InspectionRecipesViewModel>();
         services.AddTransient<CobotViewModel>();
         services.AddTransient<CalibrationViewModel>();
+        services.AddTransient<VisionInterfaceViewModel>();
 
         return services;
     }

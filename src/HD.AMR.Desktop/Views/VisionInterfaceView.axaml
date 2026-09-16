@@ -1,0 +1,13 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:HD.AMR.Desktop.ViewModels"
+             xmlns:views="using:HD.AMR.Desktop.Views"
+             x:Class="HD.AMR.Desktop.Views.VisionInterfaceView"
+             x:DataType="vm:VisionInterfaceViewModel">
+    <StackPanel MaxWidth="900" HorizontalAlignment="Left">
+        <TextBlock Classes="page-title" Text="비전 인터페이스" />
+        <TextBlock Classes="page-subtitle" TextWrapping="Wrap"
+                   Text="HD현대 비전 통신 프로토콜(사양 v2) 기반 자동화 S/W(클라이언트). 비전 서버 IP에 원격 비전 서버 주소를 지정하고 Connect 하면 TCP로 프레임을 주고받습니다." />
+        <views:VisionPanelView DataContext="{Binding Panel}" />
+    </StackPanel>
+</UserControl>
