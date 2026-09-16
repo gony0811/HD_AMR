@@ -44,6 +44,9 @@ public sealed partial class SequenceViewModel : ViewModelBase
     private const string InspectCamOffsetXKey = "Sequence.InspectCam.OffsetXMm";
     private const string InspectCamOffsetYKey = "Sequence.InspectCam.OffsetYMm";
 
+    /// <summary>실행 시작 시 발생 — 뷰가 모니터 창을 열도록(원본 window.open 대응).</summary>
+    public event Action? MonitorRequested;
+
     public ObservableCollection<SeqStepVm> Steps { get; } = new();
     public ObservableCollection<SurfaceOption> SurfaceOptions { get; } = new();
     public ObservableCollection<Drawing> Drawings { get; } = new();
@@ -292,6 +295,7 @@ public sealed partial class SequenceViewModel : ViewModelBase
     {
         if (_seq is null) return;
         Message = null; ApplyContext();
+        MonitorRequested?.Invoke();
         var ok = await _seq.RunAllAsync(_context);
         IsError = !ok;
         Message = ok ? "풀오토 시퀀스 완료." : "시퀀스 중단 — 위 상태를 확인하세요.";
@@ -302,6 +306,7 @@ public sealed partial class SequenceViewModel : ViewModelBase
     {
         if (_seq is null) return;
         Message = null; ApplyContext();
+        MonitorRequested?.Invoke();
         var r = await _seq.RunStepAsync(stepKey, _context);
         IsError = !r.Success;
         Message = r.Message;
