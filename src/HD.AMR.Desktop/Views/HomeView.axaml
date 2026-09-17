@@ -54,6 +54,11 @@
                             <TextBlock Text="{Binding CobotStateConnected, Converter={x:Static vm:BoolTextConverters.Recv}, StringFormat='상태 {0}'}" />
                         </Border>
                     </StackPanel>
+                    <!-- 활성 좌표계(상태 패킷 20004) — 작업물이 베이스가 아니면 강조 -->
+                    <Border Classes="badge" Classes.off="{Binding !CobotUserNotBase}" HorizontalAlignment="Left"
+                            ToolTip.Tip="컨트롤러의 현재 활성 공구/작업물 좌표계 번호. 티칭 캡처·조그는 이 좌표계 기준으로 동작합니다.">
+                        <TextBlock Text="{Binding CobotFrameText}" />
+                    </Border>
                 </StackPanel>
             </Border>
 

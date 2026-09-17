@@ -53,6 +53,14 @@ public sealed partial class HomeViewModel : ViewModelBase
     public bool CobotConnected => _cobot.IsConnected;
     public bool CobotStateConnected => _cobot.IsStateConnected;
 
+    /// <summary>상태 패킷(20004)에서 읽은 활성 공구/작업물 좌표계 번호. 상태 미수신이면 -1(미상).</summary>
+    public string CobotFrameText => _cobot.State is { } s && s.Tool >= 0 && s.User >= 0
+        ? $"툴 #{s.Tool} / 작업물 #{s.User}{(s.User == 0 ? " (베이스)" : "")}"
+        : "툴/작업물 미상";
+
+    /// <summary>활성 작업물이 베이스(#0)가 아님 — 조그·티칭이 프레임 기준으로 동작하므로 눈에 띄게 표시.</summary>
+    public bool CobotUserNotBase => _cobot.State?.User is > 0;
+
     // Camera
     public bool CameraConnected => _camera.IsConnected;
     public bool CameraStreaming => _camera.IsStreaming;
