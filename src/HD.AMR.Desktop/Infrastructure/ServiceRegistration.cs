@@ -79,6 +79,9 @@ internal static class ServiceRegistration
             return new RoiProfileStore(Path.IsPathRooted(dir) ? dir : Path.Combine(AppDataDir(), dir));
         });
         services.AddSingleton<WeldTrackingService>();
+        // DL 학습 오케스트레이터(학습 프로세스가 페이지와 무관하게 살아야 함) + ONNX 추론(세션 캐시) — 싱글톤.
+        services.AddSingleton<WeldTrainingService>();
+        services.AddSingleton<OnnxBeadSegmentationService>();
 
         // 도면 저장/변환(DrawingService 의존성).
         var uploadDir = Path.Combine(AppDataDir(), "UploadedDrawings");
@@ -139,6 +142,7 @@ internal static class ServiceRegistration
         services.AddTransient<InspectionMapViewModel>();
         services.AddTransient<TeachingViewModel>();
         services.AddTransient<LabelEditorViewModel>();
+        services.AddTransient<VisionTrainingViewModel>();
 
         return services;
     }

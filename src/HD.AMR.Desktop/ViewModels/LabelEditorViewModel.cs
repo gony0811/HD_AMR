@@ -39,6 +39,10 @@ public sealed partial class LabelEditorViewModel : ViewModelBase
     public event Action<bool, int>? BrushChanged;
     public event Action? ClearRequested;
 
+    // ④ 추론 탭 "학습셋에 추가 + 라벨링" 이동 시 대상 촬영본/모달리티(원본 쿼리 파라미터 sel/mod 대응).
+    private static string? _pendingStem, _pendingMod;
+    public static void Preselect(string stem, string modality) { _pendingStem = stem; _pendingMod = modality; }
+
     public LabelEditorViewModel(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
 
     public override async void OnActivated()
@@ -48,6 +52,16 @@ public sealed partial class LabelEditorViewModel : ViewModelBase
             Dir = await With(l => l.GetDirAsync());
             OnPropertyChanged(nameof(HasDir));
             await RefreshListAsync();
+            if (_pendingStem is not null)
+            {
+                var match = Entries.FirstOrDefault(e => e.Stem == _pendingStem);
+                var mod = _pendingMod; _pendingStem = _pendingMod = null;
+                if (match is not null)
+                {
+                    ModalityIndex = (mod == "ir" && match.HasIr) ? 1 : (mod == "rgb" && match.HasRgb) ? 0 : match.HasIr ? 1 : 0;
+                    Selected = match;
+                }
+            }
         }
         catch (Exception ex) { Notify($"초기화 실패: {ex.Message}", true); }
     }

@@ -1,0 +1,172 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:HD.AMR.Desktop.ViewModels"
+             xmlns:vis="using:HD.AMR.App.Service.Vision"
+             x:Class="HD.AMR.Desktop.Views.VisionTrainingView"
+             x:DataType="vm:VisionTrainingViewModel">
+    <UserControl.Styles>
+        <Style Selector="TextBlock.axis"><Setter Property="Foreground" Value="{DynamicResource TextMuted}" /><Setter Property="FontSize" Value="12" /></Style>
+        <Style Selector="TextBlock.hint"><Setter Property="Foreground" Value="{DynamicResource TextMuted}" /><Setter Property="FontSize" Value="12" /><Setter Property="TextWrapping" Value="Wrap" /></Style>
+    </UserControl.Styles>
+
+    <StackPanel MaxWidth="980" HorizontalAlignment="Left">
+        <TextBlock Classes="page-title" Text="비전 학습 (YOLOv8-seg · CPU 파이프라인)" />
+
+        <Border Classes="alert" IsVisible="{Binding !HasPaths}">
+            <TextBlock TextWrapping="Wrap" Text="캡처 저장 폴더가 설정되지 않았습니다. Camera 페이지에서 폴더 선택 후 캡처하고, 비드 라벨링에서 마스크를 만든 뒤 이 화면으로 오세요." />
+        </Border>
+
+        <StackPanel IsVisible="{Binding HasPaths}">
+            <TextBlock Classes="axis" Margin="0,0,0,6" Text="{Binding Paths.Workspace, StringFormat='작업 폴더: {0}'}" />
+
+            <!-- Python 상태(공통) -->
+            <Border Classes="card" Padding="10">
+                <StackPanel Spacing="6">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="Python" FontWeight="SemiBold" VerticalAlignment="Center" />
+                        <Border Classes="badge" Background="{Binding PyKind, Converter={x:Static vm:SeqConverters.StatusBrush}}">
+                            <TextBlock Text="{Binding PyKind, Converter={x:Static vm:TrainConverters.PyText}}" />
+                        </Border>
+                        <TextBlock Classes="axis" VerticalAlignment="Center" FontFamily="monospace" Text="{Binding PyDetail}" />
+                        <TextBox Width="280" Watermark="python 실행 경로 (예: python 또는 C:\...\python.exe)" Text="{Binding PythonExe}" />
+                        <Button Content="저장·확인" Command="{Binding SavePythonCommand}" />
+                    </StackPanel>
+                    <TextBlock Classes="hint" FontFamily="monospace" Text="{Binding InstallHint}" IsVisible="{Binding NeedInstall}" />
+                </StackPanel>
+            </Border>
+
+            <TabControl SelectedIndex="{Binding TabIndex}">
+                <!-- ① 데이터셋 -->
+                <TabItem Header="① 데이터셋">
+                    <StackPanel Spacing="8" Margin="0,8,0,0">
+                        <TextBlock Text="마스크 초안 → YOLO-seg 데이터셋 변환" FontWeight="SemiBold" />
+                        <TextBlock Classes="hint" Text="선택한 모달리티의 *_maskdraft.png 를 스캔해 폴리곤 라벨(.txt)과 data.yaml 을 생성합니다. (표본이 적어 val = train — 과적합/배선 점검용)" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <ComboBox Width="190" SelectedIndex="{Binding ModalityIndex}">
+                                <ComboBoxItem Content="{Binding RgbMasks, StringFormat='RGB (마스크 {0}개)'}" />
+                                <ComboBoxItem Content="{Binding IrMasks, StringFormat='IR (마스크 {0}개)'}" />
+                            </ComboBox>
+                            <Button Content="데이터셋 변환" Classes="accent" Command="{Binding ConvertCommand}" IsEnabled="{Binding !Working}" />
+                        </StackPanel>
+                        <Border Classes="alert" IsVisible="{Binding ConvertText, Converter={x:Static ObjectConverters.IsNotNull}}"><TextBlock Text="{Binding ConvertText}" TextWrapping="Wrap" FontFamily="monospace" FontSize="12" /></Border>
+                        <TextBlock Text="데이터 증강 — 90° 회전본 생성" FontWeight="SemiBold" Margin="0,8,0,0" />
+                        <TextBlock Classes="hint" Text="0°/90° 두 방향 비드를 모두 학습하려면 이미지와 마스크를 함께 90° 회전한 복사본을 만듭니다. 생성 후 데이터셋 변환을 다시 누르세요. 재실행해도 중복 생성하지 않습니다." />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <ComboBox Width="170" SelectedIndex="{Binding RotDirIndex}">
+                                <ComboBoxItem>시계 90°</ComboBoxItem><ComboBoxItem>반시계 90°</ComboBoxItem><ComboBoxItem>양방향(±90°, 2배)</ComboBoxItem>
+                            </ComboBox>
+                            <Button Content="90° 회전본 생성" Command="{Binding GenerateRotatedCommand}" IsEnabled="{Binding !Working}" />
+                        </StackPanel>
+                        <Border Classes="alert" IsVisible="{Binding RotText, Converter={x:Static ObjectConverters.IsNotNull}}"><TextBlock Text="{Binding RotText}" TextWrapping="Wrap" /></Border>
+                    </StackPanel>
+                </TabItem>
+
+                <!-- ② 학습 -->
+                <TabItem Header="② 학습">
+                    <StackPanel Spacing="8" Margin="0,8,0,0">
+                        <TextBlock Text="학습 (YOLOv8-seg, CPU)" FontWeight="SemiBold" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <StackPanel><TextBlock Classes="axis" Text="베이스" /><ComboBox Width="170" SelectedIndex="{Binding BaseModelIndex}"><ComboBoxItem>yolov8n-seg (최소)</ComboBoxItem><ComboBoxItem>yolov8s-seg (소형)</ComboBoxItem></ComboBox></StackPanel>
+                            <StackPanel><TextBlock Classes="axis" Text="epochs" /><NumericUpDown Width="100" Value="{Binding Epochs}" Minimum="1" Increment="10" FormatString="0" /></StackPanel>
+                            <StackPanel><TextBlock Classes="axis" Text="imgsz" /><NumericUpDown Width="100" Value="{Binding Imgsz}" Minimum="32" Increment="32" FormatString="0" /></StackPanel>
+                            <StackPanel><TextBlock Classes="axis" Text="batch" /><NumericUpDown Width="90" Value="{Binding Batch}" Minimum="1" Increment="1" FormatString="0" /></StackPanel>
+                            <Button VerticalAlignment="Bottom" Content="학습 시작" Classes="accent" Command="{Binding StartTrainCommand}" IsEnabled="{Binding PyReady}" />
+                        </StackPanel>
+                        <CheckBox Content="증강 최소화 (mosaic·기하·색 증강 끔 — 소규모 데이터/과적합 검증용, 권장)" IsChecked="{Binding MinimalAug}" />
+                        <CheckBox Content="밝기 증강 (조명·노출 편차·반사 대응 — 밝기/채도만 변동)" IsChecked="{Binding BrightAug}" />
+                        <TextBlock Classes="hint" Text="epochs — CPU 학습은 느립니다. 소규모 배선/과적합 확인은 100~300 권장. imgsz — 32의 배수 작업 해상도(원본 크기와 무관하게 레터박스, 내보내기·추론이 자동으로 따라감). batch — CPU면 2~8, 기본 4." />
+                    </StackPanel>
+                </TabItem>
+
+                <!-- ③ 모델 -->
+                <TabItem Header="③ 모델 · 내보내기">
+                    <StackPanel Spacing="8" Margin="0,8,0,0">
+                        <TextBlock Text="ONNX 내보내기 · 모델 목록" FontWeight="SemiBold" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <StackPanel><TextBlock Classes="axis" Text="모달리티" /><ComboBox Width="90" SelectedIndex="{Binding ExportModalityIndex}"><ComboBoxItem>RGB</ComboBoxItem><ComboBoxItem>IR</ComboBoxItem></ComboBox></StackPanel>
+                            <StackPanel><TextBlock Classes="axis" Text="opset" /><NumericUpDown Width="90" Value="{Binding Opset}" Minimum="9" Increment="1" FormatString="0" /></StackPanel>
+                            <StackPanel><TextBlock Classes="axis" Text="imgsz" /><NumericUpDown Width="100" Value="{Binding ExportImgsz}" Minimum="32" Increment="32" FormatString="0" /></StackPanel>
+                            <Button VerticalAlignment="Bottom" Content="{Binding ExportButtonText}" Classes="accent" Command="{Binding StartExportCommand}" IsEnabled="{Binding PyReady}" />
+                            <Button VerticalAlignment="Bottom" Content="목록 새로고침" Command="{Binding RefreshModelsCommand}" />
+                        </StackPanel>
+                        <TextBlock Classes="hint" Text="방금 학습한 데이터셋의 모달리티로 내보내세요. IR/RGB 모델이 파일명으로 구분되어 함께 보관됩니다." />
+                        <Grid ColumnDefinitions="*,100,150"><TextBlock Text="파일" Classes="axis" /><TextBlock Grid.Column="1" Text="크기" Classes="axis" /><TextBlock Grid.Column="2" Text="수정" Classes="axis" /></Grid>
+                        <ItemsControl ItemsSource="{Binding Models}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vis:ModelInfo">
+                                    <Grid ColumnDefinitions="*,100,150" Margin="0,2">
+                                        <TextBlock FontFamily="monospace" FontSize="12" Text="{Binding Name}" />
+                                        <TextBlock Grid.Column="1" FontSize="12" Text="{Binding Bytes, Converter={x:Static vm:TrainConverters.Kb}}" />
+                                        <TextBlock Grid.Column="2" FontSize="12" Text="{Binding Modified, StringFormat='{}{0:yyyy-MM-dd HH:mm}'}" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock Classes="hint" Text="아직 모델이 없습니다. 학습→내보내기 후 생성됩니다." IsVisible="{Binding NoModels}" />
+                    </StackPanel>
+                </TabItem>
+
+                <!-- ④ 추론 -->
+                <TabItem Header="④ 추론 · 검증">
+                    <StackPanel Spacing="8" Margin="0,8,0,0">
+                        <TextBlock Text="네이티브 ONNX 추론 (CPU)" FontWeight="SemiBold" />
+                        <Border Classes="alert" IsVisible="{Binding NoModels}"><TextBlock Text="모델이 없습니다. ①→②→③ 로 weld_seg.onnx 를 먼저 만드세요." /></Border>
+                        <StackPanel IsVisible="{Binding !NoModels}" Spacing="8">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <StackPanel><TextBlock Classes="axis" Text="모델" /><ComboBox Width="220" ItemsSource="{Binding Models}" SelectedItem="{Binding SelModel}"><ComboBox.ItemTemplate><DataTemplate x:DataType="vis:ModelInfo"><TextBlock Text="{Binding Name}" /></DataTemplate></ComboBox.ItemTemplate></ComboBox></StackPanel>
+                                <StackPanel><TextBlock Classes="axis" Text="학습 이미지 (동작 점검)" /><ComboBox Width="240" ItemsSource="{Binding Entries}" SelectedItem="{Binding InferEntry}" FontFamily="monospace"><ComboBox.ItemTemplate><DataTemplate x:DataType="vis:CaptureEntry"><TextBlock Text="{Binding Stem}" /></DataTemplate></ComboBox.ItemTemplate></ComboBox></StackPanel>
+                                <StackPanel><TextBlock Classes="axis" Text="모달리티" /><ComboBox Width="90" SelectedIndex="{Binding InferModalityIndex}"><ComboBoxItem>RGB</ComboBoxItem><ComboBoxItem>IR</ComboBoxItem></ComboBox></StackPanel>
+                                <Button VerticalAlignment="Bottom" Content="추론 실행" Classes="accent" Command="{Binding RunInferCommand}" IsEnabled="{Binding !Inferring}" />
+                            </StackPanel>
+                            <Border Padding="8" CornerRadius="6" BorderBrush="{DynamicResource CardBorder}" BorderThickness="1">
+                                <StackPanel Spacing="6">
+                                    <TextBlock Classes="hint" Text="또는 검증용 이미지 업로드 (따로 빼둔 이미지 — 모델이 학습한 모달리티와 같은 종류로)" />
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <Button Name="UploadBtn" Content="이미지 선택…" IsEnabled="{Binding !Inferring}" />
+                                        <TextBlock Classes="axis" VerticalAlignment="Center" Text="{Binding UploadName, StringFormat='📄 {0}'}" IsVisible="{Binding UploadName, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                                    </StackPanel>
+                                    <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding HasUpload}">
+                                        <TextBlock Classes="axis" VerticalAlignment="Center" Text="검출이 안 되면 이 이미지를 학습에 추가 →" />
+                                        <ComboBox Width="90" SelectedIndex="{Binding AddModalityIndex}"><ComboBoxItem>RGB</ComboBoxItem><ComboBoxItem>IR</ComboBoxItem></ComboBox>
+                                        <Button Content="학습셋에 추가 + 라벨링" Command="{Binding AddToTrainingAndLabelCommand}" IsEnabled="{Binding !Inferring}" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+                            <StackPanel Orientation="Horizontal" Spacing="12">
+                                <TextBlock Classes="axis" VerticalAlignment="Center" Text="{Binding Conf, StringFormat='conf {0:0.00}'}" /><Slider Width="140" Minimum="0.05" Maximum="0.9" TickFrequency="0.05" IsSnapToTickEnabled="True" Value="{Binding Conf}" />
+                                <TextBlock Classes="axis" VerticalAlignment="Center" Text="{Binding MaskThr, StringFormat='mask {0:0.00}'}" /><Slider Width="140" Minimum="0.30" Maximum="0.70" TickFrequency="0.05" IsSnapToTickEnabled="True" Value="{Binding MaskThr}" />
+                            </StackPanel>
+                            <Border Classes="alert" IsVisible="{Binding InferText, Converter={x:Static ObjectConverters.IsNotNull}}"><TextBlock Text="{Binding InferText}" TextWrapping="Wrap" /></Border>
+                            <Border BorderBrush="{DynamicResource CardBorder}" BorderThickness="1" Background="Black" Height="360" IsVisible="{Binding OverlayImage, Converter={x:Static ObjectConverters.IsNotNull}}">
+                                <Image Source="{Binding OverlayImage}" Stretch="Uniform" />
+                            </Border>
+                        </StackPanel>
+                    </StackPanel>
+                </TabItem>
+            </TabControl>
+
+            <!-- 실행 상태 · 로그(공통) -->
+            <Border Classes="card" Margin="0,10,0,0">
+                <StackPanel Spacing="6">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="상태" FontWeight="SemiBold" VerticalAlignment="Center" />
+                        <Border Classes="badge" Background="{Binding PhaseKind, Converter={x:Static vm:SeqConverters.StatusBrush}}"><TextBlock Text="{Binding PhaseText}" /></Border>
+                        <TextBlock Classes="axis" VerticalAlignment="Center" Text="{Binding StatusText}" />
+                        <Button Content="중단" Classes="danger" Command="{Binding StopCommand}" IsVisible="{Binding IsBusy}" />
+                        <Button Content="로그 지우기" Command="{Binding ClearLogCommand}" />
+                    </StackPanel>
+                    <StackPanel IsVisible="{Binding ShowProgress}" Spacing="2">
+                        <Grid ColumnDefinitions="*,Auto"><TextBlock FontSize="12" Text="{Binding ProgressText}" /><TextBlock Grid.Column="1" Classes="axis" Text="{Binding EtaText}" /></Grid>
+                        <ProgressBar Minimum="0" Maximum="100" Value="{Binding ProgressPct}" Height="14" />
+                    </StackPanel>
+                    <TextBox Text="{Binding LogText, Mode=OneWay}" IsReadOnly="True" AcceptsReturn="True" FontFamily="monospace" FontSize="11"
+                             Height="320" Background="#111" Foreground="#DDD" TextWrapping="NoWrap" />
+                </StackPanel>
+            </Border>
+        </StackPanel>
+
+        <Border Classes="alert" Margin="0,10,0,0" IsVisible="{Binding Message, Converter={x:Static ObjectConverters.IsNotNull}}">
+            <TextBlock Text="{Binding Message}" TextWrapping="Wrap" />
+        </Border>
+    </StackPanel>
+</UserControl>

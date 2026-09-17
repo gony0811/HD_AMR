@@ -35,7 +35,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             new("용접 추적",     "📈", typeof(WeldTrackingViewModel)),
             new("Vision Interface", "🖧", typeof(VisionInterfaceViewModel)),
             new("비드 라벨링",   "🏷", typeof(LabelEditorViewModel)),
-            new("비전 학습",     "🧠", null),
+            new("비전 학습",     "🧠", typeof(VisionTrainingViewModel)),
             new("QR Pose Teaching", "🧭", typeof(CalibrationViewModel)),
             new("Parameter",     "🎛", typeof(ParametersViewModel)),
             new("Laser Sensor",  "📏", null),
