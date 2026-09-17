@@ -1,0 +1,65 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:HD.AMR.Desktop.ViewModels"
+             xmlns:views="using:HD.AMR.Desktop.Views"
+             x:Class="HD.AMR.Desktop.Views.LabelEditorView"
+             x:DataType="vm:LabelEditorViewModel">
+    <UserControl.Styles>
+        <Style Selector="TextBlock.axis"><Setter Property="Foreground" Value="{DynamicResource TextMuted}" /><Setter Property="FontSize" Value="12" /></Style>
+    </UserControl.Styles>
+
+    <StackPanel MaxWidth="1200" HorizontalAlignment="Left">
+        <TextBlock Classes="page-title" Text="비드 마스크 라벨링 (DL 학습용 초안 수정/생성)" />
+
+        <Border Classes="alert" IsVisible="{Binding !HasDir}">
+            <TextBlock TextWrapping="Wrap" Text="캡처 저장 폴더가 설정되지 않았습니다. Camera 페이지에서 폴더 선택 후 캡처하세요." />
+        </Border>
+
+        <StackPanel IsVisible="{Binding HasDir}">
+            <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,0,0,8">
+                <TextBlock Classes="axis" VerticalAlignment="Center" Text="{Binding Dir, StringFormat='폴더: {0}'}" />
+                <Button Content="새로고침" Command="{Binding RefreshListCommand}" IsEnabled="{Binding !Busy}" />
+            </StackPanel>
+
+            <Grid ColumnDefinitions="260,*">
+                <!-- 좌: 촬영본 목록 -->
+                <StackPanel Grid.Column="0" Margin="0,0,10,0">
+                    <TextBlock Classes="axis" Text="{Binding Entries.Count, StringFormat='촬영본 ({0})'}" />
+                    <ListBox ItemsSource="{Binding Entries}" SelectedItem="{Binding Selected}" Height="520" FontFamily="monospace" FontSize="12">
+                        <ListBox.ItemTemplate><DataTemplate x:DataType="vm:CaptureEntryRow"><TextBlock Text="{Binding Label}" /></DataTemplate></ListBox.ItemTemplate>
+                    </ListBox>
+                    <TextBlock Classes="axis" Text="✓ = 마스크 있음" />
+                </StackPanel>
+
+                <!-- 우: 에디터 -->
+                <StackPanel Grid.Column="1">
+                    <Border Classes="alert" IsVisible="{Binding !HasSelection}"><TextBlock Text="왼쪽에서 촬영본을 선택하세요." /></Border>
+                    <StackPanel IsVisible="{Binding HasSelection}" Spacing="6">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <ComboBox Width="90" SelectedIndex="{Binding ModalityIndex}">
+                                <ComboBoxItem IsEnabled="{Binding CanRgb}">RGB</ComboBoxItem>
+                                <ComboBoxItem IsEnabled="{Binding CanIr}">IR</ComboBoxItem>
+                            </ComboBox>
+                            <ComboBox Width="110" SelectedIndex="{Binding BrushModeIndex}">
+                                <ComboBoxItem>🖌 칠하기</ComboBoxItem><ComboBoxItem>🧽 지우기</ComboBoxItem>
+                            </ComboBox>
+                            <TextBlock Classes="axis" VerticalAlignment="Center" Text="{Binding Radius, StringFormat='굵기 {0}'}" />
+                            <Slider Width="140" Minimum="2" Maximum="60" Value="{Binding Radius}" />
+                            <Button Content="초안 다시" Command="{Binding ReloadDraftCommand}" />
+                            <Button Content="전체 지우기" Command="{Binding ClearMaskCommand}" />
+                            <Button Name="SaveBtn" Content="💾 마스크 저장" Classes="accent" IsEnabled="{Binding !Busy}" />
+                        </StackPanel>
+                        <Border BorderBrush="{DynamicResource CardBorder}" BorderThickness="1" Background="Black">
+                            <views:MaskCanvas Name="Mask" Height="480" Cursor="Cross" />
+                        </Border>
+                        <TextBlock Classes="axis" TextWrapping="Wrap" Text="{Binding SaveHint}" />
+                    </StackPanel>
+                </StackPanel>
+            </Grid>
+        </StackPanel>
+
+        <Border Classes="alert" Margin="0,10,0,0" IsVisible="{Binding Message, Converter={x:Static ObjectConverters.IsNotNull}}">
+            <TextBlock Text="{Binding Message}" TextWrapping="Wrap" />
+        </Border>
+    </StackPanel>
+</UserControl>

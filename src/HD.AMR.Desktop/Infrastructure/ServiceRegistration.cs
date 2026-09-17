@@ -109,6 +109,7 @@ internal static class ServiceRegistration
         services.AddScoped<QrLocalizationService>();
         services.AddScoped<DrawingService>();
         services.AddScoped<TeachingService>();
+        services.AddScoped<LabelDataService>();
 
         // ── 시퀀스(스텝 그래프 + 실행/모니터) ───────────────────────
         // SequenceMonitorService 는 별도 모니터 창과 공유하므로 싱글톤.
@@ -137,6 +138,7 @@ internal static class ServiceRegistration
         services.AddTransient<InspectionPointsViewModel>();
         services.AddTransient<InspectionMapViewModel>();
         services.AddTransient<TeachingViewModel>();
+        services.AddTransient<LabelEditorViewModel>();
 
         return services;
     }
