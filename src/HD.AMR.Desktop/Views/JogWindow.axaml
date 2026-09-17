@@ -5,7 +5,8 @@
         x:Class="HD.AMR.Desktop.Views.JogWindow"
         x:DataType="vm:JogRibbonViewModel"
         Width="1040" Height="820"
-        Title="코봇 조그">
+        Title="코봇 조그"
+        Background="{DynamicResource AppWindowBrush}">
     <ScrollViewer Padding="16">
         <StackPanel Spacing="8">
             <TextBlock Classes="page-title" Text="코봇 조그" />

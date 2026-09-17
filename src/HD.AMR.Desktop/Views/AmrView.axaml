@@ -6,7 +6,7 @@
     <UserControl.Styles>
         <!-- 상태 표 한 줄: 라벨(muted) + 값 -->
         <Style Selector="Grid.kv > TextBlock:nth-child(1)">
-            <Setter Property="Foreground" Value="{DynamicResource TextMuted}" />
+            <Setter Property="Foreground" Value="{DynamicResource AppMutedTextBrush}" />
         </Style>
     </UserControl.Styles>
 

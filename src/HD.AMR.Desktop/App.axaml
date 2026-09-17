@@ -3,32 +3,28 @@
              xmlns:local="using:HD.AMR.Desktop"
              x:Class="HD.AMR.Desktop.App"
              RequestedThemeVariant="Dark">
-    <!-- ACS 운영 UI(docs/ACS_UI.jpg)와 통일 — 다크 고정. -->
+    <!-- HD_ACS 데스크톱과 통일 — Fluent 다크 고정 + ACS와 같은 브러시 키(Themes/Brushes.axaml). -->
 
     <Application.DataTemplates>
         <local:ViewLocator />
     </Application.DataTemplates>
 
     <Application.Resources>
-        <!-- Fluent 액센트를 ACS 참조 파랑(#1E7FFF)으로 — accent 버튼·ListBox 선택·포커스 링에 반영. -->
-        <Color x:Key="SystemAccentColor">#1E7FFF</Color>
-        <Color x:Key="SystemAccentColorDark1">#186BDB</Color>
-        <Color x:Key="SystemAccentColorDark2">#1259B8</Color>
-        <Color x:Key="SystemAccentColorDark3">#0D4694</Color>
-        <Color x:Key="SystemAccentColorLight1">#4C99FF</Color>
-        <Color x:Key="SystemAccentColorLight2">#79B2FF</Color>
-        <Color x:Key="SystemAccentColorLight3">#A6CCFF</Color>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceInclude Source="avares://HD.AMR.Desktop/Themes/Brushes.axaml" />
+            </ResourceDictionary.MergedDictionaries>
 
-        <!-- 입력 컨트롤(TextBox/NumericUpDown/ComboBox)을 ACS 참조의 어두운 입력창으로. -->
-        <SolidColorBrush x:Key="TextControlBackground" Color="#0B0C0E" />
-        <SolidColorBrush x:Key="TextControlBackgroundPointerOver" Color="#101216" />
-        <SolidColorBrush x:Key="TextControlBackgroundFocused" Color="#0B0C0E" />
-        <SolidColorBrush x:Key="TextControlBorderBrush" Color="#3A3F45" />
-        <SolidColorBrush x:Key="TextControlBorderBrushPointerOver" Color="#4A5058" />
-        <SolidColorBrush x:Key="ComboBoxBackground" Color="#0B0C0E" />
-        <SolidColorBrush x:Key="ComboBoxBackgroundPointerOver" Color="#14171B" />
-        <SolidColorBrush x:Key="ComboBoxBackgroundPressed" Color="#14171B" />
-        <SolidColorBrush x:Key="ComboBoxBorderBrush" Color="#3A3F45" />
+            <!-- Fluent 액센트(accent 버튼·ListBox 선택·포커스 링·탭 밑줄)를 ACS 운영 화면(docs/ACS_UI.jpg)의 파랑으로 고정
+                 — OS 액센트 설정과 무관하게 두 앱이 같은 색으로 보이도록. -->
+            <Color x:Key="SystemAccentColor">#1E7FFF</Color>
+            <Color x:Key="SystemAccentColorDark1">#186BDB</Color>
+            <Color x:Key="SystemAccentColorDark2">#1259B8</Color>
+            <Color x:Key="SystemAccentColorDark3">#0D4694</Color>
+            <Color x:Key="SystemAccentColorLight1">#4C99FF</Color>
+            <Color x:Key="SystemAccentColorLight2">#79B2FF</Color>
+            <Color x:Key="SystemAccentColorLight3">#A6CCFF</Color>
+        </ResourceDictionary>
     </Application.Resources>
 
     <Application.Styles>

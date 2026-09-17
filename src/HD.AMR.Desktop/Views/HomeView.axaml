@@ -88,8 +88,8 @@
                         </Border>
                     </Grid>
                     <!-- 간단 배터리 바(퍼센트 폭). null 이면 0 폭. -->
-                    <Border Height="20" CornerRadius="4" Background="{DynamicResource CardBorder}">
-                        <Border HorizontalAlignment="Left" CornerRadius="4" Background="{DynamicResource BadgeSuccess}"
+                    <Border Height="20" CornerRadius="4" Background="{DynamicResource AppBorderBrush}">
+                        <Border HorizontalAlignment="Left" CornerRadius="4" Background="{DynamicResource AppGoodBrush}"
                                 Width="{Binding BatteryPercent}" MinWidth="0" />
                     </Border>
                     <TextBlock Classes="muted" FontSize="12" Text="{Binding BatterySubText}" />

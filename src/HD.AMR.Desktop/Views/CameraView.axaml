@@ -4,9 +4,9 @@
              x:Class="HD.AMR.Desktop.Views.CameraView"
              x:DataType="vm:CameraViewModel">
     <UserControl.Styles>
-        <Style Selector="TextBlock.axis"><Setter Property="Foreground" Value="{DynamicResource TextMuted}" /><Setter Property="FontSize" Value="12" /></Style>
+        <Style Selector="TextBlock.axis"><Setter Property="Foreground" Value="{DynamicResource AppMutedTextBrush}" /><Setter Property="FontSize" Value="12" /></Style>
         <Style Selector="Image.stream"><Setter Property="Stretch" Value="Fill" /></Style>
-        <Style Selector="Border.streambox"><Setter Property="BorderBrush" Value="{DynamicResource CardBorder}" /><Setter Property="BorderThickness" Value="1" /><Setter Property="CornerRadius" Value="4" /><Setter Property="Background" Value="Black" /><Setter Property="Height" Value="240" /></Style>
+        <Style Selector="Border.streambox"><Setter Property="BorderBrush" Value="{DynamicResource AppBorderBrush}" /><Setter Property="BorderThickness" Value="1" /><Setter Property="CornerRadius" Value="4" /><Setter Property="Background" Value="Black" /><Setter Property="Height" Value="240" /></Style>
     </UserControl.Styles>
 
     <StackPanel MaxWidth="1100" HorizontalAlignment="Left">

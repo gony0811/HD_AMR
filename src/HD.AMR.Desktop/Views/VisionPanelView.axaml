@@ -117,7 +117,7 @@
                         <TextBox AcceptsReturn="True" Height="70" FontFamily="monospace" Text="{Binding RawHex}" />
                         <StackPanel Orientation="Horizontal" Spacing="8">
                             <Button Content="▶ Send Raw" Classes="accent" Command="{Binding SendRawCommand}" IsEnabled="{Binding IsConnected}" />
-                            <TextBlock Foreground="{DynamicResource BadgeNeutral}" VerticalAlignment="Center" Text="{Binding RawError}"
+                            <TextBlock Foreground="{DynamicResource AppErrorBrush}" VerticalAlignment="Center" Text="{Binding RawError}"
                                        IsVisible="{Binding RawError, Converter={x:Static ObjectConverters.IsNotNull}}" />
                         </StackPanel>
                     </StackPanel>
@@ -129,7 +129,7 @@
                 <TextBlock Grid.Column="0" Text="로그 (최신순)" FontWeight="SemiBold" VerticalAlignment="Center" />
                 <Button Grid.Column="1" Content="Clear" Command="{Binding ClearLogCommand}" />
             </Grid>
-            <Border BorderBrush="{DynamicResource CardBorder}" BorderThickness="1" CornerRadius="4">
+            <Border BorderBrush="{DynamicResource AppBorderBrush}" BorderThickness="1" CornerRadius="4">
                 <ScrollViewer MaxHeight="300">
                     <ItemsControl ItemsSource="{Binding Log}">
                         <ItemsControl.ItemTemplate>

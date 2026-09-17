@@ -5,7 +5,7 @@
              x:Class="HD.AMR.Desktop.Views.SequenceView"
              x:DataType="vm:SequenceViewModel">
     <UserControl.Styles>
-        <Style Selector="TextBlock.axis"><Setter Property="Foreground" Value="{DynamicResource TextMuted}" /><Setter Property="FontSize" Value="12" /></Style>
+        <Style Selector="TextBlock.axis"><Setter Property="Foreground" Value="{DynamicResource AppMutedTextBrush}" /><Setter Property="FontSize" Value="12" /></Style>
     </UserControl.Styles>
 
     <StackPanel MaxWidth="1100" HorizontalAlignment="Left">

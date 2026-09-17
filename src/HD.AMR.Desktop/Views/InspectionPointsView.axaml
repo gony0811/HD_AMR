@@ -6,7 +6,7 @@
              x:Class="HD.AMR.Desktop.Views.InspectionPointsView"
              x:DataType="vm:InspectionPointsViewModel">
     <UserControl.Styles>
-        <Style Selector="TextBlock.axis"><Setter Property="Foreground" Value="{DynamicResource TextMuted}" /><Setter Property="FontSize" Value="12" /></Style>
+        <Style Selector="TextBlock.axis"><Setter Property="Foreground" Value="{DynamicResource AppMutedTextBrush}" /><Setter Property="FontSize" Value="12" /></Style>
         <Style Selector="NumericUpDown.cell"><Setter Property="Margin" Value="1,0" /></Style>
     </UserControl.Styles>
 
@@ -92,7 +92,7 @@
 
         <StackPanel Spacing="10">
             <!-- 캔버스 -->
-            <Border BorderBrush="{DynamicResource CardBorder}" BorderThickness="1" CornerRadius="6" Background="#111318">
+            <Border BorderBrush="{DynamicResource AppBorderBrush}" BorderThickness="1" CornerRadius="6" Background="{DynamicResource AppCanvasBrush}">
                 <views:XyPlot Name="Plot" Height="440" />
             </Border>
 

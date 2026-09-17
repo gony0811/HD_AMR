@@ -4,7 +4,7 @@
              x:Class="HD.AMR.Desktop.Views.InspectionMapView"
              x:DataType="vm:InspectionMapViewModel">
     <UserControl.Styles>
-        <Style Selector="TextBlock.axis"><Setter Property="Foreground" Value="{DynamicResource TextMuted}" /><Setter Property="FontSize" Value="12" /></Style>
+        <Style Selector="TextBlock.axis"><Setter Property="Foreground" Value="{DynamicResource AppMutedTextBrush}" /><Setter Property="FontSize" Value="12" /></Style>
         <Style Selector="TextBlock.cell"><Setter Property="FontSize" Value="12" /><Setter Property="VerticalAlignment" Value="Center" /><Setter Property="TextWrapping" Value="Wrap" /></Style>
         <Style Selector="Border.mapcell"><Setter Property="CornerRadius" Value="4" /><Setter Property="Padding" Value="6,3" /><Setter Property="Margin" Value="2" /><Setter Property="HorizontalAlignment" Value="Left" /></Style>
     </UserControl.Styles>

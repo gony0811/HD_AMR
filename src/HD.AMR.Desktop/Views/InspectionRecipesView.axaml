@@ -48,7 +48,7 @@
 
                             <!-- 고급 설정 -->
                             <Border IsVisible="{Binding IsExpanded}" Padding="8" CornerRadius="6"
-                                    Background="{DynamicResource CardBorder}">
+                                    Background="{DynamicResource AppBorderBrush}">
                                 <WrapPanel>
                                     <StackPanel Width="220" Margin="0,0,12,8">
                                         <TextBlock Classes="muted" FontSize="12" Text="접근 자세 티칭 키" />

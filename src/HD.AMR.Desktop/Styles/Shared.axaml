@@ -1,16 +1,25 @@
 <Styles xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
-    <!-- Bootstrap card/badge/alert 를 대체하는 공용 스타일. 페이지 포팅 시 재사용. -->
+    <!--
+      앱 공용 컨트롤 스타일(클래스 셀렉터). 색은 Themes/Brushes.axaml(HD_ACS와 동일 키)만 참조한다.
+      카드·위험 버튼·탭 헤더 규격은 HD_ACS Themes/Controls.axaml 과 맞춘다.
+    -->
 
-    <!-- 카드: .card.card-surface -->
+    <!-- 카드(ACS 운영 화면 카드: 서피스 + 1px 테두리 + 반경 10) -->
     <Style Selector="Border.card">
-        <Setter Property="Background" Value="{DynamicResource CardBackground}" />
-        <Setter Property="BorderBrush" Value="{DynamicResource CardBorder}" />
+        <Setter Property="Background" Value="{DynamicResource AppSurfaceBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AppBorderBrush}" />
         <Setter Property="BorderThickness" Value="1" />
-        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="CornerRadius" Value="10" />
         <Setter Property="Padding" Value="16" />
         <Setter Property="Margin" Value="0,0,0,12" />
+    </Style>
+    <Style Selector="TextBlock.cardHead">
+        <Setter Property="FontSize" Value="11" />
+        <Setter Property="FontWeight" Value="Bold" />
+        <Setter Property="Foreground" Value="{DynamicResource AppMutedTextBrush}" />
+        <Setter Property="Padding" Value="12,9" />
     </Style>
 
     <!-- 페이지 제목/부제 -->
@@ -20,28 +29,45 @@
         <Setter Property="Margin" Value="0,0,0,2" />
     </Style>
     <Style Selector="TextBlock.page-subtitle">
-        <Setter Property="Foreground" Value="{DynamicResource TextMuted}" />
+        <Setter Property="Foreground" Value="{DynamicResource AppMutedTextBrush}" />
         <Setter Property="Margin" Value="0,0,0,14" />
     </Style>
     <Style Selector="TextBlock.muted">
-        <Setter Property="Foreground" Value="{DynamicResource TextMuted}" />
+        <Setter Property="Foreground" Value="{DynamicResource AppMutedTextBrush}" />
     </Style>
 
-    <!-- 상태 뱃지: .badge (기본) / .badge.on / .badge.off -->
+    <!-- 상태 뱃지(ACS 앱바 연결 상태칩 형태): .badge (기본) / .badge.on / .badge.off -->
     <Style Selector="Border.badge">
-        <Setter Property="CornerRadius" Value="4" />
-        <Setter Property="Padding" Value="8,4" />
-        <Setter Property="Background" Value="{DynamicResource BadgeNeutral}" />
+        <Setter Property="CornerRadius" Value="20" />
+        <Setter Property="Padding" Value="10,3" />
+        <Setter Property="Background" Value="{DynamicResource AppWindowBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AppBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
     </Style>
     <Style Selector="Border.badge > TextBlock">
-        <Setter Property="Foreground" Value="White" />
+        <Setter Property="Foreground" Value="{DynamicResource AppTextBrush}" />
         <Setter Property="FontSize" Value="12" />
     </Style>
     <Style Selector="Border.badge.on">
-        <Setter Property="Background" Value="{DynamicResource BadgeSuccess}" />
+        <Setter Property="Background" Value="{DynamicResource AppGoodSoftBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AppGoodBrush}" />
     </Style>
-    <Style Selector="Border.badge.off">
-        <Setter Property="Background" Value="{DynamicResource BadgeNeutral}" />
+    <Style Selector="Border.badge.on > TextBlock">
+        <Setter Property="Foreground" Value="{DynamicResource AppGoodBrush}" />
+    </Style>
+    <Style Selector="Border.badge.off > TextBlock">
+        <Setter Property="Foreground" Value="{DynamicResource AppMutedTextBrush}" />
+    </Style>
+
+    <!-- 비상정지·위험 동작 버튼(ACS Button.danger 와 동일) -->
+    <Style Selector="Button.danger">
+        <Setter Property="Background" Value="{DynamicResource AppDangerBrush}" />
+        <Setter Property="Foreground" Value="White" />
+        <Setter Property="FontWeight" Value="Bold" />
+    </Style>
+    <Style Selector="Button.danger:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource AppDangerHoverBrush}" />
+        <Setter Property="Foreground" Value="White" />
     </Style>
 
     <!-- 숫자 입력: 스핀 버튼·값이 잘리지 않도록 최소 폭 150 -->
@@ -49,64 +75,34 @@
         <Setter Property="MinWidth" Value="150" />
     </Style>
 
-    <!-- 경고 배너: .alert.warning -->
+    <!-- 탭 헤더: Fluent 기본(24px)이 콘솔에 과대 → ACS와 같은 13px -->
+    <Style Selector="TabItem">
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Padding" Value="12,6" />
+        <Setter Property="MinHeight" Value="34" />
+    </Style>
+    <Style Selector="TabControl">
+        <Setter Property="Padding" Value="0" />
+    </Style>
+
+    <!-- 경고 콜아웃(ACS Warn 콜아웃): .alert -->
     <Style Selector="Border.alert">
         <Setter Property="CornerRadius" Value="6" />
         <Setter Property="Padding" Value="12,8" />
         <Setter Property="Margin" Value="0,8,0,0" />
-        <Setter Property="Background" Value="{DynamicResource AlertWarningBg}" />
-    </Style>
-
-    <!-- 파랑 강조 정보 카드(ACS '현재 선창' 카드 스타일): .alert.info -->
-    <Style Selector="Border.alert.info">
-        <Setter Property="Background" Value="{DynamicResource InfoCardBackground}" />
-        <Setter Property="BorderBrush" Value="{DynamicResource InfoCardBorder}" />
+        <Setter Property="Background" Value="{DynamicResource AppWarnBgBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AppWarnBorderBrush}" />
         <Setter Property="BorderThickness" Value="1" />
     </Style>
 
-    <Styles.Resources>
-        <ResourceDictionary>
-            <ResourceDictionary.ThemeDictionaries>
-                <ResourceDictionary x:Key="Light">
-                    <SolidColorBrush x:Key="AppBackground" Color="#F4F5F7" />
-                    <SolidColorBrush x:Key="CardBackground" Color="#FFFFFF" />
-                    <SolidColorBrush x:Key="CardBorder" Color="#E2E5EA" />
-                    <SolidColorBrush x:Key="TextMuted" Color="#6C757D" />
-                    <SolidColorBrush x:Key="BadgeNeutral" Color="#6C757D" />
-                    <SolidColorBrush x:Key="BadgeSuccess" Color="#198754" />
-                    <SolidColorBrush x:Key="AlertWarningBg" Color="#FFF3CD" />
-                    <SolidColorBrush x:Key="BadgeDanger" Color="#DC3545" />
-                    <SolidColorBrush x:Key="NavBackground" Color="#1F2633" />
-                    <SolidColorBrush x:Key="Accent" Color="#1E7FFF" />
-                    <SolidColorBrush x:Key="AccentHover" Color="#4C99FF" />
-                    <SolidColorBrush x:Key="InputBackground" Color="#FFFFFF" />
-                    <SolidColorBrush x:Key="InputBorder" Color="#CED4DA" />
-                    <SolidColorBrush x:Key="TableHeaderBackground" Color="#EDEFF2" />
-                    <SolidColorBrush x:Key="InfoCardBackground" Color="#E7F1FF" />
-                    <SolidColorBrush x:Key="InfoCardBorder" Color="#1E7FFF" />
-                </ResourceDictionary>
-                <!-- Dark = ACS 운영 UI(docs/ACS_UI.jpg) 팔레트 — 앱은 App.axaml 에서 Dark 고정.
-                     크롬·카드 배경은 반투명(알파) — 창의 아크릴 블러(MainWindow)가 은은히 비친다. -->
-                <ResourceDictionary x:Key="Dark">
-                    <SolidColorBrush x:Key="AppBackground" Color="#990D0E10" />
-                    <SolidColorBrush x:Key="CardBackground" Color="#CC17191C" />
-                    <SolidColorBrush x:Key="CardBorder" Color="#2E3238" />
-                    <SolidColorBrush x:Key="TextMuted" Color="#9AA0A8" />
-                    <SolidColorBrush x:Key="BadgeNeutral" Color="#3A414B" />
-                    <SolidColorBrush x:Key="BadgeSuccess" Color="#2FA36B" />
-                    <SolidColorBrush x:Key="AlertWarningBg" Color="#3B3316" />
-                    <SolidColorBrush x:Key="BadgeDanger" Color="#E45060" />
-                    <SolidColorBrush x:Key="NavBackground" Color="#D90A0B0D" />
-                    <SolidColorBrush x:Key="Accent" Color="#1E7FFF" />
-                    <SolidColorBrush x:Key="AccentHover" Color="#4C99FF" />
-                    <SolidColorBrush x:Key="InputBackground" Color="#0B0C0E" />
-                    <SolidColorBrush x:Key="InputBorder" Color="#3A3F45" />
-                    <SolidColorBrush x:Key="TableHeaderBackground" Color="#0B0C0E" />
-                    <SolidColorBrush x:Key="InfoCardBackground" Color="#10233B" />
-                    <SolidColorBrush x:Key="InfoCardBorder" Color="#1E7FFF" />
-                </ResourceDictionary>
-            </ResourceDictionary.ThemeDictionaries>
-        </ResourceDictionary>
-    </Styles.Resources>
+    <!-- 정보 콜아웃(ACS '현재 선창' 카드): .alert.info -->
+    <Style Selector="Border.alert.info">
+        <Setter Property="Background" Value="{DynamicResource AppInfoBgBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AppInfoBorderBrush}" />
+    </Style>
+    <Style Selector="Border.alert.info TextBlock">
+        <Setter Property="Foreground" Value="{DynamicResource AppInfoFgBrush}" />
+    </Style>
 
 </Styles>

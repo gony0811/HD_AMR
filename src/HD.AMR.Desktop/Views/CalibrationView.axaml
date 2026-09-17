@@ -5,7 +5,7 @@
              x:DataType="vm:CalibrationViewModel">
     <UserControl.Styles>
         <Style Selector="NumericUpDown.pose"><Setter Property="Margin" Value="0,0,6,0" /></Style>
-        <Style Selector="TextBlock.axis"><Setter Property="Foreground" Value="{DynamicResource TextMuted}" /><Setter Property="FontSize" Value="12" /></Style>
+        <Style Selector="TextBlock.axis"><Setter Property="Foreground" Value="{DynamicResource AppMutedTextBrush}" /><Setter Property="FontSize" Value="12" /></Style>
     </UserControl.Styles>
 
     <StackPanel MaxWidth="1000" HorizontalAlignment="Left">
@@ -75,7 +75,7 @@
                 <TextBlock Text="③ QR 촬영 · 목표 SLAM Pose 계산" FontWeight="SemiBold" />
                 <Grid ColumnDefinitions="*,*">
                     <Border Grid.Column="0" Margin="0,0,8,0" MinHeight="200" CornerRadius="6"
-                            Background="{DynamicResource CardBorder}">
+                            Background="{DynamicResource AppBorderBrush}">
                         <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" Classes="muted" TextWrapping="Wrap" TextAlignment="Center"
                                    Text="카메라 스트리밍 미표시 — 라이브 영상은 Tier 3(CameraView)에서 배선 예정" />
                     </Border>

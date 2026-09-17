@@ -1,0 +1,48 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!--
+      앱 공용 다크 테마 브러시 — HD_ACS(src/HD.Acs.UI.Desktop/Themes/Brushes.axaml)와 키·색 동일.
+      두 앱의 시각 정렬 기준이므로 ACS 쪽 값이 바뀌면 여기도 함께 맞춘다.
+      뷰는 {DynamicResource} 로만 참조한다. 영상 오버레이(ROI 박스 등) 같은 데이터-뷰 의미색은 뷰에 리터럴로 둔다.
+    -->
+
+    <!-- 표면/배경 -->
+    <SolidColorBrush x:Key="AppWindowBrush"  Color="#1E1E1E" />
+    <SolidColorBrush x:Key="AppHeaderBrush"  Color="#2D2D30" />
+    <SolidColorBrush x:Key="AppSurfaceBrush" Color="#252526" />
+    <SolidColorBrush x:Key="AppCanvasBrush"  Color="#1A1A1C" />
+
+    <!-- 선/구분 -->
+    <SolidColorBrush x:Key="AppBorderBrush"  Color="#3F3F46" />
+
+    <!-- 글씨 -->
+    <SolidColorBrush x:Key="AppTextBrush"         Color="#E6E6E6" />
+    <SolidColorBrush x:Key="AppMutedTextBrush"    Color="#9AA0A6" />
+    <SolidColorBrush x:Key="AppOnAccentTextBrush" Color="#FFFFFF" />
+
+    <!-- 액센트(크라이오 시안) · 운영 상태 강조 -->
+    <SolidColorBrush x:Key="AppAccentBrush"     Color="#3AC4DF" />
+    <SolidColorBrush x:Key="AppAccentSoftBrush" Color="#1E3C46" />
+    <SolidColorBrush x:Key="AppGoodBrush"       Color="#47BC6C" />
+
+    <!-- 시맨틱 콜아웃 -->
+    <SolidColorBrush x:Key="AppErrorBrush"      Color="#E06C5B" />
+    <SolidColorBrush x:Key="AppInfoBgBrush"     Color="#16324A" />
+    <SolidColorBrush x:Key="AppInfoBorderBrush" Color="#2E6FA5" />
+    <SolidColorBrush x:Key="AppInfoFgBrush"     Color="#A9CEEC" />
+    <SolidColorBrush x:Key="AppWarnBgBrush"     Color="#3A3320" />
+    <SolidColorBrush x:Key="AppWarnBorderBrush" Color="#B7950B" />
+    <SolidColorBrush x:Key="AppWarnFgBrush"     Color="#E6C34A" />
+
+    <!--
+      ── AMR 확장 ── ACS 키에 없는 AMR 전용 의미색. 값은 ACS 뷰/스타일에 쓰인 색에서 가져왔다.
+    -->
+    <!-- 비상정지·위험 버튼(ACS Button.danger 와 동일) -->
+    <SolidColorBrush x:Key="AppDangerBrush"      Color="#C0392B" />
+    <SolidColorBrush x:Key="AppDangerHoverBrush" Color="#E74C3C" />
+    <!-- 연결됨 뱃지 배경(AppGoodBrush 의 soft 톤 — AppAccentSoftBrush 와 같은 방식) -->
+    <SolidColorBrush x:Key="AppGoodSoftBrush"    Color="#1E3A28" />
+    <!-- 채움형 상태 태그(흰 글씨) — ACS 작업 상태색(#27AE60 완료 · #2980B9 진행)과 동일 -->
+    <SolidColorBrush x:Key="AppGoodFillBrush"    Color="#27AE60" />
+    <SolidColorBrush x:Key="AppInfoFillBrush"    Color="#2980B9" />
+</ResourceDictionary>

@@ -48,7 +48,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public string AmrStatusText => IsAmrConnected ? "연결" : "미연결";
     public string CobotStatusText => IsCobotConnected ? "연결" : "미연결";
     public string IoStatusText => IsIoConnected ? "연결" : "미연결";
-    public string EmoButtonText => IsEmoActive ? "🛑 비상정지 해제" : "🛑 비상정지";
+    public string EmoButtonText => IsEmoActive ? "■ 비상정지 해제" : "■ 비상정지";
 
     public MainWindowViewModel(INavigationService navigation, AMRService amr, CobotService cobot, IoModuleService io)
     {

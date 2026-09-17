@@ -5,8 +5,8 @@
              x:Class="HD.AMR.Desktop.Views.LaserView"
              x:DataType="vm:LaserViewModel">
     <UserControl.Styles>
-        <Style Selector="TextBlock.axis"><Setter Property="Foreground" Value="{DynamicResource TextMuted}" /><Setter Property="FontSize" Value="12" /></Style>
-        <Style Selector="TextBlock.hint"><Setter Property="Foreground" Value="{DynamicResource TextMuted}" /><Setter Property="FontSize" Value="12" /><Setter Property="TextWrapping" Value="Wrap" /></Style>
+        <Style Selector="TextBlock.axis"><Setter Property="Foreground" Value="{DynamicResource AppMutedTextBrush}" /><Setter Property="FontSize" Value="12" /></Style>
+        <Style Selector="TextBlock.hint"><Setter Property="Foreground" Value="{DynamicResource AppMutedTextBrush}" /><Setter Property="FontSize" Value="12" /><Setter Property="TextWrapping" Value="Wrap" /></Style>
         <Style Selector="TextBlock.val"><Setter Property="FontWeight" Value="SemiBold" /><Setter Property="HorizontalAlignment" Value="Center" /></Style>
         <Style Selector="Border.tag"><Setter Property="CornerRadius" Value="4" /><Setter Property="Padding" Value="5,2" /><Setter Property="Margin" Value="0,0,4,0" /></Style>
         <Style Selector="Border.tag > TextBlock"><Setter Property="FontSize" Value="11" /><Setter Property="Foreground" Value="White" /></Style>
@@ -56,11 +56,11 @@
                                     </StackPanel>
                                     <WrapPanel Grid.Column="2" VerticalAlignment="Center">
                                         <Border Classes="tag" Background="{Binding Enabled, Converter={x:Static vm:LaserConverters.OnOffBrush}}"><TextBlock Text="{Binding Enabled, Converter={x:Static vm:LaserConverters.MeasText}}" /></Border>
-                                        <Border Classes="tag" Background="#DC3545" IsVisible="{Binding Error}"><TextBlock Text="에러" /></Border>
-                                        <Border Classes="tag" Background="#B08A00" IsVisible="{Binding Warning}"><TextBlock Text="경고" /></Border>
-                                        <Border Classes="tag" Background="#0DCAF0" IsVisible="{Binding High}"><TextBlock Text="HIGH" /></Border>
-                                        <Border Classes="tag" Background="#0DCAF0" IsVisible="{Binding Low}"><TextBlock Text="LOW" /></Border>
-                                        <Border Classes="tag" Background="#0D6EFD" IsVisible="{Binding Pass}"><TextBlock Text="PASS" /></Border>
+                                        <Border Classes="tag" Background="{DynamicResource AppDangerBrush}" IsVisible="{Binding Error}"><TextBlock Text="에러" /></Border>
+                                        <Border Classes="tag" Background="{DynamicResource AppWarnBorderBrush}" IsVisible="{Binding Warning}"><TextBlock Text="경고" /></Border>
+                                        <Border Classes="tag" Background="{DynamicResource AppInfoBorderBrush}" IsVisible="{Binding High}"><TextBlock Text="HIGH" /></Border>
+                                        <Border Classes="tag" Background="{DynamicResource AppInfoBorderBrush}" IsVisible="{Binding Low}"><TextBlock Text="LOW" /></Border>
+                                        <Border Classes="tag" Background="{DynamicResource AppInfoFillBrush}" IsVisible="{Binding Pass}"><TextBlock Text="PASS" /></Border>
                                         <Border Classes="tag" Background="#333" IsVisible="{Binding Zeroed}"><TextBlock Text="영점" /></Border>
                                     </WrapPanel>
                                     <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="4">
@@ -73,7 +73,7 @@
                     </ItemsControl>
 
                     <!-- 평면 중심 pose -->
-                    <Border BorderBrush="{DynamicResource CardBorder}" BorderThickness="0,1,0,0" Padding="0,10,0,0">
+                    <Border BorderBrush="{DynamicResource AppBorderBrush}" BorderThickness="0,1,0,0" Padding="0,10,0,0">
                         <StackPanel Spacing="6">
                             <Grid ColumnDefinitions="*,Auto">
                                 <TextBlock Text="삼각형 평면 중심 (툴 좌표계)" FontWeight="SemiBold" />
@@ -95,7 +95,7 @@
                     </Border>
 
                     <!-- 평행 기준 -->
-                    <Border BorderBrush="{DynamicResource CardBorder}" BorderThickness="0,1,0,0" Padding="0,10,0,0">
+                    <Border BorderBrush="{DynamicResource AppBorderBrush}" BorderThickness="0,1,0,0" Padding="0,10,0,0">
                         <StackPanel Spacing="6">
                             <Grid ColumnDefinitions="*,Auto">
                                 <TextBlock Text="평행 기준 (센서 장착 틸트 보정)" FontWeight="SemiBold" />
@@ -112,7 +112,7 @@
                     </Border>
 
                     <!-- 툴 자세 보정 -->
-                    <Border BorderBrush="{DynamicResource CardBorder}" BorderThickness="0,1,0,0" Padding="0,10,0,0">
+                    <Border BorderBrush="{DynamicResource AppBorderBrush}" BorderThickness="0,1,0,0" Padding="0,10,0,0">
                         <StackPanel Spacing="6">
                             <Grid ColumnDefinitions="*,Auto">
                                 <TextBlock Text="툴 자세 보정 (Rx, Ry)" FontWeight="SemiBold" />
@@ -149,7 +149,7 @@
                                 <Button Content="중단" Classes="danger" Command="{Binding AbortCalibrationCommand}" IsVisible="{Binding Calibrating}" />
                                 <TextBlock Classes="axis" VerticalAlignment="Center" Text="서보 ON 필요" IsVisible="{Binding !ServoOn}" />
                             </StackPanel>
-                            <Border Background="#111" CornerRadius="4" Padding="6" MaxHeight="180" IsVisible="{Binding CalLog.Count, Converter={x:Static vm:LaserConverters.NonZero}}">
+                            <Border Background="{DynamicResource AppCanvasBrush}" CornerRadius="4" Padding="6" MaxHeight="180" IsVisible="{Binding CalLog.Count, Converter={x:Static vm:LaserConverters.NonZero}}">
                                 <ScrollViewer><ItemsControl ItemsSource="{Binding CalLog}"><ItemsControl.ItemTemplate><DataTemplate x:DataType="x:String"><TextBlock Text="{Binding}" FontFamily="monospace" FontSize="11" Foreground="#DDD" TextWrapping="Wrap" /></DataTemplate></ItemsControl.ItemTemplate></ItemsControl></ScrollViewer>
                             </Border>
                             <StackPanel IsVisible="{Binding CalResult, Converter={x:Static ObjectConverters.IsNotNull}}">
