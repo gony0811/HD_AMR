@@ -38,7 +38,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             new("비전 학습",     "🧠", typeof(VisionTrainingViewModel)),
             new("QR Pose Teaching", "🧭", typeof(CalibrationViewModel)),
             new("Parameter",     "🎛", typeof(ParametersViewModel)),
-            new("Laser Sensor",  "📏", null),
+            new("Laser Sensor",  "📏", typeof(LaserViewModel)),
             new("IO Module",     "🔌", typeof(IoModuleViewModel)),
         };
 

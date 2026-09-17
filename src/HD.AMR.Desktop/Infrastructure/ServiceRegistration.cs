@@ -56,6 +56,8 @@ internal static class ServiceRegistration
 
         AddHostedSingleton<LaserDisplacementSensorService>(services);
         services.Configure<LaserDisplacementSensorSettings>(config.GetSection("LaserDisplacementSensor"));
+        // 헤드 XY 오프셋 틸트 응답 캘리브레이션 — Laser 페이지에서 실행하는 무상태 루틴.
+        services.AddTransient<LaserHeadCalibrationRoutine>();
 
         // ── 시퀀스 그래프 지원 서비스 ───────────────────────────────
         // 평탄 중심 정렬(무상태 루틴) — 카메라 페이지/FlatSurfaceAlignStep 공유.
@@ -143,6 +145,7 @@ internal static class ServiceRegistration
         services.AddTransient<TeachingViewModel>();
         services.AddTransient<LabelEditorViewModel>();
         services.AddTransient<VisionTrainingViewModel>();
+        services.AddTransient<LaserViewModel>();
 
         return services;
     }

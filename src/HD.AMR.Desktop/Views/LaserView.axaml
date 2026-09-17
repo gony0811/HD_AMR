@@ -1,0 +1,259 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:HD.AMR.Desktop.ViewModels"
+             xmlns:m="using:HD.AMR.App.Models"
+             x:Class="HD.AMR.Desktop.Views.LaserView"
+             x:DataType="vm:LaserViewModel">
+    <UserControl.Styles>
+        <Style Selector="TextBlock.axis"><Setter Property="Foreground" Value="{DynamicResource TextMuted}" /><Setter Property="FontSize" Value="12" /></Style>
+        <Style Selector="TextBlock.hint"><Setter Property="Foreground" Value="{DynamicResource TextMuted}" /><Setter Property="FontSize" Value="12" /><Setter Property="TextWrapping" Value="Wrap" /></Style>
+        <Style Selector="TextBlock.val"><Setter Property="FontWeight" Value="SemiBold" /><Setter Property="HorizontalAlignment" Value="Center" /></Style>
+        <Style Selector="Border.tag"><Setter Property="CornerRadius" Value="4" /><Setter Property="Padding" Value="5,2" /><Setter Property="Margin" Value="0,0,4,0" /></Style>
+        <Style Selector="Border.tag > TextBlock"><Setter Property="FontSize" Value="11" /><Setter Property="Foreground" Value="White" /></Style>
+        <Style Selector="Expander"><Setter Property="Margin" Value="0,10,0,0" /></Style>
+    </UserControl.Styles>
+
+    <StackPanel MaxWidth="820" HorizontalAlignment="Left">
+        <TextBlock Classes="page-title" Text="Laser Displacement Sensor" />
+        <TextBlock Classes="page-subtitle" Text="레이저 변위 센서 — EtherNet/IP 통신 연결 및 3채널 거리 측정" />
+
+        <!-- 연결 -->
+        <Border Classes="card">
+            <StackPanel Spacing="6">
+                <Grid ColumnDefinitions="*,Auto">
+                    <TextBlock Text="통신 연결 (EtherNet/IP)" FontWeight="SemiBold" VerticalAlignment="Center" />
+                    <Border Grid.Column="1" Classes="badge" Classes.on="{Binding IsConnected}" Classes.off="{Binding !IsConnected}">
+                        <TextBlock Text="{Binding IsConnected, Converter={x:Static vm:BoolTextConverters.Connection}}" />
+                    </Border>
+                </Grid>
+                <TextBlock Classes="axis" Text="{Binding Target}" />
+                <Border Classes="alert" IsVisible="{Binding LastError, Converter={x:Static ObjectConverters.IsNotNull}}">
+                    <TextBlock TextWrapping="Wrap" Text="{Binding LastError, StringFormat='마지막 연결 오류: {0}'}" />
+                </Border>
+            </StackPanel>
+        </Border>
+
+        <!-- 측정값 -->
+        <Border Classes="card">
+            <StackPanel Spacing="8">
+                <Grid ColumnDefinitions="*,Auto">
+                    <TextBlock Text="측정값 (거리)" FontWeight="SemiBold" VerticalAlignment="Center" />
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
+                        <Button Content="전체 영점 설정" Command="{Binding ZeroSetAllCommand}" IsEnabled="{Binding IsConnected}" />
+                        <Button Content="전체 해제" Command="{Binding ZeroResetAllCommand}" IsEnabled="{Binding IsConnected}" />
+                    </StackPanel>
+                </Grid>
+                <TextBlock Classes="hint" Text="연결되면 채널별 거리가 실시간으로 표시됩니다." IsVisible="{Binding !IsConnected}" />
+                <StackPanel IsVisible="{Binding IsConnected}" Spacing="10">
+                    <ItemsControl ItemsSource="{Binding Readings}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:LaserChannelRow">
+                                <Grid ColumnDefinitions="70,150,*,Auto" Margin="0,3">
+                                    <TextBlock Text="{Binding Channel, StringFormat='CH{0}'}" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding ValueText}" FontSize="18" FontWeight="SemiBold" Opacity="{Binding Enabled, Converter={x:Static vm:LaserConverters.DimIfOff}}" />
+                                        <TextBlock Classes="axis" VerticalAlignment="Bottom" Text="{Binding $parent[ItemsControl].((vm:LaserViewModel)DataContext).Unit}" />
+                                    </StackPanel>
+                                    <WrapPanel Grid.Column="2" VerticalAlignment="Center">
+                                        <Border Classes="tag" Background="{Binding Enabled, Converter={x:Static vm:LaserConverters.OnOffBrush}}"><TextBlock Text="{Binding Enabled, Converter={x:Static vm:LaserConverters.MeasText}}" /></Border>
+                                        <Border Classes="tag" Background="#DC3545" IsVisible="{Binding Error}"><TextBlock Text="에러" /></Border>
+                                        <Border Classes="tag" Background="#B08A00" IsVisible="{Binding Warning}"><TextBlock Text="경고" /></Border>
+                                        <Border Classes="tag" Background="#0DCAF0" IsVisible="{Binding High}"><TextBlock Text="HIGH" /></Border>
+                                        <Border Classes="tag" Background="#0DCAF0" IsVisible="{Binding Low}"><TextBlock Text="LOW" /></Border>
+                                        <Border Classes="tag" Background="#0D6EFD" IsVisible="{Binding Pass}"><TextBlock Text="PASS" /></Border>
+                                        <Border Classes="tag" Background="#333" IsVisible="{Binding Zeroed}"><TextBlock Text="영점" /></Border>
+                                    </WrapPanel>
+                                    <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="4">
+                                        <Button Content="설정" Classes="accent" Command="{Binding $parent[ItemsControl].((vm:LaserViewModel)DataContext).ZeroSetCommand}" CommandParameter="{Binding}" />
+                                        <Button Content="해제" Command="{Binding $parent[ItemsControl].((vm:LaserViewModel)DataContext).ZeroResetCommand}" CommandParameter="{Binding}" />
+                                    </StackPanel>
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <!-- 평면 중심 pose -->
+                    <Border BorderBrush="{DynamicResource CardBorder}" BorderThickness="0,1,0,0" Padding="0,10,0,0">
+                        <StackPanel Spacing="6">
+                            <Grid ColumnDefinitions="*,Auto">
+                                <TextBlock Text="삼각형 평면 중심 (툴 좌표계)" FontWeight="SemiBold" />
+                                <Border Grid.Column="1" Classes="badge" Classes.on="{Binding PoseValid}" Classes.off="{Binding !PoseValid}"><TextBlock Text="{Binding PoseValid, Converter={x:Static vm:LaserConverters.PoseText}}" /></Border>
+                            </Grid>
+                            <StackPanel IsVisible="{Binding PoseValid}" Spacing="4">
+                                <Grid ColumnDefinitions="*,*,*,*,*">
+                                    <StackPanel Grid.Column="0"><TextBlock Classes="axis" HorizontalAlignment="Center" Text="X" /><TextBlock Classes="val" Text="{Binding PX}" /></StackPanel>
+                                    <StackPanel Grid.Column="1"><TextBlock Classes="axis" HorizontalAlignment="Center" Text="Y" /><TextBlock Classes="val" Text="{Binding PY}" /></StackPanel>
+                                    <StackPanel Grid.Column="2"><TextBlock Classes="axis" HorizontalAlignment="Center" Text="Z" /><TextBlock Classes="val" Text="{Binding PZ}" /></StackPanel>
+                                    <StackPanel Grid.Column="3"><TextBlock Classes="axis" HorizontalAlignment="Center" Text="Rx°" /><TextBlock Classes="val" Text="{Binding PRx}" /></StackPanel>
+                                    <StackPanel Grid.Column="4"><TextBlock Classes="axis" HorizontalAlignment="Center" Text="Ry°" /><TextBlock Classes="val" Text="{Binding PRy}" /></StackPanel>
+                                </Grid>
+                                <TextBlock Classes="hint" Text="{Binding NormalText, StringFormat='위치 mm · 회전 도(ZYX) · {0}'}" />
+                                <TextBlock Classes="hint" Text="{Binding RawRefText}" IsVisible="{Binding HasTiltRef}" />
+                            </StackPanel>
+                            <TextBlock Classes="hint" Text="{Binding PoseNote}" IsVisible="{Binding !PoseValid}" />
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 평행 기준 -->
+                    <Border BorderBrush="{DynamicResource CardBorder}" BorderThickness="0,1,0,0" Padding="0,10,0,0">
+                        <StackPanel Spacing="6">
+                            <Grid ColumnDefinitions="*,Auto">
+                                <TextBlock Text="평행 기준 (센서 장착 틸트 보정)" FontWeight="SemiBold" />
+                                <Border Grid.Column="1" Classes="badge" Classes.on="{Binding HasTiltRef}" Classes.off="{Binding !HasTiltRef}"><TextBlock Text="{Binding HasTiltRef, Converter={x:Static vm:LaserConverters.RefText}}" /></Border>
+                            </Grid>
+                            <TextBlock Classes="hint" Text="툴을 대상면과 물리적으로 평행하게 맞춘 뒤 저장하세요. 이후 모든 틸트(Rx/Ry)는 이 기준 대비로 표시·보정됩니다. 헤드 위치 캘리브레이션을 다시 하면 기준도 재저장해야 합니다." />
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <Button Content="현재 자세를 평행 기준으로 저장" Classes="accent" Command="{Binding CaptureReferenceCommand}" />
+                                <Button Content="기준 해제" Command="{Binding ClearReferenceCommand}" IsEnabled="{Binding HasTiltRef}" />
+                            </StackPanel>
+                            <TextBlock TextWrapping="Wrap" FontSize="12" Text="{Binding RefMsg}" IsVisible="{Binding RefMsg, Converter={x:Static ObjectConverters.IsNotNull}}"
+                                       Foreground="{Binding !RefOk, Converter={x:Static vm:OkErrConverters.Brush}}" />
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 툴 자세 보정 -->
+                    <Border BorderBrush="{DynamicResource CardBorder}" BorderThickness="0,1,0,0" Padding="0,10,0,0">
+                        <StackPanel Spacing="6">
+                            <Grid ColumnDefinitions="*,Auto">
+                                <TextBlock Text="툴 자세 보정 (Rx, Ry)" FontWeight="SemiBold" />
+                                <Border Grid.Column="1" Classes="badge" Classes.on="{Binding CobotConnected}" Classes.off="{Binding !CobotConnected}"><TextBlock Text="{Binding CobotConnected, Converter={x:Static vm:LaserConverters.RobotText}}" /></Border>
+                            </Grid>
+                            <Grid ColumnDefinitions="140,140" IsVisible="{Binding PoseValid}">
+                                <StackPanel Grid.Column="0"><TextBlock Classes="axis" HorizontalAlignment="Center" Text="적용 Rx" /><TextBlock Classes="val" FontSize="18" Text="{Binding AppliedRxText, StringFormat='{}{0}°'}" /></StackPanel>
+                                <StackPanel Grid.Column="1"><TextBlock Classes="axis" HorizontalAlignment="Center" Text="적용 Ry" /><TextBlock Classes="val" FontSize="18" Text="{Binding AppliedRyText, StringFormat='{}{0}°'}" /></StackPanel>
+                            </Grid>
+                            <TextBlock Classes="hint" Text="평면이 계산되면 적용할 Rx, Ry 가 표시됩니다." IsVisible="{Binding !PoseValid}" />
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <TextBlock Classes="axis" VerticalAlignment="Center" Text="속도(%)" />
+                                <NumericUpDown Width="90" Value="{Binding VelPct}" Minimum="1" Maximum="30" Increment="1" FormatString="0" />
+                                <Button Content="보정 적용" Classes="accent" Command="{Binding ApplyCorrectionCommand}" />
+                                <TextBlock Classes="axis" VerticalAlignment="Center" Text="서보 ON 필요" IsVisible="{Binding !ServoOn}" />
+                            </StackPanel>
+                            <TextBlock TextWrapping="Wrap" FontSize="12" Text="{Binding CobotMsg}" IsVisible="{Binding CobotMsg, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 헤드 위치 캘리브레이션 -->
+                    <Expander Header="헤드 위치 캘리브레이션 (틸트 응답 자동측정 — 로봇이 움직입니다)">
+                        <StackPanel Spacing="6" Margin="0,6,0,0">
+                            <TextBlock Classes="hint" Text="평평한 면 위에서 실행하세요. '자동 수평'이 켜져 있으면 기울어진 상태에서 시작해도 됩니다 — 측정값 기반으로 자세를 보정(최대 ±15°×3회)한 뒤 수평에서 최종 산출합니다." />
+                            <WrapPanel>
+                                <StackPanel Margin="0,0,8,6"><TextBlock Classes="axis" Text="틸트(°)" /><NumericUpDown Width="90" Value="{Binding CalTiltDeg}" Minimum="0.5" Maximum="5" Increment="0.5" FormatString="0.0" IsEnabled="{Binding !Calibrating}" /></StackPanel>
+                                <StackPanel Margin="0,0,8,6"><TextBlock Classes="axis" Text="샘플" /><NumericUpDown Width="80" Value="{Binding CalSamples}" Minimum="3" Maximum="20" Increment="1" FormatString="0" IsEnabled="{Binding !Calibrating}" /></StackPanel>
+                                <StackPanel Margin="0,0,8,6"><TextBlock Classes="axis" Text="속도(%)" /><NumericUpDown Width="90" Value="{Binding CalVelPct}" Minimum="1" Maximum="30" Increment="1" FormatString="0" IsEnabled="{Binding !Calibrating}" /></StackPanel>
+                                <CheckBox Margin="0,0,8,6" VerticalAlignment="Bottom" Content="부호 검증(+Z 2mm)" IsChecked="{Binding CalSignCheck}" IsEnabled="{Binding !Calibrating}" />
+                                <CheckBox Margin="0,0,8,6" VerticalAlignment="Bottom" Content="자동 수평" IsChecked="{Binding CalAutoLevel}" IsEnabled="{Binding !Calibrating}" />
+                            </WrapPanel>
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <Button Content="캘리브레이션 시작" Classes="accent" Command="{Binding StartCalibrationCommand}" />
+                                <Button Content="중단" Classes="danger" Command="{Binding AbortCalibrationCommand}" IsVisible="{Binding Calibrating}" />
+                                <TextBlock Classes="axis" VerticalAlignment="Center" Text="서보 ON 필요" IsVisible="{Binding !ServoOn}" />
+                            </StackPanel>
+                            <Border Background="#111" CornerRadius="4" Padding="6" MaxHeight="180" IsVisible="{Binding CalLog.Count, Converter={x:Static vm:LaserConverters.NonZero}}">
+                                <ScrollViewer><ItemsControl ItemsSource="{Binding CalLog}"><ItemsControl.ItemTemplate><DataTemplate x:DataType="x:String"><TextBlock Text="{Binding}" FontFamily="monospace" FontSize="11" Foreground="#DDD" TextWrapping="Wrap" /></DataTemplate></ItemsControl.ItemTemplate></ItemsControl></ScrollViewer>
+                            </Border>
+                            <StackPanel IsVisible="{Binding CalResult, Converter={x:Static ObjectConverters.IsNotNull}}">
+                            <StackPanel DataContext="{Binding CalResult}" x:DataType="m:LaserHeadCalibrationResult" Spacing="6">
+                                <Border Classes="alert" IsVisible="{Binding !ReturnedToAnchor}"><TextBlock Text="로봇이 앵커 pose 로 복귀하지 못했습니다 — 위치를 수동 확인하세요." /></Border>
+                                <Border Classes="alert" IsVisible="{Binding !Success}"><TextBlock Text="{Binding Error, StringFormat='캘리브레이션 실패: {0}'}" TextWrapping="Wrap" /></Border>
+                                <StackPanel IsVisible="{Binding Success}" Spacing="6">
+                                    <Grid ColumnDefinitions="50,70,70,60,70,70,60,*">
+                                        <TextBlock Text="CH" Classes="axis" /><TextBlock Grid.Column="1" Text="현재 X" Classes="axis" /><TextBlock Grid.Column="2" Text="측정 X" Classes="axis" /><TextBlock Grid.Column="3" Text="ΔX" Classes="axis" />
+                                        <TextBlock Grid.Column="4" Text="현재 Y" Classes="axis" /><TextBlock Grid.Column="5" Text="측정 Y" Classes="axis" /><TextBlock Grid.Column="6" Text="ΔY" Classes="axis" /><TextBlock Grid.Column="7" Text="신뢰도" Classes="axis" />
+                                    </Grid>
+                                    <ItemsControl ItemsSource="{Binding Heads}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate x:DataType="m:HeadCalibrationEntry">
+                                                <Grid ColumnDefinitions="50,70,70,60,70,70,60,*" Margin="0,2">
+                                                    <TextBlock Text="{Binding Channel, StringFormat='CH{0}'}" FontWeight="SemiBold" />
+                                                    <TextBlock Grid.Column="1" Text="{Binding CurrentX, StringFormat='{}{0:F2}'}" /><TextBlock Grid.Column="2" FontWeight="SemiBold" Text="{Binding MeasuredX, StringFormat='{}{0:F2}'}" />
+                                                    <TextBlock Grid.Column="3" Classes="axis" Text="{Binding ., Converter={x:Static vm:LaserConverters.DeltaX}}" />
+                                                    <TextBlock Grid.Column="4" Text="{Binding CurrentY, StringFormat='{}{0:F2}'}" /><TextBlock Grid.Column="5" FontWeight="SemiBold" Text="{Binding MeasuredY, StringFormat='{}{0:F2}'}" />
+                                                    <TextBlock Grid.Column="6" Classes="axis" Text="{Binding ., Converter={x:Static vm:LaserConverters.DeltaY}}" />
+                                                    <TextBlock Grid.Column="7" Text="{Binding Confidence}" />
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                    <TextBlock Classes="hint" Text="{Binding ., Converter={x:Static vm:LaserConverters.CalSummary}}" />
+                                    <ItemsControl ItemsSource="{Binding Warnings}"><ItemsControl.ItemTemplate><DataTemplate x:DataType="x:String"><Border Classes="alert"><TextBlock Text="{Binding}" TextWrapping="Wrap" FontSize="12" /></Border></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
+                                    <TextBlock Classes="hint" Text="적용: 아래 6줄을 appsettings.json 의 LaserDisplacementSensor 섹션에 덮어쓰고 앱을 재시작하세요." />
+                                    <TextBox Text="{Binding AppSettingsJsonSnippet, Mode=OneWay}" IsReadOnly="True" AcceptsReturn="True" FontFamily="monospace" FontSize="11" Height="120" />
+                                </StackPanel>
+                            </StackPanel>
+                            </StackPanel>
+                        </StackPanel>
+                    </Expander>
+
+                    <!-- 로봇 TCP 캘리브레이션 -->
+                    <Expander Header="로봇 TCP 캘리브레이션 (레이저 보조 터치 — 로봇은 수동 조그)">
+                        <StackPanel Spacing="6" Margin="0,6,0,0">
+                            <TextBlock Classes="hint" Text="평판에 공구 팁을 물리적으로 접촉시킨 상태에서 '터치 기록'을 누르세요. 서로 다른 기울기(±15~25°, Rx/Ry 양쪽 부호 혼합)로 최소 3회, 권장 4~6회. 팁 Z와 출사면 높이 h는 동시에 관측 불가 — 아래 모드로 하나를 고정합니다. 정밀도는 접촉 정밀도가 지배합니다(±0.5~1.5mm)." />
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <ComboBox Width="300" SelectedIndex="{Binding TcpModeIndex}" IsEnabled="{Binding !TcpRecording}">
+                                    <ComboBoxItem>기준 Z 고정 — 팁 X/Y 산출 + h 추정 (기본)</ComboBoxItem>
+                                    <ComboBoxItem>출사면 h 고정 — 팁 X/Y/Z 전부 산출</ComboBoxItem>
+                                </ComboBox>
+                                <StackPanel IsVisible="{Binding !TcpFixH}"><TextBlock Classes="axis" Text="기준 Z(mm, 플랜지) — 미입력 시 첫 기록 때 tool-1 Z" /><NumericUpDown Width="130" Value="{Binding TcpRefZ}" Increment="0.1" FormatString="0.0" IsEnabled="{Binding !TcpRecording}" /></StackPanel>
+                                <StackPanel IsVisible="{Binding TcpFixH}"><TextBlock Classes="axis" Text="출사면 h(mm)" /><NumericUpDown Width="130" Value="{Binding TcpFixedH}" Increment="0.1" FormatString="0.0" IsEnabled="{Binding !TcpRecording}" /></StackPanel>
+                            </StackPanel>
+                            <Button Content="현재 측정거리를 h로 저장" Command="{Binding CaptureHeadPlaneCommand}" IsVisible="{Binding TcpFixH}" HorizontalAlignment="Left" />
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <Button Content="터치 기록" Classes="accent" Command="{Binding RecordTouchCommand}" />
+                                <Button Content="전체 삭제" Command="{Binding ClearTouchesCommand}" IsEnabled="{Binding !TcpRecording}" />
+                                <TextBlock Classes="axis" VerticalAlignment="Center" Text="{Binding TouchCount, StringFormat='기록 {0}개'}" />
+                            </StackPanel>
+                            <StackPanel IsVisible="{Binding TouchCount, Converter={x:Static vm:LaserConverters.NonZero}}">
+                                <Grid ColumnDefinitions="40,80,80,90,90,Auto"><TextBlock Text="#" Classes="axis" /><TextBlock Grid.Column="1" Text="Rx(°)" Classes="axis" /><TextBlock Grid.Column="2" Text="Ry(°)" Classes="axis" /><TextBlock Grid.Column="3" Text="거리(mm)" Classes="axis" /><TextBlock Grid.Column="4" Text="잔차(mm)" Classes="axis" /></Grid>
+                                <ItemsControl ItemsSource="{Binding Touches}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:TouchRow">
+                                            <Grid ColumnDefinitions="40,80,80,90,90,Auto" Margin="0,2">
+                                                <TextBlock Text="{Binding No}" /><TextBlock Grid.Column="1" Text="{Binding RxDeg, StringFormat='{}{0:F2}'}" /><TextBlock Grid.Column="2" Text="{Binding RyDeg, StringFormat='{}{0:F2}'}" />
+                                                <TextBlock Grid.Column="3" Text="{Binding MeanDistanceMm, StringFormat='{}{0:F1}'}" /><TextBlock Grid.Column="4" Text="{Binding ResidualText}" />
+                                                <Button Grid.Column="5" Content="삭제" Padding="6,2" Command="{Binding $parent[ItemsControl].((vm:LaserViewModel)DataContext).RemoveTouchCommand}" CommandParameter="{Binding}" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                            <StackPanel IsVisible="{Binding TcpResult, Converter={x:Static ObjectConverters.IsNotNull}}" Spacing="6">
+                                <StackPanel DataContext="{Binding TcpResult}" x:DataType="m:TcpTouchCalibrationResult" Spacing="6">
+                                    <Border Classes="alert" IsVisible="{Binding !Success}"><TextBlock Text="{Binding Error, StringFormat='산출 실패: {0}'}" TextWrapping="Wrap" /></Border>
+                                    <StackPanel IsVisible="{Binding Success}" Spacing="4">
+                                        <Grid ColumnDefinitions="*,*,*,*">
+                                            <StackPanel Grid.Column="0"><TextBlock Classes="axis" HorizontalAlignment="Center" Text="Tip X (산출)" /><TextBlock Classes="val" Text="{Binding TipX, StringFormat='{}{0:F2}'}" /></StackPanel>
+                                            <StackPanel Grid.Column="1"><TextBlock Classes="axis" HorizontalAlignment="Center" Text="Tip Y (산출)" /><TextBlock Classes="val" Text="{Binding TipY, StringFormat='{}{0:F2}'}" /></StackPanel>
+                                            <StackPanel Grid.Column="2"><TextBlock Classes="axis" HorizontalAlignment="Center" Text="{Binding $parent[UserControl].((vm:LaserViewModel)DataContext).TipZLabel}" /><TextBlock Classes="val" Text="{Binding TipZ, StringFormat='{}{0:F2}'}" /></StackPanel>
+                                            <StackPanel Grid.Column="3"><TextBlock Classes="axis" HorizontalAlignment="Center" Text="{Binding $parent[UserControl].((vm:LaserViewModel)DataContext).HLabel}" /><TextBlock Classes="val" Text="{Binding HeadPlaneZmm, StringFormat='{}{0:F1}'}" /></StackPanel>
+                                        </Grid>
+                                        <TextBlock Classes="hint" Text="{Binding ., Converter={x:Static vm:LaserConverters.TcpSummary}}" />
+                                        <ItemsControl ItemsSource="{Binding Warnings}"><ItemsControl.ItemTemplate><DataTemplate x:DataType="x:String"><Border Classes="alert"><TextBlock Text="{Binding}" TextWrapping="Wrap" FontSize="12" /></Border></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
+                                    </StackPanel>
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding !TcpFixH}">
+                                    <Button Content="산출 h를 앵커로 저장" Command="{Binding SaveHeadPlaneCommand}" />
+                                    <TextBlock Classes="axis" VerticalAlignment="Center" Text="{Binding TouchMeanText, StringFormat='h는 터치 평균거리(~{0}mm)와 비슷해야 정상'}" />
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <TextBlock Classes="axis" VerticalAlignment="Center" Text="쓰기 대상 tool" />
+                                    <NumericUpDown Width="90" Value="{Binding TcpWriteId}" Minimum="1" Maximum="14" Increment="1" FormatString="0" IsEnabled="{Binding !TcpWriting}" />
+                                    <CheckBox Content="산출값 확인함" IsChecked="{Binding TcpConfirm}" />
+                                    <CheckBox Content="tool 1 덮어쓰기 허용" IsChecked="{Binding TcpAllowTool1}" />
+                                    <Button Content="{Binding TcpWriteId, StringFormat='tool {0}에 쓰기'}" Classes="danger" Command="{Binding WriteTcpToolCommand}" />
+                                </StackPanel>
+                            </StackPanel>
+                            <TextBlock TextWrapping="Wrap" FontSize="12" Text="{Binding TcpMsg}" IsVisible="{Binding TcpMsg, Converter={x:Static ObjectConverters.IsNotNull}}"
+                                       Foreground="{Binding !TcpMsgOk, Converter={x:Static vm:OkErrConverters.Brush}}" />
+                        </StackPanel>
+                    </Expander>
+
+                    <!-- 진단 -->
+                    <Expander Header="진단 — Input Assembly 원본 (hex)">
+                        <TextBox Margin="0,6,0,0" Text="{Binding HexDump, Mode=OneWay}" IsReadOnly="True" AcceptsReturn="True" FontFamily="monospace" FontSize="11" Height="160" />
+                    </Expander>
+                </StackPanel>
+            </StackPanel>
+        </Border>
+    </StackPanel>
+</UserControl>
