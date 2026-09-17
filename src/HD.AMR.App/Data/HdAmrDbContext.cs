@@ -35,10 +35,12 @@ public class HdAmrDbContext : DbContext
                 .WithOne(r => r.Drawing!)
                 .HasForeignKey(r => r.DrawingId)
                 .OnDelete(DeleteBehavior.Cascade);
+            // 프로파일은 도면 하위가 아님(선택적 연결) — 도면 삭제 시 프로파일은 남고 연결만 해제.
             b.HasMany<InspectionProfile>()
-                .WithOne(p => p.Drawing!)
+                .WithOne(p => p.Drawing)
                 .HasForeignKey(p => p.DrawingId)
-                .OnDelete(DeleteBehavior.Cascade);
+                .IsRequired(false)
+                .OnDelete(DeleteBehavior.SetNull);
         });
 
         modelBuilder.Entity<DrawingSegment>(b =>

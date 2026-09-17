@@ -35,7 +35,6 @@ public sealed partial class SequenceViewModel : ViewModelBase
     private const string DirectionKey = "Sequence.Inspection.Direction";
     private const string CameraDistKey = "Sequence.Camera.TargetDistance";
     private const string CameraToLaserShiftKey = "Sequence.FlatSurface.CameraToLaserShiftYmm";
-    private const string InspectionDrawingKey = "Sequence.Inspection.DrawingId";
     private const string InspectionProfileKey = "Sequence.Inspection.ProfileId";
     private const string InspectionSurfaceKey = "Sequence.Inspection.SurfaceId";
     private const string XSignKey = "Camera.Axis.XSign";
@@ -49,7 +48,6 @@ public sealed partial class SequenceViewModel : ViewModelBase
 
     public ObservableCollection<SeqStepVm> Steps { get; } = new();
     public ObservableCollection<SurfaceOption> SurfaceOptions { get; } = new();
-    public ObservableCollection<Drawing> Drawings { get; } = new();
     public ObservableCollection<InspectionProfile> Profiles { get; } = new();
 
     [ObservableProperty] private int _tool = 1;
@@ -73,7 +71,6 @@ public sealed partial class SequenceViewModel : ViewModelBase
     [ObservableProperty] private int _wobjId = 1;
     [ObservableProperty] private double _pitchMm = 370;
     [ObservableProperty] private int _pitchDirIndex;         // 0 → +1, 1 → −1
-    [ObservableProperty] private int _inspectionDrawingId;
     [ObservableProperty] private int _inspectionProfileId;
 
     public SequenceViewModel(IServiceScopeFactory scopeFactory, CobotService cobot)
@@ -139,11 +136,6 @@ public sealed partial class SequenceViewModel : ViewModelBase
             InspectCamOffsetY = await _param.GetDoubleAsync(InspectCamOffsetYKey) ?? 0;
             WobjId = (int)(await _param.GetDoubleAsync(WObjPointStep.WObjIdKey) ?? 1);
 
-            var drawings = await _drawing.ListAsync();
-            Drawings.Clear();
-            foreach (var d in drawings) Drawings.Add(d);
-
-            InspectionDrawingId = (int)(await _param.GetDoubleAsync(InspectionDrawingKey) ?? 0);
             InspectionProfileId = (int)(await _param.GetDoubleAsync(InspectionProfileKey) ?? 0);
             InspectionSurfaceId = (int)(await _param.GetDoubleAsync(InspectionSurfaceKey) ?? 0x01);
 
@@ -172,8 +164,8 @@ public sealed partial class SequenceViewModel : ViewModelBase
     private async Task LoadProfilesAsync()
     {
         Profiles.Clear();
-        if (_drawing is not null && InspectionDrawingId > 0)
-            foreach (var p in await _drawing.ListProfilesAsync(InspectionDrawingId))
+        if (_drawing is not null)
+            foreach (var p in await _drawing.ListProfilesAsync())
                 Profiles.Add(p);
         if (Profiles.All(p => p.Id != InspectionProfileId))
             InspectionProfileId = 0;
@@ -190,7 +182,6 @@ public sealed partial class SequenceViewModel : ViewModelBase
         _context.InspectionOffsetV = OffsetV;
         _context.CameraTargetDistanceMm = CameraTargetDistanceMm;
         _context.CameraToLaserShiftYmm = CameraToLaserShiftYmm;
-        _context.InspectionDrawingId = InspectionDrawingId;
         _context.InspectionProfileId = InspectionProfileId;
     }
 
@@ -210,12 +201,6 @@ public sealed partial class SequenceViewModel : ViewModelBase
     partial void OnWobjIdChanged(int value) => Save(WObjPointStep.WObjIdKey, value);
     partial void OnInspectionSurfaceIdChanged(int value) { _context.InspectionSurfaceId = value; SaveInspection(); RefreshSteps(); }
     partial void OnInspectionProfileIdChanged(int value) { _context.InspectionProfileId = value; SaveInspection(); }
-    async partial void OnInspectionDrawingIdChanged(int value)
-    {
-        _context.InspectionDrawingId = value;
-        await LoadProfilesAsync();
-        SaveInspection();
-    }
 
     private async void SaveOffsets()
     {
@@ -241,7 +226,6 @@ public sealed partial class SequenceViewModel : ViewModelBase
     private async void SaveInspection()
     {
         if (_loading || _param is null) return;
-        await _param.SetDoubleAsync(InspectionDrawingKey, InspectionDrawingId);
         await _param.SetDoubleAsync(InspectionProfileKey, InspectionProfileId);
         await _param.SetDoubleAsync(InspectionSurfaceKey, InspectionSurfaceId);
     }

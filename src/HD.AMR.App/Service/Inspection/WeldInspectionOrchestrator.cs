@@ -290,26 +290,17 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         }
     }
 
-    /// <summary>sectionDxfId 로 로컬 Drawing 을 찾고(이름 정확 일치 → 파일명 매칭 순), 그 도면의
-    /// 최신 티칭설정(InspectionProfile)을 반환. 없으면 (null, 사유).</summary>
+    /// <summary>SeamType 기준 최신(UpdatedAt) 티칭설정(InspectionProfile)을 반환. 없으면 (null, 사유).
+    /// 도면 매칭은 폐기 — X-Y 교시 일원화로 프로파일은 도면 무관이며, sectionDxfId 는 로그용으로만 받는다.</summary>
     private static async Task<(InspectionProfile? Profile, string? Error)> FindProfileAsync(
         HdAmrDbContext db, string sectionDxfId, string seamType, CancellationToken ct)
     {
-        var drawing = await db.Drawings.AsNoTracking()
-                          .FirstOrDefaultAsync(d => d.Name == sectionDxfId, ct)
-                      ?? await db.Drawings.AsNoTracking()
-                          .FirstOrDefaultAsync(d => d.FileName == sectionDxfId
-                                                    || d.FileName == sectionDxfId + ".dxf"
-                                                    || d.FileName == sectionDxfId + ".dwg", ct);
-        if (drawing is null)
-            return (null, $"no local drawing for sectionDxfId='{sectionDxfId}' — 도면 업로드/이름 정합 필요");
-
         var profile = await db.InspectionProfiles.AsNoTracking()
-            .Where(p => p.DrawingId == drawing.Id && p.SeamType == seamType)
+            .Where(p => p.SeamType == seamType)
             .OrderByDescending(p => p.UpdatedAt)
             .FirstOrDefaultAsync(ct);
         if (profile is null)
-            return (null, $"no taught {seamType} profile for sectionDxfId='{sectionDxfId}' (drawing '{drawing.Name}') — 온보드 {seamType} 티칭 필요");
+            return (null, $"no taught {seamType} profile (sectionDxfId='{sectionDxfId}') — 온보드 {seamType} 티칭 필요");
 
         return (profile, null);
     }

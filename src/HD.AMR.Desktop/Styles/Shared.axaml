@@ -57,26 +57,53 @@
         <Setter Property="Background" Value="{DynamicResource AlertWarningBg}" />
     </Style>
 
+    <!-- 파랑 강조 정보 카드(ACS '현재 선창' 카드 스타일): .alert.info -->
+    <Style Selector="Border.alert.info">
+        <Setter Property="Background" Value="{DynamicResource InfoCardBackground}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource InfoCardBorder}" />
+        <Setter Property="BorderThickness" Value="1" />
+    </Style>
+
     <Styles.Resources>
         <ResourceDictionary>
             <ResourceDictionary.ThemeDictionaries>
                 <ResourceDictionary x:Key="Light">
+                    <SolidColorBrush x:Key="AppBackground" Color="#F4F5F7" />
                     <SolidColorBrush x:Key="CardBackground" Color="#FFFFFF" />
                     <SolidColorBrush x:Key="CardBorder" Color="#E2E5EA" />
                     <SolidColorBrush x:Key="TextMuted" Color="#6C757D" />
                     <SolidColorBrush x:Key="BadgeNeutral" Color="#6C757D" />
                     <SolidColorBrush x:Key="BadgeSuccess" Color="#198754" />
                     <SolidColorBrush x:Key="AlertWarningBg" Color="#FFF3CD" />
+                    <SolidColorBrush x:Key="BadgeDanger" Color="#DC3545" />
                     <SolidColorBrush x:Key="NavBackground" Color="#1F2633" />
+                    <SolidColorBrush x:Key="Accent" Color="#1E7FFF" />
+                    <SolidColorBrush x:Key="AccentHover" Color="#4C99FF" />
+                    <SolidColorBrush x:Key="InputBackground" Color="#FFFFFF" />
+                    <SolidColorBrush x:Key="InputBorder" Color="#CED4DA" />
+                    <SolidColorBrush x:Key="TableHeaderBackground" Color="#EDEFF2" />
+                    <SolidColorBrush x:Key="InfoCardBackground" Color="#E7F1FF" />
+                    <SolidColorBrush x:Key="InfoCardBorder" Color="#1E7FFF" />
                 </ResourceDictionary>
+                <!-- Dark = ACS 운영 UI(docs/ACS_UI.jpg) 팔레트 — 앱은 App.axaml 에서 Dark 고정.
+                     크롬·카드 배경은 반투명(알파) — 창의 아크릴 블러(MainWindow)가 은은히 비친다. -->
                 <ResourceDictionary x:Key="Dark">
-                    <SolidColorBrush x:Key="CardBackground" Color="#252A33" />
-                    <SolidColorBrush x:Key="CardBorder" Color="#3A414D" />
-                    <SolidColorBrush x:Key="TextMuted" Color="#9AA4B2" />
-                    <SolidColorBrush x:Key="BadgeNeutral" Color="#5A6473" />
+                    <SolidColorBrush x:Key="AppBackground" Color="#990D0E10" />
+                    <SolidColorBrush x:Key="CardBackground" Color="#CC17191C" />
+                    <SolidColorBrush x:Key="CardBorder" Color="#2E3238" />
+                    <SolidColorBrush x:Key="TextMuted" Color="#9AA0A8" />
+                    <SolidColorBrush x:Key="BadgeNeutral" Color="#3A414B" />
                     <SolidColorBrush x:Key="BadgeSuccess" Color="#2FA36B" />
-                    <SolidColorBrush x:Key="AlertWarningBg" Color="#4A3F1E" />
-                    <SolidColorBrush x:Key="NavBackground" Color="#161B24" />
+                    <SolidColorBrush x:Key="AlertWarningBg" Color="#3B3316" />
+                    <SolidColorBrush x:Key="BadgeDanger" Color="#E45060" />
+                    <SolidColorBrush x:Key="NavBackground" Color="#D90A0B0D" />
+                    <SolidColorBrush x:Key="Accent" Color="#1E7FFF" />
+                    <SolidColorBrush x:Key="AccentHover" Color="#4C99FF" />
+                    <SolidColorBrush x:Key="InputBackground" Color="#0B0C0E" />
+                    <SolidColorBrush x:Key="InputBorder" Color="#3A3F45" />
+                    <SolidColorBrush x:Key="TableHeaderBackground" Color="#0B0C0E" />
+                    <SolidColorBrush x:Key="InfoCardBackground" Color="#10233B" />
+                    <SolidColorBrush x:Key="InfoCardBorder" Color="#1E7FFF" />
                 </ResourceDictionary>
             </ResourceDictionary.ThemeDictionaries>
         </ResourceDictionary>

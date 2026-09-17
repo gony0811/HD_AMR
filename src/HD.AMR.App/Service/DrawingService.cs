@@ -141,7 +141,15 @@ public class DrawingService
         await _db.SaveChangesAsync(ct);
     }
 
-    // ── Inspection 설정 프로파일 (도면별 저장/불러오기) ────────────────────
+    // ── Inspection 설정 프로파일 ──────────────────────────────────────────
+    // 도면 하위 개념 폐기 — 전체 목록이 기본. (int drawingId) 오버로드는 구 도면 기반 페이지 호환용.
+
+    /// <summary>전체 프로파일 목록(최신 갱신 순). 도면 무관.</summary>
+    public Task<List<InspectionProfile>> ListProfilesAsync(CancellationToken ct = default) =>
+        _db.InspectionProfiles.AsNoTracking()
+            .OrderByDescending(p => p.UpdatedAt)
+            .ToListAsync(ct);
+
     public Task<List<InspectionProfile>> ListProfilesAsync(int drawingId, CancellationToken ct = default) =>
         _db.InspectionProfiles.AsNoTracking()
             .Where(p => p.DrawingId == drawingId)

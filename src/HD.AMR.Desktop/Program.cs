@@ -32,6 +32,13 @@ internal static class Program
         builder.Services.AddHdAmrServices(builder.Configuration);
         var host = builder.Build();
 
+        // 과거 상대경로 시절의 레거시 DB(웹 프로젝트 폴더 등)를 정본 경로(%LocalAppData%/HD.AMR)로
+        // 1회 가져오기 — DB 초기화(EnsureCreated)보다 먼저 실행해야 한다.
+        HD.AMR.App.Data.LegacyDatabaseImporter.ImportIfNeeded(
+            builder.Configuration, AppContext.BaseDirectory,
+            host.Services.GetRequiredService<Microsoft.Extensions.Logging.ILoggerFactory>()
+                .CreateLogger("LegacyDbImport"));
+
         // DB 초기화(EnsureCreated + 후방호환 스키마 + 시드) 1회 실행 — 기존 Web Program.cs 로직 이식.
         DatabaseInitializer.Initialize(host.Services);
 
@@ -59,8 +66,11 @@ internal static class Program
         }
 
         // 잔여 비관리/블로킹 스레드(소켓 종료 대기, 네이티브 카메라/OpenCV 등)가 남아도 프로세스가
-        // 확실히 끝나도록 하는 최종 보장.
-        Environment.Exit(0);
+        // 확실히 끝나도록 하는 최종 보장. Environment.Exit 은 AppDomain.ProcessExit 핸들러를 실행하는데,
+        // ConsoleLifetime 이 그 핸들러에서 "호스트 완전 종료"를 무기한 대기하므로 StopAsync 가 멈춘
+        // 클라이언트(동기 블로킹 Disconnect)가 있으면 창이 닫힌 뒤에도 좀비 프로세스가 남는다 —
+        // Process.Kill 은 ProcessExit 핸들러를 우회해 즉시 종료한다.
+        System.Diagnostics.Process.GetCurrentProcess().Kill();
     }
 
     // 신호 수신 시: OS 기본 종료를 취소하고 Avalonia 를 정상 종료 → 메인 스레드 블로킹 해제 → finally 실행.

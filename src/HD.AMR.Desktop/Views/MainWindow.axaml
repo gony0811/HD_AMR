@@ -7,15 +7,51 @@
         x:Class="HD.AMR.Desktop.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
         Width="1280" Height="800"
+        TransparencyLevelHint="AcrylicBlur, Blur, Transparent"
+        Background="Transparent"
         Title="HD현대 AMR — 통합 제어 콘솔">
 
-    <Grid ColumnDefinitions="250,*">
+    <Window.Styles>
+        <!-- 비상정지(EMO) 토글 버튼: 평상시 빨간 아웃라인, EMO 활성 시 빨간 채움 -->
+        <Style Selector="Button.emo">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource BadgeDanger}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BadgeDanger}" />
+            <Setter Property="BorderThickness" Value="1.5" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="Padding" Value="14,7" />
+            <Setter Property="FontWeight" Value="Bold" />
+        </Style>
+        <Style Selector="Button.emo:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource BadgeDanger}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BadgeDanger}" />
+        </Style>
+        <Style Selector="Button.emo.emo-active /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource BadgeDanger}" />
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BadgeDanger}" />
+        </Style>
+    </Window.Styles>
 
-        <!-- ── 좌: 네비게이션 사이드바 ── -->
-        <Grid Column="0" Background="{DynamicResource NavBackground}" RowDefinitions="Auto,*,Auto">
-            <StackPanel Grid.Row="0" Margin="16,18,16,10">
-                <TextBlock Text="HD현대 AMR" Foreground="White" FontSize="18" FontWeight="Bold" />
-                <TextBlock Text="자율주행 로봇 통합 제어 콘솔" Foreground="#9AA4B2" FontSize="11" />
+    <Panel>
+        <!-- 반투명 크리스탈(아크릴 블러) 배경 — 어두운 틴트로 다크 테마 유지, 미지원 환경에선 틴트색 폴백. -->
+        <ExperimentalAcrylicBorder IsHitTestVisible="False">
+            <ExperimentalAcrylicBorder.Material>
+                <ExperimentalAcrylicMaterial BackgroundSource="Digger"
+                                             TintColor="#0D0E10" TintOpacity="1" MaterialOpacity="0.55" />
+            </ExperimentalAcrylicBorder.Material>
+        </ExperimentalAcrylicBorder>
+
+        <Grid ColumnDefinitions="250,*">
+
+        <!-- ── 좌: 네비게이션 사이드바 — 페이지 배경과 동일(아크릴 위 투명), 우측 1px 경계만 ── -->
+        <Border Grid.Column="0" BorderBrush="{DynamicResource CardBorder}" BorderThickness="0,0,1,0">
+        <Grid Background="Transparent" RowDefinitions="Auto,*,Auto">
+            <StackPanel Grid.Row="0" Margin="16,18,16,10" Spacing="8">
+                <!-- HHI 로고 — 다크 배경용(초록 화살표 + 흰 텍스트, ACS UI 상단 로고와 동일 형태). -->
+                <Image Source="avares://HD.AMR.Desktop/Assets/HHI_white2_ko.png" Height="22" HorizontalAlignment="Left" />
+                <TextBlock Text="자율주행 로봇 통합 제어 콘솔" Foreground="{DynamicResource TextMuted}" FontSize="11" />
             </StackPanel>
 
             <ListBox Grid.Row="1"
@@ -26,23 +62,78 @@
                     <DataTemplate x:DataType="vm:NavItem">
                         <StackPanel Orientation="Horizontal" Spacing="10">
                             <TextBlock Text="{Binding Icon}" FontSize="15" Width="20" />
-                            <TextBlock Text="{Binding Label}" VerticalAlignment="Center" />
+                            <TextBlock Text="{Binding Label}" VerticalAlignment="Center" Foreground="White" />
                         </StackPanel>
                     </DataTemplate>
                 </ListBox.ItemTemplate>
             </ListBox>
 
-            <Border Grid.Row="2" Margin="12" Padding="12" CornerRadius="8" Background="#2A3242">
+            <Border Grid.Row="2" Margin="12" Padding="12" CornerRadius="8"
+                    Background="{DynamicResource CardBackground}"
+                    BorderBrush="{DynamicResource CardBorder}" BorderThickness="1">
                 <StackPanel Spacing="2">
                     <TextBlock Text="HD현대 AMR" Foreground="White" FontWeight="SemiBold" FontSize="12" />
-                    <TextBlock Text="Avalonia 데스크톱 (이관 중)" Foreground="#9AA4B2" FontSize="11" TextWrapping="Wrap" />
+                    <TextBlock Text="Avalonia 데스크톱 (이관 중)" Foreground="{DynamicResource TextMuted}" FontSize="11" TextWrapping="Wrap" />
                 </StackPanel>
             </Border>
         </Grid>
+        </Border>
 
-        <!-- ── 우: 현재 페이지 ── -->
-        <ScrollViewer Grid.Column="1" Padding="24">
-            <ContentControl Content="{Binding Navigation.CurrentViewModel}" />
-        </ScrollViewer>
-    </Grid>
+        <!-- ── 우: 상단 상태바 + 현재 페이지 ── -->
+        <Grid Grid.Column="1" RowDefinitions="Auto,*">
+
+            <!-- 상태바: 좌측 연결 배지, 우측 끝 비상정지(EMO) 토글 — 페이지 배경과 동일, 하단 1px 경계만 -->
+            <Border Grid.Row="0"
+                    Background="Transparent"
+                    BorderBrush="{DynamicResource CardBorder}"
+                    BorderThickness="0,0,0,1"
+                    Padding="24,10">
+                <DockPanel>
+                    <Button DockPanel.Dock="Right"
+                            Classes="emo"
+                            Classes.emo-active="{Binding IsEmoActive}"
+                            Content="{Binding EmoButtonText}"
+                            Command="{Binding ToggleEmoCommand}"
+                            VerticalAlignment="Center" />
+
+                    <TextBlock DockPanel.Dock="Right"
+                               Classes="muted"
+                               Text="{Binding EmoMessage}"
+                               IsVisible="{Binding EmoMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                               FontSize="12"
+                               MaxWidth="360"
+                               TextWrapping="Wrap"
+                               VerticalAlignment="Center"
+                               Margin="0,0,12,0" />
+
+                    <StackPanel Orientation="Horizontal" Spacing="14" VerticalAlignment="Center">
+                        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                            <TextBlock Text="AMR" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" />
+                            <Border Classes="badge" Classes.on="{Binding IsAmrConnected}">
+                                <TextBlock Text="{Binding AmrStatusText}" />
+                            </Border>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                            <TextBlock Text="Cobot" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" />
+                            <Border Classes="badge" Classes.on="{Binding IsCobotConnected}">
+                                <TextBlock Text="{Binding CobotStatusText}" />
+                            </Border>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                            <TextBlock Text="IO모듈" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" />
+                            <Border Classes="badge" Classes.on="{Binding IsIoConnected}">
+                                <TextBlock Text="{Binding IoStatusText}" />
+                            </Border>
+                        </StackPanel>
+                    </StackPanel>
+                </DockPanel>
+            </Border>
+
+            <!-- 현재 페이지 -->
+            <ScrollViewer Grid.Row="1" Padding="24">
+                <ContentControl Content="{Binding Navigation.CurrentViewModel}" />
+            </ScrollViewer>
+        </Grid>
+        </Grid>
+    </Panel>
 </Window>

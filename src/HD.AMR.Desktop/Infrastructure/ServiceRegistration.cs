@@ -28,8 +28,9 @@ internal static class ServiceRegistration
     {
         // ── 데이터 계층 ─────────────────────────────────────────────
         // DB 를 직접 주입받는 서비스(Web 에서 Scoped)를 위해 Scoped DbContext 로 등록하고,
-        // 뷰모델은 작업마다 scope 를 연다. 파일 경로는 저장소 대신 LocalApplicationData 아래.
-        var cs = ResolveConnectionString(config);
+        // 뷰모델은 작업마다 scope 를 연다. 파일 경로는 저장소 대신 LocalApplicationData 아래 —
+        // 웹 앱과 같은 정본 경로를 공유한다(SqliteConnectionResolver).
+        var cs = SqliteConnectionResolver.Resolve(config);
         services.AddDbContext<HdAmrDbContext>(opt => opt.UseSqlite(cs));
 
         // ── 하드웨어 서비스 (싱글톤 + HostedService) — 기존 Web 과 동일 패턴 ──
@@ -179,12 +180,7 @@ internal static class ServiceRegistration
     }
 
     /// <summary>%LocalAppData%/HD.AMR (macOS: ~/Library/Application Support/HD.AMR).</summary>
-    private static string AppDataDir()
-    {
-        var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "HD.AMR");
-        Directory.CreateDirectory(dir);
-        return dir;
-    }
+    private static string AppDataDir() => SqliteConnectionResolver.AppDataDirectory;
 
     /// <summary>싱글톤으로 등록하고 동일 인스턴스를 HostedService 로도 노출(주입 공유 + 자동 기동).</summary>
     private static void AddHostedSingleton<T>(IServiceCollection services)
@@ -192,26 +188,5 @@ internal static class ServiceRegistration
     {
         services.AddSingleton<T>();
         services.AddHostedService(sp => sp.GetRequiredService<T>());
-    }
-
-    /// <summary>
-    /// 연결 문자열의 상대 SQLite 경로를 %LocalAppData%/HD.AMR (macOS: ~/Library/Application Support)
-    /// 아래 절대 경로로 재배치한다. 이미 절대 경로면 그대로 둔다.
-    /// </summary>
-    private static string ResolveConnectionString(IConfiguration config)
-    {
-        var raw = config.GetConnectionString("DefaultConnection") ?? "Data Source=hd_amr.db";
-        var builder = new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder(raw);
-        var dataSource = builder.DataSource;
-
-        if (!string.IsNullOrWhiteSpace(dataSource) && !Path.IsPathRooted(dataSource))
-        {
-            var dir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "HD.AMR");
-            Directory.CreateDirectory(dir);
-            builder.DataSource = Path.Combine(dir, dataSource);
-        }
-
-        return builder.ToString();
     }
 }

@@ -65,7 +65,7 @@ public sealed partial class InspectionMapViewModel : ViewModelBase
                         SeamTypeKind.Corner2 => "실행 스텝 미구현 (게이트 OFF) — corner2 슬롯/캡처 후속",
                         SeamTypeKind.Cross => "X-Y 6-DOF 캡처 교시 프로필 (검사 포인트, CROSS4)",
                         SeamTypeKind.Cross3 => "X-Y 6-DOF 캡처 교시 프로필 (검사 포인트, CROSS3)",
-                        _ => "도면 LINE 티칭 프로필 (sectionDxfId → 최신 InspectionProfile)",
+                        _ => "X-Y 티칭 프로필 (SeamType → 최신 InspectionProfile, 도면 무관)",
                     }));
 
             Teaching.Clear();

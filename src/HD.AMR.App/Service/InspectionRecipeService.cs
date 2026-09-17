@@ -8,9 +8,9 @@ using Microsoft.Extensions.Logging;
 namespace HD.AMR.App.Service;
 
 /// <summary>
-/// 검사 매핑 요약 뷰(레시피 관리 UI)용 읽기 모델 — 도면 1건과 그 <b>최신</b> 티칭 프로필의 상태.
-/// 실기 액션의 경유점 조회 경로(<c>sectionDxfId → Drawing → 최신 InspectionProfile</c>)와 동일한 규칙으로
-/// 산출한다 — 어느 도면이 검사 실행 가능한 경유점을 갖췄는지(HasProfile·WaypointCount) 한눈에 본다.
+/// 검사 매핑 요약 뷰(레시피 관리 UI)용 읽기 모델 — 티칭 프로필 1건의 상태.
+/// 실기 액션의 경유점 조회 규칙(<c>SeamType → 최신 InspectionProfile</c>)과 정합 — SeamType 별 최신
+/// 프로필이 실제 실행에 쓰인다. DrawingId/DrawingName 은 구 도면 기반 교시의 잔여 연결(없으면 0/"—").
 /// </summary>
 public record DrawingTeachingSummary(
     int DrawingId,
@@ -44,34 +44,31 @@ public class InspectionRecipeService
     public Task<InspectionRecipe?> GetAsync(string id, CancellationToken ct = default) =>
         _db.InspectionRecipes.AsNoTracking().FirstOrDefaultAsync(r => r.Id == id, ct);
 
-    /// <summary>도면별 최신 티칭 프로필 요약(검사 매핑 요약 뷰용). 실기 경유점 조회와 같은 규칙:
-    /// 도면당 <see cref="InspectionProfile.UpdatedAt"/> 최신 1건 = 액션이 실제로 사용할 프로필.
+    /// <summary>티칭 프로필 요약(검사 매핑 요약 뷰용) — 프로필 전체를 최신 갱신 순으로 1행씩.
+    /// 실기 경유점 조회 규칙(SeamType 별 <see cref="InspectionProfile.UpdatedAt"/> 최신 1건)과 정합.
     /// 경유점 수는 <see cref="InspectionProfile.WaypointsJson"/> 배열 길이로 센다(파싱 실패 시 0).</summary>
     public async Task<List<DrawingTeachingSummary>> ListTeachingSummaryAsync(CancellationToken ct = default)
     {
-        var drawings = await _db.Drawings.AsNoTracking()
-            .OrderBy(d => d.Name).ThenBy(d => d.FileName)
-            .Select(d => new { d.Id, d.Name, d.FileName })
+        var profiles = await _db.InspectionProfiles.AsNoTracking()
+            .OrderByDescending(p => p.UpdatedAt)
+            .Select(p => new
+            {
+                p.Id, p.DrawingId, p.Name, p.SeamType, p.WaypointsJson, p.UpdatedAt,
+                DrawingName = p.Drawing != null ? p.Drawing.Name : null,
+                DrawingFileName = p.Drawing != null ? p.Drawing.FileName : null,
+            })
             .ToListAsync(ct);
 
-        var result = new List<DrawingTeachingSummary>(drawings.Count);
-        foreach (var d in drawings)
-        {
-            var profile = await _db.InspectionProfiles.AsNoTracking()
-                .Where(p => p.DrawingId == d.Id)
-                .OrderByDescending(p => p.UpdatedAt)
-                .Select(p => new { p.Name, p.SeamType, p.WaypointsJson, p.UpdatedAt })
-                .FirstOrDefaultAsync(ct);
-
-            result.Add(new DrawingTeachingSummary(
-                d.Id, d.Name, d.FileName,
-                HasProfile: profile is not null,
-                ProfileName: profile?.Name,
-                SeamType: profile?.SeamType,
-                WaypointCount: CountWaypoints(profile?.WaypointsJson),
-                TaughtAt: profile?.UpdatedAt));
-        }
-        return result;
+        return profiles.Select(p => new DrawingTeachingSummary(
+                p.DrawingId ?? 0,
+                p.DrawingName ?? "—",
+                p.DrawingFileName ?? "—",
+                HasProfile: true,
+                ProfileName: p.Name,
+                SeamType: p.SeamType,
+                WaypointCount: CountWaypoints(p.WaypointsJson),
+                TaughtAt: p.UpdatedAt))
+            .ToList();
     }
 
     /// <summary>WaypointsJson(배열) 원소 수. null/빈/비배열/파싱 실패는 0.</summary>

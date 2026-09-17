@@ -21,12 +21,10 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
     private readonly CobotService _cobot;
 
     public ObservableCollection<XyPointVm> Points { get; } = new();
-    public ObservableCollection<Drawing> Drawings { get; } = new();
     public ObservableCollection<InspectionProfile> Profiles { get; } = new();
 
     private static readonly string[] SeamTypes = { "LINE", "CROSS", "CROSS3", "CORNER2", "CORNER3" };
 
-    [ObservableProperty] private int _drawingId;
     [ObservableProperty] private int _seamTypeIndex = 1;   // 기본 CROSS
     [ObservableProperty] private double _fovMm = 30;
     [ObservableProperty] private double _defaultZ = 400;
@@ -72,29 +70,14 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
     {
         try
         {
-            var list = await WithDrawing(s => s.ListAsync());
-            Drawings.Clear();
-            foreach (var d in list) Drawings.Add(d);
+            await ReloadProfiles();
         }
-        catch (Exception ex) { Notify($"도면 목록 로드 실패: {ex.Message}", true); }
+        catch (Exception ex) { Notify($"프로필 목록 로드 실패: {ex.Message}", true); }
         RecomputeViewBox();
     }
 
     partial void OnSeamTypeIndexChanged(int value) => OnPropertyChanged(nameof(IsCross));
     partial void OnFovMmChanged(double value) => RecomputeViewBox();
-
-    async partial void OnDrawingIdChanged(int value)
-    {
-        SelectedProfileId = 0;
-        Profiles.Clear();
-        if (value == 0) return;
-        try
-        {
-            foreach (var p in await WithDrawing(s => s.ListProfilesAsync(value)))
-                Profiles.Add(p);
-        }
-        catch (Exception ex) { Notify($"프로필 목록 로드 실패: {ex.Message}", true); }
-    }
 
     [RelayCommand]
     private void AddPoint()
@@ -232,7 +215,7 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
     [RelayCommand]
     private async Task SaveProfile()
     {
-        if (DrawingId == 0 || string.IsNullOrWhiteSpace(ProfileName) || Points.Count == 0) return;
+        if (string.IsNullOrWhiteSpace(ProfileName) || Points.Count == 0) return;
         try
         {
             var wps = Points.Select(p => new InspectionWaypoint(
@@ -245,7 +228,6 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
             var profile = new InspectionProfile
             {
                 Id = existing?.Id ?? 0,
-                DrawingId = DrawingId,
                 Name = name,
                 SeamType = SeamType,
                 PoseAbsolute = true,
@@ -301,8 +283,7 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
     private async Task ReloadProfiles()
     {
         Profiles.Clear();
-        if (DrawingId == 0) return;
-        foreach (var p in await WithDrawing(s => s.ListProfilesAsync(DrawingId)))
+        foreach (var p in await WithDrawing(s => s.ListProfilesAsync()))
             Profiles.Add(p);
     }
 

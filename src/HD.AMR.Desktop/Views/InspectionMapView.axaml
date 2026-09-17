@@ -89,38 +89,36 @@
             </StackPanel>
         </Border>
 
-        <!-- ③ 도면 티칭 현황 -->
+        <!-- ③ 티칭 프로필 현황 -->
         <Border Classes="card">
             <StackPanel Spacing="4">
-                <TextBlock Text="③ 도면 티칭(경유점) 현황" FontWeight="SemiBold" />
-                <TextBlock Classes="axis" TextWrapping="Wrap" Text="LINE/CROSS 검사는 액션의 sectionDxfId 로 도면을 찾고 그 도면의 최신 티칭 프로필 경유점을 사용합니다. 티칭 없음 또는 경유점 0 이면 FAILED+inspectionFailed." />
-                <Grid ColumnDefinitions="150,150,150,70,70,130,100">
-                    <TextBlock Grid.Column="0" Text="도면명" Classes="axis" />
-                    <TextBlock Grid.Column="1" Text="파일명" Classes="axis" />
-                    <TextBlock Grid.Column="2" Text="최신 프로필" Classes="axis" />
-                    <TextBlock Grid.Column="3" Text="타입" Classes="axis" />
-                    <TextBlock Grid.Column="4" Text="경유점" Classes="axis" />
-                    <TextBlock Grid.Column="5" Text="티칭 시각(UTC)" Classes="axis" />
-                    <TextBlock Grid.Column="6" Text="상태" Classes="axis" />
+                <TextBlock Text="③ 티칭 프로필(경유점) 현황" FontWeight="SemiBold" />
+                <TextBlock Classes="axis" TextWrapping="Wrap" Text="LINE/CROSS 검사는 레시피 SeamType 과 일치하는 최신 티칭 프로필의 경유점을 사용합니다(도면 무관). 티칭 없음 또는 경유점 0 이면 FAILED+inspectionFailed." />
+                <Grid ColumnDefinitions="180,90,70,140,110,150">
+                    <TextBlock Grid.Column="0" Text="프로필" Classes="axis" />
+                    <TextBlock Grid.Column="1" Text="타입" Classes="axis" />
+                    <TextBlock Grid.Column="2" Text="경유점" Classes="axis" />
+                    <TextBlock Grid.Column="3" Text="티칭 시각(UTC)" Classes="axis" />
+                    <TextBlock Grid.Column="4" Text="상태" Classes="axis" />
+                    <TextBlock Grid.Column="5" Text="연결 도면(구)" Classes="axis" />
                 </Grid>
                 <ItemsControl ItemsSource="{Binding Teaching}">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="vm:TeachingRow">
-                            <Grid ColumnDefinitions="150,150,150,70,70,130,100" Margin="0,2">
-                                <TextBlock Grid.Column="0" Classes="cell" FontFamily="monospace" Text="{Binding DrawingName}" />
-                                <TextBlock Grid.Column="1" Classes="cell axis" Text="{Binding FileName}" />
-                                <TextBlock Grid.Column="2" Classes="cell" Text="{Binding ProfileName}" />
-                                <TextBlock Grid.Column="3" Classes="cell" Text="{Binding SeamType}" />
-                                <TextBlock Grid.Column="4" Classes="cell" Text="{Binding WaypointCount}" />
-                                <TextBlock Grid.Column="5" Classes="cell axis" Text="{Binding TaughtAt}" />
-                                <Border Grid.Column="6" Classes="badge mapcell" Classes.on="{Binding Runnable}" Classes.off="{Binding !Runnable}">
+                            <Grid ColumnDefinitions="180,90,70,140,110,150" Margin="0,2">
+                                <TextBlock Grid.Column="0" Classes="cell" Text="{Binding ProfileName}" />
+                                <TextBlock Grid.Column="1" Classes="cell" Text="{Binding SeamType}" />
+                                <TextBlock Grid.Column="2" Classes="cell" Text="{Binding WaypointCount}" />
+                                <TextBlock Grid.Column="3" Classes="cell axis" Text="{Binding TaughtAt}" />
+                                <Border Grid.Column="4" Classes="badge mapcell" Classes.on="{Binding Runnable}" Classes.off="{Binding !Runnable}">
                                     <TextBlock Text="{Binding Status}" FontSize="11" />
                                 </Border>
+                                <TextBlock Grid.Column="5" Classes="cell axis" Text="{Binding DrawingName}" />
                             </Grid>
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
-                <TextBlock Classes="axis" Text="등록된 도면이 없습니다 — 도면 업로드/티칭 후 표시됩니다." HorizontalAlignment="Center"
+                <TextBlock Classes="axis" Text="저장된 티칭 프로필이 없습니다 — 검사 포인트(X-Y) 페이지에서 교시 후 표시됩니다." HorizontalAlignment="Center"
                            IsVisible="{Binding Teaching.Count, Converter={x:Static vm:CountConverters.IsZero}}" />
             </StackPanel>
         </Border>
