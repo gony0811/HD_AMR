@@ -24,4 +24,8 @@ public static class BoolTextConverters
     /// <summary>true→"수신", false→"끊김".</summary>
     public static readonly IValueConverter Recv =
         new FuncValueConverter<bool, string>(v => v ? "수신" : "끊김");
+
+    /// <summary>true→"Enabled", false→"Disabled".</summary>
+    public static readonly IValueConverter EnabledText =
+        new FuncValueConverter<bool, string>(v => v ? "Enabled" : "Disabled");
 }

@@ -1,0 +1,106 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:HD.AMR.Desktop.ViewModels"
+             x:Class="HD.AMR.Desktop.Views.TeachingView"
+             x:DataType="vm:TeachingViewModel">
+    <UserControl.Styles>
+        <Style Selector="TextBlock.axis"><Setter Property="Foreground" Value="{DynamicResource TextMuted}" /><Setter Property="FontSize" Value="12" /></Style>
+        <Style Selector="TextBlock.num"><Setter Property="FontSize" Value="11" /><Setter Property="FontFamily" Value="monospace" /><Setter Property="VerticalAlignment" Value="Center" /><Setter Property="TextAlignment" Value="Right" /><Setter Property="Margin" Value="0,0,6,0" /></Style>
+        <Style Selector="Button.op"><Setter Property="Padding" Value="6,3" /><Setter Property="FontSize" Value="11" /><Setter Property="Margin" Value="1,0" /></Style>
+    </UserControl.Styles>
+
+    <StackPanel MaxWidth="1400" HorizontalAlignment="Left">
+        <TextBlock Classes="page-title" Text="Teaching" />
+
+        <!-- 상단: 상태 + 파라미터 -->
+        <Border Classes="card">
+            <StackPanel Spacing="8">
+                <TextBlock Text="티칭 위치 (BASE 좌표계 기준)" FontWeight="SemiBold" />
+                <Border Classes="alert" IsVisible="{Binding !CobotConnected}"><TextBlock Text="⚠ 코봇 RPC 미연결 — 현재 위치 저장/이동 불가." /></Border>
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Border Classes="badge" Classes.on="{Binding ActiveIsBase}" Classes.off="{Binding !ActiveIsBase}">
+                        <TextBlock Text="{Binding ActiveUserText}" />
+                    </Border>
+                    <Button Content="베이스(0)로 전환" Command="{Binding ResetToBaseFrameCommand}"
+                            IsVisible="{Binding ActiveNotBase}" IsEnabled="{Binding CobotConnected}" />
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                    <StackPanel><TextBlock Classes="axis" Text="공구(tool)" /><NumericUpDown Width="90" Value="{Binding RunTool}" Minimum="0" Maximum="15" Increment="1" FormatString="0" IsEnabled="{Binding !IsBusy}" /></StackPanel>
+                    <StackPanel><TextBlock Classes="axis" Text="작업물(user, 0=베이스)" /><NumericUpDown Width="150" Value="{Binding CapUser}" Minimum="0" Maximum="14" Increment="1" FormatString="0" IsEnabled="{Binding !IsBusy}" /></StackPanel>
+                    <StackPanel><TextBlock Classes="axis" Text="속도(%)" /><NumericUpDown Width="90" Value="{Binding Vel}" Minimum="1" Maximum="100" Increment="1" FormatString="0" IsEnabled="{Binding !IsBusy}" /></StackPanel>
+                    <Button VerticalAlignment="Bottom" Content="■ 정지 (즉시 멈춤)" Classes="danger" Command="{Binding StopCommand}" IsEnabled="{Binding IsBusy}" />
+                </StackPanel>
+                <TextBlock Text="{Binding Message}" TextWrapping="Wrap"
+                           IsVisible="{Binding Message, Converter={x:Static ObjectConverters.IsNotNull}}"
+                           Foreground="{Binding IsErr, Converter={x:Static vm:OkErrConverters.Brush}}" />
+            </StackPanel>
+        </Border>
+
+        <!-- 목록 -->
+        <Border Classes="card">
+            <StackPanel Spacing="4">
+                <Grid ColumnDefinitions="200,90,64,64,64,58,58,58,58,58,58,58,58,58,*">
+                    <TextBlock Grid.Column="0" Text="이름" Classes="axis" />
+                    <TextBlock Grid.Column="1" Text="Wall ID" Classes="axis" />
+                    <TextBlock Grid.Column="2" Text="X" Classes="axis" /><TextBlock Grid.Column="3" Text="Y" Classes="axis" /><TextBlock Grid.Column="4" Text="Z" Classes="axis" />
+                    <TextBlock Grid.Column="5" Text="RX" Classes="axis" /><TextBlock Grid.Column="6" Text="RY" Classes="axis" /><TextBlock Grid.Column="7" Text="RZ" Classes="axis" />
+                    <TextBlock Grid.Column="8" Text="J1" Classes="axis" /><TextBlock Grid.Column="9" Text="J2" Classes="axis" /><TextBlock Grid.Column="10" Text="J3" Classes="axis" />
+                    <TextBlock Grid.Column="11" Text="J4" Classes="axis" /><TextBlock Grid.Column="12" Text="J5" Classes="axis" /><TextBlock Grid.Column="13" Text="J6" Classes="axis" />
+                    <TextBlock Grid.Column="14" Text="Operate" Classes="axis" />
+                </Grid>
+                <ItemsControl ItemsSource="{Binding Rows}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:TeachingRowVm">
+                            <Border Padding="0,3" Background="{Binding IsBusy, Converter={x:Static vm:SeqRowConverters.CurrentBrush}}">
+                                <Grid ColumnDefinitions="200,90,64,64,64,58,58,58,58,58,58,58,58,58,*">
+                                    <!-- 이름: 시드 슬롯=텍스트 / 편집 중=TextBox / 그 외 읽기전용 -->
+                                    <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                                        <TextBlock Text="{Binding Name}" VerticalAlignment="Center" IsVisible="{Binding ShowNameText}" />
+                                        <TextBox Width="150" Text="{Binding EditName}" IsVisible="{Binding ShowNameEdit}" />
+                                        <TextBox Width="150" Text="{Binding Name}" IsReadOnly="True" IsVisible="{Binding ShowNameRead}" />
+                                        <Border Classes="badge" IsVisible="{Binding HasUserFrame}"><TextBlock Text="{Binding UserFrameText}" FontSize="10" /></Border>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
+                                        <TextBlock Text="0x00" Classes="axis" VerticalAlignment="Center" IsVisible="{Binding IsSeed}" />
+                                        <NumericUpDown Width="70" Value="{Binding EditSurfaceId}" Minimum="0" Maximum="255" Increment="1" FormatString="0" IsVisible="{Binding ShowNameEdit}" />
+                                        <TextBlock Text="{Binding SurfaceHex}" Classes="axis" VerticalAlignment="Center" IsVisible="{Binding ShowNameRead}" />
+                                    </StackPanel>
+                                    <TextBlock Grid.Column="2" Classes="num" Text="{Binding X}" /><TextBlock Grid.Column="3" Classes="num" Text="{Binding Y}" /><TextBlock Grid.Column="4" Classes="num" Text="{Binding Z}" />
+                                    <TextBlock Grid.Column="5" Classes="num" Text="{Binding Rx}" /><TextBlock Grid.Column="6" Classes="num" Text="{Binding Ry}" /><TextBlock Grid.Column="7" Classes="num" Text="{Binding Rz}" />
+                                    <TextBlock Grid.Column="8" Classes="num" Text="{Binding J1}" /><TextBlock Grid.Column="9" Classes="num" Text="{Binding J2}" /><TextBlock Grid.Column="10" Classes="num" Text="{Binding J3}" />
+                                    <TextBlock Grid.Column="11" Classes="num" Text="{Binding J4}" /><TextBlock Grid.Column="12" Classes="num" Text="{Binding J5}" /><TextBlock Grid.Column="13" Classes="num" Text="{Binding J6}" />
+                                    <StackPanel Grid.Column="14" Orientation="Horizontal">
+                                        <Button Classes="op" Content="수정" IsVisible="{Binding ShowNameRead}"
+                                                Command="{Binding $parent[ItemsControl].((vm:TeachingViewModel)DataContext).BeginEditCommand}" CommandParameter="{Binding}" />
+                                        <Button Classes="op accent" Content="저장" IsVisible="{Binding ShowNameEdit}"
+                                                Command="{Binding $parent[ItemsControl].((vm:TeachingViewModel)DataContext).SaveEditCommand}" CommandParameter="{Binding}" />
+                                        <Button Classes="op" Content="취소" IsVisible="{Binding ShowNameEdit}"
+                                                Command="{Binding $parent[ItemsControl].((vm:TeachingViewModel)DataContext).CancelEditCommand}" CommandParameter="{Binding}" />
+                                        <Button Classes="op" Content="캡처" ToolTip.Tip="현재 로봇 위치를 이 항목에 저장" IsEnabled="{Binding !IsEditing}"
+                                                Command="{Binding $parent[ItemsControl].((vm:TeachingViewModel)DataContext).CaptureCommand}" CommandParameter="{Binding}" />
+                                        <Button Classes="op" Content="이동" ToolTip.Tip="저장된 위치로 이동 (MoveL)" IsEnabled="{Binding IsTaught}"
+                                                Command="{Binding $parent[ItemsControl].((vm:TeachingViewModel)DataContext).MoveToCommand}" CommandParameter="{Binding}" />
+                                        <Button Classes="op" Content="초기화" ToolTip.Tip="저장된 좌표 초기화" IsEnabled="{Binding IsTaught}"
+                                                Command="{Binding $parent[ItemsControl].((vm:TeachingViewModel)DataContext).ClearCommand}" CommandParameter="{Binding}" />
+                                        <Button Classes="op danger" Content="삭제" IsVisible="{Binding IsUser}" ToolTip.Tip="이 항목을 목록에서 삭제"
+                                                Command="{Binding $parent[ItemsControl].((vm:TeachingViewModel)DataContext).DeleteCommand}" CommandParameter="{Binding}" />
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <TextBlock Classes="axis" Text="등록된 티칭 위치가 없습니다." HorizontalAlignment="Center"
+                           IsVisible="{Binding Rows.Count, Converter={x:Static vm:CountConverters.IsZero}}" />
+
+                <!-- 새 항목 -->
+                <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,8,0,0">
+                    <StackPanel><TextBlock Classes="axis" Text="새 항목 이름" /><TextBox Width="200" Text="{Binding NewName}" IsEnabled="{Binding !IsBusy}" /></StackPanel>
+                    <StackPanel><TextBlock Classes="axis" Text="Wall ID (0~255)" /><NumericUpDown Width="110" Value="{Binding NewSurfaceId}" Minimum="0" Maximum="255" Increment="1" FormatString="0" IsEnabled="{Binding !IsBusy}" /></StackPanel>
+                    <Button VerticalAlignment="Bottom" Content="항목 추가" Classes="accent" Command="{Binding AddCommand}" IsEnabled="{Binding !IsBusy}" />
+                    <TextBlock Classes="axis" VerticalAlignment="Bottom" Text="0x00 = 홈/회피 등 디폴트 · 0x01~0xFF = 검사 위치(촬영 시 보고 Wall ID)" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+    </StackPanel>
+</UserControl>

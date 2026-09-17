@@ -24,11 +24,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
         {
             new("Dashboard",     "🏠", typeof(HomeViewModel)),
             new("AMR",           "🚚", typeof(AmrViewModel)),
-            new("Teaching",      "✏️", null),
+            new("Teaching",      "✏️", typeof(TeachingViewModel)),
             new("Inspection",    "📋", null),
             new("검사 레시피",   "📗", typeof(InspectionRecipesViewModel)),
             new("검사 포인트(X-Y)", "📍", typeof(InspectionPointsViewModel)),
-            new("검사 매핑 요약", "🗂", null),
+            new("검사 매핑 요약", "🗂", typeof(InspectionMapViewModel)),
             new("Cobot",         "🤖", typeof(CobotViewModel)),
             new("Sequence",      "🔀", typeof(SequenceViewModel)),
             new("Camera",        "🎥", typeof(CameraViewModel)),
