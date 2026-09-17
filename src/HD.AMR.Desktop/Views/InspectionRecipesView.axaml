@@ -3,7 +3,7 @@
              xmlns:vm="using:HD.AMR.Desktop.ViewModels"
              x:Class="HD.AMR.Desktop.Views.InspectionRecipesView"
              x:DataType="vm:InspectionRecipesViewModel">
-    <StackPanel MaxWidth="1120" HorizontalAlignment="Left">
+    <StackPanel MaxWidth="1800" HorizontalAlignment="Left">
         <TextBlock Classes="page-title" Text="검사 레시피 관리" />
         <TextBlock Classes="page-subtitle" TextWrapping="Wrap"
                    Text="ACS startWeldInspection 의 (seamType, wall_code) 조합으로 선택되는 검사 타입 17종의 실행 구성입니다. Enabled 는 실기 E2E 검증 후에만 켜세요." />
@@ -23,7 +23,7 @@
                 <DataTemplate x:DataType="vm:RecipeRow">
                     <Border Classes="card" Padding="12" Margin="0,0,0,8">
                         <StackPanel Spacing="6">
-                            <Grid ColumnDefinitions="Auto,120,*,Auto,120,Auto">
+                            <Grid ColumnDefinitions="Auto,150,*,150,150,Auto">
                                 <Button Grid.Column="0" Width="30"
                                         Content="{Binding IsExpanded, Converter={x:Static vm:RecipeConverters.Chevron}}"
                                         Command="{Binding $parent[ItemsControl].((vm:InspectionRecipesViewModel)DataContext).ToggleExpandCommand}"
@@ -32,8 +32,8 @@
                                 <TextBlock Grid.Column="2" Text="{Binding DisplayName}" VerticalAlignment="Center" TextWrapping="Wrap" />
                                 <CheckBox Grid.Column="3" IsChecked="{Binding Enabled}" Content="Enabled" VerticalAlignment="Center" />
                                 <NumericUpDown Grid.Column="4" Value="{Binding VisionFailRatioMax}" Increment="0.05" Minimum="0" Maximum="1"
-                                               FormatString="0.00" VerticalAlignment="Center" />
-                                <StackPanel Grid.Column="5" Orientation="Horizontal" Spacing="4">
+                                               FormatString="0.00" VerticalAlignment="Center"/>
+                                <StackPanel Grid.Column="5" Orientation="Horizontal" Spacing="4" Margin="5">
                                     <Button Content="저장" Classes="accent"
                                             Command="{Binding $parent[ItemsControl].((vm:InspectionRecipesViewModel)DataContext).SaveCommand}"
                                             CommandParameter="{Binding}" />

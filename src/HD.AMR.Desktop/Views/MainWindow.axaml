@@ -114,8 +114,10 @@
         </Border>
 
         <!-- 현재 페이지 -->
-        <ScrollViewer Grid.Row="1" Padding="24">
-            <ContentControl Content="{Binding Navigation.CurrentViewModel}" />
+        <!-- Padding 은 ScrollViewer 가 아니라 ContentControl 에 둔다: Avalonia 11.2 의 ScrollContentPresenter 는
+             Padding 을 measure/Extent 에 반영하지 않아 하단 패딩만큼 콘텐츠가 스크롤 밖으로 잘린다. -->
+        <ScrollViewer Grid.Row="1">
+            <ContentControl Content="{Binding Navigation.CurrentViewModel}" Padding="24" />
         </ScrollViewer>
     </Grid>
     </Grid>
