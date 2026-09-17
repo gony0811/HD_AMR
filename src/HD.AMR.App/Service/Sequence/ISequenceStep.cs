@@ -106,10 +106,6 @@ public class SequenceContext
     /// <summary>그룹 내 순번 (params.seqInGroup, 1부터).</summary>
     public int? SeqInGroup { get; set; }
 
-    /// <summary>비전 Surface 강제값(0=Flat,1=Corner,2=Corrugation). null=|θ| 자동 판정.
-    /// 레시피(<see cref="Data.Entities.InspectionRecipe.SurfaceOverride"/>)에서 주입.</summary>
-    public byte? SurfaceOverride { get; set; }
-
     /// <summary>ACS standoffMm — 로깅/검증용(정차점 산출은 ACS 책임, AMR은 참고만).</summary>
     public double? StandoffMmOverride { get; set; }
 

@@ -70,7 +70,6 @@ public class HdAmrDbContext : DbContext
             b.HasKey(r => r.Id);
             b.Property(r => r.Id).HasMaxLength(40);
             b.Property(r => r.DisplayName).IsRequired().HasMaxLength(200);
-            b.Property(r => r.ApproachTeachingKey).HasMaxLength(100);
             // enum 은 문자열 저장 — DB 를 사람이 직접 볼 때 판독 가능하도록.
             b.Property(r => r.SeamType).HasConversion<string>().HasMaxLength(20);
             b.Property(r => r.Orientation).HasConversion<string>().HasMaxLength(20);

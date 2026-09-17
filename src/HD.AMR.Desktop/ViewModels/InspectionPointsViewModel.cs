@@ -238,7 +238,11 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
             var saved = await WithDrawing(s => s.SaveProfileAsync(profile));
             await ReloadProfiles();
             SelectedProfileId = saved.Id;
-            Notify($"저장 완료: [{SeamType}] {name} ({wps.Count}점)", false);
+            var usedBy = await WithDrawing(s => s.ListRecipesUsingProfileAsync(saved.Id));
+            Notify($"저장 완료: [{SeamType}] {name} ({wps.Count}점)" +
+                   (usedBy.Count > 0
+                       ? $" — 레시피 {string.Join(", ", usedBy)} 에 지정된 프로필이라 ACS 실행에 즉시 반영됩니다."
+                       : " — ACS 에 쓰려면 검사 레시피 페이지에서 지정하세요."), false);
         }
         catch (Exception ex) { Notify($"저장 실패: {ex.Message}", true); }
     }
@@ -272,10 +276,13 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
         if (SelectedProfileId == 0) return;
         try
         {
-            await WithDrawing(s => s.DeleteProfileAsync(SelectedProfileId));
+            var id = SelectedProfileId;
+            var cleared = await WithDrawing(s => s.DeleteProfileAsync(id));
             await ReloadProfiles();
             SelectedProfileId = 0;
-            Notify("삭제 완료", false);
+            Notify(cleared.Count > 0
+                ? $"삭제 완료 — 레시피 {string.Join(", ", cleared)} 의 티칭 프로필 지정이 해제되었습니다(재지정 전까지 해당 액션 FAILED)."
+                : "삭제 완료", cleared.Count > 0);
         }
         catch (Exception ex) { Notify($"삭제 실패: {ex.Message}", true); }
     }

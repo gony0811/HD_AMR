@@ -6,8 +6,8 @@ namespace HD.AMR.App.Data.Entities;
 /// 검사 타입(17종, 사양 §8.5.1·INSPECTION_TYPES.md §5)별 <b>실행 방법</b> 한 세트.
 /// ACS `startWeldInspection` 액션의 `(seamType, wall_code)` 조합으로 선택된다.
 ///
-/// 경유점은 담지 않는다 — 경유점·코봇 튜닝값은 도면별 티칭 <see cref="InspectionProfile"/> 소관이며,
-/// 레시피는 타입 수준 실행 구성(시퀀스 스텝, 접근 자세 키, 폴백 파라미터, 판정 정책)만 가진다.
+/// 경유점은 담지 않는다 — 경유점·코봇 튜닝값은 티칭 <see cref="InspectionProfile"/> 소관이며,
+/// 레시피는 실행 구성(시퀀스 스텝, 실행할 티칭 프로필 지정, 폴백 파라미터, 판정 정책)만 가진다.
 /// 기본값은 기동 시 upsert-if-missing 시드(코드)로 관리하고, 현장 조정값은 DB에 남는다.
 /// </summary>
 public class InspectionRecipe
@@ -30,24 +30,27 @@ public class InspectionRecipe
     /// null/빈 값이면 등록된 풀시퀀스 전체 실행.</summary>
     public string? StepKeysJson { get; set; }
 
-    /// <summary>면 자세군별 코봇 접근 자세 티칭 키(<see cref="TeachingPosition.Key"/>). 빈 값이면 현행 스텝 기본 동작.</summary>
-    public string ApproachTeachingKey { get; set; } = "";
+    /// <summary>ACS 실행 시 사용할 티칭 프로필(<see cref="InspectionProfile.Id"/>, 경유점 소스). null = 미지정 →
+    /// LINE/CROSS 액션은 FAILED + inspectionFailed. 프로필 SeamType 은 레시피 타입과 일치해야 한다.
+    /// CORNER3 는 고정 티칭 슬롯(corner3.*)을 쓰므로 무시. 현장 지정값이라 '기본값' 재적용 시에도 보존된다.</summary>
+    public int? InspectionProfileId { get; set; }
 
-    /// <summary>action.standoffMm 부재/0 시 폴백 [mm].</summary>
-    public double DefaultStandoffMm { get; set; }
+    // (제거됨) ApproachTeachingKey — 레시피별 코봇 접근 자세 티칭 키. 런타임 미구현, 접근 자세는 Teaching 의 Wall ID
+    //   로 결정된다. 코너부 등 위치별 접근은 고도화 단계에서 재설계(2026-09-18).
 
-    /// <summary>action.workingDistanceMm 부재 시 폴백 [mm]. null 이면 전역 기본(400).</summary>
+    // (제거됨) DefaultStandoffMm — action.standoffMm 부재/0 시 폴백. standoffMm 은 ACS 필수 항목이고 정차점 산출은
+    //   ACS 책임이라 AMR 런타임에서 읽는 곳이 없어 폐기(2026-09-18).
+
+    /// <summary>③ 카메라 거리 정렬(cameraAlign) 목표 [mm]. null 이면 전역 기본(400).
+    /// ACS action.workingDistanceMm 은 산출 근거가 없어 사용하지 않는다(2026-09-18 결정 — 수신·로그만).</summary>
     public double? CameraTargetDistanceMm { get; set; }
 
-    /// <summary>비전 Surface 강제값(0=Flat,1=Corner,2=Corrugation). null=|θ| 자동 판정(부록 D.3).
-    /// CORNER3 은 1(Corner) 고정 시드.</summary>
-    public byte? SurfaceOverride { get; set; }
-
+    // (제거됨) SurfaceOverride — 비전 Surface 강제값. X-Y 교시 경유점은 점별 Surface 를 수동 지정하고
+    //   CORNER 스텝은 Corner 고정이라 무효화되어 폐기(2026-09-18). Surface 는 경유점 단위로 일원화.
     // (제거됨) PatternJson — CROSS4 십자 패턴 런타임 생성 파라미터. 캡처 교시 단일화로 폐기(2026-09-15).
     //   CROSS3/CROSS4 는 /inspection-points 6-DOF 캡처 프로필 경유점을 실행한다.
 
-    /// <summary>정렬 스텝군 실패 시 재시도 횟수 (0=재시도 없음).</summary>
-    public int AlignRetryCount { get; set; }
+    // (제거됨) AlignRetryCount — 정렬 스텝군 재시도 횟수. 런타임 미구현 상태로 불필요 판단되어 폐기(2026-09-18).
 
     /// <summary>경유점 비전 실패율 상한(0~1). 초과 시 액션 FAILED + inspectionFailed.
     /// 1.0 = 실패율 판정 안 함(현행 단독 실행과 동일).</summary>

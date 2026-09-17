@@ -13,7 +13,7 @@
     <StackPanel MaxWidth="1400" HorizontalAlignment="Left">
         <TextBlock Classes="page-title" Text="검사 포인트 티칭 (X-Y 평면)" />
         <TextBlock Classes="page-subtitle" TextWrapping="Wrap"
-                   Text="X-Y=검사평면, Z=검사면 법선(카메라 WD). 굴곡면은 코봇을 검사 자세로 조그한 뒤 '현재 자세 캡처'로 Rx/Ry/Z 실측을 담으세요." />
+                   Text="X-Y=검사평면, Z=검사면 법선(카메라 WD). 굴곡면은 코봇을 검사 자세로 조그한 뒤 '현재 자세 캡처'로 Rx/Ry/Z 실측을 담으세요. ACS 는 검사 레시피 페이지에서 레시피마다 지정한 프로필만 사용합니다." />
 
         <Border Classes="alert" IsVisible="{Binding Message, Converter={x:Static ObjectConverters.IsNotNull}}">
             <TextBlock Text="{Binding Message}" TextWrapping="Wrap" />
@@ -65,7 +65,7 @@
                 <TextBlock Classes="axis" TextWrapping="Wrap"
                            Text="열: X_mm, Y_mm, Z_mm(WD), Rx_deg, Ry_deg, Rz_deg, Surface(0/1/2). 불러오기는 현재 목록을 덮어씁니다." />
                 <StackPanel Orientation="Horizontal" Spacing="8">
-                    <Button Name="ExportBtn" Content="⭳ 내보내기" />
+                    <Button Name="ExportBtn" Content="↓ 내보내기" />
                     <Button Name="TemplateBtn" Content="템플릿 다운로드" />
                     <Button Name="ImportBtn" Content="불러오기…" />
                     <TextBlock VerticalAlignment="Center" Text="{Binding CsvMsg}"

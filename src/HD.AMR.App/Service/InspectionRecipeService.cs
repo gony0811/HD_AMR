@@ -9,8 +9,8 @@ namespace HD.AMR.App.Service;
 
 /// <summary>
 /// 검사 매핑 요약 뷰(레시피 관리 UI)용 읽기 모델 — 티칭 프로필 1건의 상태.
-/// 실기 액션의 경유점 조회 규칙(<c>SeamType → 최신 InspectionProfile</c>)과 정합 — SeamType 별 최신
-/// 프로필이 실제 실행에 쓰인다. DrawingId/DrawingName 은 구 도면 기반 교시의 잔여 연결(없으면 0/"—").
+/// 실기 액션은 레시피에 지정된 프로필(<see cref="InspectionRecipe.InspectionProfileId"/>)의 경유점을 쓴다 —
+/// <see cref="ProfileId"/> 로 레시피 지정과 대조한다. DrawingId/DrawingName 은 구 도면 기반 교시의 잔여 연결(없으면 0/"—").
 /// </summary>
 public record DrawingTeachingSummary(
     int DrawingId,
@@ -20,7 +20,8 @@ public record DrawingTeachingSummary(
     string? ProfileName,
     string? SeamType,
     int WaypointCount,
-    DateTime? TaughtAt);
+    DateTime? TaughtAt,
+    int ProfileId = 0);
 
 /// <summary>
 /// 검사 레시피(<see cref="InspectionRecipe"/>, 17종 카탈로그) CRUD + 기동 시드.
@@ -45,7 +46,7 @@ public class InspectionRecipeService
         _db.InspectionRecipes.AsNoTracking().FirstOrDefaultAsync(r => r.Id == id, ct);
 
     /// <summary>티칭 프로필 요약(검사 매핑 요약 뷰용) — 프로필 전체를 최신 갱신 순으로 1행씩.
-    /// 실기 경유점 조회 규칙(SeamType 별 <see cref="InspectionProfile.UpdatedAt"/> 최신 1건)과 정합.
+    /// 어떤 레시피가 사용하는지는 호출측이 레시피 목록의 <see cref="InspectionRecipe.InspectionProfileId"/> 로 대조한다.
     /// 경유점 수는 <see cref="InspectionProfile.WaypointsJson"/> 배열 길이로 센다(파싱 실패 시 0).</summary>
     public async Task<List<DrawingTeachingSummary>> ListTeachingSummaryAsync(CancellationToken ct = default)
     {
@@ -67,7 +68,8 @@ public class InspectionRecipeService
                 ProfileName: p.Name,
                 SeamType: p.SeamType,
                 WaypointCount: CountWaypoints(p.WaypointsJson),
-                TaughtAt: p.UpdatedAt))
+                TaughtAt: p.UpdatedAt,
+                ProfileId: p.Id))
             .ToList();
     }
 
@@ -105,14 +107,44 @@ public class InspectionRecipeService
     }
 
     /// <summary>레시피 1건을 코드 기본값(<see cref="BuildDefaults"/>)으로 재적용 — 기존 행이 있어도 덮어쓴다.
-    /// 시드가 upsert-if-missing 이라 기본값 변경이 기존 DB 에 반영되지 않을 때 쓰는 명시적 경로(레시피 관리 UI).</summary>
+    /// 시드가 upsert-if-missing 이라 기본값 변경이 기존 DB 에 반영되지 않을 때 쓰는 명시적 경로(레시피 관리 UI).
+    /// 티칭 프로필 지정(<see cref="InspectionRecipe.InspectionProfileId"/>)은 코드 기본값이 아닌 현장 데이터라 보존한다.</summary>
     public async Task<bool> ResetToDefaultAsync(string id, CancellationToken ct = default)
     {
         var seed = BuildDefaults().FirstOrDefault(r => r.Id == id);
         if (seed is null) return false;
+        seed.InspectionProfileId = await _db.InspectionRecipes.AsNoTracking()
+            .Where(r => r.Id == id).Select(r => r.InspectionProfileId).FirstOrDefaultAsync(ct);
         await SaveAsync(seed, ct);
         _logger.LogInformation("검사 레시피 {Id} 기본값 재적용", id);
         return true;
+    }
+
+    /// <summary>레시피에 지정할 티칭 프로필 검증 — 저장 전 UI 가 호출. 문제 없으면 null, 있으면 사유.
+    /// 규칙: CORNER3 은 지정 불가(고정 슬롯 사용), 프로필 존재, 프로필 SeamType = 레시피 타입, 경유점 2점 이상.</summary>
+    public async Task<string?> ValidateProfileAssignmentAsync(InspectionRecipe recipe, CancellationToken ct = default)
+    {
+        if (recipe.InspectionProfileId is not { } profileId) return null;
+        if (recipe.Id == RecipeIds.Corner3)
+            return "CORNER3 는 고정 티칭 슬롯(corner3.*)을 사용하므로 티칭 프로필을 지정할 수 없습니다.";
+
+        var profile = await _db.InspectionProfiles.AsNoTracking().FirstOrDefaultAsync(p => p.Id == profileId, ct);
+        if (profile is null)
+            return $"티칭 프로필(id={profileId})을 찾을 수 없습니다.";
+
+        var want = InspectionRecipeResolver.ProfileSeamTypeOf(recipe.Id);
+        if (!IsSeamMatch(profile, want))
+            return $"프로필 '{profile.Name}' 타입({profile.SeamType})이 레시피 {recipe.Id} 타입({want})과 다릅니다.";
+        if (CountWaypoints(profile.WaypointsJson) < 2)
+            return $"프로필 '{profile.Name}' 경유점이 2점 미만입니다 — 실행 시 실패합니다.";
+        return null;
+    }
+
+    /// <summary>프로필 SeamType 이 레시피 요구 타입과 같은지(대소문자 무시, 빈 값은 LINE 취급).</summary>
+    public static bool IsSeamMatch(InspectionProfile profile, string? wantSeamType)
+    {
+        var seam = string.IsNullOrWhiteSpace(profile.SeamType) ? "LINE" : profile.SeamType;
+        return wantSeamType is not null && string.Equals(seam, wantSeamType, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>기동 시드 — 카탈로그 17종 중 없는 행만 추가(현장 수정값 보존).</summary>
@@ -177,11 +209,7 @@ public class InspectionRecipeService
                 StepKeysJson = c.Seam == SeamTypeKind.Corner
                     ? """["amrMove","cornerInspectionRun","wobjReset","monitorClose"]"""
                     : null,
-                ApproachTeachingKey = "",
-                DefaultStandoffMm = 400,
                 CameraTargetDistanceMm = null,     // 전역 기본(400mm) 사용
-                SurfaceOverride = c.Id is RecipeIds.Corner3 or RecipeIds.Corner2 ? (byte)1 : null,   // 코너 = Corner 고정
-                AlignRetryCount = 0,
                 VisionFailRatioMax = 1.0,          // 판정 안 함 — 정책 확정 시 하향
                 // (PatternJson 제거) CROSS3/CROSS4 는 /inspection-points 6-DOF 캡처 프로필 경유점을 실행 —
                 // 십자 패턴 런타임 생성은 폐기(캡처 교시 단일화).

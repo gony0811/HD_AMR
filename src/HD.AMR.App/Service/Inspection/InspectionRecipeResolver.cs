@@ -59,6 +59,18 @@ public static class InspectionRecipeResolver
         };
     }
 
+    /// <summary>레시피 id → 티칭 프로필 SeamType 문자열(LINE/CROSS/CROSS3/CORNER2/CORNER3).
+    /// 교시 화면이 레시피 선택으로부터 프로필 타입을 유도할 때 쓴다(CROSS4 는 저장값 "CROSS"). 미정의 id 는 null.</summary>
+    public static string? ProfileSeamTypeOf(string? recipeId)
+    {
+        if (recipeId is null || !RecipeIds.All.Contains(recipeId)) return null;
+        if (recipeId == RecipeIds.Corner2) return "CORNER2";
+        if (recipeId == RecipeIds.Corner3) return "CORNER3";
+        if (recipeId.StartsWith("LINE-", StringComparison.Ordinal)) return "LINE";
+        if (recipeId.StartsWith("CROSS3-", StringComparison.Ordinal)) return "CROSS3";
+        return "CROSS";   // CROSS4-*
+    }
+
     /// <summary>CORNER3 좌/우 거울 side 판별 — 코너 스텝의 티칭 슬롯 접두사(corner3.L/R) 선택 키.
     /// wall_code 는 코너에 접한 옆면 코드: P*(좌현) → "L", S*(우현) → "R".
     /// F/A(마구리)·B/T 는 side 규칙 미확정(N13 협의 대상) — 기본 "L" 로 두고 note 에 사유를 남긴다.</summary>

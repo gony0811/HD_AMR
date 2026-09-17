@@ -170,14 +170,12 @@ public class InspectionRunStep : ISequenceStep
             if (settle > TimeSpan.Zero)
                 await Task.Delay(settle, ct);
 
-            // surface type 우선순위: 경유점 수동 지정 > 레시피 강제값(ACS 경로) > |θ| 자동 규칙.
+            // surface type 우선순위: 경유점 수동 지정 > |θ| 자동 규칙(구 도면 솎기 프로필).
             var surfaceType = w.SurfaceManual
                 ? (SurfaceType)w.Surface
-                : context.SurfaceOverride is { } ovr
-                    ? (SurfaceType)ovr
-                    : Math.Abs(w.Theta) >= profile.CorrugThresholdDeg
-                        ? SurfaceType.Corrugation
-                        : SurfaceType.Flat;
+                : Math.Abs(w.Theta) >= profile.CorrugThresholdDeg
+                    ? SurfaceType.Corrugation
+                    : SurfaceType.Flat;
             // v3: 경유점 캡처 1건 = TASK 1개. Task ID(GUID) 발급 + 사람이 읽는 Job Ref(ASCII).
             // ACS 연동 시 jobRef = "{action jobRef}-W{순번}" (사양 §8.1 — 역추적 키 유지).
             var taskId = Guid.NewGuid();

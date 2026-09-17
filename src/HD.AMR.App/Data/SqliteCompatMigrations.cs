@@ -203,11 +203,8 @@ CREATE TABLE IF NOT EXISTS InspectionRecipes (
     Orientation TEXT NOT NULL,
     Enabled INTEGER NOT NULL,
     StepKeysJson TEXT NULL,
-    ApproachTeachingKey TEXT NOT NULL DEFAULT '',
-    DefaultStandoffMm REAL NOT NULL DEFAULT 400,
     CameraTargetDistanceMm REAL NULL,
-    SurfaceOverride INTEGER NULL,
-    AlignRetryCount INTEGER NOT NULL DEFAULT 0,
+    InspectionProfileId INTEGER NULL,
     VisionFailRatioMax REAL NOT NULL DEFAULT 1.0,
     CreatedAt TEXT NOT NULL,
     UpdatedAt TEXT NOT NULL
@@ -216,5 +213,25 @@ CREATE TABLE IF NOT EXISTS InspectionRecipes (
 
         // (PatternJson 컬럼 제거 — CROSS 십자 패턴 런타임 생성 폐기, 캡처 교시 단일화. 기존 DB 의 잔여 컬럼은
         //  EF 모델에서 매핑하지 않으므로 무해하게 무시된다.)
+
+        // SurfaceOverride / AlignRetryCount / ApproachTeachingKey / DefaultStandoffMm 컬럼 제거(레시피 필드 폐기). EnsureCreated 로 만든 DB 는
+        // NOT NULL 컬럼에 DEFAULT 가 없을 수 있어 남겨두면 시드 INSERT 가 실패한다 — 실제로 DROP 한다.
+        // SQLite 3.35+ DROP COLUMN (Microsoft.Data.Sqlite 번들 SQLite 는 이를 충족).
+        foreach (var col in new[] { "SurfaceOverride", "AlignRetryCount", "ApproachTeachingKey", "DefaultStandoffMm" })
+        {
+            var exists = db.Database
+                .SqlQueryRaw<long>($"SELECT COUNT(*) AS Value FROM pragma_table_info('InspectionRecipes') WHERE name = '{col}'")
+                .AsEnumerable().First() > 0;
+            if (exists)
+                db.Database.ExecuteSqlRaw($"ALTER TABLE InspectionRecipes DROP COLUMN {col};");
+        }
+
+        // InspectionProfileId 컬럼(레시피 → 실행 티칭 프로필 지정)도 후방호환 추가. 기존 행은 NULL(미지정).
+        // FK 없음 — 프로필 삭제 시 DrawingService.DeleteProfileAsync 가 참조를 NULL 로 정리한다.
+        var hasProfileId = db.Database
+            .SqlQueryRaw<long>("SELECT COUNT(*) AS Value FROM pragma_table_info('InspectionRecipes') WHERE name = 'InspectionProfileId'")
+            .AsEnumerable().First() > 0;
+        if (!hasProfileId)
+            db.Database.ExecuteSqlRaw("ALTER TABLE InspectionRecipes ADD COLUMN InspectionProfileId INTEGER NULL;");
     }
 }

@@ -63,18 +63,25 @@ public sealed partial class InspectionMapViewModel : ViewModelBase
                     {
                         SeamTypeKind.Corner => "고정 티칭 슬롯 corner3.* (도면 무관)",
                         SeamTypeKind.Corner2 => "실행 스텝 미구현 (게이트 OFF) — corner2 슬롯/캡처 후속",
-                        SeamTypeKind.Cross => "X-Y 6-DOF 캡처 교시 프로필 (검사 포인트, CROSS4)",
-                        SeamTypeKind.Cross3 => "X-Y 6-DOF 캡처 교시 프로필 (검사 포인트, CROSS3)",
-                        _ => "X-Y 티칭 프로필 (SeamType → 최신 InspectionProfile, 도면 무관)",
-                    }));
+                        _ => "레시피 지정 X-Y 티칭 프로필 (검사 레시피에서 지정)",
+                    },
+                    r.SeamType == SeamTypeKind.Corner ? "—"
+                    : r.InspectionProfileId is null ? "미지정"
+                    : teaching.FirstOrDefault(t => t.ProfileId == r.InspectionProfileId) is { } t
+                        ? $"{t.ProfileName} ({t.WaypointCount}점)"
+                        : $"프로필 없음(id={r.InspectionProfileId})"));
 
             Teaching.Clear();
             foreach (var d in teaching)
+            {
+                var usedBy = recipes.Where(r => r.InspectionProfileId == d.ProfileId).Select(r => r.Id).ToList();
                 Teaching.Add(new TeachingRow(d.DrawingName, d.FileName, d.ProfileName ?? "—",
-                    d.HasProfile ? (string.IsNullOrWhiteSpace(d.SeamType) ? "LINE" : d.SeamType!) : "—",
+                    string.IsNullOrWhiteSpace(d.SeamType) ? "LINE" : d.SeamType!,
+                    usedBy.Count > 0 ? string.Join(", ", usedBy) : "—",
                     d.WaypointCount, d.TaughtAt?.ToString("yyyy-MM-dd HH:mm") ?? "—",
-                    d is { HasProfile: true, WaypointCount: > 0 } ? "실행 가능" : d.HasProfile ? "경유점 0" : "티칭 없음",
-                    d is { HasProfile: true, WaypointCount: > 0 }));
+                    usedBy.Count == 0 ? "ACS 미사용" : d.WaypointCount >= 2 ? "사용 중" : "경유점 부족",
+                    usedBy.Count > 0 && d.WaypointCount >= 2));
+            }
         }
         catch (Exception ex) { Message = $"로드 실패: {ex.Message}"; }
         finally { Busy = false; }
@@ -94,6 +101,6 @@ public sealed partial class InspectionMapViewModel : ViewModelBase
 
 public sealed record MapCell(string Label, bool Enabled);
 public sealed record WallMapRow(string Code, string Label, MapCell Line, MapCell Cross3, MapCell Cross4, MapCell Corner2, MapCell Corner3);
-public sealed record RecipeStatusRow(string Id, string SeamType, string Orientation, bool Enabled, string Source);
-public sealed record TeachingRow(string DrawingName, string FileName, string ProfileName, string SeamType,
+public sealed record RecipeStatusRow(string Id, string SeamType, string Orientation, bool Enabled, string Source, string AssignedProfile);
+public sealed record TeachingRow(string DrawingName, string FileName, string ProfileName, string SeamType, string UsedBy,
     int WaypointCount, string TaughtAt, string Status, bool Runnable);

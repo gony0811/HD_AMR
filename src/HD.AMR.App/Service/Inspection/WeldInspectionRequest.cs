@@ -42,6 +42,6 @@ public sealed record WeldInspectionRequest(
     string SectionDxfId,
     string InspectionProfileId,     // 촬영/측정 프리셋(자유 문자열) — 레시피 선택에 사용하지 않음(N13 대기)
     double StandoffMm,
-    double? WorkingDistanceMm,
+    double? WorkingDistanceMm,      // ACS 선택 항목 — AMR 미사용(로그용). 카메라 거리는 레시피 CameraTargetDistanceMm
     string AnchorGroupId,
     int SeqInGroup);

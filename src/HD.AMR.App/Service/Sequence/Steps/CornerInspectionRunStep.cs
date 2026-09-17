@@ -11,7 +11,7 @@ namespace HD.AMR.App.Service.Sequence.Steps;
 /// 정렬 없이 현장 티칭 자세를 그대로 재현한다 — AMR 정차 재현성(ACS 정차점 산출이 코너별 동일)이 전제.
 ///
 /// 순회: 접근(via, 촬영 없음) → 면1(135°) → 면2(90°) → 면3(90°) → 복귀(via).
-/// 각 면에서 진동 흡수 대기 후 비전 CAPTURE_REQ(SurfaceType=Corner — 레시피 SurfaceOverride=1 이 강제)를
+/// 각 면에서 진동 흡수 대기 후 비전 CAPTURE_REQ(SurfaceType=Corner 고정)를
 /// 전송한다. 비전 실패는 ⑱과 동일하게 중단하지 않고 집계만 하며(<see cref="SequenceContext.VisionFailRatioMax"/>
 /// 초과 시 스텝 Fail), MoveL 실패는 즉시 중단한다.
 ///
@@ -115,8 +115,7 @@ public class CornerInspectionRunStep : ISequenceStep
             await Task.Delay(Settle, ct);
             captured++;
 
-            // surface type: 레시피 강제값(CORNER3 시드 = Corner) > Corner 기본.
-            var surfaceType = context.SurfaceOverride is { } ovr ? (SurfaceType)ovr : SurfaceType.Corner;
+            var surfaceType = SurfaceType.Corner;
             var taskId = Guid.NewGuid();
             var jobRef = context.AcsJobRef is not null
                 ? $"{context.AcsJobRef}-C{captured}"

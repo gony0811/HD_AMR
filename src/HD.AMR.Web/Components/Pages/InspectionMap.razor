@@ -23,14 +23,14 @@
             <span class="badge bg-light text-dark border">① (seamType, wall_code)</span>
             <span class="text-muted">→ 레시피 선택(어떻게)</span>
             <span class="mx-2">＋</span>
-            <span class="badge bg-light text-dark border">② sectionDxfId</span>
-            <span class="text-muted">→ 도면 → 최신 티칭 프로필 → 경유점(어디를)</span>
+            <span class="badge bg-light text-dark border">② 레시피에 지정된 티칭 프로필</span>
+            <span class="text-muted">→ 경유점(어디를)</span>
             <span class="text-muted">→</span>
             <span class="badge bg-success">검사 실행</span>
         </div>
         <div class="mt-2 text-muted">
-            레시피는 <b>타입 11종</b>으로 도면과 무관하게 공유되고, 경유점은 <b>도면(sectionDxfId)마다</b> 티칭됩니다.
-            둘 중 하나라도 없으면(레시피 Disabled / 도면 티칭 없음) 액션은 <code>FAILED</code> 로 보고됩니다.
+            레시피는 <b>17종</b>(seamType × 면 자세)이고, 경유점은 검사 포인트(X-Y)에서 저장한 프로필을 <b>레시피마다 지정</b>합니다(도면 무관).
+            둘 중 하나라도 없으면(레시피 Disabled / 프로필 미지정) 액션은 <code>FAILED</code> 로 보고됩니다.
             <b>CORNER3</b> 는 도면 프로필 대신 고정 티칭 슬롯(<code>corner3.*</code>)을 순회하므로 도면 티칭이 필요 없습니다.
         </div>
     </div>
@@ -83,7 +83,7 @@
 </p>
 
 <!-- ② 레시피 카탈로그 상태 -->
-<h4 class="mt-4">② 레시피 카탈로그 상태 (11종)</h4>
+<h4 class="mt-4">② 레시피 카탈로그 상태 (17종)</h4>
 <div class="table-responsive" style="max-width:1150px">
     <table class="table table-sm align-middle" style="font-size:.82rem">
         <thead class="table-light">
@@ -93,6 +93,7 @@
                 <th>면자세</th>
                 <th class="text-center" style="width:90px">실행</th>
                 <th>경유점 소스</th>
+                <th>지정 티칭 프로필</th>
             </tr>
         </thead>
         <tbody>
@@ -117,69 +118,85 @@
                         {
                             SeamTypeKind.Corner => "고정 티칭 슬롯 corner3.* (도면 무관)",
                             SeamTypeKind.Corner2 => "실행 스텝 미구현 (게이트 OFF) — corner2 슬롯/캡처 후속",
-                            SeamTypeKind.Cross => "X-Y 6-DOF 캡처 교시 프로필 (/inspection-points, CROSS4)",
-                            SeamTypeKind.Cross3 => "X-Y 6-DOF 캡처 교시 프로필 (/inspection-points, CROSS3)",
-                            _ => "도면 LINE 티칭 프로필 (sectionDxfId → 최신 InspectionProfile)"
+                            _ => "레시피 지정 X-Y 티칭 프로필 (/recipes 에서 지정)"
                         })
+                    </td>
+                    <td>
+                        @if (r.SeamType == SeamTypeKind.Corner)
+                        {
+                            <span class="text-muted">—</span>
+                        }
+                        else if (r.InspectionProfileId is null)
+                        {
+                            <span class="badge bg-secondary">미지정</span>
+                        }
+                        else if (_teaching.FirstOrDefault(t => t.ProfileId == r.InspectionProfileId) is { } t)
+                        {
+                            <span class="badge @(t.WaypointCount >= 2 ? "bg-success" : "bg-warning text-dark")">@t.ProfileName (@(t.WaypointCount)점)</span>
+                        }
+                        else
+                        {
+                            <span class="badge bg-danger">프로필 없음(id=@r.InspectionProfileId)</span>
+                        }
                     </td>
                 </tr>
             }
             @if (_recipes.Count == 0)
             {
-                <tr><td colspan="5" class="text-center text-muted py-3">레시피가 없습니다 — 앱 재기동 시 자동 시드됩니다.</td></tr>
+                <tr><td colspan="6" class="text-center text-muted py-3">레시피가 없습니다 — 앱 재기동 시 자동 시드됩니다.</td></tr>
             }
         </tbody>
     </table>
 </div>
 
 <!-- ③ 도면 티칭 현황 -->
-<h4 class="mt-4">③ 도면 티칭(경유점) 현황</h4>
+<h4 class="mt-4">③ 티칭 프로필(경유점) 현황</h4>
 <p class="text-muted" style="font-size:.8rem;max-width:1150px">
-    LINE/CROSS 검사는 액션의 <code>sectionDxfId</code> 로 아래 도면을 찾고, 그 도면의 <b>최신</b> 티칭 프로필 경유점을 사용합니다.
-    <b>티칭 없음</b> 또는 <b>경유점 0</b> 인 도면으로 매핑되는 액션은 <code>FAILED+inspectionFailed</code> 입니다.
+    검사 포인트(X-Y)에서 저장한 프로필 목록입니다. ACS 는 <a href="recipes">검사 레시피</a> 에 지정된 프로필만 사용합니다(<b>지정 레시피</b> 열).
+    지정 레시피가 없는 프로필은 ACS 에서 쓰이지 않으며, 경유점 2점 미만이면 실행 시 <code>FAILED+inspectionFailed</code> 입니다.
 </p>
 <div class="table-responsive" style="max-width:1150px">
     <table class="table table-sm align-middle" style="font-size:.82rem">
         <thead class="table-light">
             <tr>
-                <th style="min-width:150px">도면명 (Name)</th>
-                <th style="min-width:150px">파일명</th>
-                <th style="min-width:150px">최신 프로필</th>
+                <th style="min-width:150px">프로필</th>
+                <th style="min-width:150px">지정 레시피</th>
                 <th class="text-center" style="width:80px">타입</th>
                 <th class="text-center" style="width:90px">경유점 수</th>
                 <th style="width:160px">티칭 시각(UTC)</th>
                 <th class="text-center" style="width:110px">상태</th>
+                <th style="min-width:120px">연결 도면(구)</th>
             </tr>
         </thead>
         <tbody>
             @foreach (var d in _teaching)
             {
                 <tr>
-                    <td><code>@d.DrawingName</code></td>
-                    <td class="text-muted">@d.FileName</td>
                     <td>@(d.ProfileName ?? "—")</td>
+                    <td>@(UsedBy(d.ProfileId) is { Count: > 0 } used ? string.Join(", ", used) : "—")</td>
                     <td class="text-center">@(d.HasProfile ? (string.IsNullOrWhiteSpace(d.SeamType) ? "LINE" : d.SeamType) : "—")</td>
                     <td class="text-center">@d.WaypointCount</td>
                     <td class="text-muted">@(d.TaughtAt?.ToString("yyyy-MM-dd HH:mm") ?? "—")</td>
                     <td class="text-center">
-                        @if (d is { HasProfile: true, WaypointCount: > 0 })
+                        @if (UsedBy(d.ProfileId).Count == 0)
                         {
-                            <span class="badge bg-success">실행 가능</span>
+                            <span class="badge bg-secondary">ACS 미사용</span>
                         }
-                        else if (d.HasProfile)
+                        else if (d.WaypointCount >= 2)
                         {
-                            <span class="badge bg-warning text-dark">경유점 0</span>
+                            <span class="badge bg-success">사용 중</span>
                         }
                         else
                         {
-                            <span class="badge bg-secondary">티칭 없음</span>
+                            <span class="badge bg-warning text-dark">경유점 부족</span>
                         }
                     </td>
+                    <td class="text-muted">@d.DrawingName</td>
                 </tr>
             }
             @if (_teaching.Count == 0)
             {
-                <tr><td colspan="7" class="text-center text-muted py-3">등록된 도면이 없습니다 — 도면 업로드/티칭 후 표시됩니다.</td></tr>
+                <tr><td colspan="7" class="text-center text-muted py-3">저장된 티칭 프로필이 없습니다 — 검사 포인트(X-Y) 페이지에서 교시 후 표시됩니다.</td></tr>
             }
         </tbody>
     </table>
@@ -233,6 +250,10 @@
             await InvokeAsync(StateHasChanged);
         }
     }
+
+    /// <summary>이 프로필을 지정한 레시피 id 목록.</summary>
+    private List<string> UsedBy(int profileId) =>
+        _recipes.Where(r => r.InspectionProfileId == profileId).Select(r => r.Id).ToList();
 
     /// <summary>매핑 레퍼런스 셀 — 레시피 id + Enabled 배지. CORNER 는 거울 side 접미사 표기.</summary>
     private RenderFragment RecipeCell(SeamTypeKind seam, string wallCode) => builder =>

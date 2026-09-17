@@ -134,4 +134,35 @@ public class InspectionRecipeResolverTests
         Assert.Equal(17, RecipeIds.All.Count);
         Assert.Equal(RecipeIds.All.Count, RecipeIds.All.Distinct().Count());
     }
+
+    // 교시 화면: 레시피 id → 프로필 SeamType 문자열(ACS 실행 선택은 레시피 id, 타입은 파생 표기).
+    [Theory]
+    [InlineData("LINE-FLOOR", "LINE")]
+    [InlineData("LINE-CHMR-UP", "LINE")]
+    [InlineData("CROSS3-WALL", "CROSS3")]
+    [InlineData("CROSS4-CEIL", "CROSS")]
+    [InlineData("CROSS4-CHMR-LO", "CROSS")]
+    [InlineData("CORNER2", "CORNER2")]
+    [InlineData("CORNER3", "CORNER3")]
+    public void ProfileSeamTypeOf_MapsRecipeToProfileSeam(string recipeId, string expected)
+    {
+        Assert.Equal(expected, InspectionRecipeResolver.ProfileSeamTypeOf(recipeId));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("LINE")]
+    [InlineData("CROSS4-XYZ")]
+    public void ProfileSeamTypeOf_UnknownRecipe_ReturnsNull(string? recipeId)
+    {
+        Assert.Null(InspectionRecipeResolver.ProfileSeamTypeOf(recipeId));
+    }
+
+    // 모든 카탈로그 레시피는 프로필 타입으로 유도 가능해야 한다(교시 화면 저장 전제).
+    [Fact]
+    public void ProfileSeamTypeOf_CoversWholeCatalog()
+    {
+        Assert.All(RecipeIds.All, id => Assert.NotNull(InspectionRecipeResolver.ProfileSeamTypeOf(id)));
+    }
 }
