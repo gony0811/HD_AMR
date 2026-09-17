@@ -69,7 +69,7 @@
                                     </ComboBox>
                                 </StackPanel>
                                 <StackPanel>
-                                    <TextBlock Classes="muted" FontSize="12" Text="Surface ID" />
+                                    <TextBlock Classes="muted" FontSize="12" Text="Wall ID" />
                                     <ComboBox Width="240" ItemsSource="{Binding Surfaces}" SelectedIndex="{Binding SurfaceIndex}">
                                         <ComboBox.ItemTemplate>
                                             <DataTemplate x:DataType="vis:SurfaceInfo">
@@ -80,8 +80,17 @@
                                 </StackPanel>
                             </StackPanel>
                             <StackPanel Orientation="Horizontal" Spacing="8">
-                                <StackPanel><TextBlock Classes="muted" FontSize="12" Text="Position X (mm)" /><NumericUpDown Value="{Binding PosX}" Minimum="0" Maximum="999999" Increment="1" FormatString="0" /></StackPanel>
-                                <StackPanel><TextBlock Classes="muted" FontSize="12" Text="Position Y (mm)" /><NumericUpDown Value="{Binding PosY}" Minimum="0" Maximum="999999" Increment="1" FormatString="0" /></StackPanel>
+                                <StackPanel><TextBlock Classes="muted" FontSize="12" Text="PosX = u (mm)" /><NumericUpDown Value="{Binding PosX}" Minimum="-999999" Maximum="999999" Increment="1" FormatString="0" /></StackPanel>
+                                <StackPanel><TextBlock Classes="muted" FontSize="12" Text="PosY = v (mm)" /><NumericUpDown Value="{Binding PosY}" Minimum="-999999" Maximum="999999" Increment="1" FormatString="0" /></StackPanel>
+                                <StackPanel><TextBlock Classes="muted" FontSize="12" Text="PosZ = h (mm)" /><NumericUpDown Value="{Binding PosZ}" Minimum="-999999" Maximum="999999" Increment="1" FormatString="0" /></StackPanel>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <StackPanel MinWidth="330">
+                                    <TextBlock Classes="muted" FontSize="12" Text="taskId (GUID — 비우면 Guid.Empty)" />
+                                    <TextBox Width="320" Watermark="00000000-0000-0000-0000-000000000000" Text="{Binding TaskIdText}" />
+                                </StackPanel>
+                                <StackPanel><TextBlock Classes="muted" FontSize="12" Text="attempt" /><NumericUpDown Value="{Binding Attempt}" Minimum="0" Maximum="255" Increment="1" FormatString="0" /></StackPanel>
+                                <StackPanel><TextBlock Classes="muted" FontSize="12" Text="captureSeq" /><NumericUpDown Value="{Binding CaptureSeq}" Minimum="0" Maximum="65535" Increment="1" FormatString="0" /></StackPanel>
                             </StackPanel>
                         </StackPanel>
 
