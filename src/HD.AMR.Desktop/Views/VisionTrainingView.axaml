@@ -67,9 +67,9 @@
                         <TextBlock Text="학습 (YOLOv8-seg, CPU)" FontWeight="SemiBold" />
                         <StackPanel Orientation="Horizontal" Spacing="8">
                             <StackPanel><TextBlock Classes="axis" Text="베이스" /><ComboBox Width="170" SelectedIndex="{Binding BaseModelIndex}"><ComboBoxItem>yolov8n-seg (최소)</ComboBoxItem><ComboBoxItem>yolov8s-seg (소형)</ComboBoxItem></ComboBox></StackPanel>
-                            <StackPanel><TextBlock Classes="axis" Text="epochs" /><NumericUpDown Width="100" Value="{Binding Epochs}" Minimum="1" Increment="10" FormatString="0" /></StackPanel>
-                            <StackPanel><TextBlock Classes="axis" Text="imgsz" /><NumericUpDown Width="100" Value="{Binding Imgsz}" Minimum="32" Increment="32" FormatString="0" /></StackPanel>
-                            <StackPanel><TextBlock Classes="axis" Text="batch" /><NumericUpDown Width="90" Value="{Binding Batch}" Minimum="1" Increment="1" FormatString="0" /></StackPanel>
+                            <StackPanel><TextBlock Classes="axis" Text="epochs" /><NumericUpDown Value="{Binding Epochs}" Minimum="1" Increment="10" FormatString="0" /></StackPanel>
+                            <StackPanel><TextBlock Classes="axis" Text="imgsz" /><NumericUpDown Value="{Binding Imgsz}" Minimum="32" Increment="32" FormatString="0" /></StackPanel>
+                            <StackPanel><TextBlock Classes="axis" Text="batch" /><NumericUpDown Value="{Binding Batch}" Minimum="1" Increment="1" FormatString="0" /></StackPanel>
                             <Button VerticalAlignment="Bottom" Content="학습 시작" Classes="accent" Command="{Binding StartTrainCommand}" IsEnabled="{Binding PyReady}" />
                         </StackPanel>
                         <CheckBox Content="증강 최소화 (mosaic·기하·색 증강 끔 — 소규모 데이터/과적합 검증용, 권장)" IsChecked="{Binding MinimalAug}" />
@@ -84,8 +84,8 @@
                         <TextBlock Text="ONNX 내보내기 · 모델 목록" FontWeight="SemiBold" />
                         <StackPanel Orientation="Horizontal" Spacing="8">
                             <StackPanel><TextBlock Classes="axis" Text="모달리티" /><ComboBox Width="90" SelectedIndex="{Binding ExportModalityIndex}"><ComboBoxItem>RGB</ComboBoxItem><ComboBoxItem>IR</ComboBoxItem></ComboBox></StackPanel>
-                            <StackPanel><TextBlock Classes="axis" Text="opset" /><NumericUpDown Width="90" Value="{Binding Opset}" Minimum="9" Increment="1" FormatString="0" /></StackPanel>
-                            <StackPanel><TextBlock Classes="axis" Text="imgsz" /><NumericUpDown Width="100" Value="{Binding ExportImgsz}" Minimum="32" Increment="32" FormatString="0" /></StackPanel>
+                            <StackPanel><TextBlock Classes="axis" Text="opset" /><NumericUpDown Value="{Binding Opset}" Minimum="9" Increment="1" FormatString="0" /></StackPanel>
+                            <StackPanel><TextBlock Classes="axis" Text="imgsz" /><NumericUpDown Value="{Binding ExportImgsz}" Minimum="32" Increment="32" FormatString="0" /></StackPanel>
                             <Button VerticalAlignment="Bottom" Content="{Binding ExportButtonText}" Classes="accent" Command="{Binding StartExportCommand}" IsEnabled="{Binding PyReady}" />
                             <Button VerticalAlignment="Bottom" Content="목록 새로고침" Command="{Binding RefreshModelsCommand}" />
                         </StackPanel>

@@ -44,6 +44,11 @@
         <Setter Property="Background" Value="{DynamicResource BadgeNeutral}" />
     </Style>
 
+    <!-- 숫자 입력: 스핀 버튼·값이 잘리지 않도록 최소 폭 150 -->
+    <Style Selector="NumericUpDown">
+        <Setter Property="MinWidth" Value="150" />
+    </Style>
+
     <!-- 경고 배너: .alert.warning -->
     <Style Selector="Border.alert">
         <Setter Property="CornerRadius" Value="6" />

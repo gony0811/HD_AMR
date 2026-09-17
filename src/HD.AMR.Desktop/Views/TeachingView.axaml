@@ -25,9 +25,9 @@
                             IsVisible="{Binding ActiveNotBase}" IsEnabled="{Binding CobotConnected}" />
                 </StackPanel>
                 <StackPanel Orientation="Horizontal" Spacing="10">
-                    <StackPanel><TextBlock Classes="axis" Text="공구(tool)" /><NumericUpDown Width="90" Value="{Binding RunTool}" Minimum="0" Maximum="15" Increment="1" FormatString="0" IsEnabled="{Binding !IsBusy}" /></StackPanel>
+                    <StackPanel><TextBlock Classes="axis" Text="공구(tool)" /><NumericUpDown Value="{Binding RunTool}" Minimum="0" Maximum="15" Increment="1" FormatString="0" IsEnabled="{Binding !IsBusy}" /></StackPanel>
                     <StackPanel><TextBlock Classes="axis" Text="작업물(user, 0=베이스)" /><NumericUpDown Width="150" Value="{Binding CapUser}" Minimum="0" Maximum="14" Increment="1" FormatString="0" IsEnabled="{Binding !IsBusy}" /></StackPanel>
-                    <StackPanel><TextBlock Classes="axis" Text="속도(%)" /><NumericUpDown Width="90" Value="{Binding Vel}" Minimum="1" Maximum="100" Increment="1" FormatString="0" IsEnabled="{Binding !IsBusy}" /></StackPanel>
+                    <StackPanel><TextBlock Classes="axis" Text="속도(%)" /><NumericUpDown Value="{Binding Vel}" Minimum="1" Maximum="100" Increment="1" FormatString="0" IsEnabled="{Binding !IsBusy}" /></StackPanel>
                     <Button VerticalAlignment="Bottom" Content="■ 정지 (즉시 멈춤)" Classes="danger" Command="{Binding StopCommand}" IsEnabled="{Binding IsBusy}" />
                 </StackPanel>
                 <TextBlock Text="{Binding Message}" TextWrapping="Wrap"
@@ -39,7 +39,7 @@
         <!-- 목록 -->
         <Border Classes="card">
             <StackPanel Spacing="4">
-                <Grid ColumnDefinitions="200,90,64,64,64,58,58,58,58,58,58,58,58,58,*">
+                <Grid ColumnDefinitions="200,160,64,64,64,58,58,58,58,58,58,58,58,58,*">
                     <TextBlock Grid.Column="0" Text="이름" Classes="axis" />
                     <TextBlock Grid.Column="1" Text="Wall ID" Classes="axis" />
                     <TextBlock Grid.Column="2" Text="X" Classes="axis" /><TextBlock Grid.Column="3" Text="Y" Classes="axis" /><TextBlock Grid.Column="4" Text="Z" Classes="axis" />
@@ -52,7 +52,7 @@
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="vm:TeachingRowVm">
                             <Border Padding="0,3" Background="{Binding IsBusy, Converter={x:Static vm:SeqRowConverters.CurrentBrush}}">
-                                <Grid ColumnDefinitions="200,90,64,64,64,58,58,58,58,58,58,58,58,58,*">
+                                <Grid ColumnDefinitions="200,160,64,64,64,58,58,58,58,58,58,58,58,58,*">
                                     <!-- 이름: 시드 슬롯=텍스트 / 편집 중=TextBox / 그 외 읽기전용 -->
                                     <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4">
                                         <TextBlock Text="{Binding Name}" VerticalAlignment="Center" IsVisible="{Binding ShowNameText}" />
@@ -62,7 +62,7 @@
                                     </StackPanel>
                                     <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
                                         <TextBlock Text="0x00" Classes="axis" VerticalAlignment="Center" IsVisible="{Binding IsSeed}" />
-                                        <NumericUpDown Width="70" Value="{Binding EditSurfaceId}" Minimum="0" Maximum="255" Increment="1" FormatString="0" IsVisible="{Binding ShowNameEdit}" />
+                                        <NumericUpDown Value="{Binding EditSurfaceId}" Minimum="0" Maximum="255" Increment="1" FormatString="0" IsVisible="{Binding ShowNameEdit}" />
                                         <TextBlock Text="{Binding SurfaceHex}" Classes="axis" VerticalAlignment="Center" IsVisible="{Binding ShowNameRead}" />
                                     </StackPanel>
                                     <TextBlock Grid.Column="2" Classes="num" Text="{Binding X}" /><TextBlock Grid.Column="3" Classes="num" Text="{Binding Y}" /><TextBlock Grid.Column="4" Classes="num" Text="{Binding Z}" />
@@ -96,7 +96,7 @@
                 <!-- 새 항목 -->
                 <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,8,0,0">
                     <StackPanel><TextBlock Classes="axis" Text="새 항목 이름" /><TextBox Width="200" Text="{Binding NewName}" IsEnabled="{Binding !IsBusy}" /></StackPanel>
-                    <StackPanel><TextBlock Classes="axis" Text="Wall ID (0~255)" /><NumericUpDown Width="110" Value="{Binding NewSurfaceId}" Minimum="0" Maximum="255" Increment="1" FormatString="0" IsEnabled="{Binding !IsBusy}" /></StackPanel>
+                    <StackPanel><TextBlock Classes="axis" Text="Wall ID (0~255)" /><NumericUpDown Value="{Binding NewSurfaceId}" Minimum="0" Maximum="255" Increment="1" FormatString="0" IsEnabled="{Binding !IsBusy}" /></StackPanel>
                     <Button VerticalAlignment="Bottom" Content="항목 추가" Classes="accent" Command="{Binding AddCommand}" IsEnabled="{Binding !IsBusy}" />
                     <TextBlock Classes="axis" VerticalAlignment="Bottom" Text="0x00 = 홈/회피 등 디폴트 · 0x01~0xFF = 검사 위치(촬영 시 보고 Wall ID)" />
                 </StackPanel>

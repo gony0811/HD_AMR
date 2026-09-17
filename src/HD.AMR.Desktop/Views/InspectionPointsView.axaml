@@ -7,10 +7,10 @@
              x:DataType="vm:InspectionPointsViewModel">
     <UserControl.Styles>
         <Style Selector="TextBlock.axis"><Setter Property="Foreground" Value="{DynamicResource TextMuted}" /><Setter Property="FontSize" Value="12" /></Style>
-        <Style Selector="NumericUpDown.cell"><Setter Property="Width" Value="82" /><Setter Property="Margin" Value="1,0" /></Style>
+        <Style Selector="NumericUpDown.cell"><Setter Property="Margin" Value="1,0" /></Style>
     </UserControl.Styles>
 
-    <StackPanel MaxWidth="1320" HorizontalAlignment="Left">
+    <StackPanel MaxWidth="1400" HorizontalAlignment="Left">
         <TextBlock Classes="page-title" Text="검사 포인트 티칭 (X-Y 평면)" />
         <TextBlock Classes="page-subtitle" TextWrapping="Wrap"
                    Text="X-Y=검사평면, Z=검사면 법선(카메라 WD). 굴곡면은 코봇을 검사 자세로 조그한 뒤 '현재 자세 캡처'로 Rx/Ry/Z 실측을 담으세요." />
@@ -30,18 +30,18 @@
                     <ComboBoxItem>LINE (직선)</ComboBoxItem><ComboBoxItem>CROSS4 (4갈래)</ComboBoxItem>
                     <ComboBoxItem>CROSS3 (3갈래)</ComboBoxItem><ComboBoxItem>CORNER2</ComboBoxItem><ComboBoxItem>CORNER3</ComboBoxItem>
                 </ComboBox></StackPanel>
-            <StackPanel><TextBlock Classes="axis" Text="FOV(mm)" /><NumericUpDown Width="90" Value="{Binding FovMm}" Minimum="1" Increment="1" FormatString="0" /></StackPanel>
-            <StackPanel><TextBlock Classes="axis" Text="기본 Z(WD, mm)" /><NumericUpDown Width="120" Value="{Binding DefaultZ}" Increment="1" FormatString="0" /></StackPanel>
+            <StackPanel><TextBlock Classes="axis" Text="FOV(mm)" /><NumericUpDown Value="{Binding FovMm}" Minimum="1" Increment="1" FormatString="0" /></StackPanel>
+            <StackPanel><TextBlock Classes="axis" Text="기본 Z(WD, mm)" /><NumericUpDown Value="{Binding DefaultZ}" Increment="1" FormatString="0" /></StackPanel>
         </StackPanel>
 
-        <Grid ColumnDefinitions="*,*">
-            <!-- 좌: 캔버스 -->
-            <Border Grid.Column="0" Margin="0,0,8,0" BorderBrush="{DynamicResource CardBorder}" BorderThickness="1" CornerRadius="6" Background="White">
+        <StackPanel Spacing="10">
+            <!-- 캔버스 -->
+            <Border BorderBrush="{DynamicResource CardBorder}" BorderThickness="1" CornerRadius="6" Background="White">
                 <views:XyPlot Name="Plot" Height="440" />
             </Border>
 
-            <!-- 우: 포인트 표 -->
-            <StackPanel Grid.Column="1" Margin="8,0,0,0">
+            <!-- 포인트 표 -->
+            <StackPanel>
                 <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,0,0,4">
                     <Button Content="＋ 추가" Classes="accent" Command="{Binding AddPointCommand}" IsEnabled="{Binding !IsRunning}" />
                     <Button Content="◉ 현재 자세 캡처" Command="{Binding CaptureCurrentPoseCommand}" IsEnabled="{Binding CobotConnected}" />
@@ -50,7 +50,7 @@
                     <TextBlock Classes="axis" VerticalAlignment="Center" Text="{Binding PointCount, StringFormat='{}{0} 점'}" />
                 </StackPanel>
 
-                <Grid ColumnDefinitions="30,82,82,82,64,64,64,90,Auto" Margin="0,0,0,2">
+                <Grid ColumnDefinitions="30,155,155,155,155,155,155,110,Auto" Margin="0,0,0,2">
                     <TextBlock Grid.Column="0" Text="#" Classes="axis" />
                     <TextBlock Grid.Column="1" Text="X" Classes="axis" />
                     <TextBlock Grid.Column="2" Text="Y" Classes="axis" />
@@ -68,14 +68,14 @@
                     </ListBox.Styles>
                     <ListBox.ItemTemplate>
                         <DataTemplate x:DataType="vm:XyPointVm">
-                            <Grid ColumnDefinitions="30,82,82,82,64,64,64,90,Auto">
+                            <Grid ColumnDefinitions="30,155,155,155,155,155,155,110,Auto">
                                 <TextBlock Grid.Column="0" VerticalAlignment="Center" Text="{Binding Index}" />
                                 <NumericUpDown Grid.Column="1" Classes="cell" Value="{Binding X}" Increment="0.1" FormatString="0.###" />
                                 <NumericUpDown Grid.Column="2" Classes="cell" Value="{Binding Y}" Increment="0.1" FormatString="0.###" />
                                 <NumericUpDown Grid.Column="3" Classes="cell" Value="{Binding Z}" Increment="0.1" FormatString="0.###" />
-                                <NumericUpDown Grid.Column="4" Width="60" Value="{Binding Rx}" Increment="1" FormatString="0.###" />
-                                <NumericUpDown Grid.Column="5" Width="60" Value="{Binding Theta}" Increment="1" FormatString="0.###" />
-                                <NumericUpDown Grid.Column="6" Width="60" Value="{Binding Rz}" Increment="1" FormatString="0.###" />
+                                <NumericUpDown Grid.Column="4" Value="{Binding Rx}" Increment="1" FormatString="0.###" />
+                                <NumericUpDown Grid.Column="5" Value="{Binding Theta}" Increment="1" FormatString="0.###" />
+                                <NumericUpDown Grid.Column="6" Value="{Binding Rz}" Increment="1" FormatString="0.###" />
                                 <ComboBox Grid.Column="7" Width="86" SelectedIndex="{Binding Surface}">
                                     <ComboBoxItem>Flat</ComboBoxItem><ComboBoxItem>Corner</ComboBoxItem><ComboBoxItem>Corrugation</ComboBoxItem>
                                 </ComboBox>
@@ -88,7 +88,7 @@
                     </ListBox.ItemTemplate>
                 </ListBox>
             </StackPanel>
-        </Grid>
+        </StackPanel>
 
         <!-- 코봇 실행 -->
         <Border Classes="card" Margin="0,10,0,0">
@@ -96,10 +96,10 @@
                 <TextBlock Text="코봇 실행 (작업물 좌표계, pose=[X,Y,Z])" FontWeight="SemiBold" />
                 <Border Classes="alert" IsVisible="{Binding !CobotConnected}"><TextBlock Text="⚠ 코봇 RPC 미연결." /></Border>
                 <StackPanel Orientation="Horizontal" Spacing="10">
-                    <StackPanel><TextBlock Classes="axis" Text="공구(tool)" /><NumericUpDown Width="80" Value="{Binding RunTool}" Minimum="0" Maximum="15" Increment="1" FormatString="0" /></StackPanel>
-                    <StackPanel><TextBlock Classes="axis" Text="작업물(user)" /><NumericUpDown Width="80" Value="{Binding RunUser}" Minimum="0" Maximum="14" Increment="1" FormatString="0" /></StackPanel>
-                    <StackPanel><TextBlock Classes="axis" Text="속도(%)" /><NumericUpDown Width="80" Value="{Binding RunVel}" Minimum="1" Maximum="100" Increment="1" FormatString="0" /></StackPanel>
-                    <StackPanel><TextBlock Classes="axis" Text="정착 대기(초)" /><NumericUpDown Width="110" Value="{Binding SettleSec}" Minimum="0" Increment="0.1" FormatString="0.0" /></StackPanel>
+                    <StackPanel><TextBlock Classes="axis" Text="공구(tool)" /><NumericUpDown Value="{Binding RunTool}" Minimum="0" Maximum="15" Increment="1" FormatString="0" /></StackPanel>
+                    <StackPanel><TextBlock Classes="axis" Text="작업물(user)" /><NumericUpDown Value="{Binding RunUser}" Minimum="0" Maximum="14" Increment="1" FormatString="0" /></StackPanel>
+                    <StackPanel><TextBlock Classes="axis" Text="속도(%)" /><NumericUpDown Value="{Binding RunVel}" Minimum="1" Maximum="100" Increment="1" FormatString="0" /></StackPanel>
+                    <StackPanel><TextBlock Classes="axis" Text="정착 대기(초)" /><NumericUpDown Value="{Binding SettleSec}" Minimum="0" Increment="0.1" FormatString="0.0" /></StackPanel>
                     <Button VerticalAlignment="Bottom" Content="실행" Classes="accent" Command="{Binding RunPointsCommand}" IsEnabled="{Binding CobotConnected}" />
                     <Button VerticalAlignment="Bottom" Content="■ 정지" Classes="danger" Command="{Binding StopRunCommand}" IsEnabled="{Binding IsRunning}" />
                 </StackPanel>

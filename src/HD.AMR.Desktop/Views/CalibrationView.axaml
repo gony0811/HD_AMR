@@ -4,7 +4,7 @@
              x:Class="HD.AMR.Desktop.Views.CalibrationView"
              x:DataType="vm:CalibrationViewModel">
     <UserControl.Styles>
-        <Style Selector="NumericUpDown.pose"><Setter Property="Width" Value="105" /><Setter Property="Margin" Value="0,0,6,0" /></Style>
+        <Style Selector="NumericUpDown.pose"><Setter Property="Margin" Value="0,0,6,0" /></Style>
         <Style Selector="TextBlock.axis"><Setter Property="Foreground" Value="{DynamicResource TextMuted}" /><Setter Property="FontSize" Value="12" /></Style>
     </UserControl.Styles>
 
@@ -22,7 +22,7 @@
             <StackPanel Spacing="8">
                 <TextBlock Text="① 고정 좌표변환 확인" FontWeight="SemiBold" />
                 <TextBlock Classes="axis" Text="T_A_B — AMR 중심 → 코봇 Base (mm/도)" />
-                <StackPanel Orientation="Horizontal">
+                <WrapPanel>
                     <StackPanel><TextBlock Classes="axis" Text="X" /><NumericUpDown Classes="pose" Value="{Binding Mount.V0}" Increment="0.1" /></StackPanel>
                     <StackPanel><TextBlock Classes="axis" Text="Y" /><NumericUpDown Classes="pose" Value="{Binding Mount.V1}" Increment="0.1" /></StackPanel>
                     <StackPanel><TextBlock Classes="axis" Text="Z" /><NumericUpDown Classes="pose" Value="{Binding Mount.V2}" Increment="0.1" /></StackPanel>
@@ -30,10 +30,10 @@
                     <StackPanel><TextBlock Classes="axis" Text="Ry" /><NumericUpDown Classes="pose" Value="{Binding Mount.V4}" Increment="0.1" /></StackPanel>
                     <StackPanel><TextBlock Classes="axis" Text="Rz" /><NumericUpDown Classes="pose" Value="{Binding Mount.V5}" Increment="0.1" /></StackPanel>
                     <Button VerticalAlignment="Bottom" Content="T_A_B 저장" Classes="accent" Command="{Binding SaveMountCommand}" />
-                </StackPanel>
+                </WrapPanel>
                 <TextBlock Classes="axis" Text="T_T_C — 선택 Tool TCP → 카메라 광학 프레임 (mm/도)" Margin="0,6,0,0" />
-                <StackPanel Orientation="Horizontal">
-                    <StackPanel Margin="0,0,10,0"><TextBlock Classes="axis" Text="Tool 번호" /><NumericUpDown Width="90" Value="{Binding Tool}" Minimum="0" Maximum="15" Increment="1" FormatString="0" /></StackPanel>
+                <WrapPanel>
+                    <StackPanel Margin="0,0,10,0"><TextBlock Classes="axis" Text="Tool 번호" /><NumericUpDown Value="{Binding Tool}" Minimum="0" Maximum="15" Increment="1" FormatString="0" /></StackPanel>
                     <StackPanel><TextBlock Classes="axis" Text="X" /><NumericUpDown Classes="pose" Value="{Binding HandEye.V0}" Increment="0.1" /></StackPanel>
                     <StackPanel><TextBlock Classes="axis" Text="Y" /><NumericUpDown Classes="pose" Value="{Binding HandEye.V1}" Increment="0.1" /></StackPanel>
                     <StackPanel><TextBlock Classes="axis" Text="Z" /><NumericUpDown Classes="pose" Value="{Binding HandEye.V2}" Increment="0.1" /></StackPanel>
@@ -41,7 +41,7 @@
                     <StackPanel><TextBlock Classes="axis" Text="Ry" /><NumericUpDown Classes="pose" Value="{Binding HandEye.V4}" Increment="0.1" /></StackPanel>
                     <StackPanel><TextBlock Classes="axis" Text="Rz" /><NumericUpDown Classes="pose" Value="{Binding HandEye.V5}" Increment="0.1" /></StackPanel>
                     <Button VerticalAlignment="Bottom" Content="T_T_C 저장" Classes="accent" Command="{Binding SaveHandEyeCommand}" />
-                </StackPanel>
+                </WrapPanel>
             </StackPanel>
         </Border>
 
@@ -57,13 +57,13 @@
                             <Button Content="ID 읽기" Command="{Binding ReadQrIdCommand}" IsEnabled="{Binding CameraStreaming}" />
                         </StackPanel>
                     </StackPanel>
-                    <StackPanel Width="120" Margin="0,0,10,8"><TextBlock Classes="axis" Text="QR 크기(mm)" /><NumericUpDown Value="{Binding QrSizeMm}" Minimum="1" Increment="1" /></StackPanel>
-                    <StackPanel Width="110" Margin="0,0,10,8"><TextBlock Classes="axis" Text="목표 X(mm)" /><NumericUpDown Value="{Binding TargetXmm}" Increment="0.1" /></StackPanel>
-                    <StackPanel Width="110" Margin="0,0,10,8"><TextBlock Classes="axis" Text="목표 Y(mm)" /><NumericUpDown Value="{Binding TargetYmm}" Increment="0.1" /></StackPanel>
-                    <StackPanel Width="110" Margin="0,0,10,8"><TextBlock Classes="axis" Text="목표 Z(mm)" /><NumericUpDown Value="{Binding TargetZmm}" Increment="0.1" /></StackPanel>
-                    <StackPanel Width="110" Margin="0,0,10,8"><TextBlock Classes="axis" Text="목표 Yaw(도)" /><NumericUpDown Value="{Binding TargetYawDeg}" Increment="0.1" /></StackPanel>
-                    <StackPanel Width="140" Margin="0,0,10,8"><TextBlock Classes="axis" Text="위치 허용오차(mm)" /><NumericUpDown Value="{Binding PositionToleranceMm}" Minimum="0" Increment="0.1" /></StackPanel>
-                    <StackPanel Width="140" Margin="0,0,10,8"><TextBlock Classes="axis" Text="Yaw 허용오차(도)" /><NumericUpDown Value="{Binding YawToleranceDeg}" Minimum="0" Increment="0.1" /></StackPanel>
+                    <StackPanel Margin="0,0,10,8"><TextBlock Classes="axis" Text="QR 크기(mm)" /><NumericUpDown Value="{Binding QrSizeMm}" Minimum="1" Increment="1" /></StackPanel>
+                    <StackPanel Margin="0,0,10,8"><TextBlock Classes="axis" Text="목표 X(mm)" /><NumericUpDown Value="{Binding TargetXmm}" Increment="0.1" /></StackPanel>
+                    <StackPanel Margin="0,0,10,8"><TextBlock Classes="axis" Text="목표 Y(mm)" /><NumericUpDown Value="{Binding TargetYmm}" Increment="0.1" /></StackPanel>
+                    <StackPanel Margin="0,0,10,8"><TextBlock Classes="axis" Text="목표 Z(mm)" /><NumericUpDown Value="{Binding TargetZmm}" Increment="0.1" /></StackPanel>
+                    <StackPanel Margin="0,0,10,8"><TextBlock Classes="axis" Text="목표 Yaw(도)" /><NumericUpDown Value="{Binding TargetYawDeg}" Increment="0.1" /></StackPanel>
+                    <StackPanel Margin="0,0,10,8"><TextBlock Classes="axis" Text="위치 허용오차(mm)" /><NumericUpDown Value="{Binding PositionToleranceMm}" Minimum="0" Increment="0.1" /></StackPanel>
+                    <StackPanel Margin="0,0,10,8"><TextBlock Classes="axis" Text="Yaw 허용오차(도)" /><NumericUpDown Value="{Binding YawToleranceDeg}" Minimum="0" Increment="0.1" /></StackPanel>
                     <Button VerticalAlignment="Bottom" Margin="0,0,0,8" Content="기준 저장" Command="{Binding SaveReferenceCommand}" />
                 </WrapPanel>
             </StackPanel>

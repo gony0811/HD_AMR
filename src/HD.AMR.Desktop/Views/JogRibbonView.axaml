@@ -71,7 +71,7 @@
         </WrapPanel>
 
         <StackPanel Orientation="Horizontal" Spacing="8">
-            <NumericUpDown Value="{Binding AssumedUser}" Minimum="0" Maximum="14" Increment="1" FormatString="0" Width="110" />
+            <NumericUpDown Value="{Binding AssumedUser}" Minimum="0" Maximum="14" Increment="1" FormatString="0" />
             <Button Content="활성 프레임 알려주기" Command="{Binding ApplyAssumedUserCommand}" IsEnabled="{Binding IsConnected}" />
             <Button Content="활성 좌표계 초기화(베이스)" Command="{Binding ResetToBaseFrameCommand}" IsEnabled="{Binding IsConnected}" />
         </StackPanel>

@@ -125,7 +125,7 @@
                             <TextBlock Classes="hint" Text="평면이 계산되면 적용할 Rx, Ry 가 표시됩니다." IsVisible="{Binding !PoseValid}" />
                             <StackPanel Orientation="Horizontal" Spacing="8">
                                 <TextBlock Classes="axis" VerticalAlignment="Center" Text="속도(%)" />
-                                <NumericUpDown Width="90" Value="{Binding VelPct}" Minimum="1" Maximum="30" Increment="1" FormatString="0" />
+                                <NumericUpDown Value="{Binding VelPct}" Minimum="1" Maximum="30" Increment="1" FormatString="0" />
                                 <Button Content="보정 적용" Classes="accent" Command="{Binding ApplyCorrectionCommand}" />
                                 <TextBlock Classes="axis" VerticalAlignment="Center" Text="서보 ON 필요" IsVisible="{Binding !ServoOn}" />
                             </StackPanel>
@@ -138,9 +138,9 @@
                         <StackPanel Spacing="6" Margin="0,6,0,0">
                             <TextBlock Classes="hint" Text="평평한 면 위에서 실행하세요. '자동 수평'이 켜져 있으면 기울어진 상태에서 시작해도 됩니다 — 측정값 기반으로 자세를 보정(최대 ±15°×3회)한 뒤 수평에서 최종 산출합니다." />
                             <WrapPanel>
-                                <StackPanel Margin="0,0,8,6"><TextBlock Classes="axis" Text="틸트(°)" /><NumericUpDown Width="90" Value="{Binding CalTiltDeg}" Minimum="0.5" Maximum="5" Increment="0.5" FormatString="0.0" IsEnabled="{Binding !Calibrating}" /></StackPanel>
-                                <StackPanel Margin="0,0,8,6"><TextBlock Classes="axis" Text="샘플" /><NumericUpDown Width="80" Value="{Binding CalSamples}" Minimum="3" Maximum="20" Increment="1" FormatString="0" IsEnabled="{Binding !Calibrating}" /></StackPanel>
-                                <StackPanel Margin="0,0,8,6"><TextBlock Classes="axis" Text="속도(%)" /><NumericUpDown Width="90" Value="{Binding CalVelPct}" Minimum="1" Maximum="30" Increment="1" FormatString="0" IsEnabled="{Binding !Calibrating}" /></StackPanel>
+                                <StackPanel Margin="0,0,8,6"><TextBlock Classes="axis" Text="틸트(°)" /><NumericUpDown Value="{Binding CalTiltDeg}" Minimum="0.5" Maximum="5" Increment="0.5" FormatString="0.0" IsEnabled="{Binding !Calibrating}" /></StackPanel>
+                                <StackPanel Margin="0,0,8,6"><TextBlock Classes="axis" Text="샘플" /><NumericUpDown Value="{Binding CalSamples}" Minimum="3" Maximum="20" Increment="1" FormatString="0" IsEnabled="{Binding !Calibrating}" /></StackPanel>
+                                <StackPanel Margin="0,0,8,6"><TextBlock Classes="axis" Text="속도(%)" /><NumericUpDown Value="{Binding CalVelPct}" Minimum="1" Maximum="30" Increment="1" FormatString="0" IsEnabled="{Binding !Calibrating}" /></StackPanel>
                                 <CheckBox Margin="0,0,8,6" VerticalAlignment="Bottom" Content="부호 검증(+Z 2mm)" IsChecked="{Binding CalSignCheck}" IsEnabled="{Binding !Calibrating}" />
                                 <CheckBox Margin="0,0,8,6" VerticalAlignment="Bottom" Content="자동 수평" IsChecked="{Binding CalAutoLevel}" IsEnabled="{Binding !Calibrating}" />
                             </WrapPanel>
@@ -194,8 +194,8 @@
                                     <ComboBoxItem>기준 Z 고정 — 팁 X/Y 산출 + h 추정 (기본)</ComboBoxItem>
                                     <ComboBoxItem>출사면 h 고정 — 팁 X/Y/Z 전부 산출</ComboBoxItem>
                                 </ComboBox>
-                                <StackPanel IsVisible="{Binding !TcpFixH}"><TextBlock Classes="axis" Text="기준 Z(mm, 플랜지) — 미입력 시 첫 기록 때 tool-1 Z" /><NumericUpDown Width="130" Value="{Binding TcpRefZ}" Increment="0.1" FormatString="0.0" IsEnabled="{Binding !TcpRecording}" /></StackPanel>
-                                <StackPanel IsVisible="{Binding TcpFixH}"><TextBlock Classes="axis" Text="출사면 h(mm)" /><NumericUpDown Width="130" Value="{Binding TcpFixedH}" Increment="0.1" FormatString="0.0" IsEnabled="{Binding !TcpRecording}" /></StackPanel>
+                                <StackPanel IsVisible="{Binding !TcpFixH}"><TextBlock Classes="axis" Text="기준 Z(mm, 플랜지) — 미입력 시 첫 기록 때 tool-1 Z" /><NumericUpDown Value="{Binding TcpRefZ}" Increment="0.1" FormatString="0.0" IsEnabled="{Binding !TcpRecording}" /></StackPanel>
+                                <StackPanel IsVisible="{Binding TcpFixH}"><TextBlock Classes="axis" Text="출사면 h(mm)" /><NumericUpDown Value="{Binding TcpFixedH}" Increment="0.1" FormatString="0.0" IsEnabled="{Binding !TcpRecording}" /></StackPanel>
                             </StackPanel>
                             <Button Content="현재 측정거리를 h로 저장" Command="{Binding CaptureHeadPlaneCommand}" IsVisible="{Binding TcpFixH}" HorizontalAlignment="Left" />
                             <StackPanel Orientation="Horizontal" Spacing="6">
@@ -237,7 +237,7 @@
                                 </StackPanel>
                                 <StackPanel Orientation="Horizontal" Spacing="8">
                                     <TextBlock Classes="axis" VerticalAlignment="Center" Text="쓰기 대상 tool" />
-                                    <NumericUpDown Width="90" Value="{Binding TcpWriteId}" Minimum="1" Maximum="14" Increment="1" FormatString="0" IsEnabled="{Binding !TcpWriting}" />
+                                    <NumericUpDown Value="{Binding TcpWriteId}" Minimum="1" Maximum="14" Increment="1" FormatString="0" IsEnabled="{Binding !TcpWriting}" />
                                     <CheckBox Content="산출값 확인함" IsChecked="{Binding TcpConfirm}" />
                                     <CheckBox Content="tool 1 덮어쓰기 허용" IsChecked="{Binding TcpAllowTool1}" />
                                     <Button Content="{Binding TcpWriteId, StringFormat='tool {0}에 쓰기'}" Classes="danger" Command="{Binding WriteTcpToolCommand}" />

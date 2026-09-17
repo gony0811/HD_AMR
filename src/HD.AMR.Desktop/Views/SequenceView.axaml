@@ -22,8 +22,8 @@
                     <TextBlock Text="{Binding FaultText}" />
                 </Border>
                 <StackPanel Orientation="Horizontal" Spacing="10">
-                    <StackPanel><TextBlock Classes="axis" Text="공구(tool)" /><NumericUpDown Width="90" Value="{Binding Tool}" Minimum="0" Maximum="15" Increment="1" FormatString="0" IsEnabled="{Binding !Busy}" /></StackPanel>
-                    <StackPanel><TextBlock Classes="axis" Text="속도(%)" /><NumericUpDown Width="90" Value="{Binding Velocity}" Minimum="1" Maximum="100" Increment="1" FormatString="0" IsEnabled="{Binding !Busy}" /></StackPanel>
+                    <StackPanel><TextBlock Classes="axis" Text="공구(tool)" /><NumericUpDown Value="{Binding Tool}" Minimum="0" Maximum="15" Increment="1" FormatString="0" IsEnabled="{Binding !Busy}" /></StackPanel>
+                    <StackPanel><TextBlock Classes="axis" Text="속도(%)" /><NumericUpDown Value="{Binding Velocity}" Minimum="1" Maximum="100" Increment="1" FormatString="0" IsEnabled="{Binding !Busy}" /></StackPanel>
                     <Button VerticalAlignment="Bottom" Content="▶▶ 풀오토" Classes="accent" Command="{Binding RunAllCommand}" />
                     <Button VerticalAlignment="Bottom" Content="■ 정지" Classes="danger" Command="{Binding StopCommand}" />
                     <Button VerticalAlignment="Bottom" Content="오류 해제" Command="{Binding ResetFaultCommand}" IsEnabled="{Binding CobotConnected}" />
@@ -56,18 +56,18 @@
                             <ComboBoxItem>수평</ComboBoxItem><ComboBoxItem>수직</ComboBoxItem>
                         </ComboBox>
                     </StackPanel>
-                    <StackPanel Width="120" Margin="0,0,12,8"><TextBlock Classes="axis" Text="U (좌+/우−)" /><NumericUpDown Value="{Binding OffsetU}" Increment="0.1" IsEnabled="{Binding !Busy}" /></StackPanel>
-                    <StackPanel Width="120" Margin="0,0,12,8"><TextBlock Classes="axis" Text="V (상+/하−)" /><NumericUpDown Value="{Binding OffsetV}" Increment="0.1" IsEnabled="{Binding !Busy}" /></StackPanel>
-                    <StackPanel Width="130" Margin="0,0,12,8"><TextBlock Classes="axis" Text="카메라 목표거리" /><NumericUpDown Value="{Binding CameraTargetDistanceMm}" Increment="1" IsEnabled="{Binding !Busy}" /></StackPanel>
+                    <StackPanel Margin="0,0,12,8"><TextBlock Classes="axis" Text="U (좌+/우−)" /><NumericUpDown Value="{Binding OffsetU}" Increment="0.1" IsEnabled="{Binding !Busy}" /></StackPanel>
+                    <StackPanel Margin="0,0,12,8"><TextBlock Classes="axis" Text="V (상+/하−)" /><NumericUpDown Value="{Binding OffsetV}" Increment="0.1" IsEnabled="{Binding !Busy}" /></StackPanel>
+                    <StackPanel Margin="0,0,12,8"><TextBlock Classes="axis" Text="카메라 목표거리" /><NumericUpDown Value="{Binding CameraTargetDistanceMm}" Increment="1" IsEnabled="{Binding !Busy}" /></StackPanel>
                     <StackPanel Width="150" Margin="0,0,12,8"><TextBlock Classes="axis" Text="레이저중심 Y" /><NumericUpDown Value="{Binding CameraToLaserShiftYmm}" Increment="0.1" IsEnabled="{Binding !Busy}" /></StackPanel>
                     <StackPanel Width="110" Margin="0,0,12,8">
                         <TextBlock Classes="axis" Text="Peak X부호" />
                         <ComboBox HorizontalAlignment="Stretch" SelectedIndex="{Binding XSignIndex}" IsEnabled="{Binding !Busy}"><ComboBoxItem>+1</ComboBoxItem><ComboBoxItem>−1</ComboBoxItem></ComboBox>
                     </StackPanel>
-                    <StackPanel Width="120" Margin="0,0,12,8"><TextBlock Classes="axis" Text="검사캠 X" /><NumericUpDown Value="{Binding InspectCamOffsetX}" Increment="0.1" IsEnabled="{Binding !Busy}" /></StackPanel>
-                    <StackPanel Width="120" Margin="0,0,12,8"><TextBlock Classes="axis" Text="검사캠 Y" /><NumericUpDown Value="{Binding InspectCamOffsetY}" Increment="0.1" IsEnabled="{Binding !Busy}" /></StackPanel>
-                    <StackPanel Width="110" Margin="0,0,12,8"><TextBlock Classes="axis" Text="작업물 번호" /><NumericUpDown Value="{Binding WobjId}" Minimum="0" Maximum="14" Increment="1" FormatString="0" IsEnabled="{Binding !Busy}" /></StackPanel>
-                    <StackPanel Width="110" Margin="0,0,12,8"><TextBlock Classes="axis" Text="Pitch" /><NumericUpDown Value="{Binding PitchMm}" Minimum="1" Increment="1" IsEnabled="{Binding !Busy}" /></StackPanel>
+                    <StackPanel Margin="0,0,12,8"><TextBlock Classes="axis" Text="검사캠 X" /><NumericUpDown Value="{Binding InspectCamOffsetX}" Increment="0.1" IsEnabled="{Binding !Busy}" /></StackPanel>
+                    <StackPanel Margin="0,0,12,8"><TextBlock Classes="axis" Text="검사캠 Y" /><NumericUpDown Value="{Binding InspectCamOffsetY}" Increment="0.1" IsEnabled="{Binding !Busy}" /></StackPanel>
+                    <StackPanel Margin="0,0,12,8"><TextBlock Classes="axis" Text="작업물 번호" /><NumericUpDown Value="{Binding WobjId}" Minimum="0" Maximum="14" Increment="1" FormatString="0" IsEnabled="{Binding !Busy}" /></StackPanel>
+                    <StackPanel Margin="0,0,12,8"><TextBlock Classes="axis" Text="Pitch" /><NumericUpDown Value="{Binding PitchMm}" Minimum="1" Increment="1" IsEnabled="{Binding !Busy}" /></StackPanel>
                     <StackPanel Width="130" Margin="0,0,12,8">
                         <TextBlock Classes="axis" Text="Peak1→2 방향" />
                         <ComboBox HorizontalAlignment="Stretch" SelectedIndex="{Binding PitchDirIndex}" IsEnabled="{Binding !Busy}"><ComboBoxItem>+1</ComboBoxItem><ComboBoxItem>−1</ComboBoxItem></ComboBox>

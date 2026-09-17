@@ -5,7 +5,7 @@
              x:Class="HD.AMR.Desktop.Views.CobotView"
              x:DataType="vm:CobotViewModel">
     <UserControl.Styles>
-        <Style Selector="NumericUpDown.pose"><Setter Property="Width" Value="100" /><Setter Property="Margin" Value="0,0,6,0" /></Style>
+        <Style Selector="NumericUpDown.pose"><Setter Property="Margin" Value="0,0,6,0" /></Style>
         <Style Selector="TextBlock.axis"><Setter Property="Foreground" Value="{DynamicResource TextMuted}" /><Setter Property="FontSize" Value="12" /></Style>
     </UserControl.Styles>
 
@@ -38,15 +38,15 @@
         <Border Classes="card">
             <StackPanel Spacing="8">
                 <TextBlock Text="좌표계 변경" FontWeight="SemiBold" />
-                <StackPanel Orientation="Horizontal">
-                    <StackPanel Margin="0,0,10,0"><TextBlock Classes="axis" Text="번호(id)" /><NumericUpDown Width="90" Value="{Binding FrameId}" Increment="1" FormatString="0" /></StackPanel>
+                <WrapPanel>
+                    <StackPanel Margin="0,0,10,0"><TextBlock Classes="axis" Text="번호(id)" /><NumericUpDown Value="{Binding FrameId}" Increment="1" FormatString="0" /></StackPanel>
                     <StackPanel><TextBlock Classes="axis" Text="X" /><NumericUpDown Classes="pose" Value="{Binding Frame.V0}" Increment="0.1" FormatString="0.0" /></StackPanel>
                     <StackPanel><TextBlock Classes="axis" Text="Y" /><NumericUpDown Classes="pose" Value="{Binding Frame.V1}" Increment="0.1" FormatString="0.0" /></StackPanel>
                     <StackPanel><TextBlock Classes="axis" Text="Z" /><NumericUpDown Classes="pose" Value="{Binding Frame.V2}" Increment="0.1" FormatString="0.0" /></StackPanel>
                     <StackPanel><TextBlock Classes="axis" Text="Rx" /><NumericUpDown Classes="pose" Value="{Binding Frame.V3}" Increment="0.1" FormatString="0.0" /></StackPanel>
                     <StackPanel><TextBlock Classes="axis" Text="Ry" /><NumericUpDown Classes="pose" Value="{Binding Frame.V4}" Increment="0.1" FormatString="0.0" /></StackPanel>
                     <StackPanel><TextBlock Classes="axis" Text="Rz" /><NumericUpDown Classes="pose" Value="{Binding Frame.V5}" Increment="0.1" FormatString="0.0" /></StackPanel>
-                </StackPanel>
+                </WrapPanel>
                 <StackPanel Orientation="Horizontal" Spacing="6">
                     <Button Content="공구 불러오기" Command="{Binding LoadToolCoordCommand}" IsEnabled="{Binding IsConnected}" />
                     <Button Content="작업물 불러오기" Command="{Binding LoadWObjCoordCommand}" IsEnabled="{Binding IsConnected}" />
@@ -62,16 +62,16 @@
         <Border Classes="card">
             <StackPanel Spacing="8">
                 <TextBlock Text="이동 (BASE 좌표계 기준)" FontWeight="SemiBold" />
-                <StackPanel Orientation="Horizontal">
+                <WrapPanel>
                     <StackPanel><TextBlock Classes="axis" Text="X" /><NumericUpDown Classes="pose" Value="{Binding Target.V0}" Increment="0.1" FormatString="0.0" /></StackPanel>
                     <StackPanel><TextBlock Classes="axis" Text="Y" /><NumericUpDown Classes="pose" Value="{Binding Target.V1}" Increment="0.1" FormatString="0.0" /></StackPanel>
                     <StackPanel><TextBlock Classes="axis" Text="Z" /><NumericUpDown Classes="pose" Value="{Binding Target.V2}" Increment="0.1" FormatString="0.0" /></StackPanel>
                     <StackPanel><TextBlock Classes="axis" Text="Rx" /><NumericUpDown Classes="pose" Value="{Binding Target.V3}" Increment="0.1" FormatString="0.0" /></StackPanel>
                     <StackPanel><TextBlock Classes="axis" Text="Ry" /><NumericUpDown Classes="pose" Value="{Binding Target.V4}" Increment="0.1" FormatString="0.0" /></StackPanel>
                     <StackPanel><TextBlock Classes="axis" Text="Rz" /><NumericUpDown Classes="pose" Value="{Binding Target.V5}" Increment="0.1" FormatString="0.0" /></StackPanel>
-                </StackPanel>
+                </WrapPanel>
                 <StackPanel Orientation="Horizontal" Spacing="10">
-                    <StackPanel><TextBlock Classes="axis" Text="공구(tool)" /><NumericUpDown Width="90" Value="{Binding MoveTool}" Minimum="0" Maximum="15" Increment="1" FormatString="0" /></StackPanel>
+                    <StackPanel><TextBlock Classes="axis" Text="공구(tool)" /><NumericUpDown Value="{Binding MoveTool}" Minimum="0" Maximum="15" Increment="1" FormatString="0" /></StackPanel>
                     <StackPanel Width="200"><TextBlock Classes="axis" Text="{Binding Vel, StringFormat='속도(%) : {0}'}" /><Slider Value="{Binding Vel}" Minimum="1" Maximum="100" /></StackPanel>
                     <Button VerticalAlignment="Bottom" Content="MoveL (직선)" Classes="accent" Command="{Binding MoveLCommand}" IsEnabled="{Binding IsConnected}" />
                     <Button VerticalAlignment="Bottom" Content="현재 포즈 불러오기" Command="{Binding UseCurrentPoseCommand}" />
@@ -93,7 +93,7 @@
             <StackPanel Spacing="8">
                 <TextBlock Text="작업물 좌표계 교시 (3점법)" FontWeight="SemiBold" />
                 <StackPanel Orientation="Horizontal" Spacing="10">
-                    <StackPanel><TextBlock Classes="axis" Text="작업물 번호(id)" /><NumericUpDown Width="120" Value="{Binding WobjId}" Minimum="0" Maximum="14" Increment="1" FormatString="0" /></StackPanel>
+                    <StackPanel><TextBlock Classes="axis" Text="작업물 번호(id)" /><NumericUpDown Value="{Binding WobjId}" Minimum="0" Maximum="14" Increment="1" FormatString="0" /></StackPanel>
                     <StackPanel><TextBlock Classes="axis" Text="계산법" /><ComboBox Width="210" SelectedIndex="{Binding WobjMethodIndex}"><ComboBoxItem>0: 원점-X축-Z축</ComboBoxItem><ComboBoxItem>1: 원점-X축-XY평면</ComboBoxItem></ComboBox></StackPanel>
                     <StackPanel><TextBlock Classes="axis" Text="측정 방식" /><ComboBox Width="150" SelectedIndex="{Binding TeachModeIndex}"><ComboBoxItem>조그-캡처</ComboBoxItem><ComboBoxItem>수동 입력</ComboBoxItem></ComboBox></StackPanel>
                 </StackPanel>
@@ -129,16 +129,16 @@
         <Border Classes="card">
             <StackPanel Spacing="8">
                 <TextBlock Text="오프셋 이동 (작업물 좌표계 기준)" FontWeight="SemiBold" />
-                <StackPanel Orientation="Horizontal">
-                    <StackPanel Margin="0,0,10,0"><TextBlock Classes="axis" Text="공구(tool)" /><NumericUpDown Width="90" Value="{Binding OffTool}" Minimum="0" Maximum="15" Increment="1" FormatString="0" /></StackPanel>
-                    <StackPanel Margin="0,0,10,0"><TextBlock Classes="axis" Text="작업물(user)" /><NumericUpDown Width="100" Value="{Binding OffUser}" Minimum="0" Maximum="14" Increment="1" FormatString="0" /></StackPanel>
+                <WrapPanel>
+                    <StackPanel Margin="0,0,10,0"><TextBlock Classes="axis" Text="공구(tool)" /><NumericUpDown Value="{Binding OffTool}" Minimum="0" Maximum="15" Increment="1" FormatString="0" /></StackPanel>
+                    <StackPanel Margin="0,0,10,0"><TextBlock Classes="axis" Text="작업물(user)" /><NumericUpDown Value="{Binding OffUser}" Minimum="0" Maximum="14" Increment="1" FormatString="0" /></StackPanel>
                     <StackPanel><TextBlock Classes="axis" Text="dX" /><NumericUpDown Classes="pose" Value="{Binding Offset.V0}" Increment="0.1" FormatString="0.0" /></StackPanel>
                     <StackPanel><TextBlock Classes="axis" Text="dY" /><NumericUpDown Classes="pose" Value="{Binding Offset.V1}" Increment="0.1" FormatString="0.0" /></StackPanel>
                     <StackPanel><TextBlock Classes="axis" Text="dZ" /><NumericUpDown Classes="pose" Value="{Binding Offset.V2}" Increment="0.1" FormatString="0.0" /></StackPanel>
                     <StackPanel><TextBlock Classes="axis" Text="dRx" /><NumericUpDown Classes="pose" Value="{Binding Offset.V3}" Increment="0.1" FormatString="0.0" /></StackPanel>
                     <StackPanel><TextBlock Classes="axis" Text="dRy" /><NumericUpDown Classes="pose" Value="{Binding Offset.V4}" Increment="0.1" FormatString="0.0" /></StackPanel>
                     <StackPanel><TextBlock Classes="axis" Text="dRz" /><NumericUpDown Classes="pose" Value="{Binding Offset.V5}" Increment="0.1" FormatString="0.0" /></StackPanel>
-                </StackPanel>
+                </WrapPanel>
                 <StackPanel Orientation="Horizontal" Spacing="10">
                     <StackPanel Width="200"><TextBlock Classes="axis" Text="{Binding OffVel, StringFormat='속도(%) : {0}'}" /><Slider Value="{Binding OffVel}" Minimum="1" Maximum="100" /></StackPanel>
                     <StackPanel><TextBlock Classes="axis" Text="기준" /><ComboBox Width="230" SelectedIndex="{Binding OffModeIndex}"><ComboBoxItem>작업물 원점 기준 (절대)</ComboBoxItem><ComboBoxItem>현재 위치 기준 (증분)</ComboBoxItem></ComboBox></StackPanel>

@@ -16,7 +16,7 @@
             <!-- 연결 -->
             <StackPanel Orientation="Horizontal" Spacing="8">
                 <StackPanel><TextBlock Classes="muted" FontSize="12" Text="비전 서버 IP" /><TextBox Width="140" Text="{Binding Host}" IsEnabled="{Binding !IsConnected}" /></StackPanel>
-                <StackPanel><TextBlock Classes="muted" FontSize="12" Text="Port" /><NumericUpDown Width="110" Value="{Binding Port}" Minimum="1" Maximum="65535" Increment="1" FormatString="0" IsEnabled="{Binding !IsConnected}" /></StackPanel>
+                <StackPanel><TextBlock Classes="muted" FontSize="12" Text="Port" /><NumericUpDown Value="{Binding Port}" Minimum="1" Maximum="65535" Increment="1" FormatString="0" IsEnabled="{Binding !IsConnected}" /></StackPanel>
                 <Button VerticalAlignment="Bottom" Content="▶ Connect" Classes="accent" Command="{Binding ConnectCommand}" IsEnabled="{Binding !IsConnected}" />
                 <Button VerticalAlignment="Bottom" Content="Disconnect" Command="{Binding DisconnectCommand}" IsEnabled="{Binding IsConnected}" />
             </StackPanel>
@@ -39,7 +39,7 @@
                                     <ComboBoxItem>0x04 ERROR_NOTI</ComboBoxItem>
                                 </ComboBox>
                             </StackPanel>
-                            <StackPanel><TextBlock Classes="muted" FontSize="12" Text="SEQ" /><NumericUpDown Width="90" Value="{Binding Seq}" Minimum="0" Maximum="255" Increment="1" FormatString="0" IsEnabled="{Binding !AutoSeq}" /></StackPanel>
+                            <StackPanel><TextBlock Classes="muted" FontSize="12" Text="SEQ" /><NumericUpDown Value="{Binding Seq}" Minimum="0" Maximum="255" Increment="1" FormatString="0" IsEnabled="{Binding !AutoSeq}" /></StackPanel>
                             <CheckBox VerticalAlignment="Bottom" Content="Auto++" IsChecked="{Binding AutoSeq}" />
                             <StackPanel>
                                 <TextBlock Classes="muted" FontSize="12" Text="TO" />
@@ -80,8 +80,8 @@
                                 </StackPanel>
                             </StackPanel>
                             <StackPanel Orientation="Horizontal" Spacing="8">
-                                <StackPanel><TextBlock Classes="muted" FontSize="12" Text="Position X (mm)" /><NumericUpDown Width="120" Value="{Binding PosX}" Minimum="0" Maximum="999999" Increment="1" FormatString="0" /></StackPanel>
-                                <StackPanel><TextBlock Classes="muted" FontSize="12" Text="Position Y (mm)" /><NumericUpDown Width="120" Value="{Binding PosY}" Minimum="0" Maximum="999999" Increment="1" FormatString="0" /></StackPanel>
+                                <StackPanel><TextBlock Classes="muted" FontSize="12" Text="Position X (mm)" /><NumericUpDown Value="{Binding PosX}" Minimum="0" Maximum="999999" Increment="1" FormatString="0" /></StackPanel>
+                                <StackPanel><TextBlock Classes="muted" FontSize="12" Text="Position Y (mm)" /><NumericUpDown Value="{Binding PosY}" Minimum="0" Maximum="999999" Increment="1" FormatString="0" /></StackPanel>
                             </StackPanel>
                         </StackPanel>
 
@@ -104,9 +104,9 @@
                         <!-- 오버라이드 -->
                         <StackPanel Orientation="Horizontal" Spacing="8">
                             <CheckBox VerticalAlignment="Bottom" Content="Auto LENGTH" IsChecked="{Binding AutoLen}" />
-                            <NumericUpDown Width="90" Value="{Binding Len}" Minimum="0" Maximum="65535" Increment="1" FormatString="0" IsEnabled="{Binding !AutoLen}" />
+                            <NumericUpDown Value="{Binding Len}" Minimum="0" Maximum="65535" Increment="1" FormatString="0" IsEnabled="{Binding !AutoLen}" />
                             <CheckBox VerticalAlignment="Bottom" Content="Auto CHECKSUM" IsChecked="{Binding AutoChk}" />
-                            <NumericUpDown Width="90" Value="{Binding Chk}" Minimum="0" Maximum="255" Increment="1" FormatString="0" IsEnabled="{Binding !AutoChk}" />
+                            <NumericUpDown Value="{Binding Chk}" Minimum="0" Maximum="255" Increment="1" FormatString="0" IsEnabled="{Binding !AutoChk}" />
                         </StackPanel>
 
                         <Button Content="▶ Send" Classes="accent" Command="{Binding SendCommand}" IsEnabled="{Binding IsConnected}" HorizontalAlignment="Left" />
