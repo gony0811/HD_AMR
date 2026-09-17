@@ -85,8 +85,11 @@ public class CornerInspectionRunStep : ISequenceStep
         if (context.CornerSide is not { } side)
             return StepResult.Ok("건너뜀 — CornerSide 미설정(비코너 경로).");
 
-        // 검사 세션 1회 = Run ID 1개, 면 캡처 1건 = Task ID 1개 — ⑱과 동일한 v3 식별 체계.
-        var runId = Guid.NewGuid();
+        // v3.2: runId 는 로깅용 내부 상관값. taskId·attempt 는 ACS 발급(폴백 Empty/1), captureSeq 는 로봇 발번.
+        var runId  = Guid.NewGuid();
+        var taskId  = context.AcsTaskId ?? Guid.Empty;
+        var attempt = context.AcsAttempt ?? (byte)1;
+        ushort captureSeq = 0;
         _logger.LogInformation(
             "⑱ᶜ 코너3 검사 시작: side={Side}, Run {RunId}, SurfaceID 0x{Sid:X2}, vel={Vel}%" +
             (context.AcsOrderId is not null ? " (ACS order={OrderId}, jobRef={JobRef})" : ""),
@@ -117,20 +120,18 @@ public class CornerInspectionRunStep : ISequenceStep
 
             // surface type: 레시피 강제값(CORNER3 시드 = Corner) > Corner 기본.
             var surfaceType = context.SurfaceOverride is { } ovr ? (SurfaceType)ovr : SurfaceType.Corner;
-            var taskId = Guid.NewGuid();
-            var jobRef = context.AcsJobRef is not null
-                ? $"{context.AcsJobRef}-C{captured}"
-                : $"CORNER3-{side}-C{captured}";
-            var data = CaptureReqPayload.Build(runId, taskId, jobRef, surfaceType,
-                (ushort)context.InspectionSurfaceId, 0, 0);
+            // 코너 캡처는 면-로컬 (u,v,h) 좌표를 산출하지 않으므로 0(미지정)으로 전송.
+            var wallId = (ushort)context.InspectionSurfaceId;
+            captureSeq++;
+            var data = CaptureReqPayload.Build(surfaceType, wallId, 0, 0, 0, taskId, attempt, captureSeq);
 
             var outcome = await _vision.Client.RequestCaptureAsync(data, VisionTimeout, ct);
             if (outcome.Success) visOk++;
             else
             {
                 visFail++;
-                _logger.LogWarning("⑱ᶜ 면{Idx} 비전 실패: task={Task}, sent={Sent}, responded={Resp}, code={Code}",
-                    captured, taskId, outcome.Sent, outcome.Responded,
+                _logger.LogWarning("⑱ᶜ 면{Idx} 비전 실패: task={Task}, seq={Seq}, sent={Sent}, responded={Resp}, code={Code}",
+                    captured, taskId, captureSeq, outcome.Sent, outcome.Responded,
                     outcome.Code is { } c ? ResultCodeNames.NameOf((ushort)c) : "—");
             }
         }

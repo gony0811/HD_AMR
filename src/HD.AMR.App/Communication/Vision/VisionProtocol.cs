@@ -3,126 +3,111 @@ using System.Buffers.Binary;
 namespace HD.AMR.App.Communication.Vision;
 
 /// <summary>
-/// CAPTURE_REQ 의 115바이트 DATA 페이로드 생성 [v3]. 레이아웃:
-///   [0-35]  Run ID   (ASCII 36, ACS 실행 GUID 정규형)
-///   [36-71] Task ID  (ASCII 36, ACS 검사 TASK GUID 정규형)
-///   [72-103]Job Ref  (ASCII 32, null 0x00 패딩)
-///   [104]   Surface Type
-///   [105-106]Surface ID (UInt16 LE)
-///   [107-110]PosX (Int32 LE, mm)
-///   [111-114]PosY (Int32 LE, mm)
-/// Run/Task ID 는 ACS 상관 식별자로, 비전 S/W 가 이를 결과에 에코하면 엔터프라이즈가
-/// 검사 결과를 ACS TASK 진행현황(inspection_result / progress)과 매칭할 수 있다.
+/// CAPTURE_REQ 의 34바이트 DATA 페이로드 생성 [v3.2]. 레이아웃 (사양: vision_interface_v3.2):
+///   [0]     Surface Type  UInt8
+///   [1-2]   Wall ID       UInt16 LE (구 Surface ID — 명칭만 변경, 값 1~10 불변)
+///   [3-6]   PosX          Int32 LE  면-로컬 u (mm)
+///   [7-10]  PosY          Int32 LE  면-로컬 v (mm)
+///   [11-14] PosZ          Int32 LE  면-로컬 h (mm, 표면 높이) — 구 예약 4바이트 자리
+///   [15-30] taskId        GUID 16바이트 (바이너리)
+///   [31]    attempt       UInt8     시도 번호(1부터) — ACS 발급
+///   [32-33] captureSeq    UInt16 LE 시도 내 촬영 번호(1부터) — 로봇 발번
+/// 전체 프레임 = 9(고정 오버헤드) + 34 = 43바이트.
+/// taskId 는 ACS 가 검사 작업(용접선 1구간)에 발급한 영구 식별자로, 비전 S/W 가 이를
+/// SAIGE 메타데이터의 productId 로 그대로 사용해 검사 이력을 누적한다.
 /// </summary>
 public static class CaptureReqPayload
 {
-    public const int RunIdLen  = 36;
-    public const int TaskIdLen = 36;
-    public const int JobRefLen = 32;
-    public const int RunIdOff       = 0;
-    public const int TaskIdOff      = RunIdOff + RunIdLen;        // 36
-    public const int JobRefOff      = TaskIdOff + TaskIdLen;      // 72
-    public const int SurfaceTypeOff = JobRefOff + JobRefLen;      // 104
-    public const int SurfaceIdOff   = SurfaceTypeOff + 1;         // 105
-    public const int PosXOff        = SurfaceIdOff + 2;           // 107
-    public const int PosYOff        = PosXOff + 4;                // 111
-    public const int Length         = PosYOff + 4;               // 115
+    public const int SurfaceTypeOff = 0;                    // [0]
+    public const int WallIdOff      = 1;                    // [1-2]
+    public const int PosXOff        = 3;                    // [3-6]
+    public const int PosYOff        = 7;                    // [7-10]
+    public const int PosZOff        = 11;                   // [11-14]
+    public const int TaskIdOff      = 15;                   // [15-30]
+    public const int AttemptOff     = 31;                   // [31]
+    public const int CaptureSeqOff  = 32;                   // [32-33]
+    public const int Length         = 34;
 
-    /// <summary>v3: ACS 상관 식별자(Run ID·Task ID·Job Ref) 포함.</summary>
-    public static byte[] Build(Guid runId, Guid taskId, string? jobRef,
-        SurfaceType type, ushort surfaceId, int posX, int posY)
+    /// <summary>v3.2: 면·위치(u,v,h)·taskId·attempt·captureSeq 를 34바이트로 직렬화.</summary>
+    public static byte[] Build(
+        SurfaceType type, ushort wallId,
+        int posX, int posY, int posZ,
+        Guid taskId, byte attempt, ushort captureSeq)
     {
         var data = new byte[Length];
-        GuidAscii.Write(data.AsSpan(RunIdOff, RunIdLen), runId);
-        GuidAscii.Write(data.AsSpan(TaskIdOff, TaskIdLen), taskId);
-        AsciiField.Write(data.AsSpan(JobRefOff, JobRefLen), jobRef);
         data[SurfaceTypeOff] = (byte)type;
-        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(SurfaceIdOff, 2), surfaceId);
+        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(WallIdOff, 2), wallId);
         BinaryPrimitives.WriteInt32LittleEndian(data.AsSpan(PosXOff, 4), posX);
         BinaryPrimitives.WriteInt32LittleEndian(data.AsSpan(PosYOff, 4), posY);
+        BinaryPrimitives.WriteInt32LittleEndian(data.AsSpan(PosZOff, 4), posZ);
+        GuidBinary.Write(data.AsSpan(TaskIdOff, 16), taskId);
+        data[AttemptOff] = attempt;
+        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(CaptureSeqOff, 2), captureSeq);
         return data;
     }
 
-    /// <summary>상관 식별자 없이(수동 테스트·비ACS 경로) 생성 — Run/Task ID = 0 GUID, Job Ref = 공란.</summary>
-    public static byte[] Build(SurfaceType type, ushort surfaceId, int posX, int posY)
-        => Build(Guid.Empty, Guid.Empty, null, type, surfaceId, posX, posY);
+    /// <summary>디코드된 CAPTURE_REQ(34B) 필드 추출. 길이 부족 시 null.</summary>
+    public static CaptureReqFields? TryRead(ReadOnlySpan<byte> data)
+    {
+        if (data.Length < Length) return null;
+        return new CaptureReqFields(
+            (SurfaceType)data[SurfaceTypeOff],
+            BinaryPrimitives.ReadUInt16LittleEndian(data.Slice(WallIdOff, 2)),
+            BinaryPrimitives.ReadInt32LittleEndian(data.Slice(PosXOff, 4)),
+            BinaryPrimitives.ReadInt32LittleEndian(data.Slice(PosYOff, 4)),
+            BinaryPrimitives.ReadInt32LittleEndian(data.Slice(PosZOff, 4)),
+            GuidBinary.Read(data.Slice(TaskIdOff, 16)),
+            data[AttemptOff],
+            BinaryPrimitives.ReadUInt16LittleEndian(data.Slice(CaptureSeqOff, 2)));
+    }
 }
 
+/// <summary>CAPTURE_REQ 디코드 결과(로그·수신 파싱용).</summary>
+public readonly record struct CaptureReqFields(
+    SurfaceType Type, ushort WallId,
+    int PosX, int PosY, int PosZ,
+    Guid TaskId, byte Attempt, ushort CaptureSeq);
+
 /// <summary>
-/// CAPTURE_RES / ERROR_NOTI 의 74바이트 DATA 페이로드 [v3]. 레이아웃:
-///   [0-35]  Run ID  (ASCII 36, 요청 값 에코)
-///   [36-71] Task ID (ASCII 36, 요청 값 에코)
-///   [72-73] 결과/오류 코드 (UInt16 LE)
+/// CAPTURE_RES / ERROR_NOTI 의 2바이트 DATA 페이로드 [v3.2]. 레이아웃:
+///   [0-1] 결과/오류 코드 (UInt16 LE)
+/// v3.2 에서 Run/Task ID 에코가 폐지되어 결과 코드만 싣는다. 응답 상관은 단일 보류 슬롯 방식.
 /// </summary>
 public static class CaptureResPayload
 {
-    public const int RunIdOff  = 0;
-    public const int TaskIdOff = 36;
-    public const int CodeOff   = 72;
-    public const int Length    = 74;
+    public const int CodeOff = 0;                           // [0-1]
+    public const int Length  = 2;
 
-    public static byte[] Build(Guid runId, Guid taskId, ResultCode code)
+    public static byte[] Build(ResultCode code)
     {
         var data = new byte[Length];
-        GuidAscii.Write(data.AsSpan(RunIdOff, 36), runId);
-        GuidAscii.Write(data.AsSpan(TaskIdOff, 36), taskId);
-        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(CodeOff, 2), (ushort)code);
+        BinaryPrimitives.WriteUInt16LittleEndian(data, (ushort)code);
         return data;
     }
 
-    /// <summary>결과 코드 추출. v3(≥74B)는 [72], v2(정확히 2B) 레거시는 [0]. 부족하면 false.</summary>
+    /// <summary>결과 코드 추출. v3.2(2B)는 [0-1]. 레거시 v3(74B: Run/Task 에코 뒤 [72])도 관대하게 읽음.</summary>
     public static bool TryReadCode(ReadOnlySpan<byte> data, out ushort code)
     {
-        if (data.Length >= Length) { code = BinaryPrimitives.ReadUInt16LittleEndian(data.Slice(CodeOff, 2)); return true; }
+        if (data.Length == Length) { code = BinaryPrimitives.ReadUInt16LittleEndian(data); return true; }
+        if (data.Length >= 74)     { code = BinaryPrimitives.ReadUInt16LittleEndian(data.Slice(72, 2)); return true; } // 레거시 74B
         if (data.Length >= 2)      { code = BinaryPrimitives.ReadUInt16LittleEndian(data.Slice(0, 2)); return true; }
         code = 0; return false;
-    }
-
-    /// <summary>에코된 Run/Task ID 추출(v3, ≥74B). 파싱 실패 시 Guid.Empty.</summary>
-    public static (Guid RunId, Guid TaskId) ReadIds(ReadOnlySpan<byte> data)
-    {
-        if (data.Length < Length) return (Guid.Empty, Guid.Empty);
-        return (GuidAscii.Read(data.Slice(RunIdOff, 36)), GuidAscii.Read(data.Slice(TaskIdOff, 36)));
-    }
-}
-
-/// <summary>GUID ↔ 36바이트 ASCII 정규형(소문자, 하이픈) 변환. 엔디안 모호성 제거용.</summary>
-internal static class GuidAscii
-{
-    public static void Write(Span<byte> dst, Guid id)
-    {
-        // dst.Length == 36. Guid "D" 포맷 = 36자 ASCII.
-        Span<char> chars = stackalloc char[36];
-        id.TryFormat(chars, out _, "D");
-        for (var i = 0; i < 36; i++) dst[i] = (byte)chars[i];
-    }
-
-    public static Guid Read(ReadOnlySpan<byte> src)
-    {
-        Span<char> chars = stackalloc char[src.Length];
-        for (var i = 0; i < src.Length; i++) chars[i] = (char)src[i];
-        return Guid.TryParse(chars, out var g) ? g : Guid.Empty;
-    }
-}
-
-/// <summary>고정 길이 ASCII 필드(null 0x00 패딩) 쓰기/읽기.</summary>
-internal static class AsciiField
-{
-    public static void Write(Span<byte> dst, string? text)
-    {
-        dst.Clear();
-        if (string.IsNullOrEmpty(text)) return;
-        var n = 0;
-        foreach (var ch in text)
-        {
-            if (n >= dst.Length) break;
-            dst[n++] = ch < 0x80 ? (byte)ch : (byte)'?';   // ASCII 전용
-        }
     }
 }
 
 /// <summary>
-/// HD현대 비전 인터페이스 프로토콜 상수/코드 정의. 사양: docs/비전 인터페이스_v2.xlsx.
+/// GUID ↔ 16바이트 바이너리 변환. RFC 4122 표준(빅엔디안) 바이트 순서를 사용해, 하이픈 문자열을
+/// 왼쪽부터 읽은 순서와 바이트 배열이 일치한다(수신 측 문자열 변환이 모호하지 않음).
+/// ※ GUID 바이트 순서는 연동 시험 시 비전 S/W 와 최종 확인 대상.
+/// </summary>
+internal static class GuidBinary
+{
+    public static void Write(Span<byte> dst, Guid id) => id.TryWriteBytes(dst, bigEndian: true, out _);
+    public static Guid Read(ReadOnlySpan<byte> src)    => new(src[..16], bigEndian: true);
+}
+
+/// <summary>
+/// HD현대 비전 인터페이스 프로토콜 상수/코드 정의. 사양: docs/vision_interface_v3.2.
 /// 프레임 = STX(1) | LENGTH(2) | SEQ(1) | COMMAND(1) | FROM(1) | TO(1) | DATA(n) | CHECKSUM(1) | ETX(1).
 /// </summary>
 public static class FrameConst
@@ -168,27 +153,34 @@ public enum ResultCode : ushort
     ErrUnknown   = 0x00FF,
 }
 
-public sealed record SurfaceInfo(ushort Id, string Name, SurfaceType Type, string Axes);
+/// <summary>면(Wall) 정보. Id=Wall ID(1~10), Code=ACS 문자 코드, Axes=v3.2 §5 U/V 축 방향.</summary>
+public sealed record SurfaceInfo(ushort Id, string Code, string Name, SurfaceType Type, string Axes);
 
-/// <summary>사양 시트 5 "Surface ID 정의" 그대로. ID 0x01~0x0A, 전부 Flat.</summary>
+/// <summary>
+/// vision_interface_v3.2 §5 "면별 축 정의"(=SAIGE v2.6 부록 A, HD_ACS 내부 원점·축 기준) 그대로.
+/// Wall ID 1~10. U/V 축 방향은 v3.1 대비 U 9면·V 4면이 반전된 v3.2 정본.
+/// </summary>
 public static class SurfaceCatalog
 {
     public static readonly IReadOnlyList<SurfaceInfo> All = new SurfaceInfo[]
     {
-        new(0x01, "바닥 (Bottom)",       SurfaceType.Flat, "U: 선수→선미, V: 좌현→우현"),
-        new(0x02, "천장 (Top)",          SurfaceType.Flat, "U: 선수→선미, V: 좌현→우현"),
-        new(0x03, "좌현벽 (Port)",        SurfaceType.Flat, "U: 선수→선미, V: 바닥→천장"),
-        new(0x04, "우현벽 (Starboard)",   SurfaceType.Flat, "U: 선수→선미, V: 바닥→천장"),
-        new(0x05, "전벽 (Forward)",      SurfaceType.Flat, "U: 좌현→우현, V: 바닥→천장"),
-        new(0x06, "후벽 (Aft)",          SurfaceType.Flat, "U: 좌현→우현, V: 바닥→천장"),
-        new(0x07, "하부 좌현 챔퍼",        SurfaceType.Flat, "U: 선수→선미, V: 바닥→좌현벽"),
-        new(0x08, "하부 우현 챔퍼",        SurfaceType.Flat, "U: 선수→선미, V: 바닥→우현벽"),
-        new(0x09, "상부 좌현 챔퍼",        SurfaceType.Flat, "U: 선수→선미, V: 천장→좌현벽"),
-        new(0x0A, "상부 우현 챔퍼",        SurfaceType.Flat, "U: 선수→선미, V: 천장→우현벽"),
+        new(0x01, "B",  "바닥 (Bottom)",       SurfaceType.Flat, "U: 선미→선수, V: 우현→좌현"),
+        new(0x02, "T",  "천장 (Top)",          SurfaceType.Flat, "U: 선미→선수, V: 우현→좌현"),
+        new(0x03, "PM", "좌현벽 (Port)",        SurfaceType.Flat, "U: 선미→선수, V: 하단→상단"),
+        new(0x04, "SM", "우현벽 (Starboard)",   SurfaceType.Flat, "U: 선미→선수, V: 하단→상단"),
+        new(0x05, "F",  "전벽 (Forward)",      SurfaceType.Flat, "U: 좌현→우현, V: 하단→상단"),
+        new(0x06, "A",  "후벽 (Aft)",          SurfaceType.Flat, "U: 우현→좌현, V: 하단→상단"),
+        new(0x07, "PL", "하부 좌현 챔퍼",        SurfaceType.Flat, "U: 선미→선수, V: 바닥→좌현 수직벽"),
+        new(0x08, "SL", "하부 우현 챔퍼",        SurfaceType.Flat, "U: 선미→선수, V: 바닥→우현 수직벽"),
+        new(0x09, "PU", "상부 좌현 챔퍼",        SurfaceType.Flat, "U: 선미→선수, V: 수직벽→천장"),
+        new(0x0A, "SU", "상부 우현 챔퍼",        SurfaceType.Flat, "U: 선미→선수, V: 수직벽→천장"),
     };
 
     public static string NameOf(ushort id) =>
         All.FirstOrDefault(s => s.Id == id)?.Name ?? $"Unknown(0x{id:X4})";
+
+    public static string CodeOf(ushort id) =>
+        All.FirstOrDefault(s => s.Id == id)?.Code ?? $"0x{id:X2}";
 }
 
 public static class ResultCodeNames

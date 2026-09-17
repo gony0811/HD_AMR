@@ -59,17 +59,11 @@ public static class FrameDescriber
 
     private static string DescribeCaptureReq(byte[] data)
     {
-        // v3: 115B (Run/Task/Job + 면·위치)
-        if (data.Length >= CaptureReqPayload.Length)
+        // v3.2: 34B (면·(u,v,h)·taskId·attempt·captureSeq)
+        if (CaptureReqPayload.TryRead(data) is { } f)
         {
-            var runId  = GuidAscii.Read(data.AsSpan(CaptureReqPayload.RunIdOff, 36));
-            var taskId = GuidAscii.Read(data.AsSpan(CaptureReqPayload.TaskIdOff, 36));
-            var st  = data[CaptureReqPayload.SurfaceTypeOff];
-            var sid = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(CaptureReqPayload.SurfaceIdOff, 2));
-            var px  = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(CaptureReqPayload.PosXOff, 4));
-            var py  = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(CaptureReqPayload.PosYOff, 4));
-            return $"Run={ShortId(runId)} Task={ShortId(taskId)} " +
-                   $"Surface={SurfaceTypeName(st)}/0x{sid:X2}({SurfaceCatalog.NameOf(sid)}), Pos=({px},{py})mm";
+            return $"Wall=0x{f.WallId:X2}({SurfaceCatalog.NameOf(f.WallId)}) {SurfaceTypeName((byte)f.Type)} " +
+                   $"uvh=({f.PosX},{f.PosY},{f.PosZ})mm Task={ShortId(f.TaskId)} att={f.Attempt} seq={f.CaptureSeq}";
         }
         // v2 레거시: 15B (면·위치)
         if (data.Length >= 15)
@@ -85,24 +79,12 @@ public static class FrameDescriber
     private static string DescribeCaptureRes(byte[] data)
     {
         if (!CaptureResPayload.TryReadCode(data, out var code)) return $"RES DATA({data.Length}B 부족)";
-        var idPart = "";
-        if (data.Length >= CaptureResPayload.Length)
-        {
-            var (r, t) = CaptureResPayload.ReadIds(data);
-            idPart = $"Run={ShortId(r)} Task={ShortId(t)} ";
-        }
-        return $"{idPart}Result=0x{code:X4} {ResultCodeNames.NameOf(code)}";
+        return $"Result=0x{code:X4} {ResultCodeNames.NameOf(code)}";
     }
 
     private static string DescribeErrorNoti(byte[] data)
     {
         if (!CaptureResPayload.TryReadCode(data, out var code)) return $"ERR DATA({data.Length}B 부족)";
-        var idPart = "";
-        if (data.Length >= CaptureResPayload.Length)
-        {
-            var (r, t) = CaptureResPayload.ReadIds(data);
-            idPart = $"Run={ShortId(r)} Task={ShortId(t)} ";
-        }
-        return $"{idPart}Error=0x{code:X4} {ResultCodeNames.NameOf(code)}";
+        return $"Error=0x{code:X4} {ResultCodeNames.NameOf(code)}";
     }
 }

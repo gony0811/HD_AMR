@@ -358,11 +358,12 @@
     }
 
     private byte[] BuildCaptureReqData()
-        => CaptureReqPayload.Build((SurfaceType)_surfaceType, (ushort)_surfaceId, _posX, _posY);
+        // v3.2: (u,v,h)·taskId·attempt·captureSeq. 수동 테스트는 h=0·taskId=0 GUID·attempt=seq=1.
+        => CaptureReqPayload.Build((SurfaceType)_surfaceType, (ushort)_surfaceId, _posX, _posY, 0, Guid.Empty, 1, 1);
 
     private byte[] BuildResultData()
-        // v3: [0-35]Run ID·[36-71]Task ID(에코, 수동 테스트는 0 GUID)·[72-73]코드.
-        => CaptureResPayload.Build(Guid.Empty, Guid.Empty, (ResultCode)_resultCode);
+        // v3.2: 결과 코드 2바이트만.
+        => CaptureResPayload.Build((ResultCode)_resultCode);
 
     private async Task SendRaw()
     {

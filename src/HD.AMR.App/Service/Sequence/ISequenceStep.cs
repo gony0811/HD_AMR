@@ -100,6 +100,14 @@ public class SequenceContext
     /// <summary>수신 액션 actionId — 로깅/추적용.</summary>
     public string? AcsActionId { get; set; }
 
+    /// <summary>ACS 발급 검사 작업 식별자(taskId, GUID). VDA 액션에서 주입 예정.
+    /// null=미연동/수동 실행 → CAPTURE_REQ 에 <see cref="System.Guid.Empty"/>(미지정)로 전송.</summary>
+    public Guid? AcsTaskId { get; set; }
+
+    /// <summary>ACS 발급 시도 번호(attempt, 1부터). VDA 액션에서 주입 예정.
+    /// null=미연동 → CAPTURE_REQ 에 1(첫 시도)로 전송.</summary>
+    public byte? AcsAttempt { get; set; }
+
     /// <summary>정렬(anchor) 공유 그룹 id (params.anchorGroupId).</summary>
     public string? AnchorGroupId { get; set; }
 
