@@ -90,7 +90,7 @@
                                             </ComboBox.ItemTemplate>
                                         </ComboBox>
                                         <TextBlock Classes="hint" IsVisible="{Binding CanPickProfile}"
-                                                   Text="검사 포인트(X-Y)에서 저장한 같은 타입 프로필만 표시됩니다. 미지정이면 ACS 액션이 FAILED 입니다." />
+                                                   Text="검사 프로파일 페이지에서 저장한 같은 타입 프로필만 표시됩니다. 미지정이면 ACS 액션이 FAILED 입니다." />
                                         <TextBlock Classes="hint" IsVisible="{Binding IsCorner3}"
                                                    Text="CORNER3 는 고정 티칭 슬롯(corner3.L/R.*)을 순회하므로 프로필을 지정하지 않습니다." />
                                     </StackPanel>

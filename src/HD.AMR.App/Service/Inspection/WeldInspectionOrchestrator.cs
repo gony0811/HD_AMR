@@ -6,6 +6,7 @@ using HD.AMR.App.Service.Sequence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using HD.AMR.App.Models;
 
 namespace HD.AMR.App.Service.Inspection;
 
@@ -326,20 +327,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         }
     }
 
-    /// <summary>wall_code → 비전 Surface ID (vision_interface.md §5, 0x01~0x0A).
-    /// S*=우현(Starboard), P*=좌현(Port). 미정의 코드는 resolver 가 먼저 거른다 — 방어적 기본 0x01.</summary>
-    private static int WallCodeToSurfaceId(string wallCode) => wallCode switch
-    {
-        "B" => 0x01,    // 바닥 (Bottom)
-        "T" => 0x02,    // 천장 (Top)
-        "PM" => 0x03,   // 좌현벽 (Port)
-        "SM" => 0x04,   // 우현벽 (Starboard)
-        "F" => 0x05,    // 전벽 (Forward)
-        "A" => 0x06,    // 후벽 (Aft)
-        "PL" => 0x07,   // 하부 좌현 챔퍼
-        "SL" => 0x08,   // 하부 우현 챔퍼
-        "PU" => 0x09,   // 상부 좌현 챔퍼
-        "SU" => 0x0A,   // 상부 우현 챔퍼
-        _ => 0x01,
-    };
+    /// <summary>wall_code → 비전 Surface ID (vision_interface.md §5, 0x01~0x0A) — 정본 표 <see cref="WallCodes"/>.
+    /// 미정의 코드는 resolver 가 먼저 거른다 — 방어적 기본 0x01.</summary>
+    private static int WallCodeToSurfaceId(string wallCode) => WallCodes.Find(wallCode)?.SurfaceId ?? 0x01;
 }

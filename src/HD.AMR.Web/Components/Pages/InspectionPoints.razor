@@ -174,8 +174,10 @@
             <input class="form-control form-control-sm" type="number" min="0" max="14" style="width:80px" @bind="_runUser" /></div>
         <div class="col-auto"><label class="form-label mb-0">속도(%)</label>
             <input class="form-control form-control-sm" type="number" min="1" max="100" style="width:80px" @bind="_runVel" /></div>
-        <div class="col-auto"><label class="form-label mb-0">정착 대기(초)</label>
+        <div class="col-auto"><label class="form-label mb-0" title="각 경유점 도착 후 진동이 가라앉을 때까지 촬영 전 대기">정착 대기(초)</label>
             <input class="form-control form-control-sm" type="number" step="0.1" min="0" style="width:110px" @bind="_settleSec" /></div>
+        <div class="col-auto"><label class="form-label mb-0" title="ACS 검사 실행 시 비전 촬영 요청(CAPTURE_REQ) 후 응답을 기다리는 최대 시간. 초과하면 그 점은 비전 실패로 집계. 드라이런에는 쓰이지 않음">비전 응답 대기(초)</label>
+            <input class="form-control form-control-sm" type="number" step="0.5" min="0.5" style="width:120px" @bind="_visionTimeoutSec" /></div>
         <div class="col-auto">
             <button class="btn btn-success" @onclick="RunPoints" disabled="@(_isRunning || _points.Count < 1 || !Cobot.IsConnected)">
                 @(_isRunning ? "실행 중..." : "실행")
@@ -278,6 +280,7 @@
     // 코봇 실행
     private int _runTool = 1, _runUser = 0, _runVel = 5;
     private double _settleSec = 0.5;
+    private double _visionTimeoutSec = HD.AMR.App.Service.Sequence.Steps.InspectionRunStep.DefaultVisionTimeoutSec;   // 프로필 DelaySec
     private bool _isRunning;
     private bool _runErr;
     private string? _runMsg;
@@ -520,6 +523,7 @@
                 RunUser = _runUser,
                 RunVel = _runVel,
                 SettleDelaySec = _settleSec,
+                DelaySec = _visionTimeoutSec > 0 ? _visionTimeoutSec : HD.AMR.App.Service.Sequence.Steps.InspectionRunStep.DefaultVisionTimeoutSec,   // 비전 응답 대기(초)
                 ThMax = 180,             // X-Y 포인트는 θ 필터 미적용(전부 실행)
                 WaypointsJson = System.Text.Json.JsonSerializer.Serialize(wps),
             };
@@ -545,6 +549,7 @@
             _seamType = p.SeamType is "LINE" or "CROSS" or "CROSS3" or "CORNER2" or "CORNER3" ? p.SeamType : "CROSS";
             _profileName = p.Name;
             _runTool = p.RunTool; _runUser = p.RunUser; _runVel = p.RunVel; _settleSec = p.SettleDelaySec;
+            _visionTimeoutSec = p.DelaySec > 0 ? p.DelaySec : HD.AMR.App.Service.Sequence.Steps.InspectionRunStep.DefaultVisionTimeoutSec;
             var wps = System.Text.Json.JsonSerializer.Deserialize<List<InspectionWaypoint>>(p.WaypointsJson) ?? new();
             _points.Clear();
             foreach (var w in wps)

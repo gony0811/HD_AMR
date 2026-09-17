@@ -133,7 +133,7 @@
                         <td>
                             @if (TeachingService.IsSeedSlot(p.Key))
                             {
-                                <span class="text-muted" title="디폴트 위치 — Wall ID 고정">0x00</span>
+                                <span class="text-muted" title="고정 슬롯 — Wall ID 고정">@TeachingService.SurfaceLabel(p.SurfaceId)</span>
                             }
                             else if (p.Id == _editId)
                             {
@@ -145,7 +145,7 @@
                             {
                                 <input class="form-control form-control-sm d-inline-block bg-body-secondary"
                                        style="width:70px" value="@p.SurfaceId" readonly />
-                                <span class="text-muted small ms-1">0x@(p.SurfaceId.ToString("X2"))</span>
+                                <span class="text-muted small ms-1">@TeachingService.SurfaceLabel(p.SurfaceId)</span>
                             }
                         </td>
                         <td class="num">@Fmt(p.X)</td>
@@ -200,7 +200,7 @@
     }
 
     @* 사용자 정의 위치 추가 — Key 자동 생성, 좌표는 "현재 위치 저장"으로 채운다.
-       Surface ID: 0x00=홈/회피 등 디폴트, 0x01~0xFF=검사 위치(시퀀스 ② 목표 + 촬영 보고 id). *@
+       Surface ID: 0x00=홈/회피 등 디폴트, 0x01~0x0A=Wall Code 고정 슬롯 전용, 0x0B~0xFF=기타 검사 위치. *@
     <div class="row g-2 align-items-end mt-2">
         <div class="col-auto">
             <label class="form-label">새 항목 이름</label>
@@ -215,7 +215,7 @@
             <button class="btn btn-primary" @onclick="AddAsync" disabled="@_isBusy">항목 추가</button>
         </div>
         <div class="col-auto text-muted small align-self-center">
-            0x00 = 홈/회피 등 디폴트 · 0x01~0xFF = 검사 위치(촬영 시 보고 Wall ID)
+            0x00 = 홈/회피 등 디폴트 · 0x01~0x0A = Wall Code 검사 준비 위치(고정 슬롯 전용) · 0x0B~0xFF = 기타
         </div>
     </div>
 </section>

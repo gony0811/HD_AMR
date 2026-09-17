@@ -4,6 +4,7 @@ using CommunityToolkit.Mvvm.Input;
 using HD.AMR.App.Service;
 using HD.AMR.App.Service.Inspection;
 using Microsoft.Extensions.DependencyInjection;
+using HD.AMR.App.Models;
 
 namespace HD.AMR.Desktop.ViewModels;
 
@@ -14,16 +15,6 @@ namespace HD.AMR.Desktop.ViewModels;
 public sealed partial class InspectionMapViewModel : ViewModelBase
 {
     private readonly IServiceScopeFactory _scopeFactory;
-
-    // 정본 10코드(§8.5.1 (2)) — ACS 발행값과 동일.
-    private static readonly (string Code, string Label)[] WallCodes =
-    {
-        ("B", "바닥 (Floor)"), ("T", "천장 (Ceiling)"),
-        ("SM", "수직벽 우현 (Starboard)"), ("PM", "수직벽 좌현 (Port)"),
-        ("F", "선수 마구리 (Fore)"), ("A", "선미 마구리 (Aft)"),
-        ("SL", "하부챔퍼 우현"), ("PL", "하부챔퍼 좌현"),
-        ("SU", "상부챔퍼 우현"), ("PU", "상부챔퍼 좌현"),
-    };
 
     public ObservableCollection<WallMapRow> MapRows { get; } = new();
     public ObservableCollection<RecipeStatusRow> Recipes { get; } = new();
@@ -50,11 +41,11 @@ public sealed partial class InspectionMapViewModel : ViewModelBase
             var teaching = await svc.ListTeachingSummaryAsync();
 
             MapRows.Clear();
-            foreach (var (code, label) in WallCodes)
-                MapRows.Add(new WallMapRow(code, label,
-                    Cell(SeamTypeKind.Line, code, enabled), Cell(SeamTypeKind.Cross3, code, enabled),
-                    Cell(SeamTypeKind.Cross, code, enabled), Cell(SeamTypeKind.Corner2, code, enabled),
-                    Cell(SeamTypeKind.Corner, code, enabled)));
+            foreach (var w in WallCodes.All)   // 정본 10코드 — App WallCodes 단일 정의
+                MapRows.Add(new WallMapRow(w.Code, w.DisplayName,
+                    Cell(SeamTypeKind.Line, w.Code, enabled), Cell(SeamTypeKind.Cross3, w.Code, enabled),
+                    Cell(SeamTypeKind.Cross, w.Code, enabled), Cell(SeamTypeKind.Corner2, w.Code, enabled),
+                    Cell(SeamTypeKind.Corner, w.Code, enabled)));
 
             Recipes.Clear();
             foreach (var r in recipes)

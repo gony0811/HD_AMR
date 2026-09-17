@@ -37,6 +37,9 @@ public class InspectionRunStep : ISequenceStep
     private readonly ParameterService _param;
     private readonly ILogger<InspectionRunStep> _logger;
 
+    /// <summary>비전 CAPTURE_REQ 응답 대기 기본값(초) — 프로필 DelaySec 미설정(0 이하) 시. 검사 프로파일 화면 기본값과 동일.</summary>
+    public const double DefaultVisionTimeoutSec = 10.0;
+
     /// <summary>MoveL 가속/오버라이드 — /inspection 페이지 RunWaypoints 와 동일값.</summary>
     private const double MoveAcc = 100.0;
     private const double MoveOvl = 100.0;
@@ -130,7 +133,13 @@ public class InspectionRunStep : ISequenceStep
                 $"작업물 좌표계 #{wobjId} 원점 이동 실패 (rc={originRc}){FairinoErrorCodes.Suffix(originRc)}.");
 
         // ── 경유점 순회 + 비전 캡처 ────────────────────────────────────
-        var visionTimeout = TimeSpan.FromSeconds(Math.Max(0, profile.DelaySec));
+        // DelaySec = CAPTURE_REQ 응답 대기 제한(초). 0 이하(검사 프로파일 화면에 입력 칸이 없던 구버전 저장분)면
+        // 즉시 타임아웃으로 모든 촬영이 실패 집계되므로 기본값으로 대체한다.
+        var visionTimeoutSec = profile.DelaySec > 0 ? profile.DelaySec : DefaultVisionTimeoutSec;
+        if (profile.DelaySec <= 0)
+            _logger.LogWarning("⑱ 티칭설정 '{Prof}' 비전 응답 대기 미설정(DelaySec={Delay}) — 기본 {Default}초 사용",
+                profile.Name, profile.DelaySec, DefaultVisionTimeoutSec);
+        var visionTimeout = TimeSpan.FromSeconds(visionTimeoutSec);
         var settle = TimeSpan.FromSeconds(Math.Max(0, profile.SettleDelaySec));
         int moved = 0, skipped = 0, visOk = 0, visFail = 0;
 

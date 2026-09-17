@@ -95,7 +95,7 @@
         <Border Classes="card">
             <StackPanel Spacing="4">
                 <TextBlock Text="③ 티칭 프로필(경유점) 현황" FontWeight="SemiBold" />
-                <TextBlock Classes="axis" TextWrapping="Wrap" Text="검사 포인트(X-Y)에서 저장한 프로필 목록입니다. ACS 는 검사 레시피에 지정된 프로필만 사용합니다(지정 레시피 열). 지정 레시피가 없으면 ACS 미사용, 경유점 2점 미만이면 실행 시 FAILED+inspectionFailed." />
+                <TextBlock Classes="axis" TextWrapping="Wrap" Text="검사 프로파일 페이지에서 저장한 프로필 목록입니다. ACS 는 검사 레시피에 지정된 프로필만 사용합니다(지정 레시피 열). 지정 레시피가 없으면 ACS 미사용, 경유점 2점 미만이면 실행 시 FAILED+inspectionFailed." />
                 <Grid ColumnDefinitions="180,80,180,70,140,110,150">
                     <TextBlock Grid.Column="0" Text="프로필" Classes="axis" />
                     <TextBlock Grid.Column="1" Text="타입" Classes="axis" />
@@ -122,7 +122,7 @@
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
-                <TextBlock Classes="axis" Text="저장된 티칭 프로필이 없습니다 — 검사 포인트(X-Y) 페이지에서 교시 후 표시됩니다." HorizontalAlignment="Center"
+                <TextBlock Classes="axis" Text="저장된 티칭 프로필이 없습니다 — 검사 프로파일 페이지에서 교시 후 표시됩니다." HorizontalAlignment="Center"
                            IsVisible="{Binding Teaching.Count, Converter={x:Static vm:CountConverters.IsZero}}" />
             </StackPanel>
         </Border>

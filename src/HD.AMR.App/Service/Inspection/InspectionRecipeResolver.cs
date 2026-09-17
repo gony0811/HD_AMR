@@ -1,3 +1,5 @@
+using HD.AMR.App.Models;
+
 namespace HD.AMR.App.Service.Inspection;
 
 /// <summary>
@@ -11,16 +13,8 @@ namespace HD.AMR.App.Service.Inspection;
 /// </summary>
 public static class InspectionRecipeResolver
 {
-    /// <summary>wall_code(10코드 정본: B/T/SM/PM/F/A/SL/PL/SU/PU) → 면 자세. 미정의 코드는 null.</summary>
-    public static SurfaceOrientation? ResolveOrientation(string wallCode) => wallCode switch
-    {
-        "B" => SurfaceOrientation.Floor,
-        "T" => SurfaceOrientation.Ceiling,
-        "SM" or "PM" or "F" or "A" => SurfaceOrientation.Wall,
-        "SL" or "PL" => SurfaceOrientation.ChamferLower,
-        "SU" or "PU" => SurfaceOrientation.ChamferUpper,
-        _ => null,
-    };
+    /// <summary>wall_code(10코드 정본, <see cref="WallCodes"/>) → 면 자세. 미정의 코드는 null.</summary>
+    public static SurfaceOrientation? ResolveOrientation(string wallCode) => WallCodes.Find(wallCode)?.Orientation;
 
     /// <summary>레시피 id 유도. 실패 시 error 에 사유(계약 위반 — orderValidationError 계열).</summary>
     public static bool TryResolve(WeldInspectionRequest request, out string? recipeId, out string? error)

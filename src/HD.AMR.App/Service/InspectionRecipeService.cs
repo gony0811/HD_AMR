@@ -4,6 +4,7 @@ using HD.AMR.App.Data.Entities;
 using HD.AMR.App.Service.Inspection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using HD.AMR.App.Models;
 
 namespace HD.AMR.App.Service;
 

@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using HD.AMR.App.Models;
 
 namespace HD.AMR.App.Communication.Vision;
 
@@ -170,22 +171,13 @@ public enum ResultCode : ushort
 
 public sealed record SurfaceInfo(ushort Id, string Name, SurfaceType Type, string Axes);
 
-/// <summary>사양 시트 5 "Surface ID 정의" 그대로. ID 0x01~0x0A, 전부 Flat.</summary>
+/// <summary>사양 시트 5 "Surface ID 정의". ID 0x01~0x0A, 전부 Flat.
+/// 검사 면 정본 표 <see cref="WallCodes"/> 에서 생성한다 — ACS wall_code·Teaching Wall ID 와 같은 번호를 보장.</summary>
 public static class SurfaceCatalog
 {
-    public static readonly IReadOnlyList<SurfaceInfo> All = new SurfaceInfo[]
-    {
-        new(0x01, "바닥 (Bottom)",       SurfaceType.Flat, "U: 선수→선미, V: 좌현→우현"),
-        new(0x02, "천장 (Top)",          SurfaceType.Flat, "U: 선수→선미, V: 좌현→우현"),
-        new(0x03, "좌현벽 (Port)",        SurfaceType.Flat, "U: 선수→선미, V: 바닥→천장"),
-        new(0x04, "우현벽 (Starboard)",   SurfaceType.Flat, "U: 선수→선미, V: 바닥→천장"),
-        new(0x05, "전벽 (Forward)",      SurfaceType.Flat, "U: 좌현→우현, V: 바닥→천장"),
-        new(0x06, "후벽 (Aft)",          SurfaceType.Flat, "U: 좌현→우현, V: 바닥→천장"),
-        new(0x07, "하부 좌현 챔퍼",        SurfaceType.Flat, "U: 선수→선미, V: 바닥→좌현벽"),
-        new(0x08, "하부 우현 챔퍼",        SurfaceType.Flat, "U: 선수→선미, V: 바닥→우현벽"),
-        new(0x09, "상부 좌현 챔퍼",        SurfaceType.Flat, "U: 선수→선미, V: 천장→좌현벽"),
-        new(0x0A, "상부 우현 챔퍼",        SurfaceType.Flat, "U: 선수→선미, V: 천장→우현벽"),
-    };
+    public static readonly IReadOnlyList<SurfaceInfo> All = WallCodes.All
+        .Select(w => new SurfaceInfo((ushort)w.SurfaceId, w.DisplayName, SurfaceType.Flat, w.Axes))
+        .ToArray();
 
     public static string NameOf(ushort id) =>
         All.FirstOrDefault(s => s.Id == id)?.Name ?? $"Unknown(0x{id:X4})";

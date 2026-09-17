@@ -39,7 +39,7 @@
         <!-- 목록 -->
         <Border Classes="card">
             <StackPanel Spacing="4">
-                <Grid ColumnDefinitions="200,160,64,64,64,58,58,58,58,58,58,58,58,58,*">
+                <Grid ColumnDefinitions="200,190,64,64,64,58,58,58,58,58,58,58,58,58,*">
                     <TextBlock Grid.Column="0" Text="이름" Classes="axis" />
                     <TextBlock Grid.Column="1" Text="Wall ID" Classes="axis" />
                     <TextBlock Grid.Column="2" Text="X" Classes="axis" /><TextBlock Grid.Column="3" Text="Y" Classes="axis" /><TextBlock Grid.Column="4" Text="Z" Classes="axis" />
@@ -52,7 +52,7 @@
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="vm:TeachingRowVm">
                             <Border Padding="0,3" Background="{Binding IsBusy, Converter={x:Static vm:SeqRowConverters.CurrentBrush}}">
-                                <Grid ColumnDefinitions="200,160,64,64,64,58,58,58,58,58,58,58,58,58,*">
+                                <Grid ColumnDefinitions="200,190,64,64,64,58,58,58,58,58,58,58,58,58,*">
                                     <!-- 이름: 시드 슬롯=텍스트 / 편집 중=TextBox / 그 외 읽기전용 -->
                                     <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4">
                                         <TextBlock Text="{Binding Name}" VerticalAlignment="Center" IsVisible="{Binding ShowNameText}" />
@@ -61,9 +61,9 @@
                                         <Border Classes="badge" IsVisible="{Binding HasUserFrame}"><TextBlock Text="{Binding UserFrameText}" FontSize="10" /></Border>
                                     </StackPanel>
                                     <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
-                                        <TextBlock Text="0x00" Classes="axis" VerticalAlignment="Center" IsVisible="{Binding IsSeed}" />
+                                        <TextBlock Text="{Binding SurfaceText}" Classes="axis" VerticalAlignment="Center" IsVisible="{Binding IsSeed}" />
                                         <NumericUpDown Value="{Binding EditSurfaceId}" Minimum="0" Maximum="255" Increment="1" FormatString="0" IsVisible="{Binding ShowNameEdit}" />
-                                        <TextBlock Text="{Binding SurfaceHex}" Classes="axis" VerticalAlignment="Center" IsVisible="{Binding ShowNameRead}" />
+                                        <TextBlock Text="{Binding SurfaceText}" Classes="axis" VerticalAlignment="Center" IsVisible="{Binding ShowNameRead}" />
                                     </StackPanel>
                                     <TextBlock Grid.Column="2" Classes="num" Text="{Binding X}" /><TextBlock Grid.Column="3" Classes="num" Text="{Binding Y}" /><TextBlock Grid.Column="4" Classes="num" Text="{Binding Z}" />
                                     <TextBlock Grid.Column="5" Classes="num" Text="{Binding Rx}" /><TextBlock Grid.Column="6" Classes="num" Text="{Binding Ry}" /><TextBlock Grid.Column="7" Classes="num" Text="{Binding Rz}" />
@@ -98,7 +98,7 @@
                     <StackPanel><TextBlock Classes="axis" Text="새 항목 이름" /><TextBox Width="200" Text="{Binding NewName}" IsEnabled="{Binding !IsBusy}" /></StackPanel>
                     <StackPanel><TextBlock Classes="axis" Text="Wall ID (0~255)" /><NumericUpDown Value="{Binding NewSurfaceId}" Minimum="0" Maximum="255" Increment="1" FormatString="0" IsEnabled="{Binding !IsBusy}" /></StackPanel>
                     <Button VerticalAlignment="Bottom" Content="항목 추가" Classes="accent" Command="{Binding AddCommand}" IsEnabled="{Binding !IsBusy}" />
-                    <TextBlock Classes="axis" VerticalAlignment="Bottom" Text="0x00 = 홈/회피 등 디폴트 · 0x01~0xFF = 검사 위치(촬영 시 보고 Wall ID)" />
+                    <TextBlock Classes="axis" VerticalAlignment="Bottom" Text="0x00 = 홈/회피 등 디폴트 · 0x01~0x0A = Wall Code 검사 준비 위치(고정 슬롯 전용) · 0x0B~0xFF = 기타" />
                 </StackPanel>
             </StackPanel>
         </Border>

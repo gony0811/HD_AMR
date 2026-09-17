@@ -57,28 +57,34 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _cobot = cobot;
         _io = io;
 
-        // 기존 HD.AMR.Web/Components/Layout/NavMenu.razor 의 18개 항목 이식.
+        // 기존 HD.AMR.Web/Components/Layout/NavMenu.razor 항목 이식(도면 기반 Inspection 은 X-Y 교시 일원화로 제외).
         // 아직 포팅되지 않은 페이지는 Target = null (클릭 시 "준비 중" 플레이스홀더로 이동).
         NavItems = new ObservableCollection<NavItem>
         {
             new("Dashboard",     "🏠", typeof(HomeViewModel)),
-            new("AMR",           "🚚", typeof(AmrViewModel)),
             new("Teaching",      "✏️", typeof(TeachingViewModel)),
-            new("Inspection",    "📋", null),
-            new("검사 레시피",   "📗", typeof(InspectionRecipesViewModel)),
-            new("검사 포인트(X-Y)", "📍", typeof(InspectionPointsViewModel)),
-            new("검사 매핑 요약", "🗂", typeof(InspectionMapViewModel)),
-            new("Cobot",         "🤖", typeof(CobotViewModel)),
+            // 접이식 그룹 — 클릭 시 하위 메뉴 펼침/접힘(기본 접힘). 하위 항목은 펼칠 때 목록에 삽입된다.
+            new("RECIPE",        "🧾", null, new NavItem[]
+            {
+                new("검사 레시피",   "📗", typeof(InspectionRecipesViewModel)),
+                new("검사 프로파일", "📍", typeof(InspectionPointsViewModel)),
+                new("검사 매핑 요약", "🗂", typeof(InspectionMapViewModel)),
+            }),
             new("Sequence",      "🔀", typeof(SequenceViewModel)),
-            new("Camera",        "🎥", typeof(CameraViewModel)),
-            new("용접 추적",     "📈", typeof(WeldTrackingViewModel)),
-            new("Vision Interface", "🖧", typeof(VisionInterfaceViewModel)),
-            new("비드 라벨링",   "🏷", typeof(LabelEditorViewModel)),
-            new("비전 학습",     "🧠", typeof(VisionTrainingViewModel)),
-            new("QR Pose Teaching", "🧭", typeof(CalibrationViewModel)),
-            new("Parameter",     "🎛", typeof(ParametersViewModel)),
-            new("Laser Sensor",  "📏", typeof(LaserViewModel)),
-            new("IO Module",     "🔌", typeof(IoModuleViewModel)),
+            new("SETTINGS",      "⚙️", null, new NavItem[]
+            {
+                new("AMR",           "🚚", typeof(AmrViewModel)),
+                new("Cobot",         "🤖", typeof(CobotViewModel)),
+                new("Camera",        "🎥", typeof(CameraViewModel)),
+                new("Laser Sensor",  "📏", typeof(LaserViewModel)),
+                new("IO Module",     "🔌", typeof(IoModuleViewModel)),
+                new("Vision Interface", "🖧", typeof(VisionInterfaceViewModel)),
+                new("용접 추적",     "📈", typeof(WeldTrackingViewModel)),
+                new("비드 라벨링",   "🏷", typeof(LabelEditorViewModel)),
+                new("비전 학습",     "🧠", typeof(VisionTrainingViewModel)),
+                new("QR Pose Teaching", "🧭", typeof(CalibrationViewModel)),
+                new("Parameter",     "🎛", typeof(ParametersViewModel)),
+            }),
         };
 
         SelectedItem = NavItems[0];
@@ -123,10 +129,38 @@ public sealed partial class MainWindowViewModel : ObservableObject
         RefreshStatus();
     }
 
-    partial void OnSelectedItemChanged(NavItem? value)
+    partial void OnSelectedItemChanged(NavItem? oldValue, NavItem? newValue)
     {
-        if (value is not null)
-            Navigate(value);
+        if (newValue is null) return;
+        if (newValue.IsGroup)
+        {
+            // 그룹 헤더는 페이지가 아니다 — 펼침/접힘만 하고 선택은 이전 항목으로 되돌린다.
+            // 선택 변경 알림 도중 되돌리면 ListBox 가 무시하므로 UI 스레드에 한 틱 미룬다.
+            ToggleGroup(newValue);
+            var restore = oldValue is not null && NavItems.Contains(oldValue) ? oldValue : null;
+            Dispatcher.UIThread.Post(() => SelectedItem = restore);
+            return;
+        }
+        Navigate(newValue);
+    }
+
+    /// <summary>그룹 펼침 시 하위 항목을 헤더 바로 뒤에 삽입, 접힘 시 제거.</summary>
+    private void ToggleGroup(NavItem group)
+    {
+        var index = NavItems.IndexOf(group);
+        if (index < 0) return;
+        if (group.IsExpanded)
+        {
+            foreach (var child in group.Children)
+                NavItems.Remove(child);
+            group.IsExpanded = false;
+        }
+        else
+        {
+            for (var i = 0; i < group.Children.Count; i++)
+                NavItems.Insert(index + 1 + i, group.Children[i]);
+            group.IsExpanded = true;
+        }
     }
 
     [RelayCommand]
@@ -139,5 +173,31 @@ public sealed partial class MainWindowViewModel : ObservableObject
     }
 }
 
-/// <summary>NavMenu 한 항목. <paramref name="Target"/> 이 null 이면 아직 포팅 전 페이지.</summary>
-public sealed record NavItem(string Label, string Icon, Type? Target);
+/// <summary>NavMenu 한 항목. <see cref="Target"/> 이 null 이면 아직 포팅 전 페이지.
+/// <see cref="Children"/> 가 있으면 페이지가 아닌 접이식 그룹 헤더다(하위 항목은 들여쓰기 표시).</summary>
+public sealed partial class NavItem : ObservableObject
+{
+    public NavItem(string label, string icon, Type? target, IReadOnlyList<NavItem>? children = null)
+    {
+        Label = label;
+        Icon = icon;
+        Target = target;
+        Children = children ?? Array.Empty<NavItem>();
+        foreach (var child in Children)
+            child.IsChild = true;
+    }
+
+    public string Label { get; }
+    public string Icon { get; }
+    public Type? Target { get; }
+    public IReadOnlyList<NavItem> Children { get; }
+    public bool IsGroup => Children.Count > 0;
+    public bool IsChild { get; private set; }
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(Chevron))]
+    private bool _isExpanded;
+
+    /// <summary>그룹 헤더 우측 표시(▾ 펼침 / ▸ 접힘). 일반 항목은 빈 문자열.</summary>
+    public string Chevron => IsGroup ? (IsExpanded ? "▾" : "▸") : "";
+}

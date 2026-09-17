@@ -3,6 +3,7 @@
 @using HD.AMR.App.Data.Entities
 @using HD.AMR.App.Service
 @using HD.AMR.App.Service.Inspection
+@using HD.AMR.App.Models
 @inject InspectionRecipeService Service
 @inject ILogger<InspectionMap> Logger
 
@@ -61,11 +62,11 @@
             </tr>
         </thead>
         <tbody>
-            @foreach (var w in WallCodes)
+            @foreach (var w in WallCodes.All)
             {
                 <tr>
                     <td><code>@w.Code</code></td>
-                    <td>@w.Label</td>
+                    <td>@w.DisplayName</td>
                     <td>@RecipeCell(SeamTypeKind.Line, w.Code)</td>
                     <td>@RecipeCell(SeamTypeKind.Cross3, w.Code)</td>
                     <td>@RecipeCell(SeamTypeKind.Cross, w.Code)</td>
@@ -203,23 +204,6 @@
 </div>
 
 @code {
-    private record WallCodeRow(string Code, string Label);
-
-    // 정본 10코드(§8.5.1 (2)) — ACS 발행값과 동일.
-    private static readonly WallCodeRow[] WallCodes =
-    {
-        new("B", "바닥 (Floor)"),
-        new("T", "천장 (Ceiling)"),
-        new("SM", "수직벽 우현 (Starboard)"),
-        new("PM", "수직벽 좌현 (Port)"),
-        new("F", "선수 마구리 (Fore)"),
-        new("A", "선미 마구리 (Aft)"),
-        new("SL", "하부챔퍼 우현"),
-        new("PL", "하부챔퍼 좌현"),
-        new("SU", "상부챔퍼 우현"),
-        new("PU", "상부챔퍼 좌현"),
-    };
-
     private List<InspectionRecipe> _recipes = new();
     private Dictionary<string, bool> _enabledById = new();
     private List<DrawingTeachingSummary> _teaching = new();

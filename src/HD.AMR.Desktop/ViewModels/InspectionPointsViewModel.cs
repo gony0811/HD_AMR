@@ -36,6 +36,8 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
     [ObservableProperty] private int _runUser;
     [ObservableProperty] private int _runVel = 5;
     [ObservableProperty] private double _settleSec = 0.5;
+    /// <summary>ACS 검사 시 비전 CAPTURE_REQ 응답 대기(초) — 프로필 DelaySec. 드라이런에는 쓰이지 않음.</summary>
+    [ObservableProperty] private double _visionTimeoutSec = HD.AMR.App.Service.Sequence.Steps.InspectionRunStep.DefaultVisionTimeoutSec;
     [ObservableProperty] private bool _isRunning;
     [ObservableProperty] private string? _runMsg;
     [ObservableProperty] private bool _runErr;
@@ -232,6 +234,7 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
                 SeamType = SeamType,
                 PoseAbsolute = true,
                 RunTool = RunTool, RunUser = RunUser, RunVel = RunVel, SettleDelaySec = SettleSec,
+                DelaySec = VisionTimeoutSec > 0 ? VisionTimeoutSec : HD.AMR.App.Service.Sequence.Steps.InspectionRunStep.DefaultVisionTimeoutSec,
                 ThMax = 180,
                 WaypointsJson = System.Text.Json.JsonSerializer.Serialize(wps),
             };
@@ -259,6 +262,7 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
             SeamTypeIndex = idx >= 0 ? idx : 1;
             ProfileName = p.Name;
             RunTool = p.RunTool; RunUser = p.RunUser; RunVel = p.RunVel; SettleSec = p.SettleDelaySec;
+            VisionTimeoutSec = p.DelaySec > 0 ? p.DelaySec : HD.AMR.App.Service.Sequence.Steps.InspectionRunStep.DefaultVisionTimeoutSec;
             var wps = System.Text.Json.JsonSerializer.Deserialize<List<InspectionWaypoint>>(p.WaypointsJson) ?? new();
             Points.Clear();
             foreach (var w in wps)

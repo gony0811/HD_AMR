@@ -1,4 +1,5 @@
 using HD.AMR.App.Service.Inspection;
+using HD.AMR.App.Models;
 
 namespace HD.AMR.App.Data.Entities;
 
