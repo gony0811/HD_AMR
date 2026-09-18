@@ -53,7 +53,15 @@ public static class MountSampleInspector
             warnings.Add("일부 표본에만 텔레스코픽 스트로크가 기록돼 있습니다 — 미기록 표본이 다른 높이에서 " +
                          "잡혔다면 기울기가 조용히 틀어집니다. 전체 삭제 후 재기록을 권장합니다.");
 
-        // ⑤ 표본 노후·기간 분산 — 그 사이 재장착이 있었다면 섞어 쓰면 안 된다.
+        // ⑤ 표적 높이 미기록 — 같은 표적이었는지 확인할 근거가 없다.
+        if (samples.All(s => !s.TargetZmm.HasValue))
+            warnings.Add("표적 높이가 기록되지 않은 표본입니다 — 전 표본이 같은 점을 터치했는지 확인할 수 없습니다. " +
+                         "표적을 옮긴 적이 있으면 전체 삭제 후 재기록하세요.");
+        else if (samples.Any(s => !s.TargetZmm.HasValue))
+            warnings.Add("일부 표본에만 표적 높이가 기록돼 있습니다 — 미기록 표본이 다른 표적일 수 있습니다. " +
+                         "전체 삭제 후 재기록을 권장합니다.");
+
+        // ⑥ 표본 노후·기간 분산 — 그 사이 재장착이 있었다면 섞어 쓰면 안 된다.
         var stamped = samples.Where(s => s.CapturedAtUtc.HasValue).Select(s => s.CapturedAtUtc!.Value).ToList();
         if (stamped.Count > 0)
         {

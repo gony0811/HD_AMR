@@ -54,7 +54,6 @@ public sealed partial class MountCalibrationViewModel : ViewModelBase
     [ObservableProperty] private int _tool = 1;
     [ObservableProperty] private double _targetQzMm;
     [ObservableProperty] private bool _qzConfirmed;
-    [ObservableProperty] private double _cadTzMm;
     [ObservableProperty] private double _telescopicStrokeMm;   // 완전 하강 = 0
     [ObservableProperty] private bool _strokeConfirmed;
     [ObservableProperty] private bool _liveTcp = true;
@@ -141,7 +140,6 @@ public sealed partial class MountCalibrationViewModel : ViewModelBase
         CaptureSampleCommand.NotifyCanExecuteChanged();
         SolveCommand.NotifyCanExecuteChanged();
         RefreshTcpNowCommand.NotifyCanExecuteChanged();
-        ApplyCadTzCommand.NotifyCanExecuteChanged();
         UseLiftHeightCommand.NotifyCanExecuteChanged();
     }
 
@@ -235,11 +233,49 @@ public sealed partial class MountCalibrationViewModel : ViewModelBase
     public string DirtyText => IsDirty ? "저장값과 다름 — 저장 필요" : "저장값과 동일";
 
     public bool CanCapture => AmrConnected && CobotConnected && HasAmrPose && IsAmrStationary
-                              && QzConfirmed && StrokeConfirmed && !Busy;
-    public bool CanSolve => SampleCount >= 3 && QzConfirmed && !Busy;
+                              && QzConfirmed && StrokeConfirmed && !TargetMismatch && !Busy;
+    public bool CanSolve => SampleCount >= 3 && QzConfirmed && !TargetMismatch && !Busy;
     public bool CanApply => Result is { Success: true };
     public bool CanRefreshTcp => CobotConnected && !Busy;
-    public bool CanApplyCadTz => SampleCount >= 1 && !Busy;
+
+    // 산출 결과는 그때의 q_z 에 묶여 있다 — 표적 높이가 바뀌면 결과부터 버린다.
+    partial void OnTargetQzMmChanged(double value) => Result = null;
+
+    // ── 표적 일치 확인 ──────────────────────────────────────────────
+    /// <summary>표본에 기록된 표적 높이(있는 것만). 여러 값이면 표적을 옮긴 채 섞인 것이다.</summary>
+    private double[] RecordedTargets =>
+        _samples.Where(s => s.TargetZmm.HasValue).Select(s => s.TargetZmm!.Value).Distinct().ToArray();
+
+    /// <summary>현재 입력한 q_z 가 기존 표본이 기록한 표적 높이와 다른가 — 표적을 옮겼다는 신호.</summary>
+    public bool TargetMismatch =>
+        RecordedTargets.Length > 0 && RecordedTargets.Any(t => Math.Abs(t - TargetQzMm) > 1.0);
+
+    /// <summary>표적 높이를 기록하지 않은 구버전 표본이 섞여 있는가.</summary>
+    public bool HasUnrecordedTargets => _samples.Count > 0 && _samples.Any(s => !s.TargetZmm.HasValue);
+
+    public string TargetMismatchText => TargetMismatch
+        ? $"기존 표본은 표적 높이 {string.Join(", ", RecordedTargets.Select(t => $"{t:0.#}"))} mm 로 기록돼 있는데 " +
+          $"현재 입력은 {TargetQzMm:0.#} mm 입니다 — 표적을 옮겼다면 예전 표본은 전부 무효입니다. " +
+          "'전체 삭제' 후 새 표적으로 다시 뜨세요."
+        : "";
+
+    /// <summary>
+    /// 현재 q_z 와 실측 터치점으로 역산한 코봇 베이스 높이 — 도면·줄자와 대조하는 확인용 표시.
+    /// 산출 결과가 있으면 정확한 tz, 없으면 Bz 로 근사한다(기울기 무시).
+    /// </summary>
+    public string ImpliedTzText
+    {
+        get
+        {
+            if (Result is { Success: true, TzObserved: true } r)
+                return $"산출 tz = {r.MountPose[2]:0.0} mm (코봇 베이스의 바닥 기준 높이)";
+
+            double? bz = _tcp is { } p ? p[2] : _samples.Count > 0 ? _samples[^1].Bz : null;
+            if (bz is null) return "코봇 TCP 를 읽으면 베이스 높이를 역산해 보여 줍니다.";
+            return $"역산 tz ≈ {TargetQzMm - bz.Value:0.0} mm = q_z({TargetQzMm:0.#}) − Bz({bz.Value:0.#}) " +
+                   "— 기울기 무시 근사. 도면·줄자와 대조하세요.";
+        }
+    }
 
     // ── 리프트 실측 스트로크 ────────────────────────────────────────
     /// <summary>텔레스코픽 컨트롤러가 연결돼 높이를 읽고 있는가.</summary>
@@ -272,6 +308,7 @@ public sealed partial class MountCalibrationViewModel : ViewModelBase
     public string SolveBlockedReason =>
         !QzConfirmed ? "표적 높이 q_z 를 입력하고 확인에 체크해야 산출할 수 있습니다."
         : !StrokeConfirmed ? "텔레스코픽 스트로크를 확인에 체크해야 합니다."
+        : TargetMismatch ? "기존 표본의 표적 높이와 다릅니다 — '전체 삭제' 후 다시 뜨세요."
         : SampleCount < 3 ? $"표본이 {SampleCount}개입니다 — 최소 3개(권장 5개 이상) 필요합니다."
         : Busy ? "처리 중입니다…"
         : "";
@@ -330,6 +367,7 @@ public sealed partial class MountCalibrationViewModel : ViewModelBase
                 Brx = srx / n, Bry = sry / n, Brz = srz / n,
                 Tool = Tool, CapturedAtUtc = DateTime.UtcNow,
                 TelescopicStrokeMm = TelescopicStrokeMm,
+                TargetZmm = TargetQzMm,
             });
 
             await PersistSamplesAsync();
@@ -379,6 +417,7 @@ public sealed partial class MountCalibrationViewModel : ViewModelBase
             Bx = ManBx, By = ManBy, Bz = ManBz,
             Tool = Tool, CapturedAtUtc = DateTime.UtcNow,
             TelescopicStrokeMm = TelescopicStrokeMm,
+            TargetZmm = TargetQzMm,
         });
         await PersistSamplesAsync();
         Resolve();
@@ -397,16 +436,6 @@ public sealed partial class MountCalibrationViewModel : ViewModelBase
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { Failure($"코봇 TCP 읽기 실패: {ex.Message}"); }
-    }
-
-    /// <summary>CAD 의 tz 로부터 q_z 를 역산(q_z = tz + 평균 Bz). rx≈ry≈0 가정이라 초기 추정용이다.</summary>
-    [RelayCommand(CanExecute = nameof(CanApplyCadTz))]
-    private void ApplyCadTz()
-    {
-        TargetQzMm = CadTzMm + _samples.Average(s => s.Bz);
-        QzConfirmed = false;
-        Notify($"CAD tz {CadTzMm:0.0}mm 기준으로 q_z ≈ {TargetQzMm:0.0}mm 로 채웠습니다 — " +
-               "rx/ry≈0 가정이므로 실측값으로 확인한 뒤 체크하세요.", error: false);
     }
 
     // ── 산출 · 적용 · 저장 ──────────────────────────────────────────

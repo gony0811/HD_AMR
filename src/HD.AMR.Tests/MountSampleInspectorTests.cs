@@ -9,11 +9,13 @@ namespace HD.AMR.Tests;
 public class MountSampleInspectorTests
 {
     private static MountSample Sample(int i, double x, double y, double yaw,
-        int? tool = 1, double bz = -800, DateTime? at = null, double? stroke = 0) => new()
+        int? tool = 1, double bz = -800, DateTime? at = null, double? stroke = 0,
+        double? target = 0) => new()
     {
         Index = i, AmrXmm = x, AmrYmm = y, AmrYawDeg = yaw,
         Bx = 900 + 40 * i, By = 100 - 30 * i, Bz = bz,
         Tool = tool, CapturedAtUtc = at ?? DateTime.UtcNow, TelescopicStrokeMm = stroke,
+        TargetZmm = target,
     };
 
     private static List<MountSample> Clean() => new()
@@ -117,5 +119,24 @@ public class MountSampleInspectorTests
         list[1].TelescopicStrokeMm = null;
 
         Assert.Contains(MountSampleInspector.Inspect(list), w => w.Contains("일부 표본에만"));
+    }
+
+    // 표적 높이 미기록 — 같은 점을 터치했는지 확인할 근거가 없다.
+    [Fact]
+    public void Inspect_NoTargetHeight_Warns()
+    {
+        var list = Clean();
+        foreach (var s in list) s.TargetZmm = null;
+
+        Assert.Contains(MountSampleInspector.Inspect(list), w => w.Contains("표적 높이가 기록되지"));
+    }
+
+    [Fact]
+    public void Inspect_PartialTargetHeight_Warns()
+    {
+        var list = Clean();
+        list[2].TargetZmm = null;
+
+        Assert.Contains(MountSampleInspector.Inspect(list), w => w.Contains("일부 표본에만 표적 높이"));
     }
 }

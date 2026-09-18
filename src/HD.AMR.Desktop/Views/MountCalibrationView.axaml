@@ -62,7 +62,9 @@
             <StackPanel Spacing="8">
                 <TextBlock Classes="cardHead" Text="① 표적 정의" />
                 <TextBlock Classes="hint"
-                           Text="한 점만 씁니다 — 모든 표본에서 물리적으로 동일한 점을 터치해야 합니다. 바닥에 고정한 센터펀치 자국·원뿔 지그처럼 팁이 재현성 있게 안착하는 점을 쓰세요." />
+                           Text="한 점만 씁니다 — 모든 표본에서 물리적으로 동일한 점을 터치해야 합니다. 바닥에 고정한 센터펀치 자국·원뿔 지그처럼 팁이 재현성 있게 안착하는 점을 쓰세요. 표적을 옮기면 기존 표본은 전부 무효입니다." />
+                <TextBlock Classes="hint"
+                           Text="좌표계: 작업물(User/WObj) 프레임은 무엇이 활성이든 무관합니다 — 코드가 BASE 로 되돌립니다. 공구(Tool) 번호만 맞추세요. 아래 tool 번호는 실제로 표적을 찍는 팁의 번호여야 하고 그 TCP 가 미리 캘리브레이션돼 있어야 합니다(tool 0 = 플랜지)." />
                 <WrapPanel>
                     <StackPanel Margin="0,0,12,8">
                         <TextBlock Classes="axis" Text="터치 공구(tool) 번호" />
@@ -86,18 +88,18 @@
                             ToolTip.Tip="텔레스코픽 컨트롤러가 보고한 현재 높이를 채웁니다." />
                     <CheckBox VerticalAlignment="Bottom" Margin="0,0,12,8"
                               Content="스트로크 값을 확인했습니다" IsChecked="{Binding StrokeConfirmed}" IsEnabled="{Binding !Busy}" />
-                    <StackPanel Margin="0,0,6,8">
-                        <TextBlock Classes="axis" Text="CAD tz (mm)" />
-                        <NumericUpDown Value="{Binding CadTzMm}" Increment="1" FormatString="0.0"
-                                       IsEnabled="{Binding !Busy}" />
-                    </StackPanel>
-                    <Button VerticalAlignment="Bottom" Margin="0,0,0,8"
-                            Content="CAD tz 로부터 계산" Command="{Binding ApplyCadTzCommand}"
-                            ToolTip.Tip="q_z = CAD tz + 평균 Bz. rx≈ry≈0 가정이므로 초기 추정용입니다." />
                 </WrapPanel>
                 <Border Classes="alert">
                     <TextBlock TextWrapping="Wrap" FontSize="12"
-                               Text="q_z 는 바닥면(z=0)을 기준으로 잰 표적 점의 높이입니다 — 바닥에 표적을 두면 0, 받침 위에 두면 그 높이. AMR pose 가 평면(x·y·yaw)이라 z 방정식이 q_z 와 tz 를 차이로만 담습니다. 이 값이 없으면 tz 가 수학적으로 관측되지 않아 T_A_B 의 Z 가 결정되지 않습니다." />
+                               Text="q_z 는 바닥면(z=0)을 기준으로 잰 표적 점의 높이입니다 — 계산하는 값이 아니라 줄자로 잰 값을 그대로 넣습니다(바닥에 두면 0, 770mm 받침 위에 두면 770). AMR pose 가 평면(x·y·yaw)이라 z 방정식이 q_z 와 tz 를 차이로만 담습니다. 이 값이 없으면 tz 가 수학적으로 관측되지 않아 T_A_B 의 Z 가 결정되지 않습니다." />
+                </Border>
+                <TextBlock Classes="hint" Text="{Binding ImpliedTzText}" />
+                <Border Classes="alert" IsVisible="{Binding TargetMismatch}">
+                    <TextBlock Text="{Binding TargetMismatchText}" TextWrapping="Wrap" />
+                </Border>
+                <Border Classes="alert" IsVisible="{Binding HasUnrecordedTargets}">
+                    <TextBlock TextWrapping="Wrap" FontSize="12"
+                               Text="표적 높이가 기록되지 않은 구버전 표본이 섞여 있습니다 — 같은 점을 터치했는지 확인할 수 없습니다. 표적을 옮긴 적이 있으면 '전체 삭제' 후 재기록하세요." />
                 </Border>
                 <TextBlock Classes="hint" Text="{Binding LiftHeightText}" />
                 <Border Classes="alert" IsVisible="{Binding LiftStrokeMismatch}">

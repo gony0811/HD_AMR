@@ -44,6 +44,9 @@ public class CalibrationService
     /// <summary>표본 간 허용 스트로크 편차(mm). 1mm 편차 = 기울기 0.32° 오차라 사실상 "동일" 을 요구한다.</summary>
     private const double StrokeTolMm = 1.0;
 
+    /// <summary>표본 간 허용 표적 높이 편차(mm). 같은 점을 만지는 것이므로 사실상 0 이어야 한다.</summary>
+    private const double TargetTolMm = 1.0;
+
     // ── 코봇 장착 오프셋 T_A_B ──────────────────────────────────────
     /// <summary>저장된 장착 오프셋 [x,y,z,rx,ry,rz](mm/도). 없으면 0 배열.</summary>
     public async Task<double[]> GetMountAsync()
@@ -123,6 +126,18 @@ public class CalibrationService
                     $"표본 간 텔레스코픽 스트로크가 {spread:0.0}mm 다릅니다 — " +
                     "이 편차는 전부 가짜 기울기(rx/ry)로 흡수됩니다. " +
                     "같은 스트로크(완전 하강 권장)에서 다시 표본하세요.");
+        }
+
+        // 전제조건: 모든 표본이 같은 표적(같은 물리적 점)이어야 한다. 표적을 옮긴 뒤 예전 표본과
+        // 섞으면 해가 통째로 무의미해지는데 잔차만으로는 드러나지 않는다.
+        var targets = list.Where(m => m.TargetZmm.HasValue).Select(m => m.TargetZmm!.Value).ToList();
+        if (targets.Count > 0)
+        {
+            double spread = targets.Max() - targets.Min();
+            if (spread > TargetTolMm)
+                return MountCalibrationResult.Fail(
+                    $"표본 간 표적 높이가 {spread:0.0}mm 다릅니다 — 표적을 옮긴 뒤 예전 표본과 섞인 것으로 보입니다. " +
+                    "모든 표본은 같은 물리적 점을 터치해야 하므로 전체 삭제 후 재기록하세요.");
         }
 
         var tuples = list.Select(m => (m.AmrXmm, m.AmrYmm, m.AmrYawDeg, m.Bx, m.By, m.Bz)).ToList();
@@ -322,6 +337,14 @@ public class MountSample
     public double? Brx { get; set; }
     public double? Bry { get; set; }
     public double? Brz { get; set; }
+
+    /// <summary>
+    /// 기록 시점의 표적 높이 q_z(바닥 기준, mm). 구버전 표본은 null.
+    ///
+    /// 모든 표본은 <b>같은 물리적 점</b>을 터치해야 한다 — 표적을 옮기면 예전 표본은 전부 무효다.
+    /// 이 값을 표본에 박아 두면 앱을 재시작해도 "표적을 옮긴 뒤 예전 표본과 섞었다"를 검출할 수 있다.
+    /// </summary>
+    public double? TargetZmm { get; set; }
 
     /// <summary>
     /// 기록 시 Z축 텔레스코픽 스트로크(mm, <b>완전 하강 = 0</b>). 구버전 표본은 null.
