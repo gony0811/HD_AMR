@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
+using HD.AMR.App.Communication;
 using HD.AMR.App.Service;
 
 namespace HD.AMR.Desktop.ViewModels;
@@ -20,6 +21,9 @@ public sealed partial class IoModuleViewModel : ViewModelBase
     [ObservableProperty] private string? _lastError;
     [ObservableProperty] private string? _adapterLedSummary;
     [ObservableProperty] private string _lastUpdateText = "상태 수신 대기 중…";
+
+    /// <summary>접점 이름 맵의 근거 각주 — 배선표 출처를 화면에 남긴다.</summary>
+    public string PointMapNote { get; } = $"접점 이름: {IoPointMap.SourceNote}";
 
     public ObservableCollection<IoBit> Inputs { get; } = new();
     public ObservableCollection<IoBit> Outputs { get; } = new();
@@ -56,19 +60,24 @@ public sealed partial class IoModuleViewModel : ViewModelBase
         }
 
         LastUpdateText = $"마지막 상태 갱신: {Age(state.UpdatedUtc)}";
-        Sync(Inputs, state.Inputs, "IN");
-        Sync(Outputs, state.Outputs, "OUT");
+        Sync(Inputs, state.Inputs, "IN", IoPointMap.InputLabel, IoPointMap.Input);
+        Sync(Outputs, state.Outputs, "OUT", IoPointMap.OutputLabel, IoPointMap.Output);
     }
 
     // 컬렉션 전체 재생성 없이 항목을 제자리 갱신(깜빡임/GC 최소화).
-    private static void Sync(ObservableCollection<IoBit> target, bool[] values, string prefix)
+    // 라벨(접점 이름)은 배선표 고정값이라 최초 생성 시에만 계산한다.
+    private static void Sync(ObservableCollection<IoBit> target, bool[] values, string prefix,
+        Func<int, string> nameOf, Func<int, IoPoint?> pointOf)
     {
         for (var i = 0; i < values.Length; i++)
         {
             if (i < target.Count)
                 target[i].On = values[i];
             else
-                target.Add(new IoBit($"{prefix} {i:00}") { On = values[i] });
+                target.Add(new IoBit($"{prefix} {i:00} · {nameOf(i)}", pointOf(i) is not null)
+                {
+                    On = values[i]
+                });
         }
         while (target.Count > values.Length)
             target.RemoveAt(target.Count - 1);
@@ -85,6 +94,15 @@ public sealed partial class IoModuleViewModel : ViewModelBase
 public sealed partial class IoBit : ObservableObject
 {
     public string Label { get; }
+
+    /// <summary>배선된 접점이면 true — 미배선 접점은 흐리게 표시한다.</summary>
+    public bool Assigned { get; }
+
     [ObservableProperty] private bool _on;
-    public IoBit(string label) => Label = label;
+
+    public IoBit(string label, bool assigned = true)
+    {
+        Label = label;
+        Assigned = assigned;
+    }
 }

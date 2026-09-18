@@ -58,6 +58,10 @@
     <Style Selector="Border.badge.off > TextBlock">
         <Setter Property="Foreground" Value="{DynamicResource AppMutedTextBrush}" />
     </Style>
+    <!-- 미배선 접점 — 값이 있어도 의미가 없으므로 흐리게 -->
+    <Style Selector="Border.badge.unassigned">
+        <Setter Property="Opacity" Value="0.45" />
+    </Style>
 
     <!-- 비상정지·위험 동작 버튼(ACS Button.danger 와 동일) -->
     <Style Selector="Button.danger">

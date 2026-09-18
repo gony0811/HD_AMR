@@ -30,6 +30,8 @@
         <Border Classes="card">
             <StackPanel Spacing="10">
                 <TextBlock Text="입력 접점" FontWeight="SemiBold" />
+                <TextBlock Classes="muted" FontSize="12"
+                           Text="{Binding PointMapNote}" TextWrapping="Wrap" />
                 <ItemsControl ItemsSource="{Binding Inputs}">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate>
@@ -39,8 +41,9 @@
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="vm:IoBit">
                             <Border Classes="badge" Classes.on="{Binding On}" Classes.off="{Binding !On}"
-                                    MinWidth="88" Margin="0,0,8,8" Padding="8,6">
-                                <TextBlock Text="{Binding Label, StringFormat='{}{0}'}" HorizontalAlignment="Center" />
+                                    Classes.unassigned="{Binding !Assigned}"
+                                    MinWidth="150" Margin="0,0,8,8" Padding="8,6">
+                                <TextBlock Text="{Binding Label}" HorizontalAlignment="Center" />
                             </Border>
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
@@ -52,6 +55,8 @@
         <Border Classes="card">
             <StackPanel Spacing="10">
                 <TextBlock Text="출력 접점" FontWeight="SemiBold" />
+                <TextBlock Classes="muted" FontSize="12"
+                           Text="{Binding PointMapNote}" TextWrapping="Wrap" />
                 <ItemsControl ItemsSource="{Binding Outputs}">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate>
@@ -61,7 +66,8 @@
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="vm:IoBit">
                             <Border Classes="badge" Classes.on="{Binding On}" Classes.off="{Binding !On}"
-                                    MinWidth="88" Margin="0,0,8,8" Padding="8,6">
+                                    Classes.unassigned="{Binding !Assigned}"
+                                    MinWidth="150" Margin="0,0,8,8" Padding="8,6">
                                 <TextBlock Text="{Binding Label}" HorizontalAlignment="Center" />
                             </Border>
                         </DataTemplate>

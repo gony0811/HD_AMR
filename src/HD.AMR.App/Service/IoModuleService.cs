@@ -7,9 +7,10 @@ namespace HD.AMR.App.Service;
 
 /// <summary>
 /// LS산전 IO Module ModbusTCP 서비스. AMR/Cobot 과 동일하게 싱글톤 + 호스티드로 등록되어
-/// 기동 시 자동 접속하고 실패 시 5초마다 재접속한다. IO list(주소 매핑)가 아직 미정이라
-/// 고정 폴링 없이 연결만 유지하고, 페이지에서 임의 주소를 읽고/쓸 수 있도록 범용 pass-through
-/// 메서드를 노출한다. (추후 IO list 확정 시 여기에 typed 메서드 추가)
+/// 기동 시 자동 접속하고 실패 시 5초마다 재접속한다. 입력/출력 이미지를 주기적으로 폴링해
+/// <see cref="IoModuleState"/> 스냅샷으로 캐싱하고, 페이지에서 임의 주소를 읽고/쓸 수 있도록
+/// 범용 pass-through 메서드도 노출한다.
+/// 접점 ↔ 설비 신호 대응은 <see cref="IoPointMap"/> 이 단일 원천이다(docs/IO_MODULE_POINTS.md).
 /// </summary>
 public class IoModuleService : BackgroundService
 {
