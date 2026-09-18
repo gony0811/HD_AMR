@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
 using HD.AMR.App.Communication;
 using HD.AMR.App.Service;
 
@@ -16,11 +17,20 @@ public sealed partial class IoModuleViewModel : ViewModelBase
     private readonly IoModuleService _svc;
     private readonly DispatcherTimer _timer;
 
-    [ObservableProperty] private bool _isConnected;
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(SetOutputOnCommand))]
+    [NotifyCanExecuteChangedFor(nameof(SetOutputOffCommand))]
+    private bool _isConnected;
     [ObservableProperty] private string _connectionSummary = "";
     [ObservableProperty] private string? _lastError;
     [ObservableProperty] private string? _adapterLedSummary;
     [ObservableProperty] private string _lastUpdateText = "상태 수신 대기 중…";
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(SetOutputOnCommand))]
+    [NotifyCanExecuteChangedFor(nameof(SetOutputOffCommand))]
+    private bool _isOutputBusy;
+    [ObservableProperty] private string? _outputMessage;
+    [ObservableProperty] private bool _outputFailed;
 
     /// <summary>접점 이름 맵의 근거 각주 — 배선표 출처를 화면에 남긴다.</summary>
     public string PointMapNote { get; } = $"접점 이름: {IoPointMap.SourceNote}";
@@ -74,7 +84,7 @@ public sealed partial class IoModuleViewModel : ViewModelBase
             if (i < target.Count)
                 target[i].On = values[i];
             else
-                target.Add(new IoBit($"{prefix} {i:00} · {nameOf(i)}", pointOf(i) is not null)
+                target.Add(new IoBit(i, prefix, nameOf(i), pointOf(i) is not null)
                 {
                     On = values[i]
                 });
@@ -88,11 +98,47 @@ public sealed partial class IoModuleViewModel : ViewModelBase
         var s = (DateTime.UtcNow - utc).TotalSeconds;
         return s < 60 ? $"{s:0}초 전" : $"{s / 60:0}분 전";
     }
+
+    private bool CanSetOutput(IoBit? bit) => IsConnected && !IsOutputBusy && bit is not null;
+
+    [RelayCommand(CanExecute = nameof(CanSetOutput))]
+    private Task SetOutputOnAsync(IoBit bit) => SetOutputAsync(bit, true);
+
+    [RelayCommand(CanExecute = nameof(CanSetOutput))]
+    private Task SetOutputOffAsync(IoBit bit) => SetOutputAsync(bit, false);
+
+    private async Task SetOutputAsync(IoBit bit, bool value)
+    {
+        if (!CanSetOutput(bit)) return;
+
+        IsOutputBusy = true;
+        OutputMessage = null;
+        try
+        {
+            var confirmed = await _svc.WriteOutputAsync(bit.Index, value);
+            OutputFailed = !confirmed;
+            OutputMessage = confirmed
+                ? $"OUT {bit.Index:00} {bit.Name} ← {(value ? "ON" : "OFF")} 설정 성공 (되읽기 반영 확인)."
+                : $"OUT {bit.Index:00} {bit.Name} 쓰기는 수락됐지만 반영되지 않았습니다 — RAPIEnet 상태를 확인하세요.";
+        }
+        catch (Exception ex)
+        {
+            OutputFailed = true;
+            OutputMessage = $"OUT {bit.Index:00} {bit.Name} 설정 실패: {ex.Message}";
+        }
+        finally
+        {
+            IsOutputBusy = false;
+            Refresh();
+        }
+    }
 }
 
 /// <summary>접점 1비트(라벨 + ON/OFF). ON 변경 시 UI 뱃지가 갱신되도록 ObservableObject.</summary>
 public sealed partial class IoBit : ObservableObject
 {
+    public int Index { get; }
+    public string Name { get; }
     public string Label { get; }
 
     /// <summary>배선된 접점이면 true — 미배선 접점은 흐리게 표시한다.</summary>
@@ -100,9 +146,11 @@ public sealed partial class IoBit : ObservableObject
 
     [ObservableProperty] private bool _on;
 
-    public IoBit(string label, bool assigned = true)
+    public IoBit(int index, string prefix, string name, bool assigned = true)
     {
-        Label = label;
+        Index = index;
+        Name = name;
+        Label = $"{prefix} {index:00} · {name}";
         Assigned = assigned;
     }
 }
