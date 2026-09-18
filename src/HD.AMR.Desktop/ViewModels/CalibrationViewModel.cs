@@ -8,7 +8,8 @@ namespace HD.AMR.Desktop.ViewModels;
 
 /// <summary>
 /// QR 기준 AMR 정차 Pose 티칭. 기존 Calibration.razor 이식.
-/// 고정 변환(T_A_B/T_T_C) · QR 정차 기준 저장/로드는 완전 동작(DB). QR 촬영·측정은
+/// T_T_C · QR 정차 기준 저장/로드는 완전 동작(DB). <b>T_A_B 편집은 이 화면에서 제거됐다</b> —
+/// 측정·수정은 SETTINGS ▸ 장착 보정 (T_A_B) 에서 하고 여기서는 읽기 전용으로 확인만 한다. QR 촬영·측정은
 /// 카메라/OpenCV 하드웨어가 필요 — 장비 없는 환경(macOS)에서는 실패 메시지로 폴백한다.
 /// 라이브 카메라 영상은 Tier 3(CameraView)에서 공용 컨트롤로 배선 예정(현재는 스트리밍 상태만 표시).
 /// </summary>
@@ -18,11 +19,15 @@ public sealed partial class CalibrationViewModel : ViewModelBase
     private readonly AMRService _amr;
     private readonly CobotService _cobot;
     private readonly CameraService _camera;
+    private readonly INavigationService _nav;
     private readonly DispatcherTimer _timer;
     private readonly CancellationTokenSource _cts = new();
 
-    public Pose6 Mount { get; } = new();     // T_A_B
     public Pose6 HandEye { get; } = new();    // T_T_C
+
+    // T_A_B 는 읽기 전용 표시 — 값 자체는 QR 측정 체인이 쓰므로 계속 로드한다.
+    [ObservableProperty] private string _mountText = "(로드 중)";
+    [ObservableProperty][NotifyPropertyChangedFor(nameof(Ready))] private bool _mountIsZero = true;
     [ObservableProperty] private int _tool = 1;
 
     // QR 정차 기준
@@ -41,10 +46,10 @@ public sealed partial class CalibrationViewModel : ViewModelBase
     [ObservableProperty] private MeasurementVm? _measurement;
 
     public CalibrationViewModel(IServiceScopeFactory scopeFactory,
-        AMRService amr, CobotService cobot, CameraService camera)
+        AMRService amr, CobotService cobot, CameraService camera, INavigationService nav)
     {
         _scopeFactory = scopeFactory;
-        _amr = amr; _cobot = cobot; _camera = camera;
+        _amr = amr; _cobot = cobot; _camera = camera; _nav = nav;
         _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _timer.Tick += (_, _) => RefreshStatus();
     }
@@ -57,7 +62,12 @@ public sealed partial class CalibrationViewModel : ViewModelBase
         {
             using var scope = _scopeFactory.CreateScope();
             var calib = scope.ServiceProvider.GetRequiredService<CalibrationService>();
-            Mount.FromArray(await calib.GetMountAsync());
+            var mount = await calib.GetMountAsync();
+            MountIsZero = mount.All(v => v == 0);
+            MountText = MountIsZero
+                ? "미설정 — 장착 보정 페이지에서 먼저 T_A_B 를 구하세요."
+                : $"X={mount[0]:0.0}  Y={mount[1]:0.0}  Z={mount[2]:0.0} mm   ·   " +
+                  $"Rx={mount[3]:0.000}  Ry={mount[4]:0.000}  Rz={mount[5]:0.000}°";
             HandEye.FromArray(await calib.GetHandEyeAsync());
             var r = await calib.GetQrStopReferenceAsync();
             QrText = r.Text; QrSizeMm = r.SizeMm;
@@ -83,7 +93,8 @@ public sealed partial class CalibrationViewModel : ViewModelBase
     public bool AmrConnected => _amr.IsConnected;
     public bool CobotConnected => _cobot.IsConnected;
     public bool CameraStreaming => _camera.IsStreaming;
-    public bool Ready => _amr.IsConnected && _cobot.IsConnected && _camera.IsStreaming && !HandEye.ToArray().All(v => v == 0);
+    public bool Ready => _amr.IsConnected && _cobot.IsConnected && _camera.IsStreaming
+                         && !HandEye.ToArray().All(v => v == 0) && !MountIsZero;
 
     public string SlamXText => _amr.LatestStatus is { } s ? $"{s.Pose.X * 1000:0.0} mm" : "-";
     public string SlamYText => _amr.LatestStatus is { } s ? $"{s.Pose.Y * 1000:0.0} mm" : "-";
@@ -104,11 +115,7 @@ public sealed partial class CalibrationViewModel : ViewModelBase
     }
 
     [RelayCommand]
-    private async Task SaveMount()
-    {
-        try { await WithCalib(c => c.SaveMountAsync(Mount.ToArray())); Success("T_A_B를 저장했습니다."); }
-        catch (Exception ex) { Failure($"T_A_B 저장 실패: {ex.Message}"); }
-    }
+    private void OpenMountCalibration() => _nav.NavigateTo<MountCalibrationViewModel>();
 
     [RelayCommand]
     private async Task SaveHandEye()

@@ -21,16 +21,15 @@
         <Border Classes="card">
             <StackPanel Spacing="8">
                 <TextBlock Text="① 고정 좌표변환 확인" FontWeight="SemiBold" />
-                <TextBlock Classes="axis" Text="T_A_B — AMR 중심 → 코봇 Base (mm/도)" />
-                <WrapPanel>
-                    <StackPanel><TextBlock Classes="axis" Text="X" /><NumericUpDown Classes="pose" Value="{Binding Mount.V0}" Increment="0.1" /></StackPanel>
-                    <StackPanel><TextBlock Classes="axis" Text="Y" /><NumericUpDown Classes="pose" Value="{Binding Mount.V1}" Increment="0.1" /></StackPanel>
-                    <StackPanel><TextBlock Classes="axis" Text="Z" /><NumericUpDown Classes="pose" Value="{Binding Mount.V2}" Increment="0.1" /></StackPanel>
-                    <StackPanel><TextBlock Classes="axis" Text="Rx" /><NumericUpDown Classes="pose" Value="{Binding Mount.V3}" Increment="0.1" /></StackPanel>
-                    <StackPanel><TextBlock Classes="axis" Text="Ry" /><NumericUpDown Classes="pose" Value="{Binding Mount.V4}" Increment="0.1" /></StackPanel>
-                    <StackPanel><TextBlock Classes="axis" Text="Rz" /><NumericUpDown Classes="pose" Value="{Binding Mount.V5}" Increment="0.1" /></StackPanel>
-                    <Button VerticalAlignment="Bottom" Content="T_A_B 저장" Classes="accent" Command="{Binding SaveMountCommand}" />
-                </WrapPanel>
+                <TextBlock Classes="axis" Text="T_A_B — AMR 중심 → 코봇 Base (mm/도) · 읽기 전용" />
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                    <TextBlock Text="{Binding MountText}" VerticalAlignment="Center" TextWrapping="Wrap" />
+                    <Button Content="장착 보정 페이지 열기" Command="{Binding OpenMountCalibrationCommand}" />
+                </StackPanel>
+                <Border Classes="alert" IsVisible="{Binding MountIsZero}">
+                    <TextBlock TextWrapping="Wrap" FontSize="12"
+                               Text="T_A_B 가 미설정(전부 0)입니다 — SETTINGS ▸ 장착 보정 (T_A_B) 에서 먼저 산출·저장하세요. 미설정 상태의 QR 측정 결과는 신뢰할 수 없습니다." />
+                </Border>
                 <TextBlock Classes="axis" Text="T_T_C — 선택 Tool TCP → 카메라 광학 프레임 (mm/도)" Margin="0,6,0,0" />
                 <WrapPanel>
                     <StackPanel Margin="0,0,10,0"><TextBlock Classes="axis" Text="Tool 번호" /><NumericUpDown Value="{Binding Tool}" Minimum="0" Maximum="15" Increment="1" FormatString="0" /></StackPanel>

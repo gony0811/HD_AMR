@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using HD.AMR.App.Models;
 using Microsoft.Extensions.Logging;
 
 namespace HD.AMR.App.Service;
@@ -26,6 +27,8 @@ public class CalibrationService
     // 파라미터 키
     private const string MountKey = "Calib.Mount.Pose";          // JSON double[6] = [x,y,z,rx,ry,rz]
     private const string MountSamplesKey = "Calib.Mount.SamplesJson";
+    private const string MountTargetZKey = "Calib.Mount.TargetZmm";   // double — AMR 원점 기준 타깃 높이
+    private const string MountSolveKey = "Calib.Mount.SolveJson";     // JSON MountSolveSnapshot
     private const string RefPointsKey = "Calib.MapRef.PointsJson";
     private const string HandEyeKey = "Calib.HandEye.Pose";      // JSON double[6] = [x,y,z,rx,ry,rz]
     private const string QrMarkersKey = "Calib.Qr.MarkersJson";
@@ -79,7 +82,11 @@ public class CalibrationService
         => _param.SetAsync(MountSamplesKey, JsonSerializer.Serialize(samples),
             "장착 캘리브레이션 표본(AMR 맵 pose + 코봇 BASE 터치점)");
 
-    /// <summary>표본으로 장착 오프셋의 평면 성분(rz, tx, ty)을 추정. 표본 3개 미만이면 null.</summary>
+    /// <summary>
+    /// 표본으로 장착 오프셋의 평면 성분(rz, tx, ty)을 추정. 표본 3개 미만이면 null.
+    /// <b>레거시 평면 전용 경로(rx=ry=0 가정)</b> — 신규 화면은 <see cref="SolveMount3D"/> 를 쓰세요.
+    /// 표본에 Bz 가 없던 구버전 데이터의 폴백 경로로 남겨 둔다.
+    /// </summary>
     public MountSolveResult? SolveMount(IEnumerable<MountSample> samples)
     {
         var list = samples.ToList();
@@ -87,6 +94,56 @@ public class CalibrationService
         var s = list.Select(m => (m.AmrXmm, m.AmrYmm, m.AmrYawDeg, m.Bx, m.By)).ToList();
         var (phi, tx, ty, rms, n) = MapCalibration.SolveMount2D(s);
         return new MountSolveResult(phi, tx, ty, rms, n);
+    }
+
+    /// <summary>
+    /// 표본으로 6-DoF 장착 오프셋(T_A_B)을 산출. 예외를 던지지 않고 결과에 성공/실패를 담는다.
+    /// 표본 메타데이터 경고(<see cref="MountSampleInspector"/>)를 수치 경고 앞에 덧붙인다.
+    /// </summary>
+    /// <param name="samples">터치 표본.</param>
+    /// <param name="targetZmm">타깃 높이 q_z(AMR 차체 원점 기준, mm). null 이면 tz 미관측으로 보고.</param>
+    /// <param name="currentMount">현재 저장된 T_A_B — 주면 변화량을 함께 보고.</param>
+    public MountCalibrationResult SolveMount3D(
+        IEnumerable<MountSample> samples, double? targetZmm, double[]? currentMount = null)
+    {
+        var list = samples.ToList();
+        var tuples = list.Select(m => (m.AmrXmm, m.AmrYmm, m.AmrYawDeg, m.Bx, m.By, m.Bz)).ToList();
+        var result = MapCalibration.SolveMount3D(tuples, targetZmm, currentMount);
+
+        var provenance = MountSampleInspector.Inspect(list);
+        if (provenance.Count == 0 || !result.Success) return result;
+        return result with { Warnings = provenance.Concat(result.Warnings).ToList() };
+    }
+
+    // ── 장착 타깃 높이 q_z ──────────────────────────────────────────
+    /// <summary>저장된 타깃 높이(mm). 한 번도 입력하지 않았으면 null — 0 과 구별해야 한다
+    /// (AMR 원점이 바닥에 있으면 0 도 정당한 값이다).</summary>
+    public Task<double?> GetMountTargetZmmAsync() => _param.GetDoubleAsync(MountTargetZKey);
+
+    public Task SaveMountTargetZmmAsync(double zmm)
+        => _param.SetDoubleAsync(MountTargetZKey, zmm,
+            "장착 캘리브 타깃 높이 q_z (AMR 차체 원점 기준, mm — 바닥 타깃이면 음수)");
+
+    // ── 마지막 산출 스냅샷 ──────────────────────────────────────────
+    /// <summary>마지막 산출 결과. 화면의 "마지막 산출" 표시와 높이 후입력 시 tz 재계산에 쓴다.</summary>
+    public async Task<MountSolveSnapshot?> GetMountSolveAsync()
+    {
+        var raw = await _param.GetAsync(MountSolveKey);
+        if (raw is null) return null;
+        try { return JsonSerializer.Deserialize<MountSolveSnapshot>(raw, JsonOpts); }
+        catch (Exception ex) { _logger.LogWarning(ex, "장착 산출 스냅샷 역직렬화 실패 — 무시"); return null; }
+    }
+
+    /// <summary>성공한 산출 결과만 스냅샷으로 저장한다(실패는 남기지 않는다).</summary>
+    public Task SaveMountSolveAsync(MountCalibrationResult r)
+    {
+        if (!r.Success) return Task.CompletedTask;
+        var snap = new MountSolveSnapshot(
+            DateTime.UtcNow, r.MountPose, r.TzObserved, r.TargetZmm, r.PlaneOffsetDmm,
+            r.RmsMm, r.MaxAbsMm, r.PlaneRmsMm, r.PlanarRmsMm, r.PlaneSpanMm,
+            r.TiltSigmaDeg, r.YawSpanDeg, r.N, r.Warnings.ToArray());
+        return _param.SetAsync(MountSolveKey, JsonSerializer.Serialize(snap),
+            "장착 캘리브 마지막 산출 결과(측정값 — 적용값 Calib.Mount.Pose 와 별개)");
     }
 
     // ── 핸드아이 오프셋 T_T_C (툴 TCP→카메라 광학 프레임) ───────────
@@ -219,7 +276,10 @@ public class MapRefPoint
     public bool HasW { get; set; }
 }
 
-/// <summary>장착 캘리브레이션 표본 한 개. AMR 맵 pose(x,y[mm], yaw[도])와 코봇 BASE 기준 터치점(mm).</summary>
+/// <summary>
+/// 장착 캘리브레이션 표본 한 개. AMR 맵 pose(x,y[mm], yaw[도])와 코봇 BASE 기준 터치점(mm).
+/// JSON(<c>Calib.Mount.SamplesJson</c>)으로 보관하므로 nullable 필드 추가는 하위호환이다.
+/// </summary>
 public class MountSample
 {
     public int Index { get; set; }
@@ -229,10 +289,35 @@ public class MountSample
     public double Bx { get; set; }
     public double By { get; set; }
     public double Bz { get; set; }
+
+    /// <summary>기록 시각(UTC). 표본 노후·재장착 판정용. 구버전 표본은 null.</summary>
+    public DateTime? CapturedAtUtc { get; set; }
+
+    /// <summary>
+    /// <c>GetTcpPoseInBaseAsync</c> 에 넘긴 공구 번호. <b>표본 간 혼용이 가장 위험한 조용한 오염</b> —
+    /// tool 0(플랜지)과 tool 1(프로브)을 섞으면 일부 터치점에만 수백 mm 바이어스가 들어가
+    /// 그럴듯하지만 틀린 기울기로 위장된다. 사후 수치로는 검출 불가라 기록이 유일한 방어다.
+    /// </summary>
+    public int? Tool { get; set; }
+
+    /// <summary>기록 시 BASE 기준 TCP 자세(도) — 현재 해에는 미사용, 재분석·감사용.</summary>
+    public double? Brx { get; set; }
+    public double? Bry { get; set; }
+    public double? Brz { get; set; }
 }
 
 /// <summary>장착 오프셋 평면 측정 결과 (rz=φ, tx, ty, 잔차, 표본수).</summary>
 public record MountSolveResult(double PhiDeg, double Tx, double Ty, double RmsMm, int N);
+
+/// <summary>
+/// 장착 산출 결과 스냅샷 — "마지막 산출" 표시 + 타깃 높이 후입력 시 tz 재계산용.
+/// <b>측정값</b>이므로 운영자가 손으로 보정할 수 있는 <b>적용값</b>(<c>Calib.Mount.Pose</c>)과 별개로 보관한다.
+/// 두 값의 차이는 물리적 재장착 후 가장 유용한 진단 지표다.
+/// </summary>
+public record MountSolveSnapshot(
+    DateTime SolvedAtUtc, double[] MountPose, bool TzObserved, double TargetZmm,
+    double PlaneOffsetDmm, double RmsMm, double MaxAbsMm, double PlaneRmsMm, double PlanarRmsMm,
+    double PlaneSpanMm, double TiltSigmaDeg, double YawSpanDeg, int N, string[] Warnings);
 
 /// <summary>맵↔도면 2D 강체 정합 결과 T_W_G. w = R(θ)·g + t.</summary>
 public record MapRegistration(double ThetaDeg, double Tx, double Ty, double RmsMm, int PointCount);

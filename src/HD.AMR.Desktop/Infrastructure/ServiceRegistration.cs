@@ -147,6 +147,7 @@ internal static class ServiceRegistration
         services.AddTransient<LabelEditorViewModel>();
         services.AddTransient<VisionTrainingViewModel>();
         services.AddTransient<LaserViewModel>();
+        services.AddTransient<MountCalibrationViewModel>();
 
         return services;
     }
