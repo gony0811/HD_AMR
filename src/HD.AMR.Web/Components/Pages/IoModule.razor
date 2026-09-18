@@ -111,12 +111,27 @@
                         <span class="badge @(on ? "bg-success" : "bg-secondary")" style="min-width: 56px;">
                             @(on ? "ON" : "OFF")
                         </span>
-                        <div class="form-check form-switch mb-0">
-                            <input class="form-check-input" type="checkbox" role="switch"
-                                   style="width: 2.6rem; height: 1.4rem;"
-                                   checked="@on"
-                                   disabled="@(_busy || !Svc.IsConnected)"
-                                   @onchange="() => ToggleOutput(idx, !on)" />
+                        <div class="btn-group btn-group-sm" role="group" aria-label="@($"OUT {idx:00} 출력 테스트")">
+                            <button type="button"
+                                    class="btn @(on ? "btn-success" : "btn-outline-success")"
+                                    disabled="@(_busy || !Svc.IsConnected || on)"
+                                    @onclick="() => SetOutput(idx, true)">
+                                @if (_busyOutputIndex == idx && _busyOutputValue)
+                                {
+                                    <span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>
+                                }
+                                ON
+                            </button>
+                            <button type="button"
+                                    class="btn @(!on ? "btn-secondary" : "btn-outline-secondary")"
+                                    disabled="@(_busy || !Svc.IsConnected || !on)"
+                                    @onclick="() => SetOutput(idx, false)">
+                                @if (_busyOutputIndex == idx && !_busyOutputValue)
+                                {
+                                    <span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>
+                                }
+                                OFF
+                            </button>
                         </div>
                     </div>
                 }
@@ -249,6 +264,8 @@
     private int _regValue;
 
     private bool _busy;
+    private int? _busyOutputIndex;
+    private bool _busyOutputValue;
     private bool _isError;
     private string? _message;
 
@@ -289,10 +306,12 @@
                age.TotalMinutes < 60 ? $"{age.TotalMinutes:0}분 전" : $"{age.TotalHours:0.#}시간 전";
     }
 
-    private async Task ToggleOutput(int index, bool value)
+    private async Task SetOutput(int index, bool value)
     {
         if (_busy) return;
         _busy = true;
+        _busyOutputIndex = index;
+        _busyOutputValue = value;
         _message = null;
         var name = IoPointMap.OutputLabel(index);
         try
@@ -314,6 +333,7 @@
         finally
         {
             _busy = false;
+            _busyOutputIndex = null;
             await InvokeAsync(StateHasChanged);
         }
     }
