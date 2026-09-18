@@ -137,10 +137,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
         if (newValue.IsGroup)
         {
             // 그룹 헤더는 페이지가 아니다 — 펼침/접힘만 하고 선택은 이전 항목으로 되돌린다.
-            // 선택 변경 알림 도중 되돌리면 ListBox 가 무시하므로 UI 스레드에 한 틱 미룬다.
-            ToggleGroup(newValue);
-            var restore = oldValue is not null && NavItems.Contains(oldValue) ? oldValue : null;
-            Dispatcher.UIThread.Post(() => SelectedItem = restore);
+            // 이 콜백은 ListBox 의 선택 커밋 도중에 불린다: 여기서 NavItems 를 곧바로 변형하면
+            // SelectionModel 이 변형 전 인덱스로 SelectedItems 를 열거하다 ArgumentOutOfRangeException
+            // 으로 앱이 죽는다. 토글과 선택 복원 모두 커밋이 끝난 뒤(UI 스레드 다음 틱)로 미룬다.
+            Dispatcher.UIThread.Post(() =>
+            {
+                ToggleGroup(newValue);
+                SelectedItem = oldValue is not null && NavItems.Contains(oldValue) ? oldValue : null;
+            });
             return;
         }
         Navigate(newValue);

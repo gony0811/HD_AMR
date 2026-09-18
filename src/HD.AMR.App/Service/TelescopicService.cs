@@ -81,6 +81,10 @@ public class TelescopicService : BackgroundService
     {
         _logger.LogInformation("TelescopicService 시작 ({Port} @ {Baud})", _settings.PortName, _settings.BaudRate);
 
+        // host.Start() 는 첫 await 까지 동기 실행한다 — 아래 _client.Open()(SerialPort.Open 은 동기 블로킹)이
+        // 기동 메인 스레드를 붙잡지 않도록 먼저 스레드풀로 양보한다.
+        await Task.Yield();
+
         while (!stoppingToken.IsCancellationRequested)
         {
             try
@@ -132,7 +136,7 @@ public class TelescopicService : BackgroundService
 
     private async Task PollAsync(CancellationToken ct)
     {
-        var response = await _client.SendAsync(TelescopicProtocol.Read(), ct);
+        var response = await _client.SendAsync(TelescopicProtocol.Read(), ct).ConfigureAwait(false);
         var status = TelescopicProtocol.ParseStatus(response);
         if (status is null)
         {
@@ -194,7 +198,7 @@ public class TelescopicService : BackgroundService
         }
         cts?.Cancel();
         cts?.Dispose();
-        await StopAsync_Internal(ct);
+        await StopAsync_Internal(ct).ConfigureAwait(false);
     }
 
     private async Task JogLoopAsync(TelescopicProtocol.HandleBits bits, CancellationToken ct)
@@ -219,8 +223,8 @@ public class TelescopicService : BackgroundService
                     break;
                 }
 
-                await _client.SendNoWaitAsync(command, ct);
-                await Task.Delay(_settings.JogKeepAliveMs, ct);
+                await _client.SendNoWaitAsync(command, ct).ConfigureAwait(false);
+                await Task.Delay(_settings.JogKeepAliveMs, ct).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) { /* 정상 종료 */ }
@@ -231,7 +235,7 @@ public class TelescopicService : BackgroundService
             {
                 if (_jogBits == bits) { _jogCts = null; _jogBits = TelescopicProtocol.HandleBits.None; }
             }
-            try { await StopAsync_Internal(CancellationToken.None); }
+            try { await StopAsync_Internal(CancellationToken.None).ConfigureAwait(false); }
             catch (Exception ex) { _logger.LogError(ex, "텔레스코픽 정지 명령 실패 — 물리 정지 버튼을 사용하세요"); }
         }
     }
@@ -256,9 +260,9 @@ public class TelescopicService : BackgroundService
             throw new ArgumentOutOfRangeException(nameof(heightMm), heightMm,
                 $"운영 범위는 {_settings.MinHeightMm}~{_settings.MaxHeightMm} mm 입니다.");
 
-        await EndJogAsync(ct);   // 조그와 절대 이동을 섞지 않는다.
+        await EndJogAsync(ct).ConfigureAwait(false);   // 조그와 절대 이동을 섞지 않는다.
         var response = await _client.SendAsync(
-            TelescopicProtocol.Target(heightMm, _settings.TargetDigits), ct);
+            TelescopicProtocol.Target(heightMm, _settings.TargetDigits), ct).ConfigureAwait(false);
         return TelescopicProtocol.ParseTargetAck(response);
     }
 
@@ -272,10 +276,10 @@ public class TelescopicService : BackgroundService
 
     private async Task PulseAsync(int slot, int holdMs, CancellationToken ct)
     {
-        await EndJogAsync(ct);
-        await _client.SendAsync(TelescopicProtocol.Memory(slot), ct);
-        try { await Task.Delay(holdMs, ct); }
-        finally { await StopAsync_Internal(CancellationToken.None); }
+        await EndJogAsync(ct).ConfigureAwait(false);
+        await _client.SendAsync(TelescopicProtocol.Memory(slot), ct).ConfigureAwait(false);
+        try { await Task.Delay(holdMs, ct).ConfigureAwait(false); }
+        finally { await StopAsync_Internal(CancellationToken.None).ConfigureAwait(false); }
     }
 
     /// <summary>
@@ -284,20 +288,21 @@ public class TelescopicService : BackgroundService
     /// </summary>
     public async Task ResetAsync(CancellationToken ct = default)
     {
-        await EndJogAsync(ct);
-        await _client.SendAsync(TelescopicProtocol.Reset(), ct);
-        try { await Task.Delay(TelescopicProtocol.ResetHoldMs, ct); }
-        finally { await StopAsync_Internal(CancellationToken.None); }
+        await EndJogAsync(ct).ConfigureAwait(false);
+        await _client.SendAsync(TelescopicProtocol.Reset(), ct).ConfigureAwait(false);
+        try { await Task.Delay(TelescopicProtocol.ResetHoldMs, ct).ConfigureAwait(false); }
+        finally { await StopAsync_Internal(CancellationToken.None).ConfigureAwait(false); }
     }
 
     /// <summary>에러 코드 강제 클리어. 반환 true = <c>ClearErr OK</c>.</summary>
     public async Task<bool> ClearErrorAsync(CancellationToken ct = default)
-        => TelescopicProtocol.ParseClearErrAck(await _client.SendAsync(TelescopicProtocol.ClearErr(), ct));
+        => TelescopicProtocol.ParseClearErrAck(
+            await _client.SendAsync(TelescopicProtocol.ClearErr(), ct).ConfigureAwait(false));
 
     /// <summary>즉시 상태를 한 번 읽어 캐시를 갱신한다.</summary>
     public async Task<TelescopicStatus?> RefreshAsync(CancellationToken ct = default)
     {
-        await PollAsync(ct);
+        await PollAsync(ct).ConfigureAwait(false);
         return Latest;
     }
 

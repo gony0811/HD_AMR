@@ -18,6 +18,16 @@ internal static class Program
     [STAThread]
     public static void Main(string[] args)
     {
+        // 미처리 예외로 프로세스가 조용히 죽으면 원인 추적이 불가능하다(터미널 없이 실행하는 현장 특히).
+        // 종료를 막을 수는 없지만(아발로니아 11.2 에는 UI 예외를 삼키는 공식 훅이 없다) 파일로는 남긴다.
+        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+            LogCrash(e.ExceptionObject as Exception, "AppDomain.UnhandledException");
+        TaskScheduler.UnobservedTaskException += (_, e) =>
+        {
+            LogCrash(e.Exception, "TaskScheduler.UnobservedTaskException");
+            e.SetObserved();   // 관찰 처리 — 이 경로로는 프로세스를 내리지 않는다.
+        };
+
         // 기존 HD.AMR.Web 과 동일하게 Generic Host 위에 하드웨어 서비스(싱글톤 + HostedService)를 얹는다.
         // ContentRoot 를 실행 파일 폴더로 고정한다 — 기본값(현재 작업 디렉터리)이면 다른 폴더에서 실행할 때
         // 출력 폴더의 appsettings.json 을 찾지 못해 모든 장비 설정(IP/포트, Vda5050.Enabled 등)이 기본값이 된다.
@@ -55,6 +65,12 @@ internal static class Program
             host.Start();
             BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
         }
+        catch (Exception ex)
+        {
+            // UI 스레드 미처리 예외(메인 루프 탈출)를 기록하고 다시 던진다 — 종료 동작은 유지.
+            LogCrash(ex, "Main");
+            throw;
+        }
         finally
         {
             // 호스티드 서비스 정리에 자체 하드 타임아웃을 건다. 일부 클라이언트의 Disconnect/StopAsync 는
@@ -79,6 +95,21 @@ internal static class Program
         ctx.Cancel = true;   // OS 기본 종료를 취소하고 우리가 정상 종료 경로로 내려간다.
         Dispatcher.UIThread.Post(() =>
             (Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.Shutdown());
+    }
+
+    /// <summary>크래시 내용을 정본 데이터 폴더(%LocalAppData%/HD.AMR)에 파일로 남긴다. 실패는 무시.</summary>
+    private static void LogCrash(Exception? ex, string source)
+    {
+        if (ex is null) return;
+        try
+        {
+            var dir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "HD.AMR");
+            Directory.CreateDirectory(dir);
+            var path = Path.Combine(dir, $"crash-{DateTime.Now:yyyyMMdd-HHmmss}.log");
+            File.AppendAllText(path, $"[{DateTime.Now:O}] {source}{Environment.NewLine}{ex}{Environment.NewLine}");
+        }
+        catch { /* 로그 기록 실패가 종료 경로를 막지 않게 */ }
     }
 
     // Avalonia configuration, don't remove; also used by visual designer.

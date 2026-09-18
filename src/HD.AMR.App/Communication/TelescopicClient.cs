@@ -75,27 +75,32 @@ public sealed class TelescopicClient : IDisposable
     /// </summary>
     public async Task<string?> SendAsync(string command, CancellationToken ct = default)
     {
-        await _io.WaitAsync(ct);
+        await _io.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             var port = _port ?? throw new InvalidOperationException("텔레스코픽 포트가 열려 있지 않습니다.");
 
-            port.DiscardInBuffer();
-            port.WriteLine(command);
-            LastTx = command;
+            // SerialPort 의 WriteLine/ReadLine 은 동기 블로킹(각각 WriteTimeout/ReadTimeout까지) —
+            // UI 스레드에서 await 되어도 프리즈가 없도록 스레드풀에서 실행한다.
+            return await Task.Run(() =>
+            {
+                port.DiscardInBuffer();
+                port.WriteLine(command);
+                LastTx = command;
 
-            try
-            {
-                var response = port.ReadLine().TrimEnd('\r', '\n');
-                LastRx = response;
-                return response;
-            }
-            catch (TimeoutException)
-            {
-                LastRx = null;
-                _logger.LogDebug("텔레스코픽 응답 타임아웃 (TX={Tx})", command);
-                return null;
-            }
+                try
+                {
+                    var response = port.ReadLine().TrimEnd('\r', '\n');
+                    LastRx = response;
+                    return response;
+                }
+                catch (TimeoutException)
+                {
+                    LastRx = null;
+                    _logger.LogDebug("텔레스코픽 응답 타임아웃 (TX={Tx})", command);
+                    return null;
+                }
+            }, ct).ConfigureAwait(false);
         }
         finally { _io.Release(); }
     }
@@ -103,12 +108,16 @@ public sealed class TelescopicClient : IDisposable
     /// <summary>응답을 기다리지 않는 송신 — 조그 유지 명령처럼 왕복 지연이 아까운 경우에만 쓴다.</summary>
     public async Task SendNoWaitAsync(string command, CancellationToken ct = default)
     {
-        await _io.WaitAsync(ct);
+        await _io.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             var port = _port ?? throw new InvalidOperationException("텔레스코픽 포트가 열려 있지 않습니다.");
-            port.WriteLine(command);
-            LastTx = command;
+            // WriteLine 도 WriteTimeout(기본 1s)까지 동기 블로킹 — UI 스레드 프리즈 방지.
+            await Task.Run(() =>
+            {
+                port.WriteLine(command);
+                LastTx = command;
+            }, ct).ConfigureAwait(false);
             // 응답은 다음 SendAsync 의 DiscardInBuffer 에서 버려진다.
         }
         finally { _io.Release(); }
