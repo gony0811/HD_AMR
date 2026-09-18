@@ -155,9 +155,9 @@
         <Border Classes="card">
             <StackPanel Spacing="10">
                 <TextBlock Text="추진기 리셋" FontWeight="SemiBold" />
-                <Button Classes="danger" Content="리셋 (Handle:032, 2초 유지)" Command="{Binding ResetCommand}" HorizontalAlignment="Left" />
+                <Button Classes="danger" Content="리셋 (완료 상태 확인)" Command="{Binding ResetCommand}" HorizontalAlignment="Left" />
                 <TextBlock Classes="hint"
-                           Text="리셋은 추진기를 기계적 원점까지 내립니다. 사양서 FAQ 5·7: 완료(운행 모드 '리셋 중' → '정지') 전에 정지시키면 알람이 해제되지 않습니다. 완료까지 기다린 뒤 에러 코드를 확인하세요." />
+                           Text="리셋은 추진기를 기계적 원점까지 내립니다. 운행 모드가 '리셋 중'으로 진입하고 다시 '정지'가 될 때까지 명령을 유지합니다. 완료 전에는 알람이 해제되지 않으며 최대 2분 동안 완료를 기다립니다." />
             </StackPanel>
         </Border>
 

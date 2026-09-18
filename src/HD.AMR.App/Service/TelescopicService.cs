@@ -154,6 +154,19 @@ public class TelescopicService : BackgroundService
         LastError = null;
     }
 
+    private void UpdateStatus(string? response)
+    {
+        var status = TelescopicProtocol.ParseStatus(response);
+        if (status is null) return;
+
+        lock (_stateLock)
+        {
+            _latest = status;
+            _latestUtc = DateTime.UtcNow;
+        }
+        LastError = null;
+    }
+
     // ── 조그(상승/하강) ─────────────────────────────────────────────
     /// <summary>
     /// 조그 세션 시작. <paramref name="up"/>=true 상승, false 하강.
@@ -282,16 +295,61 @@ public class TelescopicService : BackgroundService
         finally { await StopAsync_Internal(CancellationToken.None).ConfigureAwait(false); }
     }
 
+    private static readonly TimeSpan ResetMinimumHold =
+        TimeSpan.FromMilliseconds(TelescopicProtocol.ResetHoldMs + 200);
+    private static readonly TimeSpan ResetStartTimeout = TimeSpan.FromSeconds(8);
+    private static readonly TimeSpan ResetCompletionTimeout = TimeSpan.FromMinutes(2);
+
     /// <summary>
-    /// 추진기 리셋 — <c>Handle:032</c> 2s 유지 후 정지. 사양서 FAQ 5: 리셋 완료 전에 정지하면
-    /// 알람이 해제되지 않으므로, 완료(운행 모드 3 → 0)까지 기다린 뒤 에러를 확인할 것.
+    /// 추진기 리셋 — <c>Handle:032</c> 을 2초 초과 유지하고 운행 모드 3(리셋 중) 진입을 확인한 뒤,
+    /// 모드 0(정지)으로 완료되어야 <c>Handle:000</c> 을 보낸다. 완료 전 정지는 리셋과 알람 해제를
+    /// 중단한다는 사양서 FAQ 5·7을 따른다.
     /// </summary>
     public async Task ResetAsync(CancellationToken ct = default)
     {
         await EndJogAsync(ct).ConfigureAwait(false);
-        await _client.SendAsync(TelescopicProtocol.Reset(), ct).ConfigureAwait(false);
-        try { await Task.Delay(TelescopicProtocol.ResetHoldMs, ct).ConfigureAwait(false); }
-        finally { await StopAsync_Internal(CancellationToken.None).ConfigureAwait(false); }
+
+        var startedUtc = DateTime.UtcNow;
+        var resetSeen = false;
+        try
+        {
+            // Handle 명령의 Length 응답도 상태 프레임이므로 버리지 않고 캐시에 반영한다.
+            var resetResponse = await _client.SendAsync(TelescopicProtocol.Reset(), ct).ConfigureAwait(false);
+            var initialStatus = TelescopicProtocol.ParseStatus(resetResponse);
+            UpdateStatus(resetResponse);
+            resetSeen = initialStatus?.Mode == TelescopicProtocol.RunMode.Resetting;
+
+            while (DateTime.UtcNow - startedUtc < ResetCompletionTimeout)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(200), ct).ConfigureAwait(false);
+                await PollAsync(ct).ConfigureAwait(false);
+
+                var status = Latest;
+                if (status?.Mode == TelescopicProtocol.RunMode.Resetting)
+                    resetSeen = true;
+
+                var elapsed = DateTime.UtcNow - startedUtc;
+                if (!resetSeen && elapsed >= ResetStartTimeout)
+                    throw new InvalidOperationException(
+                        "리셋 명령 후 운행 모드가 '리셋 중(3)'으로 진입하지 않았습니다. " +
+                        "컨트롤러 활성·잠금 상태와 TX/RX 결선을 확인하세요.");
+
+                if (resetSeen && elapsed >= ResetMinimumHold &&
+                    status?.Mode == TelescopicProtocol.RunMode.Stopped)
+                {
+                    _logger.LogInformation("텔레스코픽 리셋 완료 ({Elapsed:F1}s, 높이={Height})",
+                        elapsed.TotalSeconds, status.HeightMm);
+                    return;
+                }
+            }
+
+            throw new TimeoutException("추진기 리셋이 2분 안에 완료되지 않았습니다.");
+        }
+        finally
+        {
+            // 정상 완료, 시간 초과, 취소 모두 명령 비트를 안전하게 해제한다.
+            await StopAsync_Internal(CancellationToken.None).ConfigureAwait(false);
+        }
     }
 
     /// <summary>에러 코드 강제 클리어. 반환 true = <c>ClearErr OK</c>.</summary>

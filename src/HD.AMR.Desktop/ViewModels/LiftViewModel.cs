@@ -193,9 +193,7 @@ public sealed partial class LiftViewModel : ViewModelBase
         try
         {
             await _svc.ResetAsync(_cts.Token);
-            // 사양서 FAQ 5·7: 리셋 완료(운행 모드 3 → 0) 전에는 알람이 해제되지 않는다.
-            Notify("리셋 명령을 보냈습니다 — 운행 모드가 '리셋 중'에서 '정지'로 바뀔 때까지 기다리세요. " +
-                   "완료 전에는 알람이 해제되지 않습니다.", false);
+            Notify("추진기 리셋이 완료되었습니다 — 운행 모드 '리셋 중' → '정지' 전환을 확인했습니다.", false);
         }
         catch (Exception ex) { Notify($"리셋 실패: {ex.Message}", true); }
         finally { Busy = false; }
