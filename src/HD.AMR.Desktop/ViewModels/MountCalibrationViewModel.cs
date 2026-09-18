@@ -32,6 +32,7 @@ public sealed partial class MountCalibrationViewModel : ViewModelBase
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly AMRService _amr;
     private readonly CobotService _cobot;
+    private readonly TelescopicService _lift;
     private readonly DispatcherTimer _timer;
     private readonly CancellationTokenSource _cts = new();
 
@@ -71,11 +72,13 @@ public sealed partial class MountCalibrationViewModel : ViewModelBase
     [ObservableProperty] private double _manBy;
     [ObservableProperty] private double _manBz;
 
-    public MountCalibrationViewModel(IServiceScopeFactory scopeFactory, AMRService amr, CobotService cobot)
+    public MountCalibrationViewModel(IServiceScopeFactory scopeFactory, AMRService amr, CobotService cobot,
+        TelescopicService lift)
     {
         _scopeFactory = scopeFactory;
         _amr = amr;
         _cobot = cobot;
+        _lift = lift;
         _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
         _timer.Tick += (_, _) => OnTick();
     }
@@ -139,6 +142,7 @@ public sealed partial class MountCalibrationViewModel : ViewModelBase
         SolveCommand.NotifyCanExecuteChanged();
         RefreshTcpNowCommand.NotifyCanExecuteChanged();
         ApplyCadTzCommand.NotifyCanExecuteChanged();
+        UseLiftHeightCommand.NotifyCanExecuteChanged();
     }
 
     private async Task PollTcpAsync()
@@ -236,6 +240,33 @@ public sealed partial class MountCalibrationViewModel : ViewModelBase
     public bool CanApply => Result is { Success: true };
     public bool CanRefreshTcp => CobotConnected && !Busy;
     public bool CanApplyCadTz => SampleCount >= 1 && !Busy;
+
+    // ── 리프트 실측 스트로크 ────────────────────────────────────────
+    /// <summary>텔레스코픽 컨트롤러가 연결돼 높이를 읽고 있는가.</summary>
+    public bool LiftConnected => _lift.IsConnected && _lift.Latest is not null;
+
+    /// <summary>컨트롤러가 보고한 현재 높이(mm). 없으면 null.</summary>
+    public int? LiftHeightMm => _lift.Latest is { HeightMm: >= 0 } s ? s.HeightMm : null;
+
+    public string LiftHeightText => LiftHeightMm is { } h
+        ? $"리프트 실측 높이: {h} mm"
+        : _lift.IsConnected ? "리프트 상태 수신 대기 중…" : "리프트 미연결 — 스트로크를 직접 입력하세요.";
+
+    /// <summary>입력한 스트로크와 실측이 어긋나면 경고 — 오타로 기울기가 통째로 틀어지는 걸 막는다.</summary>
+    public bool LiftStrokeMismatch =>
+        LiftHeightMm is { } h && Math.Abs(h - TelescopicStrokeMm) > 1.0;
+
+    public bool CanUseLiftHeight => LiftHeightMm is not null && !Busy;
+
+    /// <summary>컨트롤러가 보고한 높이를 스트로크 입력란에 채운다 — 확인 체크는 운영자가 직접.</summary>
+    [RelayCommand(CanExecute = nameof(CanUseLiftHeight))]
+    private void UseLiftHeight()
+    {
+        TelescopicStrokeMm = LiftHeightMm!.Value;
+        StrokeConfirmed = false;
+        Notify($"리프트 실측 높이 {TelescopicStrokeMm:0} mm 를 채웠습니다 — 완전 하강 상태인지 확인하고 체크하세요.",
+               error: false);
+    }
 
     /// <summary>버튼을 회색으로 두고 끝내지 않고, 무엇이 막고 있는지 말한다.</summary>
     public string SolveBlockedReason =>

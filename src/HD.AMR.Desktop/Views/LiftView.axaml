@@ -1,0 +1,169 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:HD.AMR.Desktop.ViewModels"
+             x:Class="HD.AMR.Desktop.Views.LiftView"
+             x:DataType="vm:LiftViewModel">
+    <UserControl.Styles>
+        <Style Selector="TextBlock.axis">
+            <Setter Property="Foreground" Value="{DynamicResource AppMutedTextBrush}" />
+            <Setter Property="FontSize" Value="12" />
+        </Style>
+        <Style Selector="TextBlock.hint">
+            <Setter Property="Foreground" Value="{DynamicResource AppMutedTextBrush}" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+        <Style Selector="TextBlock.val">
+            <Setter Property="FontSize" Value="22" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="HorizontalAlignment" Value="Center" />
+        </Style>
+        <Style Selector="Button.jog">
+            <Setter Property="Width" Value="150" />
+            <Setter Property="Height" Value="76" />
+            <Setter Property="FontSize" Value="18" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+    </UserControl.Styles>
+
+    <StackPanel MaxWidth="1000" HorizontalAlignment="Left">
+        <TextBlock Classes="page-title" Text="Z축 리프트 (텔레스코픽)" />
+        <TextBlock Classes="page-subtitle" TextWrapping="Wrap"
+                   Text="EBLUM 3채널 홀 동기 컨트롤러를 RS232/TTL 로 제어합니다. 리프트 위에 코봇이 올라가 있습니다 — 주변에 사람·간섭물이 없는지 확인한 뒤 조작하세요." />
+
+        <Border Classes="alert" Classes.info="{Binding !IsError}"
+                IsVisible="{Binding Message, Converter={x:Static ObjectConverters.IsNotNull}}">
+            <TextBlock Text="{Binding Message}" TextWrapping="Wrap" />
+        </Border>
+
+        <!-- 연결 -->
+        <Border Classes="card">
+            <StackPanel Spacing="8">
+                <Grid ColumnDefinitions="*,Auto">
+                    <TextBlock Grid.Column="0" Text="통신 연결 (RS232/TTL)" FontWeight="SemiBold" VerticalAlignment="Center" />
+                    <Border Grid.Column="1" Classes="badge" Classes.on="{Binding IsConnected}" Classes.off="{Binding !IsConnected}">
+                        <TextBlock Text="{Binding IsConnected, Converter={x:Static vm:BoolTextConverters.Connection}}" />
+                    </Border>
+                </Grid>
+                <TextBlock Classes="axis" Text="{Binding PortText}" />
+                <TextBlock Classes="axis" Text="{Binding AgeText}" />
+                <TextBlock Classes="axis" Text="{Binding TrafficText}" />
+                <Border Classes="alert" IsVisible="{Binding LastError, Converter={x:Static ObjectConverters.IsNotNull}}">
+                    <TextBlock Text="{Binding LastError, StringFormat='통신 오류: {0}'}" TextWrapping="Wrap" />
+                </Border>
+                <TextBlock Classes="hint"
+                           Text="컨트롤러 포트는 TTL 레벨입니다 — PC 와 연결하려면 TTL↔RS232(또는 TTL↔USB) 변환 모듈이 필요합니다. RJ45 3=RX1, 4=TX1 을 외부 기기의 TX/RX 와 교차 결선하고 8=GND 를 공통으로 잇습니다. 전원(7=5V)이 통신 핀과 단락되지 않도록 확인 후 전원을 넣으세요." />
+            </StackPanel>
+        </Border>
+
+        <!-- 상태 -->
+        <Border Classes="card">
+            <StackPanel Spacing="10">
+                <Grid ColumnDefinitions="*,Auto">
+                    <TextBlock Grid.Column="0" Text="상태" FontWeight="SemiBold" VerticalAlignment="Center" />
+                    <Button Grid.Column="1" Content="지금 읽기" Command="{Binding RefreshNowCommand}" />
+                </Grid>
+                <Grid ColumnDefinitions="*,*,*">
+                    <StackPanel Grid.Column="0">
+                        <TextBlock Classes="axis" HorizontalAlignment="Center" Text="현재 높이" />
+                        <TextBlock Classes="val" Text="{Binding HeightText}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1">
+                        <TextBlock Classes="axis" HorizontalAlignment="Center" Text="운행 모드" />
+                        <TextBlock Classes="val" Text="{Binding ModeText}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="2">
+                        <TextBlock Classes="axis" HorizontalAlignment="Center" Text="에러 코드" />
+                        <TextBlock Classes="val" Text="{Binding ErrorText}" />
+                    </StackPanel>
+                </Grid>
+                <WrapPanel>
+                    <Border Classes="badge" Classes.on="{Binding IsActive}" Classes.off="{Binding !IsActive}" Margin="0,0,6,6">
+                        <TextBlock Text="{Binding ActiveText}" /></Border>
+                    <Border Classes="badge" Classes.on="{Binding IsUnlocked}" Classes.off="{Binding !IsUnlocked}" Margin="0,0,6,6">
+                        <TextBlock Text="{Binding LockText}" /></Border>
+                    <Border Classes="badge" Classes.on="{Binding IsMoving}" Classes.off="{Binding !IsMoving}" Margin="0,0,6,6">
+                        <TextBlock Text="동작 중" /></Border>
+                    <Border Classes="badge" Classes.on="{Binding IsHealthy}" Classes.off="{Binding !IsHealthy}" Margin="0,0,6,6">
+                        <TextBlock Text="에러 없음" /></Border>
+                </WrapPanel>
+                <Border Classes="alert" IsVisible="{Binding HasFault}">
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="{Binding ErrorText, StringFormat='컨트롤러 에러: {0}'}" TextWrapping="Wrap" />
+                        <Button Content="에러 코드 클리어 (ClearErr)" Command="{Binding ClearErrorCommand}" HorizontalAlignment="Left" />
+                    </StackPanel>
+                </Border>
+                <Border Classes="alert" IsVisible="{Binding LayoutMismatch}">
+                    <TextBlock TextWrapping="Wrap" FontSize="12"
+                               Text="응답 길이가 사양서(14자)와 다릅니다 — 에러·높이는 뒤에서 세어 읽었지만 중간 필드는 신뢰하지 않습니다. 펌웨어 버전을 확인하세요." />
+                </Border>
+            </StackPanel>
+        </Border>
+
+        <!-- 수동 조작 -->
+        <Border Classes="card">
+            <StackPanel Spacing="10">
+                <TextBlock Text="수동 조작" FontWeight="SemiBold" />
+                <CheckBox Content="동작 허용 — 리프트 주변에 사람·간섭물이 없음을 확인했습니다"
+                          IsChecked="{Binding MotionArmed}" />
+                <TextBlock Classes="hint" Text="{Binding BlockedReason}" />
+                <StackPanel Orientation="Horizontal" Spacing="12">
+                    <Button Name="JogUpBtn" Classes="jog accent" Content="▲  상승" />
+                    <Button Name="JogDownBtn" Classes="jog accent" Content="▼  하강" />
+                    <Button Classes="jog danger" Content="■  정지" Command="{Binding StopCommand}" />
+                </StackPanel>
+                <TextBlock Classes="hint"
+                           Text="상승·하강은 버튼을 누르고 있는 동안만 동작합니다. 떼면 즉시 정지 명령이 나가고, 화면이 멈추거나 페이지를 떠나도 서비스의 데드맨이 자동으로 정지시킵니다. 정지 버튼은 '동작 허용'과 무관하게 항상 눌립니다." />
+            </StackPanel>
+        </Border>
+
+        <!-- 지정 높이 이동 -->
+        <Border Classes="card">
+            <StackPanel Spacing="10">
+                <TextBlock Text="지정 높이 이동 (Target)" FontWeight="SemiBold" />
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                    <StackPanel>
+                        <TextBlock Classes="axis" Text="목표 높이 (mm)" />
+                        <NumericUpDown Value="{Binding TargetHeightMm}" Increment="10" FormatString="0" />
+                    </StackPanel>
+                    <Button VerticalAlignment="Bottom" Classes="accent" Content="이동" Command="{Binding MoveToHeightCommand}" />
+                    <TextBlock Classes="axis" VerticalAlignment="Bottom" Margin="0,0,0,8" Text="{Binding RangeText}" />
+                </StackPanel>
+                <TextBlock Classes="hint"
+                           Text="컨트롤러가 실행 결과 0(가능)/1(불가)로 응답합니다. 잠김·슬립 상태에서는 거부됩니다. ⚠ 사양서는 지령 높이를 3바이트(0~999mm)로 규정하는데 응답 높이는 4바이트라 비대칭입니다 — 행정 1000mm 의 최상단을 지령하려면 벤더 확인이 필요합니다(설정 TargetDigits)." />
+            </StackPanel>
+        </Border>
+
+        <!-- 메모리 위치 -->
+        <Border Classes="card">
+            <StackPanel Spacing="10">
+                <TextBlock Text="메모리 위치 (1~3)" FontWeight="SemiBold" />
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                    <StackPanel>
+                        <TextBlock Classes="axis" Text="슬롯" />
+                        <NumericUpDown Value="{Binding MemorySlot}" Minimum="1" Maximum="3" Increment="1" FormatString="0" />
+                    </StackPanel>
+                    <Button VerticalAlignment="Bottom" Classes="accent" Content="이동" Command="{Binding MoveToMemoryCommand}" />
+                    <Button VerticalAlignment="Bottom" Content="현재 위치를 저장" Command="{Binding SaveMemoryCommand}" />
+                </StackPanel>
+                <TextBlock Classes="hint"
+                           Text="같은 명령을 50ms 유지하면 '이동', 2초 유지하면 '저장'입니다(사양서 Bit2~4). 저장 버튼은 2초간 명령을 유지하므로 그 사이 리프트가 움직일 수 있습니다." />
+            </StackPanel>
+        </Border>
+
+        <!-- 리셋 -->
+        <Border Classes="card">
+            <StackPanel Spacing="10">
+                <TextBlock Text="추진기 리셋" FontWeight="SemiBold" />
+                <Button Classes="danger" Content="리셋 (Handle:032, 2초 유지)" Command="{Binding ResetCommand}" HorizontalAlignment="Left" />
+                <TextBlock Classes="hint"
+                           Text="리셋은 추진기를 기계적 원점까지 내립니다. 사양서 FAQ 5·7: 완료(운행 모드 '리셋 중' → '정지') 전에 정지시키면 알람이 해제되지 않습니다. 완료까지 기다린 뒤 에러 코드를 확인하세요." />
+            </StackPanel>
+        </Border>
+
+        <Border Classes="alert">
+            <TextBlock TextWrapping="Wrap" FontSize="12"
+                       Text="상승/하강 리미트와 속도는 통신 명령으로 설정할 수 없습니다 — 전용 산업용 디버깅 화면이 필요합니다(사양서 FAQ 6). 컨트롤러는 상태를 자동 통보하지 않으므로 이 화면이 주기적으로 조회합니다(FAQ 4)." />
+        </Border>
+    </StackPanel>
+</UserControl>

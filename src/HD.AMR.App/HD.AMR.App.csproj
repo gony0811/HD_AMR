@@ -17,6 +17,7 @@
       <PackageReference Include="MQTTnet" Version="4.3.7.1207" />
       <PackageReference Include="netDxf.netstandard" Version="3.0.1" />
       <PackageReference Include="NModbus" Version="3.0.81" />
+      <PackageReference Include="System.IO.Ports" Version="9.0.0" />
       <!-- EtherNet/IP (CIP) 클라이언트. Laser Displacement Sensor 통신용. netstandard2.0, 의존성 없음, MIT.
            네임스페이스 Sres.Net.EEIP, 클래스 EEIPClient (RegisterSession/UnRegisterSession/GetAttributeSingle). -->
       <PackageReference Include="EEIP.NetStandard" Version="1.0.2" />

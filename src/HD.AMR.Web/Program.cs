@@ -82,6 +82,12 @@ builder.Services.Configure<IoModuleModbusTcpSettings>(
 builder.Services.AddSingleton<IoModuleService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<IoModuleService>());
 
+// Z축 텔레스코픽(EBLUM 3채널 홀 동기 컨트롤러) — RS232/TTL.
+builder.Services.Configure<TelescopicSerialSettings>(
+    builder.Configuration.GetSection("Telescopic"));
+builder.Services.AddSingleton<TelescopicService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<TelescopicService>());
+
 // 용접라인 추적(명세서 v2). 검출은 OpenCvSharp(Windows) — 그 외 플랫폼은 no-op 폴백.
 // ROI 프로파일은 JSON 파일로 저장. 싱글톤(운영자 1인, 상태 유지).
 builder.Services.Configure<WeldTrackingSettings>(

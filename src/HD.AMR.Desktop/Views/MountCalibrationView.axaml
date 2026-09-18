@@ -81,6 +81,9 @@
                         <NumericUpDown Value="{Binding TelescopicStrokeMm}" Increment="1" FormatString="0.0"
                                        IsEnabled="{Binding !Busy}" />
                     </StackPanel>
+                    <Button VerticalAlignment="Bottom" Margin="0,0,6,8"
+                            Content="리프트에서 읽기" Command="{Binding UseLiftHeightCommand}"
+                            ToolTip.Tip="텔레스코픽 컨트롤러가 보고한 현재 높이를 채웁니다." />
                     <CheckBox VerticalAlignment="Bottom" Margin="0,0,12,8"
                               Content="스트로크 값을 확인했습니다" IsChecked="{Binding StrokeConfirmed}" IsEnabled="{Binding !Busy}" />
                     <StackPanel Margin="0,0,6,8">
@@ -95,6 +98,11 @@
                 <Border Classes="alert">
                     <TextBlock TextWrapping="Wrap" FontSize="12"
                                Text="q_z 는 바닥면(z=0)을 기준으로 잰 표적 점의 높이입니다 — 바닥에 표적을 두면 0, 받침 위에 두면 그 높이. AMR pose 가 평면(x·y·yaw)이라 z 방정식이 q_z 와 tz 를 차이로만 담습니다. 이 값이 없으면 tz 가 수학적으로 관측되지 않아 T_A_B 의 Z 가 결정되지 않습니다." />
+                </Border>
+                <TextBlock Classes="hint" Text="{Binding LiftHeightText}" />
+                <Border Classes="alert" IsVisible="{Binding LiftStrokeMismatch}">
+                    <TextBlock TextWrapping="Wrap" FontSize="12"
+                               Text="입력한 스트로크가 리프트 실측 높이와 다릅니다 — 표본이 실제와 다른 높이로 기록되면 기울기가 통째로 틀어집니다. '리프트에서 읽기'로 맞추세요." />
                 </Border>
                 <Border Classes="alert">
                     <TextBlock TextWrapping="Wrap" FontSize="12"

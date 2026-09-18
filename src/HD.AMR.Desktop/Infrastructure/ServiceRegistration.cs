@@ -52,6 +52,10 @@ internal static class ServiceRegistration
         AddHostedSingleton<IoModuleService>(services);
         services.Configure<IoModuleModbusTcpSettings>(config.GetSection("IoModule"));
 
+        // Z축 텔레스코픽(EBLUM 3채널 홀 동기 컨트롤러) — RS232/TTL. 포트가 없으면 조용히 재시도만 한다.
+        AddHostedSingleton<TelescopicService>(services);
+        services.Configure<TelescopicSerialSettings>(config.GetSection("Telescopic"));
+
         AddHostedSingleton<VisionInterfaceService>(services);
         services.Configure<HD.AMR.App.Communication.Vision.VisionInterfaceSettings>(config.GetSection("Vision"));
 
@@ -148,6 +152,7 @@ internal static class ServiceRegistration
         services.AddTransient<VisionTrainingViewModel>();
         services.AddTransient<LaserViewModel>();
         services.AddTransient<MountCalibrationViewModel>();
+        services.AddTransient<LiftViewModel>();
 
         return services;
     }
