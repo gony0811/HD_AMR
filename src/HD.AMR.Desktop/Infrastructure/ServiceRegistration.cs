@@ -116,6 +116,7 @@ internal static class ServiceRegistration
         services.AddScoped<ParameterService>();
         services.AddScoped<InspectionRecipeService>();
         services.AddScoped<CalibrationService>();
+        services.AddScoped<ArucoHandEyeService>();
         services.AddScoped<QrLocalizationService>();
         services.AddScoped<DrawingService>();
         services.AddScoped<TeachingService>();
@@ -152,6 +153,7 @@ internal static class ServiceRegistration
         services.AddTransient<VisionTrainingViewModel>();
         services.AddTransient<LaserViewModel>();
         services.AddTransient<MountCalibrationViewModel>();
+        services.AddTransient<HandEyeViewModel>();
         services.AddTransient<ArucoMountCalibrationViewModel>();
         services.AddTransient<LiftViewModel>();
 

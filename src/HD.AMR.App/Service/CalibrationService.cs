@@ -29,6 +29,13 @@ public class CalibrationService
     private const string MountSamplesKey = "Calib.Mount.SamplesJson";
     private const string MountTargetZKey = "Calib.Mount.TargetZmm";   // double — AMR 원점 기준 타깃 높이
     private const string MountSolveKey = "Calib.Mount.SolveJson";     // JSON MountSolveSnapshot
+
+    // ── 핸드아이 측정(AX=XB) 표본·스냅샷 ───────────────────────────
+    // 산출된 pose 는 <b>기존 HandEyeKey(Calib.HandEye.Pose)</b> 에 저장한다 — ArUco 장착 보정이
+    // 읽는 바로 그 값이라, 별도 키를 두면 두 개의 진실 원천이 생긴다.
+    private const string HandEyeSamplesKey = "Calib.HandEye.SamplesJson";
+    private const string HandEyeSolveKey = "Calib.HandEye.SolveJson";
+    private const string ArucoSettingsKey = "Calib.Aruco.SettingsJson";
     private const string RefPointsKey = "Calib.MapRef.PointsJson";
     private const string HandEyeKey = "Calib.HandEye.Pose";      // JSON double[6] = [x,y,z,rx,ry,rz]
     private const string QrMarkersKey = "Calib.Qr.MarkersJson";
@@ -178,6 +185,64 @@ public class CalibrationService
         return _param.SetAsync(MountSolveKey, JsonSerializer.Serialize(snap),
             "장착 캘리브 마지막 산출 결과(측정값 — 적용값 Calib.Mount.Pose 와 별개)");
     }
+
+    // ── 핸드아이 측정 표본 (AX=XB) ─────────────────────────────────
+    public async Task<List<HandEyeSample>> GetHandEyeSamplesAsync()
+    {
+        var raw = await _param.GetAsync(HandEyeSamplesKey);
+        if (raw is not null)
+        {
+            try
+            {
+                var list = JsonSerializer.Deserialize<List<HandEyeSample>>(raw, JsonOpts);
+                if (list is not null) return list;
+            }
+            catch (Exception ex) { _logger.LogWarning(ex, "핸드아이 표본 역직렬화 실패 — 빈 목록"); }
+        }
+        return new List<HandEyeSample>();
+    }
+
+    public Task SaveHandEyeSamplesAsync(List<HandEyeSample> samples)
+        => _param.SetAsync(HandEyeSamplesKey, JsonSerializer.Serialize(samples),
+            "핸드아이 측정 표본(TCP pose + 카메라 기준 ArUco pose, AX=XB 입력)");
+
+    public async Task<HandEyeSolveSnapshot?> GetHandEyeSolveAsync()
+    {
+        var raw = await _param.GetAsync(HandEyeSolveKey);
+        if (raw is null) return null;
+        try { return JsonSerializer.Deserialize<HandEyeSolveSnapshot>(raw, JsonOpts); }
+        catch (Exception ex) { _logger.LogWarning(ex, "핸드아이 산출 스냅샷 역직렬화 실패 — 무시"); return null; }
+    }
+
+    public Task SaveHandEyeSolveAsync(HandEyeResult r, int tool)
+    {
+        if (!r.Success) return Task.CompletedTask;
+        var snap = new HandEyeSolveSnapshot(
+            DateTime.UtcNow, r.PoseFC, tool, r.N, r.PairCount, r.RotationRmsDeg, r.TranslationRmsMm,
+            r.AxisSpreadDeg, r.Warnings.ToArray());
+        return _param.SetAsync(HandEyeSolveKey, JsonSerializer.Serialize(snap),
+            "핸드아이 마지막 산출 결과(측정값 — 적용값 Calib.HandEye.Pose 와 별개)");
+    }
+
+    // ── ArUco 마커 설정 ────────────────────────────────────────────
+    public async Task<ArucoSettings> GetArucoSettingsAsync()
+    {
+        var raw = await _param.GetAsync(ArucoSettingsKey);
+        if (raw is not null)
+        {
+            try
+            {
+                var v = JsonSerializer.Deserialize<ArucoSettings>(raw, JsonOpts);
+                if (v is not null) return v;
+            }
+            catch (Exception ex) { _logger.LogWarning(ex, "ArUco 설정 역직렬화 실패 — 기본값"); }
+        }
+        return new ArucoSettings();
+    }
+
+    public Task SaveArucoSettingsAsync(ArucoSettings settings)
+        => _param.SetAsync(ArucoSettingsKey, JsonSerializer.Serialize(settings),
+            "ArUco 마커 설정(사전 종류, 기대 ID, 실측 한 변 길이 mm)");
 
     // ── 핸드아이 오프셋 T_T_C (툴 TCP→카메라 광학 프레임) ───────────
     /// <summary>저장된 핸드아이 오프셋 [x,y,z,rx,ry,rz](mm/도). 없으면 0 배열.</summary>
@@ -366,6 +431,11 @@ public record MountSolveResult(double PhiDeg, double Tx, double Ty, double RmsMm
 /// <b>측정값</b>이므로 운영자가 손으로 보정할 수 있는 <b>적용값</b>(<c>Calib.Mount.Pose</c>)과 별개로 보관한다.
 /// 두 값의 차이는 물리적 재장착 후 가장 유용한 진단 지표다.
 /// </summary>
+/// <summary>핸드아이(AX=XB) 산출 스냅샷 — "마지막 산출" 표시용. 기준 tool 번호를 함께 남긴다.</summary>
+public record HandEyeSolveSnapshot(
+    DateTime SolvedAtUtc, double[] PoseFC, int Tool, int N, int PairCount,
+    double RotationRmsDeg, double TranslationRmsMm, double AxisSpreadDeg, string[] Warnings);
+
 public record MountSolveSnapshot(
     DateTime SolvedAtUtc, double[] MountPose, bool TzObserved, double TargetZmm,
     double PlaneOffsetDmm, double RmsMm, double MaxAbsMm, double PlaneRmsMm, double PlanarRmsMm,

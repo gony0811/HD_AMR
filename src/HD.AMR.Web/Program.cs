@@ -127,6 +127,7 @@ builder.Services.AddScoped<ParameterService>();
 builder.Services.AddScoped<InspectionRecipeService>();
 // QR 정차 pose 티칭에 필요한 T_A_B, T_T_C, 목표 T_A_Q 및 기존 정합값 저장.
 builder.Services.AddScoped<CalibrationService>();
+builder.Services.AddScoped<ArucoHandEyeService>();
 // 바닥 QR 기준 목표 AMR SLAM 정차 pose 계산. 온디맨드 측정 — 호스티드 불필요.
 builder.Services.AddScoped<QrLocalizationService>();
 

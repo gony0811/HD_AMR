@@ -1,0 +1,211 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:HD.AMR.Desktop.ViewModels"
+             xmlns:m="using:HD.AMR.App.Models"
+             x:Class="HD.AMR.Desktop.Views.HandEyeView"
+             x:DataType="vm:HandEyeViewModel">
+    <UserControl.Styles>
+        <Style Selector="NumericUpDown.pose"><Setter Property="Margin" Value="0,0,6,0" /></Style>
+        <Style Selector="TextBlock.axis">
+            <Setter Property="Foreground" Value="{DynamicResource AppMutedTextBrush}" />
+            <Setter Property="FontSize" Value="12" />
+        </Style>
+        <Style Selector="TextBlock.hint">
+            <Setter Property="Foreground" Value="{DynamicResource AppMutedTextBrush}" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+        <Style Selector="TextBlock.val">
+            <Setter Property="FontSize" Value="16" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="HorizontalAlignment" Value="Center" />
+        </Style>
+    </UserControl.Styles>
+
+    <StackPanel MaxWidth="1000" HorizontalAlignment="Left">
+        <TextBlock Classes="page-title" Text="핸드아이 측정 (T_T_C)" />
+        <TextBlock Classes="page-subtitle" TextWrapping="Wrap"
+                   Text="바닥에 고정한 ArUco 를 AMR·리프트를 세워 둔 채 코봇 자세만 바꿔 촬영해 Tool TCP → 카메라 변환(T_T_C)을 AX=XB 로 산출합니다. AMR pose 가 식에서 소거되므로 T_A_B 를 몰라도 풀립니다 — 종전처럼 CAD·가정값을 넣지 않고 측정합니다. 이 화면은 코봇을 스스로 움직이지 않습니다." />
+
+        <Border Classes="alert" Classes.info="{Binding !IsError}"
+                IsVisible="{Binding Message, Converter={x:Static ObjectConverters.IsNotNull}}">
+            <TextBlock Text="{Binding Message}" TextWrapping="Wrap" />
+        </Border>
+
+        <!-- 준비 -->
+        <Border Classes="card">
+            <StackPanel Spacing="8">
+                <TextBlock Classes="cardHead" Text="준비 상태" />
+                <WrapPanel>
+                    <Border Classes="badge" Classes.on="{Binding DetectorAvailable}" Classes.off="{Binding !DetectorAvailable}" Margin="0,0,6,6">
+                        <TextBlock Text="ArUco 검출기" /></Border>
+                    <Border Classes="badge" Classes.on="{Binding CameraStreaming}" Classes.off="{Binding !CameraStreaming}" Margin="0,0,6,6">
+                        <TextBlock Text="카메라 스트리밍" /></Border>
+                    <Border Classes="badge" Classes.on="{Binding CobotConnected}" Classes.off="{Binding !CobotConnected}" Margin="0,0,6,6">
+                        <TextBlock Text="코봇 연결" /></Border>
+                    <Border Classes="badge" Margin="0,0,6,6"><TextBlock Text="{Binding SampleCountText}" /></Border>
+                </WrapPanel>
+                <TextBlock Text="{Binding NextStepText}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                <TextBlock Classes="axis" Text="{Binding LastSolveText}" />
+            </StackPanel>
+        </Border>
+
+        <!-- 마커 -->
+        <Border Classes="card">
+            <StackPanel Spacing="8">
+                <TextBlock Classes="cardHead" Text="① ArUco 마커" />
+                <WrapPanel>
+                    <StackPanel Margin="0,0,12,8">
+                        <TextBlock Classes="axis" Text="한 변 실측 (mm)" />
+                        <NumericUpDown Value="{Binding MarkerSizeMm}" Increment="1" FormatString="0.0" IsEnabled="{Binding !Busy}" />
+                    </StackPanel>
+                    <StackPanel Margin="0,0,6,8">
+                        <TextBlock Classes="axis" Text="마커 ID" />
+                        <NumericUpDown Value="{Binding MarkerId}" Minimum="0" Maximum="49" Increment="1" FormatString="0" IsEnabled="{Binding !Busy}" />
+                    </StackPanel>
+                    <StackPanel Margin="0,0,12,8">
+                        <TextBlock Classes="axis" Text="Tool 번호" />
+                        <NumericUpDown Value="{Binding Tool}" Minimum="0" Maximum="15" Increment="1" FormatString="0" IsEnabled="{Binding !Busy}" />
+                    </StackPanel>
+                    <CheckBox VerticalAlignment="Bottom" Margin="0,0,0,8" Content="이 ID 만 사용" IsChecked="{Binding MatchMarkerId}" />
+                </WrapPanel>
+                <TextBlock Classes="hint"
+                           Text="사전은 4×4_50 입니다. 한 변 실측값이 틀리면 거리가 비례로 틀어지므로 인쇄물을 자로 재서 넣으세요. ⚠ Tool 번호는 ArUco 장착 보정 화면과 반드시 같아야 합니다 — T_T_C 는 그 tool 의 TCP 기준이고, 장착 보정이 같은 기준의 T_B_T 와 합성합니다. 카메라에 TOOL 이 없으면 0(플랜지)을 쓰면 됩니다." />
+            </StackPanel>
+        </Border>
+
+        <!-- 정지 확인 -->
+        <Border Classes="card">
+            <StackPanel Spacing="8">
+                <TextBlock Classes="cardHead" Text="② AMR · 리프트 고정" />
+                <CheckBox Content="AMR 을 정차시키고 리프트를 고정했습니다 — 측정 내내 건드리지 않습니다"
+                          IsChecked="{Binding StationaryConfirmed}" />
+                <TextBlock Classes="axis" Text="{Binding LiftText}" />
+                <Border Classes="alert" IsVisible="{Binding LiftMoved}">
+                    <TextBlock TextWrapping="Wrap"
+                               Text="리프트가 움직였습니다 — 리프트는 AMR 과 코봇 베이스 사이에 있어서 움직이면 마커가 베이스 기준으로 이동합니다. 'AX=XB 의 상수' 전제가 깨지므로 표본을 전부 삭제하고 다시 시작해야 합니다." />
+                </Border>
+                <TextBlock Classes="hint"
+                           Text="AMR 이나 리프트가 움직이면 식에서 소거되던 항이 변해 해가 무의미해집니다. 두 축을 완전히 고정한 뒤 코봇 자세만 바꾸세요." />
+            </StackPanel>
+        </Border>
+
+        <!-- 자세 캡처 -->
+        <Border Classes="card">
+            <StackPanel Spacing="8">
+                <TextBlock Classes="cardHead" Text="③ 코봇 자세 캡처" />
+                <TextBlock Classes="hint"
+                           Text="⚠ 이 방식의 성패는 표본 수가 아니라 회전축 다양성입니다. 손목을 서로 평행하지 않은 2개 이상 축으로 각각 ±20~30° 돌려가며 잡으세요. 위치만 옮기고 자세가 비슷하면 8회든 20회든 풀리지 않습니다 — 산출 단계에서 거부됩니다." />
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button Name="JogPopupBtn" Content="코봇 조그 (팝업)" />
+                    <Button Content="자세 캡처" Classes="accent" Command="{Binding CaptureCommand}" />
+                    <Button Content="전체 삭제" Classes="danger" Command="{Binding ClearSamplesCommand}" IsEnabled="{Binding !Busy}" />
+                </StackPanel>
+                <TextBlock Classes="hint" Text="{Binding BlockedReason}" />
+                <TextBlock Classes="axis" Text="{Binding AxisSpreadText}" />
+            </StackPanel>
+        </Border>
+
+        <!-- 표본 목록 -->
+        <Border Classes="card">
+            <StackPanel Spacing="6">
+                <TextBlock Classes="cardHead" Text="④ 표본 목록" />
+                <Grid ColumnDefinitions="40,50,50,150,140,70,80,Auto">
+                    <TextBlock Classes="axis" Text="#" />
+                    <TextBlock Grid.Column="1" Classes="axis" Text="ID" />
+                    <TextBlock Grid.Column="2" Classes="axis" Text="tool" />
+                    <TextBlock Grid.Column="3" Classes="axis" Text="TCP XYZ" />
+                    <TextBlock Grid.Column="4" Classes="axis" Text="Rx Ry Rz" />
+                    <TextBlock Grid.Column="5" Classes="axis" Text="재투영" />
+                    <TextBlock Grid.Column="6" Classes="axis" Text="깊이−PnP" />
+                </Grid>
+                <ItemsControl ItemsSource="{Binding Rows}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:HandEyeRow">
+                            <Grid ColumnDefinitions="40,50,50,150,140,70,80,Auto" Margin="0,2">
+                                <TextBlock Text="{Binding No}" />
+                                <TextBlock Grid.Column="1" Text="{Binding MarkerId}" />
+                                <TextBlock Grid.Column="2" Text="{Binding Tool}" />
+                                <TextBlock Grid.Column="3" Text="{Binding TcpText}" />
+                                <TextBlock Grid.Column="4" Text="{Binding OrientText}" />
+                                <TextBlock Grid.Column="5" Text="{Binding ReprojText}" />
+                                <TextBlock Grid.Column="6" Text="{Binding DepthText}" />
+                                <Button Grid.Column="7" Content="삭제" Padding="6,2"
+                                        Command="{Binding $parent[ItemsControl].((vm:HandEyeViewModel)DataContext).RemoveSampleCommand}"
+                                        CommandParameter="{Binding}" />
+                            </Grid>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <TextBlock Classes="hint"
+                           Text="깊이−PnP 는 depth 채널 실측 거리와 PnP 거리의 차입니다. 평면 마커 PnP 는 광축 방향(깊이)이 가장 약하므로(측면 대비 5~10배) 이 값이 크면 마커 크기 오입력이나 검출 불안정을 의심하세요." />
+            </StackPanel>
+        </Border>
+
+        <!-- 산출 -->
+        <Border Classes="card">
+            <StackPanel Spacing="8">
+                <TextBlock Classes="cardHead" Text="⑤ 산출 결과" />
+                <Button Content="산출" Classes="accent" Command="{Binding SolveCommand}" HorizontalAlignment="Left" />
+                <StackPanel IsVisible="{Binding Result, Converter={x:Static ObjectConverters.IsNotNull}}">
+                  <StackPanel DataContext="{Binding Result}" x:DataType="m:HandEyeResult" Spacing="6">
+                    <Border Classes="alert" IsVisible="{Binding !Success}">
+                        <TextBlock Text="{Binding Error, StringFormat='산출 실패: {0}'}" TextWrapping="Wrap" />
+                    </Border>
+                    <StackPanel IsVisible="{Binding Success}" Spacing="6">
+                        <Grid ColumnDefinitions="*,*,*,*,*,*">
+                            <StackPanel Grid.Column="0"><TextBlock Classes="axis" HorizontalAlignment="Center" Text="x (mm)" /><TextBlock Classes="val" Text="{Binding PoseFC[0], StringFormat='{}{0:F2}'}" /></StackPanel>
+                            <StackPanel Grid.Column="1"><TextBlock Classes="axis" HorizontalAlignment="Center" Text="y (mm)" /><TextBlock Classes="val" Text="{Binding PoseFC[1], StringFormat='{}{0:F2}'}" /></StackPanel>
+                            <StackPanel Grid.Column="2"><TextBlock Classes="axis" HorizontalAlignment="Center" Text="z (mm)" /><TextBlock Classes="val" Text="{Binding PoseFC[2], StringFormat='{}{0:F2}'}" /></StackPanel>
+                            <StackPanel Grid.Column="3"><TextBlock Classes="axis" HorizontalAlignment="Center" Text="rx (°)" /><TextBlock Classes="val" Text="{Binding PoseFC[3], StringFormat='{}{0:F3}'}" /></StackPanel>
+                            <StackPanel Grid.Column="4"><TextBlock Classes="axis" HorizontalAlignment="Center" Text="ry (°)" /><TextBlock Classes="val" Text="{Binding PoseFC[4], StringFormat='{}{0:F3}'}" /></StackPanel>
+                            <StackPanel Grid.Column="5"><TextBlock Classes="axis" HorizontalAlignment="Center" Text="rz (°)" /><TextBlock Classes="val" Text="{Binding PoseFC[5], StringFormat='{}{0:F3}'}" /></StackPanel>
+                        </Grid>
+                        <TextBlock Classes="hint">
+                            <TextBlock.Text>
+                                <MultiBinding StringFormat="자세 {0}개 · 유효 쌍 {1}개 · 회전 잔차 {2:F2}° (최대 {3:F2}°) · 병진 잔차 {4:F1}mm (최대 {5:F1}mm) · 회전축 다양성 {6:F1}°">
+                                    <Binding Path="N" /><Binding Path="PairCount" />
+                                    <Binding Path="RotationRmsDeg" /><Binding Path="RotationMaxDeg" />
+                                    <Binding Path="TranslationRmsMm" /><Binding Path="TranslationMaxMm" />
+                                    <Binding Path="AxisSpreadDeg" />
+                                </MultiBinding>
+                            </TextBlock.Text>
+                        </TextBlock>
+                        <ItemsControl ItemsSource="{Binding Warnings}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="x:String">
+                                    <Border Classes="alert"><TextBlock Text="{Binding}" TextWrapping="Wrap" FontSize="12" /></Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                  </StackPanel>
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <!-- 적용 -->
+        <Border Classes="card">
+            <StackPanel Spacing="8">
+                <TextBlock Classes="cardHead" Text="⑥ 적용 · 저장" />
+                <TextBlock Classes="axis" Text="T_T_C — 선택 Tool TCP → 카메라 광학 프레임 (mm/도)" />
+                <WrapPanel>
+                    <StackPanel><TextBlock Classes="axis" Text="X" /><NumericUpDown Classes="pose" Value="{Binding HandEye.V0}" Increment="0.1" /></StackPanel>
+                    <StackPanel><TextBlock Classes="axis" Text="Y" /><NumericUpDown Classes="pose" Value="{Binding HandEye.V1}" Increment="0.1" /></StackPanel>
+                    <StackPanel><TextBlock Classes="axis" Text="Z" /><NumericUpDown Classes="pose" Value="{Binding HandEye.V2}" Increment="0.1" /></StackPanel>
+                    <StackPanel><TextBlock Classes="axis" Text="Rx" /><NumericUpDown Classes="pose" Value="{Binding HandEye.V3}" Increment="0.1" /></StackPanel>
+                    <StackPanel><TextBlock Classes="axis" Text="Ry" /><NumericUpDown Classes="pose" Value="{Binding HandEye.V4}" Increment="0.1" /></StackPanel>
+                    <StackPanel><TextBlock Classes="axis" Text="Rz" /><NumericUpDown Classes="pose" Value="{Binding HandEye.V5}" Increment="0.1" /></StackPanel>
+                </WrapPanel>
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button Content="결과 적용" Command="{Binding ApplyResultCommand}" />
+                    <Button Content="T_T_C 저장" Classes="accent" Command="{Binding SaveHandEyePoseCommand}" />
+                    <Button Content="저장값 되돌리기" Command="{Binding ReloadHandEyePoseCommand}" />
+                    <TextBlock Classes="axis" VerticalAlignment="Center" Text="{Binding DirtyText}" />
+                </StackPanel>
+                <TextBlock Classes="hint"
+                           Text="이 값은 ArUco 장착 보정·QR 흐름이 읽는 것과 동일한 키(Calib.HandEye.Pose)에 저장됩니다 — 진실 원천이 하나입니다. 저장 후 ArUco 장착 보정 화면으로 넘어가세요(같은 Tool 번호 사용)." />
+            </StackPanel>
+        </Border>
+    </StackPanel>
+</UserControl>
