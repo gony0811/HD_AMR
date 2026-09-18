@@ -134,6 +134,7 @@ internal static class ServiceRegistration
         services.AddSingleton<MainWindowViewModel>();
 
         // 페이지 뷰모델 — 진입 시마다 새로 만든다(상태 초기화).
+        services.AddSingleton<AmrMapViewModel>();
         services.AddTransient<HomeViewModel>();
         services.AddTransient<ComingSoonViewModel>();
         services.AddTransient<IoModuleViewModel>();

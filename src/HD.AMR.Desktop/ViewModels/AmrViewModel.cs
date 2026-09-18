@@ -1,14 +1,10 @@
 using System.Collections.ObjectModel;
-using System.Text.Json;
-using Avalonia.Media.Imaging;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HD.AMR.App.Enums;
-using HD.AMR.App.Communication;
 using HD.AMR.App.Models;
 using HD.AMR.App.Service;
-using Microsoft.Extensions.Options;
 
 namespace HD.AMR.Desktop.ViewModels;
 
@@ -19,18 +15,15 @@ namespace HD.AMR.Desktop.ViewModels;
 public sealed partial class AmrViewModel : ViewModelBase
 {
     private readonly AMRService _svc;
-    private readonly AmrRestClient _rest;
-    private readonly AmrRestSettings _restSettings;
+    public AmrMapViewModel Map { get; }
     private readonly DispatcherTimer _timer;
     private RobotStatus? _status;
     private bool _busy;
 
-    public AmrViewModel(AMRService svc, AmrRestClient rest, IOptions<AmrRestSettings> restOptions)
+    public AmrViewModel(AMRService svc, AmrMapViewModel map)
     {
         _svc = svc;
-        _rest = rest;
-        _restSettings = restOptions.Value;
-        MapName = _restSettings.MapName;
+        Map = map;
         _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _timer.Tick += (_, _) => Refresh();
     }
@@ -78,71 +71,6 @@ public sealed partial class AmrViewModel : ViewModelBase
     public string CurrentTaskText => _status?.TaskProgress.CurrentTaskNumber.ToString() ?? "-";
     public string TotalJobText => _status?.TaskProgress.TotalJobCount.ToString() ?? "-";
     public string CurrentJobText => _status?.TaskProgress.CurrentJobNumber.ToString() ?? "-";
-
-    // ── REST 맵 조회 ──
-    [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(LoadMapCommand))]
-    private string _mapName = "";
-
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(HasMapImage))]
-    private Bitmap? _mapImage;
-    [ObservableProperty] private string _mapLoadStatus = "맵 이름은 AMR API에서 자동 조회되지 않습니다. appsettings.json에 지정하거나 아래에 입력하세요.";
-    [ObservableProperty] private string _mapSummary = "";
-    public bool HasMapImage => MapImage is not null;
-    public string MapRequestTarget => $"{_restSettings.BaseUrl.TrimEnd('/')}/{_restSettings.MapContentPath.Trim('/')}/{{맵 이름}}";
-
-    private bool CanLoadMap() => !_busy && !string.IsNullOrWhiteSpace(MapName);
-
-    [RelayCommand(CanExecute = nameof(CanLoadMap))]
-    private async Task LoadMapAsync()
-    {
-        if (_busy) return;
-        _busy = true;
-        LoadMapCommand.NotifyCanExecuteChanged();
-        WriteCommand.NotifyCanExecuteChanged();
-        MapLoadStatus = "맵을 가져오는 중…";
-        try
-        {
-            var result = await _rest.GetMapContentAsync(MapName);
-            if (!result.Ok || result.Data is not { } data)
-                throw new InvalidOperationException(result.Message ?? $"AMR API 오류 ({result.Code})");
-
-            if (!TryProperty(data, "mapping", out var mapping) || mapping.ValueKind != JsonValueKind.String)
-                throw new InvalidOperationException("응답에 mapping(base64 PNG) 필드가 없습니다.");
-
-            var bytes = Convert.FromBase64String(mapping.GetString()!);
-            await using var stream = new MemoryStream(bytes, writable: false);
-            var bitmap = new Bitmap(stream);
-            var old = MapImage;
-            MapImage = bitmap;
-            old?.Dispose();
-
-            var nodeCount = TryProperty(data, "node", out var nodes) && nodes.ValueKind == JsonValueKind.Array
-                ? nodes.GetArrayLength() : 0;
-            var courseCount = TryProperty(data, "course", out var courses) && courses.ValueKind == JsonValueKind.Array
-                ? courses.GetArrayLength() : 0;
-            MapSummary = $"{MapName.Trim()} · {bitmap.PixelSize.Width}×{bitmap.PixelSize.Height}px · 노드 {nodeCount}개 · 코스 {courseCount}개";
-            MapLoadStatus = $"가져옴 {DateTime.Now:HH:mm:ss}";
-        }
-        catch (Exception ex)
-        {
-            MapLoadStatus = $"맵 조회 실패: {ex.Message}";
-        }
-        finally
-        {
-            _busy = false;
-            LoadMapCommand.NotifyCanExecuteChanged();
-            WriteCommand.NotifyCanExecuteChanged();
-        }
-    }
-
-    private static bool TryProperty(JsonElement element, string name, out JsonElement value)
-    {
-        if (element.ValueKind == JsonValueKind.Object && element.TryGetProperty(name, out value)) return true;
-        value = default;
-        return false;
-    }
 
     // ── 쓰기 입력값 (콤보 SelectedIndex) ──
     // Power: 인덱스==값(0 None,1 PowerOff,2 Restart,3 QuickRestart).
@@ -216,3 +144,4 @@ public sealed record AmrLogEntry(string Time, string Command, bool Ok, string? E
 {
     public string ResultText => Ok ? "OK" : (Error ?? "FAIL");
 }
+

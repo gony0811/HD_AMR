@@ -14,6 +14,37 @@
             </Border>
         </Grid>
 
+        <Border Classes="card" Margin="0,0,12,14">
+            <StackPanel Spacing="10">
+                <TextBlock Text="AMR 실시간 위치" FontSize="18" FontWeight="SemiBold" />
+                <WrapPanel>
+                    <TextBox Width="220" Margin="0,0,8,6" Text="{Binding Map.MapName}" Watermark="맵 이름" />
+                    <Button Margin="0,0,16,6" Content="맵 가져오기" Command="{Binding Map.LoadMapCommand}" />
+                    <TextBlock Margin="0,8,8,6" Text="해상도 (m/픽셀)" />
+                    <NumericUpDown Width="140" Margin="0,0,0,6" Minimum="0.000001" Maximum="1000"
+                                   Increment="0.01" FormatString="0.######" Value="{Binding Map.Resolution}" />
+                </WrapPanel>
+                <TextBlock Classes="muted" Text="{Binding Map.MapLoadStatus}" TextWrapping="Wrap" />
+                <TextBlock Text="{Binding Map.MapSummary}" />
+                <Border Background="#20262D" CornerRadius="6" Padding="12" IsVisible="{Binding Map.HasMapImage}">
+                    <Viewbox Height="420" Stretch="Uniform">
+                        <Canvas Width="{Binding Map.ImageWidth}" Height="{Binding Map.ImageHeight}">
+                            <Image Width="{Binding Map.ImageWidth}" Height="{Binding Map.ImageHeight}"
+                                   Source="{Binding Map.MapImage}" Stretch="Fill" />
+                            <Grid Width="16" Height="16" Canvas.Left="{Binding Map.RobotLeft}" Canvas.Top="{Binding Map.RobotTop}"
+                                  IsVisible="{Binding Map.ShowRobot}" RenderTransformOrigin="50%,50%">
+                                <Grid.RenderTransform><RotateTransform Angle="{Binding Map.HeadingDegrees}" /></Grid.RenderTransform>
+                                <Ellipse Fill="#168BFF" Stroke="White" StrokeThickness="1.5" />
+                                <Path Data="M 7,4 L 13,8 L 7,12 Z" Fill="White" />
+                            </Grid>
+                        </Canvas>
+                    </Viewbox>
+                </Border>
+                <TextBlock Text="{Binding Map.PoseText}" FontFamily="monospace" />
+                <TextBlock Classes="muted" Text="{Binding Map.PositionStatus}" TextWrapping="Wrap" />
+            </StackPanel>
+        </Border>
+
         <WrapPanel>
             <WrapPanel.Styles>
                 <Style Selector="Border.stat">

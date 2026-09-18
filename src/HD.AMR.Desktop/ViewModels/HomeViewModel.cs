@@ -18,30 +18,40 @@ public sealed partial class HomeViewModel : ViewModelBase
     private readonly CameraService _camera;
     private readonly Vda5050AdapterService _vda;
     private readonly DispatcherTimer _timer;
+    public AmrMapViewModel Map { get; }
 
     public ObservableCollection<string> MapIdOptions { get; } = new();
     [ObservableProperty] private string _selectedMapId = "";
     [ObservableProperty] private string? _mapIdStatus;
 
-    public HomeViewModel(AMRService amr, CobotService cobot, CameraService camera, Vda5050AdapterService vda)
+    public HomeViewModel(AMRService amr, CobotService cobot, CameraService camera, Vda5050AdapterService vda, AmrMapViewModel map)
     {
         _amr = amr;
         _cobot = cobot;
         _camera = camera;
         _vda = vda;
+        Map = map;
         _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
-        _timer.Tick += (_, _) => OnPropertyChanged(string.Empty);
+        _timer.Tick += (_, _) => Refresh();
     }
 
     public override void OnActivated()
     {
         RebuildMapOptions();
         SelectedMapId = _vda.CurrentMapId;
-        OnPropertyChanged(string.Empty);
+        Refresh();
         _timer.Start();
+        if (!Map.HasMapImage && !string.IsNullOrWhiteSpace(Map.MapName) && !Map.LoadMapCommand.IsRunning)
+            _ = Map.LoadMapCommand.ExecuteAsync(null);
     }
 
     public override void OnDeactivated() => _timer.Stop();
+
+    private void Refresh()
+    {
+        Map.UpdatePose(_amr.IsConnected ? _amr.LatestStatus?.Pose : null);
+        OnPropertyChanged(string.Empty);
+    }
 
     public string NowText => DateTime.Now.ToString("yyyy-MM-dd HH:mm");
 
