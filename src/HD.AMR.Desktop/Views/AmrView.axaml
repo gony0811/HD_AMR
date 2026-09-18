@@ -67,6 +67,23 @@
                         <Grid Classes="kv" ColumnDefinitions="140,*"><TextBlock Text="Current Job" /><TextBlock Grid.Column="1" Text="{Binding CurrentJobText}" /></Grid>
                     </StackPanel>
                 </Border>
+
+                <Border Classes="card">
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="AMR 맵 내용 (REST)" FontWeight="SemiBold" />
+                        <TextBlock Classes="muted" FontSize="12" TextWrapping="Wrap" Text="현재 API는 맵 이름을 요구합니다. 운영 맵 이름을 입력하거나 AmrRest:MapName에 설정하세요." />
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBox Grid.Column="0" Text="{Binding MapName}" Watermark="예: 260903_133609.map" />
+                            <Button Grid.Column="1" Margin="6,0,0,0" Content="맵 가져오기" Command="{Binding LoadMapCommand}" />
+                        </Grid>
+                        <TextBlock Classes="muted" FontSize="12" Text="{Binding MapLoadStatus}" TextWrapping="Wrap" />
+                        <TextBlock FontSize="12" Text="{Binding MapSummary}" TextWrapping="Wrap" />
+                        <Border BorderBrush="{DynamicResource AppBorderBrush}" BorderThickness="1" MinHeight="180"
+                                IsVisible="{Binding HasMapImage}">
+                            <Image Source="{Binding MapImage}" Stretch="Uniform" MaxHeight="440" />
+                        </Border>
+                    </StackPanel>
+                </Border>
             </StackPanel>
 
             <!-- ═══ 오른쪽: 제어 쓰기 ═══ -->

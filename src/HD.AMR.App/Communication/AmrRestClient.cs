@@ -53,6 +53,17 @@ public sealed class AmrRestClient : IDisposable
     public Task<AmrRestResult> GetStatusAsync(CancellationToken ct = default)
         => SendAsync(HttpMethod.Get, _s.StatusPath, body: null, ct);
 
+    /// <summary>이름으로 맵 내용(노드·코스·base64 PNG mapping)을 조회한다.
+    /// 활성 맵 이름 조회 API가 확정되지 않아 호출측에서 이름을 제공해야 한다.</summary>
+    public Task<AmrRestResult> GetMapContentAsync(string mapName, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(mapName))
+            return Task.FromResult(AmrRestResult.Fail("맵 이름을 입력하세요."));
+
+        var path = $"{_s.MapContentPath.TrimEnd('/')}/{Uri.EscapeDataString(mapName.Trim())}";
+        return SendAsync(HttpMethod.Get, path, body: null, ct);
+    }
+
     private async Task<AmrRestResult> SendAsync(HttpMethod method, string path, object? body, CancellationToken ct)
     {
         var rel = path.TrimStart('/');

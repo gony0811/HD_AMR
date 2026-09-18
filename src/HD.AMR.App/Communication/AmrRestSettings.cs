@@ -22,6 +22,15 @@ public class AmrRestSettings
     /// <summary>로봇 상태 조회. schedule(진행)·error(실패) 필드 폴링.</summary>
     public string StatusPath { get; set; } = "/robot/status";
 
+    /// <summary>맵 내용 조회 경로. 맵 이름은 URL 마지막 segment 로 붙인다.</summary>
+    public string MapContentPath { get; set; } = "/map/content/name";
+
+    /// <summary>
+    /// AMR 운영 맵 이름(예: <c>260903_133609.map</c>).
+    /// 현재 확인된 API/Modbus 계약은 활성 맵 이름을 노출하지 않아 설정으로 보유한다.
+    /// </summary>
+    public string MapName { get; set; } = "";
+
     /// <summary>이동 중 status 폴링 간격(ms). 부록 D-6 검토값 200~500ms.</summary>
     public int StatusPollMs { get; set; } = 500;
 
