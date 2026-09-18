@@ -32,14 +32,14 @@ public sealed partial class HomeViewModel : ViewModelBase
         _vda = vda;
         Map = map;
         _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
-        _timer.Tick += (_, _) => Refresh();
+        _timer.Tick += async (_, _) => await RefreshAsync();
     }
 
     public override void OnActivated()
     {
         RebuildMapOptions();
         SelectedMapId = _vda.CurrentMapId;
-        Refresh();
+        _ = RefreshAsync();
         _timer.Start();
         if (!Map.HasMapImage && !string.IsNullOrWhiteSpace(Map.MapName) && !Map.LoadMapCommand.IsRunning)
             _ = Map.LoadMapCommand.ExecuteAsync(null);
@@ -47,9 +47,9 @@ public sealed partial class HomeViewModel : ViewModelBase
 
     public override void OnDeactivated() => _timer.Stop();
 
-    private void Refresh()
+    private async Task RefreshAsync()
     {
-        Map.UpdatePose(_amr.IsConnected ? _amr.LatestStatus?.Pose : null);
+        await Map.RefreshTelemetryAsync();
         OnPropertyChanged(string.Empty);
     }
 

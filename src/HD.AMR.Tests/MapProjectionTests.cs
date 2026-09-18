@@ -36,4 +36,13 @@ public class MapProjectionTests
         Assert.Equal(0, x);
         Assert.Equal(427, y);
     }
+
+    [Fact]
+    public void ProjectsLidarWorldPointUsingSameMapFrame()
+    {
+        Assert.True(MapProjection.TryProjectPoint(4.3896208, 12.2516994, .05, 0, 0,
+            307, 427, out var x, out var y));
+        Assert.Equal(87.792416, x, 5);
+        Assert.Equal(181.966012, y, 5);
+    }
 }

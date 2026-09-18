@@ -55,6 +55,10 @@ public sealed class AmrRestClient : IDisposable
     public Task<AmrRestResult> GetStatusAsync(CancellationToken ct = default)
         => SendAsync(HttpMethod.Get, _s.StatusPath, body: null, ct);
 
+    /// <summary>현재 SLAM 포즈, 맵 좌표로 변환된 라이다 점과 맵 일치율을 조회한다.</summary>
+    public Task<AmrRestResult> GetPoseAsync(CancellationToken ct = default)
+        => SendAsync(HttpMethod.Get, _s.PosePath, body: null, ct, logResponseBody: false);
+
     /// <summary>이름으로 맵 내용(노드·코스·base64 PNG mapping)을 조회한다.
     /// 활성 맵 이름 조회 API가 확정되지 않아 호출측에서 이름을 제공해야 한다.</summary>
     public Task<AmrRestResult> GetMapContentAsync(string mapName, CancellationToken ct = default)
@@ -66,7 +70,24 @@ public sealed class AmrRestClient : IDisposable
         return SendAsync(HttpMethod.Get, path, body: null, ct);
     }
 
-    private async Task<AmrRestResult> SendAsync(HttpMethod method, string path, object? body, CancellationToken ct)
+    /// <summary>AMR SLAM 맵 스캔을 시작한다.</summary>
+    public Task<AmrRestResult> StartMapScanAsync(CancellationToken ct = default)
+        => SendAsync(HttpMethod.Post, _s.MapScanOnPath, body: null, ct);
+
+    /// <summary>진행 중인 SLAM 맵 스캔을 종료한다.</summary>
+    public Task<AmrRestResult> StopMapScanAsync(CancellationToken ct = default)
+        => SendAsync(HttpMethod.Post, _s.MapScanOffPath, body: null, ct);
+
+    /// <summary>현재 AMR의 맵/플랜/구역을 지정한 이름으로 저장한다.</summary>
+    public Task<AmrRestResult> SaveMapAsync(string mapName, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(mapName))
+            return Task.FromResult(AmrRestResult.Fail("저장할 맵 이름을 입력하세요."));
+        return SendAsync(HttpMethod.Post, _s.MapSavePath, new { mapName = mapName.Trim() }, ct);
+    }
+
+    private async Task<AmrRestResult> SendAsync(HttpMethod method, string path, object? body, CancellationToken ct,
+        bool logResponseBody = true)
     {
         var rel = path.TrimStart('/');
         try
@@ -81,7 +102,11 @@ public sealed class AmrRestClient : IDisposable
 
             using var res = await _http.SendAsync(req, ct);
             var raw = await res.Content.ReadAsStringAsync(ct);
-            _logger.LogDebug("AMR REST {Method} {Path} 응답 HTTP {Status}: {Raw}", method, rel, (int)res.StatusCode, raw);
+            if (logResponseBody)
+                _logger.LogDebug("AMR REST {Method} {Path} 응답 HTTP {Status}: {Raw}", method, rel, (int)res.StatusCode, raw);
+            else
+                _logger.LogDebug("AMR REST {Method} {Path} 응답 HTTP {Status} ({Length} chars)",
+                    method, rel, (int)res.StatusCode, raw.Length);
 
             if (!res.IsSuccessStatusCode)
             {

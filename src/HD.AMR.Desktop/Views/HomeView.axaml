@@ -1,6 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:HD.AMR.Desktop.ViewModels"
+             xmlns:controls="using:HD.AMR.Desktop.Controls"
              x:Class="HD.AMR.Desktop.Views.HomeView"
              x:DataType="vm:HomeViewModel">
     <StackPanel>
@@ -16,31 +17,44 @@
 
         <Border Classes="card" Margin="0,0,12,14">
             <StackPanel Spacing="10">
-                <TextBlock Text="AMR 실시간 위치" FontSize="18" FontWeight="SemiBold" />
-                <WrapPanel>
+                <Grid ColumnDefinitions="*,Auto">
+                    <TextBlock Text="AMR 실시간 위치·라이다" FontSize="18" FontWeight="SemiBold" />
+                    <Border Grid.Column="1" Classes="badge" Classes.on="{Binding Map.HasConfidence}"
+                            ToolTip.Tip="AMR REST의 SLAM 맵 일치율(fit). 실제 위치 오차(m)를 뜻하지 않습니다.">
+                        <TextBlock Text="{Binding Map.ConfidenceText}" />
+                    </Border>
+                </Grid>
+                <WrapPanel VerticalAlignment="Center">
                     <TextBox Width="220" Margin="0,0,8,6" Text="{Binding Map.MapName}" Watermark="맵 이름" />
                     <Button Margin="0,0,16,6" Content="맵 가져오기" Command="{Binding Map.LoadMapCommand}" />
                     <TextBlock Margin="0,8,8,6" Text="해상도 (m/픽셀)" />
                     <NumericUpDown Width="140" Margin="0,0,0,6" Minimum="0.000001" Maximum="1000"
                                    Increment="0.01" FormatString="0.######" Value="{Binding Map.Resolution}" />
                 </WrapPanel>
+                <Grid ColumnDefinitions="Auto,Auto,Auto,180,Auto,*">
+                    <Button Grid.Column="0" Content="−" Command="{Binding Map.ZoomOutCommand}" ToolTip.Tip="축소" />
+                    <Button Grid.Column="1" Margin="6,0,0,0" Content="+" Command="{Binding Map.ZoomInCommand}" ToolTip.Tip="확대" />
+                    <Button Grid.Column="2" Margin="6,0,10,0" Content="100%" Command="{Binding Map.ResetZoomCommand}" />
+                    <Slider Grid.Column="3" Minimum="0.5" Maximum="5" TickFrequency="0.25" Value="{Binding Map.Zoom}" />
+                    <TextBlock Grid.Column="4" Width="58" Margin="10,6,0,0" Text="{Binding Map.ZoomText}" />
+                    <TextBlock Grid.Column="5" HorizontalAlignment="Right" Margin="10,6,0,0"
+                               Classes="muted" Text="드래그 대신 스크롤바로 이동" />
+                </Grid>
                 <TextBlock Classes="muted" Text="{Binding Map.MapLoadStatus}" TextWrapping="Wrap" />
                 <TextBlock Text="{Binding Map.MapSummary}" />
-                <Border Background="#20262D" CornerRadius="6" Padding="12" IsVisible="{Binding Map.HasMapImage}">
-                    <Viewbox Height="420" Stretch="Uniform">
-                        <Canvas Width="{Binding Map.ImageWidth}" Height="{Binding Map.ImageHeight}">
-                            <Image Width="{Binding Map.ImageWidth}" Height="{Binding Map.ImageHeight}"
-                                   Source="{Binding Map.MapImage}" Stretch="Fill" />
-                            <Grid Width="16" Height="16" Canvas.Left="{Binding Map.RobotLeft}" Canvas.Top="{Binding Map.RobotTop}"
-                                  IsVisible="{Binding Map.ShowRobot}" RenderTransformOrigin="50%,50%">
-                                <Grid.RenderTransform><RotateTransform Angle="{Binding Map.HeadingDegrees}" /></Grid.RenderTransform>
-                                <Ellipse Fill="#168BFF" Stroke="White" StrokeThickness="1.5" />
-                                <Path Data="M 7,4 L 13,8 L 7,12 Z" Fill="White" />
-                            </Grid>
-                        </Canvas>
-                    </Viewbox>
+                <ProgressBar Minimum="0" Maximum="100" Value="{Binding Map.ConfidencePercent}"
+                             Height="5" IsVisible="{Binding Map.HasConfidence}" />
+                <Border Background="#20262D" CornerRadius="6" Padding="8" IsVisible="{Binding Map.HasMapImage}">
+                    <ScrollViewer Height="500" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+                        <controls:AmrMapCanvas Width="{Binding Map.CanvasWidth}" Height="{Binding Map.CanvasHeight}"
+                            MapImage="{Binding Map.MapImage}" LidarPoints="{Binding Map.LidarPoints}"
+                            Resolution="{Binding Map.ResolutionValue}" OriginX="{Binding Map.OriginX}" OriginY="{Binding Map.OriginY}"
+                            RobotX="{Binding Map.RobotX}" RobotY="{Binding Map.RobotY}"
+                            RobotHeading="{Binding Map.RobotHeading}" ShowRobot="{Binding Map.ShowRobot}" />
+                    </ScrollViewer>
                 </Border>
                 <TextBlock Text="{Binding Map.PoseText}" FontFamily="monospace" />
+                <TextBlock Text="{Binding Map.LidarStatus}" Foreground="#FF6B6B" />
                 <TextBlock Classes="muted" Text="{Binding Map.PositionStatus}" TextWrapping="Wrap" />
             </StackPanel>
         </Border>
