@@ -23,8 +23,8 @@
     </UserControl.Styles>
 
     <StackPanel MaxWidth="1000" HorizontalAlignment="Left">
-        <TextBlock Classes="page-title" Text="핸드아이 측정 (T_T_C)" />
-        <TextBlock Classes="page-subtitle" TextWrapping="Wrap"
+        <TextBlock Classes="cardHead" Text="① 핸드아이 측정 (T_T_C)" />
+        <TextBlock Classes="hint" TextWrapping="Wrap"
                    Text="바닥에 고정한 ArUco 를 AMR·리프트를 세워 둔 채 코봇 자세만 바꿔 촬영해 Tool TCP → 카메라 변환(T_T_C)을 AX=XB 로 산출합니다. AMR pose 가 식에서 소거되므로 T_A_B 를 몰라도 풀립니다 — 종전처럼 CAD·가정값을 넣지 않고 측정합니다. 이 화면은 코봇을 스스로 움직이지 않습니다." />
 
         <Border Classes="alert" Classes.info="{Binding !IsError}"
@@ -50,30 +50,7 @@
             </StackPanel>
         </Border>
 
-        <!-- 마커 -->
-        <Border Classes="card">
-            <StackPanel Spacing="8">
-                <TextBlock Classes="cardHead" Text="① ArUco 마커" />
-                <WrapPanel>
-                    <StackPanel Margin="0,0,12,8">
-                        <TextBlock Classes="axis" Text="한 변 실측 (mm)" />
-                        <NumericUpDown Value="{Binding MarkerSizeMm}" Increment="1" FormatString="0.0" IsEnabled="{Binding !Busy}" />
-                    </StackPanel>
-                    <StackPanel Margin="0,0,6,8">
-                        <TextBlock Classes="axis" Text="마커 ID" />
-                        <NumericUpDown Value="{Binding MarkerId}" Minimum="0" Maximum="49" Increment="1" FormatString="0" IsEnabled="{Binding !Busy}" />
-                    </StackPanel>
-                    <StackPanel Margin="0,0,12,8">
-                        <TextBlock Classes="axis" Text="Tool 번호" />
-                        <NumericUpDown Value="{Binding Tool}" Minimum="0" Maximum="15" Increment="1" FormatString="0" IsEnabled="{Binding !Busy}" />
-                    </StackPanel>
-                    <CheckBox VerticalAlignment="Bottom" Margin="0,0,0,8" Content="이 ID 만 사용" IsChecked="{Binding MatchMarkerId}" />
-                </WrapPanel>
-                <TextBlock Classes="hint"
-                           Text="사전은 4×4_50 입니다. 한 변 실측값이 틀리면 거리가 비례로 틀어지므로 인쇄물을 자로 재서 넣으세요. ⚠ Tool 번호는 ArUco 장착 보정 화면과 반드시 같아야 합니다 — T_T_C 는 그 tool 의 TCP 기준이고, 장착 보정이 같은 기준의 T_B_T 와 합성합니다. 카메라에 TOOL 이 없으면 0(플랜지)을 쓰면 됩니다." />
-            </StackPanel>
-        </Border>
-
+        <!-- 마커 설정은 상위 공통 설정 카드에 있다(Tool 정합 보장) -->
         <!-- 정지 확인 -->
         <Border Classes="card">
             <StackPanel Spacing="8">

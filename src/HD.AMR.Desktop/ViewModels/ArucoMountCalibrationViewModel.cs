@@ -47,6 +47,12 @@ public sealed partial class ArucoMountCalibrationViewModel : ViewModelBase
         NotifyState();
     }
 
+    /// <summary>① 단계에서 측정한 T_T_C 표시 — 이 화면에서는 편집하지 않는다(가정값 주입 방지).</summary>
+    public string HandEyeText => HandEye.ToArray().All(v => v == 0)
+        ? "미설정 — ① 핸드아이 측정 단계를 먼저 완료하세요."
+        : $"X={HandEye.V0:0.00}  Y={HandEye.V1:0.00}  Z={HandEye.V2:0.00} mm   ·   " +
+          $"Rx={HandEye.V3:0.000}  Ry={HandEye.V4:0.000}  Rz={HandEye.V5:0.000}°";
+
     public bool AmrConnected => _amr.IsConnected;
     public bool CobotConnected => _cobot.IsConnected;
     public bool CameraReady => _camera.LatestColor is not null && _camera.GetD2CParams() is not null;
@@ -124,7 +130,7 @@ public sealed partial class ArucoMountCalibrationViewModel : ViewModelBase
     }
     private double PositionSpan() { double m = 0; for (int i = 0; i < _samples.Count; i++) for (int j = i + 1; j < _samples.Count; j++) { double dx = _samples[i].AmrPoseWA[0] - _samples[j].AmrPoseWA[0], dy = _samples[i].AmrPoseWA[1] - _samples[j].AmrPoseWA[1]; m = Math.Max(m, Math.Sqrt(dx * dx + dy * dy)); } return m; }
     private double CircularSpan() { var a = _samples.Select(s => (s.AmrPoseWA[5] % 360 + 360) % 360).Order().ToArray(); if (a.Length < 2) return 0; double g = a[0] + 360 - a[^1]; for (int i = 1; i < a.Length; i++) g = Math.Max(g, a[i] - a[i - 1]); return 360 - g; }
-    private void NotifyState() { OnPropertyChanged(string.Empty); CaptureCommand.NotifyCanExecuteChanged(); SolveCommand.NotifyCanExecuteChanged(); ApplyCommand.NotifyCanExecuteChanged(); }
+    private void NotifyState() { OnPropertyChanged(string.Empty); OnPropertyChanged(nameof(HandEyeText)); CaptureCommand.NotifyCanExecuteChanged(); SolveCommand.NotifyCanExecuteChanged(); ApplyCommand.NotifyCanExecuteChanged(); }
     private void Success(string s) { Message = s; IsError = false; }
     private void Fail(string s) { Message = s; IsError = true; }
 }

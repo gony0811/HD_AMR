@@ -9,35 +9,24 @@
   </UserControl.Styles>
   <ScrollViewer>
     <StackPanel MaxWidth="1050" HorizontalAlignment="Left">
-      <TextBlock Classes="page-title" Text="ArUco 장착 보정 (T_A_B)"/>
-      <TextBlock Classes="page-subtitle" TextWrapping="Wrap" Text="바닥에 고정한 ArUco의 높이(q_z)만 입력하고, 서로 다른 AMR·코봇 자세에서 촬영하여 AMR→코봇 장착 변환과 마커의 미지 X/Y/Yaw를 동시에 추정합니다. 이 페이지는 장비를 자동으로 움직이지 않습니다."/>
+      <TextBlock Classes="cardHead" Text="ArUco 장착 보정 (T_A_B)"/>
+      <TextBlock Classes="hint" TextWrapping="Wrap" Text="바닥에 고정한 ArUco의 높이(q_z)만 입력하고, 서로 다른 AMR·코봇 자세에서 촬영하여 AMR→코봇 장착 변환과 마커의 미지 X/Y/Yaw를 동시에 추정합니다. 이 페이지는 장비를 자동으로 움직이지 않습니다."/>
       <Border Classes="alert" Classes.info="{Binding !IsError}" IsVisible="{Binding Message, Converter={x:Static ObjectConverters.IsNotNull}}"><TextBlock Text="{Binding Message}" TextWrapping="Wrap"/></Border>
 
       <Border Classes="card"><StackPanel Spacing="8">
-        <TextBlock Classes="cardHead" Text="① 마커와 카메라 설정"/>
-        <TextBlock Classes="hint" Text="현재 구현은 DICT_4X4_50을 사용합니다. 인쇄한 검은 사각형의 바깥 한 변을 mm로 재고, 마커 좌표 원점(중앙)의 바닥 기준 높이를 q_z에 입력하세요."/>
+        <TextBlock Classes="cardHead" Text="마커 q_z 와 T_T_C 확인"/>
+        <TextBlock Classes="hint" Text="ArUco ID·크기·Tool 번호는 위 공통 설정 카드에서 지정합니다. 여기서는 마커 중앙의 바닥 기준 높이(q_z)만 입력하세요."/>
         <WrapPanel>
-          <StackPanel Margin="0,0,10,8"><TextBlock Classes="axis" Text="ArUco ID"/><NumericUpDown Value="{Binding MarkerId}" Minimum="0" Maximum="49" Increment="1" FormatString="0"/></StackPanel>
-          <StackPanel Margin="0,0,10,8"><TextBlock Classes="axis" Text="마커 크기 (mm)"/><NumericUpDown Value="{Binding MarkerSizeMm}" Minimum="10" Increment="1"/></StackPanel>
           <StackPanel Margin="0,0,10,8"><TextBlock Classes="axis" Text="마커 q_z (mm)"/><NumericUpDown Value="{Binding MarkerQzMm}" Increment="0.1"/></StackPanel>
           <CheckBox VerticalAlignment="Bottom" Margin="0,0,14,10" Content="q_z 확인" IsChecked="{Binding QzConfirmed}"/>
-          <StackPanel Margin="0,0,10,8"><TextBlock Classes="axis" Text="카메라 Tool 번호"/><NumericUpDown Value="{Binding Tool}" Minimum="0" Maximum="15" Increment="1" FormatString="0"/></StackPanel>
         </WrapPanel>
-        <TextBlock Classes="axis" Text="T_T_C — 선택 Tool TCP → D435 RGB 광학 중심 (mm/도)"/>
-        <WrapPanel>
-          <StackPanel><TextBlock Classes="axis" Text="X"/><NumericUpDown Classes="pose" Value="{Binding HandEye.V0}" Increment="0.1"/></StackPanel>
-          <StackPanel><TextBlock Classes="axis" Text="Y"/><NumericUpDown Classes="pose" Value="{Binding HandEye.V1}" Increment="0.1"/></StackPanel>
-          <StackPanel><TextBlock Classes="axis" Text="Z"/><NumericUpDown Classes="pose" Value="{Binding HandEye.V2}" Increment="0.1"/></StackPanel>
-          <StackPanel><TextBlock Classes="axis" Text="Rx"/><NumericUpDown Classes="pose" Value="{Binding HandEye.V3}" Increment="0.1"/></StackPanel>
-          <StackPanel><TextBlock Classes="axis" Text="Ry"/><NumericUpDown Classes="pose" Value="{Binding HandEye.V4}" Increment="0.1"/></StackPanel>
-          <StackPanel><TextBlock Classes="axis" Text="Rz"/><NumericUpDown Classes="pose" Value="{Binding HandEye.V5}" Increment="0.1"/></StackPanel>
-          <Button VerticalAlignment="Bottom" Margin="4,0,0,0" Content="T_T_C 저장" Command="{Binding SaveHandEyeCommand}"/>
-        </WrapPanel>
-        <Border Classes="alert"><TextBlock FontSize="12" TextWrapping="Wrap" Text="Tool 2 원점을 RGB 광학 중심으로 정확히 설정했다면 T_T_C는 [0,0,0,0,0,0]입니다. 그렇지 않으면 Tool TCP에서 RGB 광학 중심까지의 6-DoF 변환을 입력해야 합니다. 카메라 영상축과 플랜지축이 같은 방향이라는 가정만으로 위치 오프셋이 없어지지는 않습니다."/></Border>
+        <TextBlock Classes="axis" Text="T_T_C — ① 단계에서 측정한 값 (읽기 전용)"/>
+        <TextBlock Text="{Binding HandEyeText}" TextWrapping="Wrap"/>
+        <Border Classes="alert"><TextBlock FontSize="12" TextWrapping="Wrap" Text="T_T_C 는 ① 핸드아이 측정 단계에서 AX=XB 로 산출·저장한 값입니다. 여기서 직접 입력하지 않습니다 — 가정값을 넣으면 그 오차가 T_A_B 로 흡수되어 잔차로는 드러나지 않기 때문입니다. 값을 바꾸려면 ① 탭으로 돌아가세요."/></Border>
       </StackPanel></Border>
 
       <Border Classes="card"><StackPanel Spacing="8">
-        <TextBlock Classes="cardHead" Text="② 표본 수집"/>
+        <TextBlock Classes="cardHead" Text="표본 수집"/>
         <TextBlock Classes="hint" Text="AMR을 완전히 정지시킨 뒤 촬영하세요. 같은 마커를 계속 사용하며, AMR 4곳 이상·yaw 60° 이상(권장 90°), 각 위치에서 코봇 시점 3~5개로 총 15~40개를 권장합니다. 마커는 중간에 움직이면 안 됩니다."/>
         <WrapPanel>
           <Border Classes="badge" Classes.on="{Binding AmrConnected}" Classes.off="{Binding !AmrConnected}" Margin="0,0,6,6"><TextBlock Text="AMR"/></Border>

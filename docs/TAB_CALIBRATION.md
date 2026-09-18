@@ -2,13 +2,22 @@
 
 AMR 차체 프레임 **A** → 코봇 BASE 프레임 **B** 장착 변환 **T_A_B** 를 고정 표적 터치로 산출하는 절차.
 
-- **화면**: Desktop `SETTINGS ▸ 장착 보정 (T_A_B)` ([MountCalibrationView.axaml](../src/HD.AMR.Desktop/Views/MountCalibrationView.axaml))
+- **화면**: Desktop `SETTINGS ▸ 장착 보정 (접촉식)` ([MountCalibrationView.axaml](../src/HD.AMR.Desktop/Views/MountCalibrationView.axaml))
 - **수학**: [`MapCalibration.SolveMount3D`](../src/HD.AMR.App/Service/MapCalibration.cs)
 - **저장**: `Calib.Mount.Pose`(적용값) / `Calib.Mount.SolveJson`(측정값) / `Calib.Mount.SamplesJson` / `Calib.Mount.TargetZmm`
   — 전부 `Parameters` 테이블. `/parameter` 화면에서 그대로 보인다.
 
 T_A_B 는 좌표 체인의 뿌리다(`p_W = T_W_A · T_A_B · p_B`). 오차는 목표 SLAM pose 오차로 그대로 전파되므로
 QR 정차 티칭보다 **먼저** 확정해야 한다.
+
+> **이 문서는 접촉식 방법이다.** 운영 표준은 카메라 기반
+> [`장착 보정 (ArUco)`](ARUCO_TAB_CALIBRATION.md) 이고, 둘은 같은 `T_A_B` 를 구하는 **대안**이다
+> (둘 다 `Calib.Mount.Pose` 에 쓴다).
+>
+> 접촉식을 남겨 둔 이유는 **오차 체인이 짧고 카메라가 전혀 필요 없다**는 것이다 —
+> 접촉식은 `T_B_T` 변환 하나, ArUco 는 `T_B_T · T_T_C · T_C_Q` 세 개다. ArUco 쪽 `T_T_C` 오차는
+> `T_A_B` 로 흡수되어 잔차로 드러나지 않으므로, **ArUco 결과를 독립적으로 교차검증할 수 있는 유일한 수단**이다.
+> 초기 도입 시 한 번은 두 방법을 대조해 보라(권장 일치 범위: tx·ty ±25 mm, rz ±1.5°, 기울기 ±0.3°).
 
 ---
 

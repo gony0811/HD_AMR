@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Net.Http.Headers;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -37,6 +38,7 @@ public sealed class AmrRestClient : IDisposable
             BaseAddress = new Uri(_s.BaseUrl.TrimEnd('/') + "/"),
             Timeout = TimeSpan.FromMilliseconds(_s.TimeoutMs),
         };
+        _http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
     }
 
     /// <summary>좌표 이동 명령(비동기 — 응답은 "명령 수리"). 검사 정차는 항상 stopFlag=true
@@ -82,7 +84,14 @@ public sealed class AmrRestClient : IDisposable
             _logger.LogDebug("AMR REST {Method} {Path} 응답 HTTP {Status}: {Raw}", method, rel, (int)res.StatusCode, raw);
 
             if (!res.IsSuccessStatusCode)
-                return new AmrRestResult(false, (int)res.StatusCode, $"HTTP {(int)res.StatusCode}", null, raw);
+            {
+                var detail = string.IsNullOrWhiteSpace(raw)
+                    ? null
+                    : raw.Length <= 300 ? raw.Trim() : raw[..300].Trim() + "…";
+                var errorMessage = $"HTTP {(int)res.StatusCode} ({res.ReasonPhrase})" +
+                                   (detail is null ? "" : $": {detail}");
+                return new AmrRestResult(false, (int)res.StatusCode, errorMessage, null, raw);
+            }
 
             // 공통 envelope 파싱 — HTTP 상태코드가 아니라 body 의 code 로 판정한다.
             using var doc = JsonDocument.Parse(raw);

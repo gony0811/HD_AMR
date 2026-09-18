@@ -72,6 +72,7 @@
                     <StackPanel Spacing="6">
                         <TextBlock Text="AMR 맵 내용 (REST)" FontWeight="SemiBold" />
                         <TextBlock Classes="muted" FontSize="12" TextWrapping="Wrap" Text="현재 API는 맵 이름을 요구합니다. 운영 맵 이름을 입력하거나 AmrRest:MapName에 설정하세요." />
+                        <TextBlock Classes="muted" FontFamily="monospace" FontSize="11" TextWrapping="Wrap" Text="{Binding MapRequestTarget, StringFormat='호출 대상: {0}'}" />
                         <Grid ColumnDefinitions="*,Auto">
                             <TextBox Grid.Column="0" Text="{Binding MapName}" Watermark="예: 260903_133609.map" />
                             <Button Grid.Column="1" Margin="6,0,0,0" Content="맵 가져오기" Command="{Binding LoadMapCommand}" />

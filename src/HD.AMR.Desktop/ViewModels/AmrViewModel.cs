@@ -20,6 +20,7 @@ public sealed partial class AmrViewModel : ViewModelBase
 {
     private readonly AMRService _svc;
     private readonly AmrRestClient _rest;
+    private readonly AmrRestSettings _restSettings;
     private readonly DispatcherTimer _timer;
     private RobotStatus? _status;
     private bool _busy;
@@ -28,7 +29,8 @@ public sealed partial class AmrViewModel : ViewModelBase
     {
         _svc = svc;
         _rest = rest;
-        MapName = restOptions.Value.MapName;
+        _restSettings = restOptions.Value;
+        MapName = _restSettings.MapName;
         _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _timer.Tick += (_, _) => Refresh();
     }
@@ -88,6 +90,7 @@ public sealed partial class AmrViewModel : ViewModelBase
     [ObservableProperty] private string _mapLoadStatus = "맵 이름은 AMR API에서 자동 조회되지 않습니다. appsettings.json에 지정하거나 아래에 입력하세요.";
     [ObservableProperty] private string _mapSummary = "";
     public bool HasMapImage => MapImage is not null;
+    public string MapRequestTarget => $"{_restSettings.BaseUrl.TrimEnd('/')}/{_restSettings.MapContentPath.Trim('/')}/{{맵 이름}}";
 
     private bool CanLoadMap() => !_busy && !string.IsNullOrWhiteSpace(MapName);
 
