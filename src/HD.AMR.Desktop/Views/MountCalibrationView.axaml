@@ -62,7 +62,9 @@
             <StackPanel Spacing="8">
                 <TextBlock Classes="cardHead" Text="① 표적 정의" />
                 <TextBlock Classes="hint"
-                           Text="한 점만 씁니다 — 모든 표본에서 물리적으로 동일한 점을 터치해야 합니다. 바닥에 고정한 센터펀치 자국·원뿔 지그처럼 팁이 재현성 있게 안착하는 점을 쓰세요. 표적을 옮기면 기존 표본은 전부 무효입니다." />
+                           Text="한 점만 씁니다 — 모든 표본에서 물리적으로 동일한 점을 지시해야 합니다. 표적을 옮기면 기존 표본은 전부 무효입니다." />
+                <TextBlock Classes="hint"
+                           Text="지시 방법 두 가지: ① 접촉식 — 바닥에 고정한 센터펀치 자국·원뿔 지그에 팁을 물리적으로 접촉(반복도 ±0.5~1.5mm). ② 카메라 포인팅 — 벽 등에 십자마크를 그리고 카메라로 포커싱. ②는 해당 tool 의 TCP 가 초점 위치에 정의돼 있어야만 접촉식과 등가입니다. TCP 가 카메라 광학 원점이면 작동거리만큼 tz 가 통째로 틀어지고 잔차로는 전혀 드러나지 않습니다 — 아래 역산 tz 를 도면·줄자와 대조해 확인하세요." />
                 <TextBlock Classes="hint"
                            Text="좌표계: 작업물(User/WObj) 프레임은 무엇이 활성이든 무관합니다 — 코드가 BASE 로 되돌립니다. 공구(Tool) 번호만 맞추세요. 아래 tool 번호는 실제로 표적을 찍는 팁의 번호여야 하고 그 TCP 가 미리 캘리브레이션돼 있어야 합니다(tool 0 = 플랜지)." />
                 <WrapPanel>
@@ -118,7 +120,9 @@
             <StackPanel Spacing="8">
                 <TextBlock Classes="cardHead" Text="② 표본 수집" />
                 <TextBlock Classes="hint"
-                           Text="팁이 표적에 물리적으로 닿은 상태에서, AMR 이 완전히 정지한 뒤 캡처하세요. 정밀도는 접촉 정밀도가 지배합니다(±0.5~1.5 mm). AMR 을 밀거나 주행시켜 yaw 를 30° 이상 바꾸고 반복하세요 — 같은 yaw 의 표본은 해에 기여하지 않습니다." />
+                           Text="표적을 정확히 지시한 상태에서, AMR 이 완전히 정지한 뒤 캡처하세요. AMR 을 밀거나 주행시켜 yaw 를 30° 이상 바꾸고 반복하세요 — 같은 yaw 의 표본은 해에 기여하지 않습니다." />
+                <TextBlock Classes="hint"
+                           Text="카메라 포인팅이면 포커스만이 아니라 십자를 화면 중앙에 정렬해야 합니다 — 포커스는 깊이 1개만 구속하고, 나머지 2개는 중앙 정렬이 줍니다. 벽 십자를 수평으로 보는 배치는 오차 배분이 유리합니다: 포커스 오차는 광축(수평)으로 가서 이미 SLAM 잡음이 지배하는 tx/ty 에 묻히고, 기울기를 정하는 수직 성분은 화면 정렬 정밀도가 결정합니다." />
                 <Grid ColumnDefinitions="*,*">
                     <StackPanel Grid.Column="0" Spacing="4">
                         <TextBlock Classes="axis" Text="AMR 현재 pose (맵 기준)" />

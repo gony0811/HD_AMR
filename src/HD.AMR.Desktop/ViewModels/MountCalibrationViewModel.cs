@@ -226,7 +226,7 @@ public sealed partial class MountCalibrationViewModel : ViewModelBase
     public double BzSpreadMm => _samples.Count == 0 ? 0 : _samples.Max(s => s.Bz) - _samples.Min(s => s.Bz);
     public string BzSpreadText => _samples.Count == 0 ? ""
         : BzSpreadMm > 5.0
-            ? $"Bz 산포 {BzSpreadMm:0.0} mm — 5 mm 초과: 표적 접촉이 일정하지 않거나 장착 rx/ry 가 큽니다"
+            ? $"Bz 산포 {BzSpreadMm:0.0} mm — 5 mm 초과: 표적 지시가 일정하지 않거나(접촉 압력·포커스 재현도) 장착 rx/ry 가 큽니다"
             : $"Bz 산포 {BzSpreadMm:0.0} mm";
 
     public bool IsDirty => _savedMount is null || Mount.ToArray().Zip(_savedMount, (a, b) => Math.Abs(a - b) > 1e-9).Any(v => v);
