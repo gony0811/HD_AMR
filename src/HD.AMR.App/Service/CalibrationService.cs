@@ -41,6 +41,9 @@ public class CalibrationService
 
     private static readonly JsonSerializerOptions JsonOpts = new() { PropertyNameCaseInsensitive = true };
 
+    /// <summary>표본 간 허용 스트로크 편차(mm). 1mm 편차 = 기울기 0.32° 오차라 사실상 "동일" 을 요구한다.</summary>
+    private const double StrokeTolMm = 1.0;
+
     // ── 코봇 장착 오프셋 T_A_B ──────────────────────────────────────
     /// <summary>저장된 장착 오프셋 [x,y,z,rx,ry,rz](mm/도). 없으면 0 배열.</summary>
     public async Task<double[]> GetMountAsync()
@@ -107,6 +110,21 @@ public class CalibrationService
         IEnumerable<MountSample> samples, double? targetZmm, double[]? currentMount = null)
     {
         var list = samples.ToList();
+
+        // 전제조건: 모든 표본이 같은 텔레스코픽 스트로크여야 한다. 순수 수학 계층은 "한 평면"을
+        // 가정하므로 여기서 막지 않으면 스트로크 편차가 조용히 가짜 기울기가 된다.
+        var strokes = list.Where(m => m.TelescopicStrokeMm.HasValue)
+                          .Select(m => m.TelescopicStrokeMm!.Value).ToList();
+        if (strokes.Count > 0)
+        {
+            double spread = strokes.Max() - strokes.Min();
+            if (spread > StrokeTolMm)
+                return MountCalibrationResult.Fail(
+                    $"표본 간 텔레스코픽 스트로크가 {spread:0.0}mm 다릅니다 — " +
+                    "이 편차는 전부 가짜 기울기(rx/ry)로 흡수됩니다. " +
+                    "같은 스트로크(완전 하강 권장)에서 다시 표본하세요.");
+        }
+
         var tuples = list.Select(m => (m.AmrXmm, m.AmrYmm, m.AmrYawDeg, m.Bx, m.By, m.Bz)).ToList();
         var result = MapCalibration.SolveMount3D(tuples, targetZmm, currentMount);
 
@@ -304,6 +322,17 @@ public class MountSample
     public double? Brx { get; set; }
     public double? Bry { get; set; }
     public double? Brz { get; set; }
+
+    /// <summary>
+    /// 기록 시 Z축 텔레스코픽 스트로크(mm, <b>완전 하강 = 0</b>). 구버전 표본은 null.
+    ///
+    /// 코봇 BASE 가 약 1000mm 행정의 텔레스코픽 위에 있어 <b>T_A_B 의 tz 는 상수가 아니다</b>
+    /// (tz(s) = tz0 + s). 산출은 모든 표본이 <b>같은 스트로크</b>에 있다고 가정하므로 —
+    /// 다르면 터치점이 한 평면에 놓이지 않고 그 편차가 <b>전부 가짜 기울기로 흡수</b>된다.
+    /// 면내 펼침 180mm 기준 스트로크 1mm 편차 = 기울기 0.32° 오차(터치 잡음 1mm 와 같은 크기).
+    /// 그래서 <see cref="CalibrationService.SolveMount3D"/> 가 불일치를 계산 전에 거부한다.
+    /// </summary>
+    public double? TelescopicStrokeMm { get; set; }
 }
 
 /// <summary>장착 오프셋 평면 측정 결과 (rz=φ, tx, ty, 잔차, 표본수).</summary>

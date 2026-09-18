@@ -54,6 +54,8 @@ public sealed partial class MountCalibrationViewModel : ViewModelBase
     [ObservableProperty] private double _targetQzMm;
     [ObservableProperty] private bool _qzConfirmed;
     [ObservableProperty] private double _cadTzMm;
+    [ObservableProperty] private double _telescopicStrokeMm;   // 완전 하강 = 0
+    [ObservableProperty] private bool _strokeConfirmed;
     [ObservableProperty] private bool _liveTcp = true;
     [ObservableProperty] private bool _busy;
     [ObservableProperty] private string? _message;
@@ -228,7 +230,8 @@ public sealed partial class MountCalibrationViewModel : ViewModelBase
     public bool IsDirty => _savedMount is null || Mount.ToArray().Zip(_savedMount, (a, b) => Math.Abs(a - b) > 1e-9).Any(v => v);
     public string DirtyText => IsDirty ? "저장값과 다름 — 저장 필요" : "저장값과 동일";
 
-    public bool CanCapture => AmrConnected && CobotConnected && HasAmrPose && IsAmrStationary && QzConfirmed && !Busy;
+    public bool CanCapture => AmrConnected && CobotConnected && HasAmrPose && IsAmrStationary
+                              && QzConfirmed && StrokeConfirmed && !Busy;
     public bool CanSolve => SampleCount >= 3 && QzConfirmed && !Busy;
     public bool CanApply => Result is { Success: true };
     public bool CanRefreshTcp => CobotConnected && !Busy;
@@ -237,6 +240,7 @@ public sealed partial class MountCalibrationViewModel : ViewModelBase
     /// <summary>버튼을 회색으로 두고 끝내지 않고, 무엇이 막고 있는지 말한다.</summary>
     public string SolveBlockedReason =>
         !QzConfirmed ? "표적 높이 q_z 를 입력하고 확인에 체크해야 산출할 수 있습니다."
+        : !StrokeConfirmed ? "텔레스코픽 스트로크를 확인에 체크해야 합니다."
         : SampleCount < 3 ? $"표본이 {SampleCount}개입니다 — 최소 3개(권장 5개 이상) 필요합니다."
         : Busy ? "처리 중입니다…"
         : "";
@@ -247,6 +251,7 @@ public sealed partial class MountCalibrationViewModel : ViewModelBase
         get
         {
             if (!QzConfirmed) return "① 표적 높이 q_z 를 입력하고 확인에 체크하세요.";
+            if (!StrokeConfirmed) return "① 텔레스코픽을 완전 하강시키고 스트로크(0) 확인에 체크하세요.";
             if (SampleCount == 0) return "② AMR 을 표적 근처에 정차시키고, 조그로 팁을 표적에 접촉시킨 뒤 '표본 캡처'.";
             if (SampleCount < 3) return $"② 표본 {SampleCount}개 — AMR yaw 를 30° 이상 바꿔 최소 3개(권장 5개)까지 반복하세요.";
             if (Result is null) return "③ '해 계산'을 눌러 T_A_B 를 산출하세요.";
@@ -293,6 +298,7 @@ public sealed partial class MountCalibrationViewModel : ViewModelBase
                 Bx = sx / n, By = sy / n, Bz = sz / n,
                 Brx = srx / n, Bry = sry / n, Brz = srz / n,
                 Tool = Tool, CapturedAtUtc = DateTime.UtcNow,
+                TelescopicStrokeMm = TelescopicStrokeMm,
             });
 
             await PersistSamplesAsync();
@@ -341,6 +347,7 @@ public sealed partial class MountCalibrationViewModel : ViewModelBase
             AmrXmm = ManAmrX, AmrYmm = ManAmrY, AmrYawDeg = ManYaw,
             Bx = ManBx, By = ManBy, Bz = ManBz,
             Tool = Tool, CapturedAtUtc = DateTime.UtcNow,
+            TelescopicStrokeMm = TelescopicStrokeMm,
         });
         await PersistSamplesAsync();
         Resolve();
@@ -413,7 +420,8 @@ public sealed partial class MountCalibrationViewModel : ViewModelBase
             var pose = Mount.ToArray();
             await calib.SaveMountAsync(pose);
             _savedMount = pose;
-            Success("T_A_B 를 저장했습니다. (이 앱의 설정 DB에만 기록 — 컨트롤러·HD_ACS 에는 쓰지 않습니다.)");
+            Success($"T_A_B 를 저장했습니다 — tz 는 텔레스코픽 스트로크 {TelescopicStrokeMm:0} mm 기준입니다. " +
+                    "(이 앱의 설정 DB에만 기록 — 컨트롤러·HD_ACS 에는 쓰지 않습니다.)");
         }
         catch (Exception ex) { Failure($"T_A_B 저장 실패: {ex.Message}"); }
     }

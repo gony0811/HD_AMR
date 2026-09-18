@@ -343,6 +343,55 @@ public class MountCalibration3DTests
         Near(1.0, r.DeltaAngleDeg, 0.05, "상대 회전각");
     }
 
+    /// <summary>
+    /// 코봇 BASE 가 Z축 텔레스코픽 위에 있어 tz 는 상수가 아니다(tz = tz0 + s). 승강축이 차체 Z 와
+    /// 평행하므로 <b>변하는 성분은 tz 하나</b>이며, 이는 솔버가 관측 못 하는 바로 그 자유도다.
+    /// </summary>
+    [Fact]
+    public void MountPoseAtStroke_ShiftsOnlyTz()
+    {
+        var home = new[] { 320.0, -145.0, 738.0, 2.5, -1.8, 37.0 };
+        var lifted = MapCalibration.MountPoseAtStroke(home, 1000.0);
+
+        Near(1738.0, lifted[2], 1e-9, "tz(1000)");
+        foreach (var i in new[] { 0, 1, 3, 4, 5 })
+            Assert.Equal(home[i], lifted[i]);
+        Assert.Equal(738.0, home[2]);   // 원본 불변
+    }
+
+    /// <summary>
+    /// 스트로크 편차가 왜 치명적인지 — 터치점이 한 평면에 놓이지 않고 그 편차가 <b>전부 가짜 기울기로
+    /// 흡수</b>된다. 실제 현장 표본의 면내 펼침(약 180mm)에서 10mm 편차면 3° 가까이 틀어진다.
+    /// 그래서 CalibrationService 가 계산 전에 거부한다.
+    /// </summary>
+    [Fact]
+    public void SolveMount3D_StrokeVariationMasqueradesAsTilt()
+    {
+        var truth = new[] { Truth[0], Truth[1], Truth[2], 0.0, 0.0, Truth[5] };   // 기울기 0 인 장착
+        var clean = Build(truth, Q, Poses);
+
+        var baseline = MapCalibration.SolveMount3D(clean, targetZmm: Q[2]);
+        Assert.True(baseline.Success, baseline.Error);
+        Assert.True(Math.Abs(baseline.MountPose[3]) < 1e-9 && Math.Abs(baseline.MountPose[4]) < 1e-9);
+
+        // 표본마다 텔레스코픽이 ±10mm 씩 달랐다면: 터치점 z 가 그만큼 어긋난다.
+        double[] strokeErr = { -10, 0, 10, -5, 5, 0 };
+        var drifted = clean.Select((k, i) => (k.Item1, k.Item2, k.Item3, k.Item4, k.Item5, k.Item6 - strokeErr[i])).ToList();
+
+        var spoiled = MapCalibration.SolveMount3D(drifted, targetZmm: Q[2]);
+        Assert.True(spoiled.Success, spoiled.Error);   // 조용히 성공하는 것이 바로 위험한 지점이다
+        double fakeTilt = Math.Max(Math.Abs(spoiled.MountPose[3]), Math.Abs(spoiled.MountPose[4]));
+
+        // 크기는 atan(스트로크 산포 / 면내 펼침) 을 따른다 — 펼침이 좁을수록 더 커진다.
+        double strokeStd = Math.Sqrt(strokeErr.Sum(v => v * v) / strokeErr.Length);
+        double predicted = Math.Atan2(strokeStd, spoiled.PlaneSpanMm) * 180.0 / Math.PI;
+        Assert.InRange(fakeTilt, predicted * 0.5, predicted * 2.0);
+
+        // 기울기 경고 임계(0.2°)를 넘는다 = 도달거리 1m 에서 6mm 이상. 잔차로는 드러나지 않는다.
+        Assert.True(fakeTilt > 0.2,
+            $"스트로크 편차가 가짜 기울기로 나타나지 않았습니다({fakeTilt:F3}°) — 게이트 근거를 재검토하세요.");
+    }
+
     [Theory]
     [InlineData(new double[] { 0, 90, 180, 270 }, 270)]
     [InlineData(new double[] { 0, 10, 20 }, 20)]

@@ -70,12 +70,19 @@
                                        IsEnabled="{Binding !Busy}" />
                     </StackPanel>
                     <StackPanel Margin="0,0,12,8">
-                        <TextBlock Classes="axis" Text="표적 높이 q_z (mm)" />
+                        <TextBlock Classes="axis" Text="표적 높이 q_z (바닥 기준, mm)" />
                         <NumericUpDown Value="{Binding TargetQzMm}" Increment="1" FormatString="0.0"
                                        IsEnabled="{Binding !Busy}" />
                     </StackPanel>
                     <CheckBox VerticalAlignment="Bottom" Margin="0,0,12,8"
                               Content="q_z 값을 확인했습니다" IsChecked="{Binding QzConfirmed}" IsEnabled="{Binding !Busy}" />
+                    <StackPanel Margin="0,0,6,8">
+                        <TextBlock Classes="axis" Text="텔레스코픽 스트로크 (mm)" />
+                        <NumericUpDown Value="{Binding TelescopicStrokeMm}" Increment="1" FormatString="0.0"
+                                       IsEnabled="{Binding !Busy}" />
+                    </StackPanel>
+                    <CheckBox VerticalAlignment="Bottom" Margin="0,0,12,8"
+                              Content="스트로크 값을 확인했습니다" IsChecked="{Binding StrokeConfirmed}" IsEnabled="{Binding !Busy}" />
                     <StackPanel Margin="0,0,6,8">
                         <TextBlock Classes="axis" Text="CAD tz (mm)" />
                         <NumericUpDown Value="{Binding CadTzMm}" Increment="1" FormatString="0.0"
@@ -87,7 +94,11 @@
                 </WrapPanel>
                 <Border Classes="alert">
                     <TextBlock TextWrapping="Wrap" FontSize="12"
-                               Text="q_z 는 AMR 차체 좌표계에서 잰 표적 점의 Z 입니다. 차체 원점보다 아래면 음수(예: 바닥 표적 −320 mm). AMR pose 가 평면(x·y·yaw)이라 z 방정식이 q_z 와 tz 를 차이로만 담습니다 — 이 값이 없으면 tz 가 수학적으로 관측되지 않아 T_A_B 의 Z 가 결정되지 않습니다. 추정치라도 반드시 실측 근거를 남기세요." />
+                               Text="q_z 는 바닥면(z=0)을 기준으로 잰 표적 점의 높이입니다 — 바닥에 표적을 두면 0, 받침 위에 두면 그 높이. AMR pose 가 평면(x·y·yaw)이라 z 방정식이 q_z 와 tz 를 차이로만 담습니다. 이 값이 없으면 tz 가 수학적으로 관측되지 않아 T_A_B 의 Z 가 결정되지 않습니다." />
+                </Border>
+                <Border Classes="alert">
+                    <TextBlock TextWrapping="Wrap" FontSize="12"
+                               Text="코봇 BASE 가 Z축 텔레스코픽 위에 있어 tz 는 상수가 아닙니다(tz = tz0 + 스트로크). 기준은 완전 하강 = 0 입니다. 전 표본을 반드시 같은 스트로크에서 잡으세요 — 스트로크가 다르면 그 편차가 전부 가짜 기울기(rx/ry)로 흡수됩니다. 1 mm 편차 = 기울기 0.32° 오차(터치 잡음 1 mm 와 같은 크기)." />
                 </Border>
             </StackPanel>
         </Border>
@@ -248,7 +259,7 @@
         <Border Classes="card">
             <StackPanel Spacing="8">
                 <TextBlock Classes="cardHead" Text="⑤ 적용 · 저장" />
-                <TextBlock Classes="axis" Text="T_A_B — AMR 중심 → 코봇 Base (mm/도)" />
+                <TextBlock Classes="axis" Text="T_A_B — AMR 중심 → 코봇 Base (mm/도) · tz 는 완전 하강 기준" />
                 <WrapPanel>
                     <StackPanel><TextBlock Classes="axis" Text="X" /><NumericUpDown Classes="pose" Value="{Binding Mount.V0}" Increment="0.1" /></StackPanel>
                     <StackPanel><TextBlock Classes="axis" Text="Y" /><NumericUpDown Classes="pose" Value="{Binding Mount.V1}" Increment="0.1" /></StackPanel>

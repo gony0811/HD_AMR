@@ -255,6 +255,11 @@ public static class MapCalibration
     ///   · rz·tx·ty(평면 문제) — AMR yaw 다양성이 필요하다.
     /// 그래서 PlaneSpanMm 과 YawSpanDeg 를 따로 보고하고 경고 문구도 따로 낸다.
     ///
+    /// ⚠ 모든 표본이 <b>같은 Z축 텔레스코픽 스트로크</b>에 있다고 가정한다(터치점이 한 평면 위에 놓인다는 전제).
+    /// 스트로크가 다르면 그 편차가 전부 가짜 기울기로 흡수되므로 <see cref="CalibrationService.SolveMount3D"/> 가
+    /// 계산 전에 거부한다. 산출된 tz 는 <b>표본을 잡은 그 스트로크 기준</b>이며,
+    /// 다른 스트로크로 옮길 때는 <see cref="MountPoseAtStroke"/> 를 쓴다.
+    ///
     /// 오퍼레이터 입력 문제로는 <b>예외를 던지지 않는다</b> — Success=false + 한국어 Error 로 반환.
     /// 기대 정밀도: rx·ry ±0.05~0.2°, rz ±0.5~1.5°, tx·ty ±10~25mm(SLAM 지배, √N 개선),
     /// tz 는 입력 높이 정확도와 1:1.
@@ -462,6 +467,26 @@ public static class MapCalibration
             DeltaPosMm: deltaPosMm,
             DeltaAngleDeg: deltaAngleDeg,
             Warnings: warnings);
+    }
+
+    /// <summary>
+    /// 완전 하강 기준 T_A_B 를 현재 텔레스코픽 스트로크에 맞춰 보정한다 — <c>tz(s) = tz0 + s</c>.
+    ///
+    /// 코봇 BASE 가 약 1000mm 행정의 Z축 텔레스코픽 위에 있어 T_A_B 는 상수가 아니다. 다만 승강축이
+    /// AMR 차체 Z 와 평행하므로 <b>변하는 성분은 tz 하나뿐</b>이고 tx·ty·rx·ry·rz 는 상수다
+    /// (관측 가능한 5자유도와 정확히 일치 — 그래서 캘리브레이션 한 번으로 상수부가 전부 확정된다).
+    ///
+    /// ⚠ 컬럼이 완벽히 수직이 아니면 tx·ty 도 스트로크에 약하게 의존한다(1m 컬럼이 0.1° 기울면
+    /// 완전 상승 시 약 1.75mm 횡편차). 완전 하강·완전 상승에서 각각 캘리브레이션해 tx·ty 가 일치하는지
+    /// 확인하고, 다르면 <c>Δ(tx,ty)/Δs</c> 가 그 기울기를 직접 준다.
+    /// </summary>
+    /// <param name="mountAtHome">완전 하강(스트로크 0) 기준 T_A_B [x,y,z,rx,ry,rz].</param>
+    /// <param name="strokeMm">현재 스트로크(mm, 완전 하강 = 0).</param>
+    public static double[] MountPoseAtStroke(double[] mountAtHome, double strokeMm)
+    {
+        var p = (double[])mountAtHome.Clone();
+        p[2] += strokeMm;
+        return p;
     }
 
     /// <summary>각도를 (−180, 180] 로 정규화.</summary>

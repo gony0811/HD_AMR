@@ -45,7 +45,15 @@ public static class MountSampleInspector
             }
         }
 
-        // ④ 표본 노후·기간 분산 — 그 사이 재장착이 있었다면 섞어 쓰면 안 된다.
+        // ④ 텔레스코픽 스트로크 미기록 — 산출은 전 표본이 같은 스트로크라고 가정한다.
+        if (samples.All(s => !s.TelescopicStrokeMm.HasValue))
+            warnings.Add("텔레스코픽 스트로크가 기록되지 않은 표본입니다 — 전 표본이 같은 높이(완전 하강)에서 " +
+                         "기록됐는지 확인하세요. 스트로크 1mm 편차가 기울기 0.32° 오차가 됩니다.");
+        else if (samples.Any(s => !s.TelescopicStrokeMm.HasValue))
+            warnings.Add("일부 표본에만 텔레스코픽 스트로크가 기록돼 있습니다 — 미기록 표본이 다른 높이에서 " +
+                         "잡혔다면 기울기가 조용히 틀어집니다. 전체 삭제 후 재기록을 권장합니다.");
+
+        // ⑤ 표본 노후·기간 분산 — 그 사이 재장착이 있었다면 섞어 쓰면 안 된다.
         var stamped = samples.Where(s => s.CapturedAtUtc.HasValue).Select(s => s.CapturedAtUtc!.Value).ToList();
         if (stamped.Count > 0)
         {

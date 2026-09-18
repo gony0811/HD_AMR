@@ -9,11 +9,11 @@ namespace HD.AMR.Tests;
 public class MountSampleInspectorTests
 {
     private static MountSample Sample(int i, double x, double y, double yaw,
-        int? tool = 1, double bz = -800, DateTime? at = null) => new()
+        int? tool = 1, double bz = -800, DateTime? at = null, double? stroke = 0) => new()
     {
         Index = i, AmrXmm = x, AmrYmm = y, AmrYawDeg = yaw,
         Bx = 900 + 40 * i, By = 100 - 30 * i, Bz = bz,
-        Tool = tool, CapturedAtUtc = at ?? DateTime.UtcNow,
+        Tool = tool, CapturedAtUtc = at ?? DateTime.UtcNow, TelescopicStrokeMm = stroke,
     };
 
     private static List<MountSample> Clean() => new()
@@ -97,5 +97,25 @@ public class MountSampleInspectorTests
         foreach (var s in list) { s.Tool = null; s.CapturedAtUtc = null; }
 
         Assert.Empty(MountSampleInspector.Inspect(list));
+    }
+
+    // 스트로크 미기록은 "전 표본이 같은 높이였는지" 확인할 근거가 없다는 뜻이다.
+    [Fact]
+    public void Inspect_NoTelescopicStroke_Warns()
+    {
+        var list = Clean();
+        foreach (var s in list) s.TelescopicStrokeMm = null;
+
+        Assert.Contains(MountSampleInspector.Inspect(list), w => w.Contains("스트로크가 기록되지"));
+    }
+
+    // 일부만 기록된 경우가 더 위험하다 — 미기록 표본이 다른 높이였을 수 있다.
+    [Fact]
+    public void Inspect_PartialTelescopicStroke_Warns()
+    {
+        var list = Clean();
+        list[1].TelescopicStrokeMm = null;
+
+        Assert.Contains(MountSampleInspector.Inspect(list), w => w.Contains("일부 표본에만"));
     }
 }
