@@ -19,10 +19,6 @@ public sealed partial class AmrMapViewModel : ObservableObject, IDisposable
     private string? _loadedMapName;
     private int _telemetryBusy;
     [ObservableProperty] private string _mapName;
-    /// <summary>마지막으로 조회에 성공한 운영 맵 이름. 대시보드는 입력 없이 이 이름으로 고정 표시한다.</summary>
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(ActiveMapText))]
-    private string _activeMapName;
     [ObservableProperty] private Bitmap? _mapImage;
     [ObservableProperty] private string _mapLoadStatus = "맵을 가져오세요.";
     [ObservableProperty] private string _mapSummary = "";
@@ -33,25 +29,6 @@ public sealed partial class AmrMapViewModel : ObservableObject, IDisposable
     [ObservableProperty] private string _confidenceText = "맵 신뢰도 --";
     [ObservableProperty] private double _confidencePercent;
     [ObservableProperty] private bool _hasConfidence;
-    [ObservableProperty] private bool _hasTelemetryPose;
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(MapScanStateText))]
-    [NotifyCanExecuteChangedFor(nameof(StartMapScanCommand))]
-    [NotifyCanExecuteChangedFor(nameof(StopMapScanCommand))]
-    [NotifyCanExecuteChangedFor(nameof(SaveNewMapCommand))]
-    private bool _isMapOperationBusy;
-    [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(StartMapScanCommand))]
-    [NotifyCanExecuteChangedFor(nameof(StopMapScanCommand))]
-    [NotifyCanExecuteChangedFor(nameof(SaveNewMapCommand))]
-    private bool _isScanning;
-    [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(SaveNewMapCommand))]
-    private bool _scanReadyToSave;
-    [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(SaveNewMapCommand))]
-    private string _newMapName = DateTime.Now.ToString("yyMMdd_HHmmss");
-    [ObservableProperty] private string _mapScanStatus = "스캔 시작 → 로봇 주행 → 스캔 종료 → 맵 저장 순서로 진행하세요.";
     [ObservableProperty] private bool _showRobot;
     [ObservableProperty] private double _robotLeft;
     [ObservableProperty] private double _robotTop;
@@ -63,16 +40,11 @@ public sealed partial class AmrMapViewModel : ObservableObject, IDisposable
     {
         _rest = rest;
         _settings = settings.Value;
-        // Map Builder/AMR 페이지에서 마지막으로 확정한 맵이 appsettings 기본값보다 우선한다.
-        _activeMapName = ReadSavedMapName() ?? _settings.MapName;
-        _mapName = _activeMapName;
+        _mapName = _settings.MapName;
         _resolution = _settings.MapResolution > 0 ? (decimal)_settings.MapResolution : null;
     }
 
     public bool HasMapImage => MapImage is not null;
-    public string ActiveMapText => string.IsNullOrWhiteSpace(ActiveMapName)
-        ? "운영 맵 미설정 · Map Builder 또는 AMR 페이지에서 맵을 지정하세요."
-        : $"운영 맵: {ActiveMapName}";
     public double ImageWidth => MapImage?.PixelSize.Width ?? 1;
     public double ImageHeight => MapImage?.PixelSize.Height ?? 1;
     public double CanvasWidth => ImageWidth * Zoom;
@@ -84,7 +56,6 @@ public sealed partial class AmrMapViewModel : ObservableObject, IDisposable
     public double RobotY => _pose?.Y ?? 0;
     public double RobotHeading => _pose?.Angle ?? 0;
     public double ResolutionValue => (double)(Resolution ?? 0);
-    public string MapScanStateText => IsScanning ? "스캔 중" : "대기";
     public string MapRequestTarget => $"{_settings.BaseUrl.TrimEnd('/')}/{_settings.MapContentPath.Trim('/')}/{{맵 이름}}";
     partial void OnResolutionChanged(decimal? value)
     {
@@ -103,83 +74,6 @@ public sealed partial class AmrMapViewModel : ObservableObject, IDisposable
     [RelayCommand] private void ZoomIn() => Zoom = Math.Min(5, Zoom + .25);
     [RelayCommand] private void ZoomOut() => Zoom = Math.Max(.5, Zoom - .25);
     [RelayCommand] private void ResetZoom() => Zoom = 1.0;
-
-    private bool CanStartMapScan() => !IsMapOperationBusy && !IsScanning;
-    private bool CanStopMapScan() => !IsMapOperationBusy;
-    private bool CanSaveNewMap() => !IsMapOperationBusy && !IsScanning && ScanReadyToSave &&
-                                    !string.IsNullOrWhiteSpace(NewMapName);
-
-    [RelayCommand(CanExecute = nameof(CanStartMapScan))]
-    private async Task StartMapScanAsync()
-    {
-        IsMapOperationBusy = true;
-        MapScanStatus = "새 맵 스캔 시작 요청 중…";
-        try
-        {
-            var result = await _rest.StartMapScanAsync();
-            EnsureSuccess(result, "맵 스캔 시작");
-            IsScanning = true;
-            ScanReadyToSave = false;
-            MapScanStatus = $"스캔 중 · 시작 {DateTime.Now:HH:mm:ss} · 로봇을 맵 작성 구역으로 주행하세요.";
-        }
-        catch (Exception ex) { MapScanStatus = $"스캔 시작 실패: {ex.Message}"; }
-        finally { IsMapOperationBusy = false; }
-    }
-
-    [RelayCommand(CanExecute = nameof(CanStopMapScan))]
-    private async Task StopMapScanAsync()
-    {
-        IsMapOperationBusy = true;
-        MapScanStatus = "맵 스캔 종료 요청 중…";
-        try
-        {
-            var result = await _rest.StopMapScanAsync();
-            EnsureSuccess(result, "맵 스캔 종료");
-            IsScanning = false;
-            ScanReadyToSave = true;
-            MapScanStatus = $"스캔 종료 {DateTime.Now:HH:mm:ss} · 이름을 확인하고 맵 저장을 누르세요.";
-        }
-        catch (Exception ex) { MapScanStatus = $"스캔 종료 실패: {ex.Message}"; }
-        finally { IsMapOperationBusy = false; }
-    }
-
-    [RelayCommand(CanExecute = nameof(CanSaveNewMap))]
-    private async Task SaveNewMapAsync()
-    {
-        IsMapOperationBusy = true;
-        try
-        {
-            var name = NormalizeMapName(NewMapName);
-            MapScanStatus = $"{name} 저장 중…";
-            // Swagger의 /map/save 예시는 확장자 없는 mapName, 조회/로드는 *.map 이름을 사용한다.
-            var result = await _rest.SaveMapAsync(Path.GetFileNameWithoutExtension(name));
-            EnsureSuccess(result, "맵 저장");
-            MapName = name;
-            NewMapName = Path.GetFileNameWithoutExtension(name);
-            ScanReadyToSave = false;
-            MapScanStatus = $"저장 완료 {DateTime.Now:HH:mm:ss} · {name}";
-            await LoadMapAsync();
-        }
-        catch (Exception ex) { MapScanStatus = $"맵 저장 실패: {ex.Message}"; }
-        finally { IsMapOperationBusy = false; }
-    }
-
-    private static string NormalizeMapName(string value)
-    {
-        var name = value.Trim();
-        if (name.EndsWith(".map", StringComparison.OrdinalIgnoreCase))
-            name = name[..^4];
-        if (string.IsNullOrWhiteSpace(name) || name is "." or ".." ||
-            name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || name.Contains('/') || name.Contains('\\'))
-            throw new InvalidOperationException("맵 이름에는 파일 이름으로 사용할 수 있는 문자만 입력하세요.");
-        return name + ".map";
-    }
-
-    private static void EnsureSuccess(AmrRestResult result, string operation)
-    {
-        if (!result.Ok)
-            throw new InvalidOperationException(result.Message ?? $"{operation} API 오류 ({result.Code})");
-    }
 
     public void UpdatePose(RobotPose? pose)
     {
@@ -219,7 +113,6 @@ public sealed partial class AmrMapViewModel : ObservableObject, IDisposable
                 !ReadNumber(data, "rz", out var heading))
                 throw new InvalidOperationException("포즈 좌표가 없습니다.");
 
-            HasTelemetryPose = true;
             UpdatePose(new RobotPose((float)x, (float)y, (float)heading));
             var points = new List<AmrLidarPoint>();
             if (data.TryGetProperty("lidar", out var lidar) && lidar.ValueKind == JsonValueKind.Array)
@@ -248,7 +141,6 @@ public sealed partial class AmrMapViewModel : ObservableObject, IDisposable
         {
             LidarStatus = $"라이다 조회 실패: {ex.Message}";
             LidarPoints = Array.Empty<AmrLidarPoint>();
-            HasTelemetryPose = false;
             ShowRobot = false;
             ConfidenceText = "맵 신뢰도 --";
             HasConfidence = false;
@@ -283,7 +175,6 @@ public sealed partial class AmrMapViewModel : ObservableObject, IDisposable
                 ? (decimal)scale : name == _loadedMapName ? Resolution
                 : _settings.MapResolution > 0 ? (decimal)_settings.MapResolution : null;
             _loadedMapName = name;
-            SetActiveMap(name);
             var old = MapImage;
             MapImage = bitmap;
             var nodeCount = data.TryGetProperty("node", out var nodes) && nodes.ValueKind == JsonValueKind.Array
@@ -304,44 +195,6 @@ public sealed partial class AmrMapViewModel : ObservableObject, IDisposable
         {
             MapLoadStatus = $"맵 조회 실패: {ex.Message}" + (HasMapImage ? " · 이전 맵 표시 중" : "");
         }
-    }
-
-    /// <summary>운영 맵 이름을 확정하고 다음 실행에도 유지되도록 저장한다.</summary>
-    public void SetActiveMap(string name)
-    {
-        name = name.Trim();
-        if (name.Length == 0 || ActiveMapName == name) return;
-        ActiveMapName = name;
-        SaveMapName(name);
-    }
-
-    /// <summary>확정된 운영 맵이 아직 표시되지 않았으면 가져온다(대시보드 진입 시).</summary>
-    public async Task EnsureActiveMapLoadedAsync()
-    {
-        if (string.IsNullOrWhiteSpace(ActiveMapName) || LoadMapCommand.IsRunning) return;
-        if (HasMapImage && _loadedMapName == ActiveMapName) return;
-        MapName = ActiveMapName;
-        await LoadMapCommand.ExecuteAsync(null);
-    }
-
-    private static string SavedMapNamePath => Path.Combine(AppContext.BaseDirectory, "amr_active_map.json");
-
-    private static string? ReadSavedMapName()
-    {
-        try
-        {
-            if (!File.Exists(SavedMapNamePath)) return null;
-            using var doc = JsonDocument.Parse(File.ReadAllText(SavedMapNamePath));
-            var name = doc.RootElement.TryGetProperty("mapName", out var value) ? value.GetString() : null;
-            return string.IsNullOrWhiteSpace(name) ? null : name.Trim();
-        }
-        catch { return null; }
-    }
-
-    private static void SaveMapName(string name)
-    {
-        try { File.WriteAllText(SavedMapNamePath, JsonSerializer.Serialize(new { mapName = name })); }
-        catch { /* 저장 실패는 표시 기능에 영향이 없다. 다음 실행 시 appsettings 값으로 시작한다. */ }
     }
 
     private static bool ReadNumber(JsonElement element, string name, out double value)
