@@ -29,6 +29,7 @@ public sealed partial class AmrMapViewModel : ObservableObject, IDisposable
     [ObservableProperty] private string _confidenceText = "맵 신뢰도 --";
     [ObservableProperty] private double _confidencePercent;
     [ObservableProperty] private bool _hasConfidence;
+    [ObservableProperty] private bool _hasTelemetryPose;
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(MapScanStateText))]
     [NotifyCanExecuteChangedFor(nameof(StartMapScanCommand))]
@@ -209,6 +210,7 @@ public sealed partial class AmrMapViewModel : ObservableObject, IDisposable
                 !ReadNumber(data, "rz", out var heading))
                 throw new InvalidOperationException("포즈 좌표가 없습니다.");
 
+            HasTelemetryPose = true;
             UpdatePose(new RobotPose((float)x, (float)y, (float)heading));
             var points = new List<AmrLidarPoint>();
             if (data.TryGetProperty("lidar", out var lidar) && lidar.ValueKind == JsonValueKind.Array)
@@ -237,6 +239,7 @@ public sealed partial class AmrMapViewModel : ObservableObject, IDisposable
         {
             LidarStatus = $"라이다 조회 실패: {ex.Message}";
             LidarPoints = Array.Empty<AmrLidarPoint>();
+            HasTelemetryPose = false;
             ShowRobot = false;
             ConfidenceText = "맵 신뢰도 --";
             HasConfidence = false;

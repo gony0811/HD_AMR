@@ -1,0 +1,124 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:HD.AMR.Desktop.ViewModels"
+             xmlns:controls="using:HD.AMR.Desktop.Controls"
+             x:Class="HD.AMR.Desktop.Views.MapBuilderView"
+             x:DataType="vm:MapBuilderViewModel">
+    <StackPanel Spacing="12">
+        <Grid ColumnDefinitions="*,Auto">
+            <StackPanel>
+                <TextBlock Classes="page-title" Text="실시간 맵 작성" />
+                <TextBlock Classes="page-subtitle" Text="SLAM 맵 생성 상태와 AMR 위치·라이다를 실시간으로 확인합니다." />
+            </StackPanel>
+            <Border Grid.Column="1" Classes="badge" Classes.on="{Binding Map.IsScanning}"
+                    Classes.off="{Binding !Map.IsScanning}" VerticalAlignment="Top">
+                <TextBlock Text="{Binding Map.MapScanStateText}" />
+            </Border>
+        </Grid>
+
+        <Border Classes="card">
+            <StackPanel Spacing="8">
+                <TextBlock Classes="muted" FontSize="12" TextWrapping="Wrap"
+                           Text="① 스캔 시작 → ② 로봇을 작성 구역으로 주행 → ③ 스캔 종료 → ④ 저장. 맵 작성 중에는 운영 작업을 실행하지 마세요." />
+                <Grid ColumnDefinitions="*,Auto,Auto,Auto">
+                    <TextBox Grid.Column="0" Text="{Binding Map.NewMapName}" Watermark="예: 260919_143000" />
+                    <Button Grid.Column="1" Margin="6,0,0,0" Content="스캔 시작" Command="{Binding Map.StartMapScanCommand}" />
+                    <Button Grid.Column="2" Margin="6,0,0,0" Content="스캔 종료" Command="{Binding Map.StopMapScanCommand}" />
+                    <Button Grid.Column="3" Margin="6,0,0,0" Content="맵 저장" Command="{Binding Map.SaveNewMapCommand}" />
+                </Grid>
+                <ProgressBar IsIndeterminate="True" Height="4" IsVisible="{Binding Map.IsMapOperationBusy}" />
+                <TextBlock Text="{Binding Map.MapScanStatus}" TextWrapping="Wrap" />
+            </StackPanel>
+        </Border>
+
+        <Grid ColumnDefinitions="*,310">
+            <Border Grid.Column="0" Classes="card" Padding="10">
+                <Grid RowDefinitions="Auto,*">
+                    <Grid Grid.Row="0" ColumnDefinitions="Auto,Auto,Auto,180,Auto,*" Margin="0,0,0,8">
+                        <Button Grid.Column="0" Content="−" Command="{Binding ZoomOutCommand}" />
+                        <Button Grid.Column="1" Margin="6,0,0,0" Content="+" Command="{Binding ZoomInCommand}" />
+                        <Button Grid.Column="2" Margin="6,0,10,0" Content="100%" Command="{Binding ResetZoomCommand}" />
+                        <Slider Grid.Column="3" Minimum="0.5" Maximum="5" TickFrequency="0.25" Value="{Binding Zoom}" />
+                        <TextBlock Grid.Column="4" Width="58" Margin="10,6,0,0" Text="{Binding ZoomText}" />
+                        <TextBlock Grid.Column="5" HorizontalAlignment="Right" Margin="10,6,0,0"
+                                   Classes="muted" Text="50~500% · 스크롤바로 이동" />
+                    </Grid>
+                    <Border Grid.Row="1" Background="#20262D" CornerRadius="6">
+                        <ScrollViewer Height="600" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+                            <controls:AmrMapCanvas Width="{Binding CanvasWidth}" Height="{Binding CanvasHeight}"
+                                MapImage="{Binding LiveMapImage}" LidarPoints="{Binding LiveLidarPoints}"
+                                Resolution="{Binding Map.ResolutionValue}" OriginX="{Binding LiveOriginX}" OriginY="{Binding LiveOriginY}"
+                                RobotX="{Binding Map.RobotX}" RobotY="{Binding Map.RobotY}"
+                                RobotHeading="{Binding Map.RobotHeading}" ShowRobot="{Binding Map.HasTelemetryPose}" />
+                        </ScrollViewer>
+                    </Border>
+                </Grid>
+            </Border>
+
+            <StackPanel Grid.Column="1" Margin="12,0,0,0" Spacing="10">
+                <Border Classes="card">
+                    <StackPanel Spacing="8">
+                        <TextBlock Text="실시간 상태" FontWeight="SemiBold" />
+                        <TextBlock Text="{Binding CacheStatus}" TextWrapping="Wrap" />
+                        <TextBlock Text="{Binding Map.PoseText}" FontFamily="monospace" TextWrapping="Wrap" />
+                        <TextBlock Text="{Binding LiveLidarStatus}" Foreground="#FF6B6B" TextWrapping="Wrap" />
+                        <TextBlock Text="{Binding Map.ConfidenceText}" FontWeight="SemiBold" />
+                        <ProgressBar Minimum="0" Maximum="100" Value="{Binding Map.ConfidencePercent}" Height="6" />
+                    </StackPanel>
+                </Border>
+                <Border Classes="card">
+                    <StackPanel Spacing="8">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock Text="저장된 맵" FontWeight="SemiBold" VerticalAlignment="Center" />
+                            <Button Grid.Column="1" Content="새로고침" Command="{Binding RefreshMapListCommand}" />
+                        </Grid>
+                        <ListBox ItemsSource="{Binding StoredMaps}" SelectedItem="{Binding SelectedStoredMap}" Height="220">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate x:DataType="vm:StoredMapItem">
+                                    <Grid RowDefinitions="Auto,Auto" Margin="2,4">
+                                        <TextBlock Grid.Row="0" Text="{Binding Name}" FontWeight="SemiBold" />
+                                        <Grid Grid.Row="1" ColumnDefinitions="Auto,*">
+                                            <TextBlock Classes="muted" FontSize="11" Text="{Binding Size}" />
+                                            <TextBlock Grid.Column="1" Classes="muted" FontSize="11" Margin="10,0,0,0"
+                                                       Text="{Binding Time}" HorizontalAlignment="Right" />
+                                        </Grid>
+                                    </Grid>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                        <Button Content="선택 맵을 운영 맵으로 적용" Command="{Binding LoadSelectedMapCommand}" />
+                        <ProgressBar IsIndeterminate="True" Height="4" IsVisible="{Binding MapListBusy}" />
+                        <TextBlock Classes="muted" FontSize="11" Text="{Binding MapListStatus}" TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+                <Border Classes="card">
+                    <StackPanel Spacing="8">
+                        <TextBlock Text="표시 설정" FontWeight="SemiBold" />
+                        <Grid ColumnDefinitions="*,130">
+                            <TextBlock Text="해상도 (m/픽셀)" VerticalAlignment="Center" />
+                            <NumericUpDown Grid.Column="1" Minimum="0.000001" Maximum="1000" Increment="0.01"
+                                           FormatString="0.######" Value="{Binding Map.Resolution}" />
+                        </Grid>
+                        <CheckBox Content="실시간 맵 원점 자동 추정" IsChecked="{Binding AutoCenterOrigin}" />
+                        <Grid ColumnDefinitions="*,*">
+                            <StackPanel Margin="0,0,4,0">
+                                <TextBlock Classes="muted" FontSize="11" Text="추정 원점 X (m)" />
+                                <NumericUpDown Value="{Binding LiveOriginX}" Increment="0.05" FormatString="0.000"
+                                               IsEnabled="{Binding !AutoCenterOrigin}" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Margin="4,0,0,0">
+                                <TextBlock Classes="muted" FontSize="11" Text="추정 원점 Y (m)" />
+                                <NumericUpDown Value="{Binding LiveOriginY}" Increment="0.05" FormatString="0.000"
+                                               IsEnabled="{Binding !AutoCenterOrigin}" />
+                            </StackPanel>
+                        </Grid>
+                        <TextBlock Classes="muted" FontSize="11" TextWrapping="Wrap"
+                                   Text="캐시 API는 맵 원점을 제공하지 않습니다. 자동 모드는 현재 포즈를 이미지 중앙으로 추정하며, 필요하면 해제 후 원점을 조정하세요." />
+                        <TextBlock Classes="muted" FontSize="12" TextWrapping="Wrap"
+                                   Text="파란 원/선: 현재 AMR 위치·방향&#x0a;빨간 점: 현재 포즈로 재계산한 라이다&#x0a;흰색/회색: AMR가 반환한 원본 캐시 맵" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </Grid>
+    </StackPanel>
+</UserControl>

@@ -59,6 +59,10 @@ public sealed class AmrRestClient : IDisposable
     public Task<AmrRestResult> GetPoseAsync(CancellationToken ct = default)
         => SendAsync(HttpMethod.Get, _s.PosePath, body: null, ct, logResponseBody: false);
 
+    /// <summary>필터링된 라이다 각도·거리·품질 원시값을 센서별로 조회한다.</summary>
+    public Task<AmrRestResult> GetLidarAsync(CancellationToken ct = default)
+        => SendAsync(HttpMethod.Get, _s.LidarPath, body: null, ct, logResponseBody: false);
+
     /// <summary>이름으로 맵 내용(노드·코스·base64 PNG mapping)을 조회한다.
     /// 활성 맵 이름 조회 API가 확정되지 않아 호출측에서 이름을 제공해야 한다.</summary>
     public Task<AmrRestResult> GetMapContentAsync(string mapName, CancellationToken ct = default)
@@ -84,6 +88,22 @@ public sealed class AmrRestClient : IDisposable
         if (string.IsNullOrWhiteSpace(mapName))
             return Task.FromResult(AmrRestResult.Fail("저장할 맵 이름을 입력하세요."));
         return SendAsync(HttpMethod.Post, _s.MapSavePath, new { mapName = mapName.Trim() }, ct);
+    }
+
+    /// <summary>스캔 중 계속 갱신되는 맵 PNG(data URI 문자열)를 조회한다.</summary>
+    public Task<AmrRestResult> GetMapCacheAsync(CancellationToken ct = default)
+        => SendAsync(HttpMethod.Get, _s.MapCachePath, body: null, ct, logResponseBody: false);
+
+    /// <summary>AMR에 저장된 맵 목록을 조회한다.</summary>
+    public Task<AmrRestResult> GetMapListAsync(CancellationToken ct = default)
+        => SendAsync(HttpMethod.Get, _s.MapListPath, body: null, ct);
+
+    /// <summary>AMR에 저장된 맵을 운영 맵으로 로드한다.</summary>
+    public Task<AmrRestResult> LoadMapAsync(string mapName, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(mapName))
+            return Task.FromResult(AmrRestResult.Fail("불러올 맵을 선택하세요."));
+        return SendAsync(HttpMethod.Post, _s.MapLoadPath, new { name = mapName.Trim() }, ct);
     }
 
     private async Task<AmrRestResult> SendAsync(HttpMethod method, string path, object? body, CancellationToken ct,

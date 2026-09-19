@@ -25,6 +25,14 @@ public class AmrRestSettings
     /// <summary>현재 위치·맵 좌표 라이다 점 조회.</summary>
     public string PosePath { get; set; } = "/robot/pose";
 
+    /// <summary>센서별 필터링된 라이다 각도·거리 원시값 조회.</summary>
+    public string LidarPath { get; set; } = "/robot/lidar";
+
+    /// <summary>활성 라이다의 로봇 중심 기준 설치 위치(m/rad).</summary>
+    public double LidarOffsetX { get; set; } = 0.19;
+    public double LidarOffsetY { get; set; }
+    public double LidarOffsetRz { get; set; }
+
     /// <summary>맵 내용 조회 경로. 맵 이름은 URL 마지막 segment 로 붙인다.</summary>
     public string MapContentPath { get; set; } = "/map/content/name";
 
@@ -32,6 +40,9 @@ public class AmrRestSettings
     public string MapScanOnPath { get; set; } = "/map/scan/on";
     public string MapScanOffPath { get; set; } = "/map/scan/off";
     public string MapSavePath { get; set; } = "/map/save";
+    public string MapCachePath { get; set; } = "/map/cache";
+    public string MapListPath { get; set; } = "/map";
+    public string MapLoadPath { get; set; } = "/map/load";
 
     /// <summary>
     /// AMR 운영 맵 이름(예: <c>260903_133609.map</c>).

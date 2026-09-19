@@ -62,6 +62,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         NavItems = new ObservableCollection<NavItem>
         {
             new("Dashboard",     "🏠", typeof(HomeViewModel)),
+            new("Map Builder",   "🗺", typeof(MapBuilderViewModel)),
             new("Teaching",      "✏️", typeof(TeachingViewModel)),
             // 접이식 그룹 — 클릭 시 하위 메뉴 펼침/접힘(기본 접힘). 하위 항목은 펼칠 때 목록에 삽입된다.
             new("RECIPE",        "🧾", null, new NavItem[]

@@ -139,6 +139,7 @@ internal static class ServiceRegistration
         services.AddTransient<ComingSoonViewModel>();
         services.AddTransient<IoModuleViewModel>();
         services.AddTransient<AmrViewModel>();
+        services.AddTransient<MapBuilderViewModel>();
         services.AddTransient<ParametersViewModel>();
         services.AddTransient<InspectionRecipesViewModel>();
         services.AddTransient<CobotViewModel>();
