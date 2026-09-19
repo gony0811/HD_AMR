@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="210.0mm" height="297.0mm" viewBox="0 0 210.0 297.0" shape-rendering="crispEdges">
+<rect width="210.0" height="297.0" fill="#fff"/>
+<rect x="45.0" y="60.0" width="120.0" height="120.0" fill="#000"/>
+<rect x="65.0" y="80.0" width="20.0" height="20.0" fill="#fff"/>
+<rect x="105.0" y="80.0" width="20.0" height="20.0" fill="#fff"/>
+<rect x="125.0" y="80.0" width="20.0" height="20.0" fill="#fff"/>
+<rect x="85.0" y="100.0" width="20.0" height="20.0" fill="#fff"/>
+<rect x="125.0" y="100.0" width="20.0" height="20.0" fill="#fff"/>
+<rect x="105.0" y="120.0" width="20.0" height="20.0" fill="#fff"/>
+<rect x="125.0" y="120.0" width="20.0" height="20.0" fill="#fff"/>
+<rect x="105.0" y="140.0" width="20.0" height="20.0" fill="#fff"/>
+<rect x="25.0" y="40.0" width="160.0" height="160.0" fill="none" stroke="#bbb" stroke-width="0.2" stroke-dasharray="2 2"/>
+<text x="105.0" y="212.0" font-family="Helvetica,Arial" font-size="5" text-anchor="middle">DICT_4X4_50 · ID 0 · 검은 사각형 한 변 120 mm · 인쇄 배율 100% (실제 크기)</text>
+<text x="105.0" y="219.0" font-family="Helvetica,Arial" font-size="4" text-anchor="middle" fill="#444">이 글자가 바로 읽히는 방향에서 +X = 오른쪽, +Y = 위쪽, +Z = 인쇄면 위</text>
+<rect x="55.0" y="232.0" width="100" height="1" fill="#000"/>
+<rect x="54.9" y="229.0" width="0.2" height="3" fill="#000"/>
+<rect x="64.9" y="229.0" width="0.2" height="3" fill="#000"/>
+<rect x="74.9" y="229.0" width="0.2" height="3" fill="#000"/>
+<rect x="84.9" y="229.0" width="0.2" height="3" fill="#000"/>
+<rect x="94.9" y="229.0" width="0.2" height="3" fill="#000"/>
+<rect x="104.9" y="229.0" width="0.2" height="3" fill="#000"/>
+<rect x="114.9" y="229.0" width="0.2" height="3" fill="#000"/>
+<rect x="124.9" y="229.0" width="0.2" height="3" fill="#000"/>
+<rect x="134.9" y="229.0" width="0.2" height="3" fill="#000"/>
+<rect x="144.9" y="229.0" width="0.2" height="3" fill="#000"/>
+<rect x="154.9" y="229.0" width="0.2" height="3" fill="#000"/>
+<text x="105.0" y="239.0" font-family="Helvetica,Arial" font-size="4" text-anchor="middle">인쇄 확인용 100 mm 눈금 — 자로 재서 100.0 mm 인지 확인</text>
+</svg>
