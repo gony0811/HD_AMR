@@ -19,6 +19,10 @@ public sealed partial class AmrMapViewModel : ObservableObject, IDisposable
     private string? _loadedMapName;
     private int _telemetryBusy;
     [ObservableProperty] private string _mapName;
+    /// <summary>마지막으로 조회에 성공한 운영 맵 이름. 대시보드는 입력 없이 이 이름으로 고정 표시한다.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ActiveMapText))]
+    private string _activeMapName;
     [ObservableProperty] private Bitmap? _mapImage;
     [ObservableProperty] private string _mapLoadStatus = "맵을 가져오세요.";
     [ObservableProperty] private string _mapSummary = "";
@@ -40,11 +44,16 @@ public sealed partial class AmrMapViewModel : ObservableObject, IDisposable
     {
         _rest = rest;
         _settings = settings.Value;
-        _mapName = _settings.MapName;
+        // AMR 페이지에서 마지막으로 확정한 맵이 appsettings 기본값보다 우선한다.
+        _activeMapName = ReadSavedMapName() ?? _settings.MapName;
+        _mapName = _activeMapName;
         _resolution = _settings.MapResolution > 0 ? (decimal)_settings.MapResolution : null;
     }
 
     public bool HasMapImage => MapImage is not null;
+    public string ActiveMapText => string.IsNullOrWhiteSpace(ActiveMapName)
+        ? "운영 맵 미설정 · AMR 페이지에서 맵을 지정하세요."
+        : $"운영 맵: {ActiveMapName}";
     public double ImageWidth => MapImage?.PixelSize.Width ?? 1;
     public double ImageHeight => MapImage?.PixelSize.Height ?? 1;
     public double CanvasWidth => ImageWidth * Zoom;
@@ -175,6 +184,7 @@ public sealed partial class AmrMapViewModel : ObservableObject, IDisposable
                 ? (decimal)scale : name == _loadedMapName ? Resolution
                 : _settings.MapResolution > 0 ? (decimal)_settings.MapResolution : null;
             _loadedMapName = name;
+            SetActiveMap(name);
             var old = MapImage;
             MapImage = bitmap;
             var nodeCount = data.TryGetProperty("node", out var nodes) && nodes.ValueKind == JsonValueKind.Array
@@ -195,6 +205,44 @@ public sealed partial class AmrMapViewModel : ObservableObject, IDisposable
         {
             MapLoadStatus = $"맵 조회 실패: {ex.Message}" + (HasMapImage ? " · 이전 맵 표시 중" : "");
         }
+    }
+
+    /// <summary>운영 맵 이름을 확정하고 다음 실행에도 유지되도록 저장한다.</summary>
+    public void SetActiveMap(string name)
+    {
+        name = name.Trim();
+        if (name.Length == 0 || ActiveMapName == name) return;
+        ActiveMapName = name;
+        SaveMapName(name);
+    }
+
+    /// <summary>확정된 운영 맵이 아직 표시되지 않았으면 가져온다(대시보드 진입 시).</summary>
+    public async Task EnsureActiveMapLoadedAsync()
+    {
+        if (string.IsNullOrWhiteSpace(ActiveMapName) || LoadMapCommand.IsRunning) return;
+        if (HasMapImage && _loadedMapName == ActiveMapName) return;
+        MapName = ActiveMapName;
+        await LoadMapCommand.ExecuteAsync(null);
+    }
+
+    private static string SavedMapNamePath => Path.Combine(AppContext.BaseDirectory, "amr_active_map.json");
+
+    private static string? ReadSavedMapName()
+    {
+        try
+        {
+            if (!File.Exists(SavedMapNamePath)) return null;
+            using var doc = JsonDocument.Parse(File.ReadAllText(SavedMapNamePath));
+            var name = doc.RootElement.TryGetProperty("mapName", out var value) ? value.GetString() : null;
+            return string.IsNullOrWhiteSpace(name) ? null : name.Trim();
+        }
+        catch { return null; }
+    }
+
+    private static void SaveMapName(string name)
+    {
+        try { File.WriteAllText(SavedMapNamePath, JsonSerializer.Serialize(new { mapName = name })); }
+        catch { /* 저장 실패는 표시 기능에 영향이 없다. 다음 실행 시 appsettings 값으로 시작한다. */ }
     }
 
     private static bool ReadNumber(JsonElement element, string name, out double value)
