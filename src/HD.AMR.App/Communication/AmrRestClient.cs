@@ -70,22 +70,6 @@ public sealed class AmrRestClient : IDisposable
         return SendAsync(HttpMethod.Get, path, body: null, ct);
     }
 
-    /// <summary>AMR SLAM 맵 스캔을 시작한다.</summary>
-    public Task<AmrRestResult> StartMapScanAsync(CancellationToken ct = default)
-        => SendAsync(HttpMethod.Post, _s.MapScanOnPath, body: null, ct);
-
-    /// <summary>진행 중인 SLAM 맵 스캔을 종료한다.</summary>
-    public Task<AmrRestResult> StopMapScanAsync(CancellationToken ct = default)
-        => SendAsync(HttpMethod.Post, _s.MapScanOffPath, body: null, ct);
-
-    /// <summary>현재 AMR의 맵/플랜/구역을 지정한 이름으로 저장한다.</summary>
-    public Task<AmrRestResult> SaveMapAsync(string mapName, CancellationToken ct = default)
-    {
-        if (string.IsNullOrWhiteSpace(mapName))
-            return Task.FromResult(AmrRestResult.Fail("저장할 맵 이름을 입력하세요."));
-        return SendAsync(HttpMethod.Post, _s.MapSavePath, new { mapName = mapName.Trim() }, ct);
-    }
-
     private async Task<AmrRestResult> SendAsync(HttpMethod method, string path, object? body, CancellationToken ct,
         bool logResponseBody = true)
     {

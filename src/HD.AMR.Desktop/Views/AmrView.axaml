@@ -70,32 +70,8 @@
 
                 <Border Classes="card">
                     <StackPanel Spacing="6">
-                        <Grid ColumnDefinitions="*,Auto">
-                            <TextBlock Text="신규 맵 작성" FontWeight="SemiBold" />
-                            <Border Grid.Column="1" Classes="badge" Classes.on="{Binding Map.IsScanning}"
-                                    Classes.off="{Binding !Map.IsScanning}">
-                                <TextBlock Text="{Binding Map.MapScanStateText}" />
-                            </Border>
-                        </Grid>
-                        <TextBlock Classes="muted" FontSize="12" TextWrapping="Wrap"
-                                   Text="스캔 시작 후 로봇을 작성 구역으로 주행하고, 완료되면 스캔 종료 후 저장하세요. 맵 작성 중에는 운영 작업을 실행하지 마세요." />
-                        <Grid ColumnDefinitions="*,Auto,Auto">
-                            <TextBox Grid.Column="0" Text="{Binding Map.NewMapName}" Watermark="예: 260919_143000" />
-                            <Button Grid.Column="1" Margin="6,0,0,0" Content="스캔 시작"
-                                    Command="{Binding Map.StartMapScanCommand}" />
-                            <Button Grid.Column="2" Margin="6,0,0,0" Content="스캔 종료"
-                                    Command="{Binding Map.StopMapScanCommand}" />
-                        </Grid>
-                        <Button Content="현재 스캔 결과를 새 맵으로 저장" Command="{Binding Map.SaveNewMapCommand}" />
-                        <ProgressBar IsIndeterminate="True" Height="4" IsVisible="{Binding Map.IsMapOperationBusy}" />
-                        <TextBlock Classes="muted" FontSize="12" Text="{Binding Map.MapScanStatus}" TextWrapping="Wrap" />
-                    </StackPanel>
-                </Border>
-
-                <Border Classes="card">
-                    <StackPanel Spacing="6">
                         <TextBlock Text="AMR 맵 내용 (REST)" FontWeight="SemiBold" />
-                        <TextBlock Classes="muted" FontSize="12" TextWrapping="Wrap" Text="현재 API는 맵 이름을 요구합니다. 운영 맵 이름을 입력하거나 AmrRest:MapName에 설정하세요." />
+                        <TextBlock Classes="muted" FontSize="12" TextWrapping="Wrap" Text="맵 작성·저장은 벤더(TARS) 앱에서 수행합니다. 현재 API는 맵 이름을 요구하므로 운영 맵 이름을 입력하거나 AmrRest:MapName에 설정하세요." />
                         <TextBlock Classes="muted" FontFamily="monospace" FontSize="11" TextWrapping="Wrap" Text="{Binding Map.MapRequestTarget, StringFormat='호출 대상: {0}'}" />
                         <Grid ColumnDefinitions="*,Auto">
                             <TextBox Grid.Column="0" Text="{Binding Map.MapName}" Watermark="예: 260903_133609.map" />

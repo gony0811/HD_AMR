@@ -28,11 +28,6 @@ public class AmrRestSettings
     /// <summary>맵 내용 조회 경로. 맵 이름은 URL 마지막 segment 로 붙인다.</summary>
     public string MapContentPath { get; set; } = "/map/content/name";
 
-    /// <summary>새 맵 스캔 시작/종료 및 현재 맵 저장 경로.</summary>
-    public string MapScanOnPath { get; set; } = "/map/scan/on";
-    public string MapScanOffPath { get; set; } = "/map/scan/off";
-    public string MapSavePath { get; set; } = "/map/save";
-
     /// <summary>
     /// AMR 운영 맵 이름(예: <c>260903_133609.map</c>).
     /// 현재 확인된 API/Modbus 계약은 활성 맵 이름을 노출하지 않아 설정으로 보유한다.
