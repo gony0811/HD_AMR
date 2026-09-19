@@ -25,8 +25,8 @@
                     </Border>
                 </Grid>
                 <WrapPanel VerticalAlignment="Center">
-                    <TextBox Width="220" Margin="0,0,8,6" Text="{Binding Map.MapName}" Watermark="맵 이름" />
-                    <Button Margin="0,0,16,6" Content="맵 가져오기" Command="{Binding Map.LoadMapCommand}" />
+                    <TextBlock Margin="0,8,16,6" FontWeight="SemiBold" Text="{Binding Map.ActiveMapText}"
+                               ToolTip.Tip="Map Builder 또는 AMR 페이지에서 지정한 운영 맵입니다." />
                     <TextBlock Margin="0,8,8,6" Text="해상도 (m/픽셀)" />
                     <NumericUpDown Width="140" Margin="0,0,0,6" Minimum="0.000001" Maximum="1000"
                                    Increment="0.01" FormatString="0.######" Value="{Binding Map.Resolution}" />

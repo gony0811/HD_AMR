@@ -112,8 +112,14 @@
                                                IsEnabled="{Binding !AutoCenterOrigin}" />
                             </StackPanel>
                         </Grid>
+                        <Grid ColumnDefinitions="*,*">
+                            <Button Margin="0,0,4,0" HorizontalAlignment="Stretch" Content="현재 위치로 재추정"
+                                    Command="{Binding ReestimateOriginCommand}" />
+                            <Button Grid.Column="1" Margin="4,0,0,0" HorizontalAlignment="Stretch" Content="원점 (0,0)"
+                                    Command="{Binding ZeroOriginCommand}" />
+                        </Grid>
                         <TextBlock Classes="muted" FontSize="11" TextWrapping="Wrap"
-                                   Text="캐시 API는 맵 원점을 제공하지 않습니다. 자동 모드는 현재 포즈를 이미지 중앙으로 추정하며, 필요하면 해제 후 원점을 조정하세요." />
+                                   Text="캐시 API는 맵 원점을 제공하지 않습니다. 자동 모드는 스캔 시작·이미지 크기 변경 시 한 번만 현재 포즈를 이미지 중앙으로 추정해 고정합니다. 라이다가 벽과 어긋나면 재추정하거나 원점을 직접 조정하세요." />
                         <TextBlock Classes="muted" FontSize="12" TextWrapping="Wrap"
                                    Text="파란 원/선: 현재 AMR 위치·방향&#x0a;빨간 점: 현재 포즈로 재계산한 라이다&#x0a;흰색/회색: AMR가 반환한 원본 캐시 맵" />
                     </StackPanel>

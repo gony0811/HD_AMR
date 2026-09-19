@@ -41,8 +41,7 @@ public sealed partial class HomeViewModel : ViewModelBase
         SelectedMapId = _vda.CurrentMapId;
         _ = RefreshAsync();
         _timer.Start();
-        if (!Map.HasMapImage && !string.IsNullOrWhiteSpace(Map.MapName) && !Map.LoadMapCommand.IsRunning)
-            _ = Map.LoadMapCommand.ExecuteAsync(null);
+        _ = Map.EnsureActiveMapLoadedAsync();
     }
 
     public override void OnDeactivated() => _timer.Stop();

@@ -59,11 +59,14 @@ public sealed class AmrMapCanvas : Control
         // Render 좌표는 이미 이 컨트롤의 좌상단이 (0, 0)이다. 부모 기준 Bounds.X/Y를
         // 목적지에 다시 사용하면 배경 맵만 그만큼 밀리고, 로컬 좌표인 라이다/로봇과 분리된다.
         var localBounds = new Rect(0, 0, Bounds.Width, Bounds.Height);
-        context.DrawImage(image, new Rect(image.Size), localBounds);
-        if (Resolution <= 0) return;
-
         var sx = Bounds.Width / image.PixelSize.Width;
         var sy = Bounds.Height / image.PixelSize.Height;
+        // 점유 격자 맵은 1px 벽이 많다. 확대 시 보간하면 벽이 번지고, 축소 시 저품질 보간은 벽이 끊겨 보인다.
+        var interpolation = Math.Min(sx, sy) >= 1 ? BitmapInterpolationMode.None : BitmapInterpolationMode.HighQuality;
+        using (context.PushRenderOptions(new RenderOptions { BitmapInterpolationMode = interpolation }))
+            context.DrawImage(image, new Rect(image.Size), localBounds);
+        if (Resolution <= 0) return;
+
         if (LidarPoints is { } points)
         {
             var radius = Math.Clamp(Math.Min(sx, sy) * 1.15, 1.0, 3.0);

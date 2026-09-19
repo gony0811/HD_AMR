@@ -17,6 +17,8 @@ public sealed partial class MapBuilderViewModel : ViewModelBase
     private readonly AmrRestSettings _settings;
     private readonly DispatcherTimer _timer;
     private int _refreshBusy;
+    private string? _lastCachePayload;
+    private (int Width, int Height) _originEstimatedFor;
 
     public AmrMapViewModel Map { get; }
 
@@ -72,7 +74,24 @@ public sealed partial class MapBuilderViewModel : ViewModelBase
 
     partial void OnAutoCenterOriginChanged(bool value)
     {
-        if (value) UpdateEstimatedOrigin();
+        if (value) UpdateEstimatedOrigin(force: true);
+    }
+
+    /// <summary>현재 포즈를 이미지 중앙으로 보고 원점을 다시 추정한다.</summary>
+    [RelayCommand]
+    private void ReestimateOrigin()
+    {
+        if (AutoCenterOrigin) UpdateEstimatedOrigin(force: true);
+        else AutoCenterOrigin = true;
+    }
+
+    /// <summary>저장 맵과 같은 좌하단 (0,0) 원점을 사용한다.</summary>
+    [RelayCommand]
+    private void ZeroOrigin()
+    {
+        AutoCenterOrigin = false;
+        LiveOriginX = 0;
+        LiveOriginY = 0;
     }
 
     [RelayCommand] private void ZoomIn() => Zoom = Math.Min(5, Zoom + .25);
@@ -126,6 +145,7 @@ public sealed partial class MapBuilderViewModel : ViewModelBase
             if (!result.Ok)
                 throw new InvalidOperationException(result.Message ?? $"맵 로드 API 오류 ({result.Code})");
             Map.MapName = selected.Name;
+            Map.SetActiveMap(selected.Name);
             await Map.LoadMapCommand.ExecuteAsync(null);
             await Map.RefreshTelemetryAsync();
             MapListStatus = $"운영 맵 적용 완료 {DateTime.Now:HH:mm:ss} · {selected.Name}";
@@ -136,12 +156,24 @@ public sealed partial class MapBuilderViewModel : ViewModelBase
 
     public override void OnActivated()
     {
+        Map.PropertyChanged += OnMapPropertyChanged;
         _timer.Start();
         _ = RefreshAsync();
         _ = RefreshMapListAsync();
     }
 
-    public override void OnDeactivated() => _timer.Stop();
+    public override void OnDeactivated()
+    {
+        _timer.Stop();
+        Map.PropertyChanged -= OnMapPropertyChanged;
+    }
+
+    private void OnMapPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        // 새 스캔이 시작되면 SLAM 좌표계가 바뀌므로 다음 프레임에서 원점을 다시 추정한다.
+        if (e.PropertyName == nameof(AmrMapViewModel.IsScanning) && Map.IsScanning)
+            _originEstimatedFor = default;
+    }
 
     private async Task RefreshAsync()
     {
@@ -168,15 +200,43 @@ public sealed partial class MapBuilderViewModel : ViewModelBase
             var comma = encoded.IndexOf(',');
             if (encoded.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase) && comma >= 0)
                 encoded = encoded[(comma + 1)..];
-            using var stream = new MemoryStream(Convert.FromBase64String(encoded));
-            var bitmap = new Bitmap(stream);
+            if (encoded == _lastCachePayload && LiveMapImage is not null)
+            {
+                UpdateEstimatedOrigin();
+                return; // 변화 없는 프레임은 다시 디코딩하지 않는다.
+            }
+            // 수 MB base64/PNG 디코딩을 UI 스레드에서 하면 500ms마다 화면이 끊긴다.
+            var bitmap = await Task.Run(() =>
+            {
+                var bytes = Convert.FromBase64String(encoded);
+                if (!IsCompleteImage(bytes))
+                    throw new InvalidOperationException("기록 중 잘린 프레임");
+                using var stream = new MemoryStream(bytes);
+                return new Bitmap(stream);
+            });
+            _lastCachePayload = encoded;
             var old = LiveMapImage;
             LiveMapImage = bitmap;
             UpdateEstimatedOrigin();
             CacheStatus = $"AMR 원본 캐시 {bitmap.PixelSize.Width}×{bitmap.PixelSize.Height}px · {DateTime.Now:HH:mm:ss.fff}";
             old?.Dispose();
         }
-        catch (Exception ex) { CacheStatus = $"실시간 맵 조회 실패: {ex.Message}"; }
+        catch (Exception ex)
+        {
+            CacheStatus = $"실시간 맵 조회 실패: {ex.Message}" + (HasLiveMap ? " · 이전 프레임 유지" : "");
+        }
+    }
+
+    /// <summary>
+    /// AMR가 캐시 PNG를 쓰는 도중 읽히면 끝이 잘린 파일이 온다. Skia는 이를 예외 없이
+    /// 아래쪽이 비거나 깨진 이미지로 디코딩하므로 PNG 종료 청크(IEND)를 직접 확인한다.
+    /// </summary>
+    private static bool IsCompleteImage(byte[] bytes)
+    {
+        ReadOnlySpan<byte> pngSignature = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        if (bytes.Length < 8 || !bytes.AsSpan(0, 8).SequenceEqual(pngSignature)) return bytes.Length > 0;
+        ReadOnlySpan<byte> iend = [0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82];
+        return bytes.Length >= 20 && bytes.AsSpan(bytes.Length - 8).SequenceEqual(iend);
     }
 
     private async Task RefreshRawLidarAsync()
@@ -216,10 +276,15 @@ public sealed partial class MapBuilderViewModel : ViewModelBase
         }
     }
 
-    private void UpdateEstimatedOrigin()
+    private void UpdateEstimatedOrigin(bool force = false)
     {
         if (!AutoCenterOrigin || LiveMapImage is null || Map.ResolutionValue <= 0 || !Map.HasTelemetryPose) return;
-        // /map/cache에는 origin이 없어 스캔 중 현재 포즈를 이미지 중앙으로 추정한다.
+        // /map/cache에는 origin이 없어 현재 포즈를 이미지 중앙으로 추정한다. 매 프레임 다시 추정하면
+        // 로봇은 항상 중앙에 고정되고 라이다만 맵과 어긋나 움직이므로, 이미지 크기가 바뀌거나
+        // 새 스캔이 시작될 때만 한 번 추정해 고정한다.
+        var size = (LiveMapImage.PixelSize.Width, LiveMapImage.PixelSize.Height);
+        if (!force && _originEstimatedFor == size) return;
+        _originEstimatedFor = size;
         LiveOriginX = Map.RobotX - LiveMapImage.PixelSize.Width * Map.ResolutionValue / 2;
         LiveOriginY = Map.RobotY - LiveMapImage.PixelSize.Height * Map.ResolutionValue / 2;
     }

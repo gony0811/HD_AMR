@@ -71,12 +71,13 @@
                 <Border Classes="card">
                     <StackPanel Spacing="6">
                         <TextBlock Text="AMR 맵 내용 (REST)" FontWeight="SemiBold" />
-                        <TextBlock Classes="muted" FontSize="12" TextWrapping="Wrap" Text="현재 API는 맵 이름을 요구합니다. 운영 맵 이름을 입력하거나 AmrRest:MapName에 설정하세요." />
+                        <TextBlock Classes="muted" FontSize="12" TextWrapping="Wrap" Text="맵 이름을 입력하고 가져오면 운영 맵으로 지정되어 대시보드에 표시됩니다. (Map Builder에서 적용한 맵도 동일하게 반영)" />
                         <TextBlock Classes="muted" FontFamily="monospace" FontSize="11" TextWrapping="Wrap" Text="{Binding Map.MapRequestTarget, StringFormat='호출 대상: {0}'}" />
                         <Grid ColumnDefinitions="*,Auto">
                             <TextBox Grid.Column="0" Text="{Binding Map.MapName}" Watermark="예: 260903_133609.map" />
                             <Button Grid.Column="1" Margin="6,0,0,0" Content="맵 가져오기" Command="{Binding Map.LoadMapCommand}" />
                         </Grid>
+                        <TextBlock FontSize="12" FontWeight="SemiBold" Text="{Binding Map.ActiveMapText}" TextWrapping="Wrap" />
                         <TextBlock Classes="muted" FontSize="12" Text="{Binding Map.MapLoadStatus}" TextWrapping="Wrap" />
                         <TextBlock FontSize="12" Text="{Binding Map.MapSummary}" TextWrapping="Wrap" />
                         <Border BorderBrush="{DynamicResource AppBorderBrush}" BorderThickness="1" MinHeight="180"
