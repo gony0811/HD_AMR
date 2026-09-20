@@ -38,7 +38,7 @@ public sealed partial class ArucoCalibrationViewModel : ViewModelBase
     [ObservableProperty] private int _tool = 2;
 
     [ObservableProperty] private int _markerId;
-    [ObservableProperty] private double _markerSizeMm = 100;
+    [ObservableProperty] private double _markerSizeMm = 120;
     [ObservableProperty] private int _selectedStep;
 
     // ── 실시간 카메라 뷰(마커 검출 오버레이 포함) ──

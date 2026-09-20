@@ -24,7 +24,7 @@ public sealed partial class ArucoMountCalibrationViewModel : ViewModelBase
 
     [ObservableProperty] private int _tool = 2;
     [ObservableProperty] private int _markerId;
-    [ObservableProperty] private double _markerSizeMm = 100;
+    [ObservableProperty] private double _markerSizeMm = 120;
     [ObservableProperty] private double _markerQzMm;
     [ObservableProperty] private bool _qzConfirmed;
     [ObservableProperty] private bool _busy;
