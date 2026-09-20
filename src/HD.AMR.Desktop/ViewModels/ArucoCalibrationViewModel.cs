@@ -31,7 +31,7 @@ public sealed partial class ArucoCalibrationViewModel : ViewModelBase
     [ObservableProperty] private int _tool = 2;
 
     [ObservableProperty] private int _markerId;
-    [ObservableProperty] private double _markerSizeMm = 100;
+    [ObservableProperty] private double _markerSizeMm = 120;
     [ObservableProperty] private int _selectedStep;
 
     public ArucoCalibrationViewModel(IServiceScopeFactory scopeFactory,

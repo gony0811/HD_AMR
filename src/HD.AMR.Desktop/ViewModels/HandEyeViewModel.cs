@@ -40,7 +40,7 @@ public sealed partial class HandEyeViewModel : ViewModelBase
 
     public ObservableCollection<HandEyeRow> Rows { get; } = new();
 
-    [ObservableProperty] private double _markerSizeMm = 100;
+    [ObservableProperty] private double _markerSizeMm = 120;
     /// <summary>ArUco 장착 보정 화면과 반드시 같은 번호여야 한다(그 화면 기본값 2).</summary>
     [ObservableProperty] private int _tool = 2;
     [ObservableProperty] private int _markerId;
