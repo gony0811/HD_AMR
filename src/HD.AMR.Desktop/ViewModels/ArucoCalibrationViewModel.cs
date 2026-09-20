@@ -1,4 +1,7 @@
+using Avalonia.Media.Imaging;
+using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
+using HD.AMR.App.Communication.Vision;
 using HD.AMR.App.Service;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -19,6 +22,10 @@ namespace HD.AMR.Desktop.ViewModels;
 public sealed partial class ArucoCalibrationViewModel : ViewModelBase
 {
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly CameraService _camera;
+    private readonly DispatcherTimer _previewTimer;
+    private readonly CancellationTokenSource _cts = new();
+    private bool _previewBusy;
     private bool _loaded;
 
     /// <summary>① 핸드아이 측정 단계.</summary>
@@ -34,19 +41,32 @@ public sealed partial class ArucoCalibrationViewModel : ViewModelBase
     [ObservableProperty] private double _markerSizeMm = 100;
     [ObservableProperty] private int _selectedStep;
 
-    public ArucoCalibrationViewModel(IServiceScopeFactory scopeFactory,
+    // ── 실시간 카메라 뷰(마커 검출 오버레이 포함) ──
+    [ObservableProperty] private Bitmap? _previewImage;
+    [ObservableProperty] private string _previewStatusText = "카메라 대기 중…";
+    [ObservableProperty] private bool _targetMarkerFound;
+
+    public ArucoCalibrationViewModel(IServiceScopeFactory scopeFactory, CameraService camera,
         HandEyeViewModel handEyeStep, ArucoMountCalibrationViewModel mountStep)
     {
         _scopeFactory = scopeFactory;
+        _camera = camera;
         HandEyeStep = handEyeStep;
         MountStep = mountStep;
+        // ①에서 T_T_C 를 저장하는 즉시 ② 탭 게이트(MountStepReady)를 다시 평가한다 —
+        // 이 배선이 없으면 저장해도 ② 탭이 계속 잠겨 있다.
+        HandEyeStep.HandEyeSaved += async () => await RefreshAfterHandEyeSaveAsync();
+        // CameraViewModel 과 동일한 ~10fps 폴링 — 프레임을 가져와 마커를 그려 넣은 JPEG 를 표시한다.
+        _previewTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
+        _previewTimer.Tick += async (_, _) => await PollPreviewAsync();
     }
 
     public override async void OnActivated()
     {
-        // 두 단계 모두 활성화 — 각자 폴링 타이머와 저장값 로드를 시작한다.
+        // 두 단계 모두 활성화. ②의 저장값 로드는 await 로 완료를 보장한다 — 로드가 끝나기 전에
+        // 아래 PushShared()가 MountStepReady 를 평가하면 ② 탭이 잠긴 채 재평가되지 않는다.
         HandEyeStep.OnActivated();
-        MountStep.OnActivated();
+        await MountStep.ReloadAsync();
 
         if (!_loaded)
         {
@@ -63,11 +83,16 @@ public sealed partial class ArucoCalibrationViewModel : ViewModelBase
         }
 
         PushShared();
+
+        _previewTimer.Start();
+        await EnsureStreamingAsync();
     }
 
     // 내비게이션이 OnDeactivated → Dispose(→ OnDeactivated) 로 두 번 호출한다. 하위도 멱등이어야 한다.
     public override void OnDeactivated()
     {
+        _previewTimer.Stop();
+        PreviewImage = null;
         HandEyeStep.OnDeactivated();
         MountStep.OnDeactivated();
     }
@@ -75,8 +100,77 @@ public sealed partial class ArucoCalibrationViewModel : ViewModelBase
     public override void Dispose()
     {
         base.Dispose();
+        _cts.Cancel();
+        _cts.Dispose();
         HandEyeStep.Dispose();
         MountStep.Dispose();
+    }
+
+    /// <summary>화면 진입 시 스트림이 꺼져 있으면 자동 시작한다. 이탈 시에는 끄지 않는다(Camera 화면과 공유).</summary>
+    private async Task EnsureStreamingAsync()
+    {
+        if (!_camera.IsConnected || _camera.IsStreaming) return;
+        try { await _camera.StartStreamAsync(_cts.Token); }
+        catch (Exception ex) { SetPreviewStatus($"카메라 스트림 시작 실패: {ex.Message}", false); }
+    }
+
+    private async Task PollPreviewAsync()
+    {
+        if (_previewBusy) return;
+        _previewBusy = true;
+        try
+        {
+            if (!_camera.IsConnected) { PreviewImage = null; SetPreviewStatus("카메라 미연결", false); return; }
+            if (!_camera.IsStreaming) { PreviewImage = null; SetPreviewStatus("카메라 스트리밍 꺼짐", false); return; }
+
+            var frame = _camera.LatestColor;
+            if (frame is null || DateTime.UtcNow - _camera.LastFrameAt > TimeSpan.FromSeconds(1))
+            {
+                SetPreviewStatus("프레임 수신 없음", false);
+                return;
+            }
+
+            byte[]? jpeg;
+            if (OperatingSystem.IsWindows())
+            {
+                var target = MarkerId;
+                var result = await Task.Run(() => ArucoPoseEstimator.DetectAndRender(frame, target));
+                jpeg = result?.Jpeg;
+                if (result is not null)
+                {
+                    SetPreviewStatus(result.DetectedIds.Length == 0
+                            ? "마커 미검출"
+                            : $"마커 검출: [{string.Join(", ", result.DetectedIds.OrderBy(i => i))}]" +
+                              (result.TargetFound ? $" — ✔ 대상 ID {target} 검출됨" : $" — 대상 ID {target} 없음"),
+                        result.TargetFound);
+                }
+                else
+                {
+                    SetPreviewStatus($"검출 불가한 프레임 포맷({frame.PixelFormat}) — 영상만 표시", false);
+                    jpeg = await _camera.GetLatestColorJpegAsync(_camera.Settings.JpegQuality, _cts.Token);
+                }
+            }
+            else
+            {
+                // OpenCV 네이티브는 Windows 전용 — 다른 플랫폼에서는 검출 없이 영상만 보여준다.
+                SetPreviewStatus("이 플랫폼에서는 검출 미지원 — 영상만 표시", false);
+                jpeg = await _camera.GetLatestColorJpegAsync(_camera.Settings.JpegQuality, _cts.Token);
+            }
+
+            if (jpeg is { Length: > 0 })
+            {
+                using var ms = new MemoryStream(jpeg);
+                PreviewImage = new Bitmap(ms);
+            }
+        }
+        catch { /* 프레임 처리 오류 무시 — 다음 틱 재시도 */ }
+        finally { _previewBusy = false; }
+    }
+
+    private void SetPreviewStatus(string text, bool targetFound)
+    {
+        PreviewStatusText = text;
+        TargetMarkerFound = targetFound;
     }
 
     // 공유 값이 바뀌면 즉시 두 단계에 반영 — 한쪽만 바뀌는 상태를 만들지 않는다.
@@ -106,10 +200,10 @@ public sealed partial class ArucoCalibrationViewModel : ViewModelBase
         : "T_T_C 가 미설정입니다(전부 0) — ① 핸드아이 측정을 먼저 완료하세요. " +
           "미설정 상태로 ②를 돌리면 오차가 T_A_B 로 흡수되어 잔차로는 드러나지 않습니다.";
 
-    /// <summary>① 저장 직후 ②가 새 T_T_C 를 집도록 다시 읽힌다.</summary>
-    public void RefreshAfterHandEyeSave()
+    /// <summary>① 저장 직후 ②가 새 T_T_C 를 집도록 다시 읽는다 — 로드 완료 후 게이트를 재평가한다.</summary>
+    public async Task RefreshAfterHandEyeSaveAsync()
     {
-        MountStep.OnActivated();
+        await MountStep.ReloadAsync();
         PushShared();
     }
 }

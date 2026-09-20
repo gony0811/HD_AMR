@@ -14,6 +14,14 @@
             <Setter Property="FontSize" Value="12" />
             <Setter Property="TextWrapping" Value="Wrap" />
         </Style>
+        <!-- 프리뷰 상태 배지: 기본 회색, 대상 마커 검출 시 초록 강조 -->
+        <Style Selector="TextBlock.previewStatus">
+            <Setter Property="Foreground" Value="{DynamicResource AppMutedTextBrush}" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+        <Style Selector="TextBlock.previewStatus.found">
+            <Setter Property="Foreground" Value="{DynamicResource AppGoodBrush}" />
+        </Style>
     </UserControl.Styles>
 
     <StackPanel MaxWidth="1000" HorizontalAlignment="Left">
@@ -44,6 +52,22 @@
                                Text="⚠ Tool 번호는 두 단계가 반드시 같아야 합니다 — T_T_C 는 그 tool 의 TCP 기준이고 ②가 같은 기준의 T_B_T 와 합성합니다. 어긋나면 결과가 tool 오프셋만큼 틀리는데 잔차로는 전혀 드러나지 않습니다. 그래서 이 화면이 하나만 들고 두 단계에 밀어넣습니다. 카메라에 컨트롤러 TOOL 이 없으면 0(플랜지)을 쓰면 됩니다." />
                 </Border>
                 <TextBlock Text="{Binding StepGuideText}" FontWeight="SemiBold" TextWrapping="Wrap" />
+            </StackPanel>
+        </Border>
+
+        <!-- 실시간 카메라 뷰 — 마커가 실제로 읽히는지 눈으로 확인한다. 검출 박스+ID 는 영상에 그려져 온다. -->
+        <Border Classes="card">
+            <StackPanel Spacing="8">
+                <TextBlock Classes="cardHead" Text="카메라 실시간 뷰 (ArUco 검출)" />
+                <Border Height="280" Background="Black" CornerRadius="6" ClipToBounds="True">
+                    <Panel>
+                        <TextBlock Text="카메라 영상 없음" Foreground="Gray"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        <Image Source="{Binding PreviewImage}" Stretch="Uniform" />
+                    </Panel>
+                </Border>
+                <TextBlock Classes="previewStatus" Classes.found="{Binding TargetMarkerFound}"
+                           Text="{Binding PreviewStatusText}" TextWrapping="Wrap" />
             </StackPanel>
         </Border>
 

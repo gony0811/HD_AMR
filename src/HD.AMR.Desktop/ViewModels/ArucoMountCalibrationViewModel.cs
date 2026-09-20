@@ -35,7 +35,10 @@ public sealed partial class ArucoMountCalibrationViewModel : ViewModelBase
     public ArucoMountCalibrationViewModel(IServiceScopeFactory scopes, AMRService amr, CobotService cobot, CameraService camera)
     { _scopes = scopes; _amr = amr; _cobot = cobot; _camera = camera; }
 
-    public override async void OnActivated()
+    public override void OnActivated() => _ = ReloadAsync();
+
+    /// <summary>저장된 T_A_B/T_T_C 를 다시 읽는다 — 부모가 ② 탭 게이트 평가 전에 await 할 수 있게 분리.</summary>
+    public async Task ReloadAsync()
     {
         try
         {

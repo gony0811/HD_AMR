@@ -38,6 +38,9 @@ public sealed partial class HandEyeViewModel : ViewModelBase
     /// <summary>T_T_C 편집란 — 산출값을 적용한 뒤 필요하면 손으로 보정한다.</summary>
     public Pose6 HandEye { get; } = new();
 
+    /// <summary>T_T_C 저장 성공 시 발생 — 부모(ArucoCalibrationViewModel)가 ② 탭 게이트를 재평가한다.</summary>
+    public event Action? HandEyeSaved;
+
     public ObservableCollection<HandEyeRow> Rows { get; } = new();
 
     [ObservableProperty] private double _markerSizeMm = 100;
@@ -177,13 +180,20 @@ public sealed partial class HandEyeViewModel : ViewModelBase
             var sample = await svc.CaptureAsync(BuildSettings(), Tool, 5, _cts.Token);
             sample.Index = _samples.Count;
             _samples.Add(sample);
-
-            await calib.SaveHandEyeSamplesAsync(_samples);
-            await calib.SaveArucoSettingsAsync(BuildSettings());
-            Resolve();
+            Resolve();   // 목록(Rows) 갱신을 저장보다 먼저 — 저장이 실패해도 캡처된 표본은 화면에 보여야 한다.
 
             Notify($"자세 #{_samples.Count} 캡처 (마커 ID {sample.MarkerId}, tool {sample.Tool}, " +
                    $"재투영 {sample.ReprojErrPx:0.0}px).", false);
+
+            try
+            {
+                await calib.SaveHandEyeSamplesAsync(_samples);
+                await calib.SaveArucoSettingsAsync(BuildSettings());
+            }
+            catch (Exception ex)
+            {
+                Notify($"표본 #{_samples.Count}은 목록에 추가됐지만 DB 저장에 실패했습니다: {ex.Message}", true);
+            }
         }
         catch (Exception ex) { Notify($"캡처 실패: {ex.Message}", true); }
         finally { Busy = false; }
@@ -252,8 +262,9 @@ public sealed partial class HandEyeViewModel : ViewModelBase
             var pose = HandEye.ToArray();
             await calib.SaveHandEyeAsync(pose);
             _savedTtc = pose;
-            Notify($"T_T_C 를 저장했습니다(tool {Tool} 기준) — ArUco 장착 보정 화면에서 " +
-                   "같은 tool 번호를 쓰는지 확인하세요.", false);
+            HandEyeSaved?.Invoke();
+            Notify($"T_T_C 를 저장했습니다(tool {Tool} 기준) — ② 장착 보정 탭에서 같은 tool 번호를 " +
+                   "쓰는지 확인하세요.", false);
         }
         catch (Exception ex) { Notify($"저장 실패: {ex.Message}", true); }
     }

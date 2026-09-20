@@ -63,7 +63,9 @@ public class ArucoHandEyeService
 
         var poses = new List<double[]>();
         var reproj = new List<double>();
-        int markerId = settings.MarkerId ?? 0;
+        int? markerId = settings.MarkerId;   // null 이면 첫 검출 프레임에서 가장 큰 마커로 확정한다.
+        var seenIds = new SortedSet<int>();          // 실패 진단용 — 프레임에 실제로 보인 ID 들.
+        var rejectedReproj = new List<double>();     // 실패 진단용 — 3px 초과로 버린 오차 값들.
         double? depthVsPnp = null;
 
         for (var i = 0; i < frames; i++)
@@ -75,10 +77,27 @@ public class ArucoHandEyeService
             if (color is null || DateTime.UtcNow - _cam.LastFrameAt > TimeSpan.FromSeconds(FrameStaleSeconds))
                 throw new InvalidOperationException("카메라 프레임이 오래되었습니다 — 스트리밍 상태를 확인하세요.");
 
+            // 기대 ID 미지정이면 이 프레임에서 가장 큰 마커를 채택한다(ArucoSettings.MarkerId 문서 계약).
+            if (markerId is null)
+            {
+                var infos = await Task.Run(() => ArucoPoseEstimator.DetectMarkerInfos(color, settings.Dictionary), ct);
+                foreach (var info in infos) seenIds.Add(info.Id);
+                if (infos.Length == 0) continue;
+                markerId = infos.MaxBy(m => m.AreaPx)!.Id;
+                _logger.LogInformation("기대 마커 ID 미지정 — 가장 큰 마커 ID {Id} 채택", markerId);
+            }
+
+            int wantedId = markerId.Value;
             var r = await Task.Run(() => ArucoPoseEstimator.DetectAndEstimate(
-                color, intr, settings.SizeMm, markerId, settings.Dictionary), ct);
-            if (r is null) continue;
-            if (r.ReprojectionErrorPx > MaxReprojErrPx) continue;
+                color, intr, settings.SizeMm, wantedId, settings.Dictionary), ct);
+            if (r is null)
+            {
+                // 기대 ID 가 안 잡힌 프레임 — 무엇이 보였는지 기록해 실패 메시지에 쓴다.
+                var infos = await Task.Run(() => ArucoPoseEstimator.DetectMarkerInfos(color, settings.Dictionary), ct);
+                foreach (var info in infos) seenIds.Add(info.Id);
+                continue;
+            }
+            if (r.ReprojectionErrorPx > MaxReprojErrPx) { rejectedReproj.Add(r.ReprojectionErrorPx); continue; }
 
             poses.Add(r.PoseCQ);
             reproj.Add(r.ReprojectionErrorPx);
@@ -86,9 +105,8 @@ public class ArucoHandEyeService
         }
 
         if (poses.Count < 3)
-            throw new InvalidOperationException(
-                $"유효 검출이 부족합니다({poses.Count}/{frames}) — 마커가 화면에 크고 선명하게 들어오도록 " +
-                $"자세를 조정하세요(재투영 {MaxReprojErrPx:0}px 초과 프레임은 버립니다).");
+            throw new InvalidOperationException(BuildDetectionFailureMessage(
+                poses.Count, frames, markerId, settings.MarkerId, seenIds, rejectedReproj));
 
         var tcpAfter = await _cobot.Rpc.GetTcpPoseInBaseAsync(tool, ct);
         double moved = Math.Sqrt(
@@ -106,7 +124,7 @@ public class ArucoHandEyeService
         return new HandEyeSample
         {
             Index = 0,
-            MarkerId = markerId,
+            MarkerId = markerId!.Value,   // poses 가 채워졌다면 반드시 확정돼 있다.
             Tool = tool,
             TcpPose = tcpBefore,
             MarkerPose = markerPose,
@@ -137,6 +155,28 @@ public class ArucoHandEyeService
         return HandEyeSolver.Solve(
             list.Select(s => s.TcpPose).ToList(),
             list.Select(s => s.MarkerPose).ToList());
+    }
+
+    /// <summary>검출 부족 실패의 원인을 특정하는 메시지 — ID 불일치 / 재투영 초과 / 진짜 미검출을 구분한다.</summary>
+    private static string BuildDetectionFailureMessage(
+        int valid, int frames, int? resolvedId, int? expectedId,
+        SortedSet<int> seenIds, List<double> rejectedReproj)
+    {
+        var head = $"유효 검출이 부족합니다({valid}/{frames})";
+
+        if (expectedId is { } want && seenIds.Count > 0 && !seenIds.Contains(want))
+            return $"{head} — 기대 ID {want} 마커가 화면에 없습니다. 보인 마커 ID: [{string.Join(", ", seenIds)}]. " +
+                   "공통 설정의 ArUco ID 를 실제 마커와 맞추세요.";
+
+        if (rejectedReproj.Count > 0)
+            return $"{head} — 검출은 됐지만 재투영 오차 {rejectedReproj.Min():0.0}~{rejectedReproj.Max():0.0}px 가 " +
+                   $"상한 {MaxReprojErrPx:0}px 를 초과해 버렸습니다. 마커를 더 가깝게/정면으로 잡고 초점·마커 평탄도를 확인하세요.";
+
+        if (resolvedId is null && seenIds.Count == 0)
+            return $"{head} — 마커가 전혀 검출되지 않았습니다. 마커가 화면에 크고 선명하게 들어오도록 자세를 조정하세요.";
+
+        return $"{head} — 마커가 화면에 크고 선명하게 들어오도록 자세를 조정하세요" +
+               $"(재투영 {MaxReprojErrPx:0}px 초과 프레임은 버립니다).";
     }
 
     private static void EnsureDetectable()
