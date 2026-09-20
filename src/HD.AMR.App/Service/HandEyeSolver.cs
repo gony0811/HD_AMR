@@ -28,7 +28,7 @@ public static class HandEyeSolver
 {
     private const double Rad2Deg = 180.0 / Math.PI;
 
-    private const int MinPoses = 3;
+    public const int MinPoses = 3;
     private const int RecommendedPoses = 8;
 
     /// <summary>상대 회전이 이보다 작으면 잡음만 증폭하므로 쌍에서 제외(도).</summary>

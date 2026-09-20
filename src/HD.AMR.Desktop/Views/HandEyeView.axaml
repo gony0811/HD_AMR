@@ -80,6 +80,22 @@
                 </StackPanel>
                 <TextBlock Classes="hint" Text="{Binding BlockedReason}" />
                 <TextBlock Classes="axis" Text="{Binding AxisSpreadText}" />
+
+                <!-- 자동 캡처: 코봇이 스스로 손목을 돌려가며 표본을 수집한다 — 명시 동의 필수 -->
+                <Border Classes="alert">
+                    <StackPanel Spacing="8">
+                        <TextBlock FontWeight="SemiBold" Text="자동 캡처 — ⚠ 코봇이 스스로 움직입니다" />
+                        <TextBlock Classes="hint"
+                                   Text="마커가 화면 중앙에 크게 들어온 초기 자세에서 시작하세요. 코봇이 저속(5%)으로 손목을 Rz/Rx/Ry·대각 축 ±20° 돌려가며 최대 9개 표본을 자동 수집하고 앵커 자세로 복귀합니다. 마커를 놓치면 절반 각도로 재시도 후 건너뜁니다. 로봇 주변에 사람·장애물이 없는지 확인하세요." />
+                        <CheckBox Content="코봇 자동 이동에 동의합니다 (저속 5%, 손목 ±20° 이내, 주변 안전 확인함)"
+                                  IsChecked="{Binding AutoMoveConfirmed}" IsEnabled="{Binding !IsAutoRunning}" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button Content="▶ 자동 캡처 시작" Classes="accent" Command="{Binding AutoCaptureCommand}" />
+                            <Button Content="■ 중지" Classes="danger" Command="{Binding StopAutoCommand}"
+                                    IsEnabled="{Binding IsAutoRunning}" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
             </StackPanel>
         </Border>
 

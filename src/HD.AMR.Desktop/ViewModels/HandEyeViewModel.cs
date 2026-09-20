@@ -19,7 +19,8 @@ namespace HD.AMR.Desktop.ViewModels;
 /// 카메라에 컨트롤러 TOOL 이 없으면 tool 0(플랜지)을 써도 된다 — 중요한 것은 장착 보정 화면과
 /// <b>같은 tool 번호</b>를 쓰는 것뿐이다.
 ///
-/// <b>이 화면은 코봇을 스스로 움직이지 않는다</b> — 자세 변경은 조그 팝업에서 작업자가 한다.
+/// 자세 변경은 기본적으로 조그 팝업에서 작업자가 한다. 단 <b>자동 캡처</b>는 별도 동의 체크 하에
+/// <see cref="HandEyeAutoRoutine"/> 이 저속(5%)으로 손목을 직접 움직여 표본을 수집한다.
 /// 핵심 성패 요인은 표본 수가 아니라 <b>회전축 다양성</b>이며, 부족하면 산출을 거부한다.
 /// </summary>
 public sealed partial class HandEyeViewModel : ViewModelBase
@@ -49,6 +50,9 @@ public sealed partial class HandEyeViewModel : ViewModelBase
     [ObservableProperty] private int _markerId;
     [ObservableProperty] private bool _matchMarkerId = true;
     [ObservableProperty] private bool _stationaryConfirmed;
+    /// <summary>자동 캡처(코봇 자동 이동) 동의 — 체크해야 자동 캡처를 시작할 수 있다.</summary>
+    [ObservableProperty] private bool _autoMoveConfirmed;
+    [ObservableProperty] private bool _isAutoRunning;
     [ObservableProperty] private bool _busy;
     [ObservableProperty] private string? _message;
     [ObservableProperty] private bool _isError;
@@ -67,6 +71,7 @@ public sealed partial class HandEyeViewModel : ViewModelBase
         {
             OnPropertyChanged(string.Empty);
             CaptureCommand.NotifyCanExecuteChanged();
+            AutoCaptureCommand.NotifyCanExecuteChanged();
             SolveCommand.NotifyCanExecuteChanged();
         };
     }
@@ -136,6 +141,7 @@ public sealed partial class HandEyeViewModel : ViewModelBase
 
     public bool CanCapture => DetectorAvailable && CameraStreaming && CobotConnected
                               && StationaryConfirmed && !LiftMoved && !Busy;
+    public bool CanAutoCapture => CanCapture && AutoMoveConfirmed && _cobot.IsServoEnabled;
     public bool CanSolve => SampleCount >= 3 && !Busy;
     public bool CanApply => Result is { Success: true };
 
@@ -197,6 +203,59 @@ public sealed partial class HandEyeViewModel : ViewModelBase
         }
         catch (Exception ex) { Notify($"캡처 실패: {ex.Message}", true); }
         finally { Busy = false; }
+    }
+
+    // ── 자동 캡처(코봇 자동 이동) ───────────────────────────────────
+    private CancellationTokenSource? _autoCts;
+
+    [RelayCommand(CanExecute = nameof(CanAutoCapture))]
+    private async Task AutoCapture()
+    {
+        Busy = true;
+        IsAutoRunning = true;
+        _autoCts = new CancellationTokenSource();
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var routine = scope.ServiceProvider.GetRequiredService<HandEyeAutoRoutine>();
+
+            // 진행 메시지는 스레드풀에서 올라온다 — UI 스레드로 마샬링해 표시.
+            var result = await routine.RunAsync(BuildSettings(), Tool, _savedTtc, tiltDeg: 20,
+                msg => Dispatcher.UIThread.Post(() => Notify(msg, false)), _autoCts.Token);
+
+            foreach (var sample in result.Samples)
+            {
+                sample.Index = _samples.Count;
+                _samples.Add(sample);
+            }
+            Resolve();
+            await PersistAsync();
+
+            if (result.Success)
+                Notify($"자동 캡처 완료 — 표본 {result.Samples.Count}개 수집(건너뜀 {result.Skipped}). " +
+                       "'산출'로 T_T_C 를 계산하세요.", false);
+            else
+                Notify($"자동 캡처 {(result.Samples.Count > 0 ? $"부분 완료(표본 {result.Samples.Count}개) — " : "실패 — ")}" +
+                       $"{result.Error}" +
+                       (result.ReturnedToAnchor ? "" : " ⚠ 앵커 복귀 실패 — 조그로 로봇 위치를 확인하세요."), true);
+        }
+        catch (Exception ex) { Notify($"자동 캡처 실패: {ex.Message}", true); }
+        finally
+        {
+            _autoCts.Dispose();
+            _autoCts = null;
+            IsAutoRunning = false;
+            Busy = false;
+        }
+    }
+
+    /// <summary>자동 캡처 즉시 중지 — 취소 + 진행 중인 블로킹 이동도 즉시정지 RPC 로 끊는다.</summary>
+    [RelayCommand]
+    private async Task StopAuto()
+    {
+        _autoCts?.Cancel();
+        try { await _cobot.StopMotionImmediateAsync(); }
+        catch (Exception ex) { Notify($"즉시 정지 실패: {ex.Message} — 물리 비상정지를 사용하세요.", true); }
     }
 
     [RelayCommand]
