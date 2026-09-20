@@ -169,14 +169,14 @@ public class ArucoHandEyeService
 /// <summary>ArUco 마커 설정 — 사전 종류, 기대 ID, 실측 한 변 길이(mm).</summary>
 public class ArucoSettings
 {
-    /// <summary>OpenCV 사전 종류. 기본 4×4_50 (100mm 마커에 적합 — 비트가 굵어 멀리서도 잡힌다).</summary>
+    /// <summary>OpenCV 사전 종류. 기본 4×4_50 (프로젝트 제공 120 mm 마커와 일치).</summary>
     public PredefinedDictionaryName Dictionary { get; set; } = PredefinedDictionaryName.Dict4X4_50;
 
     /// <summary>기대 마커 ID. null 이면 화면에서 가장 큰 마커를 채택한다.</summary>
     public int? MarkerId { get; set; }
 
     /// <summary>검은 사각형 한 변의 실측 길이(mm). 이 값이 틀리면 거리가 비례로 틀어진다.</summary>
-    public double SizeMm { get; set; } = 100;
+    public double SizeMm { get; set; } = 120;
 }
 
 /// <summary>
