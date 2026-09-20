@@ -122,6 +122,19 @@
                             <TextBlock Text="{Binding IoStatusText}" />
                         </Border>
                     </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                        <TextBlock Text="ACS" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" />
+                        <Border Classes="badge" Classes.on="{Binding IsAcsConnected}"
+                                ToolTip.Tip="{Binding AcsDetailText}">
+                            <TextBlock Text="{Binding AcsStatusText}" />
+                        </Border>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                        <TextBlock Text="배터리" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" />
+                        <Border Classes="badge" Classes.on="{Binding IsBatteryOk}">
+                            <TextBlock Text="{Binding BatteryText}" />
+                        </Border>
+                    </StackPanel>
                 </StackPanel>
             </DockPanel>
         </Border>

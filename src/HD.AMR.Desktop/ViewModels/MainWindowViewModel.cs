@@ -16,6 +16,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly AMRService _amr;
     private readonly CobotService _cobot;
     private readonly IoModuleService _io;
+    private readonly Vda5050AdapterService _vda;
     private readonly DispatcherTimer _timer;
 
     public INavigationService Navigation { get; }
@@ -39,6 +40,21 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private bool _isIoConnected;
 
     [ObservableProperty]
+    private bool _isAcsConnected;
+
+    [ObservableProperty]
+    private string _acsStatusText = "미연결";
+
+    [ObservableProperty]
+    private string _acsDetailText = "";
+
+    [ObservableProperty]
+    private bool _isBatteryOk;
+
+    [ObservableProperty]
+    private string _batteryText = "—";
+
+    [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(EmoButtonText))]
     private bool _isEmoActive;
 
@@ -50,12 +66,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public string IoStatusText => IsIoConnected ? "연결" : "미연결";
     public string EmoButtonText => IsEmoActive ? "■ 비상정지 해제" : "■ 비상정지";
 
-    public MainWindowViewModel(INavigationService navigation, AMRService amr, CobotService cobot, IoModuleService io)
+    public MainWindowViewModel(INavigationService navigation, AMRService amr, CobotService cobot,
+        IoModuleService io, Vda5050AdapterService vda)
     {
         Navigation = navigation;
         _amr = amr;
         _cobot = cobot;
         _io = io;
+        _vda = vda;
 
         // 기존 HD.AMR.Web/Components/Layout/NavMenu.razor 항목 이식(도면 기반 Inspection 은 X-Y 교시 일원화로 제외).
         // 아직 포팅되지 않은 페이지는 Target = null (클릭 시 "준비 중" 플레이스홀더로 이동).
@@ -105,6 +123,33 @@ public sealed partial class MainWindowViewModel : ObservableObject
         IsAmrConnected = _amr.IsConnected;
         IsCobotConnected = _cobot.IsConnected;
         IsIoConnected = _io.IsConnected;
+        // ACS: 브로커(로컬 MQTT) 접속만으로는 "연결"이라 할 수 없다 — ACS 생존(connection 토픽
+        // Last Will 기반 liveness) 또는 최근 60초 내 ACS 메시지 수신까지 확인돼야 초록 "연결".
+        bool acsAlive = _vda.AcsConnectionLiveness == HD.AMR.App.Service.AcsLiveness.Online
+                        || _vda.AcsRecentlyActive;
+        IsAcsConnected = _vda.IsBrokerConnected && acsAlive;
+        AcsStatusText = !_vda.IsBrokerConnected ? "미연결"
+            : acsAlive ? "연결"
+            : "브로커만";
+        AcsDetailText =
+            $"브로커: {(_vda.IsBrokerConnected ? "접속" : "미접속")} · ACS 생존: {_vda.AcsConnectionLiveness}" +
+            (_vda.LastAcsMessageUtc is { } t
+                ? $" · 마지막 ACS 메시지: {t.ToLocalTime():HH:mm:ss}"
+                : " · ACS 메시지 수신 이력 없음");
+
+        // 배터리 — AMR 폴링 스냅샷 기준. 미연결/미수신이면 "—".
+        var battery = _amr.LatestStatus?.Battery;
+        if (battery is null)
+        {
+            BatteryText = "—";
+            IsBatteryOk = false;
+        }
+        else
+        {
+            BatteryText = $"{battery.LevelPercent:0}%" +
+                          (battery.ChargingState == HD.AMR.App.Enums.ChargingState.Charging ? " ⚡" : "");
+            IsBatteryOk = battery.LevelPercent >= 20;
+        }
 
         // 표시 상태는 클릭이 아니라 폴링된 출력 스냅샷 기준 → 쓰기 미반영 시 자동 원복.
         var state = _io.GetState();
