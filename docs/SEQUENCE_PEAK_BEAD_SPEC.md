@@ -450,7 +450,7 @@ double offsetMm = result.OffsetPx * mmPerPx;
 
 | # | Key | Order | 클래스 | peakId | 설명 |
 |---|---|---|---|---|---|
-| ① | `amrMove` | 100 | `AmrMoveStep` | — | (기존) AMR 검사위치 이동 |
+| ① | `amrMove` | 100 | `AmrMoveStep` | — | (기존) AMR 검사위치 이동. **활성 좌표계 정규화**(툴 `context.Tool`/작업물 0, 무변위 MoveJ) 후 홈 복귀 — 이전 실행이 반납 못 한 작업물 프레임·펜던트에서 바뀐 활성 공구가 남으면 이후 단계의 앵커(FK→베이스)와 IK 가 그 값으로 해석돼 오이동·rc=38/112 |
 | ② | `cobotInspection` | 200 | `CobotInspectionMoveStep` | — | (기존) Cobot 검사위치 이동 |
 | ③ | `cameraAlign` | 300 | `CameraAlignStep` | — | (기존) 카메라 거리 정렬 400mm |
 | ④ | `flatSurfaceAlign` | 400 | `FlatSurfaceAlignStep` | — | (기존) 평탄면 센터링 — 시작 포즈를 앵커로 Bag 저장 |
