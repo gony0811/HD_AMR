@@ -6,7 +6,7 @@
              x:DataType="vm:CobotViewModel">
     <UserControl.Styles>
         <Style Selector="NumericUpDown.pose"><Setter Property="Margin" Value="0,0,6,0" /></Style>
-        <Style Selector="TextBlock.axis"><Setter Property="Foreground" Value="{DynamicResource TextMuted}" /><Setter Property="FontSize" Value="12" /></Style>
+        <Style Selector="TextBlock.axis"><Setter Property="Foreground" Value="{DynamicResource AppMutedTextBrush}" /><Setter Property="FontSize" Value="12" /></Style>
     </UserControl.Styles>
 
     <StackPanel MaxWidth="960" HorizontalAlignment="Left">
@@ -119,7 +119,7 @@
 
                 <StackPanel Orientation="Horizontal" Spacing="6">
                     <Button Content="좌표계 계산 &amp; 등록" Classes="accent" Command="{Binding RegisterWObjCommand}" IsEnabled="{Binding IsConnected}" />
-                    <TextBlock Text="{Binding WobjResultText}" VerticalAlignment="Center" Foreground="{DynamicResource BadgeSuccess}"
+                    <TextBlock Text="{Binding WobjResultText}" VerticalAlignment="Center" Foreground="{DynamicResource AppGoodBrush}"
                                IsVisible="{Binding WobjResultText, Converter={x:Static ObjectConverters.IsNotNull}}" />
                 </StackPanel>
             </StackPanel>

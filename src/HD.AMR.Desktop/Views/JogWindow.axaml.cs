@@ -32,12 +32,15 @@ public partial class JogWindow : Window
         Closed += (_, _) => { _timer.Stop(); _vm.StopAll(); _instance = null; };
     }
 
-    /// <summary>단일 인스턴스로 열기 — 이미 열려 있으면 앞으로 가져온다(원본 window.open 이름 재사용과 동일).</summary>
+    /// <summary>단일 인스턴스로 열기 — 이미 열려 있으면 앞으로 가져온다(원본 window.open 이름 재사용과 동일).
+    /// 반드시 MainWindow 를 owner 로 연다 — 소유되지 않은 최상위 창은 메인 창 종료 후에도 남아
+    /// OnLastWindowClose 종료를 막는다(잔존 프로세스 원인).</summary>
     public static void Open()
     {
         if (_instance is { IsVisible: true } w) { w.Activate(); return; }
-        _instance = new JogWindow();
         var owner = (Avalonia.Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.MainWindow;
-        if (owner is not null) _instance.Show(owner); else _instance.Show();
+        if (owner is null) return;
+        _instance = new JogWindow();
+        _instance.Show(owner);
     }
 }

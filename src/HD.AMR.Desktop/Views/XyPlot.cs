@@ -16,15 +16,17 @@ public sealed class XyPlot : Control
     private IReadOnlyList<PlotPoint> _pts = Array.Empty<PlotPoint>();
     private double _fov = 30, _minX = -50, _minY = -50, _w = 100, _h = 100;
 
-    private static readonly IBrush AxisX = new SolidColorBrush(Color.FromRgb(0xE0, 0xA0, 0xA0));
-    private static readonly IBrush AxisY = new SolidColorBrush(Color.FromRgb(0xA0, 0xC0, 0xE0));
-    private static readonly IBrush SelStroke = new SolidColorBrush(Color.FromRgb(0x0D, 0x6E, 0xFD));
-    private static readonly IBrush SelFill = new SolidColorBrush(Color.FromArgb(31, 0x0D, 0x6E, 0xFD));
-    private static readonly IBrush DotSel = new SolidColorBrush(Color.FromRgb(0xDC, 0x35, 0x45));
-    private static readonly IBrush Dot = new SolidColorBrush(Color.FromRgb(0x0D, 0x6E, 0xFD));
-    private static readonly IBrush BoxStroke = new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88));
-    private static readonly IBrush BoxFill = new SolidColorBrush(Color.FromArgb(15, 0x78, 0x78, 0x78));
-    private static readonly IBrush LabelBrush = new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88));
+    // 다크 캔버스(ACS UI 통일) 위에서 시인성이 나오도록 조정한 팔레트.
+    private static readonly IBrush CanvasBg = new SolidColorBrush(Color.FromRgb(0x11, 0x13, 0x18));
+    private static readonly IBrush AxisX = new SolidColorBrush(Color.FromRgb(0xB0, 0x6A, 0x6A));
+    private static readonly IBrush AxisY = new SolidColorBrush(Color.FromRgb(0x5A, 0x7A, 0x9A));
+    private static readonly IBrush SelStroke = new SolidColorBrush(Color.FromRgb(0x1E, 0x7F, 0xFF));
+    private static readonly IBrush SelFill = new SolidColorBrush(Color.FromArgb(45, 0x1E, 0x7F, 0xFF));
+    private static readonly IBrush DotSel = new SolidColorBrush(Color.FromRgb(0xE4, 0x50, 0x60));
+    private static readonly IBrush Dot = new SolidColorBrush(Color.FromRgb(0x4C, 0x99, 0xFF));
+    private static readonly IBrush BoxStroke = new SolidColorBrush(Color.FromRgb(0x66, 0x6C, 0x74));
+    private static readonly IBrush BoxFill = new SolidColorBrush(Color.FromArgb(20, 0xA0, 0xA6, 0xAE));
+    private static readonly IBrush LabelBrush = new SolidColorBrush(Color.FromRgb(0x9A, 0xA0, 0xA8));
     private static readonly Typeface Face = new(FontFamily.Default);
 
     public void Update(IReadOnlyList<PlotPoint> pts, double fov, double minX, double minY, double w, double h)
@@ -36,8 +38,8 @@ public sealed class XyPlot : Control
     public override void Render(DrawingContext ctx)
     {
         var b = Bounds.Size;
-        // 흰 배경(도면 뷰어) — 라이트/다크 무관하게 좌표가 잘 보이도록.
-        ctx.FillRectangle(Brushes.White, new Rect(b));
+        // 다크 배경(ACS UI 통일) — 축/점/라벨은 위 다크 대비 팔레트로 그린다.
+        ctx.FillRectangle(CanvasBg, new Rect(b));
         if (b.Width <= 0 || b.Height <= 0 || _w <= 0 || _h <= 0) return;
 
         var scale = Math.Min(b.Width / _w, b.Height / _h);

@@ -4,8 +4,8 @@
              x:Class="HD.AMR.Desktop.Views.WeldTrackingView"
              x:DataType="vm:WeldTrackingViewModel">
     <UserControl.Styles>
-        <Style Selector="TextBlock.axis"><Setter Property="Foreground" Value="{DynamicResource TextMuted}" /><Setter Property="FontSize" Value="12" /></Style>
-        <Style Selector="Border.imgbox"><Setter Property="BorderBrush" Value="{DynamicResource CardBorder}" /><Setter Property="BorderThickness" Value="1" /><Setter Property="CornerRadius" Value="4" /><Setter Property="Background" Value="Black" /></Style>
+        <Style Selector="TextBlock.axis"><Setter Property="Foreground" Value="{DynamicResource AppMutedTextBrush}" /><Setter Property="FontSize" Value="12" /></Style>
+        <Style Selector="Border.imgbox"><Setter Property="BorderBrush" Value="{DynamicResource AppBorderBrush}" /><Setter Property="BorderThickness" Value="1" /><Setter Property="CornerRadius" Value="4" /><Setter Property="Background" Value="Black" /></Style>
         <Style Selector="Image.stream"><Setter Property="Stretch" Value="Fill" /></Style>
     </UserControl.Styles>
 

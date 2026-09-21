@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using HD.AMR.App.Models;
 
 namespace HD.AMR.App.Communication.Vision;
 
@@ -156,25 +157,14 @@ public enum ResultCode : ushort
 /// <summary>면(Wall) 정보. Id=Wall ID(1~10), Code=ACS 문자 코드, Axes=v3.2 §5 U/V 축 방향.</summary>
 public sealed record SurfaceInfo(ushort Id, string Code, string Name, SurfaceType Type, string Axes);
 
-/// <summary>
-/// vision_interface_v3.2 §5 "면별 축 정의"(=SAIGE v2.6 부록 A, HD_ACS 내부 원점·축 기준) 그대로.
-/// Wall ID 1~10. U/V 축 방향은 v3.1 대비 U 9면·V 4면이 반전된 v3.2 정본.
-/// </summary>
+
+/// <summary>사양 시트 5 "Surface ID 정의". ID 0x01~0x0A, 전부 Flat.
+/// 검사 면 정본 표 <see cref="WallCodes"/> 에서 생성한다 — ACS wall_code·Teaching Wall ID 와 같은 번호를 보장.</summary>
 public static class SurfaceCatalog
 {
-    public static readonly IReadOnlyList<SurfaceInfo> All = new SurfaceInfo[]
-    {
-        new(0x01, "B",  "바닥 (Bottom)",       SurfaceType.Flat, "U: 선미→선수, V: 우현→좌현"),
-        new(0x02, "T",  "천장 (Top)",          SurfaceType.Flat, "U: 선미→선수, V: 우현→좌현"),
-        new(0x03, "PM", "좌현벽 (Port)",        SurfaceType.Flat, "U: 선미→선수, V: 하단→상단"),
-        new(0x04, "SM", "우현벽 (Starboard)",   SurfaceType.Flat, "U: 선미→선수, V: 하단→상단"),
-        new(0x05, "F",  "전벽 (Forward)",      SurfaceType.Flat, "U: 좌현→우현, V: 하단→상단"),
-        new(0x06, "A",  "후벽 (Aft)",          SurfaceType.Flat, "U: 우현→좌현, V: 하단→상단"),
-        new(0x07, "PL", "하부 좌현 챔퍼",        SurfaceType.Flat, "U: 선미→선수, V: 바닥→좌현 수직벽"),
-        new(0x08, "SL", "하부 우현 챔퍼",        SurfaceType.Flat, "U: 선미→선수, V: 바닥→우현 수직벽"),
-        new(0x09, "PU", "상부 좌현 챔퍼",        SurfaceType.Flat, "U: 선미→선수, V: 수직벽→천장"),
-        new(0x0A, "SU", "상부 우현 챔퍼",        SurfaceType.Flat, "U: 선미→선수, V: 수직벽→천장"),
-    };
+    public static readonly IReadOnlyList<SurfaceInfo> All = WallCodes.All
+        .Select(w => new SurfaceInfo((ushort)w.SurfaceId, w.DisplayName, SurfaceType.Flat, w.Axes))
+        .ToArray();
 
     public static string NameOf(ushort id) =>
         All.FirstOrDefault(s => s.Id == id)?.Name ?? $"Unknown(0x{id:X4})";

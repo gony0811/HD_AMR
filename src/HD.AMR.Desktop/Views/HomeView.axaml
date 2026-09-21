@@ -1,6 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:HD.AMR.Desktop.ViewModels"
+             xmlns:controls="using:HD.AMR.Desktop.Controls"
              x:Class="HD.AMR.Desktop.Views.HomeView"
              x:DataType="vm:HomeViewModel">
     <StackPanel>
@@ -13,6 +14,50 @@
                 <TextBlock Text="{Binding NowText}" />
             </Border>
         </Grid>
+
+        <Border Classes="card" Margin="0,0,12,14">
+            <StackPanel Spacing="10">
+                <Grid ColumnDefinitions="*,Auto">
+                    <TextBlock Text="AMR 실시간 위치·라이다" FontSize="18" FontWeight="SemiBold" />
+                    <Border Grid.Column="1" Classes="badge" Classes.on="{Binding Map.HasConfidence}"
+                            ToolTip.Tip="AMR REST의 SLAM 맵 일치율(fit). 실제 위치 오차(m)를 뜻하지 않습니다.">
+                        <TextBlock Text="{Binding Map.ConfidenceText}" />
+                    </Border>
+                </Grid>
+                <WrapPanel VerticalAlignment="Center">
+                    <TextBlock Margin="0,8,16,6" FontWeight="SemiBold" Text="{Binding Map.ActiveMapText}"
+                               ToolTip.Tip="Map Builder 또는 AMR 페이지에서 지정한 운영 맵입니다." />
+                    <TextBlock Margin="0,8,8,6" Text="해상도 (m/픽셀)" />
+                    <NumericUpDown Width="140" Margin="0,0,0,6" Minimum="0.000001" Maximum="1000"
+                                   Increment="0.01" FormatString="0.######" Value="{Binding Map.Resolution}" />
+                </WrapPanel>
+                <Grid ColumnDefinitions="Auto,Auto,Auto,180,Auto,*">
+                    <Button Grid.Column="0" Content="−" Command="{Binding Map.ZoomOutCommand}" ToolTip.Tip="축소" />
+                    <Button Grid.Column="1" Margin="6,0,0,0" Content="+" Command="{Binding Map.ZoomInCommand}" ToolTip.Tip="확대" />
+                    <Button Grid.Column="2" Margin="6,0,10,0" Content="100%" Command="{Binding Map.ResetZoomCommand}" />
+                    <Slider Grid.Column="3" Minimum="0.5" Maximum="5" TickFrequency="0.25" Value="{Binding Map.Zoom}" />
+                    <TextBlock Grid.Column="4" Width="58" Margin="10,6,0,0" Text="{Binding Map.ZoomText}" />
+                    <TextBlock Grid.Column="5" HorizontalAlignment="Right" Margin="10,6,0,0"
+                               Classes="muted" Text="드래그 대신 스크롤바로 이동" />
+                </Grid>
+                <TextBlock Classes="muted" Text="{Binding Map.MapLoadStatus}" TextWrapping="Wrap" />
+                <TextBlock Text="{Binding Map.MapSummary}" />
+                <ProgressBar Minimum="0" Maximum="100" Value="{Binding Map.ConfidencePercent}"
+                             Height="5" IsVisible="{Binding Map.HasConfidence}" />
+                <Border Background="#20262D" CornerRadius="6" Padding="8" IsVisible="{Binding Map.HasMapImage}">
+                    <ScrollViewer Height="500" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+                        <controls:AmrMapCanvas Width="{Binding Map.CanvasWidth}" Height="{Binding Map.CanvasHeight}"
+                            MapImage="{Binding Map.MapImage}" LidarPoints="{Binding Map.LidarPoints}"
+                            Resolution="{Binding Map.ResolutionValue}" OriginX="{Binding Map.OriginX}" OriginY="{Binding Map.OriginY}"
+                            RobotX="{Binding Map.RobotX}" RobotY="{Binding Map.RobotY}"
+                            RobotHeading="{Binding Map.RobotHeading}" ShowRobot="{Binding Map.ShowRobot}" />
+                    </ScrollViewer>
+                </Border>
+                <TextBlock Text="{Binding Map.PoseText}" FontFamily="monospace" />
+                <TextBlock Text="{Binding Map.LidarStatus}" Foreground="#FF6B6B" />
+                <TextBlock Classes="muted" Text="{Binding Map.PositionStatus}" TextWrapping="Wrap" />
+            </StackPanel>
+        </Border>
 
         <WrapPanel>
             <WrapPanel.Styles>
@@ -54,6 +99,11 @@
                             <TextBlock Text="{Binding CobotStateConnected, Converter={x:Static vm:BoolTextConverters.Recv}, StringFormat='상태 {0}'}" />
                         </Border>
                     </StackPanel>
+                    <!-- 활성 좌표계(상태 패킷 20004) — 작업물이 베이스가 아니면 강조 -->
+                    <Border Classes="badge" Classes.off="{Binding !CobotUserNotBase}" HorizontalAlignment="Left"
+                            ToolTip.Tip="컨트롤러의 현재 활성 공구/작업물 좌표계 번호. 티칭 캡처·조그는 이 좌표계 기준으로 동작합니다.">
+                        <TextBlock Text="{Binding CobotFrameText}" />
+                    </Border>
                 </StackPanel>
             </Border>
 
@@ -88,8 +138,8 @@
                         </Border>
                     </Grid>
                     <!-- 간단 배터리 바(퍼센트 폭). null 이면 0 폭. -->
-                    <Border Height="20" CornerRadius="4" Background="{DynamicResource CardBorder}">
-                        <Border HorizontalAlignment="Left" CornerRadius="4" Background="{DynamicResource BadgeSuccess}"
+                    <Border Height="20" CornerRadius="4" Background="{DynamicResource AppBorderBrush}">
+                        <Border HorizontalAlignment="Left" CornerRadius="4" Background="{DynamicResource AppGoodBrush}"
                                 Width="{Binding BatteryPercent}" MinWidth="0" />
                     </Border>
                     <TextBlock Classes="muted" FontSize="12" Text="{Binding BatterySubText}" />

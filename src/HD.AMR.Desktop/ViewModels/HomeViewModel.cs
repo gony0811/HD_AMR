@@ -18,30 +18,39 @@ public sealed partial class HomeViewModel : ViewModelBase
     private readonly CameraService _camera;
     private readonly Vda5050AdapterService _vda;
     private readonly DispatcherTimer _timer;
+    public AmrMapViewModel Map { get; }
 
     public ObservableCollection<string> MapIdOptions { get; } = new();
     [ObservableProperty] private string _selectedMapId = "";
     [ObservableProperty] private string? _mapIdStatus;
 
-    public HomeViewModel(AMRService amr, CobotService cobot, CameraService camera, Vda5050AdapterService vda)
+    public HomeViewModel(AMRService amr, CobotService cobot, CameraService camera, Vda5050AdapterService vda, AmrMapViewModel map)
     {
         _amr = amr;
         _cobot = cobot;
         _camera = camera;
         _vda = vda;
+        Map = map;
         _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
-        _timer.Tick += (_, _) => OnPropertyChanged(string.Empty);
+        _timer.Tick += async (_, _) => await RefreshAsync();
     }
 
     public override void OnActivated()
     {
         RebuildMapOptions();
         SelectedMapId = _vda.CurrentMapId;
-        OnPropertyChanged(string.Empty);
+        _ = RefreshAsync();
         _timer.Start();
+        _ = Map.EnsureActiveMapLoadedAsync();
     }
 
     public override void OnDeactivated() => _timer.Stop();
+
+    private async Task RefreshAsync()
+    {
+        await Map.RefreshTelemetryAsync();
+        OnPropertyChanged(string.Empty);
+    }
 
     public string NowText => DateTime.Now.ToString("yyyy-MM-dd HH:mm");
 
@@ -52,6 +61,14 @@ public sealed partial class HomeViewModel : ViewModelBase
     // Cobot
     public bool CobotConnected => _cobot.IsConnected;
     public bool CobotStateConnected => _cobot.IsStateConnected;
+
+    /// <summary>상태 패킷(20004)에서 읽은 활성 공구/작업물 좌표계 번호. 상태 미수신이면 -1(미상).</summary>
+    public string CobotFrameText => _cobot.State is { } s && s.Tool >= 0 && s.User >= 0
+        ? $"툴 #{s.Tool} / 작업물 #{s.User}{(s.User == 0 ? " (베이스)" : "")}"
+        : "툴/작업물 미상";
+
+    /// <summary>활성 작업물이 베이스(#0)가 아님 — 조그·티칭이 프레임 기준으로 동작하므로 눈에 띄게 표시.</summary>
+    public bool CobotUserNotBase => _cobot.State?.User is > 0;
 
     // Camera
     public bool CameraConnected => _camera.IsConnected;

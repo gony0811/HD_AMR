@@ -240,6 +240,8 @@ public sealed partial class TeachingRowVm : ObservableObject
     public string Name => Entity.Name;
     public int SurfaceId => Entity.SurfaceId;
     public string SurfaceHex => $"0x{Entity.SurfaceId:X2}";
+    /// <summary>"0x01 · B 바닥" — Wall Code 고정 범위 밖이면 hex 만.</summary>
+    public string SurfaceText => TeachingService.SurfaceLabel(Entity.SurfaceId);
     public bool IsSeed => TeachingService.IsSeedSlot(Entity.Key);
     public bool IsUser => !IsSeed;
     public bool IsTaught => Entity.IsTaught;

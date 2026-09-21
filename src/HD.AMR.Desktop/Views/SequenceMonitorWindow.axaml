@@ -4,10 +4,11 @@
         x:Class="HD.AMR.Desktop.Views.SequenceMonitorWindow"
         x:DataType="vm:SequenceMonitorViewModel"
         Width="720" Height="640"
-        Title="시퀀스 모니터">
+        Title="시퀀스 모니터"
+        Background="{DynamicResource AppWindowBrush}">
     <Grid Margin="16">
         <TextBlock IsVisible="{Binding !HasStep}" Text="{Binding IdleText}"
-                   Foreground="{DynamicResource TextMuted}" TextWrapping="Wrap"
+                   Foreground="{DynamicResource AppMutedTextBrush}" TextWrapping="Wrap"
                    HorizontalAlignment="Center" VerticalAlignment="Center" />
 
         <DockPanel IsVisible="{Binding HasStep}">
@@ -16,7 +17,7 @@
                     <StackPanel Grid.Column="0">
                         <TextBlock Text="{Binding StepHeader}" FontSize="18" FontWeight="SemiBold" />
                         <TextBlock Text="{Binding TargetDistanceText, StringFormat='목표 거리: {0}'}"
-                                   Foreground="{DynamicResource TextMuted}" FontSize="12" />
+                                   Foreground="{DynamicResource AppMutedTextBrush}" FontSize="12" />
                     </StackPanel>
                     <Border Grid.Column="1" VerticalAlignment="Center" CornerRadius="4" Padding="10,5"
                             Background="{Binding StatusKind, Converter={x:Static vm:SeqConverters.StatusBrush}}">

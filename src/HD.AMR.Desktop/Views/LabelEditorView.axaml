@@ -5,7 +5,7 @@
              x:Class="HD.AMR.Desktop.Views.LabelEditorView"
              x:DataType="vm:LabelEditorViewModel">
     <UserControl.Styles>
-        <Style Selector="TextBlock.axis"><Setter Property="Foreground" Value="{DynamicResource TextMuted}" /><Setter Property="FontSize" Value="12" /></Style>
+        <Style Selector="TextBlock.axis"><Setter Property="Foreground" Value="{DynamicResource AppMutedTextBrush}" /><Setter Property="FontSize" Value="12" /></Style>
     </UserControl.Styles>
 
     <StackPanel MaxWidth="1200" HorizontalAlignment="Left">
@@ -49,7 +49,7 @@
                             <Button Content="전체 지우기" Command="{Binding ClearMaskCommand}" />
                             <Button Name="SaveBtn" Content="💾 마스크 저장" Classes="accent" IsEnabled="{Binding !Busy}" />
                         </StackPanel>
-                        <Border BorderBrush="{DynamicResource CardBorder}" BorderThickness="1" Background="Black">
+                        <Border BorderBrush="{DynamicResource AppBorderBrush}" BorderThickness="1" Background="Black">
                             <views:MaskCanvas Name="Mask" Height="480" Cursor="Cross" />
                         </Border>
                         <TextBlock Classes="axis" TextWrapping="Wrap" Text="{Binding SaveHint}" />

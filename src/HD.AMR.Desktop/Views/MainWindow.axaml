@@ -7,42 +7,144 @@
         x:Class="HD.AMR.Desktop.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
         Width="1280" Height="800"
+        Background="{DynamicResource AppWindowBrush}"
         Title="HD현대 AMR — 통합 제어 콘솔">
+
+    <Window.Styles>
+        <!-- 사이드바 접이식 그룹: 하위 항목 들여쓰기 / 그룹 헤더 굵게 -->
+        <Style Selector="Grid.nav-child">
+            <Setter Property="Margin" Value="22,0,0,0" />
+        </Style>
+        <Style Selector="TextBlock.nav-group">
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+        <!-- 비상정지(EMO) 토글: 평상시 = ACS 앱바 비상정지와 같은 빨간 채움(Button.danger),
+             EMO 활성(래치) 시 = 밝은 빨강 + 흰 테두리로 구분 -->
+        <Style Selector="Button.emo">
+            <Setter Property="Padding" Value="14,6" />
+        </Style>
+        <Style Selector="Button.emo.emo-active">
+            <Setter Property="Background" Value="{DynamicResource AppDangerHoverBrush}" />
+            <Setter Property="BorderBrush" Value="White" />
+            <Setter Property="BorderThickness" Value="2" />
+        </Style>
+        <Style Selector="Button.emo.emo-active:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="BorderBrush" Value="White" />
+        </Style>
+    </Window.Styles>
 
     <Grid ColumnDefinitions="250,*">
 
-        <!-- ── 좌: 네비게이션 사이드바 ── -->
-        <Grid Column="0" Background="{DynamicResource NavBackground}" RowDefinitions="Auto,*,Auto">
-            <StackPanel Grid.Row="0" Margin="16,18,16,10">
-                <TextBlock Text="HD현대 AMR" Foreground="White" FontSize="18" FontWeight="Bold" />
-                <TextBlock Text="자율주행 로봇 통합 제어 콘솔" Foreground="#9AA4B2" FontSize="11" />
-            </StackPanel>
+    <!-- ── 좌: 네비게이션 사이드바 — ACS 앱바와 같은 헤더 톤, 우측 1px 경계 ── -->
+    <Border Grid.Column="0" Background="{DynamicResource AppHeaderBrush}" BorderBrush="{DynamicResource AppBorderBrush}" BorderThickness="0,0,1,0">
+    <Grid Background="Transparent" RowDefinitions="Auto,*,Auto">
+        <StackPanel Grid.Row="0" Margin="16,18,16,10" Spacing="8">
+            <!-- HHI 로고 — ACS 앱바와 동일 자산·높이. -->
+            <Image Source="avares://HD.AMR.Desktop/Assets/HHI_white2_ko.png" Height="26" HorizontalAlignment="Left"
+                   RenderOptions.BitmapInterpolationMode="HighQuality" />
+            <TextBlock Text="자율주행 로봇 통합 제어 콘솔" Foreground="{DynamicResource AppMutedTextBrush}" FontSize="11" />
+        </StackPanel>
 
-            <ListBox Grid.Row="1"
-                     Background="Transparent"
-                     ItemsSource="{Binding NavItems}"
-                     SelectedItem="{Binding SelectedItem}">
-                <ListBox.ItemTemplate>
-                    <DataTemplate x:DataType="vm:NavItem">
-                        <StackPanel Orientation="Horizontal" Spacing="10">
+        <ListBox Grid.Row="1"
+                 Background="Transparent"
+                 ItemsSource="{Binding NavItems}"
+                 SelectedItem="{Binding SelectedItem}">
+            <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:NavItem">
+                    <!-- 하위 메뉴(IsChild)는 들여쓰기, 그룹 헤더(IsGroup)는 굵게 + 우측 ▸/▾ -->
+                    <Grid ColumnDefinitions="*,Auto" Classes.nav-child="{Binding IsChild}">
+                        <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="10">
                             <TextBlock Text="{Binding Icon}" FontSize="15" Width="20" />
-                            <TextBlock Text="{Binding Label}" VerticalAlignment="Center" />
+                            <TextBlock Text="{Binding Label}" VerticalAlignment="Center" Foreground="{DynamicResource AppTextBrush}"
+                                       Classes.nav-group="{Binding IsGroup}" />
                         </StackPanel>
-                    </DataTemplate>
-                </ListBox.ItemTemplate>
-            </ListBox>
+                        <TextBlock Grid.Column="1" Text="{Binding Chevron}" VerticalAlignment="Center"
+                                   Foreground="{DynamicResource AppMutedTextBrush}" IsVisible="{Binding IsGroup}" />
+                    </Grid>
+                </DataTemplate>
+            </ListBox.ItemTemplate>
+        </ListBox>
 
-            <Border Grid.Row="2" Margin="12" Padding="12" CornerRadius="8" Background="#2A3242">
-                <StackPanel Spacing="2">
-                    <TextBlock Text="HD현대 AMR" Foreground="White" FontWeight="SemiBold" FontSize="12" />
-                    <TextBlock Text="Avalonia 데스크톱 (이관 중)" Foreground="#9AA4B2" FontSize="11" TextWrapping="Wrap" />
+        <Border Grid.Row="2" Margin="12" Padding="12" CornerRadius="8"
+                Background="{DynamicResource AppWindowBrush}"
+                BorderBrush="{DynamicResource AppBorderBrush}" BorderThickness="1">
+            <StackPanel Spacing="2">
+                <TextBlock Text="HD현대 AMR" Foreground="{DynamicResource AppTextBrush}" FontWeight="SemiBold" FontSize="12" />
+                <TextBlock Text="Avalonia 데스크톱 (이관 중)" Foreground="{DynamicResource AppMutedTextBrush}" FontSize="11" TextWrapping="Wrap" />
+            </StackPanel>
+        </Border>
+    </Grid>
+    </Border>
+
+    <!-- ── 우: 상단 상태바 + 현재 페이지 ── -->
+    <Grid Grid.Column="1" RowDefinitions="Auto,*">
+
+        <!-- 상태바(ACS 앱바 톤): 좌측 연결 상태칩, 우측 끝 비상정지(EMO) 토글 -->
+        <Border Grid.Row="0"
+                Background="{DynamicResource AppHeaderBrush}"
+                BorderBrush="{DynamicResource AppBorderBrush}"
+                BorderThickness="0,0,0,1"
+                Padding="24,7">
+            <DockPanel>
+                <Button DockPanel.Dock="Right"
+                        Classes="danger emo"
+                        Classes.emo-active="{Binding IsEmoActive}"
+                        Content="{Binding EmoButtonText}"
+                        Command="{Binding ToggleEmoCommand}"
+                        VerticalAlignment="Center" />
+
+                <TextBlock DockPanel.Dock="Right"
+                           Classes="muted"
+                           Text="{Binding EmoMessage}"
+                           IsVisible="{Binding EmoMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                           FontSize="12"
+                           MaxWidth="360"
+                           TextWrapping="Wrap"
+                           VerticalAlignment="Center"
+                           Margin="0,0,12,0" />
+
+                <StackPanel Orientation="Horizontal" Spacing="14" VerticalAlignment="Center">
+                    <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                        <TextBlock Text="AMR" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" />
+                        <Border Classes="badge" Classes.on="{Binding IsAmrConnected}">
+                            <TextBlock Text="{Binding AmrStatusText}" />
+                        </Border>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                        <TextBlock Text="Cobot" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" />
+                        <Border Classes="badge" Classes.on="{Binding IsCobotConnected}">
+                            <TextBlock Text="{Binding CobotStatusText}" />
+                        </Border>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                        <TextBlock Text="IO모듈" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" />
+                        <Border Classes="badge" Classes.on="{Binding IsIoConnected}">
+                            <TextBlock Text="{Binding IoStatusText}" />
+                        </Border>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                        <TextBlock Text="ACS" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" />
+                        <Border Classes="badge" Classes.on="{Binding IsAcsConnected}"
+                                ToolTip.Tip="{Binding AcsDetailText}">
+                            <TextBlock Text="{Binding AcsStatusText}" />
+                        </Border>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                        <TextBlock Text="배터리" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" />
+                        <Border Classes="badge" Classes.on="{Binding IsBatteryOk}">
+                            <TextBlock Text="{Binding BatteryText}" />
+                        </Border>
+                    </StackPanel>
                 </StackPanel>
-            </Border>
-        </Grid>
+            </DockPanel>
+        </Border>
 
-        <!-- ── 우: 현재 페이지 ── -->
-        <ScrollViewer Grid.Column="1" Padding="24">
-            <ContentControl Content="{Binding Navigation.CurrentViewModel}" />
+        <!-- 현재 페이지 -->
+        <!-- Padding 은 ScrollViewer 가 아니라 ContentControl 에 둔다: Avalonia 11.2 의 ScrollContentPresenter 는
+             Padding 을 measure/Extent 에 반영하지 않아 하단 패딩만큼 콘텐츠가 스크롤 밖으로 잘린다. -->
+        <ScrollViewer Grid.Row="1">
+            <ContentControl Content="{Binding Navigation.CurrentViewModel}" Padding="24" />
         </ScrollViewer>
+    </Grid>
     </Grid>
 </Window>

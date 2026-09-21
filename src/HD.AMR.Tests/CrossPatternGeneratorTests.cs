@@ -34,7 +34,7 @@ public class CrossPatternGeneratorTests
             Assert.Equal(-90, w.RzDeg);
         }
 
-        // 전 경유점 θ=0 (십자 패턴은 평탄 촬상 — Surface 는 레시피 SurfaceOverride/자동 규칙 소관).
+        // 전 경유점 θ=0 (십자 패턴은 평탄 촬상 — Surface 는 경유점 지정/자동 규칙 소관).
         Assert.All(wp, w => Assert.Equal(0, w.Theta));
     }
 

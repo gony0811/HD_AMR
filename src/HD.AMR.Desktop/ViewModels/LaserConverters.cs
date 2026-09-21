@@ -6,8 +6,9 @@ namespace HD.AMR.Desktop.ViewModels;
 
 public static class LaserConverters
 {
-    private static readonly IBrush On = new SolidColorBrush(Color.FromRgb(0x19, 0x87, 0x54));
-    private static readonly IBrush Off = new SolidColorBrush(Color.FromRgb(0x6C, 0x75, 0x7D));
+    // 채움형 태그(흰 글씨) — AppGoodFillBrush / ACS 대기 회색
+    private static readonly IBrush On = new SolidColorBrush(Color.FromRgb(0x27, 0xAE, 0x60));
+    private static readonly IBrush Off = new SolidColorBrush(Color.FromRgb(0x5D, 0x6D, 0x7E));
 
     public static readonly IValueConverter DimIfOff = new FuncValueConverter<bool, double>(on => on ? 1.0 : 0.45);
     public static readonly IValueConverter OnOffBrush = new FuncValueConverter<bool, IBrush>(on => on ? On : Off);

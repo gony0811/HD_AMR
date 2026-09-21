@@ -1,6 +1,7 @@
 using HD.AMR.App.Data;
 using HD.AMR.App.Data.Entities;
 using Microsoft.EntityFrameworkCore;
+using HD.AMR.App.Models;
 
 namespace HD.AMR.App.Service;
 
@@ -17,29 +18,54 @@ public class TeachingService
         _db = db;
     }
 
-    /// <summary>고정 슬롯 정의(키, 표시 이름) — 삭제 불가·코드가 키로 직접 참조하는 위치만.
-    /// 검사 위치는 고정 슬롯이 아니라 사용자가 행을 추가하고 SurfaceId(0x01~0xFF)를 부여해 만든다
-    /// (시퀀스 ②가 SurfaceId 로 목표를 결정). 과거 시드였던 inspectionReady 등 기존 행은 DB에
-    /// 남아 사용자 행처럼 편집/삭제할 수 있다.</summary>
-    public static readonly (string Key, string Name)[] Slots =
+    /// <summary>Wall Code 고정 슬롯 키.</summary>
+    public static string WallSlotKey(string code) => $"wall.{code}";
+
+    /// <summary>사용자 항목이 쓸 수 없는 Wall ID 범위(Wall Code 고정 슬롯 전용).</summary>
+    public static bool IsReservedSurfaceId(int surfaceId) => WallCodes.FindBySurfaceId(surfaceId) is not null;
+
+    /// <summary>Wall ID → "0x01 · B 바닥" 표시 문자열. 고정 범위 밖이면 "0x0B" 처럼 hex 만.</summary>
+    public static string SurfaceLabel(int surfaceId) =>
+        WallCodes.FindBySurfaceId(surfaceId) is { } w
+            ? $"0x{surfaceId:X2} · {w.Code} {w.Label}"
+            : $"0x{surfaceId:X2}";
+
+    /// <summary>고정 슬롯 정의(키, 표시 이름, Wall ID) — 삭제·이름/Wall ID 편집 불가, 좌표만 티칭.
+    /// 순서 = 화면 표시 순서: 홈 → Wall Code 10면 검사 준비 위치 → CORNER3 슬롯. 사용자 항목은 그 뒤.</summary>
+    public static readonly (string Key, string Name, int SurfaceId)[] Slots = BuildSlots();
+
+    private static (string Key, string Name, int SurfaceId)[] BuildSlots()
     {
-        ("home", "홈 위치"),
+        var list = new List<(string, string, int)> { ("home", "홈 위치", 0x00) };
+        // Wall Code 10면 검사 준비 위치 — 코드·Wall ID·이름은 정본 표(WallCodes)에서만 가져온다.
+        foreach (var w in WallCodes.All)
+            list.Add((WallSlotKey(w.Code), $"검사 준비 — {w.Label}", w.SurfaceId));
         // CORNER3 삼면 코너 검사(cornerInspectionRun 스텝)가 키로 직접 순회하는 고정 슬롯 —
         // 좌(L)/우(R) 거울 각 5점: 접근(via, 촬영 없음) → 3면 촬영 → 복귀(via). 좌표는 현장 티칭.
-        ("corner3.L.approach", "코너3 L — 접근"),
-        ("corner3.L.face1", "코너3 L — 면1 (135°)"),
-        ("corner3.L.face2", "코너3 L — 면2 (90°)"),
-        ("corner3.L.face3", "코너3 L — 면3 (90°)"),
-        ("corner3.L.retreat", "코너3 L — 복귀"),
-        ("corner3.R.approach", "코너3 R — 접근"),
-        ("corner3.R.face1", "코너3 R — 면1 (135°)"),
-        ("corner3.R.face2", "코너3 R — 면2 (90°)"),
-        ("corner3.R.face3", "코너3 R — 면3 (90°)"),
-        ("corner3.R.retreat", "코너3 R — 복귀"),
+        foreach (var side in new[] { "L", "R" })
+        {
+            list.Add(($"corner3.{side}.approach", $"코너3 {side} — 접근", 0x00));
+            list.Add(($"corner3.{side}.face1", $"코너3 {side} — 면1 (135°)", 0x00));
+            list.Add(($"corner3.{side}.face2", $"코너3 {side} — 면2 (90°)", 0x00));
+            list.Add(($"corner3.{side}.face3", $"코너3 {side} — 면3 (90°)", 0x00));
+            list.Add(($"corner3.{side}.retreat", $"코너3 {side} — 복귀", 0x00));
+        }
+        return list.ToArray();
+    }
+
+    /// <summary>과거 사용자형 검사 위치 → Wall Code 슬롯 이관표(2026-09-18, 이름 기준 대응).
+    /// 대상 슬롯이 미티칭일 때만 좌표를 옮기고 구 행은 삭제한다.</summary>
+    private static readonly (string LegacyKey, string WallCode)[] LegacyWallMigration =
+    {
+        ("inspectionReady", "F"),    // 검사 준비 위치 (전면)
+        ("inspectionGround", "B"),   // 검사 준비 위치 (바닥)
+        ("inspectionCeiling", "T"),  // 검사 준비 위치 (천정)
     };
 
-    /// <summary><see cref="Slots"/> 중 DB에 없는 슬롯을 생성하고(좌표는 null), 표시 이름이
-    /// 시드 정의와 다른 기존 슬롯은 이름만 갱신한다. 멱등.</summary>
+    /// <summary>시드 보장(멱등):
+    /// ① <see cref="Slots"/> 중 없는 슬롯 생성(좌표 null), 기존 슬롯의 이름·Wall ID·표시 순서를 정의대로 교정
+    /// ② 구 검사 위치 행(<see cref="LegacyWallMigration"/>)의 좌표를 Wall Code 슬롯으로 이관 후 삭제
+    /// ③ 사용자 항목 표시 순서를 고정 슬롯 뒤로 정렬.</summary>
     public async Task EnsureSeededAsync(CancellationToken ct = default)
     {
         var rows = await _db.TeachingPositions.ToListAsync(ct);
@@ -49,29 +75,72 @@ public class TeachingService
         var changed = false;
         for (var i = 0; i < Slots.Length; i++)
         {
-            var (key, name) = Slots[i];
+            var (key, name, surfaceId) = Slots[i];
             if (byKey.TryGetValue(key, out var row))
             {
-                if (row.Name != name)
+                if (row.Name != name || row.SurfaceId != surfaceId || row.SortOrder != i)
                 {
                     row.Name = name;
+                    row.SurfaceId = surfaceId;
+                    row.SortOrder = i;
                     row.UpdatedAt = now;
                     changed = true;
                 }
                 continue;
             }
-            _db.TeachingPositions.Add(new TeachingPosition
+            row = new TeachingPosition
             {
                 Key = key,
                 Name = name,
+                SurfaceId = surfaceId,
                 SortOrder = i,
                 Tool = 1,
                 CreatedAt = now,
                 UpdatedAt = now,
-            });
+            };
+            _db.TeachingPositions.Add(row);
+            byKey[key] = row;
             changed = true;
         }
+
+        foreach (var (legacyKey, code) in LegacyWallMigration)
+        {
+            if (!byKey.TryGetValue(legacyKey, out var legacy)) continue;
+            var target = byKey[WallSlotKey(code)];
+            if (legacy.IsTaught && !target.IsTaught)
+                CopyCoordinates(legacy, target, now);
+            _db.TeachingPositions.Remove(legacy);
+            byKey.Remove(legacyKey);
+            changed = true;
+        }
+
+        var order = Slots.Length;
+        foreach (var user in byKey.Values.Where(p => !IsSeedSlot(p.Key)).OrderBy(p => p.SortOrder).ThenBy(p => p.Id))
+        {
+            if (user.SortOrder != order)
+            {
+                user.SortOrder = order;
+                user.UpdatedAt = now;
+                changed = true;
+            }
+            order++;
+        }
+
         if (changed) await _db.SaveChangesAsync(ct);
+    }
+
+    private static void CopyCoordinates(TeachingPosition from, TeachingPosition to, DateTime now)
+    {
+        to.X = from.X; to.Y = from.Y; to.Z = from.Z;
+        to.Rx = from.Rx; to.Ry = from.Ry; to.Rz = from.Rz;
+        to.J1 = from.J1; to.J2 = from.J2; to.J3 = from.J3;
+        to.J4 = from.J4; to.J5 = from.J5; to.J6 = from.J6;
+        to.Tool = from.Tool;
+        to.UserFrame = from.UserFrame;
+        to.RelX = from.RelX; to.RelY = from.RelY; to.RelZ = from.RelZ;
+        to.RelRx = from.RelRx; to.RelRy = from.RelRy; to.RelRz = from.RelRz;
+        to.CapturedAt = from.CapturedAt;
+        to.UpdatedAt = now;
     }
 
     /// <summary>시드 보장 후 전체 슬롯을 표시 순서대로 반환.</summary>
@@ -87,12 +156,21 @@ public class TeachingService
     public Task<TeachingPosition?> GetAsync(int id, CancellationToken ct = default) =>
         _db.TeachingPositions.AsNoTracking().FirstOrDefaultAsync(p => p.Id == id, ct);
 
+    private static void EnsureUserSurfaceId(int surfaceId)
+    {
+        if (IsReservedSurfaceId(surfaceId))
+            throw new InvalidOperationException(
+                $"Wall ID 0x{surfaceId:X2} 는 {SurfaceLabel(surfaceId)} 고정 슬롯 전용입니다 — 사용자 항목은 0x00 또는 0x0B~0xFF 를 쓰세요.");
+    }
+
     /// <summary>시드 슬롯(삭제/이름·Surface 편집 불가) 여부.</summary>
     public static bool IsSeedSlot(string key) => Slots.Any(s => s.Key == key);
 
-    /// <summary>사용자 정의 위치 행 추가. Key 는 자동 생성, 좌표는 비운 채(미티칭) 생성된다.</summary>
+    /// <summary>사용자 정의 위치 행 추가. Key 는 자동 생성, 좌표는 비운 채(미티칭) 생성된다.
+    /// Wall ID 0x01~0x0A 는 Wall Code 고정 슬롯 전용이라 거부한다.</summary>
     public async Task<TeachingPosition> AddAsync(string name, int surfaceId, CancellationToken ct = default)
     {
+        EnsureUserSurfaceId(surfaceId);
         var now = DateTime.UtcNow;
         var maxOrder = await _db.TeachingPositions.MaxAsync(p => (int?)p.SortOrder, ct) ?? -1;
         var row = new TeachingPosition
@@ -120,9 +198,10 @@ public class TeachingService
         return true;
     }
 
-    /// <summary>이름/Surface ID(0x00~0xFF) 갱신. 시드 슬롯은 무시(이름·Surface 고정).</summary>
+    /// <summary>이름/Surface ID(0x00, 0x0B~0xFF) 갱신. 시드 슬롯은 무시(이름·Surface 고정).</summary>
     public async Task UpdateInfoAsync(int id, string name, int surfaceId, CancellationToken ct = default)
     {
+        EnsureUserSurfaceId(surfaceId);
         var row = await _db.TeachingPositions.FirstOrDefaultAsync(p => p.Id == id, ct);
         if (row is null || IsSeedSlot(row.Key)) return;
         row.Name = string.IsNullOrWhiteSpace(name) ? row.Name : name.Trim();

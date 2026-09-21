@@ -5,7 +5,7 @@
              x:Class="HD.AMR.Desktop.Views.SequenceView"
              x:DataType="vm:SequenceViewModel">
     <UserControl.Styles>
-        <Style Selector="TextBlock.axis"><Setter Property="Foreground" Value="{DynamicResource TextMuted}" /><Setter Property="FontSize" Value="12" /></Style>
+        <Style Selector="TextBlock.axis"><Setter Property="Foreground" Value="{DynamicResource AppMutedTextBrush}" /><Setter Property="FontSize" Value="12" /></Style>
     </UserControl.Styles>
 
     <StackPanel MaxWidth="1100" HorizontalAlignment="Left">
@@ -71,13 +71,6 @@
                     <StackPanel Width="130" Margin="0,0,12,8">
                         <TextBlock Classes="axis" Text="Peak1→2 방향" />
                         <ComboBox HorizontalAlignment="Stretch" SelectedIndex="{Binding PitchDirIndex}" IsEnabled="{Binding !Busy}"><ComboBoxItem>+1</ComboBoxItem><ComboBoxItem>−1</ComboBoxItem></ComboBox>
-                    </StackPanel>
-                    <StackPanel Width="200" Margin="0,0,12,8">
-                        <TextBlock Classes="axis" Text="검사 도면" />
-                        <ComboBox HorizontalAlignment="Stretch" ItemsSource="{Binding Drawings}"
-                                  SelectedValue="{Binding InspectionDrawingId}" SelectedValueBinding="{Binding Id}" IsEnabled="{Binding !Busy}">
-                            <ComboBox.ItemTemplate><DataTemplate x:DataType="ent:Drawing"><TextBlock Text="{Binding Name}" /></DataTemplate></ComboBox.ItemTemplate>
-                        </ComboBox>
                     </StackPanel>
                     <StackPanel Width="200" Margin="0,0,12,8">
                         <TextBlock Classes="axis" Text="티칭설정" />

@@ -1,13 +1,17 @@
 namespace HD.AMR.App.Data.Entities;
 
 /// <summary>
-/// 한 도면에 대해 사용자가 Inspection 페이지에서 조정한 설정 한 세트(이름붙여 저장).
+/// 사용자가 교시 페이지에서 조정한 검사 설정 한 세트(이름붙여 저장).
 /// 솎기/코봇 파라미터와 경유점(수동 편집 포함)을 묶어 보관해, 나중에 그대로 복원한다.
+/// 도면 연결(<see cref="DrawingId"/>)은 선택 사항 — X-Y 교시 일원화 이후 새 프로파일은 도면 없이 저장된다.
 /// </summary>
 public class InspectionProfile
 {
     public int Id { get; set; }
-    public int DrawingId { get; set; }
+
+    /// <summary>선택적 도면 연결(구 도면 기반 교시 유산). null=도면 무관 프로파일.</summary>
+    public int? DrawingId { get; set; }
+
     public string Name { get; set; } = "";
 
     // 솎기 파라미터

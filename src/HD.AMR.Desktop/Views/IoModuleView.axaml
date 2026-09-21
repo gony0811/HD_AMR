@@ -30,6 +30,8 @@
         <Border Classes="card">
             <StackPanel Spacing="10">
                 <TextBlock Text="입력 접점" FontWeight="SemiBold" />
+                <TextBlock Classes="muted" FontSize="12"
+                           Text="{Binding PointMapNote}" TextWrapping="Wrap" />
                 <ItemsControl ItemsSource="{Binding Inputs}">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate>
@@ -39,8 +41,9 @@
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="vm:IoBit">
                             <Border Classes="badge" Classes.on="{Binding On}" Classes.off="{Binding !On}"
-                                    MinWidth="88" Margin="0,0,8,8" Padding="8,6">
-                                <TextBlock Text="{Binding Label, StringFormat='{}{0}'}" HorizontalAlignment="Center" />
+                                    Classes.unassigned="{Binding !Assigned}"
+                                    MinWidth="150" Margin="0,0,8,8" Padding="8,6">
+                                <TextBlock Text="{Binding Label}" HorizontalAlignment="Center" />
                             </Border>
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
@@ -51,7 +54,10 @@
         <!-- 출력 접점 -->
         <Border Classes="card">
             <StackPanel Spacing="10">
-                <TextBlock Text="출력 접점" FontWeight="SemiBold" />
+                <TextBlock Text="출력 접점 테스트" FontWeight="SemiBold" />
+                <TextBlock Classes="muted" FontSize="12"
+                           Text="출력별 ON/OFF 버튼을 눌러 실제 접점을 테스트합니다. 통신 연결 중에만 조작할 수 있습니다."
+                           TextWrapping="Wrap" />
                 <ItemsControl ItemsSource="{Binding Outputs}">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate>
@@ -61,12 +67,29 @@
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="vm:IoBit">
                             <Border Classes="badge" Classes.on="{Binding On}" Classes.off="{Binding !On}"
-                                    MinWidth="88" Margin="0,0,8,8" Padding="8,6">
-                                <TextBlock Text="{Binding Label}" HorizontalAlignment="Center" />
+                                    Classes.unassigned="{Binding !Assigned}"
+                                    Width="196" Margin="0,0,8,8" Padding="10,8">
+                                <StackPanel Spacing="7">
+                                    <TextBlock Text="{Binding Label}" HorizontalAlignment="Center"
+                                               TextTrimming="CharacterEllipsis" />
+                                    <Grid ColumnDefinitions="*,6,*">
+                                        <Button Grid.Column="0" Content="ON" HorizontalContentAlignment="Center"
+                                                Command="{Binding $parent[ItemsControl].((vm:IoModuleViewModel)DataContext).SetOutputOnCommand}"
+                                                CommandParameter="{Binding}" />
+                                        <Button Grid.Column="2" Content="OFF" HorizontalContentAlignment="Center"
+                                                Command="{Binding $parent[ItemsControl].((vm:IoModuleViewModel)DataContext).SetOutputOffCommand}"
+                                                CommandParameter="{Binding}" />
+                                    </Grid>
+                                </StackPanel>
                             </Border>
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
+                <TextBlock Classes="muted" FontSize="12"
+                           Text="{Binding PointMapNote}" TextWrapping="Wrap" />
+                <Border Classes="alert" IsVisible="{Binding OutputMessage, Converter={x:Static ObjectConverters.IsNotNull}}">
+                    <TextBlock Text="{Binding OutputMessage}" TextWrapping="Wrap" />
+                </Border>
             </StackPanel>
         </Border>
     </StackPanel>

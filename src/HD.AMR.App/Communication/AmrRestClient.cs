@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Net.Http.Headers;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -37,6 +38,7 @@ public sealed class AmrRestClient : IDisposable
             BaseAddress = new Uri(_s.BaseUrl.TrimEnd('/') + "/"),
             Timeout = TimeSpan.FromMilliseconds(_s.TimeoutMs),
         };
+        _http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
     }
 
     /// <summary>좌표 이동 명령(비동기 — 응답은 "명령 수리"). 검사 정차는 항상 stopFlag=true
@@ -53,7 +55,23 @@ public sealed class AmrRestClient : IDisposable
     public Task<AmrRestResult> GetStatusAsync(CancellationToken ct = default)
         => SendAsync(HttpMethod.Get, _s.StatusPath, body: null, ct);
 
-    private async Task<AmrRestResult> SendAsync(HttpMethod method, string path, object? body, CancellationToken ct)
+    /// <summary>현재 SLAM 포즈, 맵 좌표로 변환된 라이다 점과 맵 일치율을 조회한다.</summary>
+    public Task<AmrRestResult> GetPoseAsync(CancellationToken ct = default)
+        => SendAsync(HttpMethod.Get, _s.PosePath, body: null, ct, logResponseBody: false);
+
+    /// <summary>이름으로 맵 내용(노드·코스·base64 PNG mapping)을 조회한다.
+    /// 활성 맵 이름 조회 API가 확정되지 않아 호출측에서 이름을 제공해야 한다.</summary>
+    public Task<AmrRestResult> GetMapContentAsync(string mapName, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(mapName))
+            return Task.FromResult(AmrRestResult.Fail("맵 이름을 입력하세요."));
+
+        var path = $"{_s.MapContentPath.TrimEnd('/')}/{Uri.EscapeDataString(mapName.Trim())}";
+        return SendAsync(HttpMethod.Get, path, body: null, ct);
+    }
+
+    private async Task<AmrRestResult> SendAsync(HttpMethod method, string path, object? body, CancellationToken ct,
+        bool logResponseBody = true)
     {
         var rel = path.TrimStart('/');
         try
@@ -68,10 +86,21 @@ public sealed class AmrRestClient : IDisposable
 
             using var res = await _http.SendAsync(req, ct);
             var raw = await res.Content.ReadAsStringAsync(ct);
-            _logger.LogDebug("AMR REST {Method} {Path} 응답 HTTP {Status}: {Raw}", method, rel, (int)res.StatusCode, raw);
+            if (logResponseBody)
+                _logger.LogDebug("AMR REST {Method} {Path} 응답 HTTP {Status}: {Raw}", method, rel, (int)res.StatusCode, raw);
+            else
+                _logger.LogDebug("AMR REST {Method} {Path} 응답 HTTP {Status} ({Length} chars)",
+                    method, rel, (int)res.StatusCode, raw.Length);
 
             if (!res.IsSuccessStatusCode)
-                return new AmrRestResult(false, (int)res.StatusCode, $"HTTP {(int)res.StatusCode}", null, raw);
+            {
+                var detail = string.IsNullOrWhiteSpace(raw)
+                    ? null
+                    : raw.Length <= 300 ? raw.Trim() : raw[..300].Trim() + "…";
+                var errorMessage = $"HTTP {(int)res.StatusCode} ({res.ReasonPhrase})" +
+                                   (detail is null ? "" : $": {detail}");
+                return new AmrRestResult(false, (int)res.StatusCode, errorMessage, null, raw);
+            }
 
             // 공통 envelope 파싱 — HTTP 상태코드가 아니라 body 의 code 로 판정한다.
             using var doc = JsonDocument.Parse(raw);

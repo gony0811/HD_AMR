@@ -5,8 +5,8 @@
              x:Class="HD.AMR.Desktop.Views.VisionTrainingView"
              x:DataType="vm:VisionTrainingViewModel">
     <UserControl.Styles>
-        <Style Selector="TextBlock.axis"><Setter Property="Foreground" Value="{DynamicResource TextMuted}" /><Setter Property="FontSize" Value="12" /></Style>
-        <Style Selector="TextBlock.hint"><Setter Property="Foreground" Value="{DynamicResource TextMuted}" /><Setter Property="FontSize" Value="12" /><Setter Property="TextWrapping" Value="Wrap" /></Style>
+        <Style Selector="TextBlock.axis"><Setter Property="Foreground" Value="{DynamicResource AppMutedTextBrush}" /><Setter Property="FontSize" Value="12" /></Style>
+        <Style Selector="TextBlock.hint"><Setter Property="Foreground" Value="{DynamicResource AppMutedTextBrush}" /><Setter Property="FontSize" Value="12" /><Setter Property="TextWrapping" Value="Wrap" /></Style>
     </UserControl.Styles>
 
     <StackPanel MaxWidth="980" HorizontalAlignment="Left">
@@ -118,7 +118,7 @@
                                 <StackPanel><TextBlock Classes="axis" Text="모달리티" /><ComboBox Width="90" SelectedIndex="{Binding InferModalityIndex}"><ComboBoxItem>RGB</ComboBoxItem><ComboBoxItem>IR</ComboBoxItem></ComboBox></StackPanel>
                                 <Button VerticalAlignment="Bottom" Content="추론 실행" Classes="accent" Command="{Binding RunInferCommand}" IsEnabled="{Binding !Inferring}" />
                             </StackPanel>
-                            <Border Padding="8" CornerRadius="6" BorderBrush="{DynamicResource CardBorder}" BorderThickness="1">
+                            <Border Padding="8" CornerRadius="6" BorderBrush="{DynamicResource AppBorderBrush}" BorderThickness="1">
                                 <StackPanel Spacing="6">
                                     <TextBlock Classes="hint" Text="또는 검증용 이미지 업로드 (따로 빼둔 이미지 — 모델이 학습한 모달리티와 같은 종류로)" />
                                     <StackPanel Orientation="Horizontal" Spacing="8">
@@ -137,7 +137,7 @@
                                 <TextBlock Classes="axis" VerticalAlignment="Center" Text="{Binding MaskThr, StringFormat='mask {0:0.00}'}" /><Slider Width="140" Minimum="0.30" Maximum="0.70" TickFrequency="0.05" IsSnapToTickEnabled="True" Value="{Binding MaskThr}" />
                             </StackPanel>
                             <Border Classes="alert" IsVisible="{Binding InferText, Converter={x:Static ObjectConverters.IsNotNull}}"><TextBlock Text="{Binding InferText}" TextWrapping="Wrap" /></Border>
-                            <Border BorderBrush="{DynamicResource CardBorder}" BorderThickness="1" Background="Black" Height="360" IsVisible="{Binding OverlayImage, Converter={x:Static ObjectConverters.IsNotNull}}">
+                            <Border BorderBrush="{DynamicResource AppBorderBrush}" BorderThickness="1" Background="Black" Height="360" IsVisible="{Binding OverlayImage, Converter={x:Static ObjectConverters.IsNotNull}}">
                                 <Image Source="{Binding OverlayImage}" Stretch="Uniform" />
                             </Border>
                         </StackPanel>
@@ -160,7 +160,7 @@
                         <ProgressBar Minimum="0" Maximum="100" Value="{Binding ProgressPct}" Height="14" />
                     </StackPanel>
                     <TextBox Text="{Binding LogText, Mode=OneWay}" IsReadOnly="True" AcceptsReturn="True" FontFamily="monospace" FontSize="11"
-                             Height="320" Background="#111" Foreground="#DDD" TextWrapping="NoWrap" />
+                             Height="320" Background="{DynamicResource AppCanvasBrush}" Foreground="{DynamicResource AppTextBrush}" TextWrapping="NoWrap" />
                 </StackPanel>
             </Border>
         </StackPanel>

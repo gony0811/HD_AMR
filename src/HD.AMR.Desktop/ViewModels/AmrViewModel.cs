@@ -15,13 +15,15 @@ namespace HD.AMR.Desktop.ViewModels;
 public sealed partial class AmrViewModel : ViewModelBase
 {
     private readonly AMRService _svc;
+    public AmrMapViewModel Map { get; }
     private readonly DispatcherTimer _timer;
     private RobotStatus? _status;
     private bool _busy;
 
-    public AmrViewModel(AMRService svc)
+    public AmrViewModel(AMRService svc, AmrMapViewModel map)
     {
         _svc = svc;
+        Map = map;
         _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _timer.Tick += (_, _) => Refresh();
     }
@@ -142,3 +144,4 @@ public sealed record AmrLogEntry(string Time, string Command, bool Ok, string? E
 {
     public string ResultText => Ok ? "OK" : (Error ?? "FAIL");
 }
+

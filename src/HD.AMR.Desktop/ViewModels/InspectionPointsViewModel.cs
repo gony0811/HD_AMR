@@ -21,12 +21,10 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
     private readonly CobotService _cobot;
 
     public ObservableCollection<XyPointVm> Points { get; } = new();
-    public ObservableCollection<Drawing> Drawings { get; } = new();
     public ObservableCollection<InspectionProfile> Profiles { get; } = new();
 
     private static readonly string[] SeamTypes = { "LINE", "CROSS", "CROSS3", "CORNER2", "CORNER3" };
 
-    [ObservableProperty] private int _drawingId;
     [ObservableProperty] private int _seamTypeIndex = 1;   // 기본 CROSS
     [ObservableProperty] private double _fovMm = 30;
     [ObservableProperty] private double _defaultZ = 400;
@@ -38,6 +36,8 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
     [ObservableProperty] private int _runUser;
     [ObservableProperty] private int _runVel = 5;
     [ObservableProperty] private double _settleSec = 0.5;
+    /// <summary>ACS 검사 시 비전 CAPTURE_REQ 응답 대기(초) — 프로필 DelaySec. 드라이런에는 쓰이지 않음.</summary>
+    [ObservableProperty] private double _visionTimeoutSec = HD.AMR.App.Service.Sequence.Steps.InspectionRunStep.DefaultVisionTimeoutSec;
     [ObservableProperty] private bool _isRunning;
     [ObservableProperty] private string? _runMsg;
     [ObservableProperty] private bool _runErr;
@@ -72,29 +72,14 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
     {
         try
         {
-            var list = await WithDrawing(s => s.ListAsync());
-            Drawings.Clear();
-            foreach (var d in list) Drawings.Add(d);
+            await ReloadProfiles();
         }
-        catch (Exception ex) { Notify($"도면 목록 로드 실패: {ex.Message}", true); }
+        catch (Exception ex) { Notify($"프로필 목록 로드 실패: {ex.Message}", true); }
         RecomputeViewBox();
     }
 
     partial void OnSeamTypeIndexChanged(int value) => OnPropertyChanged(nameof(IsCross));
     partial void OnFovMmChanged(double value) => RecomputeViewBox();
-
-    async partial void OnDrawingIdChanged(int value)
-    {
-        SelectedProfileId = 0;
-        Profiles.Clear();
-        if (value == 0) return;
-        try
-        {
-            foreach (var p in await WithDrawing(s => s.ListProfilesAsync(value)))
-                Profiles.Add(p);
-        }
-        catch (Exception ex) { Notify($"프로필 목록 로드 실패: {ex.Message}", true); }
-    }
 
     [RelayCommand]
     private void AddPoint()
@@ -232,7 +217,7 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
     [RelayCommand]
     private async Task SaveProfile()
     {
-        if (DrawingId == 0 || string.IsNullOrWhiteSpace(ProfileName) || Points.Count == 0) return;
+        if (string.IsNullOrWhiteSpace(ProfileName) || Points.Count == 0) return;
         try
         {
             var wps = Points.Select(p => new InspectionWaypoint(
@@ -245,18 +230,22 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
             var profile = new InspectionProfile
             {
                 Id = existing?.Id ?? 0,
-                DrawingId = DrawingId,
                 Name = name,
                 SeamType = SeamType,
                 PoseAbsolute = true,
                 RunTool = RunTool, RunUser = RunUser, RunVel = RunVel, SettleDelaySec = SettleSec,
+                DelaySec = VisionTimeoutSec > 0 ? VisionTimeoutSec : HD.AMR.App.Service.Sequence.Steps.InspectionRunStep.DefaultVisionTimeoutSec,
                 ThMax = 180,
                 WaypointsJson = System.Text.Json.JsonSerializer.Serialize(wps),
             };
             var saved = await WithDrawing(s => s.SaveProfileAsync(profile));
             await ReloadProfiles();
             SelectedProfileId = saved.Id;
-            Notify($"저장 완료: [{SeamType}] {name} ({wps.Count}점)", false);
+            var usedBy = await WithDrawing(s => s.ListRecipesUsingProfileAsync(saved.Id));
+            Notify($"저장 완료: [{SeamType}] {name} ({wps.Count}점)" +
+                   (usedBy.Count > 0
+                       ? $" — 레시피 {string.Join(", ", usedBy)} 에 지정된 프로필이라 ACS 실행에 즉시 반영됩니다."
+                       : " — ACS 에 쓰려면 검사 레시피 페이지에서 지정하세요."), false);
         }
         catch (Exception ex) { Notify($"저장 실패: {ex.Message}", true); }
     }
@@ -273,6 +262,7 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
             SeamTypeIndex = idx >= 0 ? idx : 1;
             ProfileName = p.Name;
             RunTool = p.RunTool; RunUser = p.RunUser; RunVel = p.RunVel; SettleSec = p.SettleDelaySec;
+            VisionTimeoutSec = p.DelaySec > 0 ? p.DelaySec : HD.AMR.App.Service.Sequence.Steps.InspectionRunStep.DefaultVisionTimeoutSec;
             var wps = System.Text.Json.JsonSerializer.Deserialize<List<InspectionWaypoint>>(p.WaypointsJson) ?? new();
             Points.Clear();
             foreach (var w in wps)
@@ -290,10 +280,13 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
         if (SelectedProfileId == 0) return;
         try
         {
-            await WithDrawing(s => s.DeleteProfileAsync(SelectedProfileId));
+            var id = SelectedProfileId;
+            var cleared = await WithDrawing(s => s.DeleteProfileAsync(id));
             await ReloadProfiles();
             SelectedProfileId = 0;
-            Notify("삭제 완료", false);
+            Notify(cleared.Count > 0
+                ? $"삭제 완료 — 레시피 {string.Join(", ", cleared)} 의 티칭 프로필 지정이 해제되었습니다(재지정 전까지 해당 액션 FAILED)."
+                : "삭제 완료", cleared.Count > 0);
         }
         catch (Exception ex) { Notify($"삭제 실패: {ex.Message}", true); }
     }
@@ -301,8 +294,7 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
     private async Task ReloadProfiles()
     {
         Profiles.Clear();
-        if (DrawingId == 0) return;
-        foreach (var p in await WithDrawing(s => s.ListProfilesAsync(DrawingId)))
+        foreach (var p in await WithDrawing(s => s.ListProfilesAsync()))
             Profiles.Add(p);
     }
 

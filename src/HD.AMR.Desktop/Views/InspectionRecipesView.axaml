@@ -3,87 +3,140 @@
              xmlns:vm="using:HD.AMR.Desktop.ViewModels"
              x:Class="HD.AMR.Desktop.Views.InspectionRecipesView"
              x:DataType="vm:InspectionRecipesViewModel">
-    <StackPanel MaxWidth="1120" HorizontalAlignment="Left">
+    <UserControl.Styles>
+        <Style Selector="TextBlock.section"><Setter Property="FontWeight" Value="SemiBold" /><Setter Property="Margin" Value="0,0,0,4" /></Style>
+        <Style Selector="TextBlock.hint"><Setter Property="Foreground" Value="{DynamicResource AppMutedTextBrush}" /><Setter Property="FontSize" Value="12" /><Setter Property="TextWrapping" Value="Wrap" /></Style>
+        <Style Selector="TextBlock.warn"><Setter Property="Foreground" Value="{DynamicResource AppWarnFgBrush}" /><Setter Property="FontSize" Value="11" /></Style>
+        <Style Selector="ListBox.recipes ListBoxItem"><Setter Property="Padding" Value="10,6" /></Style>
+    </UserControl.Styles>
+
+    <StackPanel MaxWidth="1400" HorizontalAlignment="Left">
         <TextBlock Classes="page-title" Text="검사 레시피 관리" />
         <TextBlock Classes="page-subtitle" TextWrapping="Wrap"
-                   Text="ACS startWeldInspection 의 (seamType, wall_code) 조합으로 선택되는 검사 타입 17종의 실행 구성입니다. Enabled 는 실기 E2E 검증 후에만 켜세요." />
+                   Text="ACS startWeldInspection 의 (seamType, wall_code) 조합으로 선택되는 검사 타입 17종의 실행 구성입니다. 왼쪽에서 레시피를 선택해 설정하고 저장하세요. Enabled 는 실기 E2E 검증 후에만 켜세요." />
 
         <Grid ColumnDefinitions="Auto,*" Margin="0,0,0,8">
-            <Button Grid.Column="0" Content="새로고침" Command="{Binding ReloadCommand}" IsEnabled="{Binding !Busy}" />
+            <Button Grid.Column="0" Content="새로고침" Command="{Binding ReloadCommand}" IsEnabled="{Binding !Busy}"
+                    ToolTip.Tip="DB 에서 다시 읽습니다 — 저장하지 않은 편집(● 미저장)은 사라집니다." />
             <TextBlock Grid.Column="1" HorizontalAlignment="Right" VerticalAlignment="Center"
                        Classes="muted" Text="{Binding TotalCount, StringFormat='총 {0} 종'}" />
         </Grid>
 
-        <Border Classes="alert" IsVisible="{Binding Message, Converter={x:Static ObjectConverters.IsNotNull}}">
+        <Border Classes="alert" Margin="0,0,0,8" IsVisible="{Binding Message, Converter={x:Static ObjectConverters.IsNotNull}}">
             <TextBlock Text="{Binding Message}" TextWrapping="Wrap" />
         </Border>
 
-        <ItemsControl ItemsSource="{Binding Rows}">
-            <ItemsControl.ItemTemplate>
-                <DataTemplate x:DataType="vm:RecipeRow">
-                    <Border Classes="card" Padding="12" Margin="0,0,0,8">
-                        <StackPanel Spacing="6">
-                            <Grid ColumnDefinitions="Auto,120,*,Auto,120,Auto">
-                                <Button Grid.Column="0" Width="30"
-                                        Content="{Binding IsExpanded, Converter={x:Static vm:RecipeConverters.Chevron}}"
-                                        Command="{Binding $parent[ItemsControl].((vm:InspectionRecipesViewModel)DataContext).ToggleExpandCommand}"
-                                        CommandParameter="{Binding}" />
-                                <TextBlock Grid.Column="1" Text="{Binding Id}" FontFamily="monospace" VerticalAlignment="Center" />
-                                <TextBlock Grid.Column="2" Text="{Binding DisplayName}" VerticalAlignment="Center" TextWrapping="Wrap" />
-                                <CheckBox Grid.Column="3" IsChecked="{Binding Enabled}" Content="Enabled" VerticalAlignment="Center" />
-                                <NumericUpDown Grid.Column="4" Value="{Binding VisionFailRatioMax}" Increment="0.05" Minimum="0" Maximum="1"
-                                               FormatString="0.00" VerticalAlignment="Center" />
-                                <StackPanel Grid.Column="5" Orientation="Horizontal" Spacing="4">
-                                    <Button Content="저장" Classes="accent"
-                                            Command="{Binding $parent[ItemsControl].((vm:InspectionRecipesViewModel)DataContext).SaveCommand}"
-                                            CommandParameter="{Binding}" />
-                                    <Button Content="기본값"
-                                            Command="{Binding $parent[ItemsControl].((vm:InspectionRecipesViewModel)DataContext).ResetToDefaultCommand}"
-                                            CommandParameter="{Binding}" />
+        <Grid ColumnDefinitions="300,*">
+            <!-- 좌: 레시피 목록 -->
+            <Border Grid.Column="0" Classes="card" Padding="6" Margin="0,0,12,12" VerticalAlignment="Top">
+                <ListBox Classes="recipes" ItemsSource="{Binding Rows}" SelectedItem="{Binding SelectedRow}" Background="Transparent">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:RecipeRow">
+                            <StackPanel Spacing="3">
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <TextBlock Grid.Column="0" Text="{Binding Id}" FontFamily="monospace" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                    <TextBlock Grid.Column="1" Text="● 미저장" Classes="warn" VerticalAlignment="Center"
+                                               IsVisible="{Binding IsDirty}" />
+                                </Grid>
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <Border Classes="badge" Classes.on="{Binding Enabled}" Classes.off="{Binding !Enabled}" Padding="8,1">
+                                        <Panel>
+                                            <TextBlock FontSize="11" Text="ON" IsVisible="{Binding Enabled}" />
+                                            <TextBlock FontSize="11" Text="OFF" IsVisible="{Binding !Enabled}" />
+                                        </Panel>
+                                    </Border>
+                                    <TextBlock Classes="warn" VerticalAlignment="Center" Text="⚠ 프로필 미지정"
+                                               IsVisible="{Binding ProfileMissing}" />
                                 </StackPanel>
-                            </Grid>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </Border>
 
-                            <TextBox Text="{Binding StepKeysJson}" FontFamily="monospace" FontSize="12"
-                                     Watermark="StepKeysJson (null = 풀시퀀스)" />
+            <!-- 우: 선택 레시피 상세 -->
+            <StackPanel Grid.Column="1">
+                <Border Classes="alert info" Margin="0" IsVisible="{Binding !HasSelection}">
+                    <TextBlock Text="왼쪽에서 레시피를 선택하세요." />
+                </Border>
 
-                            <!-- 고급 설정 -->
-                            <Border IsVisible="{Binding IsExpanded}" Padding="8" CornerRadius="6"
-                                    Background="{DynamicResource CardBorder}">
-                                <WrapPanel>
-                                    <StackPanel Width="220" Margin="0,0,12,8">
-                                        <TextBlock Classes="muted" FontSize="12" Text="접근 자세 티칭 키" />
-                                        <TextBox Text="{Binding ApproachTeachingKey}" FontFamily="monospace" Watermark="(빈 값 = 스텝 기본)" />
+                <Border Classes="card" IsVisible="{Binding HasSelection}">
+                    <ContentControl Content="{Binding SelectedRow}">
+                        <ContentControl.ContentTemplate>
+                            <DataTemplate x:DataType="vm:RecipeRow">
+                                <StackPanel Spacing="14">
+                                    <!-- 헤더 -->
+                                    <StackPanel Spacing="2">
+                                        <TextBlock Text="{Binding Id}" FontFamily="monospace" FontSize="20" FontWeight="SemiBold" />
+                                        <TextBlock Text="{Binding DisplayName}" TextWrapping="Wrap" />
+                                        <TextBlock Classes="hint" Text="{Binding SeamOrientationText}" />
                                     </StackPanel>
-                                    <StackPanel Width="150" Margin="0,0,12,8">
-                                        <TextBlock Classes="muted" FontSize="12" Text="Standoff 폴백 [mm]" />
-                                        <NumericUpDown Value="{Binding DefaultStandoffMm}" Increment="10" Minimum="0" FormatString="0" />
+
+                                    <!-- 실행 허용 -->
+                                    <StackPanel>
+                                        <TextBlock Classes="section" Text="실행 허용" />
+                                        <CheckBox IsChecked="{Binding Enabled}" Content="Enabled" />
+                                        <TextBlock Classes="hint" Text="꺼져 있으면 이 레시피로 매핑된 ACS 액션은 FAILED + inspectionFailed 로 보고됩니다. 실기 E2E 검증 후에만 켜세요." />
                                     </StackPanel>
-                                    <StackPanel Width="170" Margin="0,0,12,8">
-                                        <TextBlock Classes="muted" FontSize="12" Text="카메라 목표거리 [mm]" />
-                                        <NumericUpDown Value="{Binding CameraTargetDistanceMm}" Increment="10" Minimum="0" FormatString="0" />
-                                    </StackPanel>
-                                    <StackPanel Width="170" Margin="0,0,12,8">
-                                        <TextBlock Classes="muted" FontSize="12" Text="Surface 강제" />
-                                        <ComboBox SelectedIndex="{Binding SurfaceIndex}" HorizontalAlignment="Stretch">
-                                            <ComboBoxItem>자동(|θ| 판정)</ComboBoxItem>
-                                            <ComboBoxItem>0 · Flat</ComboBoxItem>
-                                            <ComboBoxItem>1 · Corner</ComboBoxItem>
-                                            <ComboBoxItem>2 · Corrugation</ComboBoxItem>
+
+                                    <!-- 티칭 프로필 -->
+                                    <StackPanel>
+                                        <TextBlock Classes="section" Text="티칭 프로필 (경유점)" />
+                                        <ComboBox MinWidth="360" HorizontalAlignment="Left"
+                                                  IsVisible="{Binding CanPickProfile}"
+                                                  ItemsSource="{Binding ProfileOptions}" SelectedItem="{Binding SelectedProfile}">
+                                            <ComboBox.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:ProfileOption"><TextBlock Text="{Binding Label}" /></DataTemplate>
+                                            </ComboBox.ItemTemplate>
                                         </ComboBox>
+                                        <TextBlock Classes="hint" IsVisible="{Binding CanPickProfile}"
+                                                   Text="검사 프로파일 페이지에서 저장한 같은 타입 프로필만 표시됩니다. 미지정이면 ACS 액션이 FAILED 입니다." />
+                                        <TextBlock Classes="hint" IsVisible="{Binding IsCorner3}"
+                                                   Text="CORNER3 는 고정 티칭 슬롯(corner3.L/R.*)을 순회하므로 프로필을 지정하지 않습니다." />
                                     </StackPanel>
-                                    <StackPanel Width="130" Margin="0,0,12,8">
-                                        <TextBlock Classes="muted" FontSize="12" Text="정렬 재시도" />
-                                        <NumericUpDown Value="{Binding AlignRetryCount}" Increment="1" Minimum="0" FormatString="0" />
+
+                                    <!-- 실행 스텝 -->
+                                    <StackPanel>
+                                        <TextBlock Classes="section" Text="실행 스텝 (StepKeysJson)" />
+                                        <TextBox Text="{Binding StepKeysJson}" FontFamily="monospace" FontSize="12"
+                                                 AcceptsReturn="True" TextWrapping="Wrap" MinHeight="80"
+                                                 Watermark="빈 값 = 풀시퀀스 · 예: [&quot;amrMove&quot;,&quot;inspectionRun&quot;]" />
+                                        <TextBlock Classes="hint" Text="JSON 문자열 배열. 배열 순서와 무관하게 스텝 등록 순서(Order)로 실행되며, Key 오타는 저장 시 검사되지 않습니다." />
                                     </StackPanel>
-                                    <TextBlock Classes="muted" FontSize="12" Width="700"
-                                               Text="{Binding SeamType, StringFormat='seamType={0} · 세부값 편집 후 저장을 누르세요.'}" />
-                                </WrapPanel>
-                            </Border>
-                        </StackPanel>
-                    </Border>
-                </DataTemplate>
-            </ItemsControl.ItemTemplate>
-        </ItemsControl>
+
+                                    <!-- 비전 실패율 상한 / 카메라 목표거리 -->
+                                    <WrapPanel>
+                                        <StackPanel Width="260" Margin="0,0,24,0">
+                                            <TextBlock Classes="section" Text="비전 실패율 상한" />
+                                            <NumericUpDown Width="170" HorizontalAlignment="Left" Value="{Binding VisionFailRatioMax}"
+                                                           Increment="0.05" Minimum="0" Maximum="1" FormatString="0.00" />
+                                            <TextBlock Classes="hint" Text="0~1. 초과 시 액션 FAILED · 1.0 = 판정 안 함" />
+                                        </StackPanel>
+                                        <StackPanel Width="300">
+                                            <TextBlock Classes="section" Text="카메라 목표거리 [mm]" />
+                                            <NumericUpDown Width="170" HorizontalAlignment="Left" Value="{Binding CameraTargetDistanceMm}"
+                                                           Increment="10" Minimum="0" FormatString="0" />
+                                            <TextBlock Classes="hint" Text="③ 카메라 거리 정렬 목표 (빈 값 = 400, ACS workingDistanceMm 미사용)" />
+                                        </StackPanel>
+                                    </WrapPanel>
+
+                                    <!-- 버튼 -->
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <Button Content="저장" Classes="accent"
+                                                Command="{Binding $parent[UserControl].((vm:InspectionRecipesViewModel)DataContext).SaveCommand}"
+                                                CommandParameter="{Binding}" />
+                                        <Button Content="기본값"
+                                                ToolTip.Tip="코드 기본값(시드)으로 되돌립니다 — Enabled·StepKeysJson·실패율·카메라 거리. 티칭 프로필 지정은 유지됩니다."
+                                                Command="{Binding $parent[UserControl].((vm:InspectionRecipesViewModel)DataContext).ResetToDefaultCommand}"
+                                                CommandParameter="{Binding}" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ContentControl.ContentTemplate>
+                    </ContentControl>
+                </Border>
+            </StackPanel>
+        </Grid>
 
         <TextBlock Classes="muted" HorizontalAlignment="Center" Margin="0,10"
                    Text="레시피가 없습니다 — 앱 재기동 시 자동 시드됩니다."

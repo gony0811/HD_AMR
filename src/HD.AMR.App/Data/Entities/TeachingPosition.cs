@@ -9,7 +9,7 @@ public class TeachingPosition
 {
     public int Id { get; set; }
 
-    /// <summary>슬롯 식별자(home, inspectionReady …). 코드 시드와 매칭되는 unique 키.</summary>
+    /// <summary>슬롯 식별자(home, wall.B, corner3.L.face1, user-… 등). 코드 시드와 매칭되는 unique 키.</summary>
     public string Key { get; set; } = "";
 
     /// <summary>표시 이름(홈 위치, 검사 준비 위치 …).</summary>

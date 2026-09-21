@@ -21,8 +21,9 @@
     각 경유점은 6-DOF <code>[X, Y, Z, Rx, Ry, Rz]</code> — 코로게이션 등 굴곡면은 코봇을 검사 자세로
     <b>조그한 뒤 '현재 자세 캡처'</b> 로 Rx/Ry/Z 실측을 그대로 담으세요(눈으로 계산 불가).
     아래 캔버스는 X-Y 평면이며 각 점의 카메라 FOV(@F(_fovMm)×@F(_fovMm)mm)를 사각형으로 표시합니다.
-    <br /><span class="text-success-emphasis">✔ LINE·CROSS3·CROSS4: 여기서 저장한 절대 6-DOF 프로필이 ACS 자동검사의 경유점 소스입니다(Rx 포함) —
-    레시피 <code>Enabled</code> 를 켜면 됨. (도면 기반 `/inspection` 교시는 검증 후 폐기 예정 — X-Y 교시로 일원화)</span>
+    <br /><span class="text-success-emphasis">✔ LINE·CROSS3·CROSS4: 여기서 저장한 절대 6-DOF 프로필을 <a href="recipes">검사 레시피</a> 페이지에서
+    레시피(면)마다 <b>티칭 프로필로 지정</b>하면 ACS 자동검사의 경유점 소스가 됩니다(Rx 포함). 저장만으로는 ACS 실행 대상이 바뀌지 않습니다.
+    (도면 기반 `/inspection` 교시는 검증 후 폐기 예정 — X-Y 교시로 일원화)</span>
     <br /><span class="text-warning-emphasis">⚠ CORNER: 현재 ACS 런타임은 3면 코너를 BASE 좌표계 고정 슬롯(corner3.*)으로 검사합니다 —
     이 X-Y(wobj) 프로필은 아직 CORNER ACS 실행에 쓰이지 않습니다(프레임 규약 결정 필요).</span>
 </p>
@@ -173,8 +174,10 @@
             <input class="form-control form-control-sm" type="number" min="0" max="14" style="width:80px" @bind="_runUser" /></div>
         <div class="col-auto"><label class="form-label mb-0">속도(%)</label>
             <input class="form-control form-control-sm" type="number" min="1" max="100" style="width:80px" @bind="_runVel" /></div>
-        <div class="col-auto"><label class="form-label mb-0">정착 대기(초)</label>
+        <div class="col-auto"><label class="form-label mb-0" title="각 경유점 도착 후 진동이 가라앉을 때까지 촬영 전 대기">정착 대기(초)</label>
             <input class="form-control form-control-sm" type="number" step="0.1" min="0" style="width:110px" @bind="_settleSec" /></div>
+        <div class="col-auto"><label class="form-label mb-0" title="ACS 검사 실행 시 비전 촬영 요청(CAPTURE_REQ) 후 응답을 기다리는 최대 시간. 초과하면 그 점은 비전 실패로 집계. 드라이런에는 쓰이지 않음">비전 응답 대기(초)</label>
+            <input class="form-control form-control-sm" type="number" step="0.5" min="0.5" style="width:120px" @bind="_visionTimeoutSec" /></div>
         <div class="col-auto">
             <button class="btn btn-success" @onclick="RunPoints" disabled="@(_isRunning || _points.Count < 1 || !Cobot.IsConnected)">
                 @(_isRunning ? "실행 중..." : "실행")
@@ -191,7 +194,8 @@
 @* ── 프로필 저장/불러오기 ── *@
 <div class="teaching-profiles mt-2" style="padding:10px; border:1px solid #ccc; border-radius:6px; max-width:1300px">
     <strong>프로필 저장 / 불러오기</strong>
-    <p class="hint text-muted mb-1">선택한 섹션(도면)에 이 포인트 세트를 이름붙여 저장합니다. 런타임은 sectionDxfId→도면→seamType 일치 최신 프로필을 사용합니다.</p>
+    <p class="hint text-muted mb-1">선택한 섹션(도면)에 이 포인트 세트를 이름붙여 저장합니다(같은 이름+타입이면 덮어쓰기).
+        ACS 는 <a href="recipes">검사 레시피</a> 에 지정된 프로필만 사용합니다 — 이미 레시피에 지정된 프로필을 덮어쓰면 그 레시피 실행에 즉시 반영됩니다.</p>
     <div class="row g-2 align-items-end">
         <div class="col-auto">
             <input class="form-control form-control-sm" type="text" placeholder="프로필 이름" style="width:220px" @bind="_profileName" />
@@ -276,6 +280,7 @@
     // 코봇 실행
     private int _runTool = 1, _runUser = 0, _runVel = 5;
     private double _settleSec = 0.5;
+    private double _visionTimeoutSec = HD.AMR.App.Service.Sequence.Steps.InspectionRunStep.DefaultVisionTimeoutSec;   // 프로필 DelaySec
     private bool _isRunning;
     private bool _runErr;
     private string? _runMsg;
@@ -518,13 +523,18 @@
                 RunUser = _runUser,
                 RunVel = _runVel,
                 SettleDelaySec = _settleSec,
+                DelaySec = _visionTimeoutSec > 0 ? _visionTimeoutSec : HD.AMR.App.Service.Sequence.Steps.InspectionRunStep.DefaultVisionTimeoutSec,   // 비전 응답 대기(초)
                 ThMax = 180,             // X-Y 포인트는 θ 필터 미적용(전부 실행)
                 WaypointsJson = System.Text.Json.JsonSerializer.Serialize(wps),
             };
             var saved = await Service.SaveProfileAsync(profile);
             _profiles = await Service.ListProfilesAsync(_drawingId);
             _selectedProfileId = saved.Id;
-            Notify($"저장 완료: [{_seamType}] {name} ({wps.Count}점)", false);
+            var usedBy = await Service.ListRecipesUsingProfileAsync(saved.Id);
+            Notify($"저장 완료: [{_seamType}] {name} ({wps.Count}점)" +
+                   (usedBy.Count > 0
+                       ? $" — 레시피 {string.Join(", ", usedBy)} 에 지정된 프로필이라 ACS 실행에 즉시 반영됩니다."
+                       : " — ACS 에 쓰려면 검사 레시피 페이지에서 지정하세요."), false);
         }
         catch (Exception ex) { Logger.LogError(ex, "SaveProfile 실패"); Notify($"저장 실패: {ex.Message}", true); }
     }
@@ -539,6 +549,7 @@
             _seamType = p.SeamType is "LINE" or "CROSS" or "CROSS3" or "CORNER2" or "CORNER3" ? p.SeamType : "CROSS";
             _profileName = p.Name;
             _runTool = p.RunTool; _runUser = p.RunUser; _runVel = p.RunVel; _settleSec = p.SettleDelaySec;
+            _visionTimeoutSec = p.DelaySec > 0 ? p.DelaySec : HD.AMR.App.Service.Sequence.Steps.InspectionRunStep.DefaultVisionTimeoutSec;
             var wps = System.Text.Json.JsonSerializer.Deserialize<List<InspectionWaypoint>>(p.WaypointsJson) ?? new();
             _points.Clear();
             foreach (var w in wps)
@@ -555,10 +566,12 @@
         if (_selectedProfileId is not int id) return;
         try
         {
-            await Service.DeleteProfileAsync(id);
+            var cleared = await Service.DeleteProfileAsync(id);
             _profiles = await Service.ListProfilesAsync(_drawingId);
             _selectedProfileId = null;
-            Notify("삭제 완료", false);
+            Notify(cleared.Count > 0
+                ? $"삭제 완료 — 레시피 {string.Join(", ", cleared)} 의 티칭 프로필 지정이 해제되었습니다(재지정 전까지 해당 액션 FAILED)."
+                : "삭제 완료", cleared.Count > 0);
         }
         catch (Exception ex) { Logger.LogError(ex, "DeleteProfile 실패"); Notify($"삭제 실패: {ex.Message}", true); }
     }

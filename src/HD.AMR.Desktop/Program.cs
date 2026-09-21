@@ -18,6 +18,16 @@ internal static class Program
     [STAThread]
     public static void Main(string[] args)
     {
+        // 미처리 예외로 프로세스가 조용히 죽으면 원인 추적이 불가능하다(터미널 없이 실행하는 현장 특히).
+        // 종료를 막을 수는 없지만(아발로니아 11.2 에는 UI 예외를 삼키는 공식 훅이 없다) 파일로는 남긴다.
+        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+            LogCrash(e.ExceptionObject as Exception, "AppDomain.UnhandledException");
+        TaskScheduler.UnobservedTaskException += (_, e) =>
+        {
+            LogCrash(e.Exception, "TaskScheduler.UnobservedTaskException");
+            e.SetObserved();   // 관찰 처리 — 이 경로로는 프로세스를 내리지 않는다.
+        };
+
         // 기존 HD.AMR.Web 과 동일하게 Generic Host 위에 하드웨어 서비스(싱글톤 + HostedService)를 얹는다.
         // ContentRoot 를 실행 파일 폴더로 고정한다 — 기본값(현재 작업 디렉터리)이면 다른 폴더에서 실행할 때
         // 출력 폴더의 appsettings.json 을 찾지 못해 모든 장비 설정(IP/포트, Vda5050.Enabled 등)이 기본값이 된다.
@@ -31,6 +41,13 @@ internal static class Program
         builder.Services.Configure<HostOptions>(o => o.ShutdownTimeout = TimeSpan.FromSeconds(2));
         builder.Services.AddHdAmrServices(builder.Configuration);
         var host = builder.Build();
+
+        // 과거 상대경로 시절의 레거시 DB(웹 프로젝트 폴더 등)를 정본 경로(%LocalAppData%/HD.AMR)로
+        // 1회 가져오기 — DB 초기화(EnsureCreated)보다 먼저 실행해야 한다.
+        HD.AMR.App.Data.LegacyDatabaseImporter.ImportIfNeeded(
+            builder.Configuration, AppContext.BaseDirectory,
+            host.Services.GetRequiredService<Microsoft.Extensions.Logging.ILoggerFactory>()
+                .CreateLogger("LegacyDbImport"));
 
         // DB 초기화(EnsureCreated + 후방호환 스키마 + 시드) 1회 실행 — 기존 Web Program.cs 로직 이식.
         DatabaseInitializer.Initialize(host.Services);
@@ -48,6 +65,12 @@ internal static class Program
             host.Start();
             BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
         }
+        catch (Exception ex)
+        {
+            // UI 스레드 미처리 예외(메인 루프 탈출)를 기록하고 다시 던진다 — 종료 동작은 유지.
+            LogCrash(ex, "Main");
+            throw;
+        }
         finally
         {
             // 호스티드 서비스 정리에 자체 하드 타임아웃을 건다. 일부 클라이언트의 Disconnect/StopAsync 는
@@ -59,8 +82,11 @@ internal static class Program
         }
 
         // 잔여 비관리/블로킹 스레드(소켓 종료 대기, 네이티브 카메라/OpenCV 등)가 남아도 프로세스가
-        // 확실히 끝나도록 하는 최종 보장.
-        Environment.Exit(0);
+        // 확실히 끝나도록 하는 최종 보장. Environment.Exit 은 AppDomain.ProcessExit 핸들러를 실행하는데,
+        // ConsoleLifetime 이 그 핸들러에서 "호스트 완전 종료"를 무기한 대기하므로 StopAsync 가 멈춘
+        // 클라이언트(동기 블로킹 Disconnect)가 있으면 창이 닫힌 뒤에도 좀비 프로세스가 남는다 —
+        // Process.Kill 은 ProcessExit 핸들러를 우회해 즉시 종료한다.
+        System.Diagnostics.Process.GetCurrentProcess().Kill();
     }
 
     // 신호 수신 시: OS 기본 종료를 취소하고 Avalonia 를 정상 종료 → 메인 스레드 블로킹 해제 → finally 실행.
@@ -71,10 +97,24 @@ internal static class Program
             (Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.Shutdown());
     }
 
+    /// <summary>크래시 내용을 정본 데이터 폴더(%LocalAppData%/HD.AMR)에 파일로 남긴다. 실패는 무시.</summary>
+    private static void LogCrash(Exception? ex, string source)
+    {
+        if (ex is null) return;
+        try
+        {
+            var dir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "HD.AMR");
+            Directory.CreateDirectory(dir);
+            var path = Path.Combine(dir, $"crash-{DateTime.Now:yyyyMMdd-HHmmss}.log");
+            File.AppendAllText(path, $"[{DateTime.Now:O}] {source}{Environment.NewLine}{ex}{Environment.NewLine}");
+        }
+        catch { /* 로그 기록 실패가 종료 경로를 막지 않게 */ }
+    }
+
     // Avalonia configuration, don't remove; also used by visual designer.
     public static AppBuilder BuildAvaloniaApp()
         => AppBuilder.Configure<App>()
             .UsePlatformDetect()
-            .WithInterFont()
             .LogToTrace();
 }

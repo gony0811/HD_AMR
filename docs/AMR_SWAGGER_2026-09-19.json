@@ -1,0 +1,2362 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "TARS-AMR",
+    "description": "TARS-AMR API Manual",
+    "version": "3.18.0"
+  },
+  "schemes": [
+    "http"
+  ],
+  "paths": {
+    "/api/v3/robot/info": {
+      "get": {
+        "description": "로봇 제조 정보 조회",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/robot/device/info": {
+      "get": {
+        "description": "로봇 설정 정보 조회",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "post": {
+        "description": "로봇 설정 정보 업데이트",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "wheel": {
+                  "type": "object",
+                  "properties": {
+                    "diameter": {
+                      "type": "number",
+                      "example": 0.17
+                    },
+                    "tread": {
+                      "type": "number",
+                      "example": 0.333
+                    },
+                    "reduction": {
+                      "type": "number",
+                      "example": 1
+                    },
+                    "encoder": {
+                      "type": "number",
+                      "example": 4096
+                    }
+                  }
+                },
+                "size": {
+                  "type": "object",
+                  "properties": {
+                    "length": {
+                      "type": "number",
+                      "example": 0.8
+                    },
+                    "width": {
+                      "type": "number",
+                      "example": 0.5
+                    }
+                  }
+                },
+                "movement": {
+                  "type": "object",
+                  "properties": {
+                    "velocity": {
+                      "type": "number",
+                      "example": 0.5
+                    },
+                    "rotate": {
+                      "type": "number",
+                      "example": 0.7
+                    },
+                    "acceleration": {
+                      "type": "number",
+                      "example": 0.5
+                    },
+                    "deceleration": {
+                      "type": "number",
+                      "example": 1.5
+                    },
+                    "precision": {
+                      "type": "number",
+                      "example": 0.3
+                    }
+                  }
+                },
+                "obstacle": {
+                  "type": "object",
+                  "properties": {
+                    "velocity": {
+                      "type": "number",
+                      "example": -0.2
+                    },
+                    "detection": {
+                      "type": "number",
+                      "example": 0.3
+                    },
+                    "avoidance": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "avoidDistance": {
+                      "type": "number",
+                      "example": 2
+                    },
+                    "sync": {
+                      "type": "boolean",
+                      "example": true
+                    }
+                  }
+                },
+                "camera": {
+                  "type": "object",
+                  "properties": {
+                    "avoidance": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "bottomOffset": {
+                      "type": "number",
+                      "example": 0.05
+                    }
+                  }
+                },
+                "lidar": {
+                  "type": "object",
+                  "properties": {
+                    "exception": {
+                      "type": "array",
+                      "items": {
+                        "type": "array",
+                        "example": [
+                          270,
+                          315
+                        ],
+                        "items": {
+                          "type": "number"
+                        }
+                      }
+                    }
+                  }
+                },
+                "sound": {
+                  "type": "object",
+                  "properties": {
+                    "move": {
+                      "type": "number",
+                      "example": 50
+                    },
+                    "arrived": {
+                      "type": "number",
+                      "example": 50
+                    },
+                    "warning": {
+                      "type": "number",
+                      "example": 50
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/robot/validation/info": {
+      "get": {
+        "description": "로봇 활성화키 정보 조회",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "post": {
+        "description": "로봇 활성화키 설정",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string",
+                  "example": "LFRBW-1JGIV-RXYPT-XLG7Q-914BA"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/robot/status": {
+      "get": {
+        "description": "로봇 현재 상태 조회",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/robot/brief": {
+      "get": {
+        "description": "로봇 현재 상태 조회 (Modbus 정보 포함)",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/robot/cart": {
+      "post": {
+        "description": "로봇 모드 변경 (주행모드 / 수동모드)",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "cart": {
+                  "type": "boolean",
+                  "example": true
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/robot/pose": {
+      "get": {
+        "description": "로봇의 현재 좌표 조회 (좌표기반 라이다 센싱 값 및 맵 일치율 포함)",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "post": {
+        "description": "로봇 위치 보정",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "x": {
+                  "type": "number",
+                  "example": 10
+                },
+                "y": {
+                  "type": "number",
+                  "example": 5
+                },
+                "rz": {
+                  "type": "number",
+                  "example": 0
+                },
+                "tuneFlag": {
+                  "type": "boolean",
+                  "example": false
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/robot/lidar": {
+      "get": {
+        "description": "각도기반 라이다 센싱 값 조회 (필터링 적용)",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/robot/lidar/all": {
+      "get": {
+        "description": "각도기반 라이다 센싱 값 조회",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/robot/state": {
+      "get": {
+        "description": "로봇의 현재 주행 단계 조회",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "post": {
+        "description": "로봇 주행 제어 (시작/정지/일시정지)",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "state": {
+                  "type": "string",
+                  "example": "stop"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/robot/shutdown": {
+      "post": {
+        "description": "로봇 종료",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/robot/reboot": {
+      "post": {
+        "description": "로봇 재부팅",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/robot/restart": {
+      "post": {
+        "description": "로봇 빠른 재부팅 (SW 재시작)",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/robot/task": {
+      "post": {
+        "description": "작업을 시작할 Task 설정",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "example": "Task 1"
+                },
+                "index": {
+                  "type": "number",
+                  "example": 0
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/robot/task/clear": {
+      "post": {
+        "description": "설정한 Task 클리어",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/robot/move": {
+      "post": {
+        "description": "로봇 속도 제어 (200ms timeout 적용됨)",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "linear": {
+                  "type": "number",
+                  "example": 0.5
+                },
+                "angular": {
+                  "type": "number",
+                  "example": -0.25
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/robot/go": {
+      "post": {
+        "description": "특정 좌표로 이동",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "x": {
+                  "type": "number",
+                  "example": 10
+                },
+                "y": {
+                  "type": "number",
+                  "example": 5
+                },
+                "rz": {
+                  "type": "number",
+                  "example": 0
+                },
+                "stopFlag": {
+                  "type": "boolean",
+                  "example": false
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/robot/job/add": {
+      "post": {
+        "description": "현재 Task에 좌표 베이스의 거점 Job 추가",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "x": {
+                  "type": "number",
+                  "example": 10
+                },
+                "y": {
+                  "type": "number",
+                  "example": 5
+                },
+                "rz": {
+                  "type": "number",
+                  "example": 0
+                },
+                "stopFlag": {
+                  "type": "boolean",
+                  "example": false
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/robot/hold": {
+      "post": {
+        "description": "로봇 주행 일시 정지",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "block": {
+                  "type": "boolean",
+                  "example": true
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/robot/odom": {
+      "post": {
+        "description": "Odometry 정보 초기화",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/robot/obstacle": {
+      "get": {
+        "description": "검출된 장애물의 맵상 좌표 조회",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/robot/modbus": {
+      "post": {
+        "description": "모드버스 홀딩 레지스터 값 설정",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "address": {
+                  "example": "any"
+                },
+                "value": {
+                  "example": "any"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/robot/modbus/bulk": {
+      "post": {
+        "description": "모드버스 홀딩 레지스터 멀티 값 설정",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "modbus": {
+                  "example": "any"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/robot/recover": {
+      "post": {
+        "description": "맵 및 계획 초기화 (Empty Map 로드)",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/robot/sound/device": {
+      "get": {
+        "description": "로봇에 연결된 사운드 출력장치 조회",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "post": {
+        "description": "로봇 사운드 출력 장치 설정",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "card": {
+                  "example": "any"
+                },
+                "device": {
+                  "example": "any"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/robot/sound": {
+      "post": {
+        "description": "출력할 사운드 파일 커스텀 업로드",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "alarm": {
+                  "example": "any"
+                },
+                "fileName": {
+                  "example": "any"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/robot/sound/play": {
+      "post": {
+        "description": "선택된 유형의 사운드 재생",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "alarm": {
+                  "example": "any"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/robot/sound/volume": {
+      "post": {
+        "description": "선택된 유형의 사운드 볼륨 설정",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "alarm": {
+                  "example": "any"
+                },
+                "volume": {
+                  "example": "any"
+                },
+                "mute": {
+                  "example": "any"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/robot/sound/{name}": {
+      "delete": {
+        "description": "커스텀 사운드 파일 삭제",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/robot/motor/mode": {
+      "post": {
+        "description": "모터의 PWM 모드 변경",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "enum": [
+                    "pulse",
+                    "serial"
+                  ],
+                  "example": "pulse"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/plan/task/combine": {
+      "post": {
+        "description": "여러개의 Task를 병합하여 스케쥴에 로드",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "tasks": {
+                  "example": "any"
+                },
+                "type": {
+                  "example": "any"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/map/save": {
+      "post": {
+        "description": "현재 로봇에 설정된 데이터(맵/플랜/구역)를 저장",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "mapName": {
+                  "example": "any"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/map/import": {
+      "post": {
+        "description": "맵파일을 로봇에 업로드",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "mapData": {
+                  "example": "any"
+                },
+                "address": {
+                  "example": "any"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/map/export": {
+      "post": {
+        "description": "로봇에 있는 맵 파일을 다운로드",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "example": "any"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/map": {
+      "get": {
+        "description": "로봇에 저장된 맵 목록 조회",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/map/info": {
+      "get": {
+        "description": "현재 로봇에 로드된 맵 정보 조회",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/map/cache": {
+      "get": {
+        "description": "실시간 업데이트 된 맵 이미지 조회 (png)",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/map/cost/": {
+      "get": {
+        "description": "로봇 주행에 사용되는 비용 지도 이미지로 조회 (png)",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/map/size": {
+      "get": {
+        "description": "맵 크기 정보 조회",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/map/content/name/{name}": {
+      "get": {
+        "description": "맵 내용 조회 (png)",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/map/scan/on": {
+      "post": {
+        "description": "맵 스캔하기 시작",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/map/scan/off": {
+      "post": {
+        "description": "맵 스캔하기 종료",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/map/load": {
+      "post": {
+        "description": "로봇에 존재하는 맵 로드하기",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "example": "example.map"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/map/wall/shape": {
+      "post": {
+        "description": "가상벽 유형 조회 (사각형/다각형)",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "index": {
+                  "example": "any"
+                },
+                "type": {
+                  "example": "any"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/map/{name}": {
+      "delete": {
+        "description": "맵 삭제",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "required": true,
+            "type": "string",
+            "example": "map_name.map"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/plan/task/list": {
+      "get": {
+        "description": "태스크 목록 조회",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/plan/task/{id}": {
+      "get": {
+        "description": "특정 태스크 내용 조회",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "patch": {
+        "description": "특정 태스크 내용 업데이트",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "values": {
+                  "example": {
+                    "name": "이름 1",
+                    "disabled": true,
+                    "taskIndex": 1,
+                    "end": {
+                      "alarm": true,
+                      "mode": "repeat"
+                    }
+                  }
+                }
+              }
+            },
+            "description": {
+              "name": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "delete": {
+        "description": "특정 태스크 삭제",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/plan/task": {
+      "post": {
+        "description": "태스크 추가하기",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "example": "이름 1"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/plan/task/append/{taskId}": {
+      "patch": {
+        "description": "태스크에 작업 추가하기",
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "example": "waypoint"
+                },
+                "name": {
+                  "example": "이름 1"
+                },
+                "jobIndex": {
+                  "example": 0
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/plan/task/remove/{taskId}": {
+      "patch": {
+        "description": "태스크에서 작업 삭제하기",
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "jobId": {
+                  "example": "string"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/plan/task/job/{taskId}/{jobId}": {
+      "patch": {
+        "description": "태스크에 포함된 작업의 파라미터 업데이트",
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "jobId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "values": {
+                  "example": {
+                    "type": "charge",
+                    "name": "이름 1",
+                    "disabled": false,
+                    "data": {
+                      "wall": "DEFAULT",
+                      "direction": "center",
+                      "offset": {
+                        "from": 1,
+                        "to": 0.45
+                      },
+                      "percentage": 50,
+                      "retry": true,
+                      "tuneSpeed": {
+                        "linear": 0.05,
+                        "angular": 0.05
+                      },
+                      "detection": 0.3,
+                      "recharge": {
+                        "enable": true,
+                        "threshold": 10
+                      },
+                      "gapRate": 4
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/plan/waypoint/list": {
+      "get": {
+        "description": "거점 목록 조회하기",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/plan/waypoint/{id}": {
+      "get": {
+        "description": "특정 거점의 정보 조회하기",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "delete": {
+        "description": "특정 거점 삭제하기",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "patch": {
+        "description": "특정 거점의 정보 갱신하기",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "values": {
+                  "example": {
+                    "disabled": false,
+                    "name": "이름 1",
+                    "pose": {
+                      "x": 10,
+                      "y": 10,
+                      "rz": 0.1
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/plan/waypoint": {
+      "post": {
+        "description": "거점 추가하기",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "example": "이름 1"
+                },
+                "pose": {
+                  "example": {
+                    "x": 10,
+                    "y": 10,
+                    "rz": 0.1
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/plan/marker/list": {
+      "get": {
+        "description": "마커 목록 조회하기",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/plan/marker/{id}": {
+      "get": {
+        "description": "특정 마커 정보 조회하기",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "delete": {
+        "description": "특정 마커 삭제하기",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "patch": {
+        "description": "특정 마커 정보 갱신하기",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "values": {
+                  "example": {
+                    "type": "V",
+                    "pose": {
+                      "x": 10,
+                      "y": 10,
+                      "rz": 0.1
+                    },
+                    "disabled": false,
+                    "name": "마커 1"
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/plan/marker": {
+      "post": {
+        "description": "마커 추가하기",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "example": "마커 1"
+                },
+                "type": {
+                  "example": "I"
+                },
+                "pose": {
+                  "example": {
+                    "x": 10,
+                    "y": 10,
+                    "rz": 0.1
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/plan/wallgroup/list": {
+      "get": {
+        "description": "가상벽 그룹 목록 조회하기",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/plan/wallgroup/{id}": {
+      "get": {
+        "description": "특정 가상벽 그룹 정보 조회하기",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "delete": {
+        "description": "특정 가상벽 그룹 삭제하기",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/plan/wallgroup": {
+      "post": {
+        "description": "가상벽 그룹 추가히기",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "example": "그룹 1"
+                },
+                "parts": {
+                  "example": [
+                    "wall Id 1",
+                    "wall Id 2"
+                  ]
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/plan/wallgroup/append/{id}": {
+      "patch": {
+        "description": "특정 가상벽 그룹에 포함되는 가상벽 추가하기",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "parts": {
+                  "example": [
+                    "wall Id 1",
+                    "wall Id 2"
+                  ]
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/plan/wallgroup/remove/{id}": {
+      "patch": {
+        "description": "특정 가상벽 그룹에서 가상벽 제외하기",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "parts": {
+                  "example": [
+                    "wall Id 1",
+                    "wall Id 2"
+                  ]
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/plan/wall/list": {
+      "get": {
+        "description": "가상벽 목록 조회하기",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/plan/wall/{id}": {
+      "get": {
+        "description": "특정 가상벽 목록 정보 조회하기",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "delete": {
+        "description": "특정 가상벽 삭제하기",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "patch": {
+        "description": "특정 가상벽 정보 갱신하기",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "values": {
+                  "example": {
+                    "name": "가상벽 1",
+                    "data": [
+                      {
+                        "x": 10,
+                        "y": 10
+                      },
+                      {
+                        "x": 20,
+                        "y": 10
+                      },
+                      {
+                        "x": 20,
+                        "y": 20
+                      },
+                      {
+                        "x": 10,
+                        "y": 20
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/plan/wall": {
+      "post": {
+        "description": "가상벽 추가하기",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "example": "가상벽 1"
+                },
+                "points": {
+                  "example": [
+                    {
+                      "x": 10,
+                      "y": 10
+                    },
+                    {
+                      "x": 20,
+                      "y": 10
+                    },
+                    {
+                      "x": 20,
+                      "y": 20
+                    },
+                    {
+                      "x": 10,
+                      "y": 20
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/plan/area/list": {
+      "get": {
+        "description": "구역 목록 조회하기",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/plan/area/{id}": {
+      "get": {
+        "description": "특정 구역 정보 조회하기",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "delete": {
+        "description": "특정 구역 삭제하기",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "patch": {
+        "description": "특정 구역 정보 갱신하기",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "values": {
+                  "example": {
+                    "name": "영역 1",
+                    "data": [
+                      {
+                        "x": 10,
+                        "y": 10
+                      },
+                      {
+                        "x": 20,
+                        "y": 10
+                      },
+                      {
+                        "x": 20,
+                        "y": 20
+                      },
+                      {
+                        "x": 10,
+                        "y": 20
+                      }
+                    ]
+                  },
+                  "disabled": false
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/plan/area": {
+      "post": {
+        "description": "구역 추가하기",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "example": "영역 1"
+                },
+                "points": {
+                  "example": [
+                    {
+                      "x": 10,
+                      "y": 10
+                    },
+                    {
+                      "x": 20,
+                      "y": 10
+                    },
+                    {
+                      "x": 20,
+                      "y": 20
+                    },
+                    {
+                      "x": 10,
+                      "y": 20
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/plan/oneway/list": {
+      "get": {
+        "description": "일방통행 목록 조회하기",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/plan/oneway/{id}": {
+      "get": {
+        "description": "특정 일방통행 정보 조회하기",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "delete": {
+        "description": "특정 일방통행 삭제하기",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "patch": {
+        "description": "특정 일방통행 정보 갱신하기",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "values": {
+                  "example": {
+                    "name": "영역 1",
+                    "pose": {
+                      "x": 10,
+                      "y": 10,
+                      "rz": 0.1
+                    },
+                    "width": 3,
+                    "height": 1,
+                    "disabled": false
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/plan/oneway": {
+      "post": {
+        "description": "일방통행 추가하기",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "example": "일방통행 1"
+                },
+                "width": {
+                  "example": 3
+                },
+                "height": {
+                  "example": 1
+                },
+                "pose": {
+                  "example": {
+                    "x": 10,
+                    "y": 10,
+                    "rz": 0.1
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/plan/speedLimit/list": {
+      "get": {
+        "description": "속도제한 목록 조회하기",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/plan/speedLimit/{id}": {
+      "get": {
+        "description": "특정 속도제한 정보 조회하기",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "delete": {
+        "description": "특정 속도제한 삭제하기",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "patch": {
+        "description": "특정 속도제한 정보 갱신하기",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "values": {
+                  "example": {
+                    "name": "속도제한 1",
+                    "data": [
+                      {
+                        "x": 10,
+                        "y": 10
+                      },
+                      {
+                        "x": 20,
+                        "y": 10
+                      },
+                      {
+                        "x": 20,
+                        "y": 20
+                      },
+                      {
+                        "x": 10,
+                        "y": 20
+                      }
+                    ]
+                  },
+                  "disabled": false,
+                  "velocity": 0.5
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/plan/speedLimit": {
+      "post": {
+        "description": "속도제한 추가하기",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "example": "속도제한 1"
+                },
+                "points": {
+                  "example": [
+                    {
+                      "x": 10,
+                      "y": 10
+                    },
+                    {
+                      "x": 20,
+                      "y": 10
+                    },
+                    {
+                      "x": 20,
+                      "y": 20
+                    },
+                    {
+                      "x": 10,
+                      "y": 20
+                    }
+                  ]
+                },
+                "velocity": {
+                  "example": 0.7
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/plan/dynamicarea/list": {
+      "get": {
+        "description": "가변구역 목록 조회하기",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/plan/dynamicarea/{id}": {
+      "get": {
+        "description": "특정 가변구역 정보 조회하기",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "delete": {
+        "description": "특정 가변구역 삭제하기",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "patch": {
+        "description": "특정 가변구역 정보 갱신하기",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "values": {
+                  "example": {
+                    "name": "가변구역 1",
+                    "data": [
+                      {
+                        "x": 10,
+                        "y": 10
+                      },
+                      {
+                        "x": 20,
+                        "y": 10
+                      },
+                      {
+                        "x": 20,
+                        "y": 20
+                      },
+                      {
+                        "x": 10,
+                        "y": 20
+                      }
+                    ]
+                  },
+                  "disabled": false
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/plan/dynamicarea": {
+      "post": {
+        "description": "가변구역 추가하기",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "example": "가변구역 1"
+                },
+                "points": {
+                  "example": [
+                    {
+                      "x": 10,
+                      "y": 10
+                    },
+                    {
+                      "x": 20,
+                      "y": 10
+                    },
+                    {
+                      "x": 20,
+                      "y": 20
+                    },
+                    {
+                      "x": 10,
+                      "y": 20
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v3/proxy": {
+      "post": {
+        "description": "로봇의 유선 무선 간 네트워크의 REST 요청을 프록시",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "method": {
+                  "example": "any"
+                },
+                "url": {
+                  "example": "any"
+                },
+                "data": {
+                  "example": "any"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,3 +1,5 @@
+using HD.AMR.App.Models;
+
 namespace HD.AMR.App.Service.Inspection;
 
 /// <summary>
@@ -11,16 +13,8 @@ namespace HD.AMR.App.Service.Inspection;
 /// </summary>
 public static class InspectionRecipeResolver
 {
-    /// <summary>wall_code(10코드 정본: B/T/SM/PM/F/A/SL/PL/SU/PU) → 면 자세. 미정의 코드는 null.</summary>
-    public static SurfaceOrientation? ResolveOrientation(string wallCode) => wallCode switch
-    {
-        "B" => SurfaceOrientation.Floor,
-        "T" => SurfaceOrientation.Ceiling,
-        "SM" or "PM" or "F" or "A" => SurfaceOrientation.Wall,
-        "SL" or "PL" => SurfaceOrientation.ChamferLower,
-        "SU" or "PU" => SurfaceOrientation.ChamferUpper,
-        _ => null,
-    };
+    /// <summary>wall_code(10코드 정본, <see cref="WallCodes"/>) → 면 자세. 미정의 코드는 null.</summary>
+    public static SurfaceOrientation? ResolveOrientation(string wallCode) => WallCodes.Find(wallCode)?.Orientation;
 
     /// <summary>레시피 id 유도. 실패 시 error 에 사유(계약 위반 — orderValidationError 계열).</summary>
     public static bool TryResolve(WeldInspectionRequest request, out string? recipeId, out string? error)
@@ -57,6 +51,18 @@ public static class InspectionRecipeResolver
             SurfaceOrientation.ChamferUpper => $"{prefix}-CHMR-UP",
             _ => null,
         };
+    }
+
+    /// <summary>레시피 id → 티칭 프로필 SeamType 문자열(LINE/CROSS/CROSS3/CORNER2/CORNER3).
+    /// 교시 화면이 레시피 선택으로부터 프로필 타입을 유도할 때 쓴다(CROSS4 는 저장값 "CROSS"). 미정의 id 는 null.</summary>
+    public static string? ProfileSeamTypeOf(string? recipeId)
+    {
+        if (recipeId is null || !RecipeIds.All.Contains(recipeId)) return null;
+        if (recipeId == RecipeIds.Corner2) return "CORNER2";
+        if (recipeId == RecipeIds.Corner3) return "CORNER3";
+        if (recipeId.StartsWith("LINE-", StringComparison.Ordinal)) return "LINE";
+        if (recipeId.StartsWith("CROSS3-", StringComparison.Ordinal)) return "CROSS3";
+        return "CROSS";   // CROSS4-*
     }
 
     /// <summary>CORNER3 좌/우 거울 side 판별 — 코너 스텝의 티칭 슬롯 접두사(corner3.L/R) 선택 키.

@@ -6,6 +6,7 @@ using HD.AMR.App.Service.Sequence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using HD.AMR.App.Models;
 
 namespace HD.AMR.App.Service.Inspection;
 
@@ -14,7 +15,7 @@ namespace HD.AMR.App.Service.Inspection;
 ///
 ///   파싱(<see cref="WeldInspectionActionParser"/>) → 레시피 매핑(<see cref="InspectionRecipeResolver"/>)
 ///   → scope 생성(scoped 서비스 경계 해소) → 레시피 로드(Enabled 게이트)
-///   → sectionDxfId→Drawing→InspectionProfile 조회(사전 티칭 경유점)
+///   → 레시피에 지정된 InspectionProfile 조회(사전 티칭 경유점)
 ///   → SequenceContext 구성(ACS 필드 주입) → SequenceService.RunSequenceAsync
 ///   → 결과 → FINISHED / FAILED + errorType(orderValidationError·equipmentError·inspectionFailed).
 ///
@@ -129,19 +130,13 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             return InspectionActionResult.Fail("inspectionFailed",
                 $"recipe {recipeId} resolved but not enabled (실행 미구현 — N13/2차 대기)");
 
-        // 6) 사전 티칭 경유점 조회: sectionDxfId → Drawing(이름 매칭) → 최신 InspectionProfile.
+        // 6) 사전 티칭 경유점 조회: 레시피에 지정된 InspectionProfile(검사 레시피 페이지에서 지정).
+        //    면 자세마다 경유점이 다르므로 레시피(LINE-FLOOR ≠ LINE-WALL)별로 명시 지정한다.
         //    CORNER 는 도면 프로필을 쓰지 않는다(고정 티칭 슬롯 corner3.* 직접 순회) — 조회 생략.
-        //    seamType(LINE/CROSS)로 필터해 LINE 액션이 CROSS 티칭 프로필을 잡는 혼선을 막는다.
         InspectionProfile? profile = null;
         if (recipe.SeamType != SeamTypeKind.Corner)
         {
-            var wantSeam = recipe.SeamType switch
-            {
-                SeamTypeKind.Cross => "CROSS",
-                SeamTypeKind.Cross3 => "CROSS3",
-                _ => "LINE",
-            };
-            var (found, profileError) = await FindProfileAsync(db, req.SectionDxfId, wantSeam, ct);
+            var (found, profileError) = await FindProfileAsync(db, recipe, req.SectionDxfId, ct);
             if (found is null)
                 return InspectionActionResult.Fail("inspectionFailed", profileError!);
             profile = found;
@@ -180,6 +175,12 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                 cornerSide, sideNote, req.DrawingPos.WallCode);
         }
 
+        var cameraTargetMm = recipe.CameraTargetDistanceMm ?? 400;
+        if (req.WorkingDistanceMm is { } acsWd && Math.Abs(acsWd - cameraTargetMm) > 0.001)
+            _logger.LogInformation(
+                "ACS workingDistanceMm={AcsWd} 무시 — 레시피 {Recipe} 카메라 목표거리 {Target}mm 사용 (jobRef={JobRef})",
+                acsWd, recipe.Id, cameraTargetMm, req.JobRef);
+
         // 9) SequenceContext 구성 — 파라미터 우선순위: ① ACS action → ② 티칭 프로필 → ③ 레시피 → ④ 전역 기본.
         //    CORNER 는 profile 이 없다 — Tool/Velocity 는 SequenceContext 기본값(단독 실행과 동일).
         var context = new SequenceContext
@@ -191,16 +192,15 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             InspectionProfileId = profile?.Id ?? 0,
             CornerSide = cornerSide,
             InspectionSurfaceId = WallCodeToSurfaceId(req.DrawingPos.WallCode),
-            CameraTargetDistanceMm = req.WorkingDistanceMm
-                                     ?? recipe.CameraTargetDistanceMm
-                                     ?? 400,
+            // ③ 카메라 거리 정렬 목표 — 레시피 값(빈 값=전역 400). ACS workingDistanceMm 은 산출 근거가 없어
+            // 사용하지 않는다(2026-09-18 결정, 스키마 항목은 유지 — 수신·로그만).
+            CameraTargetDistanceMm = cameraTargetMm,
             AcsJobRef = req.JobRef,
             AcsOrderId = orderId,
             AcsActionId = action.ActionId,
             AnchorGroupId = req.AnchorGroupId,
             SeqInGroup = req.SeqInGroup,
-            SurfaceOverride = recipe.SurfaceOverride,
-            StandoffMmOverride = req.StandoffMm > 0 ? req.StandoffMm : recipe.DefaultStandoffMm,
+            StandoffMmOverride = req.StandoffMm > 0 ? req.StandoffMm : null,
             VisionFailRatioMax = recipe.VisionFailRatioMax < 1.0 ? recipe.VisionFailRatioMax : null,
         };
 
@@ -290,26 +290,23 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         }
     }
 
-    /// <summary>sectionDxfId 로 로컬 Drawing 을 찾고(이름 정확 일치 → 파일명 매칭 순), 그 도면의
-    /// 최신 티칭설정(InspectionProfile)을 반환. 없으면 (null, 사유).</summary>
+    /// <summary>레시피에 지정된 티칭설정(InspectionProfile)을 반환. 미지정/없음/타입 불일치면 (null, 사유).
+    /// 도면·최신 저장 기준 자동 선택은 폐기 — 레시피 페이지의 명시 지정만 사용한다(테스트 저장이 실행 대상을 바꾸지 않도록).
+    /// sectionDxfId 는 로그용으로만 받는다.</summary>
     private static async Task<(InspectionProfile? Profile, string? Error)> FindProfileAsync(
-        HdAmrDbContext db, string sectionDxfId, string seamType, CancellationToken ct)
+        HdAmrDbContext db, InspectionRecipe recipe, string sectionDxfId, CancellationToken ct)
     {
-        var drawing = await db.Drawings.AsNoTracking()
-                          .FirstOrDefaultAsync(d => d.Name == sectionDxfId, ct)
-                      ?? await db.Drawings.AsNoTracking()
-                          .FirstOrDefaultAsync(d => d.FileName == sectionDxfId
-                                                    || d.FileName == sectionDxfId + ".dxf"
-                                                    || d.FileName == sectionDxfId + ".dwg", ct);
-        if (drawing is null)
-            return (null, $"no local drawing for sectionDxfId='{sectionDxfId}' — 도면 업로드/이름 정합 필요");
+        if (recipe.InspectionProfileId is not { } profileId)
+            return (null, $"recipe {recipe.Id} 에 티칭 프로필 미지정 (sectionDxfId='{sectionDxfId}') — " +
+                          "검사 레시피 페이지에서 프로필 지정 필요");
 
-        var profile = await db.InspectionProfiles.AsNoTracking()
-            .Where(p => p.DrawingId == drawing.Id && p.SeamType == seamType)
-            .OrderByDescending(p => p.UpdatedAt)
-            .FirstOrDefaultAsync(ct);
+        var profile = await db.InspectionProfiles.AsNoTracking().FirstOrDefaultAsync(p => p.Id == profileId, ct);
         if (profile is null)
-            return (null, $"no taught {seamType} profile for sectionDxfId='{sectionDxfId}' (drawing '{drawing.Name}') — 온보드 {seamType} 티칭 필요");
+            return (null, $"recipe {recipe.Id} 지정 티칭 프로필(id={profileId}) 없음 — 삭제됨, 레시피 재지정 필요");
+
+        var want = InspectionRecipeResolver.ProfileSeamTypeOf(recipe.Id);
+        if (!InspectionRecipeService.IsSeamMatch(profile, want))
+            return (null, $"recipe {recipe.Id} 지정 프로필 '{profile.Name}' 타입({profile.SeamType}) ≠ {want} — 레시피 재지정 필요");
 
         return (profile, null);
     }
@@ -330,20 +327,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         }
     }
 
-    /// <summary>wall_code → 비전 Surface ID (vision_interface.md §5, 0x01~0x0A).
-    /// S*=우현(Starboard), P*=좌현(Port). 미정의 코드는 resolver 가 먼저 거른다 — 방어적 기본 0x01.</summary>
-    private static int WallCodeToSurfaceId(string wallCode) => wallCode switch
-    {
-        "B" => 0x01,    // 바닥 (Bottom)
-        "T" => 0x02,    // 천장 (Top)
-        "PM" => 0x03,   // 좌현벽 (Port)
-        "SM" => 0x04,   // 우현벽 (Starboard)
-        "F" => 0x05,    // 전벽 (Forward)
-        "A" => 0x06,    // 후벽 (Aft)
-        "PL" => 0x07,   // 하부 좌현 챔퍼
-        "SL" => 0x08,   // 하부 우현 챔퍼
-        "PU" => 0x09,   // 상부 좌현 챔퍼
-        "SU" => 0x0A,   // 상부 우현 챔퍼
-        _ => 0x01,
-    };
+    /// <summary>wall_code → 비전 Surface ID (vision_interface.md §5, 0x01~0x0A) — 정본 표 <see cref="WallCodes"/>.
+    /// 미정의 코드는 resolver 가 먼저 거른다 — 방어적 기본 0x01.</summary>
+    private static int WallCodeToSurfaceId(string wallCode) => WallCodes.Find(wallCode)?.SurfaceId ?? 0x01;
 }

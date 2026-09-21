@@ -1,3 +1,5 @@
+using HD.AMR.App.Models;
+
 namespace HD.AMR.App.Service.Inspection;
 
 /// <summary>`params.seamType` — 용접 형상 (사양 §8.1/§8.5.1, 독립 5종). 계약 enum(N13 확장):
@@ -12,16 +14,7 @@ public enum SeamTypeKind
     Corner2,    // 2면 코너 (계약 "CORNER2") → 레시피 CORNER2 (실행 미구현 — Enabled=false)
 }
 
-/// <summary>`wall_code` → 면 자세 5군 (사양 §8.5.1 (2), INSPECTION_TYPES.md §2).</summary>
-public enum SurfaceOrientation
-{
-    Floor,          // B
-    Ceiling,        // T
-    Wall,           // SM PM F A
-    ChamferLower,   // SL PL (45°)
-    ChamferUpper,   // SU PU (45°)
-    Any,            // CORNER3 — 면 자세 무관 단일 레시피
-}
+// SurfaceOrientation(면 자세 5군)은 검사 면 정본 표와 함께 HD.AMR.App.Models.WallCodes 로 이동.
 
 /// <summary>`position.drawingPos` echo — tank/level/wall_code + 벽면-로컬 u,v + 도면 x,y,z (§8.1).</summary>
 public sealed record WeldDrawingPos(
@@ -42,6 +35,6 @@ public sealed record WeldInspectionRequest(
     string SectionDxfId,
     string InspectionProfileId,     // 촬영/측정 프리셋(자유 문자열) — 레시피 선택에 사용하지 않음(N13 대기)
     double StandoffMm,
-    double? WorkingDistanceMm,
+    double? WorkingDistanceMm,      // ACS 선택 항목 — AMR 미사용(로그용). 카메라 거리는 레시피 CameraTargetDistanceMm
     string AnchorGroupId,
     int SeqInGroup);

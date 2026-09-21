@@ -94,13 +94,13 @@ public class ModbusTcpClient : IDisposable
         try
         {
             _logger.LogDebug("{Name} ReadHoldingRegisters: address={Address}, count={Count}", _settings.Name, startAddress, count);
-            var result = await _master!.ReadHoldingRegistersAsync(_settings.SlaveId, startAddress, count);
+            var result = await Master.ReadHoldingRegistersAsync(_settings.SlaveId, startAddress, count);
             _logger.LogDebug("{Name} ReadHoldingRegisters 성공: {Count}개", _settings.Name, result.Length);
             return result;
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "{Name} ReadHoldingRegisters 실패: address={Address}, count={Count}", _settings.Name, startAddress, count);
+            OnOperationFailed(ex, $"ReadHoldingRegisters(address={startAddress}, count={count})");
             throw;
         }
         finally
@@ -116,13 +116,13 @@ public class ModbusTcpClient : IDisposable
         try
         {
             _logger.LogDebug("{Name} ReadInputRegisters: address={Address}, count={Count}", _settings.Name, startAddress, count);
-            var result = await _master!.ReadInputRegistersAsync(_settings.SlaveId, startAddress, count);
+            var result = await Master.ReadInputRegistersAsync(_settings.SlaveId, startAddress, count);
             _logger.LogDebug("{Name} ReadInputRegisters 성공: {Count}개", _settings.Name, result.Length);
             return result;
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "{Name} ReadInputRegisters 실패: address={Address}, count={Count}", _settings.Name, startAddress, count);
+            OnOperationFailed(ex, $"ReadInputRegisters(address={startAddress}, count={count})");
             throw;
         }
         finally
@@ -138,13 +138,13 @@ public class ModbusTcpClient : IDisposable
         try
         {
             _logger.LogDebug("{Name} ReadCoils: address={Address}, count={Count}", _settings.Name, startAddress, count);
-            var result = await _master!.ReadCoilsAsync(_settings.SlaveId, startAddress, count);
+            var result = await Master.ReadCoilsAsync(_settings.SlaveId, startAddress, count);
             _logger.LogDebug("{Name} ReadCoils 성공: {Count}개", _settings.Name, result.Length);
             return result;
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "{Name} ReadCoils 실패: address={Address}, count={Count}", _settings.Name, startAddress, count);
+            OnOperationFailed(ex, $"ReadCoils(address={startAddress}, count={count})");
             throw;
         }
         finally
@@ -160,13 +160,13 @@ public class ModbusTcpClient : IDisposable
         try
         {
             _logger.LogDebug("{Name} ReadDiscreteInputs: address={Address}, count={Count}", _settings.Name, startAddress, count);
-            var result = await _master!.ReadInputsAsync(_settings.SlaveId, startAddress, count);
+            var result = await Master.ReadInputsAsync(_settings.SlaveId, startAddress, count);
             _logger.LogDebug("{Name} ReadDiscreteInputs 성공: {Count}개", _settings.Name, result.Length);
             return result;
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "{Name} ReadDiscreteInputs 실패: address={Address}, count={Count}", _settings.Name, startAddress, count);
+            OnOperationFailed(ex, $"ReadDiscreteInputs(address={startAddress}, count={count})");
             throw;
         }
         finally
@@ -182,11 +182,11 @@ public class ModbusTcpClient : IDisposable
         try
         {
             _logger.LogDebug("{Name} WriteSingleRegister: address={Address}, value={Value}", _settings.Name, address, value);
-            await _master!.WriteSingleRegisterAsync(_settings.SlaveId, address, value);
+            await Master.WriteSingleRegisterAsync(_settings.SlaveId, address, value);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "{Name} WriteSingleRegister 실패: address={Address}, value={Value}", _settings.Name, address, value);
+            OnOperationFailed(ex, $"WriteSingleRegister(address={address}, value={value})");
             throw;
         }
         finally
@@ -202,11 +202,11 @@ public class ModbusTcpClient : IDisposable
         try
         {
              _logger.LogDebug("{Name} WriteMultipleRegisters: address={Address}, count={Count}", _settings.Name, startAddress, values.Length);
-            await _master!.WriteMultipleRegistersAsync(_settings.SlaveId, startAddress, values);
+            await Master.WriteMultipleRegistersAsync(_settings.SlaveId, startAddress, values);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "{Name} WriteMultipleRegisters 실패: address={Address}, count={Count}", _settings.Name, startAddress, values.Length);
+            OnOperationFailed(ex, $"WriteMultipleRegisters(address={startAddress}, count={values.Length})");
             throw;
         }
         finally
@@ -222,11 +222,11 @@ public class ModbusTcpClient : IDisposable
         try
         {
             _logger.LogDebug("{Name} WriteSingleCoil: address={Address}, value={Value}", _settings.Name, address, value);
-            await _master!.WriteSingleCoilAsync(_settings.SlaveId, address, value);
+            await Master.WriteSingleCoilAsync(_settings.SlaveId, address, value);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "{Name} WriteSingleCoil 실패: address={Address}, value={Value}", _settings.Name, address, value);
+            OnOperationFailed(ex, $"WriteSingleCoil(address={address}, value={value})");
             throw;
         }
         finally
@@ -239,6 +239,25 @@ public class ModbusTcpClient : IDisposable
     {
         if (!IsConnected || _master == null)
             throw new InvalidOperationException($"{_settings.Name} Modbus TCP가 연결되지 않았습니다.");
+    }
+
+    // 세마포어 획득 전 EnsureConnected 를 통과했어도, 대기 중 다른 연산의 실패 처리로
+    // 연결이 끊겼을 수 있다(_master=null) — 획득 후에는 이 접근자로 다시 확인한다.
+    private IModbusMaster Master =>
+        _master ?? throw new InvalidOperationException($"{_settings.Name} Modbus TCP가 연결되지 않았습니다.");
+
+    /// <summary>
+    /// 개별 연산 실패 공통 처리. 상세(스택 포함)는 Debug 로만 남긴다 — 사용자용 요약 경고는
+    /// 각 서비스가 끊김당 1회 남기므로 여기서 Warning 을 찍으면 끊김 동안 스택트레이스가 반복된다.
+    /// 소켓이 죽은 오류면 즉시 연결을 끊는다: 오류 직후에도 <see cref="TcpClient.Connected"/> 가
+    /// 잠시 true 로 남는 반쪽 연결 상태에서 서비스 루프가 재연결을 건너뛰지 않게 한다.
+    /// (TimeoutException 은 장비가 느린 것일 수 있어 연결을 유지한다. 호출자는 세마포어를 쥔 상태다.)
+    /// </summary>
+    private void OnOperationFailed(Exception ex, string op)
+    {
+        _logger.LogDebug(ex, "{Name} {Op} 실패", _settings.Name, op);
+        if (ex is IOException or SocketException or ObjectDisposedException)
+            Disconnect();
     }
 
     public void Dispose()
