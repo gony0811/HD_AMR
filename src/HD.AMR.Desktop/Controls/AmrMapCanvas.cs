@@ -1,3 +1,4 @@
+using System.Globalization;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
@@ -32,6 +33,13 @@ public sealed class AmrMapCanvas : Control
     private static readonly IBrush RobotBrush = new SolidColorBrush(Color.FromRgb(22, 139, 255));
     private static readonly Pen RobotOutline = new(Brushes.White, 1.5);
     private static readonly Pen HeadingPen = new(Brushes.White, 2.5);
+    private static readonly IBrush OriginBrush = new SolidColorBrush(Color.FromRgb(255, 196, 64));
+    private static readonly Pen OriginPen = new(OriginBrush, 2);
+    private static readonly IBrush AxisXBrush = new SolidColorBrush(Color.FromRgb(255, 92, 92));
+    private static readonly IBrush AxisYBrush = new SolidColorBrush(Color.FromRgb(86, 220, 132));
+    private static readonly Pen AxisXPen = new(AxisXBrush, 2);
+    private static readonly Pen AxisYPen = new(AxisYBrush, 2);
+    private static readonly Typeface LabelTypeface = new(FontFamily.Default, FontStyle.Normal, FontWeight.Bold);
 
     static AmrMapCanvas()
     {
@@ -67,6 +75,8 @@ public sealed class AmrMapCanvas : Control
             context.DrawImage(image, new Rect(image.Size), localBounds);
         if (Resolution <= 0) return;
 
+        DrawWorldOrigin(context, image.PixelSize.Width, image.PixelSize.Height, sx, sy);
+
         if (LidarPoints is { } points)
         {
             var radius = Math.Clamp(Math.Min(sx, sy) * 1.15, 1.0, 3.0);
@@ -89,5 +99,44 @@ public sealed class AmrMapCanvas : Control
         var end = new Point(robotX + Math.Cos(RobotHeading) * arrowLength,
             robotY - Math.Sin(RobotHeading) * arrowLength);
         context.DrawLine(HeadingPen, new Point(robotX, robotY), end);
+    }
+
+    /// <summary>
+    /// 월드 좌표계의 (0,0)과 양의 축을 표시한다. 이미지 Y축은 아래로 증가하므로
+    /// 월드 +Y 화살표는 화면 위쪽을 향한다.
+    /// </summary>
+    private void DrawWorldOrigin(DrawingContext context, int imageWidth, int imageHeight, double sx, double sy)
+    {
+        if (!MapProjection.TryProjectPoint(0, 0, Resolution, OriginX, OriginY,
+                imageWidth, imageHeight, out var originPx, out var originPy)) return;
+
+        var origin = new Point(originPx * sx, originPy * sy);
+        const double axisLength = 46;
+        const double arrow = 6;
+        var xEnd = new Point(Math.Min(Bounds.Width - 3, origin.X + axisLength), origin.Y);
+        var yEnd = new Point(origin.X, Math.Max(3, origin.Y - axisLength));
+
+        // 원점 십자와 링은 배경색과 무관하게 좌표 (0,0)을 찾기 쉽게 한다.
+        context.DrawEllipse(null, OriginPen, origin, 7, 7);
+        context.DrawLine(OriginPen, new Point(origin.X - 10, origin.Y), new Point(origin.X + 10, origin.Y));
+        context.DrawLine(OriginPen, new Point(origin.X, origin.Y - 10), new Point(origin.X, origin.Y + 10));
+
+        context.DrawLine(AxisXPen, origin, xEnd);
+        context.DrawLine(AxisXPen, xEnd, new Point(xEnd.X - arrow, xEnd.Y - arrow / 2));
+        context.DrawLine(AxisXPen, xEnd, new Point(xEnd.X - arrow, xEnd.Y + arrow / 2));
+        context.DrawLine(AxisYPen, origin, yEnd);
+        context.DrawLine(AxisYPen, yEnd, new Point(yEnd.X - arrow / 2, yEnd.Y + arrow));
+        context.DrawLine(AxisYPen, yEnd, new Point(yEnd.X + arrow / 2, yEnd.Y + arrow));
+
+        DrawLabel(context, "(0,0)", OriginBrush, new Point(origin.X + 8, origin.Y + 7));
+        DrawLabel(context, "+X · 0°", AxisXBrush, new Point(xEnd.X + 3, xEnd.Y - 9));
+        DrawLabel(context, "+Y · +90°", AxisYBrush, new Point(yEnd.X + 5, yEnd.Y - 7));
+    }
+
+    private static void DrawLabel(DrawingContext context, string text, IBrush brush, Point point)
+    {
+        var label = new FormattedText(text, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
+            LabelTypeface, 11, brush);
+        context.DrawText(label, point);
     }
 }

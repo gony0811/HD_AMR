@@ -54,6 +54,8 @@
                     </ScrollViewer>
                 </Border>
                 <TextBlock Text="{Binding Map.PoseText}" FontFamily="monospace" />
+                <TextBlock Classes="muted" TextWrapping="Wrap"
+                           Text="좌표축: 노란색 (0,0) · 빨간색 +X/0° (오른쪽) · 초록색 +Y/+90° (위쪽) · 양의 각도는 반시계 방향" />
                 <TextBlock Text="{Binding Map.LidarStatus}" Foreground="#FF6B6B" />
                 <TextBlock Classes="muted" Text="{Binding Map.PositionStatus}" TextWrapping="Wrap" />
             </StackPanel>
