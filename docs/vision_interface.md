@@ -2,8 +2,20 @@
 
 자동화 S/W(HD_AMR) ↔ 비전 검사 S/W 간 TCP 통신 프로토콜 사양이다.
 
-원 사양서는 `docs/비전 인터페이스_v2.xlsx`(저장소 미포함)이며, 이 문서는 실제 구현
-(`HD_AMR/HD_AMR/Communication/Vision/`)을 기준으로 정리한 것이다.
+**적용 버전: v3.2** (개정분 `vision_interface_v3.2_revision_20260915`, = HD_ACS↔SAIGE 연동
+사양서 v2.6 부록 B). CAPTURE_REQ DATA 가 15 → 34바이트로 확장되어 `taskId`(GUID 16B 바이너리)·
+`PosZ`(면-로컬 h)·`attempt`·`captureSeq` 가 추가되고, Surface ID 는 Wall ID 로 개명되었다.
+프레임 구조·체크섬·기존 필드 오프셋([0]~[10])은 불변. 구현 기준은
+`HD.AMR.App/Communication/Vision/`.
+
+### 구현 메모 (연동 시험 확인 대상)
+- **taskId·attempt 는 ACS 발급.** `SequenceContext.AcsTaskId`·`AcsAttempt` 로 주입(VDA5050
+  `startWeldInspection` 액션). 미연동/수동 실행 폴백 = `taskId`=`Guid.Empty`, `attempt`=1.
+  ※ 현재 ACS 는 액션에 taskId·attempt 를 싣지 않으므로 ACS 측 발행 추가가 선행되어야 한다.
+- **captureSeq 는 로봇 발번.** 검사 실행(=TASK) 내 촬영마다 1부터 증가.
+- **(u,v,h) 는 코봇 wobj pose 직접.** `FaceLocalMapper` 가 코봇 (X,Y,Z)→(u,v,h) 매핑(현재 항등).
+  축·부호는 wobj 티칭 규약(§5)에 흡수, h=0=벽 표면 정합은 물리 캘리브레이션 확인 대상.
+- **taskId 바이트 순서**: RFC 4122 빅엔디안(`GuidBinary`). 비전 S/W 와 최종 확인.
 
 ## 1. 통신 개요
 
@@ -66,15 +78,21 @@ STX(1) │ LENGTH(2, LE) │ SEQ(1) │ COMMAND(1) │ FROM(1) │ TO(1) │ DAT
 | [0-13] | 타임스탬프 | ASCII 14자 (`yyyyMMddHHmmss`) |
 | [14-19] | 예약 | ASCII `"000000"` |
 
-### 3.2 CAPTURE_REQ (`0x02`) DATA (15바이트)
+### 3.2 CAPTURE_REQ (`0x02`) DATA (34바이트, v3.2)
 
 | 오프셋 | 필드 | 형식 |
 |---|---|---|
 | [0] | Surface Type | 1B (§4) |
-| [1-2] | Surface ID | UInt16 LE (§5) |
-| [3-6] | PosX (mm) | Int32 LE |
-| [7-10] | PosY (mm) | Int32 LE |
-| [11-14] | 예약 | `0x00` |
+| [1-2] | Wall ID | UInt16 LE (§5, 구 Surface ID) |
+| [3-6] | PosX = u (mm) | Int32 LE (면-로컬) |
+| [7-10] | PosY = v (mm) | Int32 LE (면-로컬) |
+| [11-14] | PosZ = h (mm) | Int32 LE (표면 높이) |
+| [15-30] | taskId | GUID 16B 바이너리 (RFC 4122 빅엔디안) |
+| [31] | attempt | UInt8 (1부터, ACS 발급) |
+| [32-33] | captureSeq | UInt16 LE (시도 내 1부터, 로봇 발번) |
+
+전체 프레임 = 9 + 34 = 43바이트. 수신 시 DATA 길이로 버전 판별(34=v3.2, 15=v2 레거시,
+그 외=폐기·재동기화).
 
 ### 3.3 CAPTURE_RES (`0x03`) DATA
 
@@ -90,22 +108,24 @@ STX(1) │ LENGTH(2, LE) │ SEQ(1) │ COMMAND(1) │ FROM(1) │ TO(1) │ DAT
 | `0x01` | Corner |
 | `0x02` | Corrugation |
 
-## 5. Surface ID 정의
+## 5. Wall ID 정의 (v3.2 축 정본)
 
-ID `0x01`~`0x0A`, 모두 Flat 면이다.
+구 Surface ID. Wall ID `0x01`~`0x0A`. 축 방향은 v3.2 §5(=SAIGE v2.6 부록 A, HD_ACS 내부
+원점·축 기준)이며, v3.1 대비 U축 9면·V축 4면(바닥·천장·상부챔퍼2)이 반전되었다. 값 체계(1~10)·
+바이트 위치는 불변.
 
-| ID | 면 | U / V 축 방향 |
-|---|---|---|
-| `0x01` | 바닥 (Bottom) | U: 선수→선미, V: 좌현→우현 |
-| `0x02` | 천장 (Top) | U: 선수→선미, V: 좌현→우현 |
-| `0x03` | 좌현벽 (Port) | U: 선수→선미, V: 바닥→천장 |
-| `0x04` | 우현벽 (Starboard) | U: 선수→선미, V: 바닥→천장 |
-| `0x05` | 전벽 (Forward) | U: 좌현→우현, V: 바닥→천장 |
-| `0x06` | 후벽 (Aft) | U: 좌현→우현, V: 바닥→천장 |
-| `0x07` | 하부 좌현 챔퍼 | U: 선수→선미, V: 바닥→좌현벽 |
-| `0x08` | 하부 우현 챔퍼 | U: 선수→선미, V: 바닥→우현벽 |
-| `0x09` | 상부 좌현 챔퍼 | U: 선수→선미, V: 천장→좌현벽 |
-| `0x0A` | 상부 우현 챔퍼 | U: 선수→선미, V: 천장→우현벽 |
+| ID | Code | 면 | U / V 축 방향 |
+|---|---|---|---|
+| `0x01` | B | 바닥 (Bottom) | U: 선미→선수, V: 우현→좌현 |
+| `0x02` | T | 천장 (Top) | U: 선미→선수, V: 우현→좌현 |
+| `0x03` | PM | 좌현벽 (Port) | U: 선미→선수, V: 하단→상단 |
+| `0x04` | SM | 우현벽 (Starboard) | U: 선미→선수, V: 하단→상단 |
+| `0x05` | F | 전벽 (Forward) | U: 좌현→우현, V: 하단→상단 |
+| `0x06` | A | 후벽 (Aft) | U: 우현→좌현, V: 하단→상단 |
+| `0x07` | PL | 하부 좌현 챔퍼 | U: 선미→선수, V: 바닥→좌현 수직벽 |
+| `0x08` | SL | 하부 우현 챔퍼 | U: 선미→선수, V: 바닥→우현 수직벽 |
+| `0x09` | PU | 상부 좌현 챔퍼 | U: 선미→선수, V: 수직벽→천장 |
+| `0x0A` | SU | 상부 우현 챔퍼 | U: 선미→선수, V: 수직벽→천장 |
 
 ## 6. 결과 코드
 
@@ -126,7 +146,9 @@ ID `0x01`~`0x0A`, 모두 Flat 면이다.
 
 1. 경유점으로 코봇 이동 후 안정화 지연(`SettleDelaySec`) 대기.
 2. Surface Type 판정: `|θ| ≥ 코로게이션 판정각`이면 `Corrugation`, 아니면 `Flat`.
-3. `CaptureReqPayload.Build(type, surfaceId, X, Z)`로 **CAPTURE_REQ** 전송.
+3. `FaceLocalMapper.ToFaceLocal(wallId, X, Y, Z)`로 (u,v,h) 산출 후
+   `CaptureReqPayload.Build(type, wallId, u, v, h, taskId, attempt, captureSeq)`로 **CAPTURE_REQ** 전송
+   (captureSeq 는 촬영마다 증가).
 4. 프로필의 `DelaySec`를 타임아웃으로 **CAPTURE_RES / ERROR_NOTI** 수신 대기.
 5. 결과 코드가 `SUCCESS`이면 OK 카운트, 아니면 실패로 기록(전송 여부·응답 여부·코드 로그).
 

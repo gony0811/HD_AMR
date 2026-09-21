@@ -147,12 +147,19 @@ public class InspectionRunStep : ISequenceStep
         // ACS 연동 실행이면 jobRef 는 작업지시(VDA5050 action jobRef) 기반으로 발급하고,
         // 단독 실행에서는 현행대로 "P{프로필}-W{순번}" 자기발급.
         // 이 식별자는 CAPTURE_REQ 로 비전에 전달되어, 결과 에코를 통해 엔터프라이즈가 ACS 진행현황과 매칭한다.
+        // runId 는 로깅/추적용 내부 상관값(프레임 미탑재). CAPTURE_REQ 식별자는 taskId 하나.
         var runId = Guid.NewGuid();
+        // v3.2: taskId·attempt 는 ACS 발급(VDA 액션에서 주입). 미연동/수동 실행이면 폴백(Empty/1).
+        // 검사 실행 1건 = TASK 1개(용접선 1구간)이므로 taskId·attempt 는 경유점 전체에 공통이며,
+        // captureSeq 만 촬영마다 1부터 증가시킨다(로봇 발번, §3.4).
+        var taskId  = context.AcsTaskId ?? Guid.Empty;
+        var attempt = context.AcsAttempt ?? (byte)1;
+        ushort captureSeq = 0;
         if (context.AcsOrderId is not null)
-            _logger.LogInformation("⑱ 검사 Run ID = {RunId} (ACS order={OrderId}, action={ActionId}, jobRef={JobRef})",
-                runId, context.AcsOrderId, context.AcsActionId, context.AcsJobRef);
+            _logger.LogInformation("⑱ 검사 Run={RunId}, Task={TaskId}, attempt={Attempt} (ACS order={OrderId}, action={ActionId}, jobRef={JobRef})",
+                runId, taskId, attempt, context.AcsOrderId, context.AcsActionId, context.AcsJobRef);
         else
-            _logger.LogInformation("⑱ 검사 Run ID = {RunId}", runId);
+            _logger.LogInformation("⑱ 검사 Run={RunId}, Task={TaskId}, attempt={Attempt}", runId, taskId, attempt);
 
         for (var i = 0; i < waypoints.Count; i++)
         {
@@ -182,25 +189,23 @@ public class InspectionRunStep : ISequenceStep
             // surface type 우선순위: 경유점 수동 지정 > |θ| 자동 규칙(구 도면 솎기 프로필).
             var surfaceType = w.SurfaceManual
                 ? (SurfaceType)w.Surface
-                : Math.Abs(w.Theta) >= profile.CorrugThresholdDeg
-                    ? SurfaceType.Corrugation
-                    : SurfaceType.Flat;
-            // v3: 경유점 캡처 1건 = TASK 1개. Task ID(GUID) 발급 + 사람이 읽는 Job Ref(ASCII).
-            // ACS 연동 시 jobRef = "{action jobRef}-W{순번}" (사양 §8.1 — 역추적 키 유지).
-            var taskId = Guid.NewGuid();
-            var jobRef = context.AcsJobRef is not null
-                ? $"{context.AcsJobRef}-W{i + 1}"
-                : $"P{context.InspectionProfileId}-W{i + 1}";
-            var data = CaptureReqPayload.Build(runId, taskId, jobRef, surfaceType,
-                (ushort)context.InspectionSurfaceId, (int)Math.Round(w.X), (int)Math.Round(w.Z));
-
+                : context.SurfaceOverride is { } ovr
+                    ? (SurfaceType)ovr
+                    : Math.Abs(w.Theta) >= profile.CorrugThresholdDeg
+                        ? SurfaceType.Corrugation
+                        : SurfaceType.Flat;
+            // v3.2: 코봇 wobj pose → 면-로컬 (u,v,h). 축·부호는 wobj 티칭 규약(§5)에 흡수(FaceLocalMapper).
+            var wallId = (ushort)context.InspectionSurfaceId;
+            var (u, v, h) = FaceLocalMapper.ToFaceLocal(wallId, w.X, w.Y, w.Z);
+            captureSeq++;
+            var data = CaptureReqPayload.Build(surfaceType, wallId, u, v, h, taskId, attempt, captureSeq);
             var outcome = await _vision.Client.RequestCaptureAsync(data, visionTimeout, ct);
             if (outcome.Success) visOk++;
             else
             {
                 visFail++;
-                _logger.LogWarning("⑱ 경유점 #{Idx} 비전 실패: task={Task}, sent={Sent}, responded={Resp}, code={Code}",
-                    i + 1, taskId, outcome.Sent, outcome.Responded,
+                _logger.LogWarning("⑱ 경유점 #{Idx} 비전 실패: task={Task}, seq={Seq}, sent={Sent}, responded={Resp}, code={Code}",
+                    i + 1, taskId, captureSeq, outcome.Sent, outcome.Responded,
                     outcome.Code is { } c ? ResultCodeNames.NameOf((ushort)c) : "—");
             }
         }

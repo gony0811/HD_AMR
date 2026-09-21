@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    HD_AMR to 비전 검사 S/W v3.2 프로토콜 검증기 (독립 콘솔 TCP 서버).
+    비전 S/W 역할을 흉내 내어, VisionPanel(자동화 = TCP 클라이언트)이 보내는 프레임을
+    사양서(vision_interface_v3.2) 기준으로 독립 파싱해 정합성을 검증한다.
+    HD.AMR.App 을 참조하지 않는다: 우리 인코더와 다른 코드로 디코드해야 순환 검증을 피한다.
+    실행 예는 Program.cs 상단 주석 참조.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>VisionProtocolTester</AssemblyName>
+    <RootNamespace>VisionProtocolTester</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+</Project>

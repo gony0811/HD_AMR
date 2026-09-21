@@ -43,6 +43,10 @@ public sealed partial class VisionPanelViewModel : ObservableObject
     [ObservableProperty] private int _surfaceIndex;       // SurfaceCatalog.All 인덱스
     [ObservableProperty] private int _posX;
     [ObservableProperty] private int _posY;
+    [ObservableProperty] private int _posZ;               // v3.2 면-로컬 h (mm)
+    [ObservableProperty] private string _taskIdText = ""; // v3.2 taskId (GUID). 비우면 Guid.Empty
+    [ObservableProperty] private int _attempt = 1;        // v3.2 시도 번호(수동 테스트 기본 1)
+    [ObservableProperty] private int _captureSeq = 1;     // v3.2 촬영 번호(수동 테스트 기본 1)
     [ObservableProperty] private int _resultIndex;        // ResultCodes 인덱스
 
     [ObservableProperty] private bool _autoLen = true;
@@ -136,12 +140,14 @@ public sealed partial class VisionPanelViewModel : ObservableObject
         try
         {
             var cmd = Commands[CommandIndex];
+            var taskId = Guid.TryParse(TaskIdText, out var tid) ? tid : Guid.Empty;   // 빈칸/파싱 실패 = Guid.Empty
             byte[] data = cmd switch
             {
                 CommandCode.Heartbeat => BuildHeartbeat(),
                 CommandCode.CaptureReq => CaptureReqPayload.Build((SurfaceType)SurfaceType,
-                    Surfaces.Count > 0 ? Surfaces[Math.Clamp(SurfaceIndex, 0, Surfaces.Count - 1)].Id : (ushort)0, PosX, PosY),
-                _ => CaptureResPayload.Build(Guid.Empty, Guid.Empty, (ResultCode)ResultCodes[Math.Clamp(ResultIndex, 0, ResultCodes.Length - 1)]),
+                    Surfaces.Count > 0 ? Surfaces[Math.Clamp(SurfaceIndex, 0, Surfaces.Count - 1)].Id : (ushort)0,
+                    PosX, PosY, PosZ, taskId, (byte)Math.Clamp(Attempt, 0, 255), (ushort)Math.Clamp(CaptureSeq, 0, ushort.MaxValue)),
+                _ => CaptureResPayload.Build((ResultCode)ResultCodes[Math.Clamp(ResultIndex, 0, ResultCodes.Length - 1)]),
             };
             _engine.AutoIncrementSeq = AutoSeq;
             await _engine.SendAsync(new SendRequest(

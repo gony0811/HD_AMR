@@ -1146,8 +1146,9 @@
 
                 if (_visionCheckEnabled)
                 {
+                    // v3.2(레거시 Web 경로): 기존 (u,v)=(x,z) 보존, h=0. 비ACS이므로 taskId=0 GUID·attempt=seq=1.
                     var data = CaptureReqPayload.Build(EffectiveSurfaceType(i), (ushort)_surfaceId,
-                        (int)Math.Round(x), (int)Math.Round(z));
+                        (int)Math.Round(x), (int)Math.Round(z), 0, Guid.Empty, 1, 1);
                     var outcome = await Vision.Client.RequestCaptureAsync(data, visionTimeout, ct);
                     var result = outcome switch
                     {
@@ -1267,8 +1268,9 @@
             if (_visionCheckEnabled)
             {
                 var visionTimeout = TimeSpan.FromSeconds(Math.Max(0, _visionTimeoutSec));
+                // v3.2(레거시 Web 경로): 기존 (u,v)=(x,z) 보존, h=0. 비ACS이므로 taskId=0 GUID·attempt=seq=1.
                 var data = CaptureReqPayload.Build(EffectiveSurfaceType(i), (ushort)_surfaceId,
-                    (int)Math.Round(x), (int)Math.Round(z));
+                    (int)Math.Round(x), (int)Math.Round(z), 0, Guid.Empty, 1, 1);
                 var outcome = await Vision.Client.RequestCaptureAsync(data, visionTimeout, CancellationToken.None);
                 var result = outcome switch
                 {
