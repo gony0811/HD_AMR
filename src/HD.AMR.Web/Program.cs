@@ -122,6 +122,7 @@ builder.Services.AddDbContext<HdAmrDbContext>(opt =>
 
 builder.Services.AddScoped<DrawingService>();
 builder.Services.AddScoped<TeachingService>();
+builder.Services.AddScoped<ToolOffsetRecoveryService>();
 builder.Services.AddScoped<ParameterService>();
 // 검사 타입 17종 레시피(사양 §8.5.1) CRUD + 기동 시드 — ACS startWeldInspection 매핑 대상.
 builder.Services.AddScoped<InspectionRecipeService>();

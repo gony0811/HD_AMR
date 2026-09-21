@@ -1,9 +1,12 @@
+using System.Collections.ObjectModel;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HD.AMR.App.Communication;
+using HD.AMR.App.Models;
 using HD.AMR.App.Service;
 using HD.AMR.App.Service.Sequence;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace HD.AMR.Desktop.ViewModels;
 
@@ -14,15 +17,17 @@ namespace HD.AMR.Desktop.ViewModels;
 public sealed partial class CobotViewModel : ViewModelBase
 {
     private readonly CobotService _svc;
+    private readonly IServiceScopeFactory _scopeFactory;
     private readonly DispatcherTimer _timer;
     private bool _busy;
     private CancellationTokenSource? _opCts;
 
     public JogRibbonViewModel Jog { get; }
 
-    public CobotViewModel(CobotService svc, SequenceRunGate gate)
+    public CobotViewModel(CobotService svc, SequenceRunGate gate, IServiceScopeFactory scopeFactory)
     {
         _svc = svc;
+        _scopeFactory = scopeFactory;
         Jog = new JogRibbonViewModel(svc, gate, showSafetyHeader: false, autoResetBaseFrame: true);
         _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _timer.Tick += (_, _) => { RefreshState(); Jog.RefreshState(); };
@@ -67,6 +72,13 @@ public sealed partial class CobotViewModel : ViewModelBase
     // ── 좌표계 변경 ──
     [ObservableProperty] private int _frameId;
     public Pose6 Frame { get; } = new();
+
+    // ── 공구 정의 복원(교시 위치 기반) ──
+    /// <summary>교시 위치별로 되짚은 공구 오프셋. 컨트롤러 쓰기는 '편집란에 적용' 후 '공구 좌표계 설정'으로만.</summary>
+    public ObservableCollection<ToolOffsetRecoveryRowVm> RecoveryRows { get; } = new();
+    [ObservableProperty] private string? _recoveryText;
+    [ObservableProperty] private bool _isRecoveryError;
+    [ObservableProperty] private bool _hasRecoveryRows;
 
     // ── 이동 ──
     public Pose6 Target { get; } = new();
@@ -146,6 +158,59 @@ public sealed partial class CobotViewModel : ViewModelBase
     [RelayCommand]
     private Task SetToolCoord() => Run("공구 좌표계 설정", ct => _svc.Rpc.SetToolCoordAsync(FrameId, Frame.ToArray(), ct: ct));
 
+    /// <summary>
+    /// 지워진 공구 정의를 교시 위치로 되짚는다 — 번호(id)의 공구로 캡처된 교시 위치마다
+    /// <c>inv(T_플랜지) · T_TCP</c> 를 계산해 목록에 보여 준다. 값은 편집란에만 채우고 쓰기는 별도 버튼.
+    /// </summary>
+    [RelayCommand]
+    private async Task RecoverToolOffset()
+    {
+        if (_busy) return;
+        if (FrameId <= 0)
+        {
+            RecoveryText = "번호(id)를 복원할 공구 번호(1 이상)로 맞추세요 — 0 은 플랜지라 정의가 없습니다.";
+            IsRecoveryError = true;
+            return;
+        }
+        _busy = true;
+        RecoveryRows.Clear();
+        HasRecoveryRows = false;
+        RecoveryText = $"공구 #{FrameId} 오프셋 계산 중…";
+        IsRecoveryError = false;
+        _opCts?.Dispose();
+        _opCts = new CancellationTokenSource();
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var svc = scope.ServiceProvider.GetRequiredService<ToolOffsetRecoveryService>();
+            var r = await svc.RecoverAsync(FrameId, _opCts.Token);
+            if (!r.Success)
+            {
+                RecoveryText = $"복원 실패: {r.Error}";
+                IsRecoveryError = true;
+                return;
+            }
+            foreach (var row in r.Rows) RecoveryRows.Add(new ToolOffsetRecoveryRowVm(row));
+            HasRecoveryRows = RecoveryRows.Count > 0;
+            var rec = string.Join(", ", r.Recommended.Select(v => v.ToString("0.###")));
+            RecoveryText = $"교시 위치 {r.Rows.Count}개에서 계산 — 행 간 차이 위치 {r.MaxPosSpreadMm:0.##}mm / 회전 {r.MaxRotSpreadDeg:0.###}°. " +
+                           $"권장(최신 행): [{rec}]" +
+                           (r.Warnings.Count > 0 ? " ⚠ " + string.Join(" ", r.Warnings) : "");
+            IsRecoveryError = r.Warnings.Count > 0;
+        }
+        catch (OperationCanceledException) { RecoveryText = "복원 취소됨"; IsRecoveryError = true; }
+        catch (Exception ex) { RecoveryText = $"복원 실패: {ex.Message}"; IsRecoveryError = true; }
+        finally { _busy = false; }
+    }
+
+    /// <summary>복원된 오프셋을 편집란(X~Rz)에 채운다. 컨트롤러에는 쓰지 않는다.</summary>
+    [RelayCommand]
+    private void ApplyRecovered(ToolOffsetRecoveryRowVm row)
+    {
+        Frame.FromArray(row.Offset);
+        Notify($"'{row.Key}' 에서 복원한 오프셋을 편집란에 채웠습니다 — 값을 확인한 뒤 '공구 좌표계 설정'으로 공구 #{FrameId} 에 쓰세요.", false);
+    }
+
     [RelayCommand]
     private Task SetWObjCoord() => Run("사용자 좌표계 설정", ct => _svc.Rpc.SetWObjCoordAsync(FrameId, Frame.ToArray(), ct: ct));
 
@@ -224,6 +289,24 @@ public sealed partial class CobotViewModel : ViewModelBase
     }
 
     private void Notify(string msg, bool error) { Message = msg; IsError = error; }
+}
+
+/// <summary>공구 오프셋 복원 표의 한 행.</summary>
+public sealed class ToolOffsetRecoveryRowVm
+{
+    public ToolOffsetRecoveryRowVm(ToolOffsetRecoveryRow row)
+    {
+        Key = row.Key; Name = row.Name; CapturedAt = row.CapturedAt; Offset = row.Offset;
+    }
+
+    public string Key { get; }
+    public string Name { get; }
+    public DateTime? CapturedAt { get; }
+    public double[] Offset { get; }
+
+    public string CapturedText => CapturedAt is { } t ? t.ToLocalTime().ToString("yyyy-MM-dd HH:mm") : "—";
+    public string PosText => $"{Offset[0]:0.###}, {Offset[1]:0.###}, {Offset[2]:0.###}";
+    public string RotText => $"{Offset[3]:0.###}, {Offset[4]:0.###}, {Offset[5]:0.###}";
 }
 
 /// <summary>6-DOF 포즈 입력(X,Y,Z,Rx,Ry,Rz) — NumericUpDown 바인딩용 관찰 가능 래퍼.</summary>

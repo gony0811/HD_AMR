@@ -121,6 +121,7 @@ internal static class ServiceRegistration
         services.AddScoped<QrLocalizationService>();
         services.AddScoped<DrawingService>();
         services.AddScoped<TeachingService>();
+        services.AddScoped<ToolOffsetRecoveryService>();   // 지워진 공구 정의 복원 — TeachingService(Scoped) 의존.
         services.AddScoped<LabelDataService>();
 
         // ── 시퀀스(스텝 그래프 + 실행/모니터) ───────────────────────

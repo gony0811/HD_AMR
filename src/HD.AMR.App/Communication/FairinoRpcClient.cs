@@ -306,6 +306,17 @@ public class FairinoRpcClient : IDisposable
     public async Task<double[]> GetTcpPoseInBaseAsync(int tool, CancellationToken ct = default)
     {
         var joints = await GetActualJointPosAsync(ct: ct);
+        return await GetToolPoseInBaseAtJointsAsync(joints, tool, ct);
+    }
+
+    /// <summary>
+    /// 임의 관절각 <paramref name="joints"/>에서 공구 <paramref name="tool"/> 프레임의 TCP pose(BASE 기준)를
+    /// 무모션으로 계산한다 — <see cref="GetTcpPoseInBaseAsync"/> 와 같은 재프레임이며 관절각만 외부에서 받는다.
+    /// tool=0 이면 <b>플랜지 pose</b> 가 나온다. 교시 위치에 저장된 관절각으로 플랜지 pose 를 되짚어
+    /// 지워진 공구 정의를 복원하는 데 쓴다(<c>ToolOffsetRecoveryService</c>).
+    /// </summary>
+    public async Task<double[]> GetToolPoseInBaseAtJointsAsync(double[] joints, int tool, CancellationToken ct = default)
+    {
         var pActive = await GetForwardKinInBaseAsync(joints, ct);   // BASE, 현재 활성 공구 프레임(활성 작업물 프레임 → 베이스 변환)
         int active = await ResolveActiveToolAsync(ct);
         if (active == tool) return pActive;                    // 재프레임 불필요 → 공구 좌표 조회 생략.
