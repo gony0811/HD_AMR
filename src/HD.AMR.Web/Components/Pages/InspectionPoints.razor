@@ -6,8 +6,10 @@
 @using HD.AMR.App.Data.Entities
 @using HD.AMR.App.Service
 @using HD.AMR.App.Service.Inspection
+@using HD.AMR.App.Communication.Vision
 @inject DrawingService Service
 @inject CobotService Cobot
+@inject VisionInterfaceService Vision
 @inject IJSRuntime JS
 @inject ILogger<InspectionPoints> Logger
 @implements IDisposable
@@ -167,6 +169,10 @@
     {
         <div class="hint text-danger">⚠ 코봇 RPC 미연결.</div>
     }
+    @if (!Vision.Client.IsConnected)
+    {
+        <div class="hint text-danger">⚠ 비전 인터페이스 미연결 — 실행 시 CAPTURE_REQ를 보낼 수 없습니다.</div>
+    }
     <div class="row g-2 align-items-end mt-1">
         <div class="col-auto"><label class="form-label mb-0">공구(tool)</label>
             <input class="form-control form-control-sm" type="number" min="0" max="15" style="width:80px" @bind="_runTool" /></div>
@@ -178,6 +184,8 @@
             <input class="form-control form-control-sm" type="number" step="0.1" min="0" style="width:110px" @bind="_settleSec" /></div>
         <div class="col-auto"><label class="form-label mb-0" title="ACS 검사 실행 시 비전 촬영 요청(CAPTURE_REQ) 후 응답을 기다리는 최대 시간. 초과하면 그 점은 비전 실패로 집계. 드라이런에는 쓰이지 않음">비전 응답 대기(초)</label>
             <input class="form-control form-control-sm" type="number" step="0.5" min="0.5" style="width:120px" @bind="_visionTimeoutSec" /></div>
+        <div class="col-auto"><label class="form-label mb-0" title="CAPTURE_REQ Wall ID (1~10)">Wall ID</label>
+            <input class="form-control form-control-sm" type="number" min="1" max="10" style="width:80px" @bind="_wallId" /></div>
         <div class="col-auto">
             <button class="btn btn-success" @onclick="RunPoints" disabled="@(_isRunning || _points.Count < 1 || !Cobot.IsConnected)">
                 @(_isRunning ? "실행 중..." : "실행")
@@ -185,6 +193,7 @@
             <button class="btn btn-danger" @onclick="StopRun" disabled="@(!_isRunning)">■ 정지</button>
         </div>
     </div>
+    <div class="hint text-muted mt-1">각 포인트 이동·정착 후 비전 인터페이스로 CAPTURE_REQ를 전송하고 CAPTURE_RES를 기다립니다. 비전 실패는 집계하고 다음 포인트를 계속 실행합니다.</div>
     @if (!string.IsNullOrEmpty(_runMsg))
     {
         <div class="mt-1 @(_runErr ? "text-danger" : "text-success")">@_runMsg</div>
@@ -281,6 +290,7 @@
     private int _runTool = 1, _runUser = 0, _runVel = 5;
     private double _settleSec = 0.5;
     private double _visionTimeoutSec = HD.AMR.App.Service.Sequence.Steps.InspectionRunStep.DefaultVisionTimeoutSec;   // 프로필 DelaySec
+    private int _wallId = 1;
     private bool _isRunning;
     private bool _runErr;
     private string? _runMsg;
@@ -428,12 +438,21 @@
     private async Task RunPoints()
     {
         if (_isRunning || !Cobot.IsConnected || _points.Count < 1) return;
+        if (!Vision.Client.IsConnected)
+        {
+            _runErr = true;
+            _runMsg = "비전 인터페이스 미연결 — CAPTURE_REQ를 실행할 수 없습니다.";
+            return;
+        }
         _isRunning = true; _runErr = false; _runMsg = null;
         _runCts = new CancellationTokenSource();
         var ct = _runCts.Token;
         try
         {
             var rpc = Cobot.Rpc!;
+            int visionOk = 0, visionFail = 0;
+            ushort captureSeq = 0;
+            var timeout = TimeSpan.FromSeconds(Math.Max(.5, _visionTimeoutSec));
             for (int i = 0; i < _points.Count; i++)
             {
                 ct.ThrowIfCancellationRequested();
@@ -446,8 +465,29 @@
                 await InvokeAsync(StateHasChanged);
                 if (rc != 0) { _runErr = true; _runMsg = $"#{i + 1} 이동 실패 (rc={rc}) — 중단"; return; }
                 if (_settleSec > 0) await Task.Delay(TimeSpan.FromSeconds(_settleSec), ct);
+
+                var wallId = (ushort)Math.Clamp(_wallId, 1, 10);
+                var (u, v, h) = FaceLocalMapper.ToFaceLocal(wallId, p.X, p.Y, p.Z);
+                captureSeq++;
+                var data = CaptureReqPayload.Build((SurfaceType)(p.Surface <= 2 ? p.Surface : (byte)0), wallId,
+                    u, v, h, Guid.Empty, attempt: 1, captureSeq);
+                var outcome = await Vision.Client.RequestCaptureAsync(data, timeout, ct);
+                if (outcome.Success)
+                {
+                    visionOk++;
+                    _runMsg = $"#{i + 1} 이동·CAPTURE_REQ 성공 ({visionOk}/{i + 1})";
+                }
+                else
+                {
+                    visionFail++;
+                    _runErr = true;
+                    _runMsg = $"#{i + 1} 비전 실패 — {CaptureFailure(outcome)} (다음 점 계속)";
+                }
+                await InvokeAsync(StateHasChanged);
             }
-            _runMsg = $"완료 — {_points.Count}점 이동";
+            _runErr = visionFail > 0;
+            _runMsg = $"완료 — {_points.Count}점 이동, 비전 OK {visionOk}/{_points.Count}" +
+                      (visionFail > 0 ? $" (실패 {visionFail})" : "");
         }
         catch (OperationCanceledException) { _runMsg = "정지됨"; }
         catch (Exception ex) { Logger.LogError(ex, "RunPoints 실패"); _runErr = true; _runMsg = $"실행 실패: {ex.Message}"; }
@@ -461,6 +501,15 @@
                 await TryReturnBaseFrameAsync();
             await InvokeAsync(StateHasChanged);
         }
+    }
+
+    private static string CaptureFailure(CaptureOutcome outcome)
+    {
+        if (!outcome.Sent) return "비전 인터페이스 미연결/전송 실패";
+        if (!outcome.Responded) return "응답 시간 초과";
+        return outcome.Code is { } code
+            ? $"응답 {ResultCodeNames.NameOf((ushort)code)}"
+            : "응답 코드 없음";
     }
 
     /// <summary>활성 작업물 좌표계를 베이스(0)로 반납(무변위 MoveJ) — 실패는 로그/메시지로만 알린다.

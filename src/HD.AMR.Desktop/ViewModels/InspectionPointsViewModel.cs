@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using HD.AMR.App.Communication.Vision;
 using HD.AMR.App.Data.Entities;
 using HD.AMR.App.Service;
 using HD.AMR.App.Service.Inspection;
@@ -19,6 +20,7 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
 {
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly CobotService _cobot;
+    private readonly VisionInterfaceService _vision;
 
     public ObservableCollection<XyPointVm> Points { get; } = new();
     public ObservableCollection<InspectionProfile> Profiles { get; } = new();
@@ -38,6 +40,7 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
     [ObservableProperty] private double _settleSec = 0.5;
     /// <summary>ACS 검사 시 비전 CAPTURE_REQ 응답 대기(초) — 프로필 DelaySec. 드라이런에는 쓰이지 않음.</summary>
     [ObservableProperty] private double _visionTimeoutSec = HD.AMR.App.Service.Sequence.Steps.InspectionRunStep.DefaultVisionTimeoutSec;
+    [ObservableProperty] private int _wallId = 1;
     [ObservableProperty] private bool _isRunning;
     [ObservableProperty] private string? _runMsg;
     [ObservableProperty] private bool _runErr;
@@ -55,6 +58,7 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
     public string SeamType => SeamTypes[Math.Clamp(SeamTypeIndex, 0, SeamTypes.Length - 1)];
     public bool IsCross => SeamType is "CROSS" or "CROSS3";
     public bool CobotConnected => _cobot.IsConnected;
+    public bool VisionConnected => _vision.Client.IsConnected;
     public int PointCount => Points.Count;
 
     // 십자 패턴 파라미터(간이)
@@ -62,10 +66,12 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
 
     private CancellationTokenSource? _runCts;
 
-    public InspectionPointsViewModel(IServiceScopeFactory scopeFactory, CobotService cobot)
+    public InspectionPointsViewModel(IServiceScopeFactory scopeFactory, CobotService cobot,
+        VisionInterfaceService vision)
     {
         _scopeFactory = scopeFactory;
         _cobot = cobot;
+        _vision = vision;
     }
 
     public override async void OnActivated()
@@ -172,11 +178,20 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
     private async Task RunPoints()
     {
         if (IsRunning || !_cobot.IsConnected || Points.Count < 1) return;
+        if (!_vision.Client.IsConnected)
+        {
+            RunErr = true;
+            RunMsg = "비전 인터페이스 미연결 — CAPTURE_REQ를 실행할 수 없습니다.";
+            return;
+        }
         IsRunning = true; RunErr = false; RunMsg = null;
         _runCts = new CancellationTokenSource();
         var ct = _runCts.Token;
         try
         {
+            int visionOk = 0, visionFail = 0;
+            ushort captureSeq = 0;
+            var timeout = TimeSpan.FromSeconds(Math.Max(.5, VisionTimeoutSec));
             for (int i = 0; i < Points.Count; i++)
             {
                 ct.ThrowIfCancellationRequested();
@@ -186,8 +201,29 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
                 RunMsg = $"#{i + 1} 이동 (rc={rc})";
                 if (rc != 0) { RunErr = true; RunMsg = $"#{i + 1} 이동 실패 (rc={rc}) — 중단"; return; }
                 if (SettleSec > 0) await Task.Delay(TimeSpan.FromSeconds(SettleSec), ct);
+
+                var p = Points[i];
+                var wallId = (ushort)Math.Clamp(WallId, 1, 10);
+                var (u, v, h) = FaceLocalMapper.ToFaceLocal(wallId, p.X, p.Y, p.Z);
+                captureSeq++;
+                var data = CaptureReqPayload.Build((SurfaceType)Math.Clamp(p.Surface, 0, 2), wallId,
+                    u, v, h, Guid.Empty, attempt: 1, captureSeq);
+                var outcome = await _vision.Client.RequestCaptureAsync(data, timeout, ct);
+                if (outcome.Success)
+                {
+                    visionOk++;
+                    RunMsg = $"#{i + 1} 이동·CAPTURE_REQ 성공 ({visionOk}/{i + 1})";
+                }
+                else
+                {
+                    visionFail++;
+                    RunErr = true;
+                    RunMsg = $"#{i + 1} 비전 실패 — {CaptureFailure(outcome)} (다음 점 계속)";
+                }
             }
-            RunMsg = $"완료 — {Points.Count}점 이동";
+            RunErr = visionFail > 0;
+            RunMsg = $"완료 — {Points.Count}점 이동, 비전 OK {visionOk}/{Points.Count}" +
+                     (visionFail > 0 ? $" (실패 {visionFail})" : "");
         }
         catch (OperationCanceledException) { RunMsg = "정지됨"; }
         catch (Exception ex) { RunErr = true; RunMsg = $"실행 실패: {ex.Message}"; }
@@ -208,6 +244,15 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
             if (rc != 0) RunMsg += $" · 활성 좌표계 베이스 반납 실패 (rc={rc})";
         }
         catch { /* 로그만 — 무시 */ }
+    }
+
+    private static string CaptureFailure(CaptureOutcome outcome)
+    {
+        if (!outcome.Sent) return "비전 인터페이스 미연결/전송 실패";
+        if (!outcome.Responded) return "응답 시간 초과";
+        return outcome.Code is { } code
+            ? $"응답 {ResultCodeNames.NameOf((ushort)code)}"
+            : "응답 코드 없음";
     }
 
     [RelayCommand]
