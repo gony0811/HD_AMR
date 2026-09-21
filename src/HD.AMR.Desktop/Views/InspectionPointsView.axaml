@@ -24,15 +24,18 @@
             <StackPanel Spacing="8">
                 <TextBlock Text="코봇 실행 (작업물 좌표계, pose=[X,Y,Z])" FontWeight="SemiBold" />
                 <Border Classes="alert" IsVisible="{Binding !CobotConnected}"><TextBlock Text="⚠ 코봇 RPC 미연결." /></Border>
+                <Border Classes="alert" IsVisible="{Binding !VisionConnected}"><TextBlock Text="⚠ 비전 인터페이스 미연결 — 실행 시 CAPTURE_REQ를 보낼 수 없습니다." /></Border>
                 <StackPanel Orientation="Horizontal" Spacing="10">
                     <StackPanel><TextBlock Classes="axis" Text="공구(tool)" /><NumericUpDown Value="{Binding RunTool}" Minimum="0" Maximum="15" Increment="1" FormatString="0" /></StackPanel>
                     <StackPanel><TextBlock Classes="axis" Text="작업물(user)" /><NumericUpDown Value="{Binding RunUser}" Minimum="0" Maximum="14" Increment="1" FormatString="0" /></StackPanel>
                     <StackPanel><TextBlock Classes="axis" Text="속도(%)" /><NumericUpDown Value="{Binding RunVel}" Minimum="1" Maximum="100" Increment="1" FormatString="0" /></StackPanel>
                     <StackPanel ToolTip.Tip="각 경유점 도착 후 진동이 가라앉을 때까지 촬영 전 대기"><TextBlock Classes="axis" Text="정착 대기(초)" /><NumericUpDown Value="{Binding SettleSec}" Minimum="0" Increment="0.1" FormatString="0.0" /></StackPanel>
                     <StackPanel ToolTip.Tip="ACS 검사 실행 시 비전 촬영 요청(CAPTURE_REQ) 후 응답을 기다리는 최대 시간. 초과하면 그 점은 비전 실패로 집계. 드라이런에는 쓰이지 않음"><TextBlock Classes="axis" Text="비전 응답 대기(초)" /><NumericUpDown Value="{Binding VisionTimeoutSec}" Minimum="0.5" Increment="0.5" FormatString="0.0" /></StackPanel>
+                    <StackPanel ToolTip.Tip="CAPTURE_REQ Wall ID (1~10)"><TextBlock Classes="axis" Text="Wall ID" /><NumericUpDown Value="{Binding WallId}" Minimum="1" Maximum="10" Increment="1" FormatString="0" /></StackPanel>
                     <Button VerticalAlignment="Bottom" Content="실행" Classes="accent" Command="{Binding RunPointsCommand}" IsEnabled="{Binding CobotConnected}" />
                     <Button VerticalAlignment="Bottom" Content="■ 정지" Classes="danger" Command="{Binding StopRunCommand}" IsEnabled="{Binding IsRunning}" />
                 </StackPanel>
+                <TextBlock Classes="axis" Text="각 포인트 이동·정착 후 비전 인터페이스로 CAPTURE_REQ를 전송하고 CAPTURE_RES를 기다립니다. 비전 실패는 표시하고 다음 포인트를 계속 실행합니다." TextWrapping="Wrap" />
                 <TextBlock Text="{Binding RunMsg}" IsVisible="{Binding RunMsg, Converter={x:Static ObjectConverters.IsNotNull}}"
                            Foreground="{Binding RunErr, Converter={x:Static vm:OkErrConverters.Brush}}" />
             </StackPanel>

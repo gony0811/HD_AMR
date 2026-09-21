@@ -1,7 +1,9 @@
 using System.Collections.ObjectModel;
+using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HD.AMR.App.Communication.Vision;
+using HD.AMR.App.Enums;
 using HD.AMR.App.Models;
 using HD.AMR.App.Service;
 using Microsoft.Extensions.DependencyInjection;
@@ -28,6 +30,8 @@ public sealed partial class ArucoMountCalibrationViewModel : ViewModelBase
     [ObservableProperty] private double _markerQzMm;
     [ObservableProperty] private bool _qzConfirmed;
     [ObservableProperty] private bool _busy;
+    [ObservableProperty] private bool _isAutoRunning;
+    [ObservableProperty] private bool _travelPoseConfirmed;
     [ObservableProperty] private string? _message;
     [ObservableProperty] private bool _isError;
     [ObservableProperty] private ArucoMountCalibrationResult? _result;
@@ -63,6 +67,7 @@ public sealed partial class ArucoMountCalibrationViewModel : ViewModelBase
         ? $"X {s.Pose.X * 1000:0.0} mm · Y {s.Pose.Y * 1000:0.0} mm · Yaw {s.Pose.Angle * 180 / Math.PI:0.00}°" : "AMR pose 없음";
     public string SampleSummary => $"{_samples.Count}개 · Yaw 범위 {CircularSpan():0}° · 위치 범위 {PositionSpan():0} mm";
     public bool CanCapture => !Busy && AmrConnected && CobotConnected && CameraReady && QzConfirmed && MarkerSizeMm > 0;
+    public bool CanAutoCapture => CanCapture && TravelPoseConfirmed && HandEye.ToArray().Any(v => v != 0);
     public bool CanSolve => !Busy && _samples.Count >= 8 && QzConfirmed;
     public bool CanApply => Result?.Success == true && !Busy;
 
@@ -92,6 +97,62 @@ public sealed partial class ArucoMountCalibrationViewModel : ViewModelBase
         }
         catch (Exception ex) { Fail($"캡처 실패: {ex.Message}"); }
         finally { Busy = false; NotifyState(); }
+    }
+
+    private CancellationTokenSource? _autoCts;
+
+    [RelayCommand(CanExecute = nameof(CanAutoCapture))]
+    private async Task AutoCapture()
+    {
+        Busy = true;
+        IsAutoRunning = true;
+        _autoCts = new CancellationTokenSource();
+        try
+        {
+            using var scope = _scopes.CreateScope();
+            var routine = scope.ServiceProvider.GetRequiredService<ArucoMountAutoRoutine>();
+            var settings = new ArucoSettings { MarkerId = MarkerId, SizeMm = MarkerSizeMm };
+            var auto = await routine.RunAsync(settings, Tool, HandEye.ToArray(), _savedMount, null,
+                msg => Dispatcher.UIThread.Post(() => Success(msg)), _autoCts.Token);
+
+            foreach (var sample in auto.Samples)
+                _samples.Add(sample with { Index = _samples.Count });
+            Rebuild();
+
+            if (auto.Samples.Count >= 8)
+                Result = ArucoMountCalibration.Solve(_samples, HandEye.ToArray(), MarkerQzMm, _savedMount);
+
+            if (auto.Success && Result?.Success == true)
+                Success($"자동 계측·산출 완료 — {auto.VisitedStations}개 정차점, 표본 {auto.Samples.Count}개, " +
+                        $"위치 RMS {Result.TranslationRmsMm:0.0}mm, 회전 RMS {Result.RotationRmsDeg:0.00}°. " +
+                        "검토 후 산출값을 적용·저장하세요.");
+            else
+                Fail($"자동 계측 {(auto.Samples.Count > 0 ? $"부분 완료(표본 {auto.Samples.Count}개)" : "실패")}: " +
+                     $"{auto.Error ?? Result?.Error}" +
+                     (auto.ReturnedToTravelPose ? "" : " 코봇 안전자세 복귀를 확인하세요."));
+        }
+        catch (Exception ex) { Fail($"자동 계측 실패: {ex.Message}"); }
+        finally
+        {
+            _autoCts?.Dispose();
+            _autoCts = null;
+            IsAutoRunning = false;
+            Busy = false;
+            NotifyState();
+        }
+    }
+
+    [RelayCommand]
+    private async Task StopAuto()
+    {
+        _autoCts?.Cancel();
+        try
+        {
+            await _amr.SetExecutionControlAsync(ExecutionControl.Stop);
+            await _cobot.StopMotionImmediateAsync();
+            Success("자동 장착보정 중지 명령을 전송했습니다.");
+        }
+        catch (Exception ex) { Fail($"즉시 정지 실패: {ex.Message} — 물리 비상정지를 사용하세요."); }
     }
 
     [RelayCommand(CanExecute = nameof(CanSolve))]
@@ -133,7 +194,8 @@ public sealed partial class ArucoMountCalibrationViewModel : ViewModelBase
     }
     private double PositionSpan() { double m = 0; for (int i = 0; i < _samples.Count; i++) for (int j = i + 1; j < _samples.Count; j++) { double dx = _samples[i].AmrPoseWA[0] - _samples[j].AmrPoseWA[0], dy = _samples[i].AmrPoseWA[1] - _samples[j].AmrPoseWA[1]; m = Math.Max(m, Math.Sqrt(dx * dx + dy * dy)); } return m; }
     private double CircularSpan() { var a = _samples.Select(s => (s.AmrPoseWA[5] % 360 + 360) % 360).Order().ToArray(); if (a.Length < 2) return 0; double g = a[0] + 360 - a[^1]; for (int i = 1; i < a.Length; i++) g = Math.Max(g, a[i] - a[i - 1]); return 360 - g; }
-    private void NotifyState() { OnPropertyChanged(string.Empty); OnPropertyChanged(nameof(HandEyeText)); CaptureCommand.NotifyCanExecuteChanged(); SolveCommand.NotifyCanExecuteChanged(); ApplyCommand.NotifyCanExecuteChanged(); }
+    partial void OnTravelPoseConfirmedChanged(bool value) => AutoCaptureCommand.NotifyCanExecuteChanged();
+    private void NotifyState() { OnPropertyChanged(string.Empty); OnPropertyChanged(nameof(HandEyeText)); CaptureCommand.NotifyCanExecuteChanged(); AutoCaptureCommand.NotifyCanExecuteChanged(); SolveCommand.NotifyCanExecuteChanged(); ApplyCommand.NotifyCanExecuteChanged(); }
     private void Success(string s) { Message = s; IsError = false; }
     private void Fail(string s) { Message = s; IsError = true; }
 }

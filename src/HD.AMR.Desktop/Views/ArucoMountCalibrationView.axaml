@@ -10,7 +10,7 @@
   <ScrollViewer>
     <StackPanel MaxWidth="1050" HorizontalAlignment="Left">
       <TextBlock Classes="cardHead" Text="ArUco 장착 보정 (T_A_B)"/>
-      <TextBlock Classes="hint" TextWrapping="Wrap" Text="바닥에 고정한 ArUco의 높이(q_z)만 입력하고, 서로 다른 AMR·코봇 자세에서 촬영하여 AMR→코봇 장착 변환과 마커의 미지 X/Y/Yaw를 동시에 추정합니다. 이 페이지는 장비를 자동으로 움직이지 않습니다."/>
+      <TextBlock Classes="hint" TextWrapping="Wrap" Text="바닥에 고정한 ArUco의 높이(q_z)만 입력하고, 서로 다른 AMR·코봇 자세에서 촬영하여 AMR→코봇 장착 변환과 마커의 미지 X/Y/Yaw를 동시에 추정합니다. 수동 캡처 또는 AMR·코봇 자동 계측을 선택할 수 있습니다."/>
       <Border Classes="alert" Classes.info="{Binding !IsError}" IsVisible="{Binding Message, Converter={x:Static ObjectConverters.IsNotNull}}"><TextBlock Text="{Binding Message}" TextWrapping="Wrap"/></Border>
 
       <Border Classes="card"><StackPanel Spacing="8">
@@ -36,6 +36,14 @@
         </WrapPanel>
         <TextBlock Text="{Binding AmrPoseText}"/>
         <StackPanel Orientation="Horizontal" Spacing="8"><Button Classes="accent" Content="현재 자세에서 ArUco 캡처" Command="{Binding CaptureCommand}"/><Button Content="전체 삭제" Command="{Binding ClearCommand}"/></StackPanel>
+        <Border Classes="alert"><StackPanel Spacing="6">
+          <TextBlock FontSize="12" TextWrapping="Wrap" Text="자동 계측 전 AMR +Y와 마커 +Y를 맞추고, 현재 코봇 자세에서 마커가 보이며 이 자세가 AMR 주행 중에도 충돌 없는 안전자세인지 확인하세요. AMR은 시작점 기준 좌/우/전/후 약 250mm, Yaw ±45°로 이동한 뒤 시작점으로 복귀합니다."/>
+          <CheckBox Content="현재 코봇 자세가 AMR 주행 안전자세임을 확인했습니다" IsChecked="{Binding TravelPoseConfirmed}"/>
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <Button Classes="accent" Content="AMR + 코봇 자동 계측" Command="{Binding AutoCaptureCommand}"/>
+            <Button Content="자동 계측 중지" Command="{Binding StopAutoCommand}" IsVisible="{Binding IsAutoRunning}"/>
+          </StackPanel>
+        </StackPanel></Border>
         <ItemsControl ItemsSource="{Binding Rows}"><ItemsControl.ItemTemplate><DataTemplate x:DataType="vm:ArucoMountSampleRow">
           <Grid ColumnDefinitions="45,120,120,100,100,*" Margin="0,3"><TextBlock Text="{Binding Index}"/><TextBlock Grid.Column="1" Text="{Binding X, StringFormat='X {0:0.0}'}"/><TextBlock Grid.Column="2" Text="{Binding Y, StringFormat='Y {0:0.0}'}"/><TextBlock Grid.Column="3" Text="{Binding Yaw, StringFormat='{}{0:0.0}°'}"/><TextBlock Grid.Column="4" Text="{Binding ErrorPx, StringFormat='{}{0:0.00}px'}"/><Button Grid.Column="5" HorizontalAlignment="Left" Content="삭제" Command="{Binding $parent[ItemsControl].((vm:ArucoMountCalibrationViewModel)DataContext).RemoveCommand}" CommandParameter="{Binding Index}"/></Grid>
         </DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
