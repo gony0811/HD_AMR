@@ -221,7 +221,8 @@
                 </StackPanel>
 
                 <StackPanel IsVisible="{Binding Result, Converter={x:Static ObjectConverters.IsNotNull}}">
-                  <StackPanel DataContext="{Binding Result}" x:DataType="m:MountCalibrationResult" Spacing="8">
+                  <StackPanel DataContext="{Binding Result}">
+                  <StackPanel x:DataType="m:MountCalibrationResult" Spacing="8">
                     <Border Classes="alert" IsVisible="{Binding !Success}">
                         <TextBlock Text="{Binding Error, StringFormat='산출 실패: {0}'}" TextWrapping="Wrap" />
                     </Border>
@@ -264,6 +265,7 @@
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
                     </StackPanel>
+                  </StackPanel>
                   </StackPanel>
                 </StackPanel>
             </StackPanel>

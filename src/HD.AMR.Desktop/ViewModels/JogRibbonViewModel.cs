@@ -162,7 +162,8 @@ public sealed partial class JogRibbonViewModel : ObservableObject
     [RelayCommand]
     private async Task EmergencyStop()
     {
-        _opCts?.Cancel();
+        try { _opCts?.Cancel(); }
+        catch (ObjectDisposedException) { /* StopAll 과의 경합 방어 */ }
         _holding = false;
         try
         {
@@ -222,7 +223,13 @@ public sealed partial class JogRibbonViewModel : ObservableObject
     {
         if (_holding && _svc.IsConnected) _ = _svc.ImmStopJogImmediateAsync();
         _holding = false;
-        _opCts?.Cancel();
-        _opCts?.Dispose();
+        // take-and-null: Dispose 된 CTS 를 필드에 남기면 다음 StopAll/EmergencyStop 의
+        // Cancel() 이 ObjectDisposedException 으로 앱을 죽인다(페이지 재진입 후 이탈 시 재현).
+        var cts = _opCts;
+        _opCts = null;
+        if (cts is null) return;
+        try { cts.Cancel(); }
+        catch (ObjectDisposedException) { /* 이미 정리됨 — 무시 */ }
+        cts.Dispose();
     }
 }

@@ -92,7 +92,8 @@
 
                 <!-- 결과 -->
                 <StackPanel IsVisible="{Binding Measurement, Converter={x:Static ObjectConverters.IsNotNull}}">
-                <StackPanel DataContext="{Binding Measurement}" x:DataType="vm:MeasurementVm" Spacing="8">
+                <StackPanel DataContext="{Binding Measurement}">
+                <StackPanel x:DataType="vm:MeasurementVm" Spacing="8">
                     <Border Classes="alert"><TextBlock Text="{Binding Headline}" FontWeight="SemiBold" /></Border>
                     <Grid ColumnDefinitions="*,*">
                         <StackPanel Grid.Column="0" Margin="0,0,8,0">
@@ -128,6 +129,7 @@
                             <TextBlock Classes="muted" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0" Text="{Binding Stats}" />
                         </StackPanel>
                     </Grid>
+                </StackPanel>
                 </StackPanel>
                 </StackPanel>
             </StackPanel>

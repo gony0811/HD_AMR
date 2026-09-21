@@ -153,7 +153,10 @@
                                 <ScrollViewer><ItemsControl ItemsSource="{Binding CalLog}"><ItemsControl.ItemTemplate><DataTemplate x:DataType="x:String"><TextBlock Text="{Binding}" FontFamily="monospace" FontSize="11" Foreground="#DDD" TextWrapping="Wrap" /></DataTemplate></ItemsControl.ItemTemplate></ItemsControl></ScrollViewer>
                             </Border>
                             <StackPanel IsVisible="{Binding CalResult, Converter={x:Static ObjectConverters.IsNotNull}}">
-                            <StackPanel DataContext="{Binding CalResult}" x:DataType="m:LaserHeadCalibrationResult" Spacing="6">
+                            <!-- DataContext 지정과 x:DataType 선언은 분리 — 같은 요소에 두면 자신의
+                                 DataContext 바인딩까지 결과 타입으로 해석돼 바인딩 경고가 난다. -->
+                            <StackPanel DataContext="{Binding CalResult}">
+                            <StackPanel x:DataType="m:LaserHeadCalibrationResult" Spacing="6">
                                 <Border Classes="alert" IsVisible="{Binding !ReturnedToAnchor}"><TextBlock Text="로봇이 앵커 pose 로 복귀하지 못했습니다 — 위치를 수동 확인하세요." /></Border>
                                 <Border Classes="alert" IsVisible="{Binding !Success}"><TextBlock Text="{Binding Error, StringFormat='캘리브레이션 실패: {0}'}" TextWrapping="Wrap" /></Border>
                                 <StackPanel IsVisible="{Binding Success}" Spacing="6">
@@ -180,6 +183,7 @@
                                     <TextBlock Classes="hint" Text="적용: 아래 6줄을 appsettings.json 의 LaserDisplacementSensor 섹션에 덮어쓰고 앱을 재시작하세요." />
                                     <TextBox Text="{Binding AppSettingsJsonSnippet, Mode=OneWay}" IsReadOnly="True" AcceptsReturn="True" FontFamily="monospace" FontSize="11" Height="120" />
                                 </StackPanel>
+                            </StackPanel>
                             </StackPanel>
                             </StackPanel>
                         </StackPanel>
@@ -218,7 +222,8 @@
                                 </ItemsControl>
                             </StackPanel>
                             <StackPanel IsVisible="{Binding TcpResult, Converter={x:Static ObjectConverters.IsNotNull}}" Spacing="6">
-                                <StackPanel DataContext="{Binding TcpResult}" x:DataType="m:TcpTouchCalibrationResult" Spacing="6">
+                                <StackPanel DataContext="{Binding TcpResult}">
+                                <StackPanel x:DataType="m:TcpTouchCalibrationResult" Spacing="6">
                                     <Border Classes="alert" IsVisible="{Binding !Success}"><TextBlock Text="{Binding Error, StringFormat='산출 실패: {0}'}" TextWrapping="Wrap" /></Border>
                                     <StackPanel IsVisible="{Binding Success}" Spacing="4">
                                         <Grid ColumnDefinitions="*,*,*,*">
@@ -230,6 +235,7 @@
                                         <TextBlock Classes="hint" Text="{Binding ., Converter={x:Static vm:LaserConverters.TcpSummary}}" />
                                         <ItemsControl ItemsSource="{Binding Warnings}"><ItemsControl.ItemTemplate><DataTemplate x:DataType="x:String"><Border Classes="alert"><TextBlock Text="{Binding}" TextWrapping="Wrap" FontSize="12" /></Border></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
                                     </StackPanel>
+                                </StackPanel>
                                 </StackPanel>
                                 <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding !TcpFixH}">
                                     <Button Content="산출 h를 앵커로 저장" Command="{Binding SaveHeadPlaneCommand}" />

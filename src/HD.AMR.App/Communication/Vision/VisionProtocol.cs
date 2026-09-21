@@ -163,7 +163,7 @@ public sealed record SurfaceInfo(ushort Id, string Code, string Name, SurfaceTyp
 public static class SurfaceCatalog
 {
     public static readonly IReadOnlyList<SurfaceInfo> All = WallCodes.All
-        .Select(w => new SurfaceInfo((ushort)w.SurfaceId, w.DisplayName, SurfaceType.Flat, w.Axes))
+        .Select(w => new SurfaceInfo((ushort)w.SurfaceId, w.Code, w.DisplayName, SurfaceType.Flat, w.Axes))
         .ToArray();
 
     public static string NameOf(ushort id) =>

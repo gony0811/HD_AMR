@@ -141,7 +141,8 @@
                 <TextBlock Classes="cardHead" Text="⑤ 산출 결과" />
                 <Button Content="산출" Classes="accent" Command="{Binding SolveCommand}" HorizontalAlignment="Left" />
                 <StackPanel IsVisible="{Binding Result, Converter={x:Static ObjectConverters.IsNotNull}}">
-                  <StackPanel DataContext="{Binding Result}" x:DataType="m:HandEyeResult" Spacing="6">
+                  <StackPanel DataContext="{Binding Result}">
+                  <StackPanel x:DataType="m:HandEyeResult" Spacing="6">
                     <Border Classes="alert" IsVisible="{Binding !Success}">
                         <TextBlock Text="{Binding Error, StringFormat='산출 실패: {0}'}" TextWrapping="Wrap" />
                     </Border>
@@ -172,6 +173,7 @@
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
                     </StackPanel>
+                  </StackPanel>
                   </StackPanel>
                 </StackPanel>
             </StackPanel>

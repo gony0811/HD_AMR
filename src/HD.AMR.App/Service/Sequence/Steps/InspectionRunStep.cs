@@ -187,13 +187,12 @@ public class InspectionRunStep : ISequenceStep
                 await Task.Delay(settle, ct);
 
             // surface type 우선순위: 경유점 수동 지정 > |θ| 자동 규칙(구 도면 솎기 프로필).
+            // (레시피 SurfaceOverride 는 경유점 단위 지정으로 일원화되며 폐기 — 2026-09-18.)
             var surfaceType = w.SurfaceManual
                 ? (SurfaceType)w.Surface
-                : context.SurfaceOverride is { } ovr
-                    ? (SurfaceType)ovr
-                    : Math.Abs(w.Theta) >= profile.CorrugThresholdDeg
-                        ? SurfaceType.Corrugation
-                        : SurfaceType.Flat;
+                : Math.Abs(w.Theta) >= profile.CorrugThresholdDeg
+                    ? SurfaceType.Corrugation
+                    : SurfaceType.Flat;
             // v3.2: 코봇 wobj pose → 면-로컬 (u,v,h). 축·부호는 wobj 티칭 규약(§5)에 흡수(FaceLocalMapper).
             var wallId = (ushort)context.InspectionSurfaceId;
             var (u, v, h) = FaceLocalMapper.ToFaceLocal(wallId, w.X, w.Y, w.Z);

@@ -118,8 +118,8 @@ public class CornerInspectionRunStep : ISequenceStep
             await Task.Delay(Settle, ct);
             captured++;
 
-            // surface type: 레시피 강제값(CORNER3 시드 = Corner) > Corner 기본.
-            var surfaceType = context.SurfaceOverride is { } ovr ? (SurfaceType)ovr : SurfaceType.Corner;
+            // surface type: 코너 캡처는 Corner 고정 (레시피 SurfaceOverride 폐기 — 2026-09-18).
+            var surfaceType = SurfaceType.Corner;
             // 코너 캡처는 면-로컬 (u,v,h) 좌표를 산출하지 않으므로 0(미지정)으로 전송.
             var wallId = (ushort)context.InspectionSurfaceId;
             captureSeq++;
