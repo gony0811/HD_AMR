@@ -147,10 +147,44 @@ public sealed partial class JogRibbonViewModel : ObservableObject
         var max = AxisIsRotational(axis) ? JogHoldMaxDeg : JogHoldMaxMm;
         try
         {
+            if (!await EnsureHoldFramesAsync()) { _holding = false; return; }
             var rc = await _svc.Rpc.StartJogAsync(Frame, axis + 1, sign > 0 ? 1 : 0, max, JogVel);
             if (rc != 0) { _holding = false; Notify($"연속 조그 시작 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}", true); }
         }
         catch (Exception ex) { _holding = false; Notify($"연속 조그 시작 실패: {ex.Message}", true); }
+    }
+
+    /// <summary>연속(누름) 조그 기준 정합. StartJOG 의 ref 는 '활성 툴'(4)·'활성 작업물'(8) 만 가리킬 수 있고
+    /// 번호 인자가 없어, 화면 선택값과 컨트롤러 활성값이 다르면 표시와 다른 기준으로 움직인다(증분 조그는
+    /// MoveL 의 tool/user 인자를 쓰므로 무관). 시작 전에 무변위 MoveJ 로 활성 좌표계를 맞추고(같으면 no-op),
+    /// 실패하면 조그를 시작하지 않는다. 관절·베이스 프레임은 활성값과 무관하므로 건너뛴다.</summary>
+    private async Task<bool> EnsureHoldFramesAsync()
+    {
+        if (Frame is not (JogFrame.Tool or JogFrame.Workpiece)) return true;
+        try
+        {
+            // 툴 조그는 작업물 프레임을 건드리지 않는다(티칭 중 팝업이 작업물 프레임을 유지해야 함) —
+            // 이때만 현재 작업물 번호가 필요하고, 확정할 수 없으면 예외로 조그를 막는다.
+            int wantUser = Frame == JogFrame.Workpiece
+                ? JogUser
+                : (await _svc.Rpc.ResolveActiveFramesAsync()).user;
+
+            // 컨트롤러 자체 보고(상태 패킷)가 이미 목표와 같으면 모션 없이 건너뛴다 —
+            // 누를 때마다 무변위 MoveJ 를 보내지 않기 위한 조건. 미상(-1)이면 보수적으로 맞춘다.
+            if (_svc.State is { Tool: >= 0, User: >= 0 } st && st.Tool == JogTool && st.User == wantUser)
+                return true;
+
+            var rc = await _svc.Rpc.ResetActiveFrameAsync(JogTool, wantUser);
+            if (rc == 0) return true;
+            Notify($"연속 조그 기준 정합 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)} — " +
+                   $"활성 좌표계를 툴 #{JogTool}/작업물 #{wantUser} 로 맞추지 못해 시작하지 않습니다.", true);
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Notify($"연속 조그 기준 확인 실패: {ex.Message}", true);
+            return false;
+        }
     }
 
     /// <summary>누름 연속 조그 정지(포인터 업/이탈).</summary>
@@ -200,8 +234,10 @@ public sealed partial class JogRibbonViewModel : ObservableObject
     [RelayCommand]
     private void ApplyAssumedUser()
     {
+        // 공구도 함께 알린다 — 앵커 재프레임이 활성 공구를 알아야 하고, 모르면 모션이 strict 검사에 막힌다.
         _svc.Rpc.SetAssumedActiveUser(AssumedUser);
-        Notify($"컨트롤러 활성 작업물 프레임을 #{AssumedUser}로 설정(클라이언트 추적값).", false);
+        _svc.Rpc.SetAssumedActiveTool(JogTool);
+        Notify($"컨트롤러 활성 좌표계를 툴 #{JogTool}/작업물 #{AssumedUser}로 설정(클라이언트 추적값).", false);
     }
 
     private async Task Run(string label, Func<CancellationToken, Task<int>> action)

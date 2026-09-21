@@ -276,10 +276,12 @@ public class FairinoRpcClient : IDisposable
     /// ⚠ 이 펌웨어의 <see cref="GetForwardKinAsync"/> 은 베이스가 아니라 '현재 활성 작업물 프레임'
     /// 기준 pose 를 준다(실물 확인: 활성 user=5 에서 원점 근처 값 반환). 활성 프레임 N&gt;0 이면 등록된
     /// 좌표계 T_N(베이스 기준)으로 되돌린다: P_base = T_N · P_N. 활성 프레임 0(베이스)이면 그대로 반환.</summary>
-    private async Task<double[]> GetForwardKinInBaseAsync(double[] jointPos, CancellationToken ct = default)
+    /// <param name="strict">활성 프레임 미상일 때 0 을 가정하지 않고 예외(모션 앵커 기본값).</param>
+    private async Task<double[]> GetForwardKinInBaseAsync(double[] jointPos, CancellationToken ct = default,
+                                                          bool strict = true)
     {
         var pFk = await GetForwardKinAsync(jointPos, ct);      // 활성 작업물 프레임 기준
-        int n = await ResolveActiveUserAsync(ct);
+        int n = await ResolveActiveUserAsync(ct, strict);
         if (n <= 0)
         {
             _logger.LogInformation("{Name} FK→베이스: 활성 작업물 #{N}(≤0) → 변환 없음. fk=[{Fk}]",
@@ -312,7 +314,7 @@ public class FairinoRpcClient : IDisposable
     {
         var joints = await GetActualJointPosAsync(ct: ct);
         var pActive = await GetForwardKinInBaseAsync(joints, ct);   // BASE, 현재 활성 공구 프레임(활성 작업물 프레임 → 베이스 변환)
-        int active = await ResolveActiveToolAsync(ct);
+        int active = await ResolveActiveToolAsync(ct, strict: true);
         return await ReframeToolAsync(pActive, active, tool, ct);
     }
 
@@ -339,7 +341,9 @@ public class FairinoRpcClient : IDisposable
     /// <summary>현재 활성 공구 번호를 확정한다: GetActualTCPNum 실측(read-only) → 라이브 20004 스트림 →
     /// 추적 캐시 <see cref="_activeTool"/> → 기본값(DefaultToolId). 실측/라이브가 되면 캐시도 갱신한다.
     /// 라이브를 캐시보다 우선해, 펜던트 등 외부에서 활성 공구가 바뀌어도 앵커 계산이 실제 프레임을 따른다.</summary>
-    private async Task<int> ResolveActiveToolAsync(CancellationToken ct)
+    /// <param name="strict">true 면 근거(실측·라이브·추적 캐시)가 하나도 없을 때 기본값을 가정하지 않고
+    /// 예외를 던진다. 모션에 쓰이는 앵커·IK 경로는 항상 strict — 틀린 가정은 엉뚱한 위치 이동으로 이어진다.</param>
+    private async Task<int> ResolveActiveToolAsync(CancellationToken ct, bool strict = false)
     {
         var actual = await TryGetActualToolNumAsync(ct: ct);   // 미지원 시 null
         if (actual is int a) { _activeTool = a; return a; }
@@ -347,17 +351,25 @@ public class FairinoRpcClient : IDisposable
         var live = _liveActiveFrameProvider?.Invoke();
         if (live is { tool: var lt } && lt is >= 0 and <= 15) { _activeTool = lt; return lt; }
         if (_activeTool >= 0) return _activeTool;
+        if (strict) throw new InvalidOperationException(UnknownFrameMessage("공구"));
         _logger.LogWarning("{Name} 활성 공구 미상 — 기본 공구 #{Def} 가정(실제와 다르면 앵커가 틀어질 수 있음).",
             _settings.Name, _settings.DefaultToolId);
         return _settings.DefaultToolId;
     }
+
+    /// <summary>활성 좌표계 미상 시의 안내 메시지 — 사용자가 취할 조치를 담는다.</summary>
+    private static string UnknownFrameMessage(string what)
+        => $"활성 {what} 좌표계 번호를 확인할 수 없습니다(상태 패킷 미수신/단절, 펌웨어 실측 조회 미지원). " +
+           "틀린 값으로 이동하면 엉뚱한 위치로 가므로 명령을 중단했습니다. " +
+           "상태 소켓 연결을 확인하거나, 조그 리본의 '활성 프레임 알려주기'로 컨트롤러의 현재 공구·작업물 번호를 입력한 뒤 다시 시도하세요.";
 
     /// <summary>현재 활성 작업물(User) 프레임 번호를 확정한다: GetActualWObjNum 실측(read-only) →
     /// 라이브 20004 스트림 → 추적 캐시 <see cref="_activeUser"/> → 기본값(DefaultUserId, 통상 0=베이스).
     /// 실측/라이브가 되면 캐시도 갱신한다. 라이브를 캐시보다 우선해, 펜던트 등 외부에서 활성 프레임이
     /// 바뀌어도 FK→베이스 변환이 실제 프레임을 따라 좌표계 불일치(rc=154/38)를 막는다.
     /// ⚠ 라이브 미수신(콜드스타트/소켓단절)이고 GetActualWObjNum 미지원이면 캐시→0 가정으로 폴백한다.</summary>
-    private async Task<int> ResolveActiveUserAsync(CancellationToken ct)
+    /// <param name="strict">true 면 근거가 하나도 없을 때 0 을 가정하지 않고 예외를 던진다(모션 경로 기본).</param>
+    private async Task<int> ResolveActiveUserAsync(CancellationToken ct, bool strict = false)
     {
         var actual = await GetActualWObjNumAsync(ct: ct);   // 미지원 시 null
         if (actual is int u) { _activeUser = u; return u; }
@@ -365,10 +377,16 @@ public class FairinoRpcClient : IDisposable
         var live = _liveActiveFrameProvider?.Invoke();
         if (live is { user: var lu } && lu is >= 0 and <= 14) { _activeUser = lu; return lu; }
         if (_activeUser >= 0) return _activeUser;
+        if (strict) throw new InvalidOperationException(UnknownFrameMessage("작업물"));
         _logger.LogWarning("{Name} 활성 작업물 프레임 미상 — 기본 #{Def} 가정(실제와 다르면 베이스 변환이 틀어질 수 있음).",
             _settings.Name, _settings.DefaultUserId);
         return _settings.DefaultUserId;
     }
+
+    /// <summary>현재 활성 (공구, 작업물) 번호를 한 번에 확정한다. UI 가 연속 조그 기준을 맞출 때 쓴다.
+    /// <paramref name="strict"/> 면 근거가 없을 때 가정 대신 예외.</summary>
+    public async Task<(int tool, int user)> ResolveActiveFramesAsync(CancellationToken ct = default, bool strict = true)
+        => (await ResolveActiveToolAsync(ct, strict), await ResolveActiveUserAsync(ct, strict));
 
     // ── 이동 ───────────────────────────────────────────────────────
     /// <summary>
@@ -418,7 +436,7 @@ public class FairinoRpcClient : IDisposable
     /// 과거에는 활성 프레임이 목표 프레임으로 '잔류'해 있어 우연히 맞았던 경로다.</summary>
     private async Task<double[]> GetInverseKinForUserAsync(double[] descPose, int user, CancellationToken ct)
     {
-        int active = await ResolveActiveUserAsync(ct);
+        int active = await ResolveActiveUserAsync(ct, strict: true);
         if (active == user)
             return await GetInverseKinAsync(descPose, ct: ct);
 
@@ -459,9 +477,12 @@ public class FairinoRpcClient : IDisposable
     /// <summary>관절 이동(MoveJ). jointPos = 6축 각도, descPose = 대응 직교 포즈.
     /// ⚠ 실물 펌웨어는 desc_pos=0(전부 0)을 rc=154(관절 지령점 오류)로 거부한다 — joint_pos 에 대응하는
     /// 유효 pose 가 필요하므로, 0 배열/미제공이면 정기구학(GetForwardKin)으로 채워 보낸다.</summary>
+    /// <param name="allowUnknownFrames">true 면 활성 좌표계 미상일 때도 기본값 가정으로 진행한다.
+    /// <see cref="ResetActiveFrameAsync"/> 전용 — 프레임을 '알려진 값으로 만드는' 복구 경로가 strict 검사에
+    /// 스스로 막히면 사용자가 빠져나올 수단이 없어진다. 현재 관절각을 그대로 지령하는 무변위 호출에만 쓴다.</param>
     public async Task<int> MoveJAsync(double[] jointPos, double[] descPose, int? tool = null, int? user = null,
                                       double? vel = null, double acc = 0, double ovl = 100, double blendT = -1,
-                                      CancellationToken ct = default)
+                                      CancellationToken ct = default, bool allowUnknownFrames = false)
     {
         int t = tool ?? _settings.DefaultToolId;
         int u = user ?? _settings.DefaultUserId;
@@ -476,8 +497,8 @@ public class FairinoRpcClient : IDisposable
             // 활성 공구와 다르면 공구 오프셋으로 재프레임해 t 기준 desc 를 만든다 — 그래야 MoveJ 의
             // tool 인자가 활성 공구로 덮이지 않고, 관절 조그/프레임 반납이 요청 공구(통상 1)를 유지·복원한다.
             // (예전에는 t 를 활성 공구로 강제해, 활성 공구가 0 으로 바뀐 뒤엔 반납이 0 을 그대로 남겼다.)
-            activeTool = await ResolveActiveToolAsync(ct);
-            descActive = await GetForwardKinInBaseAsync(jointPos, ct);
+            activeTool = await ResolveActiveToolAsync(ct, strict: !allowUnknownFrames);
+            descActive = await GetForwardKinInBaseAsync(jointPos, ct, strict: !allowUnknownFrames);
             try
             {
                 descPose = await ReframeToolAsync(descActive, activeTool, t, ct);
@@ -554,6 +575,15 @@ public class FairinoRpcClient : IDisposable
         _logger.LogInformation("{Name} 활성 작업물 프레임 추적값 수동 설정 → #{N}", _settings.Name, n);
     }
 
+    /// <summary>컨트롤러의 현재 활성 <b>공구</b> 번호를 클라이언트 추적값에 수동으로 알린다.
+    /// <see cref="SetAssumedActiveUser"/> 와 같은 목적 — 앵커 재프레임(<see cref="GetTcpPoseInBaseAsync"/>)이
+    /// 활성 공구를 알아야 공구 오프셋만큼의 어긋남을 막을 수 있고, strict 해석의 마지막 근거가 된다.</summary>
+    public void SetAssumedActiveTool(int n)
+    {
+        _activeTool = n;
+        _logger.LogInformation("{Name} 활성 공구 추적값 수동 설정 → #{N}", _settings.Name, n);
+    }
+
     /// <summary>시작(연결) 시 20004 상태 패킷에서 읽은 활성 공구/작업물 번호로 추적값을 시딩한다
     /// (RPC 실측 조회 GetActualTCPNum/WObjNum 이 이 펌웨어에서 errcode=-1/미지원이므로 상태 패킷이 유일한 자동 소스).
     /// ⚠ 상태 패킷 오프셋이 펌웨어 버전차로 어긋나면 garbage 값이 올 수 있어 <b>범위 검증</b> 후에만 반영한다
@@ -583,7 +613,9 @@ public class FairinoRpcClient : IDisposable
         if (curUser == user && curTool == tool) return 0;
 
         var joints = await GetActualJointPosAsync(ct: ct);
-        return await MoveJAsync(joints, new double[6], tool: tool, user: user, vel: 5, ct: ct);
+        // 무변위(현재 관절각 지령) + 프레임 복구 경로이므로 활성 좌표계 미상이어도 진행한다.
+        return await MoveJAsync(joints, new double[6], tool: tool, user: user, vel: 5, ct: ct,
+                                allowUnknownFrames: true);
     }
 
     // ── 점동(JOG) ──────────────────────────────────────────────────
