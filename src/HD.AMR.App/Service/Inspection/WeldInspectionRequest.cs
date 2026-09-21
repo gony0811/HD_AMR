@@ -37,4 +37,7 @@ public sealed record WeldInspectionRequest(
     double StandoffMm,
     double? WorkingDistanceMm,      // ACS 선택 항목 — AMR 미사용(로그용). 카메라 거리는 레시피 CameraTargetDistanceMm
     string AnchorGroupId,
-    int SeqInGroup);
+    int SeqInGroup,
+    // ACS 발급 검사 작업 식별자 [VDA 사양서 1.6 §8.1/§8.6, N14] — 둘 다 선택 필드.
+    Guid? TaskId = null,            // 용접선 1구간의 영구 GUID → CAPTURE_REQ [15-30] → SAIGE productId. null=구버전 ACS(폴백 Guid.Empty)
+    byte? Attempt = null);          // taskId별 누적 시도 번호 1~255 → CAPTURE_REQ [31]. null=폴백 1. AMR은 증감하지 않는다

@@ -241,4 +241,76 @@ public class WeldInspectionActionParserTests
         Assert.False(ok);
         Assert.Contains("seamStartW", error);
     }
+
+    // ── taskId·attempt [VDA 사양서 1.6 §8.1/§8.6, N14] ─────────────────────────────
+
+    /// <summary>골든 예시의 params 끝에 추가 필드를 붙인 액션 JSON.</summary>
+    private static string GoldenWith(string extraParams) =>
+        GoldenActionJson.Replace("\"seqInGroup\": 2 }", "\"seqInGroup\": 2, " + extraParams + " }");
+
+    /// <summary>사양 1.6 §8.4 골든 값 — ACS 가 발급한 taskId·attempt 가 그대로 파싱된다.</summary>
+    [Fact]
+    public void Parse_TaskIdAndAttempt_AreCarriedThrough()
+    {
+        var action = Deserialize(GoldenWith("\"taskId\": \"3a9f2c14-8e51-4d7a-b2c9-1f6e0a5d3b47\", \"attempt\": 3"));
+
+        var ok = WeldInspectionActionParser.TryParse(action, out var req, out var error);
+
+        Assert.True(ok, error);
+        Assert.Equal(Guid.Parse("3a9f2c14-8e51-4d7a-b2c9-1f6e0a5d3b47"), req!.TaskId);
+        Assert.Equal((byte)3, req.Attempt);
+    }
+
+    /// <summary>구버전 ACS(두 필드 미탑재) — 파싱은 성공하고 null. 실행 스텝이 Guid.Empty / 1 로 폴백한다.</summary>
+    [Fact]
+    public void Parse_WithoutTaskIdAndAttempt_SucceedsWithNulls()
+    {
+        var ok = WeldInspectionActionParser.TryParse(Deserialize(GoldenActionJson), out var req, out var error);
+
+        Assert.True(ok, error);
+        Assert.Null(req!.TaskId);
+        Assert.Null(req.Attempt);
+    }
+
+    /// <summary>JSON null 은 "미탑재"와 같다(ACS 직렬화기가 null 을 쓸 수 있음).</summary>
+    [Fact]
+    public void Parse_ExplicitNulls_TreatedAsAbsent()
+    {
+        var ok = WeldInspectionActionParser.TryParse(
+            Deserialize(GoldenWith("\"taskId\": null, \"attempt\": null")), out var req, out var error);
+
+        Assert.True(ok, error);
+        Assert.Null(req!.TaskId);
+        Assert.Null(req.Attempt);
+    }
+
+    /// <summary>attempt 경계 — UInt8 프레임 필드라 1~255 만 유효.</summary>
+    [Theory]
+    [InlineData(1)]
+    [InlineData(255)]
+    public void Parse_AttemptBounds_Accepted(int attempt)
+    {
+        var ok = WeldInspectionActionParser.TryParse(Deserialize(GoldenWith($"\"attempt\": {attempt}")), out var req, out var error);
+
+        Assert.True(ok, error);
+        Assert.Equal((byte)attempt, req!.Attempt);
+    }
+
+    /// <summary>실려 왔는데 형식이 틀리면 거부 — 엉뚱한 식별자로 촬영이 나가 다른 용접선 이력에 섞이는 것을 막는다.</summary>
+    [Theory]
+    [InlineData("\"taskId\": \"abc\"", "taskId")]
+    [InlineData("\"taskId\": 123", "taskId")]
+    [InlineData("\"taskId\": \"00000000-0000-0000-0000-000000000000\"", "taskId")]   // 빈 GUID = 미지정 예약값
+    [InlineData("\"attempt\": 0", "attempt")]
+    [InlineData("\"attempt\": 256", "attempt")]
+    [InlineData("\"attempt\": -1", "attempt")]
+    [InlineData("\"attempt\": 1.5", "attempt")]
+    [InlineData("\"attempt\": \"2\"", "attempt")]
+    public void Parse_MalformedTaskIdOrAttempt_Rejected(string extraParams, string expectedInError)
+    {
+        var ok = WeldInspectionActionParser.TryParse(Deserialize(GoldenWith(extraParams)), out _, out var error);
+
+        Assert.False(ok);
+        Assert.Contains(expectedInError, error);
+    }
 }
