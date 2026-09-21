@@ -199,12 +199,13 @@ public sealed class VisionEngine : IAsyncDisposable
             if (winner == tcs.Task)
             {
                 var f = await tcs.Task.ConfigureAwait(false);
-                if (f.Command == (byte)CommandCode.CaptureRes && CaptureResPayload.TryReadCode(f.Data, out var code))
+                // CAPTURE_RES/ERROR_NOTI 모두 [0-1]에 결과 코드를 싣는다(레거시 74B는 TryReadCode가 흡수).
+                if (f.Command is (byte)CommandCode.CaptureRes or (byte)CommandCode.ErrorNoti
+                    && CaptureResPayload.TryReadCode(f.Data, out var code))
                 {
-                    // v3: 결과 코드는 [72-73], Run/Task ID(에코)는 [0-71]. v2(2B)는 [0-1] 폴백.
                     return new CaptureOutcome(true, true, (ResultCode)code);
                 }
-                // ERROR_NOTI 등: 응답은 왔으나 성공 코드가 아님.
+                // 코드 판독 불가(DATA 2바이트 미만)일 때만 unknown.
                 return new CaptureOutcome(true, true, ResultCode.ErrUnknown);
             }
 
