@@ -202,7 +202,8 @@ public class FairinoRpcClient : IDisposable
             return a[1..7].Select(ToDouble).ToArray();
         var err = raw is object[] arr && arr.Length > 0 ? ToErr(arr[0]) : -1;
         throw new InvalidOperationException(
-            $"역기구학(GetInverseKin) 실패 (errcode={err}). 목표 자세가 작업영역 밖이거나 도달 불가일 수 있습니다.");
+            $"역기구학(GetInverseKin) 실패 (errcode={err}){FairinoErrorCodes.Suffix(err)}. 목표 자세가 작업영역 밖이거나 도달 불가일 수 있습니다. " +
+            $"IK 입력 pose(활성 프레임 기준)=[{string.Join(", ", descPose.Select(x => x.ToString("0.#")))}]");
     }
 
     /// <summary>현재 관절각(도) [j0..j5] 조회. flag 0=블로킹,1=논블로킹. 실패 시 예외.
@@ -399,6 +400,12 @@ public class FairinoRpcClient : IDisposable
             0,                                  // velAccParamMode
         };
         var rc = await InvokeAsync("MoveL", p => ToErr(p.MoveL(args)), ct, faultRecovery: false);
+        if (rc != 0)
+            _logger.LogWarning("{Name} MoveL rc={Rc}{Desc} (tool={T}, user={U}, pose=[{P}], joints=[{J}], offsetFlag={F}, offset=[{O}])",
+                _settings.Name, rc, FairinoErrorCodes.Suffix(rc), t, u,
+                string.Join(",", descPose.Select(x => x.ToString("0.##"))),
+                string.Join(",", j.Select(x => x.ToString("0.##"))),
+                offsetFlag, string.Join(",", off.Select(x => x.ToString("0.##"))));
         if (rc == 0) { _activeTool = t; _activeUser = u; }   // tool/user 인자가 컨트롤러 활성 프레임을 바꾸므로 추적값 동기.
         return rc;
     }

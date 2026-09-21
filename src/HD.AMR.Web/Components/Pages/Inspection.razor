@@ -944,6 +944,8 @@
             _thinned[i] = _thinned[i] with { Y = v };
     }
 
+    private static string FormatPose(double[] p) => string.Join(", ", p.Select(v => v.ToString("0.#")));
+
     // 경유점 로봇 Y(mm). PointMarker 는 X/Z 만 담으므로 별도 딕셔너리에 보관한다(없으면 0).
     private double EffectiveY(int i) => _yOverrides.TryGetValue(i, out var y) ? y : 0.0;
 
@@ -1146,7 +1148,8 @@
                 if (rc != 0)
                 {
                     _runIsError = true;
-                    _runMessage = $"#{i + 1} 점 이동 실패 (rc={rc}) — 중단";
+                    _runMessage = $"#{i + 1} 점 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)} — 중단. " +
+                                  $"명령 pose(작업물 #{_runUser}, tool {_runTool})=[{FormatPose(pose)}]";
                     return;
                 }
 
@@ -1269,7 +1272,8 @@
             if (rc != 0)
             {
                 _runIsError = true;
-                _runMessage = $"#{i + 1} 이동 실패 (rc={rc})";
+                _runMessage = $"#{i + 1} 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}. " +
+                              $"명령 pose(작업물 #{_runUser}, tool {_runTool})=[{FormatPose(pose)}]";
                 return; // finally에서 _isRunning 해제
             }
 
