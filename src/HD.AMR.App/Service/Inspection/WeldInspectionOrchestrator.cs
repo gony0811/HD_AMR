@@ -183,10 +183,14 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
 
         // 9) SequenceContext 구성 — 파라미터 우선순위: ① ACS action → ② 티칭 프로필 → ③ 레시피 → ④ 전역 기본.
         //    CORNER 는 profile 이 없다 — Tool/Velocity 는 SequenceContext 기본값(단독 실행과 동일).
+        //    공구는 실제 TCP 가 설정된 #1 이어야 한다 — 프로필 RunTool 이 0(미설정/플랜지)이면 1 로 보정.
+        if (profile is { RunTool: <= 0 })
+            _logger.LogWarning("티칭 프로필 '{Profile}' RunTool={RunTool} — 공구 #1 로 보정해 실행 (프로필 저장값 확인 필요)",
+                profile.Name, profile.RunTool);
         var context = new SequenceContext
         {
             InspectionDirection = direction,
-            Tool = profile?.RunTool ?? 1,
+            Tool = profile is { RunTool: > 0 } ? profile.RunTool : 1,
             Velocity = profile?.RunVel ?? 20,
             InspectionDrawingId = profile?.DrawingId ?? 0,
             InspectionProfileId = profile?.Id ?? 0,
@@ -224,11 +228,9 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         }
 
         SequenceRunResult runResult;
-        bool runCancelled = false;
         try
         {
             runResult = await sequence.RunSequenceAsync(context, stepKeys, runCts.Token);
-            runCancelled = runCts.IsCancellationRequested;   // Dispose 전에 캡처(이후 Token 접근 불가)
         }
         finally
         {
@@ -248,11 +250,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
 
             case SequenceRunOutcome.Failed:
                 InvalidateAnchor();   // 정렬 신뢰 불가 — 다음 액션은 풀시퀀스
-                // 스텝 실패는 즉시 중단이라 wobjReset(1300)에 못 간다 — 활성 작업물 좌표계가 N 으로
-                // 남으면 이후 조그/코봇 페이지가 프레임 불일치를 내므로 best-effort 로 반납한다.
-                // 단 취소(emergencyStop·임무 폐기)로 인한 실패는 제외 — 정지 직후 모션 명령 금지.
-                if (!runCancelled && !ct.IsCancellationRequested)
-                    await TryResetActiveFrameAsync(context.Tool);
+                // 활성 작업물 좌표계 0·공구 복귀(best-effort)는 SequenceService.RunSequenceAsync 가 실패 종료
+                // 시(취소 제외) 수행한다 — UI 풀오토와 이 경로가 같은 반납을 공유한다.
                 return InspectionActionResult.Fail("inspectionFailed",
                     $"recipe={recipeId} step={runResult.FailedStepKey ?? "?"} fail: {runResult.Message}");
 
@@ -266,27 +265,6 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                     $"recipe={recipeId} profile='{profile?.Name ?? $"corner3.{cornerSide}"}' anchor={req.AnchorGroupId}#{req.SeqInGroup}" +
                     (anchorHit ? " (정렬 공유)" : "") +
                     $" jobRef={req.JobRef}");
-        }
-    }
-
-    /// <summary>활성 작업물 좌표계 0(베이스) 복귀 — 실패 종료 경로의 best-effort 반납.
-    /// 무변위 MoveJ(<see cref="Communication.FairinoRpcClient.ResetActiveFrameAsync"/>)라 로봇은 움직이지
-    /// 않지만 모션 명령이므로, 호출측이 취소(emergencyStop) 아님을 확인하고 부른다. 실패는 삼키고 로그만.</summary>
-    private async Task TryResetActiveFrameAsync(int tool)
-    {
-        if (!_cobot.IsConnected) return;
-        try
-        {
-            var rc = await _cobot.Rpc.ResetActiveFrameAsync(tool, 0, CancellationToken.None);
-            if (rc == 0)
-                _logger.LogInformation("실패 종료 후 활성 작업물 좌표계 0(베이스) 반납 완료.");
-            else
-                _logger.LogWarning("실패 종료 후 활성 작업물 좌표계 반납 실패 (rc={Rc}){Desc} — 코봇 페이지의 '활성 좌표계 초기화' 필요할 수 있음",
-                    rc, Communication.FairinoErrorCodes.Suffix(rc));
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "실패 종료 후 활성 작업물 좌표계 반납 중 예외 — 무시");
         }
     }
 

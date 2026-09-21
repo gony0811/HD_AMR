@@ -117,6 +117,13 @@ public class SequenceService
                 }
             }
 
+            // 스텝 실패는 즉시 중단이라 wobjReset(1300)에 못 간다 — 활성 작업물 좌표계가 N 으로 남거나
+            // 활성 공구가 context.Tool(통상 1)이 아닌 채 남으면 이후 조그/코봇 페이지가 프레임 불일치를 내므로
+            // best-effort 로 반납한다(무변위 MoveJ, 공구도 복원). 취소(emergencyStop·임무 폐기)로 인한 실패는
+            // 제외 — 정지 직후 모션 명령 금지. UI 풀오토와 ACS(오케스트레이터) 경로 모두 여기를 지난다.
+            if (runResult.Outcome == SequenceRunOutcome.Failed && !ct.IsCancellationRequested)
+                await TryResetActiveFrameAsync(context.Tool);
+
             RunState = SequenceRunState.Idle;
             CurrentStepKey = null;
             _runCts?.Dispose();
@@ -172,6 +179,27 @@ public class SequenceService
         finally
         {
             _gate.Exit();
+        }
+    }
+
+    /// <summary>활성 작업물 좌표계 0(베이스)·공구 <paramref name="tool"/> 복귀 — 실패 종료 경로의 best-effort 반납.
+    /// 무변위 MoveJ(<see cref="Communication.FairinoRpcClient.ResetActiveFrameAsync"/>)라 로봇은 움직이지
+    /// 않지만 모션 명령이므로 호출측이 취소 아님을 확인하고 부른다. 실패는 삼키고 로그만.</summary>
+    private async Task TryResetActiveFrameAsync(int tool)
+    {
+        if (!_cobotService.IsConnected) return;
+        try
+        {
+            var rc = await _cobotService.Rpc.ResetActiveFrameAsync(tool, 0, CancellationToken.None);
+            if (rc == 0)
+                _logger.LogInformation("실패 종료 후 활성 작업물 좌표계 0(베이스)·공구 #{Tool} 반납 완료.", tool);
+            else
+                _logger.LogWarning("실패 종료 후 활성 좌표계 반납 실패 (rc={Rc}){Desc} — 코봇 페이지의 '활성 좌표계 초기화' 필요할 수 있음",
+                    rc, Communication.FairinoErrorCodes.Suffix(rc));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "실패 종료 후 활성 좌표계 반납 중 예외 — 무시");
         }
     }
 

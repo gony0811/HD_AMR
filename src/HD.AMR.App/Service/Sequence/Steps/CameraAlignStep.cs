@@ -102,7 +102,7 @@ public class CameraAlignStep : ISequenceStep
             ToleranceMm = 1.0,
             MaxTravelMm = MaxAlignTravelMm,
             DepthAxis = depthAxis,
-            Tool = 1,
+            Tool = context.Tool,
             Velocity = context.Velocity,
         }, progress: context.Progress, ct);
 

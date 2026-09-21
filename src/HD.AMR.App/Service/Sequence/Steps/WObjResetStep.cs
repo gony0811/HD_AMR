@@ -6,7 +6,8 @@ namespace HD.AMR.App.Service.Sequence.Steps;
 /// <summary>
 /// ⑱⁺ 작업물 좌표계 0 복귀 — 마지막 스텝. ⑱ 검사 수행이 user=작업물 좌표계 번호로 MoveL 하면서
 /// 컨트롤러의 활성 작업물 좌표계가 남는 것을, 현재 포즈로의 <b>무이동 MoveL(user:0)</b> 로
-/// 베이스(0)로 되돌린다. 로봇은 움직이지 않는다.
+/// 베이스(0)로 되돌린다. 로봇은 움직이지 않는다. MoveL 의 tool 인자가 context.Tool(통상 1)이고
+/// desc 도 그 공구 기준(GetTcpPoseInBase 재프레임)이므로 활성 공구도 함께 context.Tool 로 복원된다.
 ///
 /// IK 우회: 활성 프레임이 wobj 인 상태에서는 GetInverseKin 이 base 포즈를 오해석해 112(작업영역 밖)를
 /// 반환하는 순환이 생기므로, 현재 관절각을 jointPos 로 직접 넘겨 역기구학 호출 자체를 생략한다.
@@ -52,7 +53,7 @@ public class WObjResetStep : ISequenceStep
             return StepResult.Fail(
                 $"작업물 좌표계 0 복귀 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)} — 티치펜던트에서 확인하세요.");
 
-        _logger.LogInformation("⑱⁺ 활성 작업물 좌표계 0(베이스) 복귀 완료.");
-        return StepResult.Ok("활성 작업물 좌표계 0(베이스) 복귀 완료.");
+        _logger.LogInformation("⑱⁺ 활성 작업물 좌표계 0(베이스)·공구 #{Tool} 복귀 완료.", context.Tool);
+        return StepResult.Ok($"활성 작업물 좌표계 0(베이스)·공구 #{context.Tool} 복귀 완료.");
     }
 }
