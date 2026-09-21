@@ -86,8 +86,8 @@
                     <StackPanel Spacing="8">
                         <TextBlock FontWeight="SemiBold" Text="자동 캡처 — ⚠ 코봇이 스스로 움직입니다" />
                         <TextBlock Classes="hint"
-                                   Text="마커가 화면 중앙에 크게 들어온 초기 자세에서 시작하세요. 코봇이 저속(5%)으로 손목을 Rz/Rx/Ry·대각 축 ±20° 돌려가며 최대 9개 표본을 자동 수집하고 앵커 자세로 복귀합니다. 마커를 놓치면 절반 각도로 재시도 후 건너뜁니다. 로봇 주변에 사람·장애물이 없는지 확인하세요." />
-                        <CheckBox Content="코봇 자동 이동에 동의합니다 (저속 5%, 손목 ±20° 이내, 주변 안전 확인함)"
+                                   Text="마커가 화면 중앙에 크게 들어온 초기 자세에서 시작하세요. 코봇이 저속(5%)으로 손목을 Rz/Rx/Ry·대각 축 ±25°(Rx/Ry 는 ±12.5° 추가) 돌려가며 최대 13개 표본을 자동 수집하고 앵커 자세로 복귀합니다. 이동마다 실제 TCP 가 목표에 도달·정지한 것을 확인한 뒤 캡처하며, 로봇이 움직이지 않으면 오류로 중단합니다. 마커를 놓치면 절반 각도로 재시도 후 건너뜁니다. 로봇 주변에 사람·장애물이 없는지 확인하세요." />
+                        <CheckBox Content="코봇 자동 이동에 동의합니다 (저속 5%, 손목 ±25° 이내, 주변 안전 확인함)"
                                   IsChecked="{Binding AutoMoveConfirmed}" IsEnabled="{Binding !IsAutoRunning}" />
                         <StackPanel Orientation="Horizontal" Spacing="8">
                             <Button Content="▶ 자동 캡처 시작" Classes="accent" Command="{Binding AutoCaptureCommand}" />
@@ -103,7 +103,7 @@
         <Border Classes="card">
             <StackPanel Spacing="6">
                 <TextBlock Classes="cardHead" Text="④ 표본 목록" />
-                <Grid ColumnDefinitions="40,50,50,150,140,70,80,Auto">
+                <Grid ColumnDefinitions="40,50,50,150,140,70,80,70,110,Auto">
                     <TextBlock Classes="axis" Text="#" />
                     <TextBlock Grid.Column="1" Classes="axis" Text="ID" />
                     <TextBlock Grid.Column="2" Classes="axis" Text="tool" />
@@ -111,11 +111,13 @@
                     <TextBlock Grid.Column="4" Classes="axis" Text="Rx Ry Rz" />
                     <TextBlock Grid.Column="5" Classes="axis" Text="재투영" />
                     <TextBlock Grid.Column="6" Classes="axis" Text="깊이−PnP" />
+                    <TextBlock Grid.Column="7" Classes="axis" Text="마커 px" />
+                    <TextBlock Grid.Column="8" Classes="axis" Text="잔차 (회전/병진)" />
                 </Grid>
                 <ItemsControl ItemsSource="{Binding Rows}">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="vm:HandEyeRow">
-                            <Grid ColumnDefinitions="40,50,50,150,140,70,80,Auto" Margin="0,2">
+                            <Grid ColumnDefinitions="40,50,50,150,140,70,80,70,110,Auto" Margin="0,2">
                                 <TextBlock Text="{Binding No}" />
                                 <TextBlock Grid.Column="1" Text="{Binding MarkerId}" />
                                 <TextBlock Grid.Column="2" Text="{Binding Tool}" />
@@ -123,7 +125,9 @@
                                 <TextBlock Grid.Column="4" Text="{Binding OrientText}" />
                                 <TextBlock Grid.Column="5" Text="{Binding ReprojText}" />
                                 <TextBlock Grid.Column="6" Text="{Binding DepthText}" />
-                                <Button Grid.Column="7" Content="삭제" Padding="6,2"
+                                <TextBlock Grid.Column="7" Text="{Binding SideText}" />
+                                <TextBlock Grid.Column="8" Text="{Binding ResidualText}" />
+                                <Button Grid.Column="9" Content="삭제" Padding="6,2"
                                         Command="{Binding $parent[ItemsControl].((vm:HandEyeViewModel)DataContext).RemoveSampleCommand}"
                                         CommandParameter="{Binding}" />
                             </Grid>
@@ -131,7 +135,7 @@
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
                 <TextBlock Classes="hint"
-                           Text="깊이−PnP 는 depth 채널 실측 거리와 PnP 거리의 차입니다. 평면 마커 PnP 는 광축 방향(깊이)이 가장 약하므로(측면 대비 5~10배) 이 값이 크면 마커 크기 오입력이나 검출 불안정을 의심하세요." />
+                           Text="깊이−PnP 는 depth 채널 실측 거리와 PnP 거리의 차입니다. 평면 마커 PnP 는 광축 방향(깊이)이 가장 약하므로(측면 대비 5~10배) 이 값이 크면 마커 크기 오입력이나 검출 불안정을 의심하세요. 잔차 열은 마지막 산출에서 그 표본이 든 쌍들의 AX−XB 잔차입니다 — 한 표본만 튀면 그 자세를 삭제하고 재산출하세요. 마커 px 가 프레임 폭의 20% 미만이면 기울기 추정이 불안정해 회전 잔차가 커집니다." />
             </StackPanel>
         </Border>
 

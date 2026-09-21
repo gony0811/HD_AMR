@@ -42,6 +42,34 @@ public class HandEyeAutoRoutineTests
         Assert.True(Math.Abs(pose[3] - 30) < 1e-6);
     }
 
+    /// <summary>기대 목표 = 앵커 ∘ 오프셋(tool 프레임). 오프셋 0 이면 앵커 그대로, 회전 오프셋이면 앵커 대비 그 각도만큼 돈다.</summary>
+    [Fact]
+    public void ExpectedTarget_ComposesOffsetInToolFrame()
+    {
+        double[] anchor = [600, -40, 320, 178, 3, -25];
+        Assert.All(HandEyeAutoRoutine.ExpectedTarget(anchor, new double[6]).Zip(anchor),
+            pair => Assert.True(Math.Abs(pair.First - pair.Second) < 1e-9));
+
+        // maxTrans 를 넉넉히 줘 클램프가 걸리지 않게 한다(클램프되면 피벗이 정확히 고정되지 않는 것이 맞다).
+        var offset = HandEyeAutoRoutine.BuildPivotOffsetPose([0, 1, 0], 20, [0, 0, 450], 500);
+        var target = HandEyeAutoRoutine.ExpectedTarget(anchor, offset);
+        Assert.True(Math.Abs(FrameMath.RelativeRotationDeg(anchor, target) - 20) < 1e-6);
+
+        // 피벗점(tool 기준 [0,0,450])은 앵커·목표 어느 프레임으로 봐도 같은 베이스 점이어야 한다.
+        var pa = FrameMath.Multiply(FrameMath.PoseToMatrix(anchor), FrameMath.PoseToMatrix([0, 0, 450, 0, 0, 0]));
+        var pt = FrameMath.Multiply(FrameMath.PoseToMatrix(target), FrameMath.PoseToMatrix([0, 0, 450, 0, 0, 0]));
+        for (int i = 0; i < 3; i++) Assert.True(Math.Abs(pa[i, 3] - pt[i, 3]) < 1e-6, $"피벗 {i}: {pa[i, 3]} vs {pt[i, 3]}");
+    }
+
+    /// <summary>웨이포인트는 Rz 외 축에 절반 각도 시점이 있고, 배율은 0 초과 1 이하여야 한다.</summary>
+    [Fact]
+    public void Waypoints_IncludeHalfAngleObliqueViews()
+    {
+        Assert.Contains(HandEyeAutoRoutine.Waypoints, w => w.Frac < 1.0 && w.Axis[2] == 0);
+        Assert.DoesNotContain(HandEyeAutoRoutine.Waypoints, w => w.Frac < 1.0 && w.Axis[2] != 0);
+        Assert.All(HandEyeAutoRoutine.Waypoints, w => Assert.True(w.Frac is > 0 and <= 1.0));
+    }
+
     [Fact]
     public void EstimatePivotInTool_FallsBackToOpticalAxisWhenNoTtc()
     {

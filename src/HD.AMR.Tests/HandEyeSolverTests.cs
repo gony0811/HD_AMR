@@ -94,6 +94,40 @@ public class HandEyeSolverTests
         Assert.DoesNotContain(r.Warnings, w => w.Contains("회전축 다양성"));
     }
 
+    /// <summary>표본별 잔차는 입력 순서·길이를 따르고, 정확 데이터에서는 전부 0 근처이며 NaN 이 없어야 한다.</summary>
+    [Fact]
+    public void Solve_ReportsPerSampleResiduals()
+    {
+        var (f, m) = Build(GoodPoses());
+        var r = HandEyeSolver.Solve(f, m);
+
+        Assert.True(r.Success, r.Error);
+        Assert.Equal(f.Count, r.SampleRotationResidualDeg.Count);
+        Assert.Equal(f.Count, r.SampleTranslationResidualMm.Count);
+        Assert.All(r.SampleRotationResidualDeg, v => Assert.True(!double.IsNaN(v) && v < 1e-4, $"회전 {v}"));
+        Assert.All(r.SampleTranslationResidualMm, v => Assert.True(!double.IsNaN(v) && v < 1e-6, $"병진 {v}"));
+        Assert.DoesNotContain(r.Warnings, w => w.Contains("튀는 표본"));
+    }
+
+    /// <summary>한 표본의 마커 자세만 크게 틀면(자세 플립·흔들림) 그 표본의 잔차가 가장 크고 경고에 지목돼야 한다.</summary>
+    [Fact]
+    public void Solve_PerSampleResidual_PointsAtCorruptedSample()
+    {
+        var (f, m) = Build(GoodPoses());
+        const int bad = 5;
+        m[bad] = new[] { m[bad][0], m[bad][1], m[bad][2], m[bad][3] + 6.0, m[bad][4] - 4.0, m[bad][5] };
+
+        var r = HandEyeSolver.Solve(f, m);
+
+        Assert.True(r.Success, r.Error);
+        int worst = 0;
+        for (var i = 1; i < r.SampleRotationResidualDeg.Count; i++)
+            if (r.SampleRotationResidualDeg[i] > r.SampleRotationResidualDeg[worst]) worst = i;
+        Assert.Equal(bad, worst);
+        Assert.True(r.Warnings.Any(w => w.Contains("튀는 표본") && w.Contains($"#{bad + 1}(")),
+            $"경고 없음. rms={r.RotationRmsDeg:0.000} per-sample=[{string.Join(", ", r.SampleRotationResidualDeg.Select(v => v.ToString("0.000")))}] warnings=[{string.Join(" | ", r.Warnings)}]");
+    }
+
     /// <summary>
     /// 이 방식이 T_A_B 와 무관함을 고정한다 — 표본 생성에 AMR pose 가 전혀 쓰이지 않으므로
     /// (AMR 을 세워 두면 식에서 소거되므로) 순환 의존이 없다.

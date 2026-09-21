@@ -5,10 +5,35 @@ using OpenCvSharp.Aruco;
 
 namespace HD.AMR.App.Communication.Vision;
 
-/// <summary>D435 RGB 영상에서 ArUco를 검출하고 컬러 광학 프레임 기준 T_C_Q를 계산한다.</summary>
+/// <summary>
+/// D435 RGB 영상에서 ArUco를 검출하고 컬러 광학 프레임 기준 T_C_Q를 계산한다.
+///
+/// 정밀도 요점(핸드아이 잔차의 지배 요인이 마커 <b>회전</b> 추정이다):
+///  · 코너는 서브픽셀 정제(<see cref="MakeDetectorParameters"/>)한다. 정제 없이는 코너 오차 0.5~1 px 이고,
+///    정면에 가까운 마커는 원근 단서가 약해 1 px 가 기울기 약 1° 오차로 번진다.
+///  · 렌즈 왜곡을 반영한다. 정방향 Brown-Conrady 계수는 solvePnP 에 그대로 넘기고, RealSense 색상 센서가
+///    흔히 보고하는 Inverse Brown-Conrady 는 코너 픽셀을 먼저 편 뒤 무왜곡 PnP 를 한다(규약이 반대라
+///    계수를 그대로 넘기면 오히려 틀어진다).
+/// </summary>
 public static class ArucoPoseEstimator
 {
     private const SolvePnPFlags IppeSquare = (SolvePnPFlags)7;
+
+    /// <summary>
+    /// 검출 파라미터 — 서브픽셀 코너 정제 ON. 모든 검출 경로(자세 추정·프리뷰·ID 조사)가 같은 설정을 쓴다.
+    /// 창 5 px, 최대 50회, 정확도 0.01 px 는 OpenCV 권장 범위이며 220 px 안팎 마커에서 코너를 0.1 px 수준으로 잡는다.
+    /// </summary>
+    public static DetectorParameters MakeDetectorParameters()
+    {
+        var p = new DetectorParameters
+        {
+            CornerRefinementMethod = CornerRefineMethod.Subpix,
+            CornerRefinementWinSize = 5,
+            CornerRefinementMaxIterations = 50,
+            CornerRefinementMinAccuracy = 0.01,
+        };
+        return p;
+    }
 
     public static ArucoPoseResult? DetectAndEstimate(
         CameraFrame color, CameraD2CParams intr, double sizeMm, int markerId,
@@ -19,10 +44,12 @@ public static class ArucoPoseEstimator
         using var gray = new Mat();
         Cv2.CvtColor(rgb, gray, ColorConversionCodes.RGB2GRAY);
         using var dictionary = CvAruco.GetPredefinedDictionary(dictionaryName);
-        var parameters = new DetectorParameters();
+        var parameters = MakeDetectorParameters();
         CvAruco.DetectMarkers(gray, dictionary, out Point2f[][] corners, out int[] ids, parameters, out _);
         int found = Array.IndexOf(ids, markerId);
         if (found < 0 || corners[found].Length != 4) return null;
+
+        var raw = corners[found];
 
         // ArUco 코너 순서는 TL,TR,BR,BL. Q축은 X=오른쪽, Y=위, Z=카메라 쪽이다.
         double h = sizeMm / 2.0;
@@ -30,20 +57,43 @@ public static class ArucoPoseEstimator
             new Point3f((float)h, (float)-h, 0), new Point3f((float)-h, (float)-h, 0) };
         double sx = intr.ColorW > 0 ? (double)color.Width / intr.ColorW : 1;
         double sy = intr.ColorH > 0 ? (double)color.Height / intr.ColorH : 1;
-        var k = new double[,] { { intr.ColorFx * sx, 0, intr.ColorCx * sx },
-            { 0, intr.ColorFy * sy, intr.ColorCy * sy }, { 0, 0, 1 } };
-        var dist = new double[5];
+        double fx = intr.ColorFx * sx, fy = intr.ColorFy * sy, cx = intr.ColorCx * sx, cy = intr.ColorCy * sy;
+        var k = new double[,] { { fx, 0, cx }, { 0, fy, cy }, { 0, 0, 1 } };
+
+        // 왜곡 처리: 정방향 모델은 계수를 PnP 에, 역방향 모델은 코너를 먼저 편다(둘 다 아니면 무왜곡).
+        var dist = intr.OpenCvColorDistCoeffs();
+        var pts = raw;
+        if (intr.ColorDistortionIsInverse)
+        {
+            pts = new Point2f[4];
+            for (int i = 0; i < 4; i++)
+            {
+                var (u, v) = intr.ColorUndistortPixel(raw[i].X, raw[i].Y, fx, fy, cx, cy);
+                pts[i] = new Point2f((float)u, (float)v);
+            }
+        }
+
         var rvec = new double[3]; var tvec = new double[3];
-        Cv2.SolvePnP(obj, corners[found], k, dist, ref rvec, ref tvec, false, IppeSquare);
+        Cv2.SolvePnP(obj, pts, k, dist, ref rvec, ref tvec, false, IppeSquare);
         Cv2.Rodrigues(rvec, out double[,] rot, out _);
         var m = new double[4, 4];
         for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) m[i, j] = rot[i, j];
         m[0, 3] = tvec[0]; m[1, 3] = tvec[1]; m[2, 3] = tvec[2]; m[3, 3] = 1;
         Cv2.ProjectPoints(obj, rvec, tvec, k, dist, out Point2f[] projected, out _);
         double se = 0;
-        for (int i = 0; i < 4; i++) { double u = projected[i].X - corners[found][i].X, v = projected[i].Y - corners[found][i].Y; se += u * u + v * v; }
+        for (int i = 0; i < 4; i++) { double u = projected[i].X - pts[i].X, v = projected[i].Y - pts[i].Y; se += u * u + v * v; }
+
+        // 화면상 마커 한 변 길이(px) — 네 변 평균. 작을수록 기울기 추정이 불안정하므로 진단에 쓴다.
+        double side = 0;
+        for (int i = 0; i < 4; i++)
+        {
+            var a = raw[i]; var b = raw[(i + 1) % 4];
+            side += Math.Sqrt((a.X - b.X) * (a.X - b.X) + (a.Y - b.Y) * (a.Y - b.Y));
+        }
+        side /= 4;
+
         return new ArucoPoseResult(FrameMath.MatrixToPose(m), Math.Sqrt(se / 4), markerId,
-            corners[found].Average(p => p.X), corners[found].Average(p => p.Y));
+            raw.Average(p => p.X), raw.Average(p => p.Y), side);
     }
 
     /// <summary>
@@ -61,7 +111,7 @@ public static class ArucoPoseEstimator
         using var gray = new Mat();
         Cv2.CvtColor(bgr, gray, ColorConversionCodes.BGR2GRAY);
         using var dictionary = CvAruco.GetPredefinedDictionary(dictionaryName);
-        CvAruco.DetectMarkers(gray, dictionary, out Point2f[][] corners, out int[] ids, new DetectorParameters(), out _);
+        CvAruco.DetectMarkers(gray, dictionary, out Point2f[][] corners, out int[] ids, MakeDetectorParameters(), out _);
 
         if (ids.Length > 0)
         {
@@ -96,7 +146,7 @@ public static class ArucoPoseEstimator
         using var gray = new Mat();
         Cv2.CvtColor(bgr, gray, ColorConversionCodes.BGR2GRAY);
         using var dictionary = CvAruco.GetPredefinedDictionary(dictionaryName);
-        CvAruco.DetectMarkers(gray, dictionary, out Point2f[][] corners, out int[] ids, new DetectorParameters(), out _);
+        CvAruco.DetectMarkers(gray, dictionary, out Point2f[][] corners, out int[] ids, MakeDetectorParameters(), out _);
 
         var infos = new ArucoMarkerInfo[ids.Length];
         for (int i = 0; i < ids.Length; i++)
@@ -135,7 +185,8 @@ public static class ArucoPoseEstimator
     }
 }
 
-public sealed record ArucoPoseResult(double[] PoseCQ, double ReprojectionErrorPx, int MarkerId, double CenterU, double CenterV);
+/// <summary>마커 자세 추정 결과. <paramref name="SidePx"/> 는 화면상 마커 한 변 길이(px, 네 변 평균).</summary>
+public sealed record ArucoPoseResult(double[] PoseCQ, double ReprojectionErrorPx, int MarkerId, double CenterU, double CenterV, double SidePx = 0);
 
 /// <summary>실시간 프리뷰 결과 — 마커가 그려진 JPEG + 검출된 ID 목록 + 대상 마커 검출 여부.</summary>
 public sealed record ArucoPreviewResult(byte[] Jpeg, int[] DetectedIds, bool TargetFound);

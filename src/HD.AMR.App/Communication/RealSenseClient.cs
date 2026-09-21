@@ -253,17 +253,28 @@ public class RealSenseClient : IDisposable
                     ex.translation[2] * 1000.0,
                 };
 
+                // 색상 렌즈 왜곡 — 모델명과 계수 5개. D435 색상은 보통 Inverse Brown-Conrady 로 보고되며
+                // 계수가 전부 0 인 개체도 있다. 규약 차이는 CameraD2CParams 가 흡수한다(ArUco PnP 에서 사용).
+                string distModel = ci.model.ToString().ToLowerInvariant();
+                var coeffs = new double[5];
+                if (ci.coeffs is { Length: >= 5 })
+                    for (int k = 0; k < 5; k++) coeffs[k] = ci.coeffs[k];
+
                 var p = new CameraD2CParams(
                     di.fx, di.fy, di.ppx, di.ppy, di.width, di.height,
                     ci.fx, ci.fy, ci.ppx, ci.ppy, ci.width, ci.height,
-                    rot, trans);
+                    rot, trans, distModel, coeffs);
                 if (!p.IsValid) return null;   // 첫 프레임 전 등 0 값이면 캐시하지 않고 재시도
                 _camParam = p;
                 // sanity 기대값(D435): depth fx≈420~430@848x480, color fx≈910~920@1280x720,
                 // baseline |t0|≈15mm. 크게 어긋나면 단위/전치 회귀 의심.
                 _logger.LogInformation(
-                    "{Name} Depth↔Color 캘리브레이션 획득: depth fx={Dfx:0.0} color fx={Cfx:0.0} baseline≈{B:0.0}mm",
-                    _settings.Name, p.DepthFx, p.ColorFx, Math.Abs(trans[0]));
+                    "{Name} Depth↔Color 캘리브레이션 획득: depth fx={Dfx:0.0} color fx={Cfx:0.0} baseline≈{B:0.0}mm " +
+                    "color 왜곡={Model} [{Coeffs}]",
+                    _settings.Name, p.DepthFx, p.ColorFx, Math.Abs(trans[0]), distModel,
+                    string.Join(",", coeffs.Select(v => v.ToString("0.####"))));
+                if (p.HasColorDistortion && !p.ColorDistortionIsForward && !p.ColorDistortionIsInverse)
+                    _logger.LogWarning("{Name} 색상 왜곡 모델 {Model} 은 지원하지 않아 무왜곡으로 처리합니다", _settings.Name, distModel);
                 return _camParam;
             }
             catch (DllNotFoundException) { return null; }

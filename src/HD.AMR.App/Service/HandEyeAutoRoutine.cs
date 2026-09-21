@@ -16,6 +16,13 @@ namespace HD.AMR.App.Service;
 /// 벗어난다. 초기 검출에서 얻은 마커 위치를 피벗으로 삼아, 회전 R 에 보상 병진 t = p − R·p 를 합성한
 /// tool 오프셋으로 이동해 시선이 마커 근처에 머물게 한다. 그래도 놓치면 θ/2 로 1회 재시도 후 건너뛴다.
 ///
+/// <b>도달 확인:</b> 이동 RPC 의 rc=0 은 "수락"일 뿐일 수 있다. 캡처 전에
+/// <see cref="FairinoRpcClient.WaitUntilReachedAsync"/> 로 실제 TCP 가 기대 목표에 도달·정지했는지
+/// 확인하고, 전혀 움직이지 않았으면 명확한 오류로 중단한다(그냥 캡처하면 앵커와 같은 표본만 쌓인다).
+///
+/// <b>경사 시점:</b> Rz(광축) 회전은 마커를 보는 경사각을 바꾸지 못해 평면 마커의 기울기 추정에 도움이
+/// 없다. Rx/Ry/대각 축에는 ±θ 외에 ±θ/2 웨이포인트를 더해 경사 시점 표본을 늘린다.
+///
 /// <b>안전:</b> 속도 5%(≤30 클램프), 회전 ≤30°, 보상 병진 ≤150mm, <see cref="SequenceRunGate"/> 로
 /// 프로세스 전역 모션 1건 강제, 리프트/AMR 이동 감지 시 즉시 중단, 취소/실패와 무관하게 앵커 복귀.
 /// 예외를 밖으로 던지지 않고 항상 결과 객체로 반환한다.
@@ -23,7 +30,12 @@ namespace HD.AMR.App.Service;
 public class HandEyeAutoRoutine
 {
     private const double DefaultVelPct = 5;
-    private const int SettleMs = 600;
+    /// <summary>도달 확인 뒤 진동 안정화 대기(ms).</summary>
+    private const int SettleMs = 1000;
+    /// <summary>도달 대기 한도 — 5% 속도에서 150 mm 보상 병진 + 30° 회전이 넉넉히 끝나는 시간.</summary>
+    private static readonly TimeSpan ArrivalTimeout = TimeSpan.FromSeconds(45);
+    private const double ArrivalPosTolMm = 2.0;
+    private const double ArrivalRotTolDeg = 0.5;
     private const double MinTiltDeg = 5;
     private const double MaxTiltDeg = 30;
     private const double MaxPivotTransMm = 150;
@@ -126,16 +138,17 @@ public class HandEyeAutoRoutine
                 ct.ThrowIfCancellationRequested();
                 EnsurePlatformStationary(liftStart, amrStart);
 
-                var (label, axis, sign) = Waypoints[i];
+                var (label, axis, sign, frac) = Waypoints[i];
+                double fullAngle = theta * frac;
                 attempted++;
                 bool captured = false;
 
-                foreach (var angle in new[] { theta, theta / 2 })
+                foreach (var angle in new[] { fullAngle, fullAngle / 2 })
                 {
                     var offset = BuildPivotOffsetPose(axis, sign * angle, pivot, MaxPivotTransMm);
                     Report($"{label} {sign * angle:+0.#;-0.#}° 이동…");
                     atAnchor = false;
-                    await MoveOffsetAsync(anchor, offset, tool, vel, label, ct);
+                    await MoveOffsetAsync(anchor, offset, tool, vel, label, angle, Report, ct);
                     await Task.Delay(SettleMs, ct);
 
                     if (await IsMarkerVisibleAsync(markerId, effSettings, ct))
@@ -152,8 +165,8 @@ public class HandEyeAutoRoutine
                     }
 
                     Report($"{label}: 마커 미검출 — 앵커 복귀 후 " +
-                           (angle == theta ? "절반 각도로 재시도." : "이 방향은 건너뜀."));
-                    await MoveOffsetAsync(anchor, new double[6], tool, vel, "앵커 복귀", ct);
+                           (angle == fullAngle ? "절반 각도로 재시도." : "이 방향은 건너뜀."));
+                    await MoveOffsetAsync(anchor, new double[6], tool, vel, "앵커 복귀", 0, Report, ct);
                     atAnchor = true;
                     await Task.Delay(SettleMs, ct);
                 }
@@ -161,7 +174,7 @@ public class HandEyeAutoRoutine
                 if (!captured) skipped++;
                 if (!atAnchor)
                 {
-                    await MoveOffsetAsync(anchor, new double[6], tool, vel, "앵커 복귀", ct);
+                    await MoveOffsetAsync(anchor, new double[6], tool, vel, "앵커 복귀", 0, Report, ct);
                     atAnchor = true;
                     await Task.Delay(SettleMs, ct);
                 }
@@ -213,18 +226,34 @@ public class HandEyeAutoRoutine
         return new HandEyeAutoResult(true, null, samples, attempted, skipped, returned);
     }
 
-    /// <summary>웨이포인트 스케줄 — 직교 3축 + 대각. Rz(광축) 먼저(마커 이탈 위험이 가장 낮다).</summary>
-    private static readonly (string Label, double[] Axis, int Sign)[] Waypoints =
+    /// <summary>
+    /// 웨이포인트 스케줄 — 직교 3축 + 대각, 각도 배율(θ 기준). Rz(광축) 먼저(마커 이탈 위험이 가장 낮다).
+    /// Rx/Ry/대각에는 ±θ/2 를 더한다: 경사 시점이 많을수록 평면 마커의 기울기 추정이 안정되고 유효 쌍도 늘어난다
+    /// (Rz 는 경사각을 바꾸지 못하므로 추가하지 않는다).
+    /// </summary>
+    public static readonly (string Label, double[] Axis, int Sign, double Frac)[] Waypoints =
     {
-        ("Rz", new[] { 0.0, 0.0, 1.0 }, +1),
-        ("Rz", new[] { 0.0, 0.0, 1.0 }, -1),
-        ("Rx", new[] { 1.0, 0.0, 0.0 }, +1),
-        ("Rx", new[] { 1.0, 0.0, 0.0 }, -1),
-        ("Ry", new[] { 0.0, 1.0, 0.0 }, +1),
-        ("Ry", new[] { 0.0, 1.0, 0.0 }, -1),
-        ("Rxy", new[] { 0.70710678, 0.70710678, 0.0 }, +1),
-        ("Rxy", new[] { 0.70710678, 0.70710678, 0.0 }, -1),
+        ("Rz", new[] { 0.0, 0.0, 1.0 }, +1, 1.0),
+        ("Rz", new[] { 0.0, 0.0, 1.0 }, -1, 1.0),
+        ("Rx", new[] { 1.0, 0.0, 0.0 }, +1, 1.0),
+        ("Rx", new[] { 1.0, 0.0, 0.0 }, -1, 1.0),
+        ("Ry", new[] { 0.0, 1.0, 0.0 }, +1, 1.0),
+        ("Ry", new[] { 0.0, 1.0, 0.0 }, -1, 1.0),
+        ("Rxy", new[] { 0.70710678, 0.70710678, 0.0 }, +1, 1.0),
+        ("Rxy", new[] { 0.70710678, 0.70710678, 0.0 }, -1, 1.0),
+        ("Rx½", new[] { 1.0, 0.0, 0.0 }, +1, 0.5),
+        ("Rx½", new[] { 1.0, 0.0, 0.0 }, -1, 0.5),
+        ("Ry½", new[] { 0.0, 1.0, 0.0 }, +1, 0.5),
+        ("Ry½", new[] { 0.0, 1.0, 0.0 }, -1, 0.5),
     };
+
+    /// <summary>
+    /// tool 프레임 오프셋 이동의 기대 목표(BASE 기준): T_target = T_anchor · T_offset.
+    /// FAIRINO offset_flag=2 가 오프셋을 현재 tool 프레임에서 합성한다는 전제이며,
+    /// <see cref="FairinoRpcClient.WaitUntilReachedAsync"/> 의 목표로 쓴다.
+    /// </summary>
+    public static double[] ExpectedTarget(double[] anchor, double[] offset)
+        => FrameMath.MatrixToPose(FrameMath.Multiply(FrameMath.PoseToMatrix(anchor), FrameMath.PoseToMatrix(offset)));
 
     /// <summary>
     /// 피벗 회전용 tool 오프셋 pose 를 만든다 — 축 <paramref name="axisUnit"/>(tool 좌표계 단위벡터) 둘레
@@ -308,13 +337,52 @@ public class HandEyeAutoRoutine
         }
     }
 
-    /// <summary>앵커 기준 tool 오프셋 이동. rc≠0 이면 사유를 붙여 예외.</summary>
+    /// <summary>
+    /// 앵커 기준 tool 오프셋 이동 + <b>도달 확인</b>. rc≠0 이면 사유를 붙여 예외.
+    /// rc=0 뒤에도 실제 TCP 를 폴링해 기대 목표(<see cref="ExpectedTarget"/>)에 정지했는지 본다:
+    ///  · 도달 → 정상.
+    ///  · 앵커에서 벗어나지 않음 → "명령은 수락됐지만 움직이지 않음" 예외(컨트롤러 모드/오프셋 지원 점검).
+    ///  · 움직였고 정지했지만 목표와 다름(기대 회전의 절반 이상은 돌았음) → 경고 후 계속.
+    ///    표본은 실제 FK pose 로 기록되므로 여전히 유효하고, 컨트롤러의 오프셋 합성 규약 차이일 수 있다.
+    ///  · 그 외(타임아웃까지 계속 움직임 등) → 예외.
+    /// <paramref name="expectedTurnDeg"/>=0(앵커 복귀)이면 도달만 인정한다.
+    /// </summary>
     private async Task MoveOffsetAsync(
-        double[] anchor, double[] offset, int tool, double vel, string what, CancellationToken ct)
+        double[] anchor, double[] offset, int tool, double vel, string what, double expectedTurnDeg,
+        Action<string> report, CancellationToken ct)
     {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         var rc = await _cobot.Rpc.MoveByToolOffsetAsync(anchor, user: 0, offset, tool: tool, vel: vel, ct: ct);
         if (rc != 0)
             throw new InvalidOperationException($"{what} 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.");
+        double rpcSec = sw.Elapsed.TotalSeconds;
+
+        var target = ExpectedTarget(anchor, offset);
+        var arrival = await _cobot.Rpc.WaitUntilReachedAsync(
+            target, tool, ArrivalPosTolMm, ArrivalRotTolDeg, ArrivalTimeout, ct);
+        _logger.LogInformation("핸드아이 자동 캡처: {What} MoveL rc=0 ({Rpc:0.00}s) → {Arrival}",
+            what, rpcSec, arrival.Describe());
+        if (arrival.Reached) return;
+
+        double fromAnchorDeg = FrameMath.RelativeRotationDeg(anchor, arrival.FinalPose);
+        double fromAnchorMm = FrameMath.DistanceMm(anchor, arrival.FinalPose);
+        bool leftAnchor = fromAnchorDeg > ArrivalRotTolDeg || fromAnchorMm > ArrivalPosTolMm;
+
+        if (expectedTurnDeg > 0 && !leftAnchor)
+            throw new InvalidOperationException(
+                $"{what}: 이동 명령은 수락됐지만(rc=0) 로봇이 움직이지 않았습니다({arrival.Describe()}) — " +
+                "컨트롤러 모드/속도 오버라이드/tool 오프셋 이동 지원을 확인하세요.");
+
+        if (expectedTurnDeg > 0 && arrival.Stationary && fromAnchorDeg >= 0.5 * expectedTurnDeg)
+        {
+            // 정지해 있고 앵커에서 충분히 돌았지만 기대 목표와 다름 — 표본은 실제 FK 로 기록되므로 계속.
+            report($"{what}: 목표와 {arrival.PosErrMm:0.#}mm/{arrival.RotErrDeg:0.##}° 차이로 정지 " +
+                   $"(앵커 대비 {fromAnchorDeg:0.#}° 회전) — 실제 자세로 계속합니다.");
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"{what}: 목표 미도달({arrival.Describe()}) — 이동이 끝나지 않았거나 경로가 막혔습니다. 중단합니다.");
     }
 }
 

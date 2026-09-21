@@ -23,6 +23,11 @@ namespace HD.AMR.App.Models;
 /// 모든 축이 평행하면 0 에 수렴하고, 그때는 표본을 아무리 늘려도 해가 없다.
 /// </param>
 /// <param name="Warnings">주의 메시지(자세 부족, 축 다양성 부족, 잔차 과대).</param>
+/// <param name="SampleRotationResidualDeg">
+/// 표본별 회전 잔차(도) — 그 표본이 포함된 유효 쌍들의 AX−XB 회전 잔차 RMS. 입력 순서와 같은 길이이며,
+/// 어떤 쌍에도 들지 못한 표본은 NaN. 한 표본만 튀면 그 자세(흔들림·자세 플립)를 삭제하고 재산출한다.
+/// </param>
+/// <param name="SampleTranslationResidualMm">표본별 병진 잔차(mm) — 위와 같은 정의.</param>
 public sealed record HandEyeResult(
     bool Success,
     string? Error,
@@ -34,9 +39,12 @@ public sealed record HandEyeResult(
     double TranslationRmsMm,
     double TranslationMaxMm,
     double AxisSpreadDeg,
-    IReadOnlyList<string> Warnings)
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<double> SampleRotationResidualDeg,
+    IReadOnlyList<double> SampleTranslationResidualMm)
 {
     /// <summary>실패 결과 헬퍼.</summary>
     public static HandEyeResult Fail(string error) =>
-        new(false, error, new double[6], 0, 0, 0, 0, 0, 0, 0, Array.Empty<string>());
+        new(false, error, new double[6], 0, 0, 0, 0, 0, 0, 0, Array.Empty<string>(),
+            Array.Empty<double>(), Array.Empty<double>());
 }

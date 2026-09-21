@@ -208,6 +208,9 @@ public sealed partial class HandEyeViewModel : ViewModelBase
     // ── 자동 캡처(코봇 자동 이동) ───────────────────────────────────
     private CancellationTokenSource? _autoCts;
 
+    /// <summary>자동 캡처 손목 틸트(도). 25° — 경사 시점이 클수록 평면 마커 기울기 추정이 안정된다(루틴 상한 30°).</summary>
+    private const double AutoTiltDeg = 25;
+
     [RelayCommand(CanExecute = nameof(CanAutoCapture))]
     private async Task AutoCapture()
     {
@@ -220,7 +223,7 @@ public sealed partial class HandEyeViewModel : ViewModelBase
             var routine = scope.ServiceProvider.GetRequiredService<HandEyeAutoRoutine>();
 
             // 진행 메시지는 스레드풀에서 올라온다 — UI 스레드로 마샬링해 표시.
-            var result = await routine.RunAsync(BuildSettings(), Tool, _savedTtc, tiltDeg: 20,
+            var result = await routine.RunAsync(BuildSettings(), Tool, _savedTtc, tiltDeg: AutoTiltDeg,
                 msg => Dispatcher.UIThread.Post(() => Notify(msg, false)), _autoCts.Token);
 
             foreach (var sample in result.Samples)
@@ -355,9 +358,15 @@ public sealed partial class HandEyeViewModel : ViewModelBase
     private void RebuildRows()
     {
         Rows.Clear();
+        var rot = Result is { Success: true } r ? r.SampleRotationResidualDeg : null;
+        var trans = Result is { Success: true } r2 ? r2.SampleTranslationResidualMm : null;
         foreach (var s in _samples)
+        {
+            double? rr = rot is not null && s.Index < rot.Count && !double.IsNaN(rot[s.Index]) ? rot[s.Index] : null;
+            double? tr = trans is not null && s.Index < trans.Count && !double.IsNaN(trans[s.Index]) ? trans[s.Index] : null;
             Rows.Add(new HandEyeRow(s.Index, s.MarkerId, s.Tool ?? -1, s.TcpPose,
-                s.ReprojErrPx, s.DepthMinusPnpMm));
+                s.ReprojErrPx, s.DepthMinusPnpMm, s.MarkerSidePx, rr, tr));
+        }
     }
 
     private async Task PersistAsync()
@@ -374,14 +383,17 @@ public sealed partial class HandEyeViewModel : ViewModelBase
     private void Notify(string msg, bool error) { Message = msg; IsError = error; }
 }
 
-/// <summary>핸드아이 표본 표의 한 행.</summary>
+/// <summary>핸드아이 표본 표의 한 행. 잔차 열은 마지막 산출 결과의 표본별 기여(산출 전이면 "—").</summary>
 public sealed record HandEyeRow(
     int Index, int MarkerId, int Tool, double[] TcpPose,
-    double ReprojErrPx, double? DepthMinusPnpMm)
+    double ReprojErrPx, double? DepthMinusPnpMm, double? MarkerSidePx,
+    double? RotResidualDeg, double? TransResidualMm)
 {
     public int No => Index + 1;
     public string TcpText => $"{TcpPose[0]:F0}, {TcpPose[1]:F0}, {TcpPose[2]:F0}";
     public string OrientText => $"{TcpPose[3]:F0}, {TcpPose[4]:F0}, {TcpPose[5]:F0}";
     public string ReprojText => $"{ReprojErrPx:F1}px";
     public string DepthText => DepthMinusPnpMm is { } d ? $"{d:+0.0;-0.0}mm" : "—";
+    public string SideText => MarkerSidePx is { } s ? $"{s:F0}px" : "—";
+    public string ResidualText => RotResidualDeg is { } r && TransResidualMm is { } t ? $"{r:F2}° / {t:F1}mm" : "—";
 }

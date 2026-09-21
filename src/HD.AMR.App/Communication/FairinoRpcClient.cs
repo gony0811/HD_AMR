@@ -318,6 +318,59 @@ public class FairinoRpcClient : IDisposable
         return PoseMath.ToPose(tT);
     }
 
+    /// <summary>
+    /// 이동 명령 뒤 TCP 가 <paramref name="targetBase"/>(BASE 기준, 공구 <paramref name="tool"/> 프레임)에
+    /// 도달해 정지할 때까지 무모션 조회(<see cref="GetTcpPoseInBaseAsync"/>)로 폴링한다.
+    /// 도달 판정: 위치 ≤ <paramref name="posTolMm"/> 이고 회전 ≤ <paramref name="rotTolDeg"/> 이며
+    /// 직전 폴링 대비 정지(<see cref="StationaryPosMm"/>/<see cref="StationaryRotDeg"/>) 상태가 연속 2회.
+    /// 이동 RPC 가 rc=0 을 돌려줘도 펌웨어에 따라 "수락"과 "완료"가 다를 수 있어, 표본 캡처·측정 전에는
+    /// 반드시 이걸로 확인한다. 예외를 던지지 않고 <see cref="MotionArrival"/> 로 결과를 돌려준다
+    /// (취소는 예외). 타임아웃 시 <see cref="MotionArrival.Reached"/>=false.
+    /// </summary>
+    public async Task<MotionArrival> WaitUntilReachedAsync(
+        double[] targetBase, int tool, double posTolMm = 2.0, double rotTolDeg = 0.5,
+        TimeSpan? timeout = null, CancellationToken ct = default)
+    {
+        var limit = timeout ?? TimeSpan.FromSeconds(30);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var start = await GetTcpPoseInBaseAsync(tool, ct);
+        var prev = start;
+        int stillCount = 0;
+        double posErr = double.NaN, rotErr = double.NaN;
+        while (true)
+        {
+            await Task.Delay(ArrivalPollMs, ct);
+            var cur = await GetTcpPoseInBaseAsync(tool, ct);
+            posErr = FrameMath.DistanceMm(cur, targetBase);
+            rotErr = FrameMath.RelativeRotationDeg(cur, targetBase);
+            bool still = FrameMath.DistanceMm(cur, prev) <= StationaryPosMm
+                         && FrameMath.RelativeRotationDeg(cur, prev) <= StationaryRotDeg;
+            stillCount = still ? stillCount + 1 : 0;
+            prev = cur;
+
+            bool inTol = posErr <= posTolMm && rotErr <= rotTolDeg;
+            if (inTol && stillCount >= 2)
+            {
+                _logger.LogInformation("{Name} 도달 확인: 오차 {P:0.#}mm/{R:0.##}° ({T:0.0}s)",
+                    _settings.Name, posErr, rotErr, sw.Elapsed.TotalSeconds);
+                return new MotionArrival(true, false, true, posErr, rotErr,
+                    FrameMath.DistanceMm(cur, start), FrameMath.RelativeRotationDeg(cur, start), sw.Elapsed, cur);
+            }
+            if (sw.Elapsed > limit)
+            {
+                double moved = FrameMath.DistanceMm(cur, start), turned = FrameMath.RelativeRotationDeg(cur, start);
+                bool neverMoved = moved <= StationaryPosMm && turned <= StationaryRotDeg;
+                _logger.LogWarning("{Name} 도달 대기 타임아웃({T:0.0}s): 오차 {P:0.#}mm/{R:0.##}°, 시작 대비 이동 {M:0.#}mm/{D:0.##}°",
+                    _settings.Name, sw.Elapsed.TotalSeconds, posErr, rotErr, moved, turned);
+                return new MotionArrival(false, neverMoved, stillCount >= 1, posErr, rotErr, moved, turned, sw.Elapsed, cur);
+            }
+        }
+    }
+
+    private const int ArrivalPollMs = 200;
+    private const double StationaryPosMm = 0.2;
+    private const double StationaryRotDeg = 0.05;
+
     /// <summary>공구 <paramref name="id"/>의 flange→TCP 오프셋 [x,y,z,rx,ry,rz]. 공구 0 = flange(identity).
     /// 그 외는 GetToolCoordAsync(실패 시 throw)로 읽는다.</summary>
     private async Task<double[]> GetToolOffsetAsync(int id, CancellationToken ct)

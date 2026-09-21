@@ -27,6 +27,16 @@ public class ArucoHandEyeService
     /// <summary>재투영 오차 상한(px) — 기존 ArUco 장착 보정 화면과 같은 기준.</summary>
     private const double MaxReprojErrPx = 3.0;
 
+    /// <summary>캡처 전후 TCP 허용 이동(mm)·회전(도) — 초과하면 정지 상태가 아니므로 표본을 버린다.</summary>
+    private const double MaxMoveDuringCaptureMm = 1.0;
+    private const double MaxTurnDuringCaptureDeg = 0.2;
+
+    /// <summary>표본 간 TCP 상대 회전이 전부 이보다 작으면 "로봇이 안 움직인 채 캡처"로 보고 산출을 거부한다(도).</summary>
+    private const double MinPoseSpreadDeg = 1.0;
+
+    /// <summary>화면상 마커 한 변이 프레임 폭의 이 비율보다 작으면 경고 — 기울기 추정이 불안정해진다.</summary>
+    private const double MarkerSideWarnFrac = 0.15;
+
     private readonly CameraService _cam;
     private readonly CobotService _cobot;
     private readonly CalibrationService _calib;
@@ -63,6 +73,8 @@ public class ArucoHandEyeService
 
         var poses = new List<double[]>();
         var reproj = new List<double>();
+        var sides = new List<double>();             // 화면상 마커 한 변(px) — 크기 진단용.
+        int frameWidth = 0;
         int? markerId = settings.MarkerId;   // null 이면 첫 검출 프레임에서 가장 큰 마커로 확정한다.
         var seenIds = new SortedSet<int>();          // 실패 진단용 — 프레임에 실제로 보인 ID 들.
         var rejectedReproj = new List<double>();     // 실패 진단용 — 3px 초과로 버린 오차 값들.
@@ -101,6 +113,8 @@ public class ArucoHandEyeService
 
             poses.Add(r.PoseCQ);
             reproj.Add(r.ReprojectionErrorPx);
+            sides.Add(r.SidePx);
+            frameWidth = color.Width;
             depthVsPnp ??= DepthMinusPnpMm(intr, r);
         }
 
@@ -108,13 +122,15 @@ public class ArucoHandEyeService
             throw new InvalidOperationException(BuildDetectionFailureMessage(
                 poses.Count, frames, markerId, settings.MarkerId, seenIds, rejectedReproj));
 
+        // 위치뿐 아니라 회전도 본다 — 손목만 도는 자세 변경(피벗 Rz 등)은 TCP 위치가 그대로라 위치 검사만으로는
+        // 회전 중 캡처를 걸러내지 못하고, 그 프레임이 섞이면 곧바로 T_T_C 회전 잔차가 된다.
         var tcpAfter = await _cobot.Rpc.GetTcpPoseInBaseAsync(tool, ct);
-        double moved = Math.Sqrt(
-            Math.Pow(tcpAfter[0] - tcpBefore[0], 2) +
-            Math.Pow(tcpAfter[1] - tcpBefore[1], 2) +
-            Math.Pow(tcpAfter[2] - tcpBefore[2], 2));
-        if (moved > 1.0)
+        double moved = FrameMath.DistanceMm(tcpBefore, tcpAfter);
+        double turned = FrameMath.RelativeRotationDeg(tcpBefore, tcpAfter);
+        if (moved > MaxMoveDuringCaptureMm)
             throw new InvalidOperationException($"캡처 중 코봇이 움직였습니다(Δ{moved:0.#}mm) — 완전히 정지한 뒤 다시 캡처하세요.");
+        if (turned > MaxTurnDuringCaptureDeg)
+            throw new InvalidOperationException($"캡처 중 코봇이 회전했습니다(Δ{turned:0.##}°) — 완전히 정지한 뒤 다시 캡처하세요.");
 
         // 위치는 산술 평균, 각도는 원형 평균.
         var markerPose = new double[6];
@@ -131,6 +147,8 @@ public class ArucoHandEyeService
             FramesUsed = poses.Count,
             ReprojErrPx = reproj.Average(),
             DepthMinusPnpMm = depthVsPnp,
+            MarkerSidePx = sides.Average(),
+            FrameWidthPx = frameWidth,
             CapturedAtUtc = DateTime.UtcNow,
         };
     }
@@ -152,9 +170,37 @@ public class ArucoHandEyeService
                 $"표본 간 Tool 번호가 다릅니다({string.Join(", ", tools)}) — " +
                 "T_T_C 는 특정 tool 의 TCP 기준이므로 한 번호로 통일해 재촬영하세요.");
 
-        return HandEyeSolver.Solve(
+        // 코봇 자세가 전부 같으면(자동 이동이 실행되지 않았거나 조그를 잊은 경우) 솔버가 "축 다양성 부족"으로
+        // 실패하지만, 원인이 로봇 쪽임을 바로 알 수 있게 먼저 걸러 준다.
+        if (list.Count >= 2)
+        {
+            double maxRel = 0;
+            for (int i = 0; i < list.Count; i++)
+                for (int j = i + 1; j < list.Count; j++)
+                    maxRel = Math.Max(maxRel, FrameMath.RelativeRotationDeg(list[i].TcpPose, list[j].TcpPose));
+            if (maxRel < MinPoseSpreadDeg)
+                return HandEyeResult.Fail(
+                    $"표본의 코봇 자세가 모두 같습니다(최대 상대 회전 {maxRel:0.00}°) — " +
+                    "로봇이 실제로 움직였는지 확인하세요. 자세를 바꾸지 않은 캡처는 표본이 될 수 없습니다.");
+        }
+
+        var result = HandEyeSolver.Solve(
             list.Select(s => s.TcpPose).ToList(),
             list.Select(s => s.MarkerPose).ToList());
+        if (!result.Success) return result;
+
+        // 마커가 화면에서 작으면 기울기 추정이 불안정하다 — 잔차가 크면 이것부터 의심하도록 안내.
+        var fracs = list.Where(s => s.MarkerSidePx is > 0 && s.FrameWidthPx is > 0)
+            .Select(s => s.MarkerSidePx!.Value / s.FrameWidthPx!.Value).ToList();
+        if (fracs.Count > 0 && fracs.Average() < MarkerSideWarnFrac)
+        {
+            double avgPx = list.Where(s => s.MarkerSidePx is > 0).Average(s => s.MarkerSidePx!.Value);
+            var warnings = result.Warnings.ToList();
+            warnings.Add($"마커가 화면에서 작습니다(한 변 평균 {avgPx:0}px, 프레임 폭의 {fracs.Average():P0}) — " +
+                         "마커를 더 가깝게(프레임 폭의 20% 이상) 두면 회전 잔차가 줄어듭니다.");
+            result = result with { Warnings = warnings };
+        }
+        return result;
     }
 
     /// <summary>검출 부족 실패의 원인을 특정하는 메시지 — ID 불일치 / 재투영 초과 / 진짜 미검출을 구분한다.</summary>
@@ -251,6 +297,12 @@ public class HandEyeSample
 
     /// <summary>깊이 실측 − PnP 거리(mm). 평면 PnP 의 약축(깊이) 교차검증. 깊이 무효면 null.</summary>
     public double? DepthMinusPnpMm { get; set; }
+
+    /// <summary>화면상 마커 한 변 길이(px, 프레임 평균). 작을수록 기울기 추정이 불안정하다. 구버전 표본은 null.</summary>
+    public double? MarkerSidePx { get; set; }
+
+    /// <summary>캡처 프레임 폭(px) — <see cref="MarkerSidePx"/> 를 비율로 해석하기 위한 기준. 구버전 표본은 null.</summary>
+    public int? FrameWidthPx { get; set; }
 
     public DateTime? CapturedAtUtc { get; set; }
 }

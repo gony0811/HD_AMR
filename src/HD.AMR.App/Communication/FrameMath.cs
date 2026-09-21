@@ -78,6 +78,18 @@ public static class FrameMath
         return r;
     }
 
+    /// <summary>회전행렬(4×4 동차 또는 3×3 좌상단)의 회전각(도) — trace 기반. π 근처에서도 안정적이다.</summary>
+    public static double RotationAngleDeg(double[,] m)
+        => Math.Acos(Math.Clamp((m[0, 0] + m[1, 1] + m[2, 2] - 1.0) / 2.0, -1.0, 1.0)) * Rad2Deg;
+
+    /// <summary>두 pose 사이의 상대 회전각(도) — R_a⁻¹·R_b 의 회전각. 위치 성분은 무시한다.</summary>
+    public static double RelativeRotationDeg(double[] a, double[] b)
+        => RotationAngleDeg(Multiply(Invert(PoseToMatrix(a)), PoseToMatrix(b)));
+
+    /// <summary>두 pose 사이의 위치 거리(mm). 회전 성분은 무시한다.</summary>
+    public static double DistanceMm(double[] a, double[] b)
+        => Math.Sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2]));
+
     /// <summary>베이스 기준 pose를 작업물 좌표계(<paramref name="framePose"/>=T_N, 베이스 기준) 기준
     /// 상대 pose로 변환. P_rel = inv(T_N) · P_base.</summary>
     public static double[] ToFrame(double[] baseP, double[] framePose)

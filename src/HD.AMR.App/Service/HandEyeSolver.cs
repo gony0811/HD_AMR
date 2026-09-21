@@ -69,7 +69,7 @@ public static class HandEyeSolver
                 $"표본이 부족합니다({n}/{MinPoses}) — 코봇 자세를 바꿔가며 더 촬영하세요(권장 {RecommendedPoses}개 이상).");
 
         // ① 모든 자세 쌍에서 상대 운동을 만든다. 회전이 너무 작은 쌍은 잡음만 키우므로 버린다.
-        var pairs = new List<(double[,] A, double[,] B, double[] Alpha, double[] Beta)>();
+        var pairs = new List<(double[,] A, double[,] B, double[] Alpha, double[] Beta, int I, int J)>();
         for (var i = 0; i < n; i++)
         {
             var fi = FrameMath.PoseToMatrix(flangePoses[i]);
@@ -88,7 +88,7 @@ public static class HandEyeSolver
                 double angA = RotationAngleDeg(a);
                 if (angA < MinPairRotationDeg || angA > MaxPairRotationDeg) continue;
 
-                pairs.Add((a, b, alpha, beta));
+                pairs.Add((a, b, alpha, beta, i, j));
             }
         }
 
@@ -100,7 +100,7 @@ public static class HandEyeSolver
 
         // ② 회전: M = Σ βαᵀ, R_X = (MᵀM)^(−1/2)·Mᵀ
         var m = new double[3, 3];
-        foreach (var (_, _, alpha, beta) in pairs)
+        foreach (var (_, _, alpha, beta, _, _) in pairs)
             for (var r = 0; r < 3; r++)
                 for (var c = 0; c < 3; c++)
                     m[r, c] += beta[r] * alpha[c];
@@ -144,7 +144,7 @@ public static class HandEyeSolver
         // ③ 병진: (R_A − I)·t_X = R_X·t_B − t_A 를 전 쌍에 쌓아 최소자승.
         var ata = new double[3, 3];
         var atb = new double[3];
-        foreach (var (a, b, _, _) in pairs)
+        foreach (var (a, b, _, _, _, _) in pairs)
         {
             var rowBase = new double[3, 3];
             for (var r = 0; r < 3; r++)
@@ -182,7 +182,9 @@ public static class HandEyeSolver
         var pose = FrameMath.MatrixToPose(x);
 
         double rotSe = 0, transSe = 0, rotMax = 0, transMax = 0;
-        foreach (var (a, b, _, _) in pairs)
+        // 표본별 기여: 그 표본이 든 쌍들의 잔차 제곱합/개수 → RMS. 튀는 자세 하나를 찾아내는 진단값.
+        var sRotSe = new double[n]; var sTransSe = new double[n]; var sCount = new int[n];
+        foreach (var (a, b, _, _, i, j) in pairs)
         {
             // AX − XB 잔차
             var ax = FrameMath.Multiply(a, x);
@@ -193,9 +195,17 @@ public static class HandEyeSolver
             double dt = Math.Sqrt(diff[0, 3] * diff[0, 3] + diff[1, 3] * diff[1, 3] + diff[2, 3] * diff[2, 3]);
             rotSe += ang * ang; transSe += dt * dt;
             rotMax = Math.Max(rotMax, ang); transMax = Math.Max(transMax, dt);
+            sRotSe[i] += ang * ang; sTransSe[i] += dt * dt; sCount[i]++;
+            sRotSe[j] += ang * ang; sTransSe[j] += dt * dt; sCount[j]++;
         }
         double rotRms = Math.Sqrt(rotSe / pairs.Count);
         double transRms = Math.Sqrt(transSe / pairs.Count);
+        var sampleRot = new double[n]; var sampleTrans = new double[n];
+        for (var i = 0; i < n; i++)
+        {
+            sampleRot[i] = sCount[i] > 0 ? Math.Sqrt(sRotSe[i] / sCount[i]) : double.NaN;
+            sampleTrans[i] = sCount[i] > 0 ? Math.Sqrt(sTransSe[i] / sCount[i]) : double.NaN;
+        }
 
         var warnings = new List<string>();
         if (n < RecommendedPoses)
@@ -210,11 +220,21 @@ public static class HandEyeSolver
             warnings.Add($"병진 잔차 RMS {transRms:0.0}mm > {TransResidualWarnMm:0.0}mm — " +
                          "마커가 화면에서 너무 작거나 거리(깊이) 추정이 불안정할 수 있습니다.");
 
+        // 한 표본이 전체 RMS 의 1.5배 이상으로 튀면 그 자세를 지목한다(흔들림·자세 플립 의심).
+        // 표본 n 개 중 하나만 오염(쌍 잔차 e)이면 그 표본은 e, 전체 RMS 는 e·√(2/n), 나머지는 e/√(n−1) 이므로
+        // n≥6 에서 1.5배 기준이 오염 표본만 골라낸다.
+        var outliers = Enumerable.Range(0, n)
+            .Where(i => !double.IsNaN(sampleRot[i]) && sampleRot[i] > Math.Max(1.5 * rotRms, RotResidualWarnDeg))
+            .Select(i => $"#{i + 1}({sampleRot[i]:0.0}°)").ToList();
+        if (outliers.Count > 0 && outliers.Count < n)
+            warnings.Add($"잔차가 튀는 표본: {string.Join(", ", outliers)} — 해당 자세를 삭제하고 재산출해 보세요.");
+
         return new HandEyeResult(
             Success: true, Error: null, PoseFC: pose, N: n, PairCount: pairs.Count,
             RotationRmsDeg: rotRms, RotationMaxDeg: rotMax,
             TranslationRmsMm: transRms, TranslationMaxMm: transMax,
-            AxisSpreadDeg: axisSpreadDeg, Warnings: warnings);
+            AxisSpreadDeg: axisSpreadDeg, Warnings: warnings,
+            SampleRotationResidualDeg: sampleRot, SampleTranslationResidualMm: sampleTrans);
     }
 
     // ── 보조 ────────────────────────────────────────────────────────
