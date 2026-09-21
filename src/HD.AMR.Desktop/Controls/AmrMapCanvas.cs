@@ -39,6 +39,7 @@ public sealed class AmrMapCanvas : Control
     private static readonly IBrush AxisYBrush = new SolidColorBrush(Color.FromRgb(86, 220, 132));
     private static readonly Pen AxisXPen = new(AxisXBrush, 2);
     private static readonly Pen AxisYPen = new(AxisYBrush, 2);
+    private static readonly Pen OriginGuidePen = new(OriginBrush, 1);
     private static readonly Typeface LabelTypeface = new(FontFamily.Default, FontStyle.Normal, FontWeight.Bold);
 
     static AmrMapCanvas()
@@ -110,11 +111,20 @@ public sealed class AmrMapCanvas : Control
         if (!MapProjection.TryProjectPoint(0, 0, Resolution, OriginX, OriginY,
                 imageWidth, imageHeight, out var originPx, out var originPy)) return;
 
-        var origin = new Point(originPx * sx, originPy * sy);
+        var projectedOrigin = new Point(originPx * sx, originPy * sy);
+        // 원점이 이미지 경계에 있으면 링과 글자가 컨트롤 밖에서 잘린다. 실제 위치에는 연결선을
+        // 남기고, 축 마커만 안쪽으로 옮겨 좌하단 원점도 온전히 보이게 한다.
+        const double inset = 13;
+        var origin = new Point(
+            Math.Clamp(projectedOrigin.X, inset, Math.Max(inset, Bounds.Width - inset)),
+            Math.Clamp(projectedOrigin.Y, inset, Math.Max(inset, Bounds.Height - inset)));
         const double axisLength = 46;
         const double arrow = 6;
         var xEnd = new Point(Math.Min(Bounds.Width - 3, origin.X + axisLength), origin.Y);
         var yEnd = new Point(origin.X, Math.Max(3, origin.Y - axisLength));
+
+        if (origin != projectedOrigin)
+            context.DrawLine(OriginGuidePen, projectedOrigin, origin);
 
         // 원점 십자와 링은 배경색과 무관하게 좌표 (0,0)을 찾기 쉽게 한다.
         context.DrawEllipse(null, OriginPen, origin, 7, 7);
@@ -128,15 +138,18 @@ public sealed class AmrMapCanvas : Control
         context.DrawLine(AxisYPen, yEnd, new Point(yEnd.X - arrow / 2, yEnd.Y + arrow));
         context.DrawLine(AxisYPen, yEnd, new Point(yEnd.X + arrow / 2, yEnd.Y + arrow));
 
-        DrawLabel(context, "(0,0)", OriginBrush, new Point(origin.X + 8, origin.Y + 7));
-        DrawLabel(context, "+X · 0°", AxisXBrush, new Point(xEnd.X + 3, xEnd.Y - 9));
+        DrawLabel(context, "(0,0)", OriginBrush, new Point(origin.X + 8, origin.Y + 6));
+        DrawLabel(context, "+X · 0°", AxisXBrush, new Point(xEnd.X + 3, xEnd.Y - 17));
         DrawLabel(context, "+Y · +90°", AxisYBrush, new Point(yEnd.X + 5, yEnd.Y - 7));
     }
 
-    private static void DrawLabel(DrawingContext context, string text, IBrush brush, Point point)
+    private void DrawLabel(DrawingContext context, string text, IBrush brush, Point point)
     {
         var label = new FormattedText(text, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
             LabelTypeface, 11, brush);
-        context.DrawText(label, point);
+        // 우측/상하 경계에서도 텍스트 전체가 캔버스 안에 남도록 최종 위치를 제한한다.
+        var x = Math.Clamp(point.X, 2, Math.Max(2, Bounds.Width - label.Width - 2));
+        var y = Math.Clamp(point.Y, 2, Math.Max(2, Bounds.Height - label.Height - 2));
+        context.DrawText(label, new Point(x, y));
     }
 }
