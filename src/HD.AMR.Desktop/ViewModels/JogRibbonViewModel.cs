@@ -33,17 +33,21 @@ public sealed partial class JogRibbonViewModel : ObservableObject
         _autoResetBaseFrame = autoResetBaseFrame;
     }
 
-    // 진입 시 1회: 활성 작업물 좌표계 잔류 자동 정규화(무변위). 조건 미충족 시 조용히 건너뜀.
+    // 진입 시 1회: 활성 작업물 좌표계 잔류(≠0) 또는 활성 공구 ≠ 조그 공구(#1) 자동 정규화(무변위).
+    // 조건 미충족(상태 미수신·정상·시퀀스 실행 중)이면 조용히 건너뜀.
     public async void OnActivatedOnce()
     {
         if (!_autoResetBaseFrame || !_svc.IsConnected) return;
-        if (_svc.State is not { User: > 0 }) return;
+        if (_svc.State is not { } st) return;
+        // 미상(-1)은 판단 근거 없음 → 건너뜀. 작업물 잔류(>0) 또는 공구 불일치(알려진 값이 조그 공구와 다름)만 정규화.
+        bool userStale = st.User > 0, toolStale = st.Tool >= 0 && st.Tool != JogTool;
+        if (!userStale && !toolStale) return;
         if (!_gate.TryEnter()) return;
         try
         {
             var rc = await _svc.Rpc.ResetActiveFrameAsync(JogTool, 0);
             Notify(rc == 0
-                ? "활성 작업물 좌표계 잔류 감지 — 베이스(0)로 자동 복귀했습니다."
+                ? $"활성 좌표계 잔류 감지(툴 #{st.Tool}/작업물 #{st.User}) — 툴 #{JogTool}/베이스(0)로 자동 복귀했습니다."
                 : $"활성 좌표계 자동 복귀 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)} — '활성 좌표계 초기화' 버튼으로 수동 복귀하세요.", rc != 0);
         }
         catch (Exception ex) { Notify($"활성 좌표계 자동 복귀 중 오류: {ex.Message}", true); }
@@ -76,7 +80,7 @@ public sealed partial class JogRibbonViewModel : ObservableObject
     // ── 조그 파라미터 ──
     [ObservableProperty] private int _jogModeIndex;   // 0 미세 증분, 1 연속(누름)
     [ObservableProperty] private int _jogFrameIndex = 1; // 0 관절,1 베이스,2 툴,3 작업물 (기본 베이스)
-    [ObservableProperty] private int _jogTool;
+    [ObservableProperty] private int _jogTool = 1;   // 실제 TCP 가 설정된 공구(#1). 0 이면 조그 MoveL 이 활성 공구를 플랜지(0)로 바꿔 버린다.
     [ObservableProperty] private int _jogUser;
     [ObservableProperty] private int _jogVel = 20;
     [ObservableProperty] private double _jogMaxMm = 20;

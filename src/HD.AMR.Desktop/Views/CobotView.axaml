@@ -121,6 +121,8 @@
                     <Button Content="좌표계 계산 &amp; 등록" Classes="accent" Command="{Binding RegisterWObjCommand}" IsEnabled="{Binding IsConnected}" />
                     <TextBlock Text="{Binding WobjResultText}" VerticalAlignment="Center" Foreground="{DynamicResource AppGoodBrush}"
                                IsVisible="{Binding WobjResultText, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                    <TextBlock Text="{Binding WobjHintText}" VerticalAlignment="Center" Classes="muted" TextWrapping="Wrap"
+                               IsVisible="{Binding WobjHintText, Converter={x:Static ObjectConverters.IsNotNull}}" />
                 </StackPanel>
             </StackPanel>
         </Border>

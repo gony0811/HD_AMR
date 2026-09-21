@@ -171,7 +171,11 @@ public class FairinoRpcClient : IDisposable
         throw new InvalidOperationException($"작업물 좌표계 계산(ComputeWObjCoord) 실패 (errcode={err}).");
     }
 
-    /// <summary>조그-캡처(SetWObjCoordPoint ×3 선행)한 점들로 좌표계 계산 후 id에 등록. 등록된 pose 반환.</summary>
+    /// <summary>조그-캡처(SetWObjCoordPoint ×3 선행)한 점들로 좌표계 계산 후 id에 등록. 등록된 pose 반환.
+    /// ⚠ 컨트롤러의 3점 버퍼는 각 점을 <b>기록 시점의 활성 작업물 프레임</b> 기준으로 저장한다(이 펌웨어의
+    /// GetActualTCPPose 와 동일). 점 사이에 활성 프레임이 바뀌면(예: 작업물 원점 이동 후 점1 캡처 → 베이스 조그
+    /// → 점2·3) 점1이 (0,0,0)으로 기록돼 원점=베이스 원점인 엉뚱한 프레임이 등록되고 원점 이동이 112 를 낸다.
+    /// UI 는 베이스 기준 포즈를 직접 모아 <see cref="RegisterWObjFromPointsAsync"/> 를 쓴다.</summary>
     public async Task<double[]> RegisterWObjFromTeachingAsync(int id, int method, int refFrame = 0, CancellationToken ct = default)
     {
         var pose = await ComputeWObjCoordAsync(method, refFrame, ct);
@@ -308,9 +312,17 @@ public class FairinoRpcClient : IDisposable
         var joints = await GetActualJointPosAsync(ct: ct);
         var pActive = await GetForwardKinInBaseAsync(joints, ct);   // BASE, 현재 활성 공구 프레임(활성 작업물 프레임 → 베이스 변환)
         int active = await ResolveActiveToolAsync(ct);
-        if (active == tool) return pActive;                    // 재프레임 불필요 → 공구 좌표 조회 생략.
+        return await ReframeToolAsync(pActive, active, tool, ct);
+    }
 
-        var offAct = await GetToolOffsetAsync(active, ct);     // 0 → identity(flange)
+    /// <summary>활성 공구 <paramref name="activeTool"/> 기준 베이스 pose <paramref name="pActive"/> 를
+    /// 공구 <paramref name="tool"/> 의 TCP pose 로 재프레임한다(모션 없음): P_T = P_active ∘ inv(offset_active) ∘ offset_T.
+    /// 같은 공구면 그대로 반환(공구 좌표 조회 생략). 공구 좌표를 못 읽으면 예외.</summary>
+    private async Task<double[]> ReframeToolAsync(double[] pActive, int activeTool, int tool, CancellationToken ct)
+    {
+        if (activeTool == tool) return pActive;                // 재프레임 불필요 → 공구 좌표 조회 생략.
+
+        var offAct = await GetToolOffsetAsync(activeTool, ct); // 0 → identity(flange)
         var offT = await GetToolOffsetAsync(tool, ct);         // 0 → identity(flange)
         var tFlange = PoseMath.Multiply(PoseMath.FromPose(pActive),
                                         PoseMath.Inverse(PoseMath.FromPose(offAct)));
@@ -446,16 +458,51 @@ public class FairinoRpcClient : IDisposable
     {
         int t = tool ?? _settings.DefaultToolId;
         int u = user ?? _settings.DefaultUserId;
-        if (descPose is null || descPose.All(v => v == 0.0))
+        bool fkFill = descPose is null || descPose.All(v => v == 0.0);
+        int activeTool = -1;
+        double[]? descActive = null;   // FK-채움 시 '활성 공구' 기준 desc(재프레임 실패/거부 폴백용)
+        if (fkFill)
         {
             // descPose 를 정기구학으로 채운다. 이 펌웨어의 GetForwardKin 은 '현재 활성 작업물 프레임'
             // 기준 pose 를 주므로, GetForwardKinInBaseAsync 로 베이스 pose 를 만들어 desc_pos↔user
-            // 프레임을 일치시킨다. FK-채움 호출부(관절 조그·ResetActiveFrameAsync)는 모두 user=0(베이스)
-            // 이므로 베이스 desc 가 맞다(불일치 시 rc=154). 관절 이동이라 tool 값은 물리 결과와 무관하나,
-            // FK 는 활성 공구 기준이므로 tool 도 활성 공구로 맞춘다.
-            t = await ResolveActiveToolAsync(ct);
-            descPose = await GetForwardKinInBaseAsync(jointPos, ct);
+            // 프레임을 일치시킨다(불일치 시 rc=154). FK 는 '현재 활성 공구' 기준이므로, 요청 공구 t 가
+            // 활성 공구와 다르면 공구 오프셋으로 재프레임해 t 기준 desc 를 만든다 — 그래야 MoveJ 의
+            // tool 인자가 활성 공구로 덮이지 않고, 관절 조그/프레임 반납이 요청 공구(통상 1)를 유지·복원한다.
+            // (예전에는 t 를 활성 공구로 강제해, 활성 공구가 0 으로 바뀐 뒤엔 반납이 0 을 그대로 남겼다.)
+            activeTool = await ResolveActiveToolAsync(ct);
+            descActive = await GetForwardKinInBaseAsync(jointPos, ct);
+            try
+            {
+                descPose = await ReframeToolAsync(descActive, activeTool, t, ct);
+            }
+            catch (InvalidOperationException ex)
+            {
+                _logger.LogWarning(ex, "{Name} MoveJ: 공구 #{T} 재프레임 실패 — 활성 공구 #{A} 로 대체(공구 미복원)",
+                    _settings.Name, t, activeTool);
+                t = activeTool;
+                descPose = descActive;
+            }
+            if (u > 0)
+                descPose = FrameMath.ToFrame(descPose, await GetWObjCoordAsync(u, ct));   // desc 는 user 프레임 기준
         }
+        var rc = await MoveJRawAsync(jointPos, descPose!, t, u, vel, acc, ovl, blendT, ct);
+        if (rc != 0 && fkFill && descActive is not null && t != activeTool)
+        {
+            // 펌웨어가 tool≠활성 공구의 재프레임 desc 를 거부(rc=154 등)하면 활성 공구 기준으로 1회 재시도 —
+            // 관절 이동 자체는 성공시키되 공구는 복원되지 않으므로 경고를 남긴다.
+            _logger.LogWarning("{Name} MoveJ rc={Rc} (tool=#{T} 재프레임) — 활성 공구 #{A} 기준으로 재시도(공구 미복원)",
+                _settings.Name, rc, t, activeTool);
+            t = activeTool;
+            var descRetry = u > 0 ? FrameMath.ToFrame(descActive, await GetWObjCoordAsync(u, ct)) : descActive;
+            rc = await MoveJRawAsync(jointPos, descRetry, t, u, vel, acc, ovl, blendT, ct);
+        }
+        if (rc == 0) { _activeTool = t; _activeUser = u; }   // tool/user 인자가 컨트롤러 활성 프레임을 바꾸므로 추적값 동기.
+        return rc;
+    }
+
+    private async Task<int> MoveJRawAsync(double[] jointPos, double[] descPose, int t, int u,
+                                          double? vel, double acc, double ovl, double blendT, CancellationToken ct)
+    {
         var rc = await InvokeAsync("MoveJ", p => ToErr(p.MoveJ(
                 jointPos, descPose,
                 t, u,
@@ -466,7 +513,6 @@ public class FairinoRpcClient : IDisposable
                 _settings.Name, rc, t, u,
                 string.Join(",", jointPos.Select(x => x.ToString("0.##"))),
                 string.Join(",", descPose.Select(x => x.ToString("0.##"))));
-        if (rc == 0) { _activeTool = t; _activeUser = u; }   // tool/user 인자가 컨트롤러 활성 프레임을 바꾸므로 추적값 동기.
         return rc;
     }
 
@@ -517,14 +563,17 @@ public class FairinoRpcClient : IDisposable
 
     /// <summary>
     /// MoveJ 로 컨트롤러의 활성 tool/user 좌표계를 재설정한다(활성 프레임 전환 세터 RPC가 없어 이동
-    /// 명령의 user 파라미터가 유일한 수단). MoveJ 는 IK를 쓰지 않아 활성 프레임이 어긋나 있어도 성공한다.
-    /// 현재 관절각을 그대로 지령하므로 실질 무변위. descPose 는 MoveJAsync 가 정기구학으로 채운다.
-    /// 이미 원하는 user 면(GetActualWObjNum 확인 가능 시) 건너뛴다.
+    /// 명령의 tool/user 파라미터가 유일한 수단). MoveJ 는 IK를 쓰지 않아 활성 프레임이 어긋나 있어도 성공한다.
+    /// 현재 관절각을 그대로 지령하므로 실질 무변위. descPose 는 MoveJAsync 가 정기구학으로 채우되
+    /// 요청 공구 <paramref name="tool"/> 기준으로 재프레임하므로 <b>공구도 함께 복원</b>된다
+    /// (작업물 반납이 활성 공구를 0 등 엉뚱한 값으로 남기지 않는다).
+    /// 이미 원하는 user·tool 이면(실측 조회 가능 시) 건너뛴다.
     /// </summary>
     public async Task<int> ResetActiveFrameAsync(int tool, int user, CancellationToken ct = default)
     {
-        var cur = await GetActualWObjNumAsync(ct: ct);   // 미지원이면 null → 무조건 재설정
-        if (cur == user) return 0;
+        var curUser = await GetActualWObjNumAsync(ct: ct);   // 미지원이면 null → 무조건 재설정
+        var curTool = await TryGetActualToolNumAsync(ct: ct);
+        if (curUser == user && curTool == tool) return 0;
 
         var joints = await GetActualJointPosAsync(ct: ct);
         return await MoveJAsync(joints, new double[6], tool: tool, user: user, vel: 5, ct: ct);
@@ -724,18 +773,23 @@ public class FairinoRpcClient : IDisposable
     public static double[] ComputeFramePose(double[] origin, double[] xAxisPt, double[] planePt, int method)
     {
         var o = new[] { origin[0], origin[1], origin[2] };
-        var x = Normalize(Sub(xAxisPt, o), "X축");
+        var dx = Sub(xAxisPt, o);
         var v = Sub(planePt, o);
+        RequireSeparation(dx, "점1(원점)-점2(X축)");
+        RequireSeparation(v, "점1(원점)-점3(평면/Z)");
+        var x = Normalize(dx, "X축");
 
         double[] y, z;
         if (method == 0) // 원점-X축-Z축
         {
             var zApprox = Normalize(v, "Z축");
+            RequireNotCollinear(x, zApprox);
             y = Normalize(Cross(zApprox, x), "Y축(X×Z 직교)");
             z = Cross(x, y);
         }
         else // 원점-X축-XY평면
         {
+            RequireNotCollinear(x, Normalize(v, "평면점"));
             z = Normalize(Cross(x, v), "Z축(X×평면 직교)");
             y = Cross(z, x);
         }
@@ -747,6 +801,31 @@ public class FairinoRpcClient : IDisposable
         double rx = Math.Atan2(y[2], z[2]) * rad2deg;
 
         return new[] { o[0], o[1], o[2], rx, ry, rz };
+    }
+
+    /// <summary>3점법 점 사이 최소 거리(mm). 이보다 가까우면 잡음이 축 방향을 지배한다.</summary>
+    public const double MinPointSeparationMm = 1.0;
+
+    /// <summary>3점법 X축과 점3 방향 사이 최소 각도(°). 이보다 작으면 세 점이 사실상 일직선이다.</summary>
+    public const double MinAxisAngleDeg = 1.0;
+
+    private static void RequireSeparation(double[] d, string what)
+    {
+        double m = Math.Sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+        if (m < MinPointSeparationMm)
+            throw new InvalidOperationException(
+                $"좌표계 계산 실패: {what} 거리가 {m:0.00}mm 로 너무 가깝습니다(최소 {MinPointSeparationMm:0}mm). " +
+                "같은 위치에서 두 번 캡처했거나 점 캡처 순서가 잘못됐는지 확인하세요.");
+    }
+
+    private static void RequireNotCollinear(double[] xUnit, double[] vUnit)
+    {
+        var c = Cross(xUnit, vUnit);
+        double sinA = Math.Sqrt(c[0] * c[0] + c[1] * c[1] + c[2] * c[2]);
+        if (sinA < Math.Sin(MinAxisAngleDeg * Math.PI / 180.0))
+            throw new InvalidOperationException(
+                $"좌표계 계산 실패: 점3이 X축(점1→점2)과 {Math.Asin(Math.Min(1, sinA)) * 180 / Math.PI:0.0}° 로 거의 일직선입니다" +
+                $"(최소 {MinAxisAngleDeg:0}°). 점3을 X축에서 벗어난 위치(Z 방향 또는 XY 평면 위)로 잡으세요.");
     }
 
     private static double[] Sub(double[] a, double[] b) => new[] { a[0] - b[0], a[1] - b[1], a[2] - b[2] };

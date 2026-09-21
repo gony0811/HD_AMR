@@ -83,6 +83,7 @@ public sealed partial class CobotViewModel : ViewModelBase
     [ObservableProperty] private string _capture1Text = "미캡처";
     [ObservableProperty] private string _capture2Text = "미캡처";
     [ObservableProperty] private string? _wobjResultText;
+    [ObservableProperty] private string? _wobjHintText;
     public bool IsJogTeach => TeachModeIndex == 0;
     partial void OnTeachModeIndexChanged(int value) => OnPropertyChanged(nameof(IsJogTeach));
 
@@ -162,36 +163,49 @@ public sealed partial class CobotViewModel : ViewModelBase
     });
 
     // ── 작업물 교시 ──
+    /// <summary>점 N 캡처 — 현재 TCP 의 <b>베이스 기준</b> 포즈(교시 워크플로 공구 기준)를 앱에 보관한다.
+    /// 컨트롤러 3점 버퍼(SetWObjCoordPoint)는 기록 시점의 활성 작업물 프레임 기준이라 점 사이에 프레임이
+    /// 바뀌면(작업물 원점 이동 후 점1 캡처 → 베이스 조그 → 점2·3) 점1이 (0,0,0)으로 남아 엉뚱한 프레임이
+    /// 등록되고 원점 이동이 112 를 냈다. 버퍼를 쓰지 않고 등록도 클라이언트 계산으로 한다.</summary>
     [RelayCommand]
     private Task CapturePoint(string pointNumStr)
     {
         int pointNum = int.Parse(pointNumStr);
+        Captured[pointNum - 1] = false;
+        SetCaptureText(pointNum, "미캡처");
         return Run($"점{pointNum} 캡처", async ct =>
         {
-            var rc = await _svc.Rpc.SetWObjCoordPointAsync(pointNum, ct);
-            try
-            {
-                var pose = await _svc.Rpc.GetTcpPoseInBaseAsync(OffTool, ct);
-                Points[pointNum - 1].FromArray(pose);
-            }
-            catch { /* 표시용 조회 실패 무시 */ }
+            var pose = await _svc.Rpc.GetTcpPoseInBaseAsync(OffTool, ct);
+            Points[pointNum - 1].FromArray(pose);
             Captured[pointNum - 1] = true;
             var p = Points[pointNum - 1];
-            var text = $"캡처됨 ({p.V0:0.0}, {p.V1:0.0}, {p.V2:0.0})";
-            switch (pointNum) { case 1: Capture0Text = text; break; case 2: Capture1Text = text; break; case 3: Capture2Text = text; break; }
-            return rc;
+            SetCaptureText(pointNum, $"캡처됨 ({p.V0:0.0}, {p.V1:0.0}, {p.V2:0.0})");
+            return 0;
         });
+    }
+
+    private void SetCaptureText(int pointNum, string text)
+    {
+        switch (pointNum) { case 1: Capture0Text = text; break; case 2: Capture1Text = text; break; case 3: Capture2Text = text; break; }
     }
 
     [RelayCommand]
     private Task RegisterWObj() => Run("작업물 좌표계 등록", async ct =>
     {
-        var pose = IsJogTeach
-            ? await _svc.Rpc.RegisterWObjFromTeachingAsync(WobjId, WobjMethodIndex, ct: ct)
-            : await _svc.Rpc.RegisterWObjFromPointsAsync(WobjId,
-                Points[0].ToArray(), Points[1].ToArray(), Points[2].ToArray(), WobjMethodIndex, ct: ct);
-        OffUser = WobjId;
+        if (IsJogTeach && Captured.Any(c => !c))
+            throw new InvalidOperationException("점1·점2·점3을 모두 캡처한 뒤 등록하세요.");
+        var pose = await _svc.Rpc.RegisterWObjFromPointsAsync(WobjId,
+            Points[0].ToArray(), Points[1].ToArray(), Points[2].ToArray(), WobjMethodIndex, ct: ct);
         WobjResultText = $"등록됨 #{WobjId} : {string.Join(", ", pose.Select(v => v.ToString("0.0")))}";
+
+        // 편의: 오프셋 이동을 '방금 등록한 좌표계 원점(절대)'으로 미리 채운다. 회전은 점1 캡처 당시 공구 자세를
+        // 새 프레임 기준으로 환산한 값 — [0,0,0]으로 두면 공구가 프레임 축과 정렬돼 자세에 따라 도달 불가(112)가 난다.
+        OffUser = WobjId;
+        OffModeIndex = 0;
+        var p1InFrame = FrameMath.ToFrame(Points[0].ToArray(), pose);
+        Offset.FromArray(new[] { 0.0, 0.0, 0.0, Math.Round(p1InFrame[3], 2), Math.Round(p1InFrame[4], 2), Math.Round(p1InFrame[5], 2) });
+        WobjHintText = $"오프셋 이동을 원점(절대, user #{WobjId}) + 점1 캡처 자세(dRx {Offset.V3:0.0}, dRy {Offset.V4:0.0}, dRz {Offset.V5:0.0})로 채웠습니다. " +
+                       "'오프셋 이동'을 누르면 점1 위치·자세로 갑니다.";
         return 0;
     });
 
