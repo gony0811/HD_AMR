@@ -1113,6 +1113,16 @@
 
         try
         {
+            // 작업물 좌표계 실행: 시작 시점의 프레임 기준 RZ 를 유지(rz0)하고 틸트 부호를 보정한다 —
+            // 시퀀스 ⑫ InspectionRunStep 과 동일 규칙(WObjAttitude). 3점 교시 프레임 X 가 툴 X 와 반대
+            // (rz0≈±180)일 때 rz=0 절대 명령이 툴 180° 회전 → 112 를 내던 문제를 막는다. user=0 은 절대값 그대로.
+            var attitude = await WObjAttitude.ResolveAsync(rpc, _runUser, _runTool, ct);
+            if (_runUser != 0)
+            {
+                _runMessage = $"작업물 #{_runUser} {attitude}";
+                await InvokeAsync(StateHasChanged);
+            }
+
             int moved = 0;
             for (int i = 0; i < _thinned.Count; i++)
             {
@@ -1124,7 +1134,7 @@
                 _runIndex = i;
                 double x = _thinned[i].X;
                 double z = _thinned[i].Y;
-                var pose = new[] { x, EffectiveY(i), z, 0.0, theta, EffectiveRz(i) };
+                var pose = attitude.Pose(x, EffectiveY(i), z, theta, EffectiveRz(i));
 
                 var rc = await rpc.MoveLAsync(pose, tool: _runTool, user: _runUser,
                     vel: _runVel, acc: 100, ovl: 100, blendR: -1, ct: ct);
@@ -1246,10 +1256,12 @@
         try
         {
             var rpc = Cobot.Rpc!;
+            // 배치 실행과 동일하게 프레임 기준 RZ 유지·틸트 부호 보정(WObjAttitude). user=0 은 절대값 그대로.
+            var attitude = await WObjAttitude.ResolveAsync(rpc, _runUser, _runTool);
             double x = _thinned[i].X;
             double z = _thinned[i].Y;
             double theta = EffectiveThetaDeg(i);
-            var pose = new[] { x, EffectiveY(i), z, 0.0, theta, EffectiveRz(i) };
+            var pose = attitude.Pose(x, EffectiveY(i), z, theta, EffectiveRz(i));
 
             var rc = await rpc.MoveLAsync(pose, tool: _runTool, user: _runUser,
                 vel: _runVel, acc: 100, ovl: 100, blendR: -1);

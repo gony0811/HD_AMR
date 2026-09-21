@@ -109,13 +109,12 @@ public class InspectionRunStep : ISequenceStep
                 $"작업물 좌표계 #{wobjId} 가 등록되지 않았습니다(원점=0) — " +
                 "⑯⁺ 작업물 좌표계 등록 단계를 먼저 실행하세요.");
 
-        // ── 현재 자세의 프레임 기준 RZ — 회전 없이 검사하기 위한 유지값 ──
+        // ── 현재 자세의 프레임 기준 RZ — 회전 없이 검사하기 위한 유지값(WObjAttitude 참조) ──
         // 등록 프레임 X(비드1→비드2)가 툴 X와 반대면 rz0 ≈ ±180°. rz=0 을 명령하면 툴이 180° 회전한다.
         var cur = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
-        var rel = FrameMath.ToFrame(cur, frame);
-        var rz0 = rel[5];
-        // ZYX 규약: Ry_frame(θ)·Rz(rz0) = Rz(rz0)·Ry(±θ) — rz0≈±180 이면 틸트 부호 반전.
-        var tiltSign = Math.Cos(rz0 * Math.PI / 180.0) >= 0 ? 1.0 : -1.0;
+        var attitude = Inspection.WObjAttitude.FromCurrent(cur, frame);
+        var rz0 = attitude.Rz0;
+        var tiltSign = attitude.TiltSign;
 
         _logger.LogInformation(
             "⑱ 검사 수행 시작: 도면 {Draw}, 티칭설정 '{Prof}'({N}점), wobj #{Id} 원점 [{X:0.0},{Y:0.0},{Z:0.0}], " +
@@ -175,7 +174,7 @@ public class InspectionRunStep : ISequenceStep
             //    (/inspection-points 조그+캡처 — 코로게이션 법선 추종). rz0/tiltSign 합성 금지.
             var pose = profile.PoseAbsolute
                 ? new[] { w.X, w.Y, w.Z, w.RxDeg, w.Theta, w.RzDeg }
-                : new[] { w.X, w.Y, w.Z, 0.0, tiltSign * w.Theta, rz0 + w.RzDeg };
+                : attitude.Pose(w.X, w.Y, w.Z, w.Theta, w.RzDeg);
             var rc = await _cobot.Rpc.MoveLAsync(pose, tool: context.Tool, user: wobjId,
                 vel: context.Velocity, acc: MoveAcc, ovl: MoveOvl, blendR: -1, ct: ct);
             if (rc != 0)
