@@ -97,6 +97,27 @@ public static class WeldInspectionActionParser
         var standoff = GetDouble(pr, "standoffMm");
         if (standoff is null) { error = "params.standoffMm 누락"; return false; }
 
+        // taskId·attempt [VDA 사양서 1.6 §8.1/§8.6, N14] — 선택 필드: 없으면 null(실행 스텝이 Empty/1 폴백, 구버전 ACS 호환).
+        // 실려 왔는데 형식이 틀리면 계약 위반으로 거부한다(§8.2 각주) — 엉뚱한 taskId 로 촬영이 나가면
+        // SAIGE 에서 다른 용접선의 이력에 섞이는 조용한 오귀속이 되기 때문.
+        Guid? taskId = null;
+        if (pr.TryGetProperty("taskId", out var taskIdEl) && taskIdEl.ValueKind != JsonValueKind.Null)
+        {
+            if (taskIdEl.ValueKind != JsonValueKind.String
+                || !Guid.TryParse(taskIdEl.GetString(), out var parsedTaskId) || parsedTaskId == Guid.Empty)
+            { error = "params.taskId 부적합 (GUID 문자열 아님)"; return false; }
+            taskId = parsedTaskId;
+        }
+
+        byte? attempt = null;
+        if (pr.TryGetProperty("attempt", out var attemptEl) && attemptEl.ValueKind != JsonValueKind.Null)
+        {
+            if (attemptEl.ValueKind != JsonValueKind.Number
+                || !attemptEl.TryGetInt32(out var parsedAttempt) || parsedAttempt is < 1 or > 255)
+            { error = "params.attempt 부적합 (1~255 정수)"; return false; }
+            attempt = (byte)parsedAttempt;
+        }
+
         request = new WeldInspectionRequest(
             JobRef: jobRef!,
             SeamStartW: seamStart!,
@@ -108,7 +129,9 @@ public static class WeldInspectionActionParser
             StandoffMm: standoff.Value,
             WorkingDistanceMm: GetDouble(pr, "workingDistanceMm"),
             AnchorGroupId: anchorGroupId!,
-            SeqInGroup: seqInGroup.Value);
+            SeqInGroup: seqInGroup.Value,
+            TaskId: taskId,
+            Attempt: attempt);
         return true;
     }
 

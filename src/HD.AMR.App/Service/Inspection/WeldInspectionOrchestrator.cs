@@ -198,6 +198,9 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             AcsJobRef = req.JobRef,
             AcsOrderId = orderId,
             AcsActionId = action.ActionId,
+            // ACS 발급 식별자 → 이 액션의 모든 CAPTURE_REQ 에 그대로 실린다(N14). null 이면 실행 스텝이 Empty/1 폴백.
+            AcsTaskId = req.TaskId,
+            AcsAttempt = req.Attempt,
             AnchorGroupId = req.AnchorGroupId,
             SeqInGroup = req.SeqInGroup,
             StandoffMmOverride = req.StandoffMm > 0 ? req.StandoffMm : null,
