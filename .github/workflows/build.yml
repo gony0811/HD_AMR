@@ -1,0 +1,59 @@
+name: build
+
+# main 푸시와 모든 PR 에서 실행한다. 브랜치 푸시는 PR 이 열려 있으면 pull_request(synchronize)
+# 이벤트로 잡히므로, push 를 main 으로 한정해 같은 커밋이 두 번 돌지 않게 한다.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 같은 브랜치에 연속 푸시하면 이전 실행을 취소한다 — 마지막 커밋 결과만 의미가 있다.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    # 윈도우 런너인 이유:
+    #  - OpenCvSharp4.runtime.win / Intel.RealSenseWithNativeDll 은 win-x64 네이티브만 제공한다.
+    #  - ArucoPreviewTests 는 플랫폼 가드 없이 OpenCV 를 호출하므로 리눅스에서는
+    #    DllNotFoundException 으로 실패한다(빌드는 되지만 테스트가 못 돈다).
+    #  - 배포 대상 자체가 Windows x64 뿐이다(CLAUDE.md).
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # SDK 버전은 src/global.json 이 정본(8.0.0, rollForward latestMinor).
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: src/global.json
+
+      - name: NuGet 패키지 캐시
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('src/**/*.csproj', 'src/global.json') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - name: 복원
+        run: dotnet restore src/HD.AMR.sln
+
+      - name: 빌드
+        run: dotnet build src/HD.AMR.sln --configuration Release --no-restore
+
+      - name: 테스트
+        run: >
+          dotnet test src/HD.AMR.sln
+          --configuration Release --no-build
+          --logger "trx;LogFileName=test-results.trx"
+          --results-directory artifacts/test-results
+
+      - name: 테스트 결과 업로드
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: artifacts/test-results
+          if-no-files-found: ignore
