@@ -4,17 +4,20 @@ using HD.AMR.App.Communication.Vda5050;
 namespace HD.AMR.App.Service.Inspection;
 
 /// <summary>
-/// `startWeldInspection` 액션의 <see cref="VdaAction.ActionParameters"/>(jobRef/position/params 3쌍, 사양 §8.1)를
-/// <see cref="WeldInspectionRequest"/>로 해석한다.
+/// `startWeldInspection` 액션의 <see cref="VdaAction.ActionParameters"/>(사양 §8.1 — jobRef/taskId/attempt/
+/// position/params 5쌍)를 <see cref="WeldInspectionRequest"/>로 해석한다.
 ///
 /// value 는 object 발행이 기본(§8.3)이라 역직렬화 시 <see cref="JsonElement"/>로 들어오지만,
 /// 문자열로 실려 온 JSON 재파싱도 방어적으로 수용한다(§8.3/N7 — AMR은 둘 다 수용).
 /// `drawingPos`의 u/v 부재는 허용(§8.2 각주). 실패 시 사유 문자열 반환 — 계약 위반이므로
 /// 호출측이 액션 FAILED + orderValidationError 로 보고한다.
 ///
-/// ACS 추가분 `taskId`(+`attempt`)는 <b>선택 항목</b>으로 읽는다 — 최상위 actionParameters key 와
-/// `params` 안 둘 다 수용(위치 미확정). 값은 비전 CAPTURE_REQ 의 taskId(GUID 16B, = SAIGE productId)로
-/// 그대로 실려 나간다. 미수신·GUID 아닌 값은 액션을 거부하지 않고 폴백(Guid.Empty/attempt=1)한다.
+/// `taskId`·`attempt`(사양 §8.1.1 — ACS 발급 <b>필수</b>, N14)는 비전 CAPTURE_REQ 의
+/// taskId(GUID 16B, = SAIGE productId)·attempt(UInt8)로 그대로 중계된다. 수신 위치는 최상위
+/// actionParameters key 가 정본이며 `params` 안도 수용한다(전환 유예).
+/// <b>전환 유예</b>: 미수신·형식 위반은 액션을 거부하지 않고 폴백(Guid.Empty/attempt=1)하며 원문
+/// (<see cref="WeldInspectionRequest.TaskIdRaw"/>·<see cref="WeldInspectionRequest.AttemptRaw"/>)만
+/// 보존한다 — 호출측이 경고 로그를 남긴다. 거부 승격 여부는 §10 N14 확정 대기.
 /// </summary>
 public static class WeldInspectionActionParser
 {
@@ -105,9 +108,10 @@ public static class WeldInspectionActionParser
         var standoff = GetDouble(pr, "standoffMm");
         if (standoff is null) { error = "params.standoffMm 누락"; return false; }
 
-        // ── taskId / attempt (ACS 추가분) ───────────────────────────
-        // 위치: 최상위 actionParameters key 우선, 없으면 params 안. 형식: GUID 문자열(하이픈/중괄호/무하이픈 모두 수용).
-        // 계약 필수가 아니므로 미수신이면 null(=CAPTURE_REQ 에 Guid.Empty/1 폴백) — 액션을 거부하지 않는다.
+        // ── taskId / attempt (사양 §8.1.1, N14 — ACS 발급 필수) ─────
+        // 위치: 최상위 actionParameters key 가 정본, 없으면 params 안(전환 유예).
+        // 형식: taskId=GUID 문자열(하이픈/중괄호/무하이픈 모두 수용), attempt=1~255.
+        // 전환 유예 중이라 미수신·형식 위반이어도 액션을 거부하지 않는다(null → 스텝에서 Guid.Empty/1 폴백).
         var taskIdRaw = ReadScalar(taskIdEl, pr, "taskId");
         Guid? taskId = null;
         if (!string.IsNullOrWhiteSpace(taskIdRaw))
@@ -138,7 +142,8 @@ public static class WeldInspectionActionParser
             SeqInGroup: seqInGroup.Value,
             TaskId: taskId,
             TaskIdRaw: string.IsNullOrWhiteSpace(taskIdRaw) ? null : taskIdRaw,
-            Attempt: attempt);
+            Attempt: attempt,
+            AttemptRaw: string.IsNullOrWhiteSpace(attemptRaw) ? null : attemptRaw);
         return true;
     }
 

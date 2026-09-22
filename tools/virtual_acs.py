@@ -10,10 +10,11 @@ Usage:
   python tools/virtual_acs.py order        send order to the AMR's current position, watch until finished
   python tools/virtual_acs.py order X Y TH send order to explicit coordinates
   python tools/virtual_acs.py bad          send invalid order (wrong mapId) to test rejection
-  python tools/virtual_acs.py inspect [SEAM [WALL [N]]]
+  python tools/virtual_acs.py inspect [SEAM [WALL [N [ATTEMPT]]]]
                                            send order with N startWeldInspection actions
                                            (SEAM: LINE|CROSS|CORNER, WALL: B/T/SM/PM/F/A/SL/PL/SU/PU
-                                           or an undefined code like W03; default LINE SM 2)
+                                           or an undefined code like W03; default LINE SM 2 1.
+                                           ATTEMPT = ACS retry number 1..255, spec 8.1.1)
   python tools/virtual_acs.py estop        send emergencyStop instant action
   python tools/virtual_acs.py die          exit without MQTT DISCONNECT so the broker
                                            publishes the ACS Last Will (CONNECTIONBROKEN)
@@ -230,13 +231,21 @@ def send_order(client, coords=None, map_id=MAP_ID, watch=True):
     return order
 
 
-def send_inspect(client, seam="LINE", wall="SM", count=2, watch=True):
-    """Order to current position carrying N startWeldInspection actions (shared anchorGroup)."""
+def send_inspect(client, seam="LINE", wall="SM", count=2, attempt=1, watch=True):
+    """Order to current position carrying N startWeldInspection actions (shared anchorGroup).
+
+    Each action gets its own taskId (one weld-seam segment = one inspection task, spec
+    §8.1.1); attempt is the retry number of that task and is shared by this batch.
+    """
     pos = wait_for_position()
     if pos is None:
         print("[acs] no agvPosition seen in state yet - cannot target current position")
         return None
-    actions = [build_weld_inspection_action(seam, wall, seq_in_group=i + 1) for i in range(count)]
+    actions = [build_weld_inspection_action(seam, wall, seq_in_group=i + 1, attempt=attempt)
+               for i in range(count)]
+    for a in actions:
+        task_id = next(p["value"] for p in a["actionParameters"] if p["key"] == "taskId")
+        print(f"[acs] action {a['actionId'][:8]} taskId={task_id} attempt={attempt}")
     order = build_order(pos["x"], pos["y"], pos.get("theta") or 0.0, actions=actions)
     publish(client, "order", order)
     if watch:
@@ -287,7 +296,7 @@ def watch_order(order_id, timeout=120):
 
 def interactive(client):
     print(
-        "commands: order | order X Y TH | bad | inspect [SEAM [WALL [N]]] | estop | die | quit"
+        "commands: order | order X Y TH | bad | inspect [SEAM [WALL [N [ATTEMPT]]]] | estop | die | quit"
     )
     for line in sys.stdin:
         parts = line.split()
@@ -304,7 +313,8 @@ def interactive(client):
             seam = parts[1].upper() if len(parts) > 1 else "LINE"
             wall = parts[2] if len(parts) > 2 else "SM"
             count = int(parts[3]) if len(parts) > 3 else 2
-            send_inspect(client, seam=seam, wall=wall, count=count, watch=False)
+            attempt = int(parts[4]) if len(parts) > 4 else 1
+            send_inspect(client, seam=seam, wall=wall, count=count, attempt=attempt, watch=False)
         elif cmd == "estop":
             publish(client, "instantActions", build_estop())
         elif cmd == "die":
@@ -335,7 +345,8 @@ def main():
             seam = args[1].upper() if len(args) > 1 else "LINE"
             wall = args[2] if len(args) > 2 else "SM"
             count = int(args[3]) if len(args) > 3 else 2
-            send_inspect(client, seam=seam, wall=wall, count=count)
+            attempt = int(args[4]) if len(args) > 4 else 1
+            send_inspect(client, seam=seam, wall=wall, count=count, attempt=attempt)
         elif args[0] == "estop":
             time.sleep(1)  # let subscriptions settle so the resulting state is visible
             publish(client, "instantActions", build_estop())

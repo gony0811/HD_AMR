@@ -110,8 +110,9 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             req.SectionDxfId, req.InspectionProfileId, req.AnchorGroupId, req.SeqInGroup,
             req.TaskId?.ToString() ?? "(미수신)", req.Attempt?.ToString() ?? "(미수신→1)");
 
-        // taskId 진단 — 비전 CAPTURE_REQ 의 taskId(=SAIGE productId)로 그대로 나가는 값이라
-        // 미수신·형식 오류는 검사 이력 누적이 끊기므로 경고로 남긴다(액션은 계속 진행).
+        // taskId/attempt 진단 (사양 §8.1.1 — ACS 발급 필수). 비전 CAPTURE_REQ 로 그대로 중계되는 값이라
+        // 미수신·형식 위반이면 비전 측 검사 이력 누적 키가 끊긴다. 전환 유예 중이라 액션은 계속 진행하고
+        // 폴백(Guid.Empty/1)을 쓰되 경고로 남긴다 — 거부 승격은 §10 N14 확정 후.
         if (req.TaskId is null)
         {
             if (req.TaskIdRaw is { } raw)
@@ -120,7 +121,20 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                     raw, req.JobRef);
             else
                 _logger.LogWarning(
-                    "ACS 액션에 taskId 없음 — 비전에 Guid.Empty 로 전송됩니다 (jobRef={JobRef})", req.JobRef);
+                    "ACS 액션에 taskId 없음(계약 §8.1.1 필수) — 비전에 Guid.Empty 로 전송됩니다 (jobRef={JobRef})",
+                    req.JobRef);
+        }
+
+        if (req.Attempt is null)
+        {
+            if (req.AttemptRaw is { } araw)
+                _logger.LogWarning(
+                    "ACS attempt '{Raw}' 가 1~255 정수가 아님 — 비전에 1 로 전송됩니다 (jobRef={JobRef})",
+                    araw, req.JobRef);
+            else
+                _logger.LogWarning(
+                    "ACS 액션에 attempt 없음(계약 §8.1.1 필수) — 비전에 1 로 전송됩니다 (jobRef={JobRef})",
+                    req.JobRef);
         }
 
         // 3) 설비 선행 확인 — 코봇/비전 링크 불능이면 equipmentError(설비 자체 불능).
