@@ -24,7 +24,7 @@ public sealed partial class ArucoMountCalibrationViewModel : ViewModelBase
     public Pose6 Mount { get; } = new();
     public ObservableCollection<ArucoMountSampleRow> Rows { get; } = new();
 
-    [ObservableProperty] private int _tool = 2;
+    [ObservableProperty] private int _tool;   // 기본 0(플랜지) — 부모(ArucoCalibrationViewModel)가 공유값을 덮어쓴다.
     [ObservableProperty] private int _markerId;
     [ObservableProperty] private double _markerSizeMm = 120;
     [ObservableProperty] private double _markerQzMm;
@@ -177,7 +177,14 @@ public sealed partial class ArucoMountCalibrationViewModel : ViewModelBase
     [RelayCommand]
     private async Task SaveHandEye()
     {
-        try { using var s = _scopes.CreateScope(); await s.ServiceProvider.GetRequiredService<CalibrationService>().SaveHandEyeAsync(HandEye.ToArray()); Success("T_T_C를 저장했습니다."); }
+        try
+        {
+            using var s = _scopes.CreateScope();
+            var calib = s.ServiceProvider.GetRequiredService<CalibrationService>();
+            await calib.SaveHandEyeAsync(HandEye.ToArray());
+            await calib.SaveHandEyeToolAsync(Tool);   // T_T_C 는 이 tool 의 TCP 기준 — 소비처 기본값이 된다.
+            Success($"T_T_C를 저장했습니다(tool {Tool} 기준).");
+        }
         catch (Exception ex) { Fail($"저장 실패: {ex.Message}"); }
     }
 

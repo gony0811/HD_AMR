@@ -82,3 +82,59 @@
 - 변환 수학은 신규 `Communication/PoseMath.cs`(ZYX RPY 도 규약, `ComputeFramePose`와 동일)에 있다.
 - 이 문서의 SetToolCoord/MoveJ 전환 방식은 위 재프레임으로 **대체**되었다. 오일러 규약은 여전히
   실물 대조(감독된 MoveJ 후 GetForwardKin 비교) 검증이 필요하다.
+
+## 후속 (2026-09-22) — 같은 비대칭이 역기구학 쪽에 남아 있었다 (ArUco 자동 보정 rc=112)
+
+### 증상
+ArUco 장착 보정(T_A_B) 자동 계측 실행 중 코봇이 한 번도 움직이지 못하고 중단, 화면에:
+
+```
+코봇 안전자세 복귀 실패: 역기구학(GetInverseKin) 실패 (errcode=112): 목표 자세 도달 불가 …
+IK 입력 pose(활성 프레임 기준)=[-880.8, -73.3, -1254.6, -167, -14.1, 0.9]
+```
+
+### 근본 원인
+2026-07-01 의 클라이언트 재프레임은 **앵커(FK) 쪽만** 고쳤다. 역기구학 쪽에는 같은 비대칭이 남아 있었다:
+
+| 경로 | 공구 프레임 |
+|---|---|
+| `GetTcpPoseInBaseAsync(tool)` | 활성 공구 → **요청 공구 T 로 재프레임** |
+| `GetInverseKin(type, pose, config)` | tool 인자가 없음 → **컨트롤러 활성 공구로 해석** |
+
+`GetInverseKinForUserAsync` 는 작업물(user) 프레임만 보정했다. 그래서 활성 공구 ≠ 이동 공구이면 IK 가
+`off_T ∘ inv(off_active)` 만큼 어긋난 점에 **다른 TCP** 를 놓으라는 요구를 받는다. 실패 자세는 베이스에서
+약 1535mm(작업영역 테두리)라 그대로 도달 불가(112)가 됐다.
+
+어긋남의 조건은 이 앱의 기본값 조합 그대로다 — ArUco 보정 화면은 카메라 기준 공구(뎁스 카메라는 컨트롤러
+TOOL 이 없어 #0=플랜지)를 쓰고, 조그 리본(`JogTool=1`)·`DefaultToolId=1`·시퀀스는 #1 로 정규화한다.
+카메라를 조그로 조준한 뒤 자동 계측을 누르면 "활성 #1 · 루틴 #0" 상태가 된다.
+`MoveL` 의 tool 인자가 성공 시 활성 공구를 바꾸므로, 이번에도 증상은 **첫 명령만 실패**다.
+
+### 수정 내용
+- `PoseMath.ReframeTool(pose, offFrom, offTo)` — 재프레임 수식을 순수 함수로 분리(양방향 대칭).
+  `ReframeToolAsync` 는 이 함수를 쓰고 파라미터명을 `fromTool`/`toTool` 로 바꿔 방향을 드러낸다.
+- `GetInverseKinForUserAsync` → **`GetInverseKinForMoveAsync(descPose, tool, user, ct)`** (public).
+  IK 직전에 공구 축도 보정한다: `P_active = P_tool ∘ inv(off_tool) ∘ off_active`. 활성=이동 공구면
+  기존과 동일한 무동작 경로다(공구 좌표 조회도 생략).
+- 두 자동 보정 루틴(`ArucoMountAutoRoutine`, `HandEyeAutoRoutine`):
+  진입 시 `ResetActiveFrameAsync(tool, 0)` 정규화(시퀀스 `AmrMoveStep` 과 같은 처리, 무변위),
+  종료 시 **진입 시점 활성 공구로 복원**(보정용 #0 이 다음 작업에 남지 않게),
+  시작 관절각을 기록해 복귀는 `MoveL` 실패 시 **`MoveJ` 폴백**(MoveJ 는 IK 를 쓰지 않는다),
+  `ArucoMountAutoRoutine` 은 AMR 을 움직이기 **전에** 안전자세 IK 를 선검증해 조기 실패한다.
+- `T_T_C` 를 측정한 공구 번호를 `Calib.HandEye.Tool` 에 저장하고, 이를 소비하는 화면
+  (QR Pose Teaching 데스크톱/웹)의 Tool 기본값으로 쓴다 — `T_T_C` 는 그 공구의 TCP 기준이라
+  다른 번호로 TCP 를 읽으면 오차가 잔차에 드러나지 않고 조용히 섞인다.
+
+### 시퀀스(tool #1)에 대한 영향
+- **모션/IK**: 없음. 활성 공구 == 이동 공구면 재프레임은 항등이고 공구 좌표 조회도 하지 않는다.
+  달라지는 것은 지금까지 실패하거나 빗나가던 불일치 상황뿐이다.
+- **활성 공구 잔류**: 보정 루틴이 끝나면 진입 시점 공구로 되돌린다. 시퀀스는 자기 진입부
+  (`AmrMoveStep`)에서 다시 정규화하므로 이중으로 막힌다.
+- **캘리브 값**: `T_A_B` 는 공구 무관(코봇 BASE 기준)이라 그대로 쓸 수 있다. `T_T_C` 만 공구 종속이며,
+  위 저장/기본값 연동으로 소비처가 같은 번호를 쓰게 된다.
+
+### 검증
+- `src/HD.AMR.Tests/ToolReframeTests.cs` — 앵커(활성→이동)와 IK(이동→활성) 왕복이 항등,
+  공구 0 항등, 보정 누락 시 목표가 공구 오프셋만큼 어긋남.
+- 실물: 조그(툴 #1)로 카메라를 조준한 직후 ArUco 자동 계측(Tool #0)을 실행 → 첫 이동이 rc=112 없이
+  진행되고, 종료 후 활성 공구가 #1 로 돌아오는지 확인.

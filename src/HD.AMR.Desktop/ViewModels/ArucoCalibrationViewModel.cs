@@ -34,8 +34,10 @@ public sealed partial class ArucoCalibrationViewModel : ViewModelBase
     /// <summary>② 장착 보정 단계(기존 ArUco 동시 추정).</summary>
     public ArucoMountCalibrationViewModel MountStep { get; }
 
-    /// <summary>두 단계가 공유하는 기준 tool — 어긋날 수 없게 여기 하나만 둔다.</summary>
-    [ObservableProperty] private int _tool = 2;
+    /// <summary>두 단계가 공유하는 기준 tool — 어긋날 수 없게 여기 하나만 둔다.
+    /// 기본값 0(플랜지): 뎁스 카메라는 컨트롤러 TOOL 이 없어 플랜지 기준으로 T_T_C 를 잡는다.
+    /// 저장된 측정 공구(<c>Calib.HandEye.Tool</c>)가 있으면 <see cref="OnActivated"/> 에서 그 값으로 덮는다.</summary>
+    [ObservableProperty] private int _tool;
 
     [ObservableProperty] private int _markerId;
     [ObservableProperty] private double _markerSizeMm = 120;
@@ -77,6 +79,9 @@ public sealed partial class ArucoCalibrationViewModel : ViewModelBase
                 var aruco = await calib.GetArucoSettingsAsync();
                 MarkerSizeMm = aruco.SizeMm;
                 MarkerId = aruco.MarkerId ?? 0;
+                // 지난 측정에 쓴 공구를 그대로 이어 쓴다 — ①과 ②가 다른 공구를 쓰면 T_T_C 기준이
+                // 어긋나고, 소비처(QR 측위)도 이 번호를 따라간다.
+                if (await calib.GetHandEyeToolAsync() is { } t && t >= 0 && t <= 15) Tool = (int)t;
                 _loaded = true;
             }
             catch { /* 기본값 유지 — 각 단계가 자체 메시지로 알린다. */ }

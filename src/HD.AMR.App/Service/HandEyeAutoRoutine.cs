@@ -75,8 +75,9 @@ public class HandEyeAutoRoutine
             return HandEyeAutoResult.Fail("다른 모션 루틴(시퀀스/조그)이 실행 중입니다 — 종료 후 다시 시도하세요.");
 
         var samples = new List<HandEyeSample>();
-        int attempted = 0, skipped = 0;
+        int attempted = 0, skipped = 0, entryTool = -1;
         double[]? anchor = null;
+        double[]? anchorJoints = null;
         bool atAnchor = true;
         bool returned = true;
         string? error = null;
@@ -87,8 +88,10 @@ public class HandEyeAutoRoutine
 
         try
         {
+            entryTool = await NormalizeFramesAsync(tool, Report, ct);
             Report("앵커 pose 조회(무모션)…");
             anchor = await _cobot.Rpc.GetTcpPoseInBaseAsync(tool, ct);
+            anchorJoints = await _cobot.Rpc.GetActualJointPosAsync(ct: ct);   // IK 실패 시 복귀 폴백용.
 
             // ── 초기 검출: 마커 ID 확정(미지정이면 가장 큰 마커) + 피벗 거리 확보 ──
             var frame = _cam.LatestColor ?? throw new InvalidOperationException("카메라 프레임이 없습니다.");
@@ -200,7 +203,25 @@ public class HandEyeAutoRoutine
                     returned = false;
                     Report($"앵커 복귀 실패: {ex.Message} — 수동 조그로 복귀하세요.");
                 }
+
+                // MoveL(IK) 경로가 막혔으면 시작 관절각으로 MoveJ 폴백 — MoveJ 는 IK 를 쓰지 않아
+                // 활성 좌표계가 어긋나 있어도 성공한다(ResetActiveFrameAsync 와 같은 이유).
+                if (!returned && anchorJoints is not null)
+                {
+                    try
+                    {
+                        using var jointCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                        var rc = await _cobot.Rpc.MoveJAsync(anchorJoints, new double[6], tool: tool, user: 0,
+                            vel: vel, ct: jointCts.Token);
+                        returned = rc == 0;
+                        Report(rc == 0
+                            ? "시작 관절각(MoveJ)으로 앵커에 복귀했습니다."
+                            : $"앵커 복귀(MoveJ) 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)} — 수동 조그로 복귀하세요.");
+                    }
+                    catch (Exception ex) { Report($"앵커 복귀(MoveJ) 실패: {ex.Message} — 수동 조그로 복귀하세요."); }
+                }
             }
+            await RestoreEntryToolAsync(entryTool, tool, Report);
             _gate.Exit();
         }
 
@@ -211,6 +232,46 @@ public class HandEyeAutoRoutine
                 $"유효 표본이 {samples.Count}개뿐입니다(최소 {HandEyeSolver.MinPoses}) — 마커 위치/조명을 바꿔 다시 시도하세요.",
                 samples, attempted, skipped, returned);
         return new HandEyeAutoResult(true, null, samples, attempted, skipped, returned);
+    }
+
+    /// <summary>진입 시 활성 좌표계를 (공구 <paramref name="tool"/>, 작업물 0)으로 정규화하고, 진입 시점의
+    /// 활성 공구를 돌려준다(종료 시 복원용). 컨트롤러에서 활성 공구를 읽지 못하면 설정 기본값
+    /// (<c>DefaultToolId</c>)이 오므로 복원 대상도 그 값이 된다 — 조그 리본·시퀀스의 정규화와 같은 기준이다.
+    /// 무변위 MoveJ 라 로봇은 움직이지 않는다.
+    /// 실패해도 중단하지 않는다 — <see cref="Communication.FairinoRpcClient.GetInverseKinForMoveAsync"/> 가
+    /// 활성 공구를 스스로 보정하므로 이중 방어다.</summary>
+    private async Task<int> NormalizeFramesAsync(int tool, Action<string> report, CancellationToken ct)
+    {
+        var (entryTool, entryUser) = await _cobot.Rpc.ResolveActiveFramesAsync(ct, strict: false);
+        if (entryTool == tool && entryUser == 0) return entryTool;
+        try
+        {
+            var rc = await _cobot.Rpc.ResetActiveFrameAsync(tool, 0, ct);
+            report(rc == 0
+                ? $"활성 좌표계 정규화(무변위 MoveJ): 툴 #{entryTool}/작업물 #{entryUser} → 툴 #{tool}/베이스(0)."
+                : $"활성 좌표계 정규화 실패(rc={rc}){FairinoErrorCodes.Suffix(rc)} — IK 공구 보정으로 계속합니다.");
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex) { report($"활성 좌표계 정규화 생략({ex.Message}) — IK 공구 보정으로 계속합니다."); }
+        return entryTool;
+    }
+
+    /// <summary>루틴이 바꾼 활성 공구를 진입 시점 값으로 되돌린다(무변위 MoveJ). MoveL 의 tool 인자가 활성
+    /// 공구를 바꾸므로, 보정용 공구(예: 카메라 기준 #0)를 그대로 남기면 이후 다른 화면·시퀀스가 자기
+    /// 진입부에서 다시 정규화하기 전까지 그 공구 기준으로 해석된다.</summary>
+    private async Task RestoreEntryToolAsync(int entryTool, int tool, Action<string> report)
+    {
+        if (entryTool < 0 || entryTool == tool) return;
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            var rc = await _cobot.Rpc.ResetActiveFrameAsync(entryTool, 0, cts.Token);
+            report(rc == 0
+                ? $"활성 공구를 진입 시점 값(#{entryTool})으로 복원했습니다."
+                : $"활성 공구 복원 실패(rc={rc}){FairinoErrorCodes.Suffix(rc)} — 조그 리본의 '활성 좌표계 초기화'로 맞추세요.");
+        }
+        catch (Exception ex)
+        { report($"활성 공구 복원 실패: {ex.Message} — 조그 리본의 '활성 좌표계 초기화'로 맞추세요."); }
     }
 
     /// <summary>웨이포인트 스케줄 — 직교 3축 + 대각. Rz(광축) 먼저(마커 이탈 위험이 가장 낮다).</summary>

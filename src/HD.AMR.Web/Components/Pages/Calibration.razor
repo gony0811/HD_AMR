@@ -142,11 +142,14 @@
     {
         _mount = await Calib.GetMountAsync();
         _handEye = await Calib.GetHandEyeAsync();
+        // T_T_C 를 측정한 공구 번호가 저장돼 있으면 Tool 기본값으로 쓴다 — 다른 번호로 TCP 를 읽으면
+        // 두 공구의 TCP 오프셋 차이만큼 조용히 틀어진 목표 pose 가 나온다.
+        if (await Calib.GetHandEyeToolAsync() is { } ttcTool && ttcTool >= 0 && ttcTool <= 15) _tool = (int)ttcTool;
         _reference = await Calib.GetQrStopReferenceAsync();
     }
 
     private async Task SaveMountAsync() { try { await Calib.SaveMountAsync(_mount); Success("T_A_B를 저장했습니다."); } catch (Exception ex) { Failure($"T_A_B 저장 실패: {ex.Message}"); } }
-    private async Task SaveHandEyeAsync() { try { await Calib.SaveHandEyeAsync(_handEye); Success("T_T_C를 저장했습니다."); } catch (Exception ex) { Failure($"T_T_C 저장 실패: {ex.Message}"); } }
+    private async Task SaveHandEyeAsync() { try { await Calib.SaveHandEyeAsync(_handEye); await Calib.SaveHandEyeToolAsync(_tool); Success($"T_T_C를 저장했습니다(tool {_tool} 기준)."); } catch (Exception ex) { Failure($"T_T_C 저장 실패: {ex.Message}"); } }
 
     private async Task SaveReferenceAsync()
     {

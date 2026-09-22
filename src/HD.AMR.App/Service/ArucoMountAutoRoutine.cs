@@ -65,17 +65,21 @@ public sealed class ArucoMountAutoRoutine
 
         var samples = new List<ArucoMountSample>();
         double[]? travelPose = null;
+        double[]? travelJoints = null;
         RobotPose? startPose = null;
         double[,]? fixedCameraW = null;
         double? liftStart = _lift.Latest?.HeightMm;
-        int visited = 0, skipped = 0;
+        int visited = 0, skipped = 0, entryTool = -1;
         bool returned = true;
         string? error = null;
 
         try
         {
             startPose = _amr.LatestStatus!.Pose;
+            entryTool = await NormalizeFramesAsync(tool, Report, ct);
             travelPose = await _cobot.Rpc.GetTcpPoseInBaseAsync(tool, ct);
+            travelJoints = await _cobot.Rpc.GetActualJointPosAsync(ct: ct);   // IK 실패 시 복귀 폴백용.
+            await PreflightTravelPoseAsync(travelPose, tool, ct);
             Report("초기 자세에서 마커를 계측합니다…");
 
             var first = await _capture.CaptureAsync(marker, tool, options.FramesPerSample, ct);
@@ -154,18 +158,8 @@ public sealed class ArucoMountAutoRoutine
         {
             // 취소 토큰과 분리해 코봇만 안전자세로 복귀한다. AMR은 취소 시 즉시 정지 상태를 유지한다.
             if (travelPose is not null)
-            {
-                try
-                {
-                    using var returnCts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-                    await MoveCobotAsync(travelPose, tool, "최종 안전자세 복귀", returnCts.Token);
-                }
-                catch (Exception ex)
-                {
-                    returned = false;
-                    Report($"코봇 안전자세 복귀 실패: {ex.Message} — 수동으로 확인하세요.");
-                }
-            }
+                returned = await ReturnToTravelPoseAsync(travelPose, travelJoints, tool, Report);
+            await RestoreEntryToolAsync(entryTool, tool, Report);
             _gate.Exit();
         }
 
@@ -235,6 +229,90 @@ public sealed class ArucoMountAutoRoutine
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         { throw new TimeoutException($"AMR이 {options.NavigationTimeout.TotalSeconds:0}초 안에 목표 자세에 도달하지 못했습니다."); }
+    }
+
+    /// <summary>진입 시 활성 좌표계를 (공구 <paramref name="tool"/>, 작업물 0)으로 정규화하고, 진입 시점의
+    /// 활성 공구를 돌려준다(종료 시 복원용). 컨트롤러에서 활성 공구를 읽지 못하면 설정 기본값
+    /// (<c>DefaultToolId</c>)이 오므로 복원 대상도 그 값이 된다 — 조그 리본·시퀀스의 정규화와 같은 기준이다.
+    /// 무변위 MoveJ 라 로봇은 움직이지 않는다 —
+    /// 시퀀스 진입부(<c>AmrMoveStep</c>)·조그 리본과 같은 처리다. 실패해도 중단하지 않는다:
+    /// <see cref="FairinoRpcClient.GetInverseKinForMoveAsync"/> 가 활성 공구를 스스로 보정하므로 이중 방어다.</summary>
+    private async Task<int> NormalizeFramesAsync(int tool, Action<string> report, CancellationToken ct)
+    {
+        var (entryTool, entryUser) = await _cobot.Rpc.ResolveActiveFramesAsync(ct, strict: false);
+        if (entryTool == tool && entryUser == 0) return entryTool;
+        try
+        {
+            var rc = await _cobot.Rpc.ResetActiveFrameAsync(tool, 0, ct);
+            report(rc == 0
+                ? $"활성 좌표계 정규화(무변위 MoveJ): 툴 #{entryTool}/작업물 #{entryUser} → 툴 #{tool}/베이스(0)."
+                : $"활성 좌표계 정규화 실패(rc={rc}){FairinoErrorCodes.Suffix(rc)} — IK 공구 보정으로 계속합니다.");
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex) { report($"활성 좌표계 정규화 생략({ex.Message}) — IK 공구 보정으로 계속합니다."); }
+        return entryTool;
+    }
+
+    /// <summary>AMR 을 움직이기 전에 주행 안전자세의 역기구학을 미리 확인한다. 정차점을 돌기 시작한 뒤에
+    /// 복귀가 막히면 코봇이 계측 자세로 남은 채 AMR 만 움직이게 되므로, 실패는 여기서 드러나야 한다.</summary>
+    private async Task PreflightTravelPoseAsync(double[] travelPose, int tool, CancellationToken ct)
+    {
+        try { await _cobot.Rpc.GetInverseKinForMoveAsync(travelPose, tool, user: 0, ct: ct); }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                $"주행 안전자세를 역기구학으로 재현할 수 없어 AMR 이동 전에 중단했습니다. {ex.Message} — " +
+                $"현재 자세가 작업영역 테두리인지, 화면의 Tool 번호(#{tool})가 실제 계측 공구와 같은지 확인하세요.");
+        }
+    }
+
+    /// <summary>안전자세 복귀. MoveL(IK)이 실패하면 시작 관절각으로 MoveJ 폴백한다 — MoveJ 는 IK 를 쓰지
+    /// 않아 활성 좌표계가 어긋나 있어도 성공한다(<c>ResetActiveFrameAsync</c> 와 같은 이유). 복귀 여부 반환.</summary>
+    private async Task<bool> ReturnToTravelPoseAsync(double[] travelPose, double[]? travelJoints, int tool,
+        Action<string> report)
+    {
+        try
+        {
+            using var moveLCts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            await MoveCobotAsync(travelPose, tool, "최종 안전자세 복귀", moveLCts.Token);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            report($"안전자세 복귀(MoveL) 실패: {ex.Message}" +
+                   (travelJoints is null ? " — 수동으로 확인하세요." : " — 시작 관절각으로 재시도합니다."));
+        }
+
+        if (travelJoints is null) return false;
+        try
+        {
+            using var moveJCts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            var rc = await _cobot.Rpc.MoveJAsync(travelJoints, new double[6], tool: tool, user: 0,
+                vel: CobotVelocityPct, ct: moveJCts.Token);
+            if (rc == 0) { report("시작 관절각(MoveJ)으로 안전자세에 복귀했습니다."); return true; }
+            report($"안전자세 복귀(MoveJ) 실패(rc={rc}){FairinoErrorCodes.Suffix(rc)} — 수동으로 확인하세요.");
+        }
+        catch (Exception ex) { report($"안전자세 복귀(MoveJ) 실패: {ex.Message} — 수동으로 확인하세요."); }
+        return false;
+    }
+
+    /// <summary>루틴이 바꾼 활성 공구를 진입 시점 값으로 되돌린다(무변위 MoveJ). MoveL 의 tool 인자가 활성
+    /// 공구를 바꾸므로, 보정용 공구(예: 카메라 기준 #0)를 그대로 남기면 이후 다른 화면·시퀀스가 자기
+    /// 진입부에서 다시 정규화하기 전까지 그 공구 기준으로 해석된다.</summary>
+    private async Task RestoreEntryToolAsync(int entryTool, int tool, Action<string> report)
+    {
+        if (entryTool < 0 || entryTool == tool) return;
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            var rc = await _cobot.Rpc.ResetActiveFrameAsync(entryTool, 0, cts.Token);
+            report(rc == 0
+                ? $"활성 공구를 진입 시점 값(#{entryTool})으로 복원했습니다."
+                : $"활성 공구 복원 실패(rc={rc}){FairinoErrorCodes.Suffix(rc)} — 조그 리본의 '활성 좌표계 초기화'로 맞추세요.");
+        }
+        catch (Exception ex)
+        { report($"활성 공구 복원 실패: {ex.Message} — 조그 리본의 '활성 좌표계 초기화'로 맞추세요."); }
     }
 
     private async Task MoveCobotAsync(double[] pose, int tool, string label, CancellationToken ct)

@@ -46,7 +46,7 @@ public sealed partial class HandEyeViewModel : ViewModelBase
 
     [ObservableProperty] private double _markerSizeMm = 120;
     /// <summary>ArUco 장착 보정 화면과 반드시 같은 번호여야 한다(그 화면 기본값 2).</summary>
-    [ObservableProperty] private int _tool = 2;
+    [ObservableProperty] private int _tool;   // 기본 0(플랜지) — 부모(ArucoCalibrationViewModel)가 공유값을 덮어쓴다.
     [ObservableProperty] private int _markerId;
     [ObservableProperty] private bool _matchMarkerId = true;
     [ObservableProperty] private bool _stationaryConfirmed;
@@ -320,6 +320,8 @@ public sealed partial class HandEyeViewModel : ViewModelBase
             var calib = scope.ServiceProvider.GetRequiredService<CalibrationService>();
             var pose = HandEye.ToArray();
             await calib.SaveHandEyeAsync(pose);
+            // T_T_C 는 이 tool 의 TCP 기준이다 — 소비처(QR 측위 등)가 같은 번호로 TCP 를 읽도록 함께 저장한다.
+            await calib.SaveHandEyeToolAsync(Tool);
             _savedTtc = pose;
             HandEyeSaved?.Invoke();
             Notify($"T_T_C 를 저장했습니다(tool {Tool} 기준) — ② 장착 보정 탭에서 같은 tool 번호를 " +
