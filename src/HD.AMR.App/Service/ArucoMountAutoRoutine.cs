@@ -72,14 +72,15 @@ public sealed class ArucoMountAutoRoutine
         RobotPose? startPose = null;
         double[,]? fixedCameraW = null;
         double? liftStart = _lift.Latest?.HeightMm;
-        int visited = 0, skipped = 0, entryTool = -1;
+        int visited = 0, skipped = 0;
+        (int Tool, int User) entryFrames = (-1, -1);   // 진입 시 활성 좌표계(복원·보고용).
         bool returned = true;
         string? error = null;
 
         try
         {
             startPose = _amr.LatestStatus!.Pose;
-            entryTool = await NormalizeFramesAsync(tool, Report, ct);
+            entryFrames = await NormalizeFramesAsync(tool, Report, ct);
             travelPose = await _cobot.Rpc.GetTcpPoseInBaseAsync(tool, ct);
             travelJoints = await _cobot.Rpc.GetActualJointPosAsync(ct: ct);   // IK 실패 시 복귀 폴백용.
             await PreflightTravelPoseAsync(travelPose, tool, ct);
@@ -178,7 +179,7 @@ public sealed class ArucoMountAutoRoutine
             // 취소 토큰과 분리해 코봇을 안전자세로 복귀시킨다.
             if (travelPose is not null)
                 returned = await ReturnToTravelPoseAsync(travelPose, travelJoints, tool, Report);
-            await RestoreEntryToolAsync(entryTool, tool, Report);
+            await RestoreEntryToolAsync(entryFrames, tool, Report);
             _gate.Exit();
         }
 
@@ -248,10 +249,11 @@ public sealed class ArucoMountAutoRoutine
     /// 무변위 MoveJ 라 로봇은 움직이지 않는다 —
     /// 시퀀스 진입부(<c>AmrMoveStep</c>)·조그 리본과 같은 처리다. 실패해도 중단하지 않는다:
     /// <see cref="FairinoRpcClient.GetInverseKinForMoveAsync"/> 가 활성 공구를 스스로 보정하므로 이중 방어다.</summary>
-    private async Task<int> NormalizeFramesAsync(int tool, Action<string> report, CancellationToken ct)
+    private async Task<(int Tool, int User)> NormalizeFramesAsync(int tool, Action<string> report,
+        CancellationToken ct)
     {
         var (entryTool, entryUser) = await _cobot.Rpc.ResolveActiveFramesAsync(ct, strict: false);
-        if (entryTool == tool && entryUser == 0) return entryTool;
+        if (entryTool == tool && entryUser == 0) return (entryTool, entryUser);
         try
         {
             var rc = await _cobot.Rpc.ResetActiveFrameAsync(tool, 0, ct);
@@ -261,7 +263,7 @@ public sealed class ArucoMountAutoRoutine
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex) { report($"활성 좌표계 정규화 생략({ex.Message}) — IK 공구 보정으로 계속합니다."); }
-        return entryTool;
+        return (entryTool, entryUser);
     }
 
     /// <summary>AMR 을 움직이기 전에 주행 안전자세의 역기구학을 미리 확인한다. 정차점을 돌기 시작한 뒤에
@@ -311,15 +313,22 @@ public sealed class ArucoMountAutoRoutine
     /// <summary>루틴이 바꾼 활성 공구를 진입 시점 값으로 되돌린다(무변위 MoveJ). MoveL 의 tool 인자가 활성
     /// 공구를 바꾸므로, 보정용 공구(예: 카메라 기준 #0)를 그대로 남기면 이후 다른 화면·시퀀스가 자기
     /// 진입부에서 다시 정규화하기 전까지 그 공구 기준으로 해석된다.</summary>
-    private async Task RestoreEntryToolAsync(int entryTool, int tool, Action<string> report)
+    private async Task RestoreEntryToolAsync((int Tool, int User) entry, int tool, Action<string> report)
     {
-        if (entryTool < 0 || entryTool == tool) return;
+        // 작업물 프레임은 되돌리지 않는다 — 이 앱에서 작업물 #N 잔류는 '정리 대상'이다(조그 리본은 진입 시
+        // user>0 을 잔류로 보고 0 으로 되돌리고, 시퀀스도 종료 시 (공구, 0) 으로 반납한다). 여기서 #N 을
+        // 되살리면 그 규약을 깨고 잔류를 다시 만든다. 대신 무엇이 바뀌었는지는 반드시 남긴다.
+        if (entry.User > 0)
+            report($"진입 시 활성 작업물 #{entry.User} 이 남아 있었습니다 — 베이스(0)로 반납했고 복원하지 " +
+                   "않습니다(조그 리본·시퀀스와 같은 규약). 작업물 기준 작업은 해당 화면에서 다시 지정하세요.");
+
+        if (entry.Tool < 0 || entry.Tool == tool) return;
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-            var rc = await _cobot.Rpc.ResetActiveFrameAsync(entryTool, 0, cts.Token);
+            var rc = await _cobot.Rpc.ResetActiveFrameAsync(entry.Tool, 0, cts.Token);
             report(rc == 0
-                ? $"활성 공구를 진입 시점 값(#{entryTool})으로 복원했습니다."
+                ? $"활성 공구를 진입 시점 값(#{entry.Tool})으로 복원했습니다."
                 : $"활성 공구 복원 실패(rc={rc}){FairinoErrorCodes.Suffix(rc)} — 조그 리본의 '활성 좌표계 초기화'로 맞추세요.");
         }
         catch (Exception ex)

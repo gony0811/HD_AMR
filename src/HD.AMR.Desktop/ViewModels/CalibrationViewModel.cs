@@ -123,7 +123,17 @@ public sealed partial class CalibrationViewModel : ViewModelBase
     [RelayCommand]
     private async Task SaveHandEye()
     {
-        try { await WithCalib(c => c.SaveHandEyeAsync(HandEye.ToArray())); Success("T_T_C를 저장했습니다."); }
+        try
+        {
+            // T_T_C 와 측정 공구는 한 쌍이다 — 공구만 빠뜨리면 다음 측정이 이전 공구 번호를 기본값으로
+            // 집어, 두 공구의 TCP 오프셋 차이만큼 조용히 틀어진 목표 pose 가 나온다.
+            await WithCalib(async c =>
+            {
+                await c.SaveHandEyeAsync(HandEye.ToArray());
+                await c.SaveHandEyeToolAsync(Tool);
+            });
+            Success($"T_T_C를 저장했습니다(tool {Tool} 기준).");
+        }
         catch (Exception ex) { Failure($"T_T_C 저장 실패: {ex.Message}"); }
     }
 
