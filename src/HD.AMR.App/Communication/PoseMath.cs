@@ -10,7 +10,7 @@ namespace HD.AMR.App.Communication;
 ///   틀어지고, 그 앵커가 실제 이동(MoveL/MoveByOffset)을 구동하므로 위험하다. 실물 검증(감독된
 ///   MoveJ 후 GetForwardKin 대조) 전까지는 신뢰하지 말 것.
 /// </summary>
-internal static class PoseMath
+public static class PoseMath
 {
     private const double Deg2Rad = Math.PI / 180.0;
     private const double Rad2Deg = 180.0 / Math.PI;
@@ -56,6 +56,18 @@ internal static class PoseMath
             }
         return m;
     }
+
+    /// <summary>
+    /// 공구 <c>A</c> TCP 기준 pose 를 공구 <c>B</c> TCP 기준 pose 로 변환한다(모션 없음):
+    /// <c>P_B = P_A ∘ inv(off_A) ∘ off_B</c>. <paramref name="offsetFrom"/>/<paramref name="offsetTo"/> 는
+    /// 각 공구의 플랜지→TCP 오프셋(공구 0 = identity = 0 배열).
+    ///
+    /// 두 방향 모두 이 한 식으로 표현된다 — 인자를 뒤집으면 역변환이다. 앵커 조회
+    /// (<see cref="FairinoRpcClient.GetTcpPoseInBaseAsync"/>: 활성 공구→이동 공구)와 역기구학 입력
+    /// (활성 공구가 아닌 pose→활성 공구)이 이 대칭을 공유해야 앵커와 IK 가 같은 TCP 를 가리킨다.
+    /// </summary>
+    public static double[] ReframeTool(double[] pose, double[] offsetFrom, double[] offsetTo)
+        => ToPose(Multiply(Multiply(FromPose(pose), Inverse(FromPose(offsetFrom))), FromPose(offsetTo)));
 
     /// <summary>강체 역변환: R' = Rᵀ, t' = -Rᵀ·t.</summary>
     public static double[,] Inverse(double[,] t)

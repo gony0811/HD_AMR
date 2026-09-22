@@ -318,19 +318,18 @@ public class FairinoRpcClient : IDisposable
         return await ReframeToolAsync(pActive, active, tool, ct);
     }
 
-    /// <summary>활성 공구 <paramref name="activeTool"/> 기준 베이스 pose <paramref name="pActive"/> 를
-    /// 공구 <paramref name="tool"/> 의 TCP pose 로 재프레임한다(모션 없음): P_T = P_active ∘ inv(offset_active) ∘ offset_T.
-    /// 같은 공구면 그대로 반환(공구 좌표 조회 생략). 공구 좌표를 못 읽으면 예외.</summary>
-    private async Task<double[]> ReframeToolAsync(double[] pActive, int activeTool, int tool, CancellationToken ct)
+    /// <summary>공구 <paramref name="fromTool"/> TCP 기준 pose 를 공구 <paramref name="toTool"/> TCP
+    /// 기준으로 재프레임한다(모션 없음): P_to = P_from ∘ inv(offset_from) ∘ offset_to.
+    /// 같은 공구면 그대로 반환(공구 좌표 조회 생략). 공구 좌표를 못 읽으면 예외.
+    /// 앵커 조회(활성 공구→이동 공구)와 역기구학 입력(이동 공구→활성 공구)이 <b>같은 식을 서로 반대
+    /// 방향으로</b> 쓴다 — 한쪽만 적용하면 앵커와 IK 가 다른 TCP 를 가리켜 rc=112(도달 불가)가 난다.</summary>
+    private async Task<double[]> ReframeToolAsync(double[] pose, int fromTool, int toTool, CancellationToken ct)
     {
-        if (activeTool == tool) return pActive;                // 재프레임 불필요 → 공구 좌표 조회 생략.
+        if (fromTool == toTool) return pose;                   // 재프레임 불필요 → 공구 좌표 조회 생략.
 
-        var offAct = await GetToolOffsetAsync(activeTool, ct); // 0 → identity(flange)
-        var offT = await GetToolOffsetAsync(tool, ct);         // 0 → identity(flange)
-        var tFlange = PoseMath.Multiply(PoseMath.FromPose(pActive),
-                                        PoseMath.Inverse(PoseMath.FromPose(offAct)));
-        var tT = PoseMath.Multiply(tFlange, PoseMath.FromPose(offT));
-        return PoseMath.ToPose(tT);
+        var offFrom = await GetToolOffsetAsync(fromTool, ct);  // 0 → identity(flange)
+        var offTo = await GetToolOffsetAsync(toTool, ct);      // 0 → identity(flange)
+        return PoseMath.ReframeTool(pose, offFrom, offTo);
     }
 
     /// <summary>공구 <paramref name="id"/>의 flange→TCP 오프셋 [x,y,z,rx,ry,rz]. 공구 0 = flange(identity).
@@ -403,7 +402,7 @@ public class FairinoRpcClient : IDisposable
         double v = vel ?? _settings.DefaultVelPct;
         double[] off = (offsetPos is { Length: >= 6 }) ? offsetPos : new double[6];
 
-        double[] j = jointPos ?? await GetInverseKinForUserAsync(descPose, u, ct);
+        double[] j = jointPos ?? await GetInverseKinForMoveAsync(descPose, t, u, ct);
 
         var args = new object[]
         {
@@ -428,31 +427,52 @@ public class FairinoRpcClient : IDisposable
         return rc;
     }
 
-    /// <summary>이동 목표 프레임(user)에 맞춘 역기구학 관절 시드. 이 펌웨어의 GetInverseKin 은 입력 pose 를
-    /// <b>현재 활성 작업물 프레임</b> 기준으로 해석한다(GetForwardKin 과 대칭 — WObjResetStep 의 112 순환에서
-    /// 확인). 따라서 활성 프레임(M)과 이동 목표 프레임(user)이 다르면 입력을 활성 프레임 기준으로 변환해
-    /// IK 를 부른다: P_M = T_M⁻¹ · T_user · P_user (T_0 = identity). 변환 없이 부르면 예컨대 활성=0(베이스)
-    /// 상태에서 작업물 좌표(원점 근처 값)를 베이스로 오해석해 rc=38(특이/도달불가)·112 가 난다 —
-    /// 과거에는 활성 프레임이 목표 프레임으로 '잔류'해 있어 우연히 맞았던 경로다.</summary>
-    private async Task<double[]> GetInverseKinForUserAsync(double[] descPose, int user, CancellationToken ct)
+    /// <summary>
+    /// 이동 목표 프레임(<paramref name="tool"/>/<paramref name="user"/>)에 맞춘 역기구학 관절 시드.
+    /// <c>GetInverseKin</c> 은 <b>tool·user 인자가 없어</b> 입력 pose 를 컨트롤러의 <b>현재 활성
+    /// 공구·작업물</b> 기준으로 해석한다. 그래서 이동에 쓸 프레임 기준 pose 를 활성 프레임 기준으로
+    /// 되돌려 넘긴다. 두 축을 모두 보정해야 한다 — 한쪽만 맞추면 IK 가 엉뚱한 TCP/원점을 요구받는다.
+    ///
+    /// <b>공구</b>: P_active = P_tool ∘ inv(off_tool) ∘ off_active
+    /// (<see cref="GetTcpPoseInBaseAsync"/> 의 앵커 재프레임과 정확히 반대 방향). 보정이 없으면 예컨대
+    /// 앵커는 tool #0(플랜지) 기준인데 활성 공구가 #1(TCP 수백 mm)이라, 이미 작업영역 테두리에 있는
+    /// 자세가 도달 불가로 판정돼 <b>errcode=112</b> 가 난다. MoveL 의 tool 인자가 성공 시 활성 공구를
+    /// 바꾸므로 "첫 명령만 실패/오이동하고 이후 정상"으로 나타난다(docs/bugfix_jog_first_move.md).
+    ///
+    /// <b>작업물</b>: P_M = T_M⁻¹ · T_user · P_user (T_0 = identity). 이 펌웨어의 GetInverseKin 은 입력을
+    /// 현재 활성 작업물 프레임 기준으로 해석한다(GetForwardKin 과 대칭 — WObjResetStep 의 112 순환에서 확인).
+    /// 변환 없이 부르면 활성=0(베이스) 상태에서 작업물 좌표(원점 근처 값)를 베이스로 오해석해 rc=38·112 가 난다.
+    /// </summary>
+    public async Task<double[]> GetInverseKinForMoveAsync(double[] descPose, int tool, int user,
+                                                          CancellationToken ct = default)
     {
-        int active = await ResolveActiveUserAsync(ct, strict: true);
-        if (active == user)
-            return await GetInverseKinAsync(descPose, ct: ct);
+        // ① 공구 축 — 본문(body) 변환이라 ②의 좌변 변환과 교환 가능하므로 순서는 무관하다.
+        int activeTool = await ResolveActiveToolAsync(ct, strict: true);
+        var pose = await ReframeToolAsync(descPose, tool, activeTool, ct);
+        if (activeTool != tool)
+            _logger.LogInformation("{Name} IK 공구 보정: 이동 공구 #{T}, 활성 공구 #{A} — pose=[{P}] → [{Q}]",
+                _settings.Name, tool, activeTool,
+                string.Join(",", descPose.Select(x => x.ToString("0.##"))),
+                string.Join(",", pose.Select(x => x.ToString("0.##"))));
 
-        double[] pBase = descPose;
+        // ② 작업물 축
+        int activeUser = await ResolveActiveUserAsync(ct, strict: true);
+        if (activeUser == user)
+            return await GetInverseKinAsync(pose, ct: ct);
+
+        double[] pBase = pose;
         if (user > 0)
         {
             var tUser = await GetWObjCoordAsync(user, ct);
             if (tUser.All(v => v == 0))
                 _logger.LogWarning("{Name} IK 프레임 보정: 목표 작업물 #{U} 가 미등록(원점=0) — pose 를 베이스로 간주. " +
                                    "좌표계 등록을 먼저 확인하세요.", _settings.Name, user);
-            pBase = FrameMath.FromFrame(descPose, tUser);
+            pBase = FrameMath.FromFrame(pose, tUser);
         }
-        var pActive = active > 0 ? FrameMath.ToFrame(pBase, await GetWObjCoordAsync(active, ct)) : pBase;
+        var pActive = activeUser > 0 ? FrameMath.ToFrame(pBase, await GetWObjCoordAsync(activeUser, ct)) : pBase;
         _logger.LogInformation("{Name} IK 프레임 보정: 목표 user=#{U}, 활성=#{M} — pose=[{P}] → IK 입력=[{Q}]",
-            _settings.Name, user, active,
-            string.Join(",", descPose.Select(x => x.ToString("0.##"))),
+            _settings.Name, user, activeUser,
+            string.Join(",", pose.Select(x => x.ToString("0.##"))),
             string.Join(",", pActive.Select(x => x.ToString("0.##"))));
         return await GetInverseKinAsync(pActive, ct: ct);
     }

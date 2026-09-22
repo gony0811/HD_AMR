@@ -38,6 +38,7 @@ public class CalibrationService
     private const string ArucoSettingsKey = "Calib.Aruco.SettingsJson";
     private const string RefPointsKey = "Calib.MapRef.PointsJson";
     private const string HandEyeKey = "Calib.HandEye.Pose";      // JSON double[6] = [x,y,z,rx,ry,rz]
+    private const string HandEyeToolKey = "Calib.HandEye.Tool";  // int — T_T_C 를 측정한 공구 번호
     private const string QrMarkersKey = "Calib.Qr.MarkersJson";
     private const string QrStopReferenceKey = "Calib.Qr.StopReferenceJson";
     private const string RegThetaKey = "Calib.MapReg.ThetaDeg";
@@ -264,6 +265,19 @@ public class CalibrationService
     public Task SaveHandEyeAsync(double[] pose)
         => _param.SetAsync(HandEyeKey, JsonSerializer.Serialize(pose),
             "핸드아이 오프셋 T_T_C [x,y,z,rx,ry,rz] (mm/도, 코봇 툴 TCP→컬러카메라 광학 프레임)");
+
+    /// <summary>
+    /// <c>T_T_C</c> 를 측정한 공구 번호. <b>T_T_C 는 그 공구의 TCP 기준</b>이므로, 이 값을 합성하는 쪽
+    /// (QR 측위 등)이 <c>GetTcpPoseInBaseAsync</c> 에 <b>같은 번호</b>를 넘겨야 한다. 다른 번호를 쓰면
+    /// 두 공구의 TCP 오프셋 차이만큼 조용히 틀어진 결과가 나온다 — 잔차로는 드러나지 않는다.
+    /// 예: 뎁스 카메라 보정을 공구 0(플랜지) 기준으로 하고 소비처가 공구 1(실제 TCP)로 읽는 경우.
+    /// 값이 없으면(구버전 저장) null — 호출부는 화면 기본값을 그대로 쓴다.
+    /// </summary>
+    public Task<double?> GetHandEyeToolAsync() => _param.GetDoubleAsync(HandEyeToolKey);
+
+    public Task SaveHandEyeToolAsync(int tool)
+        => _param.SetDoubleAsync(HandEyeToolKey, tool,
+            "T_T_C 를 측정한 공구 번호 — 이 값을 소비하는 화면(QR 측위 등)의 Tool 기본값");
 
     // ── QR 마커 등록 ────────────────────────────────────────────────
     public async Task<List<QrMarkerReg>> GetQrMarkersAsync()

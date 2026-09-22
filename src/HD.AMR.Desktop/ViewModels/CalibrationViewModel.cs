@@ -69,6 +69,9 @@ public sealed partial class CalibrationViewModel : ViewModelBase
                 : $"X={mount[0]:0.0}  Y={mount[1]:0.0}  Z={mount[2]:0.0} mm   ·   " +
                   $"Rx={mount[3]:0.000}  Ry={mount[4]:0.000}  Rz={mount[5]:0.000}°";
             HandEye.FromArray(await calib.GetHandEyeAsync());
+            // T_T_C 는 측정에 쓴 공구의 TCP 기준이다. 다른 번호로 TCP 를 읽으면 두 공구의 오프셋 차이만큼
+            // 조용히 틀어지므로, 저장된 번호가 있으면 그것을 기본값으로 쓴다.
+            if (await calib.GetHandEyeToolAsync() is { } t && t >= 0 && t <= 15) Tool = (int)t;
             var r = await calib.GetQrStopReferenceAsync();
             QrText = r.Text; QrSizeMm = r.SizeMm;
             TargetXmm = r.TargetXmm; TargetYmm = r.TargetYmm; TargetZmm = r.TargetZmm; TargetYawDeg = r.TargetYawDeg;
