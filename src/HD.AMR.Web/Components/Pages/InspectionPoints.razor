@@ -122,7 +122,7 @@
                         <th style="width:40px">#</th>
                         <th>X</th><th>Y</th><th>Z(WD)</th><th>Rx°</th><th>Ry°(θ)</th><th>Rz°</th>
                         <th style="width:110px">Surface</th>
-                        <th style="width:120px"></th>
+                        <th style="width:170px"></th>
                     </tr>
                 </thead>
                 <tbody>
@@ -148,6 +148,8 @@
                             <td @onclick:stopPropagation="true">
                                 <button class="btn btn-sm btn-outline-primary" @onclick="() => MoveToPointAsync(idx)"
                                         disabled="@(_isRunning || !Cobot.IsConnected)">이동</button>
+                                <button class="btn btn-sm btn-outline-success" @onclick="() => InspectPointAsync(idx)"
+                                        disabled="@(_isRunning || !Vision.Client.IsConnected)">검사</button>
                                 <button class="btn btn-sm btn-outline-danger" @onclick="() => RemovePoint(idx)" disabled="@_isRunning">－</button>
                             </td>
                         </tr>
@@ -545,6 +547,39 @@
             _runMsg = $"#{i + 1} 이동 (rc={rc})";
         }
         catch (Exception ex) { Logger.LogError(ex, "MoveToPoint 실패"); _runErr = true; _runMsg = $"이동 실패: {ex.Message}"; }
+    }
+
+    private ushort _manualCaptureSeq;
+
+    /// <summary>이동 없이 해당 포인트의 좌표·Surface 로 CAPTURE_REQ 를 1회 전송한다.</summary>
+    private async Task InspectPointAsync(int i)
+    {
+        if (_isRunning || i < 0 || i >= _points.Count) return;
+        if (!Vision.Client.IsConnected)
+        {
+            _runErr = true;
+            _runMsg = "비전 인터페이스 미연결 — CAPTURE_REQ를 전송할 수 없습니다.";
+            return;
+        }
+        _selected = i;
+        try
+        {
+            var p = _points[i];
+            var wallId = (ushort)Math.Clamp(_wallId, 1, 10);
+            var (u, v, h) = FaceLocalMapper.ToFaceLocal(wallId, p.X, p.Y, p.Z);
+            _manualCaptureSeq++;
+            var data = CaptureReqPayload.Build((SurfaceType)(p.Surface <= 2 ? p.Surface : (byte)0), wallId,
+                u, v, h, Guid.Empty, attempt: 1, _manualCaptureSeq);
+            var timeout = TimeSpan.FromSeconds(Math.Max(.5, _visionTimeoutSec));
+            _runErr = false; _runMsg = $"#{i + 1} CAPTURE_REQ 전송...";
+            await InvokeAsync(StateHasChanged);
+            var outcome = await Vision.Client.RequestCaptureAsync(data, timeout);
+            _runErr = !outcome.Success;
+            _runMsg = outcome.Success
+                ? $"#{i + 1} 검사 CAPTURE_REQ 성공"
+                : $"#{i + 1} 검사 실패 — {CaptureFailure(outcome)}";
+        }
+        catch (Exception ex) { Logger.LogError(ex, "InspectPoint 실패"); _runErr = true; _runMsg = $"검사 실패: {ex.Message}"; }
     }
 
     private async Task SaveProfileAsync()

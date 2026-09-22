@@ -1,4 +1,5 @@
 using HD.AMR.App.Communication;
+using HD.AMR.App.Enums;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -19,9 +20,12 @@ public class IoModuleService : BackgroundService
     private readonly ILogger<IoModuleService> _logger;
     private readonly AMRService _amr;
     private readonly IoAmrModeControl _modeControl = new();
+    private readonly IoStartStopLampControl _lampControl = new();
+    private readonly SemaphoreSlim _outputWriteLock = new(1, 1);
 
     private readonly object _stateLock = new();
     private IoModuleState? _state;
+    private bool _initialStopStateApplied;
 
     public IoModuleService(IOptions<IoModuleModbusTcpSettings> options, ILoggerFactory loggerFactory, AMRService amr)
     {
@@ -118,6 +122,27 @@ public class IoModuleService : BackgroundService
                 var inputs = await PollStateAsync(stoppingToken);
                 if (inputs is not null)
                 {
+                    if (!_initialStopStateApplied)
+                    {
+                        try
+                        {
+                            await _amr.SetDrivingModeAsync(DrivingMode.Cart, stoppingToken);
+                            await _lampControl.ApplyAsync(
+                                DrivingMode.Cart, SetStartStopLampsAsync, stoppingToken);
+                            _initialStopStateApplied = true;
+                            _logger.LogInformation("시스템 초기 상태 동기화 완료: AMR Cart, START 램프 OFF, STOP 램프 ON");
+                        }
+                        catch (OperationCanceledException) { throw; }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "시스템 초기 STOP 상태 동기화 실패 — 다음 입력 폴링에서 재시도");
+                        }
+
+                        // 초기 STOP 상태를 먼저 확정한 다음 주기부터 실제 버튼 입력을 처리한다.
+                        await Task.Delay(TimeSpan.FromMilliseconds(200), stoppingToken);
+                        continue;
+                    }
+
                     try
                     {
                         await _modeControl.ApplyAsync(inputs, async (mode, ct) =>
@@ -130,6 +155,21 @@ public class IoModuleService : BackgroundService
                     catch (Exception ex)
                     {
                         _logger.LogWarning(ex, "IO 버튼 입력에 따른 AMR 모드 전환 실패 — 다음 입력 폴링에서 재시도");
+                    }
+
+                    var indicatorMode = _amr.IndicatorDrivingMode;
+                    if (indicatorMode is not null)
+                    {
+                        try
+                        {
+                            await _lampControl.ApplyAsync(
+                                indicatorMode.Value, SetStartStopLampsAsync, stoppingToken);
+                        }
+                        catch (OperationCanceledException) { throw; }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "AMR 주행 모드에 따른 START/STOP 램프 동기화 실패 — 다음 입력 폴링에서 재시도");
+                        }
                     }
                 }
             }
@@ -185,25 +225,67 @@ public class IoModuleService : BackgroundService
             throw new ArgumentOutOfRangeException(nameof(index),
                 $"출력 인덱스는 0~{_settings.OutputCount - 1} 범위여야 합니다.");
 
-        ushort word;
+        await _outputWriteLock.WaitAsync(ct);
         try
         {
-            word = (await _client.ReadHoldingRegistersAsync(_settings.OutputWriteAddress, 1, ct))[0];
+            var word = await ReadOutputWordForUpdateAsync(ct);
+            word = value ? (ushort)(word | (1 << index)) : (ushort)(word & ~(1 << index));
+            await WriteOutputWordAsync(word, ct);
         }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception)
+        finally
         {
-            word = _lastCommandedOutputs;   // 되읽기 불가 시 마지막 명령값 기준 RMW
+            _outputWriteLock.Release();
         }
-
-        word = value ? (ushort)(word | (1 << index)) : (ushort)(word & ~(1 << index));
-        await RunAsync(() => _client.WriteMultipleRegistersAsync(_settings.OutputWriteAddress, new[] { word }, ct));
-        _lastCommandedOutputs = word;
 
         // 반영 확인: 되읽어 스냅샷 갱신 + 해당 비트 일치 여부 판정.
         await PollStateAsync(ct);
         var state = GetState();
         return state is not null && index < state.Outputs.Length && state.Outputs[index] == value;
+    }
+
+    private async Task SetStartStopLampsAsync(bool startSelected, CancellationToken ct)
+    {
+        await _outputWriteLock.WaitAsync(ct);
+        try
+        {
+            var word = await ReadOutputWordForUpdateAsync(ct);
+            var startMask = (ushort)(1 << IoPointMap.Out.StartButtonLamp);
+            var stopMask = (ushort)(1 << IoPointMap.Out.StopButtonLamp);
+
+            word = startSelected
+                ? (ushort)((word | startMask) & ~stopMask)
+                : (ushort)((word | stopMask) & ~startMask);
+
+            await WriteOutputWordAsync(word, ct);
+            _logger.LogInformation("AMR {Mode} 모드 표시: START 램프 {Start}, STOP 램프 {Stop}",
+                startSelected ? "Drive" : "Cart",
+                startSelected ? "ON" : "OFF",
+                startSelected ? "OFF" : "ON");
+        }
+        finally
+        {
+            _outputWriteLock.Release();
+        }
+    }
+
+    private async Task<ushort> ReadOutputWordForUpdateAsync(CancellationToken ct)
+    {
+        try
+        {
+            return (await _client.ReadHoldingRegistersAsync(_settings.OutputWriteAddress, 1, ct))[0];
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception)
+        {
+            return _lastCommandedOutputs;
+        }
+    }
+
+    private async Task WriteOutputWordAsync(ushort word, CancellationToken ct)
+    {
+        await RunAsync(() => _client.WriteMultipleRegistersAsync(
+            _settings.OutputWriteAddress, new[] { word }, ct));
+        _lastCommandedOutputs = word;
     }
 
     /// <summary>마지막으로 명령한 출력 워드 — 홀딩 되읽기 실패 시 RMW 기준값.</summary>

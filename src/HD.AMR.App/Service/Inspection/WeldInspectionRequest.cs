@@ -23,7 +23,7 @@ public sealed record WeldDrawingPos(
     double X, double Y, double Z);
 
 /// <summary>
-/// `startWeldInspection` 액션 파라미터의 해석 결과 (사양 §8.1 — jobRef/position/params 3쌍).
+/// `startWeldInspection` 액션 파라미터의 해석 결과 (사양 §8.1 — jobRef/taskId/attempt/position/params 5쌍).
 /// <see cref="WeldInspectionActionParser"/>가 생성한다.
 /// </summary>
 public sealed record WeldInspectionRequest(
@@ -37,4 +37,8 @@ public sealed record WeldInspectionRequest(
     double StandoffMm,
     double? WorkingDistanceMm,      // ACS 선택 항목 — AMR 미사용(로그용). 카메라 거리는 레시피 CameraTargetDistanceMm
     string AnchorGroupId,
-    int SeqInGroup);
+    int SeqInGroup,
+    Guid? TaskId = null,            // ACS 발급 검사 작업 식별자(§8.1.1) — 비전 CAPTURE_REQ taskId(=SAIGE productId)로 중계
+    string? TaskIdRaw = null,       // 수신 원문(GUID 파싱 실패 진단용 — 파싱 성공 시에도 원문 보존)
+    byte? Attempt = null,           // ACS 발급 시도 번호(1~255, §8.1.1) — 미수신/범위 밖이면 null(=CAPTURE_REQ 에 1)
+    string? AttemptRaw = null);     // 수신 원문(범위 밖·비수치 진단용)

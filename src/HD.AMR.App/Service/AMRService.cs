@@ -27,6 +27,41 @@ public class AMRService : BackgroundService
     /// <summary>백그라운드 폴링으로 캐싱된 최신 로봇 상태 (미연결/읽기 실패 시 null)</summary>
     public RobotStatus? LatestStatus { get; private set; }
 
+    private int _lastCommandedDrivingMode;
+    private long _lastDrivingModeCommandUtcTicks;
+
+    /// <summary>
+    /// 마지막으로 AMR에 쓰기가 성공한 주행 모드. I/O 버튼 램프 등 명령 상태 표시의 단일 기준으로 사용한다.
+    /// 아직 모드 명령이 성공한 적이 없으면 null이다.
+    /// </summary>
+    public DrivingMode? LastCommandedDrivingMode
+    {
+        get
+        {
+            var value = Volatile.Read(ref _lastCommandedDrivingMode);
+            return value == 0 ? null : (DrivingMode)value;
+        }
+    }
+
+    /// <summary>
+    /// 버튼 램프에 표시할 주행 모드. 명령 직후 3초 동안은 폴링 지연 전의 명령값을 사용하고,
+    /// 이후에는 VDA5050이나 외부 조그 등 장비 측에서 변경된 실제 상태를 우선한다.
+    /// </summary>
+    public DrivingMode? IndicatorDrivingMode
+    {
+        get
+        {
+            var commanded = LastCommandedDrivingMode;
+            var commandTicks = Interlocked.Read(ref _lastDrivingModeCommandUtcTicks);
+            if (commanded is not null && commandTicks != 0 &&
+                DateTime.UtcNow - new DateTime(commandTicks, DateTimeKind.Utc) <= TimeSpan.FromSeconds(3))
+                return commanded;
+
+            var actual = LatestStatus?.DrivingMode;
+            return actual is DrivingMode.Drive or DrivingMode.Cart ? actual : commanded;
+        }
+    }
+
     // 연결 실패 warn을 끊김당 1회만 남기기 위한 플래그(재연결 성공 시 리셋).
     private bool _retryWarned;
 
@@ -130,8 +165,12 @@ public class AMRService : BackgroundService
         => _client.WriteSingleRegisterAsync(AmrRegisterMap.Holding.Power, (ushort)command, ct);
 
     /// <summary>주행 모드 설정 — 드라이브(1), 카트(2)</summary>
-    public Task SetDrivingModeAsync(DrivingMode mode, CancellationToken ct = default)
-        => _client.WriteSingleRegisterAsync(AmrRegisterMap.Holding.DrivingMode, (ushort)mode, ct);
+    public async Task SetDrivingModeAsync(DrivingMode mode, CancellationToken ct = default)
+    {
+        await _client.WriteSingleRegisterAsync(AmrRegisterMap.Holding.DrivingMode, (ushort)mode, ct);
+        Volatile.Write(ref _lastCommandedDrivingMode, (int)mode);
+        Interlocked.Exchange(ref _lastDrivingModeCommandUtcTicks, DateTime.UtcNow.Ticks);
+    }
 
     /// <summary>상태 제어 — 정지(1), 시작(2), 일시정지(3)</summary>
     public Task SetExecutionControlAsync(ExecutionControl control, CancellationToken ct = default)

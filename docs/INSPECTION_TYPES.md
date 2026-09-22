@@ -130,6 +130,7 @@
 | `sectionDxfId` | 면별 DXF(§8) | 상세 형상 참조 |
 | `standoff` / 정차각 | `ref.wall` 법선 자동 산출 | 면 자세별 접근 |
 | `anchorGroupId` | `{tank}-L{n}-{wall}-{영역}` | 앵커 공유 판정 |
+| `taskId` / `attempt` | ACS 발급 (VDA5050 §8.1.1, N14) | 검사 타입과 무관 — **비전 CAPTURE_REQ 로 중계되는 작업 식별자**(taskId = SAIGE `productId`, attempt = 재검사 시도 번호) |
 
 **핵심**: 툴 수직/수평은 파라미터로 넘기지 않는다 — `seamStartW→EndW` 방향으로 AMR이 결정.
 
