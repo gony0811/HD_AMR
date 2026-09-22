@@ -146,13 +146,27 @@ public sealed partial class ArucoMountCalibrationViewModel : ViewModelBase
     private async Task StopAuto()
     {
         _autoCts?.Cancel();
+
+        // 셋을 각각 시도한다 — 하나가 실패해도 나머지 정지를 건너뛰면 안 된다.
+        var problems = new List<string>();
+
+        // REST /robot/go 로 낸 이동은 Modbus ExecutionControl 로 멈추지 않는다 — /robot/state 정지가 필수.
         try
         {
-            await _amr.SetExecutionControlAsync(ExecutionControl.Stop);
-            await _cobot.StopMotionImmediateAsync();
-            Success("자동 장착보정 중지 명령을 전송했습니다.");
+            using var scope = _scopes.CreateScope();
+            if (!await scope.ServiceProvider.GetRequiredService<AmrDriveService>().StopAsync())
+                problems.Add("AMR 주행 정지 거부됨");
         }
-        catch (Exception ex) { Fail($"즉시 정지 실패: {ex.Message} — 물리 비상정지를 사용하세요."); }
+        catch (Exception ex) { problems.Add($"AMR 주행 정지: {ex.Message}"); }
+
+        try { await _amr.SetExecutionControlAsync(ExecutionControl.Stop); }
+        catch (Exception ex) { problems.Add($"AMR 실행 정지: {ex.Message}"); }
+
+        try { await _cobot.StopMotionImmediateAsync(); }
+        catch (Exception ex) { problems.Add($"코봇 정지: {ex.Message}"); }
+
+        if (problems.Count == 0) Success("자동 장착보정 중지 명령을 전송했습니다.");
+        else Fail($"즉시 정지 일부 실패({string.Join(" / ", problems)}) — 물리 비상정지를 사용하세요.");
     }
 
     [RelayCommand(CanExecute = nameof(CanSolve))]
