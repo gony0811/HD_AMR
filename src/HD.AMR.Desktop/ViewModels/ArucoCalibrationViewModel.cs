@@ -8,16 +8,10 @@ using Microsoft.Extensions.DependencyInjection;
 namespace HD.AMR.Desktop.ViewModels;
 
 /// <summary>
-/// ArUco 기반 장착 보정 — <b>한 페이지 2단계</b>. 바닥 마커 하나로 순서대로 진행한다.
+/// ArUco 기반 설정 — 핸드아이 보정 후 도면 설치 좌표를 입력한다.
 ///   ① <see cref="HandEyeStep"/> — <c>T_T_C</c>(Tool TCP → 카메라) 를 AX=XB 로 측정
-///   ② <see cref="MountStep"/>  — <c>T_A_B</c>(AMR 차체 → 코봇 BASE) 를 동시 추정
-///
-/// <b>합친 이유는 Tool 번호 정합이다.</b> <c>T_T_C</c> 는 특정 tool 의 TCP 기준이고 ②가 같은 기준의
-/// <c>T_B_T</c> 와 합성한다 — 두 값의 tool 이 어긋나면 결과가 tool 오프셋만큼 틀리는데
-/// <b>잔차로는 전혀 드러나지 않는다.</b> 화면을 나누면 각 화면에서 따로 입력해 어긋날 수 있으므로,
-/// tool·마커 설정을 이 컨테이너가 <b>단일 원천</b>으로 들고 두 단계에 밀어넣는다.
-///
-/// 순서도 강제한다 — <c>T_T_C</c> 가 미설정이면 ②로 넘어갈 수 없다(<see cref="MountStepReady"/>).
+///   ② <see cref="MountStep"/>  — 도면의 AMR/코봇 설치 좌표로 <c>T_A_B</c>를 계산·저장
+/// Tool·마커 설정은 ①에서만 사용한다. <c>T_T_C</c>가 저장돼야 ②로 넘어갈 수 있다.
 /// </summary>
 public sealed partial class ArucoCalibrationViewModel : ViewModelBase
 {
@@ -31,10 +25,10 @@ public sealed partial class ArucoCalibrationViewModel : ViewModelBase
     /// <summary>① 핸드아이 측정 단계.</summary>
     public HandEyeViewModel HandEyeStep { get; }
 
-    /// <summary>② 장착 보정 단계(기존 ArUco 동시 추정).</summary>
+    /// <summary>② 도면 설치 좌표 입력 단계.</summary>
     public ArucoMountCalibrationViewModel MountStep { get; }
 
-    /// <summary>두 단계가 공유하는 기준 tool — 어긋날 수 없게 여기 하나만 둔다.
+    /// <summary>핸드아이 보정 기준 tool.
     /// 기본값 0(플랜지): 뎁스 카메라는 컨트롤러 TOOL 이 없어 플랜지 기준으로 T_T_C 를 잡는다.
     /// 저장된 측정 공구(<c>Calib.HandEye.Tool</c>)가 있으면 <see cref="OnActivated"/> 에서 그 값으로 덮는다.</summary>
     [ObservableProperty] private int _tool;
@@ -55,8 +49,7 @@ public sealed partial class ArucoCalibrationViewModel : ViewModelBase
         _camera = camera;
         HandEyeStep = handEyeStep;
         MountStep = mountStep;
-        // ①에서 T_T_C 를 저장하는 즉시 ② 탭 게이트(MountStepReady)를 다시 평가한다 —
-        // 이 배선이 없으면 저장해도 ② 탭이 계속 잠겨 있다.
+        // ①에서 T_T_C를 저장하는 즉시 ② 탭 게이트를 다시 평가한다.
         HandEyeStep.HandEyeSaved += async () => await RefreshAfterHandEyeSaveAsync();
         // CameraViewModel 과 동일한 ~10fps 폴링 — 프레임을 가져와 마커를 그려 넣은 JPEG 를 표시한다.
         _previewTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
@@ -65,8 +58,7 @@ public sealed partial class ArucoCalibrationViewModel : ViewModelBase
 
     public override async void OnActivated()
     {
-        // 두 단계 모두 활성화. ②의 저장값 로드는 await 로 완료를 보장한다 — 로드가 끝나기 전에
-        // 아래 PushShared()가 MountStepReady 를 평가하면 ② 탭이 잠긴 채 재평가되지 않는다.
+        // ②의 저장값 로드는 await로 완료해 탭 게이트가 최신 T_T_C를 보도록 한다.
         HandEyeStep.OnActivated();
         await MountStep.ReloadAsync();
 
@@ -79,8 +71,7 @@ public sealed partial class ArucoCalibrationViewModel : ViewModelBase
                 var aruco = await calib.GetArucoSettingsAsync();
                 MarkerSizeMm = aruco.SizeMm;
                 MarkerId = aruco.MarkerId ?? 0;
-                // 지난 측정에 쓴 공구를 그대로 이어 쓴다 — ①과 ②가 다른 공구를 쓰면 T_T_C 기준이
-                // 어긋나고, 소비처(QR 측위)도 이 번호를 따라간다.
+                // 지난 측정에 쓴 공구를 이어 쓴다. 소비처(QR 측위)도 이 번호를 사용한다.
                 if (await calib.GetHandEyeToolAsync() is { } t && t >= 0 && t <= 15) Tool = (int)t;
                 _loaded = true;
             }
@@ -178,7 +169,7 @@ public sealed partial class ArucoCalibrationViewModel : ViewModelBase
         TargetMarkerFound = targetFound;
     }
 
-    // 공유 값이 바뀌면 즉시 두 단계에 반영 — 한쪽만 바뀌는 상태를 만들지 않는다.
+    // 핸드아이 설정이 바뀌면 ① 단계에 즉시 반영한다.
     partial void OnToolChanged(int value) => PushShared();
     partial void OnMarkerIdChanged(int value) => PushShared();
     partial void OnMarkerSizeMmChanged(double value) => PushShared();
@@ -189,10 +180,6 @@ public sealed partial class ArucoCalibrationViewModel : ViewModelBase
         HandEyeStep.MarkerId = MarkerId;
         HandEyeStep.MarkerSizeMm = MarkerSizeMm;
 
-        MountStep.Tool = Tool;
-        MountStep.MarkerId = MarkerId;
-        MountStep.MarkerSizeMm = MarkerSizeMm;
-
         OnPropertyChanged(nameof(MountStepReady));
         OnPropertyChanged(nameof(StepGuideText));
     }
@@ -201,9 +188,9 @@ public sealed partial class ArucoCalibrationViewModel : ViewModelBase
     public bool MountStepReady => !MountStep.HandEye.ToArray().All(v => v == 0);
 
     public string StepGuideText => MountStepReady
-        ? $"T_T_C 설정됨 (tool {Tool} 기준) — ② 장착 보정을 진행할 수 있습니다."
+        ? $"T_T_C 설정됨 (tool {Tool} 기준) — ② 도면 설치 좌표를 입력할 수 있습니다."
         : "T_T_C 가 미설정입니다(전부 0) — ① 핸드아이 측정을 먼저 완료하세요. " +
-          "미설정 상태로 ②를 돌리면 오차가 T_A_B 로 흡수되어 잔차로는 드러나지 않습니다.";
+          "저장 후 ② 도면 설치 좌표 입력 탭이 활성화됩니다.";
 
     /// <summary>① 저장 직후 ②가 새 T_T_C 를 집도록 다시 읽는다 — 로드 완료 후 게이트를 재평가한다.</summary>
     public async Task RefreshAfterHandEyeSaveAsync()
