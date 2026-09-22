@@ -17,15 +17,18 @@ public class IoModuleService : BackgroundService
     private readonly IoModuleModbusTcpSettings _settings;
     private readonly ModbusTcpClient _client;
     private readonly ILogger<IoModuleService> _logger;
+    private readonly AMRService _amr;
+    private readonly IoAmrModeControl _modeControl = new();
 
     private readonly object _stateLock = new();
     private IoModuleState? _state;
 
-    public IoModuleService(IOptions<IoModuleModbusTcpSettings> options, ILoggerFactory loggerFactory)
+    public IoModuleService(IOptions<IoModuleModbusTcpSettings> options, ILoggerFactory loggerFactory, AMRService amr)
     {
         _settings = options.Value;
         _client = new ModbusTcpClient(_settings, loggerFactory.CreateLogger<ModbusTcpClient>());
         _logger = loggerFactory.CreateLogger<IoModuleService>();
+        _amr = amr;
     }
 
     public bool IsConnected => _client.IsConnected;
@@ -112,7 +115,23 @@ public class IoModuleService : BackgroundService
             // 입력(FC02 ×16)·출력(FC01 ×8)을 읽어 스냅샷 캐싱. 읽기 실패는 LastError에 기록하고 계속(연결 유지 로직은 위에서 처리).
             try
             {
-                await PollStateAsync(stoppingToken);
+                var inputs = await PollStateAsync(stoppingToken);
+                if (inputs is not null)
+                {
+                    try
+                    {
+                        await _modeControl.ApplyAsync(inputs, async (mode, ct) =>
+                        {
+                            await _amr.SetDrivingModeAsync(mode, ct);
+                            _logger.LogInformation("IO 버튼 입력으로 AMR 모드 전환: {Mode}", mode);
+                        }, stoppingToken);
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "IO 버튼 입력에 따른 AMR 모드 전환 실패 — 다음 입력 폴링에서 재시도");
+                    }
+                }
             }
             catch (OperationCanceledException)
             {
@@ -204,7 +223,7 @@ public class IoModuleService : BackgroundService
     /// <summary>입력·출력 echo 를 <b>개별로</b> 읽어 스냅샷 캐싱 — 한쪽 실패가 다른 쪽 상태 표시를
     /// 막지 않도록 부분 갱신한다. 읽기 오류는 파트별 프로퍼티(<see cref="InputError"/>/<see cref="OutputError"/>)
     /// 와 <see cref="LastError"/> 에 남기고, 오류 내용이 바뀔 때만 Warning 1회(복구 시 Information).</summary>
-    private async Task PollStateAsync(CancellationToken ct)
+    private async Task<bool[]?> PollStateAsync(CancellationToken ct)
     {
         bool[]? inputs = null, outputs = null;
         string? inErr = null, outErr = null;
@@ -271,6 +290,7 @@ public class IoModuleService : BackgroundService
                 _logger.LogInformation("IO Module 폴링 복구");
             _lastPollErrorLogged = err;
         }
+        return inputs;
     }
 
     /// <summary>어댑터 LED 상태 요약 — 입력 리프레시 헤더 4바이트(부록 A.2.2, 2비트/LED: 0=Off,1=On,2=Blink).
