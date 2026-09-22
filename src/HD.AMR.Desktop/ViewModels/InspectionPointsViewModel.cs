@@ -174,6 +174,38 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
         catch (Exception ex) { RunErr = true; RunMsg = $"이동 실패: {ex.Message}"; }
     }
 
+    private ushort _manualCaptureSeq;
+
+    /// <summary>이동 없이 해당 포인트의 좌표·Surface 로 CAPTURE_REQ 를 1회 전송한다.</summary>
+    [RelayCommand]
+    private async Task InspectPoint(XyPointVm p)
+    {
+        if (IsRunning) return;
+        if (!_vision.Client.IsConnected)
+        {
+            RunErr = true;
+            RunMsg = "비전 인터페이스 미연결 — CAPTURE_REQ를 전송할 수 없습니다.";
+            return;
+        }
+        Selected = Points.IndexOf(p);
+        try
+        {
+            var wallId = (ushort)Math.Clamp(WallId, 1, 10);
+            var (u, v, h) = FaceLocalMapper.ToFaceLocal(wallId, p.X, p.Y, p.Z);
+            _manualCaptureSeq++;
+            var data = CaptureReqPayload.Build((SurfaceType)Math.Clamp(p.Surface, 0, 2), wallId,
+                u, v, h, Guid.Empty, attempt: 1, _manualCaptureSeq);
+            var timeout = TimeSpan.FromSeconds(Math.Max(.5, VisionTimeoutSec));
+            RunErr = false; RunMsg = $"#{Selected + 1} CAPTURE_REQ 전송...";
+            var outcome = await _vision.Client.RequestCaptureAsync(data, timeout);
+            RunErr = !outcome.Success;
+            RunMsg = outcome.Success
+                ? $"#{Selected + 1} 검사 CAPTURE_REQ 성공"
+                : $"#{Selected + 1} 검사 실패 — {CaptureFailure(outcome)}";
+        }
+        catch (Exception ex) { RunErr = true; RunMsg = $"검사 실패: {ex.Message}"; }
+    }
+
     [RelayCommand]
     private async Task RunPoints()
     {

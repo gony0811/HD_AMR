@@ -31,3 +31,25 @@ public sealed class IoAmrModeControl
         _appliedMode = requested;
     }
 }
+
+/// <summary>
+/// AMR 주행 모드에 맞춰 START/STOP 버튼 램프를 상호 배타적으로 전환한다.
+/// </summary>
+public sealed class IoStartStopLampControl
+{
+    private DrivingMode? _appliedMode;
+
+    public async Task ApplyAsync(DrivingMode mode,
+        Func<bool, CancellationToken, Task> setLamps, CancellationToken ct = default)
+    {
+        if (mode is not (DrivingMode.Drive or DrivingMode.Cart))
+            return;
+
+        if (mode == _appliedMode)
+            return;
+
+        await setLamps(mode == DrivingMode.Drive, ct);
+        // 쓰기에 실패하면 다음 입력 폴링에서 다시 시도한다.
+        _appliedMode = mode;
+    }
+}

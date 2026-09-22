@@ -141,6 +141,7 @@
                                 </ComboBox>
                                 <StackPanel Grid.Column="8" Orientation="Horizontal" Spacing="5">
                                     <Button Content="이동" Command="{Binding $parent[ItemsControl].((vm:InspectionPointsViewModel)DataContext).MoveToPointCommand}" CommandParameter="{Binding}" />
+                                    <Button Content="검사" Command="{Binding $parent[ItemsControl].((vm:InspectionPointsViewModel)DataContext).InspectPointCommand}" CommandParameter="{Binding}" />
                                     <Button Content="－" Command="{Binding $parent[ItemsControl].((vm:InspectionPointsViewModel)DataContext).RemovePointCommand}" CommandParameter="{Binding}" />
                                 </StackPanel>
                             </Grid>
