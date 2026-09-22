@@ -27,12 +27,12 @@
     <StackPanel MaxWidth="1000" HorizontalAlignment="Left">
         <TextBlock Classes="page-title" Text="장착 보정 (ArUco)" />
         <TextBlock Classes="page-subtitle" TextWrapping="Wrap"
-                   Text="바닥에 고정한 ArUco 마커 하나로 두 단계를 순서대로 진행합니다. ① Tool TCP → 카메라 변환(T_T_C)을 AX=XB 로 측정하고, ② 그 값으로 AMR 차체 → 코봇 BASE 변환(T_A_B)을 산출합니다. 두 화면은 코봇·AMR 을 스스로 움직이지 않습니다." />
+                   Text="① ArUco로 Tool TCP → 카메라 변환(T_T_C)을 보정한 뒤, ② 설치 도면의 AMR·코봇 BASE 좌표를 직접 입력하여 AMR → 코봇 BASE 변환(T_A_B)을 저장합니다." />
 
         <!-- 공유 설정 — 단일 원천 -->
         <Border Classes="card">
             <StackPanel Spacing="8">
-                <TextBlock Classes="cardHead" Text="공통 설정 (두 단계 공유)" />
+                <TextBlock Classes="cardHead" Text="TTC hand-eye 보정 설정" />
                 <WrapPanel>
                     <StackPanel Margin="0,0,12,8">
                         <TextBlock Classes="axis" Text="카메라 Tool 번호" />
@@ -47,10 +47,8 @@
                         <NumericUpDown Value="{Binding MarkerSizeMm}" Minimum="10" Increment="1" />
                     </StackPanel>
                 </WrapPanel>
-                <Border Classes="alert">
-                    <TextBlock TextWrapping="Wrap" FontSize="12"
-                               Text="⚠ Tool 번호는 두 단계가 반드시 같아야 합니다 — T_T_C 는 그 tool 의 TCP 기준이고 ②가 같은 기준의 T_B_T 와 합성합니다. 어긋나면 결과가 tool 오프셋만큼 틀리는데 잔차로는 전혀 드러나지 않습니다. 그래서 이 화면이 하나만 들고 두 단계에 밀어넣습니다. 카메라에 컨트롤러 TOOL 이 없으면 0(플랜지)을 쓰면 됩니다." />
-                </Border>
+                <Border Classes="alert"><TextBlock TextWrapping="Wrap" FontSize="12"
+                    Text="T_T_C는 선택한 Tool TCP 기준입니다. 카메라에 컨트롤러 TOOL이 없으면 0(플랜지)을 사용하세요." /></Border>
                 <TextBlock Text="{Binding StepGuideText}" FontWeight="SemiBold" TextWrapping="Wrap" />
             </StackPanel>
         </Border>
@@ -75,7 +73,7 @@
             <TabItem Header="① 핸드아이 측정 (T_T_C)">
                 <views:HandEyeView DataContext="{Binding HandEyeStep}" Margin="0,8,0,0" />
             </TabItem>
-            <TabItem Header="② 장착 보정 (T_A_B)" IsEnabled="{Binding MountStepReady}">
+            <TabItem Header="② 도면 설치 좌표 입력" IsEnabled="{Binding MountStepReady}">
                 <views:ArucoMountCalibrationView DataContext="{Binding MountStep}" Margin="0,8,0,0" />
             </TabItem>
         </TabControl>
