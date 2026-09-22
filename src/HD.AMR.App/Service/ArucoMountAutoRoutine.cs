@@ -17,16 +17,19 @@ public sealed class ArucoMountAutoRoutine
     private const int CobotSettleMs = 600;
 
     private readonly AMRService _amr;
+    private readonly AmrDriveService _drive;
     private readonly CobotService _cobot;
     private readonly ArucoHandEyeService _capture;
     private readonly TelescopicService _lift;
     private readonly SequenceRunGate _gate;
     private readonly ILogger<ArucoMountAutoRoutine> _logger;
 
-    public ArucoMountAutoRoutine(AMRService amr, CobotService cobot, ArucoHandEyeService capture,
-        TelescopicService lift, SequenceRunGate gate, ILogger<ArucoMountAutoRoutine> logger)
+    public ArucoMountAutoRoutine(AMRService amr, AmrDriveService drive, CobotService cobot,
+        ArucoHandEyeService capture, TelescopicService lift, SequenceRunGate gate,
+        ILogger<ArucoMountAutoRoutine> logger)
     {
         _amr = amr;
+        _drive = drive;
         _cobot = cobot;
         _capture = capture;
         _lift = lift;
@@ -105,13 +108,14 @@ public sealed class ArucoMountAutoRoutine
                 await MoveCobotAsync(travelPose, tool, "AMR 주행 안전자세", ct);
 
                 var target = targets[i];
-                Report($"AMR {i + 1}/{targets.Count}: X {target.X:0.000}m, Y {target.Y:0.000}m, " +
-                       $"Yaw {target.Angle * 180 / Math.PI:0.0}° 이동…");
-                var actual = await NavigateAndWaitAsync(target, options, ct);
-                EnsureLiftUnchanged(liftStart);
-
                 try
                 {
+                    Report($"AMR {i + 1}/{targets.Count}: X {target.X:0.000}m, Y {target.Y:0.000}m, " +
+                           $"Yaw {target.Angle * 180 / Math.PI:0.0}° 자동 주행…");
+                    // 주행 실패는 그 정차점만 건너뛴다 — 한 곳이 막혀도 나머지로 산출할 수 있어야 한다.
+                    var actual = await NavigateAndWaitAsync(target, options, Report, ct);
+                    EnsureLiftUnchanged(liftStart);
+
                     var viewPose = CalculateViewToolPose(actual, initialMount, toolToCamera, fixedCameraW);
                     ValidateCobotMove(travelPose, viewPose, options);
                     await MoveCobotAsync(viewPose, tool, "마커 재조준", ct);
@@ -129,7 +133,7 @@ public sealed class ArucoMountAutoRoutine
                 catch (Exception ex)
                 {
                     skipped++;
-                    Report($"정차점 {i + 1} 계측 실패({ex.Message}) — 건너뜁니다.");
+                    Report($"정차점 {i + 1} 실패({ex.Message}) — 건너뜁니다.");
                 }
                 finally
                 {
@@ -140,7 +144,9 @@ public sealed class ArucoMountAutoRoutine
             if (options.ReturnAmrToStart)
             {
                 Report("AMR 시작 자세로 복귀…");
-                await NavigateAndWaitAsync(startPose, options, ct);
+                try { await NavigateAndWaitAsync(startPose, options, Report, ct); }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex) { Report($"AMR 시작 자세 복귀 실패({ex.Message}) — 표본은 그대로 유효합니다."); }
             }
         }
         catch (OperationCanceledException)
@@ -156,7 +162,20 @@ public sealed class ArucoMountAutoRoutine
         }
         finally
         {
-            // 취소 토큰과 분리해 코봇만 안전자세로 복귀한다. AMR은 취소 시 즉시 정지 상태를 유지한다.
+            // 중단/실패로 끝났으면 AMR 주행을 먼저 끊는다 — /robot/go 로 낸 이동은 토큰 취소만으로는
+            // 멈추지 않는다(명령은 이미 로봇 큐에 들어가 있다). 정상 종료 경로는 이미 정차 상태다.
+            if (error is not null)
+            {
+                try
+                {
+                    using var stopCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                    if (!await _drive.StopAsync(stopCts.Token))
+                        Report("AMR 주행 정지 명령이 거부됐습니다 — 물리 비상정지를 확인하세요.");
+                }
+                catch (Exception ex) { Report($"AMR 주행 정지 실패: {ex.Message} — 물리 비상정지를 확인하세요."); }
+            }
+
+            // 취소 토큰과 분리해 코봇을 안전자세로 복귀시킨다.
             if (travelPose is not null)
                 returned = await ReturnToTravelPoseAsync(travelPose, travelJoints, tool, Report);
             await RestoreEntryToolAsync(entryTool, tool, Report);
@@ -198,121 +217,29 @@ public sealed class ArucoMountAutoRoutine
         }
     }
 
+    /// <summary>
+    /// AMR 을 목표 자세로 자동 주행시키고 정차까지 기다린다. 반환값은 <b>지령이 아니라 실제 정차 pose</b> —
+    /// 표본의 <c>T_W_A</c> 기준이 되므로 지령값을 쓰면 정차 오차가 그대로 T_A_B 오차가 된다.
+    ///
+    /// ⚠ 예전 구현은 Modbus <c>PoseSearch</c>(Holding 19~25) + <c>ExecutionControl=Start</c> 였다. 그것은
+    /// 주행이 아니라 <b>재측위</b>(+Task/Job 실행)이라 로봇은 제자리에 있고 자기 위치 추정만 목표로 옮긴다 —
+    /// 보정 표본이 전부 "가짜 AMR 자세"가 된다. 주행은 <see cref="AmrDriveService"/>(REST /robot/go)로만 낸다.
+    /// </summary>
     private async Task<RobotPose> NavigateAndWaitAsync(RobotPose target, ArucoMountAutoOptions options,
-        CancellationToken ct)
+        Action<string> report, CancellationToken ct)
     {
-        await _amr.SetPoseTargetAsync(target.X, target.Y, target.Angle, ct);
-        await _amr.SetPoseSearchAsync(1, ct);
-        await _amr.SetExecutionControlAsync(Enums.ExecutionControl.Start, ct);
-
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeout.CancelAfter(options.NavigationTimeout);
-        int stable = 0;
-        try
+        var r = await _drive.DriveToAsync(target.X, target.Y, target.Angle, new AmrDriveOptions
         {
-            while (true)
-            {
-                await Task.Delay(options.StatusPollInterval, timeout.Token);
-                var status = await _amr.ReadStatusAsync(timeout.Token);
-                if (status.ErrorCode != 0)
-                    throw new InvalidOperationException($"AMR 오류 발생(code={status.ErrorCode}).");
-                if (status.RobotStopActive == 1)
-                    throw new InvalidOperationException("AMR 주행 정지가 활성화되었습니다.");
+            PollInterval = options.StatusPollInterval,
+            Timeout = options.NavigationTimeout,
+            StablePollCount = options.StablePollCount,
+            MaxResidualMm = options.MaxArrivalResidualMm,
+            MaxResidualDeg = options.MaxArrivalResidualDeg,
+        }, report, ct);
 
-                double positionMm = DistanceMm(status.Pose, target);
-                double yawDeg = Math.Abs(NormalizeRad(status.Pose.Angle - target.Angle)) * 180 / Math.PI;
-                bool arrived = status.WorkStatus == Enums.WorkStatus.Idle &&
-                               positionMm <= options.PositionToleranceMm && yawDeg <= options.YawToleranceDeg;
-                stable = arrived ? stable + 1 : 0;
-                if (stable >= options.StablePollCount) return status.Pose;
-            }
-        }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-        { throw new TimeoutException($"AMR이 {options.NavigationTimeout.TotalSeconds:0}초 안에 목표 자세에 도달하지 못했습니다."); }
-    }
-
-    /// <summary>진입 시 활성 좌표계를 (공구 <paramref name="tool"/>, 작업물 0)으로 정규화하고, 진입 시점의
-    /// 활성 공구를 돌려준다(종료 시 복원용). 컨트롤러에서 활성 공구를 읽지 못하면 설정 기본값
-    /// (<c>DefaultToolId</c>)이 오므로 복원 대상도 그 값이 된다 — 조그 리본·시퀀스의 정규화와 같은 기준이다.
-    /// 무변위 MoveJ 라 로봇은 움직이지 않는다 —
-    /// 시퀀스 진입부(<c>AmrMoveStep</c>)·조그 리본과 같은 처리다. 실패해도 중단하지 않는다:
-    /// <see cref="FairinoRpcClient.GetInverseKinForMoveAsync"/> 가 활성 공구를 스스로 보정하므로 이중 방어다.</summary>
-    private async Task<int> NormalizeFramesAsync(int tool, Action<string> report, CancellationToken ct)
-    {
-        var (entryTool, entryUser) = await _cobot.Rpc.ResolveActiveFramesAsync(ct, strict: false);
-        if (entryTool == tool && entryUser == 0) return entryTool;
-        try
-        {
-            var rc = await _cobot.Rpc.ResetActiveFrameAsync(tool, 0, ct);
-            report(rc == 0
-                ? $"활성 좌표계 정규화(무변위 MoveJ): 툴 #{entryTool}/작업물 #{entryUser} → 툴 #{tool}/베이스(0)."
-                : $"활성 좌표계 정규화 실패(rc={rc}){FairinoErrorCodes.Suffix(rc)} — IK 공구 보정으로 계속합니다.");
-        }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception ex) { report($"활성 좌표계 정규화 생략({ex.Message}) — IK 공구 보정으로 계속합니다."); }
-        return entryTool;
-    }
-
-    /// <summary>AMR 을 움직이기 전에 주행 안전자세의 역기구학을 미리 확인한다. 정차점을 돌기 시작한 뒤에
-    /// 복귀가 막히면 코봇이 계측 자세로 남은 채 AMR 만 움직이게 되므로, 실패는 여기서 드러나야 한다.</summary>
-    private async Task PreflightTravelPoseAsync(double[] travelPose, int tool, CancellationToken ct)
-    {
-        try { await _cobot.Rpc.GetInverseKinForMoveAsync(travelPose, tool, user: 0, ct: ct); }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception ex)
-        {
-            throw new InvalidOperationException(
-                $"주행 안전자세를 역기구학으로 재현할 수 없어 AMR 이동 전에 중단했습니다. {ex.Message} — " +
-                $"현재 자세가 작업영역 테두리인지, 화면의 Tool 번호(#{tool})가 실제 계측 공구와 같은지 확인하세요.");
-        }
-    }
-
-    /// <summary>안전자세 복귀. MoveL(IK)이 실패하면 시작 관절각으로 MoveJ 폴백한다 — MoveJ 는 IK 를 쓰지
-    /// 않아 활성 좌표계가 어긋나 있어도 성공한다(<c>ResetActiveFrameAsync</c> 와 같은 이유). 복귀 여부 반환.</summary>
-    private async Task<bool> ReturnToTravelPoseAsync(double[] travelPose, double[]? travelJoints, int tool,
-        Action<string> report)
-    {
-        try
-        {
-            using var moveLCts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-            await MoveCobotAsync(travelPose, tool, "최종 안전자세 복귀", moveLCts.Token);
-            return true;
-        }
-        catch (Exception ex)
-        {
-            report($"안전자세 복귀(MoveL) 실패: {ex.Message}" +
-                   (travelJoints is null ? " — 수동으로 확인하세요." : " — 시작 관절각으로 재시도합니다."));
-        }
-
-        if (travelJoints is null) return false;
-        try
-        {
-            using var moveJCts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-            var rc = await _cobot.Rpc.MoveJAsync(travelJoints, new double[6], tool: tool, user: 0,
-                vel: CobotVelocityPct, ct: moveJCts.Token);
-            if (rc == 0) { report("시작 관절각(MoveJ)으로 안전자세에 복귀했습니다."); return true; }
-            report($"안전자세 복귀(MoveJ) 실패(rc={rc}){FairinoErrorCodes.Suffix(rc)} — 수동으로 확인하세요.");
-        }
-        catch (Exception ex) { report($"안전자세 복귀(MoveJ) 실패: {ex.Message} — 수동으로 확인하세요."); }
-        return false;
-    }
-
-    /// <summary>루틴이 바꾼 활성 공구를 진입 시점 값으로 되돌린다(무변위 MoveJ). MoveL 의 tool 인자가 활성
-    /// 공구를 바꾸므로, 보정용 공구(예: 카메라 기준 #0)를 그대로 남기면 이후 다른 화면·시퀀스가 자기
-    /// 진입부에서 다시 정규화하기 전까지 그 공구 기준으로 해석된다.</summary>
-    private async Task RestoreEntryToolAsync(int entryTool, int tool, Action<string> report)
-    {
-        if (entryTool < 0 || entryTool == tool) return;
-        try
-        {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-            var rc = await _cobot.Rpc.ResetActiveFrameAsync(entryTool, 0, cts.Token);
-            report(rc == 0
-                ? $"활성 공구를 진입 시점 값(#{entryTool})으로 복원했습니다."
-                : $"활성 공구 복원 실패(rc={rc}){FairinoErrorCodes.Suffix(rc)} — 조그 리본의 '활성 좌표계 초기화'로 맞추세요.");
-        }
-        catch (Exception ex)
-        { report($"활성 공구 복원 실패: {ex.Message} — 조그 리본의 '활성 좌표계 초기화'로 맞추세요."); }
+        if (!r.Success)
+            throw new InvalidOperationException($"AMR 주행 실패: {r.Error}");
+        return r.Pose;
     }
 
     private async Task MoveCobotAsync(double[] pose, int tool, string label, CancellationToken ct)
@@ -379,9 +306,6 @@ public sealed class ArucoMountAutoRoutine
     private static double[] ToPose(RobotPose p) =>
         [p.X * 1000, p.Y * 1000, 0, 0, 0, p.Angle * 180 / Math.PI];
 
-    private static double DistanceMm(RobotPose a, RobotPose b) =>
-        Math.Sqrt(Math.Pow((a.X - b.X) * 1000, 2) + Math.Pow((a.Y - b.Y) * 1000, 2));
-
     private static double NormalizeRad(double value)
     {
         while (value > Math.PI) value -= 2 * Math.PI;
@@ -397,11 +321,13 @@ public sealed class ArucoMountAutoOptions
     public double YawExcursionDeg { get; init; } = 45;
     public double CobotTiltDeg { get; init; } = 8;
     public int FramesPerSample { get; init; } = 5;
-    public double PositionToleranceMm { get; init; } = 20;
-    public double YawToleranceDeg { get; init; } = .7;
+    /// <summary>정차 후 목표와의 허용 잔차. AMR 은 이 정도 오차로 서는 것이 정상이고, 표본 기준은
+    /// <b>실제 정차 pose</b> 라 정밀 도달이 필요 없다 — 마커가 FOV 를 벗어날 만큼 빗나갔는지만 본다.</summary>
+    public double MaxArrivalResidualMm { get; init; } = 500;
+    public double MaxArrivalResidualDeg { get; init; } = 10;
     public int StablePollCount { get; init; } = 3;
     public TimeSpan StatusPollInterval { get; init; } = TimeSpan.FromMilliseconds(500);
-    public TimeSpan NavigationTimeout { get; init; } = TimeSpan.FromSeconds(90);
+    public TimeSpan NavigationTimeout { get; init; } = TimeSpan.FromSeconds(120);
     public double MaxCobotTranslationMm { get; init; } = 600;
     public double MaxCobotRotationDeg { get; init; } = 75;
     public bool ReturnAmrToStart { get; init; } = true;

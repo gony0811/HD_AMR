@@ -104,6 +104,8 @@ internal static class ServiceRegistration
         // TARS-M v3 REST 클라이언트(VDA5050 order 의 이동 실현 경로).
         services.Configure<AmrRestSettings>(config.GetSection("AmrRest"));
         services.AddSingleton<AmrRestClient>();
+        // AMR 좌표 주행(REST /robot/go + 정차 대기). 자동 보정 루틴이 AMR 을 스스로 옮길 때 쓴다.
+        services.AddSingleton<AmrDriveService>();
         // startWeldInspection 실행 총괄 — 싱글톤, 액션마다 scope 생성해 시퀀스 실행.
         services.AddSingleton<HD.AMR.App.Service.Inspection.IWeldInspectionExecutor,
             HD.AMR.App.Service.Inspection.WeldInspectionOrchestrator>();

@@ -64,6 +64,8 @@ builder.Services.AddSingleton<AmrJobMappingStore>();
 builder.Services.Configure<AmrRestSettings>(
     builder.Configuration.GetSection("AmrRest"));
 builder.Services.AddSingleton<AmrRestClient>();
+// AMR 좌표 주행(REST /robot/go + 정차 대기). 자동 보정 루틴이 AMR 을 스스로 옮길 때 쓴다.
+builder.Services.AddSingleton<AmrDriveService>();
 
 // VDA 5050 어댑터(ACS↔AMR) — connection/state 발행 + order 실행(REST 이동) + instantActions.
 // AMRService(Modbus 상태)를 참조해 state를 매핑. Enabled=false 면 유휴. AMR/Cobot 과 동일 패턴.
