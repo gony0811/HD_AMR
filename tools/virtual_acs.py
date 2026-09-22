@@ -92,14 +92,21 @@ def build_order(x, y, theta, map_id=MAP_ID, node_id="TEST-N1", actions=None):
 
 
 def build_weld_inspection_action(seam_type="LINE", wall_code="SM", seq_in_group=1,
-                                 anchor_group="CT1-L1-TEST-ST01", dxf_id="DXF-TEST-01"):
-    """startWeldInspection action per spec §8.1/§8.4 (golden example shape)."""
+                                 anchor_group="CT1-L1-TEST-ST01", dxf_id="DXF-TEST-01",
+                                 task_id=None, attempt=1):
+    """startWeldInspection action per spec §8.1/§8.4 (golden example shape).
+
+    taskId/attempt are the ACS-issued inspection-task identifiers; the robot forwards
+    taskId verbatim into the vision CAPTURE_REQ (v3.2 [15-30], = SAIGE productId).
+    """
     return {
         "actionType": "startWeldInspection",
         "actionId": str(uuid.uuid4()),
         "blockingType": "HARD",
         "actionParameters": [
             {"key": "jobRef", "value": f"JOB-CT1-L1-{wall_code}-S{seq_in_group:02d}"},
+            {"key": "taskId", "value": task_id or str(uuid.uuid4())},
+            {"key": "attempt", "value": attempt},
             {"key": "position", "value": {
                 "seamStartW": [12.510, 5.980, 1.420],
                 "seamEndW": [13.310, 5.980, 1.420],

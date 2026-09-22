@@ -37,4 +37,7 @@ public sealed record WeldInspectionRequest(
     double StandoffMm,
     double? WorkingDistanceMm,      // ACS 선택 항목 — AMR 미사용(로그용). 카메라 거리는 레시피 CameraTargetDistanceMm
     string AnchorGroupId,
-    int SeqInGroup);
+    int SeqInGroup,
+    Guid? TaskId = null,            // ACS 발급 검사 작업 식별자 — 비전 CAPTURE_REQ taskId(=SAIGE productId)로 전달
+    string? TaskIdRaw = null,       // 수신 원문(GUID 파싱 실패 진단용 — 파싱 성공 시에도 원문 보존)
+    byte? Attempt = null);          // ACS 발급 시도 번호(1~255) — 미수신이면 null(=CAPTURE_REQ 에 1)

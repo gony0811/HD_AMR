@@ -499,6 +499,8 @@ ACS 생존신호는 VDA 5050 표준 로봇 `connection` 메시지의 상태 모�
 | 필드 | 의미 |
 |---|---|
 | `jobRef` | 작업 역추적 키 (사람이 읽는 ID — AMR은 로깅 외 해석 불요) |
+| `taskId` | **검사 작업 식별자 (GUID, ACS 발급 — 2026-09-22 추가).** AMR은 이 값을 비전 S/W CAPTURE_REQ 의 `taskId`(v3.2 [15-30], 16B 바이너리 = SAIGE `productId`)로 **그대로 전달**한다 → [vision_interface](vision_interface.md) §3.2. **수신 위치는 최상위 `actionParameters` key 를 기본으로 하되 AMR 파서는 `params.taskId` 도 수용한다.** 미수신·GUID 아닌 값이면 액션은 계속 진행하되 비전에 `00000000-…-0000`(미지정)이 나가고 경고 로그가 남는다 |
+| `attempt` | (선택) 검사 시도 번호 [1~255, ACS 발급] — CAPTURE_REQ `attempt`(v3.2 [31])로 전달. 미수신이면 `1` |
 | `position.seamStartW/seamEndW` | 용접선 시작/끝 **맵(월드) 좌표** [x,y,z] m — 도면 좌표에 릴리즈 시점 유효 T_W_D(도면→맵 강체변환) 적용, z는 통과 |
 | `position.drawingPos` | 도면 좌표 echo — tank/level/wall_code + **u,v(벽면-로컬)** + x,y,z(도면). `wall_code`가 **티칭 자세 선택 키** |
 | `params.seamType` | 용접 형상 — **독립 5종 `LINE`·`CROSS3`·`CROSS4`·`CORNER2`·`CORNER3`** (N13 확장 2026-09-15, §8.5.1). `LINE`=직선, `CROSS3`=T자 3갈래, `CROSS4`=십자 4갈래, `CORNER2`=2면 코너, `CORNER3`=3면 코너. AMR 파서는 legacy `CROSS`(→CROSS4)·`CORNER`(→CORNER3)도 수용(전환 유예). **`LINE-*` 5종만 실행 활성** — 나머지는 캡처 교시·실기 검증 후 활성화(`CORNER2` 실행 스텝 후속). `POLYLINE`은 여전히 거부(2026-08-29 AMR 회신 §5.1 — 2점 계약으로 세그먼트 방향 불명이라 AMR이 FAILED). 꺾인 직선은 ACS가 **세그먼트별 LINE 액션 N개로 분할**(같은 정차·같은 anchorGroupId → 정렬 공유). `wall_code` 조합 레시피 매핑은 §8.5.1 |
@@ -519,6 +521,9 @@ ACS 생존신호는 VDA 5050 표준 로봇 `connection` 메시지의 상태 모�
   "required": ["jobRef", "position", "params"],
   "properties": {
     "jobRef": { "type": "string" },
+    "taskId": { "type": "string", "format": "uuid" },
+    "_taskId_note": "2026-09-22 추가 — ACS 발급 검사 작업 GUID. AMR이 비전 CAPTURE_REQ taskId(=SAIGE productId)로 그대로 전달. AMR 파서는 params.taskId 위치도 수용하며, 미수신 시 Guid.Empty 폴백(액션 거부 아님)",
+    "attempt": { "type": "integer", "minimum": 1, "maximum": 255 },
     "position": {
       "type": "object",
       "required": ["seamStartW", "seamEndW", "drawingPos"],
@@ -572,6 +577,8 @@ ACS 생존신호는 VDA 5050 표준 로봇 `connection` 메시지의 상태 모�
   "blockingType": "HARD",
   "actionParameters": [
     { "key": "jobRef", "value": "JOB-CT1-L2-SM-S07-2" },
+    { "key": "taskId", "value": "3a9f2c14-8e51-4d7a-b2c9-1f6e0a5d3b47" },
+    { "key": "attempt", "value": 1 },
     { "key": "position", "value": {
         "seamStartW": [12.510, 5.980, 1.420],
         "seamEndW":   [13.310, 5.980, 1.420],

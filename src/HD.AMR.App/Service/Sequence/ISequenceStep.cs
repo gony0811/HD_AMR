@@ -100,11 +100,12 @@ public class SequenceContext
     /// <summary>수신 액션 actionId — 로깅/추적용.</summary>
     public string? AcsActionId { get; set; }
 
-    /// <summary>ACS 발급 검사 작업 식별자(taskId, GUID). VDA 액션에서 주입 예정.
-    /// null=미연동/수동 실행 → CAPTURE_REQ 에 <see cref="System.Guid.Empty"/>(미지정)로 전송.</summary>
+    /// <summary>ACS 발급 검사 작업 식별자(taskId, GUID). `startWeldInspection` 액션의 taskId 를
+    /// <see cref="Inspection.WeldInspectionOrchestrator"/>가 주입한다.
+    /// null=미연동/수동 실행/GUID 아닌 값 → CAPTURE_REQ 에 <see cref="System.Guid.Empty"/>(미지정)로 전송.</summary>
     public Guid? AcsTaskId { get; set; }
 
-    /// <summary>ACS 발급 시도 번호(attempt, 1부터). VDA 액션에서 주입 예정.
+    /// <summary>ACS 발급 시도 번호(attempt, 1부터). `startWeldInspection` 액션의 attempt 를 주입.
     /// null=미연동 → CAPTURE_REQ 에 1(첫 시도)로 전송.</summary>
     public byte? AcsAttempt { get; set; }
 

@@ -105,9 +105,23 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
 
         _logger.LogInformation(
             "startWeldInspection 수리: jobRef={JobRef}, seamType={SeamType}, wall={Wall} → recipe={Recipe} " +
-            "(dxf={Dxf}, profileId(촬영)={ProfId}, anchor={Anchor}#{Seq})",
+            "(dxf={Dxf}, profileId(촬영)={ProfId}, anchor={Anchor}#{Seq}, taskId={TaskId}, attempt={Attempt})",
             req.JobRef, req.SeamType, req.DrawingPos.WallCode, recipeId,
-            req.SectionDxfId, req.InspectionProfileId, req.AnchorGroupId, req.SeqInGroup);
+            req.SectionDxfId, req.InspectionProfileId, req.AnchorGroupId, req.SeqInGroup,
+            req.TaskId?.ToString() ?? "(미수신)", req.Attempt?.ToString() ?? "(미수신→1)");
+
+        // taskId 진단 — 비전 CAPTURE_REQ 의 taskId(=SAIGE productId)로 그대로 나가는 값이라
+        // 미수신·형식 오류는 검사 이력 누적이 끊기므로 경고로 남긴다(액션은 계속 진행).
+        if (req.TaskId is null)
+        {
+            if (req.TaskIdRaw is { } raw)
+                _logger.LogWarning(
+                    "ACS taskId '{Raw}' 가 GUID 형식이 아님 — 비전에 Guid.Empty 로 전송됩니다 (jobRef={JobRef})",
+                    raw, req.JobRef);
+            else
+                _logger.LogWarning(
+                    "ACS 액션에 taskId 없음 — 비전에 Guid.Empty 로 전송됩니다 (jobRef={JobRef})", req.JobRef);
+        }
 
         // 3) 설비 선행 확인 — 코봇/비전 링크 불능이면 equipmentError(설비 자체 불능).
         if (!_cobot.IsConnected)
@@ -202,6 +216,10 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             AcsJobRef = req.JobRef,
             AcsOrderId = orderId,
             AcsActionId = action.ActionId,
+            // ACS 발급 taskId·attempt — ⑱ 검사 수행이 비전 CAPTURE_REQ(v3.2 [15-30]/[31])에 실어 보낸다.
+            // 미수신이면 null 유지 → 스텝에서 Guid.Empty/1 폴백.
+            AcsTaskId = req.TaskId,
+            AcsAttempt = req.Attempt,
             AnchorGroupId = req.AnchorGroupId,
             SeqInGroup = req.SeqInGroup,
             StandoffMmOverride = req.StandoffMm > 0 ? req.StandoffMm : null,
@@ -264,7 +282,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                 return InspectionActionResult.Ok(
                     $"recipe={recipeId} profile='{profile?.Name ?? $"corner3.{cornerSide}"}' anchor={req.AnchorGroupId}#{req.SeqInGroup}" +
                     (anchorHit ? " (정렬 공유)" : "") +
-                    $" jobRef={req.JobRef}");
+                    $" jobRef={req.JobRef} taskId={req.TaskId?.ToString() ?? "—"}");
         }
     }
 

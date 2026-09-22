@@ -9,9 +9,13 @@
 `HD.AMR.App/Communication/Vision/`.
 
 ### 구현 메모 (연동 시험 확인 대상)
-- **taskId·attempt 는 ACS 발급.** `SequenceContext.AcsTaskId`·`AcsAttempt` 로 주입(VDA5050
-  `startWeldInspection` 액션). 미연동/수동 실행 폴백 = `taskId`=`Guid.Empty`, `attempt`=1.
-  ※ 현재 ACS 는 액션에 taskId·attempt 를 싣지 않으므로 ACS 측 발행 추가가 선행되어야 한다.
+- **taskId·attempt 는 ACS 발급.** VDA5050 `startWeldInspection` 액션의 `taskId`(GUID 문자열)·
+  `attempt` 를 `WeldInspectionActionParser` 가 읽어 `SequenceContext.AcsTaskId`·`AcsAttempt` 로
+  주입하고, ⑱ 검사 수행이 CAPTURE_REQ 에 그대로 실어 보낸다(배선 완료 2026-09-22,
+  [VDA5050 §8.1](VDA5050_INTERFACE_SPEC.md#81-startweldinspection)).
+  수신 위치는 최상위 `actionParameters` key 우선, `params.taskId`/`params.attempt` 도 수용한다.
+  미연동/수동 실행/GUID 아닌 값 폴백 = `taskId`=`Guid.Empty`, `attempt`=1 (액션은 실패시키지 않고
+  경고 로그만 남긴다 — 이 경우 비전이 검사 이력을 누적할 키가 없다).
 - **captureSeq 는 로봇 발번.** 검사 실행(=TASK) 내 촬영마다 1부터 증가.
 - **(u,v,h) 는 코봇 wobj pose 직접.** `FaceLocalMapper` 가 코봇 (X,Y,Z)→(u,v,h) 매핑(현재 항등).
   축·부호는 wobj 티칭 규약(§5)에 흡수, h=0=벽 표면 정합은 물리 캘리브레이션 확인 대상.
