@@ -6,6 +6,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:      # 수동 실행 — PR 없이 브랜치에서 검증할 때.
 
 # 같은 브랜치에 연속 푸시하면 이전 실행을 취소한다 — 마지막 커밋 결과만 의미가 있다.
 concurrency:
@@ -25,10 +26,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # SDK 버전은 src/global.json 이 정본(8.0.0, rollForward latestMinor).
+      # ⚠ global-json-file 을 쓰면 안 된다: src/global.json 의 "8.0.0" 은 런타임 버전 표기이고
+      # 그런 SDK 는 존재하지 않는다(.NET 8 SDK 는 8.0.100 부터) → setup-dotnet 이 그 문자열을
+      # 그대로 내려받으려다 404 로 죽는다. 최신 8.0 SDK 를 설치하고 해석은 global.json 에 맡긴다
+      # (rollForward: latestMinor 라 설치된 8.0.x 로 굴러간다 — 로컬 빌드와 같은 경로).
       - uses: actions/setup-dotnet@v4
         with:
-          global-json-file: src/global.json
+          dotnet-version: '8.0.x'
 
       - name: NuGet 패키지 캐시
         uses: actions/cache@v4
