@@ -1,0 +1,69 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:HD.AMR.Desktop.ViewModels"
+             x:Class="HD.AMR.Desktop.Views.SeamLocalizationTestView"
+             x:DataType="vm:SeamLocalizationTestViewModel">
+  <UserControl.Styles>
+    <Style Selector="TextBlock.axis"><Setter Property="Foreground" Value="{DynamicResource AppMutedTextBrush}"/><Setter Property="FontSize" Value="12"/></Style>
+    <Style Selector="NumericUpDown.coord"><Setter Property="Width" Value="105"/></Style>
+  </UserControl.Styles>
+  <ScrollViewer>
+    <StackPanel MaxWidth="1100" HorizontalAlignment="Left">
+      <TextBlock Classes="page-title" Text="용접선 위치 시험 (초안)"/>
+      <TextBlock Classes="axis" TextWrapping="Wrap" Margin="0,0,0,10"
+                 Text="ACS 월드 좌표의 용접선 중심을 T_W_A · T_A_B · T_B_T · T_T_C로 컬러 영상에 투영하고 ±200 mm Depth ROI를 검증합니다. 이 화면은 코봇 모션을 실행하지 않습니다."/>
+
+      <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,0,0,10">
+        <Border Classes="badge" Classes.on="{Binding IsAmrConnected}" Classes.off="{Binding !IsAmrConnected}"><TextBlock Text="AMR"/></Border>
+        <Border Classes="badge" Classes.on="{Binding IsCobotConnected}" Classes.off="{Binding !IsCobotConnected}"><TextBlock Text="Cobot"/></Border>
+        <Border Classes="badge" Classes.on="{Binding IsCameraStreaming}" Classes.off="{Binding !IsCameraStreaming}"><TextBlock Text="Depth Camera"/></Border>
+      </StackPanel>
+
+      <Border Classes="card">
+        <StackPanel Spacing="8">
+          <TextBlock Text="ACS 입력 모사 · seamStartW / seamEndW (m)" FontWeight="SemiBold"/>
+          <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*" RowDefinitions="Auto,Auto">
+            <TextBlock Grid.Row="0" Grid.Column="0" Text="Start X" VerticalAlignment="Center"/><NumericUpDown Classes="coord" Grid.Row="0" Grid.Column="1" Value="{Binding StartX}" Increment="0.001" FormatString="0.000"/>
+            <TextBlock Grid.Row="0" Grid.Column="2" Text="Y" VerticalAlignment="Center"/><NumericUpDown Classes="coord" Grid.Row="0" Grid.Column="3" Value="{Binding StartY}" Increment="0.001" FormatString="0.000"/>
+            <TextBlock Grid.Row="0" Grid.Column="4" Text="Z" VerticalAlignment="Center"/><NumericUpDown Classes="coord" Grid.Row="0" Grid.Column="5" Value="{Binding StartZ}" Increment="0.001" FormatString="0.000"/>
+            <TextBlock Grid.Row="1" Grid.Column="0" Text="End X" VerticalAlignment="Center"/><NumericUpDown Classes="coord" Grid.Row="1" Grid.Column="1" Value="{Binding EndX}" Increment="0.001" FormatString="0.000"/>
+            <TextBlock Grid.Row="1" Grid.Column="2" Text="Y" VerticalAlignment="Center"/><NumericUpDown Classes="coord" Grid.Row="1" Grid.Column="3" Value="{Binding EndY}" Increment="0.001" FormatString="0.000"/>
+            <TextBlock Grid.Row="1" Grid.Column="4" Text="Z" VerticalAlignment="Center"/><NumericUpDown Classes="coord" Grid.Row="1" Grid.Column="5" Value="{Binding EndZ}" Increment="0.001" FormatString="0.000"/>
+          </Grid>
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <TextBlock Text="ROI 반폭" VerticalAlignment="Center"/><NumericUpDown Width="110" Value="{Binding RoiHalfWidthMm}" Minimum="10" Maximum="500" Increment="10"/><TextBlock Text="mm" VerticalAlignment="Center"/>
+            <TextBlock Text="T_T_C Tool" VerticalAlignment="Center" Margin="16,0,0,0"/><NumericUpDown Width="80" Value="{Binding Tool}" Minimum="0" Maximum="15" Increment="1"/>
+            <Button Content="좌표 체인 분석" Classes="accent" Command="{Binding AnalyzeCommand}" IsEnabled="{Binding !Busy}" Margin="16,0,0,0"/>
+          </StackPanel>
+        </StackPanel>
+      </Border>
+
+      <Border Classes="card" Margin="0,10,0,0">
+        <StackPanel Spacing="7">
+          <TextBlock Text="분석 결과" FontWeight="SemiBold"/>
+          <TextBlock Text="{Binding StatusText}" TextWrapping="Wrap"/>
+          <TextBlock Classes="axis" Text="{Binding ChainText}" TextWrapping="Wrap"/>
+          <TextBlock Classes="axis" Text="{Binding CameraPointText}" TextWrapping="Wrap"/>
+          <TextBlock Classes="axis" Text="{Binding RoiStatsText}" TextWrapping="Wrap"/>
+        </StackPanel>
+      </Border>
+
+      <StackPanel Margin="0,10,0,0">
+        <TextBlock Text="Color 광학 프레임 투영 · 노랑=±ROI · 빨강=예상 용접선 중심" FontWeight="SemiBold"/>
+        <Border Height="480" Background="Black" BorderBrush="{DynamicResource AppBorderBrush}" BorderThickness="1" CornerRadius="4">
+          <Grid Name="ImageHost">
+            <Image Source="{Binding ColorImage}" Stretch="Fill"/>
+            <Canvas Background="Transparent">
+              <Rectangle Name="RoiRect" Stroke="#FFFF00" StrokeThickness="2" IsVisible="False"/>
+              <Ellipse Name="TargetMark" Width="12" Height="12" Stroke="#FF4040" StrokeThickness="3" IsVisible="False"/>
+            </Canvas>
+          </Grid>
+        </Border>
+      </StackPanel>
+
+      <Border Classes="alert" Margin="0,10,0,0">
+        <TextBlock TextWrapping="Wrap" Text="초안 범위: 예상점 투영과 Depth ROI 품질 확인까지만 구현. 용접선 후보 추출, 면 법선 계산, IK/충돌 검사, 코봇 자동 이동은 후속 개발에서 검증 게이트와 함께 연결해야 합니다."/>
+      </Border>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

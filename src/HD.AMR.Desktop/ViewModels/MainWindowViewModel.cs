@@ -104,6 +104,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 new("장착 보정 (ArUco)", "🎯", typeof(ArucoCalibrationViewModel)),
                 new("장착 보정 (접촉식)", "📐", typeof(MountCalibrationViewModel)),
                 new("QR Pose Teaching", "🧭", typeof(CalibrationViewModel)),
+                new("용접선 위치 시험", "🧪", typeof(SeamLocalizationTestViewModel)),
                 new("Parameter",     "🎛", typeof(ParametersViewModel)),
             }),
         };

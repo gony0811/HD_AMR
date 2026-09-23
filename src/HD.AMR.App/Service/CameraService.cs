@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using HD.AMR.App.Communication;
+using HD.AMR.App.Communication.Weld;
 using HD.AMR.App.Models;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -172,6 +173,27 @@ public class CameraService : BackgroundService
         double minU = (minPx + 0.5) / f.Width;
         double minV = (minPy + 0.5) / f.Height;
         return new DepthRoiStats(min, max, avg, validCount, total, ratio, minU, minV);
+    }
+
+    /// <summary>
+    /// 컬러 영상의 정규화 ROI를 공장 캘리브레이션으로 Depth ROI에 근사 매핑한 뒤 깊이 통계를 계산한다.
+    /// T_T_C가 컬러 광학 프레임 기준이므로 월드 목표점을 영상에 투영하는 진단 화면에서 사용한다.
+    /// </summary>
+    public DepthRoiStats? ComputeDepthRoiStatsForColorRoi(double x, double y, double w, double h)
+    {
+        var depth = _client.LatestDepth;
+        var color = _client.LatestColor;
+        var d2c = GetD2CParams();
+        if (depth is null || color is null || d2c is not { IsValid: true }) return null;
+
+        var mapper = new DepthColorMapper(d2c, depth.Width, depth.Height, color.Width, color.Height);
+        var colorRoi = new RoiRect(
+            (int)Math.Floor(x * color.Width), (int)Math.Floor(y * color.Height),
+            (int)Math.Ceiling(w * color.Width), (int)Math.Ceiling(h * color.Height));
+        var depthRoi = mapper.MapColorRoiToDepth(colorRoi, depth.Width, depth.Height);
+        return ComputeDepthRoiStats(
+            (double)depthRoi.X / depth.Width, (double)depthRoi.Y / depth.Height,
+            (double)depthRoi.Width / depth.Width, (double)depthRoi.Height / depth.Height);
     }
 
     /// <summary>

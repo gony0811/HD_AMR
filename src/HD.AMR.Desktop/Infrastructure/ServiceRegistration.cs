@@ -162,6 +162,7 @@ internal static class ServiceRegistration
         services.AddTransient<ArucoCalibrationViewModel>();
         services.AddTransient<ArucoMountCalibrationViewModel>();
         services.AddTransient<LiftViewModel>();
+        services.AddTransient<SeamLocalizationTestViewModel>();
 
         return services;
     }
