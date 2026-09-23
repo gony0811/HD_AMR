@@ -10,13 +10,13 @@
 
 ### 구현 메모 (연동 시험 확인 대상)
 - **taskId·attempt 는 ACS 발급 — AMR 은 중계만 한다.** VDA5050 `startWeldInspection` 의
-  **필수 파라미터** `taskId`(GUID 문자열)·`attempt`(1~255)를 `WeldInspectionActionParser` 가 읽어
+  `params.taskId`(GUID 문자열)·`params.attempt`(1~255)를 `WeldInspectionActionParser` 가 읽어
   `SequenceContext.AcsTaskId`·`AcsAttempt` 로 주입하고, ⑱ 검사 수행이 CAPTURE_REQ 에 그대로 싣는다
-  (계약: VDA5050 사양서 §8.1.1 / N14, 개정 1.6. AMR 배선 완료 2026-09-22).
+  (계약: VDA5050 사양서 §8.1.1 / N14, 개정 1.6).
   액션 1건 = TASK 1건이라 두 값은 그 액션의 모든 촬영에 공통이고, `captureSeq` 만 로봇이 발번한다.
-  수신 위치는 최상위 `actionParameters` key 가 정본, `params.taskId`/`params.attempt` 도 수용(전환 유예).
-  **전환 유예 폴백**(미연동/수동 실행/형식 위반): `taskId`=`Guid.Empty`, `attempt`=1 — 액션을
-  실패시키지 않고 경고 로그만 남긴다. 이 경우 비전 측에 이력 누적 키(productId)가 없다.
+  **미탑재·`null`**(구버전 ACS·수동 실행) → 폴백 `taskId`=`Guid.Empty`, `attempt`=1 + 경고 로그.
+  **형식 오류**(GUID 아님·빈 GUID·1~255 밖) → 액션 `FAILED` + `orderValidationError` — 엉뚱한 키로
+  촬영이 나가 SAIGE 이력이 섞이는 조용한 오귀속을 막기 위해 거부한다.
 - **captureSeq 는 로봇 발번.** 검사 실행(=TASK) 내 촬영마다 1부터 증가.
 - **(u,v,h) 는 코봇 wobj pose 직접.** `FaceLocalMapper` 가 코봇 (X,Y,Z)→(u,v,h) 매핑(현재 항등).
   축·부호는 wobj 티칭 규약(§5)에 흡수, h=0=벽 표면 정합은 물리 캘리브레이션 확인 대상.

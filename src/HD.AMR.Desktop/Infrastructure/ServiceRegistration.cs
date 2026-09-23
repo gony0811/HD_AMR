@@ -153,6 +153,7 @@ internal static class ServiceRegistration
         services.AddTransient<WeldTrackingViewModel>();
         services.AddTransient<InspectionPointsViewModel>();
         services.AddTransient<InspectionMapViewModel>();
+        services.AddTransient<SeamMoveTestViewModel>();
         services.AddTransient<TeachingViewModel>();
         services.AddTransient<LabelEditorViewModel>();
         services.AddTransient<VisionTrainingViewModel>();

@@ -87,6 +87,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 new("검사 레시피",   "📗", typeof(InspectionRecipesViewModel)),
                 new("검사 프로파일", "📍", typeof(InspectionPointsViewModel)),
                 new("검사 매핑 요약", "🗂", typeof(InspectionMapViewModel)),
+                new("용접 위치 시험", "🎯", typeof(SeamMoveTestViewModel)),
             }),
             new("Sequence",      "🔀", typeof(SequenceViewModel)),
             new("SETTINGS",      "⚙️", null, new NavItem[]

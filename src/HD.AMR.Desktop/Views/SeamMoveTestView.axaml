@@ -1,0 +1,99 @@
+<UserControl xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:HD.AMR.Desktop.ViewModels"
+             x:Class="HD.AMR.Desktop.Views.SeamMoveTestView"
+             x:DataType="vm:SeamMoveTestViewModel">
+  <UserControl.Styles>
+    <Style Selector="TextBlock.axis"><Setter Property="Foreground" Value="{DynamicResource AppMutedTextBrush}"/><Setter Property="FontSize" Value="12"/></Style>
+    <Style Selector="TextBlock.hint"><Setter Property="Foreground" Value="{DynamicResource AppMutedTextBrush}"/><Setter Property="FontSize" Value="12"/><Setter Property="TextWrapping" Value="Wrap"/></Style>
+    <Style Selector="TextBlock.mono"><Setter Property="FontFamily" Value="Consolas, Menlo, monospace"/><Setter Property="FontSize" Value="12"/></Style>
+    <Style Selector="NumericUpDown.num"><Setter Property="Width" Value="120"/><Setter Property="Margin" Value="0,0,8,0"/></Style>
+  </UserControl.Styles>
+
+  <ScrollViewer>
+    <StackPanel MaxWidth="1050" HorizontalAlignment="Left">
+      <TextBlock Classes="cardHead" Text="용접 위치 시험 (seamStartW → 코봇 TOOL)"/>
+      <TextBlock Classes="hint" Text="ACS 가 보낸 용접선 시작점(맵 좌표)을 코봇 BASE 좌표로 환산해, TOOL 이 실제로 그 자리로 가는지 확인합니다. 이동 목표는 용접선 그 점이 아니라 벽에서 standoff 만큼 물러난 접근점입니다. 자세(Rx/Ry/Rz)는 현재 TCP 자세를 유지하고 위치만 바꿉니다."/>
+
+      <Border Classes="alert" Classes.info="{Binding !IsError}" IsVisible="{Binding Message, Converter={x:Static ObjectConverters.IsNotNull}}">
+        <TextBlock Text="{Binding Message}" TextWrapping="Wrap"/>
+      </Border>
+
+      <!-- ① 용접선 입력 -->
+      <Border Classes="card"><StackPanel Spacing="8">
+        <TextBlock Classes="cardHead" Text="① 용접선 (VDA5050 §8.1 · 맵 좌표 m)"/>
+        <TextBlock Classes="axis" Text="seamStartW [x, y, z] (m)"/>
+        <WrapPanel>
+          <NumericUpDown Classes="num" Value="{Binding SeamStartX}" Increment="0.01" FormatString="0.000"/>
+          <NumericUpDown Classes="num" Value="{Binding SeamStartY}" Increment="0.01" FormatString="0.000"/>
+          <NumericUpDown Classes="num" Value="{Binding SeamStartZ}" Increment="0.01" FormatString="0.000"/>
+        </WrapPanel>
+        <CheckBox Content="seamEndW 도 입력 (검사 방향 유도 확인용)" IsChecked="{Binding HasSeamEnd}"/>
+        <WrapPanel IsVisible="{Binding HasSeamEnd}">
+          <NumericUpDown Classes="num" Value="{Binding SeamEndX}" Increment="0.01" FormatString="0.000"/>
+          <NumericUpDown Classes="num" Value="{Binding SeamEndY}" Increment="0.01" FormatString="0.000"/>
+          <NumericUpDown Classes="num" Value="{Binding SeamEndZ}" Increment="0.01" FormatString="0.000"/>
+        </WrapPanel>
+
+        <TextBlock Classes="axis" Text="또는 수신한 startWeldInspection 액션 JSON 붙여넣기"/>
+        <TextBox AcceptsReturn="True" Height="110" FontFamily="Consolas, Menlo, monospace" FontSize="12"
+                 Watermark="{}{ &quot;actionType&quot;: &quot;startWeldInspection&quot;, &quot;actionParameters&quot;: [ ... ] }"
+                 Text="{Binding ActionJson}"/>
+        <Button Content="액션 JSON 해석해서 채우기" Command="{Binding ParseActionCommand}" HorizontalAlignment="Left"/>
+      </StackPanel></Border>
+
+      <!-- ② 기준·보정 -->
+      <Border Classes="card"><StackPanel Spacing="8">
+        <TextBlock Classes="cardHead" Text="② 기준·보정"/>
+        <TextBlock Text="{Binding AmrPoseText}"/>
+        <TextBlock Text="{Binding LiftText}"/>
+        <TextBlock Text="{Binding MountText}"/>
+
+        <CheckBox Content="정차 노드 theta 를 벽 정면 방향으로 사용 (미사용 시 AMR yaw)" IsChecked="{Binding UseNodeTheta}"/>
+        <WrapPanel IsVisible="{Binding UseNodeTheta}">
+          <StackPanel Margin="0,0,10,0"><TextBlock Classes="axis" Text="노드 theta (도)"/><NumericUpDown Classes="num" Value="{Binding NodeThetaDeg}" Increment="1" FormatString="0.00"/></StackPanel>
+        </WrapPanel>
+
+        <WrapPanel>
+          <StackPanel Margin="0,0,10,8"><TextBlock Classes="axis" Text="z 기준 보정 (mm)"/><NumericUpDown Classes="num" Value="{Binding ZDatumOffsetMm}" Increment="10" FormatString="0"/></StackPanel>
+          <StackPanel Margin="0,0,10,8"><TextBlock Classes="axis" Text="standoff (mm)"/><NumericUpDown Classes="num" Value="{Binding StandoffMm}" Increment="10" FormatString="0"/></StackPanel>
+          <StackPanel Margin="0,0,10,8"><TextBlock Classes="axis" Text="Tool"/><NumericUpDown Classes="num" Value="{Binding Tool}" Minimum="0" Maximum="15" Increment="1"/></StackPanel>
+          <StackPanel Margin="0,0,10,8"><TextBlock Classes="axis" Text="속도 (%)"/><NumericUpDown Classes="num" Value="{Binding VelPct}" Minimum="1" Maximum="30" Increment="1" FormatString="0"/></StackPanel>
+        </WrapPanel>
+        <TextBlock Classes="hint" Text="z 기준 보정 = 해당 층 바닥 높이(level_z). ACS 의 T_W_D 는 2D(x,y,yaw) 변환이라 z 는 도면 전역 z(선창 바닥 기준)가 그대로 옵니다 — 1층은 0, 2층 이상은 그 층 바닥 높이를 넣어야 코봇 기준 높이와 맞습니다."/>
+
+        <CheckBox Content="AMR pose 수동 입력 (하드웨어 없이 환산만 검증 — 이동 불가)" IsChecked="{Binding UseManualAmrPose}"/>
+        <WrapPanel IsVisible="{Binding UseManualAmrPose}">
+          <StackPanel Margin="0,0,10,8"><TextBlock Classes="axis" Text="AMR X (m)"/><NumericUpDown Classes="num" Value="{Binding ManualAmrXm}" Increment="0.01" FormatString="0.000"/></StackPanel>
+          <StackPanel Margin="0,0,10,8"><TextBlock Classes="axis" Text="AMR Y (m)"/><NumericUpDown Classes="num" Value="{Binding ManualAmrYm}" Increment="0.01" FormatString="0.000"/></StackPanel>
+          <StackPanel Margin="0,0,10,8"><TextBlock Classes="axis" Text="AMR Yaw (도)"/><NumericUpDown Classes="num" Value="{Binding ManualAmrYawDeg}" Increment="1" FormatString="0.00"/></StackPanel>
+          <StackPanel Margin="0,0,10,8"><TextBlock Classes="axis" Text="스트로크 (mm)"/><NumericUpDown Classes="num" Value="{Binding ManualStrokeMm}" Increment="10" FormatString="0"/></StackPanel>
+        </WrapPanel>
+      </StackPanel></Border>
+
+      <!-- ③ 환산 결과 -->
+      <Border Classes="card"><StackPanel Spacing="8">
+        <TextBlock Classes="cardHead" Text="③ 환산 결과"/>
+        <Button Content="다시 계산" Command="{Binding ComputeCommand}" HorizontalAlignment="Left"/>
+        <TextBlock Classes="mono" Text="{Binding TargetText}" TextWrapping="Wrap"/>
+        <Border Classes="alert" IsVisible="{Binding HasNotes}">
+          <TextBlock Text="{Binding NotesText}" TextWrapping="Wrap" FontSize="12"/>
+        </Border>
+      </StackPanel></Border>
+
+      <!-- ④ 이동 -->
+      <Border Classes="card"><StackPanel Spacing="8">
+        <TextBlock Classes="cardHead" Text="④ TOOL 이동"/>
+        <Border Classes="alert"><StackPanel Spacing="6">
+          <TextBlock FontSize="12" TextWrapping="Wrap" Text="코봇이 실제로 움직입니다. 경로상 장애물·사람이 없는지, 텔레스코픽 높이와 공구가 지금 상태로 맞는지 확인하세요. 이동 직전에 AMR pose·스트로크를 다시 읽어 목표를 재계산합니다."/>
+          <CheckBox Content="주변 안전을 확인했습니다" IsChecked="{Binding SafetyConfirmed}"/>
+        </StackPanel></Border>
+        <TextBlock Text="{Binding ReadinessText}"/>
+        <StackPanel Orientation="Horizontal" Spacing="8">
+          <Button Classes="accent" Content="접근점으로 TOOL 이동" Command="{Binding MoveToApproachCommand}"/>
+          <Button Content="즉시 정지" Command="{Binding StopMotionCommand}"/>
+        </StackPanel>
+        <TextBlock Classes="mono" Text="{Binding MoveLog}" TextWrapping="Wrap"/>
+      </StackPanel></Border>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

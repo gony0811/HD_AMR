@@ -76,6 +76,27 @@ public static class MapCalibration
         return (x, y);
     }
 
+    /// <summary>맵 좌표의 점 <paramref name="pMapMm"/>(mm, [x,y,z])을 코봇 BASE 좌표(mm)로 환산 —
+    /// <see cref="BasePointToMap"/> 의 역변환. p_B = (T_W_A · T_A_B)⁻¹ · p_W.
+    /// amrPose = 맵 기준 AMR 차체 pose [x,y,z,rx,ry,rz](mm/도), mount = T_A_B [x,y,z,rx,ry,rz](mm/도).
+    /// mount 의 tz 는 <b>현재 텔레스코픽 스트로크가 반영된 값</b>이어야 한다 — 저장값은 완전 하강 기준이므로
+    /// <see cref="MountPoseAtStroke"/> 로 먼저 보정한다.
+    ///
+    /// z 까지 그대로 환산하므로 입력 z 의 <b>기준면</b>이 AMR 차체 원점(=맵 z 원점)과 같아야 한다.
+    /// ACS 용접선 z 는 도면 전역 z(선창 바닥 기준)라 층 바닥 오프셋을 뺀 뒤 넣어야 한다.</summary>
+    public static double[] MapPointToBase(double[] amrPose, double[] mount, double[] pMapMm)
+    {
+        var tWA = FrameMath.PoseToMatrix(amrPose);
+        var tAB = FrameMath.PoseToMatrix(mount);
+        var inv = FrameMath.Invert(FrameMath.Multiply(tWA, tAB));
+        return new[]
+        {
+            inv[0, 0] * pMapMm[0] + inv[0, 1] * pMapMm[1] + inv[0, 2] * pMapMm[2] + inv[0, 3],
+            inv[1, 0] * pMapMm[0] + inv[1, 1] * pMapMm[1] + inv[1, 2] * pMapMm[2] + inv[1, 3],
+            inv[2, 0] * pMapMm[0] + inv[2, 1] * pMapMm[1] + inv[2, 2] * pMapMm[2] + inv[2, 3],
+        };
+    }
+
     /// <summary>AMR pose(맵 기준, m/rad)를 [x,y,z,rx,ry,rz](mm/도)로. z=0, roll=pitch=0.</summary>
     public static double[] AmrPoseToMmDeg(double xMeters, double yMeters, double angleRad)
         => new[] { xMeters * 1000.0, yMeters * 1000.0, 0.0, 0.0, 0.0, angleRad * Rad2Deg };

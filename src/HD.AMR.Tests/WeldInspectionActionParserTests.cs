@@ -242,56 +242,127 @@ public class WeldInspectionActionParserTests
         Assert.Contains("seamStartW", error);
     }
 
-    // ── taskId / attempt (ACS 추가분, 비전 CAPTURE_REQ v3.2 전달분) ──────────────
+    // ── taskId / attempt (사양 §8.1/§8.1.1, N14 — params 안 선택 필드) ──────────────
 
     private const string TaskIdGuid = "3a9f2c14-8e51-4d7a-b2c9-1f6e0a5d3b47";
 
-    [Fact]
-    public void Parse_TaskId_TopLevelParameter_Succeeds()
+    /// <summary>params 에 <paramref name="extra"/> 를 덧붙인 액션 JSON.</summary>
+    private static string ActionWithParams(string extra) => $$"""
     {
-        var action = Deserialize("""
-        {
-          "actionType": "startWeldInspection",
-          "actionId": "t1",
-          "actionParameters": [
-            { "key": "jobRef", "value": "JOB-T1" },
-            { "key": "taskId", "value": "3a9f2c14-8e51-4d7a-b2c9-1f6e0a5d3b47" },
-            { "key": "attempt", "value": 2 },
-            { "key": "position", "value": {
-                "seamStartW": [1,2,3], "seamEndW": [4,5,6],
-                "drawingPos": { "tank": "CT1", "level": 1, "wall_code": "SM", "x": 0, "y": 0, "z": 0 } } },
-            { "key": "params", "value": {
-                "seamType": "LINE", "sectionDxfId": "D1", "inspectionProfileId": "P1",
-                "standoffMm": 400, "anchorGroupId": "G1", "seqInGroup": 1 } }
-          ]
-        }
-        """);
+      "actionType": "startWeldInspection",
+      "actionId": "t1",
+      "actionParameters": [
+        { "key": "jobRef", "value": "JOB-T1" },
+        { "key": "position", "value": {
+            "seamStartW": [1,2,3], "seamEndW": [4,5,6],
+            "drawingPos": { "tank": "CT1", "level": 1, "wall_code": "SM", "x": 0, "y": 0, "z": 0 } } },
+        { "key": "params", "value": {
+            "seamType": "LINE", "sectionDxfId": "D1", "inspectionProfileId": "P1",
+            "standoffMm": 400, "anchorGroupId": "G1", "seqInGroup": 1{{extra}} } }
+      ]
+    }
+    """;
+
+    [Fact]
+    public void Parse_TaskIdAndAttempt_InParams_CarriedThrough()
+    {
+        var action = Deserialize(ActionWithParams(
+            ", \"taskId\": \"3a9f2c14-8e51-4d7a-b2c9-1f6e0a5d3b47\", \"attempt\": 2"));
 
         var ok = WeldInspectionActionParser.TryParse(action, out var req, out var error);
 
         Assert.True(ok, error);
         Assert.Equal(Guid.Parse(TaskIdGuid), req!.TaskId);
-        Assert.Equal(TaskIdGuid, req.TaskIdRaw);
         Assert.Equal((byte)2, req.Attempt);
     }
 
     [Fact]
-    public void Parse_TaskId_InsideParams_Succeeds()
+    public void Parse_TaskId_Absent_LeavesNull_AndSucceeds()
     {
-        // 계약상 위치가 확정되기 전이라 params 안에 실려 와도 같은 값으로 읽는다.
+        // 선택 필드 — 구버전 ACS 호환. 실행 스텝이 Guid.Empty/1 로 폴백한다.
+        var action = Deserialize(GoldenActionJson);
+
+        var ok = WeldInspectionActionParser.TryParse(action, out var req, out var error);
+
+        Assert.True(ok, error);
+        Assert.Null(req!.TaskId);
+        Assert.Null(req.Attempt);
+    }
+
+    [Fact]
+    public void Parse_TaskId_ExplicitNull_TreatedAsAbsent()
+    {
+        var action = Deserialize(ActionWithParams(", \"taskId\": null, \"attempt\": null"));
+
+        var ok = WeldInspectionActionParser.TryParse(action, out var req, out var error);
+
+        Assert.True(ok, error);
+        Assert.Null(req!.TaskId);
+        Assert.Null(req.Attempt);
+    }
+
+    [Theory]
+    [InlineData("\"TASK-CT1-L2-SM-07\"")]                          // GUID 아님
+    [InlineData("\"00000000-0000-0000-0000-000000000000\"")]       // 빈 GUID = 미지정과 구분 불가
+    [InlineData("\"\"")]                                           // 빈 문자열
+    [InlineData("12345")]                                          // 숫자
+    public void Parse_TaskId_Malformed_Rejected(string taskIdJson)
+    {
+        // 실려 왔는데 형식이 틀리면 거부한다(§8.2 각주) — 조용한 오귀속 방지.
+        var action = Deserialize(ActionWithParams($", \"taskId\": {taskIdJson}"));
+
+        var ok = WeldInspectionActionParser.TryParse(action, out _, out var error);
+
+        Assert.False(ok);
+        Assert.Contains("taskId", error);
+    }
+
+    [Theory]
+    [InlineData("0")]      // 1 미만
+    [InlineData("256")]    // UInt8 범위 밖
+    [InlineData("\"2\"")]  // 문자열 표기
+    [InlineData("2.5")]    // 정수 아님
+    public void Parse_Attempt_Malformed_Rejected(string attemptJson)
+    {
+        var action = Deserialize(ActionWithParams($", \"attempt\": {attemptJson}"));
+
+        var ok = WeldInspectionActionParser.TryParse(action, out _, out var error);
+
+        Assert.False(ok);
+        Assert.Contains("attempt", error);
+    }
+
+    [Theory]
+    [InlineData("1")]
+    [InlineData("255")]
+    public void Parse_Attempt_Bounds_Accepted(string attemptJson)
+    {
+        var action = Deserialize(ActionWithParams($", \"attempt\": {attemptJson}"));
+
+        var ok = WeldInspectionActionParser.TryParse(action, out var req, out var error);
+
+        Assert.True(ok, error);
+        Assert.Equal(byte.Parse(attemptJson), req!.Attempt);
+    }
+
+    [Fact]
+    public void Parse_TaskId_TopLevelKey_AlsoAccepted()
+    {
+        // 계약 위치는 params 안이지만, 최상위 key 로 실려 와도 같은 규칙으로 받는다(전환기 방어).
         var action = Deserialize("""
         {
           "actionType": "startWeldInspection",
           "actionId": "t2",
           "actionParameters": [
             { "key": "jobRef", "value": "JOB-T2" },
+            { "key": "taskId", "value": "3a9f2c14-8e51-4d7a-b2c9-1f6e0a5d3b47" },
+            { "key": "attempt", "value": 3 },
             { "key": "position", "value": {
                 "seamStartW": [1,2,3], "seamEndW": [4,5,6],
                 "drawingPos": { "tank": "CT1", "level": 1, "wall_code": "SM", "x": 0, "y": 0, "z": 0 } } },
             { "key": "params", "value": {
                 "seamType": "LINE", "sectionDxfId": "D2", "inspectionProfileId": "P2",
-                "standoffMm": 400, "anchorGroupId": "G2", "seqInGroup": 1,
-                "taskId": "3a9f2c14-8e51-4d7a-b2c9-1f6e0a5d3b47", "attempt": 3 } }
+                "standoffMm": 400, "anchorGroupId": "G2", "seqInGroup": 1 } }
           ]
         }
         """);
@@ -301,110 +372,5 @@ public class WeldInspectionActionParserTests
         Assert.True(ok, error);
         Assert.Equal(Guid.Parse(TaskIdGuid), req!.TaskId);
         Assert.Equal((byte)3, req.Attempt);
-    }
-
-    [Theory]
-    [InlineData("3a9f2c148e514d7ab2c91f6e0a5d3b47")]          // 하이픈 없음
-    [InlineData("{3a9f2c14-8e51-4d7a-b2c9-1f6e0a5d3b47}")]    // 중괄호
-    [InlineData("3A9F2C14-8E51-4D7A-B2C9-1F6E0A5D3B47")]      // 대문자
-    public void Parse_TaskId_AlternateGuidFormats_Succeed(string raw)
-    {
-        var action = Deserialize($$"""
-        {
-          "actionType": "startWeldInspection",
-          "actionId": "t3",
-          "actionParameters": [
-            { "key": "jobRef", "value": "JOB-T3" },
-            { "key": "taskId", "value": "{{raw}}" },
-            { "key": "position", "value": {
-                "seamStartW": [1,2,3], "seamEndW": [4,5,6],
-                "drawingPos": { "tank": "CT1", "level": 1, "wall_code": "SM", "x": 0, "y": 0, "z": 0 } } },
-            { "key": "params", "value": {
-                "seamType": "LINE", "sectionDxfId": "D3", "inspectionProfileId": "P3",
-                "standoffMm": 400, "anchorGroupId": "G3", "seqInGroup": 1 } }
-          ]
-        }
-        """);
-
-        var ok = WeldInspectionActionParser.TryParse(action, out var req, out var error);
-
-        Assert.True(ok, error);
-        Assert.Equal(Guid.Parse(TaskIdGuid), req!.TaskId);
-    }
-
-    [Fact]
-    public void Parse_TaskId_Absent_LeavesNull_AndSucceeds()
-    {
-        // 현행 ACS(미발행) 하위호환 — taskId 없이도 액션은 유효하며 스텝이 Guid.Empty/1 로 폴백한다.
-        var action = Deserialize(GoldenActionJson);
-
-        var ok = WeldInspectionActionParser.TryParse(action, out var req, out var error);
-
-        Assert.True(ok, error);
-        Assert.Null(req!.TaskId);
-        Assert.Null(req.TaskIdRaw);
-        Assert.Null(req.Attempt);
-    }
-
-    [Fact]
-    public void Parse_TaskId_NotAGuid_KeepsRaw_AndSucceeds()
-    {
-        // GUID 가 아니면 액션을 거부하지 않고 원문만 보존 — 호출측이 경고 후 Guid.Empty 로 전송한다.
-        // attempt 는 1부터라 0 은 무시(폴백 1).
-        var action = Deserialize("""
-        {
-          "actionType": "startWeldInspection",
-          "actionId": "t4",
-          "actionParameters": [
-            { "key": "jobRef", "value": "JOB-T4" },
-            { "key": "taskId", "value": "TASK-CT1-L2-SM-07" },
-            { "key": "attempt", "value": 0 },
-            { "key": "position", "value": {
-                "seamStartW": [1,2,3], "seamEndW": [4,5,6],
-                "drawingPos": { "tank": "CT1", "level": 1, "wall_code": "SM", "x": 0, "y": 0, "z": 0 } } },
-            { "key": "params", "value": {
-                "seamType": "LINE", "sectionDxfId": "D4", "inspectionProfileId": "P4",
-                "standoffMm": 400, "anchorGroupId": "G4", "seqInGroup": 1 } }
-          ]
-        }
-        """);
-
-        var ok = WeldInspectionActionParser.TryParse(action, out var req, out var error);
-
-        Assert.True(ok, error);
-        Assert.Null(req!.TaskId);
-        Assert.Equal("TASK-CT1-L2-SM-07", req.TaskIdRaw);
-        Assert.Null(req.Attempt);
-        Assert.Equal("0", req.AttemptRaw);   // 원문은 진단용으로 보존
-    }
-
-    [Theory]
-    [InlineData("256", null)]        // UInt8 범위 밖 → 폴백(1), 원문만 보존
-    [InlineData("\"2\"", (byte)2)]   // 문자열 표기 — 수치면 수용
-    public void Parse_Attempt_RangeAndStringForm(string attemptJson, byte? expected)
-    {
-        var action = Deserialize($$"""
-        {
-          "actionType": "startWeldInspection",
-          "actionId": "t5",
-          "actionParameters": [
-            { "key": "jobRef", "value": "JOB-T5" },
-            { "key": "taskId", "value": "3a9f2c14-8e51-4d7a-b2c9-1f6e0a5d3b47" },
-            { "key": "attempt", "value": {{attemptJson}} },
-            { "key": "position", "value": {
-                "seamStartW": [1,2,3], "seamEndW": [4,5,6],
-                "drawingPos": { "tank": "CT1", "level": 1, "wall_code": "SM", "x": 0, "y": 0, "z": 0 } } },
-            { "key": "params", "value": {
-                "seamType": "LINE", "sectionDxfId": "D5", "inspectionProfileId": "P5",
-                "standoffMm": 400, "anchorGroupId": "G5", "seqInGroup": 1 } }
-          ]
-        }
-        """);
-
-        var ok = WeldInspectionActionParser.TryParse(action, out var req, out var error);
-
-        Assert.True(ok, error);   // 범위 밖이어도 액션은 거부하지 않는다(전환 유예)
-        Assert.Equal(expected, req!.Attempt);
-        Assert.Equal(attemptJson.Trim('"'), req.AttemptRaw);
     }
 }

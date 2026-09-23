@@ -4,20 +4,18 @@ using HD.AMR.App.Communication.Vda5050;
 namespace HD.AMR.App.Service.Inspection;
 
 /// <summary>
-/// `startWeldInspection` 액션의 <see cref="VdaAction.ActionParameters"/>(사양 §8.1 — jobRef/taskId/attempt/
-/// position/params 5쌍)를 <see cref="WeldInspectionRequest"/>로 해석한다.
+/// `startWeldInspection` 액션의 <see cref="VdaAction.ActionParameters"/>(jobRef/position/params 3쌍, 사양 §8.1)를
+/// <see cref="WeldInspectionRequest"/>로 해석한다.
 ///
 /// value 는 object 발행이 기본(§8.3)이라 역직렬화 시 <see cref="JsonElement"/>로 들어오지만,
 /// 문자열로 실려 온 JSON 재파싱도 방어적으로 수용한다(§8.3/N7 — AMR은 둘 다 수용).
 /// `drawingPos`의 u/v 부재는 허용(§8.2 각주). 실패 시 사유 문자열 반환 — 계약 위반이므로
 /// 호출측이 액션 FAILED + orderValidationError 로 보고한다.
 ///
-/// `taskId`·`attempt`(사양 §8.1.1 — ACS 발급 <b>필수</b>, N14)는 비전 CAPTURE_REQ 의
-/// taskId(GUID 16B, = SAIGE productId)·attempt(UInt8)로 그대로 중계된다. 수신 위치는 최상위
-/// actionParameters key 가 정본이며 `params` 안도 수용한다(전환 유예).
-/// <b>전환 유예</b>: 미수신·형식 위반은 액션을 거부하지 않고 폴백(Guid.Empty/attempt=1)하며 원문
-/// (<see cref="WeldInspectionRequest.TaskIdRaw"/>·<see cref="WeldInspectionRequest.AttemptRaw"/>)만
-/// 보존한다 — 호출측이 경고 로그를 남긴다. 거부 승격 여부는 §10 N14 확정 대기.
+/// `params.taskId`·`params.attempt`(사양 §8.1/§8.1.1, N14)는 <b>선택 필드</b>다 — 없으면 null 로 두고
+/// 실행 스텝이 폴백(Guid.Empty/attempt=1)한다(구버전 ACS 호환). 다만 <b>실려 왔는데 형식이 틀리면
+/// 거부</b>한다(§8.2 각주) — 엉뚱한 taskId 로 촬영이 나가면 SAIGE 에서 다른 용접선 이력에 섞이는
+/// 조용한 오귀속이 되기 때문이다.
 /// </summary>
 public static class WeldInspectionActionParser
 {
@@ -36,7 +34,7 @@ public static class WeldInspectionActionParser
                 case "jobRef": jobRefEl = el; break;
                 case "position": positionEl = el; break;
                 case "params": paramsEl = el; break;
-                // taskId/attempt 는 ACS 추가분 — 최상위 key 로도, params 안에도 올 수 있어 둘 다 수용(아래 병합).
+                // 계약상 taskId/attempt 는 params 안이지만, 최상위 key 로 실려 와도 받는다(전환기 방어).
                 case "taskId": taskIdEl = el; break;
                 case "attempt": attemptEl = el; break;
             }
@@ -108,25 +106,28 @@ public static class WeldInspectionActionParser
         var standoff = GetDouble(pr, "standoffMm");
         if (standoff is null) { error = "params.standoffMm 누락"; return false; }
 
-        // ── taskId / attempt (사양 §8.1.1, N14 — ACS 발급 필수) ─────
-        // 위치: 최상위 actionParameters key 가 정본, 없으면 params 안(전환 유예).
-        // 형식: taskId=GUID 문자열(하이픈/중괄호/무하이픈 모두 수용), attempt=1~255.
-        // 전환 유예 중이라 미수신·형식 위반이어도 액션을 거부하지 않는다(null → 스텝에서 Guid.Empty/1 폴백).
-        var taskIdRaw = ReadScalar(taskIdEl, pr, "taskId");
+        // ── taskId / attempt (사양 §8.1/§8.1.1, N14) ──────────────────
+        // 선택 필드: 없거나 null 이면 폴백(실행 스텝이 Guid.Empty/1). 실려 왔는데 형식이 틀리면 거부.
+        // 계약상 키 위치는 params 안이며, 전환기 방어로 최상위 actionParameters key 도 같은 규칙으로 받는다.
+        var taskIdValue = taskIdEl ?? (pr.TryGetProperty("taskId", out var tEl) ? tEl : (JsonElement?)null);
         Guid? taskId = null;
-        if (!string.IsNullOrWhiteSpace(taskIdRaw))
+        if (taskIdValue is { ValueKind: not JsonValueKind.Null } tv)
         {
-            if (Guid.TryParse(taskIdRaw, out var parsed)) taskId = parsed;
-            // 파싱 실패는 원문(TaskIdRaw)만 보존 — 호출측이 경고 로그를 남기고 Guid.Empty 로 전송한다.
+            if (tv.ValueKind != JsonValueKind.String
+                || !Guid.TryParse(tv.GetString(), out var parsedTaskId) || parsedTaskId == Guid.Empty)
+            { error = "params.taskId 부적합 (GUID 문자열 아님)"; return false; }
+            taskId = parsedTaskId;
         }
 
-        var attemptRaw = ReadScalar(attemptEl, pr, "attempt");
+        var attemptValue = attemptEl ?? (pr.TryGetProperty("attempt", out var aEl) ? aEl : (JsonElement?)null);
         byte? attempt = null;
-        if (!string.IsNullOrWhiteSpace(attemptRaw)
-            && int.TryParse(attemptRaw, System.Globalization.NumberStyles.Integer,
-                            System.Globalization.CultureInfo.InvariantCulture, out var a)
-            && a is >= 1 and <= 255)   // 사양상 1부터 — 범위 밖/비수치는 무시하고 폴백(1)
-            attempt = (byte)a;
+        if (attemptValue is { ValueKind: not JsonValueKind.Null } av)
+        {
+            if (av.ValueKind != JsonValueKind.Number
+                || !av.TryGetInt32(out var parsedAttempt) || parsedAttempt is < 1 or > 255)
+            { error = "params.attempt 부적합 (1~255 정수)"; return false; }
+            attempt = (byte)parsedAttempt;
+        }
 
         request = new WeldInspectionRequest(
             JobRef: jobRef!,
@@ -141,9 +142,7 @@ public static class WeldInspectionActionParser
             AnchorGroupId: anchorGroupId!,
             SeqInGroup: seqInGroup.Value,
             TaskId: taskId,
-            TaskIdRaw: string.IsNullOrWhiteSpace(taskIdRaw) ? null : taskIdRaw,
-            Attempt: attempt,
-            AttemptRaw: string.IsNullOrWhiteSpace(attemptRaw) ? null : attemptRaw);
+            Attempt: attempt);
         return true;
     }
 
@@ -189,25 +188,6 @@ public static class WeldInspectionActionParser
         error = $"{name} 은 JSON object 여야 합니다 (수신: {el.ValueKind})";
         return null;
     }
-
-    /// <summary>스칼라 파라미터 1개를 문자열로 읽는다 — 최상위 actionParameters 값(<paramref name="topLevel"/>)을
-    /// 우선 보고, 없으면 <c>params.&lt;prop&gt;</c> 를 본다. 문자열·숫자 둘 다 수용(숫자는 불변 문화권 표기).</summary>
-    private static string? ReadScalar(JsonElement? topLevel, JsonElement prm, string prop)
-    {
-        if (topLevel is { } el)
-        {
-            var s = ScalarText(el);
-            if (!string.IsNullOrWhiteSpace(s)) return s;
-        }
-        return prm.TryGetProperty(prop, out var inner) ? ScalarText(inner) : null;
-    }
-
-    private static string? ScalarText(JsonElement el) => el.ValueKind switch
-    {
-        JsonValueKind.String => el.GetString(),
-        JsonValueKind.Number => el.GetRawText(),
-        _ => null,
-    };
 
     private static string? AsString(JsonElement el)
         => el.ValueKind == JsonValueKind.String ? el.GetString() : null;

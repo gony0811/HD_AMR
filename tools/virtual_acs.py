@@ -97,8 +97,9 @@ def build_weld_inspection_action(seam_type="LINE", wall_code="SM", seq_in_group=
                                  task_id=None, attempt=1):
     """startWeldInspection action per spec §8.1/§8.4 (golden example shape).
 
-    taskId/attempt are the ACS-issued inspection-task identifiers; the robot forwards
-    taskId verbatim into the vision CAPTURE_REQ (v3.2 [15-30], = SAIGE productId).
+    params.taskId / params.attempt are the ACS-issued inspection-task identifiers
+    (spec 1.6 / N14); the robot forwards taskId verbatim into the vision CAPTURE_REQ
+    (v3.2 [15-30], = SAIGE productId).
     """
     return {
         "actionType": "startWeldInspection",
@@ -106,8 +107,6 @@ def build_weld_inspection_action(seam_type="LINE", wall_code="SM", seq_in_group=
         "blockingType": "HARD",
         "actionParameters": [
             {"key": "jobRef", "value": f"JOB-CT1-L1-{wall_code}-S{seq_in_group:02d}"},
-            {"key": "taskId", "value": task_id or str(uuid.uuid4())},
-            {"key": "attempt", "value": attempt},
             {"key": "position", "value": {
                 "seamStartW": [12.510, 5.980, 1.420],
                 "seamEndW": [13.310, 5.980, 1.420],
@@ -121,7 +120,9 @@ def build_weld_inspection_action(seam_type="LINE", wall_code="SM", seq_in_group=
                 "standoffMm": 400,
                 "workingDistanceMm": 400,
                 "anchorGroupId": anchor_group,
-                "seqInGroup": seq_in_group}},
+                "seqInGroup": seq_in_group,
+                "taskId": task_id or str(uuid.uuid4()),
+                "attempt": attempt}},
         ],
     }
 
@@ -244,7 +245,7 @@ def send_inspect(client, seam="LINE", wall="SM", count=2, attempt=1, watch=True)
     actions = [build_weld_inspection_action(seam, wall, seq_in_group=i + 1, attempt=attempt)
                for i in range(count)]
     for a in actions:
-        task_id = next(p["value"] for p in a["actionParameters"] if p["key"] == "taskId")
+        task_id = next(p["value"]["taskId"] for p in a["actionParameters"] if p["key"] == "params")
         print(f"[acs] action {a['actionId'][:8]} taskId={task_id} attempt={attempt}")
     order = build_order(pos["x"], pos["y"], pos.get("theta") or 0.0, actions=actions)
     publish(client, "order", order)

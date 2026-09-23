@@ -110,32 +110,12 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             req.SectionDxfId, req.InspectionProfileId, req.AnchorGroupId, req.SeqInGroup,
             req.TaskId?.ToString() ?? "(미수신)", req.Attempt?.ToString() ?? "(미수신→1)");
 
-        // taskId/attempt 진단 (사양 §8.1.1 — ACS 발급 필수). 비전 CAPTURE_REQ 로 그대로 중계되는 값이라
-        // 미수신·형식 위반이면 비전 측 검사 이력 누적 키가 끊긴다. 전환 유예 중이라 액션은 계속 진행하고
-        // 폴백(Guid.Empty/1)을 쓰되 경고로 남긴다 — 거부 승격은 §10 N14 확정 후.
+        // taskId 미탑재는 계약상 허용(선택 필드)이지만 비전 측 이력 누적 키가 없다는 뜻이라 흔적을 남긴다.
+        // 형식 오류는 파서가 이미 orderValidationError 로 거부했으므로 여기 도달하지 않는다.
         if (req.TaskId is null)
-        {
-            if (req.TaskIdRaw is { } raw)
-                _logger.LogWarning(
-                    "ACS taskId '{Raw}' 가 GUID 형식이 아님 — 비전에 Guid.Empty 로 전송됩니다 (jobRef={JobRef})",
-                    raw, req.JobRef);
-            else
-                _logger.LogWarning(
-                    "ACS 액션에 taskId 없음(계약 §8.1.1 필수) — 비전에 Guid.Empty 로 전송됩니다 (jobRef={JobRef})",
-                    req.JobRef);
-        }
-
-        if (req.Attempt is null)
-        {
-            if (req.AttemptRaw is { } araw)
-                _logger.LogWarning(
-                    "ACS attempt '{Raw}' 가 1~255 정수가 아님 — 비전에 1 로 전송됩니다 (jobRef={JobRef})",
-                    araw, req.JobRef);
-            else
-                _logger.LogWarning(
-                    "ACS 액션에 attempt 없음(계약 §8.1.1 필수) — 비전에 1 로 전송됩니다 (jobRef={JobRef})",
-                    req.JobRef);
-        }
+            _logger.LogWarning(
+                "ACS 액션에 taskId 없음 — 비전에 Guid.Empty 로 전송됩니다(SAIGE 이력 누적 불가, jobRef={JobRef})",
+                req.JobRef);
 
         // 3) 설비 선행 확인 — 코봇/비전 링크 불능이면 equipmentError(설비 자체 불능).
         if (!_cobot.IsConnected)
@@ -230,8 +210,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             AcsJobRef = req.JobRef,
             AcsOrderId = orderId,
             AcsActionId = action.ActionId,
-            // ACS 발급 taskId·attempt — ⑱ 검사 수행이 비전 CAPTURE_REQ(v3.2 [15-30]/[31])에 실어 보낸다.
-            // 미수신이면 null 유지 → 스텝에서 Guid.Empty/1 폴백.
+            // ACS 발급 식별자 → 이 액션의 모든 CAPTURE_REQ(v3.2 [15-30]/[31])에 그대로 실린다(N14).
+            // null 이면 실행 스텝이 Guid.Empty/1 로 폴백.
             AcsTaskId = req.TaskId,
             AcsAttempt = req.Attempt,
             AnchorGroupId = req.AnchorGroupId,

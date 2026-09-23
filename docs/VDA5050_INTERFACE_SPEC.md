@@ -6,13 +6,14 @@
 | 작성일 | 2026-08-27 (최종 개정 2026-09-03) |
 | 대상 | HD_AMR 통합 운영 S/W 개발팀 (로봇 온보드) |
 | 기준 표준 | **VDA 5050 v2.0** (Interface for the communication between AGV and master control) |
-| 상태 | **확정** — N10(정차 이격)만 잠정값 유지. N12(ACS 생존 신호)는 2026-09-03 승인. N13(검사 타입 카탈로그)은 2026-09-14 제안(계약 무변경). N14(`taskId`·`attempt`)는 2026-09-22 계약 추가 |
+| 상태 | **확정** — N10(정차 이격)만 잠정값 유지. N12(ACS 생존 신호)는 2026-09-03 승인. N13(검사 타입 카탈로그)은 2026-09-14 제안(계약 무변경). N14(`taskId`·`attempt`)는 2026-09-21 계약 추가·양측 구현 완료(실기 관통 확인 잔여). N17(seam z 기준면)은 2026-09-23 신규 제기 |
 | 개정 1.1 | 2026-09-01 — 로봇(TARS-M) REST 실물 스펙 확보분 반영. **ACS↔AMR 계약(§1~§9·부록 A~C)은 무변경**이며, AMR 온보드가 그 계약을 로봇 REST로 어떻게 이행하는지를 **부록 D**로 신설하고 관련 절에 각주를 달았다. 에러코드 매핑·층 전환 절차는 로봇측 정보 미확보로 **보류**(§6.4·§5.2·§9.2 그대로 유효, 구현만 유보) |
 | 개정 1.2 | 2026-09-03 — ACS 프로세스 생존 상태를 HD_AMR에 알리는 ACS 전용 `connection` 토픽과 Last Will 사양 추가. **VDA 5050 표준 확장·승인 완료** `[N12]` |
 | 개정 1.3 | 2026-09-14 — §8.5 검사 타입 카탈로그·레시피 계약(제안) 신설 + **§8.5.1 `seamType`×`wall_code`→레시피 매핑 규칙(제안)**, §10 `[N13]` 등재 + **부록 D.3 경유점 `Surface` 유도(온보드 구현, HD_AMR 코드 근거)** |
 | 개정 1.3a | 2026-09-14 — **`seamType` enum 확장 ACS 선반영**: 계획 UI(③ 검사 작업 등록) seamType 드롭다운 추가에 맞춰 §8.1/§8.2·등록 게이트·`param_schema`가 `LINE`·`CROSS`·`CORNER`를 수용·발행(`POLYLINE` 거부). **`CROSS`/`CORNER`는 HD_AMR 실행 미구현(스텁) — 계획 데이터 전달만**, 레시피 실행은 N13 확정 후 2차 연동 |
 | 개정 1.5 | 2026-09-15 — **`seamType` enum 확장(N13 반영): `LINE`/`CROSS3`/`CROSS4`/`CORNER2`/`CORNER3`**. AMR 파서·resolver·17종 시드 구현(legacy `CROSS`/`CORNER` 수용). `CORNER2` 는 매핑·시드 완료이나 실행 스텝 미구현(게이트 OFF). ACS 는 canonical 5값 발행 전환 필요(§10 N13) |
-| 개정 1.6 | 2026-09-22 — **검사 작업 식별자 계약 추가 `[N14]`**: `startWeldInspection` 에 **ACS 발급 `taskId`(GUID)·`attempt`(1~255) 필수 파라미터** 신설(§8.1·§8.2·§8.4). AMR 은 두 값을 비전 S/W CAPTURE_REQ(v3.2 [15-30]/[31])에 **그대로 중계**하며, `taskId` 는 비전(SAIGE) 측 `productId` 로 쓰여 검사 이력이 누적된다. **AMR 수신 배선 구현 완료**(전환 유예 중에는 누락 시 `Guid.Empty`/`1` 폴백 + 경고, 액션은 계속 진행) |
+| 개정 1.7 | 2026-09-23 — **§10 `[N17]` seam 좌표 z 기준면 제기** + 부록 B 좌표 규약에 명시. AMR 온보드에 좌표 환산 시험 경로 추가(`SeamBaseTransform`·용접 위치 시험 화면, `docs/SEAM_MOVE_TEST.md`) — **계약 변경 없음**(맵 좌표 수신·AMR 자기 pose 환산 그대로) |
+| 개정 1.6 | 2026-09-21 — **검사 작업 식별자 `params.taskId`·`params.attempt` 추가 `[N14]`**(§8.1·§8.2·§8.4·§8.1.1). SAIGE 연동 사양서 v2.6 + 로봇↔비전 v3.2(CAPTURE_REQ 34B)가 **ACS 발급 taskId·attempt** 를 전제로 확정됨 — AMR 은 두 값을 그 액션의 모든 CAPTURE_REQ 에 실어 비전→SAIGE `productId`(=taskId)까지 관통시킨다. 두 필드 모두 **선택(optional)** 이라 구버전과 호환되며(미탑재 시 폴백 taskId 미지정·attempt 1), **실려 왔는데 형식이 틀리면** 액션 `FAILED` + `orderValidationError`. **양측 구현 완료** (ACS 발행 / AMR 파서→오케스트레이터→`SequenceContext.AcsTaskId·AcsAttempt`→CAPTURE_REQ) — 실기 관통 확인만 잔여 |
 | 개정 1.4 | 2026-09-15 — **검사 타입 카탈로그 정본화(온보드): 독립 5종 형상**(`LINE`·`CROSS3` 3갈래·`CROSS4` 4갈래·`CORNER2` 2면·`CORNER3` 3면 = 17 profileId, §8.5·INSPECTION_TYPES.md). 코너부는 브릿지 플레이트로 6-DOF 캡처 교시 전용. **CROSS3·CROSS4 는 캡처 교시로 단일화**(패턴 수식 폐기). CROSS 교시 프로필(6-DOF 절대) 실행 경로 추가. (계약 `seamType` enum 은 같은 날 **개정 1.5** 로 5종 확장 — 아래 참조) |
 
 > **이 문서가 인터페이스 계약의 단일 출처(single source of truth)다.**
@@ -123,6 +124,8 @@ AMR 수가 늘어나도 ACS MQTT 연결과 Will은 추가하지 않는다.
 | `timestamp` | ISO 8601 UTC. **밀리초 3자리 + `Z`** 형식 권장 `[협의 N2]`. 수신 측은 ISO 8601 오프셋 표기(`+00:00`, 소수 7자리 포함)도 수용해야 한다 |
 | `version` | `"2.0.0"` 고정 |
 | `manufacturer`, `serialNumber` | 토픽 경로 요소와 동일 값 |
+
+> ※`taskId`·`attempt`는 **`required`에 넣지 않는다**(1.6) — ① 구버전 AMR/ACS 혼용 기간의 호환, ② `attempt`는 Order **발행 시점**에 발급되므로 run 시작 전 사전 검증 payload 에는 아직 없기 때문. ACS는 영역 기반 검사 액션에 두 값을 **항상** 싣는다. AMR은 부재 시 폴백(taskId 미지정=`Guid.Empty`, attempt=1)으로 동작하되, **실려 왔는데 형식이 틀리면** 계약 위반으로 액션 `FAILED` + `orderValidationError` 처리한다(조용한 오귀속 방지, §8.1.1).
 
 > ※구현(2026-08-28 반영 완료): ACS는 headerId를 **토픽별 단조 증가**로 채번하고 timestamp를 **밀리초+`Z`** 포맷으로 발행한다 — ACS 제안값(N1/N2) 그대로 구현됨. 수신 측은 여전히 오프셋 표기도 수용해야 한다(§3 표).
 
@@ -495,14 +498,11 @@ ACS 생존신호는 VDA 5050 표준 로봇 `connection` 메시지의 상태 모�
 정차 노드에 부착되는 검사 액션. AMR은 이 액션 1건 = 용접선 1구간 검사로 실행한다
 (정렬 → 자세 시퀀스 → 촬영/측정 — 실행 방법은 전적으로 AMR 책임).
 
-`actionParameters`는 key/value **5쌍** — `jobRef`(string), `taskId`(string/GUID), `attempt`(integer),
-`position`(object), `params`(object). `taskId`·`attempt`는 개정 1.6(N14)에서 추가된 검사 작업 식별자다:
+`actionParameters`는 key/value 3쌍 — `jobRef`(string), `position`(object), `params`(object):
 
 | 필드 | 의미 |
 |---|---|
 | `jobRef` | 작업 역추적 키 (사람이 읽는 ID — AMR은 로깅 외 해석 불요) |
-| `taskId` | **검사 작업 식별자 [GUID 문자열] — ACS 발급 필수 `[N14, 개정 1.6]`.** 용접선 1구간(=액션 1건) 검사 작업의 **영구 식별자**. AMR은 이 값을 비전 S/W CAPTURE_REQ 의 `taskId`(v3.2 [15-30], 16B 바이너리)로 **그대로 중계**하며, 비전(SAIGE)은 이를 `productId` 로 써서 검사 이력을 누적한다 → §8.1.1 |
-| `attempt` | **검사 시도 번호 [정수 1~255] — ACS 발급 필수 `[N14, 개정 1.6]`.** 같은 `taskId` 를 **재검사**할 때 ACS가 1씩 올려 발행한다(첫 검사 = `1`). CAPTURE_REQ `attempt`(v3.2 [31], UInt8)로 그대로 중계 → §8.1.1 |
 | `position.seamStartW/seamEndW` | 용접선 시작/끝 **맵(월드) 좌표** [x,y,z] m — 도면 좌표에 릴리즈 시점 유효 T_W_D(도면→맵 강체변환) 적용, z는 통과 |
 | `position.drawingPos` | 도면 좌표 echo — tank/level/wall_code + **u,v(벽면-로컬)** + x,y,z(도면). `wall_code`가 **티칭 자세 선택 키** |
 | `params.seamType` | 용접 형상 — **독립 5종 `LINE`·`CROSS3`·`CROSS4`·`CORNER2`·`CORNER3`** (N13 확장 2026-09-15, §8.5.1). `LINE`=직선, `CROSS3`=T자 3갈래, `CROSS4`=십자 4갈래, `CORNER2`=2면 코너, `CORNER3`=3면 코너. AMR 파서는 legacy `CROSS`(→CROSS4)·`CORNER`(→CORNER3)도 수용(전환 유예). **`LINE-*` 5종만 실행 활성** — 나머지는 캡처 교시·실기 검증 후 활성화(`CORNER2` 실행 스텝 후속). `POLYLINE`은 여전히 거부(2026-08-29 AMR 회신 §5.1 — 2점 계약으로 세그먼트 방향 불명이라 AMR이 FAILED). 꺾인 직선은 ACS가 **세그먼트별 LINE 액션 N개로 분할**(같은 정차·같은 anchorGroupId → 정렬 공유). `wall_code` 조합 레시피 매핑은 §8.5.1 |
@@ -512,40 +512,46 @@ ACS 생존신호는 VDA 5050 표준 로봇 `connection` 메시지의 상태 모�
 | `params.workingDistanceMm` | (선택) 작업 거리 [mm] |
 | `params.anchorGroupId` | 정렬(anchor) 공유 그룹 — **같은 그룹의 연속 액션은 사이에 주행이 없었다면 정렬 재수행 생략 가능** |
 | `params.seqInGroup` | 그룹 내 순번 (1부터) |
+| `params.taskId` | **(1.6 신설, 선택)** 검사 작업(용접선 1구간)의 **영구 식별자** — GUID 문자열. ACS가 작업 등록 시 발급하며 run 이 바뀌어도 같은 용접선이면 같은 값. AMR은 이 액션의 **모든 CAPTURE_REQ에 같은 값**을 싣는다(비전 v3.2 [15-30], 16B 바이너리) → 비전→SAIGE `productId` (§8.1.1) |
+| `params.attempt` | **(1.6 신설, 선택)** 그 `taskId`의 **몇 번째 시도인지** — 정수 1~255, **ACS 발급**. AMR은 해석·증감 없이 CAPTURE_REQ [31]에 그대로 싣는다 (§8.1.1) |
 
 `wallNormalW`(벽 법선)는 **전송하지 않는다** — 툴 자세는 AMR이 `wall_code` 티칭으로 결정한다.
 
-#### 8.1.1 `taskId` / `attempt` — 검사 작업 식별자 `[N14, 개정 1.6]`
+#### 8.1.1 `params.taskId` · `params.attempt` — 검사 작업 식별자 `[N14, 개정 1.6]`
 
 비전 검사 결과를 ACS 작업과 대조하려면 **ACS가 발급한 식별자가 비전 S/W까지 그대로 도달**해야 한다.
-AMR은 이 두 값을 **해석하지 않고 중계만** 한다(ACS ↔ SAIGE 연동 사양 v2.6 부록 B = `vision_interface` v3.2).
+AMR은 두 값을 **해석하지 않고 중계만** 한다(ACS↔SAIGE 연동 사양 v2.6 = `vision_interface` v3.2).
+
+```
+HD_ACS ──(startWeldInspection: params.taskId · params.attempt)──▶ HD_AMR
+HD_AMR ──(CAPTURE_REQ 34B: taskId[15-30] · attempt[31] · captureSeq[32-33])──▶ 비전 S/W   ← TASK당 N회
+비전   ──(metadata: productId(=taskId) · attempt · captureSeq)──▶ SAIGE
+```
 
 | 항목 | 규약 |
 |---|---|
-| 발급 주체 | **HD_ACS** (AMR·비전 모두 자체 발급 금지) |
-| `taskId` 형식 | GUID 문자열. AMR은 하이픈/중괄호/무하이픈 표기를 모두 수용하고, 비전 프레임에는 **RFC 4122 빅엔디안 16바이트**로 싣는다 |
-| `taskId` 수명 | 검사 작업(용접선 1구간) 단위 **영구** — 재검사해도 같은 값을 재사용한다(비전 측 이력 누적 키 = `productId`) |
-| `attempt` 범위 | `1`~`255` 정수. 첫 검사 = `1`, 같은 `taskId` 재검사마다 +1. 255 초과가 필요한 상황은 운용상 없다고 보며, 도달 시 ACS가 새 `taskId`로 분리한다 |
-| 액션 1건 ↔ 값 | 액션 1건 = TASK 1건 — `taskId`·`attempt`는 그 액션의 **모든 촬영에 공통**이고, 촬영마다 증가하는 `captureSeq`(1부터)만 **AMR이 발번**한다 |
-| 수신 위치 | 최상위 `actionParameters` key (`{"key":"taskId", …}`). AMR 파서는 전환 유예로 `params.taskId`·`params.attempt` 위치도 수용한다 |
+| 발급 주체 | **HD_ACS** — `taskId`는 작업 등록 시, `attempt`는 Order 발행 시. AMR·비전 자체 발급·증감 금지 |
+| `taskId` 형식 | GUID 문자열(하이픈 36자). 비전 프레임에는 **RFC 4122 빅엔디안 16바이트**로 싣는다(바이트 순서는 §10 N16) |
+| `taskId` 수명 | 검사 작업(용접선 1구간) 단위 **영구** — run 이 바뀌어도, 재검사해도 같은 값 |
+| `attempt` 규칙 | `taskId`별 누적 1~255 — **run 경계와 무관**하게 증가. 따라서 `(taskId, attempt, captureSeq)` 가 전역 유일 |
+| 액션 1건 ↔ 값 | 액션 1건 = TASK 1개 — 두 값은 그 액션의 **모든 촬영에 공통**이고, 촬영마다 증가하는 `captureSeq`(1부터)만 **AMR이 발번** |
+| 키 위치 | `params` 안 (`params.taskId`·`params.attempt`). AMR 파서는 전환기 방어로 최상위 `actionParameters` key 도 같은 규칙으로 수용한다 |
 
-**전환 유예(누락 시 동작).** 계약상 두 값은 필수지만, 발행 전환 이전 ACS와의 호환을 위해 AMR은
-누락·형식 위반을 **액션 실패로 처리하지 않는다** — `taskId`=`00000000-0000-0000-0000-000000000000`(미지정),
-`attempt`=`1` 로 폴백해 검사를 계속하고 경고 로그를 남긴다. 이 경우 비전 측에 이력 누적 키가 없어
-**검사 결과를 ACS 작업과 대조할 수 없다.** ACS 발행 전환이 끝나면 `orderValidationError` 거부로
-승격할지 여부는 §10 N14에서 확정한다.
+**미탑재(선택 필드)와 형식 오류의 구분 — 중요.**
+
+| 수신 | AMR 동작 |
+|---|---|
+| 키 없음 / JSON `null` | **폴백** — `taskId`=`00000000-0000-0000-0000-000000000000`(미지정), `attempt`=1 로 검사를 계속한다(구버전 ACS 호환). 이력 누적 키가 없다는 뜻이므로 경고 로그를 남긴다 |
+| 형식 위반 (GUID 아님·빈 GUID·`attempt` 1~255 밖·정수 아님) | **액션 거부** — `FAILED` + `orderValidationError`. 엉뚱한 값으로 촬영이 나가면 SAIGE 에서 다른 용접선 이력에 섞이는 **조용한 오귀속**이 되기 때문 |
 
 ### 8.2 param_schema (JSON Schema draft-07 — ACS가 발행 직전 자체 검증)
 
 ```json
 {
   "type": "object",
-  "required": ["jobRef", "taskId", "attempt", "position", "params"],
+  "required": ["jobRef", "position", "params"],
   "properties": {
     "jobRef": { "type": "string" },
-    "taskId": { "type": "string", "format": "uuid" },
-    "attempt": { "type": "integer", "minimum": 1, "maximum": 255 },
-    "_taskId_note": "N14/개정 1.6(2026-09-22) — ACS 발급 필수. AMR이 비전 CAPTURE_REQ taskId(GUID 16B)·attempt(UInt8)로 그대로 중계하며 taskId 는 SAIGE productId 로 쓰인다(§8.1.1). 전환 유예: AMR 파서는 params.taskId/params.attempt 위치도 수용하고, 누락 시 Guid.Empty/1 폴백(액션 거부 아님)",
     "position": {
       "type": "object",
       "required": ["seamStartW", "seamEndW", "drawingPos"],
@@ -576,7 +582,9 @@ AMR은 이 두 값을 **해석하지 않고 중계만** 한다(ACS ↔ SAIGE 연
         "standoffMm": { "type": "number" },
         "workingDistanceMm": { "type": "number" },
         "anchorGroupId": { "type": "string" },
-        "seqInGroup": { "type": "integer", "minimum": 1 }
+        "seqInGroup": { "type": "integer", "minimum": 1 },
+        "taskId": { "type": "string", "format": "uuid" },
+        "attempt": { "type": "integer", "minimum": 1, "maximum": 255 }
       }
     }
   }
@@ -599,8 +607,6 @@ AMR은 이 두 값을 **해석하지 않고 중계만** 한다(ACS ↔ SAIGE 연
   "blockingType": "HARD",
   "actionParameters": [
     { "key": "jobRef", "value": "JOB-CT1-L2-SM-S07-2" },
-    { "key": "taskId", "value": "3a9f2c14-8e51-4d7a-b2c9-1f6e0a5d3b47" },
-    { "key": "attempt", "value": 1 },
     { "key": "position", "value": {
         "seamStartW": [12.510, 5.980, 1.420],
         "seamEndW":   [13.310, 5.980, 1.420],
@@ -614,7 +620,9 @@ AMR은 이 두 값을 **해석하지 않고 중계만** 한다(ACS ↔ SAIGE 연
         "standoffMm": 400,
         "workingDistanceMm": 400,
         "anchorGroupId": "CT1-L2-SM-ST04",
-        "seqInGroup": 2 } }
+        "seqInGroup": 2,
+        "taskId": "3a9f2c14-8e51-4d7a-b2c9-1f6e0a5d3b47",
+        "attempt": 1 } }
   ]
 }
 ```
@@ -795,7 +803,7 @@ ACS는 비상정지와 동시에 **해당 로봇의 활성 run을 자동 중단(
 
 ## 10. 협의 항목 (HD_AMR 회신 요청)
 
-**2026-08-28 HD_AMR 회신 수령(`VDA5050_AMR_REPLY.md`) — N10 보류. 2026-09-03 추가한 N12는 승인 완료. N13(검사 타입 카탈로그)은 2026-09-14 신규 제안 — 계약 무변경. N14(`taskId`·`attempt`)는 2026-09-22 계약 추가 — AMR 수신 배선 구현 완료, 전환 유예 중.**
+**2026-08-28 HD_AMR 회신 수령(`VDA5050_AMR_REPLY.md`) — N10 보류. 2026-09-03 추가한 N12는 승인 완료. N13(검사 타입 카탈로그)은 2026-09-14 신규 제안 — 계약 무변경. N14(`taskId`·`attempt`)는 2026-09-21 계약 추가 — 양측 구현 완료, 실기 관통 확인만 잔여.**
 
 | # | 항목 | ACS 제안 | HD_AMR 회신 (2026-08-28) |
 |---|---|---|---|
@@ -812,7 +820,8 @@ ACS는 비상정지와 동시에 **해당 로봇의 활성 run을 자동 중단(
 | N11 | Order 거부 보고 방식 | 폐기 + `orderValidationError` | ✅ 동의 (§4.5.2 그대로 구현) |
 | N12 | ACS 생존 신호 | ACS 전용 `connection` 토픽 + ONLINE/OFFLINE/Last Will, QoS 1·retain (§7.2) | ✅ **승인** (2026-09-03) |
 | N13 | 검사 타입 카탈로그·레시피 계약 | 검사 타입 카탈로그(§8.5) + **`seamType` × `wall_code` → 레시피 매핑(§8.5.1)** + HD_AMR 타입별 레시피 라이브러리 운용 | ⏳ **대기** — **온보드 카탈로그 정본화(2026-09-15): 독립 5종 형상**(`LINE`·`CROSS3` 3갈래·`CROSS4` 4갈래·`CORNER2` 2면·`CORNER3` 3면 = 17 profileId, §8.5/INSPECTION_TYPES.md). **계약 `seamType` enum 은 현행 3값(LINE/CROSS/CORNER) 무변경** — `CROSS3` 추가·`CORNER`→`CORNER2`/`CORNER3` 분리는 계약 변경이라 **본 N13에서 협의**. 현행: ACS 3종 선반영(2026-09-14), HD_AMR 매핑·실행 배선 완료(§8.5.1 (5)) — `LINE-*` 5종 실행 활성, `CROSS4-*`/`CORNER3` 매핑 후 게이트 OFF. **CROSS 캡처 교시로 단일화(2026-09-15)**: `/inspection-points` 6-DOF 캡처 절대 프로필을 실행(코로게이션 대응) — 패턴 수식(`PatternJson`) 런타임 생성 경로 **제거 완료**(레시피 필드·오케스트레이터 생성·`WaypointsOverride`·UI·DB 컬럼). `CrossPatternGenerator`는 교시 템플릿 전용. `wall_code` 규약 ACS 확정(정본 10코드, §8.4 `W03`→`SM` 교정). **계약 enum 확장 반영(2026-09-15)**: seamType = `LINE`/`CROSS3`/`CROSS4`/`CORNER2`/`CORNER3` — **파서·resolver·17종 시드 구현 완료**(legacy `CROSS`/`CORNER` 수용). ACS 는 canonical 5값 발행 전환 필요(값 합의). `CORNER2` 는 매핑·시드 완료이나 **실행 스텝 미구현(게이트 OFF)** — corner2 슬롯/캡처 배선 후속 |
-| N14 | 검사 작업 식별자 `taskId`·`attempt` | `startWeldInspection` 에 ACS 발급 `taskId`(GUID)·`attempt`(1~255) **필수 파라미터** 추가(§8.1·§8.1.1) — AMR 이 비전 CAPTURE_REQ(v3.2 [15-30]/[31])로 그대로 중계, `taskId` = SAIGE `productId` | ⏳ **대기(구현 선반영)** — AMR 파서·오케스트레이터·⑱ 검사 수행 배선 **구현 완료**(2026-09-22). 확정 필요: **(a)** 수신 위치(최상위 `actionParameters` key 를 정본으로 할지 — 현재 AMR 은 `params.taskId` 위치도 방어적 수용), **(b)** `taskId` 를 GUID 로 고정할지(비전 프레임이 16B 바이너리라 비GUID 문자열은 중계 불가), **(c)** ACS 발행 전환 완료 후 누락을 `orderValidationError` 로 **거부 승격**할지(현행은 `Guid.Empty`/`1` 폴백 + 경고) |
+| N14 | 검사 작업 식별자 관통 | `params.taskId`(GUID 문자열, 영구) + `params.attempt`(1~255, taskId별 누적·ACS 발급) — 둘 다 선택 필드(§8.1·§8.1.1) | ✅ **양측 구현 완료(2026-09-21)** — ACS 발행 / AMR 파서→오케스트레이터→`SequenceContext.AcsTaskId·AcsAttempt`→CAPTURE_REQ v3.2. 키 위치(`params.*`)·attempt 누적 규칙은 구현으로 합의. **실기 관통 확인 잔여**(taskId 바이트 순서 대조와 함께 1회) |
+| N17 | `seamStartW`/`seamEndW` 의 **z 기준면** | ACS 의 T_W_D 는 2D(x,y,yaw) 라 z 는 변환되지 않고 **도면 전역 z**(선창 바닥=0)가 그대로 전송된다. AMR 은 자기 바닥을 0 으로 보므로 **L2 이상에서 층 바닥 높이(level_z)만큼 어긋난다**(L1 은 0 이라 드러나지 않음). 제안: **ACS 가 발행 시 `z − level_z[level−1]` 을 적용해 층 바닥 기준으로 보낸다**(AMR 이 level_z 를 몰라도 됨). 대안은 `level_z` 를 계약에 추가하는 것 | ⏳ **협의 필요** — 현행 운영 경로는 seam 의 Δz(방향 유도)만 써서 기준면과 무관하나, 좌표를 **위치로 쓰는 순간** 영향을 준다. AMR 측은 시험 화면(`docs/SEAM_MOVE_TEST.md`)에 수동 z 기준 보정 입력을 두어 우회 중 |
 
 **AMR 구현 방식 고지 요약** (상세는 `VDA5050_AMR_REPLY.md` §3): allowedDeviation은 **도착 판정 허용 오차로만** 사용(미지정 시 0.1 m/0.1 rad) · 층별 맵은 AMR 내부 통합 맵으로 운용하되 계약(층별 mapId·좌표)은 그대로 준수 · **새 mapId는 재측위 검증 통과 시에만 보고**(실패 시 `localizationLost`) · 주행 실패 시 미도달 상태로 전 액션 FAILED+`drivingFailed` · 비상정지 시 진행 액션 FAILED+`emergencyStopActive`.
 
@@ -891,6 +900,7 @@ ACS는 비상정지와 동시에 **해당 로봇의 활성 run을 자동 중단(
 | 맵 좌표(월드) | 층별 SLAM 맵 프레임 — `mapId`로 층 식별 (`{tank}-L{n}`) |
 | 도면 좌표 | ACS 내부 프레임 — 층별 강체변환 T_W_D(기준점 캡처로 산출)로 맵 좌표 변환 후 전송. AMR은 도면 좌표를 해석할 필요 없음 (`drawingPos`는 기록·티칭 키용 echo) |
 | u,v | 벽면-로컬 2D 좌표 (u=수평, v=수직, 원점=벽면 좌하단) — echo 정보 |
+| seam 좌표의 z | **기준면 미확정 `[N17]`** — T_W_D 가 2D(x,y,yaw) 라 현행은 **도면 전역 z**(선창 바닥=0)가 그대로 전송된다. AMR 바닥 기준으로 쓰려면 층 바닥 높이(level_z)를 빼야 한다(L1 은 0). §10 N17 |
 | m↔mm 환산 | 로봇 온보드 한 곳으로 통일 (standoffMm 등 `*Mm` 필드만 mm) |
 
 ## 부록 C. AMR 구현 체크리스트
@@ -902,7 +912,7 @@ ACS는 비상정지와 동시에 **해당 로봇의 활성 run을 자동 중단(
 - [ ] `state` 2초 주기 + 이벤트 즉시 발행, **agvPosition.mapId 필수** (§6.1)
 - [ ] orderId 변경 = 새 임무, actionId/nodeId **echo만** (재발급 금지) (§4.1, §6.2)
 - [ ] `startWeldInspection` 핸들러: §8.1 파라미터 해석, wall_code 티칭 자세, anchorGroup 정렬 캐시(무효화: 주행 발생/보정 실패/그룹 변경/신규 Order) (§8)
-- [x] `taskId`·`attempt` **중계**: 액션 수신값을 비전 CAPTURE_REQ [15-30]/[31] 에 그대로 전달(촬영마다 증가하는 `captureSeq` 만 AMR 발번), 누락 시 `Guid.Empty`/`1` 폴백 + 경고 (§8.1.1, N14)
+- [x] `params.taskId`·`params.attempt` **중계**: 액션 수신값을 비전 CAPTURE_REQ [15-30]/[31] 에 그대로 전달(촬영마다 증가하는 `captureSeq` 만 AMR 발번). 미탑재·`null` = 폴백(`Guid.Empty`/`1`) + 경고, **형식 오류 = 액션 `FAILED`+`orderValidationError`** (§8.1.1, N14)
 - [ ] `initPosition`: 층 전환 재측위 → mapId 보고 갱신 (§5.2)
 - [ ] `emergencyStop`: 즉시 기능 정지 + 상태 보고 (§5.1)
 - [ ] 실패 시 actionStatus FAILED + resultDescription (+ errors 유형 코드) (§9.5)
