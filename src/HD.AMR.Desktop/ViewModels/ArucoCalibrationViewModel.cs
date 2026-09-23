@@ -8,9 +8,9 @@ using Microsoft.Extensions.DependencyInjection;
 namespace HD.AMR.Desktop.ViewModels;
 
 /// <summary>
-/// ArUco 기반 설정 — 핸드아이 보정 후 도면 설치 좌표를 입력한다.
+/// ArUco 기반 설정 — 핸드아이 보정 후 도면의 T_A_B를 직접 입력한다.
 ///   ① <see cref="HandEyeStep"/> — <c>T_T_C</c>(Tool TCP → 카메라) 를 AX=XB 로 측정
-///   ② <see cref="MountStep"/>  — 도면의 AMR/코봇 설치 좌표로 <c>T_A_B</c>를 계산·저장
+///   ② <see cref="MountStep"/>  — AMR 기준 코봇 BASE 장착 자세 <c>T_A_B</c>를 직접 입력·저장
 /// Tool·마커 설정은 ①에서만 사용한다. <c>T_T_C</c>가 저장돼야 ②로 넘어갈 수 있다.
 /// </summary>
 public sealed partial class ArucoCalibrationViewModel : ViewModelBase
@@ -25,7 +25,7 @@ public sealed partial class ArucoCalibrationViewModel : ViewModelBase
     /// <summary>① 핸드아이 측정 단계.</summary>
     public HandEyeViewModel HandEyeStep { get; }
 
-    /// <summary>② 도면 설치 좌표 입력 단계.</summary>
+    /// <summary>② T_A_B 직접 입력 단계.</summary>
     public ArucoMountCalibrationViewModel MountStep { get; }
 
     /// <summary>핸드아이 보정 기준 tool.
@@ -188,9 +188,9 @@ public sealed partial class ArucoCalibrationViewModel : ViewModelBase
     public bool MountStepReady => !MountStep.HandEye.ToArray().All(v => v == 0);
 
     public string StepGuideText => MountStepReady
-        ? $"T_T_C 설정됨 (tool {Tool} 기준) — ② 도면 설치 좌표를 입력할 수 있습니다."
+        ? $"T_T_C 설정됨 (tool {Tool} 기준) — ② T_A_B를 입력할 수 있습니다."
         : "T_T_C 가 미설정입니다(전부 0) — ① 핸드아이 측정을 먼저 완료하세요. " +
-          "저장 후 ② 도면 설치 좌표 입력 탭이 활성화됩니다.";
+          "저장 후 ② T_A_B 직접 입력 탭이 활성화됩니다.";
 
     /// <summary>① 저장 직후 ②가 새 T_T_C 를 집도록 다시 읽는다 — 로드 완료 후 게이트를 재평가한다.</summary>
     public async Task RefreshAfterHandEyeSaveAsync()

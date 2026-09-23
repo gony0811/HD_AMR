@@ -27,7 +27,7 @@
     <StackPanel MaxWidth="1000" HorizontalAlignment="Left">
         <TextBlock Classes="page-title" Text="장착 보정 (ArUco)" />
         <TextBlock Classes="page-subtitle" TextWrapping="Wrap"
-                   Text="① ArUco로 Tool TCP → 카메라 변환(T_T_C)을 보정한 뒤, ② 설치 도면의 AMR·코봇 BASE 좌표를 직접 입력하여 AMR → 코봇 BASE 변환(T_A_B)을 저장합니다." />
+                   Text="① ArUco로 Tool TCP → 카메라 변환(T_T_C)을 보정한 뒤, ② 설치 도면에서 확인한 AMR 원점 기준 코봇 BASE 장착 자세(T_A_B)를 직접 입력합니다." />
 
         <!-- 공유 설정 — 단일 원천 -->
         <Border Classes="card">
@@ -73,7 +73,7 @@
             <TabItem Header="① 핸드아이 측정 (T_T_C)">
                 <views:HandEyeView DataContext="{Binding HandEyeStep}" Margin="0,8,0,0" />
             </TabItem>
-            <TabItem Header="② 도면 설치 좌표 입력" IsEnabled="{Binding MountStepReady}">
+            <TabItem Header="② T_A_B 직접 입력" IsEnabled="{Binding MountStepReady}">
                 <views:ArucoMountCalibrationView DataContext="{Binding MountStep}" Margin="0,8,0,0" />
             </TabItem>
         </TabControl>
