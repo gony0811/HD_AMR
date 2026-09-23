@@ -360,6 +360,37 @@ public class SeamBaseTransformTests
         return r;
     }
 
+    [Fact]
+    public void Resolve_ToolAxesMap_MatchTargetPose()
+    {
+        // 표시용 툴 축(맵)이 실제 목표 pose 의 축과 일치해야 한다 — 화면 확인값이 명령값과 어긋나면 안 된다.
+        var t = SeamBaseTransform.Resolve(
+            Input(new[] { 13.0, 5.0, 1.0 }, yawRad: 0, standoff: 400, wallCode: "SM",
+                  optical: ToolAxisDir.MinusZ, spinDeg: -90));
+
+        AssertVectorEqual(t.ToolXMap!, ToolAxisInMap(t, t.TargetPoseBase!, ToolAxisDir.PlusX));
+        AssertVectorEqual(t.ToolYMap!, ToolAxisInMap(t, t.TargetPoseBase!, ToolAxisDir.PlusY));
+    }
+
+    [Fact]
+    public void Resolve_FacingChange_RotatesNormalByTheSameAngle()
+    {
+        // 정차각(노드 theta)을 40° 바꾸면 면 법선 방위도 정확히 40° 돌아야 한다.
+        var a = SeamBaseTransform.Resolve(
+            Input(new[] { 13.0, 5.0, 1.0 }, standoff: 400, wallCode: "PM",
+                  facing: 90.0 * Math.PI / 180.0));
+        var b = SeamBaseTransform.Resolve(
+            Input(new[] { 13.0, 5.0, 1.0 }, standoff: 400, wallCode: "PM",
+                  facing: 130.0 * Math.PI / 180.0));
+
+        var azA = Math.Atan2(a.SurfaceNormalMap[1], a.SurfaceNormalMap[0]) * 180.0 / Math.PI;
+        var azB = Math.Atan2(b.SurfaceNormalMap[1], b.SurfaceNormalMap[0]) * 180.0 / Math.PI;
+
+        Assert.Equal(90.0, azA, 6);
+        Assert.Equal(130.0, azB, 6);
+        Assert.Equal(40.0, MapCalibration.NormalizeDeg(azB - azA), 6);
+    }
+
     /// <summary>목표 pose(BASE)의 툴축을 맵 프레임 단위벡터로 되돌린다 — 법선 정렬 검증용.
     /// 자세 검증 테스트는 모두 AMR (12,5) yaw 0 을 쓰므로 그 값으로 T_W_A 를 재구성한다.</summary>
     private static double[] ToolAxisInMap(SeamBaseTarget t, double[] poseBase, ToolAxisDir axis)

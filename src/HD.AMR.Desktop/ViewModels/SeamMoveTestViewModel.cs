@@ -297,7 +297,8 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
                 $"면 법선(맵)   : [{Fmt3(t.SurfaceNormalMap)}]" +
                 (t.Surface is { } so ? $" ({so})" : " (wall_code 미지정 — 수평 가정)") +
                 (t.TargetPoseBase is { } tp
-                    ? $"\n이동 목표 pose: [{Fmt(tp)}] mm/도  ← 광축 툴{FlatSurfaceCenteringService.AxisName(_opticalAxis)} 이 면을 향함"
+                    ? $"\n이동 목표 pose: [{Fmt(tp)}] mm/도  ← 광축 툴{FlatSurfaceCenteringService.AxisName(_opticalAxis)} 이 면을 향함" +
+                      $"\n자세 확인(맵)  : 광축 {AxisText(t.SurfaceNormalMap)} / 툴X {AxisText(t.ToolXMap)} / 툴Y {AxisText(t.ToolYMap)}"
                     : "\n이동 목표 자세: (현재 TCP 자세 유지 — wall_code 미지정 또는 법선 자세 끔)") +
                 (t.DirectionReason is { } r ? $"\n검사 방향 유도: {r}" : "") +
                 $"\n벽 정면 방향  : {FacingSourceText}";
@@ -529,6 +530,22 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
     private static string Fmt(double[] p) => string.Join(", ", p.Select(v => v.ToString("0.0")));
 
     private static string Fmt3(double[] p) => string.Join(", ", p.Select(v => v.ToString("0.000")));
+
+    /// <summary>
+    /// 축 벡터(맵)를 사람이 읽는 방향으로 — "방위 130°·수평", "연직 아래" 처럼.
+    /// pose 의 오일러각은 ry≈±90 근방에서 짐벌락으로 rx·rz 가 요동치므로, 자세 확인은 이 표기로 한다.
+    /// </summary>
+    private static string AxisText(double[]? v)
+    {
+        if (v is not { Length: 3 }) return "—";
+        var elev = Math.Asin(Math.Clamp(v[2], -1.0, 1.0)) * 180.0 / Math.PI;
+        if (elev > 85) return "연직 위(+Z)";
+        if (elev < -85) return "연직 아래(−Z)";
+        var az = Math.Atan2(v[1], v[0]) * 180.0 / Math.PI;
+        return Math.Abs(elev) < 5
+            ? $"방위 {az:0.0}°(수평)"
+            : $"방위 {az:0.0}°·앙각 {elev:+0.0;-0.0}°";
+    }
 
     /// <summary>두 pose 자세 사이의 회전각(도) — R = R_a⁻¹·R_b 의 회전각.</summary>
     private static double OrientationDeltaDeg(double[] a, double[] b)

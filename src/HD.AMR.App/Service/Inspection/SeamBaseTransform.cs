@@ -104,12 +104,18 @@ public static class SeamBaseTransform
 
         // ── ⑥ TOOL 자세 — 광축을 면 법선에 정렬 (wall_code 있을 때만) ─
         double[]? targetPose = null;
+        double[]? toolXMap = null, toolYMap = null;
         if (wall is not null)
         {
             var tangent = SurfaceTangent(input, facing, normal);
             var rMap = ToolRotationMap(normal, tangent, input.OpticalAxis, input.ToolSpinDeg);
             var rBase = RotationToBase(amrPose, mount, rMap);
             targetPose = PoseFrom(approachBase, rBase);
+
+            // 툴 X·Y 축의 맵 방향 — 오일러각(ry≈±90 근방에서 짐벌락으로 값이 요동친다)을 읽지 않고
+            // "어디를 향하는가"로 확인할 수 있게 그대로 노출한다.
+            toolXMap = new[] { rMap[0, 0], rMap[1, 0], rMap[2, 0] };
+            toolYMap = new[] { rMap[0, 1], rMap[1, 1], rMap[2, 1] };
         }
 
         // ── ⑦ 벽 정면 방향 검증 ──────────────────────────────────────
@@ -153,6 +159,8 @@ public static class SeamBaseTransform
             SurfaceNormalMap: normal,
             Surface: wall?.Orientation,
             TargetPoseBase: targetPose,
+            ToolXMap: toolXMap,
+            ToolYMap: toolYMap,
             MountUsed: mount,
             PlanarDistanceMm: planar,
             DistanceMm: dist,
@@ -390,6 +398,8 @@ public sealed record SeamBaseInput(
 /// <param name="Surface">wall_code 가 가리키는 면 자세. 미지정·미정의면 null.</param>
 /// <param name="TargetPoseBase">BASE 기준 이동 목표 pose [x,y,z,rx,ry,rz] — 광축이 법선을 향한다.
 /// wall_code 가 없으면 null(호출측이 현재 TCP 자세 유지).</param>
+/// <param name="ToolXMap">목표 자세의 툴 X 축(맵 프레임 단위벡터). 오일러각 짐벌락과 무관한 확인용.</param>
+/// <param name="ToolYMap">목표 자세의 툴 Y 축(맵 프레임 단위벡터).</param>
 /// <param name="MountUsed">스트로크를 반영해 실제 사용한 T_A_B.</param>
 /// <param name="PlanarDistanceMm">BASE 원점에서 접근점까지 수평 거리 — 리치 판단용.</param>
 /// <param name="DistanceMm">BASE 원점에서 접근점까지 3D 거리.</param>
@@ -404,6 +414,8 @@ public sealed record SeamBaseTarget(
     double[] SurfaceNormalMap,
     SurfaceOrientation? Surface,
     double[]? TargetPoseBase,
+    double[]? ToolXMap,
+    double[]? ToolYMap,
     double[] MountUsed,
     double PlanarDistanceMm,
     double DistanceMm,
