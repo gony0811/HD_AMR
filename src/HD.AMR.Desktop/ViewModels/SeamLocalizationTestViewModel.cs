@@ -43,6 +43,18 @@ public sealed partial class SeamLocalizationTestViewModel : ViewModelBase
     [ObservableProperty] private double _roiH;
     [ObservableProperty] private double _targetU;
     [ObservableProperty] private double _targetV;
+    [ObservableProperty] private int _markerId;
+    [ObservableProperty] private double _markerSizeMm = 120;
+    [ObservableProperty] private double _referenceGxMm;
+    [ObservableProperty] private double _referenceGyMm;
+    [ObservableProperty] private double _referenceGzMm;
+    [ObservableProperty] private double _referenceGrxDeg;
+    [ObservableProperty] private double _referenceGryDeg;
+    [ObservableProperty] private double _referenceGrzDeg;
+    [ObservableProperty] private string _arucoStatusText = "캡처 대기";
+    [ObservableProperty] private string _arucoMeasuredPoseText = "—";
+    [ObservableProperty] private string _arucoErrorText = "—";
+    [ObservableProperty] private string _arucoQualityText = "—";
 
     public bool IsCameraStreaming => _camera.IsStreaming;
     public bool IsAmrConnected => _amr.IsConnected;
@@ -63,6 +75,22 @@ public sealed partial class SeamLocalizationTestViewModel : ViewModelBase
     {
         _timer.Start();
         NotifyHardware();
+        _ = LoadArucoSettingsAsync();
+    }
+
+    private async Task LoadArucoSettingsAsync()
+    {
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var saved = await scope.ServiceProvider.GetRequiredService<CalibrationService>().GetArucoSettingsAsync();
+            MarkerId = saved.MarkerId ?? 0;
+            MarkerSizeMm = saved.SizeMm;
+        }
+        catch
+        {
+            // 공통 설정을 읽지 못해도 화면 기본값으로 시험할 수 있다.
+        }
     }
 
     public override void OnDeactivated()
@@ -177,6 +205,88 @@ public sealed partial class SeamLocalizationTestViewModel : ViewModelBase
         {
             StatusText = $"분석 실패: {ex.Message}";
             RoiStatsText = "—";
+        }
+        finally { Busy = false; }
+    }
+
+    [RelayCommand]
+    private async Task ReadArucoAsync()
+    {
+        Busy = true;
+        try
+        {
+            if (_amr.LatestStatus is not { } amrStatus)
+                throw new InvalidOperationException("AMR SLAM 자세가 없습니다.");
+            if (!_camera.IsStreaming)
+                throw new InvalidOperationException("컬러/Depth 카메라 스트림을 먼저 시작하세요.");
+            if (!_cobot.IsConnected)
+                throw new InvalidOperationException("코봇 RPC가 연결되지 않았습니다.");
+            if (MarkerSizeMm <= 0)
+                throw new InvalidOperationException("마커 검은 사각형 한 변의 실측 크기를 입력하세요.");
+
+            ArucoStatusText = "ArUco 5프레임을 캡처하고 있습니다…";
+            ArucoMeasuredPoseText = ArucoErrorText = ArucoQualityText = "—";
+
+            using var scope = _scopeFactory.CreateScope();
+            var calibration = scope.ServiceProvider.GetRequiredService<CalibrationService>();
+            var capture = scope.ServiceProvider.GetRequiredService<ArucoHandEyeService>();
+            var tABPose = await calibration.GetMountAsync();
+            var tTCPose = await calibration.GetHandEyeAsync();
+            var calibratedTool = await calibration.GetHandEyeToolAsync();
+            var registration = await calibration.GetRegistrationAsync();
+            var commonAruco = await calibration.GetArucoSettingsAsync();
+
+            if (tABPose.All(v => v == 0)) throw new InvalidOperationException("T_A_B가 미설정입니다.");
+            if (tTCPose.All(v => v == 0)) throw new InvalidOperationException("T_T_C가 미설정입니다.");
+            if (registration is null) throw new InvalidOperationException("도면↔SLAM 정합 T_W_G가 미설정입니다.");
+            if (calibratedTool is { } savedTool && (int)Math.Round(savedTool) != Tool)
+                throw new InvalidOperationException($"T_T_C 기준 Tool #{savedTool:0}과 선택 Tool #{Tool}이 다릅니다.");
+
+            var settings = new ArucoSettings
+            {
+                Dictionary = commonAruco.Dictionary,
+                MarkerId = MarkerId,
+                SizeMm = MarkerSizeMm,
+            };
+            var sample = await capture.CaptureAsync(settings, Tool, frames: 5, _cts.Token);
+
+            var tWAPose = MapCalibration.AmrPoseToMmDeg(
+                amrStatus.Pose.X, amrStatus.Pose.Y, amrStatus.Pose.Angle);
+            var tWQ = FrameMath.Multiply(FrameMath.PoseToMatrix(tWAPose), FrameMath.PoseToMatrix(tABPose));
+            tWQ = FrameMath.Multiply(tWQ, FrameMath.PoseToMatrix(sample.TcpPose));
+            tWQ = FrameMath.Multiply(tWQ, FrameMath.PoseToMatrix(tTCPose));
+            tWQ = FrameMath.Multiply(tWQ, FrameMath.PoseToMatrix(sample.MarkerPose));
+
+            var tWGPose = new[] { registration.Tx, registration.Ty, 0.0, 0.0, 0.0, registration.ThetaDeg };
+            var tGQ = FrameMath.Multiply(FrameMath.Invert(FrameMath.PoseToMatrix(tWGPose)), tWQ);
+            var measured = FrameMath.MatrixToPose(tGQ);
+
+            var reference = new[]
+            {
+                ReferenceGxMm, ReferenceGyMm, ReferenceGzMm,
+                ReferenceGrxDeg, ReferenceGryDeg, ReferenceGrzDeg,
+            };
+            var dx = measured[0] - reference[0];
+            var dy = measured[1] - reference[1];
+            var dz = measured[2] - reference[2];
+            var posError = Math.Sqrt(dx * dx + dy * dy + dz * dz);
+            var drx = QrLocalization.AngleDiffDeg(measured[3], reference[3]);
+            var dry = QrLocalization.AngleDiffDeg(measured[4], reference[4]);
+            var drz = QrLocalization.AngleDiffDeg(measured[5], reference[5]);
+
+            ArucoMeasuredPoseText = $"역산 T_G_Q = [{measured[0]:0.0}, {measured[1]:0.0}, {measured[2]:0.0}] mm / " +
+                                    $"[{measured[3]:0.00}, {measured[4]:0.00}, {measured[5]:0.00}]°";
+            ArucoErrorText = $"기준 대비 Δ = [{dx:+0.0;-0.0;0.0}, {dy:+0.0;-0.0;0.0}, {dz:+0.0;-0.0;0.0}] mm " +
+                             $"(|Δp|={posError:0.0} mm) / ΔR=[{drx:+0.00;-0.00;0.00}, {dry:+0.00;-0.00;0.00}, {drz:+0.00;-0.00;0.00}]°";
+            ArucoQualityText = $"ID {sample.MarkerId} · 유효 {sample.FramesUsed}/5 프레임 · 재투영 RMS {sample.ReprojErrPx:0.00}px" +
+                               (sample.DepthMinusPnpMm is { } d ? $" · Depth−PnP {d:+0.0;-0.0;0.0} mm" : string.Empty) +
+                               $" · T_W_G 정합 RMS {registration.RmsMm:0.0} mm";
+            ArucoStatusText = "마커의 도면 좌표 역산 완료 — 아래 기준 좌표는 정합에 사용하지 않은 독립 실측값과 비교하세요.";
+        }
+        catch (Exception ex)
+        {
+            ArucoStatusText = $"역산 실패: {ex.Message}";
+            ArucoMeasuredPoseText = ArucoErrorText = ArucoQualityText = "—";
         }
         finally { Busy = false; }
     }
