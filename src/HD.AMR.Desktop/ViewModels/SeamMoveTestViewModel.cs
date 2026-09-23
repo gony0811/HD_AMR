@@ -306,6 +306,9 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
 
             // AMR yaw 폴백인데 측위가 없으면 0°(맵 +X)로 계산된다 — 숫자가 조용히 틀리므로 경고에 올린다.
             var notes = t.Notes.ToList();
+            if (!UseWallNormalPose && !string.IsNullOrWhiteSpace(WallCode))
+                notes.Insert(0, $"'면 법선 자세로 이동' 이 꺼져 있어 wall_code({WallCode})를 무시하고 " +
+                                "현재 TCP 자세를 그대로 유지합니다 — wall_code 를 바꿔도 자세가 변하지 않습니다.");
             if (!UseNodeTheta && !UseManualAmrPose && !HasAmrPose)
                 notes.Insert(0, "AMR 측위 없음인데 노드 theta 도 미사용 — 벽 정면 방향을 0°(맵 +X)로 가정해 계산했습니다. " +
                                 "노드 theta 를 입력하거나 AMR 측위를 확인하세요.");

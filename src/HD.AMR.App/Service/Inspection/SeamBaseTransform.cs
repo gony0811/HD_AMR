@@ -80,6 +80,13 @@ public static class SeamBaseTransform
 
         // 면을 향하는(안쪽) 단위 법선. wall_code 가 없으면 수평(수직벽과 동일)으로 둔다 — 종전 동작 유지.
         var normal = SurfaceNormal(wall?.Orientation, facing);
+
+        // 수직벽 4종(PM/SM/F/A)은 앙각이 모두 0° 라 법선이 theta 하나로 정해진다 — wall_code 만 바꿔서는
+        // 마주보는 벽을 구분할 수 없다. 계약상 ACS 가 벽마다 다른 theta 를 보내므로 실제 운영에선 문제가
+        // 없지만, 시험 화면에서 theta 를 고정한 채 wall_code 만 바꾸면 "아무 변화가 없다"로 나타난다.
+        if (wall?.Orientation == SurfaceOrientation.Wall)
+            notes.Add($"수직벽({wall.Code})은 앙각 0° — 법선 방위는 전적으로 벽 정면 방향({facing * 180.0 / Math.PI:0.0}°)이 정합니다. " +
+                      "PM/SM/F/A 는 서로 바꿔도 자세가 달라지지 않습니다(마주보는 벽을 보려면 theta 를 180° 바꾸세요).");
         if (wall is null)
             notes.Add("wall_code 미지정 — 수직벽으로 가정해 수평으로만 물러납니다. TOOL 자세는 만들지 않습니다" +
                       "(호출측이 현재 자세 유지).");

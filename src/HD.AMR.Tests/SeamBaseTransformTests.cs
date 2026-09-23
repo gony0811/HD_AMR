@@ -286,6 +286,42 @@ public class SeamBaseTransformTests
         Assert.Equal(12600.0, t.ApproachMapMm[0], 6);
     }
 
+    // ── 수직벽 4종은 wall_code 로 구분되지 않는다 ────────────────────
+
+    [Fact]
+    public void Resolve_VerticalWalls_ShareTheSameNormal_AndSaySo()
+    {
+        // PM/SM/F/A 는 앙각이 전부 0° 라 같은 theta 면 법선·자세가 완전히 같다.
+        // ACS 는 벽마다 다른 theta 를 보내므로 운영에선 문제가 없지만, 시험 화면에서
+        // theta 를 고정한 채 wall_code 만 바꾸면 "변화 없음" 으로 보이므로 경고로 알린다.
+        var facing = 90.0 * Math.PI / 180.0;
+        var pm = SeamBaseTransform.Resolve(
+            Input(new[] { 5.688, 14.420, 1.000 }, amrX: 5.688, amrY: 13.420,
+                  yawRad: facing, standoff: 400, wallCode: "PM", facing: facing));
+        var sm = SeamBaseTransform.Resolve(
+            Input(new[] { 5.688, 14.420, 1.000 }, amrX: 5.688, amrY: 13.420,
+                  yawRad: facing, standoff: 400, wallCode: "SM", facing: facing));
+
+        AssertVectorEqual(pm.SurfaceNormalMap, sm.SurfaceNormalMap);
+        AssertVectorEqual(pm.TargetPoseBase!, sm.TargetPoseBase!);
+        Assert.Contains(pm.Notes, n => n.Contains("PM/SM/F/A"));
+    }
+
+    [Fact]
+    public void Resolve_OppositeWall_NeedsThetaFlip()
+    {
+        // 마주보는 벽은 theta 를 180° 돌려야 법선이 뒤집힌다.
+        var near = SeamBaseTransform.Resolve(
+            Input(new[] { 5.688, 14.420, 1.000 }, amrX: 5.688, amrY: 13.420,
+                  standoff: 400, wallCode: "PM", facing: 90.0 * Math.PI / 180.0));
+        var far = SeamBaseTransform.Resolve(
+            Input(new[] { 5.688, 12.420, 1.000 }, amrX: 5.688, amrY: 13.420,
+                  standoff: 400, wallCode: "SM", facing: -90.0 * Math.PI / 180.0));
+
+        Assert.Equal(1.0, near.SurfaceNormalMap[1], 6);
+        Assert.Equal(-1.0, far.SurfaceNormalMap[1], 6);
+    }
+
     // ── 면까지의 법선 거리 검증 ──────────────────────────────────────
 
     [Fact]
