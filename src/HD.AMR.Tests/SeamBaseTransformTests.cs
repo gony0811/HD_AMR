@@ -322,6 +322,44 @@ public class SeamBaseTransformTests
         Assert.DoesNotContain(t.Notes, n => n.Contains("어긋납니다"));
     }
 
+    [Theory]
+    [InlineData(ToolAxisDir.PlusZ, 90.0)]    // 광축 +Z — spin 부호가 툴 RZ 와 같다
+    [InlineData(ToolAxisDir.MinusZ, -90.0)]  // 광축 −Z — spin 부호가 툴 RZ 와 반대다
+    public void Resolve_Spin_EqualsToolRzCcw90(ToolAxisDir optical, double spinDeg)
+    {
+        // "툴 좌표계 RZ 반시계 90°" 는 광축 +Z 면 spin +90, −Z 면 spin −90 으로 얻는다.
+        // 두 경우 모두 spin 0 대비 상대 회전(툴 프레임 기준)이 Rz(+90) 이어야 한다.
+        var at0 = SeamBaseTransform.Resolve(
+            Input(new[] { 13.0, 5.0, 1.0 }, yawRad: 0, standoff: 400, wallCode: "SM", optical: optical));
+        var spun = SeamBaseTransform.Resolve(
+            Input(new[] { 13.0, 5.0, 1.0 }, yawRad: 0, standoff: 400, wallCode: "SM",
+                  optical: optical, spinDeg: spinDeg));
+
+        var rel = RelativeToolRotation(at0.TargetPoseBase!, spun.TargetPoseBase!);
+
+        // Rz(+90) = [[0,-1,0],[1,0,0],[0,0,1]]
+        double[,] rz90 = { { 0, -1, 0 }, { 1, 0, 0 }, { 0, 0, 1 } };
+        for (var i = 0; i < 3; i++)
+            for (var j = 0; j < 3; j++)
+                Assert.Equal(rz90[i, j], rel[i, j], 6);
+    }
+
+    /// <summary>두 pose 사이의 상대 회전을 <b>앞 pose 의 툴 프레임 기준</b>으로 반환 — R_fromᵀ·R_to.</summary>
+    private static double[,] RelativeToolRotation(double[] poseFrom, double[] poseTo)
+    {
+        var a = FrameMath.PoseToMatrix(poseFrom);
+        var b = FrameMath.PoseToMatrix(poseTo);
+        var r = new double[3, 3];
+        for (var i = 0; i < 3; i++)
+            for (var j = 0; j < 3; j++)
+            {
+                double sum = 0;
+                for (var k = 0; k < 3; k++) sum += a[k, i] * b[k, j];
+                r[i, j] = sum;
+            }
+        return r;
+    }
+
     /// <summary>목표 pose(BASE)의 툴축을 맵 프레임 단위벡터로 되돌린다 — 법선 정렬 검증용.
     /// 자세 검증 테스트는 모두 AMR (12,5) yaw 0 을 쓰므로 그 값으로 T_W_A 를 재구성한다.</summary>
     private static double[] ToolAxisInMap(SeamBaseTarget t, double[] poseBase, ToolAxisDir axis)

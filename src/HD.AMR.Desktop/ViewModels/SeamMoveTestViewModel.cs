@@ -153,6 +153,7 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
 
             OnPropertyChanged(nameof(MountText));
             OnPropertyChanged(nameof(OpticalAxisText));
+            OnPropertyChanged(nameof(SpinHintText));
             Recompute();
         }
         catch (Exception ex) { Failure($"장착 보정(T_A_B) 로드 실패: {ex.Message}"); }
@@ -218,6 +219,17 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
     public string OpticalAxisText =>
         $"광축(면을 바라보는 툴축): 툴{FlatSurfaceCenteringService.AxisName(_opticalAxis)}" +
         (_opticalAxisFromParam ? "" : " — 파라미터 미설정, 기본값 사용(카메라 페이지에서 저장 권장)");
+
+    /// <summary>
+    /// spin 부호 안내 — spin 은 <b>광축 둘레</b> 회전이라, 광축이 툴 −Z 로 설정된 설비에서는
+    /// 부호가 툴 RZ 와 반대가 된다(−Z 둘레 +θ = +Z 둘레 −θ). 실수하기 쉬운 지점이라 화면에 명시한다.
+    /// </summary>
+    public string SpinHintText => _opticalAxis switch
+    {
+        ToolAxisDir.PlusZ => "spin +90° = 툴 좌표계 RZ +90°(반시계). 광축이 툴 +Z 라 부호가 그대로입니다.",
+        ToolAxisDir.MinusZ => "⚠ 광축이 툴 −Z 라 부호가 반대입니다 — 툴 RZ 를 반시계 90° 돌리려면 spin 에 −90 을 넣으세요.",
+        _ => $"spin 은 광축(툴{FlatSurfaceCenteringService.AxisName(_opticalAxis)}) 둘레 회전이라 툴 RZ 와 1:1 대응하지 않습니다.",
+    };
 
     /// <summary>선택한 wall_code 의 면 자세 설명 — 법선이 어느 쪽을 향하는지.</summary>
     public string WallCodeText
