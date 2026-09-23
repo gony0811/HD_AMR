@@ -63,41 +63,59 @@
 
       <Border Classes="card" Margin="0,10,0,0">
         <StackPanel Spacing="9">
-          <TextBlock Text="ArUco 마커 도면 위치 역산" FontSize="17" FontWeight="SemiBold"/>
+          <TextBlock Text="ACS 계산 결과 입력 모사 (VDA5050 확장 데이터 초안)" FontSize="17" FontWeight="SemiBold"/>
           <TextBlock Classes="axis" TextWrapping="Wrap"
-                     Text="벽면 마커를 읽어 T_G_Q = T_W_G⁻¹ · T_W_A · T_A_B · T_B_T · T_T_C · T_C_Q로 마커의 도면 좌표를 계산합니다. 코봇은 움직이지 않습니다."/>
+                     Text="ACS가 T_W_G를 적용해 계산한 월드/SLAM 좌표계(W) 기준 TOOL 목표 pose를 입력합니다. 이 영역은 데이터 계약 검토용이며 아직 코봇 이동을 실행하지 않습니다."/>
 
-          <WrapPanel Orientation="Horizontal">
-            <TextBlock Text="마커 ID" VerticalAlignment="Center" Margin="0,0,6,0"/>
-            <NumericUpDown Width="85" Value="{Binding MarkerId}" Minimum="0" Maximum="999" Increment="1" Margin="0,0,16,0"/>
-            <TextBlock Text="검은 사각형 한 변" VerticalAlignment="Center" Margin="0,0,6,0"/>
-            <NumericUpDown Width="105" Value="{Binding MarkerSizeMm}" Minimum="1" Maximum="1000" Increment="1" FormatString="0.0"/>
-            <TextBlock Text="mm" VerticalAlignment="Center" Margin="5,0,16,0"/>
-            <Button Content="ArUco 읽기 및 역산" Classes="accent" Command="{Binding ReadArucoCommand}" IsEnabled="{Binding !Busy}"/>
-          </WrapPanel>
-
-          <TextBlock Text="독립 실측 기준 T_G_Q (도면 좌표, mm / deg)" FontWeight="SemiBold" Margin="0,3,0,0"/>
-          <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*" RowDefinitions="Auto,Auto">
-            <TextBlock Grid.Row="0" Grid.Column="0" Text="X" VerticalAlignment="Center"/><NumericUpDown Classes="coord" Grid.Row="0" Grid.Column="1" Value="{Binding ReferenceGxMm}" Increment="1" FormatString="0.0"/>
-            <TextBlock Grid.Row="0" Grid.Column="2" Text="Y" VerticalAlignment="Center"/><NumericUpDown Classes="coord" Grid.Row="0" Grid.Column="3" Value="{Binding ReferenceGyMm}" Increment="1" FormatString="0.0"/>
-            <TextBlock Grid.Row="0" Grid.Column="4" Text="Z" VerticalAlignment="Center"/><NumericUpDown Classes="coord" Grid.Row="0" Grid.Column="5" Value="{Binding ReferenceGzMm}" Increment="1" FormatString="0.0"/>
-            <TextBlock Grid.Row="1" Grid.Column="0" Text="Rx" VerticalAlignment="Center"/><NumericUpDown Classes="coord" Grid.Row="1" Grid.Column="1" Value="{Binding ReferenceGrxDeg}" Increment="0.1" FormatString="0.00"/>
-            <TextBlock Grid.Row="1" Grid.Column="2" Text="Ry" VerticalAlignment="Center"/><NumericUpDown Classes="coord" Grid.Row="1" Grid.Column="3" Value="{Binding ReferenceGryDeg}" Increment="0.1" FormatString="0.00"/>
-            <TextBlock Grid.Row="1" Grid.Column="4" Text="Rz" VerticalAlignment="Center"/><NumericUpDown Classes="coord" Grid.Row="1" Grid.Column="5" Value="{Binding ReferenceGrzDeg}" Increment="0.1" FormatString="0.00"/>
+          <Grid ColumnDefinitions="Auto,2*,Auto,2*,Auto,*" RowDefinitions="Auto,Auto">
+            <TextBlock Grid.Row="0" Grid.Column="0" Text="jobRef" VerticalAlignment="Center"/><TextBox Grid.Row="0" Grid.Column="1" Text="{Binding AcsJobRef}" Margin="5,2,12,2"/>
+            <TextBlock Grid.Row="0" Grid.Column="2" Text="taskId (UUID)" VerticalAlignment="Center"/><TextBox Grid.Row="0" Grid.Column="3" Text="{Binding AcsTaskId}" Margin="5,2,12,2"/>
+            <TextBlock Grid.Row="0" Grid.Column="4" Text="attempt" VerticalAlignment="Center"/><NumericUpDown Grid.Row="0" Grid.Column="5" Value="{Binding AcsAttempt}" Minimum="1" Maximum="255" Increment="1"/>
+            <TextBlock Grid.Row="1" Grid.Column="0" Text="wall_code" VerticalAlignment="Center"/><TextBox Grid.Row="1" Grid.Column="1" Text="{Binding AcsWallCode}" Margin="5,2,12,2"/>
           </Grid>
 
-          <Separator Margin="0,3"/>
-          <TextBlock Text="{Binding ArucoStatusText}" TextWrapping="Wrap"/>
-          <TextBlock Classes="axis" Text="{Binding ArucoMeasuredPoseText}" TextWrapping="Wrap"/>
-          <TextBlock Classes="axis" Text="{Binding ArucoErrorText}" TextWrapping="Wrap"/>
-          <TextBlock Classes="axis" Text="{Binding ArucoQualityText}" TextWrapping="Wrap"/>
+          <TextBlock Text="좌표계 식별" FontWeight="SemiBold" Margin="0,4,0,0"/>
+          <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*">
+            <TextBlock Grid.Column="0" Text="mapId" VerticalAlignment="Center"/><TextBox Grid.Column="1" Text="{Binding AcsMapId}" Margin="5,2,12,2"/>
+            <TextBlock Grid.Column="2" Text="mapVersion" VerticalAlignment="Center"/><TextBox Grid.Column="3" Text="{Binding AcsMapVersion}" Margin="5,2,12,2"/>
+            <TextBlock Grid.Column="4" Text="registrationVersion" VerticalAlignment="Center"/><TextBox Grid.Column="5" Text="{Binding AcsRegistrationVersion}" Margin="5,2,0,2"/>
+          </Grid>
+
+          <TextBlock Text="targetToolPointW · ACS가 정차거리/워킹거리를 적용해 계산한 목표 TOOL 위치 (W 기준, m)" FontWeight="SemiBold" Margin="0,4,0,0"/>
+          <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*">
+            <TextBlock Grid.Row="0" Grid.Column="0" Text="X" VerticalAlignment="Center"/><NumericUpDown Classes="coord" Grid.Row="0" Grid.Column="1" Value="{Binding TargetWx}" Increment="0.001" FormatString="0.000"/>
+            <TextBlock Grid.Row="0" Grid.Column="2" Text="Y" VerticalAlignment="Center"/><NumericUpDown Classes="coord" Grid.Row="0" Grid.Column="3" Value="{Binding TargetWy}" Increment="0.001" FormatString="0.000"/>
+            <TextBlock Grid.Row="0" Grid.Column="4" Text="Z" VerticalAlignment="Center"/><NumericUpDown Classes="coord" Grid.Row="0" Grid.Column="5" Value="{Binding TargetWz}" Increment="0.001" FormatString="0.000"/>
+          </Grid>
+
+          <TextBlock Text="surfaceNormalW · 벽면 바깥쪽 단위 법선 (W 기준)" FontWeight="SemiBold" Margin="0,4,0,0"/>
+          <WrapPanel Orientation="Horizontal">
+            <TextBlock Text="Nx" VerticalAlignment="Center"/><NumericUpDown Classes="coord" Value="{Binding NormalWx}" Increment="0.01" FormatString="0.000" Margin="5,0,12,0"/>
+            <TextBlock Text="Ny" VerticalAlignment="Center"/><NumericUpDown Classes="coord" Value="{Binding NormalWy}" Increment="0.01" FormatString="0.000" Margin="5,0,12,0"/>
+            <TextBlock Text="Nz" VerticalAlignment="Center"/><NumericUpDown Classes="coord" Value="{Binding NormalWz}" Increment="0.01" FormatString="0.000" Margin="5,0,12,0"/>
+            <TextBlock Text="standoffMm" VerticalAlignment="Center"/><NumericUpDown Width="105" Value="{Binding AcsStandoffMm}" Minimum="0" Maximum="2000" Increment="1" Margin="5,0,12,0"/>
+            <TextBlock Text="workingDistanceMm" VerticalAlignment="Center"/><NumericUpDown Width="105" Value="{Binding AcsWorkingDistanceMm}" Minimum="0" Maximum="5000" Increment="1" Margin="5,0,0,0"/>
+          </WrapPanel>
+
+          <Separator Margin="0,4"/>
+          <WrapPanel Orientation="Horizontal">
+            <TextBlock Text="이동 속도" VerticalAlignment="Center"/><NumericUpDown Width="85" Value="{Binding MoveVelocityPct}" Minimum="1" Maximum="20" Increment="1" Margin="5,0,5,0"/><TextBlock Text="%" VerticalAlignment="Center" Margin="0,0,14,0"/>
+            <TextBlock Text="최대 이동거리" VerticalAlignment="Center"/><NumericUpDown Width="100" Value="{Binding MaxMoveDistanceMm}" Minimum="10" Maximum="2000" Increment="10" Margin="5,0,5,0"/><TextBlock Text="mm" VerticalAlignment="Center"/>
+          </WrapPanel>
+          <CheckBox IsChecked="{Binding MotionConfirmed}" Content="주변 안전과 목표 좌표를 확인했습니다. 실제 코봇 이동을 허용합니다."/>
+          <WrapPanel Orientation="Horizontal">
+            <Button Content="계산된 위치로 TOOL 이동" Classes="accent" Command="{Binding MoveToAcsTargetCommand}" IsEnabled="{Binding !Busy}"/>
+            <Button Content="즉시 정지" Command="{Binding StopCobotCommand}" Margin="8,0,0,0"/>
+          </WrapPanel>
+          <TextBlock Text="{Binding MoveStatusText}" TextWrapping="Wrap"/>
+
           <TextBlock Classes="axis" Foreground="#D69E2E" TextWrapping="Wrap"
-                     Text="검증 주의: 비교용 기준 좌표는 T_W_G 맵 정합을 만들 때 사용하지 않은 독립 측량값이어야 순환 검증을 피할 수 있습니다. 현재 T_A_B는 저장된 하강 기준값을 사용하므로 리프트가 홈 위치가 아니면 Z 오차가 포함됩니다."/>
+                     Text="이동 시 Rx/Ry/Rz=0을 명령하지 않고 현재 선택 TOOL의 자세를 유지합니다. targetToolPointW는 ACS가 정차거리와 워킹거리를 반영한 최종 위치여야 합니다. surfaceNormalW는 길이 1이어야 하며 이후 광축 방향 검증에 사용합니다."/>
         </StackPanel>
       </Border>
 
       <Border Classes="alert" Margin="0,10,0,0">
-        <TextBlock TextWrapping="Wrap" Text="초안 범위: 예상점 투영과 Depth ROI 품질 확인까지만 구현. 용접선 후보 추출, 면 법선 계산, IK/충돌 검사, 코봇 자동 이동은 후속 개발에서 검증 게이트와 함께 연결해야 합니다."/>
+        <TextBlock TextWrapping="Wrap" Text="초안 범위: 예상점/Depth ROI 분석과 ACS 목표점으로의 저속 MoveL 시험을 제공합니다. IK와 최대 이동거리는 확인하지만 충돌·특이점·작업공간 안전을 완전히 보장하지 않으므로 현장 안전 조치와 저속 수동 감시가 필요합니다."/>
       </Border>
     </StackPanel>
   </ScrollViewer>

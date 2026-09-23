@@ -20,6 +20,7 @@ public sealed partial class SeamLocalizationTestViewModel : ViewModelBase
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly DispatcherTimer _timer;
     private readonly CancellationTokenSource _cts = new();
+    private CancellationTokenSource? _moveCts;
     private bool _polling;
 
     [ObservableProperty] private Bitmap? _colorImage;
@@ -43,18 +44,25 @@ public sealed partial class SeamLocalizationTestViewModel : ViewModelBase
     [ObservableProperty] private double _roiH;
     [ObservableProperty] private double _targetU;
     [ObservableProperty] private double _targetV;
-    [ObservableProperty] private int _markerId;
-    [ObservableProperty] private double _markerSizeMm = 120;
-    [ObservableProperty] private double _referenceGxMm;
-    [ObservableProperty] private double _referenceGyMm;
-    [ObservableProperty] private double _referenceGzMm;
-    [ObservableProperty] private double _referenceGrxDeg;
-    [ObservableProperty] private double _referenceGryDeg;
-    [ObservableProperty] private double _referenceGrzDeg;
-    [ObservableProperty] private string _arucoStatusText = "캡처 대기";
-    [ObservableProperty] private string _arucoMeasuredPoseText = "—";
-    [ObservableProperty] private string _arucoErrorText = "—";
-    [ObservableProperty] private string _arucoQualityText = "—";
+    [ObservableProperty] private string _acsJobRef = "TEST-JOB-001";
+    [ObservableProperty] private string _acsTaskId = Guid.NewGuid().ToString();
+    [ObservableProperty] private int _acsAttempt = 1;
+    [ObservableProperty] private string _acsMapId = "";
+    [ObservableProperty] private string _acsMapVersion = "";
+    [ObservableProperty] private string _acsRegistrationVersion = "";
+    [ObservableProperty] private double _targetWx;
+    [ObservableProperty] private double _targetWy;
+    [ObservableProperty] private double _targetWz;
+    [ObservableProperty] private double _normalWx;
+    [ObservableProperty] private double _normalWy;
+    [ObservableProperty] private double _normalWz = 1;
+    [ObservableProperty] private double _acsStandoffMm = 200;
+    [ObservableProperty] private double _acsWorkingDistanceMm = 400;
+    [ObservableProperty] private string _acsWallCode = "PM";
+    [ObservableProperty] private double _moveVelocityPct = 5;
+    [ObservableProperty] private double _maxMoveDistanceMm = 800;
+    [ObservableProperty] private bool _motionConfirmed;
+    [ObservableProperty] private string _moveStatusText = "이동 대기";
 
     public bool IsCameraStreaming => _camera.IsStreaming;
     public bool IsAmrConnected => _amr.IsConnected;
@@ -75,22 +83,6 @@ public sealed partial class SeamLocalizationTestViewModel : ViewModelBase
     {
         _timer.Start();
         NotifyHardware();
-        _ = LoadArucoSettingsAsync();
-    }
-
-    private async Task LoadArucoSettingsAsync()
-    {
-        try
-        {
-            using var scope = _scopeFactory.CreateScope();
-            var saved = await scope.ServiceProvider.GetRequiredService<CalibrationService>().GetArucoSettingsAsync();
-            MarkerId = saved.MarkerId ?? 0;
-            MarkerSizeMm = saved.SizeMm;
-        }
-        catch
-        {
-            // 공통 설정을 읽지 못해도 화면 기본값으로 시험할 수 있다.
-        }
     }
 
     public override void OnDeactivated()
@@ -101,6 +93,8 @@ public sealed partial class SeamLocalizationTestViewModel : ViewModelBase
 
     public override void Dispose()
     {
+        _moveCts?.Cancel();
+        _moveCts?.Dispose();
         _cts.Cancel();
         _cts.Dispose();
         base.Dispose();
@@ -210,85 +204,87 @@ public sealed partial class SeamLocalizationTestViewModel : ViewModelBase
     }
 
     [RelayCommand]
-    private async Task ReadArucoAsync()
+    private async Task MoveToAcsTargetAsync()
     {
+        if (Busy) return;
         Busy = true;
+        _moveCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
         try
         {
+            if (!MotionConfirmed)
+                throw new InvalidOperationException("실제 코봇 이동 확인을 체크하세요.");
             if (_amr.LatestStatus is not { } amrStatus)
                 throw new InvalidOperationException("AMR SLAM 자세가 없습니다.");
-            if (!_camera.IsStreaming)
-                throw new InvalidOperationException("컬러/Depth 카메라 스트림을 먼저 시작하세요.");
             if (!_cobot.IsConnected)
                 throw new InvalidOperationException("코봇 RPC가 연결되지 않았습니다.");
-            if (MarkerSizeMm <= 0)
-                throw new InvalidOperationException("마커 검은 사각형 한 변의 실측 크기를 입력하세요.");
-
-            ArucoStatusText = "ArUco 5프레임을 캡처하고 있습니다…";
-            ArucoMeasuredPoseText = ArucoErrorText = ArucoQualityText = "—";
+            if (MoveVelocityPct is <= 0 or > 20)
+                throw new InvalidOperationException("시험 이동 속도는 0 초과 20% 이하로 입력하세요.");
 
             using var scope = _scopeFactory.CreateScope();
             var calibration = scope.ServiceProvider.GetRequiredService<CalibrationService>();
-            var capture = scope.ServiceProvider.GetRequiredService<ArucoHandEyeService>();
             var tABPose = await calibration.GetMountAsync();
-            var tTCPose = await calibration.GetHandEyeAsync();
-            var calibratedTool = await calibration.GetHandEyeToolAsync();
-            var registration = await calibration.GetRegistrationAsync();
-            var commonAruco = await calibration.GetArucoSettingsAsync();
-
             if (tABPose.All(v => v == 0)) throw new InvalidOperationException("T_A_B가 미설정입니다.");
-            if (tTCPose.All(v => v == 0)) throw new InvalidOperationException("T_T_C가 미설정입니다.");
-            if (registration is null) throw new InvalidOperationException("도면↔SLAM 정합 T_W_G가 미설정입니다.");
-            if (calibratedTool is { } savedTool && (int)Math.Round(savedTool) != Tool)
-                throw new InvalidOperationException($"T_T_C 기준 Tool #{savedTool:0}과 선택 Tool #{Tool}이 다릅니다.");
-
-            var settings = new ArucoSettings
-            {
-                Dictionary = commonAruco.Dictionary,
-                MarkerId = MarkerId,
-                SizeMm = MarkerSizeMm,
-            };
-            var sample = await capture.CaptureAsync(settings, Tool, frames: 5, _cts.Token);
 
             var tWAPose = MapCalibration.AmrPoseToMmDeg(
                 amrStatus.Pose.X, amrStatus.Pose.Y, amrStatus.Pose.Angle);
-            var tWQ = FrameMath.Multiply(FrameMath.PoseToMatrix(tWAPose), FrameMath.PoseToMatrix(tABPose));
-            tWQ = FrameMath.Multiply(tWQ, FrameMath.PoseToMatrix(sample.TcpPose));
-            tWQ = FrameMath.Multiply(tWQ, FrameMath.PoseToMatrix(tTCPose));
-            tWQ = FrameMath.Multiply(tWQ, FrameMath.PoseToMatrix(sample.MarkerPose));
+            var tWB = FrameMath.Multiply(FrameMath.PoseToMatrix(tWAPose), FrameMath.PoseToMatrix(tABPose));
+            var targetBPoint = TransformPoint(FrameMath.Invert(tWB),
+                new[] { TargetWx * 1000.0, TargetWy * 1000.0, TargetWz * 1000.0 });
 
-            var tWGPose = new[] { registration.Tx, registration.Ty, 0.0, 0.0, 0.0, registration.ThetaDeg };
-            var tGQ = FrameMath.Multiply(FrameMath.Invert(FrameMath.PoseToMatrix(tWGPose)), tWQ);
-            var measured = FrameMath.MatrixToPose(tGQ);
-
-            var reference = new[]
+            // Rx/Ry/Rz=0을 명령하지 않는다. 현재 선택 TOOL 자세를 유지해 의도치 않은 손목 회전을 막는다.
+            var current = await _cobot.Rpc.GetTcpPoseInBaseAsync(Tool, _moveCts.Token);
+            var target = new[]
             {
-                ReferenceGxMm, ReferenceGyMm, ReferenceGzMm,
-                ReferenceGrxDeg, ReferenceGryDeg, ReferenceGrzDeg,
+                targetBPoint[0], targetBPoint[1], targetBPoint[2],
+                current[3], current[4], current[5],
             };
-            var dx = measured[0] - reference[0];
-            var dy = measured[1] - reference[1];
-            var dz = measured[2] - reference[2];
-            var posError = Math.Sqrt(dx * dx + dy * dy + dz * dz);
-            var drx = QrLocalization.AngleDiffDeg(measured[3], reference[3]);
-            var dry = QrLocalization.AngleDiffDeg(measured[4], reference[4]);
-            var drz = QrLocalization.AngleDiffDeg(measured[5], reference[5]);
+            var dx = target[0] - current[0];
+            var dy = target[1] - current[1];
+            var dz = target[2] - current[2];
+            var travel = Math.Sqrt(dx * dx + dy * dy + dz * dz);
+            if (travel > MaxMoveDistanceMm)
+                throw new InvalidOperationException(
+                    $"목표까지 {travel:0} mm로 허용 이동거리 {MaxMoveDistanceMm:0} mm를 초과합니다.");
 
-            ArucoMeasuredPoseText = $"역산 T_G_Q = [{measured[0]:0.0}, {measured[1]:0.0}, {measured[2]:0.0}] mm / " +
-                                    $"[{measured[3]:0.00}, {measured[4]:0.00}, {measured[5]:0.00}]°";
-            ArucoErrorText = $"기준 대비 Δ = [{dx:+0.0;-0.0;0.0}, {dy:+0.0;-0.0;0.0}, {dz:+0.0;-0.0;0.0}] mm " +
-                             $"(|Δp|={posError:0.0} mm) / ΔR=[{drx:+0.00;-0.00;0.00}, {dry:+0.00;-0.00;0.00}, {drz:+0.00;-0.00;0.00}]°";
-            ArucoQualityText = $"ID {sample.MarkerId} · 유효 {sample.FramesUsed}/5 프레임 · 재투영 RMS {sample.ReprojErrPx:0.00}px" +
-                               (sample.DepthMinusPnpMm is { } d ? $" · Depth−PnP {d:+0.0;-0.0;0.0} mm" : string.Empty) +
-                               $" · T_W_G 정합 RMS {registration.RmsMm:0.0} mm";
-            ArucoStatusText = "마커의 도면 좌표 역산 완료 — 아래 기준 좌표는 정합에 사용하지 않은 독립 실측값과 비교하세요.";
+            MoveStatusText = $"IK 확인 중 · BASE 목표 [{target[0]:0.0}, {target[1]:0.0}, {target[2]:0.0}] mm · 이동 {travel:0.0} mm";
+            await _cobot.Rpc.GetInverseKinForMoveAsync(target, Tool, user: 0, ct: _moveCts.Token);
+            MoveStatusText = $"MoveL 실행 중 · 속도 {MoveVelocityPct:0.#}%";
+            var rc = await _cobot.Rpc.MoveLAsync(target, tool: Tool, user: 0,
+                vel: MoveVelocityPct, ct: _moveCts.Token);
+            if (rc != 0)
+                throw new InvalidOperationException($"MoveL 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}");
+            MoveStatusText = $"이동 완료 · BASE [{target[0]:0.0}, {target[1]:0.0}, {target[2]:0.0}] mm · 현재 TOOL 자세 유지";
+            MotionConfirmed = false;
+        }
+        catch (OperationCanceledException)
+        {
+            MoveStatusText = "사용자 정지";
         }
         catch (Exception ex)
         {
-            ArucoStatusText = $"역산 실패: {ex.Message}";
-            ArucoMeasuredPoseText = ArucoErrorText = ArucoQualityText = "—";
+            MoveStatusText = $"이동 실패: {ex.Message}";
         }
-        finally { Busy = false; }
+        finally
+        {
+            _moveCts?.Dispose();
+            _moveCts = null;
+            Busy = false;
+        }
+    }
+
+    [RelayCommand]
+    private async Task StopCobotAsync()
+    {
+        _moveCts?.Cancel();
+        try
+        {
+            await _cobot.StopMotionImmediateAsync();
+            MoveStatusText = "정지 명령 전송";
+        }
+        catch (Exception ex)
+        {
+            MoveStatusText = $"정지 명령 실패: {ex.Message}";
+        }
     }
 
     private static double[] TransformPoint(double[,] t, double[] p) =>
