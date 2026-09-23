@@ -286,6 +286,42 @@ public class SeamBaseTransformTests
         Assert.Equal(12600.0, t.ApproachMapMm[0], 6);
     }
 
+    // ── 벽 정면 방향 검증 ────────────────────────────────────────────
+
+    [Fact]
+    public void Resolve_FacingFarFromSeamAzimuth_Warns()
+    {
+        // 실기 사례: AMR 이 벽과 나란히(+Y) 서 있는데 theta 없이 AMR yaw 로 폴백 → 법선이 90° 돌아간다.
+        // 용접선은 BASE 에서 +X 쪽(방위 21°)에 있는데 가정한 벽 정면은 89° — 이 어긋남을 잡아야 한다.
+        var t = SeamBaseTransform.Resolve(
+            Input(new[] { 7.000, 13.920, 1.000 }, amrX: 5.688, amrY: 13.420,
+                  yawRad: 89.49 * Math.PI / 180.0, standoff: 400, wallCode: "PM"));
+
+        Assert.Contains(t.Notes, n => n.Contains("어긋납니다"));
+    }
+
+    [Fact]
+    public void Resolve_FacingTowardSeam_DoesNotWarn()
+    {
+        // 같은 배치에서 벽 정면(노드 theta)을 +X 로 주면 경고가 사라진다.
+        var t = SeamBaseTransform.Resolve(
+            Input(new[] { 7.000, 13.920, 1.000 }, amrX: 5.688, amrY: 13.420,
+                  yawRad: 89.49 * Math.PI / 180.0, standoff: 400, wallCode: "PM", facing: 0.0));
+
+        Assert.DoesNotContain(t.Notes, n => n.Contains("어긋납니다"));
+    }
+
+    [Fact]
+    public void Resolve_FloorCeiling_SkipFacingCheck()
+    {
+        // 바닥은 법선이 연직이라 방위각 비교가 의미 없다 — 같은 배치라도 경고하지 않는다.
+        var t = SeamBaseTransform.Resolve(
+            Input(new[] { 7.000, 13.920, 0.000 }, amrX: 5.688, amrY: 13.420,
+                  yawRad: 89.49 * Math.PI / 180.0, standoff: 400, wallCode: "B"));
+
+        Assert.DoesNotContain(t.Notes, n => n.Contains("어긋납니다"));
+    }
+
     /// <summary>목표 pose(BASE)의 툴축을 맵 프레임 단위벡터로 되돌린다 — 법선 정렬 검증용.
     /// 자세 검증 테스트는 모두 AMR (12,5) yaw 0 을 쓰므로 그 값으로 T_W_A 를 재구성한다.</summary>
     private static double[] ToolAxisInMap(SeamBaseTarget t, double[] poseBase, ToolAxisDir axis)

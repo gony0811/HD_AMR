@@ -36,6 +36,13 @@ public static class SeamBaseTransform
     /// <summary>이 값 미만의 standoff 는 면 간섭 위험으로 경고한다 [mm].</summary>
     public const double MinSafeStandoffMm = 100.0;
 
+    /// <summary>
+    /// 가정한 벽 정면 방향과 "코봇 BASE 에서 용접선을 본 방위"가 이 각도 넘게 벌어지면 경고 [도].
+    /// 용접선은 그 벽 위에 있으므로 정상 정차라면 둘은 비슷해야 한다 — 크게 어긋나면 theta(또는 AMR yaw
+    /// 폴백)가 실제 벽 방향이 아니라는 뜻이고, 그대로 두면 standoff·TOOL 자세가 통째로 돌아간다.
+    /// </summary>
+    public const double FacingMismatchWarnDeg = 60.0;
+
     public static SeamBaseTarget Resolve(SeamBaseInput input)
     {
         var notes = new List<string>();
@@ -105,7 +112,28 @@ public static class SeamBaseTransform
             targetPose = PoseFrom(approachBase, rBase);
         }
 
-        // ── ⑦ 거리 진단 ──────────────────────────────────────────────
+        // ── ⑦ 벽 정면 방향 검증 ──────────────────────────────────────
+        // 바닥·천장은 법선이 연직이라 방위각이 의미 없으므로 제외한다.
+        if (wall?.Orientation is not (SurfaceOrientation.Floor or SurfaceOrientation.Ceiling))
+        {
+            var tWB = FrameMath.Multiply(FrameMath.PoseToMatrix(amrPose), FrameMath.PoseToMatrix(mount));
+            var dx = seamMap[0] - tWB[0, 3];
+            var dy = seamMap[1] - tWB[1, 3];
+            if (Math.Sqrt(dx * dx + dy * dy) > 50.0)
+            {
+                var seamAzDeg = Math.Atan2(dy, dx) * 180.0 / Math.PI;
+                var facingDeg = facing * 180.0 / Math.PI;
+                var gap = Math.Abs(MapCalibration.NormalizeDeg(seamAzDeg - facingDeg));
+                if (gap > FacingMismatchWarnDeg)
+                    notes.Add(
+                        $"벽 정면 방향({facingDeg:0.0}°)과 코봇 BASE→용접선 방위({seamAzDeg:0.0}°)가 {gap:0}° 어긋납니다 — " +
+                        "용접선은 그 벽 위에 있어야 하므로 정상 정차라면 비슷해야 합니다. " +
+                        "노드 theta 를 확인하세요(AMR 이 벽과 나란히 서 있으면 AMR yaw 폴백은 90° 틀립니다). " +
+                        "지금 값 그대로면 standoff 후퇴 방향과 TOOL 자세가 함께 돌아갑니다.");
+            }
+        }
+
+        // ── ⑧ 거리 진단 ──────────────────────────────────────────────
         var planar = Math.Sqrt(approachBase[0] * approachBase[0] + approachBase[1] * approachBase[1]);
         var dist = Math.Sqrt(planar * planar + approachBase[2] * approachBase[2]);
 
