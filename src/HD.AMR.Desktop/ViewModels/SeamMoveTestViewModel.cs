@@ -4,8 +4,10 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HD.AMR.App.Communication;
 using HD.AMR.App.Communication.Vda5050;
+using HD.AMR.App.Models;
 using HD.AMR.App.Service;
 using HD.AMR.App.Service.Inspection;
+using HD.AMR.App.Service.Sequence.Steps;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace HD.AMR.Desktop.ViewModels;
@@ -13,14 +15,16 @@ namespace HD.AMR.Desktop.ViewModels;
 /// <summary>
 /// 용접 위치 시험 — ACS 가 보낸 용접선 좌표(<c>seamStartW</c>, 맵 좌표)로 코봇 TOOL 이 실제로 가는지 확인한다.
 ///
-/// 사슬: seam(맵 m) → z 기준 보정 → standoff 후퇴 → <see cref="SeamBaseTransform"/> → 코봇 BASE(mm) → MoveL.
+/// 사슬: seam(맵 m) → z 기준 보정 → 면 법선(wall_code×theta) → standoff 후퇴 → <see cref="SeamBaseTransform"/>
+/// → 코봇 BASE 위치·자세(광축이 면을 향함) → MoveL.
 /// 계산은 <see cref="SeamBaseTransform"/> 한 곳에 있고(단위 테스트 대상) 이 뷰모델은 입력·읽기·이동만 맡는다.
 ///
 /// <b>안전.</b> 이 페이지는 코봇을 실제로 움직인다. 그래서:
-///  · 이동 목표는 용접선 그 점이 아니라 벽에서 <see cref="StandoffMm"/> 물러난 <b>접근점</b>이다.
+///  · 이동 목표는 용접선 그 점이 아니라 면에서 <see cref="StandoffMm"/> 물러난 <b>접근점</b>이다.
 ///  · 이동 직전에 AMR pose·스트로크를 다시 읽어 목표를 재계산한다(표시값이 낡아도 엉뚱한 곳으로 가지 않도록).
 ///  · AMR 이 정지해 있어야 하고, 안전 확인 체크와 역기구학 사전 점검을 통과해야 이동 버튼이 열린다.
 ///  · 수동 AMR pose(하드웨어 없이 계산 검증용)로는 이동하지 않는다 — 계산 전용이다.
+///  · 자세를 바꾸는 이동이라 이동 전 현재 TCP 와의 자세 차이를 계산해 보여 주고, 큰 회전은 경고한다.
 /// </summary>
 public sealed partial class SeamMoveTestViewModel : ViewModelBase
 {
@@ -32,6 +36,9 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
     /// <summary>이동 속도 상한 [%] — 시험 이동은 느리게.</summary>
     private const double MaxVelPct = 30.0;
 
+    /// <summary>이 각도를 넘는 자세 변경은 로그로 한 번 더 경고한다 [도].</summary>
+    private const double LargeSwingDeg = 45.0;
+
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly AMRService _amr;
     private readonly CobotService _cobot;
@@ -42,6 +49,12 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
     private readonly Queue<(DateTime T, double X, double Y, double Yaw)> _poseHistory = new();
 
     private double[] _mountAtHome = new double[6];
+    private ToolAxisDir _opticalAxis = ToolAxisDir.PlusZ;
+    private bool _opticalAxisFromParam;
+
+    /// <summary>wall_code 선택 목록 — 정본 10종(<see cref="WallCodes"/>) + 미지정.</summary>
+    public IReadOnlyList<string> WallCodeOptions { get; } =
+        new[] { "" }.Concat(WallCodes.All.Select(w => w.Code)).ToArray();
 
     public SeamMoveTestViewModel(IServiceScopeFactory scopeFactory, AMRService amr, CobotService cobot,
         TelescopicService lift)
@@ -73,6 +86,15 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
 
     /// <summary>도면 전역 z(선창 바닥 기준) → AMR 바닥 기준 보정 [mm]. 해당 층 바닥 높이(level_z)를 넣는다.</summary>
     [ObservableProperty] private double _zDatumOffsetMm;
+
+    /// <summary>ACS `drawingPos.wall_code` — 면 법선(앙각)·TOOL 자세 결정 키. 빈 값이면 자세를 만들지 않는다.</summary>
+    [ObservableProperty] private string? _wallCode;
+
+    /// <summary>면 법선 자세로 이동할지 — 끄면 현재 TCP 자세를 유지하고 위치만 바꾼다(구 동작).</summary>
+    [ObservableProperty] private bool _useWallNormalPose = true;
+
+    /// <summary>광축 둘레 추가 회전 [도] — 0° = 용접선(없으면 벽면 수평) 방향 기준.</summary>
+    [ObservableProperty] private double _toolSpinDeg;
 
     [ObservableProperty] private double _standoffMm = SeamBaseTransform.DefaultStandoffMm;
     [ObservableProperty] private int _tool = 1;
@@ -124,7 +146,13 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
             using var scope = _scopeFactory.CreateScope();
             var calib = scope.ServiceProvider.GetRequiredService<CalibrationService>();
             _mountAtHome = await calib.GetMountAsync();
+
+            // 광축(대상을 향하는 툴축) — 카메라 페이지 설정값. 검사 시퀀스(③⑱)와 같은 규약을 쓴다.
+            var param = scope.ServiceProvider.GetRequiredService<ParameterService>();
+            (_opticalAxis, _opticalAxisFromParam) = await WeldSequenceSupport.GetDepthAxisAsync(param);
+
             OnPropertyChanged(nameof(MountText));
+            OnPropertyChanged(nameof(OpticalAxisText));
             Recompute();
         }
         catch (Exception ex) { Failure($"장착 보정(T_A_B) 로드 실패: {ex.Message}"); }
@@ -179,6 +207,32 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
         ? "T_A_B 미보정 (전부 0) — 장착 보정 페이지에서 먼저 보정하세요."
         : $"T_A_B(완전 하강): [{string.Join(", ", _mountAtHome.Select(v => v.ToString("0.0")))}] mm/도";
 
+    public string OpticalAxisText =>
+        $"광축(면을 바라보는 툴축): 툴{FlatSurfaceCenteringService.AxisName(_opticalAxis)}" +
+        (_opticalAxisFromParam ? "" : " — 파라미터 미설정, 기본값 사용(카메라 페이지에서 저장 권장)");
+
+    /// <summary>선택한 wall_code 의 면 자세 설명 — 법선이 어느 쪽을 향하는지.</summary>
+    public string WallCodeText
+    {
+        get
+        {
+            var w = WallCodes.Find(WallCode);
+            if (w is null)
+                return string.IsNullOrWhiteSpace(WallCode)
+                    ? "wall_code 미지정 — 수직벽으로 가정(수평 후퇴), TOOL 자세는 현재 자세 유지."
+                    : $"미정의 wall_code '{WallCode}'";
+            var normal = w.Orientation switch
+            {
+                SurfaceOrientation.Floor => "연직 아래(−Z)",
+                SurfaceOrientation.Ceiling => "연직 위(+Z)",
+                SurfaceOrientation.ChamferLower => "벽 정면에서 45° 아래",
+                SurfaceOrientation.ChamferUpper => "벽 정면에서 45° 위",
+                _ => "수평(벽 정면)",
+            };
+            return $"{w.DisplayName} · Wall ID 0x{w.SurfaceId:X2} · 면 자세 {w.Orientation} → 법선 {normal}";
+        }
+    }
+
     /// <summary>최근 <see cref="StationaryWindowMs"/> 동안 AMR 이 멈춰 있었는가.</summary>
     public bool IsAmrStationary
     {
@@ -219,7 +273,12 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
                 $"BASE seam     : [{Fmt(t.SeamStartBaseMm)}] mm\n" +
                 $"BASE 접근점   : [{Fmt(t.ApproachBaseMm)}] mm  ← 이동 목표\n" +
                 $"BASE 원점 거리: 수평 {t.PlanarDistanceMm:0} mm / 3D {t.DistanceMm:0} mm\n" +
-                $"사용 T_A_B    : [{Fmt(t.MountUsed)}] (스트로크 {StrokeMm:0} mm 반영)" +
+                $"사용 T_A_B    : [{Fmt(t.MountUsed)}] (스트로크 {StrokeMm:0} mm 반영)\n" +
+                $"면 법선(맵)   : [{Fmt3(t.SurfaceNormalMap)}]" +
+                (t.Surface is { } so ? $" ({so})" : " (wall_code 미지정 — 수평 가정)") +
+                (t.TargetPoseBase is { } tp
+                    ? $"\n이동 목표 pose: [{Fmt(tp)}] mm/도  ← 광축 툴{FlatSurfaceCenteringService.AxisName(_opticalAxis)} 이 면을 향함"
+                    : "\n이동 목표 자세: (현재 TCP 자세 유지 — wall_code 미지정 또는 법선 자세 끔)") +
                 (t.DirectionReason is { } r ? $"\n검사 방향 유도: {r}" : "");
             NotesText = string.Join("\n", t.Notes);
         }
@@ -241,7 +300,10 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
         TelescopicStrokeMm: StrokeMm,
         ZDatumOffsetMm: ZDatumOffsetMm,
         StandoffMm: StandoffMm,
-        WallFacingThetaRad: UseNodeTheta ? NodeThetaDeg * Math.PI / 180.0 : null);
+        WallFacingThetaRad: UseNodeTheta ? NodeThetaDeg * Math.PI / 180.0 : null,
+        WallCode: UseWallNormalPose ? WallCode : null,
+        OpticalAxis: _opticalAxis,
+        ToolSpinDeg: ToolSpinDeg);
 
     [RelayCommand]
     private void Compute()
@@ -273,10 +335,11 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
             SeamEndY = req.SeamEndW[1];
             SeamEndZ = req.SeamEndW[2];
             HasSeamEnd = true;
+            WallCode = req.DrawingPos.WallCode;
             if (req.StandoffMm > 0) StandoffMm = req.StandoffMm;
 
             Recompute();
-            Success($"액션 해석 완료 — jobRef={req.JobRef}, seamType={req.SeamType}, wall={req.DrawingPos.WallCode}. " +
+            Success($"액션 해석 완료 — jobRef={req.JobRef}, seamType={req.SeamType}, wall={req.DrawingPos.WallCode}(면 자세 적용). " +
                     "노드 theta 는 액션에 없으므로 필요하면 직접 입력하세요(order 노드의 nodePosition.theta).");
         }
         catch (JsonException ex) { Failure($"JSON 형식 오류: {ex.Message}"); }
@@ -309,13 +372,23 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
                 return;
             }
 
-            // ② 현재 TCP 자세 읽기 — 위치만 바꾸고 자세는 유지한다.
+            // ② 목표 pose 결정.
+            //    wall_code 가 있으면 광축이 면 법선을 향하는 자세(TargetPoseBase)를, 없으면 현재 TCP 자세를 쓴다.
             var tcp = await _cobot.Rpc.GetTcpPoseInBaseAsync(Tool, _cts.Token);
-            var target = new[]
+            var target = t.TargetPoseBase ?? new[]
             {
                 t.ApproachBaseMm[0], t.ApproachBaseMm[1], t.ApproachBaseMm[2],
                 tcp[3], tcp[4], tcp[5],
             };
+
+            // 자세를 바꾸는 이동이면 회전량을 먼저 알린다 — 손목이 크게 휘두르는 것을 모르고 누르지 않도록.
+            if (t.TargetPoseBase is not null)
+            {
+                var swing = OrientationDeltaDeg(tcp, target);
+                AppendLog($"자세 변화 {swing:0.0}° (현재 TCP → 면 법선 자세)");
+                if (swing > LargeSwingDeg)
+                    AppendLog($"※ 회전이 큽니다({swing:0.0}° > {LargeSwingDeg:0}°) — 주변 간섭을 확인하세요.");
+            }
 
             // ③ 역기구학 사전 점검 — 도달 불가를 이동 명령 전에 잡는다.
             double[] joints;
@@ -372,6 +445,14 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
     partial void OnNodeThetaDegChanged(double value) => Recompute();
     partial void OnUseNodeThetaChanged(bool value) => Recompute();
     partial void OnZDatumOffsetMmChanged(double value) => Recompute();
+    partial void OnToolSpinDegChanged(double value) => Recompute();
+    partial void OnUseWallNormalPoseChanged(bool value) => Recompute();
+
+    partial void OnWallCodeChanged(string? value)
+    {
+        OnPropertyChanged(nameof(WallCodeText));
+        Recompute();
+    }
 
     partial void OnStandoffMmChanged(double value)
     {
@@ -410,6 +491,22 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
 
     // ── 표시 헬퍼 ───────────────────────────────────────────────────
     private static string Fmt(double[] p) => string.Join(", ", p.Select(v => v.ToString("0.0")));
+
+    private static string Fmt3(double[] p) => string.Join(", ", p.Select(v => v.ToString("0.000")));
+
+    /// <summary>두 pose 자세 사이의 회전각(도) — R = R_a⁻¹·R_b 의 회전각.</summary>
+    private static double OrientationDeltaDeg(double[] a, double[] b)
+    {
+        var ra = FrameMath.PoseToMatrix(a);
+        var rb = FrameMath.PoseToMatrix(b);
+        // trace(Rᵀ_a·R_b) = Σ_i Σ_row Ra[row,i]·Rb[row,i]
+        double trace = 0;
+        for (var i = 0; i < 3; i++)
+            for (var row = 0; row < 3; row++)
+                trace += ra[row, i] * rb[row, i];
+        var cos = Math.Clamp((trace - 1.0) / 2.0, -1.0, 1.0);
+        return Math.Acos(cos) * 180.0 / Math.PI;
+    }
 
     private void AppendLog(string line)
     {

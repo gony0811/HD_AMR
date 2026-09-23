@@ -12,7 +12,7 @@
   <ScrollViewer>
     <StackPanel MaxWidth="1050" HorizontalAlignment="Left">
       <TextBlock Classes="cardHead" Text="용접 위치 시험 (seamStartW → 코봇 TOOL)"/>
-      <TextBlock Classes="hint" Text="ACS 가 보낸 용접선 시작점(맵 좌표)을 코봇 BASE 좌표로 환산해, TOOL 이 실제로 그 자리로 가는지 확인합니다. 이동 목표는 용접선 그 점이 아니라 벽에서 standoff 만큼 물러난 접근점입니다. 자세(Rx/Ry/Rz)는 현재 TCP 자세를 유지하고 위치만 바꿉니다."/>
+      <TextBlock Classes="hint" Text="ACS 가 보낸 용접선 시작점(맵 좌표)을 코봇 BASE 좌표로 환산해, TOOL 이 실제로 그 자리로 가는지 확인합니다. 이동 목표는 용접선 그 점이 아니라 면에서 standoff 만큼 물러난 접근점이고, wall_code 를 주면 TOOL 광축이 그 면의 법선을 바라보는 자세로 이동합니다."/>
 
       <Border Classes="alert" Classes.info="{Binding !IsError}" IsVisible="{Binding Message, Converter={x:Static ObjectConverters.IsNotNull}}">
         <TextBlock Text="{Binding Message}" TextWrapping="Wrap"/>
@@ -53,6 +53,23 @@
           <StackPanel Margin="0,0,10,0"><TextBlock Classes="axis" Text="노드 theta (도)"/><NumericUpDown Classes="num" Value="{Binding NodeThetaDeg}" Increment="1" FormatString="0.00"/></StackPanel>
         </WrapPanel>
 
+        <!-- 면 자세: wall_code → 법선 앙각, 노드 theta → 방위각 -->
+        <WrapPanel>
+          <StackPanel Margin="0,0,10,8">
+            <TextBlock Classes="axis" Text="wall_code (ACS drawingPos)"/>
+            <ComboBox Width="120" ItemsSource="{Binding WallCodeOptions}" SelectedItem="{Binding WallCode}"/>
+          </StackPanel>
+          <StackPanel Margin="0,0,10,8">
+            <TextBlock Classes="axis" Text="툴 회전 spin (도)"/>
+            <NumericUpDown Classes="num" Value="{Binding ToolSpinDeg}" Increment="5" FormatString="0.0"/>
+          </StackPanel>
+          <CheckBox VerticalAlignment="Bottom" Margin="0,0,14,10"
+                    Content="면 법선 자세로 이동" IsChecked="{Binding UseWallNormalPose}"/>
+        </WrapPanel>
+        <TextBlock Classes="hint" Text="{Binding WallCodeText}"/>
+        <TextBlock Classes="hint" Text="{Binding OpticalAxisText}"/>
+        <TextBlock Classes="hint" Text="법선 방위각은 노드 theta(벽 정면), 앙각은 wall_code 면 자세에서 옵니다 — 수직벽 0°, 바닥 −90°, 천장 +90°, 챔퍼 ∓45°. spin 0° 는 용접선 방향(seamEnd 없으면 벽면 수평) 기준이며, 체크를 끄면 현재 TCP 자세를 유지한 채 위치만 바꿉니다."/>
+
         <WrapPanel>
           <StackPanel Margin="0,0,10,8"><TextBlock Classes="axis" Text="z 기준 보정 (mm)"/><NumericUpDown Classes="num" Value="{Binding ZDatumOffsetMm}" Increment="10" FormatString="0"/></StackPanel>
           <StackPanel Margin="0,0,10,8"><TextBlock Classes="axis" Text="standoff (mm)"/><NumericUpDown Classes="num" Value="{Binding StandoffMm}" Increment="10" FormatString="0"/></StackPanel>
@@ -84,7 +101,7 @@
       <Border Classes="card"><StackPanel Spacing="8">
         <TextBlock Classes="cardHead" Text="④ TOOL 이동"/>
         <Border Classes="alert"><StackPanel Spacing="6">
-          <TextBlock FontSize="12" TextWrapping="Wrap" Text="코봇이 실제로 움직입니다. 경로상 장애물·사람이 없는지, 텔레스코픽 높이와 공구가 지금 상태로 맞는지 확인하세요. 이동 직전에 AMR pose·스트로크를 다시 읽어 목표를 재계산합니다."/>
+          <TextBlock FontSize="12" TextWrapping="Wrap" Text="코봇이 실제로 움직입니다. 면 법선 자세로 가면 손목이 크게 회전할 수 있으니 경로상 장애물·사람이 없는지, 텔레스코픽 높이와 공구가 지금 상태로 맞는지 확인하세요. 이동 직전에 AMR pose·스트로크를 다시 읽어 목표를 재계산하고, 자세 변화량을 아래 로그에 남깁니다."/>
           <CheckBox Content="주변 안전을 확인했습니다" IsChecked="{Binding SafetyConfirmed}"/>
         </StackPanel></Border>
         <TextBlock Text="{Binding ReadinessText}"/>
