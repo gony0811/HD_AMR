@@ -37,11 +37,14 @@ public static class SeamBaseTransform
     public const double MinSafeStandoffMm = 100.0;
 
     /// <summary>
-    /// 가정한 벽 정면 방향과 "코봇 BASE 에서 용접선을 본 방위"가 이 각도 넘게 벌어지면 경고 [도].
-    /// 용접선은 그 벽 위에 있으므로 정상 정차라면 둘은 비슷해야 한다 — 크게 어긋나면 theta(또는 AMR yaw
-    /// 폴백)가 실제 벽 방향이 아니라는 뜻이고, 그대로 두면 standoff·TOOL 자세가 통째로 돌아간다.
+    /// 코봇 BASE 에서 면까지의 <b>법선 방향 거리</b>가 이 값 이하이면 면이 BASE 바로 앞(혹은 뒤)이라는 뜻이라
+    /// 경고한다 [mm]. 용접선은 면 위의 점이므로 이 거리가 곧 "코봇이 면에서 얼마나 떨어져 있나"다.
+    ///
+    /// ※ 방위각 비교(BASE→용접선 방위 vs 법선 방위)로는 판정할 수 없다 — 면이 코앞이고 용접선이 면을 따라
+    /// 옆으로 멀리 있으면 두 방위가 90° 가까이 벌어지는 것이 <b>정상</b>이기 때문이다(예: 벽 0.5m 앞,
+    /// 용접선 옆으로 1.3m → 69° 차이). 법선 방향 거리만이 의미 있는 판별값이다.
     /// </summary>
-    public const double FacingMismatchWarnDeg = 60.0;
+    public const double MinNormalDistanceMm = 1.0;
 
     public static SeamBaseTarget Resolve(SeamBaseInput input)
     {
@@ -118,26 +121,27 @@ public static class SeamBaseTransform
             toolYMap = new[] { rMap[0, 1], rMap[1, 1], rMap[2, 1] };
         }
 
-        // ── ⑦ 벽 정면 방향 검증 ──────────────────────────────────────
-        // 바닥·천장은 법선이 연직이라 방위각이 의미 없으므로 제외한다.
-        if (wall?.Orientation is not (SurfaceOrientation.Floor or SurfaceOrientation.Ceiling))
+        // ── ⑦ 면까지의 법선 거리 검증 ────────────────────────────────
+        // 용접선은 면 위의 점이므로, BASE→용접선 벡터의 법선 성분이 곧 "코봇에서 면까지의 거리"다.
+        // 0 이하면 면이 코봇 뒤에 있다는 뜻(법선 방향이 반대) — theta 가 틀렸거나 그 점이 면 위가 아니다.
+        var tWB = FrameMath.Multiply(FrameMath.PoseToMatrix(amrPose), FrameMath.PoseToMatrix(mount));
+        var toSeam = new[]
         {
-            var tWB = FrameMath.Multiply(FrameMath.PoseToMatrix(amrPose), FrameMath.PoseToMatrix(mount));
-            var dx = seamMap[0] - tWB[0, 3];
-            var dy = seamMap[1] - tWB[1, 3];
-            if (Math.Sqrt(dx * dx + dy * dy) > 50.0)
-            {
-                var seamAzDeg = Math.Atan2(dy, dx) * 180.0 / Math.PI;
-                var facingDeg = facing * 180.0 / Math.PI;
-                var gap = Math.Abs(MapCalibration.NormalizeDeg(seamAzDeg - facingDeg));
-                if (gap > FacingMismatchWarnDeg)
-                    notes.Add(
-                        $"벽 정면 방향({facingDeg:0.0}°)과 코봇 BASE→용접선 방위({seamAzDeg:0.0}°)가 {gap:0}° 어긋납니다 — " +
-                        "용접선은 그 벽 위에 있어야 하므로 정상 정차라면 비슷해야 합니다. " +
-                        "노드 theta 를 확인하세요(AMR 이 벽과 나란히 서 있으면 AMR yaw 폴백은 90° 틀립니다). " +
-                        "지금 값 그대로면 standoff 후퇴 방향과 TOOL 자세가 함께 돌아갑니다.");
-            }
-        }
+            seamMap[0] - tWB[0, 3],
+            seamMap[1] - tWB[1, 3],
+            seamMap[2] - tWB[2, 3],
+        };
+        var normalDistance = Dot(toSeam, normal);
+
+        if (normalDistance < MinNormalDistanceMm)
+            notes.Add(
+                $"코봇 BASE 에서 면까지의 법선 거리가 {normalDistance:0}mm 입니다 — 면이 코봇과 같은 평면이거나 " +
+                "뒤에 있다는 뜻이라 접근점이 엉뚱한 곳에 잡힙니다. 벽 정면 방향(노드 theta)이 틀렸거나 " +
+                "입력한 용접선이 그 면 위의 점이 아닙니다.");
+        else if (normalDistance < input.StandoffMm)
+            notes.Add(
+                $"면까지 법선 거리 {normalDistance:0}mm < standoff {input.StandoffMm:0}mm — 접근점이 코봇 BASE 평면 " +
+                "뒤쪽으로 넘어갑니다(뒤로 뻗는 자세). standoff 를 줄이거나 정차 위치·theta 를 확인하세요.");
 
         // ── ⑧ 거리 진단 ──────────────────────────────────────────────
         var planar = Math.Sqrt(approachBase[0] * approachBase[0] + approachBase[1] * approachBase[1]);
@@ -157,6 +161,7 @@ public static class SeamBaseTransform
             SeamStartBaseMm: seamBase,
             ApproachBaseMm: approachBase,
             SurfaceNormalMap: normal,
+            NormalDistanceMm: normalDistance,
             Surface: wall?.Orientation,
             TargetPoseBase: targetPose,
             ToolXMap: toolXMap,
@@ -395,6 +400,8 @@ public sealed record SeamBaseInput(
 /// <param name="SeamStartBaseMm">코봇 BASE 기준 용접선 시작점(참고 — 면 위라 이동 목표 아님).</param>
 /// <param name="ApproachBaseMm">코봇 BASE 기준 접근점 — <b>이동 목표 위치</b>.</param>
 /// <param name="SurfaceNormalMap">면을 향하는 단위 법선(맵 프레임).</param>
+/// <param name="NormalDistanceMm">코봇 BASE 에서 면까지의 법선 방향 거리 [mm] — 용접선이 면 위의 점이므로
+/// 곧 "코봇이 면에서 얼마나 떨어져 있나". standoff 와 비교해 접근점이 앞/뒤 어디에 잡히는지 판단한다.</param>
 /// <param name="Surface">wall_code 가 가리키는 면 자세. 미지정·미정의면 null.</param>
 /// <param name="TargetPoseBase">BASE 기준 이동 목표 pose [x,y,z,rx,ry,rz] — 광축이 법선을 향한다.
 /// wall_code 가 없으면 null(호출측이 현재 TCP 자세 유지).</param>
@@ -412,6 +419,7 @@ public sealed record SeamBaseTarget(
     double[] SeamStartBaseMm,
     double[] ApproachBaseMm,
     double[] SurfaceNormalMap,
+    double NormalDistanceMm,
     SurfaceOrientation? Surface,
     double[]? TargetPoseBase,
     double[]? ToolXMap,

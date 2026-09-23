@@ -294,6 +294,7 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
                 $"BASE 접근점   : [{Fmt(t.ApproachBaseMm)}] mm  ← 이동 목표\n" +
                 $"BASE 원점 거리: 수평 {t.PlanarDistanceMm:0} mm / 3D {t.DistanceMm:0} mm\n" +
                 $"사용 T_A_B    : [{Fmt(t.MountUsed)}] (스트로크 {StrokeMm:0} mm 반영)\n" +
+                $"면까지 거리   : 법선 방향 {t.NormalDistanceMm:0} mm (코봇 BASE 기준 — standoff {StandoffMm:0} mm 보다 커야 정상)\n" +
                 $"면 법선(맵)   : [{Fmt3(t.SurfaceNormalMap)}]" +
                 (t.Surface is { } so ? $" ({so})" : " (wall_code 미지정 — 수평 가정)") +
                 (t.TargetPoseBase is { } tp

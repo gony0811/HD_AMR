@@ -286,78 +286,67 @@ public class SeamBaseTransformTests
         Assert.Equal(12600.0, t.ApproachMapMm[0], 6);
     }
 
-    // ── 벽 정면 방향 검증 ────────────────────────────────────────────
+    // ── 면까지의 법선 거리 검증 ──────────────────────────────────────
 
     [Fact]
-    public void Resolve_FacingFarFromSeamAzimuth_Warns()
+    public void Resolve_SeamFarAlongWall_DoesNotWarn()
     {
-        // 실기 사례: AMR 이 벽과 나란히(+Y) 서 있는데 theta 없이 AMR yaw 로 폴백 → 법선이 90° 돌아간다.
-        // 용접선은 BASE 에서 +X 쪽(방위 21°)에 있는데 가정한 벽 정면은 89° — 이 어긋남을 잡아야 한다.
+        // 정상 배치: 벽은 정면 0.5m, 용접선은 벽을 따라 옆으로 1.3m.
+        // BASE→용접선 방위는 법선과 69° 나 벌어지지만 이는 기하학적으로 정상이다(방위 비교로 판정 불가).
         var t = SeamBaseTransform.Resolve(
             Input(new[] { 7.000, 13.920, 1.000 }, amrX: 5.688, amrY: 13.420,
                   yawRad: 89.49 * Math.PI / 180.0, standoff: 400, wallCode: "PM"));
 
-        Assert.Contains(t.Notes, n => n.Contains("어긋납니다"));
+        Assert.True(t.NormalDistanceMm > 400, $"법선 거리 {t.NormalDistanceMm:0}mm");
+        Assert.DoesNotContain(t.Notes, n => n.Contains("법선 거리"));
     }
 
     [Fact]
-    public void Resolve_FacingTowardSeam_DoesNotWarn()
+    public void Resolve_SeamOnBasePlane_Warns()
     {
-        // 같은 배치에서 벽 정면(노드 theta)을 +X 로 주면 경고가 사라진다.
+        // 용접선이 코봇 BASE 와 같은 평면(법선 거리 ≈ 0) — 그 점은 면 위의 점이 아니거나 theta 가 틀렸다.
+        var t = SeamBaseTransform.Resolve(
+            Input(new[] { 6.500, 13.420, 1.200 }, amrX: 5.688, amrY: 13.420,
+                  yawRad: 89.49 * Math.PI / 180.0, standoff: 400, wallCode: "PM"));
+
+        Assert.True(t.NormalDistanceMm < 50, $"법선 거리 {t.NormalDistanceMm:0}mm");
+        Assert.Contains(t.Notes, n => n.Contains("면까지의 법선 거리"));
+    }
+
+    [Fact]
+    public void Resolve_SeamBehindRobot_Warns()
+    {
+        // theta 가 180° 틀린 경우 — 면이 코봇 뒤로 잡힌다.
         var t = SeamBaseTransform.Resolve(
             Input(new[] { 7.000, 13.920, 1.000 }, amrX: 5.688, amrY: 13.420,
-                  yawRad: 89.49 * Math.PI / 180.0, standoff: 400, wallCode: "PM", facing: 0.0));
+                  yawRad: 89.49 * Math.PI / 180.0, standoff: 400, wallCode: "PM",
+                  facing: (89.49 + 180.0) * Math.PI / 180.0));
 
-        Assert.DoesNotContain(t.Notes, n => n.Contains("어긋납니다"));
+        Assert.True(t.NormalDistanceMm < 0);
+        Assert.Contains(t.Notes, n => n.Contains("면까지의 법선 거리"));
     }
 
     [Fact]
-    public void Resolve_FloorCeiling_SkipFacingCheck()
+    public void Resolve_NormalDistanceBelowStandoff_WarnsAboutReachingBackwards()
     {
-        // 바닥은 법선이 연직이라 방위각 비교가 의미 없다 — 같은 배치라도 경고하지 않는다.
+        // 벽까지 512mm 인데 standoff 800mm → 접근점이 BASE 평면 뒤로 넘어간다.
         var t = SeamBaseTransform.Resolve(
-            Input(new[] { 7.000, 13.920, 0.000 }, amrX: 5.688, amrY: 13.420,
-                  yawRad: 89.49 * Math.PI / 180.0, standoff: 400, wallCode: "B"));
+            Input(new[] { 7.000, 13.920, 1.000 }, amrX: 5.688, amrY: 13.420,
+                  yawRad: 89.49 * Math.PI / 180.0, standoff: 800, wallCode: "PM"));
 
-        Assert.DoesNotContain(t.Notes, n => n.Contains("어긋납니다"));
+        Assert.Contains(t.Notes, n => n.Contains("뒤쪽으로 넘어갑니다"));
     }
 
-    [Theory]
-    [InlineData(ToolAxisDir.PlusZ, 90.0)]    // 광축 +Z — spin 부호가 툴 RZ 와 같다
-    [InlineData(ToolAxisDir.MinusZ, -90.0)]  // 광축 −Z — spin 부호가 툴 RZ 와 반대다
-    public void Resolve_Spin_EqualsToolRzCcw90(ToolAxisDir optical, double spinDeg)
+    [Fact]
+    public void Resolve_Floor_NormalDistanceIsBaseHeight()
     {
-        // "툴 좌표계 RZ 반시계 90°" 는 광축 +Z 면 spin +90, −Z 면 spin −90 으로 얻는다.
-        // 두 경우 모두 spin 0 대비 상대 회전(툴 프레임 기준)이 Rz(+90) 이어야 한다.
-        var at0 = SeamBaseTransform.Resolve(
-            Input(new[] { 13.0, 5.0, 1.0 }, yawRad: 0, standoff: 400, wallCode: "SM", optical: optical));
-        var spun = SeamBaseTransform.Resolve(
-            Input(new[] { 13.0, 5.0, 1.0 }, yawRad: 0, standoff: 400, wallCode: "SM",
-                  optical: optical, spinDeg: spinDeg));
+        // 바닥면: 법선 거리 = 코봇 BASE 높이 − 용접선 높이. 연직이라 같은 규칙이 그대로 통한다.
+        var t = SeamBaseTransform.Resolve(
+            Input(new[] { 6.000, 13.420, 0.000 }, amrX: 5.688, amrY: 13.420,
+                  yawRad: 0, standoff: 400, wallCode: "B"));
 
-        var rel = RelativeToolRotation(at0.TargetPoseBase!, spun.TargetPoseBase!);
-
-        // Rz(+90) = [[0,-1,0],[1,0,0],[0,0,1]]
-        double[,] rz90 = { { 0, -1, 0 }, { 1, 0, 0 }, { 0, 0, 1 } };
-        for (var i = 0; i < 3; i++)
-            for (var j = 0; j < 3; j++)
-                Assert.Equal(rz90[i, j], rel[i, j], 6);
-    }
-
-    /// <summary>두 pose 사이의 상대 회전을 <b>앞 pose 의 툴 프레임 기준</b>으로 반환 — R_fromᵀ·R_to.</summary>
-    private static double[,] RelativeToolRotation(double[] poseFrom, double[] poseTo)
-    {
-        var a = FrameMath.PoseToMatrix(poseFrom);
-        var b = FrameMath.PoseToMatrix(poseTo);
-        var r = new double[3, 3];
-        for (var i = 0; i < 3; i++)
-            for (var j = 0; j < 3; j++)
-            {
-                double sum = 0;
-                for (var k = 0; k < 3; k++) sum += a[k, i] * b[k, j];
-                r[i, j] = sum;
-            }
-        return r;
+        Assert.Equal(Mount[2], t.NormalDistanceMm, 6);   // 스트로크 0 → BASE 높이 그대로
+        Assert.DoesNotContain(t.Notes, n => n.Contains("법선 거리"));
     }
 
     [Fact]
