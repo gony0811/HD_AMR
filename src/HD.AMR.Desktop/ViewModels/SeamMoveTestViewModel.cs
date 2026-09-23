@@ -174,6 +174,7 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
         OnPropertyChanged(nameof(AmrPoseText));
         OnPropertyChanged(nameof(LiftText));
         OnPropertyChanged(nameof(IsAmrStationary));
+        OnPropertyChanged(nameof(FacingSourceText));
         OnPropertyChanged(nameof(ReadinessText));
         Recompute();
         MoveToApproachCommand.NotifyCanExecuteChanged();
@@ -206,6 +207,13 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
     public string MountText => _mountAtHome.All(v => Math.Abs(v) < 1e-9)
         ? "T_A_B 미보정 (전부 0) — 장착 보정 페이지에서 먼저 보정하세요."
         : $"T_A_B(완전 하강): [{string.Join(", ", _mountAtHome.Select(v => v.ToString("0.0")))}] mm/도";
+
+    /// <summary>벽 정면 방향(법선 방위각)을 무엇에서 가져왔는지 — 결과 표시용.</summary>
+    public string FacingSourceText =>
+        UseNodeTheta ? $"노드 theta {NodeThetaDeg:0.00}° (입력값 고정)"
+        : UseManualAmrPose ? $"수동 AMR yaw {ManualAmrYawDeg:0.00}°"
+        : HasAmrPose ? $"AMR yaw {AmrYawRad * 180.0 / Math.PI:0.00}° (실시간 — 로봇이 돌면 목표도 따라 바뀜)"
+        : "0.00° (AMR 측위 없음 — 맵 +X 가정, 아래 경고 참고)";
 
     public string OpticalAxisText =>
         $"광축(면을 바라보는 툴축): 툴{FlatSurfaceCenteringService.AxisName(_opticalAxis)}" +
@@ -279,8 +287,15 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
                 (t.TargetPoseBase is { } tp
                     ? $"\n이동 목표 pose: [{Fmt(tp)}] mm/도  ← 광축 툴{FlatSurfaceCenteringService.AxisName(_opticalAxis)} 이 면을 향함"
                     : "\n이동 목표 자세: (현재 TCP 자세 유지 — wall_code 미지정 또는 법선 자세 끔)") +
-                (t.DirectionReason is { } r ? $"\n검사 방향 유도: {r}" : "");
-            NotesText = string.Join("\n", t.Notes);
+                (t.DirectionReason is { } r ? $"\n검사 방향 유도: {r}" : "") +
+                $"\n벽 정면 방향  : {FacingSourceText}";
+
+            // AMR yaw 폴백인데 측위가 없으면 0°(맵 +X)로 계산된다 — 숫자가 조용히 틀리므로 경고에 올린다.
+            var notes = t.Notes.ToList();
+            if (!UseNodeTheta && !UseManualAmrPose && !HasAmrPose)
+                notes.Insert(0, "AMR 측위 없음인데 노드 theta 도 미사용 — 벽 정면 방향을 0°(맵 +X)로 가정해 계산했습니다. " +
+                                "노드 theta 를 입력하거나 AMR 측위를 확인하세요.");
+            NotesText = string.Join("\n", notes);
         }
         catch (Exception ex)
         {
@@ -442,8 +457,16 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
     partial void OnSeamEndYChanged(double value) => Recompute();
     partial void OnSeamEndZChanged(double value) => Recompute();
     partial void OnHasSeamEndChanged(bool value) => Recompute();
-    partial void OnNodeThetaDegChanged(double value) => Recompute();
-    partial void OnUseNodeThetaChanged(bool value) => Recompute();
+    partial void OnNodeThetaDegChanged(double value)
+    {
+        OnPropertyChanged(nameof(FacingSourceText));
+        Recompute();
+    }
+    partial void OnUseNodeThetaChanged(bool value)
+    {
+        OnPropertyChanged(nameof(FacingSourceText));
+        Recompute();
+    }
     partial void OnZDatumOffsetMmChanged(double value) => Recompute();
     partial void OnToolSpinDegChanged(double value) => Recompute();
     partial void OnUseWallNormalPoseChanged(bool value) => Recompute();
@@ -465,6 +488,7 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
     {
         OnPropertyChanged(nameof(AmrPoseText));
         OnPropertyChanged(nameof(LiftText));
+        OnPropertyChanged(nameof(FacingSourceText));
         OnPropertyChanged(nameof(ReadinessText));
         Recompute();
         MoveToApproachCommand.NotifyCanExecuteChanged();
