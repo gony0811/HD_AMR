@@ -47,6 +47,7 @@
                                     </Border>
                                     <TextBlock Classes="warn" VerticalAlignment="Center" Text="⚠ 프로필 미지정"
                                                IsVisible="{Binding ProfileMissing}" />
+                                    <TextBlock Classes="muted" FontSize="11" VerticalAlignment="Center" Text="{Binding StepSummary}" />
                                 </StackPanel>
                             </StackPanel>
                         </DataTemplate>
@@ -95,13 +96,77 @@
                                                    Text="CORNER3 는 고정 티칭 슬롯(corner3.L/R.*)을 순회하므로 프로필을 지정하지 않습니다." />
                                     </StackPanel>
 
-                                    <!-- 실행 스텝 -->
-                                    <StackPanel>
-                                        <TextBlock Classes="section" Text="실행 스텝 (StepKeysJson)" />
-                                        <TextBox Text="{Binding StepKeysJson}" FontFamily="monospace" FontSize="12"
-                                                 AcceptsReturn="True" TextWrapping="Wrap" MinHeight="80"
-                                                 Watermark="빈 값 = 풀시퀀스 · 예: [&quot;amrMove&quot;,&quot;inspectionRun&quot;]" />
-                                        <TextBlock Classes="hint" Text="JSON 문자열 배열. 배열 순서와 무관하게 스텝 등록 순서(Order)로 실행되며, Key 오타는 저장 시 검사되지 않습니다." />
+                                    <!-- 실행 스텝 — 시퀀스 풀에서 끌어오기 -->
+                                    <StackPanel Spacing="6">
+                                        <Grid ColumnDefinitions="*,Auto">
+                                            <TextBlock Grid.Column="0" Classes="section" Text="실행 스텝" VerticalAlignment="Center" />
+                                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
+                                                <Button Content="전체 담기" FontSize="12" Padding="8,2" Command="{Binding AddAllStepsCommand}" />
+                                                <Button Content="비우기 (풀시퀀스)" FontSize="12" Padding="8,2" Command="{Binding ClearStepsCommand}" />
+                                            </StackPanel>
+                                        </Grid>
+
+                                        <Grid ColumnDefinitions="*,12,*">
+                                            <!-- 좌: 시퀀스 풀 -->
+                                            <StackPanel Grid.Column="0" Spacing="3">
+                                                <TextBlock Classes="hint" Text="시퀀스 풀 — 담을 스텝 (＋)" />
+                                                <Border Classes="card" Padding="2">
+                                                    <ListBox ItemsSource="{Binding StepPool}" Background="Transparent" MaxHeight="300">
+                                                        <ListBox.ItemTemplate>
+                                                            <DataTemplate x:DataType="vm:StepPick">
+                                                                <Grid ColumnDefinitions="34,*,Auto" ToolTip.Tip="{Binding Key}">
+                                                                    <TextBlock Grid.Column="0" Classes="hint" Text="{Binding OrderText}" VerticalAlignment="Center" />
+                                                                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                                                        <TextBlock Text="{Binding Label}" TextWrapping="Wrap" />
+                                                                        <TextBlock Classes="hint" FontFamily="monospace" Text="{Binding Key}" />
+                                                                    </StackPanel>
+                                                                    <Button Grid.Column="2" Content="＋" Padding="8,0" VerticalAlignment="Center"
+                                                                            ToolTip.Tip="이 레시피에 담기"
+                                                                            Command="{Binding $parent[ListBox].((vm:RecipeRow)DataContext).AddStepCommand}"
+                                                                            CommandParameter="{Binding}" />
+                                                                </Grid>
+                                                            </DataTemplate>
+                                                        </ListBox.ItemTemplate>
+                                                    </ListBox>
+                                                </Border>
+                                            </StackPanel>
+
+                                            <!-- 우: 이 레시피가 실행할 스텝 -->
+                                            <StackPanel Grid.Column="2" Spacing="3">
+                                                <TextBlock Classes="hint" Text="이 레시피에서 실행 (－ 로 빼기)" />
+                                                <Border Classes="card" Padding="2">
+                                                    <Panel MinHeight="60">
+                                                        <ListBox ItemsSource="{Binding SelectedSteps}" Background="Transparent" MaxHeight="300">
+                                                            <ListBox.ItemTemplate>
+                                                                <DataTemplate x:DataType="vm:StepPick">
+                                                                    <Grid ColumnDefinitions="34,*,Auto" ToolTip.Tip="{Binding Key}">
+                                                                        <TextBlock Grid.Column="0" Classes="hint" Text="{Binding OrderText}" VerticalAlignment="Center" />
+                                                                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                                                            <TextBlock Text="{Binding Label}" TextWrapping="Wrap" />
+                                                                            <TextBlock Classes="hint" FontFamily="monospace" Text="{Binding Key}" />
+                                                                        </StackPanel>
+                                                                        <Button Grid.Column="2" Content="－" Padding="8,0" VerticalAlignment="Center"
+                                                                                ToolTip.Tip="이 레시피에서 빼기"
+                                                                                Command="{Binding $parent[ListBox].((vm:RecipeRow)DataContext).RemoveStepCommand}"
+                                                                                CommandParameter="{Binding}" />
+                                                                    </Grid>
+                                                                </DataTemplate>
+                                                            </ListBox.ItemTemplate>
+                                                        </ListBox>
+                                                        <TextBlock Classes="hint" Margin="8" VerticalAlignment="Center" TextWrapping="Wrap"
+                                                                   IsVisible="{Binding IsFullSequence}"
+                                                                   Text="비어 있음 = 등록된 스텝 전체를 순서대로 실행합니다(풀시퀀스). 일부만 실행하려면 왼쪽에서 ＋ 로 담으세요." />
+                                                    </Panel>
+                                                </Border>
+                                            </StackPanel>
+                                        </Grid>
+
+                                        <TextBlock Classes="hint" Text="왼쪽 숫자는 실행 순서입니다. 담는 순서는 실행 순서에 영향을 주지 않습니다 — 런타임은 언제나 이 번호 순으로 실행합니다(스텝 간 선후 의존을 이 번호가 보장합니다)." />
+                                        <Expander Header="저장값 보기 (StepKeysJson)">
+                                            <TextBox Text="{Binding StepKeysJson, Mode=OneWay}" IsReadOnly="True"
+                                                     FontFamily="monospace" FontSize="12" AcceptsReturn="True" TextWrapping="Wrap"
+                                                     Watermark="null — 풀시퀀스 전체 실행" />
+                                        </Expander>
                                     </StackPanel>
 
                                     <!-- 비전 실패율 상한 / 카메라 목표거리 -->
