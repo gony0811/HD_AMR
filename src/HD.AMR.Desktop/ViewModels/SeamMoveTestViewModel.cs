@@ -152,6 +152,7 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
             (_opticalAxis, _opticalAxisFromParam) = await WeldSequenceSupport.GetDepthAxisAsync(param);
 
             OnPropertyChanged(nameof(MountText));
+            OnPropertyChanged(nameof(MountCheckText));
             OnPropertyChanged(nameof(OpticalAxisText));
             OnPropertyChanged(nameof(SpinHintText));
             Recompute();
@@ -208,6 +209,31 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
     public string MountText => _mountAtHome.All(v => Math.Abs(v) < 1e-9)
         ? "T_A_B 미보정 (전부 0) — 장착 보정 페이지에서 먼저 보정하세요."
         : $"T_A_B(완전 하강): [{string.Join(", ", _mountAtHome.Select(v => v.ToString("0.0")))}] mm/도";
+
+    /// <summary>
+    /// 저장된 T_A_B.rz 가 맞다면 BASE 축 조그가 AMR 차체 기준 어느 쪽으로 가야 하는지 — <b>조그로 대조</b>해
+    /// 장착 회전을 현장에서 검증하기 위한 줄. 실제 조그 방향이 다르면 T_A_B.rz 가 그만큼 틀린 것이다.
+    /// AMR 차체 규약: +X = 전방(주행 방향, SLAM yaw 방향), +Y = 좌측.
+    /// </summary>
+    public string MountCheckText
+    {
+        get
+        {
+            var rz = _mountAtHome.Length > 5 ? _mountAtHome[5] : 0;
+            return $"이 값(rz={rz:0.#}°)대로면 조그 시 — BASE +X → {BodyDir(rz)}, BASE +Y → {BodyDir(rz + 90)} " +
+                   "(AMR 기준 +X=전방·+Y=좌측). 실제와 다르면 T_A_B.rz 가 그 차이만큼 틀린 것입니다.";
+        }
+    }
+
+    /// <summary>맵 평면 각도(도) → AMR 차체 기준 방향 이름. 45° 경계에서 가장 가까운 쪽으로 읽는다.</summary>
+    private static string BodyDir(double deg)
+    {
+        var d = MapCalibration.NormalizeDeg(deg);
+        if (d is > -45 and <= 45) return "AMR 전방";
+        if (d is > 45 and <= 135) return "AMR 좌측";
+        if (d is > -135 and <= -45) return "AMR 우측";
+        return "AMR 후방";
+    }
 
     /// <summary>벽 정면 방향(법선 방위각)을 무엇에서 가져왔는지 — 결과 표시용.</summary>
     public string FacingSourceText =>

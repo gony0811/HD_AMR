@@ -47,6 +47,7 @@
         <TextBlock Text="{Binding AmrPoseText}"/>
         <TextBlock Text="{Binding LiftText}"/>
         <TextBlock Text="{Binding MountText}"/>
+        <TextBlock Classes="hint" Text="{Binding MountCheckText}"/>
 
         <CheckBox Content="정차 노드 theta 를 벽 정면 방향으로 사용 (미사용 시 AMR yaw)" IsChecked="{Binding UseNodeTheta}"/>
         <WrapPanel IsVisible="{Binding UseNodeTheta}">
