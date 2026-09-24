@@ -12,7 +12,7 @@ public class LaserDisplacementSensorSettings
     public string Name { get; set; } = "LaserDisplacementSensor";
 
     /// <summary>대상 장치 IP.</summary>
-    public string IpAddress { get; set; } = "192.168.0.1";
+    public string IpAddress { get; set; } = "192.168.70.156";
 
     /// <summary>EtherNet/IP 표준 TCP 포트(0xAF12 = 44818).</summary>
     public int Port { get; set; } = 44818;
