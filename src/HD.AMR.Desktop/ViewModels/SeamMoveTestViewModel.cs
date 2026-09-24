@@ -52,6 +52,13 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
     private ToolAxisDir _opticalAxis = ToolAxisDir.PlusZ;
     private bool _opticalAxisFromParam;
 
+    // 현재 TCP 실시간 읽기 — MountCalibrationViewModel 과 같은 방식(2틱마다, 3회 연속 실패 시 중단).
+    private double[]? _tcp;
+    private DateTime _tcpAt;
+    private int _tcpFailStreak;
+    private bool _tcpPolling;
+    private int _tick;
+
     /// <summary>wall_code 선택 목록 — 정본 10종(<see cref="WallCodes"/>) + 미지정.</summary>
     public IReadOnlyList<string> WallCodeOptions { get; } =
         new[] { "" }.Concat(WallCodes.All.Select(w => w.Code)).ToArray();
@@ -106,6 +113,9 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
     [ObservableProperty] private double _manualAmrYm;
     [ObservableProperty] private double _manualAmrYawDeg;
     [ObservableProperty] private double _manualStrokeMm;
+
+    /// <summary>현재 TCP 를 주기적으로 읽어 AMR·맵 좌표로 환산해 보여준다(코봇 RPC 읽기 전용).</summary>
+    [ObservableProperty] private bool _liveTcp = true;
 
     [ObservableProperty] private bool _safetyConfirmed;
     [ObservableProperty] private bool _busy;
@@ -173,13 +183,53 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
         }
         else _poseHistory.Clear();
 
+        if (++_tick % 2 == 0 && LiveTcp && CobotConnected && !Busy && !_tcpPolling)
+            _ = PollTcpAsync();
+
         OnPropertyChanged(nameof(AmrPoseText));
         OnPropertyChanged(nameof(LiftText));
+        OnPropertyChanged(nameof(CurrentTcpText));
         OnPropertyChanged(nameof(IsAmrStationary));
         OnPropertyChanged(nameof(FacingSourceText));
         OnPropertyChanged(nameof(ReadinessText));
         Recompute();
         MoveToApproachCommand.NotifyCanExecuteChanged();
+    }
+
+    private async Task PollTcpAsync()
+    {
+        _tcpPolling = true;
+        try
+        {
+            _tcp = await _cobot.Rpc.GetTcpPoseInBaseAsync(Tool, _cts.Token);
+            _tcpAt = DateTime.UtcNow;
+            _tcpFailStreak = 0;
+        }
+        catch (OperationCanceledException) { /* 페이지 이탈 — 정상 */ }
+        catch (Exception ex)
+        {
+            if (++_tcpFailStreak >= 3)
+            {
+                LiveTcp = false;
+                Failure($"코봇 TCP 실시간 읽기를 중단했습니다 — '지금 읽기'로 재시도하세요: {ex.Message}");
+            }
+        }
+        finally { _tcpPolling = false; }
+    }
+
+    [RelayCommand]
+    private async Task RefreshTcpNow()
+    {
+        try
+        {
+            _tcp = await _cobot.Rpc.GetTcpPoseInBaseAsync(Tool, _cts.Token);
+            _tcpAt = DateTime.UtcNow;
+            _tcpFailStreak = 0;
+            OnPropertyChanged(nameof(CurrentTcpText));
+            Success("현재 TCP 를 읽었습니다.");
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { Failure($"코봇 TCP 읽기 실패: {ex.Message}"); }
     }
 
     public bool AmrConnected => _amr.IsConnected;
@@ -209,6 +259,54 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
     public string MountText => _mountAtHome.All(v => Math.Abs(v) < 1e-9)
         ? "T_A_B 미보정 (전부 0) — 장착 보정 페이지에서 먼저 보정하세요."
         : $"T_A_B(완전 하강): [{string.Join(", ", _mountAtHome.Select(v => v.ToString("0.0")))}] mm/도";
+
+    /// <summary>
+    /// 현재 TCP 를 T_A_B 로 역환산해 <b>AMR 차체 좌표</b>와 <b>맵 좌표</b>로 보여준다.
+    ///   p_A = T_A_B · p_B,  p_W = T_W_A · p_A
+    /// 툴 축 방향도 AMR 기준으로 함께 표시한다 — 오일러각(짐벌락)을 읽지 않고 "어디를 향하는가"로
+    /// 확인할 수 있어야 장착 회전·광축 설정의 오류가 눈에 띈다.
+    /// </summary>
+    public string CurrentTcpText
+    {
+        get
+        {
+            if (_tcp is not { Length: 6 } tcp)
+                return LiveTcp ? "현재 TCP: 읽는 중… (코봇 연결 확인)" : "현재 TCP: 실시간 읽기 꺼짐 — '지금 읽기'를 누르세요.";
+
+            var mount = MapCalibration.MountPoseAtStroke(_mountAtHome, StrokeMm);
+            var tAT = FrameMath.Multiply(FrameMath.PoseToMatrix(mount), FrameMath.PoseToMatrix(tcp));   // AMR 차체 기준
+            var amrPose = MapCalibration.AmrPoseToMmDeg(AmrXm, AmrYm, AmrYawRad);
+            var tWT = FrameMath.Multiply(FrameMath.PoseToMatrix(amrPose), tAT);                          // 맵 기준
+            var inAmr = FrameMath.MatrixToPose(tAT);
+            var inMap = FrameMath.MatrixToPose(tWT);
+
+            // 툴 축(AMR 기준) — 광축은 설정된 툴축, 나머지는 X·Y.
+            var ax = (int)_opticalAxis / 2;
+            var sign = (int)_opticalAxis % 2 == 0 ? 1.0 : -1.0;
+            var optical = new[] { sign * tAT[0, ax], sign * tAT[1, ax], sign * tAT[2, ax] };
+            var toolX = new[] { tAT[0, 0], tAT[1, 0], tAT[2, 0] };
+            var toolY = new[] { tAT[0, 1], tAT[1, 1], tAT[2, 1] };
+
+            var age = (DateTime.UtcNow - _tcpAt).TotalSeconds;
+            return
+                $"현재 TCP (tool #{Tool}, {age:0.0}초 전{(LiveTcp ? "" : ", 실시간 꺼짐")})\n" +
+                $"  BASE   : [{Fmt(tcp)}] mm/도\n" +
+                $"  AMR 차체: [{inAmr[0]:0.0}, {inAmr[1]:0.0}, {inAmr[2]:0.0}] mm  (T_A_B 역환산, +X=전방·+Y=좌측)\n" +
+                $"  맵      : [{inMap[0]:0.0}, {inMap[1]:0.0}, {inMap[2]:0.0}] mm\n" +
+                $"  축 방향 : 광축 툴{FlatSurfaceCenteringService.AxisName(_opticalAxis)} → {BodyAxisText(optical)} / " +
+                $"툴X → {BodyAxisText(toolX)} / 툴Y → {BodyAxisText(toolY)}";
+        }
+    }
+
+    /// <summary>축 벡터(AMR 차체 기준)를 방향 이름으로 — 연직이면 위/아래, 아니면 전/후/좌/우(+앙각).</summary>
+    private static string BodyAxisText(double[] v)
+    {
+        var elev = Math.Asin(Math.Clamp(v[2], -1.0, 1.0)) * 180.0 / Math.PI;
+        if (elev > 85) return "위(+Z)";
+        if (elev < -85) return "아래(−Z)";
+        var dir = BodyDir(Math.Atan2(v[1], v[0]) * 180.0 / Math.PI);
+        return Math.Abs(elev) < 10 ? dir : $"{dir}(앙각 {elev:+0;-0}°)";
+    }
 
     /// <summary>
     /// 저장된 T_A_B.rz 가 맞다면 BASE 축 조그가 AMR 차체 기준 어느 쪽으로 가야 하는지 — <b>조그로 대조</b>해
