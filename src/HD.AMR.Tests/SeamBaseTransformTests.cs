@@ -443,4 +443,73 @@ public class SeamBaseTransformTests
         for (var i = 0; i < 3; i++)
             Assert.Equal(expected[i], actual[i], 6);
     }
+
+    // ── 광축 틸트(특이점 회피 자유도) ────────────────────────────────
+
+    [Fact]
+    public void Resolve_Tilt0_IsIdenticalToSurfaceNormal()
+    {
+        var input = Input(new[] { 13.0, 5.0, 1.0 }, yawRad: 0, standoff: 400, facing: 0, wallCode: "PM");
+
+        var t = SeamBaseTransform.Resolve(input with { TiltUpDeg = 0, TiltSideDeg = 0 });
+
+        Assert.Equal(t.SurfaceNormalMap[0], t.LookDirMap[0], 9);
+        Assert.Equal(t.SurfaceNormalMap[1], t.LookDirMap[1], 9);
+        Assert.Equal(t.SurfaceNormalMap[2], t.LookDirMap[2], 9);
+    }
+
+    [Fact]
+    public void Resolve_TiltUp_LooksDownAndApproachesFromAbove()
+    {
+        // 벽 정면 +X, 접선은 벽면 수평(+Y). 접선 둘레 +30° 회전은 시선을 위/아래로 기울인다.
+        var input = Input(new[] { 13.0, 5.0, 1.0 }, yawRad: 0, standoff: 400, facing: 0, wallCode: "PM");
+
+        var t = SeamBaseTransform.Resolve(input with { TiltUpDeg = 30 });
+
+        // 시선이 법선에서 정확히 30° 기울었고, 수직 성분이 생겼다.
+        Assert.Equal(30.0, SeamBaseTransform.LookTiltDeg(t.SurfaceNormalMap, t.LookDirMap), 6);
+        Assert.NotEqual(0.0, Math.Round(t.LookDirMap[2], 6));
+
+        // 접근점은 법선이 아니라 시선의 반대로 물러난다 — 용접선은 여전히 광축 위 standoff 거리에 있다.
+        var dx = t.SeamStartMapMm[0] - t.ApproachMapMm[0];
+        var dy = t.SeamStartMapMm[1] - t.ApproachMapMm[1];
+        var dz = t.SeamStartMapMm[2] - t.ApproachMapMm[2];
+        Assert.Equal(400.0, Math.Sqrt(dx * dx + dy * dy + dz * dz), 6);
+        Assert.True(Math.Abs(dz) > 1.0, "상하 틸트인데 접근점 높이가 그대로입니다.");
+    }
+
+    [Fact]
+    public void Resolve_TiltSide_KeepsSeamOnOpticalAxis()
+    {
+        var input = Input(new[] { 13.0, 5.0, 1.0 }, yawRad: 0, standoff: 400, facing: 0,
+                          wallCode: "PM", optical: ToolAxisDir.MinusZ);
+
+        var t = SeamBaseTransform.Resolve(input with { TiltSideDeg = 25 });
+
+        Assert.Equal(25.0, SeamBaseTransform.LookTiltDeg(t.SurfaceNormalMap, t.LookDirMap), 6);
+
+        // 좌우 틸트는 수평면 안에서만 돈다 — 높이는 그대로.
+        Assert.Equal(0.0, t.LookDirMap[2], 9);
+        Assert.Equal(t.SeamStartMapMm[2], t.ApproachMapMm[2], 6);
+
+        // 접근점 → 용접선 방향이 곧 시선 방향이어야 한다(용접선이 광축 위).
+        for (var i = 0; i < 3; i++)
+            Assert.Equal(t.LookDirMap[i] * 400.0, t.SeamStartMapMm[i] - t.ApproachMapMm[i], 6);
+    }
+
+    [Fact]
+    public void Resolve_Tilt_RotatesToolOpticalAxisTheSameWay()
+    {
+        // 자세도 같이 기울어야 한다 — 위치만 옮기고 자세는 법선 그대로면 용접선이 화각 밖으로 나간다.
+        var input = Input(new[] { 13.0, 5.0, 1.0 }, yawRad: 0, standoff: 400, facing: 0,
+                          wallCode: "PM", optical: ToolAxisDir.MinusZ);
+
+        var t = SeamBaseTransform.Resolve(input with { TiltSideDeg = 25 });
+
+        // 툴 X·Y 는 시선과 직교해야 한다(광축이 시선과 일치한다는 뜻).
+        Assert.Equal(0.0, Dot(t.ToolXMap!, t.LookDirMap), 9);
+        Assert.Equal(0.0, Dot(t.ToolYMap!, t.LookDirMap), 9);
+    }
+
+    private static double Dot(double[] a, double[] b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 }

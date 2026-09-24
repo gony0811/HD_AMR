@@ -91,12 +91,23 @@ public static class SeamBaseTransform
             notes.Add("wall_code 미지정 — 수직벽으로 가정해 수평으로만 물러납니다. TOOL 자세는 만들지 않습니다" +
                       "(호출측이 현재 자세 유지).");
 
-        // ── ④ 접근점: 면 법선의 반대로 standoff 만큼 후퇴 ─────────────
+        // ── ④ 시선(look) 방향 — 법선에서 허용 원뿔만큼 기울인 광축 ────
+        // 불변식은 "용접선이 광축 위, standoff 거리에 있다" 이지 "광축 = 면 법선" 이 아니다. 법선에서
+        // 조금 기울여도 검사 성립은 그대로인데(피사계·입사각 허용), 손목 관절각은 크게 달라진다 —
+        // 특이점·관절한계 회피의 주 자유도다(ApproachPlanner 가 이 두 각을 탐색한다).
+        var tangent = SurfaceTangent(input, facing, normal);
+        var look = TiltedLook(normal, tangent, input.TiltUpDeg, input.TiltSideDeg);
+
+        if (Math.Abs(input.TiltUpDeg) > 1e-9 || Math.Abs(input.TiltSideDeg) > 1e-9)
+            notes.Add($"광축을 면 법선에서 기울였습니다 — 상하 {input.TiltUpDeg:+0.0;-0.0;0}° / 좌우 {input.TiltSideDeg:+0.0;-0.0;0}° " +
+                      $"(면 입사각 {LookTiltDeg(normal, look):0.0}°). 접근점도 그 방향으로 물러납니다.");
+
+        // ── ④' 접근점: 시선 방향의 반대로 standoff 만큼 후퇴 ──────────
         var approachMap = new[]
         {
-            seamMap[0] - input.StandoffMm * normal[0],
-            seamMap[1] - input.StandoffMm * normal[1],
-            seamMap[2] - input.StandoffMm * normal[2],
+            seamMap[0] - input.StandoffMm * look[0],
+            seamMap[1] - input.StandoffMm * look[1],
+            seamMap[2] - input.StandoffMm * look[2],
         };
 
         if (input.StandoffMm < MinSafeStandoffMm)
@@ -117,8 +128,7 @@ public static class SeamBaseTransform
         double[]? toolXMap = null, toolYMap = null;
         if (wall is not null)
         {
-            var tangent = SurfaceTangent(input, facing, normal);
-            var rMap = ToolRotationMap(normal, tangent, input.OpticalAxis, input.ToolSpinDeg);
+            var rMap = ToolRotationMap(look, tangent, input.OpticalAxis, input.ToolSpinDeg);
             var rBase = RotationToBase(amrPose, mount, rMap);
             targetPose = PoseFrom(approachBase, rBase);
 
@@ -168,6 +178,7 @@ public static class SeamBaseTransform
             SeamStartBaseMm: seamBase,
             ApproachBaseMm: approachBase,
             SurfaceNormalMap: normal,
+            LookDirMap: look,
             NormalDistanceMm: normalDistance,
             Surface: wall?.Orientation,
             TargetPoseBase: targetPose,
@@ -235,6 +246,37 @@ public static class SeamBaseTransform
     /// <summary>벽면 수평 탄젠트 = 벽 정면의 좌회전 90° (SeamDirectionResolver 의 u 축과 같은 규약).</summary>
     private static double[] HorizontalTangent(double facingRad)
         => new[] { -Math.Sin(facingRad), Math.Cos(facingRad), 0.0 };
+
+    /// <summary>
+    /// 면 법선을 허용 원뿔 안에서 기울인 <b>시선(광축) 방향</b>. 접선·법선으로 면 위 직교기저를 만들고
+    /// ① 상하 축(= 법선×접선) 둘레로 <paramref name="tiltSideDeg"/> (좌우 시선),
+    /// ② 접선 축 둘레로 <paramref name="tiltUpDeg"/> (상하 시선) 순으로 돌린다.
+    /// 둘 다 0 이면 법선을 그대로 돌려준다.
+    /// </summary>
+    public static double[] TiltedLook(double[] normal, double[] tangent, double tiltUpDeg, double tiltSideDeg)
+    {
+        if (Math.Abs(tiltUpDeg) < 1e-12 && Math.Abs(tiltSideDeg) < 1e-12) return Normalize(normal);
+
+        var n = Normalize(normal);
+        var u = Normalize(Reject(tangent, n));      // 접선(면 위) — 상하 회전축
+        var v = Cross(n, u);                        // 면 위 수직축 — 좌우 회전축
+
+        var look = Apply(Rodrigues(v, tiltSideDeg * Math.PI / 180.0), n);
+        look = Apply(Rodrigues(u, tiltUpDeg * Math.PI / 180.0), look);
+        return Normalize(look);
+    }
+
+    /// <summary>법선과 시선 사이 각 [도] — 면 입사각(0 = 정면).</summary>
+    public static double LookTiltDeg(double[] normal, double[] look)
+        => Math.Acos(Math.Clamp(Dot(Normalize(normal), Normalize(look)), -1.0, 1.0)) * 180.0 / Math.PI;
+
+    /// <summary>3×3 회전을 벡터에 적용.</summary>
+    private static double[] Apply(double[,] r, double[] v) => new[]
+    {
+        r[0, 0] * v[0] + r[0, 1] * v[1] + r[0, 2] * v[2],
+        r[1, 0] * v[0] + r[1, 1] * v[1] + r[1, 2] * v[2],
+        r[2, 0] * v[0] + r[2, 1] * v[1] + r[2, 2] * v[2],
+    };
 
     // ── TOOL 자세 ────────────────────────────────────────────────────
 
@@ -386,6 +428,10 @@ public static class SeamBaseTransform
 /// <param name="WallCode">ACS `drawingPos.wall_code` — 면 자세(법선 앙각) 결정. null/미정의면 자세 미생성.</param>
 /// <param name="OpticalAxis">광축(대상을 향하는) 툴축 — 카메라 페이지 설정값, 기본 +Z.</param>
 /// <param name="ToolSpinDeg">광축 둘레 추가 회전 [도] — 접선 기준 0°.</param>
+/// <param name="TiltUpDeg">광축을 면 법선에서 <b>접선 축 둘레로</b> 기울인 각 [도] — 면 위에서 위/아래로
+/// 비스듬히 본다. 검사 성립은 유지하면서 손목 관절각을 바꾸는 자유도다(특이점 회피 — <see cref="HD.AMR.App.Service.Motion.ApproachPlanner"/>).</param>
+/// <param name="TiltSideDeg">광축을 면 법선에서 <b>상하 축 둘레로</b> 기울인 각 [도] — 면 위에서 좌/우로
+/// 비스듬히 본다. 부호는 접선(+) 방향.</param>
 public sealed record SeamBaseInput(
     double[] SeamStartW,
     double[]? SeamEndW,
@@ -399,7 +445,9 @@ public sealed record SeamBaseInput(
     double? WallFacingThetaRad,
     string? WallCode = null,
     ToolAxisDir OpticalAxis = ToolAxisDir.PlusZ,
-    double ToolSpinDeg = 0);
+    double ToolSpinDeg = 0,
+    double TiltUpDeg = 0,
+    double TiltSideDeg = 0);
 
 /// <summary>환산 결과. 좌표는 전부 mm.</summary>
 /// <param name="SeamStartMapMm">z 보정까지 반영한 맵 좌표 용접선 시작점.</param>
@@ -407,6 +455,8 @@ public sealed record SeamBaseInput(
 /// <param name="SeamStartBaseMm">코봇 BASE 기준 용접선 시작점(참고 — 면 위라 이동 목표 아님).</param>
 /// <param name="ApproachBaseMm">코봇 BASE 기준 접근점 — <b>이동 목표 위치</b>.</param>
 /// <param name="SurfaceNormalMap">면을 향하는 단위 법선(맵 프레임).</param>
+/// <param name="LookDirMap">실제 광축이 향하는 단위 시선 방향(맵 프레임). 틸트 0 이면 법선과 같다 —
+/// 접근점 후퇴와 TOOL 자세는 둘 다 <b>이 방향</b>을 쓴다.</param>
 /// <param name="NormalDistanceMm">코봇 BASE 에서 면까지의 법선 방향 거리 [mm] — 용접선이 면 위의 점이므로
 /// 곧 "코봇이 면에서 얼마나 떨어져 있나". standoff 와 비교해 접근점이 앞/뒤 어디에 잡히는지 판단한다.</param>
 /// <param name="Surface">wall_code 가 가리키는 면 자세. 미지정·미정의면 null.</param>
@@ -426,6 +476,7 @@ public sealed record SeamBaseTarget(
     double[] SeamStartBaseMm,
     double[] ApproachBaseMm,
     double[] SurfaceNormalMap,
+    double[] LookDirMap,
     double NormalDistanceMm,
     SurfaceOrientation? Surface,
     double[]? TargetPoseBase,

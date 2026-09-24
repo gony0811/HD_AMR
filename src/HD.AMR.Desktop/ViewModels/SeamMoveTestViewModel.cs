@@ -7,6 +7,7 @@ using HD.AMR.App.Communication.Vda5050;
 using HD.AMR.App.Models;
 using HD.AMR.App.Service;
 using HD.AMR.App.Service.Inspection;
+using HD.AMR.App.Service.Motion;
 using HD.AMR.App.Service.Sequence.Steps;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -51,6 +52,11 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
     private double[] _mountAtHome = new double[6];
     private ToolAxisDir _opticalAxis = ToolAxisDir.PlusZ;
     private bool _opticalAxisFromParam;
+
+    // 자세 허용 범위(툴 장착 상태의 소프트리밋·특이점 여유) — 탐색·이동 전 판정의 기준.
+    private PostureLimits _limits = PostureLimits.Default;
+    private bool _limitsConfigured;
+    private double[]? _joints;              // 현재 관절각 — 실시간 읽기와 경로 안전성 판정에 쓴다.
 
     // 현재 TCP 실시간 읽기 — MountCalibrationViewModel 과 같은 방식(2틱마다, 3회 연속 실패 시 중단).
     private double[]? _tcp;
@@ -103,6 +109,22 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
     /// <summary>광축 둘레 추가 회전 [도] — 0° = 용접선(없으면 벽면 수평) 방향 기준.</summary>
     [ObservableProperty] private double _toolSpinDeg;
 
+    /// <summary>광축을 면 법선에서 상하로 기울인 각 [도] — 손목 특이점 회피용 자유도.</summary>
+    [ObservableProperty] private double _tiltUpDeg;
+
+    /// <summary>광축을 면 법선에서 좌우로 기울인 각 [도].</summary>
+    [ObservableProperty] private double _tiltSideDeg;
+
+    /// <summary>관절 이동(MoveJ)으로 갈지 — 직선 이동(MoveL)은 도중에 손목 특이점을 쓸고 지나갈 수 있다.</summary>
+    [ObservableProperty] private bool _useJointMove = true;
+
+    // ── 자세 허용 범위 편집(툴 장착 상태) ───────────────────────────
+    [ObservableProperty] private string _jointMinText = "";
+    [ObservableProperty] private string _jointMaxText = "";
+    [ObservableProperty] private double _wristMarginDeg = 15;
+    [ObservableProperty] private double _elbowMarginDeg = 8;
+    [ObservableProperty] private double _maxJointTravelDeg = 200;
+
     [ObservableProperty] private double _standoffMm = SeamBaseTransform.DefaultStandoffMm;
     [ObservableProperty] private int _tool = 1;
     [ObservableProperty] private double _velPct = 10;
@@ -127,6 +149,15 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
     [ObservableProperty] private string _targetText = "용접선 좌표를 입력하면 환산 결과가 표시됩니다.";
     [ObservableProperty] private string _notesText = "";
     [ObservableProperty] private string _moveLog = "";
+
+    /// <summary>자세 탐색 결과 요약.</summary>
+    [ObservableProperty] private string _planText = "‘자세 탐색’ 을 누르면 특이점·관절한계를 피하는 접근 자세를 찾습니다.";
+    [ObservableProperty] private string _planNotes = "";
+    private ApproachPlan? _plan;
+
+    public bool HasPlanNotes => !string.IsNullOrEmpty(PlanNotes);
+
+    partial void OnPlanNotesChanged(string value) => OnPropertyChanged(nameof(HasPlanNotes));
 
     /// <summary>경고 문구가 있는가 — 주의 카드 표시 조건.</summary>
     public bool HasNotes => !string.IsNullOrEmpty(NotesText);
@@ -161,6 +192,13 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
             var param = scope.ServiceProvider.GetRequiredService<ParameterService>();
             (_opticalAxis, _opticalAxisFromParam) = await WeldSequenceSupport.GetDepthAxisAsync(param);
 
+            // 자세 허용 범위 — 툴 장착 상태의 관절 소프트리밋·특이점 여유.
+            var limitsSvc = scope.ServiceProvider.GetRequiredService<PostureLimitsService>();
+            _limits = await limitsSvc.GetAsync();
+            _limitsConfigured = await limitsSvc.IsConfiguredAsync();
+            ApplyLimitsToInputs(_limits);
+            OnPropertyChanged(nameof(LimitsText));
+
             OnPropertyChanged(nameof(MountText));
             OnPropertyChanged(nameof(MountCheckText));
             OnPropertyChanged(nameof(OpticalAxisText));
@@ -189,6 +227,7 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
         OnPropertyChanged(nameof(AmrPoseText));
         OnPropertyChanged(nameof(LiftText));
         OnPropertyChanged(nameof(CurrentTcpText));
+        OnPropertyChanged(nameof(CurrentPostureText));
         OnPropertyChanged(nameof(IsAmrStationary));
         OnPropertyChanged(nameof(FacingSourceText));
         OnPropertyChanged(nameof(ReadinessText));
@@ -202,6 +241,7 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
         try
         {
             _tcp = await _cobot.Rpc.GetTcpPoseInBaseAsync(Tool, _cts.Token);
+            _joints = await _cobot.Rpc.GetActualJointPosAsync(ct: _cts.Token);
             _tcpAt = DateTime.UtcNow;
             _tcpFailStreak = 0;
         }
@@ -223,9 +263,11 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
         try
         {
             _tcp = await _cobot.Rpc.GetTcpPoseInBaseAsync(Tool, _cts.Token);
+            _joints = await _cobot.Rpc.GetActualJointPosAsync(ct: _cts.Token);
             _tcpAt = DateTime.UtcNow;
             _tcpFailStreak = 0;
             OnPropertyChanged(nameof(CurrentTcpText));
+            OnPropertyChanged(nameof(CurrentPostureText));
             Success("현재 TCP 를 읽었습니다.");
         }
         catch (OperationCanceledException) { }
@@ -423,7 +465,10 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
                 (t.Surface is { } so ? $" ({so})" : " (wall_code 미지정 — 수평 가정)") +
                 (t.TargetPoseBase is { } tp
                     ? $"\n이동 목표 pose: [{Fmt(tp)}] mm/도  ← 광축 툴{FlatSurfaceCenteringService.AxisName(_opticalAxis)} 이 면을 향함" +
-                      $"\n자세 확인(맵)  : 광축 {AxisText(t.SurfaceNormalMap)} / 툴X {AxisText(t.ToolXMap)} / 툴Y {AxisText(t.ToolYMap)}"
+                      $"\n자세 확인(맵)  : 광축 {AxisText(t.LookDirMap)} / 툴X {AxisText(t.ToolXMap)} / 툴Y {AxisText(t.ToolYMap)}" +
+                      (SeamBaseTransform.LookTiltDeg(t.SurfaceNormalMap, t.LookDirMap) > 0.05
+                          ? $"\n광축 틸트      : 면 법선에서 {SeamBaseTransform.LookTiltDeg(t.SurfaceNormalMap, t.LookDirMap):0.0}° (상하 {TiltUpDeg:+0.0;-0.0;0}° / 좌우 {TiltSideDeg:+0.0;-0.0;0}°)"
+                          : "")
                     : "\n이동 목표 자세: (현재 TCP 자세 유지 — wall_code 미지정 또는 법선 자세 끔)") +
                 (t.DirectionReason is { } r ? $"\n검사 방향 유도: {r}" : "") +
                 $"\n벽 정면 방향  : {FacingSourceText}";
@@ -459,7 +504,170 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
         WallFacingThetaRad: UseNodeTheta ? NodeThetaDeg * Math.PI / 180.0 : null,
         WallCode: UseWallNormalPose ? WallCode : null,
         OpticalAxis: _opticalAxis,
-        ToolSpinDeg: ToolSpinDeg);
+        ToolSpinDeg: ToolSpinDeg,
+        TiltUpDeg: TiltUpDeg,
+        TiltSideDeg: TiltSideDeg);
+
+    // ── 자세 허용 범위 · 특이점 회피 ────────────────────────────────
+
+    /// <summary>저장된 허용 범위를 편집 입력으로 되돌린다.</summary>
+    private void ApplyLimitsToInputs(PostureLimits l)
+    {
+        var n = l.Normalized();
+        JointMinText = string.Join(", ", n.JointMinDeg.Select(v => v.ToString("0.#")));
+        JointMaxText = string.Join(", ", n.JointMaxDeg.Select(v => v.ToString("0.#")));
+        WristMarginDeg = n.WristMarginDeg;
+        ElbowMarginDeg = n.ElbowMarginDeg;
+        MaxJointTravelDeg = n.MaxJointTravelDeg;
+    }
+
+    public string LimitsText => _limitsConfigured
+        ? $"자세 허용 범위: 저장값 사용 (손목 여유 |J5| ≥ {_limits.WristMarginDeg:0}°, 팔꿈치 |J3| ≥ {_limits.ElbowMarginDeg:0}°)"
+        : "⚠ 자세 허용 범위 미설정 — 하드웨어 기본값(±175°)으로 판정합니다. 플랜지 툴이 닿는 각을 조그로 찾아 " +
+          "관절 하한·상한을 좁혀 저장하세요. 그러지 않으면 '통과' 로 나와도 실제로는 툴이 간섭합니다.";
+
+    /// <summary>현재 관절각이 허용 범위 안인지 — 이동 전에 눈으로 확인하는 줄.</summary>
+    public string CurrentPostureText
+    {
+        get
+        {
+            if (_joints is not { Length: 6 } j) return "현재 관절각: 읽는 중…";
+            var m = _limits.Evaluate(j);
+            var mark = m.Feasible ? "OK" : "위반";
+            return $"현재 관절각 : [{string.Join(", ", j.Select(v => v.ToString("0.0")))}]°\n" +
+                   $"  |J5| {m.WristDeg:0.0}° (손목 특이점까지) · |J3| {m.ElbowDeg:0.0}° (팔꿈치) · 여유 {m.MarginDeg:0.0}° [{mark}]\n" +
+                   $"  가장 빠듯한 제약: {m.Limiting}";
+        }
+    }
+
+    /// <summary>편집 입력 → <see cref="PostureLimits"/>. 형식이 틀리면 null.</summary>
+    private PostureLimits? BuildLimits()
+    {
+        var min = ParseSix(JointMinText);
+        var max = ParseSix(JointMaxText);
+        if (min is null || max is null) return null;
+        return new PostureLimits(min, max, WristMarginDeg, ElbowMarginDeg,
+            _limits.ShoulderRadiusMinMm, MaxJointTravelDeg).Normalized();
+    }
+
+    private static double[]? ParseSix(string text)
+    {
+        var parts = (text ?? "").Split(new[] { ',', ';', ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 6) return null;
+        var v = new double[6];
+        for (var i = 0; i < 6; i++)
+            if (!double.TryParse(parts[i], System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out v[i])) return null;
+        return v;
+    }
+
+    [RelayCommand]
+    private async Task SaveLimits()
+    {
+        var l = BuildLimits();
+        if (l is null) { Failure("관절 하한·상한은 J1~J6 여섯 개의 숫자여야 합니다 (예: -175, -175, -160, -175, -175, -175)."); return; }
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            await scope.ServiceProvider.GetRequiredService<PostureLimitsService>().SaveAsync(l);
+            _limits = l;
+            _limitsConfigured = true;
+            OnPropertyChanged(nameof(LimitsText));
+            OnPropertyChanged(nameof(CurrentPostureText));
+            Success("자세 허용 범위를 저장했습니다 — 자세 탐색과 이동 전 점검이 이 값을 씁니다.");
+        }
+        catch (Exception ex) { Failure($"저장 실패: {ex.Message}"); }
+    }
+
+    /// <summary>현재 관절각을 그대로 "여기까지는 된다" 는 근거로 쓰도록, 한계를 현재 값 바깥으로 넓힌다.</summary>
+    [RelayCommand]
+    private void CaptureLimitFromCurrent()
+    {
+        if (_joints is not { Length: 6 } j) { Failure("현재 관절각을 읽지 못했습니다."); return; }
+        var min = ParseSix(JointMinText) ?? PostureLimits.Default.JointMinDeg.ToArray();
+        var max = ParseSix(JointMaxText) ?? PostureLimits.Default.JointMaxDeg.ToArray();
+        for (var i = 0; i < 6; i++)
+        {
+            min[i] = Math.Min(min[i], j[i]);
+            max[i] = Math.Max(max[i], j[i]);
+        }
+        JointMinText = string.Join(", ", min.Select(v => v.ToString("0.#")));
+        JointMaxText = string.Join(", ", max.Select(v => v.ToString("0.#")));
+        Success("현재 관절각을 포함하도록 범위를 넓혔습니다 — 툴이 닿기 직전 자세에서 누르고 저장하세요.");
+    }
+
+    /// <summary>
+    /// 특이점·관절한계를 피하는 접근 자세 탐색. 검사 불변식("용접선이 광축 위 standoff 거리")은 유지한 채
+    /// 틸트·spin·standoff 를 훑는다. 코봇 역기구학을 쓰므로 연결이 필요하지만 <b>이동은 하지 않는다</b>.
+    /// </summary>
+    [RelayCommand]
+    private async Task PlanPosture()
+    {
+        if (!CobotConnected) { Failure("코봇 미연결 — 역기구학이 필요해 탐색할 수 없습니다."); return; }
+        if (string.IsNullOrWhiteSpace(WallCode) || !UseWallNormalPose)
+        {
+            Failure("wall_code 를 고르고 '면 법선 자세로 이동' 을 켜야 자세 탐색이 의미가 있습니다.");
+            return;
+        }
+
+        Busy = true;
+        try
+        {
+            // 이상값(틸트 0) 기준 입력 — 후보는 여기서 파생된다.
+            var input = BuildInput() with { TiltUpDeg = 0, TiltSideDeg = 0 };
+            var from = _joints is { Length: 6 } ? _joints : null;
+            var started = DateTime.UtcNow;
+
+            var plan = await ApproachPlanner.PlanAsync(
+                input, ApproachSearchSpace.Default, _limits,
+                async (pose, ct) =>
+                {
+                    try { return await _cobot.Rpc.GetInverseKinForMoveAsync(pose, Tool, user: 0, ct: ct); }
+                    catch (OperationCanceledException) { throw; }
+                    catch { return null; }          // 도달 불가 — 후보에서 제외
+                },
+                fromJointsDeg: from, ct: _cts.Token);
+
+            _plan = plan;
+            var elapsed = (DateTime.UtcNow - started).TotalSeconds;
+
+            if (plan.Candidate is { } c && plan.Feasible)
+            {
+                // 찾은 값을 입력에 반영 — 이후 계산·이동이 이 자세를 쓴다.
+                TiltUpDeg = c.TiltUpDeg;
+                TiltSideDeg = c.TiltSideDeg;
+                ToolSpinDeg += c.SpinDeg;
+                StandoffMm += c.StandoffDeltaMm;
+                Recompute();
+            }
+
+            PlanText =
+                $"후보 {plan.Tried}개 평가 / 도달 가능 {plan.Reachable}개 ({elapsed:0.0}초)\n" +
+                (plan.Candidate is { } k
+                    ? $"채택: 틸트 상하 {k.TiltUpDeg:+0.0;-0.0;0}° · 좌우 {k.TiltSideDeg:+0.0;-0.0;0}° · " +
+                      $"spin {k.SpinDeg:+0.0;-0.0;0}° · standoff {k.StandoffDeltaMm:+0;-0;0}mm\n"
+                    : "채택: 없음\n") +
+                (plan.JointsDeg is { } jd
+                    ? $"목표 관절각: [{string.Join(", ", jd.Select(v => v.ToString("0.0")))}]°\n"
+                    : "") +
+                (plan.Margin is { } m
+                    ? $"여유 {m.MarginDeg:0.0}° (|J5| {m.WristDeg:0.0}° · |J3| {m.ElbowDeg:0.0}° · 이동량 {m.TravelDeg:0.0}°) — {m.Limiting}"
+                    : "");
+
+            PlanNotes = string.Join("\n", plan.Notes);
+
+            if (plan.Feasible && plan.PathSafe) Success("쓸 수 있는 접근 자세를 찾았습니다.");
+            else if (plan.Feasible) Failure("자세는 찾았지만 지금 자세에서 곧바로 가면 손목 특이점을 지납니다 — 홈 복귀 후 다시 시도하세요.");
+            else Failure("허용 범위 안의 접근 자세가 없습니다 — 텔레스코픽 높이나 AMR 정차 위치를 바꿔야 합니다.");
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { Failure($"자세 탐색 실패: {ex.Message}"); }
+        finally
+        {
+            Busy = false;
+            MoveToApproachCommand.NotifyCanExecuteChanged();
+        }
+    }
 
     [RelayCommand]
     private void Compute()
@@ -560,12 +768,48 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
                 return;
             }
 
-            // ④ 이동.
-            var vel = Math.Clamp(VelPct, 1, MaxVelPct);
-            var rc = await _cobot.Rpc.MoveLAsync(target, joints, tool: Tool, user: 0,
-                vel: vel, acc: 0, ovl: 100, blendR: -1, ct: _cts.Token);
+            // ③' 자세 점검 — 도달 가능해도 툴 간섭·특이점 범위면 가지 않는다.
+            var from = await _cobot.Rpc.GetActualJointPosAsync(ct: _cts.Token);
+            _joints = from;
+            var margin = _limits.Evaluate(joints, t.PlanarDistanceMm, from);
+            AppendLog($"목표 관절각 [{string.Join(", ", joints.Select(v => v.ToString("0.0")))}]° " +
+                      $"여유 {margin.MarginDeg:0.0}° (|J5| {margin.WristDeg:0.0}°) — {margin.Limiting}");
 
-            AppendLog($"MoveL rc={rc} 목표 [{Fmt(target)}] tool=#{Tool} vel={vel:0}%");
+            if (!margin.Feasible)
+            {
+                Failure($"허용 범위 밖 자세라 이동하지 않았습니다 — {margin.Limiting}. " +
+                        "'자세 탐색' 으로 특이점·관절한계를 피하는 접근 자세를 찾으세요.");
+                return;
+            }
+
+            // ④ 이동. 관절 이동(MoveJ)은 각 축이 두 끝값 사이에서 단조로 변하므로, 양 끝이 허용 범위 안이고
+            //    J5 부호가 같으면 경로 도중에 손목 특이점을 지나지 않는다. 직교 직선 이동(MoveL)은 자세를
+            //    보간하다 J5 가 0 을 쓸고 지나갈 수 있어(rc=38·손목 급회전) 기본값이 아니다.
+            var vel = Math.Clamp(VelPct, 1, MaxVelPct);
+            int rc;
+
+            if (UseJointMove)
+            {
+                if (!_limits.JointPathWithin(from, joints))
+                {
+                    Failure("관절 경로 도중 J5 가 부호를 바꿔 손목 특이점을 지납니다 — 홈/대기 자세로 먼저 복귀한 뒤 " +
+                            "다시 시도하거나 '자세 탐색' 으로 같은 부호의 해를 찾으세요.");
+                    AppendLog($"경로 거부: J5 {from[4]:0.0}° → {joints[4]:0.0}° (부호 반전)");
+                    return;
+                }
+
+                rc = await _cobot.Rpc.MoveJAsync(joints, target, tool: Tool, user: 0,
+                    vel: vel, acc: 0, ovl: 100, ct: _cts.Token);
+                AppendLog($"MoveJ rc={rc} 목표 [{Fmt(target)}] tool=#{Tool} vel={vel:0}% " +
+                          $"(관절 보간 — 경로는 직선이 아닙니다)");
+            }
+            else
+            {
+                rc = await _cobot.Rpc.MoveLAsync(target, joints, tool: Tool, user: 0,
+                    vel: vel, acc: 0, ovl: 100, blendR: -1, ct: _cts.Token);
+                AppendLog($"MoveL rc={rc} 목표 [{Fmt(target)}] tool=#{Tool} vel={vel:0}%");
+            }
+
             if (rc == 0) Success("접근점으로 이동했습니다 — 실제 용접선과의 오차를 육안·레이저로 확인하세요.");
             else Failure($"이동 실패 rc={rc}{FairinoErrorCodes.Suffix(rc)}");
         }
@@ -610,6 +854,8 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
     }
     partial void OnZDatumOffsetMmChanged(double value) => Recompute();
     partial void OnToolSpinDegChanged(double value) => Recompute();
+    partial void OnTiltUpDegChanged(double value) => Recompute();
+    partial void OnTiltSideDegChanged(double value) => Recompute();
     partial void OnUseWallNormalPoseChanged(bool value) => Recompute();
 
     partial void OnWallCodeChanged(string? value)

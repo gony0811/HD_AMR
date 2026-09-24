@@ -118,6 +118,7 @@ internal static class ServiceRegistration
         services.AddScoped<ParameterService>();
         services.AddScoped<InspectionRecipeService>();
         services.AddScoped<CalibrationService>();
+        services.AddScoped<HD.AMR.App.Service.Motion.PostureLimitsService>();
         services.AddScoped<ArucoHandEyeService>();
         services.AddScoped<HandEyeAutoRoutine>();   // 핸드아이 자동 캡처(코봇 자동 이동) — ArucoHandEyeService(Scoped) 의존.
         services.AddScoped<ArucoMountAutoRoutine>(); // AMR+코봇 자동 이동 ArUco 장착보정 표본 수집.
