@@ -295,11 +295,11 @@
     private bool _isErr;
     private readonly CancellationTokenSource _cts = new();
 
-    private const string OffsetUKey = "Sequence.Inspection.OffsetU";
-    private const string OffsetVKey = "Sequence.Inspection.OffsetV";
+    private const string OffsetUKey = WeldSequenceSupport.InspectionOffsetUKey;
+    private const string OffsetVKey = WeldSequenceSupport.InspectionOffsetVKey;
     private const string DirectionKey = "Sequence.Inspection.Direction";
     private const string CameraDistKey = "Sequence.Camera.TargetDistance";
-    private const string CameraToLaserShiftKey = "Sequence.FlatSurface.CameraToLaserShiftYmm";
+    private const string CameraToLaserShiftKey = WeldSequenceSupport.CameraToLaserShiftYKey;
 
     // ⑱ 검사 수행 — 스텝(InspectionRunStep)이 실행 시 context 값을 사용. 선택값은 DB에 영속.
     private const string InspectionDrawingKey = "Sequence.Inspection.DrawingId";

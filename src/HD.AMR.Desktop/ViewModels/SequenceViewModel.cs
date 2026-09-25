@@ -30,11 +30,11 @@ public sealed partial class SequenceViewModel : ViewModelBase
     private bool _loading;
 
     // Parameter 키 — 스텝(WeldSequenceSupport 등)이 실행 시 같은 키를 읽으므로 일치해야 한다.
-    private const string OffsetUKey = "Sequence.Inspection.OffsetU";
-    private const string OffsetVKey = "Sequence.Inspection.OffsetV";
+    private const string OffsetUKey = WeldSequenceSupport.InspectionOffsetUKey;
+    private const string OffsetVKey = WeldSequenceSupport.InspectionOffsetVKey;
     private const string DirectionKey = "Sequence.Inspection.Direction";
     private const string CameraDistKey = "Sequence.Camera.TargetDistance";
-    private const string CameraToLaserShiftKey = "Sequence.FlatSurface.CameraToLaserShiftYmm";
+    private const string CameraToLaserShiftKey = WeldSequenceSupport.CameraToLaserShiftYKey;
     private const string InspectionProfileKey = "Sequence.Inspection.ProfileId";
     private const string InspectionSurfaceKey = "Sequence.Inspection.SurfaceId";
     private const string XSignKey = "Camera.Axis.XSign";

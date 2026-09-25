@@ -31,6 +31,19 @@ public static class WeldSequenceSupport
     public const string BeadRoiWKey = "Camera.Bead.Roi.W";
     public const string BeadRoiHKey = "Camera.Bead.Roi.H";
 
+    // ── 시퀀스 실행 파라미터(시퀀스 페이지가 저장, ACS 실행 경로도 같은 값을 읽는다) ──────
+    // ⚠ 진실 원천은 이 상수들이다. 페이지가 자기 상수로 저장하고 ACS 경로가 읽지 않으면,
+    //   현장에서 튜닝한 값이 실제 검사에는 적용되지 않는 조용한 불일치가 생긴다.
+
+    /// <summary>② 검사위치 이동 수평 오프셋 u [mm] — 툴 X(좌+/우−).</summary>
+    public const string InspectionOffsetUKey = "Sequence.Inspection.OffsetU";
+
+    /// <summary>② 검사위치 이동 수직 오프셋 v [mm] — 툴 Y(상+/하−).</summary>
+    public const string InspectionOffsetVKey = "Sequence.Inspection.OffsetV";
+
+    /// <summary>④ 평탄면 센터링 후 카메라 광축 → 레이저 중심 보정 횡이동 [mm, 툴 Y].</summary>
+    public const string CameraToLaserShiftYKey = "Sequence.FlatSurface.CameraToLaserShiftYmm";
+
     /// <summary>비드 검출 DL 모델 전체 경로. 빈 문자열 = 자동(weld_seg_{ir|rgb}.onnx).
     /// 카메라 페이지 드롭다운이 저장하고, ⑦⑪·⑦⁺ 가 측정 전 <see cref="ApplyDlModelAsync"/> 로 적용한다.</summary>
     public const string DlModelPathKey = "Weld.Dl.ModelPath";

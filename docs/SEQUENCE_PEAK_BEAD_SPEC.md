@@ -472,6 +472,43 @@ double offsetMm = result.OffsetPx * mmPerPx;
 | **⑫⁺⁺** | `cobotHome` | **1350** | `CobotHomeReturnStep` | — | **코봇 홈 복귀** — MoveJ. `wobjReset` 다음이라 활성 작업물 프레임을 반납한 뒤 베이스 기준으로 나간다. 이미 홈(관절 0.5° 이내)이면 움직이지 않는다. 실패 중단 시에는 도달하지 않는다(정지 직후 임의 이동 금지 — 사람이 판단) |
 | **⑫⁺⁺⁺** | `monitorClose` | **1400** | `MonitorCloseStep` | — | **모니터링 창 닫기** — 정상 완주 시에만 도달(실패 시 창 유지). 세미오토 단독 실행으로 수동 닫기 가능 |
 
+### 5.1.1 ACS(VDA5050) 실행 경로에서의 스텝 선정
+
+ACS 실행은 이 스텝들을 그대로 쓴다 — 단독 실행과 같은 엔진(`SequenceService.RunSequenceAsync`)이고,
+차이는 **파라미터의 출처**와 **어떤 스텝을 뺄지**뿐이다.
+
+**1) 노드 도달 → task(액션) 순차 실행.** `Vda5050OrderExecutor`가 단일 노드로 주행한 뒤
+`node.actions` 를 배열 순서대로 돌며, `startWeldInspection` 마다 `WeldInspectionOrchestrator` 에 위임한다
+(= task 1건 = 시퀀스 1회).
+
+**2) 파라미터 출처.** 우선순위는 ① ACS action → ② 티칭 프로필 → ③ 레시피 → ④ 전역 기본.
+
+| SequenceContext 항목 | ACS 실행 시 출처 |
+|---|---|
+| `InspectionSurfaceId` | `params.drawingPos.wall_code` → Surface ID |
+| `InspectionDirection` | `seamStartW→seamEndW` 벡터 + 정차 노드 `theta` 자동 유도(§4.4) |
+| `InspectionProfileId`·`InspectionDrawingId` | (seamType, wall_code) → 레시피 → 레시피 지정 티칭 프로필 |
+| `Tool`·`Velocity` | 티칭 프로필 `RunTool`(0이면 #1)·`RunVel`(기본 20) |
+| `CameraTargetDistanceMm` | 레시피 `CameraTargetDistanceMm`(빈 값 400). `action.workingDistanceMm` 은 미사용 |
+| `AcsTaskId`·`AcsAttempt` | `params.taskId`·`params.attempt` → CAPTURE_REQ 그대로 전달(N14) |
+| `CornerSide` | `wall_code` P*→L, S*→R |
+| `VisionFailRatioMax` | 레시피(1.0 = 판정 안 함) |
+| `InspectionOffsetU/V`·`CameraToLaserShiftYmm` | **Parameters 테이블**(시퀀스 페이지가 저장한 장비 보정 상수) |
+
+마지막 줄이 중요하다 — 이 셋은 ACS 가 보내는 값이 아니라 현장 보정 상수라, 시퀀스 페이지가 저장한
+같은 키를 ACS 경로도 읽어야 한다. 키 상수의 진실 원천은 `WeldSequenceSupport`.
+
+**3) 스텝 선정.** 레시피의 실행 스텝(미지정이면 등록된 전체)에서 출발해 이 task 에 맞지 않는 것만 뺀다.
+
+| 조건 | 빼는 스텝 | 이유 |
+|---|---|---|
+| anchor 적중 (`(orderId, anchorGroupId)` 동일 + 사이에 주행 없음) | 정렬 스텝군 ②③④·⑤~⑯ | 첫 task 가 등록한 작업물 좌표계(T_N)를 재사용. ⑱이 user:N 기준으로 원점 이동부터 하므로 재정렬 불필요 |
+| 이 노드의 마지막 검사 액션이 아님 | `cobotHome` | task 사이마다 홈에 다녀오면 정렬 공유 이점이 사라지고 시간만 든다 |
+
+anchor 무효화: 주행 발생 · 시퀀스 실패 · 그룹 변경 · 신규 order. CORNER 는 정렬 스텝이 없어 캐시 비적용.
+
+---
+
 > ⑤⑨, ⑥⑩, ⑦⑪, ⑦⁺⑪⁺은 `peakId`만 다른 동일 동작이므로
 > 생성자 파라미터로 구분하고 DI에 두 번 등록한다.
 >

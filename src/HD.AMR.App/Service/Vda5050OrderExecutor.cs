@@ -220,9 +220,13 @@ public sealed class Vda5050OrderExecutor
             // 3) 액션 순차 실행 — 배열 순서 = 실행 순서(§4.2). 액션 없는 Order(actions:[])는
             //    노드 도달만으로 완결(§4.1). startWeldInspection 은 검사 실행기에 위임(§8.5.1 2차 연동).
             //    개별 액션 실패는 다음 액션 계속 — 단 equipmentError(설비 불능)면 잔여 전건 FAILED(§6.4).
+            //    마지막 검사 액션에서만 코봇을 홈으로 되돌린다 — 노드 안의 task 는 정렬(작업물 좌표계)을
+            //    공유하므로 사이마다 홈에 다녀오면 이점이 사라지고 시간만 든다(§8.1 anchorGroupId).
+            var lastInspectionIndex = node.Actions.FindLastIndex(a => a.ActionType == "startWeldInspection");
             var equipmentDown = false;
-            foreach (var action in node.Actions)
+            for (var ai = 0; ai < node.Actions.Count; ai++)
             {
+                var action = node.Actions[ai];
                 ct.ThrowIfCancellationRequested();
 
                 if (equipmentDown)
@@ -237,7 +241,8 @@ public sealed class Vda5050OrderExecutor
 
                 if (action.ActionType == "startWeldInspection")
                 {
-                    var result = await _inspection.ExecuteAsync(action, orderId, pos.Theta, ct);
+                    var result = await _inspection.ExecuteAsync(
+                        action, orderId, pos.Theta, isLastInspection: ai == lastInspectionIndex, ct);
                     SetActionStatus(action.ActionId, result.Success ? "FINISHED" : "FAILED", result.ResultDescription);
                     if (!result.Success && result.ErrorType is not null)
                     {

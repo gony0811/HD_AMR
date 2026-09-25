@@ -6,6 +6,7 @@
              x:DataType="vm:SequenceViewModel">
     <UserControl.Styles>
         <Style Selector="TextBlock.axis"><Setter Property="Foreground" Value="{DynamicResource AppMutedTextBrush}" /><Setter Property="FontSize" Value="12" /></Style>
+        <Style Selector="TextBlock.hint"><Setter Property="Foreground" Value="{DynamicResource AppMutedTextBrush}" /><Setter Property="FontSize" Value="12" /><Setter Property="TextWrapping" Value="Wrap" /></Style>
     </UserControl.Styles>
 
     <StackPanel MaxWidth="1100" HorizontalAlignment="Left">
@@ -22,8 +23,8 @@
                     <TextBlock Text="{Binding FaultText}" />
                 </Border>
                 <StackPanel Orientation="Horizontal" Spacing="10">
-                    <StackPanel><TextBlock Classes="axis" Text="공구(tool)" /><NumericUpDown Value="{Binding Tool}" Minimum="0" Maximum="15" Increment="1" FormatString="0" IsEnabled="{Binding !Busy}" /></StackPanel>
-                    <StackPanel><TextBlock Classes="axis" Text="속도(%)" /><NumericUpDown Value="{Binding Velocity}" Minimum="1" Maximum="100" Increment="1" FormatString="0" IsEnabled="{Binding !Busy}" /></StackPanel>
+                    <StackPanel><TextBlock Classes="axis" Text="공구(tool) ⓐ" ToolTip.Tip="ACS 실행에서는 티칭 프로필 RunTool (0 이면 #1 로 보정)" /><NumericUpDown Value="{Binding Tool}" Minimum="0" Maximum="15" Increment="1" FormatString="0" IsEnabled="{Binding !Busy}" /></StackPanel>
+                    <StackPanel><TextBlock Classes="axis" Text="속도(%) ⓐ" ToolTip.Tip="ACS 실행에서는 티칭 프로필 RunVel (기본 20%)" /><NumericUpDown Value="{Binding Velocity}" Minimum="1" Maximum="100" Increment="1" FormatString="0" IsEnabled="{Binding !Busy}" /></StackPanel>
                     <Button VerticalAlignment="Bottom" Content="▶▶ 풀오토" Classes="accent" Command="{Binding RunAllCommand}" />
                     <Button VerticalAlignment="Bottom" Content="■ 정지" Classes="danger" Command="{Binding StopCommand}" />
                     <Button VerticalAlignment="Bottom" Content="오류 해제" Command="{Binding ResetFaultCommand}" IsEnabled="{Binding CobotConnected}" />
@@ -39,9 +40,12 @@
         <Border Classes="card">
             <StackPanel Spacing="8">
                 <TextBlock Text="실행 파라미터" FontWeight="SemiBold" />
+                <TextBlock Classes="hint" Text="ACS 실행(VDA5050 startWeldInspection)에서는 아래 ⓐ 값들을 액션·레시피가 대신 결정합니다 — 여기 입력값은 이 페이지에서 수동 실행할 때만 쓰입니다. ⓑ 는 장비 보정 상수라 ACS 실행에도 여기 저장한 값이 그대로 적용됩니다." />
+
+                <TextBlock Classes="axis" Text="ⓐ ACS 실행 시 액션·레시피가 결정 (수동 실행 전용 입력)" />
                 <WrapPanel>
                     <StackPanel Width="230" Margin="0,0,12,8">
-                        <TextBlock Classes="axis" Text="검사 Wall (Surface)" />
+                        <TextBlock Classes="axis" Text="검사 Wall (Surface)" ToolTip.Tip="ACS: params.drawingPos.wall_code → Surface ID" />
                         <ComboBox HorizontalAlignment="Stretch" ItemsSource="{Binding SurfaceOptions}"
                                   SelectedValue="{Binding InspectionSurfaceId}" SelectedValueBinding="{Binding SurfaceId}"
                                   IsEnabled="{Binding !Busy}">
@@ -51,14 +55,18 @@
                         </ComboBox>
                     </StackPanel>
                     <StackPanel Width="130" Margin="0,0,12,8">
-                        <TextBlock Classes="axis" Text="방향" />
+                        <TextBlock Classes="axis" Text="방향" ToolTip.Tip="ACS: seamStartW→seamEndW 벡터와 정차 노드 theta 로 자동 유도" />
                         <ComboBox HorizontalAlignment="Stretch" SelectedIndex="{Binding DirectionIndex}" IsEnabled="{Binding !Busy}">
                             <ComboBoxItem>수평</ComboBoxItem><ComboBoxItem>수직</ComboBoxItem>
                         </ComboBox>
                     </StackPanel>
+                    <StackPanel Margin="0,0,12,8"><TextBlock Classes="axis" Text="카메라 목표거리" ToolTip.Tip="ACS: 레시피 CameraTargetDistanceMm (빈 값=400). action.workingDistanceMm 은 미사용" /><NumericUpDown Value="{Binding CameraTargetDistanceMm}" Increment="1" IsEnabled="{Binding !Busy}" /></StackPanel>
+                </WrapPanel>
+
+                <TextBlock Classes="axis" Text="ⓑ 장비 보정 상수 (ACS 실행에도 이 값이 적용됨)" />
+                <WrapPanel>
                     <StackPanel Margin="0,0,12,8"><TextBlock Classes="axis" Text="U (좌+/우−)" /><NumericUpDown Value="{Binding OffsetU}" Increment="0.1" IsEnabled="{Binding !Busy}" /></StackPanel>
                     <StackPanel Margin="0,0,12,8"><TextBlock Classes="axis" Text="V (상+/하−)" /><NumericUpDown Value="{Binding OffsetV}" Increment="0.1" IsEnabled="{Binding !Busy}" /></StackPanel>
-                    <StackPanel Margin="0,0,12,8"><TextBlock Classes="axis" Text="카메라 목표거리" /><NumericUpDown Value="{Binding CameraTargetDistanceMm}" Increment="1" IsEnabled="{Binding !Busy}" /></StackPanel>
                     <StackPanel Width="150" Margin="0,0,12,8"><TextBlock Classes="axis" Text="레이저중심 Y" /><NumericUpDown Value="{Binding CameraToLaserShiftYmm}" Increment="0.1" IsEnabled="{Binding !Busy}" /></StackPanel>
                     <StackPanel Width="110" Margin="0,0,12,8">
                         <TextBlock Classes="axis" Text="Peak X부호" />
@@ -73,7 +81,7 @@
                         <ComboBox HorizontalAlignment="Stretch" SelectedIndex="{Binding PitchDirIndex}" IsEnabled="{Binding !Busy}"><ComboBoxItem>+1</ComboBoxItem><ComboBoxItem>−1</ComboBoxItem></ComboBox>
                     </StackPanel>
                     <StackPanel Width="200" Margin="0,0,12,8">
-                        <TextBlock Classes="axis" Text="티칭설정" />
+                        <TextBlock Classes="axis" Text="티칭설정 (ⓐ)" ToolTip.Tip="ACS: (seamType, wall_code) → 레시피 → 레시피에 지정된 티칭 프로필" />
                         <ComboBox HorizontalAlignment="Stretch" ItemsSource="{Binding Profiles}"
                                   SelectedValue="{Binding InspectionProfileId}" SelectedValueBinding="{Binding Id}" IsEnabled="{Binding !Busy}">
                             <ComboBox.ItemTemplate><DataTemplate x:DataType="ent:InspectionProfile"><TextBlock Text="{Binding Name}" /></DataTemplate></ComboBox.ItemTemplate>

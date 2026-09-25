@@ -3,6 +3,7 @@ using HD.AMR.App.Communication.Vda5050;
 using HD.AMR.App.Data;
 using HD.AMR.App.Data.Entities;
 using HD.AMR.App.Service.Sequence;
+using HD.AMR.App.Service.Sequence.Steps;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -34,11 +35,27 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
     private (string OrderId, string AnchorGroupId)? _lastAnchor;   // 마지막 성공 정렬 키
     private CancellationTokenSource? _currentRunCts;
 
-    /// <summary>anchor 캐시 적중 시 실행할 최소 스텝 — ⑱ 검사 수행 + 활성 작업물 좌표계 반납.
-    /// 좌표계 <b>등록</b>(T_N)은 컨트롤러에 유지되므로 wobjReset(활성 프레임만 0 복귀)을 포함해도
-    /// 다음 액션의 anchor 공유는 깨지지 않는다 — ⑱의 MoveL 이 user:N 을 명시하기 때문.
-    /// 반납을 빼면 검사 후 활성 프레임 N 잔류로 조그/코봇 페이지가 프레임 불일치(rc=154/38 계열)를 낸다.</summary>
-    private static readonly string[] AnchorHitStepKeys = { "inspectionRun", "wobjReset" };
+    /// <summary>
+    /// <b>정렬 스텝군</b> — anchor 적중(같은 노드의 2번째 이후 task) 시 건너뛴다.
+    ///
+    /// 첫 task 가 ⑤~⑯에서 작업물 좌표계(T_N)를 등록해 두면, 이후 task 의 ⑱ 검사 수행은 그 좌표계 기준
+    /// (user:N)으로 경유점을 돌므로 정렬을 다시 할 이유가 없다. 좌표계 <b>등록</b>은 컨트롤러에 남으므로
+    /// 사이의 wobjReset(활성 프레임만 0 복귀)이 공유를 깨지 않는다.
+    ///
+    /// ②③④(검사위치 이동·카메라 거리·평탄면 센터링)도 함께 건너뛴다 — ⑱이 좌표계 기준으로 스스로
+    /// 원점 이동부터 하므로 재정렬이 불필요하고, 다시 하면 task 마다 왕복이 늘 뿐이다. 현장에서
+    /// 재정렬이 필요하다고 판명되면 이 집합에서 앞 4개만 빼면 된다.
+    /// </summary>
+    private static readonly HashSet<string> AlignmentStepKeys = new(StringComparer.Ordinal)
+    {
+        "cobotInspection", "cameraAlign", "flatSurfaceAlign", "laserWorkingDistance",
+        "peak1Find", "peak1Center", "bead1Find", "bead1Center", "wobjPoint1",
+        "peak2Approach", "peak2Find", "peak2Center", "bead2Find", "bead2Center", "wobjPoint2",
+        "wobjRegister",
+    };
+
+    /// <summary>코봇 홈 복귀 스텝 — 노드의 <b>마지막</b> 검사 액션에서만 실행한다.</summary>
+    private const string HomeStepKey = "cobotHome";
 
     public WeldInspectionOrchestrator(
         IServiceScopeFactory scopeFactory,
@@ -74,11 +91,12 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         }
     }
 
-    public async Task<InspectionActionResult> ExecuteAsync(VdaAction action, string orderId, double? nodeThetaRad, CancellationToken ct)
+    public async Task<InspectionActionResult> ExecuteAsync(VdaAction action, string orderId, double? nodeThetaRad,
+                                                           bool isLastInspection, CancellationToken ct)
     {
         try
         {
-            return await ExecuteCoreAsync(action, orderId, nodeThetaRad, ct);
+            return await ExecuteCoreAsync(action, orderId, nodeThetaRad, isLastInspection, ct);
         }
         catch (OperationCanceledException)
         {
@@ -92,7 +110,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         }
     }
 
-    private async Task<InspectionActionResult> ExecuteCoreAsync(VdaAction action, string orderId, double? nodeThetaRad, CancellationToken ct)
+    private async Task<InspectionActionResult> ExecuteCoreAsync(VdaAction action, string orderId, double? nodeThetaRad,
+                                                                bool isLastInspection, CancellationToken ct)
     {
         // 1) 파싱 — 실패는 계약 위반(orderValidationError).
         if (!WeldInspectionActionParser.TryParse(action, out var request, out var parseError))
@@ -128,6 +147,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         var recipeService = scope.ServiceProvider.GetRequiredService<InspectionRecipeService>();
         var db = scope.ServiceProvider.GetRequiredService<HdAmrDbContext>();
         var sequence = scope.ServiceProvider.GetRequiredService<SequenceService>();
+        var param = scope.ServiceProvider.GetRequiredService<ParameterService>();
 
         // 5) 레시피 로드 + Enabled 게이트 — 매핑은 됐지만 실행 미구현이면 inspectionFailed(실행 불가, §8.5.1 (4)).
         var recipe = await recipeService.GetAsync(recipeId!, ct);
@@ -157,9 +177,19 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             anchorHit = recipe.SeamType != SeamTypeKind.Corner
                         && _lastAnchor == (orderId, req.AnchorGroupId);
 
-        var stepKeys = anchorHit
-            ? AnchorHitStepKeys
-            : ParseStepKeys(recipe.StepKeysJson);
+        // 레시피가 정한 스텝(미지정이면 등록된 전체)에서 출발해, 이 task 에 맞지 않는 것만 뺀다.
+        //  · anchor 적중 → 정렬 스텝군 제거(첫 task 가 잡아 둔 작업물 좌표계 재사용)
+        //  · 마지막 검사 액션이 아님 → 코봇 홈 복귀 제거(task 사이에 홈 왕복 금지)
+        var baseSteps = ParseStepKeys(recipe.StepKeysJson)
+                        ?? sequence.Steps.Select(st => st.Key).ToArray();
+        var stepKeys = baseSteps
+            .Where(k => !(anchorHit && AlignmentStepKeys.Contains(k)))
+            .Where(k => isLastInspection || k != HomeStepKey)
+            .ToArray();
+
+        if (stepKeys.Length == 0)
+            return InspectionActionResult.Fail("inspectionFailed",
+                $"recipe {recipeId} 에 실행할 스텝이 남지 않았습니다 — 레시피 실행 스텝 구성을 확인하세요.");
 
         // 8) 검사 방향 자동 유도(§4.4·§8.1) — seam 벡터를 노드 theta(벽 정면) 기준 벽면-로컬 투영.
         //    theta 미상(방어적)이면 현행 기본 Horizontal 폴백. 판정 근거는 로그로 남긴다.
@@ -195,6 +225,13 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         if (profile is { RunTool: <= 0 })
             _logger.LogWarning("티칭 프로필 '{Profile}' RunTool={RunTool} — 공구 #1 로 보정해 실행 (프로필 저장값 확인 필요)",
                 profile.Name, profile.RunTool);
+        // 장비 튜닝값 — ACS 가 보내는 값이 아니라 현장에서 시퀀스 페이지로 맞춰 저장한 상수다.
+        // 예전에는 페이지만 읽고 이 경로는 기본값(0/0/−65)으로 돌아, 맞춰 놓은 값이 실제 검사에는
+        // 적용되지 않는 조용한 불일치가 있었다. 같은 키를 여기서도 읽어 해소한다.
+        var offsetU = await param.GetDoubleAsync(WeldSequenceSupport.InspectionOffsetUKey) ?? 0.0;
+        var offsetV = await param.GetDoubleAsync(WeldSequenceSupport.InspectionOffsetVKey) ?? 0.0;
+        var camToLaserShiftY = await param.GetDoubleAsync(WeldSequenceSupport.CameraToLaserShiftYKey) ?? -65.0;
+
         var context = new SequenceContext
         {
             InspectionDirection = direction,
@@ -207,6 +244,9 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             // ③ 카메라 거리 정렬 목표 — 레시피 값(빈 값=전역 400). ACS workingDistanceMm 은 산출 근거가 없어
             // 사용하지 않는다(2026-09-18 결정, 스키마 항목은 유지 — 수신·로그만).
             CameraTargetDistanceMm = cameraTargetMm,
+            InspectionOffsetU = offsetU,
+            InspectionOffsetV = offsetV,
+            CameraToLaserShiftYmm = camToLaserShiftY,
             AcsJobRef = req.JobRef,
             AcsOrderId = orderId,
             AcsActionId = action.ActionId,
@@ -228,8 +268,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             "검사 시퀀스 시작: recipe={Recipe}, profile='{Profile}'(id={ProfileId}, drawing={DrawingId}), " +
             "anchor {AnchorState}, steps={Steps}",
             recipeId, profile?.Name ?? "(미사용 — CORNER 티칭 슬롯)", profile?.Id ?? 0, profile?.DrawingId ?? 0,
-            anchorHit ? "적중(정렬 생략)" : "신규(풀시퀀스)",
-            stepKeys is null ? "(전체)" : string.Join(",", stepKeys));
+            anchorHit ? "적중(정렬 생략)" : "신규(정렬 수행)",
+            string.Join(",", stepKeys));
 
         // 10) 실행 — 취소 전파용 CTS 를 보관(AbortAsync 가 취소).
         CancellationTokenSource runCts;
