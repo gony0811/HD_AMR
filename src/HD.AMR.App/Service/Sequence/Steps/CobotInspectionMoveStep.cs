@@ -5,6 +5,10 @@ namespace HD.AMR.App.Service.Sequence.Steps;
 
 /// <summary>
 /// ② Cobot 검사위치 이동 — 티칭된 검사 준비 위치에 툴프레임 u/v 오프셋을 합성한 목표로 MoveL 직선 이동.
+///
+/// 코봇을 처음 움직이는 스텝이라 <see cref="SequenceEntry"/> 의 진입 준비(활성 좌표계 정규화 + 홈 복귀)를
+/// 자기 앞에서 수행한다 — 예전 ① AmrMoveStep 이 하던 일이다(그 스텝의 AMR 이동은 끝내 미구현이었고,
+/// AMR 은 ACS 가 VDA5050 order 로 옮긴다).
 /// </summary>
 public class CobotInspectionMoveStep : ISequenceStep
 {
@@ -36,6 +40,10 @@ public class CobotInspectionMoveStep : ISequenceStep
     {
         if (!_cobot.IsConnected)
             return StepValidation.Fail("코봇 RPC 미연결");
+
+        // 진입 준비(홈 복귀)를 이 스텝이 맡으므로 홈 티칭이 선행조건이다.
+        if (SequenceEntry.ValidateHome(context) is { IsValid: false } homeError)
+            return homeError;
 
         if (context.InspectionSurfaceId is <= 0x00 or > 0xFF)
             return StepValidation.Fail("검사 Wall ID 미설정 (0x01~0xFF) — ② 파라미터에서 선택하세요.");
@@ -104,6 +112,11 @@ public class CobotInspectionMoveStep : ISequenceStep
     {
         var inspection = FindBySurfaceId(context)
             ?? throw new InvalidOperationException($"Wall 0x{context.InspectionSurfaceId:X2} 티칭 위치 없음");
+
+        // 진입 준비 — 잔류 작업물 프레임/공구를 정규화하고 홈에서 출발시킨다(목표 계산 전에 해야
+        // 작업물 추종 pose 계산이 정규화된 프레임 기준으로 나온다).
+        var entryNote = await SequenceEntry.PrepareAsync(_cobot, context, _logger, ct);
+
         var (target, where) = await ComputeTargetPoseAsync(_cobot, inspection, ct);
         target = NormalizeUvAnchor(target, _logger);
         where = $"[0x{context.InspectionSurfaceId:X2} {inspection.Name}] {where}";
@@ -125,7 +138,7 @@ public class CobotInspectionMoveStep : ISequenceStep
             offsetNote += " [수직, RZ−90°]";
 
         return rc == 0
-            ? StepResult.Ok($"{where} 이동 완료{offsetNote}.")
+            ? StepResult.Ok($"{where} 이동 완료{offsetNote}.{entryNote}")
             : StepResult.Fail($"이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.");
     }
 }

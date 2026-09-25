@@ -6,7 +6,7 @@ namespace HD.AMR.App.Service.Sequence;
 /// </summary>
 public interface ISequenceStep
 {
-    /// <summary>고유 식별 키 (예: "amrMove", "cobotInspection").</summary>
+    /// <summary>고유 식별 키 (예: "cobotInspection", "inspectionRun").</summary>
     string Key { get; }
 
     /// <summary>UI 표시명 (예: "AMR 검사위치 이동").</summary>

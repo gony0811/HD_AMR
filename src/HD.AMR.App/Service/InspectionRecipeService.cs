@@ -208,7 +208,7 @@ public class InspectionRecipeService
                 // CORNER2 는 실행 스텝 미구현(Enabled=false 로 게이트) — 후속에서 corner2 슬롯/캡처 스텝 배선.
                 // 그 외는 풀시퀀스(null) — 타입별 부분 구성은 현장 튜닝으로 조정.
                 StepKeysJson = c.Seam == SeamTypeKind.Corner
-                    ? """["amrMove","cornerInspectionRun","wobjReset","monitorClose"]"""
+                    ? """["cornerInspectionRun","wobjReset","monitorClose"]"""
                     : null,
                 CameraTargetDistanceMm = null,     // 전역 기본(400mm) 사용
                 VisionFailRatioMax = 1.0,          // 판정 안 함 — 정책 확정 시 하향

@@ -136,7 +136,6 @@ builder.Services.AddScoped<ArucoMountAutoRoutine>();
 builder.Services.AddScoped<QrLocalizationService>();
 
 // 시퀀스 단계 등록 (ISequenceStep). 새 단계 추가 시 여기에 한 줄만 추가.
-builder.Services.AddScoped<ISequenceStep, AmrMoveStep>();
 builder.Services.AddScoped<ISequenceStep, CobotInspectionMoveStep>();
 builder.Services.AddScoped<ISequenceStep, CameraAlignStep>();
 builder.Services.AddScoped<ISequenceStep, FlatSurfaceAlignStep>();

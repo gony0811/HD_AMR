@@ -173,7 +173,6 @@ internal static class ServiceRegistration
     /// ActivatorUtilities 로 명시 인자(첫 파라미터)를 넣어 두 번 등록한다.</summary>
     private static void AddSequenceSteps(IServiceCollection services)
     {
-        services.AddScoped<ISequenceStep, AmrMoveStep>();
         services.AddScoped<ISequenceStep, CobotInspectionMoveStep>();
         services.AddScoped<ISequenceStep, CameraAlignStep>();
         services.AddScoped<ISequenceStep, FlatSurfaceAlignStep>();

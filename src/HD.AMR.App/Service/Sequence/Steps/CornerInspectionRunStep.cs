@@ -68,6 +68,10 @@ public class CornerInspectionRunStep : ISequenceStep
         if (!_cobot.IsConnected)
             return StepValidation.Fail("코봇 RPC 미연결");
 
+        // CORNER 경로는 ②를 타지 않으므로 진입 준비(홈 복귀)를 이 스텝이 맡는다.
+        if (SequenceEntry.ValidateHome(context) is { IsValid: false } homeError)
+            return homeError;
+
         var side = context.CornerSide;
         foreach (var (suffix, _) in Route)
         {
@@ -84,6 +88,10 @@ public class CornerInspectionRunStep : ISequenceStep
     {
         if (context.CornerSide is not { } side)
             return StepResult.Ok("건너뜀 — CornerSide 미설정(비코너 경로).");
+
+        // 진입 준비 — CORNER 는 ②(cobotInspection)를 타지 않으므로 여기서 한다. 위 조기 반환 뒤에 두어야
+        // LINE/CROSS 풀시퀀스가 이 스텝을 no-op 으로 지날 때 엉뚱한 홈 복귀가 끼어들지 않는다.
+        var entryNote = await SequenceEntry.PrepareAsync(_cobot, context, _logger, ct);
 
         // v3.2: runId 는 로깅용 내부 상관값. taskId·attempt 는 ACS 발급(폴백 Empty/1), captureSeq 는 로봇 발번.
         var runId  = Guid.NewGuid();
@@ -151,6 +159,6 @@ public class CornerInspectionRunStep : ISequenceStep
                     $"비전 실패율 초과 — {visFail}/{captured} ({failRatio:P0} > 허용 {maxRatio:P0}). {msg}");
         }
 
-        return StepResult.Ok(msg);
+        return StepResult.Ok(msg + entryNote);
     }
 }

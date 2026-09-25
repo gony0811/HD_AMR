@@ -247,7 +247,7 @@ public sealed class ArucoMountAutoRoutine
     /// 활성 공구를 돌려준다(종료 시 복원용). 컨트롤러에서 활성 공구를 읽지 못하면 설정 기본값
     /// (<c>DefaultToolId</c>)이 오므로 복원 대상도 그 값이 된다 — 조그 리본·시퀀스의 정규화와 같은 기준이다.
     /// 무변위 MoveJ 라 로봇은 움직이지 않는다 —
-    /// 시퀀스 진입부(<c>AmrMoveStep</c>)·조그 리본과 같은 처리다. 실패해도 중단하지 않는다:
+    /// 시퀀스 진입부(<c>Sequence.Steps.SequenceEntry</c>)·조그 리본과 같은 처리다. 실패해도 중단하지 않는다:
     /// <see cref="FairinoRpcClient.GetInverseKinForMoveAsync"/> 가 활성 공구를 스스로 보정하므로 이중 방어다.</summary>
     private async Task<(int Tool, int User)> NormalizeFramesAsync(int tool, Action<string> report,
         CancellationToken ct)
