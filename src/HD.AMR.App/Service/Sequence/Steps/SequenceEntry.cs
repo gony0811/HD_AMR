@@ -56,8 +56,9 @@ internal static class SequenceEntry
                 $"툴 #{ctx.Tool}/작업물 0 으로 맞추지 못했습니다. 코봇 페이지의 '활성 좌표계 초기화'로 복구하세요.");
     }
 
-    /// <summary>현재 관절각이 홈과 다르면 MoveJ로 복귀. 이동했으면 true.</summary>
-    private static async Task<bool> EnsureCobotAtHomeAsync(
+    /// <summary>현재 관절각이 홈과 다르면 MoveJ로 복귀. 이동했으면 true. 시퀀스 진입(②·⑱ᶜ)과
+    /// 종료(<see cref="CobotHomeReturnStep"/>) 양쪽이 같은 경로를 쓴다.</summary>
+    public static async Task<bool> EnsureCobotAtHomeAsync(
         CobotService cobot, SequenceContext ctx, CancellationToken ct)
     {
         var home = ctx.Positions["home"];

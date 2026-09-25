@@ -4,7 +4,13 @@ using Microsoft.Extensions.Logging;
 namespace HD.AMR.App.Service.Sequence.Steps;
 
 /// <summary>
-/// ② Cobot 검사위치 이동 — 티칭된 검사 준비 위치에 툴프레임 u/v 오프셋을 합성한 목표로 MoveL 직선 이동.
+/// ② Cobot 검사위치 이동 — 티칭된 검사 준비 위치에 툴프레임 u/v 오프셋을 합성한 목표로 <b>MoveJ 관절 이동</b>.
+///
+/// 관절 이동인 이유: 홈에서 검사 준비 위치까지는 거리·자세 변화가 큰 구간이라, 직선 이동(MoveL)으로 가면
+/// 자세를 직교 공간에서 보간하다 중간에 손목 특이점(J5≈0)을 쓸고 지나갈 수 있다(rc=38·손목 급회전).
+/// 관절 이동은 각 축이 두 끝값 사이에서 단조로 변하므로 그 구간이 생기지 않는다. 대신 TCP 경로가 직선이
+/// 아니라 호를 그리므로, 티칭 시 홈↔검사위치 사이에 구조물이 없는지 확인해야 한다.
+/// 면을 따라가는 짧은 이동(③~⑱)은 직선이어야 하므로 그대로 MoveL 이다.
 ///
 /// 코봇을 처음 움직이는 스텝이라 <see cref="SequenceEntry"/> 의 진입 준비(활성 좌표계 정규화 + 홈 복귀)를
 /// 자기 앞에서 수행한다 — 예전 ① AmrMoveStep 이 하던 일이다(그 스텝의 AMR 이동은 끝내 미구현이었고,
@@ -128,7 +134,7 @@ public class CobotInspectionMoveStep : ISequenceStep
         var offset = new[] { context.InspectionOffsetU, context.InspectionOffsetV, 0.0, 0.0, 0.0, rz };
         var hasOffset = context.InspectionOffsetU != 0 || context.InspectionOffsetV != 0;
 
-        var rc = await _cobot.Rpc.MoveByToolOffsetAsync(target, user: 0, offset,
+        var rc = await _cobot.Rpc.MoveJByToolOffsetAsync(target, user: 0, offset,
             tool: context.Tool, vel: context.Velocity, ct: ct);
 
         var offsetNote = hasOffset
@@ -138,7 +144,7 @@ public class CobotInspectionMoveStep : ISequenceStep
             offsetNote += " [수직, RZ−90°]";
 
         return rc == 0
-            ? StepResult.Ok($"{where} 이동 완료{offsetNote}.{entryNote}")
+            ? StepResult.Ok($"{where} 관절 이동(MoveJ) 완료{offsetNote}.{entryNote}")
             : StepResult.Fail($"이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.");
     }
 }

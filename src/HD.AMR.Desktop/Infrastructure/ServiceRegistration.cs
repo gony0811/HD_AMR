@@ -192,6 +192,7 @@ internal static class ServiceRegistration
         services.AddScoped<ISequenceStep, InspectionRunStep>();
         services.AddScoped<ISequenceStep, CornerInspectionRunStep>();
         services.AddScoped<ISequenceStep, WObjResetStep>();
+        services.AddScoped<ISequenceStep, CobotHomeReturnStep>();
         services.AddScoped<ISequenceStep, MonitorCloseStep>();
     }
 

@@ -157,6 +157,7 @@ builder.Services.AddScoped<ISequenceStep, WObjRegisterStep>();   // 1170: 가상
 builder.Services.AddScoped<ISequenceStep, InspectionRunStep>();
 builder.Services.AddScoped<ISequenceStep, CornerInspectionRunStep>();   // 1250: ⑱ᶜ CORNER3 티칭 슬롯 순회
 builder.Services.AddScoped<ISequenceStep, WObjResetStep>();   // 1300: 활성 작업물 좌표계 0 복귀
+builder.Services.AddScoped<ISequenceStep, CobotHomeReturnStep>();   // 1350: 코봇 홈 복귀 (MoveJ)
 builder.Services.AddScoped<ISequenceStep, MonitorCloseStep>();   // 1400: 모니터링 창 닫기 (최종)
 // 시퀀스 모니터링 허브 — 별도 브라우저 창(/sequence-monitor, 다른 서킷)이 구독하므로 싱글톤.
 builder.Services.AddSingleton<SequenceMonitorService>();  // 1200: ⑱ 검사 수행(도면 경유점 순회 + 비전 캡처)

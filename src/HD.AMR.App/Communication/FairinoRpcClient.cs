@@ -494,6 +494,27 @@ public class FairinoRpcClient : IDisposable
     public Task<int> MoveByToolOffsetAsync(double[] anchorPose, int user, double[] offset, int? tool = null, double? vel = null, CancellationToken ct = default)
         => MoveLAsync(anchorPose, tool: tool, user: user, vel: vel, offsetFlag: 2, offsetPos: offset, ct: ct);
 
+    /// <summary>
+    /// <see cref="MoveByToolOffsetAsync"/> 의 <b>관절 이동(MoveJ) 판</b>. 긴 이동에서 손목 특이점을
+    /// 지나지 않으려면 직선 이동이 아니라 관절 이동이어야 한다(관절 보간은 각 축이 두 끝값 사이에서
+    /// 단조로 변하므로 중간에 J5=0 을 쓸고 지나가지 않는다).
+    ///
+    /// ⚠ MoveL 과 달리 오프셋을 컨트롤러에 맡기지 않고 <b>여기서 최종 pose 를 만든다</b> — MoveJ 의
+    /// joint_pos 는 '최종' 자세여야 하는데, offset_flag 로 넘기면 컨트롤러가 pose 에만 오프셋을 적용해
+    /// 관절각과 어긋나기 때문이다. 툴 좌표 오프셋이므로 최종 pose = 앵커 ∘ offset (앵커 자신의 축 기준).
+    /// </summary>
+    public async Task<int> MoveJByToolOffsetAsync(double[] anchorPose, int user, double[] offset,
+                                                  int? tool = null, double? vel = null, CancellationToken ct = default)
+    {
+        int t = tool ?? _settings.DefaultToolId;
+        var target = (offset is { Length: >= 6 } && offset.Any(v => v != 0.0))
+            ? FrameMath.FromFrame(offset, anchorPose)
+            : anchorPose;
+
+        var joints = await GetInverseKinForMoveAsync(target, t, user, ct);
+        return await MoveJAsync(joints, target, tool: t, user: user, vel: vel, ct: ct);
+    }
+
     /// <summary>관절 이동(MoveJ). jointPos = 6축 각도, descPose = 대응 직교 포즈.
     /// ⚠ 실물 펌웨어는 desc_pos=0(전부 0)을 rc=154(관절 지령점 오류)로 거부한다 — joint_pos 에 대응하는
     /// 유효 pose 가 필요하므로, 0 배열/미제공이면 정기구학(GetForwardKin)으로 채워 보낸다.</summary>

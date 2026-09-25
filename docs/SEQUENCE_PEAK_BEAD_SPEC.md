@@ -94,8 +94,9 @@ HD_AMR/                          ← 솔루션 폴더 (git root 기준 한 단�
 │           ├── ISequenceStep.cs         스텝 인터페이스 + 컨텍스트 + 결과 타입
 │           ├── SequenceService.cs       실행 엔진
 │           └── Steps/
-│               ├── AmrMoveStep.cs               ① order 100
+│               ├── SequenceEntry.cs            진입 준비(좌표계 정규화 + 홈 복귀) 공용
 │               ├── CobotInspectionMoveStep.cs   ② order 200
+│               ├── CobotHomeReturnStep.cs       ⑫⁺⁺ order 1350
 │               ├── CameraAlignStep.cs           ③ order 300
 │               └── FlatSurfaceAlignStep.cs      ④ order 400
 └── HD_AMR.Web/                  ← Blazor Server
@@ -450,8 +451,7 @@ double offsetMm = result.OffsetPx * mmPerPx;
 
 | # | Key | Order | 클래스 | peakId | 설명 |
 |---|---|---|---|---|---|
-| ① | `amrMove` | 100 | `AmrMoveStep` | — | (기존) AMR 검사위치 이동. **활성 좌표계 정규화**(툴 `context.Tool`/작업물 0, 무변위 MoveJ) 후 홈 복귀 — 이전 실행이 반납 못 한 작업물 프레임·펜던트에서 바뀐 활성 공구가 남으면 이후 단계의 앵커(FK→베이스)와 IK 가 그 값으로 해석돼 오이동·rc=38/112 |
-| ② | `cobotInspection` | 200 | `CobotInspectionMoveStep` | — | (기존) Cobot 검사위치 이동 |
+| ② | `cobotInspection` | 200 | `CobotInspectionMoveStep` | — | Cobot 검사위치 이동 — **MoveJ 관절 이동**(홈↔검사위치는 긴 이동이라 MoveL 이면 중간에 손목 특이점 J5≈0 을 쓸고 지나갈 수 있다. TCP 경로는 호를 그리므로 티칭 시 간섭 확인). 이동 전 **진입 준비**(`SequenceEntry`): 활성 좌표계 정규화(툴 `context.Tool`/작업물 0, 무변위 MoveJ) + 홈 복귀 — 이전 실행이 반납 못 한 작업물 프레임·펜던트에서 바뀐 활성 공구가 남으면 이후 단계의 앵커(FK→베이스)와 IK 가 그 값으로 해석돼 오이동·rc=38/112 |
 | ③ | `cameraAlign` | 300 | `CameraAlignStep` | — | (기존) 카메라 거리 정렬 400mm |
 | ④ | `flatSurfaceAlign` | 400 | `FlatSurfaceAlignStep` | — | (기존) 평탄면 센터링 — 시작 포즈를 앵커로 Bag 저장 |
 | ④⁺ | `laserWorkingDistance` | 450 | `LaserWorkingDistanceStep` | — | 레이저 3점 평균 → WD 초점거리 조정 후 **앵커로 툴 X/Y 횡복귀**(Z·자세 유지) |
@@ -469,7 +469,8 @@ double offsetMm = result.OffsetPx * mmPerPx;
 | **⑪⁺⁺⁺** | `wobjRegister` | **1170** | `WObjRegisterStep` | — | **가상 점3**(현재 TCP + 툴Z 50mm, 이동 없음)으로 좌표계 계산·등록 — 클라이언트 계산 경로(`RegisterWObjFromPointsAsync`, 계산법 0) |
 | **⑫** | `inspectionRun` | **1200** | `InspectionRunStep` | — | 검사 수행 — 등록된 작업물 좌표계 기준으로 티칭설정 경유점 순회 + 비전 CAPTURE_REQ. **RZ 는 현재 자세 유지**(rz0, 회전 없이 검사 — 프레임이 툴 대비 RZ 180° 회전일 수 있음), 틸트 부호 = sign(cos rz0) |
 | **⑫⁺** | `wobjReset` | **1300** | `WObjResetStep` | — | **활성 작업물 좌표계 0(베이스) 복귀** — 무이동 MoveL(user:0). ⑫ 실패/정지로 미실행 시 단독 실행 |
-| **⑫⁺⁺** | `monitorClose` | **1400** | `MonitorCloseStep` | — | **모니터링 창 닫기** — 정상 완주 시에만 도달(실패 시 창 유지). 세미오토 단독 실행으로 수동 닫기 가능 |
+| **⑫⁺⁺** | `cobotHome` | **1350** | `CobotHomeReturnStep` | — | **코봇 홈 복귀** — MoveJ. `wobjReset` 다음이라 활성 작업물 프레임을 반납한 뒤 베이스 기준으로 나간다. 이미 홈(관절 0.5° 이내)이면 움직이지 않는다. 실패 중단 시에는 도달하지 않는다(정지 직후 임의 이동 금지 — 사람이 판단) |
+| **⑫⁺⁺⁺** | `monitorClose` | **1400** | `MonitorCloseStep` | — | **모니터링 창 닫기** — 정상 완주 시에만 도달(실패 시 창 유지). 세미오토 단독 실행으로 수동 닫기 가능 |
 
 > ⑤⑨, ⑥⑩, ⑦⑪, ⑦⁺⑪⁺은 `peakId`만 다른 동일 동작이므로
 > 생성자 파라미터로 구분하고 DI에 두 번 등록한다.
