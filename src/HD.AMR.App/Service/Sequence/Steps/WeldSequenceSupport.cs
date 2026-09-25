@@ -44,6 +44,10 @@ public static class WeldSequenceSupport
     /// <summary>④ 평탄면 센터링 후 카메라 광축 → 레이저 중심 보정 횡이동 [mm, 툴 Y].</summary>
     public const string CameraToLaserShiftYKey = "Sequence.FlatSurface.CameraToLaserShiftYmm";
 
+    /// <summary>도면 전역 z(선창 바닥 기준) → AMR 바닥 기준 보정 [mm] — 해당 층 바닥 높이(level_z).
+    /// ACS 의 T_W_D 는 2D 변환이라 z 는 도면 전역값이 그대로 실려 온다(사양 §10 N17). 1층은 0.</summary>
+    public const string ZDatumOffsetKey = "Sequence.Inspection.ZDatumOffsetMm";
+
     /// <summary>비드 검출 DL 모델 전체 경로. 빈 문자열 = 자동(weld_seg_{ir|rgb}.onnx).
     /// 카메라 페이지 드롭다운이 저장하고, ⑦⑪·⑦⁺ 가 측정 전 <see cref="ApplyDlModelAsync"/> 로 적용한다.</summary>
     public const string DlModelPathKey = "Weld.Dl.ModelPath";

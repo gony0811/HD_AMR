@@ -36,19 +36,16 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
     private CancellationTokenSource? _currentRunCts;
 
     /// <summary>
-    /// <b>정렬 스텝군</b> — anchor 적중(같은 노드의 2번째 이후 task) 시 건너뛴다.
+    /// <b>작업물 좌표계 교시 스텝군(⑤~⑯)</b> — anchor 적중(같은 노드의 2번째 이후 task) 시 건너뛴다.
     ///
-    /// 첫 task 가 ⑤~⑯에서 작업물 좌표계(T_N)를 등록해 두면, 이후 task 의 ⑱ 검사 수행은 그 좌표계 기준
-    /// (user:N)으로 경유점을 돌므로 정렬을 다시 할 이유가 없다. 좌표계 <b>등록</b>은 컨트롤러에 남으므로
-    /// 사이의 wobjReset(활성 프레임만 0 복귀)이 공유를 깨지 않는다.
+    /// 첫 task 가 여기서 작업물 좌표계(T_N)를 등록해 두면 이후 task 는 그 좌표계를 재사용한다. 등록은
+    /// 컨트롤러에 남으므로 사이의 wobjReset(활성 프레임만 0 복귀)이 공유를 깨지 않는다.
     ///
-    /// ②③④(검사위치 이동·카메라 거리·평탄면 센터링)도 함께 건너뛴다 — ⑱이 좌표계 기준으로 스스로
-    /// 원점 이동부터 하므로 재정렬이 불필요하고, 다시 하면 task 마다 왕복이 늘 뿐이다. 현장에서
-    /// 재정렬이 필요하다고 판명되면 이 집합에서 앞 4개만 빼면 된다.
+    /// <b>②③④는 건너뛰지 않는다</b> — task 마다 용접선(seamStartW)이 다르므로 ②가 그 위치로 다시
+    /// 이동해야 하고, 위치가 바뀐 이상 ③ 카메라 거리·④ 평탄면 센터링도 그 자리에서 다시 잡아야 한다.
     /// </summary>
     private static readonly HashSet<string> AlignmentStepKeys = new(StringComparer.Ordinal)
     {
-        "cobotInspection", "cameraAlign", "flatSurfaceAlign", "laserWorkingDistance",
         "peak1Find", "peak1Center", "bead1Find", "bead1Center", "wobjPoint1",
         "peak2Approach", "peak2Find", "peak2Center", "bead2Find", "bead2Center", "wobjPoint2",
         "wobjRegister",
@@ -231,6 +228,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         var offsetU = await param.GetDoubleAsync(WeldSequenceSupport.InspectionOffsetUKey) ?? 0.0;
         var offsetV = await param.GetDoubleAsync(WeldSequenceSupport.InspectionOffsetVKey) ?? 0.0;
         var camToLaserShiftY = await param.GetDoubleAsync(WeldSequenceSupport.CameraToLaserShiftYKey) ?? -65.0;
+        // z 기준 보정(N17) — ACS 의 z 는 도면 전역(선창 바닥) 기준이라 L2 이상은 층 바닥 높이를 빼야 한다.
+        var zDatumOffset = await param.GetDoubleAsync(WeldSequenceSupport.ZDatumOffsetKey) ?? 0.0;
 
         var context = new SequenceContext
         {
@@ -257,6 +256,12 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             AnchorGroupId = req.AnchorGroupId,
             SeqInGroup = req.SeqInGroup,
             StandoffMmOverride = req.StandoffMm > 0 ? req.StandoffMm : null,
+            // ② 검사위치 이동의 목표 좌표 — task 마다 달라지는 유일한 위치 정보(§8.1).
+            SeamStartW = req.SeamStartW,
+            SeamEndW = req.SeamEndW,
+            WallCode = req.DrawingPos.WallCode,
+            WallFacingThetaRad = nodeThetaRad,
+            ZDatumOffsetMm = zDatumOffset,
             VisionFailRatioMax = recipe.VisionFailRatioMax < 1.0 ? recipe.VisionFailRatioMax : null,
         };
 

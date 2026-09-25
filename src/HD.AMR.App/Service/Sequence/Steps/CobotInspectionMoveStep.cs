@@ -1,10 +1,19 @@
 using HD.AMR.App.Communication;
+using HD.AMR.App.Service.Inspection;
 using Microsoft.Extensions.Logging;
 
 namespace HD.AMR.App.Service.Sequence.Steps;
 
 /// <summary>
 /// ② Cobot 검사위치 이동 — 티칭된 검사 준비 위치에 툴프레임 u/v 오프셋을 합성한 목표로 <b>MoveJ 관절 이동</b>.
+///
+/// <b>목표 위치는 ACS 가 보낸 용접선(seamStartW)에서 온다.</b> 정차점 하나에 여러 task(액션)가 실려
+/// 오므로, 벽(Wall ID)으로 고른 티칭 위치 하나로만 가면 2번째 task 가 1번째와 같은 자리로 간다. 그래서
+/// seamStartW(맵 좌표)를 코봇 BASE 로 환산해(<see cref="SeamBaseTransform"/>) 면에서 standoff 만큼
+/// 물러난 <b>접근점</b>으로 간다. <b>자세는 티칭 위치 값을 그대로 쓴다</b> — 손으로 맞춰 검증한 값이고,
+/// 같은 벽의 어느 용접선이든 바라보는 방향은 같기 때문(위치만 벽을 따라 달라진다).
+/// 여기는 거친 접근이고, 정밀 정렬은 뒤의 ③~⑯이 카메라·레이저로 잡는다.
+/// seamStartW 가 없으면(UI 단독 실행) 종전대로 티칭 위치로 이동한다.
 ///
 /// 관절 이동인 이유: 홈에서 검사 준비 위치까지는 거리·자세 변화가 큰 구간이라, 직선 이동(MoveL)으로 가면
 /// 자세를 직교 공간에서 보간하다 중간에 손목 특이점(J5≈0)을 쓸고 지나갈 수 있다(rc=38·손목 급회전).
@@ -19,11 +28,18 @@ namespace HD.AMR.App.Service.Sequence.Steps;
 public class CobotInspectionMoveStep : ISequenceStep
 {
     private readonly CobotService _cobot;
+    private readonly AMRService _amr;
+    private readonly TelescopicService _lift;
+    private readonly CalibrationService _calib;
     private readonly ILogger<CobotInspectionMoveStep> _logger;
 
-    public CobotInspectionMoveStep(CobotService cobot, ILogger<CobotInspectionMoveStep> logger)
+    public CobotInspectionMoveStep(CobotService cobot, AMRService amr, TelescopicService lift,
+        CalibrationService calib, ILogger<CobotInspectionMoveStep> logger)
     {
         _cobot = cobot;
+        _amr = amr;
+        _lift = lift;
+        _calib = calib;
         _logger = logger;
     }
 
@@ -114,6 +130,54 @@ public class CobotInspectionMoveStep : ISequenceStep
         return FrameMath.FromFrame(new[] { 0.0, 0.0, 0.0, 0.0, 0.0, theta }, target);
     }
 
+    /// <summary>
+    /// ACS 용접선(seamStartW, 맵 좌표)을 코봇 BASE 접근점으로 환산한다. 실패(측위 없음·장착 보정 없음 등)하면
+    /// null 과 사유를 돌려주고, 호출측은 티칭 위치 폴백으로 간다 — 좌표 환산이 안 된다고 검사를 통째로
+    /// 실패시키기보다, 예전 동작(벽 티칭 위치)으로라도 진행하고 로그에 남기는 편이 운영에 낫다.
+    /// </summary>
+    private async Task<(double[]? Base, string Note)> TrySeamApproachAsync(SequenceContext context, CancellationToken ct)
+    {
+        if (context.SeamStartW is not { Length: 3 } seam)
+            return (null, "seamStartW 없음(UI 단독 실행) — 티칭 위치로 이동");
+
+        if (_amr.LatestStatus is not { } status)
+            return (null, "AMR 측위 없음 — 용접선 좌표를 환산할 수 없어 티칭 위치로 이동");
+        var pose = status.Pose;
+
+        var mount = await _calib.GetMountAsync();
+        if (mount.All(v => Math.Abs(v) < 1e-9))
+            return (null, "장착 보정(T_A_B) 미수행 — 용접선 좌표를 환산할 수 없어 티칭 위치로 이동");
+
+        var stroke = _lift.Latest is { HeightMm: >= 0 } lift ? lift.HeightMm : 0;
+        var standoff = context.StandoffMmOverride is > 0 ? context.StandoffMmOverride.Value
+                                                        : SeamBaseTransform.DefaultStandoffMm;
+
+        var target = SeamBaseTransform.Resolve(new SeamBaseInput(
+            SeamStartW: seam,
+            SeamEndW: context.SeamEndW is { Length: 3 } ? context.SeamEndW : null,
+            AmrXm: pose.X,
+            AmrYm: pose.Y,
+            AmrYawRad: pose.Angle,
+            MountAtHome: mount,
+            TelescopicStrokeMm: stroke,
+            ZDatumOffsetMm: context.ZDatumOffsetMm,
+            StandoffMm: standoff,
+            WallFacingThetaRad: context.WallFacingThetaRad,
+            WallCode: context.WallCode));
+
+        foreach (var note in target.Notes)
+            _logger.LogWarning("② 용접선 환산 주의: {Note}", note);
+
+        _logger.LogInformation(
+            "② 용접선 접근점: seamStartW=[{Sx:0.###},{Sy:0.###},{Sz:0.###}]m → BASE [{Bx:0.0},{By:0.0},{Bz:0.0}]mm " +
+            "(standoff {Standoff:0}mm, wall={Wall}, 면까지 법선거리 {Dist:0}mm, 스트로크 {Stroke:0}mm)",
+            seam[0], seam[1], seam[2],
+            target.ApproachBaseMm[0], target.ApproachBaseMm[1], target.ApproachBaseMm[2],
+            standoff, context.WallCode ?? "(미지정)", target.NormalDistanceMm, stroke);
+
+        return (target.ApproachBaseMm, $"용접선 접근점(standoff {standoff:0}mm)");
+    }
+
     public async Task<StepResult> ExecuteAsync(SequenceContext context, CancellationToken ct)
     {
         var inspection = FindBySurfaceId(context)
@@ -126,6 +190,18 @@ public class CobotInspectionMoveStep : ISequenceStep
         var (target, where) = await ComputeTargetPoseAsync(_cobot, inspection, ct);
         target = NormalizeUvAnchor(target, _logger);
         where = $"[0x{context.InspectionSurfaceId:X2} {inspection.Name}] {where}";
+
+        // 위치는 ACS 용접선에서, 자세는 티칭 값 그대로 — task 마다 달라지는 것은 위치뿐이다.
+        var (seamBase, seamNote) = await TrySeamApproachAsync(context, ct);
+        if (seamBase is not null)
+        {
+            target = new[] { seamBase[0], seamBase[1], seamBase[2], target[3], target[4], target[5] };
+            where = $"{seamNote} — 자세는 티칭 [0x{context.InspectionSurfaceId:X2} {inspection.Name}] 유지";
+        }
+        else
+        {
+            _logger.LogInformation("② {Note}", seamNote);
+        }
 
         // 툴프레임 오프셋: offset[0]=u(툴 X = 수평, 좌+/우−), offset[1]=v(툴 Y = 수직, 상+/하−).
         // 실측 확인 매핑 — 과거 [v, u] 순서는 v 가 수평으로 나가는 축 교차 오류였음.

@@ -451,7 +451,7 @@ double offsetMm = result.OffsetPx * mmPerPx;
 
 | # | Key | Order | 클래스 | peakId | 설명 |
 |---|---|---|---|---|---|
-| ② | `cobotInspection` | 200 | `CobotInspectionMoveStep` | — | Cobot 검사위치 이동 — **MoveJ 관절 이동**(홈↔검사위치는 긴 이동이라 MoveL 이면 중간에 손목 특이점 J5≈0 을 쓸고 지나갈 수 있다. TCP 경로는 호를 그리므로 티칭 시 간섭 확인). 이동 전 **진입 준비**(`SequenceEntry`): 활성 좌표계 정규화(툴 `context.Tool`/작업물 0, 무변위 MoveJ) + 홈 복귀 — 이전 실행이 반납 못 한 작업물 프레임·펜던트에서 바뀐 활성 공구가 남으면 이후 단계의 앵커(FK→베이스)와 IK 가 그 값으로 해석돼 오이동·rc=38/112 |
+| ② | `cobotInspection` | 200 | `CobotInspectionMoveStep` | — | Cobot 검사위치 이동 — **목표 위치는 ACS `seamStartW`**(맵 좌표 → `SeamBaseTransform` → 코봇 BASE, 면에서 `standoffMm` 후퇴한 접근점), **자세는 Wall ID 티칭 위치 값 유지**(같은 벽이면 바라보는 방향은 같고 위치만 벽을 따라 달라진다). 여기는 거친 접근이고 정밀 정렬은 ③~⑯이 맡는다. seamStartW·측위·T_A_B 중 하나라도 없으면 종전대로 티칭 위치로 폴백(로그 남김). **MoveJ 관절 이동**(홈↔검사위치는 긴 이동이라 MoveL 이면 중간에 손목 특이점 J5≈0 을 쓸고 지나갈 수 있다. TCP 경로는 호를 그리므로 티칭 시 간섭 확인). 이동 전 **진입 준비**(`SequenceEntry`): 활성 좌표계 정규화(툴 `context.Tool`/작업물 0, 무변위 MoveJ) + 홈 복귀 — 이전 실행이 반납 못 한 작업물 프레임·펜던트에서 바뀐 활성 공구가 남으면 이후 단계의 앵커(FK→베이스)와 IK 가 그 값으로 해석돼 오이동·rc=38/112 |
 | ③ | `cameraAlign` | 300 | `CameraAlignStep` | — | (기존) 카메라 거리 정렬 400mm |
 | ④ | `flatSurfaceAlign` | 400 | `FlatSurfaceAlignStep` | — | (기존) 평탄면 센터링 — 시작 포즈를 앵커로 Bag 저장 |
 | ④⁺ | `laserWorkingDistance` | 450 | `LaserWorkingDistanceStep` | — | 레이저 3점 평균 → WD 초점거리 조정 후 **앵커로 툴 X/Y 횡복귀**(Z·자세 유지) |
@@ -493,7 +493,9 @@ ACS 실행은 이 스텝들을 그대로 쓴다 — 단독 실행과 같은 엔�
 | `AcsTaskId`·`AcsAttempt` | `params.taskId`·`params.attempt` → CAPTURE_REQ 그대로 전달(N14) |
 | `CornerSide` | `wall_code` P*→L, S*→R |
 | `VisionFailRatioMax` | 레시피(1.0 = 판정 안 함) |
-| `InspectionOffsetU/V`·`CameraToLaserShiftYmm` | **Parameters 테이블**(시퀀스 페이지가 저장한 장비 보정 상수) |
+| `SeamStartW`·`SeamEndW`·`WallCode`·`WallFacingThetaRad` | `position.seamStartW`/`seamEndW`/`drawingPos.wall_code` + 정차 노드 `theta` — **② 검사위치 이동의 목표 좌표** |
+| `StandoffMmOverride` | `params.standoffMm` — ② 접근점의 면 이격 |
+| `InspectionOffsetU/V`·`CameraToLaserShiftYmm`·`ZDatumOffsetMm` | **Parameters 테이블**(시퀀스 페이지가 저장한 장비 보정 상수 / 층 바닥 높이 N17) |
 
 마지막 줄이 중요하다 — 이 셋은 ACS 가 보내는 값이 아니라 현장 보정 상수라, 시퀀스 페이지가 저장한
 같은 키를 ACS 경로도 읽어야 한다. 키 상수의 진실 원천은 `WeldSequenceSupport`.
@@ -502,7 +504,7 @@ ACS 실행은 이 스텝들을 그대로 쓴다 — 단독 실행과 같은 엔�
 
 | 조건 | 빼는 스텝 | 이유 |
 |---|---|---|
-| anchor 적중 (`(orderId, anchorGroupId)` 동일 + 사이에 주행 없음) | 정렬 스텝군 ②③④·⑤~⑯ | 첫 task 가 등록한 작업물 좌표계(T_N)를 재사용. ⑱이 user:N 기준으로 원점 이동부터 하므로 재정렬 불필요 |
+| anchor 적중 (`(orderId, anchorGroupId)` 동일 + 사이에 주행 없음) | 작업물 좌표계 교시 ⑤~⑯ | 첫 task 가 등록한 작업물 좌표계(T_N)를 재사용(등록은 컨트롤러에 남는다). **②③④는 건너뛰지 않는다** — task 마다 `seamStartW` 가 다르므로 ②가 그 위치로 다시 가야 하고, 위치가 바뀌면 ③ 카메라 거리·④ 평탄면 센터링도 다시 잡아야 한다 |
 | 이 노드의 마지막 검사 액션이 아님 | `cobotHome` | task 사이마다 홈에 다녀오면 정렬 공유 이점이 사라지고 시간만 든다 |
 
 anchor 무효화: 주행 발생 · 시퀀스 실패 · 그룹 변경 · 신규 order. CORNER 는 정렬 스텝이 없어 캐시 비적용.

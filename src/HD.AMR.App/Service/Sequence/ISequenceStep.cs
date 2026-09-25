@@ -115,8 +115,28 @@ public class SequenceContext
     /// <summary>그룹 내 순번 (params.seqInGroup, 1부터).</summary>
     public int? SeqInGroup { get; set; }
 
-    /// <summary>ACS standoffMm — 로깅/검증용(정차점 산출은 ACS 책임, AMR은 참고만).</summary>
+    /// <summary>ACS standoffMm — 면 이격 [mm]. ② 검사위치 이동이 접근점을 만들 때 쓴다
+    /// (정차점 산출은 ACS 책임이지만, 코봇 접근 거리는 AMR 이 이 값으로 잡는다).</summary>
     public double? StandoffMmOverride { get; set; }
+
+    // ── 용접선 위치(§8.1) — ② 검사위치 이동의 목표 좌표 ────────────────────────
+    // task 마다 달라지는 유일한 위치 정보다. 이것이 없으면 ②는 벽(Wall ID) 하나로 고른 티칭
+    // 위치로만 가므로, 같은 정차점의 2번째 task 가 1번째와 같은 자리로 간다.
+
+    /// <summary>ACS `position.seamStartW` [x,y,z] m — 맵(SLAM) 좌표. null = UI 단독 실행(티칭 위치로 이동).</summary>
+    public double[]? SeamStartW { get; set; }
+
+    /// <summary>ACS `position.seamEndW` [x,y,z] m — 맵 좌표. 방향 유도·접선 기준.</summary>
+    public double[]? SeamEndW { get; set; }
+
+    /// <summary>ACS `position.drawingPos.wall_code` — 면 법선의 앙각(면 자세) 결정 키.</summary>
+    public string? WallCode { get; set; }
+
+    /// <summary>정차 노드 theta [rad] — 벽 정면 방향(면 법선의 방위각). null 이면 AMR yaw 사용.</summary>
+    public double? WallFacingThetaRad { get; set; }
+
+    /// <summary>도면 전역 z → AMR 바닥 기준 보정 [mm] — 해당 층 바닥 높이(level_z). 사양 §10 N17.</summary>
+    public double ZDatumOffsetMm { get; set; }
 
     /// <summary>⑱ 경유점 비전 실패율 상한(0~1). 초과 시 스텝 Fail — ACS 경로에서 inspectionFailed 승격.
     /// null(UI 단독 실행)이면 현행대로 집계만 하고 실패 처리 안 함.</summary>
