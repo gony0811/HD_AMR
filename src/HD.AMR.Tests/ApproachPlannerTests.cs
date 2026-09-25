@@ -1,4 +1,5 @@
 using HD.AMR.App.Communication;
+using HD.AMR.App.Service;
 using HD.AMR.App.Service.Inspection;
 using HD.AMR.App.Service.Motion;
 
