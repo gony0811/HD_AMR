@@ -7,6 +7,12 @@
     </PropertyGroup>
 
     <ItemGroup>
+      <!-- 스텝 간 공용 계산부(예: CobotInspectionMoveStep.ResolveApproachDistanceMm,
+           CameraAlignStep.ResolveGateReference)를 public 으로 넓히지 않고 단위 테스트하기 위함. -->
+      <InternalsVisibleTo Include="HD.AMR.Tests" />
+    </ItemGroup>
+
+    <ItemGroup>
       <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="8.0.10" />
       <!-- DL 비드 세그멘테이션 추론(CPU EP). DlWeldVisionDetector/OnnxBeadSegmentationService 가 사용.
            HD.AMR.Web 에서 이관되며, Web/Desktop 양쪽 실행 프로젝트가 App 을 통해 공유한다. -->

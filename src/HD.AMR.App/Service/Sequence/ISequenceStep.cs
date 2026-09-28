@@ -115,8 +115,10 @@ public class SequenceContext
     /// <summary>그룹 내 순번 (params.seqInGroup, 1부터).</summary>
     public int? SeqInGroup { get; set; }
 
-    /// <summary>ACS standoffMm — 면 이격 [mm]. ② 검사위치 이동이 접근점을 만들 때 쓴다
-    /// (정차점 산출은 ACS 책임이지만, 코봇 접근 거리는 AMR 이 이 값으로 잡는다).</summary>
+    /// <summary>ACS standoffMm — <b>로깅/검증용. 런타임은 쓰지 않는다.</b>
+    /// 툴을 면에서 얼마나 이격할지는 AMR 이 정하는 값이라 ② 는 ③ 이 수렴시킬
+    /// <see cref="CameraTargetDistanceMm"/> 만큼 물러난다. 계약상 같은 단어가 §4.4 의 정차 이격
+    /// (벽↔AMR 중심, 이미 nodePosition 에 반영됨)에도 쓰여 혼선이 있다 — §10 N18.</summary>
     public double? StandoffMmOverride { get; set; }
 
     // ── 용접선 위치(§8.1) — ② 검사위치 이동의 목표 좌표 ────────────────────────

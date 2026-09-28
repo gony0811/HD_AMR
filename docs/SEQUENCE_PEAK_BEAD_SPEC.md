@@ -451,7 +451,7 @@ double offsetMm = result.OffsetPx * mmPerPx;
 
 | # | Key | Order | 클래스 | peakId | 설명 |
 |---|---|---|---|---|---|
-| ② | `cobotInspection` | 200 | `CobotInspectionMoveStep` | — | Cobot 검사위치 이동 — **목표 위치는 ACS `seamStartW`**(맵 좌표 → `SeamBaseTransform` → 코봇 BASE, 면에서 `standoffMm` 후퇴한 접근점), **자세는 Wall ID 티칭 위치 값 유지**(같은 벽이면 바라보는 방향은 같고 위치만 벽을 따라 달라진다). 여기는 거친 접근이고 정밀 정렬은 ③~⑯이 맡는다. seamStartW·측위·T_A_B 중 하나라도 없으면 종전대로 티칭 위치로 폴백(로그 남김). **MoveJ 관절 이동**(홈↔검사위치는 긴 이동이라 MoveL 이면 중간에 손목 특이점 J5≈0 을 쓸고 지나갈 수 있다. TCP 경로는 호를 그리므로 티칭 시 간섭 확인). 이동 전 **진입 준비**(`SequenceEntry`): 활성 좌표계 정규화(툴 `context.Tool`/작업물 0, 무변위 MoveJ) + 홈 복귀 — 이전 실행이 반납 못 한 작업물 프레임·펜던트에서 바뀐 활성 공구가 남으면 이후 단계의 앵커(FK→베이스)와 IK 가 그 값으로 해석돼 오이동·rc=38/112 |
+| ② | `cobotInspection` | 200 | `CobotInspectionMoveStep` | — | Cobot 검사위치 이동 — **목표 위치는 ACS `seamStartW`**(맵 좌표 → `SeamBaseTransform` → 코봇 BASE, 면에서 **③ 카메라 목표거리**만큼 후퇴한 접근점 — ACS `params.standoffMm` 은 쓰지 않는다, §10 N18). 이동 전 **리치 사전 점검**: 면까지 법선거리 < 후퇴 + 공구 길이 + 최소 플랜지 뻗음 이면 IK 를 부르기 전에 즉시 실패하고 ACS 에 '정차 거리 부족' 을 보고한다(§4.4.1), **자세는 Wall ID 티칭 위치 값 유지**(같은 벽이면 바라보는 방향은 같고 위치만 벽을 따라 달라진다). 여기는 거친 접근이고 정밀 정렬은 ③~⑯이 맡는다. seamStartW·측위·T_A_B 중 하나라도 없으면 종전대로 티칭 위치로 폴백(로그 남김). **MoveJ 관절 이동**(홈↔검사위치는 긴 이동이라 MoveL 이면 중간에 손목 특이점 J5≈0 을 쓸고 지나갈 수 있다. TCP 경로는 호를 그리므로 티칭 시 간섭 확인). 이동 전 **진입 준비**(`SequenceEntry`): 활성 좌표계 정규화(툴 `context.Tool`/작업물 0, 무변위 MoveJ) + 홈 복귀 — 이전 실행이 반납 못 한 작업물 프레임·펜던트에서 바뀐 활성 공구가 남으면 이후 단계의 앵커(FK→베이스)와 IK 가 그 값으로 해석돼 오이동·rc=38/112 |
 | ③ | `cameraAlign` | 300 | `CameraAlignStep` | — | (기존) 카메라 거리 정렬 400mm |
 | ④ | `flatSurfaceAlign` | 400 | `FlatSurfaceAlignStep` | — | (기존) 평탄면 센터링 — 시작 포즈를 앵커로 Bag 저장 |
 | ④⁺ | `laserWorkingDistance` | 450 | `LaserWorkingDistanceStep` | — | 레이저 3점 평균 → WD 초점거리 조정 후 **앵커로 툴 X/Y 횡복귀**(Z·자세 유지) |
@@ -489,12 +489,12 @@ ACS 실행은 이 스텝들을 그대로 쓴다 — 단독 실행과 같은 엔�
 | `InspectionDirection` | `seamStartW→seamEndW` 벡터 + 정차 노드 `theta` 자동 유도(§4.4) |
 | `InspectionProfileId`·`InspectionDrawingId` | (seamType, wall_code) → 레시피 → 레시피 지정 티칭 프로필 |
 | `Tool`·`Velocity` | 티칭 프로필 `RunTool`(0이면 #1)·`RunVel`(기본 20) |
-| `CameraTargetDistanceMm` | 레시피 `CameraTargetDistanceMm`(빈 값 400). `action.workingDistanceMm` 은 미사용 |
+| `CameraTargetDistanceMm` | 레시피 `CameraTargetDistanceMm`(빈 값 400). **② 검사위치 이동의 면 후퇴 거리 겸용** — ②가 물러난 자리를 ③이 실측으로 확정하므로 두 단계가 같은 값을 봐야 한다. `action.workingDistanceMm` 은 미사용 |
 | `AcsTaskId`·`AcsAttempt` | `params.taskId`·`params.attempt` → CAPTURE_REQ 그대로 전달(N14) |
 | `CornerSide` | `wall_code` P*→L, S*→R |
 | `VisionFailRatioMax` | 레시피(1.0 = 판정 안 함) |
 | `SeamStartW`·`SeamEndW`·`WallCode`·`WallFacingThetaRad` | `position.seamStartW`/`seamEndW`/`drawingPos.wall_code` + 정차 노드 `theta` — **② 검사위치 이동의 목표 좌표** |
-| `StandoffMmOverride` | `params.standoffMm` — ② 접근점의 면 이격 |
+| `StandoffMmOverride` | `params.standoffMm` — **참고·로깅만**(런타임 미사용). 툴 면 이격은 AMR 이 정한다(§10 N18) |
 | `InspectionOffsetU/V`·`CameraToLaserShiftYmm`·`ZDatumOffsetMm` | **Parameters 테이블**(시퀀스 페이지가 저장한 장비 보정 상수 / 층 바닥 높이 N17) |
 
 마지막 줄이 중요하다 — 이 셋은 ACS 가 보내는 값이 아니라 현장 보정 상수라, 시퀀스 페이지가 저장한
@@ -1531,4 +1531,4 @@ SQLite DB(`hd_amr.db`)의 `Parameters` 테이블에서 수정해도 동일하게
 | 자홍색 선 | Peak 위치를 나타내는 세로선 (magenta, BGR `(255,0,255)`) |
 | 초록 선 | 비드 중심선 (BGR `(0,230,0)`) |
 | 빨간 점 | 자홍선 ∩ 초록선 교점 = 측정 지점 (BGR `(0,0,255)`) |
-| standoff | 카메라와 측정면 사이 거리. ③에서 400mm로 정렬 |
+| standoff | 카메라와 측정면 사이 거리 — 레시피 `CameraTargetDistanceMm`(기본 400mm). ③이 정렬하고 **②도 같은 값만큼 물러난다**. ACS `params.standoffMm` 과는 무관(§10 N18) |

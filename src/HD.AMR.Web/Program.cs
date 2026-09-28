@@ -134,6 +134,8 @@ builder.Services.AddScoped<HandEyeAutoRoutine>();
 builder.Services.AddScoped<ArucoMountAutoRoutine>();
 // 바닥 QR 기준 목표 AMR SLAM 정차 pose 계산. 온디맨드 측정 — 호스티드 불필요.
 builder.Services.AddScoped<QrLocalizationService>();
+// 관절 한계·특이점 여유 및 최소 플랜지 뻗음(Motion.PostureLimits.Json). ② 리치 사전 점검이 읽는다.
+builder.Services.AddScoped<HD.AMR.App.Service.Motion.PostureLimitsService>();
 
 // 시퀀스 단계 등록 (ISequenceStep). 새 단계 추가 시 여기에 한 줄만 추가.
 builder.Services.AddScoped<ISequenceStep, CobotInspectionMoveStep>();

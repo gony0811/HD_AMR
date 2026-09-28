@@ -103,8 +103,10 @@ public static class WeldInspectionActionParser
         var seqInGroup = GetInt(pr, "seqInGroup");
         if (seqInGroup is null or < 1) { error = $"params.seqInGroup 부적합 ({seqInGroup?.ToString() ?? "누락"}, 1 이상)"; return false; }
 
-        var standoff = GetDouble(pr, "standoffMm");
-        if (standoff is null) { error = "params.standoffMm 누락"; return false; }
+        // standoffMm — 수신은 하위호환으로 받되 부재를 허용한다. 툴을 면에서 얼마나 이격할지는 AMR 이
+        // 정하는 값이라(② 는 ③ 카메라 목표거리만큼 물러난다) 런타임이 읽지 않는다. 계약에서 같은 단어가
+        // §4.4 정차 이격(ACS 소관)에도 쓰여 혼선이 있다 — §10 N18. 값은 로깅·대조용으로만 보관한다.
+        var standoff = GetDouble(pr, "standoffMm") ?? 0.0;
 
         // ── taskId / attempt (사양 §8.1/§8.1.1, N14) ──────────────────
         // 선택 필드: 없거나 null 이면 폴백(실행 스텝이 Guid.Empty/1). 실려 왔는데 형식이 틀리면 거부.
@@ -137,7 +139,7 @@ public static class WeldInspectionActionParser
             SeamType: seamType,
             SectionDxfId: sectionDxfId!,
             InspectionProfileId: GetString(pr, "inspectionProfileId") ?? "",
-            StandoffMm: standoff.Value,
+            StandoffMm: standoff,
             WorkingDistanceMm: GetDouble(pr, "workingDistanceMm"),
             AnchorGroupId: anchorGroupId!,
             SeqInGroup: seqInGroup.Value,

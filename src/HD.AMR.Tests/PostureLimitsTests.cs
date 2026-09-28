@@ -207,4 +207,26 @@ public class PostureLimitsTests
         Assert.False(m.Feasible);
         Assert.Contains("손목 특이점", m.Limiting);
     }
+
+    [Fact]
+    public void 관절_배열이_깨져도_최소_플랜지_뻗음은_보존된다()
+    {
+        // Normalized() 의 기본값 대체 분기에서 빠뜨리기 쉬운 자리 — 여기가 리셋되면 ② 차단 임계가
+        // 조용히 350 으로 되돌아간다.
+        var broken = new PostureLimits(
+            JointMinDeg: new[] { -175.0, -175, -160 },      // 길이 불일치
+            JointMaxDeg: new[] { 175.0, 175, 160 },
+            MinFlangeReachMm: 480);
+
+        Assert.Equal(480, broken.Normalized().MinFlangeReachMm, 6);
+    }
+
+    [Fact]
+    public void 최소_플랜지_뻗음은_관절각_판정에_끼어들지_않는다()
+    {
+        // Evaluate 는 입력이 관절각이라 플랜지 위치를 모른다 — 도달성은 ApproachReach 가 본다.
+        var tight = Limits() with { MinFlangeReachMm = 9999 };
+
+        Assert.True(tight.Evaluate(Joints()).Feasible);
+    }
 }

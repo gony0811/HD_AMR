@@ -18,8 +18,6 @@ public class PeakFindStep : ISequenceStep
     private readonly ParameterService _param;
     private readonly ILogger<PeakFindStep> _logger;
 
-    /// <summary>ROI 폭 경고를 위한 가정 거리(mm). ③에서 400mm 로 정렬된 상태를 전제.</summary>
-    private const int AssumedStandoffMm = 400;
 
     /// <param name="peakId">1 또는 2. DI 에서 <c>ActivatorUtilities.CreateInstance</c> 로 주입되므로 첫 인자여야 한다.</param>
     public PeakFindStep(
@@ -61,7 +59,10 @@ public class PeakFindStep : ISequenceStep
 
         // 진행축 ROI 길이가 pitch 를 넘으면 ROI 안에 Peak 가 2개 들어올 수 있고, 분석기는 더 가까운 쪽을
         // 고른다. 판이 기울어 있으면 중앙이 아닌 Peak 를 잡을 수 있어 경고만 남긴다(차단하지 않음).
-        var pitchPx = WeldSequenceSupport.PitchToPixels(pitchMm, AssumedStandoffMm, _camera, progressAxis);
+        // ROI 폭 경고용 가정 거리 — ③ 에서 이 거리로 정렬된 상태를 전제한다. ②의 면 후퇴 거리와 같은
+        // 값을 쓰므로 레시피에서 목표거리를 바꾸면 여기도 따라간다(예전에는 400 하드코딩이었다).
+        var assumedMm = (int)Math.Round(CobotInspectionMoveStep.ResolveApproachDistanceMm(context));
+        var pitchPx = WeldSequenceSupport.PitchToPixels(pitchMm, assumedMm, _camera, progressAxis);
         var roiProgressLen = progressAxis == WeldProgressAxis.Horizontal ? roi.Width : roi.Height;
         if (pitchPx > 0 && roiProgressLen > pitchPx)
             _logger.LogWarning(

@@ -136,11 +136,13 @@
           <StackPanel Margin="0,0,10,8"><TextBlock Classes="axis" Text="손목 여유 |J5| (도)"/><NumericUpDown Classes="num" Value="{Binding WristMarginDeg}" Minimum="0" Maximum="90" Increment="1" FormatString="0"/></StackPanel>
           <StackPanel Margin="0,0,10,8"><TextBlock Classes="axis" Text="팔꿈치 여유 |J3| (도)"/><NumericUpDown Classes="num" Value="{Binding ElbowMarginDeg}" Minimum="0" Maximum="90" Increment="1" FormatString="0"/></StackPanel>
           <StackPanel Margin="0,0,10,8"><TextBlock Classes="axis" Text="관절 이동량 상한 (도)"/><NumericUpDown Classes="num" Value="{Binding MaxJointTravelDeg}" Minimum="10" Maximum="360" Increment="10" FormatString="0"/></StackPanel>
+          <StackPanel Margin="0,0,10,8"><TextBlock Classes="axis" Text="최소 플랜지 뻗음 (mm)"/><NumericUpDown Classes="num" Value="{Binding MinFlangeReachMm}" Minimum="0" Maximum="1200" Increment="10" FormatString="0"/></StackPanel>
         </WrapPanel>
         <StackPanel Orientation="Horizontal" Spacing="8">
           <Button Content="저장" Command="{Binding SaveLimitsCommand}"/>
           <Button Content="현재 자세를 범위에 포함" Command="{Binding CaptureLimitFromCurrentCommand}"/>
         </StackPanel>
+        <TextBlock Classes="hint" Text="최소 플랜지 뻗음: 팔을 접지 않고 자세를 만들 수 있는 최소 거리입니다. 접근점으로 조금씩 가까이 가며 |J5| 가 손목 여유를 깨거나 rc=38 이 나는 직전의 '팔 뻗음' 값을 읽어 여유 50mm 를 더해 저장하세요 — 이 값이 ② 검사위치 이동의 차단 임계이자 ACS 정차 거리 산출의 근거가 됩니다(잠정 350mm)."/>
         <TextBlock Classes="hint" Text="범위 잡는 법: 툴이 링크·케이블에 닿기 직전까지 각 축을 조그해 놓고 '현재 자세를 범위에 포함' 을 누르면 그 자세가 들어가도록 넓혀집니다. 반대로 닿는 자세를 찾았으면 그 각보다 안쪽 값을 직접 적으세요. 손목 여유는 툴이 클수록 크게 — 큰 툴은 J5 가 20~30° 만 되어도 손목이 크게 휘둘립니다."/>
 
         <Separator Margin="0,4"/>

@@ -131,6 +131,9 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
     [ObservableProperty] private double _elbowMarginDeg = 8;
     [ObservableProperty] private double _maxJointTravelDeg = 200;
 
+    /// <summary>플랜지가 면 법선 방향으로 최소한 나가 있어야 하는 거리 [mm] — ② 런타임 차단과 같은 값.</summary>
+    [ObservableProperty] private double _minFlangeReachMm = 350;
+
     [ObservableProperty] private double _standoffMm = SeamBaseTransform.DefaultStandoffMm;
     [ObservableProperty] private int _tool = 1;
     [ObservableProperty] private double _velPct = 10;
@@ -555,6 +558,7 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
         WristMarginDeg = n.WristMarginDeg;
         ElbowMarginDeg = n.ElbowMarginDeg;
         MaxJointTravelDeg = n.MaxJointTravelDeg;
+        MinFlangeReachMm = n.MinFlangeReachMm;
     }
 
     public string LimitsText => _limitsConfigured
@@ -598,7 +602,7 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
         var max = ParseSix(JointMaxText);
         if (min is null || max is null) return null;
         return new PostureLimits(min, max, WristMarginDeg, ElbowMarginDeg,
-            _limits.ShoulderRadiusMinMm, MaxJointTravelDeg).Normalized();
+            _limits.ShoulderRadiusMinMm, MaxJointTravelDeg, MinFlangeReachMm).Normalized();
     }
 
     private static double[]? ParseSix(string text)
@@ -870,10 +874,6 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
         }
     }
 
-    /// <summary>이 값보다 플랜지가 BASE 축에 가까우면 팔이 접힌 채로 자세를 만들어야 한다 [mm].
-    /// 정확한 최소 리치는 기종·자세마다 다르므로 경고용 눈금이다.</summary>
-    private const double FlangeReachWarnMm = 350.0;
-
     /// <summary>
     /// 접근점을 TCP 가 아니라 <b>플랜지</b> 기준으로 보면 팔이 실제로 얼마나 뻗는지 나온다.
     ///
@@ -898,16 +898,20 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
                 : null);
             if (pose is null) return "";
 
-            var flange = PoseMath.ReframeTool(pose, tc, new double[6]);   // TCP 기준 → 플랜지 기준
+            // 판정은 ②의 런타임 차단과 같은 식·같은 값으로 한다 — 여기서 경고가 없으면 ②도 막지 않는다.
+            // 수평 반경이 아니라 면 법선축으로 봐야 바닥·천장에서 오탐이 없다.
+            var n = _limits.Normalized();
+            var reach = ApproachReach.Check(tgt.NormalDistanceMm, StandoffMm, toolLen, n.MinFlangeReachMm);
+            var flange = PoseMath.ReframeTool(pose, tc, new double[6]);   // TCP 기준 → 플랜지 기준(참고 표시용)
             var flangeHoriz = Math.Sqrt(flange[0] * flange[0] + flange[1] * flange[1]);
-            var tcpHoriz = Math.Sqrt(ap[0] * ap[0] + ap[1] * ap[1]);
 
-            var line = $"팔 뻗음   : TCP 는 BASE 축에서 수평 {tcpHoriz:0}mm 인데, 공구 길이 {toolLen:0}mm 를 빼면 " +
-                       $"플랜지는 {flangeHoriz:0}mm 입니다.";
-            return flangeHoriz < FlangeReachWarnMm
-                ? line + $"\n  ⚠ 팔이 접힌 채로 자세를 만들어야 하는 구간입니다({FlangeReachWarnMm:0}mm 미만) — " +
-                         "손목 특이점·관절한계가 여기서 납니다. AMR 을 벽에서 더 떨어뜨리거나 standoff 를 줄이세요."
-                : line;
+            var line = $"팔 뻗음   : 면까지 {tgt.NormalDistanceMm:0}mm − 후퇴 {StandoffMm:0} − 공구 {toolLen:0} " +
+                       $"= 플랜지 뻗음 {reach.FlangeReachMm:0}mm (최소 {n.MinFlangeReachMm:0}mm, BASE 축 수평 {flangeHoriz:0}mm)";
+            return reach.Ok
+                ? line
+                : line + $"\n  ⚠ 팔이 접힌 채로 자세를 만들어야 하는 구간 — 손목 특이점·관절한계가 여기서 납니다. " +
+                         $"필요 ≥ {reach.RequiredNormalDistanceMm:0}mm 이므로 AMR 을 벽에서 {reach.ShortfallMm:0}mm 더 " +
+                         "떨어뜨리거나 standoff 를 줄이세요. ② 검사위치 이동도 같은 조건에서 거부합니다.";
         }
     }
 

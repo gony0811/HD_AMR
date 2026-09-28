@@ -39,8 +39,9 @@ public class InspectionRecipe
     // (제거됨) ApproachTeachingKey — 레시피별 코봇 접근 자세 티칭 키. 런타임 미구현, 접근 자세는 Teaching 의 Wall ID
     //   로 결정된다. 코너부 등 위치별 접근은 고도화 단계에서 재설계(2026-09-18).
 
-    // (제거됨) DefaultStandoffMm — action.standoffMm 부재/0 시 폴백. standoffMm 은 ACS 필수 항목이고 정차점 산출은
-    //   ACS 책임이라 AMR 런타임에서 읽는 곳이 없어 폐기(2026-09-18).
+    // (제거됨) DefaultStandoffMm — action.standoffMm 부재/0 시 폴백으로 폐기(2026-09-18).
+    //   툴 면 이격은 이후 CameraTargetDistanceMm 로 일원화됐다 — ② 접근점 후퇴와 ③ 거리 정렬이 같은
+    //   값을 봐야 하기 때문. ACS 의 standoffMm 은 런타임에서 쓰지 않는다(로깅만, §10 N18).
 
     /// <summary>③ 카메라 거리 정렬(cameraAlign) 목표 [mm]. null 이면 전역 기본(400).
     /// ACS action.workingDistanceMm 은 산출 근거가 없어 사용하지 않는다(2026-09-18 결정 — 수신·로그만).</summary>

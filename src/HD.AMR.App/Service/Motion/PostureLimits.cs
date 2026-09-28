@@ -22,13 +22,18 @@ namespace HD.AMR.App.Service.Motion;
 /// <param name="ElbowMarginDeg">|J3| 최소 여유 [도]. 팔이 완전히 펴진 자세(J3≈0) 회피.</param>
 /// <param name="ShoulderRadiusMinMm">목표점의 BASE 수평 반경 최소값 [mm]. 이보다 가까우면 어깨 특이점 구간.</param>
 /// <param name="MaxJointTravelDeg">한 번의 관절 이동에서 허용할 최대 관절 변화 [도] — 크게 휘두르는 경로 차단.</param>
+/// <param name="MinFlangeReachMm">플랜지가 검사면 법선 방향으로 최소한 나가 있어야 하는 거리 [mm].
+/// 이보다 짧으면 팔을 접은 자세로 목표를 만들어야 하고, 손목 특이점·관절한계가 거기서 난다.
+/// <b>실측 전 잠정값</b> — 시험 화면 ③ 카드에서 조정한다. 판정은 <see cref="ApproachReach"/> 가 한다
+/// (<see cref="Evaluate"/> 는 입력이 관절각이라 플랜지 위치를 알 수 없어 여기서 보지 않는다).</param>
 public sealed record PostureLimits(
     double[] JointMinDeg,
     double[] JointMaxDeg,
     double WristMarginDeg = 15.0,
     double ElbowMarginDeg = 8.0,
     double ShoulderRadiusMinMm = 180.0,
-    double MaxJointTravelDeg = 200.0)
+    double MaxJointTravelDeg = 200.0,
+    double MinFlangeReachMm = 350.0)
 {
     /// <summary>
     /// 기본값 — FR 계열 하드웨어 범위(±175°)에 툴 없는 상태를 가정한다. <b>실장 후에는 반드시 좁혀서
@@ -48,6 +53,7 @@ public sealed record PostureLimits(
                 ElbowMarginDeg = ElbowMarginDeg,
                 ShoulderRadiusMinMm = ShoulderRadiusMinMm,
                 MaxJointTravelDeg = MaxJointTravelDeg,
+                MinFlangeReachMm = MinFlangeReachMm,
             };
 
         var min = JointMinDeg.ToArray();
