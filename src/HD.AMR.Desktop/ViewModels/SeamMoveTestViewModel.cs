@@ -883,20 +883,40 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
         // 한 후보를 끝까지 판정한다 — 역기구학이 풀리는 것만으로는 부족하고, 나온 해가 관절한계·특이점
         // 여유까지 통과해야 쓸 수 있는 자세다. 둘 중 무엇이 걸렸는지 사유로 남긴다.
         //  Joints 는 역기구학이 푼 관절각(예외면 null), Margin 은 그 해의 판정. 둘 다 있어야 채택한다.
-        async Task<(double[]? Joints, PostureMargin? Margin, string Why)> TryAsync(double[] pose)
+        //
+        //  sweepConfigs: 같은 TCP 자세를 만드는 해 가지(branch)를 전부 훑는다. 컨트롤러 자동 선택(config=−1)
+        //  은 현재 자세와의 연속성을 보장하지 않아 손목이 반 바퀴 뒤집힌 해를 주기도 한다 — 자세를 타협하기
+        //  전에 '같은 자세의 다른 해' 부터 찾는 것이 순서다. 여유가 가장 큰 가지를 고른다.
+        async Task<(double[]? Joints, PostureMargin? Margin, string Why)> TryAsync(double[] pose, bool sweepConfigs)
         {
-            double[] raw;
-            try { raw = await _cobot.Rpc.GetInverseKinForMoveAsync(pose, Tool, user: 0, ct: ct); }
-            catch (OperationCanceledException) { throw; }
-            catch (Exception ex) { return (null, null, ex.Message); }
+            double[]? bestJ = null;
+            PostureMargin? bestM = null;
+            string firstWhy = "";
 
-            var j = _limits.NormalizeJoints(raw);
-            var m = _limits.Evaluate(j, planarRadiusMm, fromJoints);
-            return (j, m, m.Feasible ? "" : m.Limiting);
+            var configs = sweepConfigs ? new[] { -1, 0, 1, 2, 3, 4, 5, 6, 7 } : new[] { -1 };
+            foreach (var cfg in configs)
+            {
+                double[] raw;
+                try { raw = await _cobot.Rpc.GetInverseKinForMoveAsync(pose, Tool, user: 0, ct: ct, config: cfg); }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex) { if (firstWhy.Length == 0) firstWhy = ex.Message; continue; }
+
+                var j = _limits.NormalizeJoints(raw);
+                var m = _limits.Evaluate(j, planarRadiusMm, fromJoints);
+                if (bestM is null || m.MarginDeg > bestM.MarginDeg) (bestJ, bestM) = (j, m);
+                if (m.Feasible)
+                {
+                    if (cfg >= 0) AppendLog($"IK 해 가지 config={cfg} 채택 — 자동 선택(−1)보다 나은 해를 찾았습니다.");
+                    return (j, m, "");
+                }
+            }
+
+            if (bestM is null) return (null, null, firstWhy.Length > 0 ? firstWhy : "역기구학 해 없음");
+            return (bestJ, bestM, bestM.Limiting);
         }
 
-        // ① 원래 자세 그대로.
-        var (joints0, margin0, why0) = await TryAsync(target);
+        // ① 원래 자세 그대로 — 자세를 틀기 전에 해 가지를 전부 훑는다.
+        var (joints0, margin0, why0) = await TryAsync(target, sweepConfigs: true);
         if (joints0 is not null && margin0 is { Feasible: true }) return (joints0, target, "");
 
         if (joints0 is null)
@@ -926,7 +946,7 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
             var probe = FrameMath.FromFrame(
                 new[] { 0.0, 0.0, 0.0, c.TiltUpDeg, c.TiltSideDeg, c.SpinDeg }, target);
 
-            var (joints, margin, why) = await TryAsync(probe);
+            var (joints, margin, why) = await TryAsync(probe, sweepConfigs: false);
             if (joints is null || margin is not { Feasible: true })
             {
                 if (margin is not null && (best is null || margin.MarginDeg > best.MarginDeg))

@@ -443,8 +443,12 @@ public class FairinoRpcClient : IDisposable
     /// 현재 활성 작업물 프레임 기준으로 해석한다(GetForwardKin 과 대칭 — WObjResetStep 의 112 순환에서 확인).
     /// 변환 없이 부르면 활성=0(베이스) 상태에서 작업물 좌표(원점 근처 값)를 베이스로 오해석해 rc=38·112 가 난다.
     /// </summary>
+    /// <param name="config">역기구학 <b>해 가지(branch)</b> 선택. −1 = 컨트롤러 자동. 6축 팔은 같은 TCP
+    /// 자세를 어깨·팔꿈치·손목 조합으로 여러 가지로 만들 수 있는데, 자동 선택은 <b>현재 자세와의 연속성을
+    /// 보장하지 않는다</b> — 손목이 반 바퀴 뒤집힌 해(J6 ±180 플립)를 돌려주기도 한다. 그런 해를 피하려면
+    /// 0..7 을 훑어 현재 자세에 가까운 것을 고르면 된다.</param>
     public async Task<double[]> GetInverseKinForMoveAsync(double[] descPose, int tool, int user,
-                                                          CancellationToken ct = default)
+                                                          CancellationToken ct = default, int config = -1)
     {
         // ① 공구 축 — 본문(body) 변환이라 ②의 좌변 변환과 교환 가능하므로 순서는 무관하다.
         int activeTool = await ResolveActiveToolAsync(ct, strict: true);
@@ -458,7 +462,7 @@ public class FairinoRpcClient : IDisposable
         // ② 작업물 축
         int activeUser = await ResolveActiveUserAsync(ct, strict: true);
         if (activeUser == user)
-            return await GetInverseKinAsync(pose, ct: ct);
+            return await GetInverseKinAsync(pose, config: config, ct: ct);
 
         double[] pBase = pose;
         if (user > 0)
@@ -474,7 +478,7 @@ public class FairinoRpcClient : IDisposable
             _settings.Name, user, activeUser,
             string.Join(",", pose.Select(x => x.ToString("0.##"))),
             string.Join(",", pActive.Select(x => x.ToString("0.##"))));
-        return await GetInverseKinAsync(pActive, ct: ct);
+        return await GetInverseKinAsync(pActive, config: config, ct: ct);
     }
 
     /// <summary>
