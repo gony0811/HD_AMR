@@ -505,6 +505,9 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
                 (t.DirectionReason is { } r ? $"\n검사 방향 유도: {r}" : "") +
                 $"\n벽 정면 방향  : {FacingSourceText}";
 
+            // Target 이 채워진 뒤라야 플랜지 역산이 가능하다 — 여기서 덧붙인다.
+            if (ReachText is { Length: > 0 } reach) TargetText += "\n" + reach;
+
             // AMR yaw 폴백인데 측위가 없으면 0°(맵 +X)로 계산된다 — 숫자가 조용히 틀리므로 경고에 올린다.
             var notes = t.Notes.ToList();
             if (!UseWallNormalPose && !string.IsNullOrWhiteSpace(WallCode))
@@ -864,6 +867,47 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
         {
             Busy = false;
             MoveToApproachCommand.NotifyCanExecuteChanged();
+        }
+    }
+
+    /// <summary>이 값보다 플랜지가 BASE 축에 가까우면 팔이 접힌 채로 자세를 만들어야 한다 [mm].
+    /// 정확한 최소 리치는 기종·자세마다 다르므로 경고용 눈금이다.</summary>
+    private const double FlangeReachWarnMm = 350.0;
+
+    /// <summary>
+    /// 접근점을 TCP 가 아니라 <b>플랜지</b> 기준으로 보면 팔이 실제로 얼마나 뻗는지 나온다.
+    ///
+    /// 검사 툴은 광축 방향으로 길다(공구 좌표계 병진 길이). 그래서 "TCP 가 BASE 에서 600mm" 라도
+    /// 플랜지는 600 − 공구길이 만큼만 나가 있다. 그 값이 작으면 팔은 목표에 닿기 위해 자기 쪽으로
+    /// 접혀야 하고, 그 자세가 손목 특이점·관절한계를 부른다 — 숫자가 멀쩡해 보여도 그렇다.
+    /// </summary>
+    private string ReachText
+    {
+        get
+        {
+            var tgt = Target;
+            if (tgt is null || tgt.ApproachBaseMm is not { Length: 3 } ap) return "";
+            if (_toolCoord is not { Length: 6 } tc) return "";
+
+            var toolLen = Math.Sqrt(tc[0] * tc[0] + tc[1] * tc[1] + tc[2] * tc[2]);
+            if (toolLen < 1.0) return "";       // 공구 오프셋 미설정(플랜지 기준) — 볼 것이 없다
+
+            // 목표 pose 가 있으면 그 자세로, 없으면 현재 TCP 자세로 플랜지를 역산한다.
+            var pose = tgt.TargetPoseBase ?? (_tcp is { Length: 6 } t
+                ? new[] { ap[0], ap[1], ap[2], t[3], t[4], t[5] }
+                : null);
+            if (pose is null) return "";
+
+            var flange = PoseMath.ReframeTool(pose, tc, new double[6]);   // TCP 기준 → 플랜지 기준
+            var flangeHoriz = Math.Sqrt(flange[0] * flange[0] + flange[1] * flange[1]);
+            var tcpHoriz = Math.Sqrt(ap[0] * ap[0] + ap[1] * ap[1]);
+
+            var line = $"팔 뻗음   : TCP 는 BASE 축에서 수평 {tcpHoriz:0}mm 인데, 공구 길이 {toolLen:0}mm 를 빼면 " +
+                       $"플랜지는 {flangeHoriz:0}mm 입니다.";
+            return flangeHoriz < FlangeReachWarnMm
+                ? line + $"\n  ⚠ 팔이 접힌 채로 자세를 만들어야 하는 구간입니다({FlangeReachWarnMm:0}mm 미만) — " +
+                         "손목 특이점·관절한계가 여기서 납니다. AMR 을 벽에서 더 떨어뜨리거나 standoff 를 줄이세요."
+                : line;
         }
     }
 
