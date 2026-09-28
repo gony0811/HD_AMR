@@ -170,8 +170,8 @@
           <CheckBox Content="주변 안전을 확인했습니다" IsChecked="{Binding SafetyConfirmed}"/>
         </StackPanel></Border>
         <CheckBox Content="관절 이동(MoveJ)으로 간다 — 권장" IsChecked="{Binding UseJointMove}"/>
-        <CheckBox Content="역기구학이 특이자세(rc=38)로 거부하면 자세를 틀어 재시도" IsChecked="{Binding NudgeOnIkFailure}"/>
-        <TextBlock Classes="hint" Text="rc=38 은 위치가 아니라 자세 때문에 나는 거부입니다. 위치는 그대로 두고 광축 방향(상하·좌우 틸트)과 광축 둘레 roll(spin)만 덜 타협하는 순서로 훑어 풀리는 자세를 찾습니다. 찾으면 얼마나 틀었는지 로그에 남기니, 검사 입사각 허용치 안인지 확인하세요. wall_code 없이도 동작합니다."/>
+        <CheckBox Content="쓸 수 있는 자세가 안 나오면 자세를 틀어 재시도" IsChecked="{Binding NudgeOnIkFailure}"/>
+        <TextBlock Classes="hint" Text="역기구학이 특이자세(rc=38)로 거부하거나, 해는 나왔지만 관절한계·손목 특이점에 걸릴 때 동작합니다. 둘 다 위치가 아니라 자세 때문입니다 — 위치는 그대로 두고 광축 방향(상하·좌우 틸트)과 광축 둘레 roll(spin)만 덜 타협하는 순서로 훑어 쓸 수 있는 자세를 찾습니다. 찾으면 얼마나 틀었는지 로그에 남기니 검사 입사각 허용치 안인지 확인하세요. wall_code 없이도 동작합니다."/>
         <TextBlock Classes="hint" Text="관절 이동은 각 축이 두 끝값 사이에서만 변하므로, 양 끝이 허용 범위 안이고 J5 부호가 같으면 경로 도중에 손목 특이점을 지나지 않습니다. 직선 이동(MoveL)은 자세를 보간하다 J5 가 0 을 쓸고 지나갈 수 있어(rc=38 · 손목 급회전) 이번 현장 증상의 원인입니다. 대신 관절 이동의 TCP 경로는 직선이 아니라 호를 그립니다 — 벽·구조물과의 간격을 먼저 확인하세요."/>
         <TextBlock Text="{Binding ReadinessText}"/>
         <StackPanel Orientation="Horizontal" Spacing="8">

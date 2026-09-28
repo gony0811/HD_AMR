@@ -793,28 +793,23 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
 
             //    IK 실패가 rc=38(특이자세)이면 위치가 아니라 자세 문제다 — 자세만 틀어 재시도한다.
             //    반환 joints 는 ±360 감김이 해제된 값이다(컨트롤러 IK 는 −3.6° 를 356.4° 로 주기도 한다).
-            var (nudged, movedTarget, ikNote) = await TryIkWithNudgeAsync(target, _cts.Token);
+            var from = await _cobot.Rpc.GetActualJointPosAsync(ct: _cts.Token);
+            _joints = from;
+
+            var (nudged, movedTarget, ikNote) = await TryIkWithNudgeAsync(
+                target, t.PlanarDistanceMm, from, _cts.Token);
             if (nudged is null)
             {
-                Failure($"역기구학 실패 — 이동하지 않았습니다. {ikNote}");
+                Failure($"쓸 수 있는 자세가 없어 이동하지 않았습니다. {ikNote}");
                 AppendLog($"  활성 좌표계 #{activeTool}/#{activeUser}");
                 return;
             }
             var joints = nudged;
             target = movedTarget;
 
-            var from = await _cobot.Rpc.GetActualJointPosAsync(ct: _cts.Token);
-            _joints = from;
             var margin = _limits.Evaluate(joints, t.PlanarDistanceMm, from);
             AppendLog($"목표 관절각 [{string.Join(", ", joints.Select(v => v.ToString("0.0")))}]° " +
                       $"여유 {margin.MarginDeg:0.0}° (|J5| {margin.WristDeg:0.0}°) — {margin.Limiting}");
-
-            if (!margin.Feasible)
-            {
-                Failure($"허용 범위 밖 자세라 이동하지 않았습니다 — {margin.Limiting}. " +
-                        "'자세 탐색' 으로 특이점·관절한계를 피하는 접근 자세를 찾으세요.");
-                return;
-            }
 
             // ④ 이동. 관절 이동(MoveJ)은 각 축이 두 끝값 사이에서 단조로 변하므로, 양 끝이 허용 범위 안이고
             //    J5 부호가 같으면 경로 도중에 손목 특이점을 지나지 않는다. 직교 직선 이동(MoveL)은 자세를
@@ -867,30 +862,47 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
     /// 후보 격자·비용 순서는 <see cref="ApproachPlanner"/> 와 공유한다 — 덜 타협한 자세부터 시도한다.
     /// </summary>
     private async Task<(double[]? Joints, double[] Target, string Note)> TryIkWithNudgeAsync(
-        double[] target, CancellationToken ct)
+        double[] target, double planarRadiusMm, double[]? fromJoints, CancellationToken ct)
     {
+        // 한 후보를 끝까지 판정한다 — 역기구학이 풀리는 것만으로는 부족하고, 나온 해가 관절한계·특이점
+        // 여유까지 통과해야 쓸 수 있는 자세다. 둘 중 무엇이 걸렸는지 사유로 남긴다.
+        //  Joints 는 역기구학이 푼 관절각(예외면 null), Margin 은 그 해의 판정. 둘 다 있어야 채택한다.
+        async Task<(double[]? Joints, PostureMargin? Margin, string Why)> TryAsync(double[] pose)
+        {
+            double[] raw;
+            try { raw = await _cobot.Rpc.GetInverseKinForMoveAsync(pose, Tool, user: 0, ct: ct); }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex) { return (null, null, ex.Message); }
+
+            var j = _limits.NormalizeJoints(raw);
+            var m = _limits.Evaluate(j, planarRadiusMm, fromJoints);
+            return (j, m, m.Feasible ? "" : m.Limiting);
+        }
+
         // ① 원래 자세 그대로.
-        try
-        {
-            var j = await _cobot.Rpc.GetInverseKinForMoveAsync(target, Tool, user: 0, ct: ct);
-            return (_limits.NormalizeJoints(j), target, "");
-        }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception ex)
-        {
-            AppendLog($"IK 실패: 목표 [{Fmt(target)}] tool=#{Tool}/user=0");
-            AppendLog($"  └ {ex.Message}");
-            if (!NudgeOnIkFailure)
-                return (null, target, "자세 재시도 꺼짐 — '자세를 틀어 재시도' 를 켜거나 wall_code 로 면 법선 자세를 쓰세요.");
-        }
+        var (joints0, margin0, why0) = await TryAsync(target);
+        if (joints0 is not null && margin0 is { Feasible: true }) return (joints0, target, "");
+
+        if (joints0 is null)
+            AppendLog($"IK 실패: 목표 [{Fmt(target)}] tool=#{Tool}/user=0\n  └ {why0}");
+        else
+            AppendLog($"원래 자세 거부: 관절각 [{string.Join(", ", joints0.Select(v => v.ToString("0.0")))}]° " +
+                      $"여유 {margin0!.MarginDeg:0.0}° (|J5| {margin0.WristDeg:0.0}° · 이동량 {margin0.TravelDeg:0.0}°) — {why0}");
+
+        if (!NudgeOnIkFailure)
+            return (null, target, margin0 is null
+                ? "자세 재시도 꺼짐 — '자세를 틀어 재시도' 를 켜거나 wall_code 로 면 법선 자세를 쓰세요."
+                : $"{why0}. '자세를 틀어 재시도' 를 켜면 자세를 바꿔 다시 찾습니다.");
 
         // ② 자세만 흔들어 재시도. standoff 축은 위치를 바꾸므로 제외한다.
         var space = ApproachSearchSpace.Default with { StandoffDeltaMm = new[] { 0.0 }, MaxEvaluations = 40 };
         var tried = 0;
+        var best = margin0;                 // ①의 판정을 출발점으로 — 후보가 더 나으면 갱신된다
+        var bestWhy = why0;
 
         foreach (var c in ApproachPlanner.Candidates(space))
         {
-            if (c.TiltUpDeg == 0 && c.TiltSideDeg == 0 && c.SpinDeg == 0) continue;   // ①에서 이미 실패
+            if (c.TiltUpDeg == 0 && c.TiltSideDeg == 0 && c.SpinDeg == 0) continue;   // ①에서 이미 판정
             if (++tried > space.MaxEvaluations) break;
             ct.ThrowIfCancellationRequested();
 
@@ -898,25 +910,25 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
             var probe = FrameMath.FromFrame(
                 new[] { 0.0, 0.0, 0.0, c.TiltUpDeg, c.TiltSideDeg, c.SpinDeg }, target);
 
-            double[] joints;
-            try { joints = await _cobot.Rpc.GetInverseKinForMoveAsync(probe, Tool, user: 0, ct: ct); }
-            catch (OperationCanceledException) { throw; }
-            catch { continue; }
-
-            joints = _limits.NormalizeJoints(joints);
-            var margin = _limits.Evaluate(joints);
-            if (!margin.Feasible) continue;
+            var (joints, margin, why) = await TryAsync(probe);
+            if (joints is null || margin is not { Feasible: true })
+            {
+                if (margin is not null && (best is null || margin.MarginDeg > best.MarginDeg))
+                    (best, bestWhy) = (margin, why);
+                continue;
+            }
 
             var note = $"자세를 틀어 해를 찾았습니다 — 상하 {c.TiltUpDeg:+0.0;-0.0;0}° / 좌우 {c.TiltSideDeg:+0.0;-0.0;0}° / " +
-                       $"spin {c.SpinDeg:+0.0;-0.0;0}° (후보 {tried}개 시도, 여유 {margin.MarginDeg:0.0}°)";
+                       $"spin {c.SpinDeg:+0.0;-0.0;0}° (후보 {tried}개 시도, 여유 {margin!.MarginDeg:0.0}°, |J5| {margin.WristDeg:0.0}°)";
             AppendLog($"※ {note}");
             AppendLog($"  틀어진 목표 pose [{Fmt(probe)}] — 검사 입사각이 그만큼 비스듬해집니다.");
             return (joints, probe, note);
         }
 
         return (null, target,
-            $"자세를 {tried}가지로 틀어 봐도 역기구학이 풀리지 않습니다 — 이 위치는 팔로 해결되지 않습니다. " +
-            "텔레스코픽 높이나 AMR 정차 위치를 바꾸세요.");
+            $"자세를 {tried}가지로 틀어 봐도 쓸 수 있는 해가 없습니다 (가장 나은 것: {bestWhy}" +
+            (best is not null ? $", 여유 {best.MarginDeg:0.0}°" : "") + "). " +
+            "이 위치는 팔로 해결되지 않습니다 — 텔레스코픽 높이나 AMR 정차 위치를 바꾸세요.");
     }
 
     /// <summary>
