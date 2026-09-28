@@ -117,6 +117,10 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
     /// <summary>관절 이동(MoveJ)으로 갈지 — 직선 이동(MoveL)은 도중에 손목 특이점을 쓸고 지나갈 수 있다.</summary>
     [ObservableProperty] private bool _useJointMove = true;
 
+    /// <summary>역기구학이 특이자세(rc=38)로 거부하면 목표 <b>자세</b>를 조금씩 틀어 재시도할지.
+    /// 위치는 그대로 두고 광축 방향·roll 만 바꾼다.</summary>
+    [ObservableProperty] private bool _nudgeOnIkFailure = true;
+
     // ── 자세 허용 범위 편집(툴 장착 상태) ───────────────────────────
     [ObservableProperty] private string _jointMinText = "";
     [ObservableProperty] private string _jointMaxText = "";
@@ -775,31 +779,17 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
                 AppendLog($"※ 활성 좌표계 공구 #{activeTool} / 작업물 #{activeUser} — 이동 기준(공구 #{Tool} / 작업물 0)과 " +
                           "다릅니다. IK 가 거부되면 '활성 좌표계 초기화' 를 먼저 누르세요.");
 
-            double[] joints;
-            try
+            //    IK 실패가 rc=38(특이자세)이면 위치가 아니라 자세 문제다 — 자세만 틀어 재시도한다.
+            //    반환 joints 는 ±360 감김이 해제된 값이다(컨트롤러 IK 는 −3.6° 를 356.4° 로 주기도 한다).
+            var (nudged, movedTarget, ikNote) = await TryIkWithNudgeAsync(target, _cts.Token);
+            if (nudged is null)
             {
-                joints = await _cobot.Rpc.GetInverseKinForMoveAsync(target, Tool, user: 0, ct: _cts.Token);
-            }
-            catch (OperationCanceledException) { throw; }   // 페이지 이탈·취소는 바깥에서 처리
-            catch (Exception ex)
-            {
-                Failure($"역기구학 실패 — 도달 불가 자세입니다(이동하지 않았습니다): {ex.Message}");
-                // 예외 메시지에 errcode·한글 설명·실제 IK 입력 pose 가 들어 있다 — 상단 알림은 다음 동작에
-                // 덮이므로 로그에도 남긴다(원인 없이 "IK 실패" 만 쌓이면 진단이 불가능하다).
-                AppendLog($"IK 실패: 목표 [{Fmt(target)}] tool=#{Tool}/user=0, 활성 #{activeTool}/#{activeUser}");
-                AppendLog($"  └ {ex.Message}");
+                Failure($"역기구학 실패 — 이동하지 않았습니다. {ikNote}");
+                AppendLog($"  활성 좌표계 #{activeTool}/#{activeUser}");
                 return;
             }
-
-            // ③' 자세 점검 — 도달 가능해도 툴 간섭·특이점 범위면 가지 않는다.
-            //    컨트롤러 IK 는 해를 ±180 으로 감아 주지 않는다(−3.6° 를 356.4° 로 준다). 판정도 지령도
-            //    같은 자세의 범위 안 표현으로 맞춰 둬야 한다 — 그러지 않으면 멀쩡한 해가 한계 초과로
-            //    거부되고, 지령으로 나가면 컨트롤러가 rc=32(관절 한계 초과)를 낸다.
-            var rawJoints = joints;
-            joints = _limits.NormalizeJoints(joints);
-            if (!rawJoints.SequenceEqual(joints))
-                AppendLog($"관절각 정규화: [{string.Join(", ", rawJoints.Select(v => v.ToString("0.0")))}]° " +
-                          $"→ [{string.Join(", ", joints.Select(v => v.ToString("0.0")))}]° (±360 감김 해제 — 같은 자세)");
+            var joints = nudged;
+            target = movedTarget;
 
             var from = await _cobot.Rpc.GetActualJointPosAsync(ct: _cts.Token);
             _joints = from;
@@ -852,6 +842,69 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
             Busy = false;
             MoveToApproachCommand.NotifyCanExecuteChanged();
         }
+    }
+
+    /// <summary>
+    /// 목표 자세를 조금씩 틀어 가며 역기구학이 풀리는 자세를 찾는다. <b>위치는 건드리지 않는다</b> —
+    /// 광축 방향(상하·좌우 틸트)과 광축 둘레 roll(spin)만 바꾼다.
+    ///
+    /// 특이자세(rc=38)는 <b>위치가 아니라 자세</b> 때문에 나는 거부다. 그런데 'wall_code 미지정 +
+    /// 면 법선 자세로 이동 끔' 상태에서는 목표 자세가 현재 TCP 자세로 고정돼 있어, 사용자가 자세를
+    /// 바꿀 수단이 없다(자세 탐색은 wall_code 를 요구한다). 여기서 현재 자세를 기준으로 같은 탐색을 한다.
+    ///
+    /// 후보 격자·비용 순서는 <see cref="ApproachPlanner"/> 와 공유한다 — 덜 타협한 자세부터 시도한다.
+    /// </summary>
+    private async Task<(double[]? Joints, double[] Target, string Note)> TryIkWithNudgeAsync(
+        double[] target, CancellationToken ct)
+    {
+        // ① 원래 자세 그대로.
+        try
+        {
+            var j = await _cobot.Rpc.GetInverseKinForMoveAsync(target, Tool, user: 0, ct: ct);
+            return (_limits.NormalizeJoints(j), target, "");
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            AppendLog($"IK 실패: 목표 [{Fmt(target)}] tool=#{Tool}/user=0");
+            AppendLog($"  └ {ex.Message}");
+            if (!NudgeOnIkFailure)
+                return (null, target, "자세 재시도 꺼짐 — '자세를 틀어 재시도' 를 켜거나 wall_code 로 면 법선 자세를 쓰세요.");
+        }
+
+        // ② 자세만 흔들어 재시도. standoff 축은 위치를 바꾸므로 제외한다.
+        var space = ApproachSearchSpace.Default with { StandoffDeltaMm = new[] { 0.0 }, MaxEvaluations = 40 };
+        var tried = 0;
+
+        foreach (var c in ApproachPlanner.Candidates(space))
+        {
+            if (c.TiltUpDeg == 0 && c.TiltSideDeg == 0 && c.SpinDeg == 0) continue;   // ①에서 이미 실패
+            if (++tried > space.MaxEvaluations) break;
+            ct.ThrowIfCancellationRequested();
+
+            // 툴 프레임 기준 회전만 얹는다 — 병진 0 이라 위치는 보존된다.
+            var probe = FrameMath.FromFrame(
+                new[] { 0.0, 0.0, 0.0, c.TiltUpDeg, c.TiltSideDeg, c.SpinDeg }, target);
+
+            double[] joints;
+            try { joints = await _cobot.Rpc.GetInverseKinForMoveAsync(probe, Tool, user: 0, ct: ct); }
+            catch (OperationCanceledException) { throw; }
+            catch { continue; }
+
+            joints = _limits.NormalizeJoints(joints);
+            var margin = _limits.Evaluate(joints);
+            if (!margin.Feasible) continue;
+
+            var note = $"자세를 틀어 해를 찾았습니다 — 상하 {c.TiltUpDeg:+0.0;-0.0;0}° / 좌우 {c.TiltSideDeg:+0.0;-0.0;0}° / " +
+                       $"spin {c.SpinDeg:+0.0;-0.0;0}° (후보 {tried}개 시도, 여유 {margin.MarginDeg:0.0}°)";
+            AppendLog($"※ {note}");
+            AppendLog($"  틀어진 목표 pose [{Fmt(probe)}] — 검사 입사각이 그만큼 비스듬해집니다.");
+            return (joints, probe, note);
+        }
+
+        return (null, target,
+            $"자세를 {tried}가지로 틀어 봐도 역기구학이 풀리지 않습니다 — 이 위치는 팔로 해결되지 않습니다. " +
+            "텔레스코픽 높이나 AMR 정차 위치를 바꾸세요.");
     }
 
     /// <summary>
