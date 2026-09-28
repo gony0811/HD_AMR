@@ -142,14 +142,35 @@ public sealed record PostureLimits(
     /// 직교 직선 이동(MoveL)이 중간에서 J5 를 0 으로 쓸고 지나가는 것과 결정적으로 다른 점이다.
     /// (단 어깨 반경은 위치 보간이 아니라 근사이므로 여기서는 보지 않는다.)
     /// </summary>
-    public bool JointPathWithin(double[] fromDeg, double[] toDeg)
+    public bool JointPathWithin(double[] fromDeg, double[] toDeg) => CheckJointPath(fromDeg, toDeg).Ok;
+
+    /// <summary>
+    /// <see cref="JointPathWithin"/> 과 같은 판정에 <b>사유</b>를 붙여 돌려준다. 거부 사유가 셋(출발 자세
+    /// 위반·목표 자세 위반·J5 부호 반전)인데 하나로 뭉뚱그리면, 예컨대 현재 자세가 이미 한계 밖일 때
+    /// "J5 가 부호를 바꾼다"는 엉뚱한 진단이 나간다.
+    /// </summary>
+    public (bool Ok, string Reason) CheckJointPath(double[] fromDeg, double[] toDeg)
     {
-        if (fromDeg is not { Length: 6 } || toDeg is not { Length: 6 }) return false;
-        if (!Evaluate(fromDeg).Feasible) return false;
-        if (!Evaluate(toDeg, fromJointsDeg: fromDeg).Feasible) return false;
+        if (fromDeg is not { Length: 6 } || toDeg is not { Length: 6 })
+            return (false, "관절각 6요소가 아님");
+
+        var from = Evaluate(fromDeg);
+        if (!from.Feasible)
+            return (false, $"출발 자세가 이미 허용 범위 밖입니다 — {from.Limiting}. " +
+                           "허용 범위 설정을 실제 로봇 값으로 맞추거나(③ 카드 '현재 자세를 범위에 포함'), " +
+                           "조그로 범위 안으로 옮긴 뒤 다시 시도하세요.");
+
+        var to = Evaluate(toDeg, fromJointsDeg: fromDeg);
+        if (!to.Feasible)
+            return (false, $"목표 자세가 허용 범위 밖입니다 — {to.Limiting}");
 
         // J5 가 양 끝에서 같은 부호여야 도중에 0(손목 특이점)을 지나지 않는다 — 관절 보간의 단조성.
-        return Math.Sign(fromDeg[4]) == Math.Sign(toDeg[4]) && Math.Sign(toDeg[4]) != 0;
+        if (Math.Sign(fromDeg[4]) != Math.Sign(toDeg[4]) || Math.Sign(toDeg[4]) == 0)
+            return (false, $"관절 경로 도중 J5 가 부호를 바꿔 손목 특이점을 지납니다 " +
+                           $"(J5 {fromDeg[4]:0.0}° → {toDeg[4]:0.0}°) — 홈/대기 자세로 먼저 복귀한 뒤 다시 시도하거나 " +
+                           "'자세 탐색' 으로 같은 부호의 해를 찾으세요.");
+
+        return (true, "여유 있음");
     }
 }
 

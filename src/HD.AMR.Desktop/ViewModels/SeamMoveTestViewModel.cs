@@ -54,6 +54,8 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
     private PostureLimits _limits = PostureLimits.Default;
     private bool _limitsConfigured;
     private double[]? _joints;              // 현재 관절각 — 실시간 읽기와 경로 안전성 판정에 쓴다.
+    private double[]? _toolCoord;           // 공구 #Tool 좌표계 오프셋 — J6 가 ±180 근방에 앉는 원인 확인용.
+    private int _toolCoordId = -1;
 
     // 현재 TCP 실시간 읽기 — MountCalibrationViewModel 과 같은 방식(2틱마다, 3회 연속 실패 시 중단).
     private double[]? _tcp;
@@ -239,6 +241,11 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
         {
             _tcp = await _cobot.Rpc.GetTcpPoseInBaseAsync(Tool, _cts.Token);
             _joints = await _cobot.Rpc.GetActualJointPosAsync(ct: _cts.Token);
+            if (_toolCoordId != Tool)
+            {
+                _toolCoord = Tool == 0 ? new double[6] : await _cobot.Rpc.GetToolCoordAsync(Tool, _cts.Token);
+                _toolCoordId = Tool;
+            }
             _tcpAt = DateTime.UtcNow;
             _tcpFailStreak = 0;
         }
@@ -531,9 +538,21 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
             if (_joints is not { Length: 6 } j) return "현재 관절각: 읽는 중…";
             var m = _limits.Evaluate(j);
             var mark = m.Feasible ? "OK" : "위반";
+            // J6 는 광축 둘레 roll 이다 — spin 을 주면 그대로 J6 가 움직이므로, 지금 J6 가 ±180 근방이면
+            // 한쪽으로는 spin 여유가 거의 없다. 공구 좌표계에 rz 가 실려 있으면 그만큼 J6 가 끌려간다.
+            var n = _limits.Normalized();
+            var spinRoom = $"  spin 여유  : J6 {j[5]:0.0}° → +{n.JointMaxDeg[5] - j[5]:0.0}° / −{j[5] - n.JointMinDeg[5]:0.0}°";
+            var toolNote = _toolCoord is { Length: 6 } tc
+                ? $"\n  공구 #{Tool}  : [{string.Join(", ", tc.Select(v => v.ToString("0.#")))}] mm/도" +
+                  (Math.Abs(Math.Abs(tc[5]) - 180.0) < 20.0
+                      ? "  ← rz 가 180° 근방: 플랜지가 반 바퀴 돌아야 이 자세가 나옵니다(J6 가 ±180 으로 밀리는 원인)"
+                      : "")
+                : "";
+
             return $"현재 관절각 : [{string.Join(", ", j.Select(v => v.ToString("0.0")))}]°\n" +
                    $"  |J5| {m.WristDeg:0.0}° (손목 특이점까지) · |J3| {m.ElbowDeg:0.0}° (팔꿈치) · 여유 {m.MarginDeg:0.0}° [{mark}]\n" +
-                   $"  가장 빠듯한 제약: {m.Limiting}";
+                   $"  가장 빠듯한 제약: {m.Limiting}\n" +
+                   spinRoom + toolNote;
         }
     }
 
@@ -794,11 +813,11 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
 
             if (UseJointMove)
             {
-                if (!_limits.JointPathWithin(from, joints))
+                var (pathOk, pathReason) = _limits.CheckJointPath(from, joints);
+                if (!pathOk)
                 {
-                    Failure("관절 경로 도중 J5 가 부호를 바꿔 손목 특이점을 지납니다 — 홈/대기 자세로 먼저 복귀한 뒤 " +
-                            "다시 시도하거나 '자세 탐색' 으로 같은 부호의 해를 찾으세요.");
-                    AppendLog($"경로 거부: J5 {from[4]:0.0}° → {joints[4]:0.0}° (부호 반전)");
+                    Failure($"관절 이동 경로 거부 — {pathReason}");
+                    AppendLog($"경로 거부: {pathReason}");
                     return;
                 }
 

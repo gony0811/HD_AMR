@@ -132,4 +132,39 @@ public class PostureLimitsTests
     {
         Assert.False(Limits().JointPathWithin(Joints(j5: 90), Joints(j5: 5)));
     }
+
+    [Fact]
+    public void 출발_자세가_한계_밖이면_J5_가_아니라_그_사유를_말한다()
+    {
+        // 현장 사례: 실제 로봇 J6 = 178.1° 인데 기본 한계가 ±175° 라 출발 자세부터 위반이었다.
+        // 이때 "J5 가 부호를 바꾼다"로 보고하면 엉뚱한 곳을 보게 된다.
+        var from = Joints(j6: 178.1);
+        var to = Joints(j6: 170);
+
+        var (ok, reason) = Limits().CheckJointPath(from, to);
+
+        Assert.False(ok);
+        Assert.Contains("출발 자세", reason);
+        Assert.Contains("J6", reason);
+        Assert.DoesNotContain("J5 가 부호", reason);
+    }
+
+    [Fact]
+    public void 목표_자세가_한계_밖이면_목표_사유를_말한다()
+    {
+        var (ok, reason) = Limits().CheckJointPath(Joints(), Joints(j6: 178.1));
+
+        Assert.False(ok);
+        Assert.Contains("목표 자세", reason);
+        Assert.Contains("J6", reason);
+    }
+
+    [Fact]
+    public void 양_끝이_멀쩡하고_J5_부호가_바뀌면_손목_특이점을_말한다()
+    {
+        var (ok, reason) = Limits().CheckJointPath(Joints(j5: 40), Joints(j5: -45));
+
+        Assert.False(ok);
+        Assert.Contains("손목 특이점", reason);
+    }
 }
