@@ -105,8 +105,11 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
     /// <summary>면 법선 자세로 이동할지 — 끄면 현재 TCP 자세를 유지하고 위치만 바꾼다(구 동작).</summary>
     [ObservableProperty] private bool _useWallNormalPose = true;
 
-    /// <summary>광축 둘레 추가 회전 [도] — 0° = 용접선(없으면 벽면 수평) 방향 기준.</summary>
+    /// <summary>광축 둘레 추가 회전 [도] — 0° 기준은 <see cref="RollRefIndex"/> 가 정한다.</summary>
     [ObservableProperty] private double _toolSpinDeg;
+
+    /// <summary>roll 0° 기준: 0=용접선 방향, 1=벽면 수평 고정, 2=맵 상방 고정.</summary>
+    [ObservableProperty] private int _rollRefIndex;
 
     /// <summary>광축을 면 법선에서 상하로 기울인 각 [도] — 손목 특이점 회피용 자유도.</summary>
     [ObservableProperty] private double _tiltUpDeg;
@@ -398,6 +401,14 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
     /// spin 부호 안내 — spin 은 <b>광축 둘레</b> 회전이라, 광축이 툴 −Z 로 설정된 설비에서는
     /// 부호가 툴 RZ 와 반대가 된다(−Z 둘레 +θ = +Z 둘레 −θ). 실수하기 쉬운 지점이라 화면에 명시한다.
     /// </summary>
+    /// <summary>roll 기준 설명 — 무엇이 영상의 회전을 정하는지.</summary>
+    public string RollRefText => RollRefIndex switch
+    {
+        1 => "roll 기준: 벽면 수평 고정 — 용접선이 비스듬해도 영상 수평이 유지됩니다.",
+        2 => "roll 기준: 맵 상방(+Z) 고정 — 영상의 한 축이 항상 '위' 를 향합니다(바닥·천장은 벽면 수평으로 대체).",
+        _ => "roll 기준: 용접선 방향 — 용접선이 비스듬하면 영상도 그만큼 기웁니다(끝점 미입력 시 벽면 수평).",
+    };
+
     public string SpinHintText => _opticalAxis switch
     {
         ToolAxisDir.PlusZ => "spin +90° = 툴 좌표계 RZ +90°(반시계). 광축이 툴 +Z 라 부호가 그대로입니다.",
@@ -514,7 +525,8 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
         OpticalAxis: _opticalAxis,
         ToolSpinDeg: ToolSpinDeg,
         TiltUpDeg: TiltUpDeg,
-        TiltSideDeg: TiltSideDeg);
+        TiltSideDeg: TiltSideDeg,
+        RollRef: (ToolRollRef)Math.Clamp(RollRefIndex, 0, 2));
 
     // ── 자세 허용 범위 · 특이점 회피 ────────────────────────────────
 
@@ -966,6 +978,7 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
     }
     partial void OnZDatumOffsetMmChanged(double value) => Recompute();
     partial void OnToolSpinDegChanged(double value) => Recompute();
+    partial void OnRollRefIndexChanged(int value) => Recompute();
     partial void OnTiltUpDegChanged(double value) => Recompute();
     partial void OnTiltSideDegChanged(double value) => Recompute();
     partial void OnUseWallNormalPoseChanged(bool value) => Recompute();

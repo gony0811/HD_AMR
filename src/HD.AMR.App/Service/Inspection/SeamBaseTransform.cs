@@ -215,23 +215,26 @@ public static class SeamBaseTransform
     }
 
     /// <summary>
-    /// 면 위에서 TOOL 회전의 기준이 될 접선. seamEnd 가 있으면 용접선 방향을, 없으면 벽면 수평 탄젠트를
-    /// 면에 투영해 쓴다. 법선과 거의 평행하면(퇴화) 다른 축으로 대체한다.
+    /// 면 위에서 TOOL 회전(광축 둘레 roll)의 <b>0° 기준</b>이 될 접선. 이 축이 곧 "영상의 가로가 어디를
+    /// 향하는가" 를 정한다 — <see cref="SeamBaseInput.RollRef"/> 가 무엇을 기준으로 삼을지 고른다.
+    /// 법선과 거의 평행하면(퇴화) 다른 축으로 대체한다.
     /// </summary>
     private static double[] SurfaceTangent(SeamBaseInput input, double facingRad, double[] normal)
     {
-        double[] raw;
-        if (input.SeamEndW is { Length: 3 } end)
+        var raw = input.RollRef switch
         {
-            raw = new[]
-            {
-                end[0] - input.SeamStartW[0],
-                end[1] - input.SeamStartW[1],
-                end[2] - input.SeamStartW[2],
-            };
-            if (Norm(raw) < 1e-6) raw = HorizontalTangent(facingRad);
-        }
-        else raw = HorizontalTangent(facingRad);
+            // 벽면 수평 고정 — 용접선이 비스듬해도 roll 이 따라가지 않는다.
+            ToolRollRef.WallHorizontal => HorizontalTangent(facingRad),
+
+            // 맵 상방(+Z)을 면에 투영 — 영상의 한 축이 항상 '위' 를 향한다. 바닥/천장은 상방이 법선과
+            // 나란해 투영이 퇴화하므로 벽면 수평으로 대체한다.
+            ToolRollRef.WorldUp => Norm(Reject(new[] { 0.0, 0.0, 1.0 }, Normalize(normal))) > 1e-3
+                ? new[] { 0.0, 0.0, 1.0 }
+                : HorizontalTangent(facingRad),
+
+            // 기본 — 용접선 방향(seamEnd 없으면 벽면 수평).
+            _ => SeamTangentOrHorizontal(input, facingRad),
+        };
 
         var projected = Reject(raw, normal);
         if (Norm(projected) < 1e-6)
@@ -241,6 +244,19 @@ public static class SeamBaseTransform
             if (Norm(projected) < 1e-6) projected = Reject(new[] { 0.0, 1.0, 0.0 }, normal);
         }
         return Normalize(projected);
+    }
+
+    /// <summary>용접선 방향(seamStart→seamEnd). 끝점이 없거나 퇴화하면 벽면 수평 탄젠트.</summary>
+    private static double[] SeamTangentOrHorizontal(SeamBaseInput input, double facingRad)
+    {
+        if (input.SeamEndW is not { Length: 3 } end) return HorizontalTangent(facingRad);
+        var raw = new[]
+        {
+            end[0] - input.SeamStartW[0],
+            end[1] - input.SeamStartW[1],
+            end[2] - input.SeamStartW[2],
+        };
+        return Norm(raw) < 1e-6 ? HorizontalTangent(facingRad) : raw;
     }
 
     /// <summary>벽면 수평 탄젠트 = 벽 정면의 좌회전 90° (SeamDirectionResolver 의 u 축과 같은 규약).</summary>
@@ -432,6 +448,8 @@ public static class SeamBaseTransform
 /// 비스듬히 본다. 검사 성립은 유지하면서 손목 관절각을 바꾸는 자유도다(특이점 회피 — <see cref="HD.AMR.App.Service.Motion.ApproachPlanner"/>).</param>
 /// <param name="TiltSideDeg">광축을 면 법선에서 <b>상하 축 둘레로</b> 기울인 각 [도] — 면 위에서 좌/우로
 /// 비스듬히 본다. 부호는 접선(+) 방향.</param>
+/// <param name="RollRef">광축 둘레 roll 의 0° 기준. 기본은 용접선 방향이라 용접선이 비스듬하면 영상도
+/// 따라 기운다 — 고정하려면 <see cref="ToolRollRef.WallHorizontal"/> 또는 <see cref="ToolRollRef.WorldUp"/>.</param>
 public sealed record SeamBaseInput(
     double[] SeamStartW,
     double[]? SeamEndW,
@@ -447,7 +465,26 @@ public sealed record SeamBaseInput(
     ToolAxisDir OpticalAxis = ToolAxisDir.PlusZ,
     double ToolSpinDeg = 0,
     double TiltUpDeg = 0,
-    double TiltSideDeg = 0);
+    double TiltSideDeg = 0,
+    ToolRollRef RollRef = ToolRollRef.SeamTangent);
+
+/// <summary>
+/// TOOL 의 광축 둘레 회전(roll) 0° 를 무엇에 맞출지. 광축이 면을 향한다는 조건은 어느 값이든 같고,
+/// 달라지는 것은 <b>영상이 어느 쪽으로 도는가</b> 뿐이다. 여기에 <c>ToolSpinDeg</c> 가 더해진다.
+/// </summary>
+public enum ToolRollRef
+{
+    /// <summary>용접선 방향(seamStart→seamEnd). 끝점이 없으면 벽면 수평. <b>기본값</b> — 용접선이
+    /// 비스듬하면 영상도 그만큼 기운다.</summary>
+    SeamTangent = 0,
+
+    /// <summary>벽면 수평 고정 — 용접선 방향과 무관하게 항상 벽의 수평축. 영상 수평이 유지된다.</summary>
+    WallHorizontal = 1,
+
+    /// <summary>맵 상방(+Z)을 면에 투영해 고정 — 영상의 한 축이 항상 '위'. 바닥·천장에서는 투영이
+    /// 퇴화하므로 벽면 수평으로 대체한다.</summary>
+    WorldUp = 2,
+}
 
 /// <summary>환산 결과. 좌표는 전부 mm.</summary>
 /// <param name="SeamStartMapMm">z 보정까지 반영한 맵 좌표 용접선 시작점.</param>

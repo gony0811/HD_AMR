@@ -512,4 +512,68 @@ public class SeamBaseTransformTests
     }
 
     private static double Dot(double[] a, double[] b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+
+    // ── roll 0° 기준 ────────────────────────────────────────────────
+
+    [Fact]
+    public void RollRef_기본값은_용접선_방향을_따라간다()
+    {
+        // 벽 정면 +X, 용접선이 벽면 위에서 45° 기운 경우 — 툴 X 가 그 방향을 따라간다.
+        var input = Input(new[] { 13.0, 5.0, 1.0 }, seamEnd: new[] { 13.0, 5.5, 1.5 },
+                          yawRad: 0, standoff: 400, facing: 0, wallCode: "PM");
+
+        var t = SeamBaseTransform.Resolve(input);
+
+        // 툴 X 는 수평이 아니다(용접선이 기울었으므로).
+        Assert.True(Math.Abs(t.ToolXMap![2]) > 0.1, "용접선 기울기가 툴 X 에 반영되지 않았습니다.");
+    }
+
+    [Fact]
+    public void RollRef_벽면_수평_고정이면_용접선이_기울어도_수평을_지킨다()
+    {
+        var input = Input(new[] { 13.0, 5.0, 1.0 }, seamEnd: new[] { 13.0, 5.5, 1.5 },
+                          yawRad: 0, standoff: 400, facing: 0, wallCode: "PM");
+
+        var t = SeamBaseTransform.Resolve(input with { RollRef = ToolRollRef.WallHorizontal });
+
+        Assert.Equal(0.0, t.ToolXMap![2], 9);      // 툴 X 에 수직 성분이 없다
+    }
+
+    [Fact]
+    public void RollRef_맵_상방_고정이면_툴축_하나가_연직을_향한다()
+    {
+        var input = Input(new[] { 13.0, 5.0, 1.0 }, seamEnd: new[] { 13.0, 5.5, 1.5 },
+                          yawRad: 0, standoff: 400, facing: 0, wallCode: "PM");
+
+        var t = SeamBaseTransform.Resolve(input with { RollRef = ToolRollRef.WorldUp });
+
+        // 기준축(툴 X)이 맵 +Z 와 나란하다 — 수평 성분이 0.
+        Assert.Equal(1.0, Math.Abs(t.ToolXMap![2]), 6);
+    }
+
+    [Fact]
+    public void RollRef_는_광축_방향을_바꾸지_않는다()
+    {
+        // roll 기준을 바꿔도 "면을 바라본다"는 조건은 그대로여야 한다.
+        var input = Input(new[] { 13.0, 5.0, 1.0 }, seamEnd: new[] { 13.0, 5.5, 1.5 },
+                          yawRad: 0, standoff: 400, facing: 0, wallCode: "PM");
+
+        var a = SeamBaseTransform.Resolve(input);
+        var b = SeamBaseTransform.Resolve(input with { RollRef = ToolRollRef.WorldUp });
+
+        AssertVectorEqual(a.LookDirMap, b.LookDirMap);
+        Assert.Equal(a.ApproachBaseMm, b.ApproachBaseMm);
+    }
+
+    [Fact]
+    public void RollRef_맵_상방은_바닥에서_벽면_수평으로_대체된다()
+    {
+        // 바닥은 법선이 연직이라 상방 투영이 퇴화한다 — 퇴화해도 유효한 자세가 나와야 한다.
+        var input = Input(new[] { 13.0, 5.0, 0.0 }, yawRad: 0, standoff: 400, facing: 0, wallCode: "B");
+
+        var t = SeamBaseTransform.Resolve(input with { RollRef = ToolRollRef.WorldUp });
+
+        Assert.NotNull(t.TargetPoseBase);
+        Assert.Equal(1.0, Norm(t.ToolXMap!), 6);   // 단위벡터 — 퇴화로 0 벡터가 되지 않았다
+    }
 }

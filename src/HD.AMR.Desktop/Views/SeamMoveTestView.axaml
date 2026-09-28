@@ -71,6 +71,14 @@
             <ComboBox Width="120" ItemsSource="{Binding WallCodeOptions}" SelectedItem="{Binding WallCode}"/>
           </StackPanel>
           <StackPanel Margin="0,0,10,8">
+            <TextBlock Classes="axis" Text="roll 0° 기준"/>
+            <ComboBox Width="150" SelectedIndex="{Binding RollRefIndex}">
+              <ComboBoxItem>용접선 방향</ComboBoxItem>
+              <ComboBoxItem>벽면 수평 고정</ComboBoxItem>
+              <ComboBoxItem>맵 상방 고정</ComboBoxItem>
+            </ComboBox>
+          </StackPanel>
+          <StackPanel Margin="0,0,10,8">
             <TextBlock Classes="axis" Text="툴 회전 spin (도)"/>
             <NumericUpDown Classes="num" Value="{Binding ToolSpinDeg}" Increment="5" FormatString="0.0"/>
           </StackPanel>
@@ -87,6 +95,7 @@
         </WrapPanel>
         <TextBlock Classes="hint" Text="{Binding WallCodeText}"/>
         <TextBlock Classes="hint" Text="{Binding OpticalAxisText}"/>
+        <TextBlock Classes="hint" Text="{Binding RollRefText}"/>
         <TextBlock Classes="hint" Text="{Binding SpinHintText}"/>
         <TextBlock Classes="hint" Text="법선 방위각은 노드 theta(벽 정면), 앙각은 wall_code 면 자세에서 옵니다 — 수직벽 0°, 바닥 −90°, 천장 +90°, 챔퍼 ∓45°. spin 0° 는 용접선 방향(seamEnd 없으면 벽면 수평) 기준이며, 체크를 끄면 현재 TCP 자세를 유지한 채 위치만 바꿉니다."/>
 
