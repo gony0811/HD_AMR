@@ -370,9 +370,22 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
     {
         get
         {
-            var rz = _mountAtHome.Length > 5 ? _mountAtHome[5] : 0;
-            return $"이 값(rz={rz:0.#}°)대로면 조그 시 — BASE +X → {BodyDir(rz)}, BASE +Y → {BodyDir(rz + 90)} " +
-                   "(AMR 기준 +X=전방·+Y=좌측). 실제와 다르면 T_A_B.rz 가 그 차이만큼 틀린 것입니다.";
+            if (_mountAtHome.Length < 6) return "";
+            double rx = _mountAtHome[3], ry = _mountAtHome[4], rz = _mountAtHome[5];
+
+            // BASE +Z 가 어디를 향하는지 — rx/ry 로만 정해진다. 지금까지 조그 대조는 X/Y 만 봤는데,
+            // 코봇이 거꾸로(마스트에 매달려) 달려 있으면 rx=180 이어야 하고 그 경우 모든 높이가
+            // 부호 반대로 계산된다. tz 만 맞춰 놓으면 숫자가 그럴듯해 보여 놓치기 쉽다.
+            var upDown = Math.Abs(MapCalibration.NormalizeDeg(rx)) < 45 && Math.Abs(MapCalibration.NormalizeDeg(ry)) < 45
+                ? "위(천장)"
+                : Math.Abs(Math.Abs(MapCalibration.NormalizeDeg(rx)) - 180) < 45
+                    ? "아래(바닥) — 코봇이 거꾸로 달린 전제"
+                    : "옆(기울어 장착된 전제)";
+
+            return $"이 값(rx={rx:0.#}°, ry={ry:0.#}°, rz={rz:0.#}°)대로면 조그 시 — " +
+                   $"BASE +X → {BodyDir(rz)}, BASE +Y → {BodyDir(rz + 90)}, BASE +Z → {upDown} " +
+                   "(AMR 기준 +X=전방·+Y=좌측). 세 축 모두 조그로 대조하세요 — 다르면 T_A_B 회전이 그만큼 틀린 것입니다. " +
+                   "특히 +Z 는 지금까지 검증된 적이 없습니다.";
         }
     }
 
@@ -558,6 +571,9 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
             // 한쪽으로는 spin 여유가 거의 없다. 공구 좌표계에 rz 가 실려 있으면 그만큼 J6 가 끌려간다.
             var n = _limits.Normalized();
             var spinRoom = $"  spin 여유  : J6 {j[5]:0.0}° → +{n.JointMaxDeg[5] - j[5]:0.0}° / −{j[5] - n.JointMinDeg[5]:0.0}°";
+            var heightNote = _tcp is { Length: 6 } && _mountAtHome.Length > 2
+                ? $"\n  높이 대조  : 위 '맵' z 가 바닥에서 잰 툴 높이와 같아야 합니다 — 다르면 T_A_B 의 tz 나 rx 가 틀렸습니다."
+                : "";
             var toolNote = _toolCoord is { Length: 6 } tc
                 ? $"\n  공구 #{Tool}  : [{string.Join(", ", tc.Select(v => v.ToString("0.#")))}] mm/도" +
                   (Math.Abs(Math.Abs(tc[5]) - 180.0) < 20.0
@@ -568,7 +584,7 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
             return $"현재 관절각 : [{string.Join(", ", j.Select(v => v.ToString("0.0")))}]°\n" +
                    $"  |J5| {m.WristDeg:0.0}° (손목 특이점까지) · |J3| {m.ElbowDeg:0.0}° (팔꿈치) · 여유 {m.MarginDeg:0.0}° [{mark}]\n" +
                    $"  가장 빠듯한 제약: {m.Limiting}\n" +
-                   spinRoom + toolNote;
+                   spinRoom + toolNote + heightNote;
         }
     }
 
