@@ -97,7 +97,7 @@ public class InspectionMoveMathTests
     private static Task<double[]> TeachingFactory() => Task.FromResult(Teaching);
 
     [Fact]
-    public void 게이트는_②가_남긴_지령_목표를_최우선으로_쓴다()
+    public void 게이트는_2단계가_남긴_지령_목표를_최우선으로_쓴다()
     {
         var commanded = new[] { 9.0, 8, 7, 6, 5, 4 };
         var c = Ctx();
