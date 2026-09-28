@@ -25,7 +25,7 @@ namespace HD.AMR.Desktop.ViewModels;
 ///  · 이동 직전에 AMR pose·스트로크를 다시 읽어 목표를 재계산한다(표시값이 낡아도 엉뚱한 곳으로 가지 않도록).
 ///  · AMR 이 정지해 있어야 하고, 안전 확인 체크와 역기구학 사전 점검을 통과해야 이동 버튼이 열린다.
 ///  · 수동 AMR pose(하드웨어 없이 계산 검증용)로는 이동하지 않는다 — 계산 전용이다.
-///  · 자세를 바꾸는 이동이라 이동 전 현재 TCP 와의 자세 차이를 계산해 보여 주고, 큰 회전은 경고한다.
+///  · 자세를 바꾸는 이동이라 이동 전 현재 TCP 와의 자세 차이를 계산해 로그에 남긴다(각도 자체로는 막지 않는다).
 /// </summary>
 public sealed partial class SeamMoveTestViewModel : ViewModelBase
 {
@@ -36,9 +36,6 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
 
     /// <summary>이동 속도 상한 [%] — 시험 이동은 느리게.</summary>
     private const double MaxVelPct = 30.0;
-
-    /// <summary>이 각도를 넘는 자세 변경은 로그로 한 번 더 경고한다 [도].</summary>
-    private const double LargeSwingDeg = 45.0;
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly AMRService _amr;
@@ -745,14 +742,10 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
                 tcp[3], tcp[4], tcp[5],
             };
 
-            // 자세를 바꾸는 이동이면 회전량을 먼저 알린다 — 손목이 크게 휘두르는 것을 모르고 누르지 않도록.
+            // 자세를 바꾸는 이동이면 회전량을 기록만 한다. 회전이 크다는 것 자체는 막을 근거가 아니다 —
+            // 면 법선 자세로 가면 90° 넘는 회전이 정상이다. 실제 판정은 아래 ③' 자세 허용 범위가 한다.
             if (t.TargetPoseBase is not null)
-            {
-                var swing = OrientationDeltaDeg(tcp, target);
-                AppendLog($"자세 변화 {swing:0.0}° (현재 TCP → 면 법선 자세)");
-                if (swing > LargeSwingDeg)
-                    AppendLog($"※ 회전이 큽니다({swing:0.0}° > {LargeSwingDeg:0}°) — 주변 간섭을 확인하세요.");
-            }
+                AppendLog($"자세 변화 {OrientationDeltaDeg(tcp, target):0.0}° (현재 TCP → 면 법선 자세)");
 
             // ③ 역기구학 사전 점검 — 도달 불가를 이동 명령 전에 잡는다.
             double[] joints;
