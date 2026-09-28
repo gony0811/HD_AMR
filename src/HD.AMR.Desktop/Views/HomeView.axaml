@@ -139,11 +139,11 @@
                             <TextBlock Text="{Binding BatteryPercentText, StringFormat='{}{0}%'}" />
                         </Border>
                     </Grid>
-                    <!-- 간단 배터리 바(퍼센트 폭). null 이면 0 폭. -->
-                    <Border Height="20" CornerRadius="4" Background="{DynamicResource AppBorderBrush}">
-                        <Border HorizontalAlignment="Left" CornerRadius="4" Background="{DynamicResource AppGoodBrush}"
-                                Width="{Binding BatteryPercent}" MinWidth="0" />
-                    </Border>
+                    <!-- Value를 0~100 범위로 해석하여 카드 너비에 비례해 채운다. -->
+                    <ProgressBar Height="20" Minimum="0" Maximum="100"
+                                 Value="{Binding BatteryPercent}"
+                                 Background="{DynamicResource AppBorderBrush}"
+                                 Foreground="{DynamicResource AppGoodBrush}" />
                     <TextBlock Classes="muted" FontSize="12" Text="{Binding BatterySubText}" />
                 </StackPanel>
             </Border>

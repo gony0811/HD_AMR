@@ -19,6 +19,7 @@ public class IoModuleService : BackgroundService
     private readonly ModbusTcpClient _client;
     private readonly ILogger<IoModuleService> _logger;
     private readonly AMRService _amr;
+    private readonly CobotService _cobot;
     private readonly IoAmrModeControl _modeControl = new();
     private readonly IoStartStopLampControl _lampControl = new();
     private readonly SemaphoreSlim _outputWriteLock = new(1, 1);
@@ -27,12 +28,14 @@ public class IoModuleService : BackgroundService
     private IoModuleState? _state;
     private bool _initialStopStateApplied;
 
-    public IoModuleService(IOptions<IoModuleModbusTcpSettings> options, ILoggerFactory loggerFactory, AMRService amr)
+    public IoModuleService(IOptions<IoModuleModbusTcpSettings> options, ILoggerFactory loggerFactory,
+        AMRService amr, CobotService cobot)
     {
         _settings = options.Value;
         _client = new ModbusTcpClient(_settings, loggerFactory.CreateLogger<ModbusTcpClient>());
         _logger = loggerFactory.CreateLogger<IoModuleService>();
         _amr = amr;
+        _cobot = cobot;
     }
 
     public bool IsConnected => _client.IsConnected;
@@ -171,6 +174,16 @@ public class IoModuleService : BackgroundService
                             _logger.LogWarning(ex, "AMR 주행 모드에 따른 START/STOP 램프 동기화 실패 — 다음 입력 폴링에서 재시도");
                         }
                     }
+
+                    try
+                    {
+                        await ApplyTowerLampPolicyAsync(inputs, stoppingToken);
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "운전 모드/알람에 따른 타워램프 동기화 실패 — 다음 입력 폴링에서 재시도");
+                    }
                 }
             }
             catch (OperationCanceledException)
@@ -267,6 +280,51 @@ public class IoModuleService : BackgroundService
             _outputWriteLock.Release();
         }
     }
+
+    /// <summary>
+    /// 실제 AUTO/MANUAL 입력과 장비 알람을 타워램프 출력에 반영한다.
+    /// 알람(EMO·AMR·코봇)은 운전 모드보다 우선한다.
+    /// </summary>
+    private async Task ApplyTowerLampPolicyAsync(bool[] inputs, CancellationToken ct)
+    {
+        if (inputs.Length <= Math.Max(IoPointMap.In.Auto, IoPointMap.In.Manual))
+            return;
+
+        var auto = inputs[IoPointMap.In.Auto];
+        var manual = inputs[IoPointMap.In.Manual];
+        var emergencyStop = inputs.Length > IoPointMap.In.EmergencyStop && inputs[IoPointMap.In.EmergencyStop];
+        var alarm = emergencyStop || _amr.LatestStatus?.ErrorCode is > 0 || _cobot.State?.ErrorCode is > 0;
+        var desired = IoTowerLampPolicy.Resolve(auto, manual, alarm);
+        if (desired is null)
+            return;
+
+        var current = GetState()?.Outputs;
+        if (current is not null &&
+            current.Length > IoPointMap.Out.TowerLampGreen &&
+            current[IoPointMap.Out.TowerLampRed] == desired.Value.Red &&
+            current[IoPointMap.Out.TowerLampYellow] == desired.Value.Yellow &&
+            current[IoPointMap.Out.TowerLampGreen] == desired.Value.Green)
+            return;
+
+        await _outputWriteLock.WaitAsync(ct);
+        try
+        {
+            var word = await ReadOutputWordForUpdateAsync(ct);
+            word = SetBit(word, IoPointMap.Out.TowerLampRed, desired.Value.Red);
+            word = SetBit(word, IoPointMap.Out.TowerLampYellow, desired.Value.Yellow);
+            word = SetBit(word, IoPointMap.Out.TowerLampGreen, desired.Value.Green);
+            await WriteOutputWordAsync(word, ct);
+            _logger.LogInformation("타워램프 동기화: RED={Red}, YELLOW={Yellow}, GREEN={Green}",
+                desired.Value.Red, desired.Value.Yellow, desired.Value.Green);
+        }
+        finally
+        {
+            _outputWriteLock.Release();
+        }
+    }
+
+    private static ushort SetBit(ushort word, int index, bool value) =>
+        value ? (ushort)(word | (1 << index)) : (ushort)(word & ~(1 << index));
 
     private async Task<ushort> ReadOutputWordForUpdateAsync(CancellationToken ct)
     {

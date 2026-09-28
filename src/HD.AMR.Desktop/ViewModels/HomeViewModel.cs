@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using HD.AMR.App.Communication;
 using HD.AMR.App.Enums;
 using HD.AMR.App.Service;
 
@@ -16,6 +17,7 @@ public sealed partial class HomeViewModel : ViewModelBase
     private readonly AMRService _amr;
     private readonly CobotService _cobot;
     private readonly CameraService _camera;
+    private readonly IoModuleService _io;
     private readonly Vda5050AdapterService _vda;
     private readonly DispatcherTimer _timer;
     public AmrMapViewModel Map { get; }
@@ -24,11 +26,13 @@ public sealed partial class HomeViewModel : ViewModelBase
     [ObservableProperty] private string _selectedMapId = "";
     [ObservableProperty] private string? _mapIdStatus;
 
-    public HomeViewModel(AMRService amr, CobotService cobot, CameraService camera, Vda5050AdapterService vda, AmrMapViewModel map)
+    public HomeViewModel(AMRService amr, CobotService cobot, CameraService camera, IoModuleService io,
+        Vda5050AdapterService vda, AmrMapViewModel map)
     {
         _amr = amr;
         _cobot = cobot;
         _camera = camera;
+        _io = io;
         _vda = vda;
         Map = map;
         _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
@@ -84,10 +88,12 @@ public sealed partial class HomeViewModel : ViewModelBase
         ? "텔레메트리 연동 예정"
         : IsCharging ? "AMR 배터리 충전 중" : "AMR 배터리 잔량";
 
-    // 안전 신호등 (텔레메트리 연동 전 — 플레이스홀더)
-    public bool LampRed => false;
-    public bool LampYellow => false;
-    public bool LampGreen => true;
+    // 안전 신호등 — IO Module 출력 되읽기(OUT 0/1/2)를 그대로 표시한다.
+    private bool LampOutput(int index) =>
+        _io.GetState() is { Outputs: var outputs } && index < outputs.Length && outputs[index];
+    public bool LampRed => LampOutput(IoPointMap.Out.TowerLampRed);
+    public bool LampYellow => LampOutput(IoPointMap.Out.TowerLampYellow);
+    public bool LampGreen => LampOutput(IoPointMap.Out.TowerLampGreen);
 
     // ACS — TopBar 배지와 동일 기준(생존 신호 우선, 신호 없으면 활동 폴백).
     public bool AcsOn =>
