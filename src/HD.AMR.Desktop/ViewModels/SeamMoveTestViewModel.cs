@@ -748,6 +748,14 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
                 AppendLog($"자세 변화 {OrientationDeltaDeg(tcp, target):0.0}° (현재 TCP → 면 법선 자세)");
 
             // ③ 역기구학 사전 점검 — 도달 불가를 이동 명령 전에 잡는다.
+            //    IK 는 tool·user 인자가 없어 컨트롤러의 '활성' 프레임 기준으로 해석된다. 활성 프레임이
+            //    이동 프레임(tool=#N, user=0)과 다르면 같은 목표가 errcode 112/38 로 거부되므로,
+            //    실패를 진단하려면 목표 pose 만으로는 부족하고 활성 프레임과 errcode 가 함께 있어야 한다.
+            var (activeTool, activeUser) = await _cobot.Rpc.ResolveActiveFramesAsync(_cts.Token, strict: false);
+            if (activeTool != Tool || activeUser != 0)
+                AppendLog($"※ 활성 좌표계 공구 #{activeTool} / 작업물 #{activeUser} — 이동 기준(공구 #{Tool} / 작업물 0)과 " +
+                          "다릅니다. IK 가 거부되면 '활성 좌표계 초기화' 를 먼저 누르세요.");
+
             double[] joints;
             try
             {
@@ -757,7 +765,10 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
             catch (Exception ex)
             {
                 Failure($"역기구학 실패 — 도달 불가 자세입니다(이동하지 않았습니다): {ex.Message}");
-                AppendLog($"IK 실패: 목표 [{Fmt(target)}]");
+                // 예외 메시지에 errcode·한글 설명·실제 IK 입력 pose 가 들어 있다 — 상단 알림은 다음 동작에
+                // 덮이므로 로그에도 남긴다(원인 없이 "IK 실패" 만 쌓이면 진단이 불가능하다).
+                AppendLog($"IK 실패: 목표 [{Fmt(target)}] tool=#{Tool}/user=0, 활성 #{activeTool}/#{activeUser}");
+                AppendLog($"  └ {ex.Message}");
                 return;
             }
 
@@ -808,6 +819,33 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { Failure($"이동 중 오류: {ex.Message}"); }
+        finally
+        {
+            Busy = false;
+            MoveToApproachCommand.NotifyCanExecuteChanged();
+        }
+    }
+
+    /// <summary>
+    /// 활성 좌표계를 이동 기준(공구 <see cref="Tool"/> / 작업물 0)으로 되돌린다. 무변위 MoveJ 라 로봇은
+    /// 움직이지 않는다. 이전 시퀀스가 반납하지 못한 작업물 프레임이 남아 있으면 IK 가 목표를 그 프레임
+    /// 기준으로 오해석해 errcode 112/38 을 내는데, 그 상태에서 빠져나오는 표준 복구 경로다.
+    /// </summary>
+    [RelayCommand]
+    private async Task ResetActiveFrame()
+    {
+        if (!CobotConnected) { Failure("코봇 미연결"); return; }
+        Busy = true;
+        try
+        {
+            var (beforeTool, beforeUser) = await _cobot.Rpc.ResolveActiveFramesAsync(_cts.Token, strict: false);
+            var rc = await _cobot.Rpc.ResetActiveFrameAsync(Tool, 0, _cts.Token);
+            AppendLog($"활성 좌표계 초기화 rc={rc}: 공구 #{beforeTool}/작업물 #{beforeUser} → 공구 #{Tool}/작업물 0");
+            if (rc == 0) Success($"활성 좌표계를 공구 #{Tool} / 작업물 0 으로 맞췄습니다.");
+            else Failure($"초기화 실패 rc={rc}{FairinoErrorCodes.Suffix(rc)}");
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { Failure($"활성 좌표계 초기화 실패: {ex.Message}"); }
         finally
         {
             Busy = false;

@@ -166,6 +166,8 @@
         <StackPanel Orientation="Horizontal" Spacing="8">
           <Button Classes="accent" Content="접근점으로 TOOL 이동" Command="{Binding MoveToApproachCommand}"/>
           <Button Content="즉시 정지" Command="{Binding StopMotionCommand}"/>
+          <Button Content="활성 좌표계 초기화" Command="{Binding ResetActiveFrameCommand}"
+                  ToolTip.Tip="활성 공구/작업물을 이동 기준(공구 #N / 작업물 0)으로 되돌립니다. 무변위 MoveJ 라 로봇은 움직이지 않습니다 — IK 가 errcode 112/38 로 거부될 때 먼저 눌러 보세요."/>
         </StackPanel>
         <TextBlock Classes="mono" Text="{Binding MoveLog}" TextWrapping="Wrap"/>
       </StackPanel></Border>
