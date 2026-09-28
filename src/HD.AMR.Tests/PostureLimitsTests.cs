@@ -167,4 +167,44 @@ public class PostureLimitsTests
         Assert.False(ok);
         Assert.Contains("손목 특이점", reason);
     }
+
+    // ── ±360 감긴 해 정규화 ─────────────────────────────────────────
+
+    [Fact]
+    public void 컨트롤러가_감아서_준_해는_같은_자세로_되돌려_판정한다()
+    {
+        // 현장 로그: IK 가 J6 = 356.4° 를 돌려줬다. −3.6° 와 같은 자세인데 ±175 범위 밖으로 보인다.
+        var m = Limits().Evaluate(Joints(j6: 356.4));
+
+        Assert.True(m.Feasible);
+        Assert.DoesNotContain("J6", m.Limiting);
+    }
+
+    [Fact]
+    public void 감아도_범위에_안_들어오면_한계_초과로_본다()
+    {
+        // 178.5° 는 −181.5° 로 감아도 ±175 밖 — 진짜 한계 초과다.
+        var m = Limits().Evaluate(Joints(j6: 178.5));
+
+        Assert.False(m.Feasible);
+        Assert.Contains("J6", m.Limiting);
+    }
+
+    [Fact]
+    public void 정규화는_범위_안_값을_건드리지_않는다()
+    {
+        var j = Joints(j6: 90);
+
+        Assert.Equal(j, Limits().NormalizeJoints(j));
+    }
+
+    [Fact]
+    public void 정규화_뒤에도_손목_특이점은_그대로_걸린다()
+    {
+        // J6 만 감긴 해였고 J5 는 6° — 진짜 문제(손목 특이점)가 J6 오탐에 가려지면 안 된다.
+        var m = Limits(wrist: 15).Evaluate(Joints(j5: 6.0, j6: 356.4));
+
+        Assert.False(m.Feasible);
+        Assert.Contains("손목 특이점", m.Limiting);
+    }
 }

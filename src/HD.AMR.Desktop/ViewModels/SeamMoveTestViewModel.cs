@@ -792,6 +792,15 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
             }
 
             // ③' 자세 점검 — 도달 가능해도 툴 간섭·특이점 범위면 가지 않는다.
+            //    컨트롤러 IK 는 해를 ±180 으로 감아 주지 않는다(−3.6° 를 356.4° 로 준다). 판정도 지령도
+            //    같은 자세의 범위 안 표현으로 맞춰 둬야 한다 — 그러지 않으면 멀쩡한 해가 한계 초과로
+            //    거부되고, 지령으로 나가면 컨트롤러가 rc=32(관절 한계 초과)를 낸다.
+            var rawJoints = joints;
+            joints = _limits.NormalizeJoints(joints);
+            if (!rawJoints.SequenceEqual(joints))
+                AppendLog($"관절각 정규화: [{string.Join(", ", rawJoints.Select(v => v.ToString("0.0")))}]° " +
+                          $"→ [{string.Join(", ", joints.Select(v => v.ToString("0.0")))}]° (±360 감김 해제 — 같은 자세)");
+
             var from = await _cobot.Rpc.GetActualJointPosAsync(ct: _cts.Token);
             _joints = from;
             var margin = _limits.Evaluate(joints, t.PlanarDistanceMm, from);

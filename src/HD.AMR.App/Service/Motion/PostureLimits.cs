@@ -61,6 +61,30 @@ public sealed record PostureLimits(
     }
 
     /// <summary>
+    /// 관절각을 허용 범위 안의 <b>같은 자세</b>로 되돌린다. 컨트롤러 역기구학은 해를 ±180 으로 감아
+    /// 주지 않아 −3.6° 를 356.4° 로 돌려주기도 한다 — 물리적으로 같은 자세인데 범위 밖으로 보인다.
+    /// ±360 을 더해 범위 안에 들어오면 그 값을 쓰고, 어느 쪽으로도 안 들어오면 원값을 그대로 둔다
+    /// (진짜 한계 초과는 한계 초과로 보고해야 한다).
+    /// </summary>
+    public double[] NormalizeJoints(double[] jointsDeg)
+    {
+        if (jointsDeg is not { Length: 6 }) return jointsDeg;
+        var n = Normalized();
+        var result = new double[6];
+        for (var i = 0; i < 6; i++)
+        {
+            var v = jointsDeg[i];
+            if (v < n.JointMinDeg[i] || v > n.JointMaxDeg[i])
+            {
+                foreach (var cand in new[] { v - 360.0, v + 360.0 })
+                    if (cand >= n.JointMinDeg[i] && cand <= n.JointMaxDeg[i]) { v = cand; break; }
+            }
+            result[i] = v;
+        }
+        return result;
+    }
+
+    /// <summary>
     /// 관절각 한 벌이 이 범위 안에 있는지와 <b>여유(margin)</b>를 계산한다.
     /// 여유는 모든 제약의 슬랙 중 최소값 [도]이며, 음수면 그 제약을 위반한 것이다.
     /// </summary>
@@ -73,6 +97,8 @@ public sealed record PostureLimits(
             return new PostureMargin(false, double.NegativeInfinity, "관절각 6요소가 아님", Array.Empty<double>(), 0, 0, 0);
 
         var n = Normalized();
+        jointsDeg = n.NormalizeJoints(jointsDeg);   // 356.4° == −3.6° — 감긴 해를 범위 안으로 되돌린다
+        if (fromJointsDeg is { Length: 6 }) fromJointsDeg = n.NormalizeJoints(fromJointsDeg);
         var slack = double.PositiveInfinity;
         var limiting = "여유 있음";
         var perJoint = new double[6];
@@ -153,6 +179,9 @@ public sealed record PostureLimits(
     {
         if (fromDeg is not { Length: 6 } || toDeg is not { Length: 6 })
             return (false, "관절각 6요소가 아님");
+
+        fromDeg = NormalizeJoints(fromDeg);
+        toDeg = NormalizeJoints(toDeg);
 
         var from = Evaluate(fromDeg);
         if (!from.Feasible)
