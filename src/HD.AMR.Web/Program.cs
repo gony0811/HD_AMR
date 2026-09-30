@@ -165,6 +165,8 @@ builder.Services.AddScoped<ISequenceStep, MonitorCloseStep>();   // 1400: 모니
 builder.Services.AddSingleton<SequenceMonitorService>();  // 1200: ⑱ 검사 수행(도면 경유점 순회 + 비전 캡처)
 // 시퀀스 전역 실행 잠금 — SequenceService 는 서킷별 scoped 라 UI/ACS 동시 실행을 막으려면 전역 게이트가 필요.
 builder.Services.AddSingleton<SequenceRunGate>();
+// 운영 로그(수동/ACS 동작 이력 + 실패 원인, DB 영속) — SequenceService/Vda5050OrderExecutor 가 기록.
+builder.Services.AddSingleton<OperationLogService>();
 builder.Services.AddScoped<SequenceService>();
 builder.Services.AddScoped<HD.AMR.App.Service.Vision.LabelDataService>();
 // DL 학습 오케스트레이터 — 학습 프로세스가 페이지 이동/서킷과 무관하게 살아 있어야 하므로 싱글톤.

@@ -94,8 +94,9 @@ public static class WeldInspectionActionParser
                 return false;
         }
 
-        var sectionDxfId = GetString(pr, "sectionDxfId");
-        if (string.IsNullOrWhiteSpace(sectionDxfId)) { error = "params.sectionDxfId 누락"; return false; }
+        // sectionDxfId — 도면 기반 프로필 자동 선택 폐기 후 로그용으로만 쓰인다(FindProfileAsync 주석).
+        // ACS 가 빈 값으로 보내는 것을 실증했으므로 부재/빈 값을 허용한다.
+        var sectionDxfId = GetString(pr, "sectionDxfId") ?? "";
 
         var anchorGroupId = GetString(pr, "anchorGroupId");
         if (string.IsNullOrWhiteSpace(anchorGroupId)) { error = "params.anchorGroupId 누락"; return false; }
@@ -137,7 +138,7 @@ public static class WeldInspectionActionParser
             SeamEndW: seamEnd!,
             DrawingPos: drawingPos,
             SeamType: seamType,
-            SectionDxfId: sectionDxfId!,
+            SectionDxfId: sectionDxfId,
             InspectionProfileId: GetString(pr, "inspectionProfileId") ?? "",
             StandoffMm: standoff,
             WorkingDistanceMm: GetDouble(pr, "workingDistanceMm"),

@@ -15,6 +15,11 @@ public class SequenceService
     private readonly CobotService _cobotService;
     private readonly SequenceMonitorService _monitor;
     private readonly SequenceRunGate _gate;
+    private readonly OperationLogService _opLog;
+
+    /// <summary>운영 로그 출처 — ACS 필드가 실려 있으면 ACS, 아니면 수동(UI).</summary>
+    private static string SourceOf(SequenceContext c)
+        => c.AcsOrderId is null ? OperationLogService.SourceUi : OperationLogService.SourceAcs;
 
     /// <summary>등록된 전체 단계 (DefaultOrder 순).</summary>
     private readonly List<ISequenceStep> _steps;
@@ -30,12 +35,14 @@ public class SequenceService
         CobotService cobotService,
         SequenceMonitorService monitor,
         SequenceRunGate gate,
+        OperationLogService opLog,
         ILogger<SequenceService> logger)
     {
         _teachingService = teachingService;
         _cobotService = cobotService;
         _monitor = monitor;
         _gate = gate;
+        _opLog = opLog;
         _logger = logger;
         _steps = steps.OrderBy(s => s.DefaultOrder).ToList();
 
@@ -98,6 +105,9 @@ public class SequenceService
 
             _logger.LogInformation("시퀀스 시작 (단계 {Count}/{Total}개, tool={Tool}, vel={Vel})",
                 selected.Count, _steps.Count, context.Tool, context.Velocity);
+            _opLog.Log(SourceOf(context), "SEQUENCE", "시퀀스 실행", null,
+                $"시작 — 단계 {selected.Count}개: {string.Join(", ", selected.Select(s => s.Key))}",
+                context.AcsOrderId);
 
             SequenceRunResult runResult = new(SequenceRunOutcome.Completed);
 
@@ -134,6 +144,12 @@ public class SequenceService
             _logger.LogInformation("시퀀스 종료 (결과={Outcome}{Detail})",
                 runResult.Outcome,
                 runResult.FailedStepKey is null ? "" : $", 실패단계={runResult.FailedStepKey}");
+            _opLog.Log(SourceOf(context), "SEQUENCE", "시퀀스 실행",
+                runResult.Outcome == SequenceRunOutcome.Completed,
+                runResult.Outcome == SequenceRunOutcome.Completed
+                    ? "완료"
+                    : $"실패 — 단계 '{runResult.FailedStepKey}': {runResult.Message}",
+                context.AcsOrderId);
             return runResult;
         }
         finally
@@ -244,6 +260,8 @@ public class SequenceService
             _monitor.StartStep(step.Key, step.DisplayName, _steps.IndexOf(step) + 1, context.CameraTargetDistanceMm);
             _monitor.EndStep(false, msg);
             _logger.LogWarning("단계 '{Step}' 검증 실패: {Msg}", step.Key, msg);
+            _opLog.Log(SourceOf(context), "STEP", $"{step.Key} ({step.DisplayName})", false,
+                $"검증 실패: {msg}", context.AcsOrderId);
             return StepResult.Fail(msg);
         }
 
@@ -260,6 +278,8 @@ public class SequenceService
             _monitor.EndStep(result.Success, result.Message);
             _logger.LogInformation("단계 '{Step}' {Result}: {Msg}",
                 step.Key, result.Success ? "완료" : "실패", result.Message);
+            _opLog.Log(SourceOf(context), "STEP", $"{step.Key} ({step.DisplayName})", result.Success,
+                result.Message, context.AcsOrderId);
 
             return result;
         }
@@ -268,6 +288,8 @@ public class SequenceService
             UpdateStatus(step.Key, StepState.Failed, "사용자 정지");
             _monitor.EndStep(false, "사용자 정지");
             _logger.LogInformation("단계 '{Step}' 사용자 정지", step.Key);
+            _opLog.Log(SourceOf(context), "STEP", $"{step.Key} ({step.DisplayName})", false,
+                "사용자 정지(취소)", context.AcsOrderId);
             return StepResult.Fail("사용자 정지");
         }
         catch (Exception ex)
@@ -276,6 +298,8 @@ public class SequenceService
             UpdateStatus(step.Key, StepState.Failed, errMsg);
             _monitor.EndStep(false, errMsg);
             _logger.LogError(ex, "단계 '{Step}' 예외", step.Key);
+            _opLog.Log(SourceOf(context), "STEP", $"{step.Key} ({step.DisplayName})", false,
+                errMsg, context.AcsOrderId);
             return StepResult.Fail(errMsg);
         }
     }

@@ -16,6 +16,7 @@ public class HdAmrDbContext : DbContext
     public DbSet<InspectionRecipe> InspectionRecipes => Set<InspectionRecipe>();
     public DbSet<TeachingPosition> TeachingPositions => Set<TeachingPosition>();
     public DbSet<Parameter> Parameters => Set<Parameter>();
+    public DbSet<OperationLog> OperationLogs => Set<OperationLog>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -91,6 +92,16 @@ public class HdAmrDbContext : DbContext
             b.Property(p => p.Value).IsRequired();
             b.Property(p => p.Description).HasMaxLength(500);
             b.HasIndex(p => p.Name).IsUnique();
+        });
+
+        modelBuilder.Entity<OperationLog>(b =>
+        {
+            b.HasKey(l => l.Id);
+            b.Property(l => l.Source).IsRequired().HasMaxLength(10);
+            b.Property(l => l.Category).IsRequired().HasMaxLength(20);
+            b.Property(l => l.Name).IsRequired().HasMaxLength(200);
+            b.Property(l => l.CorrelationId).HasMaxLength(100);
+            b.HasIndex(l => l.TimestampUtc);
         });
     }
 }

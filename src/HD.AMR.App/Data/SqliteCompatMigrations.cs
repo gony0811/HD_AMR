@@ -233,5 +233,20 @@ CREATE TABLE IF NOT EXISTS InspectionRecipes (
             .AsEnumerable().First() > 0;
         if (!hasProfileId)
             db.Database.ExecuteSqlRaw("ALTER TABLE InspectionRecipes ADD COLUMN InspectionProfileId INTEGER NULL;");
+
+        // 운영 로그(수동/ACS 동작 이력 + 실패 원인) — UI 로그 페이지 데이터 원본.
+        db.Database.ExecuteSqlRaw(@"
+CREATE TABLE IF NOT EXISTS OperationLogs (
+    Id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    TimestampUtc TEXT NOT NULL,
+    Source TEXT NOT NULL,
+    Category TEXT NOT NULL,
+    Name TEXT NOT NULL,
+    Success INTEGER NULL,
+    Detail TEXT NOT NULL,
+    CorrelationId TEXT NULL
+);
+CREATE INDEX IF NOT EXISTS IX_OperationLogs_TimestampUtc ON OperationLogs (TimestampUtc);
+");
     }
 }

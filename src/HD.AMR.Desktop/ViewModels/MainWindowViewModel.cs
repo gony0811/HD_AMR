@@ -90,6 +90,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 new("용접 위치 시험", "🎯", typeof(SeamMoveTestViewModel)),
             }),
             new("Sequence",      "🔀", typeof(SequenceViewModel)),
+            new("운영 로그",      "📜", typeof(LogsViewModel)),
             new("SETTINGS",      "⚙️", null, new NavItem[]
             {
                 new("AMR",           "🚚", typeof(AmrViewModel)),

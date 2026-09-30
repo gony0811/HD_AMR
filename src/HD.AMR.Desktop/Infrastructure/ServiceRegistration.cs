@@ -100,6 +100,9 @@ internal static class ServiceRegistration
         // ── 시퀀스 전역 실행 잠금(UI/ACS 동시 실행 방지) — 조그 리본이 참조 ──
         services.AddSingleton<HD.AMR.App.Service.Sequence.SequenceRunGate>();
 
+        // ── 운영 로그(수동/ACS 동작 이력 + 실패 원인, DB 영속) — 로그 페이지 데이터 원본 ──
+        services.AddSingleton<OperationLogService>();
+
         // ── ACS(VDA 5050) 스택 — 기존 Web 과 동일 ─────────────────────
         // TARS-M v3 REST 클라이언트(VDA5050 order 의 이동 실현 경로).
         services.Configure<AmrRestSettings>(config.GetSection("AmrRest"));
@@ -164,6 +167,7 @@ internal static class ServiceRegistration
         services.AddTransient<ArucoCalibrationViewModel>();
         services.AddTransient<ArucoMountCalibrationViewModel>();
         services.AddTransient<LiftViewModel>();
+        services.AddTransient<LogsViewModel>();
 
         return services;
     }

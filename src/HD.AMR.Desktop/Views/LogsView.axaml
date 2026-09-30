@@ -1,0 +1,57 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:HD.AMR.Desktop.ViewModels"
+             x:Class="HD.AMR.Desktop.Views.LogsView"
+             x:DataType="vm:LogsViewModel">
+    <UserControl.Styles>
+        <Style Selector="TextBlock.axis"><Setter Property="Foreground" Value="{DynamicResource AppMutedTextBrush}" /><Setter Property="FontSize" Value="12" /></Style>
+        <Style Selector="TextBlock.cell"><Setter Property="FontSize" Value="12" /><Setter Property="VerticalAlignment" Value="Top" /><Setter Property="TextWrapping" Value="Wrap" /></Style>
+        <Style Selector="Border.logbadge"><Setter Property="CornerRadius" Value="4" /><Setter Property="Padding" Value="6,1" /><Setter Property="HorizontalAlignment" Value="Left" /><Setter Property="VerticalAlignment" Value="Top" /></Style>
+    </UserControl.Styles>
+
+    <StackPanel MaxWidth="1150" HorizontalAlignment="Left">
+        <TextBlock Classes="page-title" Text="운영 로그" />
+        <TextBlock Classes="page-subtitle" TextWrapping="Wrap"
+                   Text="수동(UI) 및 ACS(VDA5050) 발 동작 이력 — order 수명주기(수신/이동/도달/완결/실패), 시퀀스 실행, 개별 스텝 결과를 기록합니다. 실패 항목은 원인 전문이 '내용'에 남습니다. 기록은 DB(OperationLogs)에 영속되어 앱 재시작 후에도 유지됩니다." />
+
+        <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,0,0,8">
+            <TextBlock Text="출처" Classes="axis" VerticalAlignment="Center" />
+            <ComboBox ItemsSource="{Binding SourceOptions}" SelectedItem="{Binding SelectedSource}" MinWidth="110" />
+            <CheckBox Content="실패만" IsChecked="{Binding OnlyFailures}" />
+            <Button Content="새로고침" Command="{Binding ReloadCommand}" IsEnabled="{Binding !Busy}" />
+            <TextBlock Classes="axis" VerticalAlignment="Center"
+                       Text="{Binding Rows.Count, StringFormat='최근 {0}건 (최대 300건 표시)'}" />
+        </StackPanel>
+
+        <Border Classes="card">
+            <StackPanel Spacing="2">
+                <Grid ColumnDefinitions="110,50,80,230,55,*">
+                    <TextBlock Grid.Column="0" Text="시간" Classes="axis" />
+                    <TextBlock Grid.Column="1" Text="출처" Classes="axis" />
+                    <TextBlock Grid.Column="2" Text="분류" Classes="axis" />
+                    <TextBlock Grid.Column="3" Text="대상" Classes="axis" />
+                    <TextBlock Grid.Column="4" Text="결과" Classes="axis" />
+                    <TextBlock Grid.Column="5" Text="내용" Classes="axis" />
+                </Grid>
+                <ItemsControl ItemsSource="{Binding Rows}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:LogRow">
+                            <Grid ColumnDefinitions="110,50,80,230,55,*" Margin="0,3">
+                                <TextBlock Grid.Column="0" Classes="cell axis" FontFamily="monospace" Text="{Binding Time}" />
+                                <TextBlock Grid.Column="1" Classes="cell" Text="{Binding Source}" />
+                                <TextBlock Grid.Column="2" Classes="cell axis" Text="{Binding Category}" />
+                                <TextBlock Grid.Column="3" Classes="cell" Text="{Binding Name}" ToolTip.Tip="{Binding CorrelationId}" />
+                                <Border Grid.Column="4" Classes="badge logbadge" Classes.on="{Binding IsSuccess}" Classes.off="{Binding IsFailure}">
+                                    <TextBlock Text="{Binding Result}" FontSize="11" />
+                                </Border>
+                                <TextBlock Grid.Column="5" Classes="cell" Text="{Binding Detail}" />
+                            </Grid>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <TextBlock Classes="axis" Text="표시할 로그가 없습니다." HorizontalAlignment="Center"
+                           IsVisible="{Binding Rows.Count, Converter={x:Static vm:CountConverters.IsZero}}" />
+            </StackPanel>
+        </Border>
+    </StackPanel>
+</UserControl>

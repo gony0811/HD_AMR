@@ -32,6 +32,7 @@ public sealed class Vda5050OrderExecutor
     private readonly AMRService _amr;
     private readonly Inspection.IWeldInspectionExecutor _inspection;
     private readonly AmrRestSettings _restSettings;
+    private readonly OperationLogService _opLog;
     private readonly ILogger<Vda5050OrderExecutor> _logger;
 
     private const double DefaultDeviationXy = 0.1;     // [m] — 사양 §4.2 미지정 기본값
@@ -56,14 +57,21 @@ public sealed class Vda5050OrderExecutor
 
     public Vda5050OrderExecutor(AmrRestClient rest, AMRService amr,
         Inspection.IWeldInspectionExecutor inspection,
-        IOptions<AmrRestSettings> restOptions, ILogger<Vda5050OrderExecutor> logger)
+        IOptions<AmrRestSettings> restOptions, OperationLogService opLog,
+        ILogger<Vda5050OrderExecutor> logger)
     {
         _rest = rest;
         _amr = amr;
         _inspection = inspection;
         _restSettings = restOptions.Value;
+        _opLog = opLog;
         _logger = logger;
     }
+
+    /// <summary>운영 로그(ACS 출처) 축약 — orderId 를 상관 식별자로 남긴다.</summary>
+    private void OpLog(string category, string name, bool? success, string detail, string? orderId = null)
+        => _opLog.Log(OperationLogService.SourceAcs, category, name, success, detail,
+            orderId ?? (_orderId.Length > 0 ? _orderId : null));
 
     /// <summary>state 메시지 구성용 스냅샷 — 복사본 반환(발행 스레드와 임무 스레드 분리).</summary>
     public (string OrderId, int OrderUpdateId, string LastNodeId, int LastNodeSequenceId, bool Driving,
@@ -108,6 +116,7 @@ public sealed class Vda5050OrderExecutor
         if (reject is not null)
         {
             _logger.LogWarning("VDA5050 order 거부: {OrderId} — {Reason}", order.OrderId, reject);
+            OpLog("ORDER", "order 거부", false, reject, order.OrderId);
             lock (_gate)
             {
                 _errors["orderValidationError"] = new VdaError
@@ -155,6 +164,9 @@ public sealed class Vda5050OrderExecutor
         _inspection.InvalidateAnchor();
         _logger.LogInformation("VDA5050 order 수리: {OrderId}, node={NodeId} → ({X:0.###}, {Y:0.###}, θ={Theta:0.###})",
             order.OrderId, node.NodeId, node.NodePosition!.X, node.NodePosition.Y, node.NodePosition.Theta);
+        OpLog("ORDER", "order 수신", null,
+            $"목표 ({node.NodePosition.X:0.###}, {node.NodePosition.Y:0.###}, θ={node.NodePosition.Theta:0.###}), " +
+            $"액션 {node.Actions.Count}건", order.OrderId);
         StateChanged?.Invoke();
 
         var task = RunMissionAsync(order.OrderId, node, ct);
@@ -186,25 +198,40 @@ public sealed class Vda5050OrderExecutor
         var pos = node.NodePosition!;
         try
         {
-            // 1) 이동 명령 — 검사 정차는 항상 stopFlag=true (부록 D-2: false 면 각도 미보정).
-            //    주행 발생 = 정렬(anchor) 캐시 무효(사양 §8.1 — 정차점이 바뀌면 정렬 재수행).
-            _inspection.InvalidateAnchor();
-            lock (_gate) _driving = true;
-            StateChanged?.Invoke();
-
-            var go = await _rest.GoAsync(pos.X, pos.Y, pos.Theta ?? 0.0, stopFlag: true, ct);
-            if (!go.Ok)
+            // 0) 이미 목표 위치면 이동 생략 — 측위 신뢰도가 낮을 때 제자리 go 가 W13(경로탐색 실패)로
+            //    전체 임무를 죽이는 것을 방지. 축별 ±devXy + theta 판정(사양과 별개의 현장 합의).
+            //    주행이 없으므로 정렬(anchor) 캐시도 유지한다(§8.1 — 정차점 불변).
+            if (IsAlreadyAtTarget(pos, out var atDesc))
             {
-                FailMission($"이동 명령 실패 (code={go.Code}): {go.Message}");
-                return;
+                _logger.LogInformation("VDA5050 이동 생략: 이미 목표 위치 ({Desc}) — {NodeId}", atDesc, node.NodeId);
+                OpLog("ORDER", "이동 생략", null, $"이미 목표 위치 ({atDesc})", orderId);
             }
-
-            // 2) 도착 대기 — 자체 위치 판정(부록 D-4) + status.error 감시(보조).
-            var arrived = await WaitForArrivalAsync(pos, ct);
-            if (!arrived.Ok)
+            else
             {
-                FailMission(arrived.Reason!);
-                return;
+                // 1) 이동 명령 — 검사 정차는 항상 stopFlag=true (부록 D-2: false 면 각도 미보정).
+                //    주행 발생 = 정렬(anchor) 캐시 무효(사양 §8.1 — 정차점이 바뀌면 정렬 재수행).
+                _inspection.InvalidateAnchor();
+                lock (_gate) _driving = true;
+                StateChanged?.Invoke();
+
+                // 이동 전 status.error 에 이미 남아 있던 항목은 과거 실패의 잔재다(플랫폼이 배열을
+                // 비우지 않고 유지하는 것을 실증) — 도착 감시에서 제외할 기준선으로 캡처.
+                var staleErrors = await SnapshotErrorKeysAsync(ct);
+
+                var go = await _rest.GoAsync(pos.X, pos.Y, pos.Theta ?? 0.0, stopFlag: true, ct);
+                if (!go.Ok)
+                {
+                    FailMission($"이동 명령 실패 (code={go.Code}): {go.Message}");
+                    return;
+                }
+
+                // 2) 도착 대기 — 자체 위치 판정(부록 D-4) + status.error 감시(보조).
+                var arrived = await WaitForArrivalAsync(pos, staleErrors, ct);
+                if (!arrived.Ok)
+                {
+                    FailMission(arrived.Reason!);
+                    return;
+                }
             }
 
             lock (_gate)
@@ -215,6 +242,7 @@ public sealed class Vda5050OrderExecutor
                 _nodeStates.Clear();   // 도달한 노드는 nodeStates 에서 제거(§6.2)
             }
             _logger.LogInformation("VDA5050 노드 도달: {NodeId} (seq={Seq})", node.NodeId, node.SequenceId);
+            OpLog("ORDER", "노드 도달", true, $"node={node.NodeId} ({pos.X:0.###}, {pos.Y:0.###})", orderId);
             StateChanged?.Invoke();
 
             // 3) 액션 순차 실행 — 배열 순서 = 실행 순서(§4.2). 액션 없는 Order(actions:[])는
@@ -244,6 +272,7 @@ public sealed class Vda5050OrderExecutor
                     var result = await _inspection.ExecuteAsync(
                         action, orderId, pos.Theta, isLastInspection: ai == lastInspectionIndex, ct);
                     SetActionStatus(action.ActionId, result.Success ? "FINISHED" : "FAILED", result.ResultDescription);
+                    OpLog("ACTION", action.ActionType, result.Success, result.ResultDescription ?? "", orderId);
                     if (!result.Success && result.ErrorType is not null)
                     {
                         ReportError(result.ErrorType, result.ErrorDescription ?? result.ResultDescription);
@@ -257,12 +286,14 @@ public sealed class Vda5050OrderExecutor
                     // 카탈로그(§8) 외 노드 액션 — 계약 위반: 액션 FAILED + orderValidationError.
                     var desc = $"미지원 노드 액션 타입 '{action.ActionType}'";
                     SetActionStatus(action.ActionId, "FAILED", desc);
+                    OpLog("ACTION", action.ActionType, false, desc, orderId);
                     ReportError("orderValidationError", $"actionId={action.ActionId}: {desc}");
                     _logger.LogWarning("VDA5050 {Desc} ({ActionId})", desc, action.ActionId);
                 }
                 StateChanged?.Invoke();
             }
             _logger.LogInformation("VDA5050 order 완결: {OrderId} (액션 {N}건)", _orderId, node.Actions.Count);
+            OpLog("ORDER", "order 완결", true, $"액션 {node.Actions.Count}건 처리 완료", orderId);
             // 완결 후에도 orderId·actionStates 는 다음 Order 수신까지 유지 보고(§4.5.4).
         }
         catch (OperationCanceledException)
@@ -272,7 +303,27 @@ public sealed class Vda5050OrderExecutor
         }
     }
 
-    private async Task<(bool Ok, string? Reason)> WaitForArrivalAsync(NodePosition pos, CancellationToken ct)
+    /// <summary>현재 pose 가 목표와 x·y 축별 devXy 이내이고 theta 도 devTheta 이내면 true.
+    /// LatestStatus 미확보(Modbus 미연결)면 판정 불가 → false(기존 이동 경로).</summary>
+    private bool IsAlreadyAtTarget(NodePosition pos, out string desc)
+    {
+        desc = "";
+        var st = _amr.LatestStatus;
+        if (st is null) return false;
+
+        var devXy = pos.AllowedDeviationXY ?? DefaultDeviationXy;
+        var devTheta = pos.AllowedDeviationTheta ?? DefaultDeviationTheta;
+        var dx = st.Pose.X - pos.X;
+        var dy = st.Pose.Y - pos.Y;
+        var dTheta = pos.Theta is double t ? Math.Abs(NormalizeRad(st.Pose.Angle - t)) : 0.0;
+        if (Math.Abs(dx) > devXy || Math.Abs(dy) > devXy || dTheta > devTheta) return false;
+
+        desc = $"dx={dx:F3}m, dy={dy:F3}m, dθ={dTheta:F3}rad";
+        return true;
+    }
+
+    private async Task<(bool Ok, string? Reason)> WaitForArrivalAsync(
+        NodePosition pos, HashSet<string> staleErrors, CancellationToken ct)
     {
         var devXy = pos.AllowedDeviationXY ?? DefaultDeviationXy;
         var devTheta = pos.AllowedDeviationTheta ?? DefaultDeviationTheta;
@@ -295,10 +346,15 @@ public sealed class Vda5050OrderExecutor
                     return (true, null);
             }
 
-            // 보조: status.error 감시 — 값 해석 미확정(D-12/D-9)이라 "존재하고 비어 있지 않음"만 실패로 본다.
+            // 보조: status.error 감시 — 이동 전 기준선(staleErrors)에 없던 신규 항목만 실패로 본다.
+            // (플랫폼이 과거 오류를 배열에 계속 남겨두므로 전량 실패 처리하면 묵은 오류가 새 임무를 죽인다.)
             var status = await _rest.GetStatusAsync(ct);
-            if (status.Ok && status.Data is JsonElement data && TryGetErrorText(data, out var errText))
-                return (false, $"로봇 이동 오류 보고: {errText}");
+            if (status.Ok && status.Data is JsonElement data)
+            {
+                var fresh = GetErrorEntries(data).Where(e => !staleErrors.Contains(e.Key)).ToList();
+                if (fresh.Count > 0)
+                    return (false, $"로봇 이동 오류 보고: [{string.Join(",", fresh.Select(e => e.Text))}]");
+            }
 
             await Task.Delay(_restSettings.StatusPollMs, ct);
         }
@@ -306,29 +362,54 @@ public sealed class Vda5050OrderExecutor
         return (false, "cancelled");
     }
 
-    /// <summary>status 응답의 error 필드가 "오류 있음"을 나타내면 true. 스키마 미확정 — 문자열 비어있지 않음
-    /// 또는 숫자 0 아님만 오류로 간주하고 원문을 그대로 전달한다(벤더 회신 D-9/D-12 후 정교화).</summary>
-    private static bool TryGetErrorText(JsonElement data, out string text)
+    /// <summary>현재 status.error 항목 키 집합 — 이동 직전에 찍는 묵은 오류 기준선.
+    /// 조회 실패 시 빈 집합(= 이후 모든 오류를 신규로 간주, 기존 동작과 동일).</summary>
+    private async Task<HashSet<string>> SnapshotErrorKeysAsync(CancellationToken ct)
     {
-        text = "";
+        var keys = new HashSet<string>(StringComparer.Ordinal);
+        var status = await _rest.GetStatusAsync(ct);
+        if (status.Ok && status.Data is JsonElement data)
+            foreach (var (key, _) in GetErrorEntries(data))
+                keys.Add(key);
+        return keys;
+    }
+
+    /// <summary>status 응답의 error 필드를 개별 항목으로 분해. 실측 스키마는 {code,timestamp,msg} 배열 —
+    /// 키는 code|timestamp 로 잡아 동일 오류의 재발(새 timestamp)은 신규로 구분된다.
+    /// 그 밖의 형태(문자열/숫자/객체)는 원문 전체를 한 항목으로 취급(비어 있음·"0"·0 은 무오류).</summary>
+    private static List<(string Key, string Text)> GetErrorEntries(JsonElement data)
+    {
+        var list = new List<(string, string)>();
         if (data.ValueKind != JsonValueKind.Object || !data.TryGetProperty("error", out var err))
-            return false;
+            return list;
         switch (err.ValueKind)
         {
+            case JsonValueKind.Array:
+                foreach (var e in err.EnumerateArray())
+                {
+                    var raw = e.GetRawText();
+                    var key = raw;
+                    if (e.ValueKind == JsonValueKind.Object)
+                    {
+                        var code = e.TryGetProperty("code", out var c) ? c.ToString() : "";
+                        var ts = e.TryGetProperty("timestamp", out var t) ? t.ToString() : "";
+                        if (code.Length > 0 || ts.Length > 0) key = $"{code}|{ts}";
+                    }
+                    list.Add((key, raw));
+                }
+                break;
             case JsonValueKind.String:
-                text = err.GetString() ?? "";
-                return !string.IsNullOrWhiteSpace(text) && text != "0";
+                var s = err.GetString() ?? "";
+                if (!string.IsNullOrWhiteSpace(s) && s != "0") list.Add((s, s));
+                break;
             case JsonValueKind.Number:
-                text = err.ToString();
-                return err.TryGetInt64(out var n) && n != 0;
-            case JsonValueKind.Object or JsonValueKind.Array:
-                text = err.GetRawText();
-                return err.ValueKind == JsonValueKind.Object
-                    ? err.EnumerateObject().Any()
-                    : err.GetArrayLength() > 0;
-            default:
-                return false;
+                if (err.TryGetInt64(out var n) && n != 0) list.Add((err.ToString(), err.ToString()));
+                break;
+            case JsonValueKind.Object:
+                if (err.EnumerateObject().Any()) list.Add((err.GetRawText(), err.GetRawText()));
+                break;
         }
+        return list;
     }
 
     private static double NormalizeRad(double rad)
@@ -343,6 +424,7 @@ public sealed class Vda5050OrderExecutor
     private void FailMission(string reason)
     {
         _logger.LogWarning("VDA5050 임무 실패: {OrderId} — {Reason}", _orderId, reason);
+        OpLog("ORDER", "임무 실패", false, reason);
         lock (_gate)
         {
             _driving = false;
@@ -387,6 +469,7 @@ public sealed class Vda5050OrderExecutor
     public async Task EmergencyStopAsync()
     {
         _logger.LogWarning("VDA5050 emergencyStop 수신 — 주행 정지 실행");
+        OpLog("ORDER", "emergencyStop", null, "ACS 비상정지 수신 — 주행 정지 및 임무 폐기");
         await AbortMissionAsync("stopped by emergencyStop");
         var stop = await _rest.StopAsync();
         if (!stop.Ok)
