@@ -33,13 +33,14 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
 
     private readonly object _sync = new();
     private (string OrderId, string AnchorGroupId)? _lastAnchor;   // 마지막 성공 정렬 키
+    private double[]? _lastInternalWorkpieceFrame;                 // 같은 anchor에서 재사용할 BASE 기준 내부 프레임
     private CancellationTokenSource? _currentRunCts;
 
     /// <summary>
     /// <b>작업물 좌표계 교시 스텝군(⑤~⑯)</b> — anchor 적중(같은 노드의 2번째 이후 task) 시 건너뛴다.
     ///
-    /// 첫 task 가 여기서 작업물 좌표계(T_N)를 등록해 두면 이후 task 는 그 좌표계를 재사용한다. 등록은
-    /// 컨트롤러에 남으므로 사이의 wobjReset(활성 프레임만 0 복귀)이 공유를 깨지 않는다.
+    /// 첫 task 가 여기서 계산한 내부 작업물 좌표계(T_BW)를 오케스트레이터가 캐시하고 이후 task에 복사한다.
+    /// 컨트롤러 작업물 좌표계에는 등록하지 않는다.
     ///
     /// <b>②③④는 건너뛰지 않는다</b> — task 마다 용접선(seamStartW)이 다르므로 ②가 그 위치로 다시
     /// 이동해야 하고, 위치가 바뀐 이상 ③ 카메라 거리·④ 평탄면 센터링도 그 자리에서 다시 잡아야 한다.
@@ -68,7 +69,11 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
 
     public void InvalidateAnchor()
     {
-        lock (_sync) _lastAnchor = null;
+        lock (_sync)
+        {
+            _lastAnchor = null;
+            _lastInternalWorkpieceFrame = null;
+        }
     }
 
     public async Task AbortAsync()
@@ -170,9 +175,14 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         // 7) anchor 캐시 판정 — 같은 (orderId, anchorGroupId) 연속이고 주행 없음 → ⑱만 실행.
         //    CORNER 는 정렬 스텝이 없어 캐시 비적용(항상 레시피 스텝 전체 실행, 캐시 갱신도 안 함).
         bool anchorHit;
+        double[]? cachedInternalFrame;
         lock (_sync)
+        {
             anchorHit = recipe.SeamType != SeamTypeKind.Corner
-                        && _lastAnchor == (orderId, req.AnchorGroupId);
+                        && _lastAnchor == (orderId, req.AnchorGroupId)
+                        && _lastInternalWorkpieceFrame is { Length: 6 };
+            cachedInternalFrame = anchorHit ? (double[])_lastInternalWorkpieceFrame!.Clone() : null;
+        }
 
         // 레시피가 정한 스텝(미지정이면 등록된 전체)에서 출발해, 이 task 에 맞지 않는 것만 뺀다.
         //  · anchor 적중 → 정렬 스텝군 제거(첫 task 가 잡아 둔 작업물 좌표계 재사용)
@@ -270,6 +280,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             ZDatumOffsetMm = zDatumOffset,
             VisionFailRatioMax = recipe.VisionFailRatioMax < 1.0 ? recipe.VisionFailRatioMax : null,
         };
+        if (cachedInternalFrame is not null)
+            context.Bag[InternalWorkpieceFrame.BagKey] = cachedInternalFrame;
 
         // CROSS3/CROSS4 는 LINE 과 동일하게 티칭 프로필 경유점을 실행한다 — 코로게이션 격자 교차부는
         // 평탄하지 않아 수식 생성으로 법선·깊이를 담을 수 없으므로 6-DOF 캡처 교시(/inspection-points)로
@@ -320,10 +332,22 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
 
             case SequenceRunOutcome.Completed:
             default:
-                // CORNER 는 정렬을 수행하지 않으므로 anchor 캐시를 갱신하지 않는다(기존 정렬도 훼손 안 함 —
-                // wobj 프레임은 컨트롤러에 유지).
+                // CORNER 는 정렬을 수행하지 않으므로 기존 내부 프레임 캐시를 훼손하지 않는다.
                 if (recipe.SeamType != SeamTypeKind.Corner)
-                    lock (_sync) _lastAnchor = (orderId, req.AnchorGroupId);
+                {
+                    if (!context.Bag.TryGetValue(InternalWorkpieceFrame.BagKey, out var value)
+                        || value is not double[] { Length: 6 } internalFrame)
+                    {
+                        InvalidateAnchor();
+                        return InspectionActionResult.Fail("inspectionFailed",
+                            "검사는 완료됐지만 내부 작업물 좌표계가 없어 anchor를 보존할 수 없습니다.");
+                    }
+                    lock (_sync)
+                    {
+                        _lastAnchor = (orderId, req.AnchorGroupId);
+                        _lastInternalWorkpieceFrame = (double[])internalFrame.Clone();
+                    }
+                }
                 return InspectionActionResult.Ok(
                     $"recipe={recipeId} profile='{profile?.Name ?? $"corner3.{cornerSide}"}' anchor={req.AnchorGroupId}#{req.SeqInGroup}" +
                     (anchorHit ? " (정렬 공유)" : "") +

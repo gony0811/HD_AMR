@@ -1,30 +1,18 @@
-using HD.AMR.App.Communication;
+using HD.AMR.App.Service.Inspection;
 using Microsoft.Extensions.Logging;
 
 namespace HD.AMR.App.Service.Sequence.Steps;
 
 /// <summary>
-/// ⑯⁺ 작업물 좌표계 등록 — 점1(원점, ⑦⁺⁺)·점2(X방향, ⑯)에 더해, <b>실제 이동 없이</b>
-/// "현재 TCP 에서 툴 Z+ 방향 <see cref="ZOffsetMm"/>mm 위치"를 가상 점3(Z방향)으로 삼아
-/// 계산법 0(원점-X축-Z축)으로 좌표계를 계산하고 <see cref="WObjPointStep.WObjIdKey"/> 번호에 등록한다.
-///
-/// 컨트롤러의 3점 버퍼(SetWObjCoordPoint)는 현재 TCP 만 기록할 수 있어 가상점을 넣을 수 없으므로,
-/// Bag 에 보관된 점1·점2 포즈와 가상 점3으로 <b>클라이언트 계산 경로</b>
-/// (<see cref="FairinoRpcClient.RegisterWObjFromPointsAsync"/> = ComputeFramePose + SetWObjCoord)를 쓴다.
-/// ComputeFramePose 의 method 0 은 점3의 X축 성분을 외적 과정에서 제거하므로 "현재 위치(점2 근방) + 툴Z 50mm"
-/// 가상점으로 정확하다. (오일러 ZYX 규약 주의 — ComputeFramePose 기존 경고 참조.)
+/// ⑯⁺ 내부 작업물 좌표계 계산 — 점1(코로게이션 Top)·점2(용접선 X+ 방향)와 점1 교시 자세의
+/// 툴 +Z로 BASE 기준 프레임을 만든다. 레시피 원점은 코로게이션 바닥이므로 Top에서 작업물 Z- 방향
+/// 33.8mm 내린 가상점으로 설정한다. 계산 결과는 실행 컨텍스트에만 보관하며 컨트롤러에는 등록하지 않는다.
 /// </summary>
 public class WObjRegisterStep : ISequenceStep
 {
     private readonly CobotService _cobot;
     private readonly ParameterService _param;
     private readonly ILogger<WObjRegisterStep> _logger;
-
-    /// <summary>가상 점3 거리(mm) — 현재 TCP 에서 툴 Z+ 방향.</summary>
-    private const double ZOffsetMm = 50.0;
-
-    /// <summary>3점법 계산법 — 0: 원점-X축-Z축 고정.</summary>
-    private const int Method = 0;
 
     private const int DefaultWObjId = 1;
 
@@ -36,7 +24,7 @@ public class WObjRegisterStep : ISequenceStep
     }
 
     public string Key => "wobjRegister";
-    public string DisplayName => "작업물 좌표계 등록 (점3 Z+50)";
+    public string DisplayName => "내부 작업물 좌표계 계산 (Top Z−33.8)";
     public int DefaultOrder => 1170;
 
     public StepValidation Validate(SequenceContext context)
@@ -61,29 +49,32 @@ public class WObjRegisterStep : ISequenceStep
             || context.Bag[WObjPointStep.PointPoseBagKey(2)] is not double[] p2 || p2.Length != 6)
             return StepResult.Fail("점1·점2 포즈를 읽을 수 없습니다 — 기록 단계를 다시 실행하세요.");
 
-        // 가상 점3: 현재 TCP 에서 툴 Z+ 방향 ZOffsetMm 병진 합성 — 모션 없음.
-        var cur = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
-        var p3 = FrameMath.FromFrame(new[] { 0.0, 0.0, ZOffsetMm, 0.0, 0.0, 0.0 }, cur);
-
-        _logger.LogInformation(
-            "⑯⁺ 작업물 좌표계 등록: wobj {Id}, p1 [{X1:0.0},{Y1:0.0},{Z1:0.0}], p2 [{X2:0.0},{Y2:0.0},{Z2:0.0}], " +
-            "p3(가상, 툴Z+{Off:0}mm) [{X3:0.0},{Y3:0.0},{Z3:0.0}]",
-            wobjId, p1[0], p1[1], p1[2], p2[0], p2[1], p2[2], ZOffsetMm, p3[0], p3[1], p3[2]);
-
-        double[] pose;
+        double[] frame;
         try
         {
-            pose = await _cobot.Rpc.RegisterWObjFromPointsAsync(wobjId, p1, p2, p3, Method, ct: ct);
+            frame = InternalWorkpieceFrame.Compute(p1, p2);
         }
-        catch (InvalidOperationException ex)
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
         {
-            return StepResult.Fail($"작업물 좌표계 등록 실패 — {ex.Message}");
+            return StepResult.Fail($"내부 작업물 좌표계 계산 실패 — {ex.Message}");
         }
 
+        context.Bag[InternalWorkpieceFrame.BagKey] = frame;
+        var span = Math.Sqrt(
+            Math.Pow(p2[0] - p1[0], 2) + Math.Pow(p2[1] - p1[1], 2) + Math.Pow(p2[2] - p1[2], 2));
+
+        _logger.LogInformation(
+            "⑯⁺ 내부 작업물 좌표계 계산: id {Id}, Top [{X1:0.0},{Y1:0.0},{Z1:0.0}], X+점 [{X2:0.0},{Y2:0.0},{Z2:0.0}], " +
+            "간격 {Span:0.0}mm, 바닥 원점(Top Z-{Height:0.0}) [{Ox:0.0},{Oy:0.0},{Oz:0.0}], RPY [{Rx:0.00},{Ry:0.00},{Rz:0.00}]",
+            wobjId, p1[0], p1[1], p1[2], p2[0], p2[1], p2[2], span,
+            InternalWorkpieceFrame.DefaultCorrugationTopHeightMm,
+            frame[0], frame[1], frame[2], frame[3], frame[4], frame[5]);
+
         return StepResult.Ok(
-            $"작업물 좌표계 wobj {wobjId} 등록 완료 — 원점 [{pose[0]:0.0}, {pose[1]:0.0}, {pose[2]:0.0}], " +
-            $"RPY [{pose[3]:0.00}, {pose[4]:0.00}, {pose[5]:0.00}] " +
-            $"(점3 = 현재 TCP + 툴Z {ZOffsetMm:0}mm 가상점, 계산법 {Method}: 원점-X축-Z축).");
+            $"내부 작업물 좌표계 계산 완료 — 교시 간격 {span:0.0}mm, 바닥 원점 " +
+            $"[{frame[0]:0.0}, {frame[1]:0.0}, {frame[2]:0.0}], RPY " +
+            $"[{frame[3]:0.00}, {frame[4]:0.00}, {frame[5]:0.00}] " +
+            $"(Top에서 작업물 Z−{InternalWorkpieceFrame.DefaultCorrugationTopHeightMm:0.0}mm, 컨트롤러 등록 없음).");
     }
 
     private async Task<double> GetWObjIdAsync()

@@ -76,7 +76,7 @@ public static class WeldSequenceSupport
     /// <summary>검사 카메라 오프셋 영상 +Y(화면 아래) 성분 (mm). <see cref="InspectCamOffsetXKey"/> 참조.</summary>
     public const string InspectCamOffsetYKey = "Sequence.InspectCam.OffsetYMm";
 
-    public const double DefaultPitchMm = 370.0;
+    public const double DefaultPitchMm = 360.0;
 
     /// <summary>Peak 찾기 결과를 담는 Bag 키. id 는 1 또는 2.</summary>
     public static string PeakFindBagKey(int id) => $"peak{id}.find";
@@ -210,7 +210,7 @@ public static class WeldSequenceSupport
         catch { return 1; }
     }
 
-    /// <summary>pitch(mm) 읽기. 없으면 기본 370.</summary>
+    /// <summary>pitch(mm) 읽기. 없으면 기본 360.</summary>
     public static async Task<double> GetPitchMmAsync(ParameterService param)
     {
         try { return await param.GetDoubleAsync(PitchMmKey) ?? DefaultPitchMm; }
