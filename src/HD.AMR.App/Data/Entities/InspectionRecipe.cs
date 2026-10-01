@@ -33,7 +33,7 @@ public class InspectionRecipe
 
     /// <summary>ACS 실행 시 사용할 티칭 프로필(<see cref="InspectionProfile.Id"/>, 경유점 소스). null = 미지정 →
     /// LINE/CROSS 액션은 FAILED + inspectionFailed. 프로필 SeamType 은 레시피 타입과 일치해야 한다.
-    /// CORNER3 는 고정 티칭 슬롯(corner3.*)을 쓰므로 무시. 현장 지정값이라 '기본값' 재적용 시에도 보존된다.</summary>
+    /// CORNER3 는 실행 시퀀스가 제거되어 사용하지 않는다. 현장 지정값이라 '기본값' 재적용 시에도 보존된다.</summary>
     public int? InspectionProfileId { get; set; }
 
     // (제거됨) ApproachTeachingKey — 레시피별 코봇 접근 자세 티칭 키. 런타임 미구현, 접근 자세는 Teaching 의 Wall ID

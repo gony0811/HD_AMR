@@ -122,12 +122,12 @@ public class InspectionRecipeService
     }
 
     /// <summary>레시피에 지정할 티칭 프로필 검증 — 저장 전 UI 가 호출. 문제 없으면 null, 있으면 사유.
-    /// 규칙: CORNER3 은 지정 불가(고정 슬롯 사용), 프로필 존재, 프로필 SeamType = 레시피 타입, 경유점 2점 이상.</summary>
+    /// 규칙: CORNER3 은 실행 시퀀스가 없어 지정 불가, 프로필 존재, 프로필 SeamType = 레시피 타입, 경유점 2점 이상.</summary>
     public async Task<string?> ValidateProfileAssignmentAsync(InspectionRecipe recipe, CancellationToken ct = default)
     {
         if (recipe.InspectionProfileId is not { } profileId) return null;
         if (recipe.Id == RecipeIds.Corner3)
-            return "CORNER3 는 고정 티칭 슬롯(corner3.*)을 사용하므로 티칭 프로필을 지정할 수 없습니다.";
+            return "CORNER3 검사 시퀀스가 제거되어 티칭 프로필을 지정할 수 없습니다.";
 
         var profile = await _db.InspectionProfiles.AsNoTracking().FirstOrDefaultAsync(p => p.Id == profileId, ct);
         if (profile is null)
@@ -204,12 +204,9 @@ public class InspectionRecipeService
                 SeamType = c.Seam,
                 Orientation = c.Orient,
                 Enabled = c.Enabled,
-                // CORNER3 은 평탄면 정렬 체인 미적용 — 티칭 슬롯(corner3.*) 직접 순회 스텝만 실행.
-                // CORNER2 는 실행 스텝 미구현(Enabled=false 로 게이트) — 후속에서 corner2 슬롯/캡처 스텝 배선.
+                // CORNER2/CORNER3 실행 시퀀스는 없음(Enabled=false 게이트).
                 // 그 외는 풀시퀀스(null) — 타입별 부분 구성은 현장 튜닝으로 조정.
-                StepKeysJson = c.Seam == SeamTypeKind.Corner
-                    ? """["cornerInspectionRun","wobjReset","monitorClose"]"""
-                    : null,
+                StepKeysJson = null,
                 CameraTargetDistanceMm = null,     // 전역 기본(400mm) 사용
                 VisionFailRatioMax = 1.0,          // 판정 안 함 — 정책 확정 시 하향
                 // (PatternJson 제거) CROSS3/CROSS4 는 /inspection-points 6-DOF 캡처 프로필 경유점을 실행 —

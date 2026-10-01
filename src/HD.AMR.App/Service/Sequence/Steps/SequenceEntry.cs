@@ -16,9 +16,8 @@ namespace HD.AMR.App.Service.Sequence.Steps;
 ///     프레임을 놓친다) 조건 없이 재설정한다.
 ///  ② <b>코봇 홈 복귀</b> — 검사 경로는 홈에서 출발하는 것을 전제로 티칭돼 있다. 이미 홈이면 움직이지 않는다.
 ///
-/// 부르는 곳은 "코봇을 움직이기 시작하는 스텝" 둘이다 — ② <see cref="CobotInspectionMoveStep"/>(LINE/CROSS)
-/// 와 ⑱ᶜ <see cref="CornerInspectionRunStep"/>(CORNER3). 앵커 히트 경로(inspectionRun·wobjReset 만 실행)는
-/// 직전 정렬 자세를 그대로 재사용하는 것이 목적이라 예전에도 ①을 타지 않았고, 지금도 타지 않는다.
+/// 부르는 곳은 ② <see cref="CobotInspectionMoveStep"/>(LINE/CROSS)이다. 앵커 히트 경로
+/// (inspectionRun·wobjReset만 실행)는 직전 정렬 자세를 그대로 재사용하는 것이 목적이라 ①을 타지 않는다.
 /// </summary>
 internal static class SequenceEntry
 {

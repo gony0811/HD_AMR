@@ -159,6 +159,9 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         if (!recipe.Enabled)
             return InspectionActionResult.Fail("inspectionFailed",
                 $"recipe {recipeId} resolved but not enabled (실행 미구현 — N13/2차 대기)");
+        if (recipe.SeamType == SeamTypeKind.Corner)
+            return InspectionActionResult.Fail("inspectionFailed",
+                "CORNER3 검사 시퀀스가 제거되어 실행할 수 없습니다.");
 
         // 6) 사전 티칭 경유점 조회: 레시피에 지정된 InspectionProfile(검사 레시피 페이지에서 지정).
         //    면 자세마다 경유점이 다르므로 레시피(LINE-FLOOR ≠ LINE-WALL)별로 명시 지정한다.

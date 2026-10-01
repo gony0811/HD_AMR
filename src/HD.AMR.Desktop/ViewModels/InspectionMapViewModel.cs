@@ -52,7 +52,7 @@ public sealed partial class InspectionMapViewModel : ViewModelBase
                 Recipes.Add(new RecipeStatusRow(r.Id, r.SeamType.ToString(), r.Orientation.ToString(), r.Enabled,
                     r.SeamType switch
                     {
-                        SeamTypeKind.Corner => "고정 티칭 슬롯 corner3.* (도면 무관)",
+                        SeamTypeKind.Corner => "실행 시퀀스 제거됨",
                         SeamTypeKind.Corner2 => "실행 스텝 미구현 (게이트 OFF) — corner2 슬롯/캡처 후속",
                         _ => "레시피 지정 X-Y 티칭 프로필 (검사 레시피에서 지정)",
                     },

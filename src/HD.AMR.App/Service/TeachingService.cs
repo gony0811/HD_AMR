@@ -31,7 +31,7 @@ public class TeachingService
             : $"0x{surfaceId:X2}";
 
     /// <summary>고정 슬롯 정의(키, 표시 이름, Wall ID) — 삭제·이름/Wall ID 편집 불가, 좌표만 티칭.
-    /// 순서 = 화면 표시 순서: 홈 → Wall Code 10면 검사 준비 위치 → CORNER3 슬롯. 사용자 항목은 그 뒤.</summary>
+    /// 순서 = 화면 표시 순서: 홈 → Wall Code 10면 검사 준비 위치. 사용자 항목은 그 뒤.</summary>
     public static readonly (string Key, string Name, int SurfaceId)[] Slots = BuildSlots();
 
     private static (string Key, string Name, int SurfaceId)[] BuildSlots()
@@ -40,16 +40,6 @@ public class TeachingService
         // Wall Code 10면 검사 준비 위치 — 코드·Wall ID·이름은 정본 표(WallCodes)에서만 가져온다.
         foreach (var w in WallCodes.All)
             list.Add((WallSlotKey(w.Code), $"검사 준비 — {w.Label}", w.SurfaceId));
-        // CORNER3 삼면 코너 검사(cornerInspectionRun 스텝)가 키로 직접 순회하는 고정 슬롯 —
-        // 좌(L)/우(R) 거울 각 5점: 접근(via, 촬영 없음) → 3면 촬영 → 복귀(via). 좌표는 현장 티칭.
-        foreach (var side in new[] { "L", "R" })
-        {
-            list.Add(($"corner3.{side}.approach", $"코너3 {side} — 접근", 0x00));
-            list.Add(($"corner3.{side}.face1", $"코너3 {side} — 면1 (135°)", 0x00));
-            list.Add(($"corner3.{side}.face2", $"코너3 {side} — 면2 (90°)", 0x00));
-            list.Add(($"corner3.{side}.face3", $"코너3 {side} — 면3 (90°)", 0x00));
-            list.Add(($"corner3.{side}.retreat", $"코너3 {side} — 복귀", 0x00));
-        }
         return list.ToArray();
     }
 

@@ -32,7 +32,7 @@
         <div class="mt-2 text-muted">
             레시피는 <b>17종</b>(seamType × 면 자세)이고, 경유점은 검사 포인트(X-Y)에서 저장한 프로필을 <b>레시피마다 지정</b>합니다(도면 무관).
             둘 중 하나라도 없으면(레시피 Disabled / 프로필 미지정) 액션은 <code>FAILED</code> 로 보고됩니다.
-            <b>CORNER3</b> 는 도면 프로필 대신 고정 티칭 슬롯(<code>corner3.*</code>)을 순회하므로 도면 티칭이 필요 없습니다.
+            <b>CORNER3</b> 는 현재 검사 시퀀스에서 제거되어 실행할 수 없습니다.
         </div>
     </div>
 </div>
@@ -117,7 +117,7 @@
                     <td class="text-muted">
                         @(r.SeamType switch
                         {
-                            SeamTypeKind.Corner => "고정 티칭 슬롯 corner3.* (도면 무관)",
+                            SeamTypeKind.Corner => "실행 시퀀스 제거됨",
                             SeamTypeKind.Corner2 => "실행 스텝 미구현 (게이트 OFF) — corner2 슬롯/캡처 후속",
                             _ => "레시피 지정 X-Y 티칭 프로필 (/recipes 에서 지정)"
                         })

@@ -181,7 +181,7 @@ public sealed partial class RecipeRow : ObservableObject
     /// <summary>생성(로드) 이후 편집되었고 아직 저장하지 않음 — 목록에 ● 표시.</summary>
     [ObservableProperty] private bool _isDirty;
 
-    /// <summary>CORNER3 은 고정 티칭 슬롯을 쓰므로 프로필 선택 칸 대신 안내 문구를 보인다.</summary>
+    /// <summary>CORNER3 은 실행 시퀀스가 제거되어 프로필을 선택할 수 없다.</summary>
     public bool IsCorner3 => _entity.Id == RecipeIds.Corner3;
     public bool CanPickProfile => !IsCorner3;
 

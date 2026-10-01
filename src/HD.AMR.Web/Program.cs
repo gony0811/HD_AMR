@@ -157,7 +157,6 @@ builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstanc
 builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<WObjPointStep>(sp, 2));   // 1160: 작업물 좌표계 점2(X방향)
 builder.Services.AddScoped<ISequenceStep, WObjRegisterStep>();   // 1170: 가상 점3(툴Z+50mm) + 좌표계 등록
 builder.Services.AddScoped<ISequenceStep, InspectionRunStep>();
-builder.Services.AddScoped<ISequenceStep, CornerInspectionRunStep>();   // 1250: ⑱ᶜ CORNER3 티칭 슬롯 순회
 builder.Services.AddScoped<ISequenceStep, WObjResetStep>();   // 1300: 활성 작업물 좌표계 0 복귀
 builder.Services.AddScoped<ISequenceStep, CobotHomeReturnStep>();   // 1350: 코봇 홈 복귀 (MoveJ)
 builder.Services.AddScoped<ISequenceStep, MonitorCloseStep>();   // 1400: 모니터링 창 닫기 (최종)
