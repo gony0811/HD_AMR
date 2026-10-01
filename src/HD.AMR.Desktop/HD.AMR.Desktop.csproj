@@ -1,13 +1,23 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
-        <OutputType>WinExe</OutputType>
+ 	<OutputType>WinExe</OutputType> <!-- 콘솔이면 Exe -->
+  	<RuntimeIdentifier>win-x64</RuntimeIdentifier>
+  	<UseAppHost>true</UseAppHost>
         <TargetFramework>net8.0</TargetFramework>
         <Nullable>enable</Nullable>
         <ImplicitUsings>enable</ImplicitUsings>
         <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
         <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
         <ApplicationManifest>app.manifest</ApplicationManifest>
+    </PropertyGroup>
+
+    <PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">
+      <PlatformTarget>x64</PlatformTarget>
+    </PropertyGroup>
+
+    <PropertyGroup Condition=" '$(Configuration)' == 'Release' ">
+      <PlatformTarget>x64</PlatformTarget>
     </PropertyGroup>
 
     <ItemGroup>
