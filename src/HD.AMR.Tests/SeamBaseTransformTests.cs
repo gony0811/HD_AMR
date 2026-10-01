@@ -576,4 +576,25 @@ public class SeamBaseTransformTests
         Assert.NotNull(t.TargetPoseBase);
         Assert.Equal(1.0, Norm(t.ToolXMap!), 6);   // 단위벡터 — 퇴화로 0 벡터가 되지 않았다
     }
+
+    [Fact]
+    public void 드라이런_끝점을_접근점으로_넣으면_끝점_기준으로_환산된다()
+    {
+        // 드라이런 2점 교시(CobotSeamEndMoveStep)는 끝점을 approachW(SeamStart 인자)로, 시작점을
+        // 방향(SeamEnd)으로 넘겨 끝점 접근점을 얻는다. 시작점 접근과 끝점 접근이 용접선 벡터만큼
+        // 떨어져야 점1(시작)≠점2(끝)가 되어 작업물 X축이 0이 되지 않는다.
+        var start = new[] { 13.0, 5.0, 1.0 };
+        var end   = new[] { 13.0, 6.2, 1.0 };   // 벽면(+X 바라봄)을 따라 +Y 로 1.2m
+
+        var atStart = SeamBaseTransform.Resolve(Input(start, seamEnd: end, yawRad: 0, standoff: 400));
+        var atEnd   = SeamBaseTransform.Resolve(Input(end, seamEnd: start, yawRad: 0, standoff: 400));
+
+        // 끝점 접근의 seam 맵 좌표는 끝점이어야 한다.
+        Assert.Equal(13000.0, atEnd.SeamStartMapMm[0], 6);
+        Assert.Equal(6200.0, atEnd.SeamStartMapMm[1], 6);
+
+        // 접근점은 벽 법선(+X) 반대로 동일하게 물러나므로 X는 같고, Y는 용접선 길이(1200mm)만큼 차이난다.
+        Assert.Equal(atStart.ApproachMapMm[0], atEnd.ApproachMapMm[0], 6);
+        Assert.Equal(1200.0, atEnd.ApproachMapMm[1] - atStart.ApproachMapMm[1], 3);
+    }
 }

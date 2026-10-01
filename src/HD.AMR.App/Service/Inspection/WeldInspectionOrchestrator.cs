@@ -50,6 +50,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         "peak1Find", "peak1Center", "bead1Find", "bead1Center", "wobjPoint1",
         "peak2Approach", "peak2Find", "peak2Center", "bead2Find", "bead2Center", "wobjPoint2",
         "wobjRegister",
+        // 드라이런 2점 교시의 끝점 이동 — anchor 적중 시 캐시 프레임 재사용으로 재교시 생략.
+        "cobotSeamEnd",
     };
 
     /// <summary>코봇 홈 복귀 스텝 — 노드의 <b>마지막</b> 검사 액션에서만 실행한다.</summary>

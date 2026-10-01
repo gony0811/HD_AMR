@@ -122,6 +122,8 @@ internal static class ServiceRegistration
         services.AddScoped<InspectionRecipeService>();
         services.AddScoped<CalibrationService>();
         services.AddScoped<HD.AMR.App.Service.Motion.PostureLimitsService>();
+        // 용접선 점(맵 좌표) → 코봇 BASE 접근점 환산 — ② 검사위치 이동과 드라이런 끝점 이동이 공유.
+        services.AddScoped<HD.AMR.App.Service.Inspection.SeamApproachResolver>();
         services.AddScoped<ArucoHandEyeService>();
         services.AddScoped<HandEyeAutoRoutine>();   // 핸드아이 자동 캡처(코봇 자동 이동) — ArucoHandEyeService(Scoped) 의존.
         services.AddScoped<ArucoMountAutoRoutine>(); // AMR+코봇 자동 이동 ArUco 장착보정 표본 수집.
@@ -193,7 +195,11 @@ internal static class ServiceRegistration
         services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<BeadCenteringStep>(sp, 2));
         services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<WObjPointStep>(sp, 2));
         services.AddScoped<ISequenceStep, WObjRegisterStep>();
-        services.AddScoped<ISequenceStep, InspectionRunStep>();
+        // 드라이런 2점 교시 끝점 이동(1155) — seamEndW 접근점으로 MoveL. wobjPoint2 가 그 자리에서 점2를 기록.
+        services.AddScoped<ISequenceStep, CobotSeamEndMoveStep>();
+        // ⑱ 검사 수행 — 일반(비전 캡처)과 드라이런(이동만) 두 변형. dryRun 이 첫 생성자 인자.
+        services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<InspectionRunStep>(sp, false));
+        services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<InspectionRunStep>(sp, true));
         services.AddScoped<ISequenceStep, WObjResetStep>();
         services.AddScoped<ISequenceStep, CobotHomeReturnStep>();
         services.AddScoped<ISequenceStep, MonitorCloseStep>();

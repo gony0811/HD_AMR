@@ -30,6 +30,7 @@ namespace HD.AMR.App.Service.Sequence.Steps;
 /// </summary>
 public class InspectionRunStep : ISequenceStep
 {
+    private readonly bool _dryRun;
     private readonly CobotService _cobot;
     private readonly VisionInterfaceService _vision;
     private readonly DrawingService _drawing;
@@ -43,10 +44,13 @@ public class InspectionRunStep : ISequenceStep
     private const double MoveAcc = 100.0;
     private const double MoveOvl = 100.0;
 
+    /// <param name="dryRun">true 면 경유점을 <b>이동만</b> 하고 비전 CAPTURE_REQ 를 보내지 않는다(드라이런).
+    /// DI 에서 <c>ActivatorUtilities.CreateInstance</c> 로 주입되므로 첫 인자여야 한다.</param>
     public InspectionRunStep(
-        CobotService cobot, VisionInterfaceService vision, DrawingService drawing,
+        bool dryRun, CobotService cobot, VisionInterfaceService vision, DrawingService drawing,
         ParameterService param, ILogger<InspectionRunStep> logger)
     {
+        _dryRun = dryRun;
         _cobot = cobot;
         _vision = vision;
         _drawing = drawing;
@@ -54,9 +58,9 @@ public class InspectionRunStep : ISequenceStep
         _logger = logger;
     }
 
-    public string Key => "inspectionRun";
-    public string DisplayName => "검사 수행 (도면 순회)";
-    public int DefaultOrder => 1200;
+    public string Key => _dryRun ? "inspectionRunDry" : "inspectionRun";
+    public string DisplayName => _dryRun ? "검사 수행 (도면 순회·비전 없음)" : "검사 수행 (도면 순회)";
+    public int DefaultOrder => _dryRun ? 1210 : 1200;
 
     public StepValidation Validate(SequenceContext context)
     {
@@ -178,6 +182,10 @@ public class InspectionRunStep : ISequenceStep
             if (settle > TimeSpan.Zero)
                 await Task.Delay(settle, ct);
 
+            // 드라이런: 경유점 이동만 하고 비전 CAPTURE_REQ 는 보내지 않는다(좌표·경로 검증용).
+            if (_dryRun)
+                continue;
+
             // surface type 우선순위: 경유점 수동 지정 > |θ| 자동 규칙(구 도면 솎기 프로필).
             // (레시피 SurfaceOverride 는 경유점 단위 지정으로 일원화되며 폐기 — 2026-09-18.)
             var surfaceType = w.SurfaceManual
@@ -202,16 +210,16 @@ public class InspectionRunStep : ISequenceStep
         }
 
         var msg =
-            $"검사 수행 완료 — 티칭설정 '{profile.Name}', 이동 {moved}점" +
+            (_dryRun ? "검사 수행 완료(드라이런·비전 없음) — " : "검사 수행 완료 — ") +
+            $"티칭설정 '{profile.Name}', 이동 {moved}점" +
             (skipped > 0 ? $"(θ 초과 {skipped}점 제외)" : "") +
-            $", 비전 OK {visOk}/{moved}" +
-            (visFail > 0 ? $" (실패 {visFail})" : "") +
+            (_dryRun ? "" : $", 비전 OK {visOk}/{moved}" + (visFail > 0 ? $" (실패 {visFail})" : "")) +
             $" [내부 wobj #{wobjId}→BASE/user 0, tool {context.Tool}, WallID 0x{context.InspectionSurfaceId:X2}, Run {runId}].";
         _logger.LogInformation("⑱ {Msg}", msg);
 
         // ACS 경로: 비전 실패율 상한 초과 시 스텝 실패로 승격(→ 액션 FAILED + inspectionFailed, §6.4 재시도 정책).
-        // UI 단독 실행(VisionFailRatioMax=null)은 현행대로 집계만 하고 성공 반환.
-        if (context.VisionFailRatioMax is { } maxRatio && moved > 0)
+        // UI 단독 실행(VisionFailRatioMax=null)은 현행대로 집계만 하고 성공 반환. 드라이런은 비전이 없어 판정 생략.
+        if (!_dryRun && context.VisionFailRatioMax is { } maxRatio && moved > 0)
         {
             var failRatio = (double)visFail / moved;
             if (failRatio > maxRatio)

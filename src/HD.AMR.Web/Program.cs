@@ -136,6 +136,8 @@ builder.Services.AddScoped<ArucoMountAutoRoutine>();
 builder.Services.AddScoped<QrLocalizationService>();
 // 관절 한계·특이점 여유 및 최소 플랜지 뻗음(Motion.PostureLimits.Json). ② 리치 사전 점검이 읽는다.
 builder.Services.AddScoped<HD.AMR.App.Service.Motion.PostureLimitsService>();
+// 용접선 점(맵 좌표) → 코봇 BASE 접근점 환산 — ② 검사위치 이동과 드라이런 끝점 이동이 공유.
+builder.Services.AddScoped<HD.AMR.App.Service.Inspection.SeamApproachResolver>();
 
 // 시퀀스 단계 등록 (ISequenceStep). 새 단계 추가 시 여기에 한 줄만 추가.
 builder.Services.AddScoped<ISequenceStep, CobotInspectionMoveStep>();
@@ -156,7 +158,11 @@ builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstanc
 builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<BeadCenteringStep>(sp, 2));   // 1150
 builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<WObjPointStep>(sp, 2));   // 1160: 작업물 좌표계 점2(X방향)
 builder.Services.AddScoped<ISequenceStep, WObjRegisterStep>();   // 1170: 가상 점3(툴Z+50mm) + 좌표계 등록
-builder.Services.AddScoped<ISequenceStep, InspectionRunStep>();
+// 드라이런 2점 교시 끝점 이동(1155) — seamEndW 접근점으로 MoveL. wobjPoint2 가 그 자리에서 점2를 기록.
+builder.Services.AddScoped<ISequenceStep, CobotSeamEndMoveStep>();
+// ⑱ 검사 수행 — 일반(비전 캡처)과 드라이런(이동만) 두 변형. dryRun 이 첫 생성자 인자.
+builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<InspectionRunStep>(sp, false));   // 1200: inspectionRun
+builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<InspectionRunStep>(sp, true));    // 1210: inspectionRunDry
 builder.Services.AddScoped<ISequenceStep, WObjResetStep>();   // 1300: 활성 작업물 좌표계 0 복귀
 builder.Services.AddScoped<ISequenceStep, CobotHomeReturnStep>();   // 1350: 코봇 홈 복귀 (MoveJ)
 builder.Services.AddScoped<ISequenceStep, MonitorCloseStep>();   // 1400: 모니터링 창 닫기 (최종)
