@@ -205,6 +205,8 @@ CREATE TABLE IF NOT EXISTS InspectionRecipes (
     DryRun INTEGER NOT NULL DEFAULT 0,
     StepKeysJson TEXT NULL,
     CameraTargetDistanceMm REAL NULL,
+    MoveVelPercent INTEGER NULL,
+    InspectVelPercent INTEGER NULL,
     InspectionProfileId INTEGER NULL,
     VisionFailRatioMax REAL NOT NULL DEFAULT 1.0,
     CreatedAt TEXT NOT NULL,
@@ -242,6 +244,16 @@ CREATE TABLE IF NOT EXISTS InspectionRecipes (
             .AsEnumerable().First() > 0;
         if (!hasDryRun)
             db.Database.ExecuteSqlRaw("ALTER TABLE InspectionRecipes ADD COLUMN DryRun INTEGER NOT NULL DEFAULT 0;");
+
+        // 이동/검사 속도 분리 컬럼(% — null=폴백: 이동은 프로필 RunVel, 검사는 이동 속도)도 후방호환 추가.
+        foreach (var velCol in new[] { "MoveVelPercent", "InspectVelPercent" })
+        {
+            var hasVel = db.Database
+                .SqlQueryRaw<long>($"SELECT COUNT(*) AS Value FROM pragma_table_info('InspectionRecipes') WHERE name = '{velCol}'")
+                .AsEnumerable().First() > 0;
+            if (!hasVel)
+                db.Database.ExecuteSqlRaw($"ALTER TABLE InspectionRecipes ADD COLUMN {velCol} INTEGER NULL;");
+        }
 
         // 운영 로그(수동/ACS 동작 이력 + 실패 원인) — UI 로그 페이지 데이터 원본.
         db.Database.ExecuteSqlRaw(@"

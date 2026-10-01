@@ -269,7 +269,10 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         {
             InspectionDirection = direction,
             Tool = profile is { RunTool: > 0 } ? profile.RunTool : 1,
-            Velocity = profile?.RunVel ?? 20,
+            // 이동 속도: 레시피 MoveVelPercent 우선, 없으면 종전대로 프로필 RunVel(미지정 20).
+            // 검사(스캔) 속도: 레시피 InspectVelPercent — null 이면 ⑱이 이동 속도로 폴백.
+            Velocity = recipe.MoveVelPercent ?? profile?.RunVel ?? 20,
+            InspectVelocity = recipe.InspectVelPercent,
             InspectionDrawingId = profile?.DrawingId ?? 0,
             InspectionProfileId = profile?.Id ?? 0,
             CornerSide = cornerSide,

@@ -172,8 +172,9 @@ public class InspectionRunStep : ISequenceStep
                 ? new[] { w.X, w.Y, w.Z, w.RxDeg, w.Theta, w.RzDeg }
                 : attitude.Pose(w.X, w.Y, w.Z, w.Theta, w.RzDeg);
             var targetBase = InternalWorkpieceFrame.ToBasePose(pose, frame);
+            // 경유점 순회(검사 스캔)만 검사 속도 적용 — 원점 이동 등 접근성 모션은 이동 속도(Velocity).
             var rc = await _cobot.Rpc.MoveLAsync(targetBase, tool: context.Tool, user: 0,
-                vel: context.Velocity, acc: MoveAcc, ovl: MoveOvl, blendR: -1, ct: ct);
+                vel: context.InspectVelocity ?? context.Velocity, acc: MoveAcc, ovl: MoveOvl, blendR: -1, ct: ct);
             if (rc != 0)
                 return StepResult.Fail(
                     $"경유점 #{i + 1} 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)} — {moved}점 이동 후 중단.");

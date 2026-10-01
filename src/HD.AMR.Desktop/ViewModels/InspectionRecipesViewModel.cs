@@ -174,6 +174,12 @@ public sealed partial class RecipeRow : ObservableObject
     [ObservableProperty] private double _visionFailRatioMax;
     [ObservableProperty] private double? _cameraTargetDistanceMm;
 
+    /// <summary>이동 속도 [%] — 접근/복귀성 모션. 비움=프로필 RunVel(미지정 20) 폴백.</summary>
+    [ObservableProperty] private double? _moveVelPercent;
+
+    /// <summary>검사 속도 [%] — ⑱ 경유점 순회(스캔) 전용. 비움=이동 속도와 동일.</summary>
+    [ObservableProperty] private double? _inspectVelPercent;
+
     /// <summary>티칭 프로필 선택지 — [0]=미지정, 이후 레시피 타입과 같은 SeamType 프로필(최신 저장순).</summary>
     public List<ProfileOption> ProfileOptions { get; }
 
@@ -198,6 +204,8 @@ public sealed partial class RecipeRow : ObservableObject
     partial void OnStepKeysJsonChanged(string? value) => IsDirty = true;
     partial void OnVisionFailRatioMaxChanged(double value) => IsDirty = true;
     partial void OnCameraTargetDistanceMmChanged(double? value) => IsDirty = true;
+    partial void OnMoveVelPercentChanged(double? value) => IsDirty = true;
+    partial void OnInspectVelPercentChanged(double? value) => IsDirty = true;
     partial void OnSelectedProfileChanged(ProfileOption? value) => IsDirty = true;
 
     /// <summary>저장 완료 — 미저장 표시 해제.</summary>
@@ -292,6 +300,8 @@ public sealed partial class RecipeRow : ObservableObject
             StepPool.Add(st);
         _visionFailRatioMax = e.VisionFailRatioMax;
         _cameraTargetDistanceMm = e.CameraTargetDistanceMm;
+        _moveVelPercent = e.MoveVelPercent;
+        _inspectVelPercent = e.InspectVelPercent;
 
         var want = InspectionRecipeResolver.ProfileSeamTypeOf(e.Id);
         ProfileOptions = new List<ProfileOption> { ProfileOption.None };
@@ -331,6 +341,8 @@ public sealed partial class RecipeRow : ObservableObject
         _entity.StepKeysJson = StepKeysJson;
         _entity.VisionFailRatioMax = VisionFailRatioMax;
         _entity.CameraTargetDistanceMm = CameraTargetDistanceMm;
+        _entity.MoveVelPercent = MoveVelPercent is { } mv ? Math.Clamp((int)Math.Round(mv), 1, 100) : null;
+        _entity.InspectVelPercent = InspectVelPercent is { } iv ? Math.Clamp((int)Math.Round(iv), 1, 100) : null;
         _entity.InspectionProfileId = IsCorner3 ? null : SelectedProfile?.Id;
         return _entity;
     }

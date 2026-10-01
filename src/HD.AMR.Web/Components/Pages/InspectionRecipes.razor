@@ -107,6 +107,20 @@
                                            @bind="row.CameraTargetDistanceMm" />
                                     <div class="form-text">③ 카메라 거리 정렬 목표 (ACS workingDistanceMm 미사용)</div>
                                 </div>
+                                <div class="col-auto">
+                                    <label class="form-label mb-1 text-muted">이동 속도 [%]</label>
+                                    <input type="number" step="5" min="1" max="100" style="width:150px"
+                                           class="form-control form-control-sm" placeholder="(빈 값 = 프로필 RunVel)"
+                                           @bind="row.MoveVelPercent" />
+                                    <div class="form-text">접근·복귀 모션(②·끝점·홈·⑱ 원점)</div>
+                                </div>
+                                <div class="col-auto">
+                                    <label class="form-label mb-1 text-muted">검사 속도 [%]</label>
+                                    <input type="number" step="5" min="1" max="100" style="width:150px"
+                                           class="form-control form-control-sm" placeholder="(빈 값 = 이동 속도)"
+                                           @bind="row.InspectVelPercent" />
+                                    <div class="form-text">⑱ 경유점 순회(검사 스캔) 전용</div>
+                                </div>
                                 <div class="col-12 text-muted">
                                     seamType=<b>@row.SeamType</b>, 면자세=<b>@row.Orientation</b> ·
                                     세부값 편집 후 위 행의 <b>저장</b> 을 누르세요(같은 레시피).

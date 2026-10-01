@@ -52,6 +52,10 @@ public class SequenceContext
     /// <summary>이동 속도 (%).</summary>
     public int Velocity { get; set; } = 20;
 
+    /// <summary>⑱ 경유점 순회(검사 스캔) 전용 속도 [%]. null = <see cref="Velocity"/> 사용.
+    /// ACS 경로에서 레시피 InspectVelPercent 로 주입된다 — 접근/복귀는 Velocity, 스캔만 이 값.</summary>
+    public int? InspectVelocity { get; set; }
+
     /// <summary>검사위치 이동 수평 오프셋 u (mm). 좌(+)/우(−) → TOOL X+/X− (실측 확인 매핑).</summary>
     public double InspectionOffsetU { get; set; }
 

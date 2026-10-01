@@ -187,6 +187,22 @@
                                         </StackPanel>
                                     </WrapPanel>
 
+                                    <!-- 코봇 속도: 이동/검사 분리 -->
+                                    <WrapPanel>
+                                        <StackPanel Width="260" Margin="0,0,24,0">
+                                            <TextBlock Classes="section" Text="이동 속도 [%]" />
+                                            <NumericUpDown Width="170" HorizontalAlignment="Left" Value="{Binding MoveVelPercent}"
+                                                           Increment="5" Minimum="1" Maximum="100" FormatString="0" />
+                                            <TextBlock Classes="hint" Text="접근·복귀 모션(②·끝점·홈·⑱ 원점). 빈 값 = 프로필 RunVel(미지정 20)" />
+                                        </StackPanel>
+                                        <StackPanel Width="300">
+                                            <TextBlock Classes="section" Text="검사 속도 [%]" />
+                                            <NumericUpDown Width="170" HorizontalAlignment="Left" Value="{Binding InspectVelPercent}"
+                                                           Increment="5" Minimum="1" Maximum="100" FormatString="0" />
+                                            <TextBlock Classes="hint" Text="⑱ 경유점 순회(검사 스캔) 전용. 빈 값 = 이동 속도와 동일" />
+                                        </StackPanel>
+                                    </WrapPanel>
+
                                     <!-- 버튼 -->
                                     <StackPanel Orientation="Horizontal" Spacing="8">
                                         <Button Content="저장" Classes="accent"

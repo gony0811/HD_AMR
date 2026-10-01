@@ -53,6 +53,13 @@ public class InspectionRecipe
     /// ACS action.workingDistanceMm 은 산출 근거가 없어 사용하지 않는다(2026-09-18 결정 — 수신·로그만).</summary>
     public double? CameraTargetDistanceMm { get; set; }
 
+    /// <summary>코봇 이동 속도 [%] — 접근/복귀성 모션(② 검사위치 이동·진입 준비·끝점 이동·홈 복귀·정렬·
+    /// ⑱ 원점 이동) 공통. null = 티칭 프로필 RunVel(미지정 시 20) 폴백.</summary>
+    public int? MoveVelPercent { get; set; }
+
+    /// <summary>코봇 검사 속도 [%] — ⑱ 경유점 순회(검사 스캔) 전용. null = 이동 속도와 동일.</summary>
+    public int? InspectVelPercent { get; set; }
+
     // (제거됨) SurfaceOverride — 비전 Surface 강제값. X-Y 교시 경유점은 점별 Surface 를 수동 지정하고
     //   CORNER 스텝은 Corner 고정이라 무효화되어 폐기(2026-09-18). Surface 는 경유점 단위로 일원화.
     // (제거됨) PatternJson — CROSS4 십자 패턴 런타임 생성 파라미터. 캡처 교시 단일화로 폐기(2026-09-15).
