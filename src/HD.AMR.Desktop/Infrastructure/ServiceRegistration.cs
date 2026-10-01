@@ -116,6 +116,8 @@ internal static class ServiceRegistration
         services.Configure<HD.AMR.App.Communication.Vda5050.Vda5050AdapterSettings>(config.GetSection("Vda5050"));
         services.AddSingleton<Vda5050OrderExecutor>();
         AddHostedSingleton<Vda5050AdapterService>(services);
+        // 층 전환 — 층별 initpose(Parameters) 재측위 → 검증 → mapId 변경·state 발행. 대시보드 ACS 카드가 구동.
+        services.AddSingleton<FloorChangeService>();
 
         // ── DB 백엔드 서비스 (Scoped) ───────────────────────────────
         services.AddScoped<ParameterService>();

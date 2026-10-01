@@ -95,18 +95,22 @@ public sealed class Vda5050AdapterService : BackgroundService
     public IReadOnlyList<string> AvailableMapIds => _s.AvailableMapIds;
 
     /// <summary>
-    /// 수동 층 전환(운영자 UI). 재측위 검증 없이 mapId 만 바꾸는 임시 운영 경로 —
-    /// initPosition 이행(D-10) 구현 전까지 사용. 변경 즉시 state 를 발행해 ACS에 회신한다(§6.1).
+    /// 층(mapId) 변경 + state 즉시 발행으로 ACS 회신(§6.1). 운영 경로는 <see cref="FloorChangeService"/> 가
+    /// initpose 재측위를 검증한 뒤 <paramref name="reason"/> 과 함께 호출한다. reason 이 없으면
+    /// 재측위 검증 없는 변경으로 경고 로그를 남긴다.
     /// </summary>
-    public void SetMapId(string mapId)
+    public void SetMapId(string mapId, string? reason = null)
     {
         mapId = mapId?.Trim() ?? "";
         if (mapId.Length == 0 || mapId == _mapId) return;
 
         var prev = _mapId;
         _mapId = mapId;
-        _logger.LogWarning("수동 층 전환: mapId {Prev} → {New} — 재측위 검증 없이 변경(D-10 유보 기간 임시 운영). " +
-                           "실제 층·맵 일치 여부는 운영자 책임.", prev, mapId);
+        if (reason is null)
+            _logger.LogWarning("층 전환: mapId {Prev} → {New} — 재측위 검증 없이 변경. 실제 층·맵 일치 여부는 운영자 책임.",
+                prev, mapId);
+        else
+            _logger.LogInformation("층 전환: mapId {Prev} → {New} — {Reason}", prev, mapId, reason);
         NudgeState();
     }
 

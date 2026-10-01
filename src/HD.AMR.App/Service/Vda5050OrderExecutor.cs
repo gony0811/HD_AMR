@@ -52,6 +52,12 @@ public sealed class Vda5050OrderExecutor
     private readonly List<NodeState> _nodeStates = new();
     private readonly Dictionary<string, VdaError> _errors = new();   // errorType → 최신 1건
 
+    /// <summary>ACS order 임무 태스크가 실행 중인지 — 층 전환(재측위) 등 주행과 충돌하는 조작의 게이트.</summary>
+    public bool IsMissionActive
+    {
+        get { lock (_gate) return _missionTask is { IsCompleted: false }; }
+    }
+
     /// <summary>보고 상태 변화(즉시 state 발행 트리거). 어댑터가 구독한다.</summary>
     public event Action? StateChanged;
 

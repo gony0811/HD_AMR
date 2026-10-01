@@ -19,6 +19,7 @@ public sealed partial class HomeViewModel : ViewModelBase
     private readonly CameraService _camera;
     private readonly IoModuleService _io;
     private readonly Vda5050AdapterService _vda;
+    private readonly FloorChangeService _floor;
     private readonly DispatcherTimer _timer;
     public AmrMapViewModel Map { get; }
 
@@ -27,13 +28,14 @@ public sealed partial class HomeViewModel : ViewModelBase
     [ObservableProperty] private string? _mapIdStatus;
 
     public HomeViewModel(AMRService amr, CobotService cobot, CameraService camera, IoModuleService io,
-        Vda5050AdapterService vda, AmrMapViewModel map)
+        Vda5050AdapterService vda, FloorChangeService floor, AmrMapViewModel map)
     {
         _amr = amr;
         _cobot = cobot;
         _camera = camera;
         _io = io;
         _vda = vda;
+        _floor = floor;
         Map = map;
         _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _timer.Tick += async (_, _) => await RefreshAsync();
@@ -106,8 +108,12 @@ public sealed partial class HomeViewModel : ViewModelBase
         : _vda.AcsConnectionLiveness == AcsLiveness.Broken ? "CONNECTIONBROKEN"
         : _vda.AcsConnectionLiveness == AcsLiveness.Online || _vda.AcsRecentlyActive ? "연결" : "대기";
     public string CurrentMapText => $"현재 맵 {_vda.CurrentMapId}";
-    public string MapIdHint => MapIdStatus ?? "재측위 검증 없이 mapId만 변경 — 실제 층 일치는 운영자 확인";
-    public bool CanApplyMap => !string.IsNullOrEmpty(SelectedMapId) && SelectedMapId != _vda.CurrentMapId;
+    public string MapIdHint => MapIdStatus ??
+        "엘리베이터 하차 위치(층별 initpose)에 AMR 을 세운 뒤 전환 — 재측위 검증 통과 시에만 층이 바뀝니다";
+    public bool MapIdFailed { get; private set; }
+    public bool CanApplyMap => !string.IsNullOrEmpty(SelectedMapId) && SelectedMapId != _vda.CurrentMapId &&
+                               !_floor.IsRunning;
+    public string ApplyMapButtonText => _floor.IsRunning ? "전환 중…" : "층 전환";
 
     partial void OnSelectedMapIdChanged(string value) => ApplyMapIdCommand.NotifyCanExecuteChanged();
 
@@ -118,12 +124,30 @@ public sealed partial class HomeViewModel : ViewModelBase
         foreach (var id in _vda.AvailableMapIds) MapIdOptions.Add(id);
     }
 
-    // 수동 층 전환(D-10 유보 기간 임시 운영) — 어댑터 mapId 변경 + state 즉시 발행으로 ACS 회신.
+    // 층 전환 — 층별 initpose 재측위 → 수렴 검증 → 통과 시 mapId 변경 + state 즉시 발행(ACS 회신).
     [RelayCommand(CanExecute = nameof(CanApplyMap))]
-    private void ApplyMapId()
+    private async Task ApplyMapIdAsync()
     {
-        _vda.SetMapId(SelectedMapId);
-        MapIdStatus = $"적용됨 {DateTime.Now:HH:mm:ss} — 현재 맵 {_vda.CurrentMapId} (state 즉시 발행)";
+        var target = SelectedMapId;
+        MapIdFailed = false;
+        MapIdStatus = $"{target} 전환 시작…";
         OnPropertyChanged(string.Empty);
+        ApplyMapIdCommand.NotifyCanExecuteChanged();
+        FloorChangeResult r;
+        try
+        {
+            r = await _floor.ChangeFloorAsync(target,
+                m => Dispatcher.UIThread.Post(() => { MapIdStatus = m; OnPropertyChanged(nameof(MapIdHint)); }),
+                CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            r = FloorChangeResult.Fail($"층 전환 오류: {ex.Message}", relocalized: false);
+        }
+        MapIdFailed = !r.Success;
+        MapIdStatus = $"{DateTime.Now:HH:mm:ss} {(r.Success ? "✓" : "✗")} {r.Message}";
+        if (!r.Success) SelectedMapId = _vda.CurrentMapId;
+        OnPropertyChanged(string.Empty);
+        ApplyMapIdCommand.NotifyCanExecuteChanged();
     }
 }

@@ -67,6 +67,9 @@
                     <Setter Property="Width" Value="300" />
                     <Setter Property="Margin" Value="0,0,12,12" />
                 </Style>
+                <Style Selector="TextBlock.floorFail">
+                    <Setter Property="Foreground" Value="{DynamicResource AppErrorBrush}" />
+                </Style>
             </WrapPanel.Styles>
 
             <!-- AMR -->
@@ -174,9 +177,9 @@
                     <Grid ColumnDefinitions="*,Auto">
                         <ComboBox Grid.Column="0" ItemsSource="{Binding MapIdOptions}" SelectedItem="{Binding SelectedMapId}"
                                   HorizontalAlignment="Stretch" />
-                        <Button Grid.Column="1" Margin="6,0,0,0" Content="층 전환" Command="{Binding ApplyMapIdCommand}" />
+                        <Button Grid.Column="1" Margin="6,0,0,0" Content="{Binding ApplyMapButtonText}" Command="{Binding ApplyMapIdCommand}" />
                     </Grid>
-                    <TextBlock Classes="muted" FontSize="12" TextWrapping="Wrap" Text="{Binding MapIdHint}" />
+                    <TextBlock Classes="muted" Classes.floorFail="{Binding MapIdFailed}" FontSize="12" TextWrapping="Wrap" Text="{Binding MapIdHint}" />
                 </StackPanel>
             </Border>
         </WrapPanel>
