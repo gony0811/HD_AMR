@@ -202,6 +202,7 @@ CREATE TABLE IF NOT EXISTS InspectionRecipes (
     SeamType TEXT NOT NULL,
     Orientation TEXT NOT NULL,
     Enabled INTEGER NOT NULL,
+    DryRun INTEGER NOT NULL DEFAULT 0,
     StepKeysJson TEXT NULL,
     CameraTargetDistanceMm REAL NULL,
     InspectionProfileId INTEGER NULL,
@@ -233,6 +234,14 @@ CREATE TABLE IF NOT EXISTS InspectionRecipes (
             .AsEnumerable().First() > 0;
         if (!hasProfileId)
             db.Database.ExecuteSqlRaw("ALTER TABLE InspectionRecipes ADD COLUMN InspectionProfileId INTEGER NULL;");
+
+        // DryRun 컬럼(레시피 드라이런 모드 토글)도 후방호환 추가. 기존 행은 DEFAULT 0(false=일반 검사).
+        // SQLite 는 NOT NULL ADD COLUMN 에 DEFAULT 가 필수 — 기존 행이 그 값으로 백필된다.
+        var hasDryRun = db.Database
+            .SqlQueryRaw<long>("SELECT COUNT(*) AS Value FROM pragma_table_info('InspectionRecipes') WHERE name = 'DryRun'")
+            .AsEnumerable().First() > 0;
+        if (!hasDryRun)
+            db.Database.ExecuteSqlRaw("ALTER TABLE InspectionRecipes ADD COLUMN DryRun INTEGER NOT NULL DEFAULT 0;");
 
         // 운영 로그(수동/ACS 동작 이력 + 실패 원인) — UI 로그 페이지 데이터 원본.
         db.Database.ExecuteSqlRaw(@"

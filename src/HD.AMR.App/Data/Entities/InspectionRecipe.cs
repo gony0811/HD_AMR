@@ -27,6 +27,12 @@ public class InspectionRecipe
     /// false 인 레시피로 매핑된 액션은 FAILED + inspectionFailed(실행 불가) 보고.</summary>
     public bool Enabled { get; set; }
 
+    /// <summary>드라이런 모드 — 켜면 비전 정렬(③~⑯) 없이 ACS 용접선 시작/끝점으로 2점 교시만 해
+    /// 내부 작업물 좌표계를 잡고, 도면 경유점을 <b>이동만</b>(비전 CAPTURE_REQ 없음) 순회한다.
+    /// 켜지면 오케스트레이터가 <see cref="StepKeysJson"/>을 무시하고 드라이런 스텝 집합을 자동 구성한다
+    /// (커미셔닝·경로/좌표 검증용). 기본 false = 일반 검사.</summary>
+    public bool DryRun { get; set; }
+
     /// <summary>실행할 시퀀스 스텝 Key 배열(JSON, DefaultOrder 순 무관 — 실행은 등록 순서 기준).
     /// null/빈 값이면 등록된 풀시퀀스 전체 실행.</summary>
     public string? StepKeysJson { get; set; }

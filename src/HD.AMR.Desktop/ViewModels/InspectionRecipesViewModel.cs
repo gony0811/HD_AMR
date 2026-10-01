@@ -166,6 +166,9 @@ public sealed partial class RecipeRow : ObservableObject
 
     [ObservableProperty] private bool _enabled;
 
+    /// <summary>드라이런 — 켜면 비전 없이 ACS 용접선 2점 교시 + 경유점 이동만. 켜지면 StepKeysJson 무시.</summary>
+    [ObservableProperty] private bool _dryRun;
+
     /// <summary>실행 스텝 — 목록 편집 결과가 <see cref="StepKeysJson"/> 으로 직렬화된다(저장값은 종전과 동일).</summary>
     [ObservableProperty] private string? _stepKeysJson;
     [ObservableProperty] private double _visionFailRatioMax;
@@ -191,6 +194,7 @@ public sealed partial class RecipeRow : ObservableObject
     public string SeamOrientationText => $"seamType={SeamType} · 면자세={Orientation}";
 
     partial void OnEnabledChanged(bool value) => IsDirty = true;
+    partial void OnDryRunChanged(bool value) => IsDirty = true;
     partial void OnStepKeysJsonChanged(string? value) => IsDirty = true;
     partial void OnVisionFailRatioMaxChanged(double value) => IsDirty = true;
     partial void OnCameraTargetDistanceMmChanged(double? value) => IsDirty = true;
@@ -274,6 +278,7 @@ public sealed partial class RecipeRow : ObservableObject
     {
         _entity = e;
         _enabled = e.Enabled;
+        _dryRun = e.DryRun;
         _stepKeysJson = e.StepKeysJson;
 
         // 저장된 StepKeysJson 을 풀/포함 두 목록으로 나눈다. 풀에 없는 키(스텝 제거·오타로 남은 값)는
@@ -322,6 +327,7 @@ public sealed partial class RecipeRow : ObservableObject
     public InspectionRecipe Apply()
     {
         _entity.Enabled = Enabled;
+        _entity.DryRun = DryRun;
         _entity.StepKeysJson = StepKeysJson;
         _entity.VisionFailRatioMax = VisionFailRatioMax;
         _entity.CameraTargetDistanceMm = CameraTargetDistanceMm;

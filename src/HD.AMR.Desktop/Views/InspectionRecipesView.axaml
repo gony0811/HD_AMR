@@ -78,6 +78,8 @@
                                         <TextBlock Classes="section" Text="실행 허용" />
                                         <CheckBox IsChecked="{Binding Enabled}" Content="Enabled" />
                                         <TextBlock Classes="hint" Text="꺼져 있으면 이 레시피로 매핑된 ACS 액션은 FAILED + inspectionFailed 로 보고됩니다. 실기 E2E 검증 후에만 켜세요." />
+                                        <CheckBox IsChecked="{Binding DryRun}" Content="DryRun (비전 없이 2점 교시+순회)" />
+                                        <TextBlock Classes="hint" Text="켜면 비전 정렬 없이 ACS 용접선 시작/끝점으로 2점 교시만 해 내부 좌표계를 잡고, 경유점을 이동만(촬영 없이) 순회합니다. StepKeysJson 은 무시됩니다. seamEndW 필요." />
                                     </StackPanel>
 
                                     <!-- 티칭 프로필 -->

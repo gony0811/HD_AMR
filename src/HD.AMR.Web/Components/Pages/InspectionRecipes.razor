@@ -39,6 +39,7 @@
                 <th style="min-width:130px">레시피 ID</th>
                 <th style="min-width:180px">표시명</th>
                 <th style="width:70px" class="text-center">Enabled</th>
+                <th style="width:80px" class="text-center" title="비전 없이 ACS 용접선 2점 교시 + 경유점 이동만 (StepKeysJson 무시)">DryRun</th>
                 <th style="min-width:200px">StepKeysJson</th>
                 <th style="min-width:230px">티칭 프로필</th>
                 <th style="width:110px">비전 실패율 상한</th>
@@ -59,6 +60,10 @@
                     <td style="font-size:.85rem">@row.DisplayName</td>
                     <td class="text-center">
                         <input type="checkbox" class="form-check-input" @bind="row.Enabled" />
+                    </td>
+                    <td class="text-center">
+                        <input type="checkbox" class="form-check-input" @bind="row.DryRun"
+                               title="비전 없이 ACS 용접선 시작/끝점 2점 교시 + 경유점 이동만. 켜면 StepKeysJson 무시." />
                     </td>
                     <td><input class="form-control form-control-sm font-monospace" style="font-size:.75rem"
                                placeholder="(null = 풀시퀀스)" @bind="row.StepKeysJson" /></td>
@@ -93,7 +98,7 @@
                 {
                     <tr @key="@(row.Id + "-adv")" class="table-light">
                         <td></td>
-                        <td colspan="7">
+                        <td colspan="8">
                             <div class="row g-3 py-2" style="font-size:.8rem">
                                 <div class="col-auto">
                                     <label class="form-label mb-1 text-muted">카메라 목표거리 [mm]</label>

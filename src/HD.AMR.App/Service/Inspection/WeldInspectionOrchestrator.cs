@@ -57,6 +57,16 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
     /// <summary>코봇 홈 복귀 스텝 — 노드의 <b>마지막</b> 검사 액션에서만 실행한다.</summary>
     private const string HomeStepKey = "cobotHome";
 
+    /// <summary>드라이런 레시피(<see cref="Data.Entities.InspectionRecipe.DryRun"/>=true)가 돌릴 스텝 집합.
+    /// 비전 정렬(③~⑯) 없이 ACS 용접선 시작/끝점으로 2점 교시(wobjPoint1→cobotSeamEnd→wobjPoint2)만 해
+    /// 내부 작업물 좌표계를 잡고(wobjRegister), 경유점을 이동만 순회(inspectionRunDry)한 뒤 반납·홈 복귀한다.
+    /// 순서는 각 스텝 DefaultOrder 가 정하므로(SequenceService) 배열 순서는 무관하다. StepKeysJson 은 무시된다.</summary>
+    private static readonly string[] DryRunStepKeys =
+    {
+        "cobotInspection", "wobjPoint1", "cobotSeamEnd", "wobjPoint2",
+        "wobjRegister", "inspectionRunDry", "wobjReset", "cobotHome", "monitorClose",
+    };
+
     public WeldInspectionOrchestrator(
         IServiceScopeFactory scopeFactory,
         CobotService cobot,
@@ -192,8 +202,11 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         // 레시피가 정한 스텝(미지정이면 등록된 전체)에서 출발해, 이 task 에 맞지 않는 것만 뺀다.
         //  · anchor 적중 → 정렬 스텝군 제거(첫 task 가 잡아 둔 작업물 좌표계 재사용)
         //  · 마지막 검사 액션이 아님 → 코봇 홈 복귀 제거(task 사이에 홈 왕복 금지)
-        var baseSteps = ParseStepKeys(recipe.StepKeysJson)
-                        ?? sequence.Steps.Select(st => st.Key).ToArray();
+        // 드라이런 레시피는 StepKeysJson 을 무시하고 고정 드라이런 집합을 쓴다 — 수기 StepKeysJson 누락으로
+        // 교시 스텝이 빠져 ⑱이 "작업물 좌표계 없음"으로 실패하던 문제를 원천 차단한다.
+        var baseSteps = recipe.DryRun
+            ? DryRunStepKeys
+            : (ParseStepKeys(recipe.StepKeysJson) ?? sequence.Steps.Select(st => st.Key).ToArray());
         var stepKeys = baseSteps
             .Where(k => !(anchorHit && AlignmentStepKeys.Contains(k)))
             .Where(k => isLastInspection || k != HomeStepKey)
@@ -293,9 +306,10 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         // 단일화했다. (구 PatternJson 런타임 생성 경로는 폐기 — CrossPatternGenerator 는 교시 시작 템플릿 전용.)
 
         _logger.LogInformation(
-            "검사 시퀀스 시작: recipe={Recipe}, profile='{Profile}'(id={ProfileId}, drawing={DrawingId}), " +
+            "검사 시퀀스 시작: recipe={Recipe}{DryRun}, profile='{Profile}'(id={ProfileId}, drawing={DrawingId}), " +
             "anchor {AnchorState}, steps={Steps}",
-            recipeId, profile?.Name ?? "(미사용 — CORNER 티칭 슬롯)", profile?.Id ?? 0, profile?.DrawingId ?? 0,
+            recipeId, recipe.DryRun ? "[드라이런]" : "", profile?.Name ?? "(미사용 — CORNER 티칭 슬롯)",
+            profile?.Id ?? 0, profile?.DrawingId ?? 0,
             anchorHit ? "적중(정렬 생략)" : "신규(정렬 수행)",
             string.Join(",", stepKeys));
 

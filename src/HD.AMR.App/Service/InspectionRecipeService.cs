@@ -204,6 +204,8 @@ public class InspectionRecipeService
                 SeamType = c.Seam,
                 Orientation = c.Orient,
                 Enabled = c.Enabled,
+                DryRun = false,   // 기본은 일반 검사 — 드라이런은 현장에서 토글, '기본값' 복원 시 꺼짐
+
                 // CORNER2/CORNER3 실행 시퀀스는 없음(Enabled=false 게이트).
                 // 그 외는 풀시퀀스(null) — 타입별 부분 구성은 현장 튜닝으로 조정.
                 StepKeysJson = null,
