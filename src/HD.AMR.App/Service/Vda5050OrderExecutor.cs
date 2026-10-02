@@ -199,8 +199,11 @@ public sealed class Vda5050OrderExecutor
         var pos = node.NodePosition!;
         try
         {
-            // 허용 오차 결정: Order → ParameterService(DB) → AmrRestSettings → 0.1
+            // 허용 오차 결정: ParameterService(DB) → Order → AmrRestSettings
             var (devXy, devTheta) = await ResolveDeviationsAsync(pos);
+
+            // 코봇 홈 복귀 — 팔이 뻗은 채 AMR 이 주행하면 구조물 충돌 위험.
+            await EnsureCobotHomeBeforeDriveAsync(ct);
 
             // 0) 이미 목표 위치면 이동 생략 — 측위 신뢰도가 낮을 때 제자리 go 가 W13(경로탐색 실패)로
             //    전체 임무를 죽이는 것을 방지. 축별 ±devXy + theta 판정(사양과 별개의 현장 합의).
@@ -306,7 +309,7 @@ public sealed class Vda5050OrderExecutor
         }
     }
 
-    /// <summary>도착 판정 허용 오차 결정 — ① Order → ② ParameterService(DB) → ③ AmrRestSettings → ④ 0.1.</summary>
+    /// <summary>도착 판정 허용 오차 결정 — ① ParameterService(DB) → ② Order → ③ AmrRestSettings.</summary>
     private async Task<(double DevXy, double DevTheta)> ResolveDeviationsAsync(NodePosition pos)
     {
         double? paramXy = null, paramTheta = null;
@@ -322,9 +325,97 @@ public sealed class Vda5050OrderExecutor
             _logger.LogDebug(ex, "도착 오차 파라미터 조회 실패 — 설정/기본값 폴백");
         }
 
-        var devXy = pos.AllowedDeviationXY ?? paramXy ?? _restSettings.DefaultDeviationXy;
-        var devTheta = pos.AllowedDeviationTheta ?? paramTheta ?? _restSettings.DefaultDeviationTheta;
+        var (devXy, srcXy) = Resolve(paramXy, pos.AllowedDeviationXY, _restSettings.DefaultDeviationXy);
+        var (devTheta, srcTheta) = Resolve(paramTheta, pos.AllowedDeviationTheta, _restSettings.DefaultDeviationTheta);
+        _logger.LogInformation("도착 오차 결정: dxy={DevXy:F3}m({SrcXy}), dθ={DevTheta:F3}rad({SrcTheta})",
+            devXy, srcXy, devTheta, srcTheta);
         return (devXy, devTheta);
+
+        static (double Value, string Src) Resolve(double? param, double? order, double settings)
+            => param is not null ? (param.Value, "DB")
+             : order is not null ? (order.Value, "Order")
+             :                     (settings, "Settings");
+    }
+
+    /// <summary>AMR 주행 전 코봇 홈 복귀 — 팔이 뻗은 상태에서 주행하면 구조물 충돌 위험.
+    /// 코봇 미연결 또는 홈 미티칭이면 건너뛴다(코봇 없는 주행 전용 시나리오).</summary>
+    private async Task EnsureCobotHomeBeforeDriveAsync(CancellationToken ct)
+    {
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var cobot = scope.ServiceProvider.GetRequiredService<CobotService>();
+            if (!cobot.IsConnected)
+            {
+                _logger.LogDebug("코봇 미연결 — 홈 복귀 건너뜀");
+                return;
+            }
+
+            var teaching = scope.ServiceProvider.GetRequiredService<TeachingService>();
+            var positions = await teaching.ListAsync(ct);
+            var home = positions.FirstOrDefault(p => p.Key == "home");
+            if (home is null || !home.IsTaught)
+            {
+                _logger.LogWarning("홈 위치 미티칭 — 코봇 홈 복귀 건너뜀");
+                return;
+            }
+
+            var homeJoints = new[]
+            {
+                home.J1!.Value, home.J2!.Value, home.J3!.Value,
+                home.J4!.Value, home.J5!.Value, home.J6!.Value,
+            };
+
+            var cur = await cobot.Rpc.GetActualJointPosAsync(ct: ct);
+            if (SequenceEntry.IsWithinJointTolerance(cur, homeJoints))
+            {
+                _logger.LogDebug("코봇 이미 홈 — 복귀 불필요");
+                return;
+            }
+
+            _logger.LogInformation("AMR 주행 전 코봇 홈 복귀 시작");
+
+            // ready 경유: 검사 자세에서 직접 홈으로 MoveJ 시 차체 충돌 방지
+            var ready = positions.FirstOrDefault(p => p.Key == "ready");
+            if (ready is not null && ready.IsTaught)
+            {
+                var readyJoints = new[]
+                {
+                    ready.J1!.Value, ready.J2!.Value, ready.J3!.Value,
+                    ready.J4!.Value, ready.J5!.Value, ready.J6!.Value,
+                };
+                if (!SequenceEntry.IsWithinJointTolerance(cur, readyJoints))
+                {
+                    var readyPose = new[]
+                    {
+                        ready.X!.Value, ready.Y!.Value, ready.Z!.Value,
+                        ready.Rx!.Value, ready.Ry!.Value, ready.Rz!.Value,
+                    };
+                    var rr = await cobot.Rpc.MoveJAsync(readyJoints, readyPose,
+                        tool: 1, user: 0, vel: 20, ct: ct);
+                    if (rr != 0)
+                        _logger.LogWarning("작업 준비 위치 경유 실패 (rc={Rc}) — 직접 홈 복귀 시도", rr);
+                    else
+                        _logger.LogInformation("작업 준비 위치 경유 완료");
+                }
+            }
+
+            var homePose = new[]
+            {
+                home.X!.Value, home.Y!.Value, home.Z!.Value,
+                home.Rx!.Value, home.Ry!.Value, home.Rz!.Value,
+            };
+            var rc = await cobot.Rpc.MoveJAsync(homeJoints, homePose,
+                tool: 1, user: 0, vel: 20, ct: ct);
+            if (rc != 0)
+                _logger.LogError("코봇 홈 복귀 실패 (rc={Rc}) — AMR 주행은 계속 진행", rc);
+            else
+                _logger.LogInformation("코봇 홈 복귀 완료");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "코봇 홈 복귀 중 예외 — AMR 주행은 계속 진행");
+        }
     }
 
     /// <summary>현재 pose 가 목표와 x·y 축별 devXy 이내이고 theta 도 devTheta 이내면 true.

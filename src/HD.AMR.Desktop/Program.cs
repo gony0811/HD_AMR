@@ -39,6 +39,7 @@ internal static class Program
         // 종료 시 호스티드 서비스(AMR/Cobot 등) 정리가 길어져도 프로세스가 매달리지 않도록
         // 호스트 종료 제한 시간을 짧게 둔다(기본 30초 → 2초). 초과분은 강제 진행.
         builder.Services.Configure<HostOptions>(o => o.ShutdownTimeout = TimeSpan.FromSeconds(2));
+        builder.Services.AddSingleton<Microsoft.Extensions.Logging.ILoggerProvider>(new FileLoggerProvider());
         builder.Services.AddHdAmrServices(builder.Configuration);
         var host = builder.Build();
 

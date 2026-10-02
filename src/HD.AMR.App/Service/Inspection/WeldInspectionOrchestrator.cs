@@ -32,7 +32,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
     private readonly ILogger<WeldInspectionOrchestrator> _logger;
 
     private readonly object _sync = new();
-    private (string OrderId, string AnchorGroupId)? _lastAnchor;   // 마지막 성공 정렬 키
+    private (string OrderId, string AnchorGroupId, InspectionMoveDirection Direction)? _lastAnchor;
     private double[]? _lastInternalWorkpieceFrame;                 // 같은 anchor에서 재사용할 BASE 기준 내부 프레임
     private CancellationTokenSource? _currentRunCts;
 
@@ -187,15 +187,37 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             profile = found;
         }
 
-        // 7) anchor 캐시 판정 — 같은 (orderId, anchorGroupId) 연속이고 주행 없음 → ⑱만 실행.
+        // 7) 검사 방향 자동 유도(§4.4·§8.1) — anchor 판정보다 먼저 결정해야 방향 변경 시 재교시 가능.
+        //    seam 벡터를 노드 theta(벽 정면) 기준 벽면-로컬 투영.
+        //    theta 미상(방어적)이면 현행 기본 Horizontal 폴백. 판정 근거는 로그로 남긴다.
+        var direction = InspectionMoveDirection.Horizontal;
+        if (nodeThetaRad is { } theta)
+        {
+            direction = SeamDirectionResolver.Resolve(req.SeamStartW, req.SeamEndW, theta, out var dirReason);
+            _logger.LogInformation("검사 방향 유도: {Reason} (jobRef={JobRef})", dirReason, req.JobRef);
+        }
+        else
+        {
+            _logger.LogWarning("노드 theta 미상 — 검사 방향 Horizontal 폴백 (jobRef={JobRef})", req.JobRef);
+        }
+
+        // 8) anchor 캐시 판정 — 같은 (orderId, anchorGroupId, direction) 연속이고 주행 없음 → ⑱만 실행.
+        //    방향이 달라지면(수평→수직 등) 작업물 좌표계를 재교시해야 하므로 캐시 미적중 처리.
         //    CORNER 는 정렬 스텝이 없어 캐시 비적용(항상 레시피 스텝 전체 실행, 캐시 갱신도 안 함).
         bool anchorHit;
         double[]? cachedInternalFrame;
         lock (_sync)
         {
             anchorHit = recipe.SeamType != SeamTypeKind.Corner
-                        && _lastAnchor == (orderId, req.AnchorGroupId)
+                        && _lastAnchor == (orderId, req.AnchorGroupId, direction)
                         && _lastInternalWorkpieceFrame is { Length: 6 };
+            if (!anchorHit && _lastAnchor is { } prev
+                && prev.OrderId == orderId && prev.AnchorGroupId == req.AnchorGroupId
+                && prev.Direction != direction)
+            {
+                _logger.LogInformation("anchor 방향 변경({Old}→{New}) — 작업물 좌표계 재교시 (anchorGroup={Group})",
+                    prev.Direction, direction, req.AnchorGroupId);
+            }
             cachedInternalFrame = anchorHit ? (double[])_lastInternalWorkpieceFrame!.Clone() : null;
         }
 
@@ -215,19 +237,6 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         if (stepKeys.Length == 0)
             return InspectionActionResult.Fail("inspectionFailed",
                 $"recipe {recipeId} 에 실행할 스텝이 남지 않았습니다 — 레시피 실행 스텝 구성을 확인하세요.");
-
-        // 8) 검사 방향 자동 유도(§4.4·§8.1) — seam 벡터를 노드 theta(벽 정면) 기준 벽면-로컬 투영.
-        //    theta 미상(방어적)이면 현행 기본 Horizontal 폴백. 판정 근거는 로그로 남긴다.
-        var direction = InspectionMoveDirection.Horizontal;
-        if (nodeThetaRad is { } theta)
-        {
-            direction = SeamDirectionResolver.Resolve(req.SeamStartW, req.SeamEndW, theta, out var dirReason);
-            _logger.LogInformation("검사 방향 유도: {Reason} (jobRef={JobRef})", dirReason, req.JobRef);
-        }
-        else
-        {
-            _logger.LogWarning("노드 theta 미상 — 검사 방향 Horizontal 폴백 (jobRef={JobRef})", req.JobRef);
-        }
 
         // 8.5) CORNER3 좌/우 거울 side 판별 — 티칭 슬롯 접두사(corner3.L/R) 선택 키.
         string? cornerSide = null;
@@ -366,7 +375,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                     }
                     lock (_sync)
                     {
-                        _lastAnchor = (orderId, req.AnchorGroupId);
+                        _lastAnchor = (orderId, req.AnchorGroupId, direction);
                         _lastInternalWorkpieceFrame = (double[])internalFrame.Clone();
                     }
                 }

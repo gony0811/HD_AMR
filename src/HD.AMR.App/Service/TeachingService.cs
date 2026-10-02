@@ -36,7 +36,11 @@ public class TeachingService
 
     private static (string Key, string Name, int SurfaceId)[] BuildSlots()
     {
-        var list = new List<(string, string, int)> { ("home", "홈 위치", 0x00) };
+        var list = new List<(string, string, int)>
+        {
+            ("home", "홈 위치", 0x00),
+            ("ready", "작업 준비 위치", 0x00),
+        };
         // Wall Code 10면 검사 준비 위치 — 코드·Wall ID·이름은 정본 표(WallCodes)에서만 가져온다.
         foreach (var w in WallCodes.All)
             list.Add((WallSlotKey(w.Code), $"검사 준비 — {w.Label}", w.SurfaceId));
