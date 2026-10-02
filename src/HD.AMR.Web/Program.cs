@@ -198,6 +198,10 @@ using (var scope = app.Services.CreateScope())
     scope.ServiceProvider.GetRequiredService<InspectionRecipeService>()
         .SeedDefaultsAsync().GetAwaiter().GetResult();
 
+    // 파라미터 기본값 시드 — arrival.deviationXy 등 UI에서 조정 가능하도록 미리 생성.
+    scope.ServiceProvider.GetRequiredService<ParameterService>()
+        .SeedDefaultsAsync().GetAwaiter().GetResult();
+
     var converter = scope.ServiceProvider.GetRequiredService<IDwgConverter>();
     if (!converter.IsAvailable)
     {

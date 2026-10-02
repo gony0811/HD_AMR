@@ -1,6 +1,8 @@
 using System.Text.Json;
 using HD.AMR.App.Communication;
 using HD.AMR.App.Communication.Vda5050;
+using HD.AMR.App.Service.Sequence.Steps;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -32,11 +34,9 @@ public sealed class Vda5050OrderExecutor
     private readonly AMRService _amr;
     private readonly Inspection.IWeldInspectionExecutor _inspection;
     private readonly AmrRestSettings _restSettings;
+    private readonly IServiceScopeFactory _scopeFactory;
     private readonly OperationLogService _opLog;
     private readonly ILogger<Vda5050OrderExecutor> _logger;
-
-    private const double DefaultDeviationXy = 0.1;     // [m] — 사양 §4.2 미지정 기본값
-    private const double DefaultDeviationTheta = 0.1;  // [rad]
 
     private readonly object _gate = new();
     private CancellationTokenSource? _missionCts;
@@ -57,13 +57,14 @@ public sealed class Vda5050OrderExecutor
 
     public Vda5050OrderExecutor(AmrRestClient rest, AMRService amr,
         Inspection.IWeldInspectionExecutor inspection,
-        IOptions<AmrRestSettings> restOptions, OperationLogService opLog,
-        ILogger<Vda5050OrderExecutor> logger)
+        IOptions<AmrRestSettings> restOptions, IServiceScopeFactory scopeFactory,
+        OperationLogService opLog, ILogger<Vda5050OrderExecutor> logger)
     {
         _rest = rest;
         _amr = amr;
         _inspection = inspection;
         _restSettings = restOptions.Value;
+        _scopeFactory = scopeFactory;
         _opLog = opLog;
         _logger = logger;
     }
@@ -198,13 +199,15 @@ public sealed class Vda5050OrderExecutor
         var pos = node.NodePosition!;
         try
         {
+            // 허용 오차 결정: Order → ParameterService(DB) → AmrRestSettings → 0.1
+            var (devXy, devTheta) = await ResolveDeviationsAsync(pos);
+
             // 0) 이미 목표 위치면 이동 생략 — 측위 신뢰도가 낮을 때 제자리 go 가 W13(경로탐색 실패)로
             //    전체 임무를 죽이는 것을 방지. 축별 ±devXy + theta 판정(사양과 별개의 현장 합의).
             //    주행이 없으므로 정렬(anchor) 캐시도 유지한다(§8.1 — 정차점 불변).
-            if (IsAlreadyAtTarget(pos, out var atDesc))
+            if (IsAlreadyAtTarget(pos, devXy, devTheta))
             {
-                _logger.LogInformation("VDA5050 이동 생략: 이미 목표 위치 ({Desc}) — {NodeId}", atDesc, node.NodeId);
-                OpLog("ORDER", "이동 생략", null, $"이미 목표 위치 ({atDesc})", orderId);
+                OpLog("ORDER", "이동 생략", null, "이미 목표 위치", orderId);
             }
             else
             {
@@ -226,7 +229,7 @@ public sealed class Vda5050OrderExecutor
                 }
 
                 // 2) 도착 대기 — 자체 위치 판정(부록 D-4) + status.error 감시(보조).
-                var arrived = await WaitForArrivalAsync(pos, staleErrors, ct);
+                var arrived = await WaitForArrivalAsync(pos, devXy, devTheta, staleErrors, ct);
                 if (!arrived.Ok)
                 {
                     FailMission(arrived.Reason!);
@@ -303,38 +306,71 @@ public sealed class Vda5050OrderExecutor
         }
     }
 
+    /// <summary>도착 판정 허용 오차 결정 — ① Order → ② ParameterService(DB) → ③ AmrRestSettings → ④ 0.1.</summary>
+    private async Task<(double DevXy, double DevTheta)> ResolveDeviationsAsync(NodePosition pos)
+    {
+        double? paramXy = null, paramTheta = null;
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var param = scope.ServiceProvider.GetRequiredService<ParameterService>();
+            paramXy = await param.GetDoubleAsync(WeldSequenceSupport.ArrivalDeviationXyKey);
+            paramTheta = await param.GetDoubleAsync(WeldSequenceSupport.ArrivalDeviationThetaKey);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "도착 오차 파라미터 조회 실패 — 설정/기본값 폴백");
+        }
+
+        var devXy = pos.AllowedDeviationXY ?? paramXy ?? _restSettings.DefaultDeviationXy;
+        var devTheta = pos.AllowedDeviationTheta ?? paramTheta ?? _restSettings.DefaultDeviationTheta;
+        return (devXy, devTheta);
+    }
+
     /// <summary>현재 pose 가 목표와 x·y 축별 devXy 이내이고 theta 도 devTheta 이내면 true.
     /// LatestStatus 미확보(Modbus 미연결)면 판정 불가 → false(기존 이동 경로).</summary>
-    private bool IsAlreadyAtTarget(NodePosition pos, out string desc)
+    private bool IsAlreadyAtTarget(NodePosition pos, double devXy, double devTheta)
     {
-        desc = "";
         var st = _amr.LatestStatus;
         if (st is null) return false;
 
-        var devXy = pos.AllowedDeviationXY ?? DefaultDeviationXy;
-        var devTheta = pos.AllowedDeviationTheta ?? DefaultDeviationTheta;
         var dx = st.Pose.X - pos.X;
         var dy = st.Pose.Y - pos.Y;
         var dTheta = pos.Theta is double t ? Math.Abs(NormalizeRad(st.Pose.Angle - t)) : 0.0;
         if (Math.Abs(dx) > devXy || Math.Abs(dy) > devXy || dTheta > devTheta) return false;
 
-        desc = $"dx={dx:F3}m, dy={dy:F3}m, dθ={dTheta:F3}rad";
+        _logger.LogInformation("VDA5050 이동 생략: 이미 목표 위치 (dx={Dx:F3}m, dy={Dy:F3}m, dθ={DTheta:F3}rad)", dx, dy, dTheta);
         return true;
     }
 
     private async Task<(bool Ok, string? Reason)> WaitForArrivalAsync(
-        NodePosition pos, HashSet<string> staleErrors, CancellationToken ct)
+        NodePosition pos, double devXy, double devTheta,
+        HashSet<string> staleErrors, CancellationToken ct)
     {
-        var devXy = pos.AllowedDeviationXY ?? DefaultDeviationXy;
-        var devTheta = pos.AllowedDeviationTheta ?? DefaultDeviationTheta;
         var deadline = DateTime.UtcNow.AddSeconds(_restSettings.DriveTimeoutSec);
+        var started = DateTime.UtcNow;
+        var lastDiagLog = DateTime.MinValue;
+        const int diagIntervalSec = 30;
+
+        double lastDxy = double.NaN, lastDTheta = double.NaN;
+        string lastPoseDesc = "미확보";
+
+        _logger.LogInformation("VDA5050 도착 대기 시작: 목표=({X:F3}, {Y:F3}, θ={T:F3}), " +
+            "허용 dxy≤{DevXy:F3}m, dθ≤{DevTheta:F3}rad, 타임아웃={Timeout}s",
+            pos.X, pos.Y, pos.Theta ?? 0.0, devXy, devTheta, _restSettings.DriveTimeoutSec);
 
         while (!ct.IsCancellationRequested)
         {
             if (DateTime.UtcNow > deadline)
-                return (false, $"주행 타임아웃 ({_restSettings.DriveTimeoutSec}s) — 목표 미도달");
+            {
+                _logger.LogWarning("VDA5050 주행 타임아웃: 최종 {Pose}, 잔여 dxy={Dxy:F3}m, dθ={DTheta:F3}rad " +
+                    "(허용 dxy≤{DevXy:F3}m, dθ≤{DevTheta:F3}rad)",
+                    lastPoseDesc, lastDxy, lastDTheta, devXy, devTheta);
+                return (false, $"주행 타임아웃 ({_restSettings.DriveTimeoutSec}s) — 목표 미도달 " +
+                    $"(최종 {lastPoseDesc}, 잔여 dxy={lastDxy:F3}m, dθ={lastDTheta:F3}rad)");
+            }
 
-            // 자체 도착 판정: Modbus 폴링 pose (1초 주기 갱신, AMRService).
+            // 1차: Modbus 폴링 pose (1초 주기 갱신, AMRService).
             var st = _amr.LatestStatus;
             if (st is not null)
             {
@@ -342,12 +378,56 @@ public sealed class Vda5050OrderExecutor
                 var dy = st.Pose.Y - pos.Y;
                 var dxy = Math.Sqrt(dx * dx + dy * dy);
                 var dTheta = pos.Theta is double t ? Math.Abs(NormalizeRad(st.Pose.Angle - t)) : 0.0;
+
+                lastDxy = dxy;
+                lastDTheta = dTheta;
+                lastPoseDesc = $"pose=({st.Pose.X:F3}, {st.Pose.Y:F3}, θ={st.Pose.Angle:F3})";
+
                 if (dxy <= devXy && dTheta <= devTheta)
                     return (true, null);
             }
+            else
+            {
+                // 2차: Modbus null → REST /robot/pose 폴백
+                var restPose = await TryGetRestPoseAsync(ct);
+                if (restPose is var (rx, ry, rTheta))
+                {
+                    var dx = rx - pos.X;
+                    var dy = ry - pos.Y;
+                    var dxy = Math.Sqrt(dx * dx + dy * dy);
+                    var dThetaRest = pos.Theta is double t2 ? Math.Abs(NormalizeRad(rTheta - t2)) : 0.0;
+
+                    lastDxy = dxy;
+                    lastDTheta = dThetaRest;
+                    lastPoseDesc = $"pose=({rx:F3}, {ry:F3}, θ={rTheta:F3})[REST]";
+
+                    if (dxy <= devXy && dThetaRest <= devTheta)
+                    {
+                        _logger.LogInformation("VDA5050 도착 판정(REST 폴백): Modbus 미연결 중 REST pose 로 도착 확인");
+                        return (true, null);
+                    }
+                }
+                else
+                {
+                    lastPoseDesc = "Modbus+REST 모두 미확보";
+                }
+            }
+
+            // 진단 로그 — 30초마다 현재 상태 기록
+            if ((DateTime.UtcNow - lastDiagLog).TotalSeconds >= diagIntervalSec)
+            {
+                var elapsed = (int)(DateTime.UtcNow - started).TotalSeconds;
+                if (st is not null)
+                    _logger.LogInformation("VDA5050 도착 대기 중: {Pose}, 잔여 dxy={Dxy:F3}m, dθ={DTheta:F3}rad " +
+                        "(경과 {Elapsed}s/{Timeout}s)",
+                        lastPoseDesc, lastDxy, lastDTheta, elapsed, _restSettings.DriveTimeoutSec);
+                else
+                    _logger.LogWarning("VDA5050 도착 대기 중: AMR Modbus 미연결 — {Pose} (경과 {Elapsed}s/{Timeout}s)",
+                        lastPoseDesc, elapsed, _restSettings.DriveTimeoutSec);
+                lastDiagLog = DateTime.UtcNow;
+            }
 
             // 보조: status.error 감시 — 이동 전 기준선(staleErrors)에 없던 신규 항목만 실패로 본다.
-            // (플랫폼이 과거 오류를 배열에 계속 남겨두므로 전량 실패 처리하면 묵은 오류가 새 임무를 죽인다.)
             var status = await _rest.GetStatusAsync(ct);
             if (status.Ok && status.Data is JsonElement data)
             {
@@ -360,6 +440,35 @@ public sealed class Vda5050OrderExecutor
         }
         ct.ThrowIfCancellationRequested();
         return (false, "cancelled");
+    }
+
+    /// <summary>REST /robot/pose 에서 현재 SLAM 포즈를 조회한다. 실패 시 null.</summary>
+    private async Task<(double X, double Y, double Theta)?> TryGetRestPoseAsync(CancellationToken ct)
+    {
+        try
+        {
+            var result = await _rest.GetPoseAsync(ct);
+            if (!result.Ok || result.Data is not JsonElement data) return null;
+
+            // data 가 {x, y, rz} 직접이거나, data.pose 안에 있을 수 있다 — 방어적 파싱.
+            var obj = data;
+            if (data.TryGetProperty("pose", out var inner) && inner.ValueKind == JsonValueKind.Object)
+                obj = inner;
+
+            if (obj.TryGetProperty("x", out var xEl) && xEl.TryGetDouble(out var x) &&
+                obj.TryGetProperty("y", out var yEl) && yEl.TryGetDouble(out var y))
+            {
+                var rz = 0.0;
+                if (obj.TryGetProperty("rz", out var rzEl)) rzEl.TryGetDouble(out rz);
+                else if (obj.TryGetProperty("theta", out var thetaEl)) thetaEl.TryGetDouble(out rz);
+                return (x, y, rz);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "REST pose 폴백 조회 실패");
+        }
+        return null;
     }
 
     /// <summary>현재 status.error 항목 키 집합 — 이동 직전에 찍는 묵은 오류 기준선.

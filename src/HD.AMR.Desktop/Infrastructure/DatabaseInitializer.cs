@@ -26,5 +26,9 @@ internal static class DatabaseInitializer
         // 검사 레시피 17종 카탈로그 시드 — 없는 행만 추가(현장 조정값 보존).
         sp.GetRequiredService<InspectionRecipeService>()
             .SeedDefaultsAsync().GetAwaiter().GetResult();
+
+        // 파라미터 기본값 시드 — arrival.deviationXy 등 UI에서 조정 가능하도록 미리 생성.
+        sp.GetRequiredService<ParameterService>()
+            .SeedDefaultsAsync().GetAwaiter().GetResult();
     }
 }

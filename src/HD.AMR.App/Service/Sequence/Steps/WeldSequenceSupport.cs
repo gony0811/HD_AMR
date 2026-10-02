@@ -48,6 +48,12 @@ public static class WeldSequenceSupport
     /// ACS 의 T_W_D 는 2D 변환이라 z 는 도면 전역값이 그대로 실려 온다(사양 §10 N17). 1층은 0.</summary>
     public const string ZDatumOffsetKey = "Sequence.Inspection.ZDatumOffsetMm";
 
+    /// <summary>도착 판정 XY 허용 오차(m). Order allowedDeviationXY → 이 키 → AmrRestSettings → 0.1 순 폴백.</summary>
+    public const string ArrivalDeviationXyKey = "arrival.deviationXy";
+
+    /// <summary>도착 판정 각도 허용 오차(rad). Order allowedDeviationTheta → 이 키 → AmrRestSettings → 0.1 순 폴백.</summary>
+    public const string ArrivalDeviationThetaKey = "arrival.deviationTheta";
+
     /// <summary>비드 검출 DL 모델 전체 경로. 빈 문자열 = 자동(weld_seg_{ir|rgb}.onnx).
     /// 카메라 페이지 드롭다운이 저장하고, ⑦⑪·⑦⁺ 가 측정 전 <see cref="ApplyDlModelAsync"/> 로 적용한다.</summary>
     public const string DlModelPathKey = "Weld.Dl.ModelPath";

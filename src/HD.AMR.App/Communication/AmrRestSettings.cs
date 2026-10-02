@@ -42,4 +42,10 @@ public class AmrRestSettings
 
     /// <summary>노드 주행 타임아웃(초). 초과 시 이동 실패 처리.</summary>
     public int DriveTimeoutSec { get; set; } = 600;
+
+    /// <summary>도착 판정 XY 허용 오차 기본값(m). Order의 allowedDeviationXY → ParameterService → 이 값 순 폴백.</summary>
+    public double DefaultDeviationXy { get; set; } = 0.1;
+
+    /// <summary>도착 판정 각도 허용 오차 기본값(rad). Order의 allowedDeviationTheta → ParameterService → 이 값 순 폴백.</summary>
+    public double DefaultDeviationTheta { get; set; } = 0.1;
 }

@@ -64,6 +64,33 @@ public class ParameterService
     public Task SetBoolAsync(string name, bool value, string? description = null)
         => SetAsync(name, value ? "true" : "false", description);
 
+    /// <summary>
+    /// 기본 파라미터 시드 — 이름이 없는 행만 추가(현장 조정값 보존).
+    /// 앱 시작 시 한 번 호출하여 UI(Parameter 페이지)에 키가 노출되도록 한다.
+    /// </summary>
+    public async Task SeedDefaultsAsync()
+    {
+        (string Name, string Value, string Desc)[] defaults =
+        [
+            ("arrival.deviationXy",    "0.1", "도착 판정 XY 허용 오차(m)"),
+            ("arrival.deviationTheta", "0.1", "도착 판정 각도 허용 오차(rad)"),
+        ];
+
+        var existing = await _db.Parameters.Select(p => p.Name).ToListAsync();
+        foreach (var (name, value, desc) in defaults)
+        {
+            if (existing.Contains(name)) continue;
+            _db.Parameters.Add(new Parameter
+            {
+                Name = name,
+                Value = value,
+                Description = desc,
+                UpdatedAt = DateTime.UtcNow,
+            });
+        }
+        await _db.SaveChangesAsync();
+    }
+
     /// <summary>id 로 파라미터 1건 삭제. 없으면 무시.</summary>
     public async Task DeleteAsync(int id)
     {
