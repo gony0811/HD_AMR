@@ -130,11 +130,13 @@ public class CobotInspectionMoveStep : ISequenceStep
         return FrameMath.FromFrame(new[] { 0.0, 0.0, 0.0, 0.0, 0.0, theta }, target);
     }
 
-    /// <summary>u(툴 X)/v(툴 Y) 오프셋 + 수직 모드 RZ−90° 를 담은 툴프레임 오프셋 벡터.</summary>
+    /// <summary>u(툴 X)/v(툴 Y) 오프셋 + 수직 모드 RZ+90° 를 담은 툴프레임 오프셋 벡터.
+    /// 수직 검사 시 카메라 센서를 벽면 기준 반시계방향(CCW) 90° 회전시켜 수직 스캔 방향에 맞춘다.
+    /// u/v 앵커 정규화(NormalizeUvAnchor)는 수직 모드에서 건너뛰므로 RZ 만으로 J6 변위를 결정한다.</summary>
     internal static double[] UvOffset(SequenceContext c) => new[]
     {
         c.InspectionOffsetU, c.InspectionOffsetV, 0.0, 0.0, 0.0,
-        c.InspectionDirection == InspectionMoveDirection.Vertical ? -90.0 : 0.0,
+        c.InspectionDirection == InspectionMoveDirection.Vertical ? 90.0 : 0.0,
     };
 
     /// <summary>
@@ -170,7 +172,10 @@ public class CobotInspectionMoveStep : ISequenceStep
         var entryNote = await SequenceEntry.PrepareAsync(_cobot, context, _logger, ct);
 
         var (target, where) = await ComputeTargetPoseAsync(_cobot, inspection, ct);
-        target = NormalizeUvAnchor(target, _logger);
+        // 수직 모드에서는 u/v 앵커 정규화를 건너뛴다 — 정규화(+88°)와 수직 RZ(−90°)가 합쳐지면
+        // 의도와 다른 J6 회전이 된다. 수직 모드의 RZ 오프셋만으로 카메라 센서 방향을 맞춘다.
+        if (context.InspectionDirection != InspectionMoveDirection.Vertical)
+            target = NormalizeUvAnchor(target, _logger);
         where = $"[0x{context.InspectionSurfaceId:X2} {inspection.Name}] {where}";
 
         // 위치는 ACS 용접선에서, 자세는 티칭 값 그대로 — task 마다 달라지는 것은 위치뿐이다.
@@ -195,14 +200,27 @@ public class CobotInspectionMoveStep : ISequenceStep
         var rz = offset[5];
         var hasOffset = context.InspectionOffsetU != 0 || context.InspectionOffsetV != 0;
 
-        var rc = await _cobot.Rpc.MoveJByToolOffsetAsync(target, user: 0, offset,
-            tool: context.Tool, vel: context.Velocity, ct: ct);
+        int rc;
+        if (context.InspectionDirection == InspectionMoveDirection.Vertical)
+        {
+            // 수직 모드: IK config 0–7 중 현재 관절에 가장 가까운 해를 선택한다.
+            // config −1(자동)은 시무 방향(위→아래 vs 아래→위)에 따라 J6 분기가 바뀌어
+            // RZ 위치가 180° 반전되는 문제가 있다.
+            var curJoints = await _cobot.Rpc.GetActualJointPosAsync(ct: ct);
+            rc = await _cobot.Rpc.MoveJByToolOffsetNearestAsync(target, user: 0, offset,
+                curJoints, tool: context.Tool, vel: context.Velocity, ct: ct);
+        }
+        else
+        {
+            rc = await _cobot.Rpc.MoveJByToolOffsetAsync(target, user: 0, offset,
+                tool: context.Tool, vel: context.Velocity, ct: ct);
+        }
 
         var offsetNote = hasOffset
             ? $" (오프셋 u={context.InspectionOffsetU:0.###}, v={context.InspectionOffsetV:0.###} mm)"
             : "";
         if (rz != 0)
-            offsetNote += " [수직, RZ−90°]";
+            offsetNote += $" [수직, RZ{rz:+0;-0}°]";
 
         if (rc != 0)
             return StepResult.Fail($"이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.");

@@ -519,6 +519,104 @@ public class FairinoRpcClient : IDisposable
         return await MoveJAsync(joints, target, tool: t, user: user, vel: vel, ct: ct);
     }
 
+    /// <summary>
+    /// <see cref="MoveJByToolOffsetAsync"/> 와 동일하나, IK config 0–7 을 시도해
+    /// <paramref name="referenceJoints"/> 에 가장 가까운 해를 선택한다.
+    /// config −1(자동)이 J6 ±180° 플립을 일으키는 경우 이 메서드로 연속성을 보장한다.
+    /// </summary>
+    public async Task<int> MoveJByToolOffsetNearestAsync(double[] anchorPose, int user, double[] offset,
+        double[] referenceJoints, int? tool = null, double? vel = null, CancellationToken ct = default)
+    {
+        int t = tool ?? _settings.DefaultToolId;
+        var target = (offset is { Length: >= 6 } && offset.Any(v => v != 0.0))
+            ? FrameMath.FromFrame(offset, anchorPose)
+            : anchorPose;
+
+        var joints = await GetInverseKinNearestAsync(target, referenceJoints, t, user, ct);
+        return await MoveJAsync(joints, target, tool: t, user: user, vel: vel, ct: ct);
+    }
+
+    /// <summary>
+    /// IK config 0–7 을 모두 시도해 <paramref name="referenceJoints"/> 에 가장 가까운
+    /// (총 관절 변위 최소) 해를 반환한다. 해가 없으면 예외.
+    /// <see cref="GetInverseKinForMoveAsync"/> 와 동일한 tool/user 프레임 보정을 수행한다.
+    /// </summary>
+    public async Task<double[]> GetInverseKinNearestAsync(
+        double[] descPose, double[] referenceJoints, int tool, int user,
+        CancellationToken ct = default)
+    {
+        int activeTool = await ResolveActiveToolAsync(ct, strict: true);
+        var pose = await ReframeToolAsync(descPose, tool, activeTool, ct);
+
+        int activeUser = await ResolveActiveUserAsync(ct, strict: true);
+        double[] ikPose;
+        if (activeUser == user)
+        {
+            ikPose = pose;
+        }
+        else
+        {
+            double[] pBase = pose;
+            if (user > 0)
+            {
+                var tUser = await GetWObjCoordAsync(user, ct);
+                pBase = FrameMath.FromFrame(pose, tUser);
+            }
+            ikPose = activeUser > 0
+                ? FrameMath.ToFrame(pBase, await GetWObjCoordAsync(activeUser, ct))
+                : pBase;
+        }
+
+        double[]? best = null;
+        double bestCost = double.MaxValue;
+        int bestConfig = -1;
+        var tried = 0;
+
+        for (int config = 0; config < 8; config++)
+        {
+            try
+            {
+                var j = await GetInverseKinAsync(ikPose, config: config, ct: ct);
+                tried++;
+                double cost = JointDistance(j, referenceJoints);
+                if (cost < bestCost)
+                {
+                    bestCost = cost;
+                    best = j;
+                    bestConfig = config;
+                }
+            }
+            catch
+            {
+                // 해당 config 도달 불가 — 무시
+            }
+        }
+
+        if (best is null)
+            throw new InvalidOperationException(
+                $"역기구학(GetInverseKin) 실패: config 0–7 모두 도달 불가. " +
+                $"IK 입력 pose=[{string.Join(", ", descPose.Select(x => x.ToString("0.#")))}]");
+
+        _logger.LogInformation(
+            "{Name} IK 최적 해: config={Config} 선택 ({Tried}개 유효, 총 변위 {Cost:0.0}°, " +
+            "기준 J6={Ref:0.0}° → 결과 J6={J6:0.0}°)",
+            _settings.Name, bestConfig, tried, bestCost, referenceJoints[5], best[5]);
+
+        return best;
+    }
+
+    private static double JointDistance(double[] a, double[] b)
+    {
+        double sum = 0;
+        for (int i = 0; i < Math.Min(a.Length, b.Length); i++)
+        {
+            double diff = Math.Abs(a[i] - b[i]);
+            if (diff > 180) diff = 360 - diff;
+            sum += diff;
+        }
+        return sum;
+    }
+
     /// <summary>관절 이동(MoveJ). jointPos = 6축 각도, descPose = 대응 직교 포즈.
     /// ⚠ 실물 펌웨어는 desc_pos=0(전부 0)을 rc=154(관절 지령점 오류)로 거부한다 — joint_pos 에 대응하는
     /// 유효 pose 가 필요하므로, 0 배열/미제공이면 정기구학(GetForwardKin)으로 채워 보낸다.</summary>
