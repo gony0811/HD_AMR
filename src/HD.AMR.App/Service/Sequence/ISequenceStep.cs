@@ -36,7 +36,7 @@ public record StepResult(bool Success, string Message)
     public static StepResult Fail(string message) => new(false, message);
 }
 
-/// <summary>② 검사위치 이동 방향. Vertical 이면 대기위치 기준 툴 RZ −90° 회전을 합성.</summary>
+/// <summary>② 검사위치 이동 방향. J6 절대각: 수직 180°(대기 자세와 동일), 수평 90°.</summary>
 public enum InspectionMoveDirection
 {
     Horizontal = 0,
@@ -62,7 +62,7 @@ public class SequenceContext
     /// <summary>검사위치 이동 수직 오프셋 v (mm). 상(+)/하(−) → TOOL Y+/Y− (실측 확인 매핑).</summary>
     public double InspectionOffsetV { get; set; }
 
-    /// <summary>검사위치 이동 방향 (수평/수직). 수직이면 툴 RZ −90° 회전 합성.</summary>
+    /// <summary>검사위치 이동 방향 (수평/수직). 수직 J6=180°, 수평 J6=90° (센서 헤드–링크암 간섭 회피).</summary>
     public InspectionMoveDirection InspectionDirection { get; set; } = InspectionMoveDirection.Horizontal;
 
     /// <summary>③ 카메라 거리 정렬 목표 거리(mm).</summary>

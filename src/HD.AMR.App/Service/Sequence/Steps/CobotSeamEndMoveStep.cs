@@ -82,8 +82,18 @@ public class CobotSeamEndMoveStep : ISequenceStep
 
         target = new[] { seamBase[0], seamBase[1], seamBase[2], target[3], target[4], target[5] };
 
-        // u/v 오프셋을 ②와 동일하게 합성해 MoveL — MoveJByToolOffsetAsync 내부식과 같은 ComposeUvTarget 사용.
-        var finalTarget = CobotInspectionMoveStep.ComposeUvTarget(target, context);
+        // u/v 오프셋·J6 절대각을 ②와 동일하게 맞춰 MoveL — 점1과 같은 J6 라 직선 이동 중 손목이 돌지 않는다.
+        double[] finalTarget;
+        try
+        {
+            (finalTarget, _) = await CobotInspectionMoveStep.AlignTwistToJ6Async(
+                _cobot, CobotInspectionMoveStep.ComposeUvTarget(target, context), context.Tool,
+                CobotInspectionMoveStep.TargetJ6Deg(context), ct);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return StepResult.Fail(ex.Message);
+        }
         var rc = await _cobot.Rpc.MoveLAsync(finalTarget, tool: context.Tool, user: 0,
             vel: context.Velocity, acc: MoveAcc, ovl: MoveOvl, blendR: -1, ct: ct);
         if (rc != 0)

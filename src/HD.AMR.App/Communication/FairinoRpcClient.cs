@@ -576,7 +576,7 @@ public class FairinoRpcClient : IDisposable
         {
             try
             {
-                var j = await GetInverseKinAsync(ikPose, config: config, ct: ct);
+                var j = UnwrapToward(await GetInverseKinAsync(ikPose, config: config, ct: ct), referenceJoints);
                 tried++;
                 double cost = JointDistance(j, referenceJoints);
                 if (cost < bestCost)
@@ -605,15 +605,26 @@ public class FairinoRpcClient : IDisposable
         return best;
     }
 
+    /// <summary>각 관절을 ±360° 감아 기준에 가장 가까운 같은 자세 값으로 옮긴다. MoveJ 는 관절 공간에서
+    /// 그대로 보간하므로 IK 가 180.4° 기준에 −179° 를 주면 손목이 359° 돈다 — 181° 로 바꿔 지령해야 한다.
+    /// 감은 값이 컨트롤러 한계를 넘으면 MoveJ 가 거부한다(휘감기보다 안전한 실패).</summary>
+    internal static double[] UnwrapToward(double[] joints, double[] reference)
+    {
+        var r = joints.ToArray();
+        for (int i = 0; i < Math.Min(r.Length, reference.Length); i++)
+        {
+            while (r[i] - reference[i] > 180) r[i] -= 360;
+            while (r[i] - reference[i] < -180) r[i] += 360;
+        }
+        return r;
+    }
+
+    /// <summary>실제 관절 이동량 합 — 감김 보정은 <see cref="UnwrapToward"/> 가 먼저 한다.</summary>
     private static double JointDistance(double[] a, double[] b)
     {
         double sum = 0;
         for (int i = 0; i < Math.Min(a.Length, b.Length); i++)
-        {
-            double diff = Math.Abs(a[i] - b[i]);
-            if (diff > 180) diff = 360 - diff;
-            sum += diff;
-        }
+            sum += Math.Abs(a[i] - b[i]);
         return sum;
     }
 

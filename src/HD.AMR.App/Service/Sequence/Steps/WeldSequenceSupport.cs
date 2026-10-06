@@ -255,8 +255,8 @@ public static class WeldSequenceSupport
 
     /// <summary>
     /// ⑤~⑫ 진행축(코로게이션 Peak 배열 방향의 영상 축)을 ② 검사방향에서 결정한다.
-    /// 수직 용접라인(Vertical)은 툴 RZ −90° 합성으로 영상이 90° 회전해 진행축이 영상 가로가 되고
-    /// (실기 검증된 기준 케이스), 수평 용접라인(Horizontal, RZ 0)은 진행축이 영상 세로가 된다.
+    /// 수직 용접라인(Vertical, J6 180°)은 진행축이 영상 가로가 되고(실기 검증된 기준 케이스),
+    /// 수평 용접라인(Horizontal, J6 90° — 광축 둘레 90° 회전)은 진행축이 영상 세로가 된다.
     /// </summary>
     public static WeldProgressAxis GetProgressAxis(SequenceContext context)
         => context.InspectionDirection == InspectionMoveDirection.Vertical

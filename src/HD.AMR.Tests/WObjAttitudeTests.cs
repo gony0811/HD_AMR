@@ -41,6 +41,33 @@ public class WObjAttitudeTests
     }
 
     [Fact]
+    public void 절대모드_역방향_검사는_광축_둘레_180도로_시작_비틀림을_유지한다()
+    {
+        // 시작 자세 툴 X 가 프레임 X(검사 이동 방향)와 반대 — 절대 rz=0 이면 J6 가 180° 뒤집힌다.
+        var cur = FrameMath.FromFrame(new[] { 0.0, 0.0, 0.0, 0.0, 0.0, -180.0 }, Frame);
+        var a = WObjAttitude.FromCurrent(cur, Frame);
+        Assert.Equal(180.0, a.AbsoluteTwistDeg);
+
+        var absolute = FrameMath.FromFrame(new[] { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 }, Frame);
+        var kept = FrameMath.PoseToMatrix(a.KeepTwist(absolute));
+        var mCur = FrameMath.PoseToMatrix(cur);
+        for (int r = 0; r < 3; r++)
+            for (int c = 0; c < 4; c++)
+                Assert.Equal(mCur[r, c], kept[r, c], 6);   // 시작 자세와 같은 회전·위치
+    }
+
+    [Fact]
+    public void 절대모드_정방향_검사는_보정하지_않는다()
+    {
+        var cur = FrameMath.FromFrame(new[] { 0.0, 0.0, 0.0, 0.0, 0.0, 5.0 }, Frame);
+        var a = WObjAttitude.FromCurrent(cur, Frame);
+        var p = new[] { 1.0, 2.0, 3.0, 4.0, 5.0, 6.0 };
+
+        Assert.Equal(0.0, a.AbsoluteTwistDeg);
+        Assert.Same(p, a.KeepTwist(p));
+    }
+
+    [Fact]
     public void Identity_PassesThrough()
     {
         var pose = WObjAttitude.Identity.Pose(1, 2, 3, -4, 5);

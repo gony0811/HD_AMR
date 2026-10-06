@@ -46,6 +46,14 @@ internal static class SequenceEntry
     {
         await NormalizeActiveFramesAsync(cobot, context, logger, ct);
 
+        // 이미 작업 준비(ready) 위치면 그대로 출발한다 — ready 는 홈에서 나와 도착하는 경유점이라
+        // 검사 자세 잔류가 아니다. 앞 task 가 ready 에서 실패한 경우 후퇴·홈 왕복을 되풀이하지 않는다.
+        if (await IsAtReadyAsync(cobot, context, ct))
+        {
+            logger.LogInformation("진입 준비: 이미 작업 준비 위치 — 후퇴·홈 왕복 생략");
+            return $" 활성 좌표계 툴 #{context.Tool}/작업물 0 정규화, (이미 작업 준비 위치).";
+        }
+
         // 이전 검사 자세에서 홈으로 바로 MoveJ 하면 차체 충돌 위험 → 벽면 후퇴 + ready 경유.
         var retracted = false;
         var viaReady = false;
@@ -76,6 +84,19 @@ internal static class SequenceEntry
         };
         var cur = await cobot.Rpc.GetActualJointPosAsync(ct: ct);
         return IsWithinJointTolerance(cur, homeJoints);
+    }
+
+    /// <summary>현재 관절각이 티칭된 ready 와 일치하면 true. 미티칭(자동 계산 ready)은 관절 기준이 없어 false.</summary>
+    private static async Task<bool> IsAtReadyAsync(CobotService cobot, SequenceContext ctx, CancellationToken ct)
+    {
+        if (!ctx.Positions.TryGetValue("ready", out var ready) || !ready.IsTaught) return false;
+        var readyJoints = new[]
+        {
+            ready.J1!.Value, ready.J2!.Value, ready.J3!.Value,
+            ready.J4!.Value, ready.J5!.Value, ready.J6!.Value,
+        };
+        var cur = await cobot.Rpc.GetActualJointPosAsync(ct: ct);
+        return IsWithinJointTolerance(cur, readyJoints);
     }
 
     private static async Task NormalizeActiveFramesAsync(

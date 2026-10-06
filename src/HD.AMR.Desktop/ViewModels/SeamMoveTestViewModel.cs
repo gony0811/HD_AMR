@@ -9,6 +9,7 @@ using HD.AMR.App.Service;
 using HD.AMR.App.Service.Inspection;
 using HD.AMR.App.Service.Sequence;
 using HD.AMR.App.Service.Sequence.Steps;
+using HD.AMR.App.Service.Sequence.Steps;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace HD.AMR.Desktop.ViewModels;
@@ -33,8 +34,8 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
     private const double MoveTolMm = 5.0;
     private const double MoveTolDeg = 0.2;
     private const int StationaryWindowMs = 2500;
-    // 운영 roll 기준: 벽면 수평 + 현장 확인된 수평 검사 spin 180°.
-    // 광축이 툴 -Z이면 수직 검사의 툴 RZ -90°는 spin +90°에 해당한다.
+    // 운영 roll 기준: 벽면 수평 + spin 초기값. 광축 둘레 최종 비틀림은 이동 직전 J6 절대각
+    // (수직 180° / 수평 90°, CobotInspectionMoveStep.TargetJ6Deg)으로 맞춘다 — 센서 헤드–링크암 간섭 회피.
     private const double HorizontalBaseSpinDeg = 180.0;
     private const string InspectionDirectionKey = "Sequence.Inspection.Direction";
 
@@ -444,8 +445,8 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
                           ? $"\n광축 틸트      : 면 법선에서 {SeamBaseTransform.LookTiltDeg(t.SurfaceNormalMap, t.LookDirMap):0.0}° (상하 {TiltUpDeg:+0.0;-0.0;0}° / 좌우 {TiltSideDeg:+0.0;-0.0;0}°)"
                           : "")
                     : "\n이동 목표 자세: (현재 TCP 자세 유지 — wall_code 미지정 또는 법선 자세 끔)") +
-                $"\n검사 방향 입력: {(SelectedInspectionDirection == InspectionMoveDirection.Horizontal ? "수평 (기준 자세 유지)" : "수직 (수평 기준에서 툴 RZ −90°)")}" +
-                $"\n적용 roll       : 벽면 수평 기준 · spin {input.ToolSpinDeg:0.0}°" +
+                $"\n검사 방향 입력: {(SelectedInspectionDirection == InspectionMoveDirection.Horizontal ? "수평" : "수직")} — 이동 시 J6 {TargetJ6Text} 로 광축 둘레 비틀림 보정" +
+                $"\n적용 roll       : 벽면 수평 기준 · spin 초기값 {input.ToolSpinDeg:0.0}° (위 목표 pose 는 보정 전)" +
                 $"\n벽 정면 방향  : {FacingSourceText}";
 
             // AMR yaw 폴백인데 측위가 없으면 0°(맵 +X)로 계산된다 — 숫자가 조용히 틀리므로 경고에 올린다.
@@ -489,13 +490,8 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
         if (SelectedInspectionDirection == InspectionMoveDirection.Horizontal)
             return HorizontalBaseSpinDeg;
 
-        return _opticalAxis switch
-        {
-            ToolAxisDir.MinusZ => MapCalibration.NormalizeDeg(HorizontalBaseSpinDeg + 90.0),
-            ToolAxisDir.PlusZ => MapCalibration.NormalizeDeg(HorizontalBaseSpinDeg - 90.0),
-            _ => throw new InvalidOperationException(
-                $"수직 검사 RZ −90° 자동 적용은 광축이 툴 ±Z일 때만 지원합니다. 현재 광축은 툴{FlatSurfaceCenteringService.AxisName(_opticalAxis)}입니다."),
-        };
+        // 초기값일 뿐 — 이동 직전 AlignTwistToJ6Async 가 J6 180° 로 최종 보정한다.
+        return MapCalibration.NormalizeDeg(HorizontalBaseSpinDeg + 90.0);
     }
 
     [RelayCommand]
@@ -587,11 +583,13 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
                 AppendLog($"※ 활성 좌표계 공구 #{activeTool} / 작업물 #{activeUser} — 이동 기준(공구 #{Tool} / 작업물 0)과 " +
                           "다릅니다. IK 가 거부되면 '활성 좌표계 초기화' 를 먼저 누르세요.");
 
-            var joints = await _cobot.Rpc.GetInverseKinForMoveAsync(
-                target, Tool, user: 0, ct: _cts.Token);
-            AppendLog(SelectedInspectionDirection == InspectionMoveDirection.Horizontal
-                ? $"검사 방향: 수평 — 기준 자세 유지(spin {BuildInput().ToolSpinDeg:0.0}°)"
-                : $"검사 방향: 수직 — 수평 기준에서 툴 RZ −90° 적용(spin {BuildInput().ToolSpinDeg:0.0}°)");
+            // J6 절대각 맞춤 — 수직 180° / 수평 90°. 광축 둘레 비틀림만 바꾸고 위치·광축 방향은 유지한다.
+            //    IK 는 현재 J1~J5 + 목표 J6 에 가장 가까운 해라 반대편 감긴 해(270° 등)로 가지 않는다.
+            double[] joints;
+            (target, joints) = await CobotInspectionMoveStep.AlignTwistToJ6Async(
+                _cobot, target, Tool, SelectedInspectionDirection, _cts.Token);
+            AppendLog($"검사 방향: {(SelectedInspectionDirection == InspectionMoveDirection.Horizontal ? "수평" : "수직")} " +
+                      $"— J6 {TargetJ6Text} 맞춤 (IK J6={joints[5]:0.0}°)");
             AppendLog($"목표 관절각 [{string.Join(", ", joints.Select(v => v.ToString("0.0")))}]°");
 
             // ④ 이동 — 컨트롤러가 계산한 동일 pose의 IK 해를 그대로 사용한다.
@@ -623,6 +621,9 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
             MoveToApproachCommand.NotifyCanExecuteChanged();
         }
     }
+
+    private string TargetJ6Text =>
+        SelectedInspectionDirection == InspectionMoveDirection.Vertical ? "180°" : "90°";
 
     private InspectionMoveDirection SelectedInspectionDirection =>
         InspectionDirectionIndex == 1 ? InspectionMoveDirection.Vertical : InspectionMoveDirection.Horizontal;

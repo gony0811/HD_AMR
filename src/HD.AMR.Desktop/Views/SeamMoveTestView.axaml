@@ -89,7 +89,7 @@
         </WrapPanel>
         <TextBlock Classes="hint" Text="{Binding WallCodeText}"/>
         <TextBlock Classes="hint" Text="{Binding OpticalAxisText}"/>
-        <TextBlock Classes="hint" Text="roll 기준은 벽면 수평, 수평 검사 spin은 180°로 장비 기준값에 고정했습니다. 운영자는 검사 방향만 선택합니다. 수평은 기준 자세를 유지하고, 수직은 그 자세에서 툴 RZ −90°를 자동 적용합니다. J6 절대각은 강제하지 않고 동일 TCP 자세의 IK 결과를 사용합니다."/>
+        <TextBlock Classes="hint" Text="운영자는 검사 방향만 선택합니다. 광축은 면 법선을 향하고, 광축 둘레 비틀림은 이동 직전에 J6 절대각으로 맞춥니다 — 수직 180°(검사 대기 자세와 동일), 수평 90°. 센서 헤드가 J3–J4 링크암과 간섭하지 않도록 이동 방향과 무관하게 이 두 값만 씁니다."/>
         <TextBlock Classes="hint" Text="정차 노드 theta는 도면 내부의 용접선 각도가 아니라 SLAM 맵 좌표계의 정차 방향(nodePosition.theta)입니다. 맵 +X=0°, 반시계가 +이며, 이 화면에서는 AMR/툴이 벽을 정면으로 바라보는 법선 방위로 사용합니다. 체크를 끄면 현재 AMR SLAM yaw를 사용합니다."/>
 
         <WrapPanel>

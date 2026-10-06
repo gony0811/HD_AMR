@@ -45,5 +45,20 @@ public readonly record struct WObjAttitude(double Rz0, double TiltSign)
     public double[] Pose(double x, double y, double z, double thetaDeg, double rzDeg)
         => new[] { x, y, z, 0.0, TiltSign * thetaDeg, Rz0 + rzDeg };
 
+    /// <summary>
+    /// 절대 6-DOF 경유점(RzDeg 가 프레임 X 기준)의 광축 둘레 보정각 — 0 또는 180°.
+    /// 프레임 X 는 점1→점2(검사 이동 방향)라, 반대 방향으로 검사하면 rz=0 이 툴을 반 바퀴 돌린 자세가
+    /// 되어 J6 가 90°↔270° 로 뒤집힌다(센서 헤드–링크암 간섭). 시작 자세의 툴 X 가 프레임 X 와 반대면
+    /// (cos rz0 &lt; 0) 툴 Z 둘레 180° 를 더해 ②에서 맞춘 J6(수평 90°/수직 180°)를 유지한다.
+    /// </summary>
+    public double AbsoluteTwistDeg => TiltSign < 0 ? 180.0 : 0.0;
+
+    /// <summary>절대 모드 경유점의 BASE 목표에 <see cref="AbsoluteTwistDeg"/> 를 툴 프레임에서 적용한다.
+    /// 위치·광축 방향은 그대로이고 광축 둘레 비틀림만 바뀐다.</summary>
+    public double[] KeepTwist(double[] basePose)
+        => AbsoluteTwistDeg == 0.0
+            ? basePose
+            : FrameMath.FromFrame(new[] { 0.0, 0.0, 0.0, 0.0, 0.0, AbsoluteTwistDeg }, basePose);
+
     public override string ToString() => $"RZ 유지={Rz0:0.0}° (틸트부호 {TiltSign:+0;-0})";
 }

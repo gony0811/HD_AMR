@@ -107,7 +107,10 @@ public class CameraAlignStep : ISequenceStep
             {
                 var (anchor, _) = await CobotInspectionMoveStep.ComputeTargetPoseAsync(_cobot, inspection, ct);
                 anchor = CobotInspectionMoveStep.NormalizeUvAnchor(anchor);   // ② 와 동일한 앵커 정규화
-                return CobotInspectionMoveStep.ComposeUvTarget(anchor, context);
+                var composed = CobotInspectionMoveStep.ComposeUvTarget(anchor, context);
+                var (pose, _) = await CobotInspectionMoveStep.AlignTwistToJ6Async(
+                    _cobot, composed, context.Tool, CobotInspectionMoveStep.TargetJ6Deg(context), ct);
+                return pose;
             });
 
         if (skip is not null)

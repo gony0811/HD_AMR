@@ -172,6 +172,9 @@ public class InspectionRunStep : ISequenceStep
                 ? new[] { w.X, w.Y, w.Z, w.RxDeg, w.Theta, w.RzDeg }
                 : attitude.Pose(w.X, w.Y, w.Z, w.Theta, w.RzDeg);
             var targetBase = InternalWorkpieceFrame.ToBasePose(pose, frame);
+            // 절대 모드는 RzDeg 가 프레임 X(검사 이동 방향) 기준이라 역방향 검사에서 J6 가 180° 뒤집힌다 — 보정.
+            if (profile.PoseAbsolute)
+                targetBase = attitude.KeepTwist(targetBase);
             // 경유점 순회(검사 스캔)만 검사 속도 적용 — 원점 이동 등 접근성 모션은 이동 속도(Velocity).
             var rc = await _cobot.Rpc.MoveLAsync(targetBase, tool: context.Tool, user: 0,
                 vel: context.InspectVelocity ?? context.Velocity, acc: MoveAcc, ovl: MoveOvl, blendR: -1, ct: ct);

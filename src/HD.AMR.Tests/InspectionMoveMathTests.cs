@@ -60,11 +60,29 @@ public class InspectionMoveMathTests
     }
 
     [Fact]
-    public void UvOffset_은_수직이면_RZ가_마이너스90_이다()
+    public void UvOffset_은_수직이어도_RZ를_싣지_않는다()
     {
+        // 광축 둘레 회전은 J6 절대각 맞춤(AlignTwistToJ6Async)이 담당한다.
         var o = CobotInspectionMoveStep.UvOffset(Ctx(dir: InspectionMoveDirection.Vertical));
 
-        Assert.Equal(-90, o[5], 9);
+        Assert.Equal(0, o[5], 9);
+    }
+
+    [Theory]
+    [InlineData(InspectionMoveDirection.Vertical, 180.0)]
+    [InlineData(InspectionMoveDirection.Horizontal, 90.0)]
+    public void J6_목표는_검사방향으로만_정해진다(InspectionMoveDirection dir, double expected)
+    {
+        Assert.Equal(expected, CobotInspectionMoveStep.TargetJ6Deg(Ctx(dir: dir)), 9);
+    }
+
+    [Fact]
+    public void IK_해는_기준_관절_쪽으로_감긴다()
+    {
+        var r = FairinoRpcClient.UnwrapToward(
+            new[] { 0.0, 0, 0, 0, 0, -179.0 }, new[] { 0.0, 0, 0, 0, 0, 180.4 });
+
+        Assert.Equal(181.0, r[5], 9);
     }
 
     [Fact]

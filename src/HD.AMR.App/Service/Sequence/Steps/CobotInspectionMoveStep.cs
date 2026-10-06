@@ -111,8 +111,8 @@ public class CobotInspectionMoveStep : ISequenceStep
     }
 
     /// <summary>u/v 오프셋 합성용 앵커 정규화 — 티칭 자세가 광축(툴 Z) 둘레로 비틀려 저장돼 있어도
-    /// (예: 수직 모드 RZ−90° 상태에서 재티칭) 툴 +Y가 베이스 상방(+Z)을 향하도록 트위스트를 제거한다.
-    /// u=수평/v=수직 매핑과 수평/수직(RZ) 회전, ④의 이미지↔툴 축 매핑은 모두 이 표준 자세를 전제하므로,
+    /// (예: J6=180° 수직 자세로 재티칭) 툴 +Y가 베이스 상방(+Z)을 향하도록 트위스트를 제거한다.
+    /// u=수평/v=수직 매핑과 ④의 이미지↔툴 축 매핑은 모두 이 표준 자세를 전제하므로,
     /// 정규화 없이는 비틀린 티칭에서 u/v가 90° 돌아간 축으로 움직인다.
     /// 광축이 연직에 가까우면(상방 성분의 XY 투영이 미소) 기준이 모호해 티칭 자세를 그대로 둔다.</summary>
     internal static double[] NormalizeUvAnchor(double[] target, ILogger? logger = null)
@@ -130,19 +130,74 @@ public class CobotInspectionMoveStep : ISequenceStep
         return FrameMath.FromFrame(new[] { 0.0, 0.0, 0.0, 0.0, 0.0, theta }, target);
     }
 
-    /// <summary>u(툴 X)/v(툴 Y) 오프셋 + 수직 모드 RZ+90° 를 담은 툴프레임 오프셋 벡터.
-    /// 수직 검사 시 카메라 센서를 벽면 기준 반시계방향(CCW) 90° 회전시켜 수직 스캔 방향에 맞춘다.
-    /// u/v 앵커 정규화(NormalizeUvAnchor)는 수직 모드에서 건너뛰므로 RZ 만으로 J6 변위를 결정한다.</summary>
+    /// <summary>u(툴 X)/v(툴 Y) 병진 오프셋 벡터. 검사 방향(수평/수직)에 따른 광축 회전은 여기서 하지 않고
+    /// <see cref="AlignTwistToJ6Async"/> 가 J6 절대각(<see cref="TargetJ6Deg"/>)으로 맞춘다.</summary>
     internal static double[] UvOffset(SequenceContext c) => new[]
     {
-        c.InspectionOffsetU, c.InspectionOffsetV, 0.0, 0.0, 0.0,
-        c.InspectionDirection == InspectionMoveDirection.Vertical ? 90.0 : 0.0,
+        c.InspectionOffsetU, c.InspectionOffsetV, 0.0, 0.0, 0.0, 0.0,
     };
 
+    /// <summary>수평 용접라인 검사 J6 절대각 [도].</summary>
+    internal const double HorizontalJ6Deg = 90.0;
+
+    /// <summary>수직 용접라인 검사 J6 절대각 [도] — 검사 대기 자세(J6=180°)와 같다.</summary>
+    internal const double VerticalJ6Deg = 180.0;
+
     /// <summary>
-    /// 앵커에 u/v·RZ 오프셋을 합성한 <b>실제 지령 목표</b>.
-    /// <see cref="Communication.FairinoRpcClient.MoveJByToolOffsetAsync"/> 내부식과 같아야 한다 —
-    /// ③ 게이트가 이 값을 기준으로 판정하므로 식이 갈라지면 ③이 통째로 막힌다(2026-09-25 회귀).
+    /// 검사 방향별 J6 절대각. 센서 헤드(레이저·Depth 카메라)가 플랜지 한쪽으로 길게 나와 있어,
+    /// J6 를 이 두 값(180°/90°) 밖으로 돌리면 J3–J4 링크암과 간섭한다. 그래서 벽면·이동 방향과 무관하게
+    /// 수직 = 180°, 수평 = 90° 로 고정하고, 대기 자세(180°)에서 최대 −90° 만 돌게 한다.
+    /// </summary>
+    public static double TargetJ6Deg(SequenceContext c)
+        => c.InspectionDirection == InspectionMoveDirection.Vertical ? VerticalJ6Deg : HorizontalJ6Deg;
+
+    /// <summary>J6 목표 허용 오차 [도].</summary>
+    private const double J6ToleranceDeg = 0.5;
+
+    /// <summary>
+    /// <paramref name="pose"/> 를 툴 Z(광축) 둘레로 돌려 역기구학 해의 J6 가 <paramref name="targetJ6Deg"/> 가
+    /// 되게 한다. 위치·광축 방향은 그대로이고 광축 둘레 비틀림만 바뀐다. 툴 Z 가 플랜지 Z 와 반대인지 등
+    /// 툴 정의에 따라 툴 RZ↔J6 부호가 달라질 수 있어, 첫 보정에서 오차가 커지면 부호를 뒤집는다.
+    /// 해는 현재 J1~J5 + 목표 J6 에 가장 가까운 것을 고르므로 270° 같은 반대편 감긴 해로 가지 않는다.
+    /// </summary>
+    public static Task<(double[] Pose, double[] Joints)> AlignTwistToJ6Async(
+        CobotService cobot, double[] pose, int tool, InspectionMoveDirection direction, CancellationToken ct)
+        => AlignTwistToJ6Async(cobot, pose, tool,
+            direction == InspectionMoveDirection.Vertical ? VerticalJ6Deg : HorizontalJ6Deg, ct);
+
+    public static async Task<(double[] Pose, double[] Joints)> AlignTwistToJ6Async(
+        CobotService cobot, double[] pose, int tool, double targetJ6Deg, CancellationToken ct)
+    {
+        var reference = (await cobot.Rpc.GetActualJointPosAsync(ct: ct)).ToArray();
+        reference[5] = targetJ6Deg;
+
+        var p = pose;
+        var joints = await cobot.Rpc.GetInverseKinNearestAsync(p, reference, tool, 0, ct);
+        var err = joints[5] - targetJ6Deg;
+        var sign = -1.0;   // 현장 티칭 5점 피팅: 툴 Z 가 플랜지 Z 와 반대 → 툴 RZ +α = J6 −α
+        for (var iter = 0; iter < 5 && Math.Abs(err) > J6ToleranceDeg; iter++)
+        {
+            var next = FrameMath.FromFrame(new[] { 0.0, 0.0, 0.0, 0.0, 0.0, sign * -err }, p);
+            var nj = await cobot.Rpc.GetInverseKinNearestAsync(next, reference, tool, 0, ct);
+            var nerr = nj[5] - targetJ6Deg;
+            if (Math.Abs(nerr) > Math.Abs(err))
+            {
+                sign = -sign;   // 부호 가정이 틀렸다 — 같은 출발점에서 반대로 돈다
+                continue;
+            }
+            (p, joints, err) = (next, nj, nerr);
+        }
+
+        if (Math.Abs(err) > J6ToleranceDeg)
+            throw new InvalidOperationException(
+                $"J6 를 {targetJ6Deg:0}° 로 맞추지 못했습니다 (IK 결과 J6={joints[5]:0.0}°) — 티칭 자세의 광축 방향을 확인하세요.");
+        return (p, joints);
+    }
+
+    /// <summary>
+    /// 앵커에 u/v 오프셋을 합성한 목표 — 이후 <see cref="AlignTwistToJ6Async"/> 가 광축 비틀림만 바꾼다.
+    /// ③ 게이트 폴백·드라이런 끝점 이동도 같은 순서(정규화 → 합성 → J6 맞춤)를 따라야 한다 —
+    /// 식이 갈라지면 ③이 통째로 막힌다(2026-09-25 회귀).
     /// </summary>
     internal static double[] ComposeUvTarget(double[] anchor, SequenceContext c)
         => FrameMath.FromFrame(UvOffset(c), anchor);
@@ -167,22 +222,23 @@ public class CobotInspectionMoveStep : ISequenceStep
         var inspection = FindBySurfaceId(context)
             ?? throw new InvalidOperationException($"Wall 0x{context.InspectionSurfaceId:X2} 티칭 위치 없음");
 
+        // 위치는 ACS 용접선에서, 자세는 티칭 값 그대로 — task 마다 달라지는 것은 위치뿐이다.
+        // 리치 점검은 정차 배치(AMR pose·장착 보정·스트로크·공구 길이)만으로 결정되므로 코봇을 움직이기
+        // 전에 한다 — 진입 준비(후퇴·홈·ready) 뒤에 실패하면 같은 정차점의 task 마다 헛동작을 반복한다.
+        var (seamBase, seamNote, blocker) = await _seam.ResolveAsync(
+            context, context.SeamStartW, context.SeamEndW, context.Tool, "②", ct);
+        if (blocker is not null)
+            return StepResult.Fail(blocker);   // 리치 부족 — 티칭 폴백으로 덮지 않는다
+
         // 진입 준비 — 잔류 작업물 프레임/공구를 정규화하고 홈에서 출발시킨다(목표 계산 전에 해야
         // 작업물 추종 pose 계산이 정규화된 프레임 기준으로 나온다).
         var entryNote = await SequenceEntry.PrepareAsync(_cobot, context, _logger, ct);
 
         var (target, where) = await ComputeTargetPoseAsync(_cobot, inspection, ct);
-        // 수직 모드에서는 u/v 앵커 정규화를 건너뛴다 — 정규화(+88°)와 수직 RZ(−90°)가 합쳐지면
-        // 의도와 다른 J6 회전이 된다. 수직 모드의 RZ 오프셋만으로 카메라 센서 방향을 맞춘다.
-        if (context.InspectionDirection != InspectionMoveDirection.Vertical)
-            target = NormalizeUvAnchor(target, _logger);
+        // u/v 축 기준 정규화 — 광축 둘레 최종 비틀림은 아래 J6 절대각 맞춤이 정한다.
+        target = NormalizeUvAnchor(target, _logger);
         where = $"[0x{context.InspectionSurfaceId:X2} {inspection.Name}] {where}";
 
-        // 위치는 ACS 용접선에서, 자세는 티칭 값 그대로 — task 마다 달라지는 것은 위치뿐이다.
-        var (seamBase, seamNote, blocker) = await _seam.ResolveAsync(
-            context, context.SeamStartW, context.SeamEndW, context.Tool, "②", ct);
-        if (blocker is not null)
-            return StepResult.Fail(blocker);   // 리치 부족 — 티칭 폴백으로 덮지 않는다
         if (seamBase is not null)
         {
             target = new[] { seamBase[0], seamBase[1], seamBase[2], target[3], target[4], target[5] };
@@ -195,39 +251,37 @@ public class CobotInspectionMoveStep : ISequenceStep
 
         // 툴프레임 오프셋: offset[0]=u(툴 X = 수평, 좌+/우−), offset[1]=v(툴 Y = 수직, 상+/하−).
         // 실측 확인 매핑 — 과거 [v, u] 순서는 v 가 수평으로 나가는 축 교차 오류였음.
-        // 수직 검사 방향이면 툴 RZ −90° 회전을 합성 (병진 u/v는 회전 전 대기자세 축 기준이라 의미 불변).
-        var offset = UvOffset(context);
-        var rz = offset[5];
         var hasOffset = context.InspectionOffsetU != 0 || context.InspectionOffsetV != 0;
+        var composed = ComposeUvTarget(target, context);
 
-        int rc;
-        if (context.InspectionDirection == InspectionMoveDirection.Vertical)
+        // 광축 둘레 비틀림은 J6 절대각으로 정한다 — 수직 180°, 수평 90° (센서 헤드–링크암 간섭 회피).
+        var targetJ6 = TargetJ6Deg(context);
+        double[] finalPose, joints;
+        try
         {
-            // 수직 모드: IK config 0–7 중 현재 관절에 가장 가까운 해를 선택한다.
-            // config −1(자동)은 시무 방향(위→아래 vs 아래→위)에 따라 J6 분기가 바뀌어
-            // RZ 위치가 180° 반전되는 문제가 있다.
-            var curJoints = await _cobot.Rpc.GetActualJointPosAsync(ct: ct);
-            rc = await _cobot.Rpc.MoveJByToolOffsetNearestAsync(target, user: 0, offset,
-                curJoints, tool: context.Tool, vel: context.Velocity, ct: ct);
+            (finalPose, joints) = await AlignTwistToJ6Async(_cobot, composed, context.Tool, targetJ6, ct);
         }
-        else
+        catch (InvalidOperationException ex)
         {
-            rc = await _cobot.Rpc.MoveJByToolOffsetAsync(target, user: 0, offset,
-                tool: context.Tool, vel: context.Velocity, ct: ct);
+            return StepResult.Fail(ex.Message);
         }
+
+        var rc = await _cobot.Rpc.MoveJAsync(joints, finalPose,
+            tool: context.Tool, user: 0, vel: context.Velocity, ct: ct);
 
         var offsetNote = hasOffset
             ? $" (오프셋 u={context.InspectionOffsetU:0.###}, v={context.InspectionOffsetV:0.###} mm)"
             : "";
-        if (rz != 0)
-            offsetNote += $" [수직, RZ{rz:+0;-0}°]";
+        offsetNote += context.InspectionDirection == InspectionMoveDirection.Vertical
+            ? $" [수직, J6={joints[5]:0.0}°]"
+            : $" [수평, J6={joints[5]:0.0}°]";
 
         if (rc != 0)
             return StepResult.Fail($"이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.");
 
         // ③ 이 "② 목표에 와 있는가" 를 검사할 때 쓸 기준. 티칭 위치로 재계산하면 ACS 경로(seam 접근점)
-        // 에서 항상 어긋나므로, 실제로 지령한 값을 남긴다. 합성식은 MoveJByToolOffsetAsync 와 동일.
-        context.Bag[WeldSequenceSupport.InspectTargetPoseBagKey] = ComposeUvTarget(target, context);
+        // 에서 항상 어긋나므로, 실제로 지령한 값을 남긴다.
+        context.Bag[WeldSequenceSupport.InspectTargetPoseBagKey] = finalPose;
 
         return StepResult.Ok($"{where} 관절 이동(MoveJ) 완료{offsetNote}.{entryNote}");
     }
