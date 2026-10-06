@@ -43,7 +43,9 @@ public sealed partial class InspectionMapViewModel : ViewModelBase
             MapRows.Clear();
             foreach (var w in WallCodes.All)   // 정본 10코드 — App WallCodes 단일 정의
                 MapRows.Add(new WallMapRow(w.Code, w.DisplayName,
-                    Cell(SeamTypeKind.Line, w.Code, enabled), Cell(SeamTypeKind.Cross3, w.Code, enabled),
+                    Cell(SeamTypeKind.Line, w.Code, enabled),
+                    Cell(SeamTypeKind.Cross3R0, w.Code, enabled), Cell(SeamTypeKind.Cross3R90, w.Code, enabled),
+                    Cell(SeamTypeKind.Cross3R180, w.Code, enabled), Cell(SeamTypeKind.Cross3R270, w.Code, enabled),
                     Cell(SeamTypeKind.Cross, w.Code, enabled), Cell(SeamTypeKind.Corner2, w.Code, enabled),
                     Cell(SeamTypeKind.Corner, w.Code, enabled)));
 
@@ -91,7 +93,9 @@ public sealed partial class InspectionMapViewModel : ViewModelBase
 }
 
 public sealed record MapCell(string Label, bool Enabled);
-public sealed record WallMapRow(string Code, string Label, MapCell Line, MapCell Cross3, MapCell Cross4, MapCell Corner2, MapCell Corner3);
+public sealed record WallMapRow(string Code, string Label, MapCell Line,
+    MapCell Cross3R0, MapCell Cross3R90, MapCell Cross3R180, MapCell Cross3R270,
+    MapCell Cross4, MapCell Corner2, MapCell Corner3);
 public sealed record RecipeStatusRow(string Id, string SeamType, string Orientation, bool Enabled, string Source, string AssignedProfile);
 public sealed record TeachingRow(string DrawingName, string FileName, string ProfileName, string SeamType, string UsedBy,
     int WaypointCount, string TaughtAt, string Status, bool Runnable);

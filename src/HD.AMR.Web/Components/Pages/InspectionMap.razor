@@ -30,7 +30,7 @@
             <span class="badge bg-success">검사 실행</span>
         </div>
         <div class="mt-2 text-muted">
-            레시피는 <b>17종</b>(seamType × 면 자세)이고, 경유점은 검사 포인트(X-Y)에서 저장한 프로필을 <b>레시피마다 지정</b>합니다(도면 무관).
+            레시피는 <b>16종</b>(seamType × 면 자세, 단 CROSS3·CORNER 는 면 자세 무관)이고, 경유점은 검사 포인트(X-Y)에서 저장한 프로필을 <b>레시피마다 지정</b>합니다(도면 무관).
             둘 중 하나라도 없으면(레시피 Disabled / 프로필 미지정) 액션은 <code>FAILED</code> 로 보고됩니다.
             <b>CORNER3</b> 는 현재 검사 시퀀스에서 제거되어 실행할 수 없습니다.
         </div>
@@ -55,7 +55,10 @@
                 <th style="width:90px">wall_code</th>
                 <th style="min-width:150px">면</th>
                 <th>LINE</th>
-                <th>CROSS3</th>
+                <th>CROSS3 0°</th>
+                <th>CROSS3 90°</th>
+                <th>CROSS3 180°</th>
+                <th>CROSS3 270°</th>
                 <th>CROSS4</th>
                 <th>CORNER2</th>
                 <th>CORNER3</th>
@@ -68,7 +71,10 @@
                     <td><code>@w.Code</code></td>
                     <td>@w.DisplayName</td>
                     <td>@RecipeCell(SeamTypeKind.Line, w.Code)</td>
-                    <td>@RecipeCell(SeamTypeKind.Cross3, w.Code)</td>
+                    <td>@RecipeCell(SeamTypeKind.Cross3R0, w.Code)</td>
+                    <td>@RecipeCell(SeamTypeKind.Cross3R90, w.Code)</td>
+                    <td>@RecipeCell(SeamTypeKind.Cross3R180, w.Code)</td>
+                    <td>@RecipeCell(SeamTypeKind.Cross3R270, w.Code)</td>
                     <td>@RecipeCell(SeamTypeKind.Cross, w.Code)</td>
                     <td>@RecipeCell(SeamTypeKind.Corner2, w.Code)</td>
                     <td>@RecipeCell(SeamTypeKind.Corner, w.Code)</td>
@@ -84,7 +90,7 @@
 </p>
 
 <!-- ② 레시피 카탈로그 상태 -->
-<h4 class="mt-4">② 레시피 카탈로그 상태 (17종)</h4>
+<h4 class="mt-4">② 레시피 카탈로그 상태 (16종)</h4>
 <div class="table-responsive" style="max-width:1150px">
     <table class="table table-sm align-middle" style="font-size:.82rem">
         <thead class="table-light">

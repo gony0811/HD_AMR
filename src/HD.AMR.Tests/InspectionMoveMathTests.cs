@@ -152,4 +152,62 @@ public class InspectionMoveMathTests
         Assert.NotNull(skip);
         Assert.Null(expected);
     }
+
+    // ── 하이브리드 접근 앵커 선택 (위치=seam, 자세=계산법선/티칭) ─────
+
+    private static readonly double[] TaughtPose = { 1, 2, 3, 40, 50, 60 };
+    private static readonly double[] SeamBase = { 700, 800, 900 };
+    private static readonly double[] ComputedPose = { 700, 800, 900, 11, 22, 33 };
+
+    [Fact]
+    public void 앵커는_측위_없으면_티칭_포즈로_폴백한다()
+    {
+        // seamBase == null → 위치·자세 모두 티칭(종전 동작).
+        var (anchor, used) = CobotInspectionMoveStep.BuildApproachAnchor(
+            TaughtPose, seamBase: null, computedPose: ComputedPose, useComputed: true);
+
+        Assert.False(used);
+        for (var i = 0; i < 6; i++) Assert.Equal(TaughtPose[i], anchor[i], 9);
+    }
+
+    [Fact]
+    public void 앵커는_토글_ON_이고_계산자세_있으면_위치는_seam_자세는_계산법선()
+    {
+        var (anchor, used) = CobotInspectionMoveStep.BuildApproachAnchor(
+            TaughtPose, SeamBase, ComputedPose, useComputed: true);
+
+        Assert.True(used);
+        Assert.Equal(SeamBase[0], anchor[0], 9);   // 위치 = seam 접근점
+        Assert.Equal(SeamBase[1], anchor[1], 9);
+        Assert.Equal(SeamBase[2], anchor[2], 9);
+        Assert.Equal(ComputedPose[3], anchor[3], 9);   // 자세 = 계산 법선
+        Assert.Equal(ComputedPose[4], anchor[4], 9);
+        Assert.Equal(ComputedPose[5], anchor[5], 9);
+    }
+
+    [Fact]
+    public void 앵커는_토글_OFF_면_위치는_seam_자세는_티칭()
+    {
+        var (anchor, used) = CobotInspectionMoveStep.BuildApproachAnchor(
+            TaughtPose, SeamBase, ComputedPose, useComputed: false);
+
+        Assert.False(used);
+        Assert.Equal(SeamBase[0], anchor[0], 9);   // 위치는 seam
+        Assert.Equal(TaughtPose[3], anchor[3], 9);   // 자세는 티칭
+        Assert.Equal(TaughtPose[4], anchor[4], 9);
+        Assert.Equal(TaughtPose[5], anchor[5], 9);
+    }
+
+    [Fact]
+    public void 앵커는_토글_ON_이라도_계산자세_없으면_자세는_티칭()
+    {
+        // wall_code 미지정/미정의 → computedPose == null. 위치는 seam, 자세는 티칭 폴백.
+        var (anchor, used) = CobotInspectionMoveStep.BuildApproachAnchor(
+            TaughtPose, SeamBase, computedPose: null, useComputed: true);
+
+        Assert.False(used);
+        Assert.Equal(SeamBase[0], anchor[0], 9);
+        Assert.Equal(TaughtPose[3], anchor[3], 9);
+        Assert.Equal(TaughtPose[5], anchor[5], 9);
+    }
 }

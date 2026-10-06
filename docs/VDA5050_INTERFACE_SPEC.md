@@ -16,6 +16,7 @@
 | 개정 1.7 | 2026-09-23 — **§10 `[N17]` seam 좌표 z 기준면 제기** + 부록 B 좌표 규약에 명시. AMR 온보드에 좌표 환산 시험 경로 추가(`SeamBaseTransform`·용접 위치 시험 화면, `docs/SEAM_MOVE_TEST.md`) — **계약 변경 없음**(맵 좌표 수신·AMR 자기 pose 환산 그대로) |
 | 개정 1.6 | 2026-09-21 — **검사 작업 식별자 `params.taskId`·`params.attempt` 추가 `[N14]`**(§8.1·§8.2·§8.4·§8.1.1). SAIGE 연동 사양서 v2.6 + 로봇↔비전 v3.2(CAPTURE_REQ 34B)가 **ACS 발급 taskId·attempt** 를 전제로 확정됨 — AMR 은 두 값을 그 액션의 모든 CAPTURE_REQ 에 실어 비전→SAIGE `productId`(=taskId)까지 관통시킨다. 두 필드 모두 **선택(optional)** 이라 구버전과 호환되며(미탑재 시 폴백 taskId 미지정·attempt 1), **실려 왔는데 형식이 틀리면** 액션 `FAILED` + `orderValidationError`. **양측 구현 완료** (ACS 발행 / AMR 파서→오케스트레이터→`SequenceContext.AcsTaskId·AcsAttempt`→CAPTURE_REQ) — 실기 관통 확인만 잔여 |
 | 개정 1.4 | 2026-09-15 — **검사 타입 카탈로그 정본화(온보드): 독립 5종 형상**(`LINE`·`CROSS3` 3갈래·`CROSS4` 4갈래·`CORNER2` 2면·`CORNER3` 3면 = 17 profileId, §8.5·INSPECTION_TYPES.md). 코너부는 브릿지 플레이트로 6-DOF 캡처 교시 전용. **CROSS3·CROSS4 는 캡처 교시로 단일화**(패턴 수식 폐기). CROSS 교시 프로필(6-DOF 절대) 실행 경로 추가. (계약 `seamType` enum 은 같은 날 **개정 1.5** 로 5종 확장 — 아래 참조) |
+| 개정 1.6 | 2026-10-07 — **CROSS3 회전 4종 확장** `[N13 연장]`: CROSS3 를 면 자세별 5종에서 **회전별 4종**(`seamType` = `CROSS3_R0`/`CROSS3_R90`/`CROSS3_R180`/`CROSS3_R270`, 레시피 `CROSS3-R0/R90/R180/R270`, 면 자세 무관)으로 재설계. AMR 파서·resolver·시드(17→16종)·UI·테스트 반영 완료(legacy bare `CROSS3`→`CROSS3_R0` 수용). **ACS 는 4개 문자열·0° 기준·회전 부호(CW/CCW) 합의 필요** — §8.5/§8.5.1·INSPECTION_TYPES.md §9-8 |
 
 > **이 문서가 인터페이스 계약의 단일 출처(single source of truth)다.**
 > 다른 문서(ARCHITECTURE.md, GRAPH_DATA_MODEL.md, SPEC_PHASE2_ACS.md 등)와 기술이 다를 경우 본 사양서가 우선한다.
@@ -545,7 +546,7 @@ ACS 생존신호는 VDA 5050 표준 로봇 `connection` 메시지의 상태 모�
 | `jobRef` | 작업 역추적 키 (사람이 읽는 ID — AMR은 로깅 외 해석 불요) |
 | `position.seamStartW/seamEndW` | 용접선 시작/끝 **맵(월드) 좌표** [x,y,z] m — 도면 좌표에 릴리즈 시점 유효 T_W_D(도면→맵 강체변환) 적용, z는 통과 |
 | `position.drawingPos` | 도면 좌표 echo — tank/level/wall_code + **u,v(벽면-로컬)** + x,y,z(도면). `wall_code`가 **티칭 자세 선택 키** |
-| `params.seamType` | 용접 형상 — **독립 5종 `LINE`·`CROSS3`·`CROSS4`·`CORNER2`·`CORNER3`** (N13 확장 2026-09-15, §8.5.1). `LINE`=직선, `CROSS3`=T자 3갈래, `CROSS4`=십자 4갈래, `CORNER2`=2면 코너, `CORNER3`=3면 코너. AMR 파서는 legacy `CROSS`(→CROSS4)·`CORNER`(→CORNER3)도 수용(전환 유예). **`LINE-*` 5종만 실행 활성** — 나머지는 캡처 교시·실기 검증 후 활성화(`CORNER2` 실행 스텝 후속). `POLYLINE`은 여전히 거부(2026-08-29 AMR 회신 §5.1 — 2점 계약으로 세그먼트 방향 불명이라 AMR이 FAILED). 꺾인 직선은 ACS가 **세그먼트별 LINE 액션 N개로 분할**(같은 정차·같은 anchorGroupId → 정렬 공유). `wall_code` 조합 레시피 매핑은 §8.5.1 |
+| `params.seamType` | 용접 형상 — `LINE`·**`CROSS3_R0`·`CROSS3_R90`·`CROSS3_R180`·`CROSS3_R270`**·`CROSS4`·`CORNER2`·`CORNER3` (N13 확장 2026-09-15; CROSS3 회전 4종 2026-10-07 §8.5.1·§9-8). `LINE`=직선, `CROSS3_R{0/90/180/270}`=T자 3갈래 회전 4종(면 자세 무관), `CROSS4`=십자 4갈래, `CORNER2`=2면 코너, `CORNER3`=3면 코너. AMR 파서는 legacy `CROSS`(→CROSS4)·`CORNER`(→CORNER3)·bare `CROSS3`(→CROSS3_R0)도 수용(전환 유예). **`LINE-*` 5종만 실행 활성** — 나머지는 캡처 교시·실기 검증 후 활성화(`CORNER2` 실행 스텝 후속). `POLYLINE`은 여전히 거부(2026-08-29 AMR 회신 §5.1 — 2점 계약으로 세그먼트 방향 불명이라 AMR이 FAILED). 꺾인 직선은 ACS가 **세그먼트별 LINE 액션 N개로 분할**(같은 정차·같은 anchorGroupId → 정렬 공유). `wall_code` 조합 레시피 매핑은 §8.5.1 |
 | `params.sectionDxfId` | 단면 프로파일 참조 ID |
 | `params.inspectionProfileId` | 검사(촬영/측정) 프로파일 ID (검사 타입 분류·레시피 계약은 §8.5 참고 — 제안, 현행 자유 문자열 무변경) |
 | `params.standoffMm` | 표면 이격 거리 [mm] — **AMR 미사용(수신·로깅만), 의미 확인 필요 `[N18]`**: §4.4 의 '정차 이격'(벽↔로봇 기준점, 기본 0.8 m)과 같은 단어인데 골든 예시는 400 mm 라 같은 값일 수 없다 |
@@ -614,8 +615,8 @@ HD_AMR ──(CAPTURE_REQ 34B: taskId[15-30] · attempt[31] · captureSeq[32-33]
       "type": "object",
       "required": ["seamType", "sectionDxfId", "inspectionProfileId", "standoffMm", "anchorGroupId", "seqInGroup"],
       "properties": {
-        "seamType": { "enum": ["LINE", "CROSS3", "CROSS4", "CORNER2", "CORNER3"] },
-        "_seamType_note": "N13 확장(2026-09-15): 독립 5종. AMR 파서는 하위호환으로 legacy CROSS(→CROSS4)·CORNER(→CORNER3)도 수용 — ACS 는 canonical 5값으로 발행 전환",
+        "seamType": { "enum": ["LINE", "CROSS3_R0", "CROSS3_R90", "CROSS3_R180", "CROSS3_R270", "CROSS4", "CORNER2", "CORNER3"] },
+        "_seamType_note": "CROSS3 회전 4종 확장(2026-10-07, N13 연장 · INSPECTION_TYPES §9-8): CROSS3 는 회전별 CROSS3_R0/R90/R180/R270 로 발행(면 자세 무관). AMR 파서는 하위호환으로 legacy CROSS(→CROSS4)·CORNER(→CORNER3)·bare CROSS3(→CROSS3_R0)도 수용 — ACS 는 canonical 값 발행 전환 필요. 0° 기준·회전 부호(CW/CCW)는 ACS 합의 대기",
         "points": { "type": "array" },
         "sectionDxfId": { "type": "string" },
         "inspectionProfileId": { "type": "string" },
@@ -683,13 +684,13 @@ HD_AMR ──(CAPTURE_REQ 34B: taskId[15-30] · attempt[31] · captureSeq[32-33]
 → HD_AMR inspection UI는 현재의 **수직/수평 단일 토글**을 **타입별 레시피 라이브러리**로 확장하는 것을 권장한다. ACS는 타입 ID만 보내고, 실행 방법은 AMR이 레시피로 결정한다.
 
 **검사 타입 카탈로그** — 정본은 [INSPECTION_TYPES](INSPECTION_TYPES.md). **정본화(2026-09-15): 독립 5종 형상**
-(`LINE`·`CROSS3` 3갈래·`CROSS4` 4갈래·`CORNER2` 2면·`CORNER3` 3면). 면 위 junction(LINE/CROSS3/CROSS4)은 면자세 5군과
-결합(각 5종), 코너(CORNER2/CORNER3)는 면자세 무관 각 1종(±거울) = **17종**(거울 분리 시 최대 19).
+(`LINE`·`CROSS3` 3갈래·`CROSS4` 4갈래·`CORNER2` 2면·`CORNER3` 3면). 면 위 junction(LINE/CROSS4)은 면자세 5군과
+결합(각 5종), **CROSS3 는 면자세 무관 회전 4종(0°/90°/180°/270°)**, 코너(CORNER2/CORNER3)는 면자세 무관 각 1종(±거울) = **16종**(거울 분리 시 최대 18).
 
-| 형상 \ 면자세 | 바닥 `B` | 천장 `T` | 수직벽 `SM`/`PM`/`F`/`A` | 하부챔퍼 `SL`/`PL` | 상부챔퍼 `SU`/`PU` | 코너 |
+| 형상 \ 면자세 | 바닥 `B` | 천장 `T` | 수직벽 `SM`/`PM`/`F`/`A` | 하부챔퍼 `SL`/`PL` | 상부챔퍼 `SU`/`PU` | 면 무관 |
 |---|:--:|:--:|:--:|:--:|:--:|:--:|
 | LINE (직선 1갈래) | `LINE-FLOOR` | `LINE-CEIL` | `LINE-WALL` | `LINE-CHMR-LO` | `LINE-CHMR-UP` | — |
-| CROSS3 (T자 3갈래) | `CROSS3-FLOOR` | `CROSS3-CEIL` | `CROSS3-WALL` | `CROSS3-CHMR-LO` | `CROSS3-CHMR-UP` | — |
+| CROSS3 (T자 3갈래) | — | — | — | — | — | `CROSS3-R0`/`-R90`/`-R180`/`-R270` (회전 4종) |
 | CROSS4 (십자 4갈래) | `CROSS4-FLOOR` | `CROSS4-CEIL` | `CROSS4-WALL` | `CROSS4-CHMR-LO` | `CROSS4-CHMR-UP` | — |
 | CORNER2 (2면 코너) | — | — | — | — | — | `CORNER2` (±거울) |
 | CORNER3 (3면 코너) | — | — | — | — | — | `CORNER3` (±거울) |
@@ -697,8 +698,10 @@ HD_AMR ──(CAPTURE_REQ 34B: taskId[15-30] · attempt[31] · captureSeq[32-33]
 > **코너부는 접힌 면에 브릿지 플레이트를 덧대므로 수식 생성 불가 — 6-DOF 캡처 교시 전용**(INSPECTION_TYPES.md §7).
 > 코너 각도 균일성(전부 135°·90°·90°)은 각도상 1종 근거이나 브릿지 플레이트 실형상은 위치별 캡처 프로필로 관리.
 >
-> **계약(`seamType` enum) 확장 (N13 반영, 2026-09-15)**: enum = **`LINE`/`CROSS3`/`CROSS4`/`CORNER2`/`CORNER3`**.
-> AMR 파서·resolver·시드는 5종 전부 구현(§8.5.1 (5)); legacy `CROSS`(→CROSS4)·`CORNER`(→CORNER3)도 수용(전환 유예).
+> **계약(`seamType` enum) 확장 (N13 반영, 2026-09-15; CROSS3 회전 4종 2026-10-07)**: enum =
+> **`LINE`/`CROSS3_R0`·`CROSS3_R90`·`CROSS3_R180`·`CROSS3_R270`/`CROSS4`/`CORNER2`/`CORNER3`**.
+> AMR 파서·resolver·시드 구현 완료(§8.5.1 (5)); legacy `CROSS`(→CROSS4)·`CORNER`(→CORNER3)·bare `CROSS3`(→`CROSS3_R0`)도 수용(전환 유예).
+> CROSS3 회전은 면 자세와 독립(회전으로만 키잉) — 0° 기준·회전 부호는 ACS 합의 대기(INSPECTION_TYPES.md §9-8).
 > **ACS 는 canonical 5값으로 발행 전환 필요** — 값 합의·전환 시점은 §10 N13. 실행은 `LINE-*`만 활성.
 
 **개념 구분(중요).** 이 "검사 타입(형상·면)"은 기존 `params.inspectionProfileId`(§8.1 — 촬영/측정 프리셋)와 **다른 축**이다. 계약에 싣는 방식은 N13에서 확정한다:
@@ -749,19 +752,20 @@ HD_AMR ──(CAPTURE_REQ 34B: taskId[15-30] · attempt[31] · captureSeq[32-33]
 | `LINE` | `LINE-FLOOR` | `LINE-CEIL` | `LINE-WALL` | `LINE-CHMR-LO` | `LINE-CHMR-UP` |
 | `CROSS` | `CROSS4-FLOOR` | `CROSS4-CEIL` | `CROSS4-WALL` | `CROSS4-CHMR-LO` | `CROSS4-CHMR-UP` |
 
+- `CROSS3_R0`/`CROSS3_R90`/`CROSS3_R180`/`CROSS3_R270`: T자 3갈래의 회전 4종 → **면 자세 무관 단일 레시피** `CROSS3-R0`/`CROSS3-R90`/`CROSS3-R180`/`CROSS3-R270`(회전으로만 키잉, CORNER 과 동일한 short-circuit). `wall_code` 는 여전히 정본 코드여야 하며 면/theta/방향 계산에 쓰인다(2026-10-07, §8.5 계약 각주·INSPECTION_TYPES §9-8).
 - `CORNER`: 삼면 코너 각도가 전부 (135°·90°·90°)로 균일 → **면 자세 무관 단일 레시피 `CORNER3`**. 좌/우 거울이 필요하면 `wall_code`(옆면)로 판별(`CORNER3-L`/`CORNER3-R`, 선택).
-- 위 매핑은 **독립 5종 seamType(LINE/CROSS3/CROSS4/CORNER2/CORNER3) 전부**를 구현한다(파서·resolver·17 profileId 시드). legacy `CROSS`/`CORNER`도 수용. `CORNER2` 는 매핑·시드는 되나 실행 스텝 미구현(게이트 OFF).
+- 위 매핑은 **seamType 전부(LINE/CROSS3 회전 4종/CROSS4/CORNER2/CORNER3)**를 구현한다(파서·resolver·16 profileId 시드). legacy `CROSS`/`CORNER`/bare `CROSS3`도 수용. `CORNER2` 는 매핑·시드는 되나 실행 스텝 미구현(게이트 OFF).
 
 **(4) HD_AMR 측 구현 요건.**
 - 수신한 `(wall_code, seamType)`로 위 표의 레시피 id를 유도하고, 그 id에 대응하는 **로컬 검사 레시피**(접근 자세·스캔 패턴·촬영/측정·경유점)를 선택·실행한다.
 - 툴 수직/수평 회전은 여전히 `seamStartW→seamEndW` 벡터에서 **자동 유도**(§4.4·§8.1) — 본 매핑표는 **스캔 패턴·면 접근**만 결정한다.
 - 미지원/모순 조합(예: `CORNER` + 평면 `wall_code`, 미정의 `seamType`) 처리는 N13에서 확정. 기본: 액션 FAILED + `orderValidationError`(계약 위반) 또는 `inspectionFailed`(실행 불가).
 
-**(5) 현행 상태 각주 (2026-09-15 갱신).** HD_AMR 2차 연동 배선 **구현 완료** — `Vda5050OrderExecutor`가 노드 도달 후 `startWeldInspection`을 검사 실행기(`WeldInspectionOrchestrator`)에 위임한다: `actionParameters` 해석(파서, §8.4 골든 예시 검증) → `(seamType, wall_code)` → 레시피 매핑(위 (3) 표) → 레시피(DB `InspectionRecipes` 정본 17종 전체 시드) 로드 → `sectionDxfId`→로컬 `Drawing`→티칭 `InspectionProfile` 경유점으로 검사 시퀀스 실행 → `FINISHED`/`FAILED` + errorType(`orderValidationError`/`equipmentError`/`inspectionFailed`) 보고. `anchorGroupId` 정렬 공유(§8.1)·`emergencyStop` 검사 중단 포함. **현행 게이트**: `LINE-*` 5종만 실행 활성(Enabled) — `CROSS3-*`/`CROSS4-*`/`CORNER2`/`CORNER3`은 매핑은 되나 게이트 OFF 라 `FAILED + inspectionFailed`("resolved but not enabled") 보고, 캡처 교시·실기 검증 후 `/recipes`에서 활성화(`CORNER2`는 실행 스텝 미구현이라 게이트만 켜도 미동작 — corner2 배선 후속). 미정의 `wall_code`·미정의 `seamType`은 액션 `FAILED + orderValidationError`. `wall_code` 규약은 **ACS 확정(2026-09-15)** — ACS는 정본 10코드(`B`/`SL`/`PL`/`SM`/`PM`/`SU`/`PU`/`T`/`F`/`A`)를 그대로 발행하며 AMR 수용값과 일치한다(과거 §8.4 예시의 `W03`은 정본화 전 오기였고 `SM`으로 교정). 실기 E2E 검증은 대기.
+**(5) 현행 상태 각주 (2026-09-15 갱신).** HD_AMR 2차 연동 배선 **구현 완료** — `Vda5050OrderExecutor`가 노드 도달 후 `startWeldInspection`을 검사 실행기(`WeldInspectionOrchestrator`)에 위임한다: `actionParameters` 해석(파서, §8.4 골든 예시 검증) → `(seamType, wall_code)` → 레시피 매핑(위 (3) 표) → 레시피(DB `InspectionRecipes` 정본 16종 전체 시드) 로드 → `sectionDxfId`→로컬 `Drawing`→티칭 `InspectionProfile` 경유점으로 검사 시퀀스 실행 → `FINISHED`/`FAILED` + errorType(`orderValidationError`/`equipmentError`/`inspectionFailed`) 보고. `anchorGroupId` 정렬 공유(§8.1)·`emergencyStop` 검사 중단 포함. **현행 게이트**: `LINE-*` 5종만 실행 활성(Enabled) — `CROSS3-R*`/`CROSS4-*`/`CORNER2`/`CORNER3`은 매핑은 되나 게이트 OFF 라 `FAILED + inspectionFailed`("resolved but not enabled") 보고, 캡처 교시·실기 검증 후 `/recipes`에서 활성화(`CORNER2`는 실행 스텝 미구현이라 게이트만 켜도 미동작 — corner2 배선 후속). 미정의 `wall_code`·미정의 `seamType`은 액션 `FAILED + orderValidationError`. `wall_code` 규약은 **ACS 확정(2026-09-15)** — ACS는 정본 10코드(`B`/`SL`/`PL`/`SM`/`PM`/`SU`/`PU`/`T`/`F`/`A`)를 그대로 발행하며 AMR 수용값과 일치한다(과거 §8.4 예시의 `W03`은 정본화 전 오기였고 `SM`으로 교정). 실기 E2E 검증은 대기.
 
 **(5-1) `CROSS4-*`/`CORNER3` 실행 시퀀스 구현 (2026-09-15 추가, 온보드 — 계약 무변경).** 위 (5)의 "실행 미구현" 부분이 해소됨. 게이트(Enabled)는 실기 검증 전이라 여전히 OFF 이며, 온보드 레시피 관리 UI(`/recipes`)에서 활성화한다.
 - **검사 방향 자동 유도 배선**: §4.4·§8.1 의 계약(seam 벡터 → 수평/수직 유도)이 ACS 경로에 실제 구현됨 — 노드 `theta` 를 검사 실행기에 전달, `SeamDirectionResolver` 가 벽면-로컬 투영으로 판정(45°±10° 경계·10mm 미만 seam 은 수평 폴백 + 로그). LINE 포함 전 타입 공통.
-- **`CROSS3-*`/`CROSS4-*`**: 정렬 1회로 등록된 작업물 좌표계 안에서 **`/inspection-points` 6-DOF 캡처 교시 프로필(`PoseAbsolute`)의 경유점을 실행**(코로게이션 법선·깊이 반영). 십자 패턴 런타임 생성(레시피 `PatternJson`)은 **제거 완료**(캡처 교시 단일화) — `CrossPatternGenerator`는 교시 시작 템플릿 전용. `anchorGroupId` 정렬 공유는 LINE 과 동일하게 동작.
+- **`CROSS3-R*`(회전 4종)/`CROSS4-*`**: 정렬 1회로 등록된 작업물 좌표계 안에서 **`/inspection-points` 6-DOF 캡처 교시 프로필(`PoseAbsolute`)의 경유점을 실행**(코로게이션 법선·깊이 반영). CROSS3 는 회전별 프로필이 서로 다른 툴 자세/경유점을 담는다. 십자 패턴 런타임 생성(레시피 `PatternJson`)은 **제거 완료**(캡처 교시 단일화) — `CrossPatternGenerator`는 교시 시작 템플릿 전용. `anchorGroupId` 정렬 공유는 LINE 과 동일하게 동작.
 - **`CORNER3`**: 평탄면 정렬 체인 미적용 — 고정 티칭 슬롯(`corner3.{L|R}.{approach,face1..3,retreat}`, 좌/우 거울 별도 티칭) 직접 순회, SurfaceType=Corner 촬상. side 판별은 `wall_code` P*→L / S*→R. **F/A(마구리) 코너의 side 규칙 미확정** — N13 협의 필요(아래 ②).
 - **N13 잔여 협의 항목**: ① `params.points` 의미 확정(CROSS 4-arm 끝점 4개 제안 — arm 별 길이 개별화), ② CORNER 거울 side 의 F/A 판별 규칙, ③ CROSS 정차점 = 교차부 중심 정면 / CORNER 정차점 재현성 보장 여부, ④ CROSS 교차 arm 의 90° 회전 영상에 대한 비전측 메타 구분 필요 여부.
 
@@ -859,7 +863,7 @@ ACS는 비상정지와 동시에 **해당 로봇의 활성 run을 자동 중단(
 | N10 | 정차 이격(standoff) 적정값 | 기본 0.8 m (영역별 조정) | 🔁 **1차 회신(2026-09-28, 잠정)** — **0.8 m 는 부족**(그 값이면 플랜지 뻗음 30 mm). 산출식 §4.4.1: 카메라 목표거리 + 툴 길이 + 최소 플랜지 뻗음 (+ T_A_B 전방 오프셋·편차 여유) ⇒ 400 + 370 + 350 = 1.12 m, **잠정 1.2 m 요청**. 근거: 벽 1.0 m 정차 실측 3회가 전부 손목 특이점(|J5| 2.1°)/`rc=38` — 플랜지 뻗음 230 mm. 최소 플랜지 뻗음 실측·T_A_B tx 확정 후 최종 회신. 온보드는 부족 시 액션 `FAILED` + `inspectionFailed` 로 "정차 거리 부족 — 필요 ≥ N mm, 현재 M mm" 보고 |
 | N11 | Order 거부 보고 방식 | 폐기 + `orderValidationError` | ✅ 동의 (§4.5.2 그대로 구현) |
 | N12 | ACS 생존 신호 | ACS 전용 `connection` 토픽 + ONLINE/OFFLINE/Last Will, QoS 1·retain (§7.2) | ✅ **승인** (2026-09-03) |
-| N13 | 검사 타입 카탈로그·레시피 계약 | 검사 타입 카탈로그(§8.5) + **`seamType` × `wall_code` → 레시피 매핑(§8.5.1)** + HD_AMR 타입별 레시피 라이브러리 운용 | ⏳ **대기** — **온보드 카탈로그 정본화(2026-09-15): 독립 5종 형상**(`LINE`·`CROSS3` 3갈래·`CROSS4` 4갈래·`CORNER2` 2면·`CORNER3` 3면 = 17 profileId, §8.5/INSPECTION_TYPES.md). **계약 `seamType` enum 은 현행 3값(LINE/CROSS/CORNER) 무변경** — `CROSS3` 추가·`CORNER`→`CORNER2`/`CORNER3` 분리는 계약 변경이라 **본 N13에서 협의**. 현행: ACS 3종 선반영(2026-09-14), HD_AMR 매핑·실행 배선 완료(§8.5.1 (5)) — `LINE-*` 5종 실행 활성, `CROSS4-*`/`CORNER3` 매핑 후 게이트 OFF. **CROSS 캡처 교시로 단일화(2026-09-15)**: `/inspection-points` 6-DOF 캡처 절대 프로필을 실행(코로게이션 대응) — 패턴 수식(`PatternJson`) 런타임 생성 경로 **제거 완료**(레시피 필드·오케스트레이터 생성·`WaypointsOverride`·UI·DB 컬럼). `CrossPatternGenerator`는 교시 템플릿 전용. `wall_code` 규약 ACS 확정(정본 10코드, §8.4 `W03`→`SM` 교정). **계약 enum 확장 반영(2026-09-15)**: seamType = `LINE`/`CROSS3`/`CROSS4`/`CORNER2`/`CORNER3` — **파서·resolver·17종 시드 구현 완료**(legacy `CROSS`/`CORNER` 수용). ACS 는 canonical 5값 발행 전환 필요(값 합의). `CORNER2` 는 매핑·시드 완료이나 **실행 스텝 미구현(게이트 OFF)** — corner2 슬롯/캡처 배선 후속 |
+| N13 | 검사 타입 카탈로그·레시피 계약 | 검사 타입 카탈로그(§8.5) + **`seamType` × `wall_code` → 레시피 매핑(§8.5.1)** + HD_AMR 타입별 레시피 라이브러리 운용 | ⏳ **대기** — **온보드 카탈로그 정본화(2026-09-15): 독립 5종 형상**(`LINE`·`CROSS3` 3갈래·`CROSS4` 4갈래·`CORNER2` 2면·`CORNER3` 3면 = 17 profileId, §8.5/INSPECTION_TYPES.md). **계약 `seamType` enum 은 현행 3값(LINE/CROSS/CORNER) 무변경** — `CROSS3` 추가·`CORNER`→`CORNER2`/`CORNER3` 분리는 계약 변경이라 **본 N13에서 협의**. 현행: ACS 3종 선반영(2026-09-14), HD_AMR 매핑·실행 배선 완료(§8.5.1 (5)) — `LINE-*` 5종 실행 활성, `CROSS4-*`/`CORNER3` 매핑 후 게이트 OFF. **CROSS 캡처 교시로 단일화(2026-09-15)**: `/inspection-points` 6-DOF 캡처 절대 프로필을 실행(코로게이션 대응) — 패턴 수식(`PatternJson`) 런타임 생성 경로 **제거 완료**(레시피 필드·오케스트레이터 생성·`WaypointsOverride`·UI·DB 컬럼). `CrossPatternGenerator`는 교시 템플릿 전용. `wall_code` 규약 ACS 확정(정본 10코드, §8.4 `W03`→`SM` 교정). **계약 enum 확장 반영(2026-09-15)**: seamType = `LINE`/`CROSS3`/`CROSS4`/`CORNER2`/`CORNER3` — **파서·resolver·시드 구현 완료**(legacy `CROSS`/`CORNER` 수용). ACS 는 canonical 값 발행 전환 필요(값 합의). `CORNER2` 는 매핑·시드 완료이나 **실행 스텝 미구현(게이트 OFF)** — corner2 슬롯/캡처 배선 후속. **CROSS3 회전 4종 확장(2026-10-07)**: CROSS3 를 면 자세별 5종에서 회전별 4종(`CROSS3_R0`/`R90`/`R180`/`R270`, 면 무관)으로 재설계 — AMR(파서·resolver·16종 시드·UI·테스트) 반영 완료, ACS 는 4개 문자열·0° 기준·회전 부호(CW/CCW) 합의 필요 |
 | N14 | 검사 작업 식별자 관통 | `params.taskId`(GUID 문자열, 영구) + `params.attempt`(1~255, taskId별 누적·ACS 발급) — 둘 다 선택 필드(§8.1·§8.1.1) | ✅ **양측 구현 완료(2026-09-21)** — ACS 발행 / AMR 파서→오케스트레이터→`SequenceContext.AcsTaskId·AcsAttempt`→CAPTURE_REQ v3.2. 키 위치(`params.*`)·attempt 누적 규칙은 구현으로 합의. **실기 관통 확인 잔여**(taskId 바이트 순서 대조와 함께 1회) |
 | N17 | `seamStartW`/`seamEndW` 의 **z 기준면** | ACS 의 T_W_D 는 2D(x,y,yaw) 라 z 는 변환되지 않고 **도면 전역 z**(선창 바닥=0)가 그대로 전송된다. AMR 은 자기 바닥을 0 으로 보므로 **L2 이상에서 층 바닥 높이(level_z)만큼 어긋난다**(L1 은 0 이라 드러나지 않음). 제안: **ACS 가 발행 시 `z − level_z[level−1]` 을 적용해 층 바닥 기준으로 보낸다**(AMR 이 level_z 를 몰라도 됨). 대안은 `level_z` 를 계약에 추가하는 것 | ⏳ **협의 필요** — 현행 운영 경로는 seam 의 Δz(방향 유도)만 써서 기준면과 무관하나, 좌표를 **위치로 쓰는 순간** 영향을 준다. AMR 측은 시험 화면(`docs/SEAM_MOVE_TEST.md`)에 수동 z 기준 보정 입력을 두어 우회 중 |
 | N18 | 검사 액션의 **거리 파라미터 2종 정리** | (a) `params.standoffMm` 이 §4.4 정차 이격과 같은 값인지 다른 값인지 명시 — 같다면 `nodePosition` 에 이미 반영된 값의 중복 전송이므로 **필드 폐기 또는 `stationStandoffMm` 등으로 개칭** 제안. (b) `params.workingDistanceMm` 은 AMR 미사용 — 존치/삭제 확인(존치 시 '참고 전용' 명기 요청). (c) '정차 거리 부족'을 ACS 가 **재정차**로 처리할 의사가 있으면 신호 방식 협의(현행 §6.4 7종에 해당 유형 없음) | ⏳ **신규 제기(2026-09-28)** — AMR 은 검사 툴의 표면 이격을 **온보드 레시피 카메라 목표거리**로 정한다(§4.4.1). ② 접근점 후퇴와 ③ 카메라 거리 정렬이 같은 값을 봐야 하기 때문(②가 물러난 자리를 ③이 실측으로 확정). 두 파라미터는 계속 수신하되 동작에 쓰지 않는다 — **계약 변경 없이도 현행대로 동작**하며, 정리는 문서 일관성 문제다 |

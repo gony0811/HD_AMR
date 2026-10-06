@@ -25,9 +25,9 @@ public record DrawingTeachingSummary(
     int ProfileId = 0);
 
 /// <summary>
-/// 검사 레시피(<see cref="InspectionRecipe"/>, 17종 카탈로그) CRUD + 기동 시드.
+/// 검사 레시피(<see cref="InspectionRecipe"/>, 16종 카탈로그) CRUD + 기동 시드.
 /// 시드는 upsert-if-missing — 기본값은 코드(git)로 버전 관리하되, 이미 존재하는 행(현장 조정값)은
-/// 건드리지 않는다. LINE-* 5종만 Enabled=true (CROSS3-*/CROSS4-*/CORNER2/CORNER3 은 실행 게이트 OFF — N13/캡처 교시 대기).
+/// 건드리지 않는다. LINE-* 5종만 Enabled=true (CROSS3-R*/CROSS4-*/CORNER2/CORNER3 은 실행 게이트 OFF — N13/캡처 교시 대기).
 /// </summary>
 public class InspectionRecipeService
 {
@@ -148,7 +148,7 @@ public class InspectionRecipeService
         return wantSeamType is not null && string.Equals(seam, wantSeamType, StringComparison.OrdinalIgnoreCase);
     }
 
-    /// <summary>기동 시드 — 카탈로그 17종 중 없는 행만 추가(현장 수정값 보존).</summary>
+    /// <summary>기동 시드 — 카탈로그 16종 중 없는 행만 추가(현장 수정값 보존).</summary>
     public async Task SeedDefaultsAsync(CancellationToken ct = default)
     {
         var existingIds = await _db.InspectionRecipes.Select(r => r.Id).ToListAsync(ct);
@@ -170,7 +170,7 @@ public class InspectionRecipeService
         }
     }
 
-    /// <summary>카탈로그 17종 기본값 (INSPECTION_TYPES.md §5 / 사양 §8.5.1).</summary>
+    /// <summary>카탈로그 16종 기본값 (INSPECTION_TYPES.md §5 / 사양 §8.5.1).</summary>
     private static IEnumerable<InspectionRecipe> BuildDefaults()
     {
         // (id, 표시명, seamType, 면자세, 실행 가능 여부)
@@ -181,11 +181,11 @@ public class InspectionRecipeService
             (RecipeIds.LineWall, "직선 seam — 수직벽(SM/PM/F/A)", SeamTypeKind.Line, SurfaceOrientation.Wall, true),
             (RecipeIds.LineChamferLower, "직선 seam — 하부챔퍼(SL/PL)", SeamTypeKind.Line, SurfaceOrientation.ChamferLower, true),
             (RecipeIds.LineChamferUpper, "직선 seam — 상부챔퍼(SU/PU)", SeamTypeKind.Line, SurfaceOrientation.ChamferUpper, true),
-            (RecipeIds.Cross3Floor, "T자 3갈래 — 바닥(B)", SeamTypeKind.Cross3, SurfaceOrientation.Floor, false),
-            (RecipeIds.Cross3Ceil, "T자 3갈래 — 천장(T)", SeamTypeKind.Cross3, SurfaceOrientation.Ceiling, false),
-            (RecipeIds.Cross3Wall, "T자 3갈래 — 수직벽(SM/PM/F/A)", SeamTypeKind.Cross3, SurfaceOrientation.Wall, false),
-            (RecipeIds.Cross3ChamferLower, "T자 3갈래 — 하부챔퍼(SL/PL)", SeamTypeKind.Cross3, SurfaceOrientation.ChamferLower, false),
-            (RecipeIds.Cross3ChamferUpper, "T자 3갈래 — 상부챔퍼(SU/PU)", SeamTypeKind.Cross3, SurfaceOrientation.ChamferUpper, false),
+            // CROSS3 회전 4종 — 면 자세 무관(CORNER 처럼 Any), 회전별 티칭 프로필 경유점으로 실행.
+            (RecipeIds.Cross3R0, "T자 3갈래 — 0°", SeamTypeKind.Cross3R0, SurfaceOrientation.Any, false),
+            (RecipeIds.Cross3R90, "T자 3갈래 — 90°", SeamTypeKind.Cross3R90, SurfaceOrientation.Any, false),
+            (RecipeIds.Cross3R180, "T자 3갈래 — 180°", SeamTypeKind.Cross3R180, SurfaceOrientation.Any, false),
+            (RecipeIds.Cross3R270, "T자 3갈래 — 270°", SeamTypeKind.Cross3R270, SurfaceOrientation.Any, false),
             (RecipeIds.Cross4Floor, "4점 십자 — 바닥(B)", SeamTypeKind.Cross, SurfaceOrientation.Floor, false),
             (RecipeIds.Cross4Ceil, "4점 십자 — 천장(T)", SeamTypeKind.Cross, SurfaceOrientation.Ceiling, false),
             (RecipeIds.Cross4Wall, "4점 십자 — 수직벽(SM/PM/F/A)", SeamTypeKind.Cross, SurfaceOrientation.Wall, false),

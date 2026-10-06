@@ -9,7 +9,6 @@ using HD.AMR.App.Service;
 using HD.AMR.App.Service.Inspection;
 using HD.AMR.App.Service.Sequence;
 using HD.AMR.App.Service.Sequence.Steps;
-using HD.AMR.App.Service.Sequence.Steps;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace HD.AMR.Desktop.ViewModels;
@@ -55,6 +54,7 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
     private ToolAxisDir _opticalAxis = ToolAxisDir.PlusZ;
     private bool _opticalAxisFromParam;
     private bool _loadingInspectionDirection;
+    private bool _loadingProductionToggle;
 
     // 현재 TCP 실시간 읽기 — MountCalibrationViewModel 과 같은 방식(2틱마다, 3회 연속 실패 시 중단).
     private double[]? _tcp;
@@ -103,6 +103,11 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
 
     /// <summary>면 법선 자세로 이동할지 — 끄면 현재 TCP 자세를 유지하고 위치만 바꾼다(구 동작).</summary>
     [ObservableProperty] private bool _useWallNormalPose = true;
+
+    /// <summary>운영 적용 토글(영속) — 켜면 실제 검사 시퀀스 ②가 자세를 계산된 면 법선으로 쓴다.
+    /// 이 화면에서 계산 자세를 검증한 뒤 켠다. 측위·장착보정·wall_code 가 없으면 자동으로 티칭 폴백.
+    /// (<see cref="SeamApproachResolver.UseComputedNormalOrientationKey"/>)</summary>
+    [ObservableProperty] private bool _applyComputedOrientationInProduction;
 
     /// <summary>시퀀스와 공유하는 용접라인 검사 방향. 0=수평, 1=수직.</summary>
     [ObservableProperty] private int _inspectionDirectionIndex;
@@ -176,6 +181,11 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
             _loadingInspectionDirection = true;
             InspectionDirectionIndex = (int)(await param.GetDoubleAsync(InspectionDirectionKey) ?? 0) == 1 ? 1 : 0;
             _loadingInspectionDirection = false;
+
+            _loadingProductionToggle = true;
+            ApplyComputedOrientationInProduction =
+                await param.GetBoolAsync(SeamApproachResolver.UseComputedNormalOrientationKey) ?? false;
+            _loadingProductionToggle = false;
 
             OnPropertyChanged(nameof(MountText));
             OnPropertyChanged(nameof(MountCheckText));
@@ -706,6 +716,24 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
                 .SetDoubleAsync(InspectionDirectionKey, value);
         }
         catch (Exception ex) { Failure($"검사 방향 저장 실패: {ex.Message}"); }
+    }
+
+    partial void OnApplyComputedOrientationInProductionChanged(bool value)
+    {
+        if (_loadingProductionToggle) return;
+        _ = SaveProductionToggleAsync(value);
+    }
+
+    private async Task SaveProductionToggleAsync(bool value)
+    {
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            await scope.ServiceProvider.GetRequiredService<ParameterService>()
+                .SetBoolAsync(SeamApproachResolver.UseComputedNormalOrientationKey, value,
+                    "② 검사위치 이동 자세 = 계산된 면 법선(true) / 티칭 포즈(false). 측위·장착보정·wall_code 없으면 티칭 폴백.");
+        }
+        catch (Exception ex) { Failure($"운영 자세 토글 저장 실패: {ex.Message}"); }
     }
 
     partial void OnWallCodeChanged(string? value)

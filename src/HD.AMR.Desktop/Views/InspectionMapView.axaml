@@ -30,26 +30,32 @@
         <Border Classes="card">
             <StackPanel Spacing="4">
                 <TextBlock Text="① wall_code × seamType → 레시피 (§8.5.1)" FontWeight="SemiBold" />
-                <Grid ColumnDefinitions="70,150,*,*,*,*,*">
+                <Grid ColumnDefinitions="70,150,*,*,*,*,*,*,*,*">
                     <TextBlock Grid.Column="0" Text="wall_code" Classes="axis" />
                     <TextBlock Grid.Column="1" Text="면" Classes="axis" />
                     <TextBlock Grid.Column="2" Text="LINE" Classes="axis" />
-                    <TextBlock Grid.Column="3" Text="CROSS3" Classes="axis" />
-                    <TextBlock Grid.Column="4" Text="CROSS4" Classes="axis" />
-                    <TextBlock Grid.Column="5" Text="CORNER2" Classes="axis" />
-                    <TextBlock Grid.Column="6" Text="CORNER3" Classes="axis" />
+                    <TextBlock Grid.Column="3" Text="CROSS3 0°" Classes="axis" />
+                    <TextBlock Grid.Column="4" Text="CROSS3 90°" Classes="axis" />
+                    <TextBlock Grid.Column="5" Text="CROSS3 180°" Classes="axis" />
+                    <TextBlock Grid.Column="6" Text="CROSS3 270°" Classes="axis" />
+                    <TextBlock Grid.Column="7" Text="CROSS4" Classes="axis" />
+                    <TextBlock Grid.Column="8" Text="CORNER2" Classes="axis" />
+                    <TextBlock Grid.Column="9" Text="CORNER3" Classes="axis" />
                 </Grid>
                 <ItemsControl ItemsSource="{Binding MapRows}">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="vm:WallMapRow">
-                            <Grid ColumnDefinitions="70,150,*,*,*,*,*">
+                            <Grid ColumnDefinitions="70,150,*,*,*,*,*,*,*,*">
                                 <TextBlock Grid.Column="0" Classes="cell" FontFamily="monospace" Text="{Binding Code}" />
                                 <TextBlock Grid.Column="1" Classes="cell" Text="{Binding Label}" />
                                 <ContentControl Grid.Column="2" Content="{Binding Line}" ContentTemplate="{StaticResource MapCellTpl}" />
-                                <ContentControl Grid.Column="3" Content="{Binding Cross3}" ContentTemplate="{StaticResource MapCellTpl}" />
-                                <ContentControl Grid.Column="4" Content="{Binding Cross4}" ContentTemplate="{StaticResource MapCellTpl}" />
-                                <ContentControl Grid.Column="5" Content="{Binding Corner2}" ContentTemplate="{StaticResource MapCellTpl}" />
-                                <ContentControl Grid.Column="6" Content="{Binding Corner3}" ContentTemplate="{StaticResource MapCellTpl}" />
+                                <ContentControl Grid.Column="3" Content="{Binding Cross3R0}" ContentTemplate="{StaticResource MapCellTpl}" />
+                                <ContentControl Grid.Column="4" Content="{Binding Cross3R90}" ContentTemplate="{StaticResource MapCellTpl}" />
+                                <ContentControl Grid.Column="5" Content="{Binding Cross3R180}" ContentTemplate="{StaticResource MapCellTpl}" />
+                                <ContentControl Grid.Column="6" Content="{Binding Cross3R270}" ContentTemplate="{StaticResource MapCellTpl}" />
+                                <ContentControl Grid.Column="7" Content="{Binding Cross4}" ContentTemplate="{StaticResource MapCellTpl}" />
+                                <ContentControl Grid.Column="8" Content="{Binding Corner2}" ContentTemplate="{StaticResource MapCellTpl}" />
+                                <ContentControl Grid.Column="9" Content="{Binding Corner3}" ContentTemplate="{StaticResource MapCellTpl}" />
                             </Grid>
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>

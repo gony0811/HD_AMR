@@ -11,7 +11,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace HD.AMR.Desktop.ViewModels;
 
 /// <summary>
-/// 검사 레시피 17종 조회·편집·저장·기본값 재적용 — 좌측 목록 선택 + 우측 상세 편집 구조.
+/// 검사 레시피 16종 조회·편집·저장·기본값 재적용 — 좌측 목록 선택 + 우측 상세 편집 구조.
 /// 행 편집값은 <see cref="RecipeRow"/> 에 유지되므로 저장은 선택 행만 처리하고 다른 행의 미저장 편집은 보존한다.
 /// <see cref="InspectionRecipeService"/> 는 Scoped 라 작업마다 scope 를 연다.
 /// </summary>

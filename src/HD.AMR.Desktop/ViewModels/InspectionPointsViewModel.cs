@@ -25,7 +25,7 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
     public ObservableCollection<XyPointVm> Points { get; } = new();
     public ObservableCollection<InspectionProfile> Profiles { get; } = new();
 
-    private static readonly string[] SeamTypes = { "LINE", "CROSS", "CROSS3", "CORNER2", "CORNER3" };
+    private static readonly string[] SeamTypes = { "LINE", "CROSS", "CROSS3_R0", "CROSS3_R90", "CROSS3_R180", "CROSS3_R270", "CORNER2", "CORNER3" };
 
     [ObservableProperty] private int _seamTypeIndex = 1;   // 기본 CROSS
     [ObservableProperty] private double _fovMm = 30;
@@ -56,7 +56,7 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
     [ObservableProperty] private int _plotVersion;
 
     public string SeamType => SeamTypes[Math.Clamp(SeamTypeIndex, 0, SeamTypes.Length - 1)];
-    public bool IsCross => SeamType is "CROSS" or "CROSS3";
+    public bool IsCross => SeamType is "CROSS" || SeamType.StartsWith("CROSS3");
     public bool CobotConnected => _cobot.IsConnected;
     public bool VisionConnected => _vision.Client.IsConnected;
     public int PointCount => Points.Count;
@@ -335,7 +335,9 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
         {
             var p = await WithDrawing(s => s.GetProfileAsync(SelectedProfileId));
             if (p is null) { Notify("프로필을 찾을 수 없습니다.", true); return; }
-            var idx = Array.IndexOf(SeamTypes, p.SeamType);
+            // 레거시 bare "CROSS3" 프로필은 0° 로 승격해 드롭다운과 정합을 맞춘다.
+            var loadedSeam = p.SeamType == "CROSS3" ? "CROSS3_R0" : p.SeamType;
+            var idx = Array.IndexOf(SeamTypes, loadedSeam);
             SeamTypeIndex = idx >= 0 ? idx : 1;
             ProfileName = p.Name;
             RunTool = p.RunTool; RunUser = p.RunUser; RunVel = p.RunVel; SettleSec = p.SettleDelaySec;

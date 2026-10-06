@@ -67,20 +67,22 @@ public class CobotSeamEndMoveStep : ISequenceStep
         var inspection = CobotInspectionMoveStep.FindBySurfaceId(context)
             ?? throw new InvalidOperationException($"Wall 0x{context.InspectionSurfaceId:X2} 티칭 위치 없음");
 
-        // 자세는 점1(검사위치)과 동일한 티칭 자세 — 위치만 끝점으로 옮긴다.
-        var (target, _) = await CobotInspectionMoveStep.ComputeTargetPoseAsync(_cobot, inspection, ct);
-        target = CobotInspectionMoveStep.NormalizeUvAnchor(target, _logger);
+        // 자세 선택은 점1(②)과 동일 규칙 — 위치만 끝점으로 옮긴다. 평면 벽에서는 시작점·끝점의 면 법선이
+        // 같으므로 하이브리드 토글이 켜져도 점1↔점2 자세가 일치한다(작업물 X축 = 끝−시작 가 상수 자세에 불변).
+        var (taught, _) = await CobotInspectionMoveStep.ComputeTargetPoseAsync(_cobot, inspection, ct);
 
         // 위치는 용접선 끝점 접근점 — 끝점을 approachW 로, 시작점을 방향(접선)용으로 넘긴다.
-        var (seamBase, _, blocker) = await _seam.ResolveAsync(
+        var seam = await _seam.ResolveAsync(
             context, context.SeamEndW, context.SeamStartW, context.Tool, "끝점", ct);
-        if (blocker is not null)
-            return StepResult.Fail(blocker);   // 리치 부족 — 폴백 없이 실패
-        if (seamBase is null)
+        if (seam.Blocker is not null)
+            return StepResult.Fail(seam.Blocker);   // 리치 부족 — 폴백 없이 실패
+        if (seam.Base is null)
             return StepResult.Fail(
                 "용접선 끝점을 코봇 BASE 로 환산할 수 없습니다 (AMR 측위·장착 보정 확인) — 드라이런은 폴백하지 않습니다.");
 
-        target = new[] { seamBase[0], seamBase[1], seamBase[2], target[3], target[4], target[5] };
+        var (target, usedComputed) = CobotInspectionMoveStep.BuildApproachAnchor(
+            taught, seam.Base, seam.ComputedPose, seam.UseComputedOrientation);
+        target = CobotInspectionMoveStep.NormalizeUvAnchor(target, _logger);
 
         // u/v 오프셋·J6 절대각을 ②와 동일하게 맞춰 MoveL — 점1과 같은 J6 라 직선 이동 중 손목이 돌지 않는다.
         double[] finalTarget;
@@ -99,8 +101,10 @@ public class CobotSeamEndMoveStep : ISequenceStep
         if (rc != 0)
             return StepResult.Fail($"용접선 끝점 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.");
 
+        var attitudeNote = usedComputed
+            ? "자세는 계산된 면 법선"
+            : $"자세는 티칭 [0x{context.InspectionSurfaceId:X2} {inspection.Name}] 유지";
         return StepResult.Ok(
-            $"용접선 끝점 접근점으로 직선 이동(MoveL) 완료 — 자세는 티칭 " +
-            $"[0x{context.InspectionSurfaceId:X2} {inspection.Name}] 유지. 다음: 점2(X+방향) 기록.");
+            $"용접선 끝점 접근점으로 직선 이동(MoveL) 완료 — {attitudeNote}. 다음: 점2(X+방향) 기록.");
     }
 }

@@ -84,7 +84,9 @@
             <StackPanel><TextBlock Classes="axis" Text="검사 타입" />
                 <ComboBox Width="210" SelectedIndex="{Binding SeamTypeIndex}">
                     <ComboBoxItem>LINE (직선)</ComboBoxItem><ComboBoxItem>CROSS4 (4갈래)</ComboBoxItem>
-                    <ComboBoxItem>CROSS3 (3갈래)</ComboBoxItem><ComboBoxItem>CORNER2</ComboBoxItem><ComboBoxItem>CORNER3</ComboBoxItem>
+                    <ComboBoxItem>CROSS3 0° (3갈래)</ComboBoxItem><ComboBoxItem>CROSS3 90° (3갈래)</ComboBoxItem>
+                    <ComboBoxItem>CROSS3 180° (3갈래)</ComboBoxItem><ComboBoxItem>CROSS3 270° (3갈래)</ComboBoxItem>
+                    <ComboBoxItem>CORNER2</ComboBoxItem><ComboBoxItem>CORNER3</ComboBoxItem>
                 </ComboBox></StackPanel>
             <StackPanel><TextBlock Classes="axis" Text="FOV(mm)" /><NumericUpDown Value="{Binding FovMm}" Minimum="1" Increment="1" FormatString="0" /></StackPanel>
             <StackPanel><TextBlock Classes="axis" Text="기본 Z(WD, mm)" /><NumericUpDown Value="{Binding DefaultZ}" Increment="1" FormatString="0" /></StackPanel>

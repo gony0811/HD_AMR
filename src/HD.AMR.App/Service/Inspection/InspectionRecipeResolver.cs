@@ -30,16 +30,20 @@ public static class InspectionRecipeResolver
     /// UI 매핑 레퍼런스 등 request 없이 조회할 때 쓰는 경량 경로 — <see cref="TryResolve"/> 가 위임한다.</summary>
     public static string? ResolveRecipeId(SeamTypeKind seamType, string wallCode)
     {
-        // CORNER: 면 자세 무관 단일 레시피(§8.5.1 (3)) — wall_code 는 여전히 정의 코드여야 한다.
+        // CORNER·CROSS3(회전 4종): 면 자세 무관 단일 레시피 — wall_code 는 여전히 정의 코드여야 한다.
+        // CORNER 은 §8.5.1 (3), CROSS3 회전은 면 자세와 독립(회전으로만 키잉) — 둘 다 아래에서 short-circuit.
         var orientation = ResolveOrientation(wallCode);
         if (orientation is null) return null;
         if (seamType == SeamTypeKind.Corner) return RecipeIds.Corner3;
         if (seamType == SeamTypeKind.Corner2) return RecipeIds.Corner2;
+        if (seamType == SeamTypeKind.Cross3R0) return RecipeIds.Cross3R0;
+        if (seamType == SeamTypeKind.Cross3R90) return RecipeIds.Cross3R90;
+        if (seamType == SeamTypeKind.Cross3R180) return RecipeIds.Cross3R180;
+        if (seamType == SeamTypeKind.Cross3R270) return RecipeIds.Cross3R270;
 
         var prefix = seamType switch
         {
             SeamTypeKind.Line => "LINE",
-            SeamTypeKind.Cross3 => "CROSS3",   // 3갈래 T자
             _ => "CROSS4",                       // Cross(4갈래)
         };
         return orientation switch
@@ -60,8 +64,11 @@ public static class InspectionRecipeResolver
         if (recipeId is null || !RecipeIds.All.Contains(recipeId)) return null;
         if (recipeId == RecipeIds.Corner2) return "CORNER2";
         if (recipeId == RecipeIds.Corner3) return "CORNER3";
+        if (recipeId == RecipeIds.Cross3R0) return "CROSS3_R0";
+        if (recipeId == RecipeIds.Cross3R90) return "CROSS3_R90";
+        if (recipeId == RecipeIds.Cross3R180) return "CROSS3_R180";
+        if (recipeId == RecipeIds.Cross3R270) return "CROSS3_R270";
         if (recipeId.StartsWith("LINE-", StringComparison.Ordinal)) return "LINE";
-        if (recipeId.StartsWith("CROSS3-", StringComparison.Ordinal)) return "CROSS3";
         return "CROSS";   // CROSS4-*
     }
 
@@ -85,7 +92,8 @@ public static class InspectionRecipeResolver
     }
 }
 
-/// <summary>레시피 id 상수 — INSPECTION_TYPES.md §5 카탈로그 17종과 동일 문자열.</summary>
+/// <summary>레시피 id 상수 — INSPECTION_TYPES.md §5 카탈로그 16종과 동일 문자열
+/// (LINE 5 + CROSS3 회전 4 + CROSS4 5 + CORNER2 + CORNER3).</summary>
 public static class RecipeIds
 {
     public const string LineFloor = "LINE-FLOOR";
@@ -93,11 +101,11 @@ public static class RecipeIds
     public const string LineWall = "LINE-WALL";
     public const string LineChamferLower = "LINE-CHMR-LO";
     public const string LineChamferUpper = "LINE-CHMR-UP";
-    public const string Cross3Floor = "CROSS3-FLOOR";
-    public const string Cross3Ceil = "CROSS3-CEIL";
-    public const string Cross3Wall = "CROSS3-WALL";
-    public const string Cross3ChamferLower = "CROSS3-CHMR-LO";
-    public const string Cross3ChamferUpper = "CROSS3-CHMR-UP";
+    // T자 3갈래 회전 4종 — 면 자세 무관(회전으로만 키잉).
+    public const string Cross3R0 = "CROSS3-R0";
+    public const string Cross3R90 = "CROSS3-R90";
+    public const string Cross3R180 = "CROSS3-R180";
+    public const string Cross3R270 = "CROSS3-R270";
     public const string Cross4Floor = "CROSS4-FLOOR";
     public const string Cross4Ceil = "CROSS4-CEIL";
     public const string Cross4Wall = "CROSS4-WALL";
@@ -109,7 +117,7 @@ public static class RecipeIds
     public static readonly IReadOnlyList<string> All = new[]
     {
         LineFloor, LineCeil, LineWall, LineChamferLower, LineChamferUpper,
-        Cross3Floor, Cross3Ceil, Cross3Wall, Cross3ChamferLower, Cross3ChamferUpper,
+        Cross3R0, Cross3R90, Cross3R180, Cross3R270,
         Cross4Floor, Cross4Ceil, Cross4Wall, Cross4ChamferLower, Cross4ChamferUpper,
         Corner2, Corner3,
     };

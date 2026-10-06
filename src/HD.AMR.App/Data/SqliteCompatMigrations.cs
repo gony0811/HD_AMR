@@ -194,7 +194,7 @@ CREATE TABLE IF NOT EXISTS Parameters (
 CREATE UNIQUE INDEX IF NOT EXISTS IX_Parameters_Name ON Parameters (Name);
 ");
 
-        // Backward-compatible schema add for InspectionRecipes (검사 타입 17종 레시피, 사양 §8.5.1; 기존 데이터 보존).
+        // Backward-compatible schema add for InspectionRecipes (검사 타입 16종 레시피, 사양 §8.5.1; 기존 데이터 보존).
         db.Database.ExecuteSqlRaw(@"
 CREATE TABLE IF NOT EXISTS InspectionRecipes (
     Id TEXT NOT NULL PRIMARY KEY,
@@ -254,6 +254,13 @@ CREATE TABLE IF NOT EXISTS InspectionRecipes (
             if (!hasVel)
                 db.Database.ExecuteSqlRaw($"ALTER TABLE InspectionRecipes ADD COLUMN {velCol} INTEGER NULL;");
         }
+
+        // CROSS3 를 면 자세별 5종(CROSS3-FLOOR/CEIL/WALL/CHMR-LO/CHMR-UP)에서 회전 4종(CROSS3-R0/R90/R180/R270)으로
+        // 전환(면 자세 무관, 회전으로만 키잉). 구 5행은 시드가 upsert-if-missing 이라 저절로 사라지지 않으므로 1회성 제거 —
+        // 안 지우면 판독 불가능한 SeamType="Cross3" tombstone 고아 행으로 남는다. CROSS3 는 항상 Enabled=false 로 실기 미사용이라 무해.
+        db.Database.ExecuteSqlRaw(
+            "DELETE FROM InspectionRecipes WHERE Id IN " +
+            "('CROSS3-FLOOR','CROSS3-CEIL','CROSS3-WALL','CROSS3-CHMR-LO','CROSS3-CHMR-UP');");
 
         // 운영 로그(수동/ACS 동작 이력 + 실패 원인) — UI 로그 페이지 데이터 원본.
         db.Database.ExecuteSqlRaw(@"

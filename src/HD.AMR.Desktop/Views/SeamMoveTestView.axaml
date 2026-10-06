@@ -89,6 +89,10 @@
         </WrapPanel>
         <TextBlock Classes="hint" Text="{Binding WallCodeText}"/>
         <TextBlock Classes="hint" Text="{Binding OpticalAxisText}"/>
+        <CheckBox Margin="0,6,0,0"
+                  Content="운영 검사 시퀀스(②)에도 계산된 면 법선 자세 적용 (설정 영속)"
+                  IsChecked="{Binding ApplyComputedOrientationInProduction}"/>
+        <TextBlock Classes="hint" Text="끄면 운영 ②는 종전처럼 벽(Wall ID)으로 고른 티칭 자세를 씁니다. 켜면 ACS 용접선·wall_code·정차 theta 로 계산한 면 법선 자세로 갑니다 — 측위·장착보정·wall_code 중 하나라도 없으면 자동으로 티칭 자세로 폴백합니다. 이 화면에서 계산 자세를 검증한 뒤 켜세요."/>
         <TextBlock Classes="hint" Text="운영자는 검사 방향만 선택합니다. 광축은 면 법선을 향하고, 광축 둘레 비틀림은 이동 직전에 J6 절대각으로 맞춥니다 — 수직 180°(검사 대기 자세와 동일), 수평 90°. 센서 헤드가 J3–J4 링크암과 간섭하지 않도록 이동 방향과 무관하게 이 두 값만 씁니다."/>
         <TextBlock Classes="hint" Text="정차 노드 theta는 도면 내부의 용접선 각도가 아니라 SLAM 맵 좌표계의 정차 방향(nodePosition.theta)입니다. 맵 +X=0°, 반시계가 +이며, 이 화면에서는 AMR/툴이 벽을 정면으로 바라보는 법선 방위로 사용합니다. 체크를 끄면 현재 AMR SLAM yaw를 사용합니다."/>
 

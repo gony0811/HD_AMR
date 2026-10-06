@@ -6,6 +6,24 @@ using Microsoft.Extensions.Logging;
 namespace HD.AMR.App.Service.Inspection;
 
 /// <summary>
+/// <see cref="SeamApproachResolver.ResolveAsync"/> 결과.
+/// </summary>
+/// <param name="Base">접근점 위치(코봇 BASE, mm). null 이고 <paramref name="Blocker"/> 도 null 이면 티칭 폴백.</param>
+/// <param name="ComputedPose">면 법선에 정렬된 <b>전체 목표 pose</b>(코봇 BASE, [x,y,z,rx,ry,rz]).
+/// wall_code 가 유효할 때만 non-null — [x,y,z]는 <paramref name="Base"/>와 같고 [rx,ry,rz]가 법선 정렬 자세다.
+/// 토글과 무관하게 항상 채운다(토글 OFF 에서도 티칭 자세와의 비교 로깅에 쓴다).</param>
+/// <param name="UseComputedOrientation">하이브리드 토글(<see cref="SeamApproachResolver.UseComputedNormalOrientationKey"/>).
+/// true 이고 <paramref name="ComputedPose"/>가 있으면 호출측은 자세를 계산 법선으로 쓴다.</param>
+/// <param name="Note">진단 문자열.</param>
+/// <param name="Blocker">null 이 아니면 호출측은 <b>폴백 없이 즉시 실패</b>(리치 부족 등).</param>
+public sealed record SeamApproachResult(
+    double[]? Base,
+    double[]? ComputedPose,
+    bool UseComputedOrientation,
+    string Note,
+    string? Blocker);
+
+/// <summary>
 /// ACS 용접선 점(맵 좌표)을 코봇 BASE 접근점으로 환산한다 — ② 검사위치 이동(시작점)과
 /// 드라이런 끝점 이동(<see cref="Steps.CobotSeamEndMoveStep"/>)이 공유한다.
 /// 측위·장착보정(T_A_B)·텔레스코픽 스트로크·면 이격(standoff)·리치 사전점검을 한 곳에서 수행한다.
@@ -18,21 +36,28 @@ namespace HD.AMR.App.Service.Inspection;
 /// </summary>
 public sealed class SeamApproachResolver
 {
+    /// <summary>하이브리드 토글 — true 면 ②/끝점 이동이 자세를 (티칭 포즈가 아니라) 계산된 면 법선에 맞춘다.
+    /// 범용 key/value(<see cref="ParameterService"/>)에 보관, 기본값 false(현재 동작 보존).</summary>
+    public const string UseComputedNormalOrientationKey = "inspection.useComputedNormalOrientation";
+
     private readonly CobotService _cobot;
     private readonly AMRService _amr;
     private readonly TelescopicService _lift;
     private readonly CalibrationService _calib;
     private readonly PostureLimitsService _limits;
+    private readonly ParameterService _param;
     private readonly ILogger<SeamApproachResolver> _logger;
 
     public SeamApproachResolver(CobotService cobot, AMRService amr, TelescopicService lift,
-        CalibrationService calib, PostureLimitsService limits, ILogger<SeamApproachResolver> logger)
+        CalibrationService calib, PostureLimitsService limits, ParameterService param,
+        ILogger<SeamApproachResolver> logger)
     {
         _cobot = cobot;
         _amr = amr;
         _lift = lift;
         _calib = calib;
         _limits = limits;
+        _param = param;
         _logger = logger;
     }
 
@@ -44,19 +69,23 @@ public sealed class SeamApproachResolver
     /// <param name="tool">리치 사전점검에 쓸 공구 번호.</param>
     /// <param name="label">로그 접두사(예 "②", "끝점").</param>
     /// <returns>Blocker 가 null 이 아니면 호출측은 즉시 실패해야 한다. Base 가 null 이고 Blocker 도 null 이면 티칭 폴백.</returns>
-    public async Task<(double[]? Base, string Note, string? Blocker)> ResolveAsync(
+    public async Task<SeamApproachResult> ResolveAsync(
         SequenceContext context, double[]? approachW, double[]? directionW, int tool, string label, CancellationToken ct)
     {
+        var useComputed = await _param.GetBoolAsync(UseComputedNormalOrientationKey) ?? false;
+
         if (approachW is not { Length: 3 } seam)
-            return (null, $"{label} 용접선 좌표 없음 — 티칭 위치로 이동", null);
+            return new SeamApproachResult(null, null, useComputed, $"{label} 용접선 좌표 없음 — 티칭 위치로 이동", null);
 
         if (_amr.LatestStatus is not { } status)
-            return (null, "AMR 측위 없음 — 용접선 좌표를 환산할 수 없어 티칭 위치로 이동", null);
+            return new SeamApproachResult(null, null, useComputed,
+                "AMR 측위 없음 — 용접선 좌표를 환산할 수 없어 티칭 위치로 이동", null);
         var pose = status.Pose;
 
         var mount = await _calib.GetMountAsync();
         if (mount.All(v => Math.Abs(v) < 1e-9))
-            return (null, "장착 보정(T_A_B) 미수행 — 용접선 좌표를 환산할 수 없어 티칭 위치로 이동", null);
+            return new SeamApproachResult(null, null, useComputed,
+                "장착 보정(T_A_B) 미수행 — 용접선 좌표를 환산할 수 없어 티칭 위치로 이동", null);
 
         var stroke = _lift.Latest is { HeightMm: >= 0 } lift ? lift.HeightMm : 0;
 
@@ -111,7 +140,7 @@ public sealed class SeamApproachResolver
                 label, target.NormalDistanceMm, standoff, toolLen, reach.FlangeReachMm, limits.MinFlangeReachMm);
 
             if (!reach.Ok)
-                return (null, "",
+                return new SeamApproachResult(null, null, useComputed, "",
                     $"정차 거리 부족 — 필요 ≥ {reach.RequiredNormalDistanceMm:0}mm, 현재 {target.NormalDistanceMm:0}mm " +
                     $"(후퇴 {standoff:0} + 공구 {toolLen:0} + 최소 뻗음 {limits.MinFlangeReachMm:0}). " +
                     $"플랜지 뻗음이 {reach.FlangeReachMm:0}mm 라 팔을 접은 자세가 되고 손목 특이점(rc=38)이 납니다 — " +
@@ -119,6 +148,10 @@ public sealed class SeamApproachResolver
                     $"(최소 뻗음 {limits.MinFlangeReachMm:0}mm 는 실측 전 잠정값 — 용접 위치 시험 화면에서 조정 가능)");
         }
 
-        return (target.ApproachBaseMm, $"용접선 접근점(면 이격 {standoff:0}mm — ③ 카메라 목표거리)", null);
+        // target.TargetPoseBase 는 wall_code 가 유효할 때만 non-null(광축이 면 법선을 향하는 전체 pose).
+        // 토글과 무관하게 돌려주고, 사용 여부는 호출측이 UseComputedOrientation 으로 판단한다.
+        return new SeamApproachResult(
+            target.ApproachBaseMm, target.TargetPoseBase, useComputed,
+            $"용접선 접근점(면 이격 {standoff:0}mm — ③ 카메라 목표거리)", null);
     }
 }

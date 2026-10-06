@@ -39,12 +39,6 @@ public class InspectionRecipeResolverTests
     [InlineData(SeamTypeKind.Cross, "PL", "CROSS4-CHMR-LO")]
     [InlineData(SeamTypeKind.Cross, "SU", "CROSS4-CHMR-UP")]
     [InlineData(SeamTypeKind.Cross, "PU", "CROSS4-CHMR-UP")]
-    [InlineData(SeamTypeKind.Cross3, "B", "CROSS3-FLOOR")]
-    [InlineData(SeamTypeKind.Cross3, "T", "CROSS3-CEIL")]
-    [InlineData(SeamTypeKind.Cross3, "SM", "CROSS3-WALL")]
-    [InlineData(SeamTypeKind.Cross3, "F", "CROSS3-WALL")]
-    [InlineData(SeamTypeKind.Cross3, "SL", "CROSS3-CHMR-LO")]
-    [InlineData(SeamTypeKind.Cross3, "SU", "CROSS3-CHMR-UP")]
     public void Resolve_LineAndCross_MatchesSpecTable(SeamTypeKind seamType, string wallCode, string expected)
     {
         var ok = InspectionRecipeResolver.TryResolve(MakeRequest(seamType, wallCode), out var recipeId, out var error);
@@ -58,7 +52,7 @@ public class InspectionRecipeResolverTests
     [InlineData(SeamTypeKind.Line, "B", "LINE-FLOOR")]
     [InlineData(SeamTypeKind.Line, "F", "LINE-WALL")]      // 마구리 → 수직벽
     [InlineData(SeamTypeKind.Cross, "T", "CROSS4-CEIL")]
-    [InlineData(SeamTypeKind.Cross3, "SM", "CROSS3-WALL")]
+    [InlineData(SeamTypeKind.Cross3R90, "SM", "CROSS3-R90")]
     [InlineData(SeamTypeKind.Corner, "PM", "CORNER3")]
     [InlineData(SeamTypeKind.Corner2, "PM", "CORNER2")]
     [InlineData(SeamTypeKind.Corner2, "SM", "CORNER2")]
@@ -86,6 +80,32 @@ public class InspectionRecipeResolverTests
 
         Assert.True(ok);
         Assert.Equal("CORNER3", recipeId);
+    }
+
+    // CROSS3 회전 4종: 면 자세 무관 — 회전별 단일 레시피(CORNER 와 동일한 short-circuit).
+    [Theory]
+    [InlineData(SeamTypeKind.Cross3R0, "CROSS3-R0")]
+    [InlineData(SeamTypeKind.Cross3R90, "CROSS3-R90")]
+    [InlineData(SeamTypeKind.Cross3R180, "CROSS3-R180")]
+    [InlineData(SeamTypeKind.Cross3R270, "CROSS3-R270")]
+    public void Resolve_Cross3Rotation_SurfaceIndependent(SeamTypeKind seamType, string expected)
+    {
+        foreach (var wallCode in new[] { "B", "T", "SM", "SL", "PU" })
+        {
+            var ok = InspectionRecipeResolver.TryResolve(MakeRequest(seamType, wallCode), out var recipeId, out var error);
+            Assert.True(ok, error);
+            Assert.Equal(expected, recipeId);
+        }
+    }
+
+    // 회전 CROSS3 라도 wall_code 는 정본 코드여야 한다(면 자세 무관 ≠ wall_code 무검증) — CORNER 와 동일.
+    [Fact]
+    public void Resolve_Cross3Rotation_UndefinedWallCode_Fails()
+    {
+        var ok = InspectionRecipeResolver.TryResolve(MakeRequest(SeamTypeKind.Cross3R90, "XX"), out var recipeId, out var error);
+        Assert.False(ok);
+        Assert.Null(recipeId);
+        Assert.Contains("wall_code", error);
     }
 
     // 정본 10코드(B/T/SM/PM/F/A/SL/PL/SU/PU) 외 값은 거부 — 방어적 처리.
@@ -128,10 +148,10 @@ public class InspectionRecipeResolverTests
     }
 
     [Fact]
-    public void RecipeIds_CatalogHasSeventeenEntries()
+    public void RecipeIds_CatalogHasSixteenEntries()
     {
-        // LINE 5 + CROSS3 5 + CROSS4 5 + CORNER2 1 + CORNER3 1 = 17 (독립 5종 카탈로그).
-        Assert.Equal(17, RecipeIds.All.Count);
+        // LINE 5 + CROSS3 회전 4 + CROSS4 5 + CORNER2 1 + CORNER3 1 = 16.
+        Assert.Equal(16, RecipeIds.All.Count);
         Assert.Equal(RecipeIds.All.Count, RecipeIds.All.Distinct().Count());
     }
 
@@ -139,7 +159,10 @@ public class InspectionRecipeResolverTests
     [Theory]
     [InlineData("LINE-FLOOR", "LINE")]
     [InlineData("LINE-CHMR-UP", "LINE")]
-    [InlineData("CROSS3-WALL", "CROSS3")]
+    [InlineData("CROSS3-R0", "CROSS3_R0")]
+    [InlineData("CROSS3-R90", "CROSS3_R90")]
+    [InlineData("CROSS3-R180", "CROSS3_R180")]
+    [InlineData("CROSS3-R270", "CROSS3_R270")]
     [InlineData("CROSS4-CEIL", "CROSS")]
     [InlineData("CROSS4-CHMR-LO", "CROSS")]
     [InlineData("CORNER2", "CORNER2")]

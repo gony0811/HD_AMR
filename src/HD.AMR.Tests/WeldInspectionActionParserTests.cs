@@ -167,12 +167,17 @@ public class WeldInspectionActionParserTests
         Assert.Contains("seamType", error);
     }
 
-    // 계약 enum 확장(N13): LINE/CROSS3/CROSS4/CORNER2/CORNER3 + legacy CROSS→Cross·CORNER→Corner 수용.
+    // 계약 enum 확장(N13): LINE/CROSS3_R0·R90·R180·R270/CROSS4/CORNER2/CORNER3
+    // + legacy CROSS→Cross·CORNER→Corner·bare CROSS3→Cross3R0 수용.
     [Theory]
     [InlineData("LINE", SeamTypeKind.Line)]
     [InlineData("CROSS4", SeamTypeKind.Cross)]
     [InlineData("CROSS", SeamTypeKind.Cross)]      // legacy
-    [InlineData("CROSS3", SeamTypeKind.Cross3)]
+    [InlineData("CROSS3_R0", SeamTypeKind.Cross3R0)]
+    [InlineData("CROSS3_R90", SeamTypeKind.Cross3R90)]
+    [InlineData("CROSS3_R180", SeamTypeKind.Cross3R180)]
+    [InlineData("CROSS3_R270", SeamTypeKind.Cross3R270)]
+    [InlineData("CROSS3", SeamTypeKind.Cross3R0)]  // legacy bare → 0°
     [InlineData("CORNER3", SeamTypeKind.Corner)]
     [InlineData("CORNER", SeamTypeKind.Corner)]    // legacy
     [InlineData("CORNER2", SeamTypeKind.Corner2)]

@@ -74,6 +74,8 @@ public class ParameterService
         [
             ("arrival.deviationXy",    "0.1", "도착 판정 XY 허용 오차(m)"),
             ("arrival.deviationTheta", "0.1", "도착 판정 각도 허용 오차(rad)"),
+            ("inspection.useComputedNormalOrientation", "false",
+                "② 검사위치 이동 자세 = 계산된 면 법선(true) / 티칭 포즈(false). 현장 검증 후 켠다. 측위·장착보정·wall_code 가 없으면 자동으로 티칭 폴백."),
         ];
 
         var existing = await _db.Parameters.Select(p => p.Name).ToListAsync();

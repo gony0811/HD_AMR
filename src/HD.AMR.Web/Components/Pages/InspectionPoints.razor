@@ -52,7 +52,10 @@
         <select class="form-select form-select-sm" style="width:210px" @bind="_seamType">
             <option value="LINE">LINE (직선)</option>
             <option value="CROSS">CROSS4 (4갈래)</option>
-            <option value="CROSS3">CROSS3 (3갈래)</option>
+            <option value="CROSS3_R0">CROSS3 0° (3갈래)</option>
+            <option value="CROSS3_R90">CROSS3 90° (3갈래)</option>
+            <option value="CROSS3_R180">CROSS3 180° (3갈래)</option>
+            <option value="CROSS3_R270">CROSS3 270° (3갈래)</option>
             <option value="CORNER2">CORNER2 (2면·수동/미리보기)</option>
             <option value="CORNER3">CORNER3 (3면·수동/미리보기)</option>
         </select>
@@ -108,7 +111,7 @@
             <button class="btn btn-sm btn-outline-success" @onclick="CaptureIntoSelected"
                     disabled="@(_isRunning || !Cobot.IsConnected || _selected < 0 || _selected >= _points.Count)"
                     title="선택한 포인트를 현재 코봇 자세로 갱신">선택점 갱신</button>
-            @if (_seamType is "CROSS" or "CROSS3")
+            @if (_seamType is "CROSS" || _seamType.StartsWith("CROSS3"))
             {
                 <button class="btn btn-sm btn-outline-secondary" @onclick="FillCrossPattern" disabled="@_isRunning"
                         title="선택점(없으면 원점) 기준 십자 4-arm 패턴을 X-Y 로 채웁니다(평면 · Rx=0)">십자 패턴 채우기</button>
@@ -630,7 +633,10 @@
         {
             var p = await Service.GetProfileAsync(id);
             if (p is null) { Notify("프로필을 찾을 수 없습니다.", true); return; }
-            _seamType = p.SeamType is "LINE" or "CROSS" or "CROSS3" or "CORNER2" or "CORNER3" ? p.SeamType : "CROSS";
+            // 레거시 bare "CROSS3" 프로필은 0° 로 승격해 드롭다운과 정합을 맞춘다.
+            var loaded = p.SeamType == "CROSS3" ? "CROSS3_R0" : p.SeamType;
+            _seamType = loaded is "LINE" or "CROSS" or "CROSS3_R0" or "CROSS3_R90" or "CROSS3_R180" or "CROSS3_R270"
+                or "CORNER2" or "CORNER3" ? loaded : "CROSS";
             _profileName = p.Name;
             _runTool = p.RunTool; _runUser = p.RunUser; _runVel = p.RunVel; _settleSec = p.SettleDelaySec;
             _visionTimeoutSec = p.DelaySec > 0 ? p.DelaySec : HD.AMR.App.Service.Sequence.Steps.InspectionRunStep.DefaultVisionTimeoutSec;

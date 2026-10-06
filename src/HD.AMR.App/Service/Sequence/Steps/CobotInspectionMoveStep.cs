@@ -110,6 +110,33 @@ public class CobotInspectionMoveStep : ISequenceStep
         return (target, "검사 준비 위치로");
     }
 
+    /// <summary>
+    /// ② 접근 앵커(= u/v·J6 전) 선택 — 하이브리드. <b>위치</b>는 ACS 용접선 접근점(<paramref name="seamBase"/>)에서,
+    /// <b>자세</b>는 토글·가용성에 따라 계산된 면 법선(<paramref name="computedPose"/>의 [rx,ry,rz]) 또는
+    /// 손으로 맞춘 티칭 자세(<paramref name="taughtPose"/>의 [rx,ry,rz])에서 온다.
+    ///
+    /// · <paramref name="seamBase"/>가 null(측위·장착보정 없음) → 티칭 포즈 전체로 폴백(종전 동작).
+    /// · seamBase 있음 + 토글 ON + computedPose 있음(wall_code 유효) → 위치=seam, 자세=계산 법선.
+    /// · 그 외(토글 OFF 또는 computedPose 없음) → 위치=seam, 자세=티칭(종전 동작).
+    ///
+    /// 광축 둘레 비틀림(roll)은 이후 <see cref="AlignTwistToJ6Async"/>가 J6 절대각으로 재정렬하므로,
+    /// 여기서 바뀌는 것은 사실상 <b>광축 방향</b>(티칭 손목 방향 → 면 법선)뿐이다.
+    /// </summary>
+    internal static (double[] Anchor, bool UsedComputed) BuildApproachAnchor(
+        double[] taughtPose, double[]? seamBase, double[]? computedPose, bool useComputed)
+    {
+        if (seamBase is not { Length: 3 })
+            return (taughtPose, false);   // 환산 불가 — 티칭 폴백(위치·자세 모두 티칭)
+
+        var orientation = useComputed && computedPose is { Length: 6 } ? computedPose : taughtPose;
+        var anchor = new[]
+        {
+            seamBase[0], seamBase[1], seamBase[2],
+            orientation[3], orientation[4], orientation[5],
+        };
+        return (anchor, ReferenceEquals(orientation, computedPose));
+    }
+
     /// <summary>u/v 오프셋 합성용 앵커 정규화 — 티칭 자세가 광축(툴 Z) 둘레로 비틀려 저장돼 있어도
     /// (예: J6=180° 수직 자세로 재티칭) 툴 +Y가 베이스 상방(+Z)을 향하도록 트위스트를 제거한다.
     /// u=수평/v=수직 매핑과 ④의 이미지↔툴 축 매핑은 모두 이 표준 자세를 전제하므로,
@@ -225,29 +252,42 @@ public class CobotInspectionMoveStep : ISequenceStep
         // 위치는 ACS 용접선에서, 자세는 티칭 값 그대로 — task 마다 달라지는 것은 위치뿐이다.
         // 리치 점검은 정차 배치(AMR pose·장착 보정·스트로크·공구 길이)만으로 결정되므로 코봇을 움직이기
         // 전에 한다 — 진입 준비(후퇴·홈·ready) 뒤에 실패하면 같은 정차점의 task 마다 헛동작을 반복한다.
-        var (seamBase, seamNote, blocker) = await _seam.ResolveAsync(
+        var seam = await _seam.ResolveAsync(
             context, context.SeamStartW, context.SeamEndW, context.Tool, "②", ct);
-        if (blocker is not null)
-            return StepResult.Fail(blocker);   // 리치 부족 — 티칭 폴백으로 덮지 않는다
+        if (seam.Blocker is not null)
+            return StepResult.Fail(seam.Blocker);   // 리치 부족 — 티칭 폴백으로 덮지 않는다
 
         // 진입 준비 — 잔류 작업물 프레임/공구를 정규화하고 홈에서 출발시킨다(목표 계산 전에 해야
         // 작업물 추종 pose 계산이 정규화된 프레임 기준으로 나온다).
         var entryNote = await SequenceEntry.PrepareAsync(_cobot, context, _logger, ct);
 
-        var (target, where) = await ComputeTargetPoseAsync(_cobot, inspection, ct);
+        var (taught, where) = await ComputeTargetPoseAsync(_cobot, inspection, ct);
+
+        // 위치는 ACS 용접선 접근점에서, 자세는 토글·가용성에 따라 계산 법선 또는 티칭.
+        var (target, usedComputed) = BuildApproachAnchor(taught, seam.Base, seam.ComputedPose, seam.UseComputedOrientation);
         // u/v 축 기준 정규화 — 광축 둘레 최종 비틀림은 아래 J6 절대각 맞춤이 정한다.
         target = NormalizeUvAnchor(target, _logger);
-        where = $"[0x{context.InspectionSurfaceId:X2} {inspection.Name}] {where}";
 
-        if (seamBase is not null)
+        var orientationLabel = $"[0x{context.InspectionSurfaceId:X2} {inspection.Name}]";
+        if (seam.Base is not null)
         {
-            target = new[] { seamBase[0], seamBase[1], seamBase[2], target[3], target[4], target[5] };
-            where = $"{seamNote} — 자세는 티칭 [0x{context.InspectionSurfaceId:X2} {inspection.Name}] 유지";
+            where = usedComputed
+                ? $"{seam.Note} — 자세는 계산된 면 법선"
+                : $"{seam.Note} — 자세는 티칭 {orientationLabel} 유지";
         }
         else
         {
-            _logger.LogInformation("② {Note}", seamNote);
+            where = $"{orientationLabel} {where}";   // 티칭 폴백(위치·자세 모두 티칭)
+            _logger.LogInformation("② {Note}", seam.Note);
         }
+
+        // 회귀 비교용 — 계산 법선 자세와 티칭 자세의 (rx,ry,rz)를 항상 함께 남긴다(토글 검증·현장 대조).
+        if (seam.ComputedPose is { Length: 6 } cp)
+            _logger.LogInformation(
+                "② 자세 비교: 계산법선 rxyz=[{Crx:0.0},{Cry:0.0},{Crz:0.0}] vs 티칭 rxyz=[{Trx:0.0},{Try:0.0},{Trz:0.0}] " +
+                "(토글 {Toggle}, 사용={Used})",
+                cp[3], cp[4], cp[5], taught[3], taught[4], taught[5],
+                seam.UseComputedOrientation ? "ON" : "OFF", usedComputed ? "계산법선" : "티칭");
 
         // 툴프레임 오프셋: offset[0]=u(툴 X = 수평, 좌+/우−), offset[1]=v(툴 Y = 수직, 상+/하−).
         // 실측 확인 매핑 — 과거 [v, u] 순서는 v 가 수평으로 나가는 축 교차 오류였음.
