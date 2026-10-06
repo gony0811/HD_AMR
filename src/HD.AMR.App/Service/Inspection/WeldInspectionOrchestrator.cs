@@ -67,6 +67,13 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         "wobjRegister", "inspectionRunDry", "wobjReset", "cobotHome", "monitorClose",
     };
 
+    /// <summary>드라이런에서만 의미 있는 스텝 — 일반 레시피가 풀시퀀스(StepKeysJson 미지정)로 돌 때 제외한다.
+    /// cobotSeamEnd 가 섞이면 bead2Center 직후 끝점으로 이동해 wobjPoint2 가 비전 Bead2 대신 그 위치를 기록한다.</summary>
+    private static readonly HashSet<string> DryRunOnlyStepKeys = new(StringComparer.Ordinal)
+    {
+        "cobotSeamEnd", "inspectionRunDry",
+    };
+
     public WeldInspectionOrchestrator(
         IServiceScopeFactory scopeFactory,
         CobotService cobot,
@@ -150,11 +157,10 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                 "ACS 액션에 taskId 없음 — 비전에 Guid.Empty 로 전송됩니다(SAIGE 이력 누적 불가, jobRef={JobRef})",
                 req.JobRef);
 
-        // 3) 설비 선행 확인 — 코봇/비전 링크 불능이면 equipmentError(설비 자체 불능).
+        // 3) 설비 선행 확인 — 코봇 링크 불능이면 equipmentError(설비 자체 불능).
+        //    비전 링크는 레시피 로드 후 드라이런이 아닐 때만 본다(5단계 뒤).
         if (!_cobot.IsConnected)
             return InspectionActionResult.Fail("equipmentError", "코봇 RPC 미연결 — 검사 실행 불가");
-        if (!_vision.Client.IsConnected)
-            return InspectionActionResult.Fail("equipmentError", "비전 S/W 링크 다운 — 검사 실행 불가");
 
         // 4) scope 생성 — scoped 서비스(레시피/도면/시퀀스) 사용.
         using var scope = _scopeFactory.CreateScope();
@@ -174,6 +180,15 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         if (recipe.SeamType == SeamTypeKind.Corner)
             return InspectionActionResult.Fail("inspectionFailed",
                 "CORNER3 검사 시퀀스가 제거되어 실행할 수 없습니다.");
+
+        // 비전 링크 — 드라이런 스텝 집합은 촬영(CAPTURE_REQ)을 하지 않으므로 링크 다운이어도 진행한다.
+        if (!_vision.Client.IsConnected)
+        {
+            if (!recipe.DryRun)
+                return InspectionActionResult.Fail("equipmentError", "비전 S/W 링크 다운 — 검사 실행 불가");
+            _logger.LogInformation("비전 링크 확인 생략(드라이런) — 비전 S/W 링크 다운 상태로 진행 (recipe={Recipe})",
+                recipeId);
+        }
 
         // 6) 사전 티칭 경유점 조회: 레시피에 지정된 InspectionProfile(검사 레시피 페이지에서 지정).
         //    면 자세마다 경유점이 다르므로 레시피(LINE-FLOOR ≠ LINE-WALL)별로 명시 지정한다.
@@ -226,13 +241,9 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         //  · 마지막 검사 액션이 아님 → 코봇 홈 복귀 제거(task 사이에 홈 왕복 금지)
         // 드라이런 레시피는 StepKeysJson 을 무시하고 고정 드라이런 집합을 쓴다 — 수기 StepKeysJson 누락으로
         // 교시 스텝이 빠져 ⑱이 "작업물 좌표계 없음"으로 실패하던 문제를 원천 차단한다.
-        var baseSteps = recipe.DryRun
-            ? DryRunStepKeys
-            : (ParseStepKeys(recipe.StepKeysJson) ?? sequence.Steps.Select(st => st.Key).ToArray());
-        var stepKeys = baseSteps
-            .Where(k => !(anchorHit && AlignmentStepKeys.Contains(k)))
-            .Where(k => isLastInspection || k != HomeStepKey)
-            .ToArray();
+        // 일반 레시피의 풀시퀀스(StepKeysJson 미지정)에서는 드라이런 전용 스텝을 뺀다.
+        var stepKeys = SelectStepKeys(recipe.DryRun, ParseStepKeys(recipe.StepKeysJson),
+            sequence.Steps.Select(st => st.Key), anchorHit, isLastInspection);
 
         if (stepKeys.Length == 0)
             return InspectionActionResult.Fail("inspectionFailed",
@@ -408,6 +419,20 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
     }
 
     /// <summary>StepKeysJson(문자열 배열) → 스텝 키 목록. null/빈/파싱 실패 → null(풀시퀀스).</summary>
+    /// <summary>이 task 가 실행할 스텝 키 — 드라이런은 고정 집합, 일반은 레시피 지정 키(미지정이면 드라이런 전용을
+    /// 뺀 전체)에서 anchor 적중 시 정렬 스텝군, 마지막 검사가 아니면 홈 복귀를 제외한다.</summary>
+    internal static string[] SelectStepKeys(bool dryRun, string[]? recipeKeys, IEnumerable<string> allKeys,
+                                            bool anchorHit, bool isLastInspection)
+    {
+        var baseSteps = dryRun
+            ? DryRunStepKeys
+            : recipeKeys ?? allKeys.Where(k => !DryRunOnlyStepKeys.Contains(k)).ToArray();
+        return baseSteps
+            .Where(k => !(anchorHit && AlignmentStepKeys.Contains(k)))
+            .Where(k => isLastInspection || k != HomeStepKey)
+            .ToArray();
+    }
+
     private string[]? ParseStepKeys(string? stepKeysJson)
     {
         if (string.IsNullOrWhiteSpace(stepKeysJson)) return null;
