@@ -61,6 +61,9 @@ public sealed class FlatCenterAlignOptions
 
     /// <summary>이동 후 진동/프레임 안정화 대기(ms).</summary>
     public int SettleMs { get; init; } = 500;
+
+    /// <summary>검출 스냅샷(<see cref="FlatDetectionMonitor"/>)에 표시할 출처 이름.</summary>
+    public string Source { get; init; } = "평탄 정렬";
 }
 
 /// <summary>깊이 거리 접근 이동 옵션. ROI 는 거리 측정(최소 깊이 샘플 평균)에 사용.</summary>
@@ -130,10 +133,15 @@ public class FlatSurfaceCenteringService
 {
     private readonly CobotService _cobot;
     private readonly CameraService _camera;
+    private readonly FlatDetectionMonitor _monitor;
     private readonly ILogger<FlatSurfaceCenteringService> _logger;
 
     /// <summary>Z(평탄 셀 평균 깊이) 확보 실패 시 폴백 거리(mm).</summary>
     private const double FallbackDepthMm = 400.0;
+
+    /// <summary>이번 RunAsync 가 스냅샷을 발행했는지 — 발행 전 실패(미연결 등)가 이전 실행의 스냅샷을
+    /// '실패'로 덮어쓰지 않게 한다.</summary>
+    private bool _publishedThisRun;
 
     /// <summary>발산 판정 배율 — 이동 후 잔차 크기가 직전 대비 이 배율을 넘으면 축 매핑 오류로 보고 중단.</summary>
     private const double DivergenceFactor = 1.2;
@@ -149,10 +157,12 @@ public class FlatSurfaceCenteringService
         => offset[(int)dir / 2] += ((int)dir % 2 == 0 ? 1.0 : -1.0) * mm;
 
     public FlatSurfaceCenteringService(
-        CobotService cobot, CameraService camera, ILogger<FlatSurfaceCenteringService> logger)
+        CobotService cobot, CameraService camera, FlatDetectionMonitor monitor,
+        ILogger<FlatSurfaceCenteringService> logger)
     {
         _cobot = cobot;
         _camera = camera;
+        _monitor = monitor;
         _logger = logger;
     }
 
@@ -160,6 +170,7 @@ public class FlatSurfaceCenteringService
     public async Task<FlatCenterAlignResult> RunAsync(
         FlatCenterAlignOptions o, Action<string>? progress, CancellationToken ct)
     {
+        _publishedThisRun = false;
         if (!_cobot.IsConnected)
             return Fail("코봇 RPC 미연결");
         if (!_camera.IsConnected)
@@ -209,16 +220,17 @@ public class FlatSurfaceCenteringService
                     dGrid = Math.Max(3, (int)Math.Round(o.GridSize * o.RefineFraction));
                 }
 
-                CameraService.DepthFlatnessResult? best = null;
+                CameraService.DepthGridAnalysis? bestAnalysis = null;
                 for (var i = 0; i < o.SamplesPerDetect; i++)
                 {
-                    var flat = _camera.FindFlattest(dRx, dRy, dRw, dRh, dGrid);
-                    if (flat is not null && (best is null || flat.SigmaMm < best.SigmaMm))
-                        best = flat;
+                    var a = _camera.AnalyzeFlatness(dRx, dRy, dRw, dRh, dGrid);
+                    if (a is not null && (bestAnalysis is null || a.Best.SigmaMm < bestAnalysis.Best.SigmaMm))
+                        bestAnalysis = a;
                     if (i < o.SamplesPerDetect - 1) await Task.Delay(100, ct);
                 }
+                var best = bestAnalysis?.Best;
 
-                if (best is null)
+                if (bestAnalysis is null || best is null)
                     return Fail(refined
                         ? "중앙 재검출 실패 — 타깃이 중앙에 오지 않았거나 ROI 내 평탄면이 불안정합니다."
                         : "깊이 프레임에서 유효한 평탄영역을 찾을 수 없습니다.", moves);
@@ -231,19 +243,32 @@ public class FlatSurfaceCenteringService
                     $"검출 {iter + 1}: 셀 u={best.U:0.###}, v={best.V:0.###}, σ={best.SigmaMm:0.##}mm, " +
                     $"Δuv=({deltaU:+0.###;-0.###}, {deltaV:+0.###;-0.###})");
 
-                if (o.DeadbandUv > 0 && Math.Abs(deltaU) < o.DeadbandUv && Math.Abs(deltaV) < o.DeadbandUv)
-                    return Ok(best, converged: true, moves, null, null,
-                        "평탄 셀이 이미 ROI 중심 근방 — 이동 생략");
-
                 double z = best.MeanMm > 0 ? best.MeanMm : FallbackDepthMm;
                 var (dxMm, dyMm) = _camera.PixelDeltaToMm(deltaU, deltaV, z);
 
+                // 검출 스냅샷 발행 — 이동하면 라이브 영상이 바뀌므로 검출 순간 프레임·전체 셀을 남긴다.
+                _monitor.Publish(new FlatDetectionSnapshot(
+                    o.Source, DateTime.Now, bestAnalysis,
+                    o.RoiX, o.RoiY, o.RoiW, o.RoiH, dxMm, dyMm, FlatDetectionStage.Moving,
+                    $"검출 {iter + 1}회차"));
+                _publishedThisRun = true;
+
+                if (o.DeadbandUv > 0 && Math.Abs(deltaU) < o.DeadbandUv && Math.Abs(deltaV) < o.DeadbandUv)
+                {
+                    _monitor.UpdateStage(FlatDetectionStage.MoveSkipped, "선택 셀이 이미 ROI 중심 근방");
+                    return Ok(best, converged: true, moves, null, null,
+                        "평탄 셀이 이미 ROI 중심 근방 — 이동 생략");
+                }
+
                 if (o.ToleranceMm > 0 && Math.Abs(dxMm) <= o.ToleranceMm && Math.Abs(dyMm) <= o.ToleranceMm)
+                {
+                    _monitor.UpdateStage(FlatDetectionStage.MoveSkipped, $"잔차 {o.ToleranceMm}mm 이내 — 수렴");
                     return Ok(best, converged: true, moves, dxMm, dyMm,
                         $"수렴 완료: 잔차 ({dxMm:0.#}, {dyMm:0.#})mm ≤ {o.ToleranceMm}mm ({moves}회 이동)");
+                }
 
                 if (iter >= o.MaxIterations)
-                    return new FlatCenterAlignResult(false, false, moves, dxMm, dyMm,
+                    return FailWithResult(moves, dxMm, dyMm,
                         best.SigmaMm, best.MeanMm, best.U, best.V,
                         $"{o.MaxIterations}회 이동 후에도 잔차 ({dxMm:0.#}, {dyMm:0.#})mm > 기준 {o.ToleranceMm}mm");
 
@@ -298,6 +323,8 @@ public class FlatSurfaceCenteringService
 
                 // 이동 후 진동/프레임 안정화 대기
                 await Task.Delay(o.SettleMs, ct);
+                _monitor.UpdateStage(FlatDetectionStage.Moved,
+                    $"Δ=({dxMm:+0.#;-0.#}, {dyMm:+0.#;-0.#})mm 이동 완료");
 
                 // 진단: 실측 BASE 변위·ROI 평균 깊이 변화 — 축 매핑/평행 이동 여부를 로그로 검증 가능하게.
                 try
@@ -431,9 +458,18 @@ public class FlatSurfaceCenteringService
         progress?.Invoke(msg);
     }
 
+    private FlatCenterAlignResult FailWithResult(
+        int moves, double dx, double dy, double sigma, double mean, double u, double v, string msg)
+    {
+        _logger.LogWarning("평탄 중심 정렬 실패: {Msg}", msg);
+        if (_publishedThisRun) _monitor.UpdateStage(FlatDetectionStage.Failed, msg);
+        return new FlatCenterAlignResult(false, false, moves, dx, dy, sigma, mean, u, v, msg);
+    }
+
     private FlatCenterAlignResult Fail(string msg, int moves = 0)
     {
         _logger.LogWarning("평탄 중심 정렬 실패: {Msg}", msg);
+        if (_publishedThisRun) _monitor.UpdateStage(FlatDetectionStage.Failed, msg);
         return new FlatCenterAlignResult(false, false, moves, null, null, null, null, null, null, msg);
     }
 

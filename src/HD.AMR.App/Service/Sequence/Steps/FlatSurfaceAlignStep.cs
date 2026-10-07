@@ -25,6 +25,7 @@ public class FlatSurfaceAlignStep : ISequenceStep
     private readonly FlatSurfaceCenteringService _centering;
     private readonly LaserDisplacementSensorService _laser;
     private readonly ParameterService _param;
+    private readonly FlatDetectionMonitor _monitor;
     private readonly ILogger<FlatSurfaceAlignStep> _logger;
 
     // ── 설정 상수 ──────────────────────────────────────────────────────
@@ -63,13 +64,14 @@ public class FlatSurfaceAlignStep : ISequenceStep
     public FlatSurfaceAlignStep(
         CobotService cobot, CameraService camera, FlatSurfaceCenteringService centering,
         LaserDisplacementSensorService laser, ParameterService param,
-        ILogger<FlatSurfaceAlignStep> logger)
+        FlatDetectionMonitor monitor, ILogger<FlatSurfaceAlignStep> logger)
     {
         _cobot = cobot;
         _camera = camera;
         _centering = centering;
         _laser = laser;
         _param = param;
+        _monitor = monitor;
         _logger = logger;
     }
 
@@ -90,6 +92,23 @@ public class FlatSurfaceAlignStep : ISequenceStep
     }
 
     public async Task<StepResult> ExecuteAsync(SequenceContext context, CancellationToken ct)
+    {
+        var startedAt = DateTime.Now;
+        try
+        {
+            return await ExecuteCoreAsync(context, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            // 취소가 검출 스냅샷에 '레이저 측정 중' 등으로 남지 않게 표시만 바꾸고 그대로 전파한다.
+            // 이번 실행이 발행한 스냅샷일 때만 — 이전 결과를 '취소'로 덮어쓰지 않는다.
+            if (_monitor.Latest is { } snap && snap.DetectedAt >= startedAt)
+                _monitor.UpdateStage(FlatDetectionStage.Failed, "사용자 취소");
+            throw;
+        }
+    }
+
+    private async Task<StepResult> ExecuteCoreAsync(SequenceContext context, CancellationToken ct)
     {
         // 시작 포즈(= ② 목표 ⊕ ③ 거리 정렬 지점)를 앵커로 저장 — ④⁺가 WD 조정 후
         // 이 위치로 툴 X/Y 횡복귀한다(⑤가 검사 준비 위치 정면에서 시작하도록).
@@ -114,6 +133,7 @@ public class FlatSurfaceAlignStep : ISequenceStep
             MaxLateralMoveMm = MaxLateralMoveMm,
             ImageXAxis = axisX, ImageYAxis = axisY,
             Tool = context.Tool, Velocity = context.Velocity,
+            Source = "시퀀스",
         }, progress: context.Progress, ct);
 
         // 공용 루틴은 취소를 삼키고 실패 결과로 반환 — 스텝은 기존처럼 취소 예외로 전파한다.
@@ -127,7 +147,7 @@ public class FlatSurfaceAlignStep : ISequenceStep
         // (SequenceContext.CameraToLaserShiftYmm, 기본 −75mm)로 설정 — 장착 위치 종속이라 DB 영속.
         var shiftY = context.CameraToLaserShiftYmm;
         if (Math.Abs(shiftY) > MaxCameraToLaserShiftMm)
-            return StepResult.Fail(
+            return FailStage(
                 $"카메라→레이저 중심 보정 이동량 {shiftY:+0.#;-0.#}mm 가 한계 ±{MaxCameraToLaserShiftMm:0}mm 초과 — " +
                 "시퀀스 페이지 ④ '레이저중심 Y' 파라미터를 확인하세요.");
         _logger.LogInformation("④ 레이저 중심 보정 횡이동: 툴 Y {Shift}mm", shiftY);
@@ -137,11 +157,12 @@ public class FlatSurfaceAlignStep : ISequenceStep
         var shiftRc = await _cobot.Rpc.MoveByToolOffsetAsync(shiftAnchor, user: 0, shiftOffset,
             tool: context.Tool, vel: context.Velocity, ct: ct);
         if (shiftRc != 0)
-            return StepResult.Fail($"레이저 중심 보정 이동 실패 (rc={shiftRc}){FairinoErrorCodes.Suffix(shiftRc)}.");
+            return FailStage($"레이저 중심 보정 이동 실패 (rc={shiftRc}){FairinoErrorCodes.Suffix(shiftRc)}.");
         await Task.Delay(300, ct);
 
         // ── Phase C: 레이저 3점 측정 → 헤드 틸트(회전) 보정 ────────────
         _logger.LogInformation("④ Phase C: 레이저 3점 평면 측정 시작");
+        _monitor.UpdateStage(FlatDetectionStage.LaserMeasuring, "레이저 3점 측정");
 
         for (var iter = 0; ; iter++)
         {
@@ -150,11 +171,12 @@ public class FlatSurfaceAlignStep : ISequenceStep
             // 안정화 후 측정 (3회 샘플 평균)
             var pose = await SamplePlanePoseAsync(ct);
             if (!pose.Valid)
-                return StepResult.Fail($"레이저 평면 측정 실패: {pose.Note}");
+                return FailStage($"레이저 평면 측정 실패: {pose.Note}");
 
             _logger.LogInformation(
                 "④ Phase C iter={Iter}: rx={Rx:0.###}°, ry={Ry:0.###}°, z={Z:0.#}mm",
                 iter, pose.Rx, pose.Ry, pose.Z);
+            _monitor.SetLaser(pose.Rx, pose.Ry);
             context.Progress?.Invoke(
                 $"레이저 3점 측정 {iter + 1}: rx={pose.Rx:0.###}°, ry={pose.Ry:0.###}°, z={pose.Z:0.#}mm");
 
@@ -163,6 +185,7 @@ public class FlatSurfaceAlignStep : ISequenceStep
             {
                 context.Progress?.Invoke(
                     $"틸트 기준 통과 (|rx|,|ry| < {TiltThresholdDeg}°) — 보정 {iter}회로 정렬 완료");
+                _monitor.UpdateStage(FlatDetectionStage.Done, $"틸트 보정 {iter}회");
                 return StepResult.Ok(
                     $"평탄면 정렬 완료 (rx={pose.Rx:0.###}°, ry={pose.Ry:0.###}°, " +
                     $"z={pose.Z:0.#}mm, 틸트 보정={iter}회, σ={align.SigmaMm:0.##}mm).");
@@ -170,7 +193,7 @@ public class FlatSurfaceAlignStep : ISequenceStep
 
             if (iter >= MaxTiltCorrections)
             {
-                return StepResult.Fail(
+                return FailStage(
                     $"틸트 보정 {MaxTiltCorrections}회 후에도 평탄 기준 미달 " +
                     $"(rx={pose.Rx:0.###}°, ry={pose.Ry:0.###}°, 기준={TiltThresholdDeg}°) — " +
                     "헤드 위치 캘리브레이션(/laser)으로 헤드 기하 확인이 필요합니다.");
@@ -187,17 +210,25 @@ public class FlatSurfaceAlignStep : ISequenceStep
                 "④ Phase C 틸트 보정 iter={Iter}: 적용 Rx={Ax:0.###}°, Ry={Ay:0.###}°",
                 iter, applyRx, applyRy);
             context.Progress?.Invoke($"틸트 보정각 적용: Rx={applyRx:+0.###;-0.###}°, Ry={applyRy:+0.###;-0.###}° → 재측정");
+            _monitor.UpdateStage(FlatDetectionStage.LaserMeasuring, $"틸트 보정 {iter + 1}회차");
 
             var corrRc = await _cobot.Rpc.MoveByToolOffsetAsync(corrAnchor, user: 0, corrOffset,
                 tool: context.Tool, vel: Math.Min(context.Velocity, 10), ct: ct);
             if (corrRc != 0)
-                return StepResult.Fail($"틸트 보정 이동 실패 (rc={corrRc}){FairinoErrorCodes.Suffix(corrRc)}.");
+                return FailStage($"틸트 보정 이동 실패 (rc={corrRc}){FairinoErrorCodes.Suffix(corrRc)}.");
 
             await Task.Delay(300, ct);
         }
     }
 
     // ── 헬퍼 ────────────────────────────────────────────────────────────
+
+    /// <summary>평탄 셀 검출 이후 단계의 실패 — 카메라 페이지 검출 스냅샷에도 실패로 표시한다.</summary>
+    private StepResult FailStage(string message)
+    {
+        _monitor.UpdateStage(FlatDetectionStage.Failed, message);
+        return StepResult.Fail(message);
+    }
 
     /// <summary>레이저 3점 측정을 3회 샘플링해 평균 pose 반환.</summary>
     private async Task<PlanePose> SamplePlanePoseAsync(CancellationToken ct)

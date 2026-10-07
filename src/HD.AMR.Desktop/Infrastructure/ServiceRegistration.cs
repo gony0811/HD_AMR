@@ -67,6 +67,8 @@ internal static class ServiceRegistration
         // ── 시퀀스 그래프 지원 서비스 ───────────────────────────────
         // 평탄 중심 정렬(무상태 루틴) — 카메라 페이지/FlatSurfaceAlignStep 공유.
         services.AddTransient<FlatSurfaceCenteringService>();
+        // 최근 평탄면 검출 스냅샷 — 시퀀스/정렬 루틴이 발행하고 카메라 페이지가 정지 화면으로 표시.
+        services.AddSingleton<FlatDetectionMonitor>();
 
         // 용접라인 추적 — 검출기는 Windows 에서만 실제(OpenCV/ONNX), 그 외 no-op 폴백.
         services.Configure<WeldTrackingSettings>(config.GetSection("WeldTracking"));

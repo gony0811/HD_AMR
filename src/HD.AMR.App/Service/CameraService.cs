@@ -189,6 +189,16 @@ public class CameraService : BackgroundService
     public DepthFlatnessResult? FindFlattest(
         double roiX, double roiY, double roiW, double roiH,
         int gridSize = 5, double minValidRatio = 0.5)
+        => AnalyzeFlatness(roiX, roiY, roiW, roiH, gridSize, minValidRatio)?.Best;
+
+    /// <summary>
+    /// <see cref="FindFlattest"/> 와 같은 계산이지만 선택 셀뿐 아니라 <b>전체 셀</b>의 σ·평균·유효율과
+    /// 계산에 쓴 깊이 프레임을 함께 반환한다 — 카메라 페이지의 검출 스냅샷(히트맵) 표시용.
+    /// 프레임이 없거나 유효 셀이 하나도 없으면 null.
+    /// </summary>
+    public DepthGridAnalysis? AnalyzeFlatness(
+        double roiX, double roiY, double roiW, double roiH,
+        int gridSize = 5, double minValidRatio = 0.5)
     {
         var f = _client.LatestDepth;
         if (f is null) return null;
@@ -202,9 +212,10 @@ public class CameraService : BackgroundService
         int roiPxW = rx1 - rx0, roiPxH = ry1 - ry0;
         if (roiPxW < gridSize || roiPxH < gridSize) return null;
 
+        var cells = new List<DepthGridCell>(gridSize * gridSize);
         double bestSigma = double.MaxValue;
         double bestU = 0.5, bestV = 0.5, bestMean = 0;
-        bool found = false;
+        int bestIndex = -1;
 
         for (int gy = 0; gy < gridSize; gy++)
         for (int gx = 0; gx < gridSize; gx++)
@@ -215,7 +226,13 @@ public class CameraService : BackgroundService
             int cy1 = ry0 + roiPxH * (gy + 1) / gridSize;
 
             int total = (cx1 - cx0) * (cy1 - cy0);
-            if (total == 0) continue;
+            double u0 = (double)cx0 / f.Width, v0 = (double)cy0 / f.Height;
+            double u1 = (double)cx1 / f.Width, v1 = (double)cy1 / f.Height;
+            if (total == 0)
+            {
+                cells.Add(new DepthGridCell(gx, gy, u0, v0, u1, v1, 0, 0, 0, false));
+                continue;
+            }
 
             long sum = 0;
             long sumSq = 0;
@@ -236,11 +253,17 @@ public class CameraService : BackgroundService
                 }
             }
 
-            if (valid < total * minValidRatio) continue;
+            double validRatio = (double)valid / total;
+            if (valid == 0 || valid < total * minValidRatio)
+            {
+                cells.Add(new DepthGridCell(gx, gy, u0, v0, u1, v1, 0, 0, validRatio, false));
+                continue;
+            }
 
             double mean = (double)sum / valid;
             double variance = (double)sumSq / valid - mean * mean;
             double sigma = Math.Sqrt(Math.Max(0, variance));
+            cells.Add(new DepthGridCell(gx, gy, u0, v0, u1, v1, sigma, mean, validRatio, true));
 
             if (sigma < bestSigma)
             {
@@ -249,12 +272,28 @@ public class CameraService : BackgroundService
                 bestU = ((cx0 + cx1) / 2.0) / f.Width;
                 bestV = ((cy0 + cy1) / 2.0) / f.Height;
                 bestMean = mean;
-                found = true;
+                bestIndex = cells.Count - 1;
             }
         }
 
-        return found ? new DepthFlatnessResult(bestU, bestV, bestSigma, bestMean) : null;
+        if (bestIndex < 0) return null;
+
+        // 2순위 셀 — 1순위와 σ 가 비슷하면 ROI 안에 평탄 후보가 여럿이라는 신호(진동 가드 원인).
+        int secondIndex = -1;
+        for (int i = 0; i < cells.Count; i++)
+        {
+            if (i == bestIndex || !cells[i].Valid) continue;
+            if (secondIndex < 0 || cells[i].SigmaMm < cells[secondIndex].SigmaMm) secondIndex = i;
+        }
+
+        return new DepthGridAnalysis(
+            f, roiX, roiY, roiW, roiH, gridSize, cells, bestIndex, secondIndex,
+            new DepthFlatnessResult(bestU, bestV, bestSigma, bestMean));
     }
+
+    /// <summary>임의의 깊이 프레임을 라이브 화면과 같은 컬러맵 JPEG 으로 인코딩 — 검출 시점 정지 화면용.</summary>
+    public byte[] EncodeDepthJpeg(CameraFrame depthFrame, int quality)
+        => EncodeDepth16ToJpeg(depthFrame, _settings.DepthMinMm, _settings.DepthMaxMm, quality);
 
     /// <summary>깊이 그리드 평탄도 분석 결과.</summary>
     /// <param name="U">가장 평평한 셀 중심의 정규화 X (0~1).</param>
@@ -262,6 +301,21 @@ public class CameraService : BackgroundService
     /// <param name="SigmaMm">해당 셀의 깊이 표준편차(mm). 작을수록 평평.</param>
     /// <param name="MeanMm">해당 셀의 평균 깊이(mm) — 평탄면까지의 거리 Z.</param>
     public sealed record DepthFlatnessResult(double U, double V, double SigmaMm, double MeanMm);
+
+    /// <summary>그리드 셀 1개의 분석값. 좌표는 전체 프레임 기준 정규화(0~1). Valid=false 면 유효 픽셀 부족으로 후보 제외.</summary>
+    public sealed record DepthGridCell(
+        int Gx, int Gy, double U0, double V0, double U1, double V1,
+        double SigmaMm, double MeanMm, double ValidRatio, bool Valid);
+
+    /// <summary>
+    /// 그리드 평탄도 전체 분석 결과. <see cref="Frame"/> 은 계산에 쓴 깊이 프레임(불변 스냅샷).
+    /// <see cref="SecondIndex"/> 는 유효 셀이 1개뿐이면 -1.
+    /// </summary>
+    public sealed record DepthGridAnalysis(
+        CameraFrame Frame,
+        double RoiX, double RoiY, double RoiW, double RoiH, int GridSize,
+        IReadOnlyList<DepthGridCell> Cells, int BestIndex, int SecondIndex,
+        DepthFlatnessResult Best);
 
     // SDK 내상수를 읽지 못할 때 쓰는 RealSense D435 Depth 공칭 FOV (데이터시트: H 87° / V 58°).
     private const double FallbackHFovDeg = 87.0;

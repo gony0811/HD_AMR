@@ -56,6 +56,8 @@ builder.Services.AddTransient<LaserHeadCalibrationRoutine>();
 
 // 평탄 중심 정렬 — 카메라 페이지와 FlatSurfaceAlignStep 이 공유하는 무상태 루틴.
 builder.Services.AddTransient<FlatSurfaceCenteringService>();
+// 최근 평탄면 검출 스냅샷 — 시퀀스/정렬 루틴이 발행하고 카메라 페이지가 표시.
+builder.Services.AddSingleton<FlatDetectionMonitor>();
 
 // 노드↔AMR Job/Task 인덱스 로컬 매핑 저장소(JSON). /amr-job-mapping 편집 화면 + (향후)어댑터 조회.
 builder.Services.AddSingleton<AmrJobMappingStore>();
