@@ -12,6 +12,12 @@ public class TelescopicSerialSettings
     /// <summary>표시용 이름.</summary>
     public string Name { get; set; } = "Telescopic";
 
+    /// <summary>
+    /// false 면 서비스가 포트 연결·폴링을 아예 시도하지 않는다 — 장비 없이 앱을 띄울 때 쓴다.
+    /// (다른 COM 포트가 열려 버리면 쓰기 타임아웃이 재연결 주기마다 반복되므로.)
+    /// </summary>
+    public bool Enabled { get; set; } = true;
+
     /// <summary>시리얼 포트 이름. Windows 는 <c>COM4</c> 형태, macOS/Linux 는 <c>/dev/tty.*</c>.</summary>
     public string PortName { get; set; } = "COM4";
 

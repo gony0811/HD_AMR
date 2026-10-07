@@ -79,6 +79,13 @@ public class TelescopicService : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        if (!_settings.Enabled)
+        {
+            LastError = "텔레스코픽 비활성화됨 (Telescopic:Enabled = false)";
+            _logger.LogInformation("TelescopicService 비활성화 — 포트 연결을 시도하지 않습니다");
+            return;
+        }
+
         _logger.LogInformation("TelescopicService 시작 ({Port} @ {Baud})", _settings.PortName, _settings.BaudRate);
 
         // host.Start() 는 첫 await 까지 동기 실행한다 — 아래 _client.Open()(SerialPort.Open 은 동기 블로킹)이
