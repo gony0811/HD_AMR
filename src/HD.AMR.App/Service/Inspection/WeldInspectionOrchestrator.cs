@@ -191,7 +191,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         }
 
         // 6) 사전 티칭 경유점 조회: 레시피에 지정된 InspectionProfile(검사 레시피 페이지에서 지정).
-        //    면 자세마다 경유점이 다르므로 레시피(LINE-FLOOR ≠ LINE-WALL)별로 명시 지정한다.
+        //    레시피는 면 자세-독립 단일(LINE/CROSS4)이고, 면별 경유점 차이는 지정된 프로파일이 흡수한다 —
+        //    접근 자세·방향은 런타임이 wall_code 로 계산하므로 같은 LINE 프로파일이 모든 면에 쓰인다(§9-8).
         //    CORNER 는 도면 프로필을 쓰지 않는다(고정 티칭 슬롯 corner3.* 직접 순회) — 조회 생략.
         InspectionProfile? profile = null;
         if (recipe.SeamType != SeamTypeKind.Corner)

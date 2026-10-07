@@ -23,7 +23,7 @@ internal static class DatabaseInitializer
         db.Database.EnsureCreated();
         SqliteCompatMigrations.Apply(db);
 
-        // 검사 레시피 17종 카탈로그 시드 — 없는 행만 추가(현장 조정값 보존).
+        // 검사 레시피 8종 카탈로그 시드 — 없는 행만 추가(현장 조정값 보존).
         sp.GetRequiredService<InspectionRecipeService>()
             .SeedDefaultsAsync().GetAwaiter().GetResult();
 

@@ -125,7 +125,7 @@ builder.Services.AddDbContext<HdAmrDbContext>(opt =>
 builder.Services.AddScoped<DrawingService>();
 builder.Services.AddScoped<TeachingService>();
 builder.Services.AddScoped<ParameterService>();
-// 검사 타입 17종 레시피(사양 §8.5.1) CRUD + 기동 시드 — ACS startWeldInspection 매핑 대상.
+// 검사 타입 8종 레시피(사양 §8.5.1) CRUD + 기동 시드 — ACS startWeldInspection 매핑 대상.
 builder.Services.AddScoped<InspectionRecipeService>();
 // QR 정차 pose 티칭에 필요한 T_A_B, T_T_C, 목표 T_A_Q 및 기존 정합값 저장.
 builder.Services.AddScoped<CalibrationService>();

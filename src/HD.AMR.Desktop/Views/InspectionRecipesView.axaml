@@ -13,7 +13,7 @@
     <StackPanel MaxWidth="1400" HorizontalAlignment="Left">
         <TextBlock Classes="page-title" Text="검사 레시피 관리" />
         <TextBlock Classes="page-subtitle" TextWrapping="Wrap"
-                   Text="ACS startWeldInspection 의 (seamType, wall_code) 조합으로 선택되는 검사 타입 17종의 실행 구성입니다. 왼쪽에서 레시피를 선택해 설정하고 저장하세요. Enabled 는 실기 E2E 검증 후에만 켜세요." />
+                   Text="ACS startWeldInspection 의 seamType 으로 선택되는 검사 타입 8종의 실행 구성입니다(면 자세-독립 — wall_code 는 런타임 접근 자세 계산에만 사용). 왼쪽에서 레시피를 선택해 설정하고 저장하세요. Enabled 는 실기 E2E 검증 후에만 켜세요." />
 
         <Grid ColumnDefinitions="Auto,*" Margin="0,0,0,8">
             <Button Grid.Column="0" Content="새로고침" Command="{Binding ReloadCommand}" IsEnabled="{Binding !Busy}"

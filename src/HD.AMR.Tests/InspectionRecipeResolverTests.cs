@@ -17,29 +17,29 @@ public class InspectionRecipeResolverTests
         AnchorGroupId: "G",
         SeqInGroup: 1);
 
-    // 사양 §8.5.1 (3) 매핑표 전 조합 — LINE/CROSS × 면자세 5군.
+    // §8.5.1 / §9-8 — LINE/CROSS4 는 면 자세-독립 단일 레시피. 정본 10코드 전부가 같은 단일 id 로 수렴한다.
     [Theory]
-    [InlineData(SeamTypeKind.Line, "B", "LINE-FLOOR")]
-    [InlineData(SeamTypeKind.Line, "T", "LINE-CEIL")]
-    [InlineData(SeamTypeKind.Line, "SM", "LINE-WALL")]
-    [InlineData(SeamTypeKind.Line, "PM", "LINE-WALL")]
-    [InlineData(SeamTypeKind.Line, "F", "LINE-WALL")]
-    [InlineData(SeamTypeKind.Line, "A", "LINE-WALL")]
-    [InlineData(SeamTypeKind.Line, "SL", "LINE-CHMR-LO")]
-    [InlineData(SeamTypeKind.Line, "PL", "LINE-CHMR-LO")]
-    [InlineData(SeamTypeKind.Line, "SU", "LINE-CHMR-UP")]
-    [InlineData(SeamTypeKind.Line, "PU", "LINE-CHMR-UP")]
-    [InlineData(SeamTypeKind.Cross, "B", "CROSS4-FLOOR")]
-    [InlineData(SeamTypeKind.Cross, "T", "CROSS4-CEIL")]
-    [InlineData(SeamTypeKind.Cross, "SM", "CROSS4-WALL")]
-    [InlineData(SeamTypeKind.Cross, "PM", "CROSS4-WALL")]
-    [InlineData(SeamTypeKind.Cross, "F", "CROSS4-WALL")]
-    [InlineData(SeamTypeKind.Cross, "A", "CROSS4-WALL")]
-    [InlineData(SeamTypeKind.Cross, "SL", "CROSS4-CHMR-LO")]
-    [InlineData(SeamTypeKind.Cross, "PL", "CROSS4-CHMR-LO")]
-    [InlineData(SeamTypeKind.Cross, "SU", "CROSS4-CHMR-UP")]
-    [InlineData(SeamTypeKind.Cross, "PU", "CROSS4-CHMR-UP")]
-    public void Resolve_LineAndCross_MatchesSpecTable(SeamTypeKind seamType, string wallCode, string expected)
+    [InlineData(SeamTypeKind.Line, "B", "LINE")]
+    [InlineData(SeamTypeKind.Line, "T", "LINE")]
+    [InlineData(SeamTypeKind.Line, "SM", "LINE")]
+    [InlineData(SeamTypeKind.Line, "PM", "LINE")]
+    [InlineData(SeamTypeKind.Line, "F", "LINE")]
+    [InlineData(SeamTypeKind.Line, "A", "LINE")]
+    [InlineData(SeamTypeKind.Line, "SL", "LINE")]
+    [InlineData(SeamTypeKind.Line, "PL", "LINE")]
+    [InlineData(SeamTypeKind.Line, "SU", "LINE")]
+    [InlineData(SeamTypeKind.Line, "PU", "LINE")]
+    [InlineData(SeamTypeKind.Cross, "B", "CROSS4")]
+    [InlineData(SeamTypeKind.Cross, "T", "CROSS4")]
+    [InlineData(SeamTypeKind.Cross, "SM", "CROSS4")]
+    [InlineData(SeamTypeKind.Cross, "PM", "CROSS4")]
+    [InlineData(SeamTypeKind.Cross, "F", "CROSS4")]
+    [InlineData(SeamTypeKind.Cross, "A", "CROSS4")]
+    [InlineData(SeamTypeKind.Cross, "SL", "CROSS4")]
+    [InlineData(SeamTypeKind.Cross, "PL", "CROSS4")]
+    [InlineData(SeamTypeKind.Cross, "SU", "CROSS4")]
+    [InlineData(SeamTypeKind.Cross, "PU", "CROSS4")]
+    public void Resolve_LineAndCross_AreSurfaceIndependent(SeamTypeKind seamType, string wallCode, string expected)
     {
         var ok = InspectionRecipeResolver.TryResolve(MakeRequest(seamType, wallCode), out var recipeId, out var error);
 
@@ -49,9 +49,9 @@ public class InspectionRecipeResolverTests
 
     // 경량 헬퍼 ResolveRecipeId(seam, wallCode) — request 없이 매핑(§8.5.1). UI 매핑 레퍼런스가 사용.
     [Theory]
-    [InlineData(SeamTypeKind.Line, "B", "LINE-FLOOR")]
-    [InlineData(SeamTypeKind.Line, "F", "LINE-WALL")]      // 마구리 → 수직벽
-    [InlineData(SeamTypeKind.Cross, "T", "CROSS4-CEIL")]
+    [InlineData(SeamTypeKind.Line, "B", "LINE")]
+    [InlineData(SeamTypeKind.Line, "F", "LINE")]           // 마구리도 동일 단일 레시피
+    [InlineData(SeamTypeKind.Cross, "T", "CROSS4")]
     [InlineData(SeamTypeKind.Cross3R90, "SM", "CROSS3-R90")]
     [InlineData(SeamTypeKind.Corner, "PM", "CORNER3")]
     [InlineData(SeamTypeKind.Corner2, "PM", "CORNER2")]
@@ -148,23 +148,21 @@ public class InspectionRecipeResolverTests
     }
 
     [Fact]
-    public void RecipeIds_CatalogHasSixteenEntries()
+    public void RecipeIds_CatalogHasEightEntries()
     {
-        // LINE 5 + CROSS3 회전 4 + CROSS4 5 + CORNER2 1 + CORNER3 1 = 16.
-        Assert.Equal(16, RecipeIds.All.Count);
+        // LINE 1 + CROSS3 회전 4 + CROSS4 1 + CORNER2 1 + CORNER3 1 = 8 (면 자세-독립 통합, §9-8).
+        Assert.Equal(8, RecipeIds.All.Count);
         Assert.Equal(RecipeIds.All.Count, RecipeIds.All.Distinct().Count());
     }
 
     // 교시 화면: 레시피 id → 프로필 SeamType 문자열(ACS 실행 선택은 레시피 id, 타입은 파생 표기).
     [Theory]
-    [InlineData("LINE-FLOOR", "LINE")]
-    [InlineData("LINE-CHMR-UP", "LINE")]
+    [InlineData("LINE", "LINE")]
     [InlineData("CROSS3-R0", "CROSS3_R0")]
     [InlineData("CROSS3-R90", "CROSS3_R90")]
     [InlineData("CROSS3-R180", "CROSS3_R180")]
     [InlineData("CROSS3-R270", "CROSS3_R270")]
-    [InlineData("CROSS4-CEIL", "CROSS")]
-    [InlineData("CROSS4-CHMR-LO", "CROSS")]
+    [InlineData("CROSS4", "CROSS")]
     [InlineData("CORNER2", "CORNER2")]
     [InlineData("CORNER3", "CORNER3")]
     public void ProfileSeamTypeOf_MapsRecipeToProfileSeam(string recipeId, string expected)
@@ -175,7 +173,7 @@ public class InspectionRecipeResolverTests
     [Theory]
     [InlineData(null)]
     [InlineData("")]
-    [InlineData("LINE")]
+    [InlineData("LINE-WALL")]    // 통합으로 폐기된 구 변종 id — 더 이상 카탈로그에 없음
     [InlineData("CROSS4-XYZ")]
     public void ProfileSeamTypeOf_UnknownRecipe_ReturnsNull(string? recipeId)
     {

@@ -4,8 +4,8 @@ using HD.AMR.App.Models;
 namespace HD.AMR.App.Data.Entities;
 
 /// <summary>
-/// 검사 타입(17종, 사양 §8.5.1·INSPECTION_TYPES.md §5)별 <b>실행 방법</b> 한 세트.
-/// ACS `startWeldInspection` 액션의 `(seamType, wall_code)` 조합으로 선택된다.
+/// 검사 타입(8종, 사양 §8.5.1·INSPECTION_TYPES.md §5)별 <b>실행 방법</b> 한 세트.
+/// ACS `startWeldInspection` 액션의 `seamType` 으로 선택된다(wall_code 는 유효성 확인만 — 면 자세-독립, §9-8).
 ///
 /// 경유점은 담지 않는다 — 경유점·코봇 튜닝값은 티칭 <see cref="InspectionProfile"/> 소관이며,
 /// 레시피는 실행 구성(시퀀스 스텝, 실행할 티칭 프로필 지정, 폴백 파라미터, 판정 정책)만 가진다.
@@ -13,17 +13,18 @@ namespace HD.AMR.App.Data.Entities;
 /// </summary>
 public class InspectionRecipe
 {
-    /// <summary>레시피 id — "LINE-WALL" 등 17종 문자열 그대로 (사양 §8.5.1, FK 없음).</summary>
+    /// <summary>레시피 id — "LINE"/"CROSS4"/"CROSS3-R0".. 등 8종 문자열 그대로 (사양 §8.5.1, FK 없음).</summary>
     public string Id { get; set; } = "";
 
     public string DisplayName { get; set; } = "";
 
     public SeamTypeKind SeamType { get; set; }
 
-    /// <summary>대상 면 자세. CORNER3 은 면 자세 무관(<see cref="SurfaceOrientation.Any"/>).</summary>
+    /// <summary>대상 면 자세. 모든 레시피가 면 자세-독립(<see cref="SurfaceOrientation.Any"/>)이며, 표시·영속화 라벨일 뿐
+    /// 런타임 실행 분기에 쓰지 않는다(§9-8 — 접근 자세·법선은 wall_code 로 계산).</summary>
     public SurfaceOrientation Orientation { get; set; }
 
-    /// <summary>실행 가능 게이트 — 미구현 타입(CROSS4-*/CORNER3)은 false 시드.
+    /// <summary>실행 가능 게이트 — 미구현 타입(CROSS4/CROSS3-R*/CORNER2/CORNER3)은 false 시드.
     /// false 인 레시피로 매핑된 액션은 FAILED + inspectionFailed(실행 불가) 보고.</summary>
     public bool Enabled { get; set; }
 

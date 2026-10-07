@@ -30,7 +30,7 @@
             <span class="badge bg-success">검사 실행</span>
         </div>
         <div class="mt-2 text-muted">
-            레시피는 <b>16종</b>(seamType × 면 자세, 단 CROSS3·CORNER 는 면 자세 무관)이고, 경유점은 검사 포인트(X-Y)에서 저장한 프로필을 <b>레시피마다 지정</b>합니다(도면 무관).
+            레시피는 <b>8종</b>(seamType 기준 — 면 자세-독립. 접근 자세·방향은 런타임이 wall_code 로 계산)이고, 경유점은 검사 포인트(X-Y)에서 저장한 프로필을 <b>레시피마다 지정</b>합니다(도면 무관).
             둘 중 하나라도 없으면(레시피 Disabled / 프로필 미지정) 액션은 <code>FAILED</code> 로 보고됩니다.
             <b>CORNER3</b> 는 현재 검사 시퀀스에서 제거되어 실행할 수 없습니다.
         </div>
@@ -90,7 +90,7 @@
 </p>
 
 <!-- ② 레시피 카탈로그 상태 -->
-<h4 class="mt-4">② 레시피 카탈로그 상태 (16종)</h4>
+<h4 class="mt-4">② 레시피 카탈로그 상태 (8종)</h4>
 <div class="table-responsive" style="max-width:1150px">
     <table class="table table-sm align-middle" style="font-size:.82rem">
         <thead class="table-light">

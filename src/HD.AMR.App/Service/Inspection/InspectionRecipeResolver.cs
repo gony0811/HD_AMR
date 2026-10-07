@@ -4,12 +4,14 @@ namespace HD.AMR.App.Service.Inspection;
 
 /// <summary>
 /// 검사 레시피 매핑(사양 §8.5.1, INSPECTION_TYPES.md §5) — 순수 함수 2단:
-/// ① `wall_code` → 면 자세 5군, ② `(seamType, 면 자세)` → 레시피 id 17종.
+/// ① `wall_code` → 면 자세(유효성 확인용), ② `seamType` → 레시피 id 8종.
 ///
 /// 정본 10코드(B/T/SM/PM/F/A/SL/PL/SU/PU, ACS 확정 2026-09-15) 외 wall_code 는 계약 위반으로
 /// 실패를 반환한다 — 호출측이 액션 FAILED + orderValidationError 로 보고.
-/// CORNER2/CORNER3 은 면 자세 무관 단일 레시피(삼면 코너 각도 전부 135°·90°·90° 균일 — INSPECTION_TYPES.md §7).
-/// 거울 L/R 분리(§9-4)는 N13 확정 시 wall_code 판별 추가.
+/// <b>면 자세는 레시피 선택에 쓰지 않는다</b> — LINE/CROSS4/CROSS3(회전4)/CORNER 모두 면 자세-독립 단일(또는 회전별)
+/// 레시피다(INSPECTION_TYPES.md §9-8). 접근 자세·법선·방향은 런타임이 `wall_code`로 직접 계산하고
+/// (<see cref="SeamBaseTransform"/>), 면별 경유점 차이는 레시피에 바인딩된 티칭 프로파일이 흡수한다.
+/// CORNER2/CORNER3 은 삼면 코너 각도 전부 135°·90°·90° 균일(INSPECTION_TYPES.md §7). 거울 L/R 분리(§9-4)는 N13 확정 시 wall_code 판별 추가.
 /// </summary>
 public static class InspectionRecipeResolver
 {
@@ -26,34 +28,25 @@ public static class InspectionRecipeResolver
         return recipeId is not null;
     }
 
-    /// <summary>(seamType × wall_code) → 레시피 id (§8.5.1 매핑표). 미정의 wall_code 는 null.
+    /// <summary>seamType → 레시피 id (§8.5.1 매핑표). wall_code 는 유효성(정본 10코드) 확인에만 쓰고
+    /// 레시피 선택에는 관여하지 않는다 — 미정의 wall_code 는 null(계약 위반).
     /// UI 매핑 레퍼런스 등 request 없이 조회할 때 쓰는 경량 경로 — <see cref="TryResolve"/> 가 위임한다.</summary>
     public static string? ResolveRecipeId(SeamTypeKind seamType, string wallCode)
     {
-        // CORNER·CROSS3(회전 4종): 면 자세 무관 단일 레시피 — wall_code 는 여전히 정의 코드여야 한다.
-        // CORNER 은 §8.5.1 (3), CROSS3 회전은 면 자세와 독립(회전으로만 키잉) — 둘 다 아래에서 short-circuit.
-        var orientation = ResolveOrientation(wallCode);
-        if (orientation is null) return null;
-        if (seamType == SeamTypeKind.Corner) return RecipeIds.Corner3;
-        if (seamType == SeamTypeKind.Corner2) return RecipeIds.Corner2;
-        if (seamType == SeamTypeKind.Cross3R0) return RecipeIds.Cross3R0;
-        if (seamType == SeamTypeKind.Cross3R90) return RecipeIds.Cross3R90;
-        if (seamType == SeamTypeKind.Cross3R180) return RecipeIds.Cross3R180;
-        if (seamType == SeamTypeKind.Cross3R270) return RecipeIds.Cross3R270;
-
-        var prefix = seamType switch
+        // 면 자세는 레시피 선택에 쓰지 않는다 — 모든 seamType 이 면 자세-독립 단일(또는 회전별) 레시피다.
+        // wall_code 는 여전히 정의 코드여야 한다(접근 자세·방향은 런타임이 wall_code 로 직접 계산).
+        if (ResolveOrientation(wallCode) is null) return null;
+        return seamType switch
         {
-            SeamTypeKind.Line => "LINE",
-            _ => "CROSS4",                       // Cross(4갈래)
-        };
-        return orientation switch
-        {
-            SurfaceOrientation.Floor => $"{prefix}-FLOOR",
-            SurfaceOrientation.Ceiling => $"{prefix}-CEIL",
-            SurfaceOrientation.Wall => $"{prefix}-WALL",
-            SurfaceOrientation.ChamferLower => $"{prefix}-CHMR-LO",
-            SurfaceOrientation.ChamferUpper => $"{prefix}-CHMR-UP",
-            _ => null,
+            SeamTypeKind.Line => RecipeIds.Line,
+            SeamTypeKind.Cross => RecipeIds.Cross4,
+            SeamTypeKind.Cross3R0 => RecipeIds.Cross3R0,
+            SeamTypeKind.Cross3R90 => RecipeIds.Cross3R90,
+            SeamTypeKind.Cross3R180 => RecipeIds.Cross3R180,
+            SeamTypeKind.Cross3R270 => RecipeIds.Cross3R270,
+            SeamTypeKind.Corner2 => RecipeIds.Corner2,
+            SeamTypeKind.Corner => RecipeIds.Corner3,
+            _ => null,   // Cross3 tombstone 등 파서 미발행 값
         };
     }
 
@@ -68,8 +61,8 @@ public static class InspectionRecipeResolver
         if (recipeId == RecipeIds.Cross3R90) return "CROSS3_R90";
         if (recipeId == RecipeIds.Cross3R180) return "CROSS3_R180";
         if (recipeId == RecipeIds.Cross3R270) return "CROSS3_R270";
-        if (recipeId.StartsWith("LINE-", StringComparison.Ordinal)) return "LINE";
-        return "CROSS";   // CROSS4-*
+        if (recipeId == RecipeIds.Line) return "LINE";
+        return "CROSS";   // CROSS4
     }
 
     /// <summary>CORNER3 좌/우 거울 side 판별 — 코너 스텝의 티칭 슬롯 접두사(corner3.L/R) 선택 키.
@@ -92,33 +85,25 @@ public static class InspectionRecipeResolver
     }
 }
 
-/// <summary>레시피 id 상수 — INSPECTION_TYPES.md §5 카탈로그 16종과 동일 문자열
-/// (LINE 5 + CROSS3 회전 4 + CROSS4 5 + CORNER2 + CORNER3).</summary>
+/// <summary>레시피 id 상수 — INSPECTION_TYPES.md §5 카탈로그 8종과 동일 문자열
+/// (LINE + CROSS3 회전 4 + CROSS4 + CORNER2 + CORNER3). 면 자세별 변종은 통합되었다(§9-8).</summary>
 public static class RecipeIds
 {
-    public const string LineFloor = "LINE-FLOOR";
-    public const string LineCeil = "LINE-CEIL";
-    public const string LineWall = "LINE-WALL";
-    public const string LineChamferLower = "LINE-CHMR-LO";
-    public const string LineChamferUpper = "LINE-CHMR-UP";
+    public const string Line = "LINE";                   // 직선 1갈래 — 면 자세-독립 단일
     // T자 3갈래 회전 4종 — 면 자세 무관(회전으로만 키잉).
     public const string Cross3R0 = "CROSS3-R0";
     public const string Cross3R90 = "CROSS3-R90";
     public const string Cross3R180 = "CROSS3-R180";
     public const string Cross3R270 = "CROSS3-R270";
-    public const string Cross4Floor = "CROSS4-FLOOR";
-    public const string Cross4Ceil = "CROSS4-CEIL";
-    public const string Cross4Wall = "CROSS4-WALL";
-    public const string Cross4ChamferLower = "CROSS4-CHMR-LO";
-    public const string Cross4ChamferUpper = "CROSS4-CHMR-UP";
+    public const string Cross4 = "CROSS4";               // 십자 4갈래 — 면 자세-독립 단일
     public const string Corner2 = "CORNER2";
     public const string Corner3 = "CORNER3";
 
     public static readonly IReadOnlyList<string> All = new[]
     {
-        LineFloor, LineCeil, LineWall, LineChamferLower, LineChamferUpper,
+        Line,
         Cross3R0, Cross3R90, Cross3R180, Cross3R270,
-        Cross4Floor, Cross4Ceil, Cross4Wall, Cross4ChamferLower, Cross4ChamferUpper,
+        Cross4,
         Corner2, Corner3,
     };
 }

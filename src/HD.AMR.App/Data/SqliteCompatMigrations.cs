@@ -194,7 +194,7 @@ CREATE TABLE IF NOT EXISTS Parameters (
 CREATE UNIQUE INDEX IF NOT EXISTS IX_Parameters_Name ON Parameters (Name);
 ");
 
-        // Backward-compatible schema add for InspectionRecipes (검사 타입 16종 레시피, 사양 §8.5.1; 기존 데이터 보존).
+        // Backward-compatible schema add for InspectionRecipes (검사 타입 8종 레시피, 사양 §8.5.1; 기존 데이터 보존).
         db.Database.ExecuteSqlRaw(@"
 CREATE TABLE IF NOT EXISTS InspectionRecipes (
     Id TEXT NOT NULL PRIMARY KEY,
@@ -261,6 +261,24 @@ CREATE TABLE IF NOT EXISTS InspectionRecipes (
         db.Database.ExecuteSqlRaw(
             "DELETE FROM InspectionRecipes WHERE Id IN " +
             "('CROSS3-FLOOR','CROSS3-CEIL','CROSS3-WALL','CROSS3-CHMR-LO','CROSS3-CHMR-UP');");
+
+        // LINE/CROSS4 를 면 자세별 5종에서 면 자세-독립 단일 레시피('LINE'/'CROSS4')로 통합(§9-8).
+        // CROSS3 와 달리 LINE 은 Enabled=true 라 현장에서 티칭 프로필(InspectionProfileId)을 바인딩했을 수 있다 —
+        // 그냥 지우면 바인딩이 사라지므로, 구 변종 중 프로필이 바인딩된 행(없으면 임의 1행)을 단일 id 로 승격한 뒤
+        // 나머지를 제거한다. 멱등: 단일 id 가 이미 있거나 구 변종이 없으면 INSERT/DELETE 둘 다 no-op.
+        // 마이그레이션은 시드보다 먼저 돌므로(Program.cs / DatabaseInitializer), 승격된 행을 시드가 건드리지 않는다.
+        foreach (var (newId, name, enabled) in new[] { ("LINE", "직선 seam", 1), ("CROSS4", "4점 십자", 0) })
+        {
+            db.Database.ExecuteSqlRaw(
+                "INSERT INTO InspectionRecipes (Id, DisplayName, SeamType, Orientation, Enabled, DryRun, StepKeysJson, " +
+                "CameraTargetDistanceMm, MoveVelPercent, InspectVelPercent, InspectionProfileId, VisionFailRatioMax, CreatedAt, UpdatedAt) " +
+                $"SELECT '{newId}', '{name}', SeamType, 'Any', {enabled}, DryRun, StepKeysJson, " +
+                "CameraTargetDistanceMm, MoveVelPercent, InspectVelPercent, InspectionProfileId, VisionFailRatioMax, CreatedAt, UpdatedAt " +
+                $"FROM InspectionRecipes WHERE Id LIKE '{newId}-%' " +
+                $"AND NOT EXISTS (SELECT 1 FROM InspectionRecipes WHERE Id = '{newId}') " +
+                "ORDER BY (InspectionProfileId IS NULL), Id LIMIT 1;");
+            db.Database.ExecuteSqlRaw($"DELETE FROM InspectionRecipes WHERE Id LIKE '{newId}-%';");
+        }
 
         // 운영 로그(수동/ACS 동작 이력 + 실패 원인) — UI 로그 페이지 데이터 원본.
         db.Database.ExecuteSqlRaw(@"
