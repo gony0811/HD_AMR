@@ -282,7 +282,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         // 적용되지 않는 조용한 불일치가 있었다. 같은 키를 여기서도 읽어 해소한다.
         var offsetU = await param.GetDoubleAsync(WeldSequenceSupport.InspectionOffsetUKey) ?? 0.0;
         var offsetV = await param.GetDoubleAsync(WeldSequenceSupport.InspectionOffsetVKey) ?? 0.0;
-        var camToLaserShiftY = await param.GetDoubleAsync(WeldSequenceSupport.CameraToLaserShiftYKey) ?? -65.0;
+        var camToLaserShiftY = await param.GetDoubleAsync(WeldSequenceSupport.CameraToLaserShiftYKey) ?? -75.0;
         // z 기준 보정(N17) — ACS 의 z 는 도면 전역(선창 바닥) 기준이라 L2 이상은 층 바닥 높이를 빼야 한다.
         var zDatumOffset = await param.GetDoubleAsync(WeldSequenceSupport.ZDatumOffsetKey) ?? 0.0;
 

@@ -11,7 +11,7 @@ namespace HD.AMR.App.Service.Sequence.Steps;
 ///   A) 뎁스 카메라 깊이 프레임을 그리드로 분할, depth σ 최소 셀(= 최평탄 영역) 탐색.
 ///   B) 평탄 셀 중심과 현재 센서 중심의 오프셋을 mm로 환산, 코봇 횡이동(툴 프레임 MoveByToolOffset —
 ///      이미지 평면과 평행, 대상면 거리 유지. FlatSurfaceCenteringService 공용 루틴).
-///      이동 후 레이저 측정 중심 보정 횡이동(툴 −Y 65mm — 레이저 중심이 카메라보다 좌측 장착).
+///      이동 후 레이저 측정 중심 보정 횡이동(툴 −Y 75mm — 레이저 3점 중심이 카메라보다 좌측(툴 +Y) 75mm 장착).
 ///   C) 레이저 변위센서 3점 측정으로 평면 틸트(rx, ry) 검증. 임계값 초과 시 측정 틸트만큼
 ///      툴 헤드를 회전 보정(위치 고정, /laser '보정 적용'과 동일 부호 규약) 후 재검증.
 ///
@@ -32,7 +32,7 @@ public class FlatSurfaceAlignStep : ISequenceStep
     private const double TiltThresholdDeg = 1.0;
 
     /// <summary>카메라→레이저 중심 보정 이동량 절대 상한(mm). 파라미터 오입력 가드.
-    /// 실제 이동량은 시퀀스 페이지 파라미터(<see cref="SequenceContext.CameraToLaserShiftYmm"/>, 기본 −65mm)로 설정 —
+    /// 실제 이동량은 시퀀스 페이지 파라미터(<see cref="SequenceContext.CameraToLaserShiftYmm"/>, 기본 −75mm)로 설정 —
     /// 레이저 중심이 카메라 대비 얼마나 좌측(툴 +Y)에 장착됐는지에 따른 장착 오프셋이라 DB로 외부화한다.</summary>
     private const double MaxCameraToLaserShiftMm = 200.0;
 
@@ -124,7 +124,7 @@ public class FlatSurfaceAlignStep : ISequenceStep
         // ── 카메라 중심 → 레이저 측정 중심 횡이동 ─────────────────────
         // Phase B는 평탄영역을 카메라 중심에 맞추므로, 레이저 3점 중심이 그 지점 위에
         // 오도록 장착 오프셋만큼 이동한 뒤 측정한다. 이동량은 시퀀스 페이지 파라미터
-        // (SequenceContext.CameraToLaserShiftYmm, 기본 −65mm)로 설정 — 장착 위치 종속이라 DB 영속.
+        // (SequenceContext.CameraToLaserShiftYmm, 기본 −75mm)로 설정 — 장착 위치 종속이라 DB 영속.
         var shiftY = context.CameraToLaserShiftYmm;
         if (Math.Abs(shiftY) > MaxCameraToLaserShiftMm)
             return StepResult.Fail(

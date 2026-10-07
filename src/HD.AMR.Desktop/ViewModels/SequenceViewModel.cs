@@ -64,7 +64,7 @@ public sealed partial class SequenceViewModel : ViewModelBase
     [ObservableProperty] private double _offsetU;
     [ObservableProperty] private double _offsetV;
     [ObservableProperty] private double _cameraTargetDistanceMm = 400;
-    [ObservableProperty] private double _cameraToLaserShiftYmm = -65;
+    [ObservableProperty] private double _cameraToLaserShiftYmm = -75;
     [ObservableProperty] private int _xSignIndex;            // 0 → +1, 1 → −1
     [ObservableProperty] private double _inspectCamOffsetX;
     [ObservableProperty] private double _inspectCamOffsetY;
@@ -128,7 +128,7 @@ public sealed partial class SequenceViewModel : ViewModelBase
             OffsetV = await _param.GetDoubleAsync(OffsetVKey) ?? 0;
             DirectionIndex = (int)(await _param.GetDoubleAsync(DirectionKey) ?? 0) == 1 ? 1 : 0;
             CameraTargetDistanceMm = await _param.GetDoubleAsync(CameraDistKey) ?? 400;
-            CameraToLaserShiftYmm = await _param.GetDoubleAsync(CameraToLaserShiftKey) ?? -65;
+            CameraToLaserShiftYmm = await _param.GetDoubleAsync(CameraToLaserShiftKey) ?? -75;
             XSignIndex = Math.Sign(await _param.GetDoubleAsync(XSignKey) ?? 1) == -1 ? 1 : 0;
             PitchMm = await _param.GetDoubleAsync(PitchMmKey) ?? 370;
             PitchDirIndex = Math.Sign(await _param.GetDoubleAsync(PitchDirKey) ?? 1) == -1 ? 1 : 0;

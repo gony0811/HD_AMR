@@ -69,8 +69,8 @@ public class SequenceContext
     public double CameraTargetDistanceMm { get; set; } = 400;
 
     /// <summary>④ 평탄면 센터링: 카메라 광축 → 레이저 3점 측정 중심 보정 횡이동(mm, 툴 Y).
-    /// 레이저 중심이 카메라보다 좌측(툴 +Y)에 장착된 만큼 센터링 후 툴 −Y로 이동. 기본 −65mm.</summary>
-    public double CameraToLaserShiftYmm { get; set; } = -65.0;
+    /// 레이저 중심이 카메라보다 좌측(툴 +Y)에 장착된 만큼 센터링 후 툴 −Y로 이동. 기본 −75mm(실측 장착 75mm).</summary>
+    public double CameraToLaserShiftYmm { get; set; } = -75.0;
 
     /// <summary>⑱ 검사 수행: 대상 도면 id (드롭박스 선택값, 티칭설정 목록 필터용).</summary>
     public int InspectionDrawingId { get; set; }
