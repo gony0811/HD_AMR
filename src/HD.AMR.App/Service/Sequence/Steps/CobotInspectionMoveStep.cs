@@ -5,25 +5,21 @@ using Microsoft.Extensions.Logging;
 namespace HD.AMR.App.Service.Sequence.Steps;
 
 /// <summary>
-/// ② Cobot 검사위치 이동 — 티칭된 검사 준비 위치에 툴프레임 u/v 오프셋을 합성한 목표로 <b>MoveJ 관절 이동</b>.
+/// ② Cobot 검사위치 이동 — 두 단계로 정의한다.
 ///
-/// <b>목표 위치는 ACS 가 보낸 용접선(seamStartW)에서 온다.</b> 정차점 하나에 여러 task(액션)가 실려
-/// 오므로, 벽(Wall ID)으로 고른 티칭 위치 하나로만 가면 2번째 task 가 1번째와 같은 자리로 간다. 그래서
-/// seamStartW(맵 좌표)를 코봇 BASE 로 환산해(<see cref="SeamBaseTransform"/>) 면에서 ③ 카메라 목표거리만큼
-/// 물러난 <b>접근점</b>으로 간다. <b>자세는 티칭 위치 값을 그대로 쓴다</b> — 손으로 맞춰 검증한 값이고,
-/// 같은 벽의 어느 용접선이든 바라보는 방향은 같기 때문(위치만 벽을 따라 달라진다).
-/// 여기는 거친 접근이고, 정밀 정렬은 뒤의 ③~⑯이 카메라·레이저로 잡는다.
-/// seamStartW 가 없으면(UI 단독 실행) 종전대로 티칭 위치로 이동한다.
+///  1. <b>작업 준비 위치 이동</b> — Teaching 의 "ready"(작업 준비 위치)로 간다. <see cref="SequenceEntry"/> 의
+///     진입 준비(활성 좌표계 정규화 → 필요 시 벽면 후퇴·홈 복귀 → ready)를 그대로 쓴다. 홈→검사 위치를
+///     바로 MoveJ 하면 900mm 이하 영역에서 툴이 차체와 부딪힐 수 있어 ready 를 반드시 거친다.
+///  2. <b>용접선 시작점 접근</b> — 해당 작업의 용접선 시작점(seamStartW, 맵 좌표)을 코봇 BASE 로 환산해
+///     (<see cref="SeamBaseTransform"/>) 면 법선 반대로 <see cref="ApproachStandoffMm"/>(400mm) 물러난 점으로
+///     <b>툴(TCP)</b>을 MoveJ 로 보낸다. 자세는 wall_code 가 유효하면 광축이 면을 바라보는 계산 자세,
+///     없으면 1단계 도착(ready) 자세를 유지한다.
 ///
-/// 관절 이동인 이유: 홈에서 검사 준비 위치까지는 거리·자세 변화가 큰 구간이라, 직선 이동(MoveL)으로 가면
-/// 자세를 직교 공간에서 보간하다 중간에 손목 특이점(J5≈0)을 쓸고 지나갈 수 있다(rc=38·손목 급회전).
-/// 관절 이동은 각 축이 두 끝값 사이에서 단조로 변하므로 그 구간이 생기지 않는다. 대신 TCP 경로가 직선이
-/// 아니라 호를 그리므로, 티칭 시 홈↔검사위치 사이에 구조물이 없는지 확인해야 한다.
-/// 면을 따라가는 짧은 이동(③~⑱)은 직선이어야 하므로 그대로 MoveL 이다.
+/// 용접선 좌표를 환산할 수 없으면(측위·장착 보정·좌표 없음) 엉뚱한 곳으로 가지 않도록 실패한다 — 예전의
+/// 벽별 검사 준비 티칭 위치 폴백은 쓰지 않는다. 정밀 정렬은 뒤의 ③~⑯이 카메라·레이저로 잡는다.
 ///
-/// 코봇을 처음 움직이는 스텝이라 <see cref="SequenceEntry"/> 의 진입 준비(활성 좌표계 정규화 + 홈 복귀)를
-/// 자기 앞에서 수행한다 — 예전 ① AmrMoveStep 이 하던 일이다(그 스텝의 AMR 이동은 끝내 미구현이었고,
-/// AMR 은 ACS 가 VDA5050 order 로 옮긴다).
+/// 관절 이동인 이유: ready→접근점은 자세 변화가 큰 구간이라 MoveL 로 가면 손목 특이점(J5≈0)을 쓸고
+/// 지나갈 수 있다(rc=38). 대신 TCP 경로가 호를 그리므로 그 사이에 구조물이 없어야 한다.
 /// </summary>
 public class CobotInspectionMoveStep : ISequenceStep
 {
@@ -54,32 +50,23 @@ public class CobotInspectionMoveStep : ISequenceStep
                 .FirstOrDefault()
             : null;
 
+    /// <summary>② 2단계 접근점이 용접선 시작점에서 물러나는 거리 [mm] — 툴(TCP) 기준.</summary>
+    public const double ApproachStandoffMm = 400.0;
+
     public StepValidation Validate(SequenceContext context)
     {
         if (!_cobot.IsConnected)
             return StepValidation.Fail("코봇 RPC 미연결");
 
-        // 진입 준비(홈 복귀)를 이 스텝이 맡으므로 홈 티칭이 선행조건이다.
+        // 진입 준비(홈 경유)를 이 스텝이 맡으므로 홈 티칭이 선행조건이다.
         if (SequenceEntry.ValidateHome(context) is { IsValid: false } homeError)
             return homeError;
 
-        if (context.InspectionSurfaceId is <= 0x00 or > 0xFF)
-            return StepValidation.Fail("검사 Wall ID 미설정 (0x01~0xFF) — ② 파라미터에서 선택하세요.");
+        if (!context.Positions.TryGetValue("ready", out var ready) || !ready.IsTaught)
+            return StepValidation.Fail("작업 준비 위치(ready) 미티칭 — Teaching에서 먼저 저장하세요.");
 
-        var pos = FindBySurfaceId(context);
-        if (pos is null)
-            return StepValidation.Fail(
-                $"Wall 0x{context.InspectionSurfaceId:X2}에 해당하는 티칭 위치가 없습니다 — Teaching에서 Wall ID를 지정하세요.");
-        if (!pos.IsTaught)
-            return StepValidation.Fail(
-                $"Wall 0x{context.InspectionSurfaceId:X2} '{pos.Name}' 미티칭 — Teaching에서 먼저 저장하세요.");
-
-        if (Math.Abs(context.InspectionOffsetU) > 500 || Math.Abs(context.InspectionOffsetV) > 500)
-            return StepValidation.Fail("검사 오프셋 u/v 범위 초과 (±500 mm 이내).");
-
-        // ②의 면 후퇴 거리도 같은 값을 쓰므로 ③(CameraAlignStep)과 같은 범위를 여기서도 본다.
-        if (context.CameraTargetDistanceMm is < 100 or > 1000)
-            return StepValidation.Fail("③ 카메라 목표 거리 범위 초과 (100~1000mm) — ②의 면 후퇴 거리도 같은 값입니다.");
+        if (context.SeamStartW is not { Length: 3 })
+            return StepValidation.Fail("용접선 시작점(seamStartW) 없음 — ACS 작업의 용접선 좌표가 필요합니다.");
 
         return StepValidation.Ok();
     }
@@ -241,88 +228,89 @@ public class CobotInspectionMoveStep : ISequenceStep
     internal static double ResolveApproachDistanceMm(SequenceContext c)
         => c.CameraTargetDistanceMm > 0 ? c.CameraTargetDistanceMm : SeamBaseTransform.DefaultStandoffMm;
 
-    public async Task<StepResult> ExecuteAsync(SequenceContext context, CancellationToken ct)
+    /// <summary>
+    /// <paramref name="current"/> 자세의 광축(툴 <paramref name="axis"/>)을 <paramref name="computed"/> 의 광축 방향으로
+    /// 맞추는 <b>최소 회전</b>을 적용한 자세. 광축 둘레 비틀림은 current 를 유지한다 — 이미 면 법선을 보고 있으면
+    /// 자세가 그대로라 손목이 움직이지 않는다. 위치는 current 값(호출측이 덮어쓴다).
+    /// </summary>
+    internal static double[] AlignOpticalAxisKeepTwist(double[] current, double[] computed, ToolAxisDir axis)
     {
-        // 재실행·실패 시 옛 목표가 남아 ③이 엉뚱한 기준으로 판정하는 것을 막는다(세미오토 재시도).
-        context.Bag.Remove(WeldSequenceSupport.InspectTargetPoseBagKey);
+        var mc = FrameMath.PoseToMatrix(current);
+        var mt = FrameMath.PoseToMatrix(computed);
+        var col = (int)axis / 2;
+        var sgn = (int)axis % 2 == 0 ? 1.0 : -1.0;
+        double[] a = { sgn * mc[0, col], sgn * mc[1, col], sgn * mc[2, col] };   // 현재 광축(베이스)
+        double[] b = { sgn * mt[0, col], sgn * mt[1, col], sgn * mt[2, col] };   // 목표 광축(베이스)
 
-        var inspection = FindBySurfaceId(context)
-            ?? throw new InvalidOperationException($"Wall 0x{context.InspectionSurfaceId:X2} 티칭 위치 없음");
-
-        // 위치는 ACS 용접선에서, 자세는 티칭 값 그대로 — task 마다 달라지는 것은 위치뿐이다.
-        // 리치 점검은 정차 배치(AMR pose·장착 보정·스트로크·공구 길이)만으로 결정되므로 코봇을 움직이기
-        // 전에 한다 — 진입 준비(후퇴·홈·ready) 뒤에 실패하면 같은 정차점의 task 마다 헛동작을 반복한다.
-        var seam = await _seam.ResolveAsync(
-            context, context.SeamStartW, context.SeamEndW, context.Tool, "②", ct);
-        if (seam.Blocker is not null)
-            return StepResult.Fail(seam.Blocker);   // 리치 부족 — 티칭 폴백으로 덮지 않는다
-
-        // 진입 준비 — 잔류 작업물 프레임/공구를 정규화하고 홈에서 출발시킨다(목표 계산 전에 해야
-        // 작업물 추종 pose 계산이 정규화된 프레임 기준으로 나온다).
-        var entryNote = await SequenceEntry.PrepareAsync(_cobot, context, _logger, ct);
-
-        var (taught, where) = await ComputeTargetPoseAsync(_cobot, inspection, ct);
-
-        // 위치는 ACS 용접선 접근점에서, 자세는 토글·가용성에 따라 계산 법선 또는 티칭.
-        var (target, usedComputed) = BuildApproachAnchor(taught, seam.Base, seam.ComputedPose, seam.UseComputedOrientation);
-        // u/v 축 기준 정규화 — 광축 둘레 최종 비틀림은 아래 J6 절대각 맞춤이 정한다.
-        target = NormalizeUvAnchor(target, _logger);
-
-        var orientationLabel = $"[0x{context.InspectionSurfaceId:X2} {inspection.Name}]";
-        if (seam.Base is not null)
+        double[] k = { a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0] };
+        var sin = Math.Sqrt(k[0] * k[0] + k[1] * k[1] + k[2] * k[2]);
+        var cos = Math.Clamp(a[0] * b[0] + a[1] * b[1] + a[2] * b[2], -1.0, 1.0);
+        if (sin < 1e-9)
         {
-            where = usedComputed
-                ? $"{seam.Note} — 자세는 계산된 면 법선"
-                : $"{seam.Note} — 자세는 티칭 {orientationLabel} 유지";
+            if (cos > 0) return current.ToArray();                 // 이미 정렬
+            // 정반대 — 회전축이 유일하지 않다. 광축에 수직인 임의 축(현재 툴의 다른 축)으로 180°.
+            var other = (col + 1) % 3;
+            k = new[] { mc[0, other], mc[1, other], mc[2, other] };
+            sin = 0; cos = -1;
         }
         else
         {
-            where = $"{orientationLabel} {where}";   // 티칭 폴백(위치·자세 모두 티칭)
-            _logger.LogInformation("② {Note}", seam.Note);
+            for (var i = 0; i < 3; i++) k[i] /= sin;
         }
 
-        // 회귀 비교용 — 계산 법선 자세와 티칭 자세의 (rx,ry,rz)를 항상 함께 남긴다(토글 검증·현장 대조).
-        if (seam.ComputedPose is { Length: 6 } cp)
-            _logger.LogInformation(
-                "② 자세 비교: 계산법선 rxyz=[{Crx:0.0},{Cry:0.0},{Crz:0.0}] vs 티칭 rxyz=[{Trx:0.0},{Try:0.0},{Trz:0.0}] " +
-                "(토글 {Toggle}, 사용={Used})",
-                cp[3], cp[4], cp[5], taught[3], taught[4], taught[5],
-                seam.UseComputedOrientation ? "ON" : "OFF", usedComputed ? "계산법선" : "티칭");
+        // Rodrigues: R = I·cos + sin·[k]× + (1−cos)·k kᵀ
+        var r = new double[3, 3];
+        double[,] kx = { { 0, -k[2], k[1] }, { k[2], 0, -k[0] }, { -k[1], k[0], 0 } };
+        for (var i = 0; i < 3; i++)
+            for (var j = 0; j < 3; j++)
+                r[i, j] = (i == j ? cos : 0) + sin * kx[i, j] + (1 - cos) * k[i] * k[j];
 
-        // 툴프레임 오프셋: offset[0]=u(툴 X = 수평, 좌+/우−), offset[1]=v(툴 Y = 수직, 상+/하−).
-        // 실측 확인 매핑 — 과거 [v, u] 순서는 v 가 수평으로 나가는 축 교차 오류였음.
-        var hasOffset = context.InspectionOffsetU != 0 || context.InspectionOffsetV != 0;
-        var composed = ComposeUvTarget(target, context);
+        var m = (double[,])mc.Clone();
+        for (var i = 0; i < 3; i++)
+            for (var j = 0; j < 3; j++)
+                m[i, j] = r[i, 0] * mc[0, j] + r[i, 1] * mc[1, j] + r[i, 2] * mc[2, j];
+        return FrameMath.MatrixToPose(m);
+    }
 
-        // 광축 둘레 비틀림은 J6 절대각으로 정한다 — 수직 180°, 수평 90° (센서 헤드–링크암 간섭 회피).
-        var targetJ6 = TargetJ6Deg(context);
-        double[] finalPose, joints;
-        try
+    public async Task<StepResult> ExecuteAsync(SequenceContext context, CancellationToken ct)
+    {
+        // 접근점은 정차 배치(AMR pose·장착 보정·스트로크)만으로 정해지므로 코봇을 움직이기 전에 환산·리치
+        // 점검을 한다 — 1단계 뒤에 실패하면 같은 정차점의 task 마다 ready 왕복을 헛되이 반복한다.
+        var seam = await _seam.ResolveAsync(
+            context, context.SeamStartW, context.SeamEndW, context.Tool, "②", ct, ApproachStandoffMm);
+        if (seam.Blocker is not null)
+            return StepResult.Fail(seam.Blocker);
+        if (seam.Base is null)
+            return StepResult.Fail($"② {seam.Note}");
+
+        // ── 1단계: 작업 준비 위치(ready) ─────────────────────────────
+        var entryNote = await SequenceEntry.PrepareAsync(_cobot, context, _logger, ct);
+
+        // ── 2단계: 용접선 시작점에서 400mm 떨어진 접근점 ───────────────
+        // 자세: ready 도착 자세에서 광축만 면 법선으로 최소 회전시킨다 — 광축 둘레 비틀림(J6)은 그대로.
+        // 계산 법선 자세를 통째로 쓰면 비틀림(툴 X/Y)이 ready 와 달라 J6·손목이 불필요하게 돈다.
+        // wall_code 가 없으면 ready 자세를 그대로 유지한다.
+        var current = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
+        var usedNormal = seam.ComputedPose is { Length: 6 };
+        var orientation = usedNormal
+            ? AlignOpticalAxisKeepTwist(current, seam.ComputedPose!, seam.OpticalAxis)
+            : current;
+        var target = new[]
         {
-            (finalPose, joints) = await AlignTwistToJ6Async(_cobot, composed, context.Tool, targetJ6, ct);
-        }
-        catch (InvalidOperationException ex)
-        {
-            return StepResult.Fail(ex.Message);
-        }
+            seam.Base[0], seam.Base[1], seam.Base[2],
+            orientation[3], orientation[4], orientation[5],
+        };
 
-        var rc = await _cobot.Rpc.MoveJAsync(joints, finalPose,
+        var reference = await _cobot.Rpc.GetActualJointPosAsync(ct: ct);
+        var joints = await _cobot.Rpc.GetInverseKinKeepWristAsync(target, reference, context.Tool, 0, ct);
+
+        var rc = await _cobot.Rpc.MoveJAsync(joints, target,
             tool: context.Tool, user: 0, vel: context.Velocity, ct: ct);
-
-        var offsetNote = hasOffset
-            ? $" (오프셋 u={context.InspectionOffsetU:0.###}, v={context.InspectionOffsetV:0.###} mm)"
-            : "";
-        offsetNote += context.InspectionDirection == InspectionMoveDirection.Vertical
-            ? $" [수직, J6={joints[5]:0.0}°]"
-            : $" [수평, J6={joints[5]:0.0}°]";
-
         if (rc != 0)
-            return StepResult.Fail($"이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.");
+            return StepResult.Fail($"용접선 접근점 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.");
 
-        // ③ 이 "② 목표에 와 있는가" 를 검사할 때 쓸 기준. 티칭 위치로 재계산하면 ACS 경로(seam 접근점)
-        // 에서 항상 어긋나므로, 실제로 지령한 값을 남긴다.
-        context.Bag[WeldSequenceSupport.InspectTargetPoseBagKey] = finalPose;
-
-        return StepResult.Ok($"{where} 관절 이동(MoveJ) 완료{offsetNote}.{entryNote}");
+        var pose = usedNormal ? "자세=면 법선" : "자세=작업 준비 위치 유지(wall_code 없음)";
+        return StepResult.Ok(
+            $"작업 준비 위치 → {seam.Note} 관절 이동(MoveJ) 완료 [{pose}, J6={joints[5]:0.0}°].{entryNote}");
     }
 }

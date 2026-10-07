@@ -110,6 +110,39 @@ public sealed class Vda5050AdapterService : BackgroundService
         NudgeState();
     }
 
+    /// <summary>
+    /// 비상정지 즉시 이행(§5.1) — 주행·검사 임무·코봇을 <b>모두 정지하고 진행 중 작업을 취소</b>한다.
+    /// 물리 EMO 버튼과 ACS emergencyStop instantAction 이 공유한다. 임무(ACS order+검사 시퀀스)는
+    /// 취소·FAILED 처리되므로 EMO 해제 후에도 이어서 재개되지 않는다(신규 Order 재배차로만 재개).
+    ///
+    /// <b>정지 명령은 진행 중 동작의 종료를 기다리지 않고 맨 먼저, 동시에 보낸다.</b> 임무 태스크는 블로킹
+    /// MoveJ(동작 완료까지 반환 안 함) 안에 있을 수 있어, 임무 종료를 먼저 기다리면 코봇 정지가 그 MoveJ 가
+    /// 끝난 뒤에야 나간다(2026-10-07 현장: EMO 후 MoveJ 가 끝까지 실행됨). 코봇 StopMotion 은 이동 세마포어를
+    /// 우회하는 정지 전용 연결로 나가고, 각 경로는 서로를 막지 않도록 스레드풀에서 독립적으로 실행된다.
+    /// </summary>
+    public async Task TriggerEmergencyStopAsync(string reason)
+    {
+        _logger.LogWarning("비상정지 이행 — {Reason}", reason);
+
+        // ① 즉시 정지 — 코봇·검사 취소·주행/임무를 동시에 시작(어느 하나가 늦거나 실패해도 나머지는 진행).
+        var cobot = Run(() => _cobot.StopMotionImmediateAsync(), "코봇 정지 실패(미연결일 수 있음)");
+        var inspection = Run(() => _inspection.AbortAsync(), "검사 실행기 취소 실패");
+        var mission = Run(() => _executor.EmergencyStopAsync(), "주행/임무 취소 실패");
+
+        // ② 코봇 정지는 임무 종료와 무관하게 먼저 확정한다 — 로그로 지연을 바로 볼 수 있게.
+        await cobot;
+        _logger.LogWarning("비상정지: 코봇 즉시 정지 전송 완료");
+
+        await Task.WhenAll(inspection, mission);
+        NudgeState();
+
+        Task Run(Func<Task> stop, string failMsg) => Task.Run(async () =>
+        {
+            try { await stop(); }
+            catch (Exception ex) { _logger.LogWarning(ex, "비상정지: {Msg}", failMsg); }
+        });
+    }
+
     // 이벤트 즉시 발행 트리거(§6.1) — 주기 대기를 깨우는 nudge.
     private TaskCompletionSource _stateNudge = NewNudge();
 
@@ -302,19 +335,8 @@ public sealed class Vda5050AdapterService : BackgroundService
                 switch (action.ActionType)
                 {
                     case "emergencyStop":
-                        // §5.1: 주행·협동로봇·검사 즉시 정지. 주행은 REST(부록 D-5), 코봇은 온보드 즉시 정지,
-                        // 진행 중 검사 시퀀스는 실행기 취소(AbortAsync — 내부에서 코봇 정지도 재시도).
-                        await _executor.EmergencyStopAsync();
-                        await _inspection.AbortAsync();
-                        try
-                        {
-                            await _cobot.StopMotionImmediateAsync();
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger.LogWarning(ex, "emergencyStop 코봇 정지 실패(미연결일 수 있음)");
-                        }
-                        NudgeState();
+                        // §5.1: 주행·협동로봇·검사 즉시 정지. ACS instantAction·물리 EMO 버튼이 같은 경로를 쓴다.
+                        await TriggerEmergencyStopAsync("ACS emergencyStop instantAction");
                         break;
 
                     case "initPosition":

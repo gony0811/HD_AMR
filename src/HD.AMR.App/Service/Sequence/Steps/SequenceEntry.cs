@@ -114,7 +114,10 @@ internal static class SequenceEntry
                 $"툴 #{ctx.Tool}/작업물 0 으로 맞추지 못했습니다. 코봇 페이지의 '활성 좌표계 초기화'로 복구하세요.");
     }
 
-    /// <summary>현재 관절각이 홈과 다르면 MoveJ로 복귀. 이동했으면 true. 시퀀스 진입(②·⑱ᶜ)과
+    /// <summary>티칭 관절값으로 MoveJ 할 때는 <see cref="FairinoRpcClient.UnwrapToward"/> 로 현재 관절 쪽 ±360°
+    /// 감기를 맞춰 지령한다 — 판정(<see cref="IsWithinJointTolerance"/>)은 감아서 비교하는데 지령은 원값이면,
+    /// 실제 J6=−179.6° · 티칭 J6=+180.4° 처럼 같은 자세에서도 J6 가 한 바퀴(+360°) 돈다(2026-10-07 현장).
+    /// 현재 관절각이 홈과 다르면 MoveJ로 복귀. 이동했으면 true. 시퀀스 진입(②·⑱ᶜ)과
     /// 종료(<see cref="CobotHomeReturnStep"/>) 양쪽이 같은 경로를 쓴다.</summary>
     public static async Task<bool> EnsureCobotAtHomeAsync(
         CobotService cobot, SequenceContext ctx, CancellationToken ct)
@@ -135,7 +138,7 @@ internal static class SequenceEntry
             home.Rx!.Value, home.Ry!.Value, home.Rz!.Value,
         };
 
-        var rc = await cobot.Rpc.MoveJAsync(homeJoints, homePose,
+        var rc = await cobot.Rpc.MoveJAsync(FairinoRpcClient.UnwrapToward(homeJoints, cur), homePose,
             tool: ctx.Tool, user: 0, vel: ctx.Velocity, ct: ct);
         if (rc != 0)
             throw new InvalidOperationException($"홈 이동(MoveJ) 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.");
@@ -158,7 +161,7 @@ internal static class SequenceEntry
         int rc;
         if (readyJoints is not null)
         {
-            rc = await cobot.Rpc.MoveJAsync(readyJoints, readyPose,
+            rc = await cobot.Rpc.MoveJAsync(FairinoRpcClient.UnwrapToward(readyJoints, cur), readyPose,
                 tool: ctx.Tool, user: 0, vel: ctx.Velocity, ct: ct);
         }
         else
@@ -200,7 +203,7 @@ internal static class SequenceEntry
         int rc;
         if (readyJoints is not null)
         {
-            rc = await cobot.Rpc.MoveJAsync(readyJoints, readyPose,
+            rc = await cobot.Rpc.MoveJAsync(FairinoRpcClient.UnwrapToward(readyJoints, cur), readyPose,
                 tool: ctx.Tool, user: 0, vel: ctx.Velocity, ct: ct);
         }
         else
@@ -285,10 +288,19 @@ internal static class SequenceEntry
         }
     }
 
+    /// <summary>현재 관절각이 목표(홈/ready)와 전 축 <see cref="HomeToleranceDeg"/> 이내인지.
+    /// 각 축 차이는 ±360° 감아 [−180,180]°로 정규화해 비교한다 — J6 같은 축이 +180° vs −180°(= 같은
+    /// 물리 자세, 한 바퀴 차)로 표현돼도 "같은 위치"로 본다. 정규화를 안 하면 홈에 있어도 360° 차이로
+    /// '홈 아님'이 되어 블라인드 벽면 후퇴가 베이스 방향으로 실행되는 위험이 있다(<see cref="FairinoRpcClient.UnwrapToward"/>와 동일 규약).</summary>
     internal static bool IsWithinJointTolerance(double[] cur, double[] target)
     {
         for (var i = 0; i < 6; i++)
-            if (Math.Abs(cur[i] - target[i]) > HomeToleranceDeg) return false;
+        {
+            var d = (cur[i] - target[i]) % 360.0;   // ±360° 감기 → [−180,180]
+            if (d > 180.0) d -= 360.0;
+            else if (d < -180.0) d += 360.0;
+            if (Math.Abs(d) > HomeToleranceDeg) return false;
+        }
         return true;
     }
 }

@@ -391,7 +391,7 @@ public sealed class Vda5050OrderExecutor
                         ready.X!.Value, ready.Y!.Value, ready.Z!.Value,
                         ready.Rx!.Value, ready.Ry!.Value, ready.Rz!.Value,
                     };
-                    var rr = await cobot.Rpc.MoveJAsync(readyJoints, readyPose,
+                    var rr = await cobot.Rpc.MoveJAsync(FairinoRpcClient.UnwrapToward(readyJoints, cur), readyPose,
                         tool: 1, user: 0, vel: 20, ct: ct);
                     if (rr != 0)
                         _logger.LogWarning("작업 준비 위치 경유 실패 (rc={Rc}) — 직접 홈 복귀 시도", rr);
@@ -405,7 +405,7 @@ public sealed class Vda5050OrderExecutor
                 home.X!.Value, home.Y!.Value, home.Z!.Value,
                 home.Rx!.Value, home.Ry!.Value, home.Rz!.Value,
             };
-            var rc = await cobot.Rpc.MoveJAsync(homeJoints, homePose,
+            var rc = await cobot.Rpc.MoveJAsync(FairinoRpcClient.UnwrapToward(homeJoints, cur), homePose,
                 tool: 1, user: 0, vel: 20, ct: ct);
             if (rc != 0)
                 _logger.LogError("코봇 홈 복귀 실패 (rc={Rc}) — AMR 주행은 계속 진행", rc);
@@ -670,10 +670,13 @@ public sealed class Vda5050OrderExecutor
     {
         _logger.LogWarning("VDA5050 emergencyStop 수신 — 주행 정지 실행");
         OpLog("ORDER", "emergencyStop", null, "ACS 비상정지 수신 — 주행 정지 및 임무 폐기");
-        await AbortMissionAsync("stopped by emergencyStop");
+        // 주행 정지를 임무 종료 대기보다 먼저 — 임무 태스크는 블로킹 동작(MoveJ 등) 안에 있을 수 있어
+        // 그 종료를 먼저 기다리면 주행 정지가 그만큼 늦어진다. 취소 신호도 대기 전에 건다.
+        lock (_gate) _missionCts?.Cancel();
         var stop = await _rest.StopAsync();
         if (!stop.Ok)
             _logger.LogWarning("emergencyStop REST 정지 실패(code={Code}): {Msg}", stop.Code, stop.Message);
+        await AbortMissionAsync("stopped by emergencyStop");
 
         lock (_gate)
         {

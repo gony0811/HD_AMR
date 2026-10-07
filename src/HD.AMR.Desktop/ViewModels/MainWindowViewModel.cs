@@ -10,8 +10,8 @@ namespace HD.AMR.Desktop.ViewModels;
 /// 상단 상태바(연결 배지 + 비상정지 토글)도 여기서 구동한다.</summary>
 public sealed partial class MainWindowViewModel : ObservableObject
 {
-    /// <summary>EMO 비상정지 출력 포인트 (IO 모듈 OUT 8, 0-based).</summary>
-    private const int EmoOutputIndex = 8;
+    /// <summary>EMO 비상정지 출력 포인트 (IO 모듈 OUT 10, 0-based).</summary>
+    private const int EmoOutputIndex = 10;
 
     private readonly AMRService _amr;
     private readonly CobotService _cobot;
@@ -56,6 +56,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(EmoButtonText))]
+    [NotifyCanExecuteChangedFor(nameof(ToggleEmoCommand))]
     private bool _isEmoActive;
 
     [ObservableProperty]
@@ -158,25 +159,54 @@ public sealed partial class MainWindowViewModel : ObservableObject
         IsEmoActive = state is not null && state.Outputs.Length > EmoOutputIndex && state.Outputs[EmoOutputIndex];
     }
 
-    private bool CanToggleEmo() => IsIoConnected;
+    /// <summary>비상정지(활성화)는 IO 연결과 무관하게 항상 누를 수 있다 — 소프트웨어 정지(코봇·주행·임무)는
+    /// IO 없이도 동작해야 한다. 해제(OFF)만 IO 출력 쓰기가 필요하다.</summary>
+    private bool CanToggleEmo() => IsIoConnected || !IsEmoActive;
 
-    [RelayCommand(CanExecute = nameof(CanToggleEmo))]
+    /// <summary>
+    /// 비상정지 토글. <b>AllowConcurrentExecutions</b> — 이전 처리(정지 대기·IO 쓰기)가 끝나지 않아도 버튼이
+    /// 비활성화되지 않고 다시 누를 수 있다. 활성화 시 하드웨어 EMO 출력과 소프트웨어 정지를 <b>동시에</b>
+    /// 시작하며, 어느 쪽도 다른 쪽(또는 진행 중 MoveJ 의 종료)을 기다리지 않는다.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanToggleEmo), AllowConcurrentExecutions = true)]
     private async Task ToggleEmoAsync()
     {
         var target = !IsEmoActive;
         EmoMessage = null;
+
+        // 비상정지 활성화 시: 진행 중 임무·검사 시퀀스·코봇/주행을 즉시 정지·취소한다(해제해도 재개 안 함).
+        // 스레드풀에서 바로 시작해 IO 출력 쓰기와 병렬로 진행한다 — 서로의 지연·실패에 묶이지 않는다.
+        var softwareStop = target
+            ? Task.Run(() => _vda.TriggerEmergencyStopAsync("물리 EMO 버튼"))
+            : Task.CompletedTask;
+
+        string outNote;
         try
         {
+            if (!IsIoConnected)
+                throw new InvalidOperationException("IO 모듈 미연결");
             var confirmed = await _io.WriteOutputAsync(EmoOutputIndex, target);
-            EmoMessage = confirmed
+            outNote = confirmed
                 ? $"EMO(OUT {EmoOutputIndex}) {(target ? "출력 ON" : "리셋(OFF)")} — 되읽기 반영 확인"
                 : "쓰기는 수락됐지만 반영되지 않음 — RAPIEnet 상태 확인 필요";
         }
         catch (Exception ex)
         {
-            EmoMessage = $"EMO 출력 실패: {ex.Message}";
+            outNote = $"EMO 출력 실패: {ex.Message}";
         }
+        EmoMessage = target ? $"{outNote} · 소프트웨어 정지 진행 중…" : outNote;
         RefreshStatus();
+
+        if (!target) return;
+        try
+        {
+            await softwareStop;
+            EmoMessage = $"{outNote} · 진행 임무·검사·코봇/주행 정지 및 취소됨(해제해도 재개 안 함)";
+        }
+        catch (Exception ex)
+        {
+            EmoMessage = $"{outNote} · 비상정지 처리 일부 실패: {ex.Message}";
+        }
     }
 
     partial void OnSelectedItemChanged(NavItem? oldValue, NavItem? newValue)

@@ -16,12 +16,14 @@ namespace HD.AMR.App.Service.Inspection;
 /// true 이고 <paramref name="ComputedPose"/>가 있으면 호출측은 자세를 계산 법선으로 쓴다.</param>
 /// <param name="Note">진단 문자열.</param>
 /// <param name="Blocker">null 이 아니면 호출측은 <b>폴백 없이 즉시 실패</b>(리치 부족 등).</param>
+/// <param name="OpticalAxis"><paramref name="ComputedPose"/> 계산에 쓴 광축 툴축(<see cref="WeldSequenceSupport.DepthAxisKey"/>).</param>
 public sealed record SeamApproachResult(
     double[]? Base,
     double[]? ComputedPose,
     bool UseComputedOrientation,
     string Note,
-    string? Blocker);
+    string? Blocker,
+    ToolAxisDir OpticalAxis = ToolAxisDir.PlusZ);
 
 /// <summary>
 /// ACS 용접선 점(맵 좌표)을 코봇 BASE 접근점으로 환산한다 — ② 검사위치 이동(시작점)과
@@ -68,11 +70,16 @@ public sealed class SeamApproachResolver
     /// <param name="directionW">방향 유도·TOOL 회전 기준이 되는 반대쪽 점 [x,y,z] m(맵, 선택).</param>
     /// <param name="tool">리치 사전점검에 쓸 공구 번호.</param>
     /// <param name="label">로그 접두사(예 "②", "끝점").</param>
+    /// <param name="standoffMm">면 이격 [mm]. null 이면 ③ 카메라 목표거리(<see cref="CobotInspectionMoveStep.ResolveApproachDistanceMm"/>).</param>
     /// <returns>Blocker 가 null 이 아니면 호출측은 즉시 실패해야 한다. Base 가 null 이고 Blocker 도 null 이면 티칭 폴백.</returns>
     public async Task<SeamApproachResult> ResolveAsync(
-        SequenceContext context, double[]? approachW, double[]? directionW, int tool, string label, CancellationToken ct)
+        SequenceContext context, double[]? approachW, double[]? directionW, int tool, string label, CancellationToken ct,
+        double? standoffMm = null)
     {
         var useComputed = await _param.GetBoolAsync(UseComputedNormalOrientationKey) ?? false;
+        // 법선 자세는 '광축 툴축이 면을 향하게' 만든다 — 카메라 페이지의 광축 설정(현장 −Z)을 따라야 한다.
+        // 기본 +Z 로 계산하면 툴이 180° 뒤집힌 목표가 나와 손목(J4)이 크게 재구성된다(2026-10-07 현장).
+        var (opticalAxis, _) = await WeldSequenceSupport.GetDepthAxisAsync(_param);
 
         if (approachW is not { Length: 3 } seam)
             return new SeamApproachResult(null, null, useComputed, $"{label} 용접선 좌표 없음 — 티칭 위치로 이동", null);
@@ -89,7 +96,7 @@ public sealed class SeamApproachResolver
 
         var stroke = _lift.Latest is { HeightMm: >= 0 } lift ? lift.HeightMm : 0;
 
-        var standoff = CobotInspectionMoveStep.ResolveApproachDistanceMm(context);
+        var standoff = standoffMm ?? CobotInspectionMoveStep.ResolveApproachDistanceMm(context);
 
         var target = SeamBaseTransform.Resolve(new SeamBaseInput(
             SeamStartW: seam,
@@ -102,7 +109,8 @@ public sealed class SeamApproachResolver
             ZDatumOffsetMm: context.ZDatumOffsetMm,
             StandoffMm: standoff,
             WallFacingThetaRad: context.WallFacingThetaRad,
-            WallCode: context.WallCode));
+            WallCode: context.WallCode,
+            OpticalAxis: opticalAxis));
 
         foreach (var note in target.Notes)
             _logger.LogWarning("{Label} 용접선 환산 주의: {Note}", label, note);
@@ -152,6 +160,8 @@ public sealed class SeamApproachResolver
         // 토글과 무관하게 돌려주고, 사용 여부는 호출측이 UseComputedOrientation 으로 판단한다.
         return new SeamApproachResult(
             target.ApproachBaseMm, target.TargetPoseBase, useComputed,
-            $"용접선 접근점(면 이격 {standoff:0}mm — ③ 카메라 목표거리)", null);
+            standoffMm is null
+                ? $"용접선 접근점(면 이격 {standoff:0}mm — ③ 카메라 목표거리)"
+                : $"용접선 접근점(면 이격 {standoff:0}mm)", null, opticalAxis);
     }
 }

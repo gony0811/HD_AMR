@@ -101,15 +101,6 @@ public static class WeldSequenceSupport
     /// ④⁺가 WD 조정 후 이 위치로 툴 X/Y 횡복귀할 때 기준 앵커로 쓴다(초점거리·자세는 유지).</summary>
     public const string InspectAnchorPoseBagKey = "inspect.anchorPose";
 
-    /// <summary>
-    /// ② 가 <b>실제로 지령한</b> 목표 TCP 포즈(double[6], BASE 기준 — u/v·RZ 합성까지 끝난 값)를 담는 Bag 키.
-    ///
-    /// ③ 이 "② 목표에 와 있는가" 를 검사할 때 쓴다. ③ 이 티칭 위치로 기대값을 <b>재계산</b>하면,
-    /// ACS 경로에서 ② 가 seamStartW 환산 접근점으로 간 경우 두 좌표가 달라 항상 실패한다.
-    /// 키가 없으면(② 미실행·세미오토 단독 실행) ③ 은 종전대로 티칭 기반 계산으로 폴백한다.
-    /// </summary>
-    public const string InspectTargetPoseBagKey = "inspect.targetPose";
-
     /// <summary>⑦⁺ Bead1 센터링 완료 직후(검사캠 시프트 <b>전</b>) TCP 포즈(double[6])를 담는 Bag 키.
     /// ⑧이 이 포즈를 앵커로 pitch 이동해, 검사캠 시프트·작업물 좌표계 교시용 이동을 자동 원복한다.</summary>
     public const string Bead1CenteredPoseBagKey = "bead1.centeredPose";

@@ -545,6 +545,64 @@ public class FairinoRpcClient : IDisposable
         double[] descPose, double[] referenceJoints, int tool, int user,
         CancellationToken ct = default)
     {
+        var candidates = await SolveIkCandidatesAsync(descPose, referenceJoints, tool, user, ct);
+        var best = SelectBestJoints(candidates, referenceJoints, (j, r) => JointDistance(j, r));
+        if (best is null) throw IkUnreachable(descPose);
+
+        _logger.LogInformation(
+            "{Name} IK 최적 해: config={Config} 선택 ({Tried}개 유효, 총 변위 {Cost:0.0}°, " +
+            "기준 J6={Ref:0.0}° → 결과 J6={J6:0.0}°)",
+            _settings.Name, best.Value.Config, candidates.Count,
+            JointDistance(best.Value.Joints, referenceJoints), referenceJoints[5], best.Value.Joints[5]);
+
+        return best.Value.Joints;
+    }
+
+    /// <summary>
+    /// 현재 관절(<paramref name="referenceJoints"/>)의 <b>J6 와인딩을 최대한 유지</b>하는 IK 해를 고른다 —
+    /// 같은 TCP 자세를 내는 손목-플립 해들 중 J6 변위가 가장 작은 것을 선택해 ② 검사위치 이동에서 J6 가
+    /// ±180° 로 크게 도는 것을 막는다(TCP 자세·카메라·u/v 는 동일, 손목 config 만 달라짐).
+    ///
+    /// <b>트레이드오프:</b> J6 를 안 돌리는 대신 같은 TCP 의 다른 손목해는 보통 J4(≈±180°)·J5(부호반전)가
+    /// 더 크게 움직인다 — 즉 전체 관절 변위는 총변위-최소 해보다 커질 수 있다. ② 는 <b>MoveJ(관절 보간)</b>라
+    /// J5 가 0 을 지나도 손목 특이점(rc=38, MoveL/직교 전용) 문제가 없으므로 그대로 진행하되, 재구성이
+    /// 두드러지면 경고 로그로 알린다(간섭은 호출측·MoveJ 한계 거부로 거른다).
+    /// </summary>
+    public async Task<double[]> GetInverseKinKeepWristAsync(
+        double[] descPose, double[] referenceJoints, int tool, int user,
+        CancellationToken ct = default)
+    {
+        var candidates = await SolveIkCandidatesAsync(descPose, referenceJoints, tool, user, ct);
+        if (candidates.Count == 0) throw IkUnreachable(descPose);
+
+        // J6 변위를 지배적으로 가중(동률·유사 시 전체 변위로 tie-break) → 현재 와인딩에 가장 가까운 해.
+        const double J6Weight = 8.0;
+        var keep = SelectBestJoints(candidates, referenceJoints,
+            (j, r) => J6Weight * Math.Abs(j[5] - r[5]) + JointDistance(j, r))!.Value;
+        var nearest = SelectBestJoints(candidates, referenceJoints, (j, r) => JointDistance(j, r))!.Value;
+
+        var keepCost = JointDistance(keep.Joints, referenceJoints);
+        var nearestCost = JointDistance(nearest.Joints, referenceJoints);
+        if (keep.Config != nearest.Config && keepCost > nearestCost + 90.0)
+            _logger.LogWarning(
+                "{Name} IK 와인딩 유지: J6 대회전은 피하지만 손목 재구성(J4/J5)이 커 총 변위가 늘어남 " +
+                "({KeepCost:0.0}° vs 최소 {NearCost:0.0}°) — 팔 자세가 크게 바뀌니 간섭을 확인하세요.",
+                _settings.Name, keepCost, nearestCost);
+
+        _logger.LogInformation(
+            "{Name} IK 와인딩 유지 해: config={Config} ({Tried}개 유효, 총 변위 {Cost:0.0}°, " +
+            "기준 J6={Ref:0.0}° → 결과 J6={J6:0.0}°)",
+            _settings.Name, keep.Config, candidates.Count, keepCost, referenceJoints[5], keep.Joints[5]);
+
+        return keep.Joints;
+    }
+
+    /// <summary>config 0–7 역기구학 해를 모두 풀어 기준에 가장 가까운 ±360 와인딩으로 정렬한 후보 목록.
+    /// 프레임 환산(활성 공구/작업물 ↔ 지정 tool/user)은 여기서 한 번만 한다 — 선택 기준만 다른 두 공개
+    /// 메서드가 공유한다.</summary>
+    private async Task<List<(int Config, double[] Joints)>> SolveIkCandidatesAsync(
+        double[] descPose, double[] referenceJoints, int tool, int user, CancellationToken ct)
+    {
         int activeTool = await ResolveActiveToolAsync(ct, strict: true);
         var pose = await ReframeToolAsync(descPose, tool, activeTool, ct);
 
@@ -567,41 +625,39 @@ public class FairinoRpcClient : IDisposable
                 : pBase;
         }
 
-        double[]? best = null;
-        double bestCost = double.MaxValue;
-        int bestConfig = -1;
-        var tried = 0;
-
+        var candidates = new List<(int Config, double[] Joints)>();
         for (int config = 0; config < 8; config++)
         {
             try
             {
                 var j = UnwrapToward(await GetInverseKinAsync(ikPose, config: config, ct: ct), referenceJoints);
-                tried++;
-                double cost = JointDistance(j, referenceJoints);
-                if (cost < bestCost)
-                {
-                    bestCost = cost;
-                    best = j;
-                    bestConfig = config;
-                }
+                candidates.Add((config, j));
             }
             catch
             {
                 // 해당 config 도달 불가 — 무시
             }
         }
+        return candidates;
+    }
 
-        if (best is null)
-            throw new InvalidOperationException(
-                $"역기구학(GetInverseKin) 실패: config 0–7 모두 도달 불가. " +
-                $"IK 입력 pose=[{string.Join(", ", descPose.Select(x => x.ToString("0.#")))}]");
+    private InvalidOperationException IkUnreachable(double[] descPose) =>
+        new($"역기구학(GetInverseKin) 실패: config 0–7 모두 도달 불가. " +
+            $"IK 입력 pose=[{string.Join(", ", descPose.Select(x => x.ToString("0.#")))}]");
 
-        _logger.LogInformation(
-            "{Name} IK 최적 해: config={Config} 선택 ({Tried}개 유효, 총 변위 {Cost:0.0}°, " +
-            "기준 J6={Ref:0.0}° → 결과 J6={J6:0.0}°)",
-            _settings.Name, bestConfig, tried, bestCost, referenceJoints[5], best[5]);
-
+    /// <summary>후보 IK 해 중 <paramref name="cost"/>(해, 기준)가 최소인 것을 고른다. 없으면 null.
+    /// 선택 기준만 주입받는 순수 함수 — 단위 테스트 대상.</summary>
+    internal static (int Config, double[] Joints)? SelectBestJoints(
+        IReadOnlyList<(int Config, double[] Joints)> candidates, double[] reference,
+        Func<double[], double[], double> cost)
+    {
+        (int Config, double[] Joints)? best = null;
+        var bestCost = double.MaxValue;
+        foreach (var c in candidates)
+        {
+            var k = cost(c.Joints, reference);
+            if (k < bestCost) { bestCost = k; best = c; }
+        }
         return best;
     }
 

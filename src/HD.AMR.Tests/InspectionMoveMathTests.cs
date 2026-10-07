@@ -6,8 +6,7 @@ using HD.AMR.App.Service.Sequence.Steps;
 namespace HD.AMR.Tests;
 
 /// <summary>
-/// ② 검사위치 이동의 순수 계산부 — 후퇴 거리 결정과 u/v 합성, 그리고 ③ 게이트 기준 선택.
-/// 이 세 가지가 2026-09-25 회귀(ACS 자동 실행이 ③에서 전부 막힘)의 진원지였다.
+/// ② 검사위치 이동의 순수 계산부 — 후퇴 거리 결정과 u/v 합성, 접근 앵커 선택.
 /// </summary>
 public class InspectionMoveMathTests
 {
@@ -106,51 +105,6 @@ public class InspectionMoveMathTests
         var composed = CobotInspectionMoveStep.ComposeUvTarget(anchor, Ctx());
 
         for (var i = 0; i < 6; i++) Assert.Equal(anchor[i], composed[i], 6);
-    }
-
-    // ── ③ 게이트 기준 선택 (세 분기) ───────────────────────────────
-
-    private static readonly double[] Teaching = { 1, 2, 3, 4, 5, 6 };
-
-    private static Task<double[]> TeachingFactory() => Task.FromResult(Teaching);
-
-    [Fact]
-    public void 게이트는_2단계가_남긴_지령_목표를_최우선으로_쓴다()
-    {
-        var commanded = new[] { 9.0, 8, 7, 6, 5, 4 };
-        var c = Ctx();
-        c.Bag[WeldSequenceSupport.InspectTargetPoseBagKey] = commanded;
-
-        var (expected, basis, skip) = CameraAlignStep.ResolveGateReference(c, TeachingFactory);
-
-        Assert.Null(skip);
-        Assert.Equal(commanded, expected!.Result);
-        Assert.Contains("지령", basis);
-    }
-
-    [Fact]
-    public void 게이트는_UI_단독_실행이면_티칭_기준으로_폴백한다()
-    {
-        // Bag 없음 + seamStartW 없음 = ②를 건너뛰고 ③만 누르는 기존 세미오토 용법.
-        var (expected, basis, skip) = CameraAlignStep.ResolveGateReference(Ctx(), TeachingFactory);
-
-        Assert.Null(skip);
-        Assert.Equal(Teaching, expected!.Result);
-        Assert.Contains("티칭", basis);
-    }
-
-    [Fact]
-    public void 게이트는_ACS_경로에_지령_기록이_없으면_실패가_아니라_생략한다()
-    {
-        // 티칭 기준 재계산은 seam 접근점과 다르므로 비교할 수 없다 — 검증 불가를 실패로 바꾼 것이
-        // 바로 2026-09-25 회귀였다.
-        var c = Ctx();
-        c.SeamStartW = new[] { 6.5, 14.42, 1.1 };
-
-        var (expected, _, skip) = CameraAlignStep.ResolveGateReference(c, TeachingFactory);
-
-        Assert.NotNull(skip);
-        Assert.Null(expected);
     }
 
     // ── 하이브리드 접근 앵커 선택 (위치=seam, 자세=계산법선/티칭) ─────

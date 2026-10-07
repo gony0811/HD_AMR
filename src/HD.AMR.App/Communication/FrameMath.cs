@@ -34,12 +34,29 @@ public static class FrameMath
         return m;
     }
 
-    /// <summary>4×4 동차 변환 → pose[6]=[x,y,z,rx,ry,rz](mm/deg). ZYX 역추출.</summary>
+    /// <summary>4×4 동차 변환 → pose[6]=[x,y,z,rx,ry,rz](mm/deg). ZYX 역추출.
+    /// ry=±90°(짐벌락)에서는 rx·rz 가 하나의 자유도로 묶여 일반식(atan2(m21,m22))이 atan2(0,0)=0 이 되어
+    /// 회전 정보를 잃는다 — 그때는 rz=0 으로 두고 rx 를 m01·m11 에서 구한다(같은 회전 행렬을 재현).
+    /// 예: 툴 X 가 정확히 연직인 자세(수직 용접선 접선 기준 법선 자세)가 광축이 뒤집힌 pose 로 나오던 원인
+    /// (2026-10-07 현장).</summary>
     public static double[] MatrixToPose(double[,] m)
     {
-        double rz = Math.Atan2(m[1, 0], m[0, 0]);
-        double ry = Math.Atan2(-m[2, 0], Math.Sqrt(m[0, 0] * m[0, 0] + m[1, 0] * m[1, 0]));
-        double rx = Math.Atan2(m[2, 1], m[2, 2]);
+        double cy = Math.Sqrt(m[0, 0] * m[0, 0] + m[1, 0] * m[1, 0]);
+        double ry = Math.Atan2(-m[2, 0], cy);
+        double rx, rz;
+        if (cy > 1e-6)
+        {
+            rz = Math.Atan2(m[1, 0], m[0, 0]);
+            rx = Math.Atan2(m[2, 1], m[2, 2]);
+        }
+        else
+        {
+            // R = Rz(c)·Ry(±90°)·Rx(a): ry=+90 → m01=sin(a−c), m11=cos(a−c); ry=−90 → m01=−sin(a+c), m11=cos(a+c).
+            rz = 0.0;
+            rx = m[2, 0] < 0
+                ? Math.Atan2(m[0, 1], m[1, 1])     // ry = +90°
+                : Math.Atan2(-m[0, 1], m[1, 1]);   // ry = −90°
+        }
         return new[]
         {
             m[0, 3], m[1, 3], m[2, 3],
