@@ -102,6 +102,34 @@ public sealed class DepthDistanceMoveOptions
 public sealed record DepthDistanceMoveResult(
     bool Success, double? MeasuredMm, double? MovedMm, string Message);
 
+/// <summary>검출된 평탄 셀 위로 레이저를 옮겨 측정하는 옵션(카메라 페이지 '레이저 이동·측정').</summary>
+public sealed class LaserToFlatOptions
+{
+    public ToolAxisDir ImageXAxis { get; init; } = ToolAxisDir.PlusX;
+    public ToolAxisDir ImageYAxis { get; init; } = ToolAxisDir.PlusY;
+
+    /// <summary>카메라 중심 → 레이저 3점 중심 툴 Y 이동량(mm). 시퀀스 ④와 같은 파라미터 값.</summary>
+    public double CameraToLaserShiftYmm { get; init; } = -75.0;
+
+    /// <summary>평탄 셀 횡이동 절대 상한(mm) — 검출 이상으로 인한 과대 이동 방지.</summary>
+    public double MaxLateralMoveMm { get; init; } = 100.0;
+
+    /// <summary>검출 시점 대비 코봇 위치 허용 오차(mm). 넘으면 검출 결과가 현재 위치와 맞지 않아 이동하지 않는다.</summary>
+    public double PoseToleranceMm { get; init; } = 1.0;
+
+    /// <summary>검출 시점 대비 자세 허용 오차(°).</summary>
+    public double PoseToleranceDeg { get; init; } = 0.5;
+
+    public int Tool { get; init; } = 1;
+    public double Velocity { get; init; } = 10;
+    public int SettleMs { get; init; } = 500;
+}
+
+/// <summary>레이저 이동·측정 결과. 측정값은 3회 샘플 평균, Channels 는 채널 1~3 원시 거리(mm).</summary>
+public sealed record LaserToFlatResult(
+    bool Success, string Message, double? Rx = null, double? Ry = null, double? Z = null,
+    IReadOnlyList<double>? Channels = null);
+
 /// <summary>평탄 중심 정렬 결과. Success=false 는 오류/미수렴, Converged 는 잔차가 기준 이내였는지.</summary>
 public sealed record FlatCenterAlignResult(
     bool Success,
@@ -134,6 +162,7 @@ public class FlatSurfaceCenteringService
     private readonly CobotService _cobot;
     private readonly CameraService _camera;
     private readonly FlatDetectionMonitor _monitor;
+    private readonly LaserDisplacementSensorService _laser;
     private readonly ILogger<FlatSurfaceCenteringService> _logger;
 
     /// <summary>Z(평탄 셀 평균 깊이) 확보 실패 시 폴백 거리(mm).</summary>
@@ -158,11 +187,12 @@ public class FlatSurfaceCenteringService
 
     public FlatSurfaceCenteringService(
         CobotService cobot, CameraService camera, FlatDetectionMonitor monitor,
-        ILogger<FlatSurfaceCenteringService> logger)
+        LaserDisplacementSensorService laser, ILogger<FlatSurfaceCenteringService> logger)
     {
         _cobot = cobot;
         _camera = camera;
         _monitor = monitor;
+        _laser = laser;
         _logger = logger;
     }
 
@@ -353,6 +383,112 @@ public class FlatSurfaceCenteringService
             _logger.LogError(ex, "평탄 중심 정렬 중 오류");
             return Fail($"정렬 오류: {ex.Message}", moves);
         }
+    }
+
+    /// <summary>
+    /// 검출 스냅샷의 평탄 셀 위로 레이저 3점 중심을 옮기고(셀 이동 Δ + 카메라→레이저 툴 Y 보정을
+    /// 툴 좌표계 1회 이동으로 합침) 레이저를 측정한다. 틸트 보정은 하지 않는다 — 측정값 확인용.
+    /// 검출 이후 코봇이 움직였으면 Δ 가 현재 위치 기준이 아니므로 이동하지 않고 실패한다
+    /// (같은 버튼을 두 번 눌러 이중 이동하는 것도 이 검사로 막힌다).
+    /// 예외를 던지지 않고 항상 결과를 반환한다(취소 포함). 결과는 <see cref="FlatDetectionMonitor"/> 에도 반영.
+    /// </summary>
+    public async Task<LaserToFlatResult> MoveLaserToFlatAsync(
+        FlatDetectionSnapshot snap, LaserToFlatOptions o, Action<string>? progress, CancellationToken ct)
+    {
+        if (!_cobot.IsConnected)
+            return LaserFail("코봇 RPC 미연결", publish: false);
+        if (!_laser.IsConnected)
+            return LaserFail("레이저 변위센서 미연결", publish: false);
+        if (snap.DeltaXmm is not { } dx || snap.DeltaYmm is not { } dy)
+            return LaserFail("검출 결과에 이동량이 없습니다.", publish: false);
+        if (snap.TcpPoseAtDetect is not { Length: >= 6 } detectPose)
+            return LaserFail("검출 시점 코봇 위치가 기록되지 않았습니다 — 코봇 연결 상태에서 '평탄 검증'을 다시 하세요.", publish: false);
+        if ((int)o.ImageXAxis / 2 == (int)o.ImageYAxis / 2)
+            return LaserFail(
+                $"이미지 X/Y 매핑이 같은 툴축입니다 (X→{AxisNames[(int)o.ImageXAxis]}, Y→{AxisNames[(int)o.ImageYAxis]}) — 설정을 확인하세요.",
+                publish: false);
+        if (Math.Abs(dx) > o.MaxLateralMoveMm || Math.Abs(dy) > o.MaxLateralMoveMm)
+            return LaserFail($"평탄 셀 이동량 ({dx:0.#}, {dy:0.#})mm 가 한계 ±{o.MaxLateralMoveMm:0}mm 초과.", publish: false);
+        if (Math.Abs(o.CameraToLaserShiftYmm) > 200)
+            return LaserFail($"카메라→레이저 보정량 {o.CameraToLaserShiftYmm:0.#}mm 가 한계 ±200mm 초과 — 시퀀스 '레이저중심 Y'를 확인하세요.", publish: false);
+
+        try
+        {
+            // ── 위치 검사: 검출 시점과 같은 자리여야 Δ 가 유효 ──
+            var anchor = await _cobot.Rpc.GetTcpPoseInBaseAsync(o.Tool, ct);
+            double posErr = Math.Sqrt(
+                Math.Pow(anchor[0] - detectPose[0], 2) + Math.Pow(anchor[1] - detectPose[1], 2) + Math.Pow(anchor[2] - detectPose[2], 2));
+            double rotErr = Enumerable.Range(3, 3).Max(i => Math.Abs(WrapDeg(anchor[i] - detectPose[i])));
+            if (posErr > o.PoseToleranceMm || rotErr > o.PoseToleranceDeg)
+                return LaserFail(
+                    $"검출 이후 코봇이 움직였습니다 (위치 {posErr:0.#}mm, 자세 {rotErr:0.##}°) — '평탄 검증'을 다시 하세요.",
+                    publish: false);
+
+            // ── 이동: 셀 Δ(이미지→툴축 매핑) + 레이저 보정(툴 Y) — 둘 다 같은 자세의 툴 평행이동이라 합산 가능 ──
+            var offset = new double[6];
+            ApplyAxis(offset, o.ImageXAxis, dx);
+            ApplyAxis(offset, o.ImageYAxis, dy);
+            offset[1] += o.CameraToLaserShiftYmm;
+            Report(progress,
+                $"레이저 이동: 셀 Δ=({dx:+0.#;-0.#}, {dy:+0.#;-0.#})mm + 레이저 보정 툴Y {o.CameraToLaserShiftYmm:+0.#;-0.#}mm → " +
+                $"툴 오프셋 [{offset[0]:0.#}, {offset[1]:0.#}, {offset[2]:0.#}]");
+            _monitor.UpdateStage(FlatDetectionStage.Moving, "레이저를 평탄 셀 위로 이동 중");
+
+            var rc = await _cobot.Rpc.MoveByToolOffsetAsync(anchor, user: 0, offset, tool: o.Tool, vel: o.Velocity, ct: ct);
+            if (rc != 0)
+                return LaserFail($"레이저 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.");
+            await Task.Delay(o.SettleMs, ct);
+
+            // ── 측정: 3회 샘플 평균 (시퀀스 ④ Phase C 와 같은 방식) ──
+            _monitor.UpdateStage(FlatDetectionStage.LaserMeasuring, "레이저 3점 측정");
+            double rx = 0, ry = 0, z = 0;
+            var ch = new double[3];
+            int n = 0;
+            string? note = null;
+            for (var i = 0; i < 3; i++)
+            {
+                var p = _laser.GetPlanePose();
+                var r = _laser.GetReadings();
+                if (p.Valid && r.Count >= 3)
+                {
+                    rx += p.Rx; ry += p.Ry; z += p.Z;
+                    for (var c = 0; c < 3; c++) ch[c] += r[c].Value;
+                    n++;
+                }
+                else note = p.Note;
+                if (i < 2) await Task.Delay(100, ct);
+            }
+            if (n == 0)
+                return LaserFail($"레이저 측정 실패: {note ?? "3회 모두 무효"} — 레이저 점이 평탄면을 벗어났거나 측정 범위 밖일 수 있습니다.");
+
+            rx /= n; ry /= n; z /= n;
+            var channels = ch.Select(v => v / n).ToArray();
+            _monitor.SetLaser(rx, ry, z, channels);
+            _monitor.UpdateStage(FlatDetectionStage.LaserMeasured, "레이저 이동·측정 완료 (틸트 보정 없음)");
+            var msg = $"레이저 측정: rx={rx:0.###}°, ry={ry:0.###}°, z={z:0.#}mm " +
+                      $"(채널 {channels[0]:0.##}/{channels[1]:0.##}/{channels[2]:0.##}mm)";
+            Report(progress, msg);
+            return new LaserToFlatResult(true, msg, rx, ry, z, channels);
+        }
+        catch (OperationCanceledException)
+        {
+            return LaserFail("사용자 취소");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "레이저 이동·측정 중 오류");
+            return LaserFail($"레이저 이동·측정 오류: {ex.Message}");
+        }
+    }
+
+    private static double WrapDeg(double d) => ((d + 180) % 360 + 360) % 360 - 180;
+
+    /// <summary>publish=false: 이동 전 사전 검사 실패 — 스냅샷(검출 결과)은 그대로 두고 메시지만 반환.</summary>
+    private LaserToFlatResult LaserFail(string msg, bool publish = true)
+    {
+        _logger.LogWarning("레이저 이동·측정 실패: {Msg}", msg);
+        if (publish) _monitor.UpdateStage(FlatDetectionStage.Failed, msg);
+        return new LaserToFlatResult(false, msg);
     }
 
     /// <summary>

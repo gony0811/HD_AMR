@@ -4,6 +4,8 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HD.AMR.App.Models;
 using HD.AMR.App.Service;
+using HD.AMR.App.Service.Sequence;
+using HD.AMR.App.Service.Sequence.Steps;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace HD.AMR.Desktop.ViewModels;
@@ -18,6 +20,9 @@ public sealed partial class CameraViewModel : ViewModelBase
 {
     private readonly CameraService _svc;
     private readonly FlatDetectionMonitor _flatMonitor;
+    private readonly CobotService _cobot;
+    private readonly SequenceRunGate _gate;
+    private readonly FlatSurfaceCenteringService _centering;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly DispatcherTimer _timer;
     private readonly CancellationTokenSource _cts = new();
@@ -35,15 +40,26 @@ public sealed partial class CameraViewModel : ViewModelBase
     private const int FlatSamples = 10;
     private const double FallbackDepthMm = 400.0;
 
+    // 레이저 이동·측정이 시퀀스 ④와 같은 값을 쓰도록 같은 파라미터 키를 읽는다.
+    private const string AlignImageXAxisKey = "Camera.Align.ImageXAxis";
+    private const string AlignImageYAxisKey = "Camera.Align.ImageYAxis";
+    private const string AlignToolKey = "Camera.Align.Tool";
+    /// <summary>레이저 이동 속도(%) — 수동 확인용이라 시퀀스보다 느리게 고정.</summary>
+    private const double LaserMoveVelocity = 10;
+
     // 파라미터 로드 중 ROI 값 세팅은 사용자 변경이 아니므로 검출 결과를 지우지 않는다.
     private bool _loadingRoi;
     // 정지 화면 비트맵이 어느 프레임으로 만들어졌는지 — 단계만 바뀐 갱신에서 재인코딩을 피한다.
     private CameraFrame? _flatFrame;
 
-    public CameraViewModel(CameraService svc, FlatDetectionMonitor flatMonitor, IServiceScopeFactory scopeFactory)
+    public CameraViewModel(CameraService svc, FlatDetectionMonitor flatMonitor, CobotService cobot,
+        SequenceRunGate gate, FlatSurfaceCenteringService centering, IServiceScopeFactory scopeFactory)
     {
         _svc = svc;
         _flatMonitor = flatMonitor;
+        _cobot = cobot;
+        _gate = gate;
+        _centering = centering;
         _scopeFactory = scopeFactory;
         _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
         _timer.Tick += async (_, _) => await PollAsync();
@@ -104,9 +120,19 @@ public sealed partial class CameraViewModel : ViewModelBase
         ? $"{dx:+0.0;-0.0}, {dy:+0.0;-0.0}mm"
         : "—";
 
-    public string FlatLaserText => FlatSnapshot is { LaserRxDeg: { } rx, LaserRyDeg: { } ry }
-        ? $"rx {rx:+0.00;-0.00}° · ry {ry:+0.00;-0.00}°"
+    public string FlatLaserText => FlatSnapshot is { LaserRxDeg: { } rx, LaserRyDeg: { } ry } s
+        ? $"rx {rx:+0.00;-0.00}° · ry {ry:+0.00;-0.00}°" + (s.LaserZmm is { } z ? $" · z {z:0.0}mm" : "")
         : "—";
+
+    public string? FlatLaserChannelsText => FlatSnapshot?.LaserChannelsMm is { Count: >= 3 } c
+        ? $"채널 1/2/3: {c[0]:0.00} / {c[1]:0.00} / {c[2]:0.00} mm"
+        : null;
+
+    /// <summary>
+    /// '레이저 이동·측정' 가능 여부 — '평탄 검증'으로 검출만 한 결과이고 검출 시점 코봇 위치가 기록돼 있을 때.
+    /// 시퀀스 결과는 이미 레이저 위치로 이동·측정을 마쳤으므로 대상이 아니다.
+    /// </summary>
+    public bool CanLaserMeasure => FlatSnapshot is { Stage: FlatDetectionStage.DetectOnly, TcpPoseAtDetect: not null } && !Busy;
 
     public string FlatStageText => FlatSnapshot?.Stage switch
     {
@@ -116,6 +142,7 @@ public sealed partial class CameraViewModel : ViewModelBase
         FlatDetectionStage.Moved => "이동 완료",
         FlatDetectionStage.LaserMeasuring => "레이저 측정 중",
         FlatDetectionStage.Done => "정렬 완료",
+        FlatDetectionStage.LaserMeasured => "레이저 측정 완료",
         FlatDetectionStage.Failed => "실패",
         _ => "",
     };
@@ -131,8 +158,9 @@ public sealed partial class CameraViewModel : ViewModelBase
         foreach (var name in new[]
                  {
                      nameof(HasFlat), nameof(FlatSourceText), nameof(FlatCellText), nameof(FlatDepthText),
-                     nameof(FlatDeltaText), nameof(FlatLaserText), nameof(FlatStageText), nameof(FlatStageMessage),
-                     nameof(FlatStageBusy), nameof(FlatStageFailed), nameof(FlatStageOk),
+                     nameof(FlatDeltaText), nameof(FlatLaserText), nameof(FlatLaserChannelsText),
+                     nameof(FlatStageText), nameof(FlatStageMessage),
+                     nameof(FlatStageBusy), nameof(FlatStageFailed), nameof(FlatStageOk), nameof(CanLaserMeasure),
                  })
             OnPropertyChanged(name);
     }
@@ -148,6 +176,8 @@ public sealed partial class CameraViewModel : ViewModelBase
     public double RoiY => Math.Clamp(RoiYPct / 100, 0, 1);
     public double RoiW => Math.Clamp(RoiWPct / 100, 0, 1);
     public double RoiH => Math.Clamp(RoiHPct / 100, 0, 1);
+
+    partial void OnBusyChanged(bool value) => OnPropertyChanged(nameof(CanLaserMeasure));
 
     public override async void OnActivated()
     {
@@ -342,12 +372,79 @@ public sealed partial class CameraViewModel : ViewModelBase
 
             double z = best.Best.MeanMm > 0 ? best.Best.MeanMm : FallbackDepthMm;
             var (dx, dy) = _svc.PixelDeltaToMm(best.Best.U - (x + w / 2), best.Best.V - (y + h / 2), z);
+
+            // 검출 시점 코봇 위치 — '레이저 이동·측정'이 같은 자리에서만 Δ 를 적용하도록 기록한다.
+            var tool = await GetAlignToolAsync();
+            double[]? pose = null;
+            if (_cobot.IsConnected)
+            {
+                try { pose = await _cobot.Rpc.GetTcpPoseInBaseAsync(tool, _cts.Token); }
+                catch (OperationCanceledException) { throw; }
+                catch { /* 위치를 못 읽으면 레이저 이동만 비활성 */ }
+            }
+
+            var note = useRoi ? "코봇 이동 없음" : "코봇 이동 없음 · ROI 미사용 → 중앙 기본 ROI";
+            if (pose is null) note += " · 코봇 위치 미기록(레이저 이동 불가)";
             _flatMonitor.Publish(new FlatDetectionSnapshot(
-                "평탄 검증", DateTime.Now, best, x, y, w, h, dx, dy, FlatDetectionStage.DetectOnly,
-                useRoi ? "코봇 이동 없음" : "코봇 이동 없음 · ROI 미사용 → 중앙 기본 ROI"));
+                "평탄 검증", DateTime.Now, best, x, y, w, h, dx, dy, FlatDetectionStage.DetectOnly, note,
+                TcpPoseAtDetect: pose, Tool: tool));
         }
         catch (OperationCanceledException) { }
         finally { Busy = false; }
+    }
+
+    /// <summary>
+    /// '평탄 검증'으로 찾은 평탄 셀 위로 레이저 3점 중심을 옮기고 레이저를 측정한다(코봇 실제 이동, 틸트 보정 없음).
+    /// 시퀀스와 동시에 코봇을 움직이지 않도록 시퀀스 전역 잠금을 잡는다.
+    /// </summary>
+    [RelayCommand]
+    private async Task LaserMeasure()
+    {
+        if (FlatSnapshot is not { } snap || !CanLaserMeasure) return;
+        if (!_gate.TryEnter())
+        {
+            Notify("시퀀스 실행 중에는 레이저 이동을 할 수 없습니다.", true);
+            return;
+        }
+        Busy = true;
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var param = scope.ServiceProvider.GetRequiredService<ParameterService>();
+            var ax = await param.GetDoubleAsync(AlignImageXAxisKey);
+            var ay = await param.GetDoubleAsync(AlignImageYAxisKey);
+            var shiftY = await param.GetDoubleAsync(WeldSequenceSupport.CameraToLaserShiftYKey) ?? -75.0;
+            var axisX = ax is >= 0 and <= 5 ? (ToolAxisDir)(int)ax.Value : ToolAxisDir.PlusX;
+            var axisY = ay is >= 0 and <= 5 ? (ToolAxisDir)(int)ay.Value : ToolAxisDir.PlusY;
+
+            Notify("레이저를 평탄 셀 위로 이동 중…", false);
+            var r = await _centering.MoveLaserToFlatAsync(snap, new LaserToFlatOptions
+            {
+                ImageXAxis = axisX, ImageYAxis = axisY,
+                CameraToLaserShiftYmm = shiftY,
+                Tool = snap.Tool ?? 1,
+                Velocity = LaserMoveVelocity,
+            }, progress: null, _cts.Token);
+            Notify(r.Success ? r.Message : $"레이저 이동·측정 실패: {r.Message}", !r.Success);
+        }
+        catch (Exception ex) { Notify($"레이저 이동·측정 오류: {ex.Message}", true); }
+        finally
+        {
+            Busy = false;
+            _gate.Exit();
+        }
+    }
+
+    private async Task<int> GetAlignToolAsync()
+    {
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var param = scope.ServiceProvider.GetRequiredService<ParameterService>();
+            var t = await param.GetDoubleAsync(AlignToolKey);
+            return t is >= 0 and <= 14 ? (int)t.Value : 1;
+        }
+        catch { return 1; }
     }
 
     [RelayCommand]

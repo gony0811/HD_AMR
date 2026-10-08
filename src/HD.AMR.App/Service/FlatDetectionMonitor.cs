@@ -15,6 +15,8 @@ public enum FlatDetectionStage
     LaserMeasuring,
     /// <summary>정렬 완료.</summary>
     Done,
+    /// <summary>카메라 페이지 '레이저 이동·측정' — 평탄 셀 위로 레이저를 옮겨 측정만 함(틸트 보정 없음).</summary>
+    LaserMeasured,
     /// <summary>실패/취소.</summary>
     Failed,
 }
@@ -31,7 +33,9 @@ public sealed record FlatDetectionSnapshot(
     double? DeltaXmm, double? DeltaYmm,
     FlatDetectionStage Stage,
     string? StageMessage = null,
-    double? LaserRxDeg = null, double? LaserRyDeg = null);
+    double? LaserRxDeg = null, double? LaserRyDeg = null,
+    double? LaserZmm = null, IReadOnlyList<double>? LaserChannelsMm = null,
+    double[]? TcpPoseAtDetect = null, int? Tool = null);
 
 /// <summary>
 /// 가장 최근 평탄면 검출 결과를 보관하고 변경을 알리는 싱글톤. 시퀀스(<see cref="Sequence.Steps.FlatSurfaceAlignStep"/>)·
@@ -56,9 +60,13 @@ public sealed class FlatDetectionMonitor
     public void UpdateStage(FlatDetectionStage stage, string? message = null)
         => Set(s => s is null ? null : s with { Stage = stage, StageMessage = message });
 
-    /// <summary>레이저 3점 측정값 갱신(스냅샷이 없으면 무시).</summary>
-    public void SetLaser(double rxDeg, double ryDeg)
-        => Set(s => s is null ? null : s with { LaserRxDeg = rxDeg, LaserRyDeg = ryDeg });
+    /// <summary>레이저 3점 측정값 갱신(스냅샷이 없으면 무시). 채널 원시 거리는 있을 때만.</summary>
+    public void SetLaser(double rxDeg, double ryDeg, double? zMm = null, IReadOnlyList<double>? channelsMm = null)
+        => Set(s => s is null ? null : s with
+        {
+            LaserRxDeg = rxDeg, LaserRyDeg = ryDeg, LaserZmm = zMm,
+            LaserChannelsMm = channelsMm ?? s.LaserChannelsMm,
+        });
 
     public void Clear() => Set(_ => null);
 
