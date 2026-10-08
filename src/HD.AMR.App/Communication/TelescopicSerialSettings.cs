@@ -43,11 +43,33 @@ public class TelescopicSerialSettings
     /// </summary>
     public int TargetDigits { get; set; } = 3;
 
-    /// <summary>운영 하한(mm) — 지정 높이 이동 시 이 값 밖이면 명령을 보내지 않는다.</summary>
+    /// <summary>운영 하한(실제 mm) — 지정 높이 이동 시 이 값 밖이면 명령을 보내지 않는다.</summary>
     public int MinHeightMm { get; set; }
 
-    /// <summary>운영 상한(mm). 기구 행정(약 1000mm)보다 보수적으로 두는 것이 안전하다.</summary>
+    /// <summary>운영 상한(실제 mm). 기구 행정보다 보수적으로 두는 것이 안전하다.</summary>
     public int MaxHeightMm { get; set; } = 999;
+
+    /// <summary>
+    /// 컨트롤러 높이 1단위당 실제 이동량(mm). 컨트롤러는 모터 축 기준 값을 mm 플래그로 보고하지만,
+    /// 다단 텔레스코픽이라 실제 끝단은 그 약 2.41배 움직인다(2026-10-08 줄자 실측: 지령 10/20/100/200 →
+    /// 25/48/240/482mm, 최소제곱 2.408). 상태의 <see cref="TelescopicStatus.HeightMm"/> 와 <c>Target:</c>
+    /// 지령은 서비스가 이 값으로 환산한다 — 화면·장착 보정·② 접근점은 모두 실제 mm 를 본다.
+    /// </summary>
+    public double MmPerUnit { get; set; } = 2.41;
+
+    /// <summary>실제 높이 = 컨트롤러 값 × <see cref="MmPerUnit"/> + 이 값(mm). 완전 하강 실측으로 맞춘다.</summary>
+    public int HeightOffsetMm { get; set; }
+
+    /// <summary>컨트롤러 높이 값 → 실제 mm. 음수(파싱 실패 표식)는 그대로 둔다.</summary>
+    public int ToMm(int controllerUnits)
+        => controllerUnits < 0 ? controllerUnits
+            : (int)Math.Round(controllerUnits * EffectiveMmPerUnit + HeightOffsetMm);
+
+    /// <summary>실제 mm → 컨트롤러 <c>Target:</c> 지령 값.</summary>
+    public int ToControllerUnits(int heightMm)
+        => (int)Math.Round((heightMm - HeightOffsetMm) / EffectiveMmPerUnit);
+
+    private double EffectiveMmPerUnit => MmPerUnit > 0 ? MmPerUnit : 1.0;
 
     /// <summary>
     /// 조그(상승/하강) 유지 명령 재전송 주기(ms). 사양서 FAQ 1 에 상승 명령 반복 전송은 무해하다고 명시.

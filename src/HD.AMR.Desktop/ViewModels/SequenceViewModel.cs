@@ -3,7 +3,9 @@ using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HD.AMR.App.Data.Entities;
+using HD.AMR.App.Models;
 using HD.AMR.App.Service;
+using HD.AMR.App.Service.Inspection;
 using HD.AMR.App.Service.Sequence;
 using HD.AMR.App.Service.Sequence.Steps;
 using Microsoft.Extensions.DependencyInjection;
@@ -19,6 +21,7 @@ public sealed partial class SequenceViewModel : ViewModelBase
 {
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly CobotService _cobot;
+    private readonly AMRService _amr;
     private readonly DispatcherTimer _timer;
 
     private IServiceScope? _scope;
@@ -42,6 +45,22 @@ public sealed partial class SequenceViewModel : ViewModelBase
     private const string PitchDirKey = "Weld.Peak.PitchDir";
     private const string InspectCamOffsetXKey = "Sequence.InspectCam.OffsetXMm";
     private const string InspectCamOffsetYKey = "Sequence.InspectCam.OffsetYMm";
+    private const string ZDatumOffsetKey = WeldSequenceSupport.ZDatumOffsetKey;
+
+    // ① AMR 위치 이동·ACS 용접선 좌표 — 페이지 테스트 입력(ACS 실행은 order/action 값을 쓴다).
+    private const string AmrMoveEnabledKey = "Sequence.Test.AmrMove.Enabled";
+    private const string AmrXKey = "Sequence.Test.AmrMove.X";
+    private const string AmrYKey = "Sequence.Test.AmrMove.Y";
+    private const string AmrThetaDegKey = "Sequence.Test.AmrMove.ThetaDeg";
+    private const string SeamStartXKey = "Sequence.Test.SeamStartW.X";
+    private const string SeamStartYKey = "Sequence.Test.SeamStartW.Y";
+    private const string SeamStartZKey = "Sequence.Test.SeamStartW.Z";
+    private const string SeamEndXKey = "Sequence.Test.SeamEndW.X";
+    private const string SeamEndYKey = "Sequence.Test.SeamEndW.Y";
+    private const string SeamEndZKey = "Sequence.Test.SeamEndW.Z";
+
+    /// <summary>방향 콤보 "자동(용접선)" 인덱스 — ACS 처럼 seam 벡터·벽 정면 theta 로 유도.</summary>
+    private const int DirectionAutoIndex = 2;
 
     /// <summary>실행 시작 시 발생 — 뷰가 모니터 창을 열도록(원본 window.open 대응).</summary>
     public event Action? MonitorRequested;
@@ -60,7 +79,8 @@ public sealed partial class SequenceViewModel : ViewModelBase
 
     // 파라미터 카드
     [ObservableProperty] private int _inspectionSurfaceId = 0x01;
-    [ObservableProperty] private int _directionIndex;         // 0 수평, 1 수직
+    [ObservableProperty] private int _directionIndex;         // 0 수평, 1 수직, 2 자동(용접선)
+    [ObservableProperty] private string? _directionHint;
     [ObservableProperty] private double _offsetU;
     [ObservableProperty] private double _offsetV;
     [ObservableProperty] private double _cameraTargetDistanceMm = 400;
@@ -72,11 +92,27 @@ public sealed partial class SequenceViewModel : ViewModelBase
     [ObservableProperty] private double _pitchMm = 370;
     [ObservableProperty] private int _pitchDirIndex;         // 0 → +1, 1 → −1
     [ObservableProperty] private int _inspectionProfileId;
+    [ObservableProperty] private double _zDatumOffsetMm;
 
-    public SequenceViewModel(IServiceScopeFactory scopeFactory, CobotService cobot)
+    // ① AMR 위치 이동 목표 (맵 좌표 m, θ deg)
+    [ObservableProperty] private bool _amrMoveEnabled;
+    [ObservableProperty] private double _amrX;
+    [ObservableProperty] private double _amrY;
+    [ObservableProperty] private double _amrThetaDeg;
+
+    // ACS 작업 용접선 좌표 seamStartW / seamEndW [x,y,z] m (맵 좌표, z 는 도면 전역)
+    [ObservableProperty] private double _seamStartX;
+    [ObservableProperty] private double _seamStartY;
+    [ObservableProperty] private double _seamStartZ;
+    [ObservableProperty] private double _seamEndX;
+    [ObservableProperty] private double _seamEndY;
+    [ObservableProperty] private double _seamEndZ;
+
+    public SequenceViewModel(IServiceScopeFactory scopeFactory, CobotService cobot, AMRService amr)
     {
         _scopeFactory = scopeFactory;
         _cobot = cobot;
+        _amr = amr;
         _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _timer.Tick += (_, _) => RefreshConnection();
     }
@@ -126,7 +162,7 @@ public sealed partial class SequenceViewModel : ViewModelBase
 
             OffsetU = await _param.GetDoubleAsync(OffsetUKey) ?? 0;
             OffsetV = await _param.GetDoubleAsync(OffsetVKey) ?? 0;
-            DirectionIndex = (int)(await _param.GetDoubleAsync(DirectionKey) ?? 0) == 1 ? 1 : 0;
+            DirectionIndex = (int)(await _param.GetDoubleAsync(DirectionKey) ?? 0) is var dir and (1 or DirectionAutoIndex) ? dir : 0;
             CameraTargetDistanceMm = await _param.GetDoubleAsync(CameraDistKey) ?? 400;
             CameraToLaserShiftYmm = await _param.GetDoubleAsync(CameraToLaserShiftKey) ?? -75;
             XSignIndex = Math.Sign(await _param.GetDoubleAsync(XSignKey) ?? 1) == -1 ? 1 : 0;
@@ -138,6 +174,18 @@ public sealed partial class SequenceViewModel : ViewModelBase
 
             InspectionProfileId = (int)(await _param.GetDoubleAsync(InspectionProfileKey) ?? 0);
             InspectionSurfaceId = (int)(await _param.GetDoubleAsync(InspectionSurfaceKey) ?? 0x01);
+            ZDatumOffsetMm = await _param.GetDoubleAsync(ZDatumOffsetKey) ?? 0;
+
+            AmrMoveEnabled = (await _param.GetDoubleAsync(AmrMoveEnabledKey) ?? 0) != 0;
+            AmrX = await _param.GetDoubleAsync(AmrXKey) ?? 0;
+            AmrY = await _param.GetDoubleAsync(AmrYKey) ?? 0;
+            AmrThetaDeg = await _param.GetDoubleAsync(AmrThetaDegKey) ?? 0;
+            SeamStartX = await _param.GetDoubleAsync(SeamStartXKey) ?? 0;
+            SeamStartY = await _param.GetDoubleAsync(SeamStartYKey) ?? 0;
+            SeamStartZ = await _param.GetDoubleAsync(SeamStartZKey) ?? 0;
+            SeamEndX = await _param.GetDoubleAsync(SeamEndXKey) ?? 0;
+            SeamEndY = await _param.GetDoubleAsync(SeamEndYKey) ?? 0;
+            SeamEndZ = await _param.GetDoubleAsync(SeamEndZKey) ?? 0;
 
             RebuildSurfaceOptions();
             await LoadProfilesAsync();
@@ -177,12 +225,45 @@ public sealed partial class SequenceViewModel : ViewModelBase
         _context.Tool = Tool;
         _context.Velocity = Velocity;
         _context.InspectionSurfaceId = InspectionSurfaceId;
-        _context.InspectionDirection = DirectionIndex == 1 ? InspectionMoveDirection.Vertical : InspectionMoveDirection.Horizontal;
         _context.InspectionOffsetU = OffsetU;
         _context.InspectionOffsetV = OffsetV;
         _context.CameraTargetDistanceMm = CameraTargetDistanceMm;
         _context.CameraToLaserShiftYmm = CameraToLaserShiftYmm;
         _context.InspectionProfileId = InspectionProfileId;
+
+        // ① AMR 목표 — 꺼져 있으면 null(이동 생략).
+        _context.AmrTargetX = AmrMoveEnabled ? AmrX : null;
+        _context.AmrTargetY = AmrMoveEnabled ? AmrY : null;
+        _context.AmrTargetThetaRad = AmrMoveEnabled ? AmrThetaDeg * Math.PI / 180 : null;
+
+        // ACS 작업 필드를 페이지 입력으로 재현 — 오케스트레이터가 action 으로 채우는 것과 같은 자리.
+        _context.SeamStartW = new[] { SeamStartX, SeamStartY, SeamStartZ };
+        _context.SeamEndW = new[] { SeamEndX, SeamEndY, SeamEndZ };
+        _context.WallCode = WallCodes.FindBySurfaceId(InspectionSurfaceId)?.Code;
+        // 벽 정면 = ACS 정차 노드 theta. ①을 쓰면 그 목표 theta, 아니면 null(SeamBaseTransform 이 AMR yaw 사용).
+        _context.WallFacingThetaRad = _context.AmrTargetThetaRad;
+        _context.ZDatumOffsetMm = ZDatumOffsetMm;
+
+        if (DirectionIndex == DirectionAutoIndex)
+        {
+            var facing = _context.WallFacingThetaRad ?? _amr.LatestStatus?.Pose.Angle;
+            if (facing is { } theta)
+            {
+                _context.InspectionDirection = SeamDirectionResolver.Resolve(
+                    _context.SeamStartW, _context.SeamEndW, theta, out var reason);
+                DirectionHint = $"→ {(_context.InspectionDirection == InspectionMoveDirection.Vertical ? "수직" : "수평")} ({reason})";
+            }
+            else
+            {
+                _context.InspectionDirection = InspectionMoveDirection.Horizontal;
+                DirectionHint = "→ 수평 (벽 정면 theta 미상 — AMR 미연결·① 미사용)";
+            }
+        }
+        else
+        {
+            _context.InspectionDirection = DirectionIndex == 1 ? InspectionMoveDirection.Vertical : InspectionMoveDirection.Horizontal;
+            DirectionHint = null;
+        }
     }
 
     // ── 파라미터 저장(변경 시) ──
@@ -201,6 +282,17 @@ public sealed partial class SequenceViewModel : ViewModelBase
     partial void OnWobjIdChanged(int value) => Save(WObjPointStep.WObjIdKey, value);
     partial void OnInspectionSurfaceIdChanged(int value) { _context.InspectionSurfaceId = value; SaveInspection(); RefreshSteps(); }
     partial void OnInspectionProfileIdChanged(int value) { _context.InspectionProfileId = value; SaveInspection(); }
+    partial void OnZDatumOffsetMmChanged(double value) => SaveAcsTest();
+    partial void OnAmrMoveEnabledChanged(bool value) => SaveAcsTest();
+    partial void OnAmrXChanged(double value) => SaveAcsTest();
+    partial void OnAmrYChanged(double value) => SaveAcsTest();
+    partial void OnAmrThetaDegChanged(double value) => SaveAcsTest();
+    partial void OnSeamStartXChanged(double value) => SaveAcsTest();
+    partial void OnSeamStartYChanged(double value) => SaveAcsTest();
+    partial void OnSeamStartZChanged(double value) => SaveAcsTest();
+    partial void OnSeamEndXChanged(double value) => SaveAcsTest();
+    partial void OnSeamEndYChanged(double value) => SaveAcsTest();
+    partial void OnSeamEndZChanged(double value) => SaveAcsTest();
 
     private async void SaveOffsets()
     {
@@ -228,6 +320,39 @@ public sealed partial class SequenceViewModel : ViewModelBase
         if (_loading || _param is null) return;
         await _param.SetDoubleAsync(InspectionProfileKey, InspectionProfileId);
         await _param.SetDoubleAsync(InspectionSurfaceKey, InspectionSurfaceId);
+    }
+
+    private async void SaveAcsTest()
+    {
+        if (_loading || _param is null) return;
+        ApplyContext();
+        RefreshSteps();
+        await _param.SetDoubleAsync(ZDatumOffsetKey, ZDatumOffsetMm);
+        await _param.SetDoubleAsync(AmrMoveEnabledKey, AmrMoveEnabled ? 1 : 0);
+        await _param.SetDoubleAsync(AmrXKey, AmrX);
+        await _param.SetDoubleAsync(AmrYKey, AmrY);
+        await _param.SetDoubleAsync(AmrThetaDegKey, AmrThetaDeg);
+        await _param.SetDoubleAsync(SeamStartXKey, SeamStartX);
+        await _param.SetDoubleAsync(SeamStartYKey, SeamStartY);
+        await _param.SetDoubleAsync(SeamStartZKey, SeamStartZ);
+        await _param.SetDoubleAsync(SeamEndXKey, SeamEndX);
+        await _param.SetDoubleAsync(SeamEndYKey, SeamEndY);
+        await _param.SetDoubleAsync(SeamEndZKey, SeamEndZ);
+    }
+
+    /// <summary>① 목표에 현재 AMR 위치를 채운다 — 지금 자리를 정차점으로 저장해 두고 반복 테스트용.</summary>
+    [RelayCommand]
+    private void UseCurrentAmrPose()
+    {
+        if (_amr.LatestStatus is not { } st)
+        {
+            IsError = true; Message = "AMR 상태를 읽을 수 없습니다 — 연결을 확인하세요.";
+            return;
+        }
+        AmrX = Math.Round(st.Pose.X, 3);
+        AmrY = Math.Round(st.Pose.Y, 3);
+        AmrThetaDeg = Math.Round(st.Pose.Angle * 180 / Math.PI, 2);
+        IsError = false; Message = $"현재 AMR 위치를 ① 목표로 설정: ({AmrX:0.###}, {AmrY:0.###}) m, θ={AmrThetaDeg:0.##}°";
     }
 
     private async void Save(string key, double v)

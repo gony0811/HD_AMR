@@ -144,7 +144,7 @@ public class TelescopicService : BackgroundService
     private async Task PollAsync(CancellationToken ct)
     {
         var response = await _client.SendAsync(TelescopicProtocol.Read(), ct).ConfigureAwait(false);
-        var status = TelescopicProtocol.ParseStatus(response);
+        var status = ToRealMm(TelescopicProtocol.ParseStatus(response));
         if (status is null)
         {
             // 조그 중에는 유지 명령의 응답과 겹칠 수 있어 한 번 놓치는 것은 정상이다.
@@ -161,9 +161,14 @@ public class TelescopicService : BackgroundService
         LastError = null;
     }
 
+    /// <summary>컨트롤러 높이 값을 실제 mm 로 환산한 상태(<see cref="TelescopicSerialSettings.MmPerUnit"/>).
+    /// 원본 응답은 <see cref="TelescopicStatus.Raw"/> 에 그대로 남는다.</summary>
+    private TelescopicStatus? ToRealMm(TelescopicStatus? status)
+        => status is null ? null : status with { HeightMm = _settings.ToMm(status.HeightMm) };
+
     private void UpdateStatus(string? response)
     {
-        var status = TelescopicProtocol.ParseStatus(response);
+        var status = ToRealMm(TelescopicProtocol.ParseStatus(response));
         if (status is null) return;
 
         lock (_stateLock)
@@ -271,8 +276,9 @@ public class TelescopicService : BackgroundService
         => _client.IsOpen ? _client.SendAsync(TelescopicProtocol.Stop(), ct) : Task.FromResult<string?>(null);
 
     /// <summary>
-    /// 지정 높이(mm)로 이동. 반환 true=컨트롤러가 수락, false=거부(잠김·비활성·범위 등), null=응답 불명.
+    /// 지정 높이(실제 mm)로 이동. 반환 true=컨트롤러가 수락, false=거부(잠김·비활성·범위 등), null=응답 불명.
     /// 설정 범위(<see cref="TelescopicSerialSettings.MinHeightMm"/>~<c>MaxHeightMm</c>) 밖이면 예외.
+    /// 컨트롤러에는 <see cref="TelescopicSerialSettings.ToControllerUnits"/> 로 환산한 값을 지령한다.
     /// </summary>
     public async Task<bool?> MoveToHeightAsync(int heightMm, CancellationToken ct = default)
     {
@@ -280,9 +286,13 @@ public class TelescopicService : BackgroundService
             throw new ArgumentOutOfRangeException(nameof(heightMm), heightMm,
                 $"운영 범위는 {_settings.MinHeightMm}~{_settings.MaxHeightMm} mm 입니다.");
 
+        var units = _settings.ToControllerUnits(heightMm);
+        _logger.LogInformation("텔레스코픽 지정 높이 이동: {Mm}mm → 컨트롤러 {Units} (×{Scale}mm/단위, 오프셋 {Offset}mm)",
+            heightMm, units, _settings.MmPerUnit, _settings.HeightOffsetMm);
+
         await EndJogAsync(ct).ConfigureAwait(false);   // 조그와 절대 이동을 섞지 않는다.
         var response = await _client.SendAsync(
-            TelescopicProtocol.Target(heightMm, _settings.TargetDigits), ct).ConfigureAwait(false);
+            TelescopicProtocol.Target(units, _settings.TargetDigits), ct).ConfigureAwait(false);
         return TelescopicProtocol.ParseTargetAck(response);
     }
 

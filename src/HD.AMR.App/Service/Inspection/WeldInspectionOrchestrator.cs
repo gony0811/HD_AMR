@@ -429,6 +429,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             ? DryRunStepKeys
             : recipeKeys ?? allKeys.Where(k => !DryRunOnlyStepKeys.Contains(k)).ToArray();
         return baseSteps
+            // ① AMR 위치 이동은 페이지 테스트 전용 — ACS 경로의 주행은 order 실행기가 이미 마쳤다.
+            .Where(k => k != Sequence.Steps.AmrMoveStep.StepKey)
             .Where(k => !(anchorHit && AlignmentStepKeys.Contains(k)))
             .Where(k => isLastInspection || k != HomeStepKey)
             .ToArray();

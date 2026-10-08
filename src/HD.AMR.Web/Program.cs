@@ -142,6 +142,7 @@ builder.Services.AddScoped<HD.AMR.App.Service.Motion.PostureLimitsService>();
 builder.Services.AddScoped<HD.AMR.App.Service.Inspection.SeamApproachResolver>();
 
 // 시퀀스 단계 등록 (ISequenceStep). 새 단계 추가 시 여기에 한 줄만 추가.
+builder.Services.AddScoped<ISequenceStep, AmrMoveStep>();   // 100: AMR 위치 이동 (페이지 테스트 전용)
 builder.Services.AddScoped<ISequenceStep, CobotInspectionMoveStep>();
 builder.Services.AddScoped<ISequenceStep, CameraAlignStep>();
 builder.Services.AddScoped<ISequenceStep, FlatSurfaceAlignStep>();

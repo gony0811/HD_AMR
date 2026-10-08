@@ -57,8 +57,9 @@
                     <StackPanel Width="130" Margin="0,0,12,8">
                         <TextBlock Classes="axis" Text="방향" ToolTip.Tip="ACS: seamStartW→seamEndW 벡터와 정차 노드 theta 로 자동 유도" />
                         <ComboBox HorizontalAlignment="Stretch" SelectedIndex="{Binding DirectionIndex}" IsEnabled="{Binding !Busy}">
-                            <ComboBoxItem>수평</ComboBoxItem><ComboBoxItem>수직</ComboBoxItem>
+                            <ComboBoxItem>수평</ComboBoxItem><ComboBoxItem>수직</ComboBoxItem><ComboBoxItem>자동 (용접선)</ComboBoxItem>
                         </ComboBox>
+                        <TextBlock Classes="hint" Text="{Binding DirectionHint}" IsVisible="{Binding DirectionHint, Converter={x:Static ObjectConverters.IsNotNull}}" />
                     </StackPanel>
                     <StackPanel Margin="0,0,12,8"><TextBlock Classes="axis" Text="카메라 목표거리" ToolTip.Tip="ACS: 레시피 CameraTargetDistanceMm (빈 값=400). action.workingDistanceMm 은 미사용" /><NumericUpDown Value="{Binding CameraTargetDistanceMm}" Increment="1" IsEnabled="{Binding !Busy}" /></StackPanel>
                 </WrapPanel>
@@ -74,6 +75,7 @@
                     </StackPanel>
                     <StackPanel Margin="0,0,12,8"><TextBlock Classes="axis" Text="검사캠 X" /><NumericUpDown Value="{Binding InspectCamOffsetX}" Increment="0.1" IsEnabled="{Binding !Busy}" /></StackPanel>
                     <StackPanel Margin="0,0,12,8"><TextBlock Classes="axis" Text="검사캠 Y" /><NumericUpDown Value="{Binding InspectCamOffsetY}" Increment="0.1" IsEnabled="{Binding !Busy}" /></StackPanel>
+                    <StackPanel Margin="0,0,12,8"><TextBlock Classes="axis" Text="z 기준 보정(mm)" ToolTip.Tip="도면 전역 z → AMR 바닥 기준: 해당 층 바닥 높이(level_z)를 뺀다. 1층=0" /><NumericUpDown Value="{Binding ZDatumOffsetMm}" Increment="1" IsEnabled="{Binding !Busy}" /></StackPanel>
                     <StackPanel Margin="0,0,12,8"><TextBlock Classes="axis" Text="작업물 번호" /><NumericUpDown Value="{Binding WobjId}" Minimum="0" Maximum="14" Increment="1" FormatString="0" IsEnabled="{Binding !Busy}" /></StackPanel>
                     <StackPanel Margin="0,0,12,8"><TextBlock Classes="axis" Text="Pitch" /><NumericUpDown Value="{Binding PitchMm}" Minimum="1" Increment="1" IsEnabled="{Binding !Busy}" /></StackPanel>
                     <StackPanel Width="130" Margin="0,0,12,8">
@@ -88,6 +90,37 @@
                         </ComboBox>
                     </StackPanel>
                 </WrapPanel>
+            </StackPanel>
+        </Border>
+
+        <!-- ACS 작업 입력 재현: ① AMR 정차 위치 + 용접선 좌표 -->
+        <Border Classes="card">
+            <StackPanel Spacing="8">
+                <TextBlock Text="ACS 작업 입력 (테스트)" FontWeight="SemiBold" />
+                <TextBlock Classes="hint" Text="ACS order 의 정차 위치(nodePosition)와 startWeldInspection 의 용접선 좌표(position.seamStartW/seamEndW)를 직접 입력해 수동 실행에서 재현합니다. 좌표는 맵(SLAM) 기준 m, z 는 도면 전역 z. ACS 실행에서는 이 값들 대신 수신값을 쓰며 ① 단계는 실행되지 않습니다." />
+
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                    <CheckBox Content="① AMR 위치 이동 사용" IsChecked="{Binding AmrMoveEnabled}" IsEnabled="{Binding !Busy}" VerticalAlignment="Bottom"
+                              ToolTip.Tip="끄면 ① 단계는 이동 없이 통과합니다. 켜면 θ 가 벽 정면 방향(노드 theta)으로도 쓰입니다." />
+                    <StackPanel><TextBlock Classes="axis" Text="X (m)" /><NumericUpDown Value="{Binding AmrX}" Increment="0.01" FormatString="0.000" IsEnabled="{Binding AmrMoveEnabled}" /></StackPanel>
+                    <StackPanel><TextBlock Classes="axis" Text="Y (m)" /><NumericUpDown Value="{Binding AmrY}" Increment="0.01" FormatString="0.000" IsEnabled="{Binding AmrMoveEnabled}" /></StackPanel>
+                    <StackPanel><TextBlock Classes="axis" Text="θ (°)" /><NumericUpDown Value="{Binding AmrThetaDeg}" Increment="1" FormatString="0.00" IsEnabled="{Binding AmrMoveEnabled}" /></StackPanel>
+                    <Button VerticalAlignment="Bottom" Content="현재 위치 가져오기" Command="{Binding UseCurrentAmrPoseCommand}" IsEnabled="{Binding !Busy}" />
+                </StackPanel>
+
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                    <TextBlock Width="150" VerticalAlignment="Bottom" Margin="0,0,0,6" Text="용접선 시작점 seamStartW" />
+                    <StackPanel><TextBlock Classes="axis" Text="x (m)" /><NumericUpDown Value="{Binding SeamStartX}" Increment="0.01" FormatString="0.000" IsEnabled="{Binding !Busy}" /></StackPanel>
+                    <StackPanel><TextBlock Classes="axis" Text="y (m)" /><NumericUpDown Value="{Binding SeamStartY}" Increment="0.01" FormatString="0.000" IsEnabled="{Binding !Busy}" /></StackPanel>
+                    <StackPanel><TextBlock Classes="axis" Text="z (m)" /><NumericUpDown Value="{Binding SeamStartZ}" Increment="0.01" FormatString="0.000" IsEnabled="{Binding !Busy}" /></StackPanel>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                    <TextBlock Width="150" VerticalAlignment="Bottom" Margin="0,0,0,6" Text="용접선 끝점 seamEndW" />
+                    <StackPanel><TextBlock Classes="axis" Text="x (m)" /><NumericUpDown Value="{Binding SeamEndX}" Increment="0.01" FormatString="0.000" IsEnabled="{Binding !Busy}" /></StackPanel>
+                    <StackPanel><TextBlock Classes="axis" Text="y (m)" /><NumericUpDown Value="{Binding SeamEndY}" Increment="0.01" FormatString="0.000" IsEnabled="{Binding !Busy}" /></StackPanel>
+                    <StackPanel><TextBlock Classes="axis" Text="z (m)" /><NumericUpDown Value="{Binding SeamEndZ}" Increment="0.01" FormatString="0.000" IsEnabled="{Binding !Busy}" /></StackPanel>
+                </StackPanel>
+                <TextBlock Classes="hint" Text="wall_code 는 위 '검사 Wall (Surface)' 선택에서 정해집니다 (면 법선 자세 계산용)." />
             </StackPanel>
         </Border>
 

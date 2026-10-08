@@ -47,7 +47,7 @@ if [ ! -d "$PUBLISH_DIR" ]; then
     exit 1
 fi
 
-FILE_COUNT=$(find "$PUBLISH_DIR" -type f | wc -l | tr -d ' ')
+FILE_COUNT=$(find "$PUBLISH_DIR" -type f ! -name 'appsettings*.json' | wc -l | tr -d ' ')
 echo "▶ 전송 대상: $FILE_COUNT 개 파일 → $REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR"
 
 if [ "$DRY_RUN" = true ]; then
@@ -63,13 +63,18 @@ echo "  ✓ 앱 종료"
 
 # ── 3. 전송 ───────────────────────────────────────────────────
 echo "▶ scp 전송 중…"
-scp -r -q "$PUBLISH_DIR/"* "$REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR/"
+# appsettings*.json 은 보내지 않는다 — 원격 현장 설정(장비 Enabled·COM 포트 등)을 로컬 값으로 덮어쓰지 않기 위해.
+# 새 설정 키는 코드 기본값으로 동작하고, 원격 설정을 바꿔야 하면 원격 파일을 직접 고친다.
+find "$PUBLISH_DIR" -mindepth 1 -maxdepth 1 ! -name 'appsettings*.json' -print0 \
+    | xargs -0 -I{} scp -r -q {} "$REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR/"
 echo "  ✓ 전송 완료"
 
 # ── 4. 원격 앱 시작 ──────────────────────────────────────────
 if [ "$NO_RESTART" = false ]; then
     echo "▶ 원격 앱 시작 중…"
-    $SSH "cd $REMOTE_DIR && start $REMOTE_EXE" 2>/dev/null || true
+    # ssh 세션에서 띄운 프로세스는 ssh 종료 시 함께 죽는다 — 로그인된 데스크톱 세션에서 실행되도록
+    # 예약 작업(Interactive)으로 시작한다(작업은 매번 덮어써 등록).
+    $SSH "powershell -NoProfile -Command \"\$a=New-ScheduledTaskAction -Execute '$REMOTE_DIR/$REMOTE_EXE' -WorkingDirectory '$REMOTE_DIR'; \$p=New-ScheduledTaskPrincipal -UserId '$REMOTE_USER' -LogonType Interactive; Register-ScheduledTask -TaskName HDAMR_Start -Action \$a -Principal \$p -Force | Out-Null; Start-ScheduledTask -TaskName HDAMR_Start\"" 2>/dev/null || true
     echo "  ✓ 앱 시작"
 fi
 

@@ -93,6 +93,17 @@ public class SequenceContext
     /// <summary>단계 간 임시 데이터 전달용.</summary>
     public Dictionary<string, object> Bag { get; set; } = new();
 
+    // ── ① AMR 위치 이동 목표(맵 좌표) — 시퀀스 페이지 테스트 전용. ACS 경로는 order 실행기가 주행하므로 null ──
+
+    /// <summary>AMR 목표 x [m]. X/Y/Theta 중 하나라도 null 이면 ① 은 이동 없이 통과.</summary>
+    public double? AmrTargetX { get; set; }
+
+    /// <summary>AMR 목표 y [m].</summary>
+    public double? AmrTargetY { get; set; }
+
+    /// <summary>AMR 목표 theta [rad].</summary>
+    public double? AmrTargetThetaRad { get; set; }
+
     // ── ACS(VDA5050) 연동 필드 — UI 단독 실행 경로에서는 전부 null 유지 ──────────
 
     /// <summary>ACS 작업 역추적 키(action jobRef). 있으면 ⑱이 자기발급 대신 "{jobRef}-W{i}"를 비전에 전달.</summary>

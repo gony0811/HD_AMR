@@ -7,7 +7,7 @@ public class WeldInspectionStepSelectionTests
     // 등록된 전체 스텝 키(DefaultOrder 순) — Program.cs / ServiceRegistration.cs 등록 집합과 같다.
     private static readonly string[] AllKeys =
     {
-        "cobotInspection", "cameraAlign", "flatSurfaceAlign", "laserWorkingDistance",
+        "amrMove", "cobotInspection", "cameraAlign", "flatSurfaceAlign", "laserWorkingDistance",
         "peak1Find", "peak1Center", "bead1Find", "bead1Center", "wobjPoint1",
         "peak2Approach", "peak2Find", "peak2Center", "bead2Find", "bead2Center",
         "cobotSeamEnd", "wobjPoint2", "wobjRegister", "inspectionRun", "inspectionRunDry",
@@ -26,6 +26,17 @@ public class WeldInspectionStepSelectionTests
         Assert.Contains("wobjPoint2", keys);
         Assert.Contains("inspectionRun", keys);
         Assert.Contains("cobotHome", keys);
+    }
+
+    // ① AMR 위치 이동은 페이지 테스트 전용 — ACS 경로는 order 실행기가 이미 주행했으므로 어느 경우에도 빠진다.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AmrMove_IsNeverSelectedForAcs(bool dryRun)
+    {
+        Assert.DoesNotContain("amrMove", WeldInspectionOrchestrator.SelectStepKeys(dryRun, null, AllKeys, false, true));
+        Assert.DoesNotContain("amrMove",
+            WeldInspectionOrchestrator.SelectStepKeys(false, new[] { "amrMove", "cobotInspection" }, AllKeys, false, true));
     }
 
     // 레시피가 명시한 키는 현장 튜닝 의도라 그대로 둔다.
