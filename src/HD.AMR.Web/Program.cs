@@ -134,6 +134,7 @@ builder.Services.AddScoped<ParameterService>();
 builder.Services.AddScoped<InspectionRecipeService>();
 // QR 정차 pose 티칭에 필요한 T_A_B, T_T_C, 목표 T_A_Q 및 기존 정합값 저장.
 builder.Services.AddScoped<CalibrationService>();
+builder.Services.AddScoped<ArucoCenterOffsetMeter>();   // moveToSeamStart 도달 후 ArUco 화면 중심 편차 측정
 builder.Services.AddScoped<ArucoHandEyeService>();
 builder.Services.AddScoped<HandEyeAutoRoutine>();
 builder.Services.AddScoped<ArucoMountAutoRoutine>();

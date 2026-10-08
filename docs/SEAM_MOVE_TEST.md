@@ -281,3 +281,54 @@ J5 부호가 반대라 경로가 거부되면 **홈/대기 자세로 먼저 복�
 | 자세는 맞는데 화면 회전이 90° 틀림 | `spin` 값, 또는 광축 파라미터(`Camera.Align.DepthAxis`) 설정 |
 | pose 의 `ry` 가 ±85~90° 이고 `rx`·`rz` 가 요동침 | **정상일 수 있음** — 툴 X 가 연직에 가까우면(예: 수직벽 + `spin ±90`) ZYX 오일러각이 짐벌락에 들어가 `rx`·`rz` 가 서로를 상쇄하며 흔들린다. 오일러 삼각형 대신 환산 결과의 **`자세 확인(맵)`** 줄(광축·툴X·툴Y 방향)로 판단할 것 |
 | 정차각(theta)을 바꿨는데 자세가 그대로 | theta 입력이 반영되지 않은 것 — `정차 노드 theta` 체크가 꺼져 있으면 AMR yaw 를 쓴다. 법선 방위가 theta 와 같이 도는지 `자세 확인(맵)` 줄로 확인 |
+
+## 7. ACS `moveToSeamStart` 액션 (§8.7 · N19)
+
+이 화면과 같은 목적(코봇툴이 seam 시작점에 닿는가)을 **ACS order 로** 수행하는 노드 액션이다.
+근거: `HD_ACS/docs/HD_AMR_MOVE_TO_SEAM_START_SPEC.md`(구현 가이드), 계약 정본은 VDA5050 사양 §8.7.
+
+**흐름:** order 수신 → (주행 전 코봇 홈 복귀) → `nodePosition` 주행(`/robot/go`, 일반 검사와 동일) →
+`moveToSeamStart` → 본검사 **② 검사위치 이동(`cobotInspection`)만** 실행 → 그 자리에 정지.
+촬영·`CAPTURE_REQ`·③④ 정렬·경유점 순회·홈 복귀는 하지 않는다.
+
+**구현 위치**
+
+| 역할 | 코드 |
+|---|---|
+| 파라미터 해석(jobRef/position 2쌍, params 없음) | `WeldInspectionActionParser.TryParseSeamStart` — position 해석은 startWeldInspection 과 공용 |
+| 실행(② 단계만, 결과 매핑) | `WeldInspectionOrchestrator.ExecuteMoveToSeamStartAsync` |
+| 액션 분기·상태/errors 보고 | `Vda5050OrderExecutor` 액션 루프 |
+
+**목표점:** `seamStartW` 그 점이 아니라 본검사 ②와 같은 **면 이격 접근점**(면 법선 방향 400mm,
+`CobotInspectionMoveStep.ApproachStandoffMm`)이다. TCP 를 seam 위에 두면 벽에 닿는다. 같은 단계를 그대로
+실행하므로 시험 결과가 실제 검사 접근과 일치한다 — 실패 사유가 그대로 standoff(N10) 산정 데이터가 된다.
+
+**결과**
+
+| 경우 | actionStatus | errorType | resultDescription |
+|---|---|---|---|
+| 도달 | FINISHED | — | `reached — 작업 준비 위치 → 용접선 접근점(면 이격 400mm …) · 플랜지 뻗음 Nmm(최소 M, 면까지 Dmm) … , \|J5\|=x°` |
+| 정차 거리 부족(리치 사전점검) | FAILED | `inspectionFailed` | `reach 불가 — … 정차 거리 부족 — 필요 ≥ N mm, 현재 M mm …` |
+| IK·이동 실패 | FAILED | `inspectionFailed` | `reach 불가 — … 용접선 접근점 이동 실패 (rc=…)` |
+| 파라미터 오류(wall_code 정의 밖 포함) | FAILED | `orderValidationError` | `파라미터 해석 실패: …` |
+| 코봇 미연결 / 시퀀스 점유 중 | FAILED | `equipmentError` | 사유 |
+
+`errors[].errorDescription` 은 `"{actionId}: 사유"` 형식(§8.7 예시)이다.
+
+**도달 후 ArUco 중심 편차 측정** — 도달(FINISHED 조건 충족) 직후, 면에 붙인 ArUco 마커가 카메라 **화면 중심(광축)에서
+얼마나 떨어져 있는지** 측정해 기록한다(`ArucoCenterOffsetMeter`). seam 시작점 접근의 실제 위치 오차를 보는 용도다.
+
+- 마커 설정(사전·기대 ID·한 변 크기)은 **ArUco 장착 보정 화면**에 저장된 값을 쓴다. 기대 ID 가 비어 있으면 화면에서 가장 큰 마커.
+- 0.5초 정착 후 5프레임 PnP(재투영 3px 이하만) 평균. 편차는 컬러 광학 프레임 기준
+  **X 오른쪽 +, Y 아래 +**(mm, 마커 깊이에서의 실거리), Z 는 마커까지 거리, 픽셀 편차(주점 대비)도 함께 남긴다.
+- 운영 로그: 출처 ACS · 분류 액션 · 대상 `ArUco 중심 편차` 행. ACS `resultDescription` 끝에도
+  `· ArUco#n 중심편차 X+12.3/Y−4.5mm @401mm` 요약이 붙는다.
+- **미검출이어도 액션은 FINISHED**(reach 시험 결과와 분리) — `· ArUco 미검출(사유, 보인 ID …)` 으로 남는다.
+
+**N19 회신안 (HD_AMR)**
+
+1. actionType — `moveToSeamStart` 그대로 수용.
+2. 실패 errorType — `inspectionFailed` 로 통일(검사 액션 실패와 동계열). 별도 유형 불요.
+3. resultDescription — 자유 문자열. 성공 `reached — …`(플랜지 뻗음·|J5| 포함), 실패 `reach 불가 — …`(필요/현재 정차 거리 또는 `rc=`).
+4. 홈 복귀 — 시험 후 그 자리 정지(운영자 육안 확인). 다음 order 는 주행 전 자동 홈 복귀가 보장된다.
+5. 목표점 — seam 점이 아니라 본검사 ②와 같은 면 이격 접근점(위 참조).

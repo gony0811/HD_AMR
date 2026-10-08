@@ -126,6 +126,7 @@ internal static class ServiceRegistration
         services.AddScoped<ParameterService>();
         services.AddScoped<InspectionRecipeService>();
         services.AddScoped<CalibrationService>();
+        services.AddScoped<ArucoCenterOffsetMeter>();   // moveToSeamStart 도달 후 ArUco 화면 중심 편차 측정
         services.AddScoped<HD.AMR.App.Service.Motion.PostureLimitsService>();
         // 용접선 점(맵 좌표) → 코봇 BASE 접근점 환산 — ② 검사위치 이동과 드라이런 끝점 이동이 공유.
         services.AddScoped<HD.AMR.App.Service.Inspection.SeamApproachResolver>();
@@ -169,7 +170,6 @@ internal static class ServiceRegistration
         services.AddTransient<LabelEditorViewModel>();
         services.AddTransient<VisionTrainingViewModel>();
         services.AddTransient<LaserViewModel>();
-        services.AddTransient<MountCalibrationViewModel>();
         services.AddTransient<HandEyeViewModel>();
         services.AddTransient<ArucoCalibrationViewModel>();
         services.AddTransient<ArucoMountCalibrationViewModel>();

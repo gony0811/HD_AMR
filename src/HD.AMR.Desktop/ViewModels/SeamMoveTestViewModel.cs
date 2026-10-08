@@ -29,7 +29,7 @@ namespace HD.AMR.Desktop.ViewModels;
 /// </summary>
 public sealed partial class SeamMoveTestViewModel : ViewModelBase
 {
-    // 정지 판정 — MountCalibrationViewModel·QrLocalizationService 와 같은 기준.
+    // 정지 판정 — (삭제된) 접촉식 장착 보정·QrLocalizationService 와 같은 기준.
     private const double MoveTolMm = 5.0;
     private const double MoveTolDeg = 0.2;
     private const int StationaryWindowMs = 2500;
@@ -56,7 +56,7 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
     private bool _loadingInspectionDirection;
     private bool _loadingProductionToggle;
 
-    // 현재 TCP 실시간 읽기 — MountCalibrationViewModel 과 같은 방식(2틱마다, 3회 연속 실패 시 중단).
+    // 현재 TCP 실시간 읽기 — (삭제된) 접촉식 장착 보정과 같은 방식(2틱마다, 3회 연속 실패 시 중단).
     private double[]? _tcp;
     private DateTime _tcpAt;
     private int _tcpFailStreak;

@@ -51,28 +51,8 @@ public static class WeldInspectionActionParser
         if (string.IsNullOrWhiteSpace(jobRef)) { error = "jobRef 가 비어 있습니다"; return false; }
 
         // ── position ────────────────────────────────────────────────
-        var position = AsObject(positionEl.Value, "position", ref error);
-        if (position is null) return false;
-        var pos = position.Value;
-
-        if (!TryVec3(pos, "seamStartW", out var seamStart, ref error)) return false;
-        if (!TryVec3(pos, "seamEndW", out var seamEnd, ref error)) return false;
-
-        if (!pos.TryGetProperty("drawingPos", out var dp) || dp.ValueKind != JsonValueKind.Object)
-        { error = "position.drawingPos 누락"; return false; }
-
-        var wallCode = GetString(dp, "wall_code");
-        if (string.IsNullOrWhiteSpace(wallCode)) { error = "drawingPos.wall_code 누락"; return false; }
-
-        var drawingPos = new WeldDrawingPos(
-            Tank: GetString(dp, "tank") ?? "",
-            Level: GetInt(dp, "level") ?? 0,
-            WallCode: wallCode!,
-            U: GetDouble(dp, "u"),
-            V: GetDouble(dp, "v"),
-            X: GetDouble(dp, "x") ?? 0,
-            Y: GetDouble(dp, "y") ?? 0,
-            Z: GetDouble(dp, "z") ?? 0);
+        if (!TryParsePosition(positionEl.Value, out var seamStart, out var seamEnd, out var drawingPos, ref error))
+            return false;
 
         // ── params ──────────────────────────────────────────────────
         var prm = AsObject(paramsEl.Value, "params", ref error);
@@ -139,7 +119,7 @@ public static class WeldInspectionActionParser
             JobRef: jobRef!,
             SeamStartW: seamStart!,
             SeamEndW: seamEnd!,
-            DrawingPos: drawingPos,
+            DrawingPos: drawingPos!,
             SeamType: seamType,
             SectionDxfId: sectionDxfId,
             InspectionProfileId: GetString(pr, "inspectionProfileId") ?? "",
@@ -152,7 +132,83 @@ public static class WeldInspectionActionParser
         return true;
     }
 
+    /// <summary>
+    /// `moveToSeamStart` 액션(사양 §8.7 — 코봇 seam 시작점 reach 시험) 해석. actionParameters 는
+    /// jobRef/position <b>2쌍</b>이고 params 는 없다(검사가 아니므로 seamType·taskId 등 미전송).
+    /// position 은 startWeldInspection 과 같은 구조라 같은 해석기를 쓴다. 면 법선 자세를 wall_code 로
+    /// 정하므로 정본 10코드 밖이면 거부한다.
+    /// </summary>
+    public static bool TryParseSeamStart(VdaAction action, out MoveToSeamStartRequest? request, out string? error)
+    {
+        request = null;
+        error = null;
+
+        JsonElement? jobRefEl = null, positionEl = null;
+        foreach (var p in action.ActionParameters)
+        {
+            switch (p.Key)
+            {
+                case "jobRef": jobRefEl = ToElement(p.Value); break;
+                case "position": positionEl = ToElement(p.Value); break;
+            }
+        }
+
+        if (jobRefEl is null || positionEl is null)
+        {
+            error = "actionParameters에 jobRef/position 2쌍이 모두 필요합니다 " +
+                    $"(수신: {string.Join(",", action.ActionParameters.Select(p => p.Key))})";
+            return false;
+        }
+
+        var jobRef = AsString(jobRefEl.Value);
+        if (string.IsNullOrWhiteSpace(jobRef)) { error = "jobRef 가 비어 있습니다"; return false; }
+
+        if (!TryParsePosition(positionEl.Value, out var seamStart, out var seamEnd, out var drawingPos, ref error))
+            return false;
+
+        if (Models.WallCodes.Find(drawingPos!.WallCode) is null)
+        {
+            error = $"미정의 wall_code '{drawingPos.WallCode}' — 정본 10코드(B/T/SM/PM/F/A/SL/PL/SU/PU)만 수용";
+            return false;
+        }
+
+        request = new MoveToSeamStartRequest(jobRef!, seamStart!, seamEnd!, drawingPos);
+        return true;
+    }
+
     // ── 헬퍼 ─────────────────────────────────────────────────────────
+
+    /// <summary>`position` 객체(§8.1 — seamStartW/seamEndW/drawingPos) 해석. startWeldInspection·moveToSeamStart 공용.</summary>
+    private static bool TryParsePosition(JsonElement positionEl, out double[]? seamStart, out double[]? seamEnd,
+        out WeldDrawingPos? drawingPos, ref string? error)
+    {
+        seamStart = seamEnd = null;
+        drawingPos = null;
+
+        var position = AsObject(positionEl, "position", ref error);
+        if (position is null) return false;
+        var pos = position.Value;
+
+        if (!TryVec3(pos, "seamStartW", out seamStart, ref error)) return false;
+        if (!TryVec3(pos, "seamEndW", out seamEnd, ref error)) return false;
+
+        if (!pos.TryGetProperty("drawingPos", out var dp) || dp.ValueKind != JsonValueKind.Object)
+        { error = "position.drawingPos 누락"; return false; }
+
+        var wallCode = GetString(dp, "wall_code");
+        if (string.IsNullOrWhiteSpace(wallCode)) { error = "drawingPos.wall_code 누락"; return false; }
+
+        drawingPos = new WeldDrawingPos(
+            Tank: GetString(dp, "tank") ?? "",
+            Level: GetInt(dp, "level") ?? 0,
+            WallCode: wallCode!,
+            U: GetDouble(dp, "u"),
+            V: GetDouble(dp, "v"),
+            X: GetDouble(dp, "x") ?? 0,
+            Y: GetDouble(dp, "y") ?? 0,
+            Z: GetDouble(dp, "z") ?? 0);
+        return true;
+    }
 
     /// <summary>ActionParameter.Value(object?) → JsonElement. 이미 JsonElement 면 그대로,
     /// 문자열이면 JSON 재파싱 시도(§8.3 문자열 폴백 방어), 그 외 프리미티브는 직렬화 경유.</summary>

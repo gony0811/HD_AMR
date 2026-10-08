@@ -19,7 +19,6 @@ public sealed partial class CalibrationViewModel : ViewModelBase
     private readonly AMRService _amr;
     private readonly CobotService _cobot;
     private readonly CameraService _camera;
-    private readonly INavigationService _nav;
     private readonly DispatcherTimer _timer;
     private readonly CancellationTokenSource _cts = new();
 
@@ -46,10 +45,10 @@ public sealed partial class CalibrationViewModel : ViewModelBase
     [ObservableProperty] private MeasurementVm? _measurement;
 
     public CalibrationViewModel(IServiceScopeFactory scopeFactory,
-        AMRService amr, CobotService cobot, CameraService camera, INavigationService nav)
+        AMRService amr, CobotService cobot, CameraService camera)
     {
         _scopeFactory = scopeFactory;
-        _amr = amr; _cobot = cobot; _camera = camera; _nav = nav;
+        _amr = amr; _cobot = cobot; _camera = camera;
         _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _timer.Tick += (_, _) => RefreshStatus();
     }
@@ -116,9 +115,6 @@ public sealed partial class CalibrationViewModel : ViewModelBase
         if (QrSizeMm <= 0) throw new InvalidOperationException("QR 실측 크기는 0보다 커야 합니다.");
         if (PositionToleranceMm < 0 || YawToleranceDeg < 0) throw new InvalidOperationException("허용오차는 음수일 수 없습니다.");
     }
-
-    [RelayCommand]
-    private void OpenMountCalibration() => _nav.NavigateTo<MountCalibrationViewModel>();
 
     [RelayCommand]
     private async Task SaveHandEye()

@@ -19,7 +19,7 @@ namespace HD.AMR.App.Service;
 /// 자체 비교한다 — allowedDeviationXY/Theta, 미지정 시 0.1 m / 0.1 rad. status.schedule 값 해석은
 /// 미확정(D-12)이라 error 필드 감시만 보조로 쓴다.
 ///
-/// 검사 액션(startWeldInspection)은 <see cref="Inspection.IWeldInspectionExecutor"/>에 위임한다
+/// 검사 액션(startWeldInspection)과 seam 시작점 시험(moveToSeamStart, §8.7)은 <see cref="Inspection.IWeldInspectionExecutor"/>에 위임한다
 /// (2차 연동, §8.5.1) — 파라미터 해석·레시피 매핑·검사 시퀀스 실행은 그쪽 책임이고, 이 클래스는
 /// 액션 상태(RUNNING→FINISHED/FAILED)와 errors 보고만 담당한다.
 /// 액션 없는 Order(actions:[])는 노드 도달만으로 완결(§4.1).
@@ -295,10 +295,14 @@ public sealed class Vda5050OrderExecutor
                 StateChanged?.Invoke();
                 var actionStarted = DateTime.UtcNow;
 
-                if (action.ActionType == "startWeldInspection")
+                if (action.ActionType is "startWeldInspection" or "moveToSeamStart")
                 {
-                    var result = await _inspection.ExecuteAsync(
-                        action, orderId, pos.Theta, isLastInspection: ai == lastInspectionIndex, ct);
+                    // startWeldInspection = 본검사(§8.5.1), moveToSeamStart = 코봇 seam 시작점 reach 시험(§8.7 —
+                    // ② 접근까지만, 촬영·홈 복귀 없음). 결과 보고·errors·equipmentDown 처리는 같다.
+                    var result = action.ActionType == "moveToSeamStart"
+                        ? await _inspection.ExecuteMoveToSeamStartAsync(action, orderId, pos.Theta, ct)
+                        : await _inspection.ExecuteAsync(
+                            action, orderId, pos.Theta, isLastInspection: ai == lastInspectionIndex, ct);
                     SetActionStatus(action.ActionId, result.Success ? "FINISHED" : "FAILED", result.ResultDescription);
                     if (!result.Success) failedActions++;
                     OpLog(OpCategory.Action, action.ActionType, result.Success,
@@ -307,7 +311,10 @@ public sealed class Vda5050OrderExecutor
                         (result.ErrorType is not null ? $" (errorType={result.ErrorType})" : ""), orderId);
                     if (!result.Success && result.ErrorType is not null)
                     {
-                        ReportError(result.ErrorType, result.ErrorDescription ?? result.ResultDescription);
+                        var errDesc = result.ErrorDescription ?? result.ResultDescription;
+                        // §8.7 예시: errorDescription 은 "{actionId}: 사유" — 시험 액션은 같은 order 에 여러 건이 올 수 있어 구분 키를 붙인다.
+                        ReportError(result.ErrorType,
+                            action.ActionType == "moveToSeamStart" ? $"{action.ActionId}: {errDesc}" : errDesc);
                         if (result.ErrorType == "equipmentError") equipmentDown = true;
                     }
                     _logger.LogInformation("VDA5050 액션 {Result}: {Type} ({ActionId}) — {Desc}",

@@ -90,6 +90,142 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         _logger = logger;
     }
 
+    /// <summary>`moveToSeamStart` 에서 실행할 단계 — 본검사 ② 검사위치 이동(ready 경유 → 면 이격 접근점)만.
+    /// ③④는 카메라·레이저 실패가 reach 결과에 섞이므로 넣지 않는다. 홈 복귀도 하지 않는다(도달 자세 확인용 정지,
+    /// 다음 order 는 주행 전 홈 복귀가 보장한다).</summary>
+    private static readonly string[] SeamStartStepKeys = { "cobotInspection" };
+
+    public async Task<InspectionActionResult> ExecuteMoveToSeamStartAsync(VdaAction action, string orderId,
+        double? nodeThetaRad, CancellationToken ct)
+    {
+        try
+        {
+            return await ExecuteMoveToSeamStartCoreAsync(action, orderId, nodeThetaRad, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;   // 임무 폐기/emergencyStop — 상위(Vda5050OrderExecutor)가 정리
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "moveToSeamStart 실행 중 미처리 예외 (action={ActionId})", action.ActionId);
+            return InspectionActionResult.Fail("inspectionFailed", $"내부 오류: {ex.Message}");
+        }
+    }
+
+    private async Task<InspectionActionResult> ExecuteMoveToSeamStartCoreAsync(VdaAction action, string orderId,
+        double? nodeThetaRad, CancellationToken ct)
+    {
+        if (!WeldInspectionActionParser.TryParseSeamStart(action, out var request, out var parseError))
+            return InspectionActionResult.Fail("orderValidationError", $"파라미터 해석 실패: {parseError}");
+        var req = request!;
+
+        if (!_cobot.IsConnected)
+            return InspectionActionResult.Fail("equipmentError", "코봇 RPC 미연결 — seam 시작점 이동 불가");
+
+        using var scope = _scopeFactory.CreateScope();
+        var sequence = scope.ServiceProvider.GetRequiredService<SequenceService>();
+        var param = scope.ServiceProvider.GetRequiredService<ParameterService>();
+
+        // 접근 거리 = 본검사 ②와 동일한 고정 면 이격(CobotInspectionMoveStep.ApproachStandoffMm) — 같은 단계를
+        // 그대로 실행하므로 시험 결과(reach 가부)가 실제 검사 접근과 일치한다(standoff 산정 데이터).
+        const double approachMm = CobotInspectionMoveStep.ApproachStandoffMm;
+
+        var context = new SequenceContext
+        {
+            Tool = 1,
+            Velocity = 20,
+            InspectionSurfaceId = WallCodeToSurfaceId(req.DrawingPos.WallCode),
+            InspectionOffsetU = await param.GetDoubleAsync(WeldSequenceSupport.InspectionOffsetUKey) ?? 0.0,
+            InspectionOffsetV = await param.GetDoubleAsync(WeldSequenceSupport.InspectionOffsetVKey) ?? 0.0,
+            AcsJobRef = req.JobRef,
+            AcsOrderId = orderId,
+            AcsActionId = action.ActionId,
+            SeamStartW = req.SeamStartW,
+            SeamEndW = req.SeamEndW,
+            WallCode = req.DrawingPos.WallCode,
+            WallFacingThetaRad = nodeThetaRad,
+            ZDatumOffsetMm = await param.GetDoubleAsync(WeldSequenceSupport.ZDatumOffsetKey) ?? 0.0,
+        };
+
+        _logger.LogInformation(
+            "moveToSeamStart 수리: jobRef={JobRef}, wall={Wall}, seamStartW=[{S}], 면 이격 {Approach}mm, nodeθ={Theta}",
+            req.JobRef, req.DrawingPos.WallCode, string.Join(", ", req.SeamStartW.Select(v => v.ToString("0.###"))),
+            approachMm, nodeThetaRad?.ToString("0.###") ?? "(미상)");
+        _opLog.Log(OperationLogService.SourceAcs, OpCategory.Action, "seam 시작점 시험 구성", null,
+            $"jobRef={req.JobRef}, wall={req.DrawingPos.WallCode}, seamStartW=[{string.Join(", ", req.SeamStartW.Select(v => v.ToString("0.###")))}], " +
+            $"면 이격 {approachMm:0}mm(본검사 ②와 동일), 노드 θ={nodeThetaRad?.ToString("0.###") ?? "미상"}, " +
+            $"z 보정 {context.ZDatumOffsetMm:0}mm, 단계: {string.Join(",", SeamStartStepKeys)} (촬영·홈 복귀 없음)", orderId);
+
+        // 코봇이 움직이므로 같은 order 의 정렬 캐시는 더 이상 믿을 수 없다.
+        InvalidateAnchor();
+
+        CancellationTokenSource runCts;
+        lock (_sync)
+        {
+            _currentRunCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            runCts = _currentRunCts;
+        }
+
+        SequenceRunResult runResult;
+        try
+        {
+            runResult = await sequence.RunSequenceAsync(context, SeamStartStepKeys, runCts.Token);
+        }
+        finally
+        {
+            lock (_sync)
+            {
+                if (_currentRunCts == runCts) _currentRunCts = null;
+                runCts.Dispose();
+            }
+        }
+
+        switch (runResult.Outcome)
+        {
+            case SequenceRunOutcome.Busy:
+                return InspectionActionResult.Fail("equipmentError",
+                    "onboard sequence busy — UI 등 다른 실행이 장비 점유 중");
+
+            case SequenceRunOutcome.Failed:
+                // 리치 부족이면 "정차 거리 부족 — 필요 ≥ N mm, 현재 M mm …", 이동 실패면 rc=… 가 그대로 실린다(N10 데이터).
+                return InspectionActionResult.Fail("inspectionFailed",
+                    $"reach 불가 — {runResult.Message}");
+
+            case SequenceRunOutcome.Completed:
+            default:
+                var stepMsg = sequence.StepStatuses.GetValueOrDefault("cobotInspection")?.Message ?? "";
+                string j5 = "";
+                try
+                {
+                    var joints = await _cobot.Rpc.GetActualJointPosAsync(ct: ct);
+                    j5 = $", |J5|={Math.Abs(joints[4]):0.0}°";
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException) { /* 관절 읽기 실패 — 수치만 생략 */ }
+
+                // 도달 후 면의 ArUco 로 화면 중심(광축) 대비 편차를 기록 — reach 결과와 무관(미검출이어도 FINISHED).
+                string aruco;
+                try
+                {
+                    var meter = scope.ServiceProvider.GetRequiredService<ArucoCenterOffsetMeter>();
+                    var off = await meter.MeasureAsync(ct);
+                    if (!off.Found)
+                        _logger.LogWarning("moveToSeamStart ArUco 중심 편차 측정 실패: {Note} (jobRef={JobRef})", off.Note, req.JobRef);
+                    _opLog.Log(OperationLogService.SourceAcs, OpCategory.Action, "ArUco 중심 편차", off.Found,
+                        $"jobRef={req.JobRef}, wall={req.DrawingPos.WallCode} — {off.Describe()}", orderId);
+                    aruco = off.Summary();
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    _logger.LogWarning(ex, "moveToSeamStart ArUco 측정 오류 — reach 결과는 그대로 보고");
+                    _opLog.Log(OperationLogService.SourceAcs, OpCategory.Action, "ArUco 중심 편차", false,
+                        $"측정 오류: {ex.Message}", orderId);
+                    aruco = $"ArUco 측정 오류({ex.Message})";
+                }
+                return InspectionActionResult.Ok($"reached — {stepMsg}{j5} · {aruco}");
+        }
+    }
+
     public void InvalidateAnchor()
     {
         lock (_sync)
