@@ -37,6 +37,7 @@ public sealed class Vda5050AdapterService : BackgroundService
     private readonly Inspection.IWeldInspectionExecutor _inspection;
     private readonly CobotService _cobot;
     private readonly ILogger<Vda5050AdapterService> _logger;
+    private readonly OperationLogService _opLog;
 
     private IMqttClient? _client;
     private int _stateHeaderId;
@@ -120,14 +121,17 @@ public sealed class Vda5050AdapterService : BackgroundService
     /// 끝난 뒤에야 나간다(2026-10-07 현장: EMO 후 MoveJ 가 끝까지 실행됨). 코봇 StopMotion 은 이동 세마포어를
     /// 우회하는 정지 전용 연결로 나가고, 각 경로는 서로를 막지 않도록 스레드풀에서 독립적으로 실행된다.
     /// </summary>
-    public async Task TriggerEmergencyStopAsync(string reason)
+    /// <param name="source">운영 로그 출처 — 물리 버튼이면 <see cref="OperationLogService.SourceIo"/>.</param>
+    public async Task TriggerEmergencyStopAsync(string reason, string source = OperationLogService.SourceAcs)
     {
         _logger.LogWarning("비상정지 이행 — {Reason}", reason);
+        _opLog.Log(source, OpCategory.EStop, "비상정지", null,
+            $"{reason} — 코봇 즉시 정지·검사 취소·주행 정지·임무 폐기", _executor.Snapshot().OrderId is { Length: > 0 } o ? o : null);
 
         // ① 즉시 정지 — 코봇·검사 취소·주행/임무를 동시에 시작(어느 하나가 늦거나 실패해도 나머지는 진행).
         var cobot = Run(() => _cobot.StopMotionImmediateAsync(), "코봇 정지 실패(미연결일 수 있음)");
         var inspection = Run(() => _inspection.AbortAsync(), "검사 실행기 취소 실패");
-        var mission = Run(() => _executor.EmergencyStopAsync(), "주행/임무 취소 실패");
+        var mission = Run(() => _executor.EmergencyStopAsync(reason), "주행/임무 취소 실패");
 
         // ② 코봇 정지는 임무 종료와 무관하게 먼저 확정한다 — 로그로 지연을 바로 볼 수 있게.
         await cobot;
@@ -151,8 +155,9 @@ public sealed class Vda5050AdapterService : BackgroundService
 
     public Vda5050AdapterService(IOptions<Vda5050AdapterSettings> options, AMRService amr,
         Vda5050OrderExecutor executor, Inspection.IWeldInspectionExecutor inspection,
-        CobotService cobot, ILoggerFactory loggerFactory)
+        CobotService cobot, OperationLogService opLog, ILoggerFactory loggerFactory)
     {
+        _opLog = opLog;
         _s = options.Value;
         _amr = amr;
         _executor = executor;
@@ -215,8 +220,9 @@ public sealed class Vda5050AdapterService : BackgroundService
             if (_brokerConnected)
             {
                 _brokerConnected = false;
-                _logger.LogWarning("VDA5050 브로커 연결 두절: {Reason}",
-                    string.IsNullOrEmpty(e.ReasonString) ? e.Reason.ToString() : e.ReasonString);
+                var why = string.IsNullOrEmpty(e.ReasonString) ? e.Reason.ToString() : e.ReasonString;
+                _logger.LogWarning("VDA5050 브로커 연결 두절: {Reason}", why);
+                _opLog.Log(OperationLogService.SourceAcs, OpCategory.Link, "브로커 연결 두절", false, why);
             }
             return Task.CompletedTask;
         };
@@ -238,6 +244,7 @@ public sealed class Vda5050AdapterService : BackgroundService
         await _client.ConnectAsync(optionsBuilder.Build(), ct);
         _brokerConnected = true;
         _logger.LogInformation("VDA5050 브로커 접속 완료.");
+        _opLog.Log(OperationLogService.SourceAcs, OpCategory.Link, "브로커 접속", true, $"{_s.BrokerHost}:{_s.BrokerPort}");
 
         // 수신 구독 (order/instantActions — QoS 1, §2.3)
         await _client.SubscribeAsync(Vda5050Topics.Order(_s), MqttQualityOfServiceLevel.AtLeastOnce, ct);
@@ -311,6 +318,7 @@ public sealed class Vda5050AdapterService : BackgroundService
             if (order is null)
             {
                 _logger.LogWarning("VDA5050 order 역직렬화 실패(null): {Len}B", json.Length);
+                _opLog.Log(OperationLogService.SourceAcs, OpCategory.Order, "order 해석 실패", false, $"역직렬화 결과 null ({json.Length}B)");
                 return;
             }
             // 층 검증(§4.5.2 현재 층 불일치 포함)은 실행기 검증부가 수행 — 어댑터 보유 mapId 를 전달.
@@ -320,6 +328,7 @@ public sealed class Vda5050AdapterService : BackgroundService
         catch (Exception ex)
         {
             _logger.LogError(ex, "VDA5050 order 처리 실패");
+            _opLog.Log(OperationLogService.SourceAcs, OpCategory.Order, "order 처리 실패", false, ex.Message);
         }
     }
 
@@ -332,6 +341,8 @@ public sealed class Vda5050AdapterService : BackgroundService
 
             foreach (var action in msg.Actions)
             {
+                _opLog.Log(OperationLogService.SourceAcs, OpCategory.Instant, $"{action.ActionType} 수신", null,
+                    Vda5050OrderExecutor.DescribeAction(action), _executor.Snapshot().OrderId is { Length: > 0 } o ? o : null);
                 switch (action.ActionType)
                 {
                     case "emergencyStop":
@@ -346,10 +357,14 @@ public sealed class Vda5050AdapterService : BackgroundService
                         _logger.LogWarning(
                             "VDA5050 initPosition 수신 — 이행 유보(D-10, 벤더 회신 대기): mapId={MapId}, x={X}, y={Y}, theta={Theta}. " +
                             "재측위·mapId 갱신 미수행.", p.MapId, p.X, p.Y, p.Theta);
+                        _opLog.Log(OperationLogService.SourceAcs, OpCategory.Instant, "initPosition", null,
+                            $"이행 유보(D-10) — mapId={p.MapId}, ({p.X}, {p.Y}, θ={p.Theta}); 재측위·mapId 갱신 안 함");
                         break;
 
                     default:
                         _logger.LogInformation("VDA5050 미지원 instantAction 무시: {Type}", action.ActionType);
+                        _opLog.Log(OperationLogService.SourceAcs, OpCategory.Instant, action.ActionType, false,
+                            "미지원 instantAction — 무시");
                         break;
                 }
             }
@@ -357,6 +372,7 @@ public sealed class Vda5050AdapterService : BackgroundService
         catch (Exception ex)
         {
             _logger.LogError(ex, "VDA5050 instantActions 처리 실패");
+            _opLog.Log(OperationLogService.SourceAcs, OpCategory.Instant, "instantActions 처리 실패", false, ex.Message);
         }
     }
 
@@ -391,6 +407,8 @@ public sealed class Vda5050AdapterService : BackgroundService
                 _logger.LogInformation("ACS 생존 신호: ONLINE");
             else
                 _logger.LogWarning("ACS 생존 신호: {State} — ACS 두절. 신규 Order 기대 불가, 진행 중 Order 는 자율 계속(§9.3).", state);
+            _opLog.Log(OperationLogService.SourceAcs, OpCategory.Link, $"ACS 생존 신호 {state}", next == AcsLiveness.Online,
+                next == AcsLiveness.Online ? "ACS 온라인" : "ACS 두절 — 신규 Order 기대 불가, 진행 중 Order 는 계속");
         }
         catch (Exception ex)
         {

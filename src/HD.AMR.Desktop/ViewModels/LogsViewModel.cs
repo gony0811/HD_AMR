@@ -22,19 +22,50 @@ public sealed partial class LogsViewModel : ViewModelBase
 
     public ObservableCollection<LogRow> Rows { get; } = new();
 
-    public string[] SourceOptions { get; } = ["전체", "ACS", "수동(UI)"];
+    /// <summary>출처 필터 — (코드, 표시명). 코드 null = 전체.</summary>
+    public FilterOption[] SourceOptions { get; } =
+    [
+        new(null, "전체"),
+        new(OperationLogService.SourceAcs, "ACS"),
+        new(OperationLogService.SourceUi, "수동(UI)"),
+        new(OperationLogService.SourceAmr, "AMR 장비"),
+        new(OperationLogService.SourceIo, "현장 버튼"),
+    ];
 
-    [ObservableProperty] private string _selectedSource = "전체";
+    /// <summary>분류 필터 — 기본 목록 + DB 에 기록된 분류(목록에 없는 코드 포함).</summary>
+    public ObservableCollection<FilterOption> CategoryOptions { get; } = new();
+
+    [ObservableProperty] private FilterOption? _selectedSource;
+    [ObservableProperty] private FilterOption? _selectedCategory;
     [ObservableProperty] private bool _onlyFailures;
     [ObservableProperty] private bool _busy;
 
-    partial void OnSelectedSourceChanged(string value) => _ = ReloadAsync();
+    partial void OnSelectedSourceChanged(FilterOption? value) => _ = ReloadAsync();
+    partial void OnSelectedCategoryChanged(FilterOption? value) => _ = ReloadAsync();
     partial void OnOnlyFailuresChanged(bool value) => _ = ReloadAsync();
 
     public override void OnActivated()
     {
+        SelectedSource ??= SourceOptions[0];
         _logs.Changed += OnLogsChanged;
+        _ = LoadCategoriesAsync();
         _ = ReloadAsync();
+    }
+
+    private async Task LoadCategoriesAsync()
+    {
+        var keep = SelectedCategory?.Code;
+        var options = new List<FilterOption> { new(null, "전체") };
+        options.AddRange(OpCategory.All.Select(c => new FilterOption(c.Code, c.Label)));
+        try
+        {
+            foreach (var code in await _logs.QueryCategoriesAsync())
+                if (options.All(o => o.Code != code)) options.Add(new FilterOption(code, code));
+        }
+        catch { /* DB 미준비 — 기본 목록만 */ }
+        CategoryOptions.Clear();
+        foreach (var o in options) CategoryOptions.Add(o);
+        SelectedCategory = CategoryOptions.FirstOrDefault(o => o.Code == keep) ?? CategoryOptions[0];
     }
 
     public override void OnDeactivated() => _logs.Changed -= OnLogsChanged;
@@ -51,19 +82,14 @@ public sealed partial class LogsViewModel : ViewModelBase
             do
             {
                 _reloadQueued = false;
-                var source = SelectedSource switch
-                {
-                    "ACS" => OperationLogService.SourceAcs,
-                    "수동(UI)" => OperationLogService.SourceUi,
-                    _ => null,
-                };
-                var list = await _logs.QueryAsync(MaxRows, source, OnlyFailures);
+                var list = await _logs.QueryAsync(MaxRows, SelectedSource?.Code, OnlyFailures,
+                    category: SelectedCategory?.Code);
                 Rows.Clear();
                 foreach (var l in list)
                     Rows.Add(new LogRow(
                         l.TimestampUtc.ToLocalTime().ToString("MM-dd HH:mm:ss"),
-                        l.Source == OperationLogService.SourceAcs ? "ACS" : "수동",
-                        l.Category,
+                        SourceLabel(l.Source),
+                        OpCategory.LabelOf(l.Category),
                         l.Name,
                         l.Success switch { true => "성공", false => "실패", _ => "정보" },
                         l.Detail,
@@ -74,6 +100,21 @@ public sealed partial class LogsViewModel : ViewModelBase
         }
         finally { Busy = false; }
     }
+
+    private static string SourceLabel(string source) => source switch
+    {
+        OperationLogService.SourceAcs => "ACS",
+        OperationLogService.SourceUi => "수동",
+        OperationLogService.SourceAmr => "AMR",
+        OperationLogService.SourceIo => "버튼",
+        _ => source,
+    };
+}
+
+/// <summary>필터 드롭다운 항목 — Code null = 전체.</summary>
+public sealed record FilterOption(string? Code, string Label)
+{
+    public override string ToString() => Label;
 }
 
 /// <summary>로그 페이지 표시 행 — Result 배지는 IsSuccess/IsFailure 로 색을 가른다.</summary>

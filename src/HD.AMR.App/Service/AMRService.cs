@@ -62,6 +62,16 @@ public class AMRService : BackgroundService
         }
     }
 
+    /// <summary>앱이 마지막으로 주행 모드를 쓴 시각(UTC). 쓴 적 없으면 null — 상태 로그가 장비 측 변경과 구분하는 근거.</summary>
+    public DateTime? LastDrivingModeCommandUtc
+    {
+        get
+        {
+            var ticks = Interlocked.Read(ref _lastDrivingModeCommandUtcTicks);
+            return ticks == 0 ? null : new DateTime(ticks, DateTimeKind.Utc);
+        }
+    }
+
     // 연결 실패 warn을 끊김당 1회만 남기기 위한 플래그(재연결 성공 시 리셋).
     private bool _retryWarned;
 

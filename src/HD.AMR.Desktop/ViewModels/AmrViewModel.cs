@@ -20,9 +20,12 @@ public sealed partial class AmrViewModel : ViewModelBase
     private RobotStatus? _status;
     private bool _busy;
 
-    public AmrViewModel(AMRService svc, AmrMapViewModel map)
+    private readonly OperationLogService _opLog;
+
+    public AmrViewModel(AMRService svc, AmrMapViewModel map, OperationLogService opLog)
     {
         _svc = svc;
+        _opLog = opLog;
         Map = map;
         _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _timer.Tick += (_, _) => Refresh();
@@ -118,8 +121,13 @@ public sealed partial class AmrViewModel : ViewModelBase
         {
             await action(CancellationToken.None);
             AddLog(label, true, null);
+            _opLog.Log(OperationLogService.SourceUi, OpCategory.AmrCommand, label, true, "AMR 페이지 레지스터 쓰기");
         }
-        catch (Exception ex) { AddLog(label, false, ex.Message); }
+        catch (Exception ex)
+        {
+            AddLog(label, false, ex.Message);
+            _opLog.Log(OperationLogService.SourceUi, OpCategory.AmrCommand, label, false, ex.Message);
+        }
         finally
         {
             _busy = false;

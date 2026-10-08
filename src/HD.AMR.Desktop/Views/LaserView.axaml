@@ -119,17 +119,23 @@
                                 <Border Grid.Column="1" Classes="badge" Classes.on="{Binding CobotConnected}" Classes.off="{Binding !CobotConnected}"><TextBlock Text="{Binding CobotConnected, Converter={x:Static vm:LaserConverters.RobotText}}" /></Border>
                             </Grid>
                             <Grid ColumnDefinitions="140,140" IsVisible="{Binding PoseValid}">
-                                <StackPanel Grid.Column="0"><TextBlock Classes="axis" HorizontalAlignment="Center" Text="적용 Rx" /><TextBlock Classes="val" FontSize="18" Text="{Binding AppliedRxText, StringFormat='{}{0}°'}" /></StackPanel>
-                                <StackPanel Grid.Column="1"><TextBlock Classes="axis" HorizontalAlignment="Center" Text="적용 Ry" /><TextBlock Classes="val" FontSize="18" Text="{Binding AppliedRyText, StringFormat='{}{0}°'}" /></StackPanel>
+                                <StackPanel Grid.Column="0"><TextBlock Classes="axis" HorizontalAlignment="Center" Text="현재 틸트 rx" /><TextBlock Classes="val" FontSize="18" Text="{Binding TiltRxText, StringFormat='{}{0}°'}" /></StackPanel>
+                                <StackPanel Grid.Column="1"><TextBlock Classes="axis" HorizontalAlignment="Center" Text="현재 틸트 ry" /><TextBlock Classes="val" FontSize="18" Text="{Binding TiltRyText, StringFormat='{}{0}°'}" /></StackPanel>
                             </Grid>
-                            <TextBlock Classes="hint" Text="평면이 계산되면 적용할 Rx, Ry 가 표시됩니다." IsVisible="{Binding !PoseValid}" />
+                            <TextBlock Classes="hint" Text="평면이 계산되면 현재 틸트가 표시됩니다." IsVisible="{Binding !PoseValid}" />
+                            <TextBlock Classes="hint" Text="'보정 적용'은 툴 Rx/Ry 를 각 3° 시험 회전해 실제 응답을 잰 뒤, 틸트가 1° 미만이 될 때까지 최대 3회 보정합니다 (로봇이 움직입니다)." />
                             <StackPanel Orientation="Horizontal" Spacing="8">
                                 <TextBlock Classes="axis" VerticalAlignment="Center" Text="속도(%)" />
                                 <NumericUpDown Value="{Binding VelPct}" Minimum="1" Maximum="30" Increment="1" FormatString="0" />
                                 <Button Content="보정 적용" Classes="accent" Command="{Binding ApplyCorrectionCommand}" />
+                                <Button Content="중단" Classes="danger" Command="{Binding AbortApplyCommand}" IsVisible="{Binding Applying}" />
                                 <TextBlock Classes="axis" VerticalAlignment="Center" Text="서보 ON 필요" IsVisible="{Binding !ServoOn}" />
                             </StackPanel>
-                            <TextBlock TextWrapping="Wrap" FontSize="12" Text="{Binding CobotMsg}" IsVisible="{Binding CobotMsg, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                            <ItemsControl ItemsSource="{Binding ApplyLog}">
+                                <ItemsControl.ItemTemplate><DataTemplate x:DataType="x:String"><TextBlock Classes="axis" TextWrapping="Wrap" Text="{Binding}" /></DataTemplate></ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <TextBlock TextWrapping="Wrap" FontSize="12" Text="{Binding CobotMsg}" IsVisible="{Binding CobotMsg, Converter={x:Static ObjectConverters.IsNotNull}}"
+                                       Foreground="{Binding !CobotMsgOk, Converter={x:Static vm:OkErrConverters.Brush}}" />
                         </StackPanel>
                     </Border>
 
@@ -180,7 +186,15 @@
                                     </ItemsControl>
                                     <TextBlock Classes="hint" Text="{Binding ., Converter={x:Static vm:LaserConverters.CalSummary}}" />
                                     <ItemsControl ItemsSource="{Binding Warnings}"><ItemsControl.ItemTemplate><DataTemplate x:DataType="x:String"><Border Classes="alert"><TextBlock Text="{Binding}" TextWrapping="Wrap" FontSize="12" /></Border></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
-                                    <TextBlock Classes="hint" Text="적용: 아래 6줄을 appsettings.json 의 LaserDisplacementSensor 섹션에 덮어쓰고 앱을 재시작하세요." />
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <Button Content="결과를 설정에 적용" Classes="accent"
+                                                Command="{Binding $parent[UserControl].((vm:LaserViewModel)DataContext).ApplyCalibrationCommand}" />
+                                    </StackPanel>
+                                    <TextBlock TextWrapping="Wrap" FontSize="12"
+                                               Text="{Binding $parent[UserControl].((vm:LaserViewModel)DataContext).CalApplyMsg}"
+                                               Foreground="{Binding !$parent[UserControl].((vm:LaserViewModel)DataContext).CalApplyOk, Converter={x:Static vm:OkErrConverters.Brush}}"
+                                               IsVisible="{Binding $parent[UserControl].((vm:LaserViewModel)DataContext).CalApplyMsg, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                                    <TextBlock Classes="hint" Text="'결과를 설정에 적용'은 즉시 반영되고 DB 에 저장됩니다(재시작 불필요 — appsettings 값은 기본값으로만 쓰임). 적용하면 평행 기준이 해제되므로 수평 자세에서 다시 저장하세요. 아래 6줄은 참고용입니다." />
                                     <TextBox Text="{Binding AppSettingsJsonSnippet, Mode=OneWay}" IsReadOnly="True" AcceptsReturn="True" FontFamily="monospace" FontSize="11" Height="120" />
                                 </StackPanel>
                             </StackPanel>

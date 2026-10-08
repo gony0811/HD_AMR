@@ -38,6 +38,9 @@ public sealed partial class LaserViewModel : ViewModelBase
     [ObservableProperty] private double _velPct = 5;
     [ObservableProperty] private bool _applying;
     [ObservableProperty] private string? _cobotMsg;
+    [ObservableProperty] private bool _cobotMsgOk = true;
+    public ObservableCollection<string> ApplyLog { get; } = new();
+    private CancellationTokenSource? _applyCts;
     // 헤드 캘리브레이션
     [ObservableProperty] private double _calTiltDeg = 2.0;
     [ObservableProperty] private int _calSamples = 5;
@@ -45,6 +48,9 @@ public sealed partial class LaserViewModel : ViewModelBase
     [ObservableProperty] private bool _calSignCheck = true, _calAutoLevel = true;
     [ObservableProperty] private bool _calibrating;
     [ObservableProperty] private LaserHeadCalibrationResult? _calResult;
+    [ObservableProperty] private string? _calApplyMsg;
+    [ObservableProperty] private bool _calApplyOk;
+    [ObservableProperty] private bool _calApplying;
     private CancellationTokenSource? _calCts;
     // TCP 캘리브레이션
     private readonly TcpTouchCalibrator _tcpCal = new();
@@ -92,10 +98,9 @@ public sealed partial class LaserViewModel : ViewModelBase
         ? $"원시(보정 전): Rx={_rawPose.Rx:F3}° Ry={_rawPose.Ry:F3}° · 기준 Rx={tr.RxDeg:F3}° Ry={tr.RyDeg:F3}° ({tr.CapturedAtUtc.ToLocalTime():yyyy-MM-dd HH:mm})" : "";
     public bool CobotConnected => _cobot.IsConnected;
     public bool ServoOn => _cobot.IsServoEnabled;
-    // 실장비 검증 부호: +Rx 회전 → 측정 Rx −(gain≈−1) → offset=+Rx; +Ry 회전 → 측정 Ry +(gain≈+1) → offset=−Ry.
-    public double AppliedRx => _pose.Rx;
-    public double AppliedRy => -_pose.Ry;
-    public string AppliedRxText => AppliedRx.ToString("F3"); public string AppliedRyText => AppliedRy.ToString("F3");
+    // 보정 대상 틸트(측정값). 적용 회전량은 고정 부호가 아니라 '보정 적용' 실행 시 응답 측정으로 정해진다
+    // (LaserTiltCorrector — 종전 [+Rx, −Ry] 규약은 현장 장착에서 발산했다).
+    public string TiltRxText => _pose.Rx.ToString("F3"); public string TiltRyText => _pose.Ry.ToString("F3");
     public bool CanCaptureRef => IsConnected && _rawPose.Valid && !CapturingRef && !Applying && !Calibrating;
     public bool CanApply => CobotConnected && ServoOn && PoseValid && !Applying && !Calibrating;
     public bool CanCalibrate => IsConnected && CobotConnected && ServoOn && PoseValid && !Calibrating && !Applying;
@@ -126,6 +131,7 @@ public sealed partial class LaserViewModel : ViewModelBase
         ApplyCorrectionCommand.NotifyCanExecuteChanged(); StartCalibrationCommand.NotifyCanExecuteChanged();
         CaptureReferenceCommand.NotifyCanExecuteChanged(); RecordTouchCommand.NotifyCanExecuteChanged();
         CaptureHeadPlaneCommand.NotifyCanExecuteChanged(); WriteTcpToolCommand.NotifyCanExecuteChanged();
+        ApplyCalibrationCommand.NotifyCanExecuteChanged();
     }
 
     private static string FormatHex(byte[]? data)
@@ -168,20 +174,34 @@ public sealed partial class LaserViewModel : ViewModelBase
         catch (Exception ex) { RefOk = false; RefMsg = $"기준 해제 오류: {ex.Message}"; }
     }
 
-    // ── 툴 자세 보정: 측정 평면 기울기를 tool=1 회전 오프셋으로 적용(위치 고정, Rz 미적용) ──
+    // ── 툴 자세 보정: 측정 틸트를 0 으로 — 프로브 회전으로 응답(J)을 잰 뒤 u=−J⁻¹·tilt 를 반복 적용(시퀀스 ④와 공용) ──
     [RelayCommand(CanExecute = nameof(CanApply))]
     private async Task ApplyCorrection()
     {
-        Applying = true; CobotMsg = null;
+        Applying = true; CobotMsg = null; CobotMsgOk = true; ApplyLog.Clear();
+        _applyCts = new CancellationTokenSource();
         try
         {
-            var offset = new[] { 0.0, 0.0, 0.0, AppliedRx, AppliedRy, 0.0 };
-            var anchor = await _cobot.Rpc.GetTcpPoseInBaseAsync(1);
-            var rc = await _cobot.Rpc.MoveByToolOffsetAsync(anchor, user: 0, offset, tool: 1, vel: Math.Clamp(VelPct, 1, 30));
-            CobotMsg = rc == 0 ? $"보정 적용 완료 (Rx={AppliedRx:0.###}°, Ry={AppliedRy:0.###}°)." : $"보정 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.";
+            using var scope = _scopeFactory.CreateScope();
+            var corrector = scope.ServiceProvider.GetRequiredService<LaserTiltCorrector>();
+            var r = await corrector.LevelAsync(new TiltLevelOptions
+            {
+                Tool = 1,
+                Velocity = Math.Clamp(VelPct, 1, 30),
+            }, msg => Dispatcher.UIThread.Post(() => ApplyLog.Add(msg)), null, _applyCts.Token);
+            CobotMsgOk = r.Success;
+            CobotMsg = r.Success ? $"보정 적용 완료 — {r.Message}" : $"보정 실패: {r.Message}";
         }
-        catch (Exception ex) { CobotMsg = $"보정 적용 오류: {ex.Message}"; }
-        finally { Applying = false; }
+        catch (OperationCanceledException) { CobotMsgOk = false; CobotMsg = "보정 중단됨."; }
+        catch (Exception ex) { CobotMsgOk = false; CobotMsg = $"보정 적용 오류: {ex.Message}"; }
+        finally { Applying = false; _applyCts.Dispose(); _applyCts = null; }
+    }
+
+    [RelayCommand]
+    private async Task AbortApply()
+    {
+        _applyCts?.Cancel();
+        try { await _cobot.StopMotionImmediateAsync(); } catch { /* 정지 실패는 무시 — 취소는 이미 전달됨 */ }
     }
 
     // ── 헤드 위치 캘리브레이션(로봇이 움직임) ──
@@ -205,6 +225,29 @@ public sealed partial class LaserViewModel : ViewModelBase
         finally { Calibrating = false; _calCts.Dispose(); _calCts = null; }
     }
     [RelayCommand] private void AbortCalibration() => _calCts?.Cancel();
+
+    public bool CanApplyCalibration => CalResult is { Success: true } && !Calibrating && !CalApplying;
+    partial void OnCalResultChanged(LaserHeadCalibrationResult? value) { CalApplyMsg = null; ApplyCalibrationCommand.NotifyCanExecuteChanged(); }
+
+    // ── 헤드 캘리브레이션 결과 → 설정 적용(즉시 + DB 저장, 평행 기준 해제) ──
+    [RelayCommand(CanExecute = nameof(CanApplyCalibration))]
+    private async Task ApplyCalibration()
+    {
+        if (CalResult is not { Success: true } r) return;
+        CalApplying = true; CalApplyMsg = null;
+        try
+        {
+            var heads = r.Heads.OrderBy(h => h.Channel).ToList();
+            var (ok, msg) = await _svc.ApplyHeadOffsetsAsync(
+                heads.Select(h => h.MeasuredX).ToArray(), heads.Select(h => h.MeasuredY).ToArray());
+            CalApplyOk = ok;
+            CalApplyMsg = ok
+                ? $"{msg}\n평행 기준이 해제됐습니다. 지금 자세가 수평(잔여 {r.FinalTiltDeg:0.##}°)이면 위 '평행 기준 저장'을 누르세요."
+                : msg;
+        }
+        catch (Exception ex) { CalApplyOk = false; CalApplyMsg = $"적용 오류: {ex.Message}"; }
+        finally { CalApplying = false; ApplyCalibrationCommand.NotifyCanExecuteChanged(); }
+    }
 
     // ── TCP 캘리브레이션(레이저 보조 터치, 로봇은 수동 조그) ──
     partial void OnTcpModeIndexChanged(int value) { OnPropertyChanged(nameof(TcpFixH)); ResolveTcp(); }
@@ -326,7 +369,7 @@ public sealed partial class LaserViewModel : ViewModelBase
         await scope.ServiceProvider.GetRequiredService<ParameterService>().SetDoubleAsync(key, v, desc);
     }
 
-    public override void Dispose() { base.Dispose(); _calCts?.Cancel(); }
+    public override void Dispose() { base.Dispose(); _calCts?.Cancel(); _applyCts?.Cancel(); }
 }
 
 /// <summary>채널 측정 행(제자리 갱신).</summary>

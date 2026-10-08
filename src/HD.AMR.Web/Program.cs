@@ -56,6 +56,7 @@ builder.Services.AddTransient<LaserHeadCalibrationRoutine>();
 
 // 평탄 중심 정렬 — 카메라 페이지와 FlatSurfaceAlignStep 이 공유하는 무상태 루틴.
 builder.Services.AddTransient<FlatSurfaceCenteringService>();
+builder.Services.AddTransient<LaserTiltCorrector>();   // 레이저 틸트 수평 보정(④ Phase C · /laser 보정 적용 공용)
 // 최근 평탄면 검출 스냅샷 — 시퀀스/정렬 루틴이 발행하고 카메라 페이지가 표시.
 builder.Services.AddSingleton<FlatDetectionMonitor>();
 
@@ -76,6 +77,8 @@ builder.Services.Configure<HD.AMR.App.Communication.Vda5050.Vda5050AdapterSettin
 builder.Services.AddSingleton<Vda5050OrderExecutor>();
 builder.Services.AddSingleton<Vda5050AdapterService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<Vda5050AdapterService>());
+// AMR 장비 자체 상태 변화(모드·이동·조그·오류)를 운영 로그(출처 AMR)로 기록.
+builder.Services.AddHostedService<AmrActivityLogService>();
 // startWeldInspection 실행 총괄(2차 검사 연동) — singleton, 액션마다 scope 생성해 시퀀스 실행.
 builder.Services.AddSingleton<HD.AMR.App.Service.Inspection.IWeldInspectionExecutor,
     HD.AMR.App.Service.Inspection.WeldInspectionOrchestrator>();

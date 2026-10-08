@@ -67,9 +67,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public string IoStatusText => IsIoConnected ? "연결" : "미연결";
     public string EmoButtonText => IsEmoActive ? "■ 비상정지 해제" : "■ 비상정지";
 
+    private readonly OperationLogService _opLog;
+
     public MainWindowViewModel(INavigationService navigation, AMRService amr, CobotService cobot,
-        IoModuleService io, Vda5050AdapterService vda)
+        IoModuleService io, Vda5050AdapterService vda, OperationLogService opLog)
     {
+        _opLog = opLog;
         Navigation = navigation;
         _amr = amr;
         _cobot = cobot;
@@ -177,7 +180,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         // 비상정지 활성화 시: 진행 중 임무·검사 시퀀스·코봇/주행을 즉시 정지·취소한다(해제해도 재개 안 함).
         // 스레드풀에서 바로 시작해 IO 출력 쓰기와 병렬로 진행한다 — 서로의 지연·실패에 묶이지 않는다.
         var softwareStop = target
-            ? Task.Run(() => _vda.TriggerEmergencyStopAsync("물리 EMO 버튼"))
+            ? Task.Run(() => _vda.TriggerEmergencyStopAsync("화면 비상정지 버튼(EMO 출력 ON)", OperationLogService.SourceUi))
             : Task.CompletedTask;
 
         string outNote;
@@ -197,7 +200,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
         EmoMessage = target ? $"{outNote} · 소프트웨어 정지 진행 중…" : outNote;
         RefreshStatus();
 
-        if (!target) return;
+        if (!target)
+        {
+            _opLog.Log(OperationLogService.SourceUi, OpCategory.EStop, "비상정지 해제", null, $"화면 비상정지 해제 — {outNote}");
+            return;
+        }
         try
         {
             await softwareStop;

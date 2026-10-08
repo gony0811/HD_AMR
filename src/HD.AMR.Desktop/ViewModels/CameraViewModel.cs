@@ -70,6 +70,9 @@ public sealed partial class CameraViewModel : ViewModelBase
     [ObservableProperty] private Bitmap? _depthImage;
 
     [ObservableProperty] private bool _busy;
+    /// <summary>'레이저 이동·측정' 결과 — 버튼 바로 아래에 표시(상단 알림은 화면 밖이라 놓치기 쉽다).</summary>
+    [ObservableProperty] private string? _laserMessage;
+    [ObservableProperty] private bool _laserMessageIsError;
     [ObservableProperty] private string? _message;
     [ObservableProperty] private bool _isError;
 
@@ -201,6 +204,7 @@ public sealed partial class CameraViewModel : ViewModelBase
 
     private async Task ApplyFlatAsync(FlatDetectionSnapshot? snapshot)
     {
+        if (!ReferenceEquals(snapshot?.Analysis, FlatSnapshot?.Analysis)) LaserMessage = null;   // 새 검출 = 이전 결과 무효
         FlatSnapshot = snapshot;
         var frame = snapshot?.Analysis.Frame;
         if (ReferenceEquals(frame, _flatFrame)) return;
@@ -403,7 +407,7 @@ public sealed partial class CameraViewModel : ViewModelBase
         if (FlatSnapshot is not { } snap || !CanLaserMeasure) return;
         if (!_gate.TryEnter())
         {
-            Notify("시퀀스 실행 중에는 레이저 이동을 할 수 없습니다.", true);
+            NotifyLaser("시퀀스 실행 중에는 레이저 이동을 할 수 없습니다.", true);
             return;
         }
         Busy = true;
@@ -417,7 +421,7 @@ public sealed partial class CameraViewModel : ViewModelBase
             var axisX = ax is >= 0 and <= 5 ? (ToolAxisDir)(int)ax.Value : ToolAxisDir.PlusX;
             var axisY = ay is >= 0 and <= 5 ? (ToolAxisDir)(int)ay.Value : ToolAxisDir.PlusY;
 
-            Notify("레이저를 평탄 셀 위로 이동 중…", false);
+            NotifyLaser("레이저를 평탄 셀 위로 이동 중…", false);
             var r = await _centering.MoveLaserToFlatAsync(snap, new LaserToFlatOptions
             {
                 ImageXAxis = axisX, ImageYAxis = axisY,
@@ -425,9 +429,9 @@ public sealed partial class CameraViewModel : ViewModelBase
                 Tool = snap.Tool ?? 1,
                 Velocity = LaserMoveVelocity,
             }, progress: null, _cts.Token);
-            Notify(r.Success ? r.Message : $"레이저 이동·측정 실패: {r.Message}", !r.Success);
+            NotifyLaser(r.Success ? r.Message : $"레이저 이동·측정 실패: {r.Message}", !r.Success);
         }
-        catch (Exception ex) { Notify($"레이저 이동·측정 오류: {ex.Message}", true); }
+        catch (Exception ex) { NotifyLaser($"레이저 이동·측정 오류: {ex.Message}", true); }
         finally
         {
             Busy = false;
@@ -478,6 +482,12 @@ public sealed partial class CameraViewModel : ViewModelBase
     }
 
     private void Notify(string msg, bool error) { Message = msg; IsError = error; }
+
+    private void NotifyLaser(string msg, bool error)
+    {
+        Notify(msg, error);
+        LaserMessage = msg; LaserMessageIsError = error;
+    }
 
     public override void Dispose() { base.Dispose(); _cts.Cancel(); _cts.Dispose(); }
 }

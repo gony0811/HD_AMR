@@ -17,8 +17,14 @@ namespace HD.AMR.App.Service;
 /// </summary>
 public sealed class OperationLogService
 {
+    /// <summary>앱 화면 조작(수동).</summary>
     public const string SourceUi = "UI";
+    /// <summary>ACS(VDA5050) order·action·instantAction.</summary>
     public const string SourceAcs = "ACS";
+    /// <summary>AMR 장비 자체 — 상태 변화 관측(펜던트·조이스틱 수동 조작, 장비 측 모드 전환 등).</summary>
+    public const string SourceAmr = "AMR";
+    /// <summary>현장 물리 버튼(START/STOP/EMO).</summary>
+    public const string SourceIo = "IO";
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<OperationLogService> _logger;
@@ -51,16 +57,26 @@ public sealed class OperationLogService
         });
     }
 
-    /// <summary>최신순 조회. source/onlyFailures 는 선택 필터.</summary>
+    /// <summary>최신순 조회. source/category/onlyFailures 는 선택 필터(null = 전체).</summary>
     public async Task<List<OperationLog>> QueryAsync(
-        int limit, string? source = null, bool onlyFailures = false, CancellationToken ct = default)
+        int limit, string? source = null, bool onlyFailures = false, CancellationToken ct = default,
+        string? category = null)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<HdAmrDbContext>();
         var q = db.OperationLogs.AsNoTracking().AsQueryable();
         if (source is not null) q = q.Where(l => l.Source == source);
+        if (category is not null) q = q.Where(l => l.Category == category);
         if (onlyFailures) q = q.Where(l => l.Success == false);
         return await q.OrderByDescending(l => l.Id).Take(limit).ToListAsync(ct);
+    }
+
+    /// <summary>기록된 분류 목록(중복 제거, 이름순) — 필터 드롭다운용.</summary>
+    public async Task<List<string>> QueryCategoriesAsync(CancellationToken ct = default)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<HdAmrDbContext>();
+        return await db.OperationLogs.AsNoTracking().Select(l => l.Category).Distinct().OrderBy(c => c).ToListAsync(ct);
     }
 
     private async Task ConsumeAsync()
@@ -82,4 +98,46 @@ public sealed class OperationLogService
             catch (Exception ex) { _logger.LogWarning(ex, "운영 로그 Changed 구독자 예외"); }
         }
     }
+}
+
+/// <summary>운영 로그 분류 코드 — 필터 기준이므로 호출측은 문자열 대신 이 상수를 쓴다.</summary>
+public static class OpCategory
+{
+    /// <summary>VDA5050 order 수명주기(수신/거부/교체/완결/실패).</summary>
+    public const string Order = "ORDER";
+    /// <summary>order 의 노드 액션(startWeldInspection 등) 시작·구성·결과.</summary>
+    public const string Action = "ACTION";
+    /// <summary>instantActions(emergencyStop/initPosition 등).</summary>
+    public const string Instant = "INSTANT";
+    /// <summary>AMR 주행 명령·도착 판정.</summary>
+    public const string Drive = "DRIVE";
+    /// <summary>코봇 동작(주행 전 홈 복귀 등 시퀀스 밖 동작).</summary>
+    public const string Cobot = "COBOT";
+    /// <summary>시퀀스 실행 전체.</summary>
+    public const string Sequence = "SEQUENCE";
+    /// <summary>시퀀스 개별 스텝.</summary>
+    public const string Step = "STEP";
+    /// <summary>AMR 주행 모드(Drive/Cart) 전환.</summary>
+    public const string AmrMode = "AMR_MODE";
+    /// <summary>AMR 상태 변화(주행 시작/정지, 오류, 주행정지, 실행상태, 연결).</summary>
+    public const string AmrState = "AMR_STATE";
+    /// <summary>AMR 수동 조작(조그·명령 없는 주행).</summary>
+    public const string AmrManual = "AMR_MANUAL";
+    /// <summary>화면에서 보낸 AMR 레지스터 쓰기 명령.</summary>
+    public const string AmrCommand = "AMR_CMD";
+    /// <summary>비상정지.</summary>
+    public const string EStop = "ESTOP";
+    /// <summary>ACS 통신 링크(브로커 접속/두절, ACS 생존 신호).</summary>
+    public const string Link = "LINK";
+
+    /// <summary>필터 드롭다운 기본 목록(코드, 표시명).</summary>
+    public static readonly IReadOnlyList<(string Code, string Label)> All = new[]
+    {
+        (Order, "오더"), (Action, "액션"), (Instant, "즉시액션"), (Drive, "주행"), (Cobot, "코봇"),
+        (Sequence, "시퀀스"), (Step, "스텝"), (AmrMode, "AMR 모드"), (AmrState, "AMR 상태"),
+        (AmrManual, "AMR 수동"), (AmrCommand, "AMR 명령"), (EStop, "비상정지"), (Link, "통신"),
+    };
+
+    /// <summary>표시명 — 목록에 없는 코드는 그대로.</summary>
+    public static string LabelOf(string code) => All.FirstOrDefault(c => c.Code == code).Label ?? code;
 }

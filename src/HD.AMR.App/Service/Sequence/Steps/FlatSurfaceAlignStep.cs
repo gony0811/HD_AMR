@@ -12,8 +12,11 @@ namespace HD.AMR.App.Service.Sequence.Steps;
 ///   B) 평탄 셀 중심과 현재 센서 중심의 오프셋을 mm로 환산, 코봇 횡이동(툴 프레임 MoveByToolOffset —
 ///      이미지 평면과 평행, 대상면 거리 유지. FlatSurfaceCenteringService 공용 루틴).
 ///      이동 후 레이저 측정 중심 보정 횡이동(툴 −Y 75mm — 레이저 3점 중심이 카메라보다 좌측(툴 +Y) 75mm 장착).
-///   C) 레이저 변위센서 3점 측정으로 평면 틸트(rx, ry) 검증. 임계값 초과 시 측정 틸트만큼
-///      툴 헤드를 회전 보정(위치 고정, /laser '보정 적용'과 동일 부호 규약) 후 재검증.
+///   C) 레이저 변위센서 3점 측정으로 평면 틸트(rx, ry) 검증. 임계값 초과 시 툴 헤드를 회전 보정(위치 고정) 후 재검증.
+///      보정량은 고정 부호 규약이 아니라 <b>실측 응답</b>으로 정한다 — 툴 Rx/Ry 를 각각 소량 회전시켜
+///      측정 틸트가 어떻게 변하는지(2×2 응답 행렬 J)를 잰 뒤 u = −J⁻¹·tilt 를 적용한다.
+///      (2026-10-07/08 현장 로그: 종전 [+Rx, −Ry] 규약에서 툴 Rx +a → 측정 rx ≈ +a 로 오차가 매회 누적,
+///      툴 Rx 가 측정 ry 도 크게 바꾸는 축 결합까지 있어 고정 부호로는 수렴하지 않았다.)
 ///
 /// 시작 시점 TCP 포즈를 <see cref="WeldSequenceSupport.InspectAnchorPoseBagKey"/> 로 저장한다 —
 /// ④⁺(레이저 WD)가 초점거리 조정 후 이 위치로 툴 X/Y 횡복귀한다(자세·초점거리는 유지).
@@ -24,6 +27,7 @@ public class FlatSurfaceAlignStep : ISequenceStep
     private readonly CameraService _camera;
     private readonly FlatSurfaceCenteringService _centering;
     private readonly LaserDisplacementSensorService _laser;
+    private readonly LaserTiltCorrector _tilt;
     private readonly ParameterService _param;
     private readonly FlatDetectionMonitor _monitor;
     private readonly ILogger<FlatSurfaceAlignStep> _logger;
@@ -63,9 +67,10 @@ public class FlatSurfaceAlignStep : ISequenceStep
 
     public FlatSurfaceAlignStep(
         CobotService cobot, CameraService camera, FlatSurfaceCenteringService centering,
-        LaserDisplacementSensorService laser, ParameterService param,
+        LaserDisplacementSensorService laser, LaserTiltCorrector tilt, ParameterService param,
         FlatDetectionMonitor monitor, ILogger<FlatSurfaceAlignStep> logger)
     {
+        _tilt = tilt;
         _cobot = cobot;
         _camera = camera;
         _centering = centering;
@@ -164,61 +169,30 @@ public class FlatSurfaceAlignStep : ISequenceStep
         _logger.LogInformation("④ Phase C: 레이저 3점 평면 측정 시작");
         _monitor.UpdateStage(FlatDetectionStage.LaserMeasuring, "레이저 3점 측정");
 
-        for (var iter = 0; ; iter++)
+        // 보정량은 실측 응답(J)으로 푼다 — LaserTiltCorrector(/laser '보정 적용'과 공용).
+        var level = await _tilt.LevelAsync(new TiltLevelOptions
         {
-            ct.ThrowIfCancellationRequested();
-
-            // 안정화 후 측정 (3회 샘플 평균)
-            var pose = await SamplePlanePoseAsync(ct);
-            if (!pose.Valid)
-                return FailStage($"레이저 평면 측정 실패: {pose.Note}");
-
-            _logger.LogInformation(
-                "④ Phase C iter={Iter}: rx={Rx:0.###}°, ry={Ry:0.###}°, z={Z:0.#}mm",
-                iter, pose.Rx, pose.Ry, pose.Z);
+            Tool = context.Tool,
+            Velocity = Math.Min(context.Velocity, 10),
+            ThresholdDeg = TiltThresholdDeg,
+            MaxCorrections = MaxTiltCorrections,
+            MaxCorrectionDeg = MaxTiltCorrectionDeg,
+        },
+        context.Progress,
+        (iter, pose) =>
+        {
             _monitor.SetLaser(pose.Rx, pose.Ry, pose.Z);
-            context.Progress?.Invoke(
-                $"레이저 3점 측정 {iter + 1}: rx={pose.Rx:0.###}°, ry={pose.Ry:0.###}°, z={pose.Z:0.#}mm");
+            if (iter > 0) _monitor.UpdateStage(FlatDetectionStage.LaserMeasuring, $"틸트 보정 {iter}회차");
+        }, ct);
 
-            // 판정: 두 축 모두 임계값 이내면 완료
-            if (Math.Abs(pose.Rx) < TiltThresholdDeg && Math.Abs(pose.Ry) < TiltThresholdDeg)
-            {
-                context.Progress?.Invoke(
-                    $"틸트 기준 통과 (|rx|,|ry| < {TiltThresholdDeg}°) — 보정 {iter}회로 정렬 완료");
-                _monitor.UpdateStage(FlatDetectionStage.Done, $"틸트 보정 {iter}회");
-                return StepResult.Ok(
-                    $"평탄면 정렬 완료 (rx={pose.Rx:0.###}°, ry={pose.Ry:0.###}°, " +
-                    $"z={pose.Z:0.#}mm, 틸트 보정={iter}회, σ={align.SigmaMm:0.##}mm).");
-            }
+        if (!level.Success)
+            return FailStage(level.Message);
 
-            if (iter >= MaxTiltCorrections)
-            {
-                return FailStage(
-                    $"틸트 보정 {MaxTiltCorrections}회 후에도 평탄 기준 미달 " +
-                    $"(rx={pose.Rx:0.###}°, ry={pose.Ry:0.###}°, 기준={TiltThresholdDeg}°) — " +
-                    "헤드 위치 캘리브레이션(/laser)으로 헤드 기하 확인이 필요합니다.");
-            }
-
-            // 측정 틸트만큼 툴 헤드를 회전 보정 (위치 고정, Rz=0 — 3점 거리로 yaw 미결정).
-            // 부호는 /laser '보정 적용'과 동일한 실장비 검증 규약: 적용 Rx=+측정Rx, 적용 Ry=−측정Ry.
-            var applyRx = Math.Clamp(pose.Rx, -MaxTiltCorrectionDeg, MaxTiltCorrectionDeg);
-            var applyRy = Math.Clamp(-pose.Ry, -MaxTiltCorrectionDeg, MaxTiltCorrectionDeg);
-            var corrOffset = new[] { 0.0, 0.0, 0.0, applyRx, applyRy, 0.0 };
-            var corrAnchor = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
-
-            _logger.LogInformation(
-                "④ Phase C 틸트 보정 iter={Iter}: 적용 Rx={Ax:0.###}°, Ry={Ay:0.###}°",
-                iter, applyRx, applyRy);
-            context.Progress?.Invoke($"틸트 보정각 적용: Rx={applyRx:+0.###;-0.###}°, Ry={applyRy:+0.###;-0.###}° → 재측정");
-            _monitor.UpdateStage(FlatDetectionStage.LaserMeasuring, $"틸트 보정 {iter + 1}회차");
-
-            var corrRc = await _cobot.Rpc.MoveByToolOffsetAsync(corrAnchor, user: 0, corrOffset,
-                tool: context.Tool, vel: Math.Min(context.Velocity, 10), ct: ct);
-            if (corrRc != 0)
-                return FailStage($"틸트 보정 이동 실패 (rc={corrRc}){FairinoErrorCodes.Suffix(corrRc)}.");
-
-            await Task.Delay(300, ct);
-        }
+        var final = level.FinalPose!;
+        _monitor.UpdateStage(FlatDetectionStage.Done, $"틸트 보정 {level.Corrections}회");
+        return StepResult.Ok(
+            $"평탄면 정렬 완료 (rx={final.Rx:0.###}°, ry={final.Ry:0.###}°, " +
+            $"z={final.Z:0.#}mm, 틸트 보정={level.Corrections}회, σ={align.SigmaMm:0.##}mm).");
     }
 
     // ── 헬퍼 ────────────────────────────────────────────────────────────
@@ -228,40 +202,6 @@ public class FlatSurfaceAlignStep : ISequenceStep
     {
         _monitor.UpdateStage(FlatDetectionStage.Failed, message);
         return StepResult.Fail(message);
-    }
-
-    /// <summary>레이저 3점 측정을 3회 샘플링해 평균 pose 반환.</summary>
-    private async Task<PlanePose> SamplePlanePoseAsync(CancellationToken ct)
-    {
-        double rxSum = 0, rySum = 0, rzSum = 0, zSum = 0;
-        int validCount = 0;
-        string? lastNote = null;
-
-        for (var i = 0; i < 3; i++)
-        {
-            var p = _laser.GetPlanePose();
-            if (p.Valid)
-            {
-                rxSum += p.Rx;
-                rySum += p.Ry;
-                rzSum += p.Rz;
-                zSum += p.Z;
-                validCount++;
-            }
-            else
-            {
-                lastNote = p.Note;
-            }
-            if (i < 2) await Task.Delay(100, ct);
-        }
-
-        if (validCount == 0)
-            return PlanePose.Invalid(lastNote ?? "3회 측정 모두 무효");
-
-        return new PlanePose(
-            0, 0, zSum / validCount,
-            rxSum / validCount, rySum / validCount, rzSum / validCount,
-            new double[] { 0, 0, 1 }, true, null);
     }
 
     /// <summary>카메라 페이지에서 저장한 이미지→툴축 매핑이 있으면 사용, 없으면 기본(+X/+Y).

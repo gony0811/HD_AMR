@@ -74,12 +74,16 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         "cobotSeamEnd", "inspectionRunDry",
     };
 
+    private readonly OperationLogService _opLog;
+
     public WeldInspectionOrchestrator(
         IServiceScopeFactory scopeFactory,
         CobotService cobot,
         VisionInterfaceService vision,
+        OperationLogService opLog,
         ILogger<WeldInspectionOrchestrator> logger)
     {
+        _opLog = opLog;
         _scopeFactory = scopeFactory;
         _cobot = cobot;
         _vision = vision;
@@ -336,6 +340,14 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             profile?.Id ?? 0, profile?.DrawingId ?? 0,
             anchorHit ? "적중(정렬 생략)" : "신규(정렬 수행)",
             string.Join(",", stepKeys));
+        _opLog.Log(OperationLogService.SourceAcs, OpCategory.Action, "검사 구성", null,
+            $"jobRef={req.JobRef}, seam={req.SeamType}, wall={req.DrawingPos.WallCode}, recipe={recipeId}" +
+            (recipe.DryRun ? "[드라이런]" : "") +
+            $", profile='{profile?.Name ?? "(미사용)"}', 방향={direction}, anchor={req.AnchorGroupId}#{req.SeqInGroup} " +
+            (anchorHit ? "적중(정렬 생략)" : "신규(정렬 수행)") +
+            $", tool={context.Tool}, vel={context.Velocity}%, 카메라 목표 {context.CameraTargetDistanceMm:0}mm, " +
+            $"seamStartW=[{string.Join(", ", req.SeamStartW.Select(v => v.ToString("0.###")))}], " +
+            $"단계 {stepKeys.Length}개: {string.Join(",", stepKeys)}", orderId);
 
         // 10) 실행 — 취소 전파용 CTS 를 보관(AbortAsync 가 취소).
         CancellationTokenSource runCts;

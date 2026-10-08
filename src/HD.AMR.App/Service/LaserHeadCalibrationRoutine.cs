@@ -195,6 +195,7 @@ public sealed class LaserHeadCalibrationRoutine
             bool xFlipped = false, yFlipped = false;
             double dRx = 0, dRy = 0;
             double finalRx = 0, finalRy = 0, finalTilt = double.MaxValue;
+            double prevTilt = double.PositiveInfinity;
             int iterUsed = 0;
 
             for (int iter = 1; iter <= MaxLevelIterations; iter++)
@@ -276,6 +277,12 @@ public sealed class LaserHeadCalibrationRoutine
                 finalTilt = Math.Max(Math.Abs(finalRx), Math.Abs(finalRy));
                 Report($"[{iter}] 측정 오프셋 기준 실기울기: Rx={finalRx:0.###}°, Ry={finalRy:0.###}°");
 
+                // 발산 가드 — 자동 수평 후 오히려 커지면 더 돌리지 않는다.
+                if (iter > 1 && finalTilt > prevTilt * 1.2)
+                    throw new InvalidOperationException(
+                        $"자동 수평 발산: 잔여 기울기 {prevTilt:0.##}° → {finalTilt:0.##}° — 표면 평탄도/시작 자세를 확인하세요.");
+                prevTilt = finalTilt;
+
                 if (finalTilt < LevelThresholdDeg)
                     break;   // 수평 — 이 회차 산출이 최종.
 
@@ -296,10 +303,13 @@ public sealed class LaserHeadCalibrationRoutine
                     break;
                 }
 
-                // 자동 수평: '보정 적용'과 동일 부호(offset = [+Rx, −Ry]) — 단 측정 오프셋 기반이라 신뢰 가능.
-                double corrRx = Math.Clamp(finalRx, -MaxLevelCorrectionDeg, MaxLevelCorrectionDeg);
-                double corrRy = Math.Clamp(-finalRy, -MaxLevelCorrectionDeg, MaxLevelCorrectionDeg);
-                if (Math.Abs(finalRx) > MaxLevelCorrectionDeg || Math.Abs(finalRy) > MaxLevelCorrectionDeg)
+                // 자동 수평: 고정 부호 대신 이 회차 프로브(Rx±θ, Ry±θ)의 실측 응답 J 로 u = −J⁻¹·tilt 를 푼다
+                // (LaserTiltCorrector 와 같은 방식, 추가 이동 없음 — 중앙차분). 측정 오프셋은 위 검증으로
+                // gain 이 −1/+1 이 되도록 맞춰지므로 이상적이면 J≈diag(−1,+1) 즉 종전 [+Rx, −Ry] 와 같다.
+                var (uRx, uRy) = SolveLevelCorrection(xMeas, yMeas, dxp, dxm, dyp, dym, tiltDeg, finalRx, finalRy, s, Report, iter);
+                double corrRx = Math.Clamp(uRx, -MaxLevelCorrectionDeg, MaxLevelCorrectionDeg);
+                double corrRy = Math.Clamp(uRy, -MaxLevelCorrectionDeg, MaxLevelCorrectionDeg);
+                if (Math.Abs(uRx) > MaxLevelCorrectionDeg || Math.Abs(uRy) > MaxLevelCorrectionDeg)
                     warnings.Add($"자동 수평 보정량이 클램프(±{MaxLevelCorrectionDeg:0.#}°)됨 — 시작 자세가 크게 기울어 있습니다.");
                 double corrDeg = Math.Max(Math.Abs(corrRx), Math.Abs(corrRy));
                 Report($"[{iter}] 자동 수평: Rx={corrRx:0.###}°, Ry={corrRy:0.###}° 회전 적용 " +
@@ -414,6 +424,35 @@ public sealed class LaserHeadCalibrationRoutine
         return result ?? LaserHeadCalibrationResult.Fail(error ?? "알 수 없는 오류.", returned);
     }
 
+    /// <summary>
+    /// 자동 수평 보정량 — 4자세 프로브 거리로 측정 오프셋 기준 pose 를 각각 계산해 응답 행렬 J
+    /// (행=측정 Rx/Ry, 열=툴 Rx/Ry, 중앙차분)를 만들고 u = −J⁻¹·[Rx, Ry] 를 푼다.
+    /// </summary>
+    private static (double Rx, double Ry) SolveLevelCorrection(
+        double[] xMeas, double[] yMeas, double[] dxp, double[] dxm, double[] dyp, double[] dym,
+        double tiltDeg, double rx, double ry, LaserDisplacementSensorSettings s, Action<string> report, int iter)
+    {
+        PlanePose P(double[] d)
+        {
+            var p = PlanePoseCalculator.ComputePose(xMeas, yMeas, d, s.TiltStandoffMm, s.TiltReadingSignForUp);
+            if (!p.Valid) throw new InvalidOperationException($"자동 수평 응답 계산 불가: {p.Note}");
+            return p;
+        }
+        var (xp, xm, yp, ym) = (P(dxp), P(dxm), P(dyp), P(dym));
+        double h = 2.0 * tiltDeg;
+        var j = new[,]
+        {
+            { (xp.Rx - xm.Rx) / h, (yp.Rx - ym.Rx) / h },
+            { (xp.Ry - xm.Ry) / h, (yp.Ry - ym.Ry) / h },
+        };
+        double det = j[0, 0] * j[1, 1] - j[0, 1] * j[1, 0];
+        report($"[{iter}] 틸트 응답 J=[[{j[0, 0]:0.###}, {j[0, 1]:0.###}], [{j[1, 0]:0.###}, {j[1, 1]:0.###}]] (det={det:0.###})");
+        if (Math.Abs(det) < 0.2)
+            throw new InvalidOperationException(
+                $"자동 수평: 틸트 응답이 축을 구분하지 못합니다 (det={det:0.###}) — 측정면 평탄도·빔 스팟 위치를 확인하세요.");
+        return LaserTiltCorrector.Solve(j, rx, ry);
+    }
+
     /// <summary>앵커 기준 툴프레임 오프셋 이동. rc≠0 이면 사유를 붙여 예외.</summary>
     private async Task MoveOffsetAsync(
         double[] anchor, double[] offset, int tool, double vel, string what, CancellationToken ct)
@@ -440,50 +479,14 @@ public sealed class LaserHeadCalibrationRoutine
     }
 
     /// <summary>
-    /// 모션 후 판독이 수렴할 때까지 대기 — 앰프 평균화 필터가 실변화를 따라오는 지연 대응.
-    /// 3샘플 미니평균을 반복 측정해 직전 미니평균 대비 전 채널 |Δ| &lt; 0.05mm 면 안정 판정.
+    /// 모션 후 판독이 수렴할 때까지 대기(<see cref="LaserDisplacementSensorService.WaitForStableReadingsAsync"/>).
     /// <paramref name="timeoutMs"/> 초과 시 경고만 남기고 진행한다(최종 판정은 호출부 검증식이 함).
-    /// 무효 스냅샷은 SampleDistancesAsync 와 동일하게 건너뛴다.
     /// </summary>
     private async Task WaitForStableAsync(
         int intervalMs, int timeoutMs, Action<string> report, CancellationToken ct)
     {
-        if (timeoutMs <= 0) return;
-
-        const double StableThresholdMm = 0.05;
-        const int MiniSamples = 3;
-        int elapsedMs = 0;
-        double[]? prev = null;
-
-        while (elapsedMs < timeoutMs)
-        {
-            var mini = new double[3];
-            int got = 0;
-            while (got < MiniSamples && elapsedMs < timeoutMs)
-            {
-                ct.ThrowIfCancellationRequested();
-                var r = _laser.GetReadings();
-                if (r.Count >= 3 && r[0].Enabled && r[1].Enabled && r[2].Enabled)
-                {
-                    for (int i = 0; i < 3; i++) mini[i] += r[i].Value;
-                    got++;
-                }
-                await Task.Delay(intervalMs, ct);
-                elapsedMs += intervalMs;
-            }
-            if (got < MiniSamples) break;   // 타임아웃/무효 지속 — 아래 경고로.
-
-            for (int i = 0; i < 3; i++) mini[i] /= MiniSamples;
-            if (prev is not null)
-            {
-                double maxDelta = Math.Max(Math.Abs(mini[0] - prev[0]),
-                    Math.Max(Math.Abs(mini[1] - prev[1]), Math.Abs(mini[2] - prev[2])));
-                if (maxDelta < StableThresholdMm) return;
-            }
-            prev = mini;
-        }
-
-        report($"판독 안정화 한도({timeoutMs}ms) 초과 — 필터 지연/진동 가능, 측정을 계속합니다.");
+        if (!await _laser.WaitForStableReadingsAsync(intervalMs, timeoutMs, ct))
+            report($"판독 안정화 한도({timeoutMs}ms) 초과 — 필터 지연/진동 가능, 측정을 계속합니다.");
     }
 
     /// <summary>

@@ -111,8 +111,9 @@ public sealed class LaserToFlatOptions
     /// <summary>카메라 중심 → 레이저 3점 중심 툴 Y 이동량(mm). 시퀀스 ④와 같은 파라미터 값.</summary>
     public double CameraToLaserShiftYmm { get; init; } = -75.0;
 
-    /// <summary>평탄 셀 횡이동 절대 상한(mm) — 검출 이상으로 인한 과대 이동 방지.</summary>
-    public double MaxLateralMoveMm { get; init; } = 100.0;
+    /// <summary>평탄 셀 횡이동 절대 상한(mm). ≤0 = 비활성(기본) — "ROI 물리 반크기 × 1.1" 동적 한계는 항상 적용
+    /// (시퀀스 ④·Web 카메라 페이지와 같은 규칙). 초과 시 이동하지 않고 실패.</summary>
+    public double MaxLateralMoveMm { get; init; }
 
     /// <summary>검출 시점 대비 코봇 위치 허용 오차(mm). 넘으면 검출 결과가 현재 위치와 맞지 않아 이동하지 않는다.</summary>
     public double PoseToleranceMm { get; init; } = 1.0;
@@ -407,8 +408,22 @@ public class FlatSurfaceCenteringService
             return LaserFail(
                 $"이미지 X/Y 매핑이 같은 툴축입니다 (X→{AxisNames[(int)o.ImageXAxis]}, Y→{AxisNames[(int)o.ImageYAxis]}) — 설정을 확인하세요.",
                 publish: false);
-        if (Math.Abs(dx) > o.MaxLateralMoveMm || Math.Abs(dy) > o.MaxLateralMoveMm)
-            return LaserFail($"평탄 셀 이동량 ({dx:0.#}, {dy:0.#})mm 가 한계 ±{o.MaxLateralMoveMm:0}mm 초과.", publish: false);
+        // 과대 이동 가드 — 시퀀스 ④(RunAsync)와 같은 규칙: ROI 물리 반크기 × 1.1 동적 한계(정상 검출이면 셀 Δ 가
+        // 이를 넘을 수 없다 → 변환 이상만 걸러짐) + 선택적 절대 상한(MaxLateralMoveMm > 0 일 때만).
+        double limX = double.PositiveInfinity, limY = double.PositiveInfinity;
+        if (snap.Analysis.Best.MeanMm > 0)
+        {
+            var (roiHalfX, roiHalfY) = _camera.PixelDeltaToMm(snap.FullRoiW / 2.0, snap.FullRoiH / 2.0, snap.Analysis.Best.MeanMm);
+            limX = Math.Abs(roiHalfX) * 1.1;
+            limY = Math.Abs(roiHalfY) * 1.1;
+        }
+        if (o.MaxLateralMoveMm > 0)
+        {
+            limX = Math.Min(limX, o.MaxLateralMoveMm);
+            limY = Math.Min(limY, o.MaxLateralMoveMm);
+        }
+        if (Math.Abs(dx) > limX || Math.Abs(dy) > limY)
+            return LaserFail($"평탄 셀 이동량 ({dx:0.#}, {dy:0.#})mm 가 한계 (X±{limX:0.#}, Y±{limY:0.#})mm 초과.", publish: false);
         if (Math.Abs(o.CameraToLaserShiftYmm) > 200)
             return LaserFail($"카메라→레이저 보정량 {o.CameraToLaserShiftYmm:0.#}mm 가 한계 ±200mm 초과 — 시퀀스 '레이저중심 Y'를 확인하세요.", publish: false);
 

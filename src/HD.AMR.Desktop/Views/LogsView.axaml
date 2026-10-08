@@ -12,11 +12,17 @@
     <StackPanel MaxWidth="1150" HorizontalAlignment="Left">
         <TextBlock Classes="page-title" Text="운영 로그" />
         <TextBlock Classes="page-subtitle" TextWrapping="Wrap"
-                   Text="수동(UI) 및 ACS(VDA5050) 발 동작 이력 — order 수명주기(수신/이동/도달/완결/실패), 시퀀스 실행, 개별 스텝 결과를 기록합니다. 실패 항목은 원인 전문이 '내용'에 남습니다. 기록은 DB(OperationLogs)에 영속되어 앱 재시작 후에도 유지됩니다." />
+                   Text="출처별(ACS·수동 UI·AMR 장비·현장 버튼) 동작 이력 — ACS order/액션/즉시액션과 주행·코봇 홈 복귀·검사 구성, 시퀀스·스텝 결과, AMR 자체 상태 변화(모드·이동·조그·오류), 조작반 버튼·비상정지를 기록합니다. 출처·분류로 걸러 볼 수 있고, 실패 항목은 원인 전문이 '내용'에 남습니다. 대상에 마우스를 올리면 order ID 가 보입니다. 기록은 DB(OperationLogs)에 영속됩니다." />
 
         <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,0,0,8">
             <TextBlock Text="출처" Classes="axis" VerticalAlignment="Center" />
-            <ComboBox ItemsSource="{Binding SourceOptions}" SelectedItem="{Binding SelectedSource}" MinWidth="110" />
+            <ComboBox ItemsSource="{Binding SourceOptions}" SelectedItem="{Binding SelectedSource}" MinWidth="120">
+                <ComboBox.ItemTemplate><DataTemplate x:DataType="vm:FilterOption"><TextBlock Text="{Binding Label}" /></DataTemplate></ComboBox.ItemTemplate>
+            </ComboBox>
+            <TextBlock Text="분류" Classes="axis" VerticalAlignment="Center" />
+            <ComboBox ItemsSource="{Binding CategoryOptions}" SelectedItem="{Binding SelectedCategory}" MinWidth="120">
+                <ComboBox.ItemTemplate><DataTemplate x:DataType="vm:FilterOption"><TextBlock Text="{Binding Label}" /></DataTemplate></ComboBox.ItemTemplate>
+            </ComboBox>
             <CheckBox Content="실패만" IsChecked="{Binding OnlyFailures}" />
             <Button Content="새로고침" Command="{Binding ReloadCommand}" IsEnabled="{Binding !Busy}" />
             <TextBlock Classes="axis" VerticalAlignment="Center"
@@ -25,7 +31,7 @@
 
         <Border Classes="card">
             <StackPanel Spacing="2">
-                <Grid ColumnDefinitions="110,50,80,230,55,*">
+                <Grid ColumnDefinitions="110,50,85,230,55,*">
                     <TextBlock Grid.Column="0" Text="시간" Classes="axis" />
                     <TextBlock Grid.Column="1" Text="출처" Classes="axis" />
                     <TextBlock Grid.Column="2" Text="분류" Classes="axis" />
@@ -36,7 +42,7 @@
                 <ItemsControl ItemsSource="{Binding Rows}">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="vm:LogRow">
-                            <Grid ColumnDefinitions="110,50,80,230,55,*" Margin="0,3">
+                            <Grid ColumnDefinitions="110,50,85,230,55,*" Margin="0,3">
                                 <TextBlock Grid.Column="0" Classes="cell axis" FontFamily="monospace" Text="{Binding Time}" />
                                 <TextBlock Grid.Column="1" Classes="cell" Text="{Binding Source}" />
                                 <TextBlock Grid.Column="2" Classes="cell axis" Text="{Binding Category}" />

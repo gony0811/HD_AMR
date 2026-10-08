@@ -20,6 +20,10 @@ public class IoModuleService : BackgroundService
     private readonly ILogger<IoModuleService> _logger;
     private readonly AMRService _amr;
     private readonly CobotService _cobot;
+    private readonly OperationLogService _opLog;
+
+    /// <summary>직전 입력 스냅샷 — 현장 버튼/선택 스위치 변화만 운영 로그로 남기기 위한 비교 기준.</summary>
+    private bool[]? _prevInputs;
     private readonly IoAmrModeControl _modeControl = new();
     private readonly IoStartStopLampControl _lampControl = new();
     private readonly SemaphoreSlim _outputWriteLock = new(1, 1);
@@ -29,8 +33,9 @@ public class IoModuleService : BackgroundService
     private bool _initialStopStateApplied;
 
     public IoModuleService(IOptions<IoModuleModbusTcpSettings> options, ILoggerFactory loggerFactory,
-        AMRService amr, CobotService cobot)
+        AMRService amr, CobotService cobot, OperationLogService opLog)
     {
+        _opLog = opLog;
         _settings = options.Value;
         _client = new ModbusTcpClient(_settings, loggerFactory.CreateLogger<ModbusTcpClient>());
         _logger = loggerFactory.CreateLogger<IoModuleService>();
@@ -146,12 +151,26 @@ public class IoModuleService : BackgroundService
                         continue;
                     }
 
+                    LogInputChanges(inputs);
+
                     try
                     {
                         await _modeControl.ApplyAsync(inputs, async (mode, ct) =>
                         {
-                            await _amr.SetDrivingModeAsync(mode, ct);
+                            try
+                            {
+                                await _amr.SetDrivingModeAsync(mode, ct);
+                            }
+                            catch (Exception ex) when (ex is not OperationCanceledException)
+                            {
+                                _opLog.Log(OperationLogService.SourceIo, OpCategory.AmrMode,
+                                    $"{(mode == DrivingMode.Drive ? "START" : "STOP")} 버튼 → AMR {mode}", false, ex.Message);
+                                throw;
+                            }
                             _logger.LogInformation("IO 버튼 입력으로 AMR 모드 전환: {Mode}", mode);
+                            _opLog.Log(OperationLogService.SourceIo, OpCategory.AmrMode,
+                                $"{(mode == DrivingMode.Drive ? "START" : "STOP")} 버튼 → AMR {mode}", true,
+                                mode == DrivingMode.Drive ? "주행 모드(Drive) 명령" : "카트 모드(Cart, 수동 밀기) 명령");
                         }, stoppingToken);
                     }
                     catch (OperationCanceledException) { throw; }
@@ -279,6 +298,29 @@ public class IoModuleService : BackgroundService
         {
             _outputWriteLock.Release();
         }
+    }
+
+    /// <summary>현장 조작반 입력 변화(EMO·RESET·AUTO/MANUAL 선택)를 운영 로그로 남긴다 — 상승/하강 에지만.
+    /// START/STOP 은 모드 명령 결과와 함께 기록하므로 여기서는 제외한다. 첫 스냅샷은 기준선으로만 쓴다.</summary>
+    private void LogInputChanges(bool[] inputs)
+    {
+        var prev = _prevInputs;
+        _prevInputs = (bool[])inputs.Clone();
+        if (prev is null || prev.Length != inputs.Length) return;
+
+        bool Rose(int i) => i < inputs.Length && inputs[i] && !prev[i];
+        bool Fell(int i) => i < inputs.Length && !inputs[i] && prev[i];
+
+        if (Rose(IoPointMap.In.EmergencyStop))
+            _opLog.Log(OperationLogService.SourceIo, OpCategory.EStop, "EMO 버튼 눌림", false, "조작반 비상정지 입력 ON");
+        if (Fell(IoPointMap.In.EmergencyStop))
+            _opLog.Log(OperationLogService.SourceIo, OpCategory.EStop, "EMO 버튼 해제", true, "조작반 비상정지 입력 OFF");
+        if (Rose(IoPointMap.In.Reset))
+            _opLog.Log(OperationLogService.SourceIo, OpCategory.EStop, "RESET 버튼", null, "조작반 리셋 입력");
+        if (Rose(IoPointMap.In.Auto))
+            _opLog.Log(OperationLogService.SourceIo, OpCategory.AmrMode, "AUTO 선택", null, "조작반 운전 선택 스위치 → 자동");
+        if (Rose(IoPointMap.In.Manual))
+            _opLog.Log(OperationLogService.SourceIo, OpCategory.AmrMode, "MANUAL 선택", null, "조작반 운전 선택 스위치 → 수동");
     }
 
     /// <summary>

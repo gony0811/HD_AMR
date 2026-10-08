@@ -24,6 +24,9 @@ public class LaserDisplacementSensorService : BackgroundService
     private const string RefRyKey = "Laser.TiltRef.RyDeg";
     private const string RefAtKey = "Laser.TiltRef.CapturedAt";
 
+    // 헤드 XY 오프셋 DB 오버라이드 — 헤드 캘리브레이션 '설정에 적용'이 저장, 시작 시 appsettings 를 덮어쓴다.
+    private static string HeadKey(int head, char axis) => $"Laser.Head{head}.Offset{axis}mm";
+
     private readonly LaserDisplacementSensorSettings _settings;
     private readonly LaserDisplacementSensorClient _client;
     private readonly ILogger<LaserDisplacementSensorService> _logger;
@@ -61,6 +64,7 @@ public class LaserDisplacementSensorService : BackgroundService
     {
         _logger.LogInformation("LaserDisplacementSensorService 시작 (상시 자동 접속)");
 
+        await LoadHeadOffsetsAsync(stoppingToken);
         await LoadTiltReferenceAsync(stoppingToken);
 
         while (!stoppingToken.IsCancellationRequested)
@@ -213,6 +217,81 @@ public class LaserDisplacementSensorService : BackgroundService
         _logger.LogInformation("평행 기준 해제");
     }
 
+    /// <summary>
+    /// 헤드 캘리브레이션 결과(툴 XY 오프셋, mm)를 즉시 적용하고 DB 에 저장한다 — 재시작 불필요.
+    /// 헤드 기하가 바뀌면 기존 평행 기준(옛 기하로 산출)은 무의미하므로 함께 해제한다.
+    /// </summary>
+    public async Task<(bool Ok, string Message)> ApplyHeadOffsetsAsync(
+        IReadOnlyList<double> x, IReadOnlyList<double> y, CancellationToken ct = default)
+    {
+        if (x.Count != 3 || y.Count != 3)
+            return (false, "헤드 오프셋은 3개씩이어야 합니다.");
+        if (x.Concat(y).Any(v => !double.IsFinite(v) || Math.Abs(v) > 500))
+            return (false, "헤드 오프셋 값이 범위(±500mm)를 벗어났거나 숫자가 아닙니다.");
+
+        var before = FormatHeads();
+        (_settings.Head1OffsetXmm, _settings.Head1OffsetYmm) = (x[0], y[0]);
+        (_settings.Head2OffsetXmm, _settings.Head2OffsetYmm) = (x[1], y[1]);
+        (_settings.Head3OffsetXmm, _settings.Head3OffsetYmm) = (x[2], y[2]);
+
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var param = scope.ServiceProvider.GetRequiredService<ParameterService>();
+            for (var i = 0; i < 3; i++)
+            {
+                await param.SetDoubleAsync(HeadKey(i + 1, 'X'), x[i], $"레이저 헤드{i + 1} 툴 X 오프셋(mm) — 헤드 캘리브레이션 적용값");
+                await param.SetDoubleAsync(HeadKey(i + 1, 'Y'), y[i], $"레이저 헤드{i + 1} 툴 Y 오프셋(mm) — 헤드 캘리브레이션 적용값");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "헤드 오프셋 저장 실패 (메모리에는 적용됨)");
+            await ClearTiltReferenceAsync(ct);
+            return (false, $"적용은 됐지만 저장 실패 — 재시작하면 이전 값으로 돌아갑니다: {ex.Message}");
+        }
+
+        await ClearTiltReferenceAsync(ct);
+        _logger.LogInformation("헤드 오프셋 적용: {Before} → {After} (평행 기준 해제)", before, FormatHeads());
+        return (true, $"헤드 오프셋 적용·저장 완료: {FormatHeads()}");
+    }
+
+    private string FormatHeads() =>
+        $"H1({_settings.Head1OffsetXmm:0.##}, {_settings.Head1OffsetYmm:0.##}) " +
+        $"H2({_settings.Head2OffsetXmm:0.##}, {_settings.Head2OffsetYmm:0.##}) " +
+        $"H3({_settings.Head3OffsetXmm:0.##}, {_settings.Head3OffsetYmm:0.##})";
+
+    /// <summary>DB 에 6개 키가 모두 있으면 appsettings 헤드 오프셋을 덮어쓴다. 일부만 있으면 무시.</summary>
+    private async Task LoadHeadOffsetsAsync(CancellationToken ct)
+    {
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var param = scope.ServiceProvider.GetRequiredService<ParameterService>();
+            var v = new double?[6];
+            for (var i = 0; i < 3; i++)
+            {
+                v[i * 2] = await param.GetDoubleAsync(HeadKey(i + 1, 'X'));
+                v[i * 2 + 1] = await param.GetDoubleAsync(HeadKey(i + 1, 'Y'));
+            }
+            if (v.Any(d => d is null)) return;
+
+            var cfg = FormatHeads();
+            (_settings.Head1OffsetXmm, _settings.Head1OffsetYmm) = (v[0]!.Value, v[1]!.Value);
+            (_settings.Head2OffsetXmm, _settings.Head2OffsetYmm) = (v[2]!.Value, v[3]!.Value);
+            (_settings.Head3OffsetXmm, _settings.Head3OffsetYmm) = (v[4]!.Value, v[5]!.Value);
+            _logger.LogInformation("헤드 오프셋 DB 값 적용: {Db} (appsettings {Cfg} 대체)", FormatHeads(), cfg);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("헤드 오프셋 DB 로드 실패(appsettings 값 사용) — {Err}", ex.Message);
+        }
+    }
+
     private async Task LoadTiltReferenceAsync(CancellationToken ct)
     {
         try
@@ -240,6 +319,50 @@ public class LaserDisplacementSensorService : BackgroundService
         {
             _logger.LogWarning("평행 기준 로드 실패(보정 없이 계속) — {Err}", ex.Message);
         }
+    }
+
+    /// <summary>
+    /// 모션 후 판독이 수렴할 때까지 대기 — 앰프 평균화 필터가 실변화를 따라오는 지연 대응.
+    /// 3샘플 미니평균을 반복 측정해 직전 미니평균 대비 전 채널 |Δ| &lt; <paramref name="thresholdMm"/> 면 안정.
+    /// 무효 스냅샷(채널 Enabled=false)은 건너뛴다. 안정이면 true, <paramref name="timeoutMs"/> 초과면 false.
+    /// </summary>
+    public async Task<bool> WaitForStableReadingsAsync(
+        int intervalMs, int timeoutMs, CancellationToken ct, double thresholdMm = 0.05)
+    {
+        if (timeoutMs <= 0) return true;
+
+        const int MiniSamples = 3;
+        int elapsedMs = 0;
+        double[]? prev = null;
+
+        while (elapsedMs < timeoutMs)
+        {
+            var mini = new double[3];
+            int got = 0;
+            while (got < MiniSamples && elapsedMs < timeoutMs)
+            {
+                ct.ThrowIfCancellationRequested();
+                var r = GetReadings();
+                if (r.Count >= 3 && r[0].Enabled && r[1].Enabled && r[2].Enabled)
+                {
+                    for (int i = 0; i < 3; i++) mini[i] += r[i].Value;
+                    got++;
+                }
+                await Task.Delay(intervalMs, ct);
+                elapsedMs += intervalMs;
+            }
+            if (got < MiniSamples) break;   // 타임아웃/무효 지속
+
+            for (int i = 0; i < 3; i++) mini[i] /= MiniSamples;
+            if (prev is not null)
+            {
+                double maxDelta = Math.Max(Math.Abs(mini[0] - prev[0]),
+                    Math.Max(Math.Abs(mini[1] - prev[1]), Math.Abs(mini[2] - prev[2])));
+                if (maxDelta < thresholdMm) return true;
+            }
+            prev = mini;
+        }
+        return false;
     }
 
     /// <summary>채널 영점 설정(현재값을 0으로).</summary>
