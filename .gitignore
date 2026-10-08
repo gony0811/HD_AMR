@@ -71,3 +71,6 @@ HD.AMR/HD.AMR.Web/*.db-wal
 *.DotSettings.user
 
 .aider*
+
+# macOS 폴더 메타데이터
+.DS_Store
