@@ -125,6 +125,7 @@ public sealed class SeamApproachResolver
         // ── 리치 사전 점검 — IK 에 특이 해를 풀게 하기 전에 배치로 거른다 ──────────────
         double toolLen = 0;
         string? skipNote = null;
+        string reachNote = "";
         try
         {
             var tc = tool == 0 ? new double[6] : await _cobot.Rpc.GetToolCoordAsync(tool, ct);
@@ -147,6 +148,7 @@ public sealed class SeamApproachResolver
                 "{Label} 리치 점검: 면까지 {Normal:0}mm − 후퇴 {Approach:0} − 공구 {Tool:0} = 플랜지 뻗음 {Flange:0}mm (최소 {Min:0}mm)",
                 label, target.NormalDistanceMm, standoff, toolLen, reach.FlangeReachMm, limits.MinFlangeReachMm);
 
+            reachNote = $" · 플랜지 뻗음 {reach.FlangeReachMm:0}mm(최소 {limits.MinFlangeReachMm:0}, 면까지 {target.NormalDistanceMm:0}mm)";
             if (!reach.Ok)
                 return new SeamApproachResult(null, null, useComputed, "",
                     $"정차 거리 부족 — 필요 ≥ {reach.RequiredNormalDistanceMm:0}mm, 현재 {target.NormalDistanceMm:0}mm " +
@@ -160,8 +162,8 @@ public sealed class SeamApproachResolver
         // 토글과 무관하게 돌려주고, 사용 여부는 호출측이 UseComputedOrientation 으로 판단한다.
         return new SeamApproachResult(
             target.ApproachBaseMm, target.TargetPoseBase, useComputed,
-            standoffMm is null
+            (standoffMm is null
                 ? $"용접선 접근점(면 이격 {standoff:0}mm — ③ 카메라 목표거리)"
-                : $"용접선 접근점(면 이격 {standoff:0}mm)", null, opticalAxis);
+                : $"용접선 접근점(면 이격 {standoff:0}mm)") + reachNote, null, opticalAxis);
     }
 }

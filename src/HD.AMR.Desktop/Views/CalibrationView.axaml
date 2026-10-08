@@ -22,13 +22,10 @@
             <StackPanel Spacing="8">
                 <TextBlock Text="① 고정 좌표변환 확인" FontWeight="SemiBold" />
                 <TextBlock Classes="axis" Text="T_A_B — AMR 중심 → 코봇 Base (mm/도) · 읽기 전용" />
-                <StackPanel Orientation="Horizontal" Spacing="10">
-                    <TextBlock Text="{Binding MountText}" VerticalAlignment="Center" TextWrapping="Wrap" />
-                    <Button Content="장착 보정 페이지 열기" Command="{Binding OpenMountCalibrationCommand}" />
-                </StackPanel>
+                <TextBlock Text="{Binding MountText}" VerticalAlignment="Center" TextWrapping="Wrap" />
                 <Border Classes="alert" IsVisible="{Binding MountIsZero}">
                     <TextBlock TextWrapping="Wrap" FontSize="12"
-                               Text="T_A_B 가 미설정(전부 0)입니다 — SETTINGS ▸ 장착 보정 (T_A_B) 에서 먼저 산출·저장하세요. 미설정 상태의 QR 측정 결과는 신뢰할 수 없습니다." />
+                               Text="T_A_B 가 미설정(전부 0)입니다 — SETTINGS ▸ 장착 보정 (ArUco) 에서 먼저 산출·저장하세요. 미설정 상태의 QR 측정 결과는 신뢰할 수 없습니다." />
                 </Border>
                 <TextBlock Classes="axis" Text="T_T_C — 선택 Tool TCP → 카메라 광학 프레임 (mm/도)" Margin="0,6,0,0" />
                 <WrapPanel>

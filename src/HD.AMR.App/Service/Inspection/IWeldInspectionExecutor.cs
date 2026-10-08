@@ -33,6 +33,13 @@ public interface IWeldInspectionExecutor
     Task<InspectionActionResult> ExecuteAsync(VdaAction action, string orderId, double? nodeThetaRad,
                                               bool isLastInspection, CancellationToken ct);
 
+    /// <summary>
+    /// `moveToSeamStart` 액션 1건 실행(사양 §8.7 — 코봇 seam 시작점 reach 시험). 본검사 ② 검사위치 이동만 수행해
+    /// 코봇툴을 seamStartW 의 면 이격 접근점으로 보내고 그 자리에 멈춘다(촬영·측정·홈 복귀 없음). 예외를 던지지 않는다.
+    /// </summary>
+    Task<InspectionActionResult> ExecuteMoveToSeamStartAsync(VdaAction action, string orderId, double? nodeThetaRad,
+                                                             CancellationToken ct);
+
     /// <summary>정렬(anchor) 캐시 무효화 — 주행 발생·신규 order 시 호출(사양 §8.1 anchorGroupId 계약).</summary>
     void InvalidateAnchor();
 
