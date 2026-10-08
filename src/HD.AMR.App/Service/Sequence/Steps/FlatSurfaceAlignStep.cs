@@ -176,7 +176,7 @@ public class FlatSurfaceAlignStep : ISequenceStep
             _logger.LogInformation(
                 "④ Phase C iter={Iter}: rx={Rx:0.###}°, ry={Ry:0.###}°, z={Z:0.#}mm",
                 iter, pose.Rx, pose.Ry, pose.Z);
-            _monitor.SetLaser(pose.Rx, pose.Ry);
+            _monitor.SetLaser(pose.Rx, pose.Ry, pose.Z);
             context.Progress?.Invoke(
                 $"레이저 3점 측정 {iter + 1}: rx={pose.Rx:0.###}°, ry={pose.Ry:0.###}°, z={pose.Z:0.#}mm");
 
