@@ -21,11 +21,13 @@ public class IoModuleService : BackgroundService
     private readonly AMRService _amr;
     private readonly CobotService _cobot;
     private readonly OperationLogService _opLog;
+    private readonly Vda5050AdapterService _vda;
 
     /// <summary>직전 입력 스냅샷 — 현장 버튼/선택 스위치 변화만 운영 로그로 남기기 위한 비교 기준.</summary>
     private bool[]? _prevInputs;
     private readonly IoAmrModeControl _modeControl = new();
     private readonly IoStartStopLampControl _lampControl = new();
+    private readonly IoEmoResetControl _emoControl = new();
     private readonly SemaphoreSlim _outputWriteLock = new(1, 1);
 
     private readonly object _stateLock = new();
@@ -33,7 +35,7 @@ public class IoModuleService : BackgroundService
     private bool _initialStopStateApplied;
 
     public IoModuleService(IOptions<IoModuleModbusTcpSettings> options, ILoggerFactory loggerFactory,
-        AMRService amr, CobotService cobot, OperationLogService opLog)
+        AMRService amr, CobotService cobot, OperationLogService opLog, Vda5050AdapterService vda)
     {
         _opLog = opLog;
         _settings = options.Value;
@@ -41,6 +43,7 @@ public class IoModuleService : BackgroundService
         _logger = loggerFactory.CreateLogger<IoModuleService>();
         _amr = amr;
         _cobot = cobot;
+        _vda = vda;
     }
 
     public bool IsConnected => _client.IsConnected;
@@ -196,6 +199,20 @@ public class IoModuleService : BackgroundService
 
                     try
                     {
+                        await _emoControl.ApplyAsync(inputs,
+                            reason => _vda.TriggerEmergencyStopAsync(reason, OperationLogService.SourceIo),
+                            reason => _vda.ClearEmergencyStopAsync(reason, OperationLogService.SourceIo),
+                            SetResetLampAsync,
+                            stoppingToken);
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "EMO/RESET 인터록 처리 실패 — 다음 입력 폴링에서 재시도");
+                    }
+
+                    try
+                    {
                         await ApplyTowerLampPolicyAsync(inputs, stoppingToken);
                     }
                     catch (OperationCanceledException) { throw; }
@@ -293,6 +310,25 @@ public class IoModuleService : BackgroundService
                 startSelected ? "Drive" : "Cart",
                 startSelected ? "ON" : "OFF",
                 startSelected ? "OFF" : "ON");
+        }
+        finally
+        {
+            _outputWriteLock.Release();
+        }
+    }
+
+    /// <summary>RESET 버튼 램프(OUT05)만 토글한다 — EMO 인터록 전용. 되읽기 확인(WriteOutputAsync 의 PollStateAsync)
+    /// 를 생략해 폴링 루프 내에서 추가 라운드트립을 유발하지 않는다. 다음 폴링 사이클이 자연히 상태를 되읽어온다.</summary>
+    private async Task SetResetLampAsync(bool on, CancellationToken ct)
+    {
+        await _outputWriteLock.WaitAsync(ct);
+        try
+        {
+            var word = await ReadOutputWordForUpdateAsync(ct);
+            var mask = (ushort)(1 << IoPointMap.Out.ResetButtonLamp);
+            word = on ? (ushort)(word | mask) : (ushort)(word & ~mask);
+            await WriteOutputWordAsync(word, ct);
+            _logger.LogInformation("RESET 버튼 램프 {State}", on ? "ON" : "OFF");
         }
         finally
         {

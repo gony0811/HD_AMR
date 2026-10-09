@@ -796,6 +796,22 @@ public sealed class Vda5050OrderExecutor
         StateChanged?.Invoke();
     }
 
+    /// <summary>물리 RESET 버튼 입력으로 소프트웨어 비상정지 상태(emergencyStopActive error)를 해소한다.
+    /// 임무는 이미 FAILED 처리되었으므로 재개하지 않는다 — 신규 Order 재배차로만 재개
+    /// (<see cref="EmergencyStopAsync"/> 와 동일한 계약). 멱등: 플래그가 없으면 조용히 반환.</summary>
+    public Task ClearEmergencyStopAsync(string reason = "조작반 RESET")
+    {
+        bool had;
+        lock (_gate) had = _errors.Remove("emergencyStopActive");
+        if (had)
+        {
+            _logger.LogInformation("비상정지 해제({Reason}) — emergencyStopActive 해소", reason);
+            OpLog(OpCategory.EStop, "비상정지 해제", true, reason);
+            StateChanged?.Invoke();
+        }
+        return Task.CompletedTask;
+    }
+
     /// <summary>진행 중 임무 태스크 취소·대기. 로봇 정지는 호출측이 이어서 수행한다(D-3 순서).</summary>
     private async Task AbortMissionAsync(string reason)
     {

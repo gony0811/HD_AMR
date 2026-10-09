@@ -129,6 +129,8 @@ public static class OpCategory
     public const string EStop = "ESTOP";
     /// <summary>ACS 통신 링크(브로커 접속/두절, ACS 생존 신호).</summary>
     public const string Link = "LINK";
+    /// <summary>IO 모듈 출력 조작(버저 OFF 등 화면 발 1회성 쓰기).</summary>
+    public const string Io = "IO";
 
     /// <summary>필터 드롭다운 기본 목록(코드, 표시명).</summary>
     public static readonly IReadOnlyList<(string Code, string Label)> All = new[]
@@ -136,6 +138,7 @@ public static class OpCategory
         (Order, "오더"), (Action, "액션"), (Instant, "즉시액션"), (Drive, "주행"), (Cobot, "코봇"),
         (Sequence, "시퀀스"), (Step, "스텝"), (AmrMode, "AMR 모드"), (AmrState, "AMR 상태"),
         (AmrManual, "AMR 수동"), (AmrCommand, "AMR 명령"), (EStop, "비상정지"), (Link, "통신"),
+        (Io, "IO"),
     };
 
     /// <summary>표시명 — 목록에 없는 코드는 그대로.</summary>

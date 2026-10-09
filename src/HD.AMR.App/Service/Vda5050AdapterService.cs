@@ -147,6 +147,16 @@ public sealed class Vda5050AdapterService : BackgroundService
         });
     }
 
+    /// <summary>물리 RESET 버튼용 비상정지 해제 — 운영 로그를 어댑터 레이어에서 남기고
+    /// Executor 에 위임한 뒤 state 를 즉시 발행한다. 임무 재개는 ACS 신규 Order 재배차로만 가능.</summary>
+    public async Task ClearEmergencyStopAsync(string reason, string source = OperationLogService.SourceIo)
+    {
+        _logger.LogInformation("비상정지 해제 요청 — {Reason}", reason);
+        _opLog.Log(source, OpCategory.EStop, "비상정지 해제", true, reason);
+        await _executor.ClearEmergencyStopAsync(reason);
+        NudgeState();
+    }
+
     // 이벤트 즉시 발행 트리거(§6.1) — 주기 대기를 깨우는 nudge.
     private TaskCompletionSource _stateNudge = NewNudge();
 

@@ -65,8 +65,8 @@ echo "  ✓ 앱 종료"
 echo "▶ scp 전송 중…"
 # appsettings*.json 은 보내지 않는다 — 원격 현장 설정(장비 Enabled·COM 포트 등)을 로컬 값으로 덮어쓰지 않기 위해.
 # 새 설정 키는 코드 기본값으로 동작하고, 원격 설정을 바꿔야 하면 원격 파일을 직접 고친다.
-find "$PUBLISH_DIR" -mindepth 1 -maxdepth 1 ! -name 'appsettings*.json' -print0 \
-    | xargs -0 -I{} scp -r -q {} "$REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR/"
+mapfile -d '' SEND_FILES < <(find "$PUBLISH_DIR" -mindepth 1 -maxdepth 1 ! -name 'appsettings*.json' -print0)
+scp -r -q "${SEND_FILES[@]}" "$REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR/"
 echo "  ✓ 전송 완료"
 
 # ── 4. 원격 앱 시작 ──────────────────────────────────────────

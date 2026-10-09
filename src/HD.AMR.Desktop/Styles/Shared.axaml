@@ -63,6 +63,32 @@
         <Setter Property="Opacity" Value="0.45" />
     </Style>
 
+    <!-- 타워램프 뱃지: .badge.lamp(기본 소등) + .red/.yellow/.green(점등 색) -->
+    <Style Selector="Border.badge.lamp.red">
+        <Setter Property="Background" Value="#FDE8E8" />
+        <Setter Property="BorderBrush" Value="#D63434" />
+    </Style>
+    <Style Selector="Border.badge.lamp.red > TextBlock">
+        <Setter Property="Foreground" Value="#9B1C1C" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="Border.badge.lamp.yellow">
+        <Setter Property="Background" Value="#FEF3C7" />
+        <Setter Property="BorderBrush" Value="#D97706" />
+    </Style>
+    <Style Selector="Border.badge.lamp.yellow > TextBlock">
+        <Setter Property="Foreground" Value="#92400E" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="Border.badge.lamp.green">
+        <Setter Property="Background" Value="{DynamicResource AppGoodSoftBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AppGoodBrush}" />
+    </Style>
+    <Style Selector="Border.badge.lamp.green > TextBlock">
+        <Setter Property="Foreground" Value="{DynamicResource AppGoodBrush}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+
     <!-- 비상정지·위험 동작 버튼(ACS Button.danger 와 동일) -->
     <Style Selector="Button.danger">
         <Setter Property="Background" Value="{DynamicResource AppDangerBrush}" />

@@ -2,6 +2,8 @@ using System.Collections.ObjectModel;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using HD.AMR.App.Communication;
+using HD.AMR.App.Enums;
 using HD.AMR.App.Service;
 
 namespace HD.AMR.Desktop.ViewModels;
@@ -62,10 +64,42 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [ObservableProperty]
     private string? _emoMessage;
 
+    // 조작반 셀렉터 래치 상태 — 둘 다 false(선택 안 됨)일 수 있어 각각 보관.
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ModeText))]
+    private bool _isAutoMode;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ModeText))]
+    private bool _isManualMode;
+
+    // 운전 상태는 AMR 모드(Drive=시작, Cart=정지)로 — 조작반 Start/Stop 버튼은 모멘터리라 입력 비트가
+    // 상태를 반영하지 못한다. IoStartStopLampControl 과 같은 소스를 쓴다.
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(RunStatusText))]
+    private bool _isRunning;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(TowerLampText))]
+    private TowerLampColor _towerLamp;
+
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(TurnOffBuzzerCommand))]
+    private bool _isBuzzerOn;
+
     public string AmrStatusText => IsAmrConnected ? "연결" : "미연결";
     public string CobotStatusText => IsCobotConnected ? "연결" : "미연결";
     public string IoStatusText => IsIoConnected ? "연결" : "미연결";
     public string EmoButtonText => IsEmoActive ? "■ 비상정지 해제" : "■ 비상정지";
+    public string ModeText => IsAutoMode ? "자동" : IsManualMode ? "수동" : "—";
+    public string RunStatusText => IsRunning ? "시작" : "정지";
+    public string TowerLampText => TowerLamp switch
+    {
+        TowerLampColor.Red => "적색",
+        TowerLampColor.Yellow => "황색",
+        TowerLampColor.Green => "녹색",
+        _ => "소등",
+    };
 
     private readonly OperationLogService _opLog;
 
@@ -159,6 +193,43 @@ public sealed partial class MainWindowViewModel : ObservableObject
         // 표시 상태는 클릭이 아니라 폴링된 출력 스냅샷 기준 → 쓰기 미반영 시 자동 원복.
         var state = _io.GetState();
         IsEmoActive = state is not null && state.Outputs.Length > EmoOutputIndex && state.Outputs[EmoOutputIndex];
+
+        // 조작반 입력(자동/수동 셀렉터) — 포인트가 끊긴 경우 false.
+        IsAutoMode = state is not null && state.Inputs.Length > IoPointMap.In.Auto && state.Inputs[IoPointMap.In.Auto];
+        IsManualMode = state is not null && state.Inputs.Length > IoPointMap.In.Manual && state.Inputs[IoPointMap.In.Manual];
+
+        // 시작/정지는 AMR 운전 모드 기준(Indicator = 조작반 램프와 같은 소스).
+        IsRunning = _amr.IndicatorDrivingMode == DrivingMode.Drive;
+
+        // 타워램프 — 출력 되읽기. IoTowerLampPolicy 상 세 색 중 하나만 ON 이지만 전환 사이 모두 OFF 가
+        // 보일 수 있다. 방어적으로 우선순위 Red>Yellow>Green.
+        TowerLamp = state is null ? TowerLampColor.None :
+            state.Outputs.Length > IoPointMap.Out.TowerLampRed && state.Outputs[IoPointMap.Out.TowerLampRed] ? TowerLampColor.Red :
+            state.Outputs.Length > IoPointMap.Out.TowerLampYellow && state.Outputs[IoPointMap.Out.TowerLampYellow] ? TowerLampColor.Yellow :
+            state.Outputs.Length > IoPointMap.Out.TowerLampGreen && state.Outputs[IoPointMap.Out.TowerLampGreen] ? TowerLampColor.Green :
+            TowerLampColor.None;
+
+        IsBuzzerOn = state is not null && state.Outputs.Length > IoPointMap.Out.Buzzer && state.Outputs[IoPointMap.Out.Buzzer];
+    }
+
+    /// <summary>IO 가 연결돼 있고 버저가 울리는 상태일 때만 끌 수 있다 — 꺼져 있으면 눌러도 의미 없음.</summary>
+    private bool CanTurnOffBuzzer() => IsIoConnected && IsBuzzerOn;
+
+    /// <summary>부저 즉시 OFF — 사용자 트리거 1회성 쓰기(상태기계 불필요).</summary>
+    [RelayCommand(CanExecute = nameof(CanTurnOffBuzzer))]
+    private async Task TurnOffBuzzerAsync()
+    {
+        try
+        {
+            var confirmed = await _io.WriteOutputAsync(IoPointMap.Out.Buzzer, false);
+            _opLog.Log(OperationLogService.SourceUi, OpCategory.Io, "버저 OFF", confirmed,
+                confirmed ? "되읽기 반영 확인" : "쓰기는 수락됐지만 반영되지 않음 — RAPIEnet 상태 확인 필요");
+        }
+        catch (Exception ex)
+        {
+            _opLog.Log(OperationLogService.SourceUi, OpCategory.Io, "버저 OFF 실패", false, ex.Message);
+        }
+        RefreshStatus();
     }
 
     /// <summary>비상정지(활성화)는 IO 연결과 무관하게 항상 누를 수 있다 — 소프트웨어 정지(코봇·주행·임무)는

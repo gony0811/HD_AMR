@@ -93,6 +93,12 @@
                         Command="{Binding ToggleEmoCommand}"
                         VerticalAlignment="Center" />
 
+                <Button DockPanel.Dock="Right"
+                        Content="🔕 Buzzer Off"
+                        Command="{Binding TurnOffBuzzerCommand}"
+                        VerticalAlignment="Center"
+                        Margin="0,0,12,0" />
+
                 <TextBlock DockPanel.Dock="Right"
                            Classes="muted"
                            Text="{Binding EmoMessage}"
@@ -133,6 +139,33 @@
                         <TextBlock Text="배터리" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" />
                         <Border Classes="badge" Classes.on="{Binding IsBatteryOk}">
                             <TextBlock Text="{Binding BatteryText}" />
+                        </Border>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                        <TextBlock Text="모드" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" />
+                        <Border Classes="badge" Classes.on="{Binding IsAutoMode}">
+                            <TextBlock Text="{Binding ModeText}" />
+                        </Border>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                        <TextBlock Text="운전" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" />
+                        <Border Classes="badge" Classes.on="{Binding IsRunning}">
+                            <TextBlock Text="{Binding RunStatusText}" />
+                        </Border>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                        <TextBlock Text="타워램프" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" />
+                        <Border Classes="badge lamp"
+                                Classes.red="{Binding TowerLamp, Converter={x:Static vm:TowerLampColorConverter.IsRed}}"
+                                Classes.yellow="{Binding TowerLamp, Converter={x:Static vm:TowerLampColorConverter.IsYellow}}"
+                                Classes.green="{Binding TowerLamp, Converter={x:Static vm:TowerLampColorConverter.IsGreen}}">
+                            <TextBlock Text="{Binding TowerLampText}" />
+                        </Border>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                        <TextBlock Text="버저" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" />
+                        <Border Classes="badge" Classes.on="{Binding IsBuzzerOn}">
+                            <TextBlock Text="{Binding IsBuzzerOn, Converter={x:Static vm:BoolTextConverters.OnOff}}" />
                         </Border>
                     </StackPanel>
                 </StackPanel>
