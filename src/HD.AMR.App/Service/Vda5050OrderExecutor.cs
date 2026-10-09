@@ -1,6 +1,7 @@
 using System.Text.Json;
 using HD.AMR.App.Communication;
 using HD.AMR.App.Communication.Vda5050;
+using HD.AMR.App.Enums;
 using HD.AMR.App.Service.Sequence.Steps;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -33,6 +34,7 @@ public sealed class Vda5050OrderExecutor
     private readonly AmrRestClient _rest;
     private readonly AMRService _amr;
     private readonly Inspection.IWeldInspectionExecutor _inspection;
+    private readonly PowerModeService _power;
     private readonly AmrRestSettings _restSettings;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly OperationLogService _opLog;
@@ -56,17 +58,36 @@ public sealed class Vda5050OrderExecutor
     public event Action? StateChanged;
 
     public Vda5050OrderExecutor(AmrRestClient rest, AMRService amr,
-        Inspection.IWeldInspectionExecutor inspection,
+        Inspection.IWeldInspectionExecutor inspection, PowerModeService power,
         IOptions<AmrRestSettings> restOptions, IServiceScopeFactory scopeFactory,
         OperationLogService opLog, ILogger<Vda5050OrderExecutor> logger)
     {
         _rest = rest;
         _amr = amr;
         _inspection = inspection;
+        _power = power;
         _restSettings = restOptions.Value;
         _scopeFactory = scopeFactory;
         _opLog = opLog;
         _logger = logger;
+
+        // 배터리 CRITICAL 로 전이하면 진행 중 임무를 그 자리 안전정지(사양 §9.5).
+        _power.Changed += OnPowerModeChanged;
+    }
+
+    private void OnPowerModeChanged()
+    {
+        if (_power.CurrentMode != PowerMode.Critical) return;
+        lock (_gate)
+        {
+            if (_missionTask is not { IsCompleted: false }) return;
+        }
+        // 이벤트 핸들러에서 async 호출은 fire-and-forget — 예외는 로그로.
+        _ = Task.Run(async () =>
+        {
+            try { await AbortForBatteryCriticalAsync(); }
+            catch (Exception ex) { _logger.LogError(ex, "배터리 CRITICAL 임무 중단 처리 실패"); }
+        });
     }
 
     /// <summary>운영 로그(ACS 출처) 축약 — orderId 를 상관 식별자로 남긴다.</summary>
@@ -126,6 +147,35 @@ public sealed class Vda5050OrderExecutor
                     ErrorType = "orderValidationError",
                     ErrorLevel = "WARNING",
                     ErrorDescription = $"orderId={order.OrderId}: {reject}",
+                };
+            }
+            StateChanged?.Invoke();
+            return;
+        }
+
+        // 배터리 저전력 수락 게이트(사양 §4) — 거부해도 기존 orderId 는 유지(§8), 기존 임무도 유지.
+        var operatingMode = _amr.LatestStatus?.DrivingMode == DrivingMode.Cart ? "MANUAL" : "AUTOMATIC";
+        var decision = OrderAdmissionGate.Evaluate(_power.CurrentMode, operatingMode, order);
+        if (decision == OrderAdmissionGate.Decision.RejectBatteryLow)
+        {
+            var firstActionId = order.Nodes.SelectMany(n => n.Actions).FirstOrDefault()?.ActionId ?? "";
+            var reason = $"PowerMode={_power.CurrentMode}, operatingMode={operatingMode} — 저전력 상태에서 비허용 Order";
+            _logger.LogWarning("VDA5050 order 거부(저전력): {OrderId} — {Reason}", order.OrderId, reason);
+            OpLog(OpCategory.Order, "order 거부(저전력)", false, reason, order.OrderId);
+            lock (_gate)
+            {
+                var refs = new List<VdaErrorReference>
+                {
+                    new() { ReferenceKey = "orderId", ReferenceValue = order.OrderId },
+                };
+                if (firstActionId.Length > 0)
+                    refs.Add(new VdaErrorReference { ReferenceKey = "actionId", ReferenceValue = firstActionId });
+                _errors["orderRejectedBatteryLow"] = new VdaError
+                {
+                    ErrorType = "orderRejectedBatteryLow",
+                    ErrorLevel = "WARNING",
+                    ErrorDescription = reason,
+                    ErrorReferences = refs,
                 };
             }
             StateChanged?.Invoke();
@@ -278,6 +328,22 @@ public sealed class Vda5050OrderExecutor
                 var action = node.Actions[ai];
                 ct.ThrowIfCancellationRequested();
 
+                // 저전력 중단(사양 §5) — 현재 iteration 의 action 은 아직 시작 전이므로 바로 FAILED.
+                // RUNNING 중이던 action 이 있다면 그 action 은 이미 아래 분기에서 완결되고, 이 체크는 다음 iteration 에 걸린다.
+                if (_power.CurrentMode != PowerMode.Normal)
+                {
+                    var reason = $"저전력({_power.CurrentMode})으로 잔여 액션 중단 — ACS cancelOrder 로 잔여 회수 대기";
+                    for (var j = ai; j < node.Actions.Count; j++)
+                    {
+                        SetActionStatus(node.Actions[j].ActionId, "FAILED", reason);
+                        failedActions++;
+                    }
+                    OpLog(OpCategory.Order, "임무 중단(저전력)", null,
+                        $"잔여 {node.Actions.Count - ai}건 FAILED — {reason}", orderId);
+                    StateChanged?.Invoke();
+                    break;
+                }
+
                 if (equipmentDown)
                 {
                     SetActionStatus(action.ActionId, "FAILED", "설비 불능(equipmentError)으로 잔여 액션 중단");
@@ -295,7 +361,43 @@ public sealed class Vda5050OrderExecutor
                 StateChanged?.Invoke();
                 var actionStarted = DateTime.UtcNow;
 
-                if (action.ActionType is "startWeldInspection" or "moveToSeamStart")
+                if (action.ActionType == "batterySwapMove")
+                {
+                    // 사양 §8.8 (ACS VDA5050_INTERFACE_SPEC.md 1.8): 교체 장소 노드로 이동.
+                    // 주행은 상단 WaitForArrivalAsync 이 이미 완료 — 이 분기는 파라미터 검증 + FINISHED 보고.
+                    // 도착 후 구동 인터락·BMS 핫스왑 자동 인식은 플랫폼(PowerModeService + HW) 책임.
+                    var targetNodeId = GetStringParam(action, "targetNodeId");
+                    var paramMapId   = GetStringParam(action, "mapId");
+                    var reason       = GetStringParam(action, "reason");
+
+                    string? validationError = null;
+                    if (string.IsNullOrEmpty(targetNodeId) || targetNodeId != node.NodeId)
+                        validationError = $"targetNodeId 불일치/누락 (param={targetNodeId}, node={node.NodeId})";
+                    else if (string.IsNullOrEmpty(paramMapId) || paramMapId != pos.MapId)
+                        validationError = $"mapId 불일치/누락 (param={paramMapId}, node={pos.MapId})";
+                    else if (reason is not ("LOW" or "CRITICAL" or "MANUAL"))
+                        validationError = $"reason 값 비정상 ({reason}) — LOW/CRITICAL/MANUAL 중 하나여야 함";
+
+                    if (validationError is not null)
+                    {
+                        SetActionStatus(action.ActionId, "FAILED", validationError);
+                        failedActions++;
+                        OpLog(OpCategory.Action, "batterySwapMove", false,
+                            $"[{ai + 1}/{node.Actions.Count}] actionId={action.ActionId}, 검증 실패 — {validationError}", orderId);
+                        ReportError("orderValidationError", $"actionId={action.ActionId}: {validationError}");
+                    }
+                    else
+                    {
+                        var soc = _amr.LatestStatus?.Battery?.LevelPercent;
+                        var socText = soc is null ? "SoC 미수신" : $"SoC {soc:0.0}%";
+                        var desc = $"교체 장소 {node.NodeId} 도착(reason={reason}, {socText}) — 구동 인터락·핫스왑 대기(플랫폼 자율)";
+                        SetActionStatus(action.ActionId, "FINISHED", desc);
+                        OpLog(OpCategory.Action, "batterySwapMove", true,
+                            $"[{ai + 1}/{node.Actions.Count}] actionId={action.ActionId}, 소요 {(DateTime.UtcNow - actionStarted).TotalSeconds:0.0}s — {desc}", orderId);
+                        _logger.LogInformation("VDA5050 batterySwapMove FINISHED: node={NodeId}, reason={Reason}", node.NodeId, reason);
+                    }
+                }
+                else if (action.ActionType is "startWeldInspection" or "moveToSeamStart")
                 {
                     // startWeldInspection = 본검사(§8.5.1), moveToSeamStart = 코봇 seam 시작점 reach 시험(§8.7 —
                     // ② 접근까지만, 촬영·홈 복귀 없음). 결과 보고·errors·equipmentDown 처리는 같다.
@@ -745,18 +847,70 @@ public sealed class Vda5050OrderExecutor
         }
     }
 
+    /// <summary>
+    /// 액션 파라미터에서 문자열 값을 꺼낸다. <see cref="ActionParameter.Value"/> 는 object? 로
+    /// JsonElement(문자열 kind) 또는 raw string 으로 역직렬화된다 — 둘 다 수용(§8.3/N7).
+    /// 누락이면 빈 문자열 반환.
+    /// </summary>
+    private static string GetStringParam(VdaAction action, string key)
+    {
+        var p = action.ActionParameters.FirstOrDefault(x => string.Equals(x.Key, key, StringComparison.Ordinal));
+        return p?.Value switch
+        {
+            null => "",
+            JsonElement el when el.ValueKind == JsonValueKind.String => el.GetString() ?? "",
+            string s => s,
+            _ => p.Value?.ToString() ?? "",
+        };
+    }
+
     /// <summary>errors 갱신 — 같은 errorType 은 최신 1건만 유지(§6.4). 해소는 다음 order 수신 시.</summary>
-    private void ReportError(string errorType, string description)
+    private void ReportError(string errorType, string description,
+        string errorLevel = "WARNING", List<VdaErrorReference>? errorReferences = null)
     {
         lock (_gate)
         {
             _errors[errorType] = new VdaError
             {
                 ErrorType = errorType,
-                ErrorLevel = "WARNING",
+                ErrorLevel = errorLevel,
                 ErrorDescription = description,
+                ErrorReferences = errorReferences,
             };
         }
+    }
+
+    /// <summary>
+    /// 배터리 CRITICAL(SoC ≤ 10%) 전이 시 진행 중 임무를 그 자리 안전정지(사양 §9.5).
+    /// EmergencyStopAsync 와 유사하지만 emergencyStopActive 에러를 세팅하지 않는다 —
+    /// batteryCritical 는 PowerModeService 가 state.errors[] 에 상주 발행.
+    /// </summary>
+    private async Task AbortForBatteryCriticalAsync()
+    {
+        string? running;
+        lock (_gate) running = _missionTask is { IsCompleted: false } ? _orderId : null;
+        if (running is null) return;
+
+        _logger.LogWarning("배터리 CRITICAL — 임무 폐기(그 자리 안전정지)");
+        OpLog(OpCategory.Order, "임무 폐기(배터리 CRITICAL)", null,
+            $"SoC ≤ {PowerModeService.CriticalThresholdPercent}% — 진행 중 order {running} 주행 정지·임무 폐기", running);
+
+        lock (_gate) _missionCts?.Cancel();
+        var stop = await _rest.StopAsync();
+        if (!stop.Ok)
+            _logger.LogWarning("배터리 CRITICAL REST 정지 실패(code={Code}): {Msg}", stop.Code, stop.Message);
+        await AbortMissionAsync("stopped by batteryCritical");
+
+        lock (_gate)
+        {
+            _driving = false;
+            foreach (var a in _actionStates.Where(a => a.ActionStatus is not ("FINISHED" or "FAILED")))
+            {
+                a.ActionStatus = "FAILED";
+                a.ResultDescription = "stopped by batteryCritical";
+            }
+        }
+        StateChanged?.Invoke();
     }
 
     // ── instantActions ────────────────────────────────────────────────

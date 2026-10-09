@@ -38,6 +38,10 @@ internal static class ServiceRegistration
         AddHostedSingleton<AMRService>(services);
         services.Configure<AmrModbusTcpSettings>(config.GetSection("Amr"));
 
+        // 배터리 저전력 상태기(사양 §3) — AMRService.LatestStatus 를 폴링해 PowerMode 를 유지한다.
+        // AMRService 뒤에 등록해 의존성 순서를 보장한다.
+        AddHostedSingleton<PowerModeService>(services);
+
         AddHostedSingleton<CobotService>(services);
         services.Configure<FairinoRpcSettings>(config.GetSection("Cobot"));
 

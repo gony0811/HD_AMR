@@ -36,6 +36,7 @@ public sealed class Vda5050AdapterService : BackgroundService
     private readonly Vda5050OrderExecutor _executor;
     private readonly Inspection.IWeldInspectionExecutor _inspection;
     private readonly CobotService _cobot;
+    private readonly PowerModeService _power;
     private readonly ILogger<Vda5050AdapterService> _logger;
     private readonly OperationLogService _opLog;
 
@@ -165,7 +166,7 @@ public sealed class Vda5050AdapterService : BackgroundService
 
     public Vda5050AdapterService(IOptions<Vda5050AdapterSettings> options, AMRService amr,
         Vda5050OrderExecutor executor, Inspection.IWeldInspectionExecutor inspection,
-        CobotService cobot, OperationLogService opLog, ILoggerFactory loggerFactory)
+        CobotService cobot, PowerModeService power, OperationLogService opLog, ILoggerFactory loggerFactory)
     {
         _opLog = opLog;
         _s = options.Value;
@@ -173,6 +174,7 @@ public sealed class Vda5050AdapterService : BackgroundService
         _executor = executor;
         _inspection = inspection;
         _cobot = cobot;
+        _power = power;
         _mapId = _s.MapId;
         _logger = loggerFactory.CreateLogger<Vda5050AdapterService>();
     }
@@ -189,6 +191,7 @@ public sealed class Vda5050AdapterService : BackgroundService
             _s.BrokerHost, _s.BrokerPort, _s.Manufacturer, _s.SerialNumber);
 
         _executor.StateChanged += NudgeState;
+        _power.Changed += NudgeState;
         try
         {
             while (!stoppingToken.IsCancellationRequested)
@@ -210,6 +213,7 @@ public sealed class Vda5050AdapterService : BackgroundService
         finally
         {
             _executor.StateChanged -= NudgeState;
+            _power.Changed -= NudgeState;
         }
     }
 
@@ -557,6 +561,23 @@ public sealed class Vda5050AdapterService : BackgroundService
                 InfoDescription = "AMR Modbus 미연결 — 위치/배터리 상태 없음",
             });
         }
+
+        // 배터리 저전력 알람(사양 §8) — PowerModeService 가 디바운스로 유지하는 동안 매 state 에 상주.
+        // CRITICAL 에서는 두 에러 모두 발행(ACS 가 severity 로 필터링).
+        if (_power.BatteryLow)
+            state.Errors.Add(new VdaError
+            {
+                ErrorType = "batteryLow",
+                ErrorLevel = "WARNING",
+                ErrorDescription = $"SoC {_power.LastObservedSoc:0.0}% ≤ {PowerModeService.LowThresholdPercent}% — 배터리 교체 유도",
+            });
+        if (_power.BatteryCritical)
+            state.Errors.Add(new VdaError
+            {
+                ErrorType = "batteryCritical",
+                ErrorLevel = "FATAL",
+                ErrorDescription = $"SoC {_power.LastObservedSoc:0.0}% ≤ {PowerModeService.CriticalThresholdPercent}% — 안전정지",
+            });
 
         return state;
     }

@@ -26,6 +26,10 @@ builder.Services.Configure<AmrModbusTcpSettings>(
 builder.Services.AddSingleton<AMRService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<AMRService>());
 
+// 배터리 저전력 상태기(사양 docs/HD_AMR_배터리관리_사양.md §3) — AMRService 뒤 등록으로 의존성 순서 보장.
+builder.Services.AddSingleton<PowerModeService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<PowerModeService>());
+
 // 코봇은 RPC 전용. (AMR/IO는 위 Modbus를 계속 사용)
 builder.Services.Configure<FairinoRpcSettings>(
     builder.Configuration.GetSection("Cobot"));

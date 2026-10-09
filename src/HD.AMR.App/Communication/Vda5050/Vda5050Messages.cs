@@ -93,6 +93,14 @@ public sealed class VdaError
     [JsonPropertyName("errorType")] public string ErrorType { get; set; } = "";
     [JsonPropertyName("errorLevel")] public string ErrorLevel { get; set; } = "WARNING";
     [JsonPropertyName("errorDescription")] public string? ErrorDescription { get; set; }
+    [JsonPropertyName("errorReferences")] public List<VdaErrorReference>? ErrorReferences { get; set; }
+}
+
+/// <summary>VDA5050 error 참조(상관 식별자) — orderId/actionId/nodeId 등을 referenceKey/referenceValue 쌍으로.</summary>
+public sealed class VdaErrorReference
+{
+    [JsonPropertyName("referenceKey")] public string ReferenceKey { get; set; } = "";
+    [JsonPropertyName("referenceValue")] public string ReferenceValue { get; set; } = "";
 }
 
 public sealed class VdaInformation
