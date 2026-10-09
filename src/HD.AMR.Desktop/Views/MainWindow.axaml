@@ -99,16 +99,6 @@
                         VerticalAlignment="Center"
                         Margin="0,0,12,0" />
 
-                <TextBlock DockPanel.Dock="Right"
-                           Classes="muted"
-                           Text="{Binding EmoMessage}"
-                           IsVisible="{Binding EmoMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
-                           FontSize="12"
-                           MaxWidth="360"
-                           TextWrapping="Wrap"
-                           VerticalAlignment="Center"
-                           Margin="0,0,12,0" />
-
                 <StackPanel Orientation="Horizontal" Spacing="14" VerticalAlignment="Center">
                     <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
                         <TextBlock Text="AMR" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" />
@@ -155,12 +145,18 @@
                     </StackPanel>
                     <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
                         <TextBlock Text="타워램프" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" />
-                        <Border Classes="badge lamp"
-                                Classes.red="{Binding TowerLamp, Converter={x:Static vm:TowerLampColorConverter.IsRed}}"
-                                Classes.yellow="{Binding TowerLamp, Converter={x:Static vm:TowerLampColorConverter.IsYellow}}"
-                                Classes.green="{Binding TowerLamp, Converter={x:Static vm:TowerLampColorConverter.IsGreen}}">
-                            <TextBlock Text="{Binding TowerLampText}" />
-                        </Border>
+                        <!-- 가로로 눕힌 3색 경광등: 캡 | 초록 | 황색 | 적색 | 캡 — 켜진 칸만 밝게 빛난다 -->
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center" ToolTip.Tip="{Binding TowerLampText}">
+                            <Border Classes="stacklamp-cap" CornerRadius="4,0,0,4" />
+                            <Border Classes="stacklamp">
+                                <StackPanel Orientation="Horizontal" Spacing="2">
+                                    <Border Classes="lens green" Classes.on="{Binding IsLampGreen}" />
+                                    <Border Classes="lens yellow" Classes.on="{Binding IsLampYellow}" />
+                                    <Border Classes="lens red" Classes.on="{Binding IsLampRed}" />
+                                </StackPanel>
+                            </Border>
+                            <Border Classes="stacklamp-cap" Width="4" CornerRadius="0,3,3,0" />
+                        </StackPanel>
                     </StackPanel>
                     <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
                         <TextBlock Text="버저" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" />

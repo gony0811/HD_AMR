@@ -370,8 +370,8 @@ public class IoModuleService : BackgroundService
 
         var auto = inputs[IoPointMap.In.Auto];
         var manual = inputs[IoPointMap.In.Manual];
-        var emergencyStop = inputs.Length > IoPointMap.In.EmergencyStop && inputs[IoPointMap.In.EmergencyStop];
-        var alarm = emergencyStop || _amr.LatestStatus?.ErrorCode is > 0 || _cobot.State?.ErrorCode is > 0;
+        var alarm = IoTowerLampPolicy.IsAlarm(inputs, GetState()?.Outputs, _emoControl.EmoActive,
+            _amr.LatestStatus?.ErrorCode is > 0, _cobot.State?.ErrorCode is > 0);
         var desired = IoTowerLampPolicy.Resolve(auto, manual, alarm);
         if (desired is null)
             return;

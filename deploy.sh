@@ -65,7 +65,10 @@ echo "  ✓ 앱 종료"
 echo "▶ scp 전송 중…"
 # appsettings*.json 은 보내지 않는다 — 원격 현장 설정(장비 Enabled·COM 포트 등)을 로컬 값으로 덮어쓰지 않기 위해.
 # 새 설정 키는 코드 기본값으로 동작하고, 원격 설정을 바꿔야 하면 원격 파일을 직접 고친다.
-mapfile -d '' SEND_FILES < <(find "$PUBLISH_DIR" -mindepth 1 -maxdepth 1 ! -name 'appsettings*.json' -print0)
+# mapfile 은 bash 4+ 전용 — macOS 기본 bash(3.2)에서도 돌도록 read 루프로 모은다.
+SEND_FILES=()
+while IFS= read -r -d '' f; do SEND_FILES+=("$f"); done \
+    < <(find "$PUBLISH_DIR" -mindepth 1 -maxdepth 1 ! -name 'appsettings*.json' -print0)
 scp -r -q "${SEND_FILES[@]}" "$REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR/"
 echo "  ✓ 전송 완료"
 

@@ -63,30 +63,64 @@
         <Setter Property="Opacity" Value="0.45" />
     </Style>
 
-    <!-- 타워램프 뱃지: .badge.lamp(기본 소등) + .red/.yellow/.green(점등 색) -->
-    <Style Selector="Border.badge.lamp.red">
-        <Setter Property="Background" Value="#FDE8E8" />
-        <Setter Property="BorderBrush" Value="#D63434" />
+    <!-- 타워램프 경광등(가로): 하우징 .stacklamp + 렌즈 .lens.green/.yellow/.red, 점등은 .on. 실제 램프 색 고정값(테마 무관). -->
+    <Style Selector="Border.stacklamp">
+        <Setter Property="Background" Value="#3A3F45" />
+        <Setter Property="BorderBrush" Value="#23272B" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Padding" Value="2" />
+        <Setter Property="Height" Value="20" />
     </Style>
-    <Style Selector="Border.badge.lamp.red > TextBlock">
-        <Setter Property="Foreground" Value="#9B1C1C" />
-        <Setter Property="FontWeight" Value="SemiBold" />
+    <Style Selector="Border.stacklamp-cap">
+        <Setter Property="Width" Value="7" />
+        <Setter Property="Height" Value="16" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="Background">
+            <LinearGradientBrush StartPoint="0%,0%" EndPoint="0%,100%">
+                <GradientStop Offset="0" Color="#9AA1A8" />
+                <GradientStop Offset="0.5" Color="#5E656C" />
+                <GradientStop Offset="1" Color="#3A3F45" />
+            </LinearGradientBrush>
+        </Setter>
     </Style>
-    <Style Selector="Border.badge.lamp.yellow">
-        <Setter Property="Background" Value="#FEF3C7" />
-        <Setter Property="BorderBrush" Value="#D97706" />
+    <Style Selector="Border.lens">
+        <Setter Property="Width" Value="22" />
+        <Setter Property="CornerRadius" Value="2" />
     </Style>
-    <Style Selector="Border.badge.lamp.yellow > TextBlock">
-        <Setter Property="Foreground" Value="#92400E" />
-        <Setter Property="FontWeight" Value="SemiBold" />
+    <!-- 소등: 같은 색의 어두운 톤 — 꺼져 있어도 칸 색이 구분된다 -->
+    <Style Selector="Border.lens.green"><Setter Property="Background" Value="#1F4D2B" /></Style>
+    <Style Selector="Border.lens.yellow"><Setter Property="Background" Value="#5C4A12" /></Style>
+    <Style Selector="Border.lens.red"><Setter Property="Background" Value="#5A1E1E" /></Style>
+    <!-- 점등: 밝은 렌즈 그라디언트 + 같은 색 글로우 -->
+    <Style Selector="Border.lens.green.on">
+        <Setter Property="Background">
+            <LinearGradientBrush StartPoint="0%,0%" EndPoint="0%,100%">
+                <GradientStop Offset="0" Color="#B9F6CA" />
+                <GradientStop Offset="0.35" Color="#34D058" />
+                <GradientStop Offset="1" Color="#16A34A" />
+            </LinearGradientBrush>
+        </Setter>
+        <Setter Property="BoxShadow" Value="0 0 8 2 #8034D058" />
     </Style>
-    <Style Selector="Border.badge.lamp.green">
-        <Setter Property="Background" Value="{DynamicResource AppGoodSoftBrush}" />
-        <Setter Property="BorderBrush" Value="{DynamicResource AppGoodBrush}" />
+    <Style Selector="Border.lens.yellow.on">
+        <Setter Property="Background">
+            <LinearGradientBrush StartPoint="0%,0%" EndPoint="0%,100%">
+                <GradientStop Offset="0" Color="#FFF7C2" />
+                <GradientStop Offset="0.35" Color="#FDE047" />
+                <GradientStop Offset="1" Color="#EAB308" />
+            </LinearGradientBrush>
+        </Setter>
+        <Setter Property="BoxShadow" Value="0 0 8 2 #80FDE047" />
     </Style>
-    <Style Selector="Border.badge.lamp.green > TextBlock">
-        <Setter Property="Foreground" Value="{DynamicResource AppGoodBrush}" />
-        <Setter Property="FontWeight" Value="SemiBold" />
+    <Style Selector="Border.lens.red.on">
+        <Setter Property="Background">
+            <LinearGradientBrush StartPoint="0%,0%" EndPoint="0%,100%">
+                <GradientStop Offset="0" Color="#FECACA" />
+                <GradientStop Offset="0.35" Color="#F87171" />
+                <GradientStop Offset="1" Color="#DC2626" />
+            </LinearGradientBrush>
+        </Setter>
+        <Setter Property="BoxShadow" Value="0 0 8 2 #80F87171" />
     </Style>
 
     <!-- 비상정지·위험 동작 버튼(ACS Button.danger 와 동일) -->

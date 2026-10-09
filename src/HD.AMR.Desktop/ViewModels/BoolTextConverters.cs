@@ -2,20 +2,9 @@ using Avalonia.Data.Converters;
 
 namespace HD.AMR.Desktop.ViewModels;
 
-/// <summary>상단 상태바 "타워램프" 뱃지 색상 상태 — 정책상 세 색 중 하나만 ON 이지만 되읽기에
-/// 일시 전부 OFF 가 보일 수 있어 None 포함.</summary>
+/// <summary>상단 상태바 타워램프 대표 색(툴팁 문구용) — 정책상 세 색 중 하나만 ON 이지만 되읽기에
+/// 일시 전부 OFF 가 보일 수 있어 None 포함. 경광등 그림은 색별 bool 로 따로 그린다.</summary>
 public enum TowerLampColor { None, Red, Yellow, Green }
-
-/// <summary><see cref="TowerLampColor"/> → bool 변환 — XAML Classes 조건 바인딩용.</summary>
-public static class TowerLampColorConverter
-{
-    public static readonly IValueConverter IsRed =
-        new FuncValueConverter<TowerLampColor, bool>(c => c == TowerLampColor.Red);
-    public static readonly IValueConverter IsYellow =
-        new FuncValueConverter<TowerLampColor, bool>(c => c == TowerLampColor.Yellow);
-    public static readonly IValueConverter IsGreen =
-        new FuncValueConverter<TowerLampColor, bool>(c => c == TowerLampColor.Green);
-}
 
 /// <summary>불리언 → 표시 텍스트 컨버터 모음(XAML 에서 x:Static 으로 사용).</summary>
 public static class BoolTextConverters

@@ -61,9 +61,6 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [NotifyCanExecuteChangedFor(nameof(ToggleEmoCommand))]
     private bool _isEmoActive;
 
-    [ObservableProperty]
-    private string? _emoMessage;
-
     // 조작반 셀렉터 래치 상태 — 둘 다 false(선택 안 됨)일 수 있어 각각 보관.
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(ModeText))]
@@ -83,6 +80,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(TowerLampText))]
     private TowerLampColor _towerLamp;
 
+    // 경광등 그림 — 세 색을 출력 비트별로 독립 표시(우선순위로 가리지 않는다).
+    [ObservableProperty] private bool _isLampGreen;
+    [ObservableProperty] private bool _isLampYellow;
+    [ObservableProperty] private bool _isLampRed;
+
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(TurnOffBuzzerCommand))]
     private bool _isBuzzerOn;
@@ -93,12 +95,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public string EmoButtonText => IsEmoActive ? "■ 비상정지 해제" : "■ 비상정지";
     public string ModeText => IsAutoMode ? "자동" : IsManualMode ? "수동" : "—";
     public string RunStatusText => IsRunning ? "시작" : "정지";
-    public string TowerLampText => TowerLamp switch
+    public string TowerLampText => !IsIoConnected ? "타워램프: IO 미연결 — 상태 미확인" : TowerLamp switch
     {
-        TowerLampColor.Red => "적색",
-        TowerLampColor.Yellow => "황색",
-        TowerLampColor.Green => "녹색",
-        _ => "소등",
+        TowerLampColor.Red => "타워램프: 적색 점등",
+        TowerLampColor.Yellow => "타워램프: 황색 점등",
+        TowerLampColor.Green => "타워램프: 녹색 점등",
+        _ => "타워램프: 소등",
     };
 
     private readonly OperationLogService _opLog;
@@ -208,6 +210,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
             state.Outputs.Length > IoPointMap.Out.TowerLampYellow && state.Outputs[IoPointMap.Out.TowerLampYellow] ? TowerLampColor.Yellow :
             state.Outputs.Length > IoPointMap.Out.TowerLampGreen && state.Outputs[IoPointMap.Out.TowerLampGreen] ? TowerLampColor.Green :
             TowerLampColor.None;
+        IsLampGreen = state is not null && state.Outputs.Length > IoPointMap.Out.TowerLampGreen && state.Outputs[IoPointMap.Out.TowerLampGreen];
+        IsLampYellow = state is not null && state.Outputs.Length > IoPointMap.Out.TowerLampYellow && state.Outputs[IoPointMap.Out.TowerLampYellow];
+        IsLampRed = state is not null && state.Outputs.Length > IoPointMap.Out.TowerLampRed && state.Outputs[IoPointMap.Out.TowerLampRed];
+        OnPropertyChanged(nameof(TowerLampText));
 
         IsBuzzerOn = state is not null && state.Outputs.Length > IoPointMap.Out.Buzzer && state.Outputs[IoPointMap.Out.Buzzer];
     }
@@ -245,7 +251,6 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private async Task ToggleEmoAsync()
     {
         var target = !IsEmoActive;
-        EmoMessage = null;
 
         // 비상정지 활성화 시: 진행 중 임무·검사 시퀀스·코봇/주행을 즉시 정지·취소한다(해제해도 재개 안 함).
         // 스레드풀에서 바로 시작해 IO 출력 쓰기와 병렬로 진행한다 — 서로의 지연·실패에 묶이지 않는다.
@@ -267,7 +272,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         {
             outNote = $"EMO 출력 실패: {ex.Message}";
         }
-        EmoMessage = target ? $"{outNote} · 소프트웨어 정지 진행 중…" : outNote;
+        // 처리 결과는 상태바가 아니라 운영 로그(출처 UI·분류 비상정지)에 남긴다 — 상태바 텍스트는 버튼·램프에 가려 보이지 않았다.
         RefreshStatus();
 
         if (!target)
@@ -278,11 +283,13 @@ public sealed partial class MainWindowViewModel : ObservableObject
         try
         {
             await softwareStop;
-            EmoMessage = $"{outNote} · 진행 임무·검사·코봇/주행 정지 및 취소됨(해제해도 재개 안 함)";
+            _opLog.Log(OperationLogService.SourceUi, OpCategory.EStop, "비상정지 처리 완료", true,
+                $"{outNote} · 진행 임무·검사·코봇/주행 정지 및 취소됨(해제해도 재개 안 함)");
         }
         catch (Exception ex)
         {
-            EmoMessage = $"{outNote} · 비상정지 처리 일부 실패: {ex.Message}";
+            _opLog.Log(OperationLogService.SourceUi, OpCategory.EStop, "비상정지 처리 완료", false,
+                $"{outNote} · 비상정지 처리 일부 실패: {ex.Message}");
         }
     }
 
