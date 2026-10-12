@@ -76,6 +76,12 @@ public class ParameterService
             ("arrival.deviationTheta", "0.1", "도착 판정 각도 허용 오차(rad)"),
             ("inspection.useComputedNormalOrientation", "false",
                 "② 검사위치 이동 자세 = 계산된 면 법선(true) / 티칭 포즈(false). 현장 검증 후 켠다. 측위·장착보정·wall_code 가 없으면 자동으로 티칭 폴백."),
+            (SeamStartTagSettings.DictionaryKey, "DictAprilTag_36h11",
+                "moveToSeamStart 도달 후 중심 편차 측정 태그 사전(DictAprilTag_36h11 등). ArUco 장착 보정 설정과 별개."),
+            (SeamStartTagSettings.MarkerIdKey, "",
+                "중심 편차 측정 태그 기대 ID. 비우면 화면에서 가장 큰 태그."),
+            (SeamStartTagSettings.SizeMmKey, "0",
+                "중심 편차 측정 태그 한 변(mm) — 검은 테두리 바깥 정사각형 실측(흰 여백 제외). 0 이면 측정 안 함."),
         ];
 
         var existing = await _db.Parameters.Select(p => p.Name).ToListAsync();

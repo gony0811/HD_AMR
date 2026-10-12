@@ -1,14 +1,16 @@
 using HD.AMR.App.Communication.Vision;
 using Microsoft.Extensions.Logging;
+using OpenCvSharp.Aruco;
 
 namespace HD.AMR.App.Service;
 
 /// <summary>
-/// 현재 카메라 화면에서 ArUco 마커 중심이 <b>화면 중심(광축)에서 몇 mm 떨어져 있는지</b> 측정한다 —
-/// ACS <c>moveToSeamStart</c> 도달 후, 면에 붙인 마커로 seam 시작점 접근의 실제 위치 오차를 기록하는 데 쓴다.
+/// 현재 카메라 화면에서 태그(기본 AprilTag 36h11) 중심이 <b>화면 중심(광축)에서 몇 mm 떨어져 있는지</b> 측정한다 —
+/// ACS <c>moveToSeamStart</c> 도달 후, 면에 붙인 태그로 seam 시작점 접근의 실제 위치 오차를 기록하는 데 쓴다.
 ///
-/// 마커 설정(사전·기대 ID·한 변 크기)은 ArUco 장착 보정 화면이 저장한 값(<see cref="CalibrationService.GetArucoSettingsAsync"/>)을
-/// 쓰고, 기대 ID 가 없으면 가장 큰 마커를 고른다(<see cref="ArucoHandEyeService.CaptureAsync"/> 와 같은 규칙).
+/// 태그 설정(사전·기대 ID·한 변 크기)은 이 측정 전용 파라미터(<see cref="SeamStartTagSettings"/>)를 쓴다 — ArUco 장착 보정·
+/// 핸드아이 화면의 ArUco 설정과는 별개다. 기대 ID 가 없으면 가장 큰 태그를 고른다(<see cref="ArucoHandEyeService.CaptureAsync"/> 와 같은 규칙).
+/// AprilTag 도 OpenCV aruco 모듈로 검출하므로 코너 순서(TL,TR,BR,BL)·PnP 경로는 ArUco 와 같다.
 /// 편차는 컬러 광학 프레임의 PnP 위치(tvec) — X 오른쪽 +, Y 아래 +, Z 마커까지 거리 — 이고, 여러 프레임을 평균한다.
 /// 실패도 예외 없이 <see cref="ArucoCenterOffset.Found"/>=false 와 사유로 돌려준다.
 /// </summary>
@@ -21,29 +23,30 @@ public sealed class ArucoCenterOffsetMeter
     private const double MaxReprojErrPx = 3.0;
 
     private readonly CameraService _cam;
-    private readonly CalibrationService _calib;
+    private readonly ParameterService _param;
     private readonly ILogger<ArucoCenterOffsetMeter> _logger;
 
-    public ArucoCenterOffsetMeter(CameraService cam, CalibrationService calib, ILogger<ArucoCenterOffsetMeter> logger)
+    public ArucoCenterOffsetMeter(CameraService cam, ParameterService param, ILogger<ArucoCenterOffsetMeter> logger)
     {
         _cam = cam;
-        _calib = calib;
+        _param = param;
         _logger = logger;
     }
 
     public async Task<ArucoCenterOffset> MeasureAsync(CancellationToken ct)
     {
         if (!OperatingSystem.IsWindows())
-            return ArucoCenterOffset.Fail("ArUco 검출은 Windows(OpenCV 네이티브)에서만 동작");
+            return ArucoCenterOffset.Fail("태그 검출은 Windows(OpenCV 네이티브)에서만 동작");
         if (!_cam.IsStreaming)
             return ArucoCenterOffset.Fail("카메라 스트리밍 중 아님");
         var intr = _cam.GetD2CParams();
         if (intr is not { IsValid: true })
             return ArucoCenterOffset.Fail("카메라 내부 파라미터 없음");
 
-        var settings = await _calib.GetArucoSettingsAsync();
+        var settings = await SeamStartTagSettings.LoadAsync(_param);
         if (settings.SizeMm <= 0)
-            return ArucoCenterOffset.Fail("ArUco 한 변 크기 미설정(ArUco 장착 보정 화면)");
+            return ArucoCenterOffset.Fail(
+                $"태그 한 변 크기 미설정 — 파라미터 '{SeamStartTagSettings.SizeMmKey}' 에 검은 테두리 바깥 한 변 실측(mm) 입력");
 
         await Task.Delay(SettleMs, ct);   // 코봇 정지 직후 진동·자동노출 안정
 
@@ -90,28 +93,30 @@ public sealed class ArucoCenterOffsetMeter
         {
             var why = tried == 0 ? "유효 카메라 프레임 없음(프레임 지연)"
                 : rejected > 0 ? $"재투영 오차 {MaxReprojErrPx}px 초과로 {rejected}프레임 버림"
-                : markerId is null ? "마커 미검출"
-                : $"마커 ID {markerId} 미검출";
-            return ArucoCenterOffset.Fail($"{why} (보인 ID: {seenText}, 사전 {settings.Dictionary})");
+                : markerId is null ? "태그 미검출"
+                : $"태그 ID {markerId} 미검출";
+            return ArucoCenterOffset.Fail($"{why} (보인 ID: {seenText}, 사전 {settings.Dictionary})", settings.Label);
         }
 
         var n = poses.Count;
-        var result = new ArucoCenterOffset(true, markerId,
+        var result = new ArucoCenterOffset(true, settings.Label, markerId,
             poses.Average(p => p.PoseCQ[0]), poses.Average(p => p.PoseCQ[1]), poses.Average(p => p.PoseCQ[2]),
             du / n, dv / n, poses.Average(p => p.ReprojectionErrorPx), n, Frames, seenText, null);
-        _logger.LogInformation("ArUco 중심 편차: {Summary}", result.Describe());
+        _logger.LogInformation("태그 중심 편차: {Summary}", result.Describe());
         return result;
     }
 }
 
-/// <summary>ArUco 마커 중심의 화면 중심(광축) 대비 편차 — 컬러 광학 프레임 mm(X 오른쪽+, Y 아래+), Z=거리.</summary>
+/// <summary>태그 중심의 화면 중심(광축) 대비 편차 — 컬러 광학 프레임 mm(X 오른쪽+, Y 아래+), Z=거리.</summary>
+/// <param name="Kind">태그 종류 표기(예: "AprilTag") — 로그·resultDescription 접두어.</param>
 public sealed record ArucoCenterOffset(
-    bool Found, int? MarkerId,
+    bool Found, string Kind, int? MarkerId,
     double DxMm, double DyMm, double ZMm,
     double DuPx, double DvPx, double ReprojPx,
     int FramesUsed, int FramesTried, string SeenIds, string? Note)
 {
-    public static ArucoCenterOffset Fail(string note) => new(false, null, 0, 0, 0, 0, 0, 0, 0, 0, "", note);
+    public static ArucoCenterOffset Fail(string note, string kind = "AprilTag")
+        => new(false, kind, null, 0, 0, 0, 0, 0, 0, 0, 0, "", note);
 
     /// <summary>운영 로그용 상세 문자열.</summary>
     public string Describe() => Found
@@ -121,6 +126,41 @@ public sealed record ArucoCenterOffset(
 
     /// <summary>ACS resultDescription 용 요약.</summary>
     public string Summary() => Found
-        ? $"ArUco#{MarkerId} 중심편차 X{DxMm:+0.0;-0.0}/Y{DyMm:+0.0;-0.0}mm @{ZMm:0}mm"
-        : $"ArUco 미검출({Note})";
+        ? $"{Kind}#{MarkerId} 중심편차 X{DxMm:+0.0;-0.0}/Y{DyMm:+0.0;-0.0}mm @{ZMm:0}mm"
+        : $"{Kind} 미검출({Note})";
+}
+
+/// <summary>
+/// <c>moveToSeamStart</c> 도달 후 중심 편차 측정용 태그 설정 — 범용 파라미터(DB)로 보관해 파라미터 화면에서 바꾼다.
+/// 기본 AprilTag 36h11. ArUco 장착 보정·핸드아이의 <see cref="ArucoSettings"/> 와 분리돼 있다.
+/// </summary>
+public sealed record SeamStartTagSettings(PredefinedDictionaryName Dictionary, int? MarkerId, double SizeMm)
+{
+    public const string DictionaryKey = "seamStartTag.dictionary";
+    public const string MarkerIdKey = "seamStartTag.markerId";
+    public const string SizeMmKey = "seamStartTag.sizeMm";
+
+    public const PredefinedDictionaryName DefaultDictionary = PredefinedDictionaryName.DictAprilTag_36h11;
+
+    /// <summary>로그 표기 — AprilTag 사전이면 "AprilTag", 아니면 "ArUco".</summary>
+    public string Label => Dictionary.ToString().StartsWith("DictAprilTag", StringComparison.Ordinal) ? "AprilTag" : "ArUco";
+
+    public static async Task<SeamStartTagSettings> LoadAsync(ParameterService param)
+    {
+        var dict = ParseDictionary(await param.GetAsync(DictionaryKey));
+        var id = await param.GetIntAsync(MarkerIdKey);
+        var size = await param.GetDoubleAsync(SizeMmKey) ?? 0;
+        return new SeamStartTagSettings(dict, id is >= 0 ? id : null, size);
+    }
+
+    /// <summary>사전 이름 해석 — "DictAprilTag_36h11" 또는 줄임 "36h11"/"AprilTag_36h11". 비었거나 모르는 값이면 36h11.</summary>
+    public static PredefinedDictionaryName ParseDictionary(string? raw)
+    {
+        var v = raw?.Trim();
+        if (string.IsNullOrEmpty(v)) return DefaultDictionary;
+        foreach (var candidate in new[] { v, "Dict" + v, "DictAprilTag_" + v })
+            if (Enum.TryParse<PredefinedDictionaryName>(candidate, ignoreCase: true, out var d) && Enum.IsDefined(d))
+                return d;
+        return DefaultDictionary;
+    }
 }

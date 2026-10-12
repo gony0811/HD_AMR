@@ -203,24 +203,24 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException) { /* 관절 읽기 실패 — 수치만 생략 */ }
 
-                // 도달 후 면의 ArUco 로 화면 중심(광축) 대비 편차를 기록 — reach 결과와 무관(미검출이어도 FINISHED).
+                // 도달 후 면의 태그(기본 AprilTag 36h11)로 화면 중심(광축) 대비 편차를 기록 — reach 결과와 무관(미검출이어도 FINISHED).
                 string aruco;
                 try
                 {
                     var meter = scope.ServiceProvider.GetRequiredService<ArucoCenterOffsetMeter>();
                     var off = await meter.MeasureAsync(ct);
                     if (!off.Found)
-                        _logger.LogWarning("moveToSeamStart ArUco 중심 편차 측정 실패: {Note} (jobRef={JobRef})", off.Note, req.JobRef);
-                    _opLog.Log(OperationLogService.SourceAcs, OpCategory.Action, "ArUco 중심 편차", off.Found,
+                        _logger.LogWarning("moveToSeamStart 태그 중심 편차 측정 실패: {Note} (jobRef={JobRef})", off.Note, req.JobRef);
+                    _opLog.Log(OperationLogService.SourceAcs, OpCategory.Action, $"{off.Kind} 중심 편차", off.Found,
                         $"jobRef={req.JobRef}, wall={req.DrawingPos.WallCode} — {off.Describe()}", orderId);
                     aruco = off.Summary();
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    _logger.LogWarning(ex, "moveToSeamStart ArUco 측정 오류 — reach 결과는 그대로 보고");
-                    _opLog.Log(OperationLogService.SourceAcs, OpCategory.Action, "ArUco 중심 편차", false,
+                    _logger.LogWarning(ex, "moveToSeamStart 태그 측정 오류 — reach 결과는 그대로 보고");
+                    _opLog.Log(OperationLogService.SourceAcs, OpCategory.Action, "태그 중심 편차", false,
                         $"측정 오류: {ex.Message}", orderId);
-                    aruco = $"ArUco 측정 오류({ex.Message})";
+                    aruco = $"태그 측정 오류({ex.Message})";
                 }
                 return InspectionActionResult.Ok($"reached — {stepMsg}{j5} · {aruco}");
         }

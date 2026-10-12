@@ -315,15 +315,21 @@ J5 부호가 반대라 경로가 거부되면 **홈/대기 자세로 먼저 복�
 
 `errors[].errorDescription` 은 `"{actionId}: 사유"` 형식(§8.7 예시)이다.
 
-**도달 후 ArUco 중심 편차 측정** — 도달(FINISHED 조건 충족) 직후, 면에 붙인 ArUco 마커가 카메라 **화면 중심(광축)에서
+**도달 후 태그(AprilTag 36h11) 중심 편차 측정** — 도달(FINISHED 조건 충족) 직후, 면에 붙인 AprilTag 가 카메라 **화면 중심(광축)에서
 얼마나 떨어져 있는지** 측정해 기록한다(`ArucoCenterOffsetMeter`). seam 시작점 접근의 실제 위치 오차를 보는 용도다.
+(2026-10-12: ArUco → AprilTag 36h11 전환. 검출은 같은 OpenCV aruco 모듈의 AprilTag 사전을 쓴다.)
 
-- 마커 설정(사전·기대 ID·한 변 크기)은 **ArUco 장착 보정 화면**에 저장된 값을 쓴다. 기대 ID 가 비어 있으면 화면에서 가장 큰 마커.
+- 태그 설정은 이 측정 **전용 파라미터**(파라미터 화면)를 쓴다 — ArUco 장착 보정·핸드아이 화면의 ArUco 설정과 별개.
+  | 파라미터 | 기본값 | 의미 |
+  |-|-|-|
+  | `seamStartTag.dictionary` | `DictAprilTag_36h11` | 태그 사전(`36h11` 같은 줄임도 허용, 모르는 값이면 36h11) |
+  | `seamStartTag.markerId` | (빈 값) | 기대 태그 ID. 비우면 화면에서 가장 큰 태그 |
+  | `seamStartTag.sizeMm` | `0` | 태그 한 변 mm — **검은 테두리 바깥 정사각형 실측**(흰 여백 제외). 0 이면 측정 안 함(미설정 사유로 기록) |
 - 0.5초 정착 후 5프레임 PnP(재투영 3px 이하만) 평균. 편차는 컬러 광학 프레임 기준
-  **X 오른쪽 +, Y 아래 +**(mm, 마커 깊이에서의 실거리), Z 는 마커까지 거리, 픽셀 편차(주점 대비)도 함께 남긴다.
-- 운영 로그: 출처 ACS · 분류 액션 · 대상 `ArUco 중심 편차` 행. ACS `resultDescription` 끝에도
-  `· ArUco#n 중심편차 X+12.3/Y−4.5mm @401mm` 요약이 붙는다.
-- **미검출이어도 액션은 FINISHED**(reach 시험 결과와 분리) — `· ArUco 미검출(사유, 보인 ID …)` 으로 남는다.
+  **X 오른쪽 +, Y 아래 +**(mm, 태그 깊이에서의 실거리), Z 는 태그까지 거리, 픽셀 편차(주점 대비)도 함께 남긴다.
+- 운영 로그: 출처 ACS · 분류 액션 · 대상 `AprilTag 중심 편차` 행. ACS `resultDescription` 끝에도
+  `· AprilTag#n 중심편차 X+12.3/Y−4.5mm @401mm` 요약이 붙는다.
+- **미검출이어도 액션은 FINISHED**(reach 시험 결과와 분리) — `· AprilTag 미검출(사유, 보인 ID …)` 으로 남는다.
 
 **N19 회신안 (HD_AMR)**
 
