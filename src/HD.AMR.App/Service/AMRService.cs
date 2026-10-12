@@ -135,6 +135,7 @@ public class AMRService : BackgroundService
 
         return new RobotStatus
         {
+            ReadAtUtc = DateTime.UtcNow,
             PowerState = (PowerState)r[AmrRegisterMap.Input.PowerStatus],
             RobotState = (RobotState)r[AmrRegisterMap.Input.RobotStatus],
             ErrorCode = r[AmrRegisterMap.Input.RobotError],

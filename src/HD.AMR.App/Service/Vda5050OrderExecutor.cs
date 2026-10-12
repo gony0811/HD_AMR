@@ -2,6 +2,7 @@ using System.Text.Json;
 using HD.AMR.App.Communication;
 using HD.AMR.App.Communication.Vda5050;
 using HD.AMR.App.Enums;
+using HD.AMR.App.Models;
 using HD.AMR.App.Service.Sequence.Steps;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -302,10 +303,11 @@ public sealed class Vda5050OrderExecutor
             // 0) 이미 목표 위치면 이동 생략 — 측위 신뢰도가 낮을 때 제자리 go 가 W13(경로탐색 실패)로
             //    전체 임무를 죽이는 것을 방지. 축별 ±devXy + theta 판정(사양과 별개의 현장 합의).
             //    주행이 없으므로 정렬(anchor) 캐시도 유지한다(§8.1 — 정차점 불변).
-            if (IsAlreadyAtTarget(pos, devXy, devTheta))
+            //    단 완전 정차까지 확인한다 — 미끄러지는 중이면 코봇이 기준 없는 자세로 뻗는다.
+            if (IsAlreadyAtTarget(pos, devXy, devTheta) && await IsSettledInPlaceAsync(pos, devXy, devTheta, ct))
             {
                 OpLog(OpCategory.Drive, "이동 생략", null,
-                    $"이미 목표 위치 — 현재 {DescribePose()} (허용 dxy≤{devXy:F3}m, dθ≤{devTheta:F3}rad)", orderId);
+                    $"이미 목표 위치·정차 확인 — 현재 {DescribePose()} (허용 dxy≤{devXy:F3}m, dθ≤{devTheta:F3}rad)", orderId);
             }
             else
             {
@@ -631,13 +633,58 @@ public sealed class Vda5050OrderExecutor
         var st = _amr.LatestStatus;
         if (st is null) return false;
 
-        var dx = st.Pose.X - pos.X;
-        var dy = st.Pose.Y - pos.Y;
-        var dTheta = pos.Theta is double t ? Math.Abs(NormalizeRad(st.Pose.Angle - t)) : 0.0;
-        if (Math.Abs(dx) > devXy || Math.Abs(dy) > devXy || dTheta > devTheta) return false;
+        if (!IsWithinAxisTolerance(st, pos, devXy, devTheta, out var dx, out var dy, out var dTheta)) return false;
 
         _logger.LogInformation("VDA5050 이동 생략: 이미 목표 위치 (dx={Dx:F3}m, dy={Dy:F3}m, dθ={DTheta:F3}rad)", dx, dy, dTheta);
         return true;
+    }
+
+    private static bool IsWithinAxisTolerance(RobotStatus st, NodePosition pos, double devXy, double devTheta,
+        out double dx, out double dy, out double dTheta)
+    {
+        dx = st.Pose.X - pos.X;
+        dy = st.Pose.Y - pos.Y;
+        dTheta = pos.Theta is double t ? Math.Abs(NormalizeRad(st.Pose.Angle - t)) : 0.0;
+        return Math.Abs(dx) <= devXy && Math.Abs(dy) <= devXy && dTheta <= devTheta;
+    }
+
+    private ArrivalSettleDetector NewSettleDetector()
+        => new(TimeSpan.FromMilliseconds(_restSettings.SettleWindowMs),
+            _restSettings.SettleXyEpsilonM, _restSettings.SettleThetaEpsilonRad);
+
+    private string DescribeSettleCriteria()
+        => $"정차 기준 {_restSettings.SettleWindowMs}ms 동안 Δxy≤{_restSettings.SettleXyEpsilonM * 1000:0.#}mm, " +
+           $"Δθ≤{_restSettings.SettleThetaEpsilonRad * 180 / Math.PI:0.##}°";
+
+    /// <summary>이동 생략 전 완전 정차 확인 — 목표 범위 안에서 pose 가 안정되면 true.
+    /// 범위를 벗어나거나 정차 대기 시간을 넘기면 false → 호출부가 정상 주행 경로로 간다.</summary>
+    private async Task<bool> IsSettledInPlaceAsync(NodePosition pos, double devXy, double devTheta, CancellationToken ct)
+    {
+        var settle = NewSettleDetector();
+        var started = DateTime.UtcNow;
+        var timeout = TimeSpan.FromSeconds(_restSettings.SettleTimeoutSec);
+        while (true)
+        {
+            await _pauseGate.WaitWhilePausedAsync(ct);
+            if (_amr.LatestStatus is not { } st) return false;
+
+            var within = IsWithinAxisTolerance(st, pos, devXy, devTheta, out _, out _, out _);
+            switch (settle.Feed(st.ReadAtUtc, st.Pose.X, st.Pose.Y, st.Pose.Angle, within))
+            {
+                case SettleResult.Settled:
+                    return true;
+                case SettleResult.OutOfTolerance:
+                    _logger.LogInformation("VDA5050 이동 생략 취소: 정차 확인 중 목표 범위 이탈 {Pose} — 주행 수행", DescribePose());
+                    return false;
+            }
+            if (DateTime.UtcNow - started > timeout)
+            {
+                _logger.LogWarning("VDA5050 이동 생략 취소: {Timeout}s 내 정차 미확인 {Pose} — 주행 수행",
+                    _restSettings.SettleTimeoutSec, DescribePose());
+                return false;
+            }
+            await Task.Delay(_restSettings.StatusPollMs, ct);
+        }
     }
 
     private async Task<(bool Ok, string? Reason)> WaitForArrivalAsync(
@@ -652,9 +699,60 @@ public sealed class Vda5050OrderExecutor
         double lastDxy = double.NaN, lastDTheta = double.NaN;
         string lastPoseDesc = "미확보";
 
+        // 허용 오차 진입 ≠ 정차 — 감속 중 진입하면 코봇이 정차 전 출발한다(현장: 진입 후 126 mm 더 진행).
+        // 허용 오차 안에서 pose 가 안정될 때까지 기다린 뒤에만 도착으로 본다.
+        var settle = NewSettleDetector();
+        var settleTimeout = TimeSpan.FromSeconds(_restSettings.SettleTimeoutSec);
+        var entryLogged = false;
+
         _logger.LogInformation("VDA5050 도착 대기 시작: 목표=({X:F3}, {Y:F3}, θ={T:F3}), " +
-            "허용 dxy≤{DevXy:F3}m, dθ≤{DevTheta:F3}rad, 타임아웃={Timeout}s",
-            pos.X, pos.Y, pos.Theta ?? 0.0, devXy, devTheta, _restSettings.DriveTimeoutSec);
+            "허용 dxy≤{DevXy:F3}m, dθ≤{DevTheta:F3}rad, 타임아웃={Timeout}s, {Settle}",
+            pos.X, pos.Y, pos.Theta ?? 0.0, devXy, devTheta, _restSettings.DriveTimeoutSec, DescribeSettleCriteria());
+
+        // 샘플 1건 반영 — 정차 확인이면 성공, 정차 대기 초과면 실패, 그 외 null(계속 대기).
+        (bool Ok, string? Reason)? OnSample(SettleResult r, double dxy, double dTheta, string? workStatus)
+        {
+            if (r == SettleResult.OutOfTolerance)
+            {
+                if (entryLogged)
+                {
+                    entryLogged = false;
+                    _logger.LogInformation("VDA5050 허용 오차 이탈(정차 대기 중): {Pose}, 잔여 dxy={Dxy:F3}m", lastPoseDesc, dxy);
+                    OpLog(OpCategory.Drive, "허용 오차 이탈", null, $"{lastPoseDesc}, 잔여 dxy={dxy:F3}m — 정차 대기 재시작");
+                }
+                return null;
+            }
+
+            if (!entryLogged)
+            {
+                entryLogged = true;
+                _logger.LogInformation("VDA5050 허용 오차 진입 — 정차 대기: {Pose}, 잔여 dxy={Dxy:F3}m, dθ={DTheta:F3}rad",
+                    lastPoseDesc, dxy, dTheta);
+                OpLog(OpCategory.Drive, "허용 오차 진입 — 정차 대기", null,
+                    $"{lastPoseDesc}, 잔여 dxy={dxy:F3}m, dθ={dTheta:F3}rad, WorkStatus={workStatus ?? "-"}, " +
+                    $"{DescribeSettleCriteria()}");
+            }
+
+            var entryAt = settle.FirstInToleranceUtc ?? DateTime.UtcNow;
+            var drift = settle.DriftSinceEntry() ?? (0, 0);
+            var entryPose = settle.FirstInTolerancePose is { } f ? $"({f.X:F3}, {f.Y:F3}, θ={f.Theta:F3})" : "-";
+            var driftDesc = $"진입 후 이동 Δxy={drift.Dxy * 1000:0}mm Δθ={drift.DTheta * 180 / Math.PI:0.0}°";
+
+            if (r == SettleResult.Settled)
+                return (true, $"허용 오차 진입 {entryAt.ToLocalTime():HH:mm:ss.f} pose={entryPose} → 정차 확인 {lastPoseDesc}, " +
+                              $"{driftDesc}, 정차 대기 {(DateTime.UtcNow - entryAt).TotalSeconds:0.0}s, " +
+                              $"잔여 dxy={dxy:F3}m, dθ={dTheta:F3}rad, WorkStatus={workStatus ?? "-"}, " +
+                              $"소요 {(DateTime.UtcNow - started).TotalSeconds:0.0}s");
+
+            if (DateTime.UtcNow - entryAt > settleTimeout)
+            {
+                _logger.LogWarning("VDA5050 정차 미확인: 허용 오차 진입 후 {Timeout}s 내 pose 불안정 — {Pose}, {Drift}",
+                    _restSettings.SettleTimeoutSec, lastPoseDesc, driftDesc);
+                return (false, $"정차 미확인 — 허용 오차 진입 후 {_restSettings.SettleTimeoutSec}s 동안 pose 불안정 " +
+                               $"(진입 pose={entryPose}, 최종 {lastPoseDesc}, {driftDesc}, WorkStatus={workStatus ?? "-"}) — 코봇 미출발");
+            }
+            return null;
+        }
 
         while (!ct.IsCancellationRequested)
         {
@@ -674,6 +772,9 @@ public sealed class Vda5050OrderExecutor
                     return (false, $"재개 이동 명령 실패 (code={go.Code}): {go.Message}");
                 lock (_gate) _driving = true;
                 StateChanged?.Invoke();
+                // 재주행 — 정차 판정을 처음부터 다시 한다.
+                settle.Reset();
+                entryLogged = false;
             }
 
             if (DateTime.UtcNow > deadline)
@@ -698,9 +799,9 @@ public sealed class Vda5050OrderExecutor
                 lastDTheta = dTheta;
                 lastPoseDesc = $"pose=({st.Pose.X:F3}, {st.Pose.Y:F3}, θ={st.Pose.Angle:F3})";
 
-                if (dxy <= devXy && dTheta <= devTheta)
-                    return (true, $"{lastPoseDesc}, 잔여 dxy={dxy:F3}m, dθ={dTheta:F3}rad, " +
-                                  $"소요 {(DateTime.UtcNow - started).TotalSeconds:0.0}s");
+                var r = settle.Feed(st.ReadAtUtc, st.Pose.X, st.Pose.Y, st.Pose.Angle, dxy <= devXy && dTheta <= devTheta);
+                if (OnSample(r, dxy, dTheta, st.WorkStatus.ToString()) is { } done)
+                    return done;
             }
             else
             {
@@ -717,11 +818,13 @@ public sealed class Vda5050OrderExecutor
                     lastDTheta = dThetaRest;
                     lastPoseDesc = $"pose=({rx:F3}, {ry:F3}, θ={rTheta:F3})[REST]";
 
-                    if (dxy <= devXy && dThetaRest <= devTheta)
+                    // REST 는 호출마다 새로 읽은 값 — 호출 시각을 샘플 시각으로 쓴다.
+                    var r = settle.Feed(DateTime.UtcNow, rx, ry, rTheta, dxy <= devXy && dThetaRest <= devTheta);
+                    if (OnSample(r, dxy, dThetaRest, null) is { } done)
                     {
-                        _logger.LogInformation("VDA5050 도착 판정(REST 폴백): Modbus 미연결 중 REST pose 로 도착 확인");
-                        return (true, $"{lastPoseDesc}, 잔여 dxy={dxy:F3}m, dθ={dThetaRest:F3}rad, " +
-                                      $"소요 {(DateTime.UtcNow - started).TotalSeconds:0.0}s");
+                        if (done.Ok)
+                            _logger.LogInformation("VDA5050 도착 판정(REST 폴백): Modbus 미연결 중 REST pose 로 정차 확인");
+                        return done;
                     }
                 }
                 else

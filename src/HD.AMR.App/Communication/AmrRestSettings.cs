@@ -48,4 +48,17 @@ public class AmrRestSettings
 
     /// <summary>도착 판정 각도 허용 오차 기본값(rad). Order의 allowedDeviationTheta → ParameterService → 이 값 순 폴백.</summary>
     public double DefaultDeviationTheta { get; set; } = 0.1;
+
+    /// <summary>완전 정차 판정 — pose 가 ε 이내로 이 시간(ms) 이상 유지돼야 노드 도달로 본다.
+    /// 허용 오차 진입만으로는 감속 중일 수 있어 코봇이 정차 전 출발하는 것을 막는다.</summary>
+    public int SettleWindowMs { get; set; } = 2000;
+
+    /// <summary>정차로 보는 위치 변화 한계(m).</summary>
+    public double SettleXyEpsilonM { get; set; } = 0.005;
+
+    /// <summary>정차로 보는 각도 변화 한계(rad).</summary>
+    public double SettleThetaEpsilonRad { get; set; } = 0.005;
+
+    /// <summary>허용 오차 진입 후 정차 확인까지 최대 대기(초). 초과 시 이동 실패 — 코봇을 출발시키지 않는다.</summary>
+    public int SettleTimeoutSec { get; set; } = 20;
 }

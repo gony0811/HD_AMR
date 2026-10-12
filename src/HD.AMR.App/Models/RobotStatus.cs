@@ -39,4 +39,7 @@ public record RobotStatus
 
     /// <summary>Task/Job 진행 상태</summary>
     public TaskProgress TaskProgress { get; init; } = new();
+
+    /// <summary>이 상태를 읽은 시각(UTC) — 1초 주기 캐시의 새 샘플 여부 판별용(정차 판정).</summary>
+    public DateTime ReadAtUtc { get; init; }
 }
