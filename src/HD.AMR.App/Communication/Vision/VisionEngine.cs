@@ -49,6 +49,10 @@ public sealed class VisionEngine : IAsyncDisposable
 
     public bool IsConnected => _transport?.IsConnected ?? false;
 
+    /// <summary>마지막 수신 시각(UTC) — 서버도 5초 주기 HEARTBEAT 를 보내므로 생존 판정에 쓴다.
+    /// 연결 수립 시점으로 초기화해 막 연결된 세션이 곧바로 무응답으로 판정되지 않게 한다.</summary>
+    public DateTime? LastRxUtc { get; private set; }
+
     public IReadOnlyList<VisionLogEntry> SnapshotLogs()
     {
         lock (_logLock) return _logs.ToArray();
@@ -96,6 +100,7 @@ public sealed class VisionEngine : IAsyncDisposable
     {
         Status = e.Status;
         Log(LogDirection.Info, "", e.Status);
+        LastRxUtc = e.IsConnected ? DateTime.UtcNow : null;
 
         if (e.IsConnected && AutoHeartbeat) StartHeartbeat();
         else StopHeartbeat();
@@ -103,6 +108,7 @@ public sealed class VisionEngine : IAsyncDisposable
 
     private void OnBytes(object? sender, ReadOnlyMemory<byte> chunk)
     {
+        LastRxUtc = DateTime.UtcNow;
         var results = _parser.Feed(chunk.Span);
         foreach (var r in results)
         {

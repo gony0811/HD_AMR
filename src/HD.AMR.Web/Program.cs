@@ -85,6 +85,11 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<Vda5050AdapterServ
 builder.Services.AddSingleton<MissionPauseGate>();
 builder.Services.AddSingleton<CommLossMonitorService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<CommLossMonitorService>());
+// 장치 통신 HEAVY 알람(비전·Depth·레이저·IO·코봇·AMR) — 공유 상태 + 감시. 알람 중 order 거부, RESET 으로 해제.
+builder.Services.Configure<DeviceHealthSettings>(builder.Configuration.GetSection("DeviceHealth"));
+builder.Services.AddSingleton<DeviceAlarmState>();
+builder.Services.AddSingleton<DeviceHealthMonitorService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<DeviceHealthMonitorService>());
 // AMR 장비 자체 상태 변화(모드·이동·조그·오류)를 운영 로그(출처 AMR)로 기록.
 builder.Services.AddHostedService<AmrActivityLogService>();
 // startWeldInspection 실행 총괄(2차 검사 연동) — singleton, 액션마다 scope 생성해 시퀀스 실행.

@@ -178,10 +178,14 @@ public sealed class Vda5050AdapterService : BackgroundService
     private static TaskCompletionSource NewNudge()
         => new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+    private readonly DeviceAlarmState _deviceAlarms;
+
     public Vda5050AdapterService(IOptions<Vda5050AdapterSettings> options, AMRService amr,
         Vda5050OrderExecutor executor, Inspection.IWeldInspectionExecutor inspection,
-        CobotService cobot, PowerModeService power, OperationLogService opLog, ILoggerFactory loggerFactory)
+        CobotService cobot, PowerModeService power, DeviceAlarmState deviceAlarms, OperationLogService opLog,
+        ILoggerFactory loggerFactory)
     {
+        _deviceAlarms = deviceAlarms;
         _opLog = opLog;
         _s = options.Value;
         _amr = amr;
@@ -206,6 +210,7 @@ public sealed class Vda5050AdapterService : BackgroundService
 
         _executor.StateChanged += NudgeState;
         _power.Changed += NudgeState;
+        _deviceAlarms.Changed += NudgeState;
         try
         {
             while (!stoppingToken.IsCancellationRequested)
@@ -228,6 +233,7 @@ public sealed class Vda5050AdapterService : BackgroundService
         {
             _executor.StateChanged -= NudgeState;
             _power.Changed -= NudgeState;
+            _deviceAlarms.Changed -= NudgeState;
         }
     }
 
@@ -611,6 +617,20 @@ public sealed class Vda5050AdapterService : BackgroundService
                 ErrorType = "batteryCritical",
                 ErrorLevel = "FATAL",
                 ErrorDescription = $"SoC {_power.LastObservedSoc:0.0}% ≤ {PowerModeService.CriticalThresholdPercent}% — 안전정지",
+            });
+
+        // 장치 통신 HEAVY 알람 — 장치별 FATAL. 복구 후에도 RESET 전까지 상주(order 수신 불가 사유).
+        foreach (var a in _deviceAlarms.Snapshot())
+            state.Errors.Add(new VdaError
+            {
+                ErrorType = DeviceAlarmTracker.ErrorType(a.Kind),
+                ErrorLevel = "FATAL",
+                ErrorDescription = $"{DeviceAlarmTracker.DisplayName(a.Kind)} 통신 두절 t0={a.SinceUtc.ToLocalTime():HH:mm:ss}" +
+                                   (a.Stage == DeviceAlarmStage.Active ? $" — {a.Detail}" : " — 복구됨, RESET 대기"),
+                ErrorReferences = new List<VdaErrorReference>
+                {
+                    new() { ReferenceKey = "device", ReferenceValue = DeviceAlarmTracker.ReferenceValue(a.Kind) },
+                },
             });
 
         return state;

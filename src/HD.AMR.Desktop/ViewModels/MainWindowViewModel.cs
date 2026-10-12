@@ -21,6 +21,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly Vda5050AdapterService _vda;
     private readonly CommLossMonitorService _commLoss;
     private readonly Vda5050OrderExecutor _executor;
+    private readonly CameraService _camera;
+    private readonly VisionInterfaceService _vision;
+    private readonly LaserDisplacementSensorService _laser;
+    private readonly DeviceAlarmState _deviceAlarms;
     private readonly DispatcherTimer _timer;
 
     public INavigationService Navigation { get; }
@@ -42,6 +46,18 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(IoStatusText))]
     [NotifyCanExecuteChangedFor(nameof(ToggleEmoCommand))]
     private bool _isIoConnected;
+
+    // 검사 장치 3종 — 연결 표시(알람 판정은 DeviceHealthMonitorService, 여기서는 배지만).
+    [ObservableProperty] private bool _isVisionConnected;
+    [ObservableProperty] private bool _isDepthConnected;
+    [ObservableProperty] private bool _isLaserConnected;
+
+    // 장치 HEAVY 알람 배너 — 알람 중 ACS order 수신 불가, 복구 후 RESET 으로 해제.
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(ResetDeviceAlarmsCommand))]
+    private bool _hasDeviceAlarm;
+
+    [ObservableProperty] private string _deviceAlarmText = "";
 
     [ObservableProperty]
     private bool _isAcsConnected;
@@ -94,6 +110,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public string AmrStatusText => IsAmrConnected ? "연결" : "미연결";
     public string CobotStatusText => IsCobotConnected ? "연결" : "미연결";
     public string IoStatusText => IsIoConnected ? "연결" : "미연결";
+    public string VisionStatusText => IsVisionConnected ? "연결" : "미연결";
+    public string DepthStatusText => IsDepthConnected ? "연결" : "미연결";
+    public string LaserStatusText => IsLaserConnected ? "연결" : "미연결";
     public string EmoButtonText => IsEmoActive ? "■ 비상정지 해제" : "■ 비상정지";
     public string ModeText => IsAutoMode ? "자동" : IsManualMode ? "수동" : "—";
     public string RunStatusText => IsRunning ? "시작" : "정지";
@@ -109,8 +128,13 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     public MainWindowViewModel(INavigationService navigation, AMRService amr, CobotService cobot,
         IoModuleService io, Vda5050AdapterService vda, CommLossMonitorService commLoss,
-        Vda5050OrderExecutor executor, OperationLogService opLog)
+        Vda5050OrderExecutor executor, OperationLogService opLog, CameraService camera,
+        VisionInterfaceService vision, LaserDisplacementSensorService laser, DeviceAlarmState deviceAlarms)
     {
+        _camera = camera;
+        _vision = vision;
+        _laser = laser;
+        _deviceAlarms = deviceAlarms;
         _commLoss = commLoss;
         _executor = executor;
         _opLog = opLog;
@@ -169,6 +193,21 @@ public sealed partial class MainWindowViewModel : ObservableObject
         IsAmrConnected = _amr.IsConnected;
         IsCobotConnected = _cobot.IsConnected;
         IsIoConnected = _io.IsConnected;
+        IsVisionConnected = _vision.Client.IsConnected;
+        IsDepthConnected = _camera.IsConnected && _camera.IsStreaming;
+        IsLaserConnected = _laser.IsConnected;
+        OnPropertyChanged(nameof(VisionStatusText));
+        OnPropertyChanged(nameof(DepthStatusText));
+        OnPropertyChanged(nameof(LaserStatusText));
+
+        var alarms = _deviceAlarms.Snapshot();
+        HasDeviceAlarm = alarms.Count > 0;
+        DeviceAlarmText = alarms.Count == 0 ? "" :
+            "⚠ HEAVY 알람 — " + string.Join(" · ", alarms.Select(a =>
+                $"{DeviceAlarmTracker.DisplayName(a.Kind)} " +
+                (a.Stage == DeviceAlarmStage.Active ? $"통신 두절({a.Detail})" : "복구됨·RESET 대기") +
+                $" [{a.SinceUtc.ToLocalTime():HH:mm:ss}]")) +
+            "  — ACS order 수신 불가";
         // ACS: 브로커(로컬 MQTT) 접속만으로는 "연결"이라 할 수 없다 — ACS 생존(connection 토픽
         // Last Will 기반 liveness) 또는 최근 60초 내 ACS 메시지 수신까지 확인돼야 초록 "연결".
         bool acsAlive = _vda.AcsConnectionLiveness == HD.AMR.App.Service.AcsLiveness.Online
@@ -231,6 +270,15 @@ public sealed partial class MainWindowViewModel : ObservableObject
         OnPropertyChanged(nameof(TowerLampText));
 
         IsBuzzerOn = state is not null && state.Outputs.Length > IoPointMap.Out.Buzzer && state.Outputs[IoPointMap.Out.Buzzer];
+    }
+
+    /// <summary>장치 HEAVY 알람 리셋 — 복구된(RESET 대기) 알람만 해제된다. IO 모듈이 끊겨 조작반 RESET 을
+    /// 읽을 수 없을 때도 화면에서 해제할 수 있게 둔다. 결과는 운영 로그(장치 알람)에 남는다.</summary>
+    [RelayCommand(CanExecute = nameof(HasDeviceAlarm))]
+    private void ResetDeviceAlarms()
+    {
+        _deviceAlarms.RequestReset("화면 알람 리셋 버튼");
+        RefreshStatus();
     }
 
     /// <summary>IO 가 연결돼 있고 버저가 울리는 상태일 때만 끌 수 있다 — 꺼져 있으면 눌러도 의미 없음.</summary>

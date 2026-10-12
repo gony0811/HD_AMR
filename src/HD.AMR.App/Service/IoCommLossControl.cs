@@ -42,3 +42,28 @@ public sealed class IoStartResumeControl
             await requestResume();
     }
 }
+
+/// <summary>
+/// 장치 HEAVY 알람 RESET — 조작반 RESET 버튼(IN01) 상승 에지에서 알람 해제를 요청한다(복구된 알람만 해제됨).
+/// EMO 해제(<see cref="IoEmoResetControl"/>)와 같은 버튼을 공유하며, 한 번 누르면 둘 다 처리된다.
+/// 기동 첫 스냅샷은 기준선으로만 쓴다(눌린 채 기동해도 해제하지 않음).
+/// </summary>
+public sealed class IoAlarmResetControl
+{
+    private bool _prevReset;
+    private bool _initialized;
+
+    public void Apply(bool[] inputs, Action requestReset)
+    {
+        if (inputs.Length <= IoPointMap.In.Reset)
+            return;
+
+        var reset = inputs[IoPointMap.In.Reset];
+        var rose = _initialized && reset && !_prevReset;
+        _prevReset = reset;
+        _initialized = true;
+
+        if (rose)
+            requestReset();
+    }
+}

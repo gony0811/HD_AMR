@@ -77,7 +77,7 @@
     </Border>
 
     <!-- ── 우: 상단 상태바 + 현재 페이지 ── -->
-    <Grid Grid.Column="1" RowDefinitions="Auto,*">
+    <Grid Grid.Column="1" RowDefinitions="Auto,Auto,*">
 
         <!-- 상태바(ACS 앱바 톤): 좌측 연결 상태칩, 우측 끝 비상정지(EMO) 토글 -->
         <Border Grid.Row="0"
@@ -116,6 +116,24 @@
                         <TextBlock Text="IO모듈" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" />
                         <Border Classes="badge" Classes.on="{Binding IsIoConnected}">
                             <TextBlock Text="{Binding IoStatusText}" />
+                        </Border>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                        <TextBlock Text="비전" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" />
+                        <Border Classes="badge" Classes.on="{Binding IsVisionConnected}">
+                            <TextBlock Text="{Binding VisionStatusText}" />
+                        </Border>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                        <TextBlock Text="Depth" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" />
+                        <Border Classes="badge" Classes.on="{Binding IsDepthConnected}">
+                            <TextBlock Text="{Binding DepthStatusText}" />
+                        </Border>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                        <TextBlock Text="레이저" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" />
+                        <Border Classes="badge" Classes.on="{Binding IsLaserConnected}">
+                            <TextBlock Text="{Binding LaserStatusText}" />
                         </Border>
                     </StackPanel>
                     <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
@@ -168,10 +186,22 @@
             </DockPanel>
         </Border>
 
+        <!-- 장치 HEAVY 알람 배너 — 알람 중 ACS order 수신 불가. 복구 후 RESET(조작반 또는 아래 버튼)으로 해제. -->
+        <Border Grid.Row="1" IsVisible="{Binding HasDeviceAlarm}"
+                Background="{DynamicResource AppDangerBrush}" Padding="24,8">
+            <DockPanel>
+                <Button DockPanel.Dock="Right" Content="알람 리셋" Command="{Binding ResetDeviceAlarmsCommand}"
+                        VerticalAlignment="Center" Margin="12,0,0,0"
+                        ToolTip.Tip="복구된 장치 알람만 해제됩니다. 아직 끊긴 장치는 유지됩니다." />
+                <TextBlock Text="{Binding DeviceAlarmText}" Foreground="{DynamicResource AppOnAccentTextBrush}"
+                           FontWeight="SemiBold" VerticalAlignment="Center" TextWrapping="Wrap" />
+            </DockPanel>
+        </Border>
+
         <!-- 현재 페이지 -->
         <!-- Padding 은 ScrollViewer 가 아니라 ContentControl 에 둔다: Avalonia 11.2 의 ScrollContentPresenter 는
              Padding 을 measure/Extent 에 반영하지 않아 하단 패딩만큼 콘텐츠가 스크롤 밖으로 잘린다. -->
-        <ScrollViewer Grid.Row="1">
+        <ScrollViewer Grid.Row="2">
             <ContentControl Content="{Binding Navigation.CurrentViewModel}" Padding="24" />
         </ScrollViewer>
     </Grid>

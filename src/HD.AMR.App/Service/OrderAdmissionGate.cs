@@ -11,6 +11,7 @@ namespace HD.AMR.App.Service;
 ///
 /// 결정 규칙:
 /// <list type="bullet">
+///   <item>장치 HEAVY 알람(통신 두절·RESET 대기) 중 → REJECT(<see cref="Decision.RejectDeviceFault"/>) — 전력 판정보다 우선.</item>
 ///   <item>PowerMode == <see cref="PowerMode.Normal"/> → ACCEPT (모든 Order).</item>
 ///   <item>PowerMode in {LOW, CRITICAL}:
 ///     <list type="bullet">
@@ -42,10 +43,13 @@ public static class OrderAdmissionGate
         Accept,
         /// <summary>저전력 사유 — <c>orderRejectedBatteryLow</c> WARNING 보고 대상.</summary>
         RejectBatteryLow,
+        /// <summary>장치 HEAVY 알람 사유 — <c>orderRejectedDeviceFault</c> WARNING 보고 대상.</summary>
+        RejectDeviceFault,
     }
 
-    public static Decision Evaluate(PowerMode powerMode, string operatingMode, Vda5050Order order)
+    public static Decision Evaluate(PowerMode powerMode, string operatingMode, Vda5050Order order, bool deviceFault = false)
     {
+        if (deviceFault) return Decision.RejectDeviceFault;
         if (powerMode == PowerMode.Normal) return Decision.Accept;
 
         // 저전력 상태에서는 AUTO 모드가 아니면 모든 Order 거부.

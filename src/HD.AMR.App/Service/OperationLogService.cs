@@ -25,6 +25,8 @@ public sealed class OperationLogService
     public const string SourceAmr = "AMR";
     /// <summary>현장 물리 버튼(START/STOP/EMO).</summary>
     public const string SourceIo = "IO";
+    /// <summary>장치 통신 감시(HEAVY 알람 발생·복구·해제).</summary>
+    public const string SourceDevice = "DEVICE";
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<OperationLogService> _logger;
@@ -131,6 +133,8 @@ public static class OpCategory
     public const string Link = "LINK";
     /// <summary>IO 모듈 출력 조작(버저 OFF 등 화면 발 1회성 쓰기).</summary>
     public const string Io = "IO";
+    /// <summary>장치 HEAVY 알람(통신 두절·복구·RESET 해제).</summary>
+    public const string Alarm = "ALARM";
 
     /// <summary>필터 드롭다운 기본 목록(코드, 표시명).</summary>
     public static readonly IReadOnlyList<(string Code, string Label)> All = new[]
@@ -138,7 +142,7 @@ public static class OpCategory
         (Order, "오더"), (Action, "액션"), (Instant, "즉시액션"), (Drive, "주행"), (Cobot, "코봇"),
         (Sequence, "시퀀스"), (Step, "스텝"), (AmrMode, "AMR 모드"), (AmrState, "AMR 상태"),
         (AmrManual, "AMR 수동"), (AmrCommand, "AMR 명령"), (EStop, "비상정지"), (Link, "통신"),
-        (Io, "IO"),
+        (Io, "IO"), (Alarm, "장치 알람"),
     };
 
     /// <summary>표시명 — 목록에 없는 코드는 그대로.</summary>

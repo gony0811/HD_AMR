@@ -28,10 +28,12 @@ public static class IoTowerLampPolicy
     ///  · 화면 비상정지 버튼이 켠 EMO 출력(OUT10) — 입력으로는 되돌아오지 않으므로 출력 되읽기로 본다
     ///  · 조작반 EMO 래치(RESET 전까지 유지, <see cref="IoEmoResetControl.EmoActive"/>)
     ///  · AMR/코봇 오류 코드
+    ///  · 장치 통신 HEAVY 알람(통신 두절 또는 복구 후 RESET 대기)
     /// </summary>
-    public static bool IsAlarm(bool[] inputs, bool[]? outputs, bool emoLatched, bool amrError, bool cobotError)
+    public static bool IsAlarm(bool[] inputs, bool[]? outputs, bool emoLatched, bool amrError, bool cobotError,
+        bool deviceAlarm = false)
         => (inputs.Length > Communication.IoPointMap.In.EmergencyStop && inputs[Communication.IoPointMap.In.EmergencyStop])
            || (outputs is not null && outputs.Length > Communication.IoPointMap.Out.EmergencyStop
                && outputs[Communication.IoPointMap.Out.EmergencyStop])
-           || emoLatched || amrError || cobotError;
+           || emoLatched || amrError || cobotError || deviceAlarm;
 }

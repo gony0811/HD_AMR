@@ -126,6 +126,10 @@ internal static class ServiceRegistration
         // 통신 단절 Fail-Safe(docs/HD_AMR_통신단절_FailSafe_사양.md) — 일시정지 게이트 + 단절 감시(GRACE→PAUSE→HOLD).
         services.AddSingleton<MissionPauseGate>();
         AddHostedSingleton<CommLossMonitorService>(services);
+        // 장치 통신 HEAVY 알람(비전·Depth·레이저·IO·코봇·AMR) — 공유 상태 + 감시. 알람 중 order 거부, RESET 으로 해제.
+        services.Configure<DeviceHealthSettings>(config.GetSection("DeviceHealth"));
+        services.AddSingleton<DeviceAlarmState>();
+        AddHostedSingleton<DeviceHealthMonitorService>(services);
         // AMR 장비 자체 상태 변화(모드·이동·조그·오류)를 운영 로그(출처 AMR)로 기록.
         services.AddHostedService<AmrActivityLogService>();
 

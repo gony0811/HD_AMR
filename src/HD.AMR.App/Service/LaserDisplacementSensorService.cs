@@ -49,6 +49,11 @@ public class LaserDisplacementSensorService : BackgroundService
 
     public bool IsConnected => _client.IsConnected;
 
+    /// <summary>마지막 생존 확인 성공 시각(UTC) — 접속 성공·도달성 점검 성공 때 갱신. 장치 알람 판정용.</summary>
+    public DateTime? LastAliveUtc { get; private set; }
+
+    private int _aliveFails;
+
     public LaserDisplacementSensorSettings Settings => _settings;
 
     /// <summary>마지막 접속 실패 메시지. 성공 시 null. 페이지에 표시.</summary>
@@ -74,8 +79,25 @@ public class LaserDisplacementSensorService : BackgroundService
                 if (!_client.IsConnected)
                 {
                     await _client.ConnectAsync(stoppingToken);
+                    if (_client.IsConnected)
+                    {
+                        LastAliveUtc = DateTime.UtcNow;
+                        _aliveFails = 0;
+                    }
                     LastError = null;
                     _retryWarned = false;
+                }
+                else if (await _client.ProbeAliveAsync(stoppingToken))
+                {
+                    LastAliveUtc = DateTime.UtcNow;
+                    _aliveFails = 0;
+                }
+                else if (++_aliveFails >= Math.Max(1, _settings.AliveFailLimit))
+                {
+                    _logger.LogWarning("레이저 변위 센서 생존 확인 {Fails}회 연속 실패 — 세션을 닫고 재접속", _aliveFails);
+                    LastError = "생존 확인 실패(도달 불가)";
+                    _aliveFails = 0;
+                    await _client.DisconnectAsync(stoppingToken);
                 }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -92,7 +114,9 @@ public class LaserDisplacementSensorService : BackgroundService
                 }
             }
 
-            await Task.Delay(TimeSpan.FromMilliseconds(_settings.ReconnectDelayMs), stoppingToken);
+            // 연결 중에는 생존 확인 주기로, 끊김 중에는 재접속 주기로 돈다.
+            var delayMs = _client.IsConnected ? _settings.AliveProbeMs : _settings.ReconnectDelayMs;
+            await Task.Delay(TimeSpan.FromMilliseconds(Math.Max(200, delayMs)), stoppingToken);
         }
     }
 

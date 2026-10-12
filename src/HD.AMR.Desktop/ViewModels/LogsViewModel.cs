@@ -30,6 +30,7 @@ public sealed partial class LogsViewModel : ViewModelBase
         new(OperationLogService.SourceUi, "수동(UI)"),
         new(OperationLogService.SourceAmr, "AMR 장비"),
         new(OperationLogService.SourceIo, "현장 버튼"),
+        new(OperationLogService.SourceDevice, "장치 감시"),
     ];
 
     /// <summary>분류 필터 — 기본 목록 + DB 에 기록된 분류(목록에 없는 코드 포함).</summary>
@@ -107,6 +108,7 @@ public sealed partial class LogsViewModel : ViewModelBase
         OperationLogService.SourceUi => "수동",
         OperationLogService.SourceAmr => "AMR",
         OperationLogService.SourceIo => "버튼",
+        OperationLogService.SourceDevice => "장치",
         _ => source,
     };
 }

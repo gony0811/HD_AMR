@@ -32,6 +32,8 @@ public class IoModuleService : BackgroundService
     private readonly IoEmoResetControl _emoControl = new();
     private readonly IoCommLossBuzzerControl _commLossBuzzer = new();
     private readonly IoStartResumeControl _startResume = new();
+    private readonly IoAlarmResetControl _alarmReset = new();
+    private readonly DeviceAlarmState _deviceAlarms;
     private readonly SemaphoreSlim _outputWriteLock = new(1, 1);
 
     private readonly object _stateLock = new();
@@ -40,9 +42,10 @@ public class IoModuleService : BackgroundService
 
     public IoModuleService(IOptions<IoModuleModbusTcpSettings> options, ILoggerFactory loggerFactory,
         AMRService amr, CobotService cobot, OperationLogService opLog, Vda5050AdapterService vda,
-        Vda5050OrderExecutor executor, CommLossMonitorService commLoss)
+        Vda5050OrderExecutor executor, CommLossMonitorService commLoss, DeviceAlarmState deviceAlarms)
     {
         _executor = executor;
+        _deviceAlarms = deviceAlarms;
         _commLoss = commLoss;
         _opLog = opLog;
         _settings = options.Value;
@@ -217,6 +220,9 @@ public class IoModuleService : BackgroundService
                     {
                         _logger.LogWarning(ex, "EMO/RESET 인터록 처리 실패 — 다음 입력 폴링에서 재시도");
                     }
+
+                    // 장치 HEAVY 알람 — RESET 버튼으로 복구된 알람 해제.
+                    _alarmReset.Apply(inputs, () => _deviceAlarms.RequestReset("조작반 RESET 버튼"));
 
                     // 통신 단절 Fail-Safe(사양 §3·§4.1) — START 버튼 재개, HOLD 부저.
                     try
@@ -410,7 +416,7 @@ public class IoModuleService : BackgroundService
         var auto = inputs[IoPointMap.In.Auto];
         var manual = inputs[IoPointMap.In.Manual];
         var alarm = IoTowerLampPolicy.IsAlarm(inputs, GetState()?.Outputs, _emoControl.EmoActive,
-            _amr.LatestStatus?.ErrorCode is > 0, _cobot.State?.ErrorCode is > 0);
+            _amr.LatestStatus?.ErrorCode is > 0, _cobot.State?.ErrorCode is > 0, _deviceAlarms.HasHeavyAlarm);
         var desired = IoTowerLampPolicy.Resolve(auto, manual, alarm, paused: _executor.IsPaused);
         if (desired is null)
             return;

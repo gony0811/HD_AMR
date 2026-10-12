@@ -83,6 +83,10 @@ public sealed class Vda5050OrderExecutor
     }
 
     /// <summary>수행 중인 Order 임무가 있다(주행 중 또는 action 실행 중) — 통신 단절 정지 적용 조건(§1).</summary>
+    public const string DeviceFaultRejectErrorType = "orderRejectedDeviceFault";
+
+    private readonly DeviceAlarmState _deviceAlarms;
+
     public bool HasActiveMission
     {
         get { lock (_gate) return _missionTask is { IsCompleted: false }; }
@@ -91,9 +95,11 @@ public sealed class Vda5050OrderExecutor
     public Vda5050OrderExecutor(AmrRestClient rest, AMRService amr,
         Inspection.IWeldInspectionExecutor inspection, PowerModeService power,
         IOptions<AmrRestSettings> restOptions, IServiceScopeFactory scopeFactory,
-        MissionPauseGate pauseGate, OperationLogService opLog, ILogger<Vda5050OrderExecutor> logger)
+        MissionPauseGate pauseGate, DeviceAlarmState deviceAlarms, OperationLogService opLog,
+        ILogger<Vda5050OrderExecutor> logger)
     {
         _rest = rest;
+        _deviceAlarms = deviceAlarms;
         _amr = amr;
         _inspection = inspection;
         _power = power;
@@ -146,6 +152,10 @@ public sealed class Vda5050OrderExecutor
                 _errors.Values.Select(e => new VdaError
                 {
                     ErrorType = e.ErrorType, ErrorLevel = e.ErrorLevel, ErrorDescription = e.ErrorDescription,
+                    ErrorReferences = e.ErrorReferences?.Select(r => new VdaErrorReference
+                    {
+                        ReferenceKey = r.ReferenceKey, ReferenceValue = r.ReferenceValue,
+                    }).ToList(),
                 }).ToList());
         }
     }
@@ -187,7 +197,38 @@ public sealed class Vda5050OrderExecutor
 
         // 배터리 저전력 수락 게이트(사양 §4) — 거부해도 기존 orderId 는 유지(§8), 기존 임무도 유지.
         var operatingMode = _amr.LatestStatus?.DrivingMode == DrivingMode.Cart ? "MANUAL" : "AUTOMATIC";
-        var decision = OrderAdmissionGate.Evaluate(_power.CurrentMode, operatingMode, order);
+        var alarms = _deviceAlarms.Snapshot();
+        var decision = OrderAdmissionGate.Evaluate(_power.CurrentMode, operatingMode, order, deviceFault: alarms.Count > 0);
+        if (decision == OrderAdmissionGate.Decision.RejectDeviceFault)
+        {
+            // 장치 HEAVY 알람(통신 두절 또는 복구 후 RESET 대기) — 기존 orderId·임무 유지(배터리 거부와 같은 계약).
+            var firstActionId = order.Nodes.SelectMany(n => n.Actions).FirstOrDefault()?.ActionId ?? "";
+            var reason = $"장치 HEAVY 알람 — {DeviceAlarmState.Describe(alarms)}. 복구 후 RESET 필요";
+            _logger.LogWarning("VDA5050 order 거부(장치 알람): {OrderId} — {Reason}", order.OrderId, reason);
+            OpLog(OpCategory.Order, "order 거부(장치 알람)", false, reason, order.OrderId);
+            lock (_gate)
+            {
+                var refs = new List<VdaErrorReference>
+                {
+                    new() { ReferenceKey = "orderId", ReferenceValue = order.OrderId },
+                };
+                if (firstActionId.Length > 0)
+                    refs.Add(new VdaErrorReference { ReferenceKey = "actionId", ReferenceValue = firstActionId });
+                refs.AddRange(alarms.Select(a => new VdaErrorReference
+                {
+                    ReferenceKey = "device", ReferenceValue = DeviceAlarmTracker.ReferenceValue(a.Kind),
+                }));
+                _errors[DeviceFaultRejectErrorType] = new VdaError
+                {
+                    ErrorType = DeviceFaultRejectErrorType,
+                    ErrorLevel = "WARNING",
+                    ErrorDescription = reason,
+                    ErrorReferences = refs,
+                };
+            }
+            StateChanged?.Invoke();
+            return;
+        }
         if (decision == OrderAdmissionGate.Decision.RejectBatteryLow)
         {
             var firstActionId = order.Nodes.SelectMany(n => n.Actions).FirstOrDefault()?.ActionId ?? "";
@@ -249,6 +290,7 @@ public sealed class Vda5050OrderExecutor
             _errors.Remove("emergencyStopActive");
             _errors.Remove("inspectionFailed");
             _errors.Remove("equipmentError");
+            _errors.Remove(DeviceFaultRejectErrorType);
 
             _missionCts = new CancellationTokenSource();
             ct = _missionCts.Token;
@@ -1226,18 +1268,41 @@ public sealed class Vda5050OrderExecutor
         _logger.LogWarning("cancelOrder({Reason}) — {Running}", reason, running ?? "진행 중 임무 없음");
         OpLog(OpCategory.Order, "임무 취소(cancelOrder)", null,
             running is null ? $"{reason} — 진행 중 임무 없음" : $"{reason} — 진행 중 order {running} 주행 정지·임무 폐기");
+        await AbortActiveMissionAsync(running is not null, "cancelled by cancelOrder");
+    }
 
+    /// <summary>
+    /// 장치 HEAVY 알람(통신 두절)으로 진행 중 임무 즉시 중단 — 주행 정지, 잔여 action FAILED, 일시정지 해소.
+    /// 수행 중 임무가 없으면 아무것도 하지 않는다(false). 신규 order 는 게이트가 알람 해제(RESET) 전까지 거부한다.
+    /// </summary>
+    public async Task<bool> AbortForDeviceFaultAsync(string description)
+    {
+        string? running;
+        lock (_gate) running = _missionTask is { IsCompleted: false } ? _orderId : null;
+        if (running is null) return false;
+
+        _logger.LogError("장치 HEAVY 알람으로 임무 중단: {OrderId} — {Desc}", running, description);
+        OpLog(OpCategory.Order, "임무 중단(장치 알람)", false,
+            $"{description} — 진행 중 order {running} 주행 정지·잔여 action FAILED", running);
+        await AbortActiveMissionAsync(true, $"aborted: {description} (HEAVY)");
+        return true;
+    }
+
+    /// <summary>진행 중 임무 폐기 공통부(cancelOrder·장치 알람) — 취소 → REST 정지 → 검사 실행기 중단 →
+    /// 잔여 action FAILED → 일시정지 해소. emergencyStopActive 는 세팅하지 않는다.</summary>
+    private async Task AbortActiveMissionAsync(bool running, string resultDescription)
+    {
         lock (_gate) _missionCts?.Cancel();
-        if (running is not null)
+        if (running)
         {
             var stop = await _rest.StopAsync();
             if (!stop.Ok)
-                _logger.LogWarning("cancelOrder REST 정지 실패(code={Code}): {Msg}", stop.Code, stop.Message);
+                _logger.LogWarning("임무 폐기 REST 정지 실패(code={Code}): {Msg}", stop.Code, stop.Message);
             // 검사 시퀀스(코봇)는 이동 완료 대기 중일 수 있어 실행기 취소로 함께 멈춘다.
             try { await _inspection.AbortAsync(); }
-            catch (Exception ex) { _logger.LogWarning(ex, "cancelOrder: 검사 실행기 취소 실패"); }
+            catch (Exception ex) { _logger.LogWarning(ex, "임무 폐기: 검사 실행기 취소 실패"); }
         }
-        await AbortMissionAsync("cancelled by cancelOrder");
+        await AbortMissionAsync(resultDescription);
 
         bool wasPaused;
         lock (_gate)
@@ -1246,7 +1311,7 @@ public sealed class Vda5050OrderExecutor
             foreach (var a in _actionStates.Where(a => a.ActionStatus is not ("FINISHED" or "FAILED")))
             {
                 a.ActionStatus = "FAILED";
-                a.ResultDescription = "cancelled by cancelOrder";
+                a.ResultDescription = resultDescription;
             }
             _nodeStates.Clear();
             wasPaused = ClearPauseLocked();

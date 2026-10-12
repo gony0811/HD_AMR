@@ -249,6 +249,25 @@ public sealed class LaserDisplacementSensorClient : IDisposable
         }
     }
 
+    /// <summary>
+    /// 연결 중 생존 확인 — EEIP implicit 수신 버퍼에는 타임스탬프가 없어 링크가 죽어도 <see cref="IsConnected"/> 가
+    /// true 로 남는다. 세션 포트로 TCP 도달성을 점검해 응답이 없으면 false.
+    /// </summary>
+    public async Task<bool> ProbeAliveAsync(CancellationToken ct = default)
+    {
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(TimeSpan.FromMilliseconds(_settings.ConnectTimeoutMs));
+        try
+        {
+            return await CanReachAsync(_settings.IpAddress, _settings.Port, _settings.ConnectTimeoutMs, timeoutCts.Token)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return false;
+        }
+    }
+
     /// <summary>연결을 해제한다. 호스트 종료 등 동기 경로용.</summary>
     public void Disconnect()
     {

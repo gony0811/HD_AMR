@@ -23,6 +23,12 @@ public class LaserDisplacementSensorSettings
     /// <summary>연결이 활성 상태일 때 재접속 시도 간격(ms).</summary>
     public int ReconnectDelayMs { get; set; } = 5000;
 
+    /// <summary>연결 중 생존 확인(TCP 도달성) 주기(ms). 연속 <see cref="AliveFailLimit"/> 회 실패하면 세션을 닫고 재접속한다.</summary>
+    public int AliveProbeMs { get; set; } = 2000;
+
+    /// <summary>생존 확인 연속 실패 허용 횟수 — 넘으면 끊김으로 본다.</summary>
+    public int AliveFailLimit { get; set; } = 2;
+
     /// <summary>태그 데이터 링크(Class1 implicit) 패킷 주기(RPI, ms). 장치 사양 1~10000ms, 기본 50ms.
     /// EEIP 의 <c>RequestedPacketRate</c>(µs) = <c>RpiMs * 1000</c> 로 양방향에 적용된다.</summary>
     public int RpiMs { get; set; } = 50;
