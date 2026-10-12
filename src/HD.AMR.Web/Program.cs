@@ -81,6 +81,10 @@ builder.Services.Configure<HD.AMR.App.Communication.Vda5050.Vda5050AdapterSettin
 builder.Services.AddSingleton<Vda5050OrderExecutor>();
 builder.Services.AddSingleton<Vda5050AdapterService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<Vda5050AdapterService>());
+// 통신 단절 Fail-Safe(docs/HD_AMR_통신단절_FailSafe_사양.md) — 일시정지 게이트 + 단절 감시(GRACE→PAUSE→HOLD).
+builder.Services.AddSingleton<MissionPauseGate>();
+builder.Services.AddSingleton<CommLossMonitorService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<CommLossMonitorService>());
 // AMR 장비 자체 상태 변화(모드·이동·조그·오류)를 운영 로그(출처 AMR)로 기록.
 builder.Services.AddHostedService<AmrActivityLogService>();
 // startWeldInspection 실행 총괄(2차 검사 연동) — singleton, 액션마다 scope 생성해 시퀀스 실행.

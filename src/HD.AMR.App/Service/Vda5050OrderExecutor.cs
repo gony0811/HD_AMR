@@ -9,6 +9,9 @@ using Microsoft.Extensions.Options;
 
 namespace HD.AMR.App.Service;
 
+/// <summary>임무 일시정지 사유 — 통신 단절 자동 PAUSE(사양 §3) / ACS startPause instantAction.</summary>
+public enum PauseReason { CommLoss, Manual }
+
 /// <summary>
 /// VDA5050 order 실행기 — 단일 노드 Order(사양 §4.1)를 TARS-M REST 로 이행한다.
 ///
@@ -54,18 +57,46 @@ public sealed class Vda5050OrderExecutor
     private readonly List<NodeState> _nodeStates = new();
     private readonly Dictionary<string, VdaError> _errors = new();   // errorType → 최신 1건
 
+    // ── 일시정지(통신 단절 사양 §3–5) ──
+    private readonly MissionPauseGate _pauseGate;
+    private bool _paused;
+    private PauseReason _pauseReason;
+    private string? _orderMapId;   // 재개 전 mapId 일치 확인용(§4.2)
+
+    /// <summary>통신 단절 PAUSE 에러 타입(사양 §5).</summary>
+    public const string CommLossErrorType = "communicationLostPause";
+
+    /// <summary>재개 거부 에러 타입(사양 §5).</summary>
+    public const string ResumeRejectedErrorType = "resumeRejected";
+
     /// <summary>보고 상태 변화(즉시 state 발행 트리거). 어댑터가 구독한다.</summary>
     public event Action? StateChanged;
+
+    /// <summary>일시정지가 해소됨(재개 승인·Order 교체/취소·비상정지·배터리 CRITICAL 폐기). 통신 단절 감시가 구독해 단계를 리셋한다.</summary>
+    public event Action? PauseCleared;
+
+    /// <summary>임무 일시정지 중(state.paused). 타워램프 황색 조건.</summary>
+    public bool IsPaused
+    {
+        get { lock (_gate) return _paused; }
+    }
+
+    /// <summary>수행 중인 Order 임무가 있다(주행 중 또는 action 실행 중) — 통신 단절 정지 적용 조건(§1).</summary>
+    public bool HasActiveMission
+    {
+        get { lock (_gate) return _missionTask is { IsCompleted: false }; }
+    }
 
     public Vda5050OrderExecutor(AmrRestClient rest, AMRService amr,
         Inspection.IWeldInspectionExecutor inspection, PowerModeService power,
         IOptions<AmrRestSettings> restOptions, IServiceScopeFactory scopeFactory,
-        OperationLogService opLog, ILogger<Vda5050OrderExecutor> logger)
+        MissionPauseGate pauseGate, OperationLogService opLog, ILogger<Vda5050OrderExecutor> logger)
     {
         _rest = rest;
         _amr = amr;
         _inspection = inspection;
         _power = power;
+        _pauseGate = pauseGate;
         _restSettings = restOptions.Value;
         _scopeFactory = scopeFactory;
         _opLog = opLog;
@@ -196,8 +227,12 @@ public sealed class Vda5050OrderExecutor
 
         var node = order.Nodes[0];
         CancellationToken ct;
+        bool wasPaused;
         lock (_gate)
         {
+            // 이전 임무의 일시정지는 Order 교체로 해소(통신 단절 사양 §5 — Order 취소 시 클리어).
+            wasPaused = ClearPauseLocked();
+            _orderMapId = node.NodePosition!.MapId;
             _orderId = order.OrderId;
             _orderUpdateId = order.OrderUpdateId;
             _driving = false;
@@ -217,6 +252,7 @@ public sealed class Vda5050OrderExecutor
             _missionCts = new CancellationTokenSource();
             ct = _missionCts.Token;
         }
+        if (wasPaused) PauseCleared?.Invoke();
         // 신규 order = 정렬(anchor) 캐시 무효(사양 §8.1 — 그룹 캐시는 order 내에서만 유효).
         _inspection.InvalidateAnchor();
         _logger.LogInformation("VDA5050 order 수리: {OrderId}, node={NodeId} → ({X:0.###}, {Y:0.###}, θ={Theta:0.###})",
@@ -287,6 +323,8 @@ public sealed class Vda5050OrderExecutor
                     $"현재 {DescribePose()} → 목표 ({pos.X:0.###}, {pos.Y:0.###}, θ={pos.Theta ?? 0.0:0.###}), " +
                     $"허용 dxy≤{devXy:F3}m, dθ≤{devTheta:F3}rad, 타임아웃 {_restSettings.DriveTimeoutSec}s" +
                     (staleErrors.Count > 0 ? $", 기존 오류 {staleErrors.Count}건 무시" : ""), orderId);
+                // 주행 전 코봇 홈 복귀 중 PAUSE 가 걸렸으면 출발하지 않고 재개를 기다린다(사양 §3).
+                await _pauseGate.WaitWhilePausedAsync(ct);
                 var go = await _rest.GoAsync(pos.X, pos.Y, pos.Theta ?? 0.0, stopFlag: true, ct);
                 if (!go.Ok)
                 {
@@ -327,6 +365,8 @@ public sealed class Vda5050OrderExecutor
             {
                 var action = node.Actions[ai];
                 ct.ThrowIfCancellationRequested();
+                // 일시정지 중이면 다음 action 을 시작하지 않는다(사양 §3).
+                await _pauseGate.WaitWhilePausedAsync(ct);
 
                 // 저전력 중단(사양 §5) — 현재 iteration 의 action 은 아직 시작 전이므로 바로 FAILED.
                 // RUNNING 중이던 action 이 있다면 그 action 은 이미 아래 분기에서 완결되고, 이 체크는 다음 iteration 에 걸린다.
@@ -438,6 +478,17 @@ public sealed class Vda5050OrderExecutor
             OpLog(OpCategory.Order, "order 완결", failedActions == 0,
                 $"액션 {node.Actions.Count}건 처리 — 성공 {node.Actions.Count - failedActions}, 실패 {failedActions}", orderId);
             // 완결 후에도 orderId·actionStates 는 다음 Order 수신까지 유지 보고(§4.5.4).
+
+            // 마지막 action 이 끝나는 순간 PAUSE 가 걸렸다면 멈출 대상이 없다 — 일시정지를 해소한다
+            // (통신 단절 정지는 수행 중 Order 에만 적용, 사양 §1).
+            bool wasPaused;
+            lock (_gate) wasPaused = ClearPauseLocked();
+            if (wasPaused)
+            {
+                OpLog(OpCategory.Order, "일시정지 해소", null, "order 완결 — 남은 작업 없음", orderId);
+                PauseCleared?.Invoke();
+                StateChanged?.Invoke();
+            }
         }
         catch (OperationCanceledException)
         {
@@ -607,6 +658,24 @@ public sealed class Vda5050OrderExecutor
 
         while (!ct.IsCancellationRequested)
         {
+            // 통신 단절 PAUSE(사양 §3) — 정지(REST stop)는 PauseAsync 가 이미 보냈다. 재개되면 같은 목표로
+            // REST 이동을 다시 지령한다(§4.3). 정지 시간은 주행 타임아웃에서 뺀다.
+            if (_pauseGate.IsPaused)
+            {
+                var pausedAt = DateTime.UtcNow;
+                await _pauseGate.WaitWhilePausedAsync(ct);
+                deadline += DateTime.UtcNow - pausedAt;
+                // stop 이 status.error 에 남긴 항목이 있으면 재출발 직후 실패로 오인하므로 기준선을 다시 잡는다.
+                staleErrors = await SnapshotErrorKeysAsync(ct);
+                OpLog(OpCategory.Drive, "주행 재지령", null,
+                    $"일시정지 해제 — 현재 {DescribePose()} → 같은 목표 ({pos.X:0.###}, {pos.Y:0.###}, θ={pos.Theta ?? 0.0:0.###}) 재이동");
+                var go = await _rest.GoAsync(pos.X, pos.Y, pos.Theta ?? 0.0, stopFlag: true, ct);
+                if (!go.Ok)
+                    return (false, $"재개 이동 명령 실패 (code={go.Code}): {go.Message}");
+                lock (_gate) _driving = true;
+                StateChanged?.Invoke();
+            }
+
             if (DateTime.UtcNow > deadline)
             {
                 _logger.LogWarning("VDA5050 주행 타임아웃: 최종 {Pose}, 잔여 dxy={Dxy:F3}m, dθ={DTheta:F3}rad " +
@@ -824,6 +893,7 @@ public sealed class Vda5050OrderExecutor
     {
         _logger.LogWarning("VDA5050 임무 실패: {OrderId} — {Reason}", _orderId, reason);
         OpLog(OpCategory.Order, "임무 실패", false, reason);
+        bool wasPaused;
         lock (_gate)
         {
             _driving = false;
@@ -832,7 +902,9 @@ public sealed class Vda5050OrderExecutor
                 a.ActionStatus = "FAILED";
                 a.ResultDescription = reason;
             }
+            wasPaused = ClearPauseLocked();
         }
+        if (wasPaused) PauseCleared?.Invoke();
         StateChanged?.Invoke();
     }
 
@@ -901,6 +973,7 @@ public sealed class Vda5050OrderExecutor
             _logger.LogWarning("배터리 CRITICAL REST 정지 실패(code={Code}): {Msg}", stop.Code, stop.Message);
         await AbortMissionAsync("stopped by batteryCritical");
 
+        bool wasPaused;
         lock (_gate)
         {
             _driving = false;
@@ -909,8 +982,185 @@ public sealed class Vda5050OrderExecutor
                 a.ActionStatus = "FAILED";
                 a.ResultDescription = "stopped by batteryCritical";
             }
+            wasPaused = ClearPauseLocked();
+        }
+        if (wasPaused) PauseCleared?.Invoke();
+        StateChanged?.Invoke();
+    }
+
+    // ── 일시정지 / 재개 (통신 단절 사양 §3–5) ─────────────────────────
+
+    /// <summary>
+    /// 임무 일시정지 — 주행 중이면 REST stop 으로 감속정지(남은 목표는 유지, 재개 시 같은 노드 재지령),
+    /// 코봇 검사 중이면 진행 중인 경유점 이동까지 마치고 경계에서 멈춘다(<see cref="MissionPauseGate"/>).
+    /// 진행 중 action 은 FAILED 가 아니라 PAUSED, Order 도 폐기하지 않는다. 활성 임무가 없으면 false.
+    /// </summary>
+    /// <param name="errorDescription">CommLoss 일 때 <see cref="CommLossErrorType"/> 에러 설명(단절 시각·경과·조건).</param>
+    public async Task<bool> PauseAsync(PauseReason reason, string? errorDescription = null)
+    {
+        bool driving;
+        string orderId;
+        lock (_gate)
+        {
+            if (_missionTask is not { IsCompleted: false }) return false;
+            if (_paused)
+            {
+                // 이미 정지 중(예: startPause 후 통신 단절) — 통신 단절 에러만 덧붙인다.
+                if (reason == PauseReason.CommLoss && errorDescription is not null)
+                    _errors[CommLossErrorType] = NewCommLossError(errorDescription);
+                return true;
+            }
+            _paused = true;
+            _pauseReason = reason;
+            _pauseGate.Pause();
+            driving = _driving;
+            orderId = _orderId;
+            foreach (var a in _actionStates.Where(a => a.ActionStatus == "RUNNING"))
+                a.ActionStatus = "PAUSED";
+            _errors.Remove(ResumeRejectedErrorType);
+            if (reason == PauseReason.CommLoss && errorDescription is not null)
+                _errors[CommLossErrorType] = NewCommLossError(errorDescription);
+        }
+
+        var what = reason == PauseReason.CommLoss ? "통신 단절" : "ACS startPause";
+        _logger.LogWarning("임무 일시정지({What}) — order {OrderId}, 주행 중={Driving}", what, orderId, driving);
+        OpLog(OpCategory.Order, $"임무 일시정지({what})", null,
+            (driving ? "주행 감속정지(REST stop), 남은 목표 유지" : "검사·action 경계에서 정지") +
+            (errorDescription is not null ? $" — {errorDescription}" : "") + " · 재개는 stopPause 또는 START 버튼", orderId);
+
+        if (driving)
+        {
+            var stop = await _rest.StopAsync();
+            if (!stop.Ok)
+                _logger.LogWarning("일시정지 REST 정지 실패(code={Code}): {Msg}", stop.Code, stop.Message);
+            lock (_gate) _driving = false;
         }
         StateChanged?.Invoke();
+        return true;
+    }
+
+    /// <summary>HOLD 진입 등으로 <see cref="CommLossErrorType"/> 설명만 갱신(level 은 WARNING 유지, §5).</summary>
+    public void UpdateCommLossError(string description)
+    {
+        lock (_gate)
+        {
+            if (!_paused) return;
+            _errors[CommLossErrorType] = NewCommLossError(description);
+        }
+        StateChanged?.Invoke();
+    }
+
+    private static VdaError NewCommLossError(string description) => new()
+    {
+        ErrorType = CommLossErrorType,
+        ErrorLevel = "WARNING",
+        ErrorDescription = description,
+    };
+
+    /// <summary>
+    /// 재개 요청(ACS stopPause / 조작반 START) — §4.2 확인을 모두 통과해야 재개한다. 거부 시 <see cref="ResumeRejectedErrorType"/>
+    /// 에러로 사유를 보고하고 일시정지를 유지한다. 승인 시 action PAUSED→RUNNING, 정지 지점부터 이어서 수행
+    /// (주행은 같은 목표 재지령, 검사는 정지 직전 경유점부터 재촬영 — §4.3).
+    /// </summary>
+    /// <returns>거부 사유(승인 시 null).</returns>
+    public string? TryResume(string source, string currentMapId, double localizedThresholdPercent)
+    {
+        var st = _amr.LatestStatus;
+        string? reject;
+        string orderId;
+        lock (_gate)
+        {
+            orderId = _orderId;
+            reject = ResumePrecheck.Evaluate(new ResumePrecheck.Input(
+                HasPausedMission: _paused && _missionTask is { IsCompleted: false },
+                EmergencyStopActive: _errors.ContainsKey("emergencyStopActive") || st?.RobotStopActive is not (null or 0),
+                PowerMode: _power.CurrentMode,
+                PositionInitialized: st is not null && st.MapStatusPercent >= localizedThresholdPercent,
+                CurrentMapId: currentMapId,
+                OrderMapId: _orderMapId,
+                OperatingMode: st?.DrivingMode == DrivingMode.Cart ? "MANUAL" : "AUTOMATIC"));
+
+            if (reject is not null)
+            {
+                _errors[ResumeRejectedErrorType] = new VdaError
+                {
+                    ErrorType = ResumeRejectedErrorType,
+                    ErrorLevel = "WARNING",
+                    ErrorDescription = $"{source}: {reject}",
+                };
+            }
+            else
+            {
+                foreach (var a in _actionStates.Where(a => a.ActionStatus == "PAUSED"))
+                    a.ActionStatus = "RUNNING";
+                ClearPauseLocked();
+            }
+        }
+
+        if (reject is not null)
+        {
+            _logger.LogWarning("재개 거부({Source}): {Reason}", source, reject);
+            OpLog(OpCategory.Order, "재개 거부", false, $"{source}: {reject}", orderId.Length > 0 ? orderId : null);
+        }
+        else
+        {
+            _logger.LogInformation("임무 재개({Source}) — order {OrderId}", source, orderId);
+            OpLog(OpCategory.Order, "임무 재개", true, $"{source} — 정지 지점부터 이어서 수행", orderId);
+            PauseCleared?.Invoke();
+        }
+        StateChanged?.Invoke();
+        return reject;
+    }
+
+    /// <summary>
+    /// cancelOrder instantAction — 진행 중 임무 폐기(취소→REST 정지→임무 종료 대기, D-3 순서), 미종결 action FAILED.
+    /// 비상정지와 달리 emergencyStopActive 를 남기지 않으므로 다음 Order 를 바로 수락한다. 일시정지·통신 단절 에러도 클리어(§5).
+    /// </summary>
+    public async Task CancelOrderAsync(string reason = "ACS cancelOrder instantAction")
+    {
+        string? running;
+        lock (_gate) running = _missionTask is { IsCompleted: false } ? _orderId : null;
+        _logger.LogWarning("cancelOrder({Reason}) — {Running}", reason, running ?? "진행 중 임무 없음");
+        OpLog(OpCategory.Order, "임무 취소(cancelOrder)", null,
+            running is null ? $"{reason} — 진행 중 임무 없음" : $"{reason} — 진행 중 order {running} 주행 정지·임무 폐기");
+
+        lock (_gate) _missionCts?.Cancel();
+        if (running is not null)
+        {
+            var stop = await _rest.StopAsync();
+            if (!stop.Ok)
+                _logger.LogWarning("cancelOrder REST 정지 실패(code={Code}): {Msg}", stop.Code, stop.Message);
+            // 검사 시퀀스(코봇)는 이동 완료 대기 중일 수 있어 실행기 취소로 함께 멈춘다.
+            try { await _inspection.AbortAsync(); }
+            catch (Exception ex) { _logger.LogWarning(ex, "cancelOrder: 검사 실행기 취소 실패"); }
+        }
+        await AbortMissionAsync("cancelled by cancelOrder");
+
+        bool wasPaused;
+        lock (_gate)
+        {
+            _driving = false;
+            foreach (var a in _actionStates.Where(a => a.ActionStatus is not ("FINISHED" or "FAILED")))
+            {
+                a.ActionStatus = "FAILED";
+                a.ResultDescription = "cancelled by cancelOrder";
+            }
+            _nodeStates.Clear();
+            wasPaused = ClearPauseLocked();
+        }
+        if (wasPaused) PauseCleared?.Invoke();
+        StateChanged?.Invoke();
+    }
+
+    /// <summary>일시정지 해소 공통부(_gate 잠금 안에서 호출). 게이트를 열고 통신 단절·재개 거부 에러를 지운다. 정지 중이었으면 true.</summary>
+    private bool ClearPauseLocked()
+    {
+        var was = _paused;
+        _paused = false;
+        _pauseGate.Resume();
+        _errors.Remove(CommLossErrorType);
+        _errors.Remove(ResumeRejectedErrorType);
+        return was;
     }
 
     // ── instantActions ────────────────────────────────────────────────
@@ -932,6 +1182,7 @@ public sealed class Vda5050OrderExecutor
             _logger.LogWarning("emergencyStop REST 정지 실패(code={Code}): {Msg}", stop.Code, stop.Message);
         await AbortMissionAsync("stopped by emergencyStop");
 
+        bool wasPaused;
         lock (_gate)
         {
             _driving = false;
@@ -946,7 +1197,10 @@ public sealed class Vda5050OrderExecutor
                 ErrorLevel = "WARNING",
                 ErrorDescription = "emergencyStop 수신에 의한 기능 정지 중 — 신규 Order 재배차로 재개",
             };
+            // 비상정지는 임무를 폐기하므로 일시정지도 함께 해소된다(통신 단절 사양 §7 — 비상정지 우선).
+            wasPaused = ClearPauseLocked();
         }
+        if (wasPaused) PauseCleared?.Invoke();
         StateChanged?.Invoke();
     }
 

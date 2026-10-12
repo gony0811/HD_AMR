@@ -27,6 +27,10 @@ namespace HD.AMR.App.Service.Sequence.Steps;
 /// 컨트롤러는 내부 작업물 프레임을 알지 못하고 최종 변환된 TCP 목표만 받는다.
 /// 비전 실패/무응답은 /inspection 페이지와 동일하게 <b>중단하지 않고</b> 집계만 하고 다음 점으로 진행한다.
 /// (MoveL 실패는 즉시 중단.)
+///
+/// 일시정지(통신 단절 사양 §3·§4.3, <see cref="MissionPauseGate"/>): 진행 중 경유점 MoveL 은 끝까지 수행하고
+/// 다음 촬영·이동으로 넘어가지 않는다. 재개 시 <b>정지 직전 경유점부터 다시 촬영</b>한다 — 정지 순간의
+/// 촬영 성공 여부가 불확실하므로 같은 점의 결과는 마지막 촬영으로 덮어써 집계한다.
 /// </summary>
 public class InspectionRunStep : ISequenceStep
 {
@@ -35,6 +39,7 @@ public class InspectionRunStep : ISequenceStep
     private readonly VisionInterfaceService _vision;
     private readonly DrawingService _drawing;
     private readonly ParameterService _param;
+    private readonly MissionPauseGate _pauseGate;
     private readonly ILogger<InspectionRunStep> _logger;
 
     /// <summary>비전 CAPTURE_REQ 응답 대기 기본값(초) — 프로필 DelaySec 미설정(0 이하) 시. 검사 프로파일 화면 기본값과 동일.</summary>
@@ -48,9 +53,10 @@ public class InspectionRunStep : ISequenceStep
     /// DI 에서 <c>ActivatorUtilities.CreateInstance</c> 로 주입되므로 첫 인자여야 한다.</param>
     public InspectionRunStep(
         bool dryRun, CobotService cobot, VisionInterfaceService vision, DrawingService drawing,
-        ParameterService param, ILogger<InspectionRunStep> logger)
+        ParameterService param, MissionPauseGate pauseGate, ILogger<InspectionRunStep> logger)
     {
         _dryRun = dryRun;
+        _pauseGate = pauseGate;
         _cobot = cobot;
         _vision = vision;
         _drawing = drawing;
@@ -120,6 +126,7 @@ public class InspectionRunStep : ISequenceStep
         // ── 작업물 좌표계 원점으로 이동 — RZ 는 현재값 유지(회전 없음) ──
         var originTarget = InternalWorkpieceFrame.ToBasePose(
             new[] { 0.0, 0.0, 0.0, 0.0, 0.0, rz0 }, frame);
+        await _pauseGate.WaitWhilePausedAsync(ct);
         var originRc = await _cobot.Rpc.MoveLAsync(
             originTarget, tool: context.Tool, user: 0,
             vel: context.Velocity, acc: MoveAcc, ovl: MoveOvl, blendR: -1, ct: ct);
@@ -136,7 +143,11 @@ public class InspectionRunStep : ISequenceStep
                 profile.Name, profile.DelaySec, DefaultVisionTimeoutSec);
         var visionTimeout = TimeSpan.FromSeconds(visionTimeoutSec);
         var settle = TimeSpan.FromSeconds(Math.Max(0, profile.SettleDelaySec));
-        int moved = 0, skipped = 0, visOk = 0, visFail = 0;
+        // 집계는 경유점 인덱스 단위 — 일시정지 재개 시 같은 점을 다시 이동·촬영하므로 중복 집계를 막는다.
+        var movedSet = new HashSet<int>();
+        var skippedSet = new HashSet<int>();
+        var visByIndex = new Dictionary<int, bool>();
+        var lastMoved = -1;
 
         // v3: 검사 세션 1회 = Run ID 1개(GUID). 각 경유점 캡처 = Task ID 1개.
         // ACS 연동 실행이면 jobRef 는 작업지시(VDA5050 action jobRef) 기반으로 발급하고,
@@ -160,9 +171,17 @@ public class InspectionRunStep : ISequenceStep
         {
             ct.ThrowIfCancellationRequested();
 
+            // 일시정지 체크포인트 ① — 다음 경유점으로 이동하기 전. 재개되면 정지 직전 경유점으로 되돌아가 재촬영(§4.3).
+            if (await _pauseGate.WaitWhilePausedAsync(ct) && lastMoved >= 0 && !_dryRun && lastMoved < i)
+            {
+                _logger.LogInformation("⑱ 일시정지 해제 — 정지 직전 경유점 #{Idx} 부터 재촬영", lastMoved + 1);
+                context.Progress?.Invoke($"일시정지 해제 — 경유점 #{lastMoved + 1} 부터 재촬영");
+                i = lastMoved;
+            }
+
             var w = waypoints[i];
             // th_max 초과 점은 /inspection 과 동일하게 제외 (절대 6-DOF 모드는 θ=절대 Ry 라 필터 미적용).
-            if (!profile.PoseAbsolute && Math.Abs(w.Theta) > profile.ThMax) { skipped++; continue; }
+            if (!profile.PoseAbsolute && Math.Abs(w.Theta) > profile.ThMax) { skippedSet.Add(i); continue; }
 
             // 자세 해석 — profile.PoseAbsolute:
             //  · false(상대 틸트): θ/RzDeg 를 프레임 유지값 rz0 에 합성. Rx=0 (LINE 도면 솎기·CROSS 패턴).
@@ -180,11 +199,16 @@ public class InspectionRunStep : ISequenceStep
                 vel: context.InspectVelocity ?? context.Velocity, acc: MoveAcc, ovl: MoveOvl, blendR: -1, ct: ct);
             if (rc != 0)
                 return StepResult.Fail(
-                    $"경유점 #{i + 1} 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)} — {moved}점 이동 후 중단.");
-            moved++;
+                    $"경유점 #{i + 1} 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)} — {movedSet.Count}점 이동 후 중단.");
+            movedSet.Add(i);
+            lastMoved = i;
 
             if (settle > TimeSpan.Zero)
                 await Task.Delay(settle, ct);
+
+            // 일시정지 체크포인트 ② — 이동은 마쳤고 촬영 전. 재개되면 이 자리(정지 직전 경유점)에서 촬영한다.
+            if (await _pauseGate.WaitWhilePausedAsync(ct))
+                _logger.LogInformation("⑱ 일시정지 해제 — 경유점 #{Idx} 촬영부터 재개", i + 1);
 
             // 드라이런: 경유점 이동만 하고 비전 CAPTURE_REQ 는 보내지 않는다(좌표·경로 검증용).
             if (_dryRun)
@@ -203,16 +227,17 @@ public class InspectionRunStep : ISequenceStep
             captureSeq++;
             var data = CaptureReqPayload.Build(surfaceType, wallId, u, v, h, taskId, attempt, captureSeq);
             var outcome = await _vision.Client.RequestCaptureAsync(data, visionTimeout, ct);
-            if (outcome.Success) visOk++;
-            else
+            visByIndex[i] = outcome.Success;
+            if (!outcome.Success)
             {
-                visFail++;
                 _logger.LogWarning("⑱ 경유점 #{Idx} 비전 실패: task={Task}, seq={Seq}, sent={Sent}, responded={Resp}, code={Code}",
                     i + 1, taskId, captureSeq, outcome.Sent, outcome.Responded,
                     outcome.Code is { } c ? ResultCodeNames.NameOf((ushort)c) : "—");
             }
         }
 
+        int moved = movedSet.Count, skipped = skippedSet.Count;
+        int visOk = visByIndex.Values.Count(ok => ok), visFail = visByIndex.Count - visOk;
         var msg =
             (_dryRun ? "검사 수행 완료(드라이런·비전 없음) — " : "검사 수행 완료 — ") +
             $"티칭설정 '{profile.Name}', 이동 {moved}점" +

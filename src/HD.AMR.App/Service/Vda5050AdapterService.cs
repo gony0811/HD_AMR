@@ -22,7 +22,8 @@ public enum AcsLiveness { Unknown, Online, Offline, Broken }
 ///
 /// 범위(1차): connection(ONLINE/OFFLINE/Last Will) + state 2초 주기·이벤트 즉시 발행 +
 /// order 수신 → REST 이동·도달 보고(<see cref="Vda5050OrderExecutor"/>) +
-/// instantActions(emergencyStop 이행 / initPosition 파싱만 — 이행은 벤더 회신 D-10 대기).
+/// instantActions(emergencyStop 이행 / startPause·stopPause·cancelOrder 이행(통신 단절 사양 §4–5) /
+/// initPosition 파싱만 — 이행은 벤더 회신 D-10 대기).
 /// startWeldInspection 은 검사 실행기(<see cref="Inspection.IWeldInspectionExecutor"/>) 위임(2차 연동, §8.5.1)
 /// — 레시피 매핑·검사 시퀀스 실행 후 FINISHED/FAILED + errorType 보고.
 ///
@@ -148,6 +149,19 @@ public sealed class Vda5050AdapterService : BackgroundService
         });
     }
 
+    /// <summary>
+    /// 일시정지 재개 요청 — ACS stopPause 와 조작반 START 버튼이 공유한다(통신 단절 사양 §4.1).
+    /// 재개 전 확인(§4.2)은 실행기가 수행하고, 거부되면 resumeRejected 로 사유를 보고한다.
+    /// </summary>
+    /// <returns>거부 사유(재개 시 null).</returns>
+    public Task<string?> RequestResumeAsync(string reason, string source)
+    {
+        _logger.LogInformation("재개 요청 — {Reason} ({Source})", reason, source);
+        var reject = _executor.TryResume(reason, _mapId, _s.LocalizedThresholdPercent);
+        NudgeState();
+        return Task.FromResult(reject);
+    }
+
     /// <summary>물리 RESET 버튼용 비상정지 해제 — 운영 로그를 어댑터 레이어에서 남기고
     /// Executor 에 위임한 뒤 state 를 즉시 발행한다. 임무 재개는 ACS 신규 Order 재배차로만 가능.</summary>
     public async Task ClearEmergencyStopAsync(string reason, string source = OperationLogService.SourceIo)
@@ -248,6 +262,8 @@ public sealed class Vda5050AdapterService : BackgroundService
             .WithTcpServer(_s.BrokerHost, _s.BrokerPort)
             .WithClientId($"hdamr-{_s.Manufacturer}-{_s.SerialNumber}")
             .WithCleanSession()
+            // 통신 단절 사양 §2.2 — keep-alive 를 명시해 단절 감지 지연을 1.5 × keep-alive 로 묶는다(5 s → 최대 7.5 s).
+            .WithKeepAlivePeriod(TimeSpan.FromSeconds(Math.Max(1, _s.KeepAliveSec)))
             .WithWillTopic(Vda5050Topics.Connection(_s))
             .WithWillPayload(willPayload)
             .WithWillRetain(true)
@@ -364,6 +380,22 @@ public sealed class Vda5050AdapterService : BackgroundService
                         await TriggerEmergencyStopAsync("ACS emergencyStop instantAction");
                         break;
 
+                    case "startPause":
+                        // 표준 일시정지 — 통신 단절 PAUSE 와 같은 경로(주행 감속정지, 검사 경유점 경계 정지, action PAUSED).
+                        if (!await _executor.PauseAsync(PauseReason.Manual))
+                            _opLog.Log(OperationLogService.SourceAcs, OpCategory.Instant, "startPause", false,
+                                "수행 중 임무 없음 — 무시");
+                        break;
+
+                    case "stopPause":
+                        // 재개 — 통신 단절 사양 §4.2 확인 후 이행, 거부 시 resumeRejected.
+                        await RequestResumeAsync("ACS stopPause", OperationLogService.SourceAcs);
+                        break;
+
+                    case "cancelOrder":
+                        await _executor.CancelOrderAsync();
+                        break;
+
                     case "initPosition":
                         // §5.2 + 부록 D-10: 이행 유보(tuneFlag 의미·수렴 판정 미확인). 파싱·로그만 남긴다.
                         // mapId 갱신도 재측위 검증 통과 시에만 하는 계약이라 여기서 바꾸지 않는다.
@@ -435,6 +467,8 @@ public sealed class Vda5050AdapterService : BackgroundService
         if (_acsLiveness == next) return;
         _acsLiveness = next;
         Interlocked.Exchange(ref _acsLivenessChangedTicks, DateTime.UtcNow.Ticks);
+        // ACS 복구 즉시 state 를 발행해 관제가 PAUSE 상태를 바로 알게 한다(통신 단절 사양 §5).
+        NudgeState();
     }
 
     /// <summary>initPosition 파라미터 파싱 — 평면 key 4개(N5 확정) + pose 객체 형태도 방어적 수용.</summary>
@@ -516,7 +550,7 @@ public sealed class Vda5050AdapterService : BackgroundService
             LastNodeSequenceId = lastNodeSeq,
             Driving = driving,
             OperatingMode = st?.DrivingMode == DrivingMode.Cart ? "MANUAL" : "AUTOMATIC",
-            Paused = st?.RobotState == RobotState.Paused,
+            Paused = _executor.IsPaused || st?.RobotState == RobotState.Paused,
             NewBaseRequest = false,
             ActionStates = actionStates,
             NodeStates = nodeStates,

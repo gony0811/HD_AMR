@@ -22,12 +22,16 @@ public class IoModuleService : BackgroundService
     private readonly CobotService _cobot;
     private readonly OperationLogService _opLog;
     private readonly Vda5050AdapterService _vda;
+    private readonly Vda5050OrderExecutor _executor;
+    private readonly CommLossMonitorService _commLoss;
 
     /// <summary>직전 입력 스냅샷 — 현장 버튼/선택 스위치 변화만 운영 로그로 남기기 위한 비교 기준.</summary>
     private bool[]? _prevInputs;
     private readonly IoAmrModeControl _modeControl = new();
     private readonly IoStartStopLampControl _lampControl = new();
     private readonly IoEmoResetControl _emoControl = new();
+    private readonly IoCommLossBuzzerControl _commLossBuzzer = new();
+    private readonly IoStartResumeControl _startResume = new();
     private readonly SemaphoreSlim _outputWriteLock = new(1, 1);
 
     private readonly object _stateLock = new();
@@ -35,8 +39,11 @@ public class IoModuleService : BackgroundService
     private bool _initialStopStateApplied;
 
     public IoModuleService(IOptions<IoModuleModbusTcpSettings> options, ILoggerFactory loggerFactory,
-        AMRService amr, CobotService cobot, OperationLogService opLog, Vda5050AdapterService vda)
+        AMRService amr, CobotService cobot, OperationLogService opLog, Vda5050AdapterService vda,
+        Vda5050OrderExecutor executor, CommLossMonitorService commLoss)
     {
+        _executor = executor;
+        _commLoss = commLoss;
         _opLog = opLog;
         _settings = options.Value;
         _client = new ModbusTcpClient(_settings, loggerFactory.CreateLogger<ModbusTcpClient>());
@@ -211,6 +218,19 @@ public class IoModuleService : BackgroundService
                         _logger.LogWarning(ex, "EMO/RESET 인터록 처리 실패 — 다음 입력 폴링에서 재시도");
                     }
 
+                    // 통신 단절 Fail-Safe(사양 §3·§4.1) — START 버튼 재개, HOLD 부저.
+                    try
+                    {
+                        await _startResume.ApplyAsync(inputs, _executor.IsPaused,
+                            () => _vda.RequestResumeAsync("조작반 START 버튼", OperationLogService.SourceIo));
+                        await _commLossBuzzer.ApplyAsync(_commLoss.Stage == CommLossStage.Hold, SetBuzzerAsync, stoppingToken);
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "통신 단절 START 재개/부저 처리 실패 — 다음 입력 폴링에서 재시도");
+                    }
+
                     try
                     {
                         await ApplyTowerLampPolicyAsync(inputs, stoppingToken);
@@ -336,6 +356,25 @@ public class IoModuleService : BackgroundService
         }
     }
 
+    /// <summary>부저(OUT03)만 토글한다 — 통신 단절 HOLD 경보 전용(되읽기 생략, <see cref="SetResetLampAsync"/> 와 같은 이유).</summary>
+    private async Task SetBuzzerAsync(bool on, CancellationToken ct)
+    {
+        await _outputWriteLock.WaitAsync(ct);
+        try
+        {
+            var word = await ReadOutputWordForUpdateAsync(ct);
+            word = SetBit(word, IoPointMap.Out.Buzzer, on);
+            await WriteOutputWordAsync(word, ct);
+            _logger.LogInformation("부저 {State} (통신 단절 HOLD {Phase})", on ? "ON" : "OFF", on ? "진입" : "해제");
+            _opLog.Log(OperationLogService.SourceIo, OpCategory.Io, on ? "부저 ON" : "부저 OFF", null,
+                on ? "통신 단절 HOLD — 현장 경보" : "통신 단절 HOLD 해제");
+        }
+        finally
+        {
+            _outputWriteLock.Release();
+        }
+    }
+
     /// <summary>현장 조작반 입력 변화(EMO·RESET·AUTO/MANUAL 선택)를 운영 로그로 남긴다 — 상승/하강 에지만.
     /// START/STOP 은 모드 명령 결과와 함께 기록하므로 여기서는 제외한다. 첫 스냅샷은 기준선으로만 쓴다.</summary>
     private void LogInputChanges(bool[] inputs)
@@ -372,7 +411,7 @@ public class IoModuleService : BackgroundService
         var manual = inputs[IoPointMap.In.Manual];
         var alarm = IoTowerLampPolicy.IsAlarm(inputs, GetState()?.Outputs, _emoControl.EmoActive,
             _amr.LatestStatus?.ErrorCode is > 0, _cobot.State?.ErrorCode is > 0);
-        var desired = IoTowerLampPolicy.Resolve(auto, manual, alarm);
+        var desired = IoTowerLampPolicy.Resolve(auto, manual, alarm, paused: _executor.IsPaused);
         if (desired is null)
             return;
 

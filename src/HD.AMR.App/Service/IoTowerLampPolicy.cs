@@ -3,13 +3,16 @@ namespace HD.AMR.App.Service;
 /// <summary>타워램프 세 출력의 상호 배타적인 상태.</summary>
 public readonly record struct TowerLampState(bool Red, bool Yellow, bool Green);
 
-/// <summary>조작반 운전 모드와 알람 상태를 타워램프 상태로 변환한다.</summary>
+/// <summary>조작반 운전 모드·알람·임무 일시정지 상태를 타워램프 상태로 변환한다.</summary>
 public static class IoTowerLampPolicy
 {
-    public static TowerLampState? Resolve(bool auto, bool manual, bool alarm)
+    /// <param name="paused">임무 일시정지(통신 단절 PAUSE/HOLD·startPause) — 황색(통신 단절 사양 §3). 알람보다 낮고 운전 모드보다 높다.</param>
+    public static TowerLampState? Resolve(bool auto, bool manual, bool alarm, bool paused = false)
     {
         if (alarm)
             return new TowerLampState(Red: true, Yellow: false, Green: false);
+        if (paused)
+            return new TowerLampState(Red: false, Yellow: true, Green: false);
         if (manual)
             return new TowerLampState(Red: false, Yellow: true, Green: false);
         if (auto)

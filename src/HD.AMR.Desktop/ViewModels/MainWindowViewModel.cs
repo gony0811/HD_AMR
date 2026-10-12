@@ -19,6 +19,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly CobotService _cobot;
     private readonly IoModuleService _io;
     private readonly Vda5050AdapterService _vda;
+    private readonly CommLossMonitorService _commLoss;
+    private readonly Vda5050OrderExecutor _executor;
     private readonly DispatcherTimer _timer;
 
     public INavigationService Navigation { get; }
@@ -106,8 +108,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly OperationLogService _opLog;
 
     public MainWindowViewModel(INavigationService navigation, AMRService amr, CobotService cobot,
-        IoModuleService io, Vda5050AdapterService vda, OperationLogService opLog)
+        IoModuleService io, Vda5050AdapterService vda, CommLossMonitorService commLoss,
+        Vda5050OrderExecutor executor, OperationLogService opLog)
     {
+        _commLoss = commLoss;
+        _executor = executor;
         _opLog = opLog;
         Navigation = navigation;
         _amr = amr;
@@ -169,10 +174,20 @@ public sealed partial class MainWindowViewModel : ObservableObject
         bool acsAlive = _vda.AcsConnectionLiveness == HD.AMR.App.Service.AcsLiveness.Online
                         || _vda.AcsRecentlyActive;
         IsAcsConnected = _vda.IsBrokerConnected && acsAlive;
-        AcsStatusText = !_vda.IsBrokerConnected ? "미연결"
-            : acsAlive ? "연결"
-            : "브로커만";
+        // 통신 단절 Fail-Safe(사양 §3) — PAUSE/HOLD 는 연결 상태보다 우선 표기(복구 후에도 재개 대기 중이면 유지).
+        var commStage = _commLoss.Stage;
+        var pauseText = commStage switch
+        {
+            CommLossStage.Hold => _commLoss.IsLost ? "단절 HOLD" : "재개 대기(HOLD)",
+            CommLossStage.Pause => _commLoss.IsLost ? "단절 PAUSE" : "재개 대기",
+            _ => _executor.IsPaused ? "일시정지" : null,
+        };
+        AcsStatusText = pauseText
+            ?? (!_vda.IsBrokerConnected ? "미연결"
+                : acsAlive ? "연결"
+                : "브로커만");
         AcsDetailText =
+            (pauseText is not null ? $"임무 일시정지({pauseText}) — 관제 재개(stopPause) 또는 START 버튼으로 재개 · " : "") +
             $"브로커: {(_vda.IsBrokerConnected ? "접속" : "미접속")} · ACS 생존: {_vda.AcsConnectionLiveness}" +
             (_vda.LastAcsMessageUtc is { } t
                 ? $" · 마지막 ACS 메시지: {t.ToLocalTime():HH:mm:ss}"

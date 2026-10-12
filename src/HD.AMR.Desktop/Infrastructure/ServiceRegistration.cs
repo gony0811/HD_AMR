@@ -123,6 +123,9 @@ internal static class ServiceRegistration
         services.Configure<HD.AMR.App.Communication.Vda5050.Vda5050AdapterSettings>(config.GetSection("Vda5050"));
         services.AddSingleton<Vda5050OrderExecutor>();
         AddHostedSingleton<Vda5050AdapterService>(services);
+        // 통신 단절 Fail-Safe(docs/HD_AMR_통신단절_FailSafe_사양.md) — 일시정지 게이트 + 단절 감시(GRACE→PAUSE→HOLD).
+        services.AddSingleton<MissionPauseGate>();
+        AddHostedSingleton<CommLossMonitorService>(services);
         // AMR 장비 자체 상태 변화(모드·이동·조그·오류)를 운영 로그(출처 AMR)로 기록.
         services.AddHostedService<AmrActivityLogService>();
 

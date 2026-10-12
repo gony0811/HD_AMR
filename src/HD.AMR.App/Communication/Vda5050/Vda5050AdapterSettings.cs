@@ -32,6 +32,12 @@ public class Vda5050AdapterSettings
     /// <summary>재접속 재시도 간격(ms).</summary>
     public int ReconnectDelayMs { get; set; } = 5000;
 
+    /// <summary>MQTT keep-alive(초). 통신 단절 사양 §2.2 — 5 s 명시(감지 지연 최대 7.5 s). 로봇·관제 동일.</summary>
+    public int KeepAliveSec { get; set; } = 5;
+
+    /// <summary>통신 단절 Fail-Safe(docs/HD_AMR_통신단절_FailSafe_사양.md §8).</summary>
+    public CommLossSettings CommLoss { get; set; } = new();
+
     /// <summary>
     /// ACS "최근 활동" 판정 창(초). 마지막 order/instantActions 수신이 이 시간 이내면 활동 중으로 표시.
     /// VDA5050 에는 ACS 하트비트가 없어 경과해도 두절 단정은 불가 — UI 표시용.
@@ -47,4 +53,17 @@ public class Vda5050AdapterSettings
 
     /// <summary>측위 완료 판정 임계(맵 일치율 %). 이상이면 positionInitialized=true.</summary>
     public double LocalizedThresholdPercent { get; set; } = 80.0;
+}
+
+/// <summary>통신 단절 Fail-Safe 파라미터(사양 §8). appsettings 의 <c>Vda5050:CommLoss</c> 섹션.</summary>
+public class CommLossSettings
+{
+    /// <summary>기능 사용. LAB 디버깅용으로만 해제 — 현장 운영은 항상 true.</summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>T1 — 단절 판정(t0)부터 PAUSE 진입까지(초).</summary>
+    public double PauseAfterSec { get; set; } = 30;
+
+    /// <summary>T2 — 단절 판정(t0)부터 HOLD(부저 경보) 진입까지(초). T1 보다 커야 한다.</summary>
+    public double HoldAfterSec { get; set; } = 60;
 }

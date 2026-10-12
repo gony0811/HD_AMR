@@ -16,6 +16,7 @@ public class SequenceService
     private readonly SequenceMonitorService _monitor;
     private readonly SequenceRunGate _gate;
     private readonly OperationLogService _opLog;
+    private readonly MissionPauseGate _pauseGate;
 
     /// <summary>운영 로그 출처 — ACS 필드가 실려 있으면 ACS, 아니면 수동(UI).</summary>
     private static string SourceOf(SequenceContext c)
@@ -36,8 +37,10 @@ public class SequenceService
         SequenceMonitorService monitor,
         SequenceRunGate gate,
         OperationLogService opLog,
+        MissionPauseGate pauseGate,
         ILogger<SequenceService> logger)
     {
+        _pauseGate = pauseGate;
         _teachingService = teachingService;
         _cobotService = cobotService;
         _monitor = monitor;
@@ -114,6 +117,18 @@ public class SequenceService
             foreach (var step in selected)
             {
                 if (ct.IsCancellationRequested)
+                {
+                    runResult = new SequenceRunResult(SequenceRunOutcome.Failed, step.Key, "실행 취소됨");
+                    break;
+                }
+
+                // 임무 일시정지(통신 단절 사양 §3) — 스텝 경계에서 멈추고, 재개되면 다음 스텝부터 이어서 수행한다.
+                try
+                {
+                    if (await _pauseGate.WaitWhilePausedAsync(ct))
+                        _logger.LogInformation("시퀀스 일시정지 해제 — '{Step}' 부터 재개", step.Key);
+                }
+                catch (OperationCanceledException)
                 {
                     runResult = new SequenceRunResult(SequenceRunOutcome.Failed, step.Key, "실행 취소됨");
                     break;
