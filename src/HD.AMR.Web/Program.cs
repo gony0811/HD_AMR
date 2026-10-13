@@ -219,8 +219,14 @@ using (var scope = app.Services.CreateScope())
         .SeedDefaultsAsync().GetAwaiter().GetResult();
 
     // 파라미터 기본값 시드 — arrival.deviationXy 등 UI에서 조정 가능하도록 미리 생성.
-    scope.ServiceProvider.GetRequiredService<ParameterService>()
-        .SeedDefaultsAsync().GetAwaiter().GetResult();
+    var param = scope.ServiceProvider.GetRequiredService<ParameterService>();
+    param.SeedDefaultsAsync().GetAwaiter().GetResult();
+
+    // 폐기 키 정리(Camera.Weld.Roi.* 등) — 어떤 코드도 읽지 않아 Parameter 화면에서 혼동만 준다.
+    var removedParams = param.RemoveObsoleteAsync().GetAwaiter().GetResult();
+    if (removedParams.Count > 0)
+        scope.ServiceProvider.GetRequiredService<ILogger<Program>>()
+            .LogInformation("폐기 파라미터 삭제: {Names}", string.Join(", ", removedParams));
 
     var converter = scope.ServiceProvider.GetRequiredService<IDwgConverter>();
     if (!converter.IsAvailable)

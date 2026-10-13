@@ -116,23 +116,21 @@ public static class WeldSequenceSupport
         var f = camera.LatestIr;
         if (f is null) return (null, "IR 프레임 없음");
 
-        double x = 0.35, y = 0.35, w = 0.30, h = 0.30;
+        var roi = DefaultCenterRoi;
         var src = "중앙 기본 ROI";
 
-        if (await TryReadRoiAsync(param, PeakRoiEnabledKey, PeakRoiXKey, PeakRoiYKey, PeakRoiWKey, PeakRoiHKey)
-            is { } peak)
+        if (await CameraRoiParameters.ReadAsync(param, CameraRoiKeys.Peak) is { } peak)
         {
-            (x, y, w, h) = peak;
+            roi = peak;
             src = "Peak ROI";
         }
-        else if (await TryReadRoiAsync(param, RoiEnabledKey, RoiXKey, RoiYKey, RoiWKey, RoiHKey)
-                 is { } depth)
+        else if (await CameraRoiParameters.ReadAsync(param, CameraRoiKeys.Depth) is { } depth)
         {
-            (x, y, w, h) = depth;
+            roi = depth;
             src = "평탄면 ROI 폴백";
         }
 
-        return (ToPixelRoi(f, x, y, w, h), src);
+        return (roi.ToPixel(f.Width, f.Height), src);
     }
 
     /// <summary>
@@ -145,55 +143,30 @@ public static class WeldSequenceSupport
         var f = camera.LatestIr;
         if (f is null) return (null, "IR 프레임 없음");
 
-        double x = 0.35, y = 0.35, w = 0.30, h = 0.30;
+        var roi = DefaultCenterRoi;
         var src = "중앙 기본 ROI";
 
-        if (await TryReadRoiAsync(param, BeadRoiEnabledKey, BeadRoiXKey, BeadRoiYKey, BeadRoiWKey, BeadRoiHKey)
-            is { } bead)
+        if (await CameraRoiParameters.ReadAsync(param, CameraRoiKeys.Bead) is { } bead)
         {
-            (x, y, w, h) = bead;
+            roi = bead;
             src = "Bead ROI";
         }
-        else if (await TryReadRoiAsync(param, PeakRoiEnabledKey, PeakRoiXKey, PeakRoiYKey, PeakRoiWKey, PeakRoiHKey)
-                 is { } peak)
+        else if (await CameraRoiParameters.ReadAsync(param, CameraRoiKeys.Peak) is { } peak)
         {
-            (x, y, w, h) = peak;
+            roi = peak;
             src = "Peak ROI 폴백";
         }
-        else if (await TryReadRoiAsync(param, RoiEnabledKey, RoiXKey, RoiYKey, RoiWKey, RoiHKey)
-                 is { } depth)
+        else if (await CameraRoiParameters.ReadAsync(param, CameraRoiKeys.Depth) is { } depth)
         {
-            (x, y, w, h) = depth;
+            roi = depth;
             src = "평탄면 ROI 폴백";
         }
 
-        return (ToPixelRoi(f, x, y, w, h), src);
+        return (roi.ToPixel(f.Width, f.Height), src);
     }
 
-    private static RoiRect ToPixelRoi(CameraFrame f, double x, double y, double w, double h)
-        => new RoiRect(
-            (int)Math.Round(x * f.Width),
-            (int)Math.Round(y * f.Height),
-            (int)Math.Round(w * f.Width),
-            (int)Math.Round(h * f.Height)).ClampTo(f.Width, f.Height);
-
-    /// <summary>키 세트 하나의 정규화 ROI 를 읽는다. 비활성/무효/DB 미준비면 null.</summary>
-    private static async Task<(double X, double Y, double W, double H)?> TryReadRoiAsync(
-        ParameterService param, string enabledKey, string xKey, string yKey, string wKey, string hKey)
-    {
-        try
-        {
-            if (await param.GetBoolAsync(enabledKey) != true) return null;
-            var x = await param.GetDoubleAsync(xKey) ?? 0;
-            var y = await param.GetDoubleAsync(yKey) ?? 0;
-            var w = await param.GetDoubleAsync(wKey) ?? 0;
-            var h = await param.GetDoubleAsync(hKey) ?? 0;
-            if (w > 0 && h > 0 && x + w <= 1.0001 && y + h <= 1.0001)
-                return (x, y, w, h);
-        }
-        catch { /* DB 미준비 등 — 폴백 */ }
-        return null;
-    }
+    /// <summary>ROI 파라미터가 하나도 없을 때의 폴백 — 화면 중앙 30%.</summary>
+    private static readonly NormalizedRoi DefaultCenterRoi = new(0.35, 0.35, 0.30, 0.30);
 
     /// <summary>부호 파라미터(+1/−1) 읽기. 값이 없거나 0이면 +1.</summary>
     public static async Task<int> GetSignAsync(ParameterService param, string key)

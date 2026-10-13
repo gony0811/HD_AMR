@@ -10,7 +10,8 @@ namespace HD.AMR.Desktop.ViewModels;
 
 /// <summary>
 /// 용접라인 추적(수동 2-shot). 기존 WeldTrackingPanel.razor 이식(핵심).
-/// ROI 에디터(weld/peak) + 1회 검출/피크 캡처/각도 계산 + 검출 오버레이. 검출은 카메라·OpenCV/ONNX 의존
+/// ROI 에디터(Bead/Peak — 시퀀스와 같은 Camera.Bead/Peak.Roi 파라미터) + 진행축 선택 + 1회 검출/피크 캡처/
+/// 각도 계산 + 검출 오버레이. 검출은 카메라·OpenCV/ONNX 의존
 /// (Windows 전용, macOS 는 Noop). 후속: 검출 파라미터 상세 튜닝, 스케일 2점 보정, 학습/라벨 연동.
 /// </summary>
 public sealed partial class WeldTrackingViewModel : ViewModelBase
@@ -37,7 +38,23 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
     [ObservableProperty] private string? _message;
 
     [ObservableProperty] private int _methodIndex;      // 0 DL, 1 Param
-    [ObservableProperty] private int _drawKindIndex;    // 0 weld, 1 peak
+    [ObservableProperty] private int _drawKindIndex;    // 0 weld(=Bead ROI), 1 peak
+
+    /// <summary>
+    /// 진행축(0 가로, 1 세로) — 서비스 값을 직접 읽고 쓴다. 시퀀스가 실행 중 검사방향으로 바꾸므로
+    /// 백킹 필드를 두지 않고 폴링(RefreshStatus)마다 다시 읽어 화면과 실제 값을 맞춘다.
+    /// </summary>
+    public int ProgressAxisIndex
+    {
+        get => _svc.Params.ProgressAxis == WeldProgressAxis.Vertical ? 1 : 0;
+        set
+        {
+            var axis = value == 1 ? WeldProgressAxis.Vertical : WeldProgressAxis.Horizontal;
+            if (_svc.Params.ProgressAxis == axis) return;
+            _svc.Params.ProgressAxis = axis;
+            OnPropertyChanged();
+        }
+    }
     private string DrawKind => DrawKindIndex == 1 ? "peak" : "weld";
     [ObservableProperty] private int _mx, _my, _mw, _mh;
     [ObservableProperty] private string _loadName = "";
@@ -85,6 +102,7 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
         OnPropertyChanged(nameof(DetectorAvailable));
         OnPropertyChanged(nameof(MethodText));
         OnPropertyChanged(nameof(StateText));
+        OnPropertyChanged(nameof(ProgressAxisIndex));
         OnPropertyChanged(nameof(WeldRoiText));
         OnPropertyChanged(nameof(PeakRoiText));
         OnPropertyChanged(nameof(WeldRoi));

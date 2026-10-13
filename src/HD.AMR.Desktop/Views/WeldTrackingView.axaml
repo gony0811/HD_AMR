@@ -28,7 +28,7 @@
                         <TextBlock Text="ROI 지정 (스트림 위 드래그)" FontWeight="SemiBold" />
                         <StackPanel Orientation="Horizontal" Spacing="8">
                             <ComboBox SelectedIndex="{Binding DrawKindIndex}" Width="140">
-                                <ComboBoxItem>Weld ROI</ComboBoxItem>
+                                <ComboBoxItem>Bead ROI</ComboBoxItem>
                                 <ComboBoxItem>Peak ROI</ComboBoxItem>
                             </ComboBox>
                             <Button Content="ROI 초기화" Command="{Binding ResetRoiCommand}" />
@@ -56,7 +56,7 @@
                             <Button VerticalAlignment="Bottom" Content="ROI 적용" Command="{Binding ApplyManualRoiCommand}" />
                         </StackPanel>
                         <TextBlock FontSize="12">
-                            <Run Text="Weld:" Foreground="#CAA500" /><Run Text="{Binding WeldRoiText}" />
+                            <Run Text="Bead:" Foreground="#CAA500" /><Run Text="{Binding WeldRoiText}" />
                             <Run Text="  |  Peak:" Foreground="#00A6C0" /><Run Text="{Binding PeakRoiText}" />
                         </TextBlock>
 
@@ -80,10 +80,19 @@
                 <Border Classes="card">
                     <StackPanel Spacing="8">
                         <TextBlock Text="검출 방식" FontWeight="SemiBold" />
-                        <ComboBox SelectedIndex="{Binding MethodIndex}" Width="200">
-                            <ComboBoxItem>🧠 DL 모델</ComboBoxItem>
-                            <ComboBoxItem>⚙ 파라미터(CV)</ComboBoxItem>
-                        </ComboBox>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <ComboBox SelectedIndex="{Binding MethodIndex}" Width="200">
+                                <ComboBoxItem>🧠 DL 모델</ComboBoxItem>
+                                <ComboBoxItem>⚙ 파라미터(CV)</ComboBoxItem>
+                            </ComboBox>
+                            <!-- 진행축 = 용접선(비드)이 뻗은 방향. Peak 선은 이 축에 수직으로 그려진다.
+                                 시퀀스 실행 시 검사방향으로 자동 설정되며, 여기서는 수동 시험용으로 바꾼다. -->
+                            <TextBlock Classes="axis" Text="진행축" VerticalAlignment="Center" Margin="8,0,0,0" />
+                            <ComboBox SelectedIndex="{Binding ProgressAxisIndex}" Width="150">
+                                <ComboBoxItem>가로 (Peak 선 세로)</ComboBoxItem>
+                                <ComboBoxItem>세로 (Peak 선 가로)</ComboBoxItem>
+                            </ComboBox>
+                        </StackPanel>
                         <StackPanel Orientation="Horizontal" Spacing="6">
                             <Button Content="1회 검출(Peak)" Classes="accent" Command="{Binding FindPeakCommand}" IsEnabled="{Binding !Busy}" />
                             <Button Content="#1 캡처" Command="{Binding CaptureCommand}" CommandParameter="1" IsEnabled="{Binding DetectorAvailable}" />

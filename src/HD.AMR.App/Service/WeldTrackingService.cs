@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using HD.AMR.App.Communication.Weld;
 using HD.AMR.App.Models;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using SixLabors.ImageSharp;
@@ -13,7 +14,11 @@ namespace HD.AMR.App.Service;
 /// 용접라인 추적 오케스트레이션(명세서 v2). 1차 구현은 <b>수동 2-shot 측정</b>:
 /// Peak #1·Peak #2 에서 운영자가 트리거 → 각 한 장에서 비드 centerline·위치오차 d(픽셀)를 구하고,
 /// d1·d2·pitch 로 각도 theta 를 산출한다(화면 표시만, 로봇 미동작). 검출은 <see cref="IWeldVisionDetector"/>,
-/// Peak 는 <see cref="DepthPeakAnalyzer"/>, ROI 는 <see cref="RoiProfileStore"/>(JSON) 사용.
+/// Peak 는 <see cref="DepthPeakAnalyzer"/> 사용.
+/// ROI 는 카메라 페이지·시퀀스와 같은 파라미터(<see cref="CameraRoiKeys.Peak"/>=Peak ROI,
+/// <see cref="CameraRoiKeys.Bead"/>=Weld ROI, 정규화 0~1)가 원천이다 — 이 서비스에서 바꾸면 DB 에 저장되고,
+/// 다른 화면이 바꾸면 <see cref="ParameterService.Changed"/> 로 다시 읽는다. <see cref="RoiProfileStore"/>(JSON)
+/// 프로파일은 이름 붙인 스냅샷으로만 쓴다(Load 하면 그 ROI 가 파라미터에 저장된다).
 /// 싱글톤 — 페이지 이동 간 ROI/파라미터/측정 상태가 유지된다.
 /// </summary>
 public class WeldTrackingService
@@ -23,7 +28,20 @@ public class WeldTrackingService
     private readonly IDlWeldVisionDetector _dlDetector;
     private readonly RoiProfileStore _store;
     private readonly WeldTrackingSettings _settings;
+    private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<WeldTrackingService> _logger;
+
+    /// <summary>파라미터 ROI 캐시(정규화). 참조 교체로 원자적 갱신 — 여러 스레드(UI·시퀀스·DB 이벤트)가 읽는다.</summary>
+    private sealed record RoiState(NormalizedRoi? Peak, NormalizedRoi? Bead);
+    private volatile RoiState _roi = new(null, null);
+
+    /// <summary>시퀀스가 넘긴 ROI(픽셀) 일시 적용분. null 이면 파라미터 캐시를 쓴다.</summary>
+    private sealed record RoiOverride(RoiRect? Peak, RoiRect? Weld);
+    private volatile RoiOverride? _override;
+
+    /// <summary>파라미터 쓰기 직렬화 + 자기 쓰기로 생긴 변경 이벤트 무시용 카운터.</summary>
+    private readonly SemaphoreSlim _persistGate = new(1, 1);
+    private int _selfWrites;
 
     /// <summary>
     /// 시퀀스(자동)와 Weld 페이지(수동)의 동시 접근 직렬화. 신규 *Async 메서드에서만 획득한다.
@@ -37,6 +55,7 @@ public class WeldTrackingService
         IDlWeldVisionDetector dlDetector,
         RoiProfileStore store,
         IOptions<WeldTrackingSettings> options,
+        IServiceScopeFactory scopeFactory,
         ILoggerFactory loggerFactory)
     {
         _camera = camera;
@@ -44,13 +63,19 @@ public class WeldTrackingService
         _dlDetector = dlDetector;
         _store = store;
         _settings = options.Value;
+        _scopeFactory = scopeFactory;
         _logger = loggerFactory.CreateLogger<WeldTrackingService>();
 
+        // 자동 로드 프로파일은 스케일 보정값만 적용한다 — ROI 는 파라미터가 원천이라, 여기서 ROI 까지
+        // 적용하면 재시작마다 카메라 페이지에서 저장한 ROI 를 옛 프로파일로 덮어쓰게 된다.
         if (!string.IsNullOrWhiteSpace(_settings.AutoLoadProfile))
         {
             var p = _store.Load(_settings.AutoLoadProfile!);
-            if (p is not null) ApplyProfile(p);
+            if (p is not null) ApplyProfile(p, applyRoi: false);
         }
+
+        ParameterService.Changed += OnParameterChanged;
+        _ = ReloadRoiAsync();
     }
 
     // ── 상태(UI 가 읽음) ────────────────────────────────────────────
@@ -61,8 +86,12 @@ public class WeldTrackingService
     private IWeldVisionDetector Detector => Method == WeldDetectionMethod.Dl ? _dlDetector : _cvDetector;
 
     public bool DetectorAvailable => Detector.IsAvailable;
-    public RoiRect? PeakRoi { get; private set; }
-    public RoiRect? WeldRoi { get; private set; }
+
+    /// <summary>Peak ROI(검출 프레임 픽셀). 원천은 <see cref="CameraRoiKeys.Peak"/> 파라미터.</summary>
+    public RoiRect? PeakRoi => _override is { } o ? o.Peak : ToPixel(_roi.Peak);
+
+    /// <summary>Weld(비드) ROI(검출 프레임 픽셀). 원천은 <see cref="CameraRoiKeys.Bead"/> 파라미터.</summary>
+    public RoiRect? WeldRoi => _override is { } o ? o.Weld : ToPixel(_roi.Bead);
     public string ProfileName { get; set; } = "default";
     public WeldDetectionParams Params { get; } = new();
     public double Pitch { get; set; }
@@ -103,20 +132,94 @@ public class WeldTrackingService
     public string ProfileDirectory => _store.Directory_;
 
     // ── ROI 관리 ────────────────────────────────────────────────────
-    public void SetPeakRoi(RoiRect? r) => PeakRoi = r;
-    public void SetWeldRoi(RoiRect? r) => WeldRoi = r;
-    public void ResetRoi() { PeakRoi = null; WeldRoi = null; Message = "ROI 초기화됨"; }
+    // 설정 즉시 캐시에 반영하고(화면이 바로 읽음) 파라미터 저장은 백그라운드로 한다 — 시퀀스도 같은 값을 쓴다.
+    public void SetPeakRoi(RoiRect? r) => SetRois(ToNormalized(r), _roi.Bead);
+    public void SetWeldRoi(RoiRect? r) => SetRois(_roi.Peak, ToNormalized(r));
+
+    /// <summary>Peak·Weld ROI 사용 해제 — 파라미터 Enabled=false(좌표 보존). 시퀀스는 다른 ROI 로 폴백한다.</summary>
+    public void ResetRoi() { SetRois(null, null); Message = "ROI 초기화됨 (Peak/Bead ROI 사용 해제)"; }
+
+    private void SetRois(NormalizedRoi? peak, NormalizedRoi? bead)
+    {
+        var prev = _roi;
+        _roi = new RoiState(peak, bead);
+        if (prev.Peak != peak) _ = PersistRoiAsync(CameraRoiKeys.Peak, peak);
+        if (prev.Bead != bead) _ = PersistRoiAsync(CameraRoiKeys.Bead, bead);
+    }
+
+    private async Task PersistRoiAsync(CameraRoiKeys keys, NormalizedRoi? roi)
+    {
+        await _persistGate.WaitAsync();
+        Interlocked.Increment(ref _selfWrites);
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var param = scope.ServiceProvider.GetRequiredService<ParameterService>();
+            await CameraRoiParameters.WriteAsync(param, keys, roi);
+            _logger.LogInformation("용접 추적 ROI 저장: {Label} ROI = {Roi}", keys.Label,
+                roi is { } r ? $"({r.X:0.000}, {r.Y:0.000}, {r.W:0.000}, {r.H:0.000})" : "사용 해제");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "용접 추적 ROI 저장 실패: {Label}", keys.Label);
+            Message = $"{keys.Label} ROI 저장 실패: {ex.Message}";
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _selfWrites);
+            _persistGate.Release();
+        }
+    }
+
+    /// <summary>다른 화면(카메라 페이지·Parameter 화면)이 ROI 파라미터를 바꾸면 캐시를 다시 읽는다.</summary>
+    private void OnParameterChanged(string name)
+    {
+        if (Volatile.Read(ref _selfWrites) > 0) return;
+        if (CameraRoiKeys.Peak.Contains(name) || CameraRoiKeys.Bead.Contains(name))
+            _ = ReloadRoiAsync();
+    }
+
+    private async Task ReloadRoiAsync()
+    {
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var param = scope.ServiceProvider.GetRequiredService<ParameterService>();
+            _roi = new RoiState(
+                await CameraRoiParameters.ReadAsync(param, CameraRoiKeys.Peak),
+                await CameraRoiParameters.ReadAsync(param, CameraRoiKeys.Bead));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "용접 추적 ROI 파라미터 읽기 실패 — 이전 값 유지");
+        }
+    }
+
+    private RoiRect? ToPixel(NormalizedRoi? roi)
+    {
+        if (roi is not { } r) return null;
+        var (w, h) = DetectionFrameSize();
+        return r.ToPixel(w, h);
+    }
+
+    private NormalizedRoi? ToNormalized(RoiRect? r)
+    {
+        if (r is null) return null;
+        var (w, h) = DetectionFrameSize();
+        var n = NormalizedRoi.FromPixel(r, w, h);
+        return n.IsValid ? n : null;
+    }
 
     public void SaveProfile(string name)
     {
-        var size = FrameSize();
+        var (w, h) = DetectionFrameSize();
         _store.Save(new RoiProfile
         {
             Name = name,
             PeakRoi = PeakRoi,
             WeldRoi = WeldRoi,
-            FrameWidth = size?.w ?? 0,
-            FrameHeight = size?.h ?? 0,
+            FrameWidth = w,
+            FrameHeight = h,
             ScaleCorrection = ScaleCorrection,
             ScaleCorrectionEnabled = ScaleCorrectionEnabled,
         });
@@ -128,28 +231,23 @@ public class WeldTrackingService
     {
         var p = _store.Load(name);
         if (p is null) { Message = $"프로파일 '{name}' 없음"; return false; }
-        ApplyProfile(p);
-        Message = $"프로파일 '{name}' 불러옴";
+        Message = $"프로파일 '{name}' 불러옴 (ROI 는 Peak/Bead ROI 파라미터에 저장)";
+        ApplyProfile(p, applyRoi: true);
         return true;
     }
 
-    private void ApplyProfile(RoiProfile p)
+    private void ApplyProfile(RoiProfile p, bool applyRoi)
     {
         ProfileName = p.Name;
         ScaleCorrection = p.ScaleCorrection <= 0 ? 1.0 : p.ScaleCorrection;
         ScaleCorrectionEnabled = p.ScaleCorrectionEnabled;
-        var size = FrameSize();
-        if (size is { } s)
-        {
-            PeakRoi = RoiProfileStore.ValidateAndClamp(p.PeakRoi, s.w, s.h, out var c1);
-            WeldRoi = RoiProfileStore.ValidateAndClamp(p.WeldRoi, s.w, s.h, out var c2);
-            if (c1 || c2) Message = "Load 된 ROI 가 현재 해상도에 맞게 보정되었습니다.";
-        }
-        else
-        {
-            PeakRoi = p.PeakRoi;
-            WeldRoi = p.WeldRoi;
-        }
+        if (!applyRoi) return;
+
+        var (w, h) = DetectionFrameSize();
+        var peak = RoiProfileStore.ValidateAndClamp(p.PeakRoi, w, h, out var c1);
+        var weld = RoiProfileStore.ValidateAndClamp(p.WeldRoi, w, h, out var c2);
+        if (c1 || c2) Message = "Load 된 ROI 가 현재 해상도에 맞게 보정되었습니다.";
+        SetRois(ToNormalized(peak), ToNormalized(weld));
     }
 
     // ── 검출/측정 ───────────────────────────────────────────────────
@@ -390,8 +488,8 @@ public class WeldTrackingService
     }
 
     // ── 시퀀스용 비동기 API ──────────────────────────────────────────
-    // 시퀀스는 ROI 를 스스로 계산해 넘긴다(깊이 ROI 파라미터 기준). 여기서는 그 ROI 를 일시 적용하고
-    // finally 에서 반드시 원복해, 운영자가 Weld 페이지에서 튜닝·저장한 프로파일을 덮어쓰지 않는다.
+    // 시퀀스는 ROI 를 스스로 계산해 넘긴다(같은 파라미터 + 평탄면/중앙 폴백). 여기서는 그 ROI 를
+    // 일시 적용(_override)만 하고 finally 에서 해제한다 — 파라미터에는 쓰지 않는다.
     // 검출 자체는 수백 ms 걸릴 수 있어 Task.Run 으로 Blazor 서킷 스레드를 막지 않는다.
     // (기존 동기 메서드 내부는 취소할 수 없다. 한 호출이 수 초 이내라 허용 범위로 본다.)
 
@@ -399,17 +497,14 @@ public class WeldTrackingService
     public async Task<PeakFindResult> FindPeakAsync(RoiRect peakRoi, CancellationToken ct = default)
     {
         await _gate.WaitAsync(ct);
-        var savedPeak = PeakRoi;
-        var savedWeld = WeldRoi;
         try
         {
-            PeakRoi = peakRoi;
+            _override = new RoiOverride(peakRoi, WeldRoi);
             return await Task.Run(FindPeak, ct);
         }
         finally
         {
-            PeakRoi = savedPeak;
-            WeldRoi = savedWeld;
+            _override = null;
             _gate.Release();
         }
     }
@@ -422,19 +517,15 @@ public class WeldTrackingService
         int id, RoiRect peakRoi, RoiRect weldRoi, CancellationToken ct = default)
     {
         await _gate.WaitAsync(ct);
-        var savedPeak = PeakRoi;
-        var savedWeld = WeldRoi;
         try
         {
-            PeakRoi = peakRoi;
-            WeldRoi = weldRoi;
+            _override = new RoiOverride(peakRoi, weldRoi);
             await Task.Run(() => CapturePeak(id), ct);
             return (id == 1 ? M1 : M2, LastDetect);
         }
         finally
         {
-            PeakRoi = savedPeak;
-            WeldRoi = savedWeld;
+            _override = null;
             _gate.Release();
         }
     }
@@ -514,10 +605,19 @@ public class WeldTrackingService
 
     private static string Fmt(double dpx) => $"{dpx:0.0}px";   // 1회 검출(튜닝)은 깊이 컨텍스트가 없어 px 로 표시
 
-    private (int w, int h)? FrameSize()
+    /// <summary>
+    /// 검출 프레임 크기(ROI 픽셀 좌표계) — IR 모드는 IR(=Depth 해상도, 시퀀스와 동일 기준), RGB 모드는 컬러.
+    /// 스트림이 없으면 설정 해상도.
+    /// </summary>
+    private (int w, int h) DetectionFrameSize()
     {
-        var f = _camera.LatestColor ?? _camera.LatestIr ?? _camera.LatestDepth;
-        return f is null ? null : (f.Width, f.Height);
+        if (Params.Mode == WeldImageMode.Ir)
+            return _camera.LatestIr is { } ir
+                ? (ir.Width, ir.Height)
+                : (_camera.Settings.IrWidth, _camera.Settings.IrHeight);
+        return _camera.LatestColor is { } c
+            ? (c.Width, c.Height)
+            : (_camera.Settings.ColorWidth, _camera.Settings.ColorHeight);
     }
 
     // ── 스케일(mm 환산) ─────────────────────────────────────────────

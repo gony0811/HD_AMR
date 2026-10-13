@@ -1,6 +1,7 @@
 using HD.AMR.App.Data;
 using HD.AMR.App.Service;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace HD.AMR.Desktop.Infrastructure;
 
@@ -28,7 +29,13 @@ internal static class DatabaseInitializer
             .SeedDefaultsAsync().GetAwaiter().GetResult();
 
         // 파라미터 기본값 시드 — arrival.deviationXy 등 UI에서 조정 가능하도록 미리 생성.
-        sp.GetRequiredService<ParameterService>()
-            .SeedDefaultsAsync().GetAwaiter().GetResult();
+        var param = sp.GetRequiredService<ParameterService>();
+        param.SeedDefaultsAsync().GetAwaiter().GetResult();
+
+        // 폐기 키 정리(Camera.Weld.Roi.* 등) — 어떤 코드도 읽지 않아 Parameter 화면에서 혼동만 준다.
+        var removed = param.RemoveObsoleteAsync().GetAwaiter().GetResult();
+        if (removed.Count > 0)
+            sp.GetRequiredService<ILoggerFactory>().CreateLogger(nameof(DatabaseInitializer))
+                .LogInformation("폐기 파라미터 삭제: {Names}", string.Join(", ", removed));
     }
 }
