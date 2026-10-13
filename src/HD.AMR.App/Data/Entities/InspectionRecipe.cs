@@ -55,7 +55,7 @@ public class InspectionRecipe
     public double? CameraTargetDistanceMm { get; set; }
 
     /// <summary>코봇 이동 속도 [%] — 접근/복귀성 모션(② 검사위치 이동·진입 준비·끝점 이동·홈 복귀·정렬·
-    /// ⑱ 원점 이동) 공통. null = 티칭 프로필 RunVel(미지정 시 20) 폴백.</summary>
+    /// ⑱ 첫 경유점 스테이징) 공통. null = 티칭 프로필 RunVel(미지정 시 20) 폴백.</summary>
     public int? MoveVelPercent { get; set; }
 
     /// <summary>코봇 검사 속도 [%] — ⑱ 경유점 순회(검사 스캔) 전용. null = 이동 속도와 동일.</summary>

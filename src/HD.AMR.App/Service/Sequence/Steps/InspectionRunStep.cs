@@ -14,7 +14,8 @@ namespace HD.AMR.App.Service.Sequence.Steps;
 ///
 /// 흐름:
 ///   1) 실행 컨텍스트에서 BASE 기준 내부 작업물 프레임을 읽는다.
-///   2) 그 좌표계 <b>원점</b>을 BASE TCP 목표로 변환해 MoveL — 검사 시작 스테이징. 자세의 RZ 는
+///   2) <b>첫 경유점</b>(Top 높이)을 BASE TCP 목표로 변환해 MoveL — 검사 시작 스테이징. 프레임 원점(Top Z−33.8
+///      바닥 가상점)으로는 가지 않는다 — 광축 방향으로 작업물에 파고들어 기구물과 충돌했다(실기). 자세의 RZ 는
 ///      <b>현재 툴 RZ(프레임 기준 rz0)를
 ///      유지</b>한다 — 등록 프레임의 X축(비드1→비드2)이 툴 X와 반대면 프레임이 툴 대비 RZ 180° 회전 상태라,
 ///      rz=0 을 명령하면 툴이 180° 돌아가는 문제가 있었음(실기). 회전 없이 현재 자세로 바로 검사한다.
@@ -123,16 +124,40 @@ public class InspectionRunStep : ISequenceStep
             frame[0], frame[1], frame[2], context.Tool, context.Velocity, context.InspectionSurfaceId,
             rz0, tiltSign);
 
-        // ── 작업물 좌표계 원점으로 이동 — RZ 는 현재값 유지(회전 없음) ──
-        var originTarget = InternalWorkpieceFrame.ToBasePose(
-            new[] { 0.0, 0.0, 0.0, 0.0, 0.0, rz0 }, frame);
-        await _pauseGate.WaitWhilePausedAsync(ct);
-        var originRc = await _cobot.Rpc.MoveLAsync(
-            originTarget, tool: context.Tool, user: 0,
-            vel: context.Velocity, acc: MoveAcc, ovl: MoveOvl, blendR: -1, ct: ct);
-        if (originRc != 0)
+        // th_max 초과 점은 /inspection 과 동일하게 제외 (절대 6-DOF 모드는 θ=절대 Ry 라 필터 미적용).
+        bool IsSkipped(InspectionWaypoint w) => !profile.PoseAbsolute && Math.Abs(w.Theta) > profile.ThMax;
+
+        // 자세 해석 — profile.PoseAbsolute:
+        //  · false(상대 틸트): θ/RzDeg 를 프레임 유지값 rz0 에 합성. Rx=0 (LINE 도면 솎기·CROSS 패턴).
+        //  · true(절대 6-DOF): 캡처한 X/Y/Z/Rx/Ry(θ)/Rz 를 작업물 좌표계 기준 그대로 명령
+        //    (/inspection-points 조그+캡처 — 코로게이션 법선 추종). rz0/tiltSign 합성 금지.
+        double[] ToTargetBase(InspectionWaypoint w)
+        {
+            var pose = profile.PoseAbsolute
+                ? new[] { w.X, w.Y, w.Z, w.RxDeg, w.Theta, w.RzDeg }
+                : attitude.Pose(w.X, w.Y, w.Z, w.Theta, w.RzDeg);
+            var targetBase = InternalWorkpieceFrame.ToBasePose(pose, frame);
+            // 절대 모드는 RzDeg 가 프레임 X(검사 이동 방향) 기준이라 역방향 검사에서 J6 가 180° 뒤집힌다 — 보정.
+            return profile.PoseAbsolute ? attitude.KeepTwist(targetBase) : targetBase;
+        }
+
+        // ── 첫 경유점으로 바로 이동(검사 시작 스테이징) — RZ 는 현재값 유지(회전 없음) ──
+        // 과거엔 프레임 원점(z=0)으로 먼저 갔는데, 원점은 Top 에서 작업물 Z− 로 33.8mm 내린 코로게이션 바닥
+        // 가상점이라 Peak2→Peak1 횡이동 중 툴이 작업물 쪽으로 파고들어 기구물과 충돌했다(실기). 첫 경유점은
+        // Top 높이이므로 광축(Z) 방향 진입 없이 그 자리로 간다.
+        var firstIdx = waypoints.FindIndex(w => !IsSkipped(w));
+        if (firstIdx < 0)
             return StepResult.Fail(
-                $"내부 작업물 좌표계 원점 이동 실패 (rc={originRc}){FairinoErrorCodes.Suffix(originRc)}.");
+                $"티칭설정 '{profile.Name}' 경유점이 모두 th_max({profile.ThMax}°) 초과로 제외되었습니다.");
+        _logger.LogInformation("⑱ 첫 경유점 #{Idx} 로 스테이징 이동 (프레임 z={Z:0.0}mm)",
+            firstIdx + 1, waypoints[firstIdx].Z);
+        await _pauseGate.WaitWhilePausedAsync(ct);
+        var stageRc = await _cobot.Rpc.MoveLAsync(
+            ToTargetBase(waypoints[firstIdx]), tool: context.Tool, user: 0,
+            vel: context.Velocity, acc: MoveAcc, ovl: MoveOvl, blendR: -1, ct: ct);
+        if (stageRc != 0)
+            return StepResult.Fail(
+                $"첫 경유점 #{firstIdx + 1} 스테이징 이동 실패 (rc={stageRc}){FairinoErrorCodes.Suffix(stageRc)}.");
 
         // ── 경유점 순회 + 비전 캡처 ────────────────────────────────────
         // DelaySec = CAPTURE_REQ 응답 대기 제한(초). 0 이하(검사 프로파일 화면에 입력 칸이 없던 구버전 저장분)면
@@ -180,22 +205,10 @@ public class InspectionRunStep : ISequenceStep
             }
 
             var w = waypoints[i];
-            // th_max 초과 점은 /inspection 과 동일하게 제외 (절대 6-DOF 모드는 θ=절대 Ry 라 필터 미적용).
-            if (!profile.PoseAbsolute && Math.Abs(w.Theta) > profile.ThMax) { skippedSet.Add(i); continue; }
+            if (IsSkipped(w)) { skippedSet.Add(i); continue; }
 
-            // 자세 해석 — profile.PoseAbsolute:
-            //  · false(상대 틸트): θ/RzDeg 를 프레임 유지값 rz0 에 합성. Rx=0 (LINE 도면 솎기·CROSS 패턴).
-            //  · true(절대 6-DOF): 캡처한 X/Y/Z/Rx/Ry(θ)/Rz 를 작업물 좌표계 기준 그대로 명령
-            //    (/inspection-points 조그+캡처 — 코로게이션 법선 추종). rz0/tiltSign 합성 금지.
-            var pose = profile.PoseAbsolute
-                ? new[] { w.X, w.Y, w.Z, w.RxDeg, w.Theta, w.RzDeg }
-                : attitude.Pose(w.X, w.Y, w.Z, w.Theta, w.RzDeg);
-            var targetBase = InternalWorkpieceFrame.ToBasePose(pose, frame);
-            // 절대 모드는 RzDeg 가 프레임 X(검사 이동 방향) 기준이라 역방향 검사에서 J6 가 180° 뒤집힌다 — 보정.
-            if (profile.PoseAbsolute)
-                targetBase = attitude.KeepTwist(targetBase);
-            // 경유점 순회(검사 스캔)만 검사 속도 적용 — 원점 이동 등 접근성 모션은 이동 속도(Velocity).
-            var rc = await _cobot.Rpc.MoveLAsync(targetBase, tool: context.Tool, user: 0,
+            // 경유점 순회(검사 스캔)만 검사 속도 적용 — 스테이징 등 접근성 모션은 이동 속도(Velocity).
+            var rc = await _cobot.Rpc.MoveLAsync(ToTargetBase(w), tool: context.Tool, user: 0,
                 vel: context.InspectVelocity ?? context.Velocity, acc: MoveAcc, ovl: MoveOvl, blendR: -1, ct: ct);
             if (rc != 0)
                 return StepResult.Fail(
