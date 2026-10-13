@@ -188,7 +188,7 @@ public class BeadCenteringStep : ISequenceStep
         FlatSurfaceCenteringService.ApplyAxis(offset, axY, -offY);
 
         _logger.LogInformation(
-            "[Bead{Id} 센터링] Bead{Id} 검사캠 시프트: 영상 ({X:+0.0;-0.0}, {Y:+0.0;-0.0})mm 역방향 이동 → 툴 오프셋 [{Ox:0.#}, {Oy:0.#}, {Oz:0.#}]",
+            "[Bead{Id} 센터링] 검사캠 시프트: 영상 ({X:+0.0;-0.0}, {Y:+0.0;-0.0})mm 역방향 이동 → 툴 오프셋 [{Ox:0.#}, {Oy:0.#}, {Oz:0.#}]",
             _peakId, offX, offY, offset[0], offset[1], offset[2]);
 
         var rc = await _cobot.Rpc.MoveByToolOffsetAsync(anchor, user: 0, offset,

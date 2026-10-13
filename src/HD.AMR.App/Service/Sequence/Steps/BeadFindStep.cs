@@ -94,7 +94,7 @@ public class BeadFindStep : ISequenceStep
         context.Bag[WeldSequenceSupport.BeadDMmBagKey(_peakId)] = dMm;
 
         _logger.LogInformation(
-            "[Bead{Id} 찾기] Bead{Id} 찾음: d={DMm:0.0}mm ({DPx:0.0}px), coverage={Cov:P0}, 외삽={Ex:0}px, ROI={Roi}",
+            "[Bead{Id} 찾기] 찾음: d={DMm:0.0}mm ({DPx:0.0}px), coverage={Cov:P0}, 외삽={Ex:0}px, ROI={Roi}",
             _peakId, dMm, detect.DPixel, detect.Confidence, extrapPx, roiSrc);
 
         var extrapNote = extrapPx > 0 ? $"외삽 {extrapPx:0}px" : "외삽 없음";

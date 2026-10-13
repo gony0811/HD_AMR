@@ -87,7 +87,7 @@ public class PeakFindStep : ISequenceStep
         context.Bag[WeldSequenceSupport.OffsetMmBagKey(_peakId)] = offsetMm;
 
         _logger.LogInformation(
-            "[Peak{Id} 찾기] Peak{Id} 찾음: offset={Px:0.0}px / {Mm:0.0}mm, depth={D}mm, conf={C:0.00}, ROI={Roi}({X},{Y},{W},{H})",
+            "[Peak{Id} 찾기] 찾음: offset={Px:0.0}px / {Mm:0.0}mm, depth={D}mm, conf={C:0.00}, ROI={Roi}({X},{Y},{W},{H})",
             _peakId, r.OffsetPx, offsetMm, r.DepthMm, r.Confidence, roiSrc, roi.X, roi.Y, roi.Width, roi.Height);
 
         return StepResult.Ok(
