@@ -35,7 +35,7 @@
                 <StackPanel Spacing="8">
                     <Grid ColumnDefinitions="*,Auto">
                         <TextBlock Text="카메라" FontWeight="SemiBold" />
-                        <TextBlock Grid.Column="1" Classes="cap" Margin="0" Text="{Binding CameraHint}" />
+                        <TextBlock Grid.Column="1" Classes="cap" Margin="0" Text="{Binding CameraHint, StringFormat='{}{0} · 마우스를 올리면 거리(mm)'}" />
                     </Grid>
 
                     <!-- 2칸: 라이브 + (검출 결과 | 레이저 3점 값) -->
@@ -43,9 +43,10 @@
                         <StackPanel Grid.Column="0" Margin="0,0,5,0">
                             <TextBlock Classes="cap" Text="{Binding LiveTitle}" />
                             <Border Classes="imgbox" Height="190">
-                                <Grid Name="LiveHost">
+                                <Grid Name="LiveHost" Background="Transparent">
                                     <Image Source="{Binding LiveImage}" Stretch="Fill" />
                                     <Canvas Name="LiveOverlay" />
+                                    <Canvas Name="LiveProbe" />
                                 </Grid>
                             </Border>
                         </StackPanel>
@@ -70,22 +71,29 @@
                             <StackPanel Grid.Column="0" Margin="0,0,4,0">
                                 <TextBlock Classes="cap" Text="{Binding LiveTitle}" />
                                 <Border Classes="imgbox" Height="135">
-                                    <Image Source="{Binding LiveImage}" Stretch="Fill" />
+                                    <Grid Name="FlatLiveHost" Background="Transparent">
+                                        <Image Source="{Binding LiveImage}" Stretch="Fill" />
+                                        <Canvas Name="FlatLiveProbe" />
+                                    </Grid>
                                 </Border>
                             </StackPanel>
                             <StackPanel Grid.Column="1" Margin="4,0,4,0">
                                 <TextBlock Classes="cap" Text="{Binding FlatTitle}" TextTrimming="CharacterEllipsis" />
                                 <Border Classes="imgbox" Height="135">
-                                    <Grid Name="FlatHost">
+                                    <Grid Name="FlatHost" Background="Transparent">
                                         <Image Source="{Binding FlatImage}" Stretch="Fill" />
                                         <Canvas Name="FlatOverlay" />
+                                        <Canvas Name="FlatProbe" />
                                     </Grid>
                                 </Border>
                             </StackPanel>
                             <StackPanel Grid.Column="2" Margin="4,0,0,0">
                                 <TextBlock Classes="cap" Text="{Binding PreLaserTitle}" TextTrimming="CharacterEllipsis" />
                                 <Border Classes="imgbox" Height="135">
-                                    <Image Source="{Binding PreLaserImage}" Stretch="Fill" />
+                                    <Grid Name="PreLaserHost" Background="Transparent">
+                                        <Image Source="{Binding PreLaserImage}" Stretch="Fill" />
+                                        <Canvas Name="PreLaserProbe" />
+                                    </Grid>
                                 </Border>
                             </StackPanel>
                         </Grid>

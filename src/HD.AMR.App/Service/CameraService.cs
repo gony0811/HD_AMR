@@ -111,9 +111,11 @@ public class CameraService : BackgroundService
     /// 정규화 좌표 (u,v)∈[0,1] 위치의 깊이값(mm)을 반환한다. 프레임 없음/범위밖/무효(0)면 null.
     /// 정규화 좌표를 쓰므로 표시 스케일·네이티브 해상도(640×400/1280×800)와 무관하게 동작한다.
     /// </summary>
-    public int? GetLatestDepthMmAt(double u, double v)
+    public int? GetLatestDepthMmAt(double u, double v) => DepthMmAt(_client.LatestDepth, u, v);
+
+    /// <summary><see cref="GetLatestDepthMmAt"/> 의 지정 프레임 버전 — 정지 화면(검출 순간 프레임) hover 용.</summary>
+    public static int? DepthMmAt(CameraFrame? f, double u, double v)
     {
-        var f = _client.LatestDepth;
         if (f is null || u < 0 || u > 1 || v < 0 || v > 1) return null;
         int x = Math.Clamp((int)(u * f.Width), 0, f.Width - 1);
         int y = Math.Clamp((int)(v * f.Height), 0, f.Height - 1);

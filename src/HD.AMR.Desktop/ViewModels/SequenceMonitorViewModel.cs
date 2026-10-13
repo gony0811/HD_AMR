@@ -93,6 +93,11 @@ public sealed partial class SequenceMonitorViewModel : ObservableObject, IDispos
         _ => "",
     };
 
+    // ── 마우스 hover 거리(mm) — 정규화 좌표. IR 은 Depth 와 같은 센서·해상도라 같은 위치의 깊이를 읽는다. ──
+    public int? ProbeLive(double u, double v) => _cam.GetLatestDepthMmAt(u, v);
+    public int? ProbeFlat(double u, double v) => CameraService.DepthMmAt(FlatSnapshot?.Analysis.Frame, u, v);
+    public int? ProbePreLaser(double u, double v) => CameraService.DepthMmAt(FlatSnapshot?.PreLaserFrame, u, v);
+
     private static MonitorCameraKind KindOf(string? key) => key switch
     {
         "flatSurfaceAlign" => MonitorCameraKind.Flat,

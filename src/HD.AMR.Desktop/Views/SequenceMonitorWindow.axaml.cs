@@ -27,6 +27,42 @@ public partial class SequenceMonitorWindow : Window
         _flatOverlay = this.FindControl<Canvas>("FlatOverlay")!;
         _liveHost.SizeChanged += (_, _) => DrawLiveRoi();
         _flatHost.SizeChanged += (_, _) => DrawFlat();
+
+        // 마우스 hover → 그 위치 깊이(mm). 라이브는 최신 프레임, 정지 화면은 그 순간 프레임에서 읽는다.
+        AttachProbe(_liveHost, "LiveProbe", (u, v) => _vm?.ProbeLive(u, v));
+        AttachProbe(this.FindControl<Grid>("FlatLiveHost")!, "FlatLiveProbe", (u, v) => _vm?.ProbeLive(u, v));
+        AttachProbe(_flatHost, "FlatProbe", (u, v) => _vm?.ProbeFlat(u, v));
+        AttachProbe(this.FindControl<Grid>("PreLaserHost")!, "PreLaserProbe", (u, v) => _vm?.ProbePreLaser(u, v));
+    }
+
+    private void AttachProbe(Grid host, string canvasName, Func<double, double, int?> sample)
+    {
+        var canvas = this.FindControl<Canvas>(canvasName)!;
+        var text = new TextBlock { Foreground = Brushes.White, FontSize = 11 };
+        var label = new Border
+        {
+            Background = new SolidColorBrush(Color.Parse("#CC000000")),
+            CornerRadius = new Avalonia.CornerRadius(3),
+            Padding = new Avalonia.Thickness(4, 2),
+            IsVisible = false,
+            IsHitTestVisible = false,
+            Child = text,
+        };
+        canvas.Children.Add(label);
+
+        host.PointerMoved += (_, e) =>
+        {
+            var size = host.Bounds.Size;
+            if (size.Width <= 0 || size.Height <= 0) return;
+            var p = e.GetPosition(host);
+            var mm = sample(Math.Clamp(p.X / size.Width, 0, 1), Math.Clamp(p.Y / size.Height, 0, 1));
+            text.Text = mm is { } m ? $"{m} mm" : "— mm";
+            // 오른쪽·아래 가장자리에서는 라벨을 커서 반대편으로 붙여 잘리지 않게 한다.
+            Canvas.SetLeft(label, p.X + 70 > size.Width ? p.X - 66 : p.X + 10);
+            Canvas.SetTop(label, p.Y + 26 > size.Height ? p.Y - 22 : p.Y + 10);
+            label.IsVisible = true;
+        };
+        host.PointerExited += (_, _) => label.IsVisible = false;
     }
 
     public SequenceMonitorWindow(SequenceMonitorViewModel vm) : this()
