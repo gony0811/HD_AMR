@@ -154,7 +154,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             approachMm, nodeThetaRad?.ToString("0.###") ?? "(미상)");
         _opLog.Log(OperationLogService.SourceAcs, OpCategory.Action, "seam 시작점 시험 구성", null,
             $"jobRef={req.JobRef}, wall={req.DrawingPos.WallCode}, seamStartW=[{string.Join(", ", req.SeamStartW.Select(v => v.ToString("0.###")))}], " +
-            $"면 이격 {approachMm:0}mm(본검사 ②와 동일), 노드 θ={nodeThetaRad?.ToString("0.###") ?? "미상"}, " +
+            $"면 이격 {approachMm:0}mm(본검사 'Cobot 검사위치 이동'과 동일), 노드 θ={nodeThetaRad?.ToString("0.###") ?? "미상"}, " +
             $"z 보정 {context.ZDatumOffsetMm:0}mm, 단계: {string.Join(",", SeamStartStepKeys)} (촬영·홈 복귀 없음)", orderId);
 
         // 코봇이 움직이므로 같은 order 의 정렬 캐시는 더 이상 믿을 수 없다.
@@ -404,7 +404,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         // ②는 ③이 수렴시킬 카메라 목표거리만큼 물러난다. 수신값이 다르면 흔적만 남긴다.
         if (req.StandoffMm > 0 && Math.Abs(req.StandoffMm - cameraTargetMm) > 0.001)
             _logger.LogInformation(
-                "ACS standoffMm={AcsStandoff} 미사용 — ② 면 이격은 레시피 {Recipe} 카메라 목표거리 {Target}mm 를 씁니다 (jobRef={JobRef})",
+                "ACS standoffMm={AcsStandoff} 미사용 — 'Cobot 검사위치 이동' 면 이격은 레시피 {Recipe} 카메라 목표거리 {Target}mm 를 씁니다 (jobRef={JobRef})",
                 req.StandoffMm, recipe.Id, cameraTargetMm, req.JobRef);
         if (req.WorkingDistanceMm is { } acsWd && Math.Abs(acsWd - cameraTargetMm) > 0.001)
             _logger.LogInformation(

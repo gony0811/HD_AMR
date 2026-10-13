@@ -52,7 +52,7 @@ public class CobotHomeReturnStep : ISequenceStep
         if (SequenceEntry.IsWithinJointTolerance(cur, homeJoints))
         {
             const string already = "코봇이 이미 홈 위치에 있습니다.";
-            _logger.LogInformation("⑲ {Msg}", already);
+            _logger.LogInformation("[코봇 홈 복귀] {Msg}", already);
             context.Progress?.Invoke(already);
             return StepResult.Ok(already);
         }
@@ -72,7 +72,7 @@ public class CobotHomeReturnStep : ISequenceStep
         parts.Add("홈 복귀");
         var msg = $"코봇 {string.Join(" → ", parts)} 완료.";
 
-        _logger.LogInformation("⑲ {Msg}", msg);
+        _logger.LogInformation("[코봇 홈 복귀] {Msg}", msg);
         context.Progress?.Invoke(msg);
         return StepResult.Ok(msg);
     }

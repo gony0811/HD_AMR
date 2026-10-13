@@ -98,7 +98,7 @@ public class AmrMoveStep : ISequenceStep
 
         var msg = $"AMR 정차 ({r.Pose.X:0.###}, {r.Pose.Y:0.###}) m, θ={r.Pose.Angle * 180 / Math.PI:0.##}° " +
                   $"— 목표 대비 {r.ResidualMm:0}mm / {r.ResidualDeg:0.0}°";
-        _logger.LogInformation("① {Msg}", msg);
+        _logger.LogInformation("[AMR 위치 이동] {Msg}", msg);
         context.Progress?.Invoke(msg);
         return StepResult.Ok(msg);
     }

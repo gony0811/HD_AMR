@@ -66,7 +66,7 @@ public class BeadCenteringStep : ISequenceStep
 
         if (!context.Bag.ContainsKey(WeldSequenceSupport.BeadDMmBagKey(_peakId)))
             return StepValidation.Fail(
-                $"Bead{_peakId} 측정값 없음 — {(_peakId == 1 ? "⑦" : "⑪")} 단계를 먼저 실행하세요.");
+                $"Bead{_peakId} 측정값 없음 — 'Bead{_peakId} 찾기' 단계를 먼저 실행하세요.");
 
         return StepValidation.Ok();
     }
@@ -94,7 +94,7 @@ public class BeadCenteringStep : ISequenceStep
         var clamped = Math.Clamp(moveMm, -MaxCenteringMoveMm, MaxCenteringMoveMm);
         if (Math.Abs(clamped - moveMm) > 1e-6)
             _logger.LogWarning(
-                "⑦⁺/⑪⁺ Bead{Id} 센터링 이동량 {Raw:0.0}mm 가 한계 ±{Max:0}mm 로 클램프됨.",
+                "Bead{Id} 센터링 이동량 {Raw:0.0}mm 가 한계 ±{Max:0}mm 로 클램프됨.",
                 _peakId, moveMm, MaxCenteringMoveMm);
         var (toolAxis, axisFromParam) = await WeldSequenceSupport.GetCrossToolAxisAsync(_param, progressAxis);
         if (!axisFromParam)
@@ -107,7 +107,7 @@ public class BeadCenteringStep : ISequenceStep
         FlatSurfaceCenteringService.ApplyAxis(offset, toolAxis, clamped);
 
         _logger.LogInformation(
-            "⑦⁺/⑪⁺ Bead{Id} 센터링: 진행축={Prog}, cross 툴{Axis} {Off:+0.0;-0.0}mm (측정 d={Meas:+0.0;-0.0}mm)",
+            "Bead{Id} 센터링: 진행축={Prog}, cross 툴{Axis} {Off:+0.0;-0.0}mm (측정 d={Meas:+0.0;-0.0}mm)",
             _peakId, progressAxis, FlatSurfaceCenteringService.AxisName(toolAxis), clamped, initialDMm);
 
         var rc = await _cobot.Rpc.MoveByToolOffsetAsync(anchor, user: 0, offset,
@@ -124,7 +124,7 @@ public class BeadCenteringStep : ISequenceStep
             return ok2
                 ? StepResult.Ok(
                     $"Bead2 센터링 완료 — 툴{FlatSurfaceCenteringService.AxisName(toolAxis)} {clamped:+0.0;-0.0}mm 이동 " +
-                    $"(⑫ 각도 정합을 위해 재측정하지 않음).{note2}")
+                    $"(각도 산출 정합을 위해 재측정하지 않음).{note2}")
                 : StepResult.Fail(note2);
         }
 
@@ -188,7 +188,7 @@ public class BeadCenteringStep : ISequenceStep
         FlatSurfaceCenteringService.ApplyAxis(offset, axY, -offY);
 
         _logger.LogInformation(
-            "⑦⁺/⑪⁺ Bead{Id} 검사캠 시프트: 영상 ({X:+0.0;-0.0}, {Y:+0.0;-0.0})mm 역방향 이동 → 툴 오프셋 [{Ox:0.#}, {Oy:0.#}, {Oz:0.#}]",
+            "[Bead{Id} 센터링] Bead{Id} 검사캠 시프트: 영상 ({X:+0.0;-0.0}, {Y:+0.0;-0.0})mm 역방향 이동 → 툴 오프셋 [{Ox:0.#}, {Oy:0.#}, {Oz:0.#}]",
             _peakId, offX, offY, offset[0], offset[1], offset[2]);
 
         var rc = await _cobot.Rpc.MoveByToolOffsetAsync(anchor, user: 0, offset,

@@ -82,7 +82,7 @@ public sealed class SeamApproachResolver
         var (opticalAxis, _) = await WeldSequenceSupport.GetDepthAxisAsync(_param);
 
         if (approachW is not { Length: 3 } seam)
-            return new SeamApproachResult(null, null, useComputed, $"{label} 용접선 좌표 없음 — 티칭 위치로 이동", null);
+            return new SeamApproachResult(null, null, useComputed, "용접선 좌표 없음 — 티칭 위치로 이동", null);
 
         if (_amr.LatestStatus is not { } status)
             return new SeamApproachResult(null, null, useComputed,
@@ -163,7 +163,7 @@ public sealed class SeamApproachResolver
         return new SeamApproachResult(
             target.ApproachBaseMm, target.TargetPoseBase, useComputed,
             (standoffMm is null
-                ? $"용접선 접근점(면 이격 {standoff:0}mm — ③ 카메라 목표거리)"
+                ? $"용접선 접근점(면 이격 {standoff:0}mm — '카메라 거리 정렬' 목표거리)"
                 : $"용접선 접근점(면 이격 {standoff:0}mm)") + reachNote, null, opticalAxis);
     }
 }

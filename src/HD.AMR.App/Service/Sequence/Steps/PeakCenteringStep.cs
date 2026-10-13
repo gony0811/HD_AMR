@@ -61,7 +61,7 @@ public class PeakCenteringStep : ISequenceStep
 
         if (!context.Bag.ContainsKey(WeldSequenceSupport.OffsetMmBagKey(_peakId)))
             return StepValidation.Fail(
-                $"Peak{_peakId} 측정값 없음 — {(_peakId == 1 ? "⑤" : "⑨")} 단계를 먼저 실행하세요.");
+                $"Peak{_peakId} 측정값 없음 — 'Peak{_peakId} 찾기' 단계를 먼저 실행하세요.");
 
         return StepValidation.Ok();
     }
@@ -86,7 +86,7 @@ public class PeakCenteringStep : ISequenceStep
         var clamped = Math.Clamp(moveMm, -MaxCenteringMoveMm, MaxCenteringMoveMm);
         if (Math.Abs(clamped - moveMm) > 1e-6)
             _logger.LogWarning(
-                "⑥/⑩ Peak{Id} 센터링 이동량 {Raw:0.0}mm 가 한계 ±{Max:0}mm 로 클램프됨.",
+                "Peak{Id} 센터링 이동량 {Raw:0.0}mm 가 한계 ±{Max:0}mm 로 클램프됨.",
                 _peakId, moveMm, MaxCenteringMoveMm);
         var (toolAxis, axisFromParam) = await WeldSequenceSupport.GetProgressToolAxisAsync(_param, progressAxis);
         if (!axisFromParam)
@@ -99,7 +99,7 @@ public class PeakCenteringStep : ISequenceStep
         FlatSurfaceCenteringService.ApplyAxis(offset, toolAxis, clamped);
 
         _logger.LogInformation(
-            "⑥/⑩ Peak{Id} 센터링: 진행축={Prog}, 툴{Axis} {Off:+0.0;-0.0}mm (측정 {Meas:+0.0;-0.0}mm)",
+            "Peak{Id} 센터링: 진행축={Prog}, 툴{Axis} {Off:+0.0;-0.0}mm (측정 {Meas:+0.0;-0.0}mm)",
             _peakId, progressAxis, FlatSurfaceCenteringService.AxisName(toolAxis), clamped, initialOffsetMm);
 
         var rc = await _cobot.Rpc.MoveByToolOffsetAsync(anchor, user: 0, offset,

@@ -50,7 +50,7 @@ public class BeadFindStep : ISequenceStep
 
         if (!context.Bag.ContainsKey(WeldSequenceSupport.PeakFindBagKey(_peakId)))
             return StepValidation.Fail(
-                $"Peak{_peakId} 측정값 없음 — {(_peakId == 1 ? "⑤⑥" : "⑨⑩")} 단계를 먼저 실행하세요.");
+                $"Peak{_peakId} 측정값 없음 — 'Peak{_peakId} 찾기'·'Peak{_peakId} 센터링' 단계를 먼저 실행하세요.");
 
         return StepValidation.Ok();
     }
@@ -94,7 +94,7 @@ public class BeadFindStep : ISequenceStep
         context.Bag[WeldSequenceSupport.BeadDMmBagKey(_peakId)] = dMm;
 
         _logger.LogInformation(
-            "⑦/⑪ Bead{Id} 찾음: d={DMm:0.0}mm ({DPx:0.0}px), coverage={Cov:P0}, 외삽={Ex:0}px, ROI={Roi}",
+            "[Bead{Id} 찾기] Bead{Id} 찾음: d={DMm:0.0}mm ({DPx:0.0}px), coverage={Cov:P0}, 외삽={Ex:0}px, ROI={Roi}",
             _peakId, dMm, detect.DPixel, detect.Confidence, extrapPx, roiSrc);
 
         var extrapNote = extrapPx > 0 ? $"외삽 {extrapPx:0}px" : "외삽 없음";

@@ -122,7 +122,7 @@ public class FlatSurfaceAlignStep : ISequenceStep
 
         // ── Phase A+B: 평탄영역 탐색 + 코봇 횡이동 (공용 루틴) ─────────
         var (roiX, roiY, roiW, roiH, roiSrc) = await GetDepthRoiAsync();
-        _logger.LogInformation("④ Phase A/B: 평탄영역 탐색+횡이동 시작 (grid={Grid}×{Grid}, ROI={Roi})",
+        _logger.LogInformation("[평탄면 센터링 (레이저 정렬)] Phase A/B: 평탄영역 탐색+횡이동 시작 (grid={Grid}×{Grid}, ROI={Roi})",
             GridSize, GridSize, roiSrc);
 
         context.Progress?.Invoke($"평탄영역 탐색 시작 (grid={GridSize}×{GridSize}, ROI={roiSrc})");
@@ -154,8 +154,8 @@ public class FlatSurfaceAlignStep : ISequenceStep
         if (Math.Abs(shiftY) > MaxCameraToLaserShiftMm)
             return FailStage(
                 $"카메라→레이저 중심 보정 이동량 {shiftY:+0.#;-0.#}mm 가 한계 ±{MaxCameraToLaserShiftMm:0}mm 초과 — " +
-                "시퀀스 페이지 ④ '레이저중심 Y' 파라미터를 확인하세요.");
-        _logger.LogInformation("④ 레이저 중심 보정 횡이동: 툴 Y {Shift}mm", shiftY);
+                "시퀀스 페이지 '레이저중심 Y' 파라미터를 확인하세요.");
+        _logger.LogInformation("[평탄면 센터링 (레이저 정렬)] 레이저 중심 보정 횡이동: 툴 Y {Shift}mm", shiftY);
         context.Progress?.Invoke($"레이저 중심 보정 횡이동: 툴 Y {shiftY:+0.#;-0.#}mm");
         var shiftAnchor = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
         var shiftOffset = new[] { 0.0, shiftY, 0.0, 0.0, 0.0, 0.0 };
@@ -166,7 +166,7 @@ public class FlatSurfaceAlignStep : ISequenceStep
         await Task.Delay(300, ct);
 
         // ── Phase C: 레이저 3점 측정 → 헤드 틸트(회전) 보정 ────────────
-        _logger.LogInformation("④ Phase C: 레이저 3점 평면 측정 시작");
+        _logger.LogInformation("[평탄면 센터링 (레이저 정렬)] Phase C: 레이저 3점 평면 측정 시작");
         _monitor.UpdateStage(FlatDetectionStage.LaserMeasuring, "레이저 3점 측정");
 
         // 보정량은 실측 응답(J)으로 푼다 — LaserTiltCorrector(/laser '보정 적용'과 공용).

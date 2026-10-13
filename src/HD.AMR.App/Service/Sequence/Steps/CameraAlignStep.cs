@@ -68,7 +68,7 @@ public class CameraAlignStep : ISequenceStep
                 "'{Key}' 광축 매핑 파라미터 없음/범위 밖 — 기본 +Z 사용. 카메라 페이지에서 광축을 설정·저장하세요.",
                 WeldSequenceSupport.DepthAxisKey);
         _logger.LogInformation(
-            "Sequence ③ 거리 정렬: 목표={Dist}mm, ROI={Roi}({Rx:0.00},{Ry:0.00},{Rw:0.00},{Rh:0.00}), 광축=툴{Axis}",
+            "Sequence [카메라 거리 정렬] 목표={Dist}mm, ROI={Roi}({Rx:0.00},{Ry:0.00},{Rw:0.00},{Rh:0.00}), 광축=툴{Axis}",
             context.CameraTargetDistanceMm, roiSrc, rx, ry, rw, rh, depthAxis);
         context.Progress?.Invoke(
             $"거리 정렬 시작 — 목표 {context.CameraTargetDistanceMm:0}mm (ROI={roiSrc}, 광축=툴{depthAxis})");

@@ -256,7 +256,7 @@ public sealed partial class SequenceViewModel : ViewModelBase
             else
             {
                 _context.InspectionDirection = InspectionMoveDirection.Horizontal;
-                DirectionHint = "→ 수평 (벽 정면 theta 미상 — AMR 미연결·① 미사용)";
+                DirectionHint = "→ 수평 (벽 정면 theta 미상 — AMR 미연결·'AMR 위치 이동' 미사용)";
             }
         }
         else
@@ -352,7 +352,7 @@ public sealed partial class SequenceViewModel : ViewModelBase
         AmrX = Math.Round(st.Pose.X, 3);
         AmrY = Math.Round(st.Pose.Y, 3);
         AmrThetaDeg = Math.Round(st.Pose.Angle * 180 / Math.PI, 2);
-        IsError = false; Message = $"현재 AMR 위치를 ① 목표로 설정: ({AmrX:0.###}, {AmrY:0.###}) m, θ={AmrThetaDeg:0.##}°";
+        IsError = false; Message = $"현재 AMR 위치를 'AMR 위치 이동' 목표로 설정: ({AmrX:0.###}, {AmrY:0.###}) m, θ={AmrThetaDeg:0.##}°";
     }
 
     private async void Save(string key, double v)

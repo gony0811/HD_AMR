@@ -53,7 +53,7 @@ public class WObjResetStep : ISequenceStep
             return StepResult.Fail(
                 $"작업물 좌표계 0 복귀 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)} — 티치펜던트에서 확인하세요.");
 
-        _logger.LogInformation("⑱⁺ 활성 작업물 좌표계 0(베이스)·공구 #{Tool} 복귀 완료.", context.Tool);
+        _logger.LogInformation("[작업물 좌표계 0 복귀] 활성 작업물 좌표계 0(베이스)·공구 #{Tool} 복귀 완료.", context.Tool);
         return StepResult.Ok($"활성 작업물 좌표계 0(베이스)·공구 #{context.Tool} 복귀 완료.");
     }
 }

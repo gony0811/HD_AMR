@@ -106,7 +106,7 @@ public class LaserWorkingDistanceStep : ISequenceStep
 
         var delta = z1.Value - wd;
         _logger.LogInformation(
-            "④⁺ WD 조정: z={Z:0.##}mm, 목표={Wd:0.#}mm, Δ={Delta:+0.##;-0.##}mm",
+            "[레이저 WD 거리 조정] WD 조정: z={Z:0.##}mm, 목표={Wd:0.#}mm, Δ={Delta:+0.##;-0.##}mm",
             z1.Value, wd, delta);
 
         if (Math.Abs(delta) <= ToleranceMm)
@@ -130,7 +130,7 @@ public class LaserWorkingDistanceStep : ISequenceStep
         FlatSurfaceCenteringService.ApplyAxis(offset, depthAxis, delta);
 
         _logger.LogInformation(
-            "④⁺ WD 접근: 툴{Axis} {Delta:+0.##;-0.##}mm",
+            "[레이저 WD 거리 조정] WD 접근: 툴{Axis} {Delta:+0.##;-0.##}mm",
             FlatSurfaceCenteringService.AxisName(depthAxis), delta);
 
         var rc = await _cobot.Rpc.MoveByToolOffsetAsync(anchor, user: 0, offset,
@@ -151,7 +151,7 @@ public class LaserWorkingDistanceStep : ISequenceStep
         var residual = z2.Value - wd;
         var change = z2.Value - z1.Value;   // 정상이면 ≈ −delta (이동한 만큼 거리가 줄거나 늘어남)
         _logger.LogInformation(
-            "④⁺ WD 검증: z={Z:0.##}mm, 잔차={Res:+0.##;-0.##}mm, 측정변화={Chg:+0.##;-0.##}mm (기대 {Exp:+0.##;-0.##}mm)",
+            "[레이저 WD 거리 조정] WD 검증: z={Z:0.##}mm, 잔차={Res:+0.##;-0.##}mm, 측정변화={Chg:+0.##;-0.##}mm (기대 {Exp:+0.##;-0.##}mm)",
             z2.Value, residual, change, -delta);
 
         if (Math.Abs(residual) <= ToleranceMm)
@@ -197,7 +197,7 @@ public class LaserWorkingDistanceStep : ISequenceStep
         if (!context.Bag.TryGetValue(WeldSequenceSupport.InspectAnchorPoseBagKey, out var v)
             || v is not double[] anchorPose || anchorPose.Length != 6)
         {
-            _logger.LogWarning("④⁺ 횡복귀 생략 — 검사 준비 앵커 없음 (④ 평탄면 센터링을 먼저 실행해야 저장됨).");
+            _logger.LogWarning("[레이저 WD 거리 조정] 횡복귀 생략 — 검사 준비 앵커 없음 ('평탄면 센터링 (레이저 정렬)' 단계를 먼저 실행해야 저장됨).");
             return (true, "");
         }
 
@@ -214,7 +214,7 @@ public class LaserWorkingDistanceStep : ISequenceStep
                 "앵커 포즈/자세를 확인하세요.");
 
         _logger.LogInformation(
-            "④⁺ 검사 준비 위치 횡복귀: 툴 X{Dx:+0.0;-0.0} / Y{Dy:+0.0;-0.0} mm (Z·자세 유지)", dx, dy);
+            "[레이저 WD 거리 조정] 검사 준비 위치 횡복귀: 툴 X{Dx:+0.0;-0.0} / Y{Dy:+0.0;-0.0} mm (Z·자세 유지)", dx, dy);
 
         var offset = new[] { dx, dy, 0.0, 0.0, 0.0, 0.0 };
         var rc = await _cobot.Rpc.MoveByToolOffsetAsync(cur, user: 0, offset,
@@ -257,7 +257,7 @@ public class LaserWorkingDistanceStep : ISequenceStep
                 {
                     var z = window.Average();
                     _logger.LogInformation(
-                        "④⁺ 측정 안정화 완료: z={Z:0.##}mm (폭 {Band:0.###}mm, {Elapsed}ms, 샘플 {N}개)",
+                        "[레이저 WD 거리 조정] 측정 안정화 완료: z={Z:0.##}mm (폭 {Band:0.###}mm, {Elapsed}ms, 샘플 {N}개)",
                         z, window.Max() - window.Min(), sw.ElapsedMilliseconds, samples);
                     return (z, null);
                 }

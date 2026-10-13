@@ -72,7 +72,7 @@ public class PeakApproachStep : ISequenceStep
         else
         {
             // 폴백: 앵커 없음(상태 초기화 후 단독 실행 등) — 현재 포즈 기준 + 플래그 기반 시프트 역보정.
-            _logger.LogWarning("⑧ Bead1 센터링 앵커 없음 — 현재 위치 기준으로 pitch 이동합니다.");
+            _logger.LogWarning("[Peak2 이동 (pitch)] Bead1 센터링 앵커 없음 — 현재 위치 기준으로 pitch 이동합니다.");
             anchor = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
             if (context.Bag.TryGetValue(WeldSequenceSupport.InspectShiftedBagKey, out var shifted) && shifted is true)
             {
@@ -87,7 +87,7 @@ public class PeakApproachStep : ISequenceStep
         }
 
         _logger.LogInformation(
-            "⑧ Peak2 이동: 진행축={Prog}, 툴{Axis} {Move:+0.0;-0.0}mm (pitch={Pitch:0.#}mm, dir={Dir:+0;-0}{Unshift})",
+            "Peak2 이동: 진행축={Prog}, 툴{Axis} {Move:+0.0;-0.0}mm (pitch={Pitch:0.#}mm, dir={Dir:+0;-0}{Unshift})",
             progressAxis, FlatSurfaceCenteringService.AxisName(toolAxis), moveMm, pitchMm, pitchDir, unshiftNote);
 
         var rc = await _cobot.Rpc.MoveByToolOffsetAsync(anchor, user: 0, offset,

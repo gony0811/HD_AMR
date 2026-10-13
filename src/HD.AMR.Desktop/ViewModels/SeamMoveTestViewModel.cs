@@ -731,7 +731,7 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
             using var scope = _scopeFactory.CreateScope();
             await scope.ServiceProvider.GetRequiredService<ParameterService>()
                 .SetBoolAsync(SeamApproachResolver.UseComputedNormalOrientationKey, value,
-                    "② 검사위치 이동 자세 = 계산된 면 법선(true) / 티칭 포즈(false). 측위·장착보정·wall_code 없으면 티칭 폴백.");
+                    "'Cobot 검사위치 이동' 자세 = 계산된 면 법선(true) / 티칭 포즈(false). 측위·장착보정·wall_code 없으면 티칭 폴백.");
         }
         catch (Exception ex) { Failure($"운영 자세 토글 저장 실패: {ex.Message}"); }
     }

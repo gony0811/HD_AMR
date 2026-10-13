@@ -140,7 +140,7 @@ public class CobotInspectionMoveStep : ISequenceStep
         var theta = Math.Atan2(-ux, uy) * 180.0 / Math.PI;
         if (Math.Abs(theta) < 1.0) return target;         // 이미 정렬(±1°)
         logger?.LogInformation(
-            "② u/v 앵커 정규화: 티칭 자세 광축 트위스트 {Theta:0.#}° 제거 (툴 +Y → 베이스 상방 정렬)", theta);
+            "[Cobot 검사위치 이동] u/v 앵커 정규화: 티칭 자세 광축 트위스트 {Theta:0.#}° 제거 (툴 +Y → 베이스 상방 정렬)", theta);
         return FrameMath.FromFrame(new[] { 0.0, 0.0, 0.0, 0.0, 0.0, theta }, target);
     }
 
@@ -277,11 +277,11 @@ public class CobotInspectionMoveStep : ISequenceStep
         // 접근점은 정차 배치(AMR pose·장착 보정·스트로크)만으로 정해지므로 코봇을 움직이기 전에 환산·리치
         // 점검을 한다 — 1단계 뒤에 실패하면 같은 정차점의 task 마다 ready 왕복을 헛되이 반복한다.
         var seam = await _seam.ResolveAsync(
-            context, context.SeamStartW, context.SeamEndW, context.Tool, "②", ct, ApproachStandoffMm);
+            context, context.SeamStartW, context.SeamEndW, context.Tool, "[Cobot 검사위치 이동]", ct, ApproachStandoffMm);
         if (seam.Blocker is not null)
             return StepResult.Fail(seam.Blocker);
         if (seam.Base is null)
-            return StepResult.Fail($"② {seam.Note}");
+            return StepResult.Fail($"[Cobot 검사위치 이동] {seam.Note}");
 
         // ── 1단계: 작업 준비 위치(ready) ─────────────────────────────
         var entryNote = await SequenceEntry.PrepareAsync(_cobot, context, _logger, ct);

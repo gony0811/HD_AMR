@@ -64,7 +64,7 @@ public class WObjRegisterStep : ISequenceStep
             Math.Pow(p2[0] - p1[0], 2) + Math.Pow(p2[1] - p1[1], 2) + Math.Pow(p2[2] - p1[2], 2));
 
         _logger.LogInformation(
-            "⑯⁺ 내부 작업물 좌표계 계산: id {Id}, Top [{X1:0.0},{Y1:0.0},{Z1:0.0}], X+점 [{X2:0.0},{Y2:0.0},{Z2:0.0}], " +
+            "내부 작업물 좌표계 계산: id {Id}, Top [{X1:0.0},{Y1:0.0},{Z1:0.0}], X+점 [{X2:0.0},{Y2:0.0},{Z2:0.0}], " +
             "간격 {Span:0.0}mm, 바닥 원점(Top Z-{Height:0.0}) [{Ox:0.0},{Oy:0.0},{Oz:0.0}], RPY [{Rx:0.00},{Ry:0.00},{Rz:0.00}]",
             wobjId, p1[0], p1[1], p1[2], p2[0], p2[1], p2[2], span,
             InternalWorkpieceFrame.DefaultCorrugationTopHeightMm,
