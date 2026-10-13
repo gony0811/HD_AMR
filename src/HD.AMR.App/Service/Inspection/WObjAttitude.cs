@@ -46,12 +46,48 @@ public readonly record struct WObjAttitude(double Rz0, double TiltSign)
         => new[] { x, y, z, 0.0, TiltSign * thetaDeg, Rz0 + rzDeg };
 
     /// <summary>
+    /// <see cref="AbsoluteTwistDeg"/> 를 직접 지정(0 또는 180°). null 이면 cos rz0 부호로 정한다.
+    /// 툴 X 가 프레임 X 와 수직(rz0 ≈ ±90°)이면 cos 부호가 의미 없어 회전 방향이 사실상 임의가 되므로,
+    /// 시퀀스는 <see cref="SelectCounterClockwiseTwist"/> 로 고른 값을 여기에 넣는다.
+    /// </summary>
+    public double? TwistOverrideDeg { get; init; }
+
+    /// <summary>
     /// 절대 6-DOF 경유점(RzDeg 가 프레임 X 기준)의 광축 둘레 보정각 — 0 또는 180°.
     /// 프레임 X 는 점1→점2(검사 이동 방향)라, 반대 방향으로 검사하면 rz=0 이 툴을 반 바퀴 돌린 자세가
     /// 되어 J6 가 90°↔270° 로 뒤집힌다(센서 헤드–링크암 간섭). 시작 자세의 툴 X 가 프레임 X 와 반대면
     /// (cos rz0 &lt; 0) 툴 Z 둘레 180° 를 더해 ②에서 맞춘 J6(수평 90°/수직 180°)를 유지한다.
     /// </summary>
-    public double AbsoluteTwistDeg => TiltSign < 0 ? 180.0 : 0.0;
+    public double AbsoluteTwistDeg => TwistOverrideDeg ?? (TiltSign < 0 ? 180.0 : 0.0);
+
+    /// <summary>시작 자세에서 허용하는 J6 증가(시계방향) 여유 [도] — IK·자세 오차 흡수용.</summary>
+    public const double ClockwiseToleranceDeg = 5.0;
+
+    /// <summary>시작 자세에서 허용하는 J6 감소(반시계방향) 최대량 [도] — 설계상 −90°(대기 180° → 수평 90°) + 여유.</summary>
+    public const double MaxCounterClockwiseDeg = 100.0;
+
+    /// <summary>
+    /// 절대 모드 비틀림(0/180°) 후보 중 J6 를 <b>반시계(감소) 방향으로만</b> 돌리는 것을 고른다.
+    /// 센서 헤드가 플랜지 한쪽으로 나와 있어 J6 를 시계방향(증가)으로 돌리면 링크암과 간섭한다(실기 2026-10-13:
+    /// 수평 비드에서 rz0=−94° 일 때 cos 부호로 180° 를 골라 J6 −179.6°→−92° 로 시계 회전).
+    /// 허용: −<see cref="MaxCounterClockwiseDeg"/> ≤ ΔJ6 ≤ +<see cref="ClockwiseToleranceDeg"/>.
+    /// 허용 후보 중 |ΔJ6| 최소를 고르고, 없으면 null(호출측은 움직이지 않고 실패).
+    /// </summary>
+    /// <param name="currentJ6">현재 J6 [도].</param>
+    /// <param name="candidates">비틀림 후보와 그 목표의 IK J6(현재 와인딩 기준, 도달 불가면 null).</param>
+    public static (double TwistDeg, double DeltaJ6)? SelectCounterClockwiseTwist(
+        double currentJ6, IReadOnlyList<(double TwistDeg, double? J6)> candidates)
+    {
+        (double TwistDeg, double DeltaJ6)? best = null;
+        foreach (var (twist, j6) in candidates)
+        {
+            if (j6 is not { } j) continue;
+            var d = j - currentJ6;
+            if (d > ClockwiseToleranceDeg || d < -MaxCounterClockwiseDeg) continue;
+            if (best is null || Math.Abs(d) < Math.Abs(best.Value.DeltaJ6)) best = (twist, d);
+        }
+        return best;
+    }
 
     /// <summary>절대 모드 경유점의 BASE 목표에 <see cref="AbsoluteTwistDeg"/> 를 툴 프레임에서 적용한다.
     /// 위치·광축 방향은 그대로이고 광축 둘레 비틀림만 바뀐다.</summary>

@@ -108,7 +108,7 @@ public class InspectionRunStep : ISequenceStep
         if (!context.Bag.TryGetValue(InternalWorkpieceFrame.BagKey, out var frameValue)
             || frameValue is not double[] { Length: 6 } frame)
             return StepResult.Fail(
-                "내부 작업물 좌표계가 없습니다 — 점1(Top)·점2(X+) 기록과 ⑯⁺ 계산 단계를 먼저 실행하세요.");
+                "내부 작업물 좌표계가 없습니다 — 점1(Top)·점2(X+) 기록과 '내부 작업물 좌표계 계산' 단계를 먼저 실행하세요.");
 
         // ── 현재 자세의 프레임 기준 RZ — 회전 없이 검사하기 위한 유지값(WObjAttitude 참조) ──
         // 등록 프레임 X(비드1→비드2)가 툴 X와 반대면 rz0 ≈ ±180°. rz=0 을 명령하면 툴이 180° 회전한다.
@@ -118,7 +118,7 @@ public class InspectionRunStep : ISequenceStep
         var tiltSign = attitude.TiltSign;
 
         _logger.LogInformation(
-            "⑱ 검사 수행 시작: 도면 {Draw}, 티칭설정 '{Prof}'({N}점), 내부 wobj #{Id} 원점 [{X:0.0},{Y:0.0},{Z:0.0}], " +
+            "[검사 수행] 시작: 도면 {Draw}, 티칭설정 '{Prof}'({N}점), 내부 wobj #{Id} 원점 [{X:0.0},{Y:0.0},{Z:0.0}], " +
             "tool={Tool}, vel={Vel}%, SurfaceID 0x{Sid:X2}, RZ 유지={Rz0:0.0}° (틸트부호 {Sign:+0;-0})",
             profile.DrawingId, profile.Name, waypoints.Count, wobjId,
             frame[0], frame[1], frame[2], context.Tool, context.Velocity, context.InspectionSurfaceId,
@@ -149,7 +149,17 @@ public class InspectionRunStep : ISequenceStep
         if (firstIdx < 0)
             return StepResult.Fail(
                 $"티칭설정 '{profile.Name}' 경유점이 모두 th_max({profile.ThMax}°) 초과로 제외되었습니다.");
-        _logger.LogInformation("⑱ 첫 경유점 #{Idx} 로 스테이징 이동 (프레임 z={Z:0.0}mm)",
+        // 절대 모드는 첫 경유점에서 툴을 광축 둘레로 0/180° 중 하나로 맞추는데, 그 회전은 반드시
+        // J6 반시계(감소) 방향이어야 한다 — 시계방향은 센서 헤드–링크암 간섭(실기). IK 로 미리 확인한다.
+        if (profile.PoseAbsolute)
+        {
+            var twist = await SelectCounterClockwiseTwistAsync(context, waypoints[firstIdx], frame, attitude, ct);
+            if (twist.Error is { } err)
+                return StepResult.Fail(err);
+            attitude = attitude with { TwistOverrideDeg = twist.TwistDeg };
+        }
+
+        _logger.LogInformation("[검사 수행] 첫 경유점 #{Idx} 로 스테이징 이동 (프레임 z={Z:0.0}mm)",
             firstIdx + 1, waypoints[firstIdx].Z);
         await _pauseGate.WaitWhilePausedAsync(ct);
         var stageRc = await _cobot.Rpc.MoveLAsync(
@@ -164,7 +174,7 @@ public class InspectionRunStep : ISequenceStep
         // 즉시 타임아웃으로 모든 촬영이 실패 집계되므로 기본값으로 대체한다.
         var visionTimeoutSec = profile.DelaySec > 0 ? profile.DelaySec : DefaultVisionTimeoutSec;
         if (profile.DelaySec <= 0)
-            _logger.LogWarning("⑱ 티칭설정 '{Prof}' 비전 응답 대기 미설정(DelaySec={Delay}) — 기본 {Default}초 사용",
+            _logger.LogWarning("[검사 수행] 티칭설정 '{Prof}' 비전 응답 대기 미설정(DelaySec={Delay}) — 기본 {Default}초 사용",
                 profile.Name, profile.DelaySec, DefaultVisionTimeoutSec);
         var visionTimeout = TimeSpan.FromSeconds(visionTimeoutSec);
         var settle = TimeSpan.FromSeconds(Math.Max(0, profile.SettleDelaySec));
@@ -187,10 +197,10 @@ public class InspectionRunStep : ISequenceStep
         var attempt = context.AcsAttempt ?? (byte)1;
         ushort captureSeq = 0;
         if (context.AcsOrderId is not null)
-            _logger.LogInformation("⑱ 검사 Run={RunId}, Task={TaskId}, attempt={Attempt} (ACS order={OrderId}, action={ActionId}, jobRef={JobRef})",
+            _logger.LogInformation("[검사 수행] 검사 Run={RunId}, Task={TaskId}, attempt={Attempt} (ACS order={OrderId}, action={ActionId}, jobRef={JobRef})",
                 runId, taskId, attempt, context.AcsOrderId, context.AcsActionId, context.AcsJobRef);
         else
-            _logger.LogInformation("⑱ 검사 Run={RunId}, Task={TaskId}, attempt={Attempt}", runId, taskId, attempt);
+            _logger.LogInformation("[검사 수행] 검사 Run={RunId}, Task={TaskId}, attempt={Attempt}", runId, taskId, attempt);
 
         for (var i = 0; i < waypoints.Count; i++)
         {
@@ -199,7 +209,7 @@ public class InspectionRunStep : ISequenceStep
             // 일시정지 체크포인트 ① — 다음 경유점으로 이동하기 전. 재개되면 정지 직전 경유점으로 되돌아가 재촬영(§4.3).
             if (await _pauseGate.WaitWhilePausedAsync(ct) && lastMoved >= 0 && !_dryRun && lastMoved < i)
             {
-                _logger.LogInformation("⑱ 일시정지 해제 — 정지 직전 경유점 #{Idx} 부터 재촬영", lastMoved + 1);
+                _logger.LogInformation("[검사 수행] 일시정지 해제 — 정지 직전 경유점 #{Idx} 부터 재촬영", lastMoved + 1);
                 context.Progress?.Invoke($"일시정지 해제 — 경유점 #{lastMoved + 1} 부터 재촬영");
                 i = lastMoved;
             }
@@ -221,7 +231,7 @@ public class InspectionRunStep : ISequenceStep
 
             // 일시정지 체크포인트 ② — 이동은 마쳤고 촬영 전. 재개되면 이 자리(정지 직전 경유점)에서 촬영한다.
             if (await _pauseGate.WaitWhilePausedAsync(ct))
-                _logger.LogInformation("⑱ 일시정지 해제 — 경유점 #{Idx} 촬영부터 재개", i + 1);
+                _logger.LogInformation("[검사 수행] 일시정지 해제 — 경유점 #{Idx} 촬영부터 재개", i + 1);
 
             // 드라이런: 경유점 이동만 하고 비전 CAPTURE_REQ 는 보내지 않는다(좌표·경로 검증용).
             if (_dryRun)
@@ -243,7 +253,7 @@ public class InspectionRunStep : ISequenceStep
             visByIndex[i] = outcome.Success;
             if (!outcome.Success)
             {
-                _logger.LogWarning("⑱ 경유점 #{Idx} 비전 실패: task={Task}, seq={Seq}, sent={Sent}, responded={Resp}, code={Code}",
+                _logger.LogWarning("[검사 수행] 경유점 #{Idx} 비전 실패: task={Task}, seq={Seq}, sent={Sent}, responded={Resp}, code={Code}",
                     i + 1, taskId, captureSeq, outcome.Sent, outcome.Responded,
                     outcome.Code is { } c ? ResultCodeNames.NameOf((ushort)c) : "—");
             }
@@ -257,7 +267,7 @@ public class InspectionRunStep : ISequenceStep
             (skipped > 0 ? $"(θ 초과 {skipped}점 제외)" : "") +
             (_dryRun ? "" : $", 비전 OK {visOk}/{moved}" + (visFail > 0 ? $" (실패 {visFail})" : "")) +
             $" [내부 wobj #{wobjId}→BASE/user 0, tool {context.Tool}, WallID 0x{context.InspectionSurfaceId:X2}, Run {runId}].";
-        _logger.LogInformation("⑱ {Msg}", msg);
+        _logger.LogInformation("[검사 수행] {Msg}", msg);
 
         // ACS 경로: 비전 실패율 상한 초과 시 스텝 실패로 승격(→ 액션 FAILED + inspectionFailed, §6.4 재시도 정책).
         // UI 단독 실행(VisionFailRatioMax=null)은 현행대로 집계만 하고 성공 반환. 드라이런은 비전이 없어 판정 생략.
@@ -276,5 +286,46 @@ public class InspectionRunStep : ISequenceStep
     {
         try { return await _param.GetDoubleAsync(WObjPointStep.WObjIdKey) ?? 1; }
         catch { return 1; }
+    }
+
+    /// <summary>
+    /// 절대 모드 첫 경유점의 비틀림 후보(0/180°)를 IK 로 풀어 J6 반시계(감소) 회전만 허용하는 쪽을 고른다
+    /// (<see cref="Inspection.WObjAttitude.SelectCounterClockwiseTwist"/>). IK 는 현재 관절 기준 최소 변위 해라
+    /// 손목을 뒤집지 않는 해 = MoveL 이 실제로 갈 J6 와 같다. 고를 수 없으면 Error 에 사유를 담는다.
+    /// </summary>
+    private async Task<(double TwistDeg, string? Error)> SelectCounterClockwiseTwistAsync(
+        SequenceContext context, InspectionWaypoint first, double[] frame,
+        Inspection.WObjAttitude attitude, CancellationToken ct)
+    {
+        var current = await _cobot.Rpc.GetActualJointPosAsync(ct: ct);
+        var raw = InternalWorkpieceFrame.ToBasePose(
+            new[] { first.X, first.Y, first.Z, first.RxDeg, first.Theta, first.RzDeg }, frame);
+
+        var candidates = new List<(double TwistDeg, double? J6)>();
+        foreach (var twist in new[] { 0.0, 180.0 })
+        {
+            var target = (attitude with { TwistOverrideDeg = twist }).KeepTwist(raw);
+            double? j6 = null;
+            try { j6 = (await _cobot.Rpc.GetInverseKinNearestAsync(target, current, context.Tool, 0, ct))[5]; }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning("[검사 수행] 비틀림 {Twist:0}° 후보 IK 실패: {Msg}", twist, ex.Message);
+            }
+            candidates.Add((twist, j6));
+        }
+
+        var desc = string.Join(", ", candidates.Select(c =>
+            c.J6 is { } j ? $"{c.TwistDeg:0}°→J6 {j:0.0}°(Δ{j - current[5]:+0.0;-0.0})" : $"{c.TwistDeg:0}°→IK 불가"));
+        var pick = Inspection.WObjAttitude.SelectCounterClockwiseTwist(current[5], candidates);
+        if (pick is not { } p)
+        {
+            _logger.LogWarning("[검사 수행] 반시계 회전 후보 없음 — 현재 J6 {J6:0.0}°, 후보 {Desc}", current[5], desc);
+            return (0, $"첫 경유점으로 가려면 J6 를 시계방향으로 돌려야 합니다(센서 헤드 간섭 위험) — 이동하지 않고 중단. " +
+                       $"현재 J6 {current[5]:0.0}°, 후보 {desc}. 'Cobot 검사위치 이동'의 검사 방향(수평/수직)을 확인하세요.");
+        }
+
+        _logger.LogInformation("[검사 수행] 비틀림 {Twist:0}° 선택 — J6 {Cur:0.0}° → {Next:0.0}° (Δ{Delta:+0.0;-0.0}°, 반시계 허용). 후보 {Desc}",
+            p.TwistDeg, current[5], current[5] + p.DeltaJ6, p.DeltaJ6, desc);
+        return (p.TwistDeg, null);
     }
 }
