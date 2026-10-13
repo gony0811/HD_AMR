@@ -3,9 +3,13 @@
         xmlns:vm="using:HD.AMR.Desktop.ViewModels"
         x:Class="HD.AMR.Desktop.Views.SequenceMonitorWindow"
         x:DataType="vm:SequenceMonitorViewModel"
-        Width="720" Height="640"
+        Width="760" Height="900"
         Title="시퀀스 모니터"
         Background="{DynamicResource AppWindowBrush}">
+    <Window.Styles>
+        <Style Selector="TextBlock.cap"><Setter Property="Foreground" Value="{DynamicResource AppMutedTextBrush}" /><Setter Property="FontSize" Value="12" /><Setter Property="Margin" Value="0,0,0,4" /></Style>
+        <Style Selector="Border.imgbox"><Setter Property="Background" Value="Black" /><Setter Property="CornerRadius" Value="4" /><Setter Property="ClipToBounds" Value="True" /></Style>
+    </Window.Styles>
     <Grid Margin="16">
         <TextBlock IsVisible="{Binding !HasStep}" Text="{Binding IdleText}"
                    Foreground="{DynamicResource AppMutedTextBrush}" TextWrapping="Wrap"
@@ -24,6 +28,70 @@
                         <TextBlock Text="{Binding StatusText}" Foreground="White" />
                     </Border>
                 </Grid>
+            </Border>
+
+            <!-- 카메라 칸 — 평탄면 센터링·레이저 WD·Peak/Bead 찾기·센터링 단계에서만 표시. -->
+            <Border DockPanel.Dock="Bottom" Classes="card" Padding="12" Margin="0,10,0,0" IsVisible="{Binding ShowCamera}">
+                <StackPanel Spacing="8">
+                    <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Text="카메라" FontWeight="SemiBold" />
+                        <TextBlock Grid.Column="1" Classes="cap" Margin="0" Text="{Binding CameraHint}" />
+                    </Grid>
+
+                    <!-- 2칸: 라이브 + (검출 결과 | 레이저 3점 값) -->
+                    <Grid ColumnDefinitions="*,*" IsVisible="{Binding ShowTwoPane}">
+                        <StackPanel Grid.Column="0" Margin="0,0,5,0">
+                            <TextBlock Classes="cap" Text="{Binding LiveTitle}" />
+                            <Border Classes="imgbox" Height="190">
+                                <Grid Name="LiveHost">
+                                    <Image Source="{Binding LiveImage}" Stretch="Fill" />
+                                    <Canvas Name="LiveOverlay" />
+                                </Grid>
+                            </Border>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Margin="5,0,0,0" IsVisible="{Binding ShowResultImage}">
+                            <TextBlock Classes="cap" Text="{Binding ResultTitle}" />
+                            <Border Classes="imgbox" Height="190">
+                                <Image Source="{Binding ResultImage}" Stretch="Fill" />
+                            </Border>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Margin="5,0,0,0" IsVisible="{Binding ShowLaserPane}">
+                            <TextBlock Classes="cap" Text="레이저 3점 (라이브)" />
+                            <Border Height="190" CornerRadius="4" Padding="10"
+                                    BorderBrush="{DynamicResource AppBorderBrush}" BorderThickness="1">
+                                <TextBlock Text="{Binding LaserText}" FontFamily="monospace" FontSize="13" />
+                            </Border>
+                        </StackPanel>
+                    </Grid>
+
+                    <!-- 3칸(평탄면 센터링): 라이브 + 평탄 셀 검출 + 레이저 측정 직전 -->
+                    <StackPanel Spacing="6" IsVisible="{Binding ShowFlatPane}">
+                        <Grid ColumnDefinitions="*,*,*">
+                            <StackPanel Grid.Column="0" Margin="0,0,4,0">
+                                <TextBlock Classes="cap" Text="{Binding LiveTitle}" />
+                                <Border Classes="imgbox" Height="135">
+                                    <Image Source="{Binding LiveImage}" Stretch="Fill" />
+                                </Border>
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Margin="4,0,4,0">
+                                <TextBlock Classes="cap" Text="{Binding FlatTitle}" TextTrimming="CharacterEllipsis" />
+                                <Border Classes="imgbox" Height="135">
+                                    <Grid Name="FlatHost">
+                                        <Image Source="{Binding FlatImage}" Stretch="Fill" />
+                                        <Canvas Name="FlatOverlay" />
+                                    </Grid>
+                                </Border>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2" Margin="4,0,0,0">
+                                <TextBlock Classes="cap" Text="{Binding PreLaserTitle}" TextTrimming="CharacterEllipsis" />
+                                <Border Classes="imgbox" Height="135">
+                                    <Image Source="{Binding PreLaserImage}" Stretch="Fill" />
+                                </Border>
+                            </StackPanel>
+                        </Grid>
+                        <TextBlock Classes="cap" Margin="0" Text="{Binding FlatLaserText}" TextWrapping="Wrap" />
+                    </StackPanel>
+                </StackPanel>
             </Border>
 
             <Border Classes="card" Padding="0" Margin="0,10,0,0">

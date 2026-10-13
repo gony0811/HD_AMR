@@ -164,6 +164,8 @@ public class FlatSurfaceAlignStep : ISequenceStep
         if (shiftRc != 0)
             return FailStage($"레이저 중심 보정 이동 실패 (rc={shiftRc}){FairinoErrorCodes.Suffix(shiftRc)}.");
         await Task.Delay(300, ct);
+        // 레이저가 실제로 측정할 자리의 정지 화면 — 시퀀스 모니터에서 비평탄 실패 원인(스팟 위치) 확인용.
+        _monitor.SetPreLaserFrame(_camera.LatestDepth);
 
         // ── Phase C: 레이저 3점 측정 → 헤드 틸트(회전) 보정 ────────────
         _logger.LogInformation("[평탄면 센터링 (레이저 정렬)] Phase C: 레이저 3점 평면 측정 시작");

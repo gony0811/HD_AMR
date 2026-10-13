@@ -33,8 +33,13 @@ public partial class SequenceView : UserControl
             as IClassicDesktopStyleApplicationLifetime)?.MainWindow;
         if (owner is null) return;
 
-        var monitorSvc = Program.Services.GetRequiredService<SequenceMonitorService>();
-        _monitor = new SequenceMonitorWindow(new SequenceMonitorViewModel(monitorSvc));
+        var sp = Program.Services;
+        _monitor = new SequenceMonitorWindow(new SequenceMonitorViewModel(
+            sp.GetRequiredService<SequenceMonitorService>(),
+            sp.GetRequiredService<HD.AMR.App.Service.CameraService>(),
+            sp.GetRequiredService<HD.AMR.App.Service.WeldTrackingService>(),
+            sp.GetRequiredService<HD.AMR.App.Service.FlatDetectionMonitor>(),
+            sp.GetRequiredService<HD.AMR.App.Service.LaserDisplacementSensorService>()));
         _monitor.Closed += (_, _) => _monitor = null;
         _monitor.Show(owner);
     }

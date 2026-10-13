@@ -35,7 +35,8 @@ public sealed record FlatDetectionSnapshot(
     string? StageMessage = null,
     double? LaserRxDeg = null, double? LaserRyDeg = null,
     double? LaserZmm = null, IReadOnlyList<double>? LaserChannelsMm = null,
-    double[]? TcpPoseAtDetect = null, int? Tool = null);
+    double[]? TcpPoseAtDetect = null, int? Tool = null,
+    Models.CameraFrame? PreLaserFrame = null, DateTime? PreLaserAt = null);
 
 /// <summary>
 /// 가장 최근 평탄면 검출 결과를 보관하고 변경을 알리는 싱글톤. 시퀀스(<see cref="Sequence.Steps.FlatSurfaceAlignStep"/>)·
@@ -67,6 +68,11 @@ public sealed class FlatDetectionMonitor
             LaserRxDeg = rxDeg, LaserRyDeg = ryDeg, LaserZmm = zMm,
             LaserChannelsMm = channelsMm ?? s.LaserChannelsMm,
         });
+
+    /// <summary>레이저 3점 측정 직전(셀 이동·레이저 중심 보정 이동 후)의 깊이 프레임 — 스팟이 놓인 자리 확인용.
+    /// 스냅샷이 없으면 무시.</summary>
+    public void SetPreLaserFrame(Models.CameraFrame? frame)
+        => Set(s => s is null ? null : s with { PreLaserFrame = frame, PreLaserAt = frame is null ? null : DateTime.Now });
 
     public void Clear() => Set(_ => null);
 
