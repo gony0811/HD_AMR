@@ -8,11 +8,11 @@ using HD.AMR.App.Service.Sequence;
 namespace HD.AMR.Desktop.ViewModels;
 
 /// <summary>시퀀스 모니터 카메라 칸의 표시 종류 — 단계 키로 정한다.</summary>
-public enum MonitorCameraKind { None, Flat, LaserWd, Peak, Bead }
+public enum MonitorCameraKind { None, CameraAlign, Flat, LaserWd, Peak, Bead }
 
 /// <summary>
 /// 시퀀스 모니터 창 뷰모델. 싱글톤 <see cref="SequenceMonitorService"/> 를 구독해 현재 단계·상태·로그를
-/// 실시간 표시한다. 카메라를 쓰는 단계(평탄면 센터링·레이저 WD·Peak/Bead 찾기·센터링)에서는 아래 카메라 칸에
+/// 실시간 표시한다. 카메라를 쓰는 단계(카메라 거리 정렬·평탄면 센터링·레이저 WD·Peak/Bead 찾기·센터링)에서는 아래 카메라 칸에
 /// 라이브 영상(Depth/IR + ROI)과 그 단계가 판단에 쓴 정지 화면을 함께 보여준다.
 /// </summary>
 public sealed partial class SequenceMonitorViewModel : ObservableObject, IDisposable
@@ -25,7 +25,7 @@ public sealed partial class SequenceMonitorViewModel : ObservableObject, IDispos
     private readonly DispatcherTimer _timer;
     private bool _polling;
     private byte[]? _lastOverlayRef;
-    private CameraFrame? _flatFrameRef, _preLaserFrameRef;
+    private CameraFrame? _flatFrameRef, _centeredFrameRef;
 
     /// <summary>마지막 스텝(모니터 닫기)이 닫기를 요청하면 발생 — 창이 구독해 self-close.</summary>
     public event Action? CloseRequested;
@@ -58,7 +58,7 @@ public sealed partial class SequenceMonitorViewModel : ObservableObject, IDispos
     // ── 카메라 칸 ──
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(ShowCamera), nameof(ShowTwoPane), nameof(ShowFlatPane),
-        nameof(ShowResultImage), nameof(ShowLaserPane), nameof(CameraHint), nameof(LiveTitle))]
+        nameof(ShowResultImage), nameof(ShowTextPane), nameof(TextPaneTitle), nameof(CameraHint), nameof(LiveTitle))]
     private MonitorCameraKind _cameraKind;
 
     [ObservableProperty] private Bitmap? _liveImage;
@@ -67,9 +67,11 @@ public sealed partial class SequenceMonitorViewModel : ObservableObject, IDispos
     [ObservableProperty] private Bitmap? _flatImage;
     [ObservableProperty] private string _flatTitle = "평탄 셀 검출";
     [ObservableProperty] private FlatDetectionSnapshot? _flatSnapshot;
-    [ObservableProperty] private Bitmap? _preLaserImage;
-    [ObservableProperty] private string _preLaserTitle = "레이저 측정 직전";
-    [ObservableProperty] private string _laserText = "";
+    /// <summary>'레이저 측정 직전' 칸 — 카메라 센터링 직후 화면(ROI 중심에 예상 측정 범위를 그린다).</summary>
+    [ObservableProperty] private Bitmap? _centeredImage;
+    [ObservableProperty] private string _centeredTitle = "레이저 측정 직전 · 센터링 화면";
+    /// <summary>오른쪽 글자 칸 내용 — 레이저 WD: 레이저 3점, 카메라 거리 정렬: 화면 중앙 거리.</summary>
+    [ObservableProperty] private string _paneText = "";
     [ObservableProperty] private string _flatLaserText = "레이저 측정 전";
 
     /// <summary>라이브 영상 위에 그릴 ROI(검출 프레임 픽셀) — Peak/Bead 단계만.</summary>
@@ -78,15 +80,18 @@ public sealed partial class SequenceMonitorViewModel : ObservableObject, IDispos
     public int LiveFrameH => _cam.LatestIr?.Height ?? _cam.Settings.IrHeight;
 
     public bool ShowCamera => CameraKind != MonitorCameraKind.None;
-    public bool ShowTwoPane => CameraKind is MonitorCameraKind.LaserWd or MonitorCameraKind.Peak or MonitorCameraKind.Bead;
+    public bool ShowTwoPane => CameraKind is MonitorCameraKind.CameraAlign or MonitorCameraKind.LaserWd
+        or MonitorCameraKind.Peak or MonitorCameraKind.Bead;
     public bool ShowFlatPane => CameraKind == MonitorCameraKind.Flat;
     public bool ShowResultImage => CameraKind is MonitorCameraKind.Peak or MonitorCameraKind.Bead;
-    public bool ShowLaserPane => CameraKind == MonitorCameraKind.LaserWd;
+    public bool ShowTextPane => CameraKind is MonitorCameraKind.LaserWd or MonitorCameraKind.CameraAlign;
+    public string TextPaneTitle => CameraKind == MonitorCameraKind.CameraAlign ? "거리 (라이브)" : "레이저 3점 (라이브)";
     public string LiveTitle => CameraKind == MonitorCameraKind.Bead ? "라이브 (IR)" : "라이브 (Depth)";
 
     public string CameraHint => CameraKind switch
     {
-        MonitorCameraKind.Flat => "Depth 라이브 + 평탄 셀 검출 + 레이저 측정 직전",
+        MonitorCameraKind.CameraAlign => "Depth 라이브 + 화면 중앙 거리",
+        MonitorCameraKind.Flat => "Depth 라이브 + 평탄 셀 검출 + 레이저 측정 직전(예상 측정 범위)",
         MonitorCameraKind.LaserWd => "Depth 라이브 + 레이저 3점 값",
         MonitorCameraKind.Peak => "Depth 라이브 + Peak 검출 결과",
         MonitorCameraKind.Bead => "IR 라이브 + 비드 검출 결과",
@@ -96,10 +101,11 @@ public sealed partial class SequenceMonitorViewModel : ObservableObject, IDispos
     // ── 마우스 hover 거리(mm) — 정규화 좌표. IR 은 Depth 와 같은 센서·해상도라 같은 위치의 깊이를 읽는다. ──
     public int? ProbeLive(double u, double v) => _cam.GetLatestDepthMmAt(u, v);
     public int? ProbeFlat(double u, double v) => CameraService.DepthMmAt(FlatSnapshot?.Analysis.Frame, u, v);
-    public int? ProbePreLaser(double u, double v) => CameraService.DepthMmAt(FlatSnapshot?.PreLaserFrame, u, v);
+    public int? ProbeCentered(double u, double v) => CameraService.DepthMmAt(FlatSnapshot?.CenteredFrame, u, v);
 
     private static MonitorCameraKind KindOf(string? key) => key switch
     {
+        "cameraAlign" => MonitorCameraKind.CameraAlign,
         "flatSurfaceAlign" => MonitorCameraKind.Flat,
         "laserWorkingDistance" => MonitorCameraKind.LaserWd,
         "peak1Find" or "peak2Find" or "peak1Center" or "peak2Center" => MonitorCameraKind.Peak,
@@ -157,10 +163,20 @@ public sealed partial class SequenceMonitorViewModel : ObservableObject, IDispos
                 ResultTitle = $"최근 검출 결과 (정지 · {DateTime.Now:HH:mm:ss})";
             }
 
-            if (ShowLaserPane) LaserText = LiveLaserText();
+            if (CameraKind == MonitorCameraKind.LaserWd) PaneText = LiveLaserText();
+            else if (CameraKind == MonitorCameraKind.CameraAlign) PaneText = LiveDistanceText();
         }
         catch { /* 영상 한 장 실패는 다음 틱에 다시 시도 */ }
         finally { _polling = false; }
+    }
+
+    /// <summary>카메라 거리 정렬 — 화면 중앙 깊이와 목표 거리 비교.</summary>
+    private string LiveDistanceText()
+    {
+        var target = _monitor.CameraTargetDistanceMm;
+        return _cam.GetLatestDepthMmAt(0.5, 0.5) is { } mm
+            ? $"화면 중앙 거리\n{mm} mm\n\n목표 {target:0} mm\n차이 {mm - target:+0;-0} mm"
+            : $"화면 중앙 거리\n— mm (무효 픽셀)\n\n목표 {target:0} mm";
     }
 
     private string LiveLaserText()
@@ -184,7 +200,9 @@ public sealed partial class SequenceMonitorViewModel : ObservableObject, IDispos
     {
         FlatSnapshot = s;
         FlatTitle = s is null ? "평탄 셀 검출" : $"평탄 셀 검출 (정지 · {s.DetectedAt:HH:mm:ss})";
-        PreLaserTitle = s?.PreLaserAt is { } t ? $"레이저 측정 직전 (정지 · {t:HH:mm:ss})" : "레이저 측정 직전";
+        CenteredTitle = s?.CenteredAt is { } t
+            ? $"레이저 측정 직전 · 센터링 화면 (정지 · {t:HH:mm:ss})"
+            : "레이저 측정 직전 · 센터링 화면";
         FlatLaserText = s is { LaserRxDeg: { } rx, LaserRyDeg: { } ry }
             ? $"레이저 측정: rx {rx:+0.00;-0.00}°, ry {ry:+0.00;-0.00}°" +
               (s.LaserZmm is { } z ? $", z {z:0.0} mm" : "") +
@@ -192,7 +210,7 @@ public sealed partial class SequenceMonitorViewModel : ObservableObject, IDispos
             : "레이저 측정 전";
 
         FlatImage = await EncodeIfChangedAsync(s?.Analysis.Frame, ref _flatFrameRef, FlatImage);
-        PreLaserImage = await EncodeIfChangedAsync(s?.PreLaserFrame, ref _preLaserFrameRef, PreLaserImage);
+        CenteredImage = await EncodeIfChangedAsync(s?.CenteredFrame, ref _centeredFrameRef, CenteredImage);
     }
 
     private Task<Bitmap?> EncodeIfChangedAsync(CameraFrame? frame, ref CameraFrame? last, Bitmap? current)

@@ -16,6 +16,8 @@ public partial class SequenceMonitorWindow : Window
     private readonly Canvas _liveOverlay;
     private readonly Grid _flatHost;
     private readonly Canvas _flatOverlay;
+    private readonly Grid _centeredHost;
+    private readonly Canvas _centeredOverlay;
     private SequenceMonitorViewModel? _vm;
 
     public SequenceMonitorWindow()
@@ -25,14 +27,17 @@ public partial class SequenceMonitorWindow : Window
         _liveOverlay = this.FindControl<Canvas>("LiveOverlay")!;
         _flatHost = this.FindControl<Grid>("FlatHost")!;
         _flatOverlay = this.FindControl<Canvas>("FlatOverlay")!;
+        _centeredHost = this.FindControl<Grid>("CenteredHost")!;
+        _centeredOverlay = this.FindControl<Canvas>("CenteredOverlay")!;
         _liveHost.SizeChanged += (_, _) => DrawLiveRoi();
         _flatHost.SizeChanged += (_, _) => DrawFlat();
+        _centeredHost.SizeChanged += (_, _) => DrawFlat();
 
         // 마우스 hover → 그 위치 깊이(mm). 라이브는 최신 프레임, 정지 화면은 그 순간 프레임에서 읽는다.
         AttachProbe(_liveHost, "LiveProbe", (u, v) => _vm?.ProbeLive(u, v));
         AttachProbe(this.FindControl<Grid>("FlatLiveHost")!, "FlatLiveProbe", (u, v) => _vm?.ProbeLive(u, v));
         AttachProbe(_flatHost, "FlatProbe", (u, v) => _vm?.ProbeFlat(u, v));
-        AttachProbe(this.FindControl<Grid>("PreLaserHost")!, "PreLaserProbe", (u, v) => _vm?.ProbePreLaser(u, v));
+        AttachProbe(_centeredHost, "CenteredProbe", (u, v) => _vm?.ProbeCentered(u, v));
     }
 
     private void AttachProbe(Grid host, string canvasName, Func<double, double, int?> sample)
@@ -95,7 +100,11 @@ public partial class SequenceMonitorWindow : Window
         FlatOverlayRenderer.DrawRoi(_liveOverlay, _vm.LiveRoi, _vm.LiveFrameW, _vm.LiveFrameH, _liveHost.Bounds.Size, brush);
     }
 
-    private void DrawFlat() => FlatOverlayRenderer.Draw(_flatOverlay, _vm?.FlatSnapshot, _flatHost.Bounds.Size);
+    private void DrawFlat()
+    {
+        FlatOverlayRenderer.Draw(_flatOverlay, _vm?.FlatSnapshot, _flatHost.Bounds.Size);
+        FlatOverlayRenderer.DrawExpectedLaserArea(_centeredOverlay, _vm?.FlatSnapshot, _centeredHost.Bounds.Size);
+    }
 
     private void OnCloseRequested() => Dispatcher.UIThread.Post(async () =>
     {

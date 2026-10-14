@@ -146,6 +146,10 @@ public class FlatSurfaceAlignStep : ISequenceStep
         if (!align.Success)
             return StepResult.Fail(align.Message);
 
+        // 센터링 직후 화면 — 평탄 셀이 ROI 중심에 와 있고, 다음 이동으로 레이저가 바로 그 자리를 측정한다.
+        // 시퀀스 모니터가 ROI 중심에 예상 측정 범위를 그려 비평탄 실패 원인(측정 자리)을 확인하게 한다.
+        _monitor.SetCenteredFrame(_camera.LatestDepth);
+
         // ── 카메라 중심 → 레이저 측정 중심 횡이동 ─────────────────────
         // Phase B는 평탄영역을 카메라 중심에 맞추므로, 레이저 3점 중심이 그 지점 위에
         // 오도록 장착 오프셋만큼 이동한 뒤 측정한다. 이동량은 시퀀스 페이지 파라미터
@@ -164,8 +168,6 @@ public class FlatSurfaceAlignStep : ISequenceStep
         if (shiftRc != 0)
             return FailStage($"레이저 중심 보정 이동 실패 (rc={shiftRc}){FairinoErrorCodes.Suffix(shiftRc)}.");
         await Task.Delay(300, ct);
-        // 레이저가 실제로 측정할 자리의 정지 화면 — 시퀀스 모니터에서 비평탄 실패 원인(스팟 위치) 확인용.
-        _monitor.SetPreLaserFrame(_camera.LatestDepth);
 
         // ── Phase C: 레이저 3점 측정 → 헤드 틸트(회전) 보정 ────────────
         _logger.LogInformation("[평탄면 센터링 (레이저 정렬)] Phase C: 레이저 3점 평면 측정 시작");

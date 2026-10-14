@@ -440,6 +440,7 @@ public class FlatSurfaceCenteringService
             {
                 _monitor.UpdateStage(FlatDetectionStage.MoveSkipped, "선택 셀이 이미 ROI 중심 근방 — 카메라 이동 생략");
                 _monitor.SetStepPose(anchor, null);
+                _monitor.SetCenteredFrame(_camera.LatestDepth);
                 const string skip = "카메라 이동 생략 — 선택 셀이 이미 ROI 중심 근방 (시퀀스와 같은 데드밴드)";
                 Report(progress, skip);
                 return new LaserToFlatResult(true, skip);
@@ -460,6 +461,7 @@ public class FlatSurfaceCenteringService
 
             var after = await _cobot.Rpc.GetTcpPoseInBaseAsync(o.Tool, ct);
             _monitor.SetStepPose(after, null);
+            _monitor.SetCenteredFrame(_camera.LatestDepth);   // 센터링 직후 화면 — 레이저 예상 측정 위치 확인용
             _monitor.UpdateStage(FlatDetectionStage.Moved, $"카메라 이동 완료 Δ=({dx:+0.#;-0.#}, {dy:+0.#;-0.#})mm");
             var msg = $"카메라 이동 완료: Δ=({dx:+0.#;-0.#}, {dy:+0.#;-0.#})mm, BASE 실측 " +
                       $"[{after[0] - anchor[0]:+0.#;-0.#}, {after[1] - anchor[1]:+0.#;-0.#}, {after[2] - anchor[2]:+0.#;-0.#}]mm";
@@ -480,7 +482,7 @@ public class FlatSurfaceCenteringService
     /// <summary>
     /// ② 레이저 이동 — '카메라 이동'을 마친 자리에서 카메라→레이저 장착 오프셋(툴 Y, 시퀀스 '레이저중심 Y' 파라미터)만큼
     /// 옮겨 레이저 3점 중심을 평탄 셀 위에 놓고 측정만 한다(틸트 보정 없음). 시퀀스 ④의 레이저 중심 보정 이동과 같다.
-    /// 측정 직전 깊이 프레임을 남겨 스팟이 놓인 자리를 정지 화면으로 확인할 수 있게 한다.
+    /// (예상 측정 위치 확인용 화면은 '카메라 이동' 직후에 남긴다 — <see cref="FlatDetectionMonitor.SetCenteredFrame"/>.)
     /// </summary>
     public async Task<LaserToFlatResult> MoveLaserOntoFlatAsync(
         FlatDetectionSnapshot snap, LaserToFlatOptions o, Action<string>? progress, CancellationToken ct)
@@ -514,7 +516,6 @@ public class FlatSurfaceCenteringService
 
             var after = await _cobot.Rpc.GetTcpPoseInBaseAsync(o.Tool, ct);
             _monitor.SetStepPose(null, after);
-            _monitor.SetPreLaserFrame(_camera.LatestDepth);
 
             // ── 측정: 3회 샘플 평균 (시퀀스 ④ Phase C 와 같은 방식) ──
             _monitor.UpdateStage(FlatDetectionStage.LaserMeasuring, "레이저 3점 측정");

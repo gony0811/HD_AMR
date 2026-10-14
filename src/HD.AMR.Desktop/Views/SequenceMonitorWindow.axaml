@@ -56,11 +56,11 @@
                                 <Image Source="{Binding ResultImage}" Stretch="Fill" />
                             </Border>
                         </StackPanel>
-                        <StackPanel Grid.Column="1" Margin="5,0,0,0" IsVisible="{Binding ShowLaserPane}">
-                            <TextBlock Classes="cap" Text="레이저 3점 (라이브)" />
+                        <StackPanel Grid.Column="1" Margin="5,0,0,0" IsVisible="{Binding ShowTextPane}">
+                            <TextBlock Classes="cap" Text="{Binding TextPaneTitle}" />
                             <Border Height="190" CornerRadius="4" Padding="10"
                                     BorderBrush="{DynamicResource AppBorderBrush}" BorderThickness="1">
-                                <TextBlock Text="{Binding LaserText}" FontFamily="monospace" FontSize="13" />
+                                <TextBlock Text="{Binding PaneText}" FontFamily="monospace" FontSize="13" />
                             </Border>
                         </StackPanel>
                     </Grid>
@@ -88,11 +88,13 @@
                                 </Border>
                             </StackPanel>
                             <StackPanel Grid.Column="2" Margin="4,0,0,0">
-                                <TextBlock Classes="cap" Text="{Binding PreLaserTitle}" TextTrimming="CharacterEllipsis" />
+                                <TextBlock Classes="cap" Text="{Binding CenteredTitle}" TextTrimming="CharacterEllipsis"
+                                           ToolTip.Tip="카메라 센터링 직후 화면. 청록 사각형 = 레이저 예상 측정 범위(ROI 중심, 선택 셀 크기)" />
                                 <Border Classes="imgbox" Height="135">
-                                    <Grid Name="PreLaserHost" Background="Transparent">
-                                        <Image Source="{Binding PreLaserImage}" Stretch="Fill" />
-                                        <Canvas Name="PreLaserProbe" />
+                                    <Grid Name="CenteredHost" Background="Transparent">
+                                        <Image Source="{Binding CenteredImage}" Stretch="Fill" />
+                                        <Canvas Name="CenteredOverlay" />
+                                        <Canvas Name="CenteredProbe" />
                                     </Grid>
                                 </Border>
                             </StackPanel>

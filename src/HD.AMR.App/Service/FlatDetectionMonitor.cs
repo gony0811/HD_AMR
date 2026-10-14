@@ -36,7 +36,7 @@ public sealed record FlatDetectionSnapshot(
     double? LaserRxDeg = null, double? LaserRyDeg = null,
     double? LaserZmm = null, IReadOnlyList<double>? LaserChannelsMm = null,
     double[]? TcpPoseAtDetect = null, int? Tool = null,
-    Models.CameraFrame? PreLaserFrame = null, DateTime? PreLaserAt = null,
+    Models.CameraFrame? CenteredFrame = null, DateTime? CenteredAt = null,
     double[]? TcpPoseAfterCameraMove = null, double[]? TcpPoseAfterLaserMove = null);
 
 /// <summary>
@@ -70,10 +70,11 @@ public sealed class FlatDetectionMonitor
             LaserChannelsMm = channelsMm ?? s.LaserChannelsMm,
         });
 
-    /// <summary>레이저 3점 측정 직전(셀 이동·레이저 중심 보정 이동 후)의 깊이 프레임 — 스팟이 놓인 자리 확인용.
+    /// <summary>카메라 센터링(셀 이동) 직후, 레이저 중심 보정 이동 <b>전</b>의 깊이 프레임. 이때 평탄 셀이 ROI 중심에
+    /// 와 있고 레이저는 다음 이동으로 바로 그 자리를 측정하므로, ROI 중심 = 레이저 예상 측정 위치로 그려 확인한다.
     /// 스냅샷이 없으면 무시.</summary>
-    public void SetPreLaserFrame(Models.CameraFrame? frame)
-        => Set(s => s is null ? null : s with { PreLaserFrame = frame, PreLaserAt = frame is null ? null : DateTime.Now });
+    public void SetCenteredFrame(Models.CameraFrame? frame)
+        => Set(s => s is null ? null : s with { CenteredFrame = frame, CenteredAt = frame is null ? null : DateTime.Now });
 
     /// <summary>카메라 페이지 단계 버튼('카메라 이동'/'레이저 이동')이 끝난 자리 기록 — 다음 단계가 같은 자리에서만
     /// 이어지도록(이중 이동 방지) 검사하는 기준. 스냅샷이 없으면 무시.</summary>

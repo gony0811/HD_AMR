@@ -99,6 +99,27 @@ internal static class FlatOverlayRenderer
         canvas.Children.Add(dot);
     }
 
+    /// <summary>
+    /// 카메라 센터링 직후 화면 위에 레이저 예상 측정 범위를 그린다. 센터링은 선택 셀을 ROI 중심에 맞추고 레이저는
+    /// 다음 이동(카메라→레이저 장착 오프셋)으로 바로 그 자리를 측정하므로, ROI 중심에 선택 셀 크기의 사각형
+    /// (평탄 셀 검출의 선택 셀과 같은 청록색)으로 표시한다. ROI 와 중심 십자선도 함께 그린다.
+    /// </summary>
+    public static void DrawExpectedLaserArea(Canvas canvas, FlatDetectionSnapshot? snap, Size size)
+    {
+        canvas.Children.Clear();
+        if (snap?.CenteredFrame is null || size.Width <= 0 || size.Height <= 0) return;
+        double w = size.Width, h = size.Height;
+        var best = snap.Analysis.Cells[snap.Analysis.BestIndex];
+        double cw = (best.U1 - best.U0) * w, ch = (best.V1 - best.V0) * h;
+        double cx = (snap.FullRoiX + snap.FullRoiW / 2) * w;
+        double cy = (snap.FullRoiY + snap.FullRoiH / 2) * h;
+
+        AddRect(canvas, snap.FullRoiX * w, snap.FullRoiY * h, snap.FullRoiW * w, snap.FullRoiH * h, null, RoiBrush, 1);
+        AddRect(canvas, cx - cw / 2, cy - ch / 2, cw, ch, null, PickBrush, 3);
+        AddLine(canvas, cx - CrossArm, cy, cx + CrossArm, cy, PickBrush, 1.5);
+        AddLine(canvas, cx, cy - CrossArm, cx, cy + CrossArm, PickBrush, 1.5);
+    }
+
     /// <summary>프레임 픽셀 ROI 를 캔버스 크기에 맞춰 사각형 하나로 그린다(라이브 영상 위 ROI 표시용).</summary>
     public static void DrawRoi(Canvas canvas, RoiRect? roi, int frameW, int frameH, Size size, IBrush stroke)
     {
