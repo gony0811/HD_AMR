@@ -23,6 +23,7 @@ public sealed partial class CameraViewModel : ViewModelBase
     private readonly CobotService _cobot;
     private readonly SequenceRunGate _gate;
     private readonly FlatSurfaceCenteringService _centering;
+    private readonly LaserTiltCorrector _tilt;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly DispatcherTimer _timer;
     private readonly CancellationTokenSource _cts = new();
@@ -40,11 +41,12 @@ public sealed partial class CameraViewModel : ViewModelBase
     private const int FlatSamples = 10;
     private const double FallbackDepthMm = 400.0;
 
-    // 레이저 이동·측정이 시퀀스 ④와 같은 값을 쓰도록 같은 파라미터 키를 읽는다.
+    // 카메라 이동·레이저 이동이 시퀀스 ④와 같은 값을 쓰도록 같은 파라미터 키를 읽는다.
     private const string AlignImageXAxisKey = "Camera.Align.ImageXAxis";
     private const string AlignImageYAxisKey = "Camera.Align.ImageYAxis";
     private const string AlignToolKey = "Camera.Align.Tool";
-    /// <summary>레이저 이동 속도(%) — 수동 확인용이라 시퀀스보다 느리게 고정.</summary>
+    /// <summary>카메라·레이저 이동과 평탄면 보정 속도(%) — 수동 확인용이라 시퀀스보다 느리게 고정
+    /// (평탄면 보정은 시퀀스 ④ Phase C 도 min(속도, 10)).</summary>
     private const double LaserMoveVelocity = 10;
 
     // 파라미터 로드 중 ROI 값 세팅은 사용자 변경이 아니므로 검출 결과를 지우지 않는다.
@@ -53,13 +55,15 @@ public sealed partial class CameraViewModel : ViewModelBase
     private CameraFrame? _flatFrame;
 
     public CameraViewModel(CameraService svc, FlatDetectionMonitor flatMonitor, CobotService cobot,
-        SequenceRunGate gate, FlatSurfaceCenteringService centering, IServiceScopeFactory scopeFactory)
+        SequenceRunGate gate, FlatSurfaceCenteringService centering, LaserTiltCorrector tilt,
+        IServiceScopeFactory scopeFactory)
     {
         _svc = svc;
         _flatMonitor = flatMonitor;
         _cobot = cobot;
         _gate = gate;
         _centering = centering;
+        _tilt = tilt;
         _scopeFactory = scopeFactory;
         _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
         _timer.Tick += async (_, _) => await PollAsync();
@@ -70,7 +74,7 @@ public sealed partial class CameraViewModel : ViewModelBase
     [ObservableProperty] private Bitmap? _depthImage;
 
     [ObservableProperty] private bool _busy;
-    /// <summary>'레이저 이동·측정' 결과 — 버튼 바로 아래에 표시(상단 알림은 화면 밖이라 놓치기 쉽다).</summary>
+    /// <summary>'카메라 이동'·'레이저 이동'·'평탄면 보정' 결과 — 버튼 바로 아래에 표시(상단 알림은 화면 밖이라 놓치기 쉽다).</summary>
     [ObservableProperty] private string? _laserMessage;
     [ObservableProperty] private bool _laserMessageIsError;
     [ObservableProperty] private string? _message;
@@ -131,11 +135,32 @@ public sealed partial class CameraViewModel : ViewModelBase
         ? $"채널 1/2/3: {c[0]:0.00} / {c[1]:0.00} / {c[2]:0.00} mm"
         : null;
 
-    /// <summary>
-    /// '레이저 이동·측정' 가능 여부 — '평탄 검증'으로 검출만 한 결과이고 검출 시점 코봇 위치가 기록돼 있을 때.
-    /// 시퀀스 결과는 이미 레이저 위치로 이동·측정을 마쳤으므로 대상이 아니다.
-    /// </summary>
-    public bool CanLaserMeasure => FlatSnapshot is { Stage: FlatDetectionStage.DetectOnly, TcpPoseAtDetect: not null } && !Busy;
+    // ── 평탄 검증 이후 단계 버튼 — 시퀀스 ④를 '카메라 이동 → 레이저 이동 → 평탄면 보정'으로 나눠 하나씩 실행 ──
+
+    /// <summary>'카메라 이동' 가능 — '평탄 검증'으로 검출만 한 결과이고 검출 시점 코봇 위치가 기록돼 있을 때.
+    /// 시퀀스 결과는 이미 이동을 마쳤으므로 대상이 아니다.</summary>
+    public bool CanCameraMove => FlatSnapshot is { Stage: FlatDetectionStage.DetectOnly, TcpPoseAtDetect: not null } && !Busy;
+
+    /// <summary>'레이저 이동' 가능 — '카메라 이동'(또는 생략)을 마쳤고 아직 레이저 이동을 하지 않았을 때.</summary>
+    public bool CanLaserMove => FlatSnapshot is
+    {
+        Stage: FlatDetectionStage.Moved or FlatDetectionStage.MoveSkipped,
+        TcpPoseAfterCameraMove: not null, TcpPoseAfterLaserMove: null,
+    } && !Busy;
+
+    /// <summary>'평탄면 보정' 가능 — Laser Sensor 페이지 '보정 적용'과 같이 현재 자리에서 언제든 실행.</summary>
+    public bool CanFlatCorrect => !Busy;
+
+    /// <summary>다음에 누를 버튼 안내.</summary>
+    public string FlatStepHint => FlatSnapshot switch
+    {
+        null => "",
+        { Stage: FlatDetectionStage.DetectOnly, TcpPoseAtDetect: null } => "검출 시점 코봇 위치가 없어 이동할 수 없습니다 — 코봇 연결 후 '평탄 검증'을 다시 하세요.",
+        _ when CanCameraMove => "다음: ① 카메라 이동",
+        _ when CanLaserMove => "다음: ② 레이저 이동",
+        { Stage: FlatDetectionStage.LaserMeasured } => "다음: ③ 평탄면 보정",
+        _ => "다시 하려면 '평탄 검증'부터 하세요.",
+    };
 
     public string FlatStageText => FlatSnapshot?.Stage switch
     {
@@ -163,7 +188,8 @@ public sealed partial class CameraViewModel : ViewModelBase
                      nameof(HasFlat), nameof(FlatSourceText), nameof(FlatCellText), nameof(FlatDepthText),
                      nameof(FlatDeltaText), nameof(FlatLaserText), nameof(FlatLaserChannelsText),
                      nameof(FlatStageText), nameof(FlatStageMessage),
-                     nameof(FlatStageBusy), nameof(FlatStageFailed), nameof(FlatStageOk), nameof(CanLaserMeasure),
+                     nameof(FlatStageBusy), nameof(FlatStageFailed), nameof(FlatStageOk),
+                     nameof(CanCameraMove), nameof(CanLaserMove), nameof(CanFlatCorrect), nameof(FlatStepHint),
                  })
             OnPropertyChanged(name);
     }
@@ -180,7 +206,13 @@ public sealed partial class CameraViewModel : ViewModelBase
     public double RoiW => Math.Clamp(RoiWPct / 100, 0, 1);
     public double RoiH => Math.Clamp(RoiHPct / 100, 0, 1);
 
-    partial void OnBusyChanged(bool value) => OnPropertyChanged(nameof(CanLaserMeasure));
+    partial void OnBusyChanged(bool value)
+    {
+        OnPropertyChanged(nameof(CanCameraMove));
+        OnPropertyChanged(nameof(CanLaserMove));
+        OnPropertyChanged(nameof(CanFlatCorrect));
+        OnPropertyChanged(nameof(FlatStepHint));
+    }
 
     public override async void OnActivated()
     {
@@ -377,7 +409,7 @@ public sealed partial class CameraViewModel : ViewModelBase
             double z = best.Best.MeanMm > 0 ? best.Best.MeanMm : FallbackDepthMm;
             var (dx, dy) = _svc.PixelDeltaToMm(best.Best.U - (x + w / 2), best.Best.V - (y + h / 2), z);
 
-            // 검출 시점 코봇 위치 — '레이저 이동·측정'이 같은 자리에서만 Δ 를 적용하도록 기록한다.
+            // 검출 시점 코봇 위치 — '카메라 이동'이 같은 자리에서만 Δ 를 적용하도록 기록한다.
             var tool = await GetAlignToolAsync();
             double[]? pose = null;
             if (_cobot.IsConnected)
@@ -397,17 +429,59 @@ public sealed partial class CameraViewModel : ViewModelBase
         finally { Busy = false; }
     }
 
+    /// <summary>① 카메라 이동 — 평탄 셀이 ROI 중심에 오도록 셀 Δ 만큼 이동(시퀀스 ④ Phase B 와 같은 계산).</summary>
+    [RelayCommand]
+    private Task CameraMove() => RunFlatStepAsync("카메라 이동", CanCameraMove, async (snap, o) =>
+        await _centering.MoveCameraToFlatAsync(snap, o, progress: null, _cts.Token));
+
+    /// <summary>② 레이저 이동 — 카메라→레이저 장착 오프셋(시퀀스 '레이저중심 Y')만큼 이동 후 측정만(틸트 보정 없음).</summary>
+    [RelayCommand]
+    private Task LaserMove() => RunFlatStepAsync("레이저 이동", CanLaserMove, async (snap, o) =>
+        await _centering.MoveLaserOntoFlatAsync(snap, o, progress: null, _cts.Token));
+
     /// <summary>
-    /// '평탄 검증'으로 찾은 평탄 셀 위로 레이저 3점 중심을 옮기고 레이저를 측정한다(코봇 실제 이동, 틸트 보정 없음).
-    /// 시퀀스와 동시에 코봇을 움직이지 않도록 시퀀스 전역 잠금을 잡는다.
+    /// ③ 평탄면 보정 — Laser Sensor 페이지 '보정 적용'과 같은 틸트 보정(<see cref="LaserTiltCorrector"/>, 기본 옵션 =
+    /// 시퀀스 ④ Phase C 와 같은 기준 1°·최대 3회·회당 10°)을 현재 자리에서 실행한다.
     /// </summary>
     [RelayCommand]
-    private async Task LaserMeasure()
+    private async Task FlatCorrect()
     {
-        if (FlatSnapshot is not { } snap || !CanLaserMeasure) return;
+        if (!CanFlatCorrect) return;
         if (!_gate.TryEnter())
         {
-            NotifyLaser("시퀀스 실행 중에는 레이저 이동을 할 수 없습니다.", true);
+            NotifyLaser("시퀀스 실행 중에는 평탄면 보정을 할 수 없습니다.", true);
+            return;
+        }
+        Busy = true;
+        try
+        {
+            var tool = FlatSnapshot?.Tool ?? await GetAlignToolAsync();
+            NotifyLaser("평탄면 보정 중…", false);
+            _flatMonitor.UpdateStage(FlatDetectionStage.LaserMeasuring, "평탄면 보정 중");
+            var r = await _tilt.LevelAsync(new TiltLevelOptions { Tool = tool, Velocity = LaserMoveVelocity },
+                msg => Dispatcher.UIThread.Post(() => NotifyLaser(msg, false)),
+                (_, pose) => _flatMonitor.SetLaser(pose.Rx, pose.Ry, pose.Z),
+                _cts.Token);
+            _flatMonitor.UpdateStage(r.Success ? FlatDetectionStage.Done : FlatDetectionStage.Failed, r.Message);
+            NotifyLaser(r.Success ? $"평탄면 보정 완료 — {r.Message}" : $"평탄면 보정 실패: {r.Message}", !r.Success);
+        }
+        catch (OperationCanceledException) { NotifyLaser("평탄면 보정 중단됨.", true); }
+        catch (Exception ex) { NotifyLaser($"평탄면 보정 오류: {ex.Message}", true); }
+        finally
+        {
+            Busy = false;
+            _gate.Exit();
+        }
+    }
+
+    /// <summary>카메라/레이저 이동 공통 — 시퀀스 전역 잠금, 시퀀스 ④와 같은 파라미터(축 매핑·레이저중심 Y) 로드.</summary>
+    private async Task RunFlatStepAsync(string name, bool allowed,
+        Func<FlatDetectionSnapshot, LaserToFlatOptions, Task<LaserToFlatResult>> step)
+    {
+        if (FlatSnapshot is not { } snap || !allowed) return;
+        if (!_gate.TryEnter())
+        {
+            NotifyLaser($"시퀀스 실행 중에는 {name}을 할 수 없습니다.", true);
             return;
         }
         Busy = true;
@@ -418,20 +492,20 @@ public sealed partial class CameraViewModel : ViewModelBase
             var ax = await param.GetDoubleAsync(AlignImageXAxisKey);
             var ay = await param.GetDoubleAsync(AlignImageYAxisKey);
             var shiftY = await param.GetDoubleAsync(WeldSequenceSupport.CameraToLaserShiftYKey) ?? -75.0;
-            var axisX = ax is >= 0 and <= 5 ? (ToolAxisDir)(int)ax.Value : ToolAxisDir.PlusX;
-            var axisY = ay is >= 0 and <= 5 ? (ToolAxisDir)(int)ay.Value : ToolAxisDir.PlusY;
-
-            NotifyLaser("레이저를 평탄 셀 위로 이동 중…", false);
-            var r = await _centering.MoveLaserToFlatAsync(snap, new LaserToFlatOptions
+            var options = new LaserToFlatOptions
             {
-                ImageXAxis = axisX, ImageYAxis = axisY,
+                ImageXAxis = ax is >= 0 and <= 5 ? (ToolAxisDir)(int)ax.Value : ToolAxisDir.PlusX,
+                ImageYAxis = ay is >= 0 and <= 5 ? (ToolAxisDir)(int)ay.Value : ToolAxisDir.PlusY,
                 CameraToLaserShiftYmm = shiftY,
                 Tool = snap.Tool ?? 1,
                 Velocity = LaserMoveVelocity,
-            }, progress: null, _cts.Token);
-            NotifyLaser(r.Success ? r.Message : $"레이저 이동·측정 실패: {r.Message}", !r.Success);
+            };
+
+            NotifyLaser($"{name} 중…", false);
+            var r = await step(snap, options);
+            NotifyLaser(r.Success ? r.Message : $"{name} 실패: {r.Message}", !r.Success);
         }
-        catch (Exception ex) { NotifyLaser($"레이저 이동·측정 오류: {ex.Message}", true); }
+        catch (Exception ex) { NotifyLaser($"{name} 오류: {ex.Message}", true); }
         finally
         {
             Busy = false;

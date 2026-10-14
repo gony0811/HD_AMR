@@ -15,7 +15,7 @@ public enum FlatDetectionStage
     LaserMeasuring,
     /// <summary>정렬 완료.</summary>
     Done,
-    /// <summary>카메라 페이지 '레이저 이동·측정' — 평탄 셀 위로 레이저를 옮겨 측정만 함(틸트 보정 없음).</summary>
+    /// <summary>카메라 페이지 '레이저 이동' — 평탄 셀 위로 레이저를 옮겨 측정만 함(틸트 보정 없음).</summary>
     LaserMeasured,
     /// <summary>실패/취소.</summary>
     Failed,
@@ -36,7 +36,8 @@ public sealed record FlatDetectionSnapshot(
     double? LaserRxDeg = null, double? LaserRyDeg = null,
     double? LaserZmm = null, IReadOnlyList<double>? LaserChannelsMm = null,
     double[]? TcpPoseAtDetect = null, int? Tool = null,
-    Models.CameraFrame? PreLaserFrame = null, DateTime? PreLaserAt = null);
+    Models.CameraFrame? PreLaserFrame = null, DateTime? PreLaserAt = null,
+    double[]? TcpPoseAfterCameraMove = null, double[]? TcpPoseAfterLaserMove = null);
 
 /// <summary>
 /// 가장 최근 평탄면 검출 결과를 보관하고 변경을 알리는 싱글톤. 시퀀스(<see cref="Sequence.Steps.FlatSurfaceAlignStep"/>)·
@@ -73,6 +74,15 @@ public sealed class FlatDetectionMonitor
     /// 스냅샷이 없으면 무시.</summary>
     public void SetPreLaserFrame(Models.CameraFrame? frame)
         => Set(s => s is null ? null : s with { PreLaserFrame = frame, PreLaserAt = frame is null ? null : DateTime.Now });
+
+    /// <summary>카메라 페이지 단계 버튼('카메라 이동'/'레이저 이동')이 끝난 자리 기록 — 다음 단계가 같은 자리에서만
+    /// 이어지도록(이중 이동 방지) 검사하는 기준. 스냅샷이 없으면 무시.</summary>
+    public void SetStepPose(double[]? afterCameraMove, double[]? afterLaserMove)
+        => Set(s => s is null ? null : s with
+        {
+            TcpPoseAfterCameraMove = afterCameraMove ?? s.TcpPoseAfterCameraMove,
+            TcpPoseAfterLaserMove = afterLaserMove ?? s.TcpPoseAfterLaserMove,
+        });
 
     public void Clear() => Set(_ => null);
 

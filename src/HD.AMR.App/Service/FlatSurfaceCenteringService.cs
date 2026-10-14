@@ -102,7 +102,7 @@ public sealed class DepthDistanceMoveOptions
 public sealed record DepthDistanceMoveResult(
     bool Success, double? MeasuredMm, double? MovedMm, string Message);
 
-/// <summary>검출된 평탄 셀 위로 레이저를 옮겨 측정하는 옵션(카메라 페이지 '레이저 이동·측정').</summary>
+/// <summary>카메라 페이지 단계 버튼('카메라 이동'/'레이저 이동') 옵션 — 시퀀스 ④와 같은 값을 넣는다.</summary>
 public sealed class LaserToFlatOptions
 {
     public ToolAxisDir ImageXAxis { get; init; } = ToolAxisDir.PlusX;
@@ -120,6 +120,9 @@ public sealed class LaserToFlatOptions
 
     /// <summary>검출 시점 대비 자세 허용 오차(°).</summary>
     public double PoseToleranceDeg { get; init; } = 0.5;
+
+    /// <summary>선택 셀이 ROI 중심에서 이 값(정규화) 안이면 카메라 이동 생략 — 시퀀스 ④와 같은 0.02.</summary>
+    public double DeadbandUv { get; init; } = 0.02;
 
     public int Tool { get; init; } = 1;
     public double Velocity { get; init; } = 10;
@@ -387,19 +390,18 @@ public class FlatSurfaceCenteringService
     }
 
     /// <summary>
-    /// 검출 스냅샷의 평탄 셀 위로 레이저 3점 중심을 옮기고(셀 이동 Δ + 카메라→레이저 툴 Y 보정을
-    /// 툴 좌표계 1회 이동으로 합침) 레이저를 측정한다. 틸트 보정은 하지 않는다 — 측정값 확인용.
-    /// 검출 이후 코봇이 움직였으면 Δ 가 현재 위치 기준이 아니므로 이동하지 않고 실패한다
-    /// (같은 버튼을 두 번 눌러 이중 이동하는 것도 이 검사로 막힌다).
+    /// ① 카메라 이동 — 검출 스냅샷의 평탄 셀이 ROI 중심에 오도록 코봇을 셀 Δ 만큼 툴 평행이동한다.
+    /// 시퀀스 ④ Phase B(<see cref="RunAsync"/>, 1회 개루프)와 같은 계산·가드·데드밴드를 쓴다.
+    /// 검출 이후 코봇이 움직였으면 Δ 가 현재 위치 기준이 아니므로 이동하지 않는다(두 번 눌러 이중 이동하는 것도 차단).
     /// 예외를 던지지 않고 항상 결과를 반환한다(취소 포함). 결과는 <see cref="FlatDetectionMonitor"/> 에도 반영.
     /// </summary>
-    public async Task<LaserToFlatResult> MoveLaserToFlatAsync(
+    public async Task<LaserToFlatResult> MoveCameraToFlatAsync(
         FlatDetectionSnapshot snap, LaserToFlatOptions o, Action<string>? progress, CancellationToken ct)
     {
         if (!_cobot.IsConnected)
             return LaserFail("코봇 RPC 미연결", publish: false);
-        if (!_laser.IsConnected)
-            return LaserFail("레이저 변위센서 미연결", publish: false);
+        if (snap.Stage != FlatDetectionStage.DetectOnly)
+            return LaserFail("'평탄 검증' 직후에만 카메라 이동을 할 수 있습니다 — '평탄 검증'을 다시 하세요.", publish: false);
         if (snap.DeltaXmm is not { } dx || snap.DeltaYmm is not { } dy)
             return LaserFail("검출 결과에 이동량이 없습니다.", publish: false);
         if (snap.TcpPoseAtDetect is not { Length: >= 6 } detectPose)
@@ -424,35 +426,95 @@ public class FlatSurfaceCenteringService
         }
         if (Math.Abs(dx) > limX || Math.Abs(dy) > limY)
             return LaserFail($"평탄 셀 이동량 ({dx:0.#}, {dy:0.#})mm 가 한계 (X±{limX:0.#}, Y±{limY:0.#})mm 초과.", publish: false);
+
+        try
+        {
+            var anchor = await _cobot.Rpc.GetTcpPoseInBaseAsync(o.Tool, ct);
+            if (PoseMismatch(anchor, detectPose, o) is { } moved)
+                return LaserFail($"검출 이후 코봇이 움직였습니다 ({moved}) — '평탄 검증'을 다시 하세요.", publish: false);
+
+            // 시퀀스와 같은 데드밴드 — 선택 셀이 이미 ROI 중심 근방이면 이동하지 않는다.
+            double du = snap.Analysis.Best.U - (snap.FullRoiX + snap.FullRoiW / 2.0);
+            double dv = snap.Analysis.Best.V - (snap.FullRoiY + snap.FullRoiH / 2.0);
+            if (o.DeadbandUv > 0 && Math.Abs(du) < o.DeadbandUv && Math.Abs(dv) < o.DeadbandUv)
+            {
+                _monitor.UpdateStage(FlatDetectionStage.MoveSkipped, "선택 셀이 이미 ROI 중심 근방 — 카메라 이동 생략");
+                _monitor.SetStepPose(anchor, null);
+                const string skip = "카메라 이동 생략 — 선택 셀이 이미 ROI 중심 근방 (시퀀스와 같은 데드밴드)";
+                Report(progress, skip);
+                return new LaserToFlatResult(true, skip);
+            }
+
+            var offset = new double[6];
+            ApplyAxis(offset, o.ImageXAxis, dx);
+            ApplyAxis(offset, o.ImageYAxis, dy);
+            Report(progress,
+                $"카메라 이동: 셀 Δ=({dx:+0.#;-0.#}, {dy:+0.#;-0.#})mm, 매핑 X→툴{AxisNames[(int)o.ImageXAxis]}/Y→툴{AxisNames[(int)o.ImageYAxis]} → " +
+                $"툴 오프셋 [{offset[0]:0.#}, {offset[1]:0.#}, {offset[2]:0.#}]");
+            _monitor.UpdateStage(FlatDetectionStage.Moving, "카메라를 평탄 셀 위로 이동 중");
+
+            var rc = await _cobot.Rpc.MoveByToolOffsetAsync(anchor, user: 0, offset, tool: o.Tool, vel: o.Velocity, ct: ct);
+            if (rc != 0)
+                return LaserFail($"카메라 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.");
+            await Task.Delay(o.SettleMs, ct);
+
+            var after = await _cobot.Rpc.GetTcpPoseInBaseAsync(o.Tool, ct);
+            _monitor.SetStepPose(after, null);
+            _monitor.UpdateStage(FlatDetectionStage.Moved, $"카메라 이동 완료 Δ=({dx:+0.#;-0.#}, {dy:+0.#;-0.#})mm");
+            var msg = $"카메라 이동 완료: Δ=({dx:+0.#;-0.#}, {dy:+0.#;-0.#})mm, BASE 실측 " +
+                      $"[{after[0] - anchor[0]:+0.#;-0.#}, {after[1] - anchor[1]:+0.#;-0.#}, {after[2] - anchor[2]:+0.#;-0.#}]mm";
+            Report(progress, msg);
+            return new LaserToFlatResult(true, msg);
+        }
+        catch (OperationCanceledException)
+        {
+            return LaserFail("사용자 취소");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "카메라 이동 중 오류");
+            return LaserFail($"카메라 이동 오류: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// ② 레이저 이동 — '카메라 이동'을 마친 자리에서 카메라→레이저 장착 오프셋(툴 Y, 시퀀스 '레이저중심 Y' 파라미터)만큼
+    /// 옮겨 레이저 3점 중심을 평탄 셀 위에 놓고 측정만 한다(틸트 보정 없음). 시퀀스 ④의 레이저 중심 보정 이동과 같다.
+    /// 측정 직전 깊이 프레임을 남겨 스팟이 놓인 자리를 정지 화면으로 확인할 수 있게 한다.
+    /// </summary>
+    public async Task<LaserToFlatResult> MoveLaserOntoFlatAsync(
+        FlatDetectionSnapshot snap, LaserToFlatOptions o, Action<string>? progress, CancellationToken ct)
+    {
+        if (!_cobot.IsConnected)
+            return LaserFail("코봇 RPC 미연결", publish: false);
+        if (!_laser.IsConnected)
+            return LaserFail("레이저 변위센서 미연결", publish: false);
+        if (snap.TcpPoseAfterCameraMove is not { Length: >= 6 } cameraPose)
+            return LaserFail("'카메라 이동'을 먼저 하세요.", publish: false);
+        if (snap.TcpPoseAfterLaserMove is not null)
+            return LaserFail("이미 레이저 이동을 했습니다 — 다시 하려면 '평탄 검증'부터 하세요.", publish: false);
         if (Math.Abs(o.CameraToLaserShiftYmm) > 200)
             return LaserFail($"카메라→레이저 보정량 {o.CameraToLaserShiftYmm:0.#}mm 가 한계 ±200mm 초과 — 시퀀스 '레이저중심 Y'를 확인하세요.", publish: false);
 
         try
         {
-            // ── 위치 검사: 검출 시점과 같은 자리여야 Δ 가 유효 ──
             var anchor = await _cobot.Rpc.GetTcpPoseInBaseAsync(o.Tool, ct);
-            double posErr = Math.Sqrt(
-                Math.Pow(anchor[0] - detectPose[0], 2) + Math.Pow(anchor[1] - detectPose[1], 2) + Math.Pow(anchor[2] - detectPose[2], 2));
-            double rotErr = Enumerable.Range(3, 3).Max(i => Math.Abs(WrapDeg(anchor[i] - detectPose[i])));
-            if (posErr > o.PoseToleranceMm || rotErr > o.PoseToleranceDeg)
-                return LaserFail(
-                    $"검출 이후 코봇이 움직였습니다 (위치 {posErr:0.#}mm, 자세 {rotErr:0.##}°) — '평탄 검증'을 다시 하세요.",
-                    publish: false);
+            if (PoseMismatch(anchor, cameraPose, o) is { } moved)
+                return LaserFail($"카메라 이동 이후 코봇이 움직였습니다 ({moved}) — '평탄 검증'부터 다시 하세요.", publish: false);
 
-            // ── 이동: 셀 Δ(이미지→툴축 매핑) + 레이저 보정(툴 Y) — 둘 다 같은 자세의 툴 평행이동이라 합산 가능 ──
             var offset = new double[6];
-            ApplyAxis(offset, o.ImageXAxis, dx);
-            ApplyAxis(offset, o.ImageYAxis, dy);
-            offset[1] += o.CameraToLaserShiftYmm;
-            Report(progress,
-                $"레이저 이동: 셀 Δ=({dx:+0.#;-0.#}, {dy:+0.#;-0.#})mm + 레이저 보정 툴Y {o.CameraToLaserShiftYmm:+0.#;-0.#}mm → " +
-                $"툴 오프셋 [{offset[0]:0.#}, {offset[1]:0.#}, {offset[2]:0.#}]");
+            offset[1] = o.CameraToLaserShiftYmm;
+            Report(progress, $"레이저 이동: 카메라→레이저 보정 툴 Y {o.CameraToLaserShiftYmm:+0.#;-0.#}mm");
             _monitor.UpdateStage(FlatDetectionStage.Moving, "레이저를 평탄 셀 위로 이동 중");
 
             var rc = await _cobot.Rpc.MoveByToolOffsetAsync(anchor, user: 0, offset, tool: o.Tool, vel: o.Velocity, ct: ct);
             if (rc != 0)
                 return LaserFail($"레이저 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.");
             await Task.Delay(o.SettleMs, ct);
+
+            var after = await _cobot.Rpc.GetTcpPoseInBaseAsync(o.Tool, ct);
+            _monitor.SetStepPose(null, after);
+            _monitor.SetPreLaserFrame(_camera.LatestDepth);
 
             // ── 측정: 3회 샘플 평균 (시퀀스 ④ Phase C 와 같은 방식) ──
             _monitor.UpdateStage(FlatDetectionStage.LaserMeasuring, "레이저 3점 측정");
@@ -479,7 +541,7 @@ public class FlatSurfaceCenteringService
             rx /= n; ry /= n; z /= n;
             var channels = ch.Select(v => v / n).ToArray();
             _monitor.SetLaser(rx, ry, z, channels);
-            _monitor.UpdateStage(FlatDetectionStage.LaserMeasured, "레이저 이동·측정 완료 (틸트 보정 없음)");
+            _monitor.UpdateStage(FlatDetectionStage.LaserMeasured, "레이저 이동·측정 완료 (틸트 보정 전)");
             var msg = $"레이저 측정: rx={rx:0.###}°, ry={ry:0.###}°, z={z:0.#}mm " +
                       $"(채널 {channels[0]:0.##}/{channels[1]:0.##}/{channels[2]:0.##}mm)";
             Report(progress, msg);
@@ -491,9 +553,20 @@ public class FlatSurfaceCenteringService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "레이저 이동·측정 중 오류");
-            return LaserFail($"레이저 이동·측정 오류: {ex.Message}");
+            _logger.LogError(ex, "레이저 이동 중 오류");
+            return LaserFail($"레이저 이동 오류: {ex.Message}");
         }
+    }
+
+    /// <summary>기준 자세와 현재 자세가 허용 오차를 넘게 다르면 설명 문자열, 같으면 null.</summary>
+    private static string? PoseMismatch(double[] current, double[] reference, LaserToFlatOptions o)
+    {
+        double posErr = Math.Sqrt(
+            Math.Pow(current[0] - reference[0], 2) + Math.Pow(current[1] - reference[1], 2) + Math.Pow(current[2] - reference[2], 2));
+        double rotErr = Enumerable.Range(3, 3).Max(i => Math.Abs(WrapDeg(current[i] - reference[i])));
+        return posErr > o.PoseToleranceMm || rotErr > o.PoseToleranceDeg
+            ? $"위치 {posErr:0.#}mm, 자세 {rotErr:0.##}°"
+            : null;
     }
 
     private static double WrapDeg(double d) => ((d + 180) % 360 + 360) % 360 - 180;
