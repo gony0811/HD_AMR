@@ -5,26 +5,29 @@ using CommunityToolkit.Mvvm.Input;
 using HD.AMR.App.Communication.Weld;
 using HD.AMR.App.Models;
 using HD.AMR.App.Service;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace HD.AMR.Desktop.ViewModels;
 
 /// <summary>
 /// 용접라인 추적(수동 2-shot). 기존 WeldTrackingPanel.razor 이식(핵심).
 /// ROI 에디터(Bead/Peak — 시퀀스와 같은 Camera.Bead/Peak.Roi 파라미터) + 진행축 선택 + 1회 검출/피크 캡처/
-/// 각도 계산 + 검출 오버레이. 검출은 카메라·OpenCV/ONNX 의존
+/// 각도 계산 + 검출 오버레이 + 학습 데이터 캡처(Camera 페이지와 같은 저장 폴더). 검출은 카메라·OpenCV/ONNX 의존
 /// (Windows 전용, macOS 는 Noop). 후속: 검출 파라미터 상세 튜닝, 스케일 2점 보정, 학습/라벨 연동.
 /// </summary>
 public sealed partial class WeldTrackingViewModel : ViewModelBase
 {
     private readonly WeldTrackingService _svc;
     private readonly CameraService _cam;
+    private readonly IServiceScopeFactory _scopeFactory;
     private readonly DispatcherTimer _timer;
     private bool _polling;
 
-    public WeldTrackingViewModel(WeldTrackingService svc, CameraService cam)
+    public WeldTrackingViewModel(WeldTrackingService svc, CameraService cam, IServiceScopeFactory scopeFactory)
     {
         _svc = svc;
         _cam = cam;
+        _scopeFactory = scopeFactory;
         _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(120) };
         _timer.Tick += async (_, _) => await PollAsync();
     }
@@ -81,13 +84,26 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
     public string AngleText => _svc.Angle is { } a ? $"{a.ThetaDeg:0.00}° ({a.ThetaRad:0.0000} rad)" : "—";
     public bool CanComputeAngle => !Busy && _svc.M1 is not null && _svc.M2 is not null && _svc.ScaleAvailable;
 
-    public override void OnActivated()
+    // 학습 데이터 캡처 — 저장 폴더는 Camera 페이지와 공유(Camera.Capture.Dir), 누적 횟수는 페이지별.
+    [ObservableProperty] private string _captureDir = "";
+    [ObservableProperty] private int _captureCount;
+    [ObservableProperty] private string? _lastCaptureInfo;
+
+    public override async void OnActivated()
     {
         Pitch = _svc.Pitch;
         MethodIndex = _svc.Method == WeldDetectionMethod.Param ? 1 : 0;
         _timer.Start();
         RefreshStatus();
         RefreshOverlays();
+        // Camera 페이지에서 폴더를 바꿨을 수 있으므로 활성화마다 다시 읽는다.
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            CaptureDir = await scope.ServiceProvider.GetRequiredService<ParameterService>()
+                .GetAsync(CameraViewModel.CaptureDirKey) ?? "";
+        }
+        catch { /* 파라미터 로드 실패는 무시 */ }
     }
 
     public override void OnDeactivated()
@@ -207,6 +223,38 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
 
     [RelayCommand]
     private void ResetMeasurements() { _svc.ResetMeasurements(); RefreshStatus(); RefreshOverlays(); }
+
+    // ── 학습 데이터 캡처 ──
+    [RelayCommand]
+    private async Task TrainingCapture()
+    {
+        if (string.IsNullOrWhiteSpace(CaptureDir)) { Message = "먼저 저장 폴더를 선택하세요."; return; }
+        if (Busy) return;
+        Busy = true;
+        try
+        {
+            var r = await _cam.SaveCaptureAsync(CaptureDir);
+            CaptureCount++;
+            LastCaptureInfo = $"{r.Timestamp} · {r.Files.Count}개 파일";
+            Message = $"캡처 저장: {r.Dir}";
+        }
+        catch (Exception ex) { Message = $"캡처 실패: {ex.Message}"; }
+        finally { Busy = false; }
+    }
+
+    /// <summary>코드비하인드(StorageProvider)가 폴더를 고른 뒤 호출 — Camera 페이지와 같은 키에 저장.</summary>
+    public async Task SetCaptureDirAsync(string dir)
+    {
+        CaptureDir = dir;
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            await scope.ServiceProvider.GetRequiredService<ParameterService>()
+                .SetAsync(CameraViewModel.CaptureDirKey, dir, "학습 데이터 캡처 저장 폴더");
+        }
+        catch { /* 무시 */ }
+        Message = $"저장 폴더 지정: {dir}";
+    }
 
     private async Task Run(Action action)
     {

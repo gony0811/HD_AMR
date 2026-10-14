@@ -107,6 +107,23 @@
                     </StackPanel>
                 </Border>
 
+                <!-- 학습 데이터 캡처 — Camera 페이지와 같은 기능·같은 저장 폴더(Camera.Capture.Dir). -->
+                <Border Classes="card">
+                    <StackPanel Spacing="8">
+                        <TextBlock Text="학습 데이터 캡처 (RGB·IR·Depth · PNG 무손실)" FontWeight="SemiBold" />
+                        <Grid ColumnDefinitions="Auto,*,Auto">
+                            <TextBlock Grid.Column="0" Text="저장 폴더" VerticalAlignment="Center" Margin="0,0,8,0" />
+                            <TextBox Grid.Column="1" Text="{Binding CaptureDir}" IsReadOnly="True" Watermark="폴더 선택… 버튼으로 지정" />
+                            <Button Grid.Column="2" Name="BrowseButton" Margin="8,0,0,0" Content="📁 폴더 선택…" />
+                        </Grid>
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                            <Button Content="📷 캡처" Classes="accent" Command="{Binding TrainingCaptureCommand}" IsEnabled="{Binding IsStreaming}" />
+                            <TextBlock Classes="axis" VerticalAlignment="Center" Text="{Binding CaptureCount, StringFormat='세션 누적 {0}회'}" />
+                            <TextBlock Classes="axis" VerticalAlignment="Center" Text="{Binding LastCaptureInfo}" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
                 <Border Classes="card">
                     <StackPanel Spacing="4">
                         <TextBlock Text="측정 결과" FontWeight="SemiBold" />

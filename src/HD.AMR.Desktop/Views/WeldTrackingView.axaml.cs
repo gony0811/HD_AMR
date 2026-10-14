@@ -3,6 +3,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Shapes;
 using Avalonia.Input;
+using Avalonia.Platform.Storage;
 using HD.AMR.App.Models;
 using HD.AMR.Desktop.ViewModels;
 
@@ -28,7 +29,22 @@ public partial class WeldTrackingView : UserControl
         _host.PointerMoved += OnMoved;
         _host.PointerReleased += OnReleased;
         _host.SizeChanged += (_, _) => DrawRois();
+        this.FindControl<Button>("BrowseButton")!.Click += OnBrowseClick;
         DataContextChanged += OnDataContextChanged;
+    }
+
+    private async void OnBrowseClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        var top = TopLevel.GetTopLevel(this);
+        if (top is null || _vm is null) return;
+        var picked = await top.StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+        {
+            Title = "캡처 저장 폴더 선택",
+            AllowMultiple = false,
+        });
+        var path = picked.Count > 0 ? picked[0].TryGetLocalPath() : null;
+        if (!string.IsNullOrWhiteSpace(path))
+            await _vm.SetCaptureDirAsync(path);
     }
 
     private void OnDataContextChanged(object? sender, System.EventArgs e)

@@ -29,7 +29,8 @@ public sealed partial class CameraViewModel : ViewModelBase
     private readonly CancellationTokenSource _cts = new();
     private bool _polling;
 
-    private const string CaptureDirKey = "Camera.Capture.Dir";
+    /// <summary>학습 데이터 캡처 저장 폴더 — 용접 추적 페이지도 같은 키를 쓴다.</summary>
+    internal const string CaptureDirKey = "Camera.Capture.Dir";
     private const string RoiEnabledKey = "Camera.Depth.Roi.Enabled";
     private const string RoiXKey = "Camera.Depth.Roi.X";
     private const string RoiYKey = "Camera.Depth.Roi.Y";
