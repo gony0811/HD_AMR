@@ -104,6 +104,15 @@
                 </StackPanel>
             </Border>
 
+            <!-- 레이저 3채널 실시간 — 로그와 카메라 칸 사이(DockPanel 은 Bottom 을 선언 순서대로 아래부터 쌓는다). -->
+            <Border DockPanel.Dock="Bottom" Classes="card" Padding="12,6" Margin="0,10,0,0">
+                <Grid ColumnDefinitions="Auto,*">
+                    <TextBlock Text="레이저" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,10,0" />
+                    <TextBlock Grid.Column="1" Text="{Binding LaserLine}" FontFamily="monospace" FontSize="13"
+                               VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                </Grid>
+            </Border>
+
             <Border Classes="card" Padding="0" Margin="0,10,0,0">
                 <TextBox Text="{Binding LogText, Mode=OneWay}" IsReadOnly="True" AcceptsReturn="True"
                          FontFamily="monospace" FontSize="12" BorderThickness="0"

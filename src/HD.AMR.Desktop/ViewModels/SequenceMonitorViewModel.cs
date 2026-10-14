@@ -136,9 +136,24 @@ public sealed partial class SequenceMonitorViewModel : ObservableObject, IDispos
         if (kind != CameraKind) { CameraKind = kind; LiveImage = null; }
     }
 
+    /// <summary>레이저 3채널 실시간 한 줄 — 로그와 카메라 칸 사이. 단계와 무관하게 항상 갱신.</summary>
+    [ObservableProperty] private string _laserLine = "레이저 —";
+
+    private string LiveLaserLine()
+    {
+        if (!_laser.IsConnected) return "레이저 미연결";
+        var ch = _laser.GetReadings();
+        if (ch.Count < 3) return "레이저 채널 대기 중";
+        var p = _laser.GetPlanePose();
+        var tilt = p.Valid ? $"   |   rx {p.Rx:+0.00;-0.00}° · ry {p.Ry:+0.00;-0.00}° · z {p.Z:0.0} mm" : "";
+        return $"CH1 {Ch(ch[0])} · CH2 {Ch(ch[1])} · CH3 {Ch(ch[2])}{tilt}";
+        static string Ch(LaserChannelReading r) => r.Enabled ? $"{r.Value:0.000} mm" : "범위 밖";
+    }
+
     // ── 라이브 영상·결과 폴링 ──
     private async Task PollAsync()
     {
+        try { LaserLine = LiveLaserLine(); } catch { /* 다음 틱에 다시 */ }
         if (_polling || !ShowCamera) return;
         _polling = true;
         try
