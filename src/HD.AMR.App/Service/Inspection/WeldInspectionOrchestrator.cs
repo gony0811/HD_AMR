@@ -400,12 +400,12 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         }
 
         var cameraTargetMm = recipe.CameraTargetDistanceMm ?? 400;
-        // params.standoffMm 은 런타임에서 쓰지 않는다 — 툴 면 이격은 AMR 이 정하는 값이고(§10 N18),
-        // ②는 ③이 수렴시킬 카메라 목표거리만큼 물러난다. 수신값이 다르면 흔적만 남긴다.
-        if (req.StandoffMm > 0 && Math.Abs(req.StandoffMm - cameraTargetMm) > 0.001)
+        // params.standoffMm 은 런타임에서 쓰지 않는다 — 툴 면 이격은 AMR 이 정하는 값이다(§10 N18).
+        // ②는 고정 면 이격(CobotInspectionMoveStep.ApproachStandoffMm)으로 물러나고, ③이 카메라 목표거리로 수렴시킨다.
+        if (req.StandoffMm > 0 && Math.Abs(req.StandoffMm - CobotInspectionMoveStep.ApproachStandoffMm) > 0.001)
             _logger.LogInformation(
-                "ACS standoffMm={AcsStandoff} 미사용 — 'Cobot 검사위치 이동' 면 이격은 레시피 {Recipe} 카메라 목표거리 {Target}mm 를 씁니다 (jobRef={JobRef})",
-                req.StandoffMm, recipe.Id, cameraTargetMm, req.JobRef);
+                "ACS standoffMm={AcsStandoff} 미사용 — 'Cobot 검사위치 이동' 면 이격은 고정 {Approach}mm, '카메라 거리 정렬' 목표는 레시피 {Recipe} {Target}mm (jobRef={JobRef})",
+                req.StandoffMm, CobotInspectionMoveStep.ApproachStandoffMm, recipe.Id, cameraTargetMm, req.JobRef);
         if (req.WorkingDistanceMm is { } acsWd && Math.Abs(acsWd - cameraTargetMm) > 0.001)
             _logger.LogInformation(
                 "ACS workingDistanceMm={AcsWd} 무시 — 레시피 {Recipe} 카메라 목표거리 {Target}mm 사용 (jobRef={JobRef})",

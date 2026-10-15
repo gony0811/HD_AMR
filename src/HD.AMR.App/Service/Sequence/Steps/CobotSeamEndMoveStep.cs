@@ -18,6 +18,13 @@ namespace HD.AMR.App.Service.Sequence.Steps;
 ///
 /// <b>seamEndW 가 없으면 즉시 Fail</b> — 끝점이 없으면 점2가 점1과 같은 자리가 되어 프레임 X가 0이 된다.
 /// ②와 달리 티칭 위치 폴백을 쓰지 않는다(폴백하면 두 점이 같아짐).
+///
+/// <b>위치는 점1 기준 평행 이동</b>이다 — 점1(<see cref="WObjPointStep"/> 기록 포즈)에서 ACS 시작점→끝점 벡터의
+/// 면 방향 성분만큼 옮기고, 광축(면 법선) 성분은 버린다. 그래서 ③ 카메라 거리 정렬 등으로 점1에서 맞춘
+/// 면 거리가 점2에 그대로 유지된다. 예전엔 끝점을 ACS 좌표로 새로 환산해 면 거리를 다시 정했는데, ACS 면
+/// 높이가 실제와 다르면 점1(카메라 실측)과 점2(ACS)가 어긋났다(실기 2026-10-15 천장 T: ACS 기준 400mm 가
+/// 실측 927mm — 점2가 527mm 낮아 작업물 좌표계가 37° 기울어 검사 수행 IK 112).
+/// 점1 기록이 없으면(단독 실행 등) 종전처럼 끝점을 ACS 좌표로 환산한 접근점으로 간다.
 /// </summary>
 public class CobotSeamEndMoveStep : ISequenceStep
 {
@@ -87,12 +94,38 @@ public class CobotSeamEndMoveStep : ISequenceStep
             taught, seam.Base, seam.ComputedPose, seam.UseComputedOrientation);
         target = CobotInspectionMoveStep.NormalizeUvAnchor(target, _logger);
 
+        // 점1 기준 평행 이동 — 시작점 접근점도 같은 면 이격으로 환산해 두 접근점의 차이(면 방향 성분)만 쓴다.
+        var positionNote = "ACS 끝점 환산 위치";
+        var fromPoint1 = false;
+        if (context.Bag.TryGetValue(WObjPointStep.PointPoseBagKey(1), out var p1v) && p1v is double[] { Length: 6 } p1)
+        {
+            var start = await _seam.ResolveAsync(
+                context, context.SeamStartW, context.SeamEndW, context.Tool, "시작점(평행 이동 기준)", ct,
+                CobotInspectionMoveStep.ApproachStandoffMm);
+            if (start.Base is { } sb)
+            {
+                var (pos, normalMm) = ParallelFromPoint1(p1, sb, seam.Base, seam.OpticalAxis);
+                target = new[] { pos[0], pos[1], pos[2], target[3], target[4], target[5] };
+                fromPoint1 = true;
+                positionNote = $"점1 기준 면 방향 평행 이동(ACS 시작→끝 법선 성분 {normalMm:+0.0;-0.0}mm 제외, 면 거리 점1 유지)";
+                _logger.LogInformation("[Cobot 용접선 끝점 이동] {Note} — 점1 [{P1}] → 목표 [{T}]",
+                    positionNote,
+                    string.Join(", ", p1.Take(3).Select(v => v.ToString("0.0"))),
+                    string.Join(", ", pos.Select(v => v.ToString("0.0"))));
+            }
+            else
+            {
+                _logger.LogWarning("[Cobot 용접선 끝점 이동] 시작점 환산 불가({Note}) — ACS 끝점 환산 위치로 이동", start.Note);
+            }
+        }
+
         // u/v 오프셋·J6 절대각을 ②와 동일하게 맞춰 MoveL — 점1과 같은 J6 라 직선 이동 중 손목이 돌지 않는다.
         double[] finalTarget;
         try
         {
+            // 점1 기준이면 u/v 오프셋은 이미 점1 위치에 들어 있다 — 다시 더하지 않는다.
             (finalTarget, _) = await CobotInspectionMoveStep.AlignTwistToJ6Async(
-                _cobot, CobotInspectionMoveStep.ComposeUvTarget(target, context), context.Tool,
+                _cobot, fromPoint1 ? target : CobotInspectionMoveStep.ComposeUvTarget(target, context), context.Tool,
                 CobotInspectionMoveStep.TargetJ6Deg(context), ct);
         }
         catch (InvalidOperationException ex)
@@ -108,6 +141,24 @@ public class CobotSeamEndMoveStep : ISequenceStep
             ? "자세는 계산된 면 법선"
             : $"자세는 티칭 [0x{context.InspectionSurfaceId:X2} {inspection.Name}] 유지";
         return StepResult.Ok(
-            $"용접선 끝점 접근점으로 직선 이동(MoveL) 완료 — {attitudeNote}. 다음: 점2(X+방향) 기록.");
+            $"용접선 끝점 접근점으로 직선 이동(MoveL) 완료 — {positionNote}, {attitudeNote}. 다음: 점2(X+방향) 기록.");
+    }
+
+    /// <summary>
+    /// 점1 위치에서 ACS 시작→끝 접근점 벡터의 면 방향 성분만큼 옮긴 위치와, 버린 법선 성분 [mm].
+    /// 법선 = 점1 포즈의 광축 툴축(<paramref name="opticalAxis"/>) — 부호는 성분 제거에 무관하다.
+    /// </summary>
+    internal static (double[] Position, double NormalMm) ParallelFromPoint1(
+        double[] point1Pose, double[] startBase, double[] endBase, ToolAxisDir opticalAxis)
+    {
+        var m = FrameMath.PoseToMatrix(point1Pose);
+        var col = (int)opticalAxis / 2;
+        double[] n = { m[0, col], m[1, col], m[2, col] };
+        double[] d = { endBase[0] - startBase[0], endBase[1] - startBase[1], endBase[2] - startBase[2] };
+        var dn = d[0] * n[0] + d[1] * n[1] + d[2] * n[2];
+        var pos = new double[3];
+        for (var i = 0; i < 3; i++)
+            pos[i] = point1Pose[i] + d[i] - dn * n[i];
+        return (pos, dn);
     }
 }
