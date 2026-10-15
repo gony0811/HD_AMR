@@ -98,4 +98,27 @@ public class WObjAttitudeCcwTwistTests
     [InlineData(0.4, false)]
     public void 안전_범위_판정은_360도_주기(double j6, bool expected)
         => Assert.Equal(expected, WObjAttitude.IsInSafeJ6Range(j6));
+
+    [Fact]
+    public void J6_변화가_같으면_손목을_뒤집지_않는_후보()
+    {
+        // 실기 2026-10-15 F-A0002: 두 후보 모두 J6 −270° 그대로, 총 변위 87.4° vs 308.5°(손목 반전 해).
+        var pick = WObjAttitude.SelectSafeTwist(-270.0, new (double, double?, double?)[]
+        {
+            (0.0, -270.02, 87.4),
+            (180.0, -270.01, 308.5),
+        });
+        Assert.Equal(0.0, pick!.Value.TwistDeg);
+    }
+
+    [Fact]
+    public void J6_변화가_확실히_작으면_총_변위보다_우선()
+    {
+        var pick = WObjAttitude.SelectSafeTwist(-179.6, new (double, double?, double?)[]
+        {
+            (0.0, -175.0, 200.0),     // Δ+4.6
+            (180.0, -190.0, 50.0),    // Δ−10.4
+        });
+        Assert.Equal(0.0, pick!.Value.TwistDeg);
+    }
 }

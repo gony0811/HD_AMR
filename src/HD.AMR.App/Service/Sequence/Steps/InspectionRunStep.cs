@@ -301,21 +301,26 @@ public class InspectionRunStep : ISequenceStep
         var raw = InternalWorkpieceFrame.ToBasePose(
             new[] { first.X, first.Y, first.Z, first.RxDeg, first.Theta, first.RzDeg }, frame);
 
-        var candidates = new List<(double TwistDeg, double? J6)>();
+        var candidates = new List<(double TwistDeg, double? J6, double? TotalDeg)>();
         foreach (var twist in new[] { 0.0, 180.0 })
         {
             var target = (attitude with { TwistOverrideDeg = twist }).KeepTwist(raw);
-            double? j6 = null;
-            try { j6 = (await _cobot.Rpc.GetInverseKinNearestAsync(target, current, context.Tool, 0, ct))[5]; }
+            double? j6 = null, total = null;
+            try
+            {
+                var joints = await _cobot.Rpc.GetInverseKinNearestAsync(target, current, context.Tool, 0, ct);
+                j6 = joints[5];
+                total = joints.Zip(current, (a, b) => Math.Abs(a - b)).Sum();
+            }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 _logger.LogWarning("[검사 수행] 비틀림 {Twist:0}° 후보 IK 실패: {Msg}", twist, ex.Message);
             }
-            candidates.Add((twist, j6));
+            candidates.Add((twist, j6, total));
         }
 
         var desc = string.Join(", ", candidates.Select(c =>
-            c.J6 is { } j ? $"{c.TwistDeg:0}°→J6 {j:0.0}°(Δ{j - current[5]:+0.0;-0.0})" : $"{c.TwistDeg:0}°→IK 불가"));
+            c.J6 is { } j ? $"{c.TwistDeg:0}°→J6 {j:0.0}°(Δ{j - current[5]:+0.0;-0.0}, 총 변위 {c.TotalDeg:0}°)" : $"{c.TwistDeg:0}°→IK 불가"));
         var pick = Inspection.WObjAttitude.SelectSafeTwist(current[5], candidates);
         if (pick is not { } p)
         {
