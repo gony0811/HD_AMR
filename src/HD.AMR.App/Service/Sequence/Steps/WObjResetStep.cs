@@ -1,26 +1,24 @@
-using HD.AMR.App.Communication;
 using Microsoft.Extensions.Logging;
 
 namespace HD.AMR.App.Service.Sequence.Steps;
 
 /// <summary>
-/// ⑱⁺ 작업물 좌표계 0 복귀 — 마지막 스텝. ⑱ 검사 수행이 user=작업물 좌표계 번호로 MoveL 하면서
-/// 컨트롤러의 활성 작업물 좌표계가 남는 것을, 현재 포즈로의 <b>무이동 MoveL(user:0)</b> 로
-/// 베이스(0)로 되돌린다. 로봇은 움직이지 않는다. MoveL 의 tool 인자가 context.Tool(통상 1)이고
-/// desc 도 그 공구 기준(GetTcpPoseInBase 재프레임)이므로 활성 공구도 함께 context.Tool 로 복원된다.
+/// ⑱⁺ 작업물 좌표계 0 복귀 — <b>동작 없음(호환용)</b>.
 ///
-/// IK 우회: 활성 프레임이 wobj 인 상태에서는 GetInverseKin 이 base 포즈를 오해석해 112(작업영역 밖)를
-/// 반환하는 순환이 생기므로, 현재 관절각을 jointPos 로 직접 넘겨 역기구학 호출 자체를 생략한다.
-/// ⑱이 실패/정지로 중단되어 풀오토가 여기까지 오지 못한 경우에는 목록에서 이 스텝만 단독 실행하면 된다.
+/// 예전에는 ⑱ 검사 수행이 user=작업물 좌표계 번호로 MoveL 해 컨트롤러의 활성 작업물 좌표계가 남았으므로,
+/// 현재 포즈로의 무이동 MoveL(user:0)로 베이스(0)로 되돌렸다. 지금은 내부 작업물 좌표계를 BASE 목표로
+/// 직접 환산해 <b>모든 이동을 user 0 으로</b> 보내므로(<see cref="InspectionRunStep"/>·<see cref="WObjPointStep"/>)
+/// 되돌릴 컨트롤러 상태가 없다. 그 무이동 MoveL 을 컨트롤러가 rc=74 로 거부해 검사를 다 마치고도 액션이
+/// 실패로 보고된 일이 있어(실기 2026-10-15 천장 T-A0001 #2) 이동 지령을 없앴다. 실패 종료 시 좌표계·공구
+/// 반납은 SequenceService 가 따로 한다.
+/// 현장 레시피 StepKeysJson·드라이런 스텝 집합이 이 키를 참조하므로 스텝 자체는 남겨 둔다.
 /// </summary>
 public class WObjResetStep : ISequenceStep
 {
-    private readonly CobotService _cobot;
     private readonly ILogger<WObjResetStep> _logger;
 
-    public WObjResetStep(CobotService cobot, ILogger<WObjResetStep> logger)
+    public WObjResetStep(ILogger<WObjResetStep> logger)
     {
-        _cobot = cobot;
         _logger = logger;
     }
 
@@ -28,32 +26,11 @@ public class WObjResetStep : ISequenceStep
     public string DisplayName => "작업물 좌표계 0 복귀";
     public int DefaultOrder => 1300;
 
-    public StepValidation Validate(SequenceContext context)
-        => _cobot.IsConnected ? StepValidation.Ok() : StepValidation.Fail("코봇 RPC 미연결");
+    public StepValidation Validate(SequenceContext context) => StepValidation.Ok();
 
-    public async Task<StepResult> ExecuteAsync(SequenceContext context, CancellationToken ct)
+    public Task<StepResult> ExecuteAsync(SequenceContext context, CancellationToken ct)
     {
-        // 현재 포즈로의 무이동 MoveL(user:0) — 이동 없이 활성 프레임만 0 으로.
-        // 활성 프레임이 wobj 인 상태에서는 GetInverseKin 이 112 를 내므로(순환),
-        // 현재 관절각을 jointPos 로 직접 넘겨 IK 를 우회한다.
-        var cur = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
-        double[] joints;
-        try
-        {
-            joints = await _cobot.Rpc.GetActualJointPosAsync(ct: ct);
-        }
-        catch (InvalidOperationException ex)
-        {
-            return StepResult.Fail($"관절각 조회 실패 — {ex.Message}");
-        }
-
-        var rc = await _cobot.Rpc.MoveLAsync(cur, jointPos: joints, tool: context.Tool, user: 0,
-            vel: context.Velocity, ct: ct);
-        if (rc != 0)
-            return StepResult.Fail(
-                $"작업물 좌표계 0 복귀 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)} — 티치펜던트에서 확인하세요.");
-
-        _logger.LogInformation("[작업물 좌표계 0 복귀] 활성 작업물 좌표계 0(베이스)·공구 #{Tool} 복귀 완료.", context.Tool);
-        return StepResult.Ok($"활성 작업물 좌표계 0(베이스)·공구 #{context.Tool} 복귀 완료.");
+        _logger.LogInformation("[작업물 좌표계 0 복귀] 컨트롤러 작업물 좌표계 미사용(모든 이동 user 0) — 생략.");
+        return Task.FromResult(StepResult.Ok("컨트롤러 작업물 좌표계 미사용(모든 이동 user 0) — 생략."));
     }
 }
