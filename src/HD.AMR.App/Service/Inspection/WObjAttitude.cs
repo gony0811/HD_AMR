@@ -89,10 +89,10 @@ public readonly record struct WObjAttitude(double Rz0, double TiltSign)
     ///    대기 자세 쪽으로 몇 도 되돌아가는 경우가 여기 해당한다(실기 2026-10-15 PL: Δ+6.2°).
     ///  · 반시계 회전 — −<see cref="MaxCounterClockwiseDeg"/> ≤ ΔJ6 ≤ +<see cref="ClockwiseToleranceDeg"/>
     ///    (현재 J6 가 범위 밖일 때의 종전 규칙).
-    /// 허용 후보 중 |ΔJ6| 최소를 고르고, 없으면 null(호출측은 움직이지 않고 실패).
-    /// |ΔJ6| 가 <see cref="TwistTieDeg"/> 이내로 같으면 관절 총 변위가 작은 쪽을 고른다 — 0°/180° 두 후보가
-    /// 같은 J6 로 풀리는 경우 한쪽은 손목을 뒤집은 해(J4·J5 크게 이동)라 MoveL 로 갈 수 없다
-    /// (실기 2026-10-15 F-A0002: 둘 다 Δ0°, 총 변위 87° vs 308° 에서 반올림으로 308° 쪽을 골라 IK 112).
+    /// 허용 후보 중 <b>관절 총 변위</b>가 가장 작은 것을 고르고(총 변위를 모르면 |ΔJ6| 최소), 없으면 null
+    /// (호출측은 움직이지 않고 실패). 손목을 뒤집은 해(J4·J5 크게 이동)는 MoveL 로 갈 수 없는데 J6 변화만
+    /// 보면 그쪽이 작게 나올 수 있다(실기 2026-10-15 F-A0002: Δ0° 동률·총 변위 87° vs 308°,
+    /// 천장 T: Δ−7.3°·369° vs Δ+9.8°·55° 에서 손목 반전 해를 골라 IK 112).
     /// </summary>
     /// <param name="currentJ6">현재 J6 [도].</param>
     /// <param name="candidates">비틀림 후보, 그 목표의 IK J6(현재 와인딩 기준, 도달 불가면 null),
@@ -109,11 +109,9 @@ public readonly record struct WObjAttitude(double Rz0, double TiltSign)
             var withinRange = currentSafe && IsInSafeJ6Range(j) && Math.Abs(d) <= MaxCounterClockwiseDeg;
             var counterClockwise = d <= ClockwiseToleranceDeg && d >= -MaxCounterClockwiseDeg;
             if (!withinRange && !counterClockwise) continue;
-            var total = totalDeg ?? double.MaxValue;
-            if (best is not { } b
-                || Math.Abs(d) < Math.Abs(b.DeltaJ6) - TwistTieDeg
-                || (Math.Abs(Math.Abs(d) - Math.Abs(b.DeltaJ6)) <= TwistTieDeg && total < b.Total))
-                best = (twist, d, total);
+            var cost = totalDeg ?? Math.Abs(d);
+            if (best is not { } b || cost < b.Total)
+                best = (twist, d, cost);
         }
         return best is { } r ? (r.TwistDeg, r.DeltaJ6) : null;
     }
@@ -123,8 +121,6 @@ public readonly record struct WObjAttitude(double Rz0, double TiltSign)
         double currentJ6, IReadOnlyList<(double TwistDeg, double? J6)> candidates)
         => SelectSafeTwist(currentJ6, candidates.Select(c => (c.TwistDeg, c.J6, (double?)null)).ToList());
 
-    /// <summary>비틀림 후보의 |ΔJ6| 를 같다고 보는 폭 [도] — 이 안이면 관절 총 변위로 고른다.</summary>
-    public const double TwistTieDeg = 1.0;
 
     /// <summary>절대 모드 경유점의 BASE 목표에 <see cref="AbsoluteTwistDeg"/> 를 툴 프레임에서 적용한다.
     /// 위치·광축 방향은 그대로이고 광축 둘레 비틀림만 바뀐다.</summary>

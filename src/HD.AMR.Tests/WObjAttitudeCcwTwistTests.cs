@@ -1,4 +1,5 @@
 using HD.AMR.App.Service.Inspection;
+using HD.AMR.App.Service.Sequence.Steps;
 
 namespace HD.AMR.Tests;
 
@@ -112,13 +113,23 @@ public class WObjAttitudeCcwTwistTests
     }
 
     [Fact]
-    public void J6_변화가_확실히_작으면_총_변위보다_우선()
+    public void J6_변화가_작아도_손목을_뒤집는_후보보다_총_변위가_작은_후보()
     {
-        var pick = WObjAttitude.SelectSafeTwist(-179.6, new (double, double?, double?)[]
+        // 실기 2026-10-15 천장 T-A0001 #2: 0°=Δ−7.3°·총 변위 369°(손목 반전), 180°=Δ+9.8°·55°.
+        var pick = WObjAttitude.SelectSafeTwist(-209.9, new (double, double?, double?)[]
         {
-            (0.0, -175.0, 200.0),     // Δ+4.6
-            (180.0, -190.0, 50.0),    // Δ−10.4
+            (0.0, -217.3, 368.7),
+            (180.0, -200.1, 55.1),
         });
-        Assert.Equal(0.0, pick!.Value.TwistDeg);
+        Assert.Equal(180.0, pick!.Value.TwistDeg);
     }
+
+    [Theory]
+    [InlineData(180.0, -179.6, -180.0)]
+    [InlineData(180.0, -210.4, -180.0)]
+    [InlineData(90.0, -229.7, -270.0)]
+    [InlineData(90.0, 85.0, 90.0)]
+    [InlineData(180.0, 175.0, 180.0)]
+    public void J6_목표는_현재_와인딩_쪽_같은_물리각(double target, double current, double expected)
+        => Assert.Equal(expected, CobotInspectionMoveStep.NearestWinding(target, current), 6);
 }

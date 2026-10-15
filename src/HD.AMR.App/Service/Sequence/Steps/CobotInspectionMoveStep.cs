@@ -173,6 +173,8 @@ public class CobotInspectionMoveStep : ISequenceStep
     /// 되게 한다. 위치·광축 방향은 그대로이고 광축 둘레 비틀림만 바뀐다. 툴 Z 가 플랜지 Z 와 반대인지 등
     /// 툴 정의에 따라 툴 RZ↔J6 부호가 달라질 수 있어, 첫 보정에서 오차가 커지면 부호를 뒤집는다.
     /// 해는 현재 J1~J5 + 목표 J6 에 가장 가까운 것을 고르므로 270° 같은 반대편 감긴 해로 가지 않는다.
+    /// 목표 J6 는 <b>현재 와인딩 쪽</b> 같은 물리각으로 바꿔 쓴다(현재 −230° 에 목표 90° → −270°) — 반대편
+    /// +90° 를 기준으로 풀면 손목을 뒤집은 해가 나와 MoveL 이 IK 112 로 실패했다(실기 2026-10-15 천장 T).
     /// </summary>
     public static Task<(double[] Pose, double[] Joints)> AlignTwistToJ6Async(
         CobotService cobot, double[] pose, int tool, InspectionMoveDirection direction, CancellationToken ct)
@@ -183,6 +185,7 @@ public class CobotInspectionMoveStep : ISequenceStep
         CobotService cobot, double[] pose, int tool, double targetJ6Deg, CancellationToken ct)
     {
         var reference = (await cobot.Rpc.GetActualJointPosAsync(ct: ct)).ToArray();
+        targetJ6Deg = NearestWinding(targetJ6Deg, reference[5]);
         reference[5] = targetJ6Deg;
 
         var p = pose;
@@ -207,6 +210,10 @@ public class CobotInspectionMoveStep : ISequenceStep
                 $"J6 를 {targetJ6Deg:0}° 로 맞추지 못했습니다 (IK 결과 J6={joints[5]:0.0}°) — 티칭 자세의 광축 방향을 확인하세요.");
         return (p, joints);
     }
+
+    /// <summary>물리각 <paramref name="angleDeg"/> 와 같은(360° 주기) 값 중 <paramref name="currentDeg"/> 에 가장 가까운 것.</summary>
+    internal static double NearestWinding(double angleDeg, double currentDeg)
+        => angleDeg + 360.0 * Math.Round((currentDeg - angleDeg) / 360.0);
 
     /// <summary>
     /// 앵커에 u/v 오프셋을 합성한 목표 — 이후 <see cref="AlignTwistToJ6Async"/> 가 광축 비틀림만 바꾼다.
@@ -301,6 +308,24 @@ public class CobotInspectionMoveStep : ISequenceStep
             orientation[3], orientation[4], orientation[5],
         };
 
+        // 광축 둘레 비틀림을 대기 자세 J6(180°)로 맞춘다. 벽은 ready 비틀림이 이미 ≈180° 라 변화가 없지만,
+        // 천장처럼 광축을 크게 돌리면 비틀림이 밀려(실기 2026-10-15 T: J6 −210°=물리 150°) 수평 검사의
+        // 90° 회전이 안전 범위(90°~180°) 밖으로 나갔다. 맞추지 못하면 경고만 남기고 종전 자세로 간다.
+        var twistNote = "";
+        if (usedNormal)
+        {
+            try
+            {
+                (target, _) = await AlignTwistToJ6Async(_cobot, target, context.Tool, VerticalJ6Deg, ct);
+                twistNote = $", 비틀림 J6 {VerticalJ6Deg:0}° 정렬";
+            }
+            catch (InvalidOperationException ex)
+            {
+                _logger.LogWarning("[Cobot 검사위치 이동] 비틀림 J6 {Target:0}° 정렬 실패 — 작업 준비 자세 비틀림 유지: {Msg}",
+                    VerticalJ6Deg, ex.Message);
+            }
+        }
+
         var reference = await _cobot.Rpc.GetActualJointPosAsync(ct: ct);
         var joints = await _cobot.Rpc.GetInverseKinKeepWristAsync(target, reference, context.Tool, 0, ct);
 
@@ -311,6 +336,6 @@ public class CobotInspectionMoveStep : ISequenceStep
 
         var pose = usedNormal ? "자세=면 법선" : "자세=작업 준비 위치 유지(wall_code 없음)";
         return StepResult.Ok(
-            $"작업 준비 위치 → {seam.Note} 관절 이동(MoveJ) 완료 [{pose}, J6={joints[5]:0.0}°].{entryNote}");
+            $"작업 준비 위치 → {seam.Note} 관절 이동(MoveJ) 완료 [{pose}{twistNote}, J6={joints[5]:0.0}°].{entryNote}");
     }
 }
