@@ -541,7 +541,9 @@ public sealed class Vda5050OrderExecutor
         }
     }
 
-    /// <summary>도착 판정 허용 오차 결정 — ① ParameterService(DB) → ② Order → ③ AmrRestSettings.</summary>
+    /// <summary>도착 판정 허용 오차 결정 — ① Order → ② ParameterService(DB) → ③ AmrRestSettings.
+    /// ACS 가 노드마다 지정한 값이 우선이다. DB 값은 Order 에 값이 없을 때의 현장 기본값이다
+    /// (예전엔 DB 가 먼저라 현장 0.2 m 가 Order 0.08 m 를 덮어 0.15 m 오차를 도착으로 판정했다, 2026-10-15).</summary>
     private async Task<(double DevXy, double DevTheta)> ResolveDeviationsAsync(NodePosition pos)
     {
         double? paramXy = null, paramTheta = null;
@@ -557,17 +559,17 @@ public sealed class Vda5050OrderExecutor
             _logger.LogDebug(ex, "도착 오차 파라미터 조회 실패 — 설정/기본값 폴백");
         }
 
-        var (devXy, srcXy) = Resolve(paramXy, pos.AllowedDeviationXY, _restSettings.DefaultDeviationXy);
-        var (devTheta, srcTheta) = Resolve(paramTheta, pos.AllowedDeviationTheta, _restSettings.DefaultDeviationTheta);
+        var (devXy, srcXy) = Resolve(pos.AllowedDeviationXY, paramXy, _restSettings.DefaultDeviationXy);
+        var (devTheta, srcTheta) = Resolve(pos.AllowedDeviationTheta, paramTheta, _restSettings.DefaultDeviationTheta);
         _logger.LogInformation("도착 오차 결정: dxy={DevXy:F3}m({SrcXy}), dθ={DevTheta:F3}rad({SrcTheta})",
             devXy, srcXy, devTheta, srcTheta);
         OpLog(OpCategory.Drive, "도착 허용 오차", null,
             $"dxy≤{devXy:F3}m(출처 {srcXy}), dθ≤{devTheta:F3}rad(출처 {srcTheta})");
         return (devXy, devTheta);
 
-        static (double Value, string Src) Resolve(double? param, double? order, double settings)
-            => param is not null ? (param.Value, "DB")
-             : order is not null ? (order.Value, "Order")
+        static (double Value, string Src) Resolve(double? order, double? param, double settings)
+            => order is not null ? (order.Value, "Order")
+             : param is not null ? (param.Value, "DB")
              :                     (settings, "Settings");
     }
 

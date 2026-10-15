@@ -149,11 +149,11 @@ public class InspectionRunStep : ISequenceStep
         if (firstIdx < 0)
             return StepResult.Fail(
                 $"티칭설정 '{profile.Name}' 경유점이 모두 th_max({profile.ThMax}°) 초과로 제외되었습니다.");
-        // 절대 모드는 첫 경유점에서 툴을 광축 둘레로 0/180° 중 하나로 맞추는데, 그 회전은 반드시
-        // J6 반시계(감소) 방향이어야 한다 — 시계방향은 센서 헤드–링크암 간섭(실기). IK 로 미리 확인한다.
+        // 절대 모드는 첫 경유점에서 툴을 광축 둘레로 0/180° 중 하나로 맞추는데, 그 회전은 J6 안전 범위
+        // (물리 90°~180°) 안에 머물러야 한다 — 밖으로 돌면 센서 헤드–링크암 간섭(실기). IK 로 미리 확인한다.
         if (profile.PoseAbsolute)
         {
-            var twist = await SelectCounterClockwiseTwistAsync(context, waypoints[firstIdx], frame, attitude, ct);
+            var twist = await SelectSafeTwistAsync(context, waypoints[firstIdx], frame, attitude, ct);
             if (twist.Error is { } err)
                 return StepResult.Fail(err);
             attitude = attitude with { TwistOverrideDeg = twist.TwistDeg };
@@ -289,11 +289,11 @@ public class InspectionRunStep : ISequenceStep
     }
 
     /// <summary>
-    /// 절대 모드 첫 경유점의 비틀림 후보(0/180°)를 IK 로 풀어 J6 반시계(감소) 회전만 허용하는 쪽을 고른다
-    /// (<see cref="Inspection.WObjAttitude.SelectCounterClockwiseTwist"/>). IK 는 현재 관절 기준 최소 변위 해라
+    /// 절대 모드 첫 경유점의 비틀림 후보(0/180°)를 IK 로 풀어 J6 안전 범위(물리 90°~180°)를 벗어나지 않는 쪽을
+    /// 고른다(<see cref="Inspection.WObjAttitude.SelectSafeTwist"/>). IK 는 현재 관절 기준 최소 변위 해라
     /// 손목을 뒤집지 않는 해 = MoveL 이 실제로 갈 J6 와 같다. 고를 수 없으면 Error 에 사유를 담는다.
     /// </summary>
-    private async Task<(double TwistDeg, string? Error)> SelectCounterClockwiseTwistAsync(
+    private async Task<(double TwistDeg, string? Error)> SelectSafeTwistAsync(
         SequenceContext context, InspectionWaypoint first, double[] frame,
         Inspection.WObjAttitude attitude, CancellationToken ct)
     {
@@ -316,15 +316,15 @@ public class InspectionRunStep : ISequenceStep
 
         var desc = string.Join(", ", candidates.Select(c =>
             c.J6 is { } j ? $"{c.TwistDeg:0}°→J6 {j:0.0}°(Δ{j - current[5]:+0.0;-0.0})" : $"{c.TwistDeg:0}°→IK 불가"));
-        var pick = Inspection.WObjAttitude.SelectCounterClockwiseTwist(current[5], candidates);
+        var pick = Inspection.WObjAttitude.SelectSafeTwist(current[5], candidates);
         if (pick is not { } p)
         {
-            _logger.LogWarning("[검사 수행] 반시계 회전 후보 없음 — 현재 J6 {J6:0.0}°, 후보 {Desc}", current[5], desc);
-            return (0, $"첫 경유점으로 가려면 J6 를 시계방향으로 돌려야 합니다(센서 헤드 간섭 위험) — 이동하지 않고 중단. " +
+            _logger.LogWarning("[검사 수행] 안전 회전 후보 없음 — 현재 J6 {J6:0.0}°, 후보 {Desc}", current[5], desc);
+            return (0, $"첫 경유점으로 가려면 J6 를 안전 범위(90°~180°) 밖으로 돌려야 합니다(센서 헤드 간섭 위험) — 이동하지 않고 중단. " +
                        $"현재 J6 {current[5]:0.0}°, 후보 {desc}. 'Cobot 검사위치 이동'의 검사 방향(수평/수직)을 확인하세요.");
         }
 
-        _logger.LogInformation("[검사 수행] 비틀림 {Twist:0}° 선택 — J6 {Cur:0.0}° → {Next:0.0}° (Δ{Delta:+0.0;-0.0}°, 반시계 허용). 후보 {Desc}",
+        _logger.LogInformation("[검사 수행] 비틀림 {Twist:0}° 선택 — J6 {Cur:0.0}° → {Next:0.0}° (Δ{Delta:+0.0;-0.0}°, 간섭 없음). 후보 {Desc}",
             p.TwistDeg, current[5], current[5] + p.DeltaJ6, p.DeltaJ6, desc);
         return (p.TwistDeg, null);
     }

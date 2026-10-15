@@ -48,7 +48,7 @@ public readonly record struct WObjAttitude(double Rz0, double TiltSign)
     /// <summary>
     /// <see cref="AbsoluteTwistDeg"/> 를 직접 지정(0 또는 180°). null 이면 cos rz0 부호로 정한다.
     /// 툴 X 가 프레임 X 와 수직(rz0 ≈ ±90°)이면 cos 부호가 의미 없어 회전 방향이 사실상 임의가 되므로,
-    /// 시퀀스는 <see cref="SelectCounterClockwiseTwist"/> 로 고른 값을 여기에 넣는다.
+    /// 시퀀스는 <see cref="SelectSafeTwist"/> 로 고른 값을 여기에 넣는다.
     /// </summary>
     public double? TwistOverrideDeg { get; init; }
 
@@ -66,24 +66,45 @@ public readonly record struct WObjAttitude(double Rz0, double TiltSign)
     /// <summary>시작 자세에서 허용하는 J6 감소(반시계방향) 최대량 [도] — 설계상 −90°(대기 180° → 수평 90°) + 여유.</summary>
     public const double MaxCounterClockwiseDeg = 100.0;
 
+    /// <summary>센서 헤드–링크암 간섭이 없는 J6 물리 범위 [도](360° 주기) — 수평 90° ~ 수직(대기) 180°.</summary>
+    public const double SafeJ6MinDeg = 90.0, SafeJ6MaxDeg = 180.0;
+
+    /// <summary>안전 범위 경계 여유 [도] — IK·정차 방향 오차 흡수용.</summary>
+    public const double SafeJ6MarginDeg = 5.0;
+
+    /// <summary>J6 [도] 가 안전 범위(<see cref="SafeJ6MinDeg"/>~<see cref="SafeJ6MaxDeg"/> ± 여유, 360° 주기) 안인지.</summary>
+    public static bool IsInSafeJ6Range(double j6Deg)
+    {
+        var a = ((j6Deg % 360.0) + 360.0) % 360.0;
+        return a >= SafeJ6MinDeg - SafeJ6MarginDeg && a <= SafeJ6MaxDeg + SafeJ6MarginDeg;
+    }
+
     /// <summary>
-    /// 절대 모드 비틀림(0/180°) 후보 중 J6 를 <b>반시계(감소) 방향으로만</b> 돌리는 것을 고른다.
-    /// 센서 헤드가 플랜지 한쪽으로 나와 있어 J6 를 시계방향(증가)으로 돌리면 링크암과 간섭한다(실기 2026-10-13:
-    /// 수평 비드에서 rz0=−94° 일 때 cos 부호로 180° 를 골라 J6 −179.6°→−92° 로 시계 회전).
-    /// 허용: −<see cref="MaxCounterClockwiseDeg"/> ≤ ΔJ6 ≤ +<see cref="ClockwiseToleranceDeg"/>.
+    /// 절대 모드 비틀림(0/180°) 후보 중 센서 헤드–링크암 간섭이 없는 회전을 고른다. 센서 헤드가 플랜지 한쪽으로
+    /// 나와 있어 J6 를 안전 범위(물리 90°~180°) 밖으로 돌리면 간섭한다(실기 2026-10-13: 수평 비드에서
+    /// rz0=−94° 일 때 cos 부호로 180° 를 골라 J6 −179.6°→−92° 로 시계 회전).
+    /// 허용(둘 중 하나):
+    ///  · 범위 내 이동 — 현재·목표 J6 가 모두 안전 범위 안이고 |ΔJ6| ≤ <see cref="MaxCounterClockwiseDeg"/>.
+    ///    범위 폭이 90°라 경로도 범위 안에 머문다. 수평 자세(90°, 범위 끝)에서 정차 방향 오차 때문에
+    ///    대기 자세 쪽으로 몇 도 되돌아가는 경우가 여기 해당한다(실기 2026-10-15 PL: Δ+6.2°).
+    ///  · 반시계 회전 — −<see cref="MaxCounterClockwiseDeg"/> ≤ ΔJ6 ≤ +<see cref="ClockwiseToleranceDeg"/>
+    ///    (현재 J6 가 범위 밖일 때의 종전 규칙).
     /// 허용 후보 중 |ΔJ6| 최소를 고르고, 없으면 null(호출측은 움직이지 않고 실패).
     /// </summary>
     /// <param name="currentJ6">현재 J6 [도].</param>
     /// <param name="candidates">비틀림 후보와 그 목표의 IK J6(현재 와인딩 기준, 도달 불가면 null).</param>
-    public static (double TwistDeg, double DeltaJ6)? SelectCounterClockwiseTwist(
+    public static (double TwistDeg, double DeltaJ6)? SelectSafeTwist(
         double currentJ6, IReadOnlyList<(double TwistDeg, double? J6)> candidates)
     {
+        var currentSafe = IsInSafeJ6Range(currentJ6);
         (double TwistDeg, double DeltaJ6)? best = null;
         foreach (var (twist, j6) in candidates)
         {
             if (j6 is not { } j) continue;
             var d = j - currentJ6;
-            if (d > ClockwiseToleranceDeg || d < -MaxCounterClockwiseDeg) continue;
+            var withinRange = currentSafe && IsInSafeJ6Range(j) && Math.Abs(d) <= MaxCounterClockwiseDeg;
+            var counterClockwise = d <= ClockwiseToleranceDeg && d >= -MaxCounterClockwiseDeg;
+            if (!withinRange && !counterClockwise) continue;
             if (best is null || Math.Abs(d) < Math.Abs(best.Value.DeltaJ6)) best = (twist, d);
         }
         return best;
