@@ -22,9 +22,10 @@ namespace HD.AMR.App.Service.Inspection;
 /// 이 법선으로 ① 접근점(standoff 후퇴)과 ② TOOL 자세(광축이 면을 바라보게)를 함께 만든다.
 /// wall_code 가 없으면 종전대로 수평 후퇴만 하고 자세는 만들지 않는다(호출측이 현재 TCP 자세 유지).
 ///
-/// <b>z 기준(중요).</b> ACS 의 T_W_D 는 2D(x,y,yaw) 강체변환이라 z 는 변환되지 않고 <b>도면 전역 z</b>
-/// (선창 바닥 = 0)가 그대로 실려 온다. AMR 은 자기 바닥을 0 으로 보므로 L2 이상에서는 층 바닥 높이
-/// (<c>level_z</c>)만큼 어긋난다 — <see cref="SeamBaseInput.ZDatumOffsetMm"/> 로 그 값을 빼서 맞춘다(§10 N17).
+/// <b>z 기준(중요).</b> seam z 는 <b>현재 층 바닥 = 0</b> 기준이어야 한다. ACS 의 T_W_D 는 2D(x,y,yaw)
+/// 강체변환이라 z 가 변환되지 않으므로, ACS 가 발행 시 <c>z − level_z</c> 를 적용해 보낸다(§10 N17 —
+/// 층이 바뀔 때마다 AMR 에서 오프셋을 바꾸는 운용은 불가). <see cref="SeamBaseInput.ZDatumOffsetMm"/> 는
+/// 시험·임시 우회용 수동 보정이며 운영값은 0 이다. 기준이 틀린 좌표는 <see cref="CheckCoordinateDatum"/> 가 IK 전에 막는다.
 ///
 /// 이 클래스는 순수 계산만 한다(하드웨어 접촉 없음) — 시험 화면과 단위 테스트가 같은 경로를 쓴다.
 /// </summary>
@@ -47,6 +48,35 @@ public static class SeamBaseTransform
     /// </summary>
     public const double MinNormalDistanceMm = 1.0;
 
+    /// <summary>
+    /// 접근점이 코봇 BASE 에서 이보다 멀면 팔 도달 문제가 아니라 <b>좌표 기준 오류</b>로 본다 [mm].
+    /// FR 계열 최대 리치(~1.85m)를 텔레스코픽·공구 여유까지 넉넉히 넘는 값이라 정상 배치에서는 걸리지 않는다.
+    /// 실기 2026-10-23: ACS 가 도면 전역 z 를 그대로 보내 접근점 z 가 9742mm 로 잡히고 IK 가
+    /// "config 0–7 모두 도달 불가"로만 실패했다 — 원인을 알 수 없는 IK 오류 대신 여기서 명확히 막는다(N17).
+    /// </summary>
+    public const double MaxPlausibleBaseDistanceMm = 3000.0;
+
+    /// <summary>
+    /// 환산된 접근점이 코봇이 닿을 수 있는 규모를 벗어났으면 실패 사유를, 아니면 null 을 돌려준다.
+    /// 세밀한 도달성은 IK·<see cref="Motion.ApproachReach"/> 가 판정한다 — 이것은 좌표 기준이 틀린 경우만 거른다.
+    /// </summary>
+    public static string? CheckCoordinateDatum(SeamBaseTarget target, double[] seamStartW)
+    {
+        if (target.DistanceMm <= MaxPlausibleBaseDistanceMm)
+            return null;
+
+        var a = target.ApproachBaseMm;
+        var msg = $"접근점이 코봇 BASE 에서 {target.DistanceMm:0}mm(수평 {target.PlanarDistanceMm:0}, 높이 {a[2]:0}) 떨어져 " +
+                  $"팔이 닿는 범위(≤ {MaxPlausibleBaseDistanceMm:0}mm)를 크게 벗어납니다 — 좌표 기준 오류로 보고 IK 전에 중단합니다.";
+        // 수직 성분이 지배적이면 z 기준면(N17) 문제 — ACS 가 층 바닥 기준 z 를 보내야 한다.
+        if (Math.Abs(a[2]) > target.PlanarDistanceMm)
+            msg += $" 용접선 z={seamStartW[2]:0.###}m 가 층 바닥 기준이 아닌 도면 전역(선창 바닥) 기준으로 온 것으로 보입니다 " +
+                   "(VDA §10 N17: ACS 가 z − level_z 를 적용해 발행).";
+        else
+            msg += " AMR 측위(맵·pose)·노드 위치·용접선 x,y 를 확인하세요.";
+        return msg;
+    }
+
     public static SeamBaseTarget Resolve(SeamBaseInput input)
     {
         var notes = new List<string>();
@@ -63,10 +93,6 @@ public static class SeamBaseTransform
             input.SeamStartW[1] * 1000.0,
             input.SeamStartW[2] * 1000.0 - input.ZDatumOffsetMm,
         };
-
-        if (Math.Abs(input.ZDatumOffsetMm) < 1e-9)
-            notes.Add("z 보정 0 — ACS z 가 도면 전역(선창 바닥) 기준이면 L2 이상에서 층 바닥 높이(level_z)만큼 " +
-                      "높게 잡힙니다. 1층이 아니면 z 기준 오프셋을 입력하세요.");
 
         // ── ② 벽 정면 방향(방위각) — 노드 theta 우선, 없으면 AMR yaw ──
         var facing = input.WallFacingThetaRad ?? input.AmrYawRad;

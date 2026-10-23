@@ -94,12 +94,48 @@ public class SeamBaseTransformTests
     }
 
     [Fact]
-    public void Resolve_WithoutZDatumOffset_WarnsAboutDrawingGlobalZ()
+    public void Resolve_WithoutZDatumOffset_UsesAcsZAsFloorRelative()
     {
+        // N17 확정: ACS 가 층 바닥 기준 z 를 보낸다 — 오프셋 0 이 정상 운영이라 경고하지 않는다.
         var t = SeamBaseTransform.Resolve(Input(new[] { 12.0, 5.0, 4.5 }));
 
         Assert.Equal(4500.0, t.SeamStartMapMm[2], 6);
-        Assert.Contains(t.Notes, n => n.Contains("z 보정 0"));
+        Assert.DoesNotContain(t.Notes, n => n.Contains("z 보정 0"));
+    }
+
+    [Fact]
+    public void CheckCoordinateDatum_PassesReachablePlacement()
+    {
+        // BASE 앞 0.8m, 높이 차 0.6m — 정상 배치.
+        var seam = new[] { 12.0, 5.9, 1.3 };
+        var t = SeamBaseTransform.Resolve(Input(seam));
+
+        Assert.Null(SeamBaseTransform.CheckCoordinateDatum(t, seam));
+    }
+
+    [Fact]
+    public void CheckCoordinateDatum_BlocksDrawingGlobalZ()
+    {
+        // 실기 2026-10-23: 도면 전역 z(~10.4m)가 그대로 와서 접근점 z 가 ~9.7m — IK 가 이유 없이 실패하던 경우.
+        var seam = new[] { 12.0, 5.9, 10.44 };
+        var t = SeamBaseTransform.Resolve(Input(seam));
+
+        var msg = SeamBaseTransform.CheckCoordinateDatum(t, seam);
+
+        Assert.NotNull(msg);
+        Assert.Contains("N17", msg);
+    }
+
+    [Fact]
+    public void CheckCoordinateDatum_BlocksFarHorizontalPointWithoutBlamingZ()
+    {
+        var seam = new[] { 12.0, 10.0, 1.3 };   // 수평 5m 밖
+        var t = SeamBaseTransform.Resolve(Input(seam));
+
+        var msg = SeamBaseTransform.CheckCoordinateDatum(t, seam);
+
+        Assert.NotNull(msg);
+        Assert.DoesNotContain("N17", msg);
     }
 
     [Fact]

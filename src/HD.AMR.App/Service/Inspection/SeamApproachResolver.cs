@@ -122,6 +122,9 @@ public sealed class SeamApproachResolver
             target.ApproachBaseMm[0], target.ApproachBaseMm[1], target.ApproachBaseMm[2],
             standoff, context.WallCode ?? "(미지정)", target.NormalDistanceMm, stroke);
 
+        if (SeamBaseTransform.CheckCoordinateDatum(target, seam) is { } datumError)
+            return new SeamApproachResult(null, null, useComputed, "", datumError);
+
         // ── 리치 사전 점검 — IK 에 특이 해를 풀게 하기 전에 배치로 거른다 ──────────────
         double toolLen = 0;
         string? skipNote = null;
