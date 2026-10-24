@@ -567,10 +567,15 @@ public class FairinoRpcClient : IDisposable
     /// 더 크게 움직인다 — 즉 전체 관절 변위는 총변위-최소 해보다 커질 수 있다. ② 는 <b>MoveJ(관절 보간)</b>라
     /// J5 가 0 을 지나도 손목 특이점(rc=38, MoveL/직교 전용) 문제가 없으므로 그대로 진행하되, 재구성이
     /// 두드러지면 경고 로그로 알린다(간섭은 호출측·MoveJ 한계 거부로 거른다).
+    ///
+    /// <paramref name="elbowAwayDir"/> 를 주면 같은 어깨·손목 가지(J1·J5·J6 동일) 안에서 <b>팔꿈치가 그 방향으로
+    /// 가장 덜 나간 해</b>를 고른다 — 천장(T)처럼 툴은 면을 보되 팔꿈치는 면 반대쪽(아래)으로 두고 싶을 때.
+    /// 툴 자세·J6 는 그대로이고 J2·J3·J4 만 다른 가지로 바뀐다.
     /// </summary>
+    /// <param name="elbowAwayDir">팔꿈치를 멀리 둘 방향(BASE 단위벡터, 예: 천장 법선 +Z). null 이면 종전 선택.</param>
     public async Task<double[]> GetInverseKinKeepWristAsync(
         double[] descPose, double[] referenceJoints, int tool, int user,
-        CancellationToken ct = default)
+        CancellationToken ct = default, double[]? elbowAwayDir = null)
     {
         var candidates = await SolveIkCandidatesAsync(descPose, referenceJoints, tool, user, ct);
         if (candidates.Count == 0) throw IkUnreachable(descPose);
@@ -594,7 +599,107 @@ public class FairinoRpcClient : IDisposable
             "기준 J6={Ref:0.0}° → 결과 J6={J6:0.0}°)",
             _settings.Name, keep.Config, candidates.Count, keepCost, referenceJoints[5], keep.Joints[5]);
 
+        if (elbowAwayDir is { Length: 3 })
+            keep = await PreferElbowAwayAsync(candidates, keep, elbowAwayDir, ct);
+
         return keep.Joints;
+    }
+
+    /// <summary>팔꿈치 가지를 바꿀 최소 이득 [mm] — 이보다 차이가 작으면 가지를 바꾸지 않는다.</summary>
+    private const double ElbowPreferMinMm = 20.0;
+
+    /// <summary>팔꿈치 높이 측정용 J3 섭동 [도].</summary>
+    private const double ElbowProbeDeg = 15.0;
+
+    /// <summary>
+    /// <paramref name="keep"/> 와 어깨·손목 가지가 같은 해(<see cref="ElbowSiblings"/>) 중 팔꿈치가
+    /// <paramref name="awayDir"/> 방향으로 가장 낮은 해를 고른다. 팔꿈치 위치는 DH·영점 규약에 기대지 않고
+    /// 컨트롤러 정기구학으로 잰다 — J3 만 ±<see cref="ElbowProbeDeg"/> 돌린 세 TCP 는 J3 축을 중심으로 한
+    /// 원 위에 있으므로 그 중심(<see cref="ArcCenter"/>)이 J3 축 위의 점이다. J3 축은 J2 축과 평행(직립 장착 시
+    /// 수평)이라 연직 방향 성분은 팔꿈치 높이와 같다. 측정이 실패하면 종전 해를 그대로 쓴다.
+    /// </summary>
+    private async Task<(int Config, double[] Joints)> PreferElbowAwayAsync(
+        List<(int Config, double[] Joints)> candidates, (int Config, double[] Joints) keep,
+        double[] awayDir, CancellationToken ct)
+    {
+        var siblings = ElbowSiblings(candidates, keep.Joints);
+        if (siblings.Count < 2)
+        {
+            _logger.LogInformation("{Name} 팔꿈치 가지 선택: 같은 손목 가지의 다른 팔꿈치 해 없음 — config={Config} 유지",
+                _settings.Name, keep.Config);
+            return keep;
+        }
+
+        (int Config, double[] Joints)? best = null;
+        double bestH = double.PositiveInfinity, keepH = double.NaN;
+        foreach (var s in siblings)
+        {
+            double h;
+            try
+            {
+                var p0 = await GetForwardKinInBaseAsync(s.Joints, ct);
+                var jp = s.Joints.ToArray(); jp[2] += ElbowProbeDeg;
+                var jm = s.Joints.ToArray(); jm[2] -= ElbowProbeDeg;
+                var p1 = await GetForwardKinInBaseAsync(jp, ct);
+                var p2 = await GetForwardKinInBaseAsync(jm, ct);
+                if (ArcCenter(p0, p1, p2) is not { } c) continue;
+                h = c[0] * awayDir[0] + c[1] * awayDir[1] + c[2] * awayDir[2];
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "{Name} 팔꿈치 높이 측정 실패 (config={Config}) — 후보 제외", _settings.Name, s.Config);
+                continue;
+            }
+
+            _logger.LogInformation("{Name} 팔꿈치 가지 후보: config={Config}, J2={J2:0.0}°, J3={J3:0.0}°, 팔꿈치 높이 {H:0}mm",
+                _settings.Name, s.Config, s.Joints[1], s.Joints[2], h);
+            if (s.Config == keep.Config) keepH = h;
+            if (h < bestH) { bestH = h; best = s; }
+        }
+
+        if (best is null || best.Value.Config == keep.Config
+            || (!double.IsNaN(keepH) && keepH - bestH < ElbowPreferMinMm))
+            return keep;
+
+        _logger.LogInformation(
+            "{Name} 팔꿈치 가지 변경: config={From} → {To} (팔꿈치 {Gain}mm 낮춤, J2 {J2a:0.0}°→{J2b:0.0}°, J3 {J3a:0.0}°→{J3b:0.0}°)",
+            _settings.Name, keep.Config, best.Value.Config,
+            double.IsNaN(keepH) ? "?" : (keepH - bestH).ToString("0"),
+            keep.Joints[1], best.Value.Joints[1], keep.Joints[2], best.Value.Joints[2]);
+        return best.Value;
+    }
+
+    /// <summary><paramref name="keep"/> 와 J1·J5·J6 가 같은(±2°) 후보 — UR 형 해석해에서 어깨·손목 가지가 같고
+    /// 팔꿈치 가지(J2·J3·J4)만 다른 해들. keep 자신도 포함한다.</summary>
+    internal static List<(int Config, double[] Joints)> ElbowSiblings(
+        IReadOnlyList<(int Config, double[] Joints)> candidates, double[] keep)
+    {
+        const double tol = 2.0;
+        return candidates
+            .Where(c => Math.Abs(c.Joints[0] - keep[0]) < tol
+                        && Math.Abs(c.Joints[4] - keep[4]) < tol
+                        && Math.Abs(c.Joints[5] - keep[5]) < tol)
+            .ToList();
+    }
+
+    /// <summary>세 점(pose 의 앞 3요소)을 지나는 원의 중심. 세 점이 거의 한 직선이면 null.</summary>
+    internal static double[]? ArcCenter(double[] p0, double[] p1, double[] p2)
+    {
+        double[] a = { p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2] };
+        double[] b = { p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2] };
+        static double[] Cross(double[] u, double[] v) =>
+            new[] { u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0] };
+        static double Dot(double[] u, double[] v) => u[0] * v[0] + u[1] * v[1] + u[2] * v[2];
+
+        var axb = Cross(a, b);
+        var n2 = Dot(axb, axb);
+        if (n2 < 1e-6 * Dot(a, a) * Dot(b, b)) return null;
+        var aa = Dot(a, a);
+        var bb = Dot(b, b);
+        double[] w = { aa * b[0] - bb * a[0], aa * b[1] - bb * a[1], aa * b[2] - bb * a[2] };
+        var t = Cross(w, axb);
+        return new[] { p0[0] + t[0] / (2 * n2), p0[1] + t[1] / (2 * n2), p0[2] + t[2] / (2 * n2) };
     }
 
     /// <summary>config 0–7 역기구학 해를 모두 풀어 기준에 가장 가까운 ±360 와인딩으로 정렬한 후보 목록.

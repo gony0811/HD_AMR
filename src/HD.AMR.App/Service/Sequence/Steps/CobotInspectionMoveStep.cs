@@ -1,4 +1,5 @@
 using HD.AMR.App.Communication;
+using HD.AMR.App.Models;
 using HD.AMR.App.Service.Inspection;
 using Microsoft.Extensions.Logging;
 
@@ -326,8 +327,19 @@ public class CobotInspectionMoveStep : ISequenceStep
             }
         }
 
+        // 천장(T): 툴은 천장을 보되 팔꿈치는 아래로 — 팔꿈치를 든 해는 J2 를 들어 올려 팔꿈치가 천장에 닿는다.
         var reference = await _cobot.Rpc.GetActualJointPosAsync(ct: ct);
-        var joints = await _cobot.Rpc.GetInverseKinKeepWristAsync(target, reference, context.Tool, 0, ct);
+        var elbowAway = ElbowAwayDirection(context.WallCode);
+        var joints = await _cobot.Rpc.GetInverseKinKeepWristAsync(target, reference, context.Tool, 0, ct, elbowAway);
+        var elbowNote = "";
+        if (elbowAway is not null && Math.Sign(joints[2]) != Math.Sign(reference[2]))
+        {
+            // 팔꿈치 가지가 바뀌면 관절 보간 도중 팔이 한 번 펴진다(J3=0) — 그 순간 손목이 가장 멀리 나간다.
+            _logger.LogWarning(
+                "[Cobot 검사위치 이동] 팔꿈치 가지 전환 (J3 {From:0.0}° → {To:0.0}°) — 이동 중 팔이 펴지므로 상부 간섭을 확인하세요.",
+                reference[2], joints[2]);
+            elbowNote = ", 팔꿈치 가지 전환";
+        }
 
         var rc = await _cobot.Rpc.MoveJAsync(joints, target,
             tool: context.Tool, user: 0, vel: context.Velocity, ct: ct);
@@ -336,6 +348,12 @@ public class CobotInspectionMoveStep : ISequenceStep
 
         var pose = usedNormal ? "자세=면 법선" : "자세=작업 준비 위치 유지(wall_code 없음)";
         return StepResult.Ok(
-            $"작업 준비 위치 → {seam.Note} 관절 이동(MoveJ) 완료 [{pose}{twistNote}, J6={joints[5]:0.0}°].{entryNote}");
+            $"작업 준비 위치 → {seam.Note} 관절 이동(MoveJ) 완료 [{pose}{twistNote}{elbowNote}, J6={joints[5]:0.0}°].{entryNote}");
     }
+
+    /// <summary>팔꿈치를 멀리 둘 방향 — 천장(T)이면 천장 법선(BASE +Z), 그 외는 null(종전 해 선택).</summary>
+    internal static double[]? ElbowAwayDirection(string? wallCode)
+        => WallCodes.Find(wallCode)?.Orientation == SurfaceOrientation.Ceiling
+            ? SeamBaseTransform.SurfaceNormal(SurfaceOrientation.Ceiling, 0.0)
+            : null;
 }
