@@ -758,20 +758,41 @@ public class FlatSurfaceCenteringService
             catch (InvalidOperationException) { return null; }
         }
 
-        string? Judge(double[] from, double[] to)
+        string? Judge(double[] from, double[] to) => JudgeJointStep(limits, from, to, usePosture);
+    }
+
+    /// <summary>
+    /// 관절 한 구간(from → to)의 판정 — 가능하면 null, 불가면 사유.
+    ///
+    /// 이동량·J5 부호는 <b>IK 원값</b>(현재 관절 쪽으로 감긴 해)으로 본다. <see cref="PostureLimits.CheckJointPath"/> 는
+    /// 두 끝을 따로 ±360 정규화한 뒤 차이를 재므로, 한계 경계(J6 ±180) 양쪽에 걸친 2.5° 회전(−180.4 → −177.9)을
+    /// −180.4 → +179.6 로 바꿔 357.5° 로 잘못 계산한다(2026-10-26 14:26 현장 — 도달 가능한 1순위 셀 탈락).
+    /// 관절 한계·특이점 여유만 정규화한 값으로 본다(<see cref="PostureLimits.Evaluate"/>).
+    /// </summary>
+    internal static string? JudgeJointStep(PostureLimits limits, double[] from, double[] to, bool usePosture)
+    {
+        if (usePosture)
         {
-            if (usePosture)
-            {
-                var (ok, why) = limits.CheckJointPath(from, to);
-                return ok ? null : why;
-            }
+            var target = limits.Evaluate(to);
+            if (!target.Feasible)
+                return $"목표 자세가 허용 범위 밖입니다 — {target.Limiting}";
+
+            var travel = 0.0;
+            for (var i = 0; i < 6; i++) travel = Math.Max(travel, Math.Abs(to[i] - from[i]));
+            if (travel > limits.MaxJointTravelDeg)
+                return $"관절 이동량 과다 (최대 {travel:0.0}° > 허용 {limits.MaxJointTravelDeg:0}°)";
+        }
+        else
+        {
             var wrist = Math.Abs(to[4]);
             if (wrist < limits.WristMarginDeg)
                 return $"손목 특이점 (|J5| {wrist:0.0}° < 여유 {limits.WristMarginDeg:0}°)";
-            if (Math.Sign(from[4]) != Math.Sign(to[4]))
-                return $"J5 부호 반전 ({from[4]:0.0}° → {to[4]:0.0}°)";
-            return null;
         }
+
+        // 관절 보간이 J5=0(손목 특이점)을 지나지 않으려면 양 끝 J5 부호가 같아야 한다.
+        if (Math.Sign(from[4]) != Math.Sign(to[4]) || Math.Sign(to[4]) == 0)
+            return $"J5 부호 반전 ({from[4]:0.0}° → {to[4]:0.0}°) — 손목 특이점 통과";
+        return null;
     }
 
     /// <summary>툴 좌표 오프셋 이동 결과 — rc 또는 (관절 이동의) IK 실패 메시지.</summary>

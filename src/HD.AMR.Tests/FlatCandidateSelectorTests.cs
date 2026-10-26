@@ -1,7 +1,46 @@
 using HD.AMR.App.Models;
 using HD.AMR.App.Service;
+using HD.AMR.App.Service.Motion;
 
 namespace HD.AMR.Tests;
+
+public class FlatReachJudgeTests
+{
+    // 2026-10-26 현장 DB 값 — J6 [−180, 180], 이동량 250°, 손목 여유 2°.
+    private static readonly PostureLimits Field = new(
+        new[] { -175.0, -175, -160, -175, -175, -180 },
+        new[] { 175.0, 175, 160, 175, 175, 180 },
+        WristMarginDeg: 2, ElbowMarginDeg: 8, ShoulderRadiusMinMm: 180, MaxJointTravelDeg: 250);
+
+    // 14:26 현장 — J6 −180.4° → −177.9° 는 2.5° 회전인데, 끝점을 따로 정규화하면 357.5° 로 보여 탈락했다.
+    [Fact]
+    public void SmallRotationAcrossJ6Boundary_IsAccepted()
+    {
+        var from = new[] { -0.4, -9.4, 120, -110.8, 63.8, -180.4 };
+        var to = new[] { -0.6, -9.1, 119.5, -110.2, 64.5, -177.9 };
+
+        Assert.False(Field.CheckJointPath(from, to).Ok);   // 종전 판정이 오판하던 입력임을 고정
+        Assert.Null(FlatSurfaceCenteringService.JudgeJointStep(Field, from, to, usePosture: true));
+    }
+
+    [Fact]
+    public void RealLargeTravel_IsRejected()
+    {
+        var from = new[] { 0.0, -9, 120, -110, 64, -170 };
+        var to = new[] { 0.0, -9, 120, -110, 64, 100 };   // IK 원값 기준 270° 회전
+
+        Assert.Contains("이동량 과다", FlatSurfaceCenteringService.JudgeJointStep(Field, from, to, usePosture: true));
+    }
+
+    [Fact]
+    public void J5SignFlip_IsRejected()
+    {
+        var from = new[] { 0.0, -9, 120, -110, 5, -170 };
+        var to = new[] { 0.0, -9, 120, -110, -5, -170 };
+
+        Assert.Contains("J5 부호 반전", FlatSurfaceCenteringService.JudgeJointStep(Field, from, to, usePosture: true));
+    }
+}
 
 public class DepthPlaneFitTests
 {
