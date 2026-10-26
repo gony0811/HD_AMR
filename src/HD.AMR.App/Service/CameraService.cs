@@ -239,6 +239,7 @@ public class CameraService : BackgroundService
             long sum = 0;
             long sumSq = 0;
             int valid = 0;
+            var plane = new DepthPlaneFit((cx0 + cx1) / 2.0, (cy0 + cy1) / 2.0);
 
             for (int py = cy0; py < cy1; py++)
             {
@@ -252,6 +253,7 @@ public class CameraService : BackgroundService
                     sum += d;
                     sumSq += (long)d * d;
                     valid++;
+                    plane.Add(px, py, d);
                 }
             }
 
@@ -265,7 +267,7 @@ public class CameraService : BackgroundService
             double mean = (double)sum / valid;
             double variance = (double)sumSq / valid - mean * mean;
             double sigma = Math.Sqrt(Math.Max(0, variance));
-            cells.Add(new DepthGridCell(gx, gy, u0, v0, u1, v1, sigma, mean, validRatio, true));
+            cells.Add(new DepthGridCell(gx, gy, u0, v0, u1, v1, sigma, mean, validRatio, true, plane.ResidualRms()));
 
             if (sigma < bestSigma)
             {
@@ -304,14 +306,17 @@ public class CameraService : BackgroundService
     /// <param name="MeanMm">해당 셀의 평균 깊이(mm) — 평탄면까지의 거리 Z.</param>
     public sealed record DepthFlatnessResult(double U, double V, double SigmaMm, double MeanMm);
 
-    /// <summary>그리드 셀 1개의 분석값. 좌표는 전체 프레임 기준 정규화(0~1). Valid=false 면 유효 픽셀 부족으로 후보 제외.</summary>
+    /// <summary>그리드 셀 1개의 분석값. 좌표는 전체 프레임 기준 정규화(0~1). Valid=false 면 유효 픽셀 부족으로 후보 제외.
+    /// <paramref name="ResidualMm"/> 는 셀 평면 맞춤 잔차 RMS(mm) — σ 에서 기울기 성분을 뺀 값(<see cref="DepthPlaneFit"/>).</summary>
     public sealed record DepthGridCell(
         int Gx, int Gy, double U0, double V0, double U1, double V1,
-        double SigmaMm, double MeanMm, double ValidRatio, bool Valid);
+        double SigmaMm, double MeanMm, double ValidRatio, bool Valid, double ResidualMm = 0);
 
     /// <summary>
     /// 그리드 평탄도 전체 분석 결과. <see cref="Frame"/> 은 계산에 쓴 깊이 프레임(불변 스냅샷).
     /// <see cref="SecondIndex"/> 는 유효 셀이 1개뿐이면 -1.
+    /// 검출 직후 <see cref="BestIndex"/>/<see cref="Best"/> 는 σ 최소 셀이고, 후보 선택
+    /// (<see cref="FlatCandidateSelector.WithSelected"/>)을 거치면 <b>선택 셀</b>로 바뀐다 — 화면·이동이 같은 셀을 쓰도록.
     /// </summary>
     public sealed record DepthGridAnalysis(
         CameraFrame Frame,

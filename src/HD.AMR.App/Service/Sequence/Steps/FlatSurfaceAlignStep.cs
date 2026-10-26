@@ -1,5 +1,5 @@
-using HD.AMR.App.Communication;
 using HD.AMR.App.Models;
+using HD.AMR.App.Service.Motion;
 using Microsoft.Extensions.Logging;
 
 namespace HD.AMR.App.Service.Sequence.Steps;
@@ -9,9 +9,13 @@ namespace HD.AMR.App.Service.Sequence.Steps;
 ///
 /// 3-Phase 알고리즘:
 ///   A) 뎁스 카메라 깊이 프레임을 그리드로 분할, depth σ 최소 셀(= 최평탄 영역) 탐색.
-///   B) 평탄 셀 중심과 현재 센서 중심의 오프셋을 mm로 환산, 코봇 횡이동(툴 프레임 MoveByToolOffset —
+///   B) 평탄 셀 중심과 현재 센서 중심의 오프셋을 mm로 환산, 코봇 횡이동(툴 프레임 오프셋 —
 ///      이미지 평면과 평행, 대상면 거리 유지. FlatSurfaceCenteringService 공용 루틴).
 ///      이동 후 레이저 측정 중심 보정 횡이동(툴 −Y 75mm — 레이저 3점 중심이 카메라보다 좌측(툴 +Y) 75mm 장착).
+///      셀은 σ 최소 하나가 아니라 후보 랭킹(잔차·σ 상한, σ + 거리 패널티)으로 고르고, 이동 전에 후보마다
+///      <b>최종 위치</b>(셀 이동 ⊕ 레이저 보정 ⊕ 틸트 여유)의 도달성을 판정해 첫 도달 가능 셀로 간다 —
+///      최외곽 라인에서 σ 최소 셀이 팔 밖에 있어 도달 불가 알람이 나던 문제(2026-10-26 현장).
+///      이동은 두 단계 그대로(카메라 페이지 '카메라 이동 → 레이저 이동'과 대응), 관절 이동(MoveJ)으로 한다.
 ///   C) 레이저 변위센서 3점 측정으로 평면 틸트(rx, ry) 검증. 임계값 초과 시 툴 헤드를 회전 보정(위치 고정) 후 재검증.
 ///      보정량은 고정 부호 규약이 아니라 <b>실측 응답</b>으로 정한다 — 툴 Rx/Ry 를 각각 소량 회전시켜
 ///      측정 틸트가 어떻게 변하는지(2×2 응답 행렬 J)를 잰 뒤 u = −J⁻¹·tilt 를 적용한다.
@@ -29,6 +33,7 @@ public class FlatSurfaceAlignStep : ISequenceStep
     private readonly LaserDisplacementSensorService _laser;
     private readonly LaserTiltCorrector _tilt;
     private readonly ParameterService _param;
+    private readonly PostureLimitsService _limits;
     private readonly FlatDetectionMonitor _monitor;
     private readonly ILogger<FlatSurfaceAlignStep> _logger;
 
@@ -68,9 +73,10 @@ public class FlatSurfaceAlignStep : ISequenceStep
     public FlatSurfaceAlignStep(
         CobotService cobot, CameraService camera, FlatSurfaceCenteringService centering,
         LaserDisplacementSensorService laser, LaserTiltCorrector tilt, ParameterService param,
-        FlatDetectionMonitor monitor, ILogger<FlatSurfaceAlignStep> logger)
+        PostureLimitsService limits, FlatDetectionMonitor monitor, ILogger<FlatSurfaceAlignStep> logger)
     {
         _tilt = tilt;
+        _limits = limits;
         _cobot = cobot;
         _camera = camera;
         _centering = centering;
@@ -127,6 +133,13 @@ public class FlatSurfaceAlignStep : ISequenceStep
 
         context.Progress?.Invoke($"평탄영역 탐색 시작 (grid={GridSize}×{GridSize}, ROI={roiSrc})");
 
+        // 레이저 보정량은 후보 도달성 판정(최종 위치)에도 쓰므로 이동 전에 검사한다.
+        var shiftY = context.CameraToLaserShiftYmm;
+        if (Math.Abs(shiftY) > MaxCameraToLaserShiftMm)
+            return FailStage(
+                $"카메라→레이저 중심 보정 이동량 {shiftY:+0.#;-0.#}mm 가 한계 ±{MaxCameraToLaserShiftMm:0}mm 초과 — " +
+                "시퀀스 페이지 '레이저중심 Y' 파라미터를 확인하세요.");
+
         var (axisX, axisY) = await GetAxisMapAsync();
         var align = await _centering.RunAsync(new FlatCenterAlignOptions
         {
@@ -139,6 +152,17 @@ public class FlatSurfaceAlignStep : ISequenceStep
             ImageXAxis = axisX, ImageYAxis = axisY,
             Tool = context.Tool, Velocity = context.Velocity,
             Source = "시퀀스",
+            Candidates = await FlatCandidateOptions.LoadAsync(_param),
+            Reach = new FlatReachOptions
+            {
+                Limits = await _limits.GetAsync(),
+                ImageXAxis = axisX, ImageYAxis = axisY,
+                CameraToLaserShiftYmm = shiftY,
+                TiltMarginDeg = await _param.GetDoubleAsync(FlatReachOptions.TiltMarginKey)
+                                ?? FlatReachOptions.DefaultTiltMarginDeg,
+                Tool = context.Tool,
+            },
+            UseJointMove = true,
         }, progress: context.Progress, ct);
 
         // 공용 루틴은 취소를 삼키고 실패 결과로 반환 — 스텝은 기존처럼 취소 예외로 전파한다.
@@ -154,19 +178,14 @@ public class FlatSurfaceAlignStep : ISequenceStep
         // Phase B는 평탄영역을 카메라 중심에 맞추므로, 레이저 3점 중심이 그 지점 위에
         // 오도록 장착 오프셋만큼 이동한 뒤 측정한다. 이동량은 시퀀스 페이지 파라미터
         // (SequenceContext.CameraToLaserShiftYmm, 기본 −75mm)로 설정 — 장착 위치 종속이라 DB 영속.
-        var shiftY = context.CameraToLaserShiftYmm;
-        if (Math.Abs(shiftY) > MaxCameraToLaserShiftMm)
-            return FailStage(
-                $"카메라→레이저 중심 보정 이동량 {shiftY:+0.#;-0.#}mm 가 한계 ±{MaxCameraToLaserShiftMm:0}mm 초과 — " +
-                "시퀀스 페이지 '레이저중심 Y' 파라미터를 확인하세요.");
         _logger.LogInformation("[평탄면 센터링 (레이저 정렬)] 레이저 중심 보정 횡이동: 툴 Y {Shift}mm", shiftY);
         context.Progress?.Invoke($"레이저 중심 보정 횡이동: 툴 Y {shiftY:+0.#;-0.#}mm");
         var shiftAnchor = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
         var shiftOffset = new[] { 0.0, shiftY, 0.0, 0.0, 0.0, 0.0 };
-        var shiftRc = await _cobot.Rpc.MoveByToolOffsetAsync(shiftAnchor, user: 0, shiftOffset,
-            tool: context.Tool, vel: context.Velocity, ct: ct);
-        if (shiftRc != 0)
-            return FailStage($"레이저 중심 보정 이동 실패 (rc={shiftRc}){FairinoErrorCodes.Suffix(shiftRc)}.");
+        var shift = await _centering.MoveToolOffsetAsync(shiftAnchor, shiftOffset, context.Tool, context.Velocity,
+            joint: true, ct);
+        if (!shift.Ok)
+            return FailStage($"레이저 중심 보정 이동 실패 {shift.Describe()}.");
         await Task.Delay(300, ct);
 
         // ── Phase C: 레이저 3점 측정 → 헤드 틸트(회전) 보정 ────────────

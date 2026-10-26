@@ -1,4 +1,5 @@
 using HD.AMR.App.Communication;
+using HD.AMR.App.Service.Motion;
 using Microsoft.Extensions.Logging;
 
 namespace HD.AMR.App.Service;
@@ -64,7 +65,50 @@ public sealed class FlatCenterAlignOptions
 
     /// <summary>검출 스냅샷(<see cref="FlatDetectionMonitor"/>)에 표시할 출처 이름.</summary>
     public string Source { get; init; } = "평탄 정렬";
+
+    /// <summary>1회차 검출에서 σ 최소 셀 대신 후보 랭킹(<see cref="FlatCandidateSelector"/>)으로 고른다. null = 종전(σ 최소).
+    /// 2회차 이후 중앙 축소 재검출은 종전대로 σ 최소(타깃 갈아타기 방지).</summary>
+    public FlatCandidateOptions? Candidates { get; init; }
+
+    /// <summary>후보마다 최종 위치(셀 이동 ⊕ 레이저 보정 ⊕ 틸트 여유) 도달성을 이동 전에 판정. null = 판정 없음.
+    /// <see cref="Candidates"/> 가 있을 때만 쓴다.</summary>
+    public FlatReachOptions? Reach { get; init; }
+
+    /// <summary>true = 횡이동을 관절 이동(MoveJ)으로 — 직선 이동이 경로 중간 J5=0 을 지나 rc=38 나는 것을 피한다.</summary>
+    public bool UseJointMove { get; init; }
 }
+
+/// <summary>
+/// 평탄 후보 도달성 판정 옵션 — 이동은 '카메라 이동 → 레이저 이동' 두 단계로 나눠 하되(카메라 페이지 단계 확인과 대응),
+/// 판정은 첫 이동 전에 <b>최종 위치</b>까지 한 번에 한다: 셀 이동 → 레이저 보정(툴 Y) → 틸트 보정 여유(툴 Rx/Ry ±).
+/// 셀 위치만 보면 1차 이동은 통과하고 레이저 이동이나 틸트 보정에서 다시 도달 불가가 난다.
+/// </summary>
+public sealed class FlatReachOptions
+{
+    /// <summary>틸트 보정 여유(°) 파라미터 키 — ④ Phase C 가 헤드를 이만큼 돌려도 자세 한계 안이어야 후보로 인정.</summary>
+    public const string TiltMarginKey = "Sequence.FlatSurface.Reach.TiltMarginDeg";
+    public const double DefaultTiltMarginDeg = 3.0;
+
+    public required PostureLimits Limits { get; init; }
+    public ToolAxisDir ImageXAxis { get; init; } = ToolAxisDir.PlusX;
+    public ToolAxisDir ImageYAxis { get; init; } = ToolAxisDir.PlusY;
+
+    /// <summary>카메라 중심 → 레이저 3점 중심 툴 Y 이동량(mm) — 시퀀스 '레이저중심 Y'.</summary>
+    public double CameraToLaserShiftYmm { get; init; }
+
+    /// <summary>틸트 보정 여유(°). 0 이하 = 틸트 판정 생략.</summary>
+    public double TiltMarginDeg { get; init; } = DefaultTiltMarginDeg;
+
+    public int Tool { get; init; } = 1;
+
+    /// <summary>도달성 판정을 시도할 최대 후보 수 — 후보 1개당 IK 6자세(각 config 0–7)라 RPC 가 많다.</summary>
+    public int MaxChecks { get; init; } = 8;
+}
+
+/// <summary>후보 선택 결과. <see cref="Selected"/> 가 null 이면 쓸 수 있는 셀이 없다(<see cref="Note"/> 에 사유).
+/// <see cref="Analysis"/> 는 선택 셀이 Best 로 바뀐 분석(선택 실패 시 원본).</summary>
+public sealed record FlatSelection(
+    CameraService.DepthGridAnalysis Analysis, FlatCandidate? Selected, bool ReachChecked, string Note);
 
 /// <summary>깊이 거리 접근 이동 옵션. ROI 는 거리 측정(최소 깊이 샘플 평균)에 사용.</summary>
 public sealed class DepthDistanceMoveOptions
@@ -127,6 +171,9 @@ public sealed class LaserToFlatOptions
     public int Tool { get; init; } = 1;
     public double Velocity { get; init; } = 10;
     public int SettleMs { get; init; } = 500;
+
+    /// <summary>true = 관절 이동(MoveJ) — 시퀀스 ④와 같은 이동 방식.</summary>
+    public bool UseJointMove { get; init; } = true;
 }
 
 /// <summary>레이저 이동·측정 결과. 측정값은 3회 샘플 평균, Channels 는 채널 1~3 원시 거리(mm).</summary>
@@ -262,12 +309,30 @@ public class FlatSurfaceCenteringService
                         bestAnalysis = a;
                     if (i < o.SamplesPerDetect - 1) await Task.Delay(100, ct);
                 }
-                var best = bestAnalysis?.Best;
-
-                if (bestAnalysis is null || best is null)
+                if (bestAnalysis is null)
                     return Fail(refined
                         ? "중앙 재검출 실패 — 타깃이 중앙에 오지 않았거나 ROI 내 평탄면이 불안정합니다."
                         : "깊이 프레임에서 유효한 평탄영역을 찾을 수 없습니다.", moves);
+
+                // 1회차: σ 최소 셀 대신 후보 랭킹 + 최종 위치 도달성으로 고른다(2안). 재검출은 종전대로.
+                string? selectNote = null;
+                if (!refined && o.Candidates is not null)
+                {
+                    var sel = await SelectReachableAsync(bestAnalysis, o.RoiX, o.RoiY, o.RoiW, o.RoiH,
+                        o.Candidates, o.Reach, progress, ct);
+                    if (sel.Selected is null)
+                    {
+                        // 히트맵은 남긴다 — 왜 아무 셀도 못 썼는지 화면에서 확인하도록.
+                        _monitor.Publish(new FlatDetectionSnapshot(
+                            o.Source, DateTime.Now, bestAnalysis,
+                            o.RoiX, o.RoiY, o.RoiW, o.RoiH, null, null, FlatDetectionStage.Failed, sel.Note));
+                        _publishedThisRun = true;
+                        return Fail(sel.Note, moves);
+                    }
+                    bestAnalysis = sel.Analysis;
+                    selectNote = sel.Note;
+                }
+                var best = bestAnalysis.Best;
 
                 // ── 잔차: 평탄 셀 중심 − ROI 중심 (정규화) ──
                 double deltaU = best.U - centerU;   // 양수 = 오른쪽
@@ -284,7 +349,7 @@ public class FlatSurfaceCenteringService
                 _monitor.Publish(new FlatDetectionSnapshot(
                     o.Source, DateTime.Now, bestAnalysis,
                     o.RoiX, o.RoiY, o.RoiW, o.RoiH, dxMm, dyMm, FlatDetectionStage.Moving,
-                    $"검출 {iter + 1}회차"));
+                    selectNote is null ? $"검출 {iter + 1}회차" : $"검출 {iter + 1}회차 · {selectNote}"));
                 _publishedThisRun = true;
 
                 if (o.DeadbandUv > 0 && Math.Abs(deltaU) < o.DeadbandUv && Math.Abs(deltaV) < o.DeadbandUv)
@@ -349,10 +414,9 @@ public class FlatSurfaceCenteringService
                     $"이동 {moves + 1}: Δ=({dxMm:+0.#;-0.#}, {dyMm:+0.#;-0.#})mm, " +
                     $"매핑 X→툴{AxisNames[(int)o.ImageXAxis]}/Y→툴{AxisNames[(int)o.ImageYAxis]} → " +
                     $"툴 오프셋 [{offset[0]:0.#}, {offset[1]:0.#}, {offset[2]:0.#}]");
-                var rc = await _cobot.Rpc.MoveByToolOffsetAsync(anchor, user: 0, offset,
-                    tool: o.Tool, vel: o.Velocity, ct: ct);
-                if (rc != 0)
-                    return Fail($"횡이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.", moves);
+                var move = await MoveToolOffsetAsync(anchor, offset, o.Tool, o.Velocity, o.UseJointMove, ct);
+                if (!move.Ok)
+                    return Fail($"횡이동 실패 {move.Describe()}.", moves);
                 moves++;
 
                 // 이동 후 진동/프레임 안정화 대기
@@ -454,9 +518,9 @@ public class FlatSurfaceCenteringService
                 $"툴 오프셋 [{offset[0]:0.#}, {offset[1]:0.#}, {offset[2]:0.#}]");
             _monitor.UpdateStage(FlatDetectionStage.Moving, "카메라를 평탄 셀 위로 이동 중");
 
-            var rc = await _cobot.Rpc.MoveByToolOffsetAsync(anchor, user: 0, offset, tool: o.Tool, vel: o.Velocity, ct: ct);
-            if (rc != 0)
-                return LaserFail($"카메라 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.");
+            var move = await MoveToolOffsetAsync(anchor, offset, o.Tool, o.Velocity, o.UseJointMove, ct);
+            if (!move.Ok)
+                return LaserFail($"카메라 이동 실패 {move.Describe()}.");
             await Task.Delay(o.SettleMs, ct);
 
             var after = await _cobot.Rpc.GetTcpPoseInBaseAsync(o.Tool, ct);
@@ -509,9 +573,9 @@ public class FlatSurfaceCenteringService
             Report(progress, $"레이저 이동: 카메라→레이저 보정 툴 Y {o.CameraToLaserShiftYmm:+0.#;-0.#}mm");
             _monitor.UpdateStage(FlatDetectionStage.Moving, "레이저를 평탄 셀 위로 이동 중");
 
-            var rc = await _cobot.Rpc.MoveByToolOffsetAsync(anchor, user: 0, offset, tool: o.Tool, vel: o.Velocity, ct: ct);
-            if (rc != 0)
-                return LaserFail($"레이저 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.");
+            var move = await MoveToolOffsetAsync(anchor, offset, o.Tool, o.Velocity, o.UseJointMove, ct);
+            if (!move.Ok)
+                return LaserFail($"레이저 이동 실패 {move.Describe()}.");
             await Task.Delay(o.SettleMs, ct);
 
             var after = await _cobot.Rpc.GetTcpPoseInBaseAsync(o.Tool, ct);
@@ -557,6 +621,184 @@ public class FlatSurfaceCenteringService
             _logger.LogError(ex, "레이저 이동 중 오류");
             return LaserFail($"레이저 이동 오류: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// 평탄 후보를 점수순(<see cref="FlatCandidateSelector.Rank"/>)으로 보며 <b>최종 위치</b>가 도달 가능한 첫 셀을 고른다.
+    /// 시퀀스 ④(<see cref="RunAsync"/>)와 카메라 페이지 '평탄 검증'이 같이 쓴다 — 두 화면이 같은 셀을 고르도록.
+    /// <paramref name="reach"/> 가 null 이거나 코봇 위치를 못 읽으면 도달성 없이 1순위 후보를 고른다(노트에 표시).
+    /// 예외를 던지지 않는다(취소 제외).
+    /// </summary>
+    public async Task<FlatSelection> SelectReachableAsync(
+        CameraService.DepthGridAnalysis analysis, double roiX, double roiY, double roiW, double roiH,
+        FlatCandidateOptions candidates, FlatReachOptions? reach, Action<string>? progress, CancellationToken ct)
+    {
+        var rank = FlatCandidateSelector.Rank(analysis, roiX + roiW / 2.0, roiY + roiH / 2.0, candidates,
+            _camera.PixelDeltaToMm, FallbackDepthMm);
+        var minCell = analysis.Cells[analysis.BestIndex];
+        var minLabel = $"({minCell.Gx + 1},{minCell.Gy + 1})";
+
+        if (rank.Candidates.Count == 0)
+        {
+            var why = rank.Excluded.Where(e => analysis.Cells[e.CellIndex].Valid)
+                .Select(e => $"({analysis.Cells[e.CellIndex].Gx + 1},{analysis.Cells[e.CellIndex].Gy + 1}) {e.Reason}")
+                .Take(3);
+            var note = $"평탄 후보 없음 — 유효 셀이 모두 기준 밖 (잔차 ≤ {candidates.MaxResidualMm:0.##}mm, " +
+                       $"σ ≤ 최소+{candidates.MaxSigmaAboveBestMm:0.##}mm): {string.Join(" / ", why)}";
+            Report(progress, note);
+            return new FlatSelection(analysis, null, false, note);
+        }
+
+        // 도달성 판정 기준 — 현재 TCP·관절. 못 읽으면 판정 없이 진행(읽기 한 번 실패로 검사를 죽이지 않는다).
+        double[]? anchor = null, joints0 = null;
+        string? skipReach = reach is null ? "도달성 판정 옵션 없음" : null;
+        if (reach is not null)
+        {
+            if (!_cobot.IsConnected) skipReach = "코봇 미연결";
+            else
+            {
+                try
+                {
+                    anchor = await _cobot.Rpc.GetTcpPoseInBaseAsync(reach.Tool, ct);
+                    joints0 = await _cobot.Rpc.GetActualJointPosAsync(ct: ct);
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex) { skipReach = $"코봇 위치 조회 실패: {ex.Message}"; }
+            }
+        }
+
+        if (skipReach is not null)
+        {
+            var first = rank.Candidates[0];
+            var note = $"후보 {first.Label} σ {first.Cell.SigmaMm:0.00}mm 선택 — 도달성 미확인({skipReach})";
+            _logger.LogWarning("평탄 후보 도달성 판정 생략: {Why}", skipReach);
+            Report(progress, note);
+            return new FlatSelection(Select(analysis, rank, 0), first, false, note);
+        }
+
+        // 설정된 자세 한계가 현재 자세조차 포함하지 않으면(미설정 기본값 등) 모든 후보가 '출발 자세 위반'으로 떨어진다 —
+        // 그때는 한계 판정 대신 IK 해 존재 + 손목 여유(|J5|)·J5 부호 유지만 본다.
+        var limits = reach!.Limits.Normalized();
+        var start = limits.Evaluate(joints0!);
+        bool usePosture = start.Feasible;
+        if (!usePosture)
+            Report(progress, $"⚠ 현재 자세가 자세 허용 범위 밖({start.Limiting}) — 관절 한계 없이 IK·손목 여유로만 판정합니다. " +
+                             "시험 화면 ③ 카드에서 허용 범위를 실제 값으로 맞추세요.");
+
+        var tried = new List<string>();
+        int checks = Math.Min(rank.Candidates.Count, Math.Max(1, reach.MaxChecks));
+        for (var k = 0; k < checks; k++)
+        {
+            ct.ThrowIfCancellationRequested();
+            var c = rank.Candidates[k];
+            var reason = await CheckReachAsync(c, anchor!, joints0!, reach, limits, usePosture, ct);
+            var line = $"후보 {k + 1} {c.Label} σ {c.Cell.SigmaMm:0.00} · 잔차 {c.Cell.ResidualMm:0.00} · " +
+                       $"이동 {c.DistanceMm:0}mm · 점수 {c.Score:0.00} → {(reason is null ? "도달 가능" : $"불가: {reason}")}";
+            Report(progress, line);
+            if (reason is null)
+            {
+                var note = c.CellIndex == analysis.BestIndex
+                    ? $"σ 최소 셀 {c.Label} 선택 (최종 위치 도달 확인)"
+                    : $"σ 최소 셀 {minLabel} 대신 후보 {k + 1} {c.Label} 선택 (σ {c.Cell.SigmaMm:0.00}mm, 최종 위치 도달 확인)";
+                return new FlatSelection(Select(analysis, rank, k), c, true, note);
+            }
+            tried.Add($"{c.Label} {reason}");
+        }
+
+        var fail = $"도달 가능한 평탄 셀 없음 — 후보 {rank.Candidates.Count}개 중 {checks}개 판정 모두 불가: " +
+                   string.Join(" / ", tried.Take(3)) +
+                   " — AMR 정차 위치를 판재 안쪽으로 옮기거나 ROI 를 좁히세요.";
+        Report(progress, fail);
+        return new FlatSelection(analysis, null, true, fail);
+    }
+
+    private static CameraService.DepthGridAnalysis Select(
+        CameraService.DepthGridAnalysis a, FlatCandidateRanking rank, int k)
+        => FlatCandidateSelector.WithSelected(a, rank.Candidates[k].CellIndex,
+            k + 1 < rank.Candidates.Count ? rank.Candidates[k + 1].CellIndex : -1);
+
+    /// <summary>후보 하나의 도달성 — 셀 이동 → 레이저 보정 → 틸트 여유(툴 Rx/Ry ±) 순으로 IK 를 이어 풀며
+    /// 자세 한계를 본다. 가능하면 null, 불가면 사유.</summary>
+    private async Task<string?> CheckReachAsync(FlatCandidate c, double[] anchor, double[] joints0,
+        FlatReachOptions r, PostureLimits limits, bool usePosture, CancellationToken ct)
+    {
+        var camOffset = new double[6];
+        ApplyAxis(camOffset, r.ImageXAxis, c.DxMm);
+        ApplyAxis(camOffset, r.ImageYAxis, c.DyMm);
+        var pCam = FrameMath.FromFrame(camOffset, anchor);
+        var pLaser = FrameMath.FromFrame(new[] { 0.0, r.CameraToLaserShiftYmm, 0, 0, 0, 0 }, pCam);
+
+        var jCam = await SolveAsync(pCam, joints0);
+        if (jCam is null) return "카메라 이동 위치 IK 해 없음";
+        if (Judge(joints0, jCam) is { } camWhy) return $"카메라 이동 — {camWhy}";
+
+        var jLaser = await SolveAsync(pLaser, jCam);
+        if (jLaser is null) return "레이저 이동 위치 IK 해 없음";
+        if (Judge(jCam, jLaser) is { } laserWhy) return $"레이저 이동 — {laserWhy}";
+
+        if (r.TiltMarginDeg > 0)
+        {
+            foreach (var (axis, name) in new[] { (3, "Rx"), (4, "Ry") })
+            foreach (var sign in new[] { 1.0, -1.0 })
+            {
+                var rot = new double[6];
+                rot[axis] = sign * r.TiltMarginDeg;
+                var jTilt = await SolveAsync(FrameMath.FromFrame(rot, pLaser), jLaser);
+                var tag = $"틸트 여유 툴 {name}{(sign > 0 ? "+" : "−")}{r.TiltMarginDeg:0.#}°";
+                if (jTilt is null) return $"{tag} IK 해 없음";
+                if (Judge(jLaser, jTilt) is { } tiltWhy) return $"{tag} — {tiltWhy}";
+            }
+        }
+        return null;
+
+        async Task<double[]?> SolveAsync(double[] pose, double[] reference)
+        {
+            try { return await _cobot.Rpc.GetInverseKinNearestAsync(pose, reference, r.Tool, user: 0, ct); }
+            catch (OperationCanceledException) { throw; }
+            catch (InvalidOperationException) { return null; }
+        }
+
+        string? Judge(double[] from, double[] to)
+        {
+            if (usePosture)
+            {
+                var (ok, why) = limits.CheckJointPath(from, to);
+                return ok ? null : why;
+            }
+            var wrist = Math.Abs(to[4]);
+            if (wrist < limits.WristMarginDeg)
+                return $"손목 특이점 (|J5| {wrist:0.0}° < 여유 {limits.WristMarginDeg:0}°)";
+            if (Math.Sign(from[4]) != Math.Sign(to[4]))
+                return $"J5 부호 반전 ({from[4]:0.0}° → {to[4]:0.0}°)";
+            return null;
+        }
+    }
+
+    /// <summary>툴 좌표 오프셋 이동 결과 — rc 또는 (관절 이동의) IK 실패 메시지.</summary>
+    public readonly record struct ToolMoveResult(int Rc, string? Error)
+    {
+        public bool Ok => Rc == 0 && Error is null;
+        public string Describe() => Error is not null ? $"({Error})" : $"(rc={Rc}){FairinoErrorCodes.Suffix(Rc)}";
+    }
+
+    /// <summary>
+    /// 툴 좌표 오프셋 이동 — <paramref name="joint"/> 면 관절 이동(현재 관절에 가장 가까운 IK 해로 MoveJ), 아니면 직선 이동.
+    /// 관절 이동은 각 축이 단조로 움직여 경로 중간에 J5=0(손목 특이점, rc=38)을 지나지 않는다. 짧은 횡이동이라
+    /// TCP 궤적 편차는 무시할 수준이고 도착 자세는 같다. ④ 센터링·레이저 보정과 카메라 페이지 단계 버튼이 공유한다.
+    /// </summary>
+    public async Task<ToolMoveResult> MoveToolOffsetAsync(double[] anchor, double[] offset, int tool, double velocity,
+        bool joint, CancellationToken ct)
+    {
+        if (!joint)
+            return new(await _cobot.Rpc.MoveByToolOffsetAsync(anchor, user: 0, offset, tool: tool, vel: velocity, ct: ct), null);
+        try
+        {
+            var joints = await _cobot.Rpc.GetActualJointPosAsync(ct: ct);
+            return new(await _cobot.Rpc.MoveJByToolOffsetNearestAsync(anchor, user: 0, offset, joints,
+                tool: tool, vel: velocity, ct: ct), null);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (InvalidOperationException ex) { return new(-1, ex.Message); }
     }
 
     /// <summary>기준 자세와 현재 자세가 허용 오차를 넘게 다르면 설명 문자열, 같으면 null.</summary>

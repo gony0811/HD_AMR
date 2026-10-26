@@ -4,6 +4,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HD.AMR.App.Models;
 using HD.AMR.App.Service;
+using HD.AMR.App.Service.Motion;
 using HD.AMR.App.Service.Sequence;
 using HD.AMR.App.Service.Sequence.Steps;
 using Microsoft.Extensions.DependencyInjection;
@@ -110,11 +111,11 @@ public sealed partial class CameraViewModel : ViewModelBase
             if (FlatSnapshot is not { } s) return "";
             var a = s.Analysis;
             var best = a.Cells[a.BestIndex];
-            var text = $"({best.Gx + 1},{best.Gy + 1}) σ {best.SigmaMm:0.00}mm";
+            var text = $"({best.Gx + 1},{best.Gy + 1}) σ {best.SigmaMm:0.00} · 잔차 {best.ResidualMm:0.00}mm";
             if (a.SecondIndex >= 0)
             {
                 var second = a.Cells[a.SecondIndex];
-                text += $" / ({second.Gx + 1},{second.Gy + 1}) σ {second.SigmaMm:0.00}mm";
+                text += $" / ({second.Gx + 1},{second.Gy + 1}) σ {second.SigmaMm:0.00} · 잔차 {second.ResidualMm:0.00}mm";
             }
             return text;
         }
@@ -378,7 +379,7 @@ public sealed partial class CameraViewModel : ViewModelBase
 
     /// <summary>
     /// ROI 깊이 통계 + 평탄 셀 검출(코봇 이동 없음). 시퀀스 ④와 같은 조건(ROI 미사용 시 중앙 30%,
-    /// 5×5 그리드, 10회 샘플 중 σ 최소)으로 검출해 결과를 정지 화면으로 남긴다.
+    /// 5×5 그리드, 10회 샘플 중 σ 최소 프레임, 후보 랭킹 + 최종 위치 도달성)으로 셀을 골라 정지 화면으로 남긴다.
     /// </summary>
     [RelayCommand]
     private async Task VerifyPlane()
@@ -407,9 +408,6 @@ public sealed partial class CameraViewModel : ViewModelBase
                 return;
             }
 
-            double z = best.Best.MeanMm > 0 ? best.Best.MeanMm : FallbackDepthMm;
-            var (dx, dy) = _svc.PixelDeltaToMm(best.Best.U - (x + w / 2), best.Best.V - (y + h / 2), z);
-
             // 검출 시점 코봇 위치 — '카메라 이동'이 같은 자리에서만 Δ 를 적용하도록 기록한다.
             var tool = await GetAlignToolAsync();
             double[]? pose = null;
@@ -422,8 +420,43 @@ public sealed partial class CameraViewModel : ViewModelBase
 
             var note = useRoi ? "코봇 이동 없음" : "코봇 이동 없음 · ROI 미사용 → 중앙 기본 ROI";
             if (pose is null) note += " · 코봇 위치 미기록(레이저 이동 불가)";
+
+            // 시퀀스 ④와 같은 후보 선택 — 최종 위치(셀 이동 ⊕ 레이저 이동 ⊕ 틸트 여유) 도달 가능한 셀.
+            // 이동은 지금처럼 '카메라 이동 → 레이저 이동' 버튼으로 나눠 하고, 판정만 여기서 미리 한다.
+            FlatSelection sel;
+            using (var scope = _scopeFactory.CreateScope())
+            {
+                var param = scope.ServiceProvider.GetRequiredService<ParameterService>();
+                var candidates = await FlatCandidateOptions.LoadAsync(param);
+                FlatReachOptions? reach = null;
+                if (pose is not null)
+                {
+                    var (ax, ay, shiftY) = await LoadFlatMoveParamsAsync(param);
+                    reach = new FlatReachOptions
+                    {
+                        Limits = await scope.ServiceProvider.GetRequiredService<PostureLimitsService>().GetAsync(),
+                        ImageXAxis = ax, ImageYAxis = ay,
+                        CameraToLaserShiftYmm = shiftY,
+                        TiltMarginDeg = await param.GetDoubleAsync(FlatReachOptions.TiltMarginKey)
+                                        ?? FlatReachOptions.DefaultTiltMarginDeg,
+                        Tool = tool,
+                    };
+                }
+                sel = await _centering.SelectReachableAsync(best, x, y, w, h, candidates, reach, progress: null, _cts.Token);
+            }
+
+            if (sel.Selected is not { } pick)
+            {
+                _flatMonitor.Publish(new FlatDetectionSnapshot(
+                    "평탄 검증", DateTime.Now, best, x, y, w, h, null, null, FlatDetectionStage.Failed,
+                    $"{note} · {sel.Note}", TcpPoseAtDetect: pose, Tool: tool));
+                Notify(sel.Note, true);
+                return;
+            }
+
             _flatMonitor.Publish(new FlatDetectionSnapshot(
-                "평탄 검증", DateTime.Now, best, x, y, w, h, dx, dy, FlatDetectionStage.DetectOnly, note,
+                "평탄 검증", DateTime.Now, sel.Analysis, x, y, w, h, pick.DxMm, pick.DyMm,
+                FlatDetectionStage.DetectOnly, $"{note} · {sel.Note}",
                 TcpPoseAtDetect: pose, Tool: tool));
         }
         catch (OperationCanceledException) { }
@@ -490,13 +523,11 @@ public sealed partial class CameraViewModel : ViewModelBase
         {
             using var scope = _scopeFactory.CreateScope();
             var param = scope.ServiceProvider.GetRequiredService<ParameterService>();
-            var ax = await param.GetDoubleAsync(AlignImageXAxisKey);
-            var ay = await param.GetDoubleAsync(AlignImageYAxisKey);
-            var shiftY = await param.GetDoubleAsync(WeldSequenceSupport.CameraToLaserShiftYKey) ?? -75.0;
+            var (ax, ay, shiftY) = await LoadFlatMoveParamsAsync(param);
             var options = new LaserToFlatOptions
             {
-                ImageXAxis = ax is >= 0 and <= 5 ? (ToolAxisDir)(int)ax.Value : ToolAxisDir.PlusX,
-                ImageYAxis = ay is >= 0 and <= 5 ? (ToolAxisDir)(int)ay.Value : ToolAxisDir.PlusY,
+                ImageXAxis = ax,
+                ImageYAxis = ay,
                 CameraToLaserShiftYmm = shiftY,
                 Tool = snap.Tool ?? 1,
                 Velocity = LaserMoveVelocity,
@@ -512,6 +543,17 @@ public sealed partial class CameraViewModel : ViewModelBase
             Busy = false;
             _gate.Exit();
         }
+    }
+
+    /// <summary>시퀀스 ④와 같은 이동 파라미터 — 이미지→툴축 매핑, 카메라→레이저 보정(툴 Y).</summary>
+    private static async Task<(ToolAxisDir X, ToolAxisDir Y, double ShiftY)> LoadFlatMoveParamsAsync(ParameterService param)
+    {
+        var ax = await param.GetDoubleAsync(AlignImageXAxisKey);
+        var ay = await param.GetDoubleAsync(AlignImageYAxisKey);
+        var shiftY = await param.GetDoubleAsync(WeldSequenceSupport.CameraToLaserShiftYKey) ?? -75.0;
+        return (ax is >= 0 and <= 5 ? (ToolAxisDir)(int)ax.Value : ToolAxisDir.PlusX,
+                ay is >= 0 and <= 5 ? (ToolAxisDir)(int)ay.Value : ToolAxisDir.PlusY,
+                shiftY);
     }
 
     private async Task<int> GetAlignToolAsync()
