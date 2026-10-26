@@ -76,6 +76,25 @@ public sealed class FlatCenterAlignOptions
 
     /// <summary>true = 횡이동을 관절 이동(MoveJ)으로 — 직선 이동이 경로 중간 J5=0 을 지나 rc=38 나는 것을 피한다.</summary>
     public bool UseJointMove { get; init; }
+
+    /// <summary>관절 이동일 때 <see cref="Velocity"/> 에 곱할 비율(<see cref="FlatMoveSettings.JointVelocityScaleKey"/>).</summary>
+    public double JointVelocityScale { get; init; } = FlatMoveSettings.DefaultJointVelocityScale;
+}
+
+/// <summary>
+/// 평탄면 센터링 이동 설정 — 시퀀스 ④와 카메라 페이지 '카메라 이동·레이저 이동'이 같은 값을 쓴다.
+/// </summary>
+public static class FlatMoveSettings
+{
+    /// <summary>관절 이동(MoveJ) 속도 비율 파라미터 키. 같은 속도 % 라도 MoveJ 는 관절 최대속도 기준이라
+    /// MoveL(직선 최대속도 기준)보다 짧은 횡이동에서 약 2배 빠르다(2026-10-26 현장: −75 mm 2.75 s → 1.44 s).
+    /// 이 비율을 곱해 종전 MoveL 체감 속도에 맞춘다.</summary>
+    public const string JointVelocityScaleKey = "Sequence.FlatSurface.JointMoveVelocityScale";
+    public const double DefaultJointVelocityScale = 0.45;
+
+    /// <summary>비율 로드 — 없거나 (0, 1] 밖이면 기본값.</summary>
+    public static async Task<double> LoadJointVelocityScaleAsync(ParameterService param)
+        => await param.GetDoubleAsync(JointVelocityScaleKey) is > 0 and <= 1 and var s ? s : DefaultJointVelocityScale;
 }
 
 /// <summary>
@@ -174,6 +193,9 @@ public sealed class LaserToFlatOptions
 
     /// <summary>true = 관절 이동(MoveJ) — 시퀀스 ④와 같은 이동 방식.</summary>
     public bool UseJointMove { get; init; } = true;
+
+    /// <summary>관절 이동일 때 <see cref="Velocity"/> 에 곱할 비율 — 시퀀스 ④와 같은 파라미터 값.</summary>
+    public double JointVelocityScale { get; init; } = FlatMoveSettings.DefaultJointVelocityScale;
 }
 
 /// <summary>레이저 이동·측정 결과. 측정값은 3회 샘플 평균, Channels 는 채널 1~3 원시 거리(mm).</summary>
@@ -414,7 +436,8 @@ public class FlatSurfaceCenteringService
                     $"이동 {moves + 1}: Δ=({dxMm:+0.#;-0.#}, {dyMm:+0.#;-0.#})mm, " +
                     $"매핑 X→툴{AxisNames[(int)o.ImageXAxis]}/Y→툴{AxisNames[(int)o.ImageYAxis]} → " +
                     $"툴 오프셋 [{offset[0]:0.#}, {offset[1]:0.#}, {offset[2]:0.#}]");
-                var move = await MoveToolOffsetAsync(anchor, offset, o.Tool, o.Velocity, o.UseJointMove, ct);
+                var move = await MoveToolOffsetAsync(anchor, offset, o.Tool, o.Velocity, o.UseJointMove, ct,
+                    o.JointVelocityScale);
                 if (!move.Ok)
                     return Fail($"횡이동 실패 {move.Describe()}.", moves);
                 moves++;
@@ -518,7 +541,8 @@ public class FlatSurfaceCenteringService
                 $"툴 오프셋 [{offset[0]:0.#}, {offset[1]:0.#}, {offset[2]:0.#}]");
             _monitor.UpdateStage(FlatDetectionStage.Moving, "카메라를 평탄 셀 위로 이동 중");
 
-            var move = await MoveToolOffsetAsync(anchor, offset, o.Tool, o.Velocity, o.UseJointMove, ct);
+            var move = await MoveToolOffsetAsync(anchor, offset, o.Tool, o.Velocity, o.UseJointMove, ct,
+                o.JointVelocityScale);
             if (!move.Ok)
                 return LaserFail($"카메라 이동 실패 {move.Describe()}.");
             await Task.Delay(o.SettleMs, ct);
@@ -573,7 +597,8 @@ public class FlatSurfaceCenteringService
             Report(progress, $"레이저 이동: 카메라→레이저 보정 툴 Y {o.CameraToLaserShiftYmm:+0.#;-0.#}mm");
             _monitor.UpdateStage(FlatDetectionStage.Moving, "레이저를 평탄 셀 위로 이동 중");
 
-            var move = await MoveToolOffsetAsync(anchor, offset, o.Tool, o.Velocity, o.UseJointMove, ct);
+            var move = await MoveToolOffsetAsync(anchor, offset, o.Tool, o.Velocity, o.UseJointMove, ct,
+                o.JointVelocityScale);
             if (!move.Ok)
                 return LaserFail($"레이저 이동 실패 {move.Describe()}.");
             await Task.Delay(o.SettleMs, ct);
@@ -806,17 +831,20 @@ public class FlatSurfaceCenteringService
     /// 툴 좌표 오프셋 이동 — <paramref name="joint"/> 면 관절 이동(현재 관절에 가장 가까운 IK 해로 MoveJ), 아니면 직선 이동.
     /// 관절 이동은 각 축이 단조로 움직여 경로 중간에 J5=0(손목 특이점, rc=38)을 지나지 않는다. 짧은 횡이동이라
     /// TCP 궤적 편차는 무시할 수준이고 도착 자세는 같다. ④ 센터링·레이저 보정과 카메라 페이지 단계 버튼이 공유한다.
+    /// 관절 이동은 속도 % 기준이 관절 최대속도라 같은 값이면 직선 이동보다 빠르다 — <paramref name="jointVelocityScale"/>
+    /// 를 곱해 맞춘다(<see cref="FlatMoveSettings.JointVelocityScaleKey"/>).
     /// </summary>
     public async Task<ToolMoveResult> MoveToolOffsetAsync(double[] anchor, double[] offset, int tool, double velocity,
-        bool joint, CancellationToken ct)
+        bool joint, CancellationToken ct, double jointVelocityScale = 1.0)
     {
         if (!joint)
             return new(await _cobot.Rpc.MoveByToolOffsetAsync(anchor, user: 0, offset, tool: tool, vel: velocity, ct: ct), null);
         try
         {
             var joints = await _cobot.Rpc.GetActualJointPosAsync(ct: ct);
+            var vel = Math.Max(1.0, velocity * jointVelocityScale);
             return new(await _cobot.Rpc.MoveJByToolOffsetNearestAsync(anchor, user: 0, offset, joints,
-                tool: tool, vel: velocity, ct: ct), null);
+                tool: tool, vel: vel, ct: ct), null);
         }
         catch (OperationCanceledException) { throw; }
         catch (InvalidOperationException ex) { return new(-1, ex.Message); }

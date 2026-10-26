@@ -141,6 +141,7 @@ public class FlatSurfaceAlignStep : ISequenceStep
                 "시퀀스 페이지 '레이저중심 Y' 파라미터를 확인하세요.");
 
         var (axisX, axisY) = await GetAxisMapAsync();
+        var jointVelScale = await FlatMoveSettings.LoadJointVelocityScaleAsync(_param);
         var align = await _centering.RunAsync(new FlatCenterAlignOptions
         {
             RoiX = roiX, RoiY = roiY, RoiW = roiW, RoiH = roiH,
@@ -163,6 +164,7 @@ public class FlatSurfaceAlignStep : ISequenceStep
                 Tool = context.Tool,
             },
             UseJointMove = true,
+            JointVelocityScale = jointVelScale,
         }, progress: context.Progress, ct);
 
         // 공용 루틴은 취소를 삼키고 실패 결과로 반환 — 스텝은 기존처럼 취소 예외로 전파한다.
@@ -183,7 +185,7 @@ public class FlatSurfaceAlignStep : ISequenceStep
         var shiftAnchor = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
         var shiftOffset = new[] { 0.0, shiftY, 0.0, 0.0, 0.0, 0.0 };
         var shift = await _centering.MoveToolOffsetAsync(shiftAnchor, shiftOffset, context.Tool, context.Velocity,
-            joint: true, ct);
+            joint: true, ct, jointVelScale);
         if (!shift.Ok)
             return FailStage($"레이저 중심 보정 이동 실패 {shift.Describe()}.");
         await Task.Delay(300, ct);

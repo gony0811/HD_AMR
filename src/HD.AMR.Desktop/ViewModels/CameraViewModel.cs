@@ -529,6 +529,7 @@ public sealed partial class CameraViewModel : ViewModelBase
                 ImageXAxis = ax,
                 ImageYAxis = ay,
                 CameraToLaserShiftYmm = shiftY,
+                JointVelocityScale = await FlatMoveSettings.LoadJointVelocityScaleAsync(param),
                 Tool = snap.Tool ?? 1,
                 Velocity = LaserMoveVelocity,
             };

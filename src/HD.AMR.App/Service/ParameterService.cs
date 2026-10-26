@@ -104,6 +104,9 @@ public class ParameterService
             (FlatReachOptions.TiltMarginKey,
                 FlatReachOptions.DefaultTiltMarginDeg.ToString(CultureInfo.InvariantCulture),
                 "④ 평탄 후보 도달성 판정의 틸트 보정 여유(°) — 레이저 위치에서 툴 Rx/Ry 를 ± 이만큼 돌려도 자세 한계 안이어야 후보로 인정. 0 = 생략."),
+            (FlatMoveSettings.JointVelocityScaleKey,
+                FlatMoveSettings.DefaultJointVelocityScale.ToString(CultureInfo.InvariantCulture),
+                "④ 평탄면 센터링 관절 이동(MoveJ) 속도 비율 — 시퀀스/카메라 페이지 속도에 곱한다(0~1). MoveJ 는 같은 % 에서 MoveL 보다 약 2배 빨라 0.45 로 종전 체감 속도에 맞춤."),
         ];
 
         var existing = await _db.Parameters.Select(p => p.Name).ToListAsync();
