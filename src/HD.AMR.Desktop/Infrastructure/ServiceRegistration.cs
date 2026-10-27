@@ -198,6 +198,7 @@ internal static class ServiceRegistration
         services.AddScoped<ISequenceStep, AmrMoveStep>();   // 100: AMR 위치 이동 (페이지 테스트 전용)
         services.AddScoped<ISequenceStep, CobotInspectionMoveStep>();
         services.AddScoped<ISequenceStep, CameraAlignStep>();
+        services.AddScoped<ISequenceStep, CameraAlignRefineStep>();
         services.AddScoped<ISequenceStep, FlatSurfaceAlignStep>();
         services.AddScoped<ISequenceStep, LaserWorkingDistanceStep>();
         services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<PeakFindStep>(sp, 1));

@@ -162,6 +162,7 @@ builder.Services.AddScoped<HD.AMR.App.Service.Inspection.SeamApproachResolver>()
 builder.Services.AddScoped<ISequenceStep, AmrMoveStep>();   // 100: AMR 위치 이동 (페이지 테스트 전용)
 builder.Services.AddScoped<ISequenceStep, CobotInspectionMoveStep>();
 builder.Services.AddScoped<ISequenceStep, CameraAlignStep>();
+builder.Services.AddScoped<ISequenceStep, CameraAlignRefineStep>();
 builder.Services.AddScoped<ISequenceStep, FlatSurfaceAlignStep>();
 builder.Services.AddScoped<ISequenceStep, LaserWorkingDistanceStep>();   // 450: ④ 직후 레이저 WD 거리 조정
 // ⑤~⑫ Peak/Bead 측정 — ⑤⑨·⑥⑩·⑦⑪은 peakId 만 다른 동일 동작이라 한 클래스를 두 번 등록한다.

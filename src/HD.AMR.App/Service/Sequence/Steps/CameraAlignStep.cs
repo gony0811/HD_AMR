@@ -61,7 +61,7 @@ public class CameraAlignStep : ISequenceStep
             return StepResult.Fail("깊이 프레임이 없습니다.");
 
         // 거리 측정 + 툴 광축 접근 보정 (공용 루틴 — 툴 프레임). 현재 위치에서 바로 측정한다.
-        var (rx, ry, rw, rh, roiSrc) = await GetDepthRoiAsync();
+        var (rx, ry, rw, rh, roiSrc) = await GetDepthRoiAsync(_param);
         var (depthAxis, axisFromParam) = await WeldSequenceSupport.GetDepthAxisAsync(_param);
         if (!axisFromParam)
             _logger.LogWarning(
@@ -89,17 +89,17 @@ public class CameraAlignStep : ISequenceStep
         return r.Success ? StepResult.Ok(r.Message) : StepResult.Fail(r.Message);
     }
 
-    /// <summary>카메라 페이지에서 저장한 ROI가 있으면 사용, 없으면 중앙 30% 기본영역.</summary>
-    private async Task<(double X, double Y, double W, double H, string Src)> GetDepthRoiAsync()
+    /// <summary>카메라 페이지에서 저장한 ROI가 있으면 사용, 없으면 중앙 30% 기본영역. ③-1 재정렬과 공유.</summary>
+    internal static async Task<(double X, double Y, double W, double H, string Src)> GetDepthRoiAsync(ParameterService param)
     {
         try
         {
-            if (await _param.GetBoolAsync(RoiEnabledKey) == true)
+            if (await param.GetBoolAsync(RoiEnabledKey) == true)
             {
-                var x = await _param.GetDoubleAsync(RoiXKey) ?? 0;
-                var y = await _param.GetDoubleAsync(RoiYKey) ?? 0;
-                var w = await _param.GetDoubleAsync(RoiWKey) ?? 0;
-                var h = await _param.GetDoubleAsync(RoiHKey) ?? 0;
+                var x = await param.GetDoubleAsync(RoiXKey) ?? 0;
+                var y = await param.GetDoubleAsync(RoiYKey) ?? 0;
+                var w = await param.GetDoubleAsync(RoiWKey) ?? 0;
+                var h = await param.GetDoubleAsync(RoiHKey) ?? 0;
                 if (w > 0 && h > 0 && x + w <= 1.0001 && y + h <= 1.0001)
                     return (x, y, w, h, "저장 ROI");
             }

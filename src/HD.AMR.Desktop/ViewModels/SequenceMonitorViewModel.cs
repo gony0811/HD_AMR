@@ -105,7 +105,7 @@ public sealed partial class SequenceMonitorViewModel : ObservableObject, IDispos
 
     private static MonitorCameraKind KindOf(string? key) => key switch
     {
-        "cameraAlign" => MonitorCameraKind.CameraAlign,
+        "cameraAlign" or "cameraAlignRefine" => MonitorCameraKind.CameraAlign,
         "flatSurfaceAlign" => MonitorCameraKind.Flat,
         "laserWorkingDistance" => MonitorCameraKind.LaserWd,
         "peak1Find" or "peak2Find" or "peak1Center" or "peak2Center" => MonitorCameraKind.Peak,

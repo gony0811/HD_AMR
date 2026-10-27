@@ -872,6 +872,22 @@ public class FlatSurfaceCenteringService
     }
 
     /// <summary>
+    /// 깊이 ROI 측정 거리 — ROI 최소 깊이(가장 가까운 물체, 충돌 안전 기준) N회 샘플 평균. 유효값이 없으면 null.
+    /// <see cref="MoveToDistanceAsync"/> 와 ③-1 재정렬의 최종 검증이 같은 기준을 쓴다.
+    /// </summary>
+    public async Task<double?> MeasureRoiDistanceAsync(DepthDistanceMoveOptions o, CancellationToken ct)
+    {
+        var samples = new List<int>(o.Samples);
+        for (var i = 0; i < o.Samples; i++)
+        {
+            var mm = _camera.ComputeDepthRoiStats(o.RoiX, o.RoiY, o.RoiW, o.RoiH)?.MinMm ?? 0;
+            if (mm > 0) samples.Add(mm);
+            if (i < o.Samples - 1) await Task.Delay(100, ct);
+        }
+        return samples.Count == 0 ? null : samples.Average();
+    }
+
+    /// <summary>
     /// 깊이 ROI 측정 거리(최소 깊이 N회 샘플 평균)가 목표가 되도록 툴 광축(<see cref="DepthDistanceMoveOptions.DepthAxis"/>)
     /// 방향으로 1회 접근 이동한다. 예외를 던지지 않고 항상 결과를 반환한다(취소 포함).
     /// </summary>
@@ -890,17 +906,10 @@ public class FlatSurfaceCenteringService
         try
         {
             // ── 측정: ROI 최소 깊이 N회 샘플 평균 (시퀀스 ③ 기존 방식 유지) ──
-            var samples = new List<int>(o.Samples);
-            for (var i = 0; i < o.Samples; i++)
-            {
-                var mm = _camera.ComputeDepthRoiStats(o.RoiX, o.RoiY, o.RoiW, o.RoiH)?.MinMm ?? 0;
-                if (mm > 0) samples.Add(mm);
-                if (i < o.Samples - 1) await Task.Delay(100, ct);
-            }
-            if (samples.Count == 0)
+            var measured = await MeasureRoiDistanceAsync(o, ct);
+            if (measured is not { } d)
                 return DistFail("유효한 깊이 측정값이 없습니다.");
 
-            double d = samples.Average();
             double delta = d - o.TargetDistanceMm;
             Report(progress, $"거리 측정 {d:0.#}mm (목표 {o.TargetDistanceMm:0}mm, Δ={delta:+0.#;-0.#}mm)");
 
