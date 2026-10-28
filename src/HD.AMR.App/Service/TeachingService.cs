@@ -31,7 +31,7 @@ public class TeachingService
             : $"0x{surfaceId:X2}";
 
     /// <summary>고정 슬롯 정의(키, 표시 이름, Wall ID) — 삭제·이름/Wall ID 편집 불가, 좌표만 티칭.
-    /// 순서 = 화면 표시 순서: 홈 → Wall Code 10면 검사 준비 위치. 사용자 항목은 그 뒤.</summary>
+    /// 순서 = 화면 표시 순서: 홈 → 홈 1.5·2 → 작업 준비 → Wall Code 10면 검사 준비 위치. 사용자 항목은 그 뒤.</summary>
     public static readonly (string Key, string Name, int SurfaceId)[] Slots = BuildSlots();
 
     private static (string Key, string Name, int SurfaceId)[] BuildSlots()
@@ -39,6 +39,9 @@ public class TeachingService
         var list = new List<(string, string, int)>
         {
             ("home", "홈 위치", 0x00),
+            // 상부(T/PU/SU) 접근용 제2 홈과 그 경유점 — 기존 홈에서는 벽 충돌·역기구학 오류로 도달 불가(2026-10-28 현장).
+            ("home15", "홈 위치_1.5", 0x00),
+            ("home2", "홈 위치_2", 0x00),
             ("ready", "작업 준비 위치", 0x00),
         };
         // Wall Code 10면 검사 준비 위치 — 코드·Wall ID·이름은 정본 표(WallCodes)에서만 가져온다.
@@ -55,6 +58,23 @@ public class TeachingService
         ("inspectionGround", "B"),   // 검사 준비 위치 (바닥)
         ("inspectionCeiling", "T"),  // 검사 준비 위치 (천정)
     };
+
+    /// <summary>현장에서 "항목 추가"로 먼저 만든 홈 1.5·2 사용자 항목 → 고정 슬롯 이관표(2026-10-28, 이름 기준).
+    /// 이름은 공백을 무시하고 비교한다("홈위치_2" = "홈 위치_2").</summary>
+    private static readonly (string Name, string SlotKey)[] UserHomeMigration =
+    {
+        ("홈위치_1.5", "home15"),
+        ("홈위치_2", "home2"),
+    };
+
+    /// <summary>사용자 항목 이름이 가리키는 홈 1.5·2 슬롯 키. 해당 없으면 null.</summary>
+    internal static string? UserHomeSlotKey(string name)
+    {
+        var compact = string.Concat(name.Where(c => !char.IsWhiteSpace(c)));
+        foreach (var (n, key) in UserHomeMigration)
+            if (compact == n) return key;
+        return null;
+    }
 
     /// <summary>시드 보장(멱등):
     /// ① <see cref="Slots"/> 중 없는 슬롯 생성(좌표 null), 기존 슬롯의 이름·Wall ID·표시 순서를 정의대로 교정
@@ -105,6 +125,19 @@ public class TeachingService
                 CopyCoordinates(legacy, target, now);
             _db.TeachingPositions.Remove(legacy);
             byKey.Remove(legacyKey);
+            changed = true;
+        }
+
+        // 사용자 항목 홈 1.5·2 → 고정 슬롯. 슬롯이 미티칭일 때만 옮기고 옮긴 행만 지운다
+        // (슬롯이 이미 티칭돼 있으면 사용자 항목은 그대로 남겨 운영자가 비교·삭제하게 한다).
+        foreach (var user in byKey.Values.Where(p => !IsSeedSlot(p.Key)).ToList())
+        {
+            if (UserHomeSlotKey(user.Name) is not { } slotKey) continue;
+            var target = byKey[slotKey];
+            if (!user.IsTaught || target.IsTaught) continue;
+            CopyCoordinates(user, target, now);
+            _db.TeachingPositions.Remove(user);
+            byKey.Remove(user.Key);
             changed = true;
         }
 
