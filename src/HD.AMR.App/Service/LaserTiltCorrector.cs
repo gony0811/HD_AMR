@@ -91,11 +91,11 @@ public sealed class LaserTiltCorrector
             if (jac is null)
             {
                 Report($"틸트 응답 측정: 툴 Rx/Ry 각 {o.ProbeDeg}° 프로브 회전");
-                var rcA = await RotateToolAsync(o.Tool, o.ProbeDeg, 0, o, Report, ct);
+                var rcA = await RotateToolAsync(o.Tool, o.ProbeDeg, 0, pose.Z, o, Report, ct);
                 if (rcA != 0)
                     return TiltLevelResult.Fail($"틸트 응답 프로브 이동 실패 (rc={rcA}){FairinoErrorCodes.Suffix(rcA)}.", iter, pose, null);
                 var pA = await SampleAsync(ct);
-                var rcB = await RotateToolAsync(o.Tool, -o.ProbeDeg, o.ProbeDeg, o, Report, ct);
+                var rcB = await RotateToolAsync(o.Tool, -o.ProbeDeg, o.ProbeDeg, pA.Valid ? pA.Z : pose.Z, o, Report, ct);
                 if (rcB != 0)
                     return TiltLevelResult.Fail($"틸트 응답 프로브 이동 실패 (rc={rcB}){FairinoErrorCodes.Suffix(rcB)}.", iter, pose, null);
                 var pB = await SampleAsync(ct);
@@ -120,7 +120,7 @@ public sealed class LaserTiltCorrector
             Report($"보정 {iter + 1}: 툴 Rx={applyRx:+0.###;-0.###}°, Ry={applyRy:+0.###;-0.###}° 회전" +
                    (applyRx != uRx || applyRy != uRy ? $" (계산 {uRx:0.###}°, {uRy:0.###}° → ±{o.MaxCorrectionDeg}° 클램프)" : ""));
 
-            var rc = await RotateToolAsync(o.Tool, applyRx, applyRy, o, Report, ct);
+            var rc = await RotateToolAsync(o.Tool, applyRx, applyRy, pose.Z, o, Report, ct);
             if (rc != 0)
                 return TiltLevelResult.Fail($"틸트 보정 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.", iter, pose, jac);
 
@@ -174,14 +174,23 @@ public sealed class LaserTiltCorrector
             new double[] { 0, 0, 1 }, true, null);
     }
 
-    /// <summary>현재 자세 기준 툴 회전 오프셋(위치 고정, Rz=0 — 3점 거리로 yaw 미결정) 후
-    /// 정착 대기 + 레이저 판독 안정화 대기(앰프 평균화 필터 지연 — 덜 수렴한 값은 가짜 틸트가 된다).</summary>
-    private async Task<int> RotateToolAsync(int tool, double rx, double ry, TiltLevelOptions o,
+    /// <summary>
+    /// 현재 자세 기준 툴 회전(Rz=0 — 3점 거리로 yaw 미결정)을 <b>레이저 3점 중심(벽 위 스팟)</b>을 축으로 수행한 뒤
+    /// 정착 대기 + 레이저 판독 안정화 대기(앰프 평균화 필터 지연 — 덜 수렴한 값은 가짜 틸트가 된다).
+    /// 헤드는 TCP 에서 약 150mm 옆(툴 Y)에 있어 TCP 축으로 돌리면 7° 에 스팟이 벽 위로 40~55mm 미끄러져
+    /// 평탄 셀을 벗어났다(10-28 09:55/09:57 '비평탄'). 회전 중심을 스팟으로 옮기면 기울기만 바뀐다.
+    /// </summary>
+    private async Task<int> RotateToolAsync(int tool, double rx, double ry, double pivotZmm, TiltLevelOptions o,
         Action<string> report, CancellationToken ct)
     {
+        var (cx, cy) = _laser.HeadCenterMm;
+        var pivot = new[] { cx, cy, -pivotZmm };
+        var offset = PivotRotationOffset(rx, ry, pivot);
+        report($"회전 중심 = 레이저 3점 중심 (툴 {pivot[0]:0.#}, {pivot[1]:0.#}, {pivot[2]:0.#}mm) → " +
+               $"보상 이동 [{offset[0]:+0.#;-0.#}, {offset[1]:+0.#;-0.#}, {offset[2]:+0.#;-0.#}]mm");
+
         var anchor = await _cobot.Rpc.GetTcpPoseInBaseAsync(tool, ct);
-        var rc = await _cobot.Rpc.MoveByToolOffsetAsync(anchor, user: 0,
-            new[] { 0.0, 0.0, 0.0, rx, ry, 0.0 }, tool: tool, vel: o.Velocity, ct: ct);
+        var rc = await _cobot.Rpc.MoveByToolOffsetAsync(anchor, user: 0, offset, tool: tool, vel: o.Velocity, ct: ct);
         if (rc != 0) return rc;
 
         await Task.Delay(o.SettleMs, ct);
@@ -191,6 +200,20 @@ public sealed class LaserTiltCorrector
             ? $"판독 안정 ({(o.SettleMs + sw.ElapsedMilliseconds) / 1000.0:0.0}s)"
             : $"판독 안정화 한도({o.StabilizeTimeoutMs}ms) 초과 — 필터 지연/진동 가능, 측정을 계속합니다.");
         return 0;
+    }
+
+    /// <summary>
+    /// 툴 좌표 점 <paramref name="pivot"/> 을 고정한 채 툴을 (rx, ry) 회전시키는 툴 오프셋 [dx,dy,dz,rx,ry,0].
+    /// 툴 오프셋 이동은 목표 = 앵커 ∘ [R|d] 이므로 p 가 제자리에 있으려면 d = p − R·p.
+    /// 피벗은 툴-1 좌표 실제 스팟 (헤드 X, Y, −z) — 빔은 −Z, z = Standoff + 거리평균(<see cref="TcpTouchCalibrator"/> 규약).
+    /// </summary>
+    public static double[] PivotRotationOffset(double rx, double ry, double[] pivot)
+    {
+        var r = FrameMath.PoseToMatrix(new[] { 0.0, 0.0, 0.0, rx, ry, 0.0 });
+        var d = new double[3];
+        for (var i = 0; i < 3; i++)
+            d[i] = pivot[i] - (r[i, 0] * pivot[0] + r[i, 1] * pivot[1] + r[i, 2] * pivot[2]);
+        return new[] { d[0], d[1], d[2], rx, ry, 0.0 };
     }
 
     /// <summary>프로브 측정으로 응답 행렬 J(측정 [rx,ry] / 툴 [Rx,Ry], 소각 선형화)를 만든다.

@@ -148,6 +148,11 @@ public class LaserDisplacementSensorService : BackgroundService
             hx, hy, d, _settings.TiltStandoffMm, _settings.TiltReadingSignForUp);
     }
 
+    /// <summary>헤드 3점 XY 오프셋의 중심(툴 좌표, mm) — 틸트 보정의 회전 중심(<see cref="LaserTiltCorrector"/>).</summary>
+    public (double X, double Y) HeadCenterMm =>
+        ((_settings.Head1OffsetXmm + _settings.Head2OffsetXmm + _settings.Head3OffsetXmm) / 3.0,
+         (_settings.Head1OffsetYmm + _settings.Head2OffsetYmm + _settings.Head3OffsetYmm) / 3.0);
+
     /// <summary>
     /// <see cref="GetRawPlanePose"/> 에 평행 기준(<see cref="TiltRef"/>)이 있으면 Rx/Ry 에서
     /// 바이어스를 빼서 반환한다. 위치 X/Y/Z(절대 거리)는 불변 — working distance 로직 안전.
