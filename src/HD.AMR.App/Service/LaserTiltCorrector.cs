@@ -116,10 +116,12 @@ public sealed class LaserTiltCorrector
             }
 
             var (uRx, uRy) = Solve(jac, pose.Rx, pose.Ry);
-            var applyRx = Math.Clamp(uRx, -o.MaxCorrectionDeg, o.MaxCorrectionDeg);
-            var applyRy = Math.Clamp(uRy, -o.MaxCorrectionDeg, o.MaxCorrectionDeg);
+            var (dRx, dRy, damped) = DampSmall(uRx, uRy);
+            var applyRx = Math.Clamp(dRx, -o.MaxCorrectionDeg, o.MaxCorrectionDeg);
+            var applyRy = Math.Clamp(dRy, -o.MaxCorrectionDeg, o.MaxCorrectionDeg);
             Report($"보정 {iter + 1}: 툴 Rx={applyRx:+0.###;-0.###}°, Ry={applyRy:+0.###;-0.###}° 회전" +
-                   (applyRx != uRx || applyRy != uRy ? $" (계산 {uRx:0.###}°, {uRy:0.###}° → ±{o.MaxCorrectionDeg}° 클램프)" : ""));
+                   (damped ? $" (계산 {uRx:0.###}°, {uRy:0.###}° → {SmallCorrectionDeg}° 미만 감쇠 ×{SmallCorrectionDamping})" : "") +
+                   (applyRx != dRx || applyRy != dRy ? $" (계산 {uRx:0.###}°, {uRy:0.###}° → ±{o.MaxCorrectionDeg}° 클램프)" : ""));
 
             var rc = await RotateToolAsync(o.Tool, applyRx, applyRy, pose.Z, o, Report, ct);
             if (rc != 0)
@@ -130,6 +132,22 @@ public sealed class LaserTiltCorrector
             lastAppliedMag = Math.Sqrt(applyRx * applyRx + applyRy * applyRy);
         }
     }
+
+    /// <summary>이 각도(°) 미만 보정은 감쇠 — 두 축 모두 이 안일 때.</summary>
+    internal const double SmallCorrectionDeg = 2.0;
+
+    /// <summary>작은 보정 감쇠 비율.</summary>
+    internal const double SmallCorrectionDamping = 0.5;
+
+    /// <summary>
+    /// 두 축 보정량이 모두 <see cref="SmallCorrectionDeg"/> 미만이면 <see cref="SmallCorrectionDamping"/> 배로 줄인다.
+    /// 1° 안팎에서는 실제 응답이 공칭의 ~2배라 보정마다 부호만 뒤집혀 ±1° 를 오갔다
+    /// (10-28 10:57 평탄면 rx +1.07 → −1.03 → +1.02°, 기준 1° 미달로 3회 소진). 응답이 공칭대로여도 절반씩 수렴해 기준을 통과한다.
+    /// </summary>
+    public static (double Rx, double Ry, bool Damped) DampSmall(double uRx, double uRy)
+        => Math.Abs(uRx) < SmallCorrectionDeg && Math.Abs(uRy) < SmallCorrectionDeg
+            ? (uRx * SmallCorrectionDamping, uRy * SmallCorrectionDamping, true)
+            : (uRx, uRy, false);
 
     /// <summary>공칭 응답 — 헤드 캘리브레이션 규약(툴 +Rx → 측정 rx gain −1, 툴 +Ry → 측정 ry gain +1).</summary>
     public static double[,] NominalJacobian() => new[,] { { -1.0, 0.0 }, { 0.0, 1.0 } };
