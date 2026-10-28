@@ -141,8 +141,8 @@ public sealed class LaserTiltCorrector
         return Math.Abs(rx - predRx) <= tol && Math.Abs(ry - predRy) <= tol;
     }
 
-    /// <summary>단일 채널 튐 시 재측정 최대 횟수 — 시퀀스 페이지 '평탄면 센터링' 안내 문구와 공유.</summary>
-    public const int MaxOutlierRetries = 2;
+    /// <summary>단일 채널 튐 시 재측정 최대 횟수.</summary>
+    internal const int MaxOutlierRetries = 2;
 
     /// <summary>한 채널이 나머지 두 채널 평균과 이만큼(mm) 이상 다르면 튐.</summary>
     internal const double OutlierDeviationMm = 10;

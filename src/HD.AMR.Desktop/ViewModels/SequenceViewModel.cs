@@ -466,17 +466,9 @@ public sealed partial class SeqStepVm : ObservableObject
     [ObservableProperty] private bool _isCurrent;
     [ObservableProperty] private bool _canRun;
 
-    /// <summary>단계명 아래 회색 보조 문구. 없으면 null(줄 숨김).</summary>
-    public string? Hint { get; }
-
     public SeqStepVm(string key, string no, string displayName)
     {
         Key = key; No = no; DisplayName = displayName;
-        Hint = key switch
-        {
-            "flatSurfaceAlign" => $"retry 최대 {LaserTiltCorrector.MaxOutlierRetries}회",
-            _ => null,
-        };
     }
 }
 
