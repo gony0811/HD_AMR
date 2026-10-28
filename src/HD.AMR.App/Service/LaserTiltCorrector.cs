@@ -134,10 +134,14 @@ public sealed class LaserTiltCorrector
     /// <summary>공칭 응답 — 헤드 캘리브레이션 규약(툴 +Rx → 측정 rx gain −1, 툴 +Ry → 측정 ry gain +1).</summary>
     public static double[,] NominalJacobian() => new[,] { { -1.0, 0.0 }, { 0.0, 1.0 } };
 
-    /// <summary>보정 후 실측이 예측과 맞는가 — 허용 오차 max(2°, 0.5×|적용 회전|), 축별.</summary>
+    /// <summary>
+    /// 보정 후 실측이 예측과 맞는가 — 허용 오차 max(3°, 0.5×|적용 회전|), 축별.
+    /// 헤드 간격 ~30mm 에서 1mm 가 ~2° 라 종전 2° 는 판 표면 잡음 수준이었다(10-28 10:40 평탄면에서 rx 0.95° 초과로 NG).
+    /// 최종 합격(ThresholdDeg)·발산 가드는 그대로라 완화로 오합격이 늘지 않고, 비드 판정이 한 회차 늦어질 뿐이다.
+    /// </summary>
     public static bool IsResponseConsistent(double predRx, double predRy, double rx, double ry, double appliedMagDeg)
     {
-        var tol = Math.Max(2.0, 0.5 * appliedMagDeg);
+        var tol = Math.Max(3.0, 0.5 * appliedMagDeg);
         return Math.Abs(rx - predRx) <= tol && Math.Abs(ry - predRy) <= tol;
     }
 
