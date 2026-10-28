@@ -139,7 +139,11 @@
                             <Border Padding="0,4" Background="{Binding IsCurrent, Converter={x:Static vm:SeqRowConverters.CurrentBrush}}">
                                 <Grid ColumnDefinitions="40,*,150,Auto">
                                     <TextBlock Grid.Column="0" Text="{Binding No}" FontSize="16" VerticalAlignment="Center" />
-                                    <TextBlock Grid.Column="1" Text="{Binding DisplayName}" VerticalAlignment="Center" TextWrapping="Wrap" />
+                                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding DisplayName}" TextWrapping="Wrap" />
+                                        <TextBlock Classes="hint" Text="{Binding Hint}"
+                                                   IsVisible="{Binding Hint, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                                    </StackPanel>
                                     <TextBlock Grid.Column="2" Text="{Binding StatusText}" VerticalAlignment="Center" TextWrapping="Wrap"
                                                Foreground="{Binding StatusKind, Converter={x:Static vm:SeqConverters.StatusBrush}}" />
                                     <Button Grid.Column="3" Content="▶ 실행"

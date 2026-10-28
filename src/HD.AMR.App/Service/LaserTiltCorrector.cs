@@ -54,13 +54,14 @@ public sealed class LaserTiltCorrector
         {
             ct.ThrowIfCancellationRequested();
 
-            var pose = await SampleAsync(ct);
+            var (pose, ch, outlierFail) = await SampleGuardedAsync(Report, ct);
             if (!pose.Valid)
                 return TiltLevelResult.Fail($"레이저 평면 측정 실패: {pose.Note}", iter, null, jac);
+            if (outlierFail is not null)
+                return TiltLevelResult.Fail(outlierFail, iter, pose, jac);
 
             onMeasured?.Invoke(iter, pose);
-            var ch = _laser.GetReadings();
-            var chText = ch.Count >= 3 ? $" [CH {ch[0].Value:0.##}/{ch[1].Value:0.##}/{ch[2].Value:0.##}mm]" : "";
+            var chText = ch.Count >= 3 ? $" [CH {ch[0]:0.##}/{ch[1]:0.##}/{ch[2]:0.##}mm]" : "";
             Report($"측정 {iter + 1}: rx={pose.Rx:0.###}°, ry={pose.Ry:0.###}°, z={pose.Z:0.#}mm{chText}");
 
             // 반응 확인 — 강체 평면이면 직전 보정의 예측대로 변해야 한다.
@@ -138,6 +139,61 @@ public sealed class LaserTiltCorrector
     {
         var tol = Math.Max(2.0, 0.5 * appliedMagDeg);
         return Math.Abs(rx - predRx) <= tol && Math.Abs(ry - predRy) <= tol;
+    }
+
+    /// <summary>단일 채널 튐 시 재측정 최대 횟수 — 시퀀스 페이지 '평탄면 센터링' 안내 문구와 공유.</summary>
+    public const int MaxOutlierRetries = 2;
+
+    /// <summary>한 채널이 나머지 두 채널 평균과 이만큼(mm) 이상 다르면 튐.</summary>
+    internal const double OutlierDeviationMm = 10;
+
+    /// <summary>튐 판정 시 나머지 두 채널끼리는 이 안(mm)이어야 한다(실제 면 기울기 몇 ° 는 2~5mm 차) — 둘도 갈라지면 단일 튐이 아니라 면 자체가 고르지 않다.</summary>
+    internal const double OutlierPeerAgreementMm = 5;
+
+    private const int OutlierRetryDelayMs = 1000;
+
+    /// <summary>
+    /// 한 채널만 튄 값(나머지 두 채널은 서로 일치)이면 그 채널 번호(0-based), 아니면 −1.
+    /// 헤드 간격이 ~30mm 라 한 채널 10mm 튐이 수십 ° 가짜 틸트가 된다(10-28 10:25 CH2 −61mm → rx −53°/ry 67°).
+    /// </summary>
+    public static int FindOutlierChannel(IReadOnlyList<double> v)
+    {
+        if (v.Count < 3) return -1;
+        for (var i = 0; i < 3; i++)
+        {
+            double a = v[(i + 1) % 3], b = v[(i + 2) % 3];
+            if (Math.Abs(a - b) <= OutlierPeerAgreementMm && Math.Abs(v[i] - (a + b) / 2) >= OutlierDeviationMm)
+                return i;
+        }
+        return -1;
+    }
+
+    /// <summary>
+    /// <see cref="SampleAsync"/> + 단일 채널 튐 가드 — 튀면 1초 뒤 재측정, 최대 <see cref="MaxOutlierRetries"/>회.
+    /// 일시 튐(필터 지연·진동)은 1~2초 안에 사라지고, 끝내 남으면 렌즈·표면 문제라 더 재도 소용없어 NG 메시지를 돌려준다.
+    /// </summary>
+    private async Task<(PlanePose Pose, IReadOnlyList<double> Channels, string? OutlierFail)> SampleGuardedAsync(
+        Action<string> report, CancellationToken ct)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            var pose = await SampleAsync(ct);
+            var ch = _laser.GetReadings().Select(r => r.Value).ToList();
+            if (!pose.Valid) return (pose, ch, null);
+
+            var bad = FindOutlierChannel(ch);
+            if (bad < 0) return (pose, ch, null);
+
+            var dev = ch[bad] - (ch[(bad + 1) % 3] + ch[(bad + 2) % 3]) / 2;
+            var chText = $"CH {ch[0]:0.##}/{ch[1]:0.##}/{ch[2]:0.##}mm";
+            if (attempt >= MaxOutlierRetries)
+                return (pose, ch,
+                    $"레이저 CH{bad + 1} 단독 이상값 ({dev:+0.#;-0.#}mm, {chText}) — 재측정 {MaxOutlierRetries}회 후에도 지속. " +
+                    $"헤드{bad + 1} 렌즈 오염·빔 정렬 또는 스팟 위치의 반사/모서리를 확인하세요.");
+
+            report($"CH{bad + 1} 단독 튐 ({dev:+0.#;-0.#}mm, {chText}) — {OutlierRetryDelayMs / 1000.0:0.#}s 후 재측정 ({attempt + 1}/{MaxOutlierRetries})");
+            await Task.Delay(OutlierRetryDelayMs, ct);
+        }
     }
 
     /// <summary>레이저 3점 측정을 3회 샘플링해 평균 pose 반환(100ms 간격).</summary>
