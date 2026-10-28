@@ -62,8 +62,9 @@ public class CobotInspectionMoveStep : ISequenceStep
         if (SequenceEntry.ValidateHome(context) is { IsValid: false } homeError)
             return homeError;
 
-        if (!context.Positions.TryGetValue("ready", out var ready) || !ready.IsTaught)
-            return StepValidation.Fail("작업 준비 위치(ready) 미티칭 — Teaching에서 먼저 저장하세요.");
+        // 진입 경유점 — 상부 면은 홈 위치_1.5·2, 그 외는 ready.
+        if (SequenceEntry.ValidateRoute(context) is { IsValid: false } routeError)
+            return routeError;
 
         if (context.SeamStartW is not { Length: 3 })
             return StepValidation.Fail("용접선 시작점(seamStartW) 없음 — ACS 작업의 용접선 좌표가 필요합니다.");
