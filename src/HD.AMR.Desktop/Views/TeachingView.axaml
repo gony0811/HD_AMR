@@ -78,7 +78,7 @@
                                                 Command="{Binding $parent[ItemsControl].((vm:TeachingViewModel)DataContext).CancelEditCommand}" CommandParameter="{Binding}" />
                                         <Button Classes="op" Content="캡처" ToolTip.Tip="현재 로봇 위치를 이 항목에 저장" IsEnabled="{Binding !IsEditing}"
                                                 Command="{Binding $parent[ItemsControl].((vm:TeachingViewModel)DataContext).CaptureCommand}" CommandParameter="{Binding}" />
-                                        <Button Classes="op" Content="이동" ToolTip.Tip="저장된 위치로 이동 (MoveL)" IsEnabled="{Binding IsTaught}"
+                                        <Button Classes="op" Content="이동" ToolTip.Tip="{Binding MoveTip}" IsEnabled="{Binding IsTaught}"
                                                 Command="{Binding $parent[ItemsControl].((vm:TeachingViewModel)DataContext).MoveToCommand}" CommandParameter="{Binding}" />
                                         <Button Classes="op" Content="초기화" ToolTip.Tip="저장된 좌표 초기화" IsEnabled="{Binding IsTaught}"
                                                 Command="{Binding $parent[ItemsControl].((vm:TeachingViewModel)DataContext).ClearCommand}" CommandParameter="{Binding}" />
