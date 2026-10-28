@@ -1,4 +1,5 @@
 using HD.AMR.App.Communication;
+using HD.AMR.App.Models;
 using Microsoft.Extensions.Logging;
 
 namespace HD.AMR.App.Service.Sequence.Steps;
@@ -18,6 +19,7 @@ namespace HD.AMR.App.Service.Sequence.Steps;
 ///  ③ <b>작업 준비 위치 경유</b> — 홈에서 검사 위치로 MoveJ 시 900mm 이하 영역에서 툴이 차체와 충돌할 수
 ///     있다. 홈 복귀 후 "ready" 티칭 위치(홈에서 툴 Z −300mm)로 먼저 이동해 충돌 영역을 벗어난다.
 ///     미티칭이면 홈에서 툴 Z −300mm 오프셋을 자동 계산해 사용한다.
+///     단 상부 면(T/PU/SU)은 ready 대신 "홈 위치_1.5" → "홈 위치_2" 를 경유한다(<see cref="IsUpperRoute"/>).
 ///
 /// 부르는 곳은 ② <see cref="CobotInspectionMoveStep"/>(LINE/CROSS)이다. 앵커 히트 경로
 /// (inspectionRun·wobjReset만 실행)는 직전 정렬 자세를 그대로 재사용하는 것이 목적이라 ①을 타지 않는다.
@@ -39,64 +41,159 @@ internal static class SequenceEntry
             ? StepValidation.Ok()
             : StepValidation.Fail("홈 위치 미티칭 — Teaching에서 먼저 저장하세요.");
 
-    /// <summary>활성 좌표계 정규화 + 안전 홈 복귀 + 작업 준비 위치 경유. 결과 메시지에 붙일 주석을 돌려준다.
-    /// 홈에 없을 때(이전 검사 자세 잔류) 벽면 직선 후퇴 → ready 경유 → 홈 순서로 차체 충돌을 회피한다.</summary>
+    /// <summary>상부 경로 경유점 키 — 홈 → 홈 1.5 → 홈 2 순서로 지나간다(복귀는 역순).</summary>
+    internal const string Home15Key = "home15";
+    internal const string Home2Key = "home2";
+
+    /// <summary>상부 경로(홈 1.5 → 홈 2)를 타는 면 — 천장(T)·상부 챔퍼(PU/SU). 기존 홈·ready 경로로는
+    /// 벽 충돌 또는 역기구학 오류로 도달할 수 없다(2026-10-28 현장).</summary>
+    internal static bool IsUpperRoute(string? wallCode)
+        => WallCodes.Find(wallCode)?.Orientation is SurfaceOrientation.Ceiling or SurfaceOrientation.ChamferUpper;
+
+    /// <summary>진입 경로 경유점 티칭 여부 — 상부 면은 홈 1.5·2, 그 외는 ready.</summary>
+    public static StepValidation ValidateRoute(SequenceContext context)
+    {
+        if (IsUpperRoute(context.WallCode))
+        {
+            foreach (var (key, name) in new[] { (Home15Key, "홈 위치_1.5"), (Home2Key, "홈 위치_2") })
+                if (!context.Positions.TryGetValue(key, out var p) || !p.IsTaught)
+                    return StepValidation.Fail(
+                        $"{name} 미티칭 — 상부 면({context.WallCode})은 홈 위치_1.5 → 홈 위치_2 경로로 진입합니다. Teaching에서 먼저 저장하세요.");
+            return StepValidation.Ok();
+        }
+
+        return context.Positions.TryGetValue("ready", out var ready) && ready.IsTaught
+            ? StepValidation.Ok()
+            : StepValidation.Fail("작업 준비 위치(ready) 미티칭 — Teaching에서 먼저 저장하세요.");
+    }
+
+    /// <summary>활성 좌표계 정규화 + 안전 홈 복귀 + 진입 경유점 이동. 결과 메시지에 붙일 주석을 돌려준다.
+    /// 경유점은 면으로 고른다 — 상부 면(<see cref="IsUpperRoute"/>)은 홈 → 홈 1.5 → 홈 2, 그 외는 홈 → ready.
+    /// 홈에 없을 때(이전 검사 자세 잔류)는 <see cref="ReturnHomeAsync"/>로 왔던 경로를 거슬러 홈에 온다.</summary>
     public static async Task<string> PrepareAsync(
         CobotService cobot, SequenceContext context, ILogger logger, CancellationToken ct)
     {
         await NormalizeActiveFramesAsync(cobot, context, logger, ct);
+        var frames = $"활성 좌표계 툴 #{context.Tool}/작업물 0 정규화";
+        var upper = IsUpperRoute(context.WallCode);
+        var cur = await cobot.Rpc.GetActualJointPosAsync(ct: ct);
 
-        // 이미 작업 준비(ready) 위치면 그대로 출발한다 — ready 는 홈에서 나와 도착하는 경유점이라
-        // 검사 자세 잔류가 아니다. 앞 task 가 ready 에서 실패한 경우 후퇴·홈 왕복을 되풀이하지 않는다.
-        if (await IsAtReadyAsync(cobot, context, ct))
+        // 이미 이번 경로의 마지막 경유점이면 그대로 출발한다 — 경유점은 검사 자세 잔류가 아니다.
+        // 앞 task 가 경유점에서 실패했거나 같은 경로의 task 가 이어질 때 후퇴·홈 왕복을 되풀이하지 않는다.
+        var lastKey = upper ? Home2Key : "ready";
+        if (IsAt(cur, context, lastKey))
         {
-            logger.LogInformation("진입 준비: 이미 작업 준비 위치 — 후퇴·홈 왕복 생략");
-            return $" 활성 좌표계 툴 #{context.Tool}/작업물 0 정규화, (이미 작업 준비 위치).";
+            var lastName = upper ? "홈 위치_2" : "작업 준비 위치";
+            logger.LogInformation("진입 준비: 이미 {Name} — 후퇴·홈 왕복 생략", lastName);
+            return $" {frames}, (이미 {lastName}).";
         }
 
-        // 이전 검사 자세에서 홈으로 바로 MoveJ 하면 차체 충돌 위험 → 벽면 후퇴 + ready 경유.
-        var retracted = false;
-        var viaReady = false;
-        if (!await IsAtHomeAsync(cobot, context, ct))
+        var parts = new List<string> { frames };
+        var back = await ReturnHomeAsync(cobot, context, logger, ct);
+        parts.Add(back.Count == 0 ? "(이미 홈)" : string.Join(" → ", back));
+
+        if (upper)
         {
-            retracted = await RetractFromWallAsync(cobot, context, logger, ct);
-            viaReady = await ReturnViaReadyAsync(cobot, context, logger, ct);
+            await MoveJToTaughtAsync(cobot, context, Home15Key, "홈 위치_1.5", ct);
+            await MoveJToTaughtAsync(cobot, context, Home2Key, "홈 위치_2", ct);
+            logger.LogInformation("진입 준비: 상부 면({Wall}) — 홈 위치_1.5 → 홈 위치_2 경유 완료", context.WallCode);
+            parts.Add($"상부 면({context.WallCode}) 홈 위치_1.5 → 홈 위치_2 경유(출발)");
         }
-
-        var moved = await EnsureCobotAtHomeAsync(cobot, context, ct);
-        var readyMoved = await MoveToReadyAsync(cobot, context, logger, ct);
-
-        var parts = new List<string> { $"활성 좌표계 툴 #{context.Tool}/작업물 0 정규화" };
-        if (retracted) parts.Add("벽면 후퇴");
-        if (viaReady) parts.Add("작업 준비 위치 경유(복귀)");
-        parts.Add(moved ? "코봇 홈 복귀" : "(이미 홈)");
-        if (readyMoved) parts.Add("작업 준비 위치 경유(출발)");
+        else if (await MoveToReadyAsync(cobot, context, logger, ct))
+        {
+            parts.Add("작업 준비 위치 경유(출발)");
+        }
         return $" {string.Join(", ", parts)}.";
     }
 
-    private static async Task<bool> IsAtHomeAsync(CobotService cobot, SequenceContext ctx, CancellationToken ct)
+    /// <summary>
+    /// 어디서든 홈으로 안전하게 돌아온다 — 시퀀스 진입·종료·주행 전 복귀가 모두 이 경로를 쓴다.
+    /// 복귀 경로는 <b>현재 관절 자세</b>로 고른다(주행 전 복귀에는 wall_code 가 없고, 재시작 후엔 직전 면도 모른다):
+    /// 홈 2 가 ready(미티칭이면 홈)보다 가까우면 상부 경로(홈 2 → 홈 1.5 → 홈), 아니면 ready → 홈.
+    /// 경유점(ready·홈 1.5·홈 2) 위에 있을 때는 벽 앞이 아니므로 벽면 후퇴를 하지 않는다.
+    /// 지나온 동작 이름 목록을 돌려준다(이미 홈이면 빈 목록).
+    /// </summary>
+    public static async Task<List<string>> ReturnHomeAsync(
+        CobotService cobot, SequenceContext ctx, ILogger logger, CancellationToken ct)
     {
-        if (!ctx.Positions.TryGetValue("home", out var home) || !home.IsTaught) return true;
-        var homeJoints = new[]
-        {
-            home.J1!.Value, home.J2!.Value, home.J3!.Value,
-            home.J4!.Value, home.J5!.Value, home.J6!.Value,
-        };
+        var done = new List<string>();
         var cur = await cobot.Rpc.GetActualJointPosAsync(ct: ct);
-        return IsWithinJointTolerance(cur, homeJoints);
+        if (IsAt(cur, ctx, "home")) return done;
+
+        var onWaypoint = IsAt(cur, ctx, "ready") || IsAt(cur, ctx, Home15Key) || IsAt(cur, ctx, Home2Key);
+        if (!onWaypoint && await RetractFromWallAsync(cobot, ctx, logger, ct))
+        {
+            done.Add("벽면 후퇴");
+            cur = await cobot.Rpc.GetActualJointPosAsync(ct: ct);
+        }
+
+        if (IsUpperSide(cur, ctx))
+        {
+            // 홈 1.5 위에서 멈춘 경우(진입 도중 실패 등)는 홈 2 로 되돌아가지 않고 바로 홈으로 간다.
+            if (!IsAt(cur, ctx, Home15Key))
+            {
+                await MoveJToTaughtAsync(cobot, ctx, Home2Key, "홈 위치_2", ct);
+                await MoveJToTaughtAsync(cobot, ctx, Home15Key, "홈 위치_1.5", ct);
+                done.Add("홈 위치_2 → 홈 위치_1.5 경유");
+            }
+            logger.LogInformation("홈 복귀: 상부 경로(홈 위치_2 → 홈 위치_1.5) 경유");
+        }
+        else if (await ReturnViaReadyAsync(cobot, ctx, logger, ct))
+        {
+            done.Add("작업 준비 위치 경유");
+        }
+
+        if (await EnsureCobotAtHomeAsync(cobot, ctx, ct)) done.Add("홈 복귀");
+        return done;
     }
 
-    /// <summary>현재 관절각이 티칭된 ready 와 일치하면 true. 미티칭(자동 계산 ready)은 관절 기준이 없어 false.</summary>
-    private static async Task<bool> IsAtReadyAsync(CobotService cobot, SequenceContext ctx, CancellationToken ct)
+    /// <summary>현재 자세가 상부 경로 쪽인지 — 홈 1.5·2 가 모두 티칭돼 있고, 홈 1.5 위에 있거나
+    /// 홈 2 까지의 관절 거리가 ready(미티칭이면 홈)까지보다 짧을 때.</summary>
+    internal static bool IsUpperSide(double[] cur, SequenceContext ctx)
     {
-        if (!ctx.Positions.TryGetValue("ready", out var ready) || !ready.IsTaught) return false;
-        var readyJoints = new[]
+        if (TaughtJoints(ctx, Home15Key) is null || TaughtJoints(ctx, Home2Key) is not { } home2) return false;
+        if (IsAt(cur, ctx, Home15Key)) return true;
+        var normal = TaughtJoints(ctx, "ready") ?? TaughtJoints(ctx, "home");
+        return normal is null || JointDistance(cur, home2) < JointDistance(cur, normal);
+    }
+
+    /// <summary>관절 거리 — 축별 차이(±360° 감기 정규화)의 최댓값 [도].</summary>
+    internal static double JointDistance(double[] a, double[] b)
+    {
+        var max = 0.0;
+        for (var i = 0; i < 6; i++)
         {
-            ready.J1!.Value, ready.J2!.Value, ready.J3!.Value,
-            ready.J4!.Value, ready.J5!.Value, ready.J6!.Value,
-        };
+            var d = (a[i] - b[i]) % 360.0;
+            if (d > 180.0) d -= 360.0;
+            else if (d < -180.0) d += 360.0;
+            max = Math.Max(max, Math.Abs(d));
+        }
+        return max;
+    }
+
+    private static double[]? TaughtJoints(SequenceContext ctx, string key)
+        => ctx.Positions.TryGetValue(key, out var p) && p.IsTaught && p.J1.HasValue
+            ? new[] { p.J1!.Value, p.J2!.Value, p.J3!.Value, p.J4!.Value, p.J5!.Value, p.J6!.Value }
+            : null;
+
+    private static bool IsAt(double[] cur, SequenceContext ctx, string key)
+        => TaughtJoints(ctx, key) is { } j && IsWithinJointTolerance(cur, j);
+
+    /// <summary>티칭 위치로 MoveJ(현재 관절 쪽으로 감기 맞춤). 이미 그 자리면 움직이지 않는다.</summary>
+    private static async Task MoveJToTaughtAsync(
+        CobotService cobot, SequenceContext ctx, string key, string name, CancellationToken ct)
+    {
+        var p = ctx.Positions[key];
+        var joints = TaughtJoints(ctx, key)
+            ?? throw new InvalidOperationException($"{name} 미티칭 — Teaching에서 먼저 저장하세요.");
         var cur = await cobot.Rpc.GetActualJointPosAsync(ct: ct);
-        return IsWithinJointTolerance(cur, readyJoints);
+        if (IsWithinJointTolerance(cur, joints)) return;
+
+        var pose = new[] { p.X!.Value, p.Y!.Value, p.Z!.Value, p.Rx!.Value, p.Ry!.Value, p.Rz!.Value };
+        var rc = await cobot.Rpc.MoveJAsync(FairinoRpcClient.UnwrapToward(joints, cur), pose,
+            tool: ctx.Tool, user: 0, vel: ctx.Velocity, ct: ct);
+        if (rc != 0)
+            throw new InvalidOperationException($"{name} 이동(MoveJ) 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.");
     }
 
     private static async Task NormalizeActiveFramesAsync(

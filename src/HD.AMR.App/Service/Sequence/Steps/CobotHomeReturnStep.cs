@@ -42,34 +42,15 @@ public class CobotHomeReturnStep : ISequenceStep
 
     public async Task<StepResult> ExecuteAsync(SequenceContext context, CancellationToken ct)
     {
-        var home = context.Positions["home"];
-        var homeJoints = new[]
-        {
-            home.J1!.Value, home.J2!.Value, home.J3!.Value,
-            home.J4!.Value, home.J5!.Value, home.J6!.Value,
-        };
-        var cur = await _cobot.Rpc.GetActualJointPosAsync(ct: ct);
-        if (SequenceEntry.IsWithinJointTolerance(cur, homeJoints))
+        // 벽면 후퇴(MoveL) → 경유점(ready 또는 홈 2 → 홈 1.5, 현재 자세로 선택) → 홈(MoveJ).
+        var parts = await SequenceEntry.ReturnHomeAsync(_cobot, context, _logger, ct);
+        if (parts.Count == 0)
         {
             const string already = "코봇이 이미 홈 위치에 있습니다.";
             _logger.LogInformation("[코봇 홈 복귀] {Msg}", already);
             context.Progress?.Invoke(already);
             return StepResult.Ok(already);
         }
-
-        // ① 벽면 직선 후퇴(MoveL) — 검사 자세에서 툴 Z+ 방향으로 떨어져 차체 충돌 경로를 확보.
-        var retracted = await SequenceEntry.RetractFromWallAsync(_cobot, context, _logger, ct);
-
-        // ② 작업 준비 위치 경유(MoveJ) — 차체 위 안전 경유점.
-        var viaReady = await SequenceEntry.ReturnViaReadyAsync(_cobot, context, _logger, ct);
-
-        // ③ 홈 복귀(MoveJ).
-        var moved = await SequenceEntry.EnsureCobotAtHomeAsync(_cobot, context, ct);
-
-        var parts = new List<string>();
-        if (retracted) parts.Add("벽면 후퇴");
-        if (viaReady) parts.Add("작업 준비 위치 경유");
-        parts.Add("홈 복귀");
         var msg = $"코봇 {string.Join(" → ", parts)} 완료.";
 
         _logger.LogInformation("[코봇 홈 복귀] {Msg}", msg);
