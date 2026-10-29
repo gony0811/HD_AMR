@@ -94,6 +94,10 @@ public class ParameterService
             ("arrival.deviationTheta", "0.1", "도착 판정 각도 허용 오차(rad)"),
             ("inspection.useComputedNormalOrientation", "false",
                 "'Cobot 검사위치 이동' 자세 = 계산된 면 법선(true) / 티칭 포즈(false). 현장 검증 후 켠다. 측위·장착보정·wall_code 가 없으면 자동으로 티칭 폴백."),
+            (Sequence.Steps.CobotInspectionMoveStep.ApproachStandoffKey,
+                Sequence.Steps.CobotInspectionMoveStep.DefaultApproachStandoffMm.ToString(CultureInfo.InvariantCulture),
+                "② Cobot 검사위치 이동 — 용접선 시작점에서 벽면 법선 방향으로 TCP 를 물리는 거리(mm). 정차 이격·이동 경로 시험용. " +
+                "모든 벽 동일 적용, 용접선 끝점 이동·ACS 시험 접근도 같은 값. 200~1000 밖이거나 비면 400."),
             (SeamStartTagSettings.DictionaryKey, "DictAprilTag_36h11",
                 "moveToSeamStart 도달 후 중심 편차 측정 태그 사전(DictAprilTag_36h11 등). ArUco 장착 보정 설정과 별개."),
             (SeamStartTagSettings.MarkerIdKey, "",

@@ -11,7 +11,7 @@ namespace HD.AMR.App.Service.Sequence.Steps;
 ///     진입 준비(활성 좌표계 정규화 → 필요 시 벽면 후퇴·홈 복귀 → ready)를 그대로 쓴다. 홈→검사 위치를
 ///     바로 MoveJ 하면 900mm 이하 영역에서 툴이 차체와 부딪힐 수 있어 ready 를 반드시 거친다.
 ///  2. <b>용접선 시작점 접근</b> — 해당 작업의 용접선 시작점(seamStartW, 맵 좌표)을 코봇 BASE 로 환산해
-///     (<see cref="SeamBaseTransform"/>) 면 법선 반대로 <see cref="ApproachStandoffMm"/>(400mm) 물러난 점으로
+///     (<see cref="SeamBaseTransform"/>) 면 법선 반대로 <see cref="ApproachStandoffKey"/>(기본 400mm) 물러난 점으로
 ///     <b>툴(TCP)</b>을 MoveJ 로 보낸다. 자세는 wall_code 가 유효하면 광축이 면을 바라보는 계산 자세,
 ///     없으면 1단계 도착(ready) 자세를 유지한다.
 ///
@@ -25,13 +25,15 @@ public class CobotInspectionMoveStep : ISequenceStep
 {
     private readonly CobotService _cobot;
     private readonly SeamApproachResolver _seam;
+    private readonly ParameterService _param;
     private readonly ILogger<CobotInspectionMoveStep> _logger;
 
-    public CobotInspectionMoveStep(CobotService cobot, SeamApproachResolver seam,
+    public CobotInspectionMoveStep(CobotService cobot, SeamApproachResolver seam, ParameterService param,
         ILogger<CobotInspectionMoveStep> logger)
     {
         _cobot = cobot;
         _seam = seam;
+        _param = param;
         _logger = logger;
     }
 
@@ -50,8 +52,36 @@ public class CobotInspectionMoveStep : ISequenceStep
                 .FirstOrDefault()
             : null;
 
-    /// <summary>② 2단계 접근점이 용접선 시작점에서 물러나는 거리 [mm] — 툴(TCP) 기준.</summary>
-    public const double ApproachStandoffMm = 400.0;
+    /// <summary>② 2단계 접근점이 용접선 시작점에서 물러나는 거리 [mm] 파라미터 키 — 툴(TCP) 기준, 모든 면 공통.
+    /// 끝점 이동(<see cref="CobotSeamEndMoveStep"/>)도 같은 값을 써야 점1·점2 면 거리가 일치한다.</summary>
+    public const string ApproachStandoffKey = "inspection.approachStandoffMm";
+
+    /// <summary>② 면 이격 기본값 [mm] — 파라미터가 없거나 범위 밖일 때.</summary>
+    public const double DefaultApproachStandoffMm = 400.0;
+
+    /// <summary>② 면 이격 허용 범위 [mm]. 하한은 ③ 카메라 거리 정렬이 들어갈 여지와 벽 충돌 여유.</summary>
+    internal const double MinApproachStandoffMm = 200.0;
+    internal const double MaxApproachStandoffMm = 1000.0;
+
+    /// <summary>② 면 이격 [mm] — 파라미터 <see cref="ApproachStandoffKey"/>, 없거나 범위 밖이면 기본 400(경고 로그).</summary>
+    public static async Task<double> GetApproachStandoffMmAsync(ParameterService param, ILogger? logger = null)
+    {
+        double? raw = null;
+        try { raw = await param.GetDoubleAsync(ApproachStandoffKey); }
+        catch { /* DB 미준비 등 — 기본값 폴백 */ }
+        var (value, ok) = ResolveApproachStandoffMm(raw);
+        if (!ok)
+            logger?.LogWarning("'{Key}' 값 {Raw} 이(가) 비었거나 범위({Min:0}~{Max:0}mm) 밖 — 기본 {Default:0}mm 사용",
+                ApproachStandoffKey, raw?.ToString() ?? "(없음)", MinApproachStandoffMm, MaxApproachStandoffMm,
+                DefaultApproachStandoffMm);
+        return value;
+    }
+
+    /// <summary>파라미터 원값 → ② 면 이격. 범위 안이면 (그 값, true), 아니면 (기본값, false).</summary>
+    internal static (double Value, bool Ok) ResolveApproachStandoffMm(double? raw)
+        => raw is { } v && v >= MinApproachStandoffMm && v <= MaxApproachStandoffMm
+            ? (v, true)
+            : (DefaultApproachStandoffMm, false);
 
     public StepValidation Validate(SequenceContext context)
     {
@@ -285,7 +315,8 @@ public class CobotInspectionMoveStep : ISequenceStep
         // 접근점은 정차 배치(AMR pose·장착 보정·스트로크)만으로 정해지므로 코봇을 움직이기 전에 환산·리치
         // 점검을 한다 — 1단계 뒤에 실패하면 같은 정차점의 task 마다 ready 왕복을 헛되이 반복한다.
         var seam = await _seam.ResolveAsync(
-            context, context.SeamStartW, context.SeamEndW, context.Tool, "[Cobot 검사위치 이동]", ct, ApproachStandoffMm);
+            context, context.SeamStartW, context.SeamEndW, context.Tool, "[Cobot 검사위치 이동]", ct,
+            await GetApproachStandoffMmAsync(_param, _logger));
         if (seam.Blocker is not null)
             return StepResult.Fail(seam.Blocker);
         if (seam.Base is null)
