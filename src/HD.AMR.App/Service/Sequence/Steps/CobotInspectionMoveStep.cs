@@ -62,8 +62,9 @@ public class CobotInspectionMoveStep : ISequenceStep
         if (SequenceEntry.ValidateHome(context) is { IsValid: false } homeError)
             return homeError;
 
-        if (!context.Positions.TryGetValue("ready", out var ready) || !ready.IsTaught)
-            return StepValidation.Fail("작업 준비 위치(ready) 미티칭 — Teaching에서 먼저 저장하세요.");
+        // 진입 기준 자세 — 상부 면은 홈 위치_2, 그 외는 ready.
+        if (SequenceEntry.ValidateRoute(context) is { IsValid: false } routeError)
+            return routeError;
 
         if (context.SeamStartW is not { Length: 3 })
             return StepValidation.Fail("용접선 시작점(seamStartW) 없음 — ACS 작업의 용접선 좌표가 필요합니다.");
@@ -290,8 +291,11 @@ public class CobotInspectionMoveStep : ISequenceStep
         if (seam.Base is null)
             return StepResult.Fail($"[Cobot 검사위치 이동] {seam.Note}");
 
-        // ── 1단계: 작업 준비 위치(ready) ─────────────────────────────
-        var entryNote = await SequenceEntry.PrepareAsync(_cobot, context, _logger, ct);
+        // ── 1단계: 작업 준비 위치(ready) — 홈 위치_2 모드(상부 면)는 홈 위치_2·검사 준비 ─────
+        // 자세 모드가 면과 맞지 않으면(수동 전환 필요) 움직이지 않고 실패한다.
+        var (entryOk, entryNote) = await SequenceEntry.PrepareAsync(_cobot, context, _logger, ct);
+        if (!entryOk)
+            return StepResult.Fail(entryNote);
 
         // ── 2단계: 용접선 시작점에서 400mm 떨어진 접근점 ───────────────
         // 자세: ready 도착 자세에서 광축만 면 법선으로 최소 회전시킨다 — 광축 둘레 비틀림(J6)은 그대로.
@@ -336,6 +340,6 @@ public class CobotInspectionMoveStep : ISequenceStep
 
         var pose = usedNormal ? "자세=면 법선" : "자세=작업 준비 위치 유지(wall_code 없음)";
         return StepResult.Ok(
-            $"작업 준비 위치 → {seam.Note} 관절 이동(MoveJ) 완료 [{pose}{twistNote}, J6={joints[5]:0.0}°].{entryNote}");
+            $"진입 경유점 → {seam.Note} 관절 이동(MoveJ) 완료 [{pose}{twistNote}, J6={joints[5]:0.0}°].{entryNote}");
     }
 }

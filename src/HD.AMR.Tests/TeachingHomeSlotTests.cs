@@ -4,15 +4,17 @@ namespace HD.AMR.Tests;
 
 public class TeachingHomeSlotTests
 {
-    // 홈 1.5·2 는 홈 바로 아래, 작업 준비 위치 위에 온다(화면 표시 순서 = Slots 순서).
+    // 홈 1.5·1.6·2 는 홈 바로 아래, 작업 준비 위치 위에 온다(화면 표시 순서 = Slots 순서).
     [Fact]
     public void HomeSlots_FollowHomeInOrder()
     {
-        var keys = TeachingService.Slots.Select(s => s.Key).Take(4).ToArray();
-        Assert.Equal(new[] { "home", "home15", "home2", "ready" }, keys);
+        var keys = TeachingService.Slots.Select(s => s.Key).Take(5).ToArray();
+        Assert.Equal(new[] { "home", "home15", "home16", "home2", "ready" }, keys);
         Assert.Equal("홈 위치_1.5", TeachingService.Slots[1].Name);
-        Assert.Equal("홈 위치_2", TeachingService.Slots[2].Name);
+        Assert.Equal("홈 위치_1.6", TeachingService.Slots[2].Name);
+        Assert.Equal("홈 위치_2", TeachingService.Slots[3].Name);
         Assert.True(TeachingService.IsSeedSlot("home15"));
+        Assert.True(TeachingService.IsSeedSlot("home16"));
         Assert.True(TeachingService.IsSeedSlot("home2"));
     }
 
@@ -20,6 +22,7 @@ public class TeachingHomeSlotTests
     [Theory]
     [InlineData("홈위치_1.5", "home15")]
     [InlineData("홈 위치_1.5", "home15")]
+    [InlineData("홈 위치_1.6", "home16")]
     [InlineData("홈위치_2", "home2")]
     [InlineData(" 홈 위치_2 ", "home2")]
     [InlineData("홈위치_3", null)]

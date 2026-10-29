@@ -598,66 +598,29 @@ public sealed class Vda5050OrderExecutor
                 return;
             }
 
-            var homeJoints = new[]
+            // 시퀀스 종료 복귀와 같은 경로 — 현재 자세 모드의 기준 자세로(홈 모드: 벽면 후퇴 → ready → 홈,
+            // 홈 위치_2 모드: 벽면 후퇴 → 검사 준비 → 홈 위치_2). 홈 위치_2 모드면 그 자세로 주행한다 — 홈 ↔ 홈 2
+            // 전환은 운영자 수동 전용(벽 충돌 위험). 이동 실패는 예외로 올라와 아래 catch 에서 기록되고 주행은 계속된다.
+            var ctx = new Sequence.SequenceContext
             {
-                home.J1!.Value, home.J2!.Value, home.J3!.Value,
-                home.J4!.Value, home.J5!.Value, home.J6!.Value,
+                Positions = positions.ToDictionary(p => p.Key, p => p),
+                Tool = 1,
+                Velocity = 20,
             };
-
             var cur = await cobot.Rpc.GetActualJointPosAsync(ct: ct);
-            if (SequenceEntry.IsWithinJointTolerance(cur, homeJoints))
+            var mode = SequenceEntry.ModeOf(cur, ctx);
+            OpLog(OpCategory.Cobot, "주행 전 홈 복귀 시작", null,
+                $"자세 모드 {mode}, 현재 관절 [{string.Join(", ", cur.Select(v => v.ToString("0.#")))}]", orderId);
+
+            var done = await SequenceEntry.ReturnToBaseAsync(cobot, ctx, _logger, ct);
+            if (done.Count == 0)
             {
-                _logger.LogDebug("코봇 이미 홈 — 복귀 불필요");
-                OpLog(OpCategory.Cobot, "주행 전 홈 복귀", null, "이미 홈 — 이동 없음", orderId);
+                _logger.LogDebug("코봇 이미 기준 자세({Mode}) — 복귀 불필요", mode);
+                OpLog(OpCategory.Cobot, "주행 전 홈 복귀", null, $"이미 기준 자세({mode}) — 이동 없음", orderId);
                 return;
             }
-
-            _logger.LogInformation("AMR 주행 전 코봇 홈 복귀 시작");
-            OpLog(OpCategory.Cobot, "주행 전 홈 복귀 시작", null,
-                $"현재 관절 [{string.Join(", ", cur.Select(v => v.ToString("0.#")))}]", orderId);
-
-            // ready 경유: 검사 자세에서 직접 홈으로 MoveJ 시 차체 충돌 방지
-            var ready = positions.FirstOrDefault(p => p.Key == "ready");
-            if (ready is not null && ready.IsTaught)
-            {
-                var readyJoints = new[]
-                {
-                    ready.J1!.Value, ready.J2!.Value, ready.J3!.Value,
-                    ready.J4!.Value, ready.J5!.Value, ready.J6!.Value,
-                };
-                if (!SequenceEntry.IsWithinJointTolerance(cur, readyJoints))
-                {
-                    var readyPose = new[]
-                    {
-                        ready.X!.Value, ready.Y!.Value, ready.Z!.Value,
-                        ready.Rx!.Value, ready.Ry!.Value, ready.Rz!.Value,
-                    };
-                    var rr = await cobot.Rpc.MoveJAsync(FairinoRpcClient.UnwrapToward(readyJoints, cur), readyPose,
-                        tool: 1, user: 0, vel: 20, ct: ct);
-                    if (rr != 0)
-                    {
-                        _logger.LogWarning("작업 준비 위치 경유 실패 (rc={Rc}) — 직접 홈 복귀 시도", rr);
-                        OpLog(OpCategory.Cobot, "작업 준비 위치 경유", false,
-                            $"rc={rr}{FairinoErrorCodes.Suffix(rr)} — 직접 홈 복귀 시도", orderId);
-                    }
-                    else
-                        _logger.LogInformation("작업 준비 위치 경유 완료");
-                }
-            }
-
-            var homePose = new[]
-            {
-                home.X!.Value, home.Y!.Value, home.Z!.Value,
-                home.Rx!.Value, home.Ry!.Value, home.Rz!.Value,
-            };
-            var rc = await cobot.Rpc.MoveJAsync(FairinoRpcClient.UnwrapToward(homeJoints, cur), homePose,
-                tool: 1, user: 0, vel: 20, ct: ct);
-            if (rc != 0)
-                _logger.LogError("코봇 홈 복귀 실패 (rc={Rc}) — AMR 주행은 계속 진행", rc);
-            else
-                _logger.LogInformation("코봇 홈 복귀 완료");
-            OpLog(OpCategory.Cobot, "주행 전 홈 복귀", rc == 0,
-                rc == 0 ? "홈 복귀 완료" : $"홈 복귀 실패 rc={rc}{FairinoErrorCodes.Suffix(rc)} — AMR 주행은 계속 진행", orderId);
+            _logger.LogInformation("코봇 기준 자세 복귀 완료 ({Route})", string.Join(" → ", done));
+            OpLog(OpCategory.Cobot, "주행 전 홈 복귀", true, $"{string.Join(" → ", done)} 완료", orderId);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
