@@ -50,6 +50,10 @@ public sealed class LaserTiltCorrector
         (double Rx, double Ry)? predicted = null;
         double lastAppliedMag = 0;
 
+        // 첫 측정 전에도 회전 후와 같은 정착·판독 안정화 대기 — 직전 횡이동 직후 앰프 필터가 덜 수렴한 값은
+        // 기울기가 부풀려져(10-29: 로그 rx 9.3° vs 같은 시점 채널값 5.7°) 과보정 → '비평탄'·rc=112 로 이어졌다.
+        await WaitSettledAsync(o, Report, ct);
+
         for (var iter = 0; ; iter++)
         {
             ct.ThrowIfCancellationRequested();
@@ -271,13 +275,20 @@ public sealed class LaserTiltCorrector
         var rc = await _cobot.Rpc.MoveByToolOffsetAsync(anchor, user: 0, offset, tool: tool, vel: o.Velocity, ct: ct);
         if (rc != 0) return rc;
 
+        await WaitSettledAsync(o, report, ct);
+        return 0;
+    }
+
+    /// <summary>정착 대기(<see cref="TiltLevelOptions.SettleMs"/>) + 레이저 판독 안정화 대기(3채널 |Δ|&lt;0.05mm, 한도
+    /// <see cref="TiltLevelOptions.StabilizeTimeoutMs"/>). 회전 후와 첫 측정 전이 같은 기준을 써야 예측·실측 비교가 맞는다.</summary>
+    private async Task WaitSettledAsync(TiltLevelOptions o, Action<string> report, CancellationToken ct)
+    {
         await Task.Delay(o.SettleMs, ct);
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var stable = await _laser.WaitForStableReadingsAsync(100, o.StabilizeTimeoutMs, ct);
         report(stable
             ? $"판독 안정 ({(o.SettleMs + sw.ElapsedMilliseconds) / 1000.0:0.0}s)"
             : $"판독 안정화 한도({o.StabilizeTimeoutMs}ms) 초과 — 필터 지연/진동 가능, 측정을 계속합니다.");
-        return 0;
     }
 
     /// <summary>
