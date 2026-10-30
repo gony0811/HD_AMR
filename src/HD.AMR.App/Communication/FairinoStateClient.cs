@@ -151,7 +151,26 @@ public class FairinoStateClient
             User = ReadI32(payload, Offsets.User),
             UpdatedAt = DateTime.UtcNow,
         };
+        LogFaultTransition(_latest, state);
         _latest = state;
+    }
+
+    /// <summary>결함 코드(main/sub)가 바뀔 때만 남긴다 — 타워램프 적색은 이 값을 따르는데, 순간 결함은
+    /// 다른 로그에 흔적이 없어 원인을 추적할 수 없었다(2026-10-30 11:07~11:11 적색 깜빡임 240회).</summary>
+    private void LogFaultTransition(FairinoState? prev, FairinoState cur)
+    {
+        var (prevMain, prevSub) = prev is null ? (0, 0) : (prev.ErrorCode, prev.SubCode);
+        if (cur.ErrorCode == prevMain && cur.SubCode == prevSub) return;
+
+        var joints = string.Join(", ", cur.JointPos.Select(v => v.ToString("0.##")));
+        if (cur.ErrorCode != 0 || cur.SubCode != 0)
+            _logger.LogWarning(
+                "{Name} 결함 코드 발생: main={Main}, sub={Sub} (이전 main={PrevMain}, sub={PrevSub}) — robot_state={State}, program_state={Prog}, j=[{Joints}]",
+                _settings.Name, cur.ErrorCode, cur.SubCode, prevMain, prevSub, cur.RobotState, cur.ProgramState, joints);
+        else
+            _logger.LogInformation(
+                "{Name} 결함 코드 해제 (이전 main={PrevMain}, sub={PrevSub}) — robot_state={State}, program_state={Prog}, j=[{Joints}]",
+                _settings.Name, prevMain, prevSub, cur.RobotState, cur.ProgramState, joints);
     }
 
     private static int ReadU8(ReadOnlySpan<byte> p, int off)
