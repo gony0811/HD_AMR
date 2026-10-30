@@ -31,7 +31,7 @@ namespace HD.AMR.App.Service.Inspection;
 /// </summary>
 public static class SeamBaseTransform
 {
-    /// <summary>호출측이 면 이격을 주지 않을 때의 폴백 [mm]. 운영 경로는 ③ 카메라 목표거리를 넘긴다 —
+    /// <summary>호출측이 면 이격을 주지 않을 때의 폴백 [mm]. 운영 경로는 ② 거친 접근 거리(inspection.approachStandoffMm)를 넘긴다 —
     /// 이 상수는 그 값과 코드상 연결돼 있지 않으므로 기본값으로만 쓸 것.</summary>
     public const double DefaultStandoffMm = 400.0;
 

@@ -22,7 +22,8 @@ public static class ApproachReach
     /// </summary>
     /// <param name="normalDistanceMm">코봇 BASE 에서 검사면까지의 법선 방향 거리 [mm]
     /// (<see cref="Inspection.SeamBaseTarget.NormalDistanceMm"/>).</param>
-    /// <param name="approachMm">면에서 물러나는 거리 [mm] — ③ 카메라 목표거리.</param>
+    /// <param name="approachMm">면에서 물러나는 거리 [mm] — ② 거친 접근 거리(inspection.approachStandoffMm).
+    /// 이후 ③·④⁺ 가 툴을 더 들여보내므로 ②가 가장 접힌 자세이고, 판정은 여기서 한다.</param>
     /// <param name="toolLengthMm">플랜지→TCP 병진 길이 [mm].</param>
     /// <param name="minFlangeReachMm">플랜지가 최소한 나가 있어야 하는 거리 [mm].</param>
     public static ReachCheck Check(double normalDistanceMm, double approachMm,
