@@ -34,7 +34,19 @@ internal static class SequenceEntry
     private const double ReadyToolZOffsetMm = -300.0;
 
     /// <summary>벽면에서 직선 후퇴 거리 [mm]. 툴 Z+ 방향(벽에서 멀어지는 방향).</summary>
-    private const double RetractDistanceMm = 300.0;
+    internal const double RetractDistanceMm = 300.0;
+
+    /// <summary>툴 Z+ 의 BASE 연직 성분이 이보다 작으면(아래로 향하면) 후퇴가 내려가는 것으로 본다.</summary>
+    private const double RetractDescendDirZ = -0.05;
+
+    /// <summary>내려가는 후퇴를 수평으로 바꿀 최소 수평 성분(|툴 Z+ 의 BASE XY|). 이보다 작으면(천장처럼
+    /// 광축이 거의 연직) 수평 성분만으로는 벽에서 떨어지지 않으므로 툴 Z+ 그대로 물러난다.</summary>
+    private const double RetractMinHorizontalFraction = 0.5;
+
+    /// <summary>내려가는 후퇴의 끝점 TCP 최저 높이(BASE z) [mm]. 이보다 낮아지면 움직이지 않고 정지한다.
+    /// 2026-10-30 SU 챔퍼(Ry 45°)에서 툴 Z+300 후퇴가 z 229→17mm 로 AMR 쪽으로 내려가 J2·J3 가 접혔다.
+    /// <b>실측 전 잠정값</b> — 차체 상면 높이를 재서 맞춘다.</summary>
+    internal const double RetractMinDescendEndZMm = 200.0;
 
     /// <summary>홈 티칭 여부 — 진입 준비를 하는 스텝의 Validate 에서 부른다.</summary>
     public static StepValidation ValidateHome(SequenceContext context)
@@ -406,20 +418,81 @@ internal static class SequenceEntry
         return (computed, null, $"자동(홈+툴Z {ReadyToolZOffsetMm:0}mm)");
     }
 
-    /// <summary>현재 위치에서 툴 Z+ 방향으로 직선 후퇴(MoveL). 벽에서 떨어져 MoveJ 경로에
-    /// 차체 충돌 여유를 확보한다. 실패 시 경고만 남기고 false.</summary>
+    /// <summary>벽면 후퇴 계획. <paramref name="Horizontal"/> 이면 BASE 오프셋(<paramref name="OffsetBase"/>)으로,
+    /// 아니면 툴 Z+ 오프셋으로 움직인다. <paramref name="Blocker"/> 가 null 이 아니면 움직이면 안 된다.</summary>
+    internal sealed record RetractPlan(bool Horizontal, double[] OffsetBase, double[] EndTcp, string? Blocker);
+
+    /// <summary>
+    /// 현재 TCP(BASE)에서의 벽면 후퇴를 계획한다 — 움직이기 전에 끝점을 정한다.
+    /// · 툴 Z+ 가 아래를 향하고 수평 성분이 충분하면(상부 챔퍼처럼 광축이 위·바깥을 보는 자세) 툴 Z+ 를
+    ///   BASE 수평면에 투영한 방향으로 물러난다 — 높이는 유지하고 벽에서만 떨어진다. 툴 Z+ 그대로면 그만큼
+    ///   AMR 쪽으로 내려가 팔이 접힌다(2026-10-30 SU: z 229→17mm).
+    /// · 그 외(옆벽처럼 광축이 수평, 천장처럼 거의 연직)는 종전대로 툴 Z+.
+    /// · 끝점이 내려가면서 <see cref="RetractMinDescendEndZMm"/> 아래로 가면 Blocker.
+    /// </summary>
+    internal static RetractPlan PlanRetract(double[] tcpPose, double distanceMm = RetractDistanceMm,
+        double minDescendEndZMm = RetractMinDescendEndZMm)
+    {
+        var m = FrameMath.PoseToMatrix(tcpPose);
+        double zx = m[0, 2], zy = m[1, 2], zz = m[2, 2];
+        var h = Math.Sqrt(zx * zx + zy * zy);
+
+        var horizontal = zz < RetractDescendDirZ && h >= RetractMinHorizontalFraction;
+        var dir = horizontal ? new[] { zx / h, zy / h, 0.0 } : new[] { zx, zy, zz };
+        var offset = new[] { dir[0] * distanceMm, dir[1] * distanceMm, dir[2] * distanceMm, 0.0, 0.0, 0.0 };
+        var end = new[] { tcpPose[0] + offset[0], tcpPose[1] + offset[1], tcpPose[2] + offset[2] };
+
+        string? blocker = null;
+        if (offset[2] < -1.0 && end[2] < minDescendEndZMm)
+            blocker = $"벽면 후퇴 끝점이 너무 낮음 — z {tcpPose[2]:0}→{end[2]:0}mm (최저 {minDescendEndZMm:0}mm). " +
+                      "후퇴 방향이 AMR 쪽으로 내려가 팔이 접힙니다. 움직이지 않고 정지 — 펜던트/조그로 벽에서 떼어 낸 뒤 재시도하세요.";
+        return new RetractPlan(horizontal, offset, end, blocker);
+    }
+
+    /// <summary>현재 위치에서 벽면 후퇴(MoveL) — 방향·끝점은 <see cref="PlanRetract"/>. 벽에서 떨어져 MoveJ 경로에
+    /// 차체 충돌 여유를 확보한다. 이동 실패 시 경고만 남기고 false.
+    /// 끝점이 위험하면 <b>움직이지 않고 예외</b> — false 를 돌려주면 호출측이 그 자리에서 바로 MoveJ 하므로 더 위험하다.</summary>
     public static async Task<bool> RetractFromWallAsync(
         CobotService cobot, SequenceContext ctx, ILogger logger, CancellationToken ct)
     {
+        double[] currentPose;
         try
         {
-            var currentPose = await cobot.Rpc.GetTcpPoseInBaseAsync(ctx.Tool, ct);
-            var offset = new[] { 0.0, 0.0, RetractDistanceMm, 0.0, 0.0, 0.0 };
-            logger.LogInformation("벽면 직선 후퇴 시작: 현재=[{Pose}], 툴Z+{Dist}mm",
-                string.Join(", ", currentPose.Select(v => v.ToString("0.#"))), RetractDistanceMm);
+            currentPose = await cobot.Rpc.GetTcpPoseInBaseAsync(ctx.Tool, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "벽면 후퇴 중 예외 — 직접 MoveJ 시도");
+            return false;
+        }
 
-            var rc = await cobot.Rpc.MoveByToolOffsetAsync(
-                currentPose, user: 0, offset, tool: ctx.Tool, vel: ctx.Velocity, ct: ct);
+        var plan = PlanRetract(currentPose);
+        var poseText = string.Join(", ", currentPose.Select(v => v.ToString("0.#")));
+        var endText = string.Join(", ", plan.EndTcp.Select(v => v.ToString("0.#")));
+        if (plan.Blocker is not null)
+        {
+            logger.LogWarning("벽면 후퇴 중단: 현재=[{Pose}] → 끝점=[{End}] — {Msg}", poseText, endText, plan.Blocker);
+            throw new InvalidOperationException(plan.Blocker);
+        }
+
+        try
+        {
+            int rc;
+            if (plan.Horizontal)
+            {
+                logger.LogInformation("벽면 직선 후퇴 시작: 현재=[{Pose}], 수평 {Dist}mm(툴Z+ 가 아래를 향함 — 높이 유지) → 끝점=[{End}]",
+                    poseText, RetractDistanceMm, endText);
+                rc = await cobot.Rpc.MoveByOffsetAsync(
+                    currentPose, user: 0, plan.OffsetBase, tool: ctx.Tool, vel: ctx.Velocity, ct: ct);
+            }
+            else
+            {
+                logger.LogInformation("벽면 직선 후퇴 시작: 현재=[{Pose}], 툴Z+{Dist}mm → 끝점=[{End}]",
+                    poseText, RetractDistanceMm, endText);
+                var offset = new[] { 0.0, 0.0, RetractDistanceMm, 0.0, 0.0, 0.0 };
+                rc = await cobot.Rpc.MoveByToolOffsetAsync(
+                    currentPose, user: 0, offset, tool: ctx.Tool, vel: ctx.Velocity, ct: ct);
+            }
 
             if (rc != 0)
             {
@@ -428,9 +501,10 @@ internal static class SequenceEntry
                 return false;
             }
 
-            logger.LogInformation("벽면 후퇴 완료 ({Dist}mm)", RetractDistanceMm);
+            logger.LogInformation("벽면 후퇴 완료 ({Dist}mm{Mode})", RetractDistanceMm, plan.Horizontal ? ", 수평" : "");
             return true;
         }
+        catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
             logger.LogWarning(ex, "벽면 후퇴 중 예외 — 직접 MoveJ 시도");
