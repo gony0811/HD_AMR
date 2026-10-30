@@ -22,8 +22,8 @@ namespace HD.AMR.App.Service.Sequence.Steps;
 ///  ④ <b>자세 모드</b> — 상부 면(T/PU/SU)은 "홈 위치_2" 자세 모드에서만, 그 외 면은 홈 모드에서만 진입한다.
 ///     두 모드 전환은 운영자 수동 전용이라 모드가 맞지 않으면 움직이지 않고 실패한다(<see cref="ModeMismatch"/>).
 ///
-/// 부르는 곳은 ② <see cref="CobotInspectionMoveStep"/>(LINE/CROSS)이다. 앵커 히트 경로
-/// (inspectionRun·wobjReset만 실행)는 직전 정렬 자세를 그대로 재사용하는 것이 목적이라 ①을 타지 않는다.
+/// 부르는 곳은 ② <see cref="CobotInspectionMoveStep"/>(LINE/CROSS)이다. 같은 anchor 그룹의 연속 task 는
+/// 직전 종료 자세가 그대로면 ②가 이 진입 준비를 건너뛰고 면을 따라 다음 시작점으로 바로 간다(액션 사이 복귀 금지).
 /// </summary>
 internal static class SequenceEntry
 {

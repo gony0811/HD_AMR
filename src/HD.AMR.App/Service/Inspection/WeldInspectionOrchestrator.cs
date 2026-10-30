@@ -34,6 +34,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
     private readonly object _sync = new();
     private (string OrderId, string AnchorGroupId, InspectionMoveDirection Direction)? _lastAnchor;
     private double[]? _lastInternalWorkpieceFrame;                 // 같은 anchor에서 재사용할 BASE 기준 내부 프레임
+    private double[]? _lastAnchorStartBase;                        // 그 프레임을 쓴 task 의 ② 시작 접근점(BASE) — 다음 task 프레임 평행 이동 기준
+    private double[]? _lastAnchorEndTcp;                           // 그 task 종료 시 TCP(BASE) — 다음 task 연속 이동 판정
     private CancellationTokenSource? _currentRunCts;
 
     /// <summary>
@@ -232,6 +234,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         {
             _lastAnchor = null;
             _lastInternalWorkpieceFrame = null;
+            _lastAnchorStartBase = null;
+            _lastAnchorEndTcp = null;
         }
     }
 
@@ -366,6 +370,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         //    CORNER 는 정렬 스텝이 없어 캐시 비적용(항상 레시피 스텝 전체 실행, 캐시 갱신도 안 함).
         bool anchorHit;
         double[]? cachedInternalFrame;
+        double[]? cachedAnchorStartBase;
+        double[]? cachedAnchorEndTcp;
         lock (_sync)
         {
             anchorHit = recipe.SeamType != SeamTypeKind.Corner
@@ -379,6 +385,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                     prev.Direction, direction, req.AnchorGroupId);
             }
             cachedInternalFrame = anchorHit ? (double[])_lastInternalWorkpieceFrame!.Clone() : null;
+            cachedAnchorStartBase = anchorHit ? _lastAnchorStartBase?.ToArray() : null;
+            cachedAnchorEndTcp = anchorHit ? _lastAnchorEndTcp?.ToArray() : null;
         }
 
         // 레시피가 정한 스텝(미지정이면 등록된 전체)에서 출발해, 이 task 에 맞지 않는 것만 뺀다.
@@ -469,6 +477,11 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         };
         if (cachedInternalFrame is not null)
             context.Bag[InternalWorkpieceFrame.BagKey] = cachedInternalFrame;
+        // ②가 캐시 프레임을 이번 시작점으로 평행 이동하고(없으면 실패), 직전 종료 자세 그대로면 복귀 없이 연속 이동한다.
+        if (cachedAnchorStartBase is not null)
+            context.Bag[CobotInspectionMoveStep.AnchorStartBaseBagKey] = cachedAnchorStartBase;
+        if (cachedAnchorEndTcp is not null)
+            context.Bag[CobotInspectionMoveStep.PreviousEndTcpBagKey] = cachedAnchorEndTcp;
 
         // CROSS3/CROSS4 는 LINE 과 동일하게 티칭 프로필 경유점을 실행한다 — 코로게이션 격자 교차부는
         // 평탄하지 않아 수식 생성으로 법선·깊이를 담을 수 없으므로 6-DOF 캡처 교시(/inspection-points)로
@@ -539,10 +552,21 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                         return InspectionActionResult.Fail("inspectionFailed",
                             "검사는 완료됐지만 내부 작업물 좌표계가 없어 anchor를 보존할 수 없습니다.");
                     }
+                    // 프레임과 짝으로 이 task 의 ② 시작 접근점·종료 TCP 를 남긴다 — 다음 task 의 프레임 평행 이동·연속 이동 근거.
+                    var startBase = context.Bag.TryGetValue(CobotInspectionMoveStep.SeamStartBaseBagKey, out var sb)
+                                    && sb is double[] { Length: 3 } s ? s.ToArray() : null;
+                    double[]? endTcp = null;
+                    try { endTcp = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct); }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        _logger.LogWarning(ex, "검사 종료 TCP 조회 실패 — 다음 task 는 연속 이동 없이 복귀 경로로 진입");
+                    }
                     lock (_sync)
                     {
                         _lastAnchor = (orderId, req.AnchorGroupId, direction);
                         _lastInternalWorkpieceFrame = (double[])internalFrame.Clone();
+                        _lastAnchorStartBase = startBase;
+                        _lastAnchorEndTcp = endTcp;
                     }
                 }
                 return InspectionActionResult.Ok(

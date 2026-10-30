@@ -51,6 +51,22 @@ public static class InternalWorkpieceFrame
         return FrameMath.FromFrame(poseInWorkpiece, frameBase);
     }
 
+    /// <summary>
+    /// anchor 공유 프레임을 다음 task 위치로 평행 이동한다 — 자세는 그대로, 원점만 두 task 의 ② 시작 접근점 차이
+    /// (<paramref name="fromStartBase"/>→<paramref name="toStartBase"/>)에서 <b>프레임 Z(면 법선) 성분을 뺀 만큼</b>
+    /// 옮긴다(면 거리 유지 — <see cref="Sequence.Steps.CobotSeamEndMoveStep.ParallelFromPoint1"/> 와 같은 식).
+    /// 이동하지 않으면 경유점이 첫 task 구간을 그대로 다시 돈다(2026-10-30 SU L4-R03C05 #2·#3 이 #1 끝점에서 종료).
+    /// </summary>
+    /// <returns>(이동한 프레임, 버린 법선 성분 mm)</returns>
+    public static (double[] Frame, double NormalMm) TranslateInPlane(
+        double[] frameBase, double[] fromStartBase, double[] toStartBase)
+    {
+        RequirePose(frameBase, nameof(frameBase));
+        var (pos, normalMm) = Sequence.Steps.CobotSeamEndMoveStep.ParallelFromPoint1(
+            frameBase, fromStartBase, toStartBase, ToolAxisDir.PlusZ);
+        return (new[] { pos[0], pos[1], pos[2], frameBase[3], frameBase[4], frameBase[5] }, normalMm);
+    }
+
     private static void RequirePose(double[] pose, string name)
     {
         if (pose is not { Length: 6 } || pose.Any(v => !double.IsFinite(v)))

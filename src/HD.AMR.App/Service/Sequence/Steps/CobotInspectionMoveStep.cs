@@ -56,6 +56,19 @@ public class CobotInspectionMoveStep : ISequenceStep
     /// 끝점 이동(<see cref="CobotSeamEndMoveStep"/>)도 같은 값을 써야 점1·점2 면 거리가 일치한다.</summary>
     public const string ApproachStandoffKey = "inspection.approachStandoffMm";
 
+    /// <summary>이번 task 의 ② 시작 접근점(BASE, mm [x,y,z]) — 오케스트레이터가 anchor 캐시에 프레임과 짝으로 보관.</summary>
+    public const string SeamStartBaseBagKey = "seam.startApproachBase";
+
+    /// <summary>anchor 적중 시 캐시 프레임을 쓴 직전 task 의 ② 시작 접근점 — 프레임 평행 이동 기준.</summary>
+    public const string AnchorStartBaseBagKey = "anchor.startApproachBase";
+
+    /// <summary>anchor 적중 시 직전 task 종료 TCP(BASE pose) — 그대로면 복귀 없이 연속 이동.</summary>
+    public const string PreviousEndTcpBagKey = "anchor.previousEndTcp";
+
+    /// <summary>연속 이동 판정: 현재 TCP 가 직전 종료 TCP 와 이 거리·각도 이내여야 한다(그 사이 조그·정지 없음).</summary>
+    internal const double ChainPoseTolMm = 5.0;
+    internal const double ChainPoseTolDeg = 2.0;
+
     /// <summary>② 면 이격 기본값 [mm] — 파라미터가 없거나 범위 밖일 때.</summary>
     public const double DefaultApproachStandoffMm = 400.0;
 
@@ -322,6 +335,14 @@ public class CobotInspectionMoveStep : ISequenceStep
         if (seam.Base is null)
             return StepResult.Fail($"[Cobot 검사위치 이동] {seam.Note}");
 
+        context.Bag[SeamStartBaseBagKey] = seam.Base.ToArray();
+        if (ShiftAnchorFrame(context, seam.Base) is { } shiftError)
+            return StepResult.Fail(shiftError);
+
+        // ── 같은 anchor 그룹 연속 task: 직전 종료 자세 그대로면 복귀 없이 다음 시작점으로 ─────
+        if (await TryChainFromPreviousAsync(context, seam, ct) is { } chained)
+            return chained;
+
         // ── 1단계: 작업 준비 위치(ready) — 홈 위치_2 모드(상부 면)는 홈 위치_2·검사 준비 ─────
         // 자세 모드가 면과 맞지 않으면(수동 전환 필요) 움직이지 않고 실패한다.
         var (entryOk, entryNote) = await SequenceEntry.PrepareAsync(_cobot, context, _logger, ct);
@@ -372,5 +393,128 @@ public class CobotInspectionMoveStep : ISequenceStep
         var pose = usedNormal ? "자세=면 법선" : "자세=작업 준비 위치 유지(wall_code 없음)";
         return StepResult.Ok(
             $"진입 경유점 → {seam.Note} 관절 이동(MoveJ) 완료 [{pose}{twistNote}, J6={joints[5]:0.0}°].{entryNote}");
+    }
+
+    /// <summary>anchor 적중 task — Bag 의 캐시 프레임(직전 task 위치)을 이번 시작 접근점으로 평행 이동한다.
+    /// 캐시 프레임이 없으면(신규 anchor) 할 일 없음. 프레임은 있는데 기준 시작점이 없으면 이동량을 알 수 없어
+    /// 직전 구간을 다시 돌게 되므로 실패.</summary>
+    private string? ShiftAnchorFrame(SequenceContext context, double[] startBase)
+    {
+        if (!context.Bag.TryGetValue(InternalWorkpieceFrame.BagKey, out var fv) || fv is not double[] { Length: 6 } frame)
+            return null;
+        if (!context.Bag.TryGetValue(AnchorStartBaseBagKey, out var av) || av is not double[] { Length: 3 } anchorStart)
+            return "[Cobot 검사위치 이동] anchor 공유 프레임의 기준 시작점이 없어 이번 용접선 위치로 옮길 수 없습니다 — " +
+                   "직전 구간을 다시 검사하게 되므로 중단합니다. 같은 그룹을 처음부터(정렬 포함) 다시 실행하세요.";
+
+        var (moved, normalMm) = InternalWorkpieceFrame.TranslateInPlane(frame, anchorStart, startBase);
+        context.Bag[InternalWorkpieceFrame.BagKey] = moved;
+        _logger.LogInformation(
+            "[Cobot 검사위치 이동] anchor 프레임 평행 이동 Δ=[{Dx:0.0}, {Dy:0.0}, {Dz:0.0}]mm (법선 성분 {N:+0.0;-0.0}mm 제외) — 원점 [{X:0.0}, {Y:0.0}, {Z:0.0}]",
+            moved[0] - frame[0], moved[1] - frame[1], moved[2] - frame[2], normalMm, moved[0], moved[1], moved[2]);
+        return null;
+    }
+
+    /// <summary>
+    /// 같은 anchor 그룹 연속 task — 직전 task 종료 자세에서 진입 준비(후퇴·홈 위치_2·검사 준비 왕복) 없이 다음 시작
+    /// 접근점으로 간다(사양 §8.1 "액션 사이 홈 왕복 금지"). 조건이 하나라도 안 맞으면 null — 호출측이 종전 경로로 간다.
+    /// 경로: ① 면에 standoff 보다 가까우면 면 법선 방향으로만 standoff 면까지 들어 올림(자세 유지) → ② 그 면을 따라
+    /// 접근점으로 MoveL(같은 면 이격 유지, 자세는 ②와 같은 규칙).
+    /// </summary>
+    private async Task<StepResult?> TryChainFromPreviousAsync(
+        SequenceContext context, SeamApproachResult seam, CancellationToken ct)
+    {
+        if (!context.Bag.TryGetValue(PreviousEndTcpBagKey, out var pv) || pv is not double[] { Length: 6 } prevEnd)
+            return null;
+        if (seam.ComputedPose is not { Length: 6 } computed || seam.Base is not { Length: 3 } startBase)
+        {
+            _logger.LogInformation("[Cobot 검사위치 이동] 연속 이동 생략 — 면 법선 자세 없음(wall_code) → 진입 준비 경로");
+            return null;
+        }
+
+        var cur = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
+        if (!IsSamePose(cur, prevEnd, ChainPoseTolMm, ChainPoseTolDeg))
+        {
+            _logger.LogInformation(
+                "[Cobot 검사위치 이동] 연속 이동 생략 — 현재 TCP [{Cur}] 가 직전 종료 [{Prev}] 와 다름(조그·정지 의심) → 진입 준비 경로",
+                string.Join(", ", cur.Select(v => v.ToString("0.#"))), string.Join(", ", prevEnd.Select(v => v.ToString("0.#"))));
+            return null;
+        }
+
+        var orientation = AlignOpticalAxisKeepTwist(cur, computed, seam.OpticalAxis);
+        var target = new[] { startBase[0], startBase[1], startBase[2], orientation[3], orientation[4], orientation[5] };
+        double[] joints;
+        try
+        {
+            (target, _) = await AlignTwistToJ6Async(_cobot, target, context.Tool, VerticalJ6Deg, ct);
+            var reference = await _cobot.Rpc.GetActualJointPosAsync(ct: ct);
+            joints = await _cobot.Rpc.GetInverseKinKeepWristAsync(target, reference, context.Tool, 0, ct);
+        }
+        catch (InvalidOperationException ex)
+        {
+            _logger.LogWarning("[Cobot 검사위치 이동] 연속 이동 생략 — 목표 자세 계산 실패: {Msg} → 진입 준비 경로", ex.Message);
+            return null;
+        }
+
+        var lift = PlanChainLift(cur, startBase, WallOutNormal(computed, seam.OpticalAxis));
+        var liftNote = "";
+        if (lift is not null)
+        {
+            var lrc = await _cobot.Rpc.MoveByOffsetAsync(cur, user: 0, lift, tool: context.Tool, vel: context.Velocity, ct: ct);
+            if (lrc != 0)
+            {
+                _logger.LogWarning("[Cobot 검사위치 이동] 연속 이동 들어 올림 실패 (rc={Rc}){Desc} → 진입 준비 경로",
+                    lrc, FairinoErrorCodes.Suffix(lrc));
+                return null;
+            }
+            liftNote = $", 면 법선 방향 {Math.Sqrt(lift[0] * lift[0] + lift[1] * lift[1] + lift[2] * lift[2]):0}mm 들어 올림";
+        }
+
+        var rc = await _cobot.Rpc.MoveLAsync(target, joints, tool: context.Tool, user: 0, vel: context.Velocity, ct: ct);
+        if (rc != 0)
+        {
+            _logger.LogWarning("[Cobot 검사위치 이동] 연속 이동 MoveL 실패 (rc={Rc}){Desc} → 진입 준비 경로",
+                rc, FairinoErrorCodes.Suffix(rc));
+            return null;
+        }
+
+        var dist = Math.Sqrt(Enumerable.Range(0, 3).Sum(i => (target[i] - cur[i]) * (target[i] - cur[i])));
+        _logger.LogInformation("[Cobot 검사위치 이동] 연속 이동 완료 — 직전 종료 자세에서 {Dist:0}mm{Lift}", dist, liftNote);
+        return StepResult.Ok(
+            $"연속 이동(복귀 생략) — 직전 종료 자세에서 {seam.Note} 직선 이동(MoveL) {dist:0}mm{liftNote} " +
+            $"[자세=면 법선, 비틀림 J6 {VerticalJ6Deg:0}° 정렬, J6={joints[5]:0.0}°].");
+    }
+
+    /// <summary>면 바깥(벽에서 멀어지는) 단위 법선 — 계산 자세의 광축(면을 향함)의 반대.</summary>
+    internal static double[] WallOutNormal(double[] computedPose, ToolAxisDir opticalAxis)
+    {
+        var m = FrameMath.PoseToMatrix(computedPose);
+        var col = (int)opticalAxis / 2;
+        var sgn = (int)opticalAxis % 2 == 0 ? 1.0 : -1.0;
+        return new[] { -sgn * m[0, col], -sgn * m[1, col], -sgn * m[2, col] };
+    }
+
+    /// <summary>연속 이동 들어 올림 — 현재 TCP 가 접근점의 면 이격 평면보다 면에 가까우면 그 평면까지 면 법선 방향으로만
+    /// 옮기는 BASE 오프셋 [dx,dy,dz,0,0,0]. 이미 그 평면 이상이면(1mm 허용) null.</summary>
+    internal static double[]? PlanChainLift(double[] cur, double[] approachBase, double[] wallOut)
+    {
+        var h = (cur[0] - approachBase[0]) * wallOut[0] + (cur[1] - approachBase[1]) * wallOut[1]
+              + (cur[2] - approachBase[2]) * wallOut[2];
+        if (h >= -1.0) return null;
+        return new[] { -h * wallOut[0], -h * wallOut[1], -h * wallOut[2], 0.0, 0.0, 0.0 };
+    }
+
+    /// <summary>두 BASE pose 가 위치 <paramref name="tolMm"/>·회전 <paramref name="tolDeg"/> 이내인지(회전은 상대 회전각).</summary>
+    internal static bool IsSamePose(double[] a, double[] b, double tolMm, double tolDeg)
+    {
+        var dp = Math.Sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2]));
+        if (dp > tolMm) return false;
+        var ma = FrameMath.PoseToMatrix(a);
+        var mb = FrameMath.PoseToMatrix(b);
+        var trace = 0.0;
+        for (var i = 0; i < 3; i++)
+            for (var k = 0; k < 3; k++)
+                trace += ma[k, i] * mb[k, i];   // tr(Raᵀ·Rb)
+        var angle = Math.Acos(Math.Clamp((trace - 1.0) / 2.0, -1.0, 1.0)) * 180.0 / Math.PI;
+        return angle <= tolDeg;
     }
 }
