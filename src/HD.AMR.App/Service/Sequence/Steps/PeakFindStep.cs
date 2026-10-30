@@ -46,7 +46,7 @@ public class PeakFindStep : ISequenceStep
 
     public async Task<StepResult> ExecuteAsync(SequenceContext context, CancellationToken ct)
     {
-        var pitchMm = await WeldSequenceSupport.GetPitchMmAsync(_param);
+        var pitchMm = await WeldSequenceSupport.GetPitchMmAsync(_param, context);
         if (pitchMm <= 0)
             return StepResult.Fail($"'{WeldSequenceSupport.PitchMmKey}' 파라미터가 0 이하입니다.");
 

@@ -5,7 +5,7 @@ namespace HD.AMR.App.Service.Sequence.Steps;
 
 /// <summary>
 /// ⑧ Peak2 이동 — <b>⑦⁺가 저장한 앵커(Bead1 센터링 완료·검사캠 시프트 전 포즈)</b> 기준으로
-/// pitch(공칭 360mm)만큼 진행축(② 검사방향에서 자동 결정 — 영상 가로면 ImageX, 세로면 ImageY
+/// pitch(공칭 360mm, 챔퍼 경사 방향은 254.6mm — <see cref="WeldSequenceSupport.ResolvePitchMm"/>)만큼 진행축(② 검사방향에서 자동 결정 — 영상 가로면 ImageX, 세로면 ImageY
 /// 툴축 매핑, ⑥⑩과 동일)으로 개루프 이동해 인접 Peak 근처로 옮긴다. 앵커 기준 이동이므로
 /// 검사캠 시프트·작업물 좌표계 교시용 이동 등 ⑦⁺ 이후 변위가 자동 원복된다
 /// (앵커 없으면 현재 포즈 기준 + 시프트 플래그 역보정 폴백).
@@ -40,7 +40,7 @@ public class PeakApproachStep : ISequenceStep
 
     public async Task<StepResult> ExecuteAsync(SequenceContext context, CancellationToken ct)
     {
-        var pitchMm = await WeldSequenceSupport.GetPitchMmAsync(_param);
+        var pitchMm = await WeldSequenceSupport.GetPitchMmAsync(_param, context);
         if (pitchMm <= 0)
             return StepResult.Fail($"'{WeldSequenceSupport.PitchMmKey}' 파라미터가 0 이하입니다.");
 

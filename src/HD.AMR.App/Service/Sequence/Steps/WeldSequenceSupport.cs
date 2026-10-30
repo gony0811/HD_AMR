@@ -84,6 +84,10 @@ public static class WeldSequenceSupport
 
     public const double DefaultPitchMm = 360.0;
 
+    /// <summary>45° 챔퍼(SL/PL/SU/PU) 경사 방향 코로게이션 top 피치(mm) — KC-2B 도면 실측.
+    /// 경사면 도면은 실제 경사 길이로 그려져 있어 환산 없이 쓴다(선체 길이 방향은 360 그대로).</summary>
+    public const double ChamferSlopePitchMm = 254.6;
+
     /// <summary>Peak 찾기 결과를 담는 Bag 키. id 는 1 또는 2.</summary>
     public static string PeakFindBagKey(int id) => $"peak{id}.find";
 
@@ -180,12 +184,28 @@ public static class WeldSequenceSupport
         catch { return 1; }
     }
 
-    /// <summary>pitch(mm) 읽기. 없으면 기본 360.</summary>
-    public static async Task<double> GetPitchMmAsync(ParameterService param)
+    /// <summary>pitch(mm) 읽기. 파라미터(없으면 기본 360)를 <see cref="ResolvePitchMm"/> 로 면·방향에 맞춘다.</summary>
+    public static async Task<double> GetPitchMmAsync(ParameterService param, SequenceContext context)
     {
-        try { return await param.GetDoubleAsync(PitchMmKey) ?? DefaultPitchMm; }
-        catch { return DefaultPitchMm; }
+        double nominal;
+        try { nominal = await param.GetDoubleAsync(PitchMmKey) ?? DefaultPitchMm; }
+        catch { nominal = DefaultPitchMm; }
+        return ResolvePitchMm(nominal, context);
     }
+
+    /// <summary>
+    /// 이번 검사에 쓸 pitch(mm). 챔퍼 면(SL/PL/SU/PU)에서 수직(경사 방향) 용접선을 따라 진행하면
+    /// 코로게이션 간격이 <see cref="ChamferSlopePitchMm"/> 이므로 그 값을, 그 외에는 파라미터 pitch 를 쓴다.
+    /// 진행축은 용접선 방향이고 ② 검사방향 Vertical = 챔퍼에서 경사 방향(SeamDirectionResolver).
+    /// </summary>
+    public static double ResolvePitchMm(double nominalMm, SequenceContext context)
+        => IsChamferSlopeProgress(context) ? ChamferSlopePitchMm : nominalMm;
+
+    /// <summary>챔퍼 면에서 경사 방향으로 진행하는지 — 면은 <see cref="SequenceContext.InspectionSurfaceId"/> 로 판정.</summary>
+    public static bool IsChamferSlopeProgress(SequenceContext context)
+        => context.InspectionDirection == InspectionMoveDirection.Vertical
+           && WallCodes.FindBySurfaceId(context.InspectionSurfaceId)?.Orientation
+               is SurfaceOrientation.ChamferLower or SurfaceOrientation.ChamferUpper;
 
     /// <summary>저장된 비드 검출 DL 모델 선택을 <see cref="WeldTrackingService.Params"/> 에 적용한다.
     /// 키 미존재/DB 미준비면 현재 인메모리 선택을 유지한다. 적용된 모델 표시명을 반환("자동"/파일명).</summary>
