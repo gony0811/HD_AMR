@@ -280,7 +280,7 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
         ? $"수동 스트로크 {ManualStrokeMm:0} mm"
         : _lift.Latest is { HeightMm: >= 0 } s
             ? $"텔레스코픽 스트로크 {s.HeightMm} mm (완전 하강 = 0)"
-            : "텔레스코픽 높이 없음 — 스트로크 0 으로 계산합니다(T_A_B tz 오차 주의).";
+            : "텔레스코픽 높이 없음 — 표시는 스트로크 0 으로 계산하지만 이동은 막습니다(T_A_B tz 를 알 수 없음).";
 
     public string MountText => _mountAtHome.All(v => Math.Abs(v) < 1e-9)
         ? "T_A_B 미보정 (전부 0) — 장착 보정 페이지에서 먼저 보정하세요."
@@ -563,6 +563,12 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
         try
         {
             // ① 이동 직전 재계산 — 표시값이 낡았어도 현재 pose·스트로크 기준으로 간다.
+            //    스트로크를 모르면 0 으로 가정한 목표로 가지 않는다(tz 가 최대 1m 어긋난다).
+            if (_lift.TryGetStrokeMm(out var liftReason) is null)
+            {
+                Failure($"{liftReason} — 코봇 BASE 높이(T_A_B tz)를 알 수 없어 이동하지 않습니다.");
+                return;
+            }
             var t = SeamBaseTransform.Resolve(BuildInput());
             Target = t;
 

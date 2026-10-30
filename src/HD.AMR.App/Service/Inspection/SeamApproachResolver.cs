@@ -94,7 +94,12 @@ public sealed class SeamApproachResolver
             return new SeamApproachResult(null, null, useComputed,
                 "장착 보정(T_A_B) 미수행 — 용접선 좌표를 환산할 수 없어 티칭 위치로 이동", null);
 
-        var stroke = _lift.Latest is { HeightMm: >= 0 } lift ? lift.HeightMm : 0;
+        // 스트로크를 모르면 0 으로 가정하지 않는다 — T_A_B 의 tz 가 그만큼(최대 1m) 어긋나 접근점이 엉뚱한
+        // 높이로 잡힌다. 티칭 폴백도 하지 않고 즉시 실패한다(폴백 위치도 현재 높이를 전제로 교시됐다).
+        if (_lift.TryGetStrokeMm(out var liftReason) is not { } stroke)
+            return new SeamApproachResult(null, null, useComputed, "",
+                $"{label} {liftReason} — 코봇 BASE 높이(T_A_B tz)를 알 수 없어 용접선 좌표를 환산하지 않습니다. " +
+                "텔레스코픽 연결을 확인하세요.");
 
         var standoff = standoffMm ?? CobotInspectionMoveStep.ResolveApproachDistanceMm(context);
 

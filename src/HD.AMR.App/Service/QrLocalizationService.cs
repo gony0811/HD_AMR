@@ -17,6 +17,7 @@ public class QrLocalizationService
     private readonly CobotService _cobot;
     private readonly AMRService _amr;
     private readonly CalibrationService _calib;
+    private readonly TelescopicService _lift;
     private readonly ILogger<QrLocalizationService> _logger;
 
     /// <summary>측정 중 AMR 이동 판정 한계(전/후 SLAM pose 비교).</summary>
@@ -25,9 +26,9 @@ public class QrLocalizationService
     private const int SampleDelayMs = 200;
 
     public QrLocalizationService(CameraService cam, CobotService cobot, AMRService amr,
-        CalibrationService calib, ILogger<QrLocalizationService> logger)
+        CalibrationService calib, TelescopicService lift, ILogger<QrLocalizationService> logger)
     {
-        _cam = cam; _cobot = cobot; _amr = amr; _calib = calib; _logger = logger;
+        _cam = cam; _cobot = cobot; _amr = amr; _calib = calib; _lift = lift; _logger = logger;
     }
 
     /// <summary>현재 컬러 프레임에서 QR 을 한 번 검출해 디코딩 텍스트만 반환(마커 ID 등록 보조). 미검출이면 null.</summary>
@@ -237,7 +238,11 @@ public class QrLocalizationService
         if (requireHandEye && handEye.All(v => v == 0))
             throw new InvalidOperationException("핸드아이 T_T_C 가 미설정입니다 — 값을 입력하거나 역산을 먼저 실행하세요.");
 
-        var mount = await _calib.GetMountAsync();
+        // T_A_B 는 완전 하강 기준 저장값 — 현재 스트로크만큼 tz 를 올려야 카메라 높이가 맞는다.
+        // x·y·yaw 는 tz 에 거의 무관하지만, 핸드아이 역산·마커 z 잔차는 그대로 어긋난다.
+        var stroke = _lift.TryGetStrokeMm(out var liftReason)
+                     ?? throw new InvalidOperationException($"{liftReason} — 코봇 BASE 높이(T_A_B tz)를 알 수 없습니다.");
+        var mount = MapCalibration.MountPoseAtStroke(await _calib.GetMountAsync(), stroke);
         var st = _amr.LatestStatus ?? throw new InvalidOperationException("AMR 상태 없음 — 맵 pose를 읽을 수 없습니다.");
         var poseBefore = MapCalibration.AmrPoseToMmDeg(st.Pose.X, st.Pose.Y, st.Pose.Angle);
         return (d2c, handEye, mount, poseBefore);
