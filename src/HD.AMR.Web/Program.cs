@@ -157,6 +157,8 @@ builder.Services.AddScoped<QrLocalizationService>();
 builder.Services.AddScoped<HD.AMR.App.Service.Motion.PostureLimitsService>();
 // 용접선 점(맵 좌표) → 코봇 BASE 접근점 환산 — ② 검사위치 이동과 드라이런 끝점 이동이 공유.
 builder.Services.AddScoped<HD.AMR.App.Service.Inspection.SeamApproachResolver>();
+// 정차 거리·높이 격자를 컨트롤러 IK 로 훑는 리치 맵(코봇 이동 없음).
+builder.Services.AddScoped<HD.AMR.App.Service.Motion.ReachMapService>();
 
 // 시퀀스 단계 등록 (ISequenceStep). 새 단계 추가 시 여기에 한 줄만 추가.
 builder.Services.AddScoped<ISequenceStep, AmrMoveStep>();   // 100: AMR 위치 이동 (페이지 테스트 전용)

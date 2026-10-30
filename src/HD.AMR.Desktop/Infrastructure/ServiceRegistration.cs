@@ -141,6 +141,8 @@ internal static class ServiceRegistration
         services.AddScoped<HD.AMR.App.Service.Motion.PostureLimitsService>();
         // 용접선 점(맵 좌표) → 코봇 BASE 접근점 환산 — ② 검사위치 이동과 드라이런 끝점 이동이 공유.
         services.AddScoped<HD.AMR.App.Service.Inspection.SeamApproachResolver>();
+        // 정차 거리·높이 격자를 컨트롤러 IK 로 훑는 리치 맵(코봇 이동 없음) — 용접 위치 시험 ⑤.
+        services.AddScoped<HD.AMR.App.Service.Motion.ReachMapService>();
         services.AddScoped<ArucoHandEyeService>();
         services.AddScoped<HandEyeAutoRoutine>();   // 핸드아이 자동 캡처(코봇 자동 이동) — ArucoHandEyeService(Scoped) 의존.
         services.AddScoped<ArucoMountAutoRoutine>(); // AMR+코봇 자동 이동 ArUco 장착보정 표본 수집.

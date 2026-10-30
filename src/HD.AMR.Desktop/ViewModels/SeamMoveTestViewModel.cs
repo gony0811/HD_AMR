@@ -219,6 +219,7 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
         OnPropertyChanged(nameof(ReadinessText));
         Recompute();
         MoveToApproachCommand.NotifyCanExecuteChanged();
+        RunReachMapCommand.NotifyCanExecuteChanged();
     }
 
     private async Task PollTcpAsync()
@@ -770,7 +771,11 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
         MoveToApproachCommand.NotifyCanExecuteChanged();
     }
 
-    partial void OnBusyChanged(bool value) => MoveToApproachCommand.NotifyCanExecuteChanged();
+    partial void OnBusyChanged(bool value)
+    {
+        MoveToApproachCommand.NotifyCanExecuteChanged();
+        RunReachMapCommand.NotifyCanExecuteChanged();
+    }
 
     partial void OnTargetChanged(SeamBaseTarget? value)
     {
