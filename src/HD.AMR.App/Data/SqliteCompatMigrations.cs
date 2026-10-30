@@ -208,6 +208,7 @@ CREATE TABLE IF NOT EXISTS InspectionRecipes (
     MoveVelPercent INTEGER NULL,
     InspectVelPercent INTEGER NULL,
     InspectionProfileId INTEGER NULL,
+    ChamferSlopeProfileId INTEGER NULL,
     VisionFailRatioMax REAL NOT NULL DEFAULT 1.0,
     CreatedAt TEXT NOT NULL,
     UpdatedAt TEXT NOT NULL
@@ -236,6 +237,14 @@ CREATE TABLE IF NOT EXISTS InspectionRecipes (
             .AsEnumerable().First() > 0;
         if (!hasProfileId)
             db.Database.ExecuteSqlRaw("ALTER TABLE InspectionRecipes ADD COLUMN InspectionProfileId INTEGER NULL;");
+
+        // ChamferSlopeProfileId 컬럼(LINE 레시피 — 챔퍼 면 수직 진행 전용 티칭 프로필)도 후방호환 추가. 기존 행은 NULL.
+        // FK 없음 — 프로필 삭제 시 DrawingService.DeleteProfileAsync 가 참조를 NULL 로 정리한다.
+        var hasChamferSlopeProfileId = db.Database
+            .SqlQueryRaw<long>("SELECT COUNT(*) AS Value FROM pragma_table_info('InspectionRecipes') WHERE name = 'ChamferSlopeProfileId'")
+            .AsEnumerable().First() > 0;
+        if (!hasChamferSlopeProfileId)
+            db.Database.ExecuteSqlRaw("ALTER TABLE InspectionRecipes ADD COLUMN ChamferSlopeProfileId INTEGER NULL;");
 
         // DryRun 컬럼(레시피 드라이런 모드 토글)도 후방호환 추가. 기존 행은 DEFAULT 0(false=일반 검사).
         // SQLite 는 NOT NULL ADD COLUMN 에 DEFAULT 가 필수 — 기존 행이 그 값으로 백필된다.

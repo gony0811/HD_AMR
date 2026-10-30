@@ -202,16 +202,19 @@ public class DrawingService
         return profile;
     }
 
-    /// <summary>프로필 삭제. 이 프로필을 지정한 검사 레시피의 <see cref="InspectionRecipe.InspectionProfileId"/> 는 NULL 로 정리하고,
+    /// <summary>프로필 삭제. 이 프로필을 지정한 검사 레시피의 <see cref="InspectionRecipe.InspectionProfileId"/>·
+    /// <see cref="InspectionRecipe.ChamferSlopeProfileId"/> 는 NULL 로 정리하고,
     /// 정리된 레시피 id 목록을 반환한다(UI 가 "레시피 X 의 지정이 해제됨"을 알리도록).</summary>
     public async Task<List<string>> DeleteProfileAsync(int id, CancellationToken ct = default)
     {
         var profile = await _db.InspectionProfiles.FirstOrDefaultAsync(p => p.Id == id, ct);
         if (profile == null) return new();
-        var recipes = await _db.InspectionRecipes.Where(r => r.InspectionProfileId == id).ToListAsync(ct);
+        var recipes = await _db.InspectionRecipes
+            .Where(r => r.InspectionProfileId == id || r.ChamferSlopeProfileId == id).ToListAsync(ct);
         foreach (var r in recipes)
         {
-            r.InspectionProfileId = null;
+            if (r.InspectionProfileId == id) r.InspectionProfileId = null;
+            if (r.ChamferSlopeProfileId == id) r.ChamferSlopeProfileId = null;
             r.UpdatedAt = DateTime.UtcNow;
         }
         _db.InspectionProfiles.Remove(profile);
@@ -221,7 +224,7 @@ public class DrawingService
 
     /// <summary>이 프로필을 실행 프로필로 지정한 검사 레시피 id 목록.</summary>
     public Task<List<string>> ListRecipesUsingProfileAsync(int id, CancellationToken ct = default) =>
-        _db.InspectionRecipes.AsNoTracking().Where(r => r.InspectionProfileId == id)
+        _db.InspectionRecipes.AsNoTracking().Where(r => r.InspectionProfileId == id || r.ChamferSlopeProfileId == id)
             .OrderBy(r => r.Id).Select(r => r.Id).ToListAsync(ct);
 
     public List<LineSegment> GetLines(Drawing drawing)

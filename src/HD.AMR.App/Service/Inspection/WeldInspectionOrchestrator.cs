@@ -330,20 +330,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                 recipeId);
         }
 
-        // 6) 사전 티칭 경유점 조회: 레시피에 지정된 InspectionProfile(검사 레시피 페이지에서 지정).
-        //    레시피는 면 자세-독립 단일(LINE/CROSS4)이고, 면별 경유점 차이는 지정된 프로파일이 흡수한다 —
-        //    접근 자세·방향은 런타임이 wall_code 로 계산하므로 같은 LINE 프로파일이 모든 면에 쓰인다(§9-8).
-        //    CORNER 는 도면 프로필을 쓰지 않는다(고정 티칭 슬롯 corner3.* 직접 순회) — 조회 생략.
-        InspectionProfile? profile = null;
-        if (recipe.SeamType != SeamTypeKind.Corner)
-        {
-            var (found, profileError) = await FindProfileAsync(db, recipe, req.SectionDxfId, ct);
-            if (found is null)
-                return InspectionActionResult.Fail("inspectionFailed", profileError!);
-            profile = found;
-        }
-
-        // 7) 검사 방향 자동 유도(§4.4·§8.1) — anchor 판정보다 먼저 결정해야 방향 변경 시 재교시 가능.
+        // 6) 검사 방향 자동 유도(§4.4·§8.1) — 프로필 선택(챔퍼 수직 전용)과 anchor 판정보다 먼저 결정한다.
         //    seam 벡터를 노드 theta(벽 정면) 기준 벽면-로컬 투영.
         //    theta 미상(방어적)이면 현행 기본 Horizontal 폴백. 판정 근거는 로그로 남긴다.
         var direction = InspectionMoveDirection.Horizontal;
@@ -355,6 +342,23 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         else
         {
             _logger.LogWarning("노드 theta 미상 — 검사 방향 Horizontal 폴백 (jobRef={JobRef})", req.JobRef);
+        }
+
+        // 7) 사전 티칭 경유점 조회: 레시피에 지정된 InspectionProfile(검사 레시피 페이지에서 지정).
+        //    레시피는 면 자세-독립 단일(LINE/CROSS4)이고, 면별 경유점 차이는 지정된 프로파일이 흡수한다 —
+        //    접근 자세·방향은 런타임이 wall_code 로 계산하므로 같은 LINE 프로파일이 모든 면에 쓰인다(§9-8).
+        //    예외: LINE 의 챔퍼 면 수직(경사 방향) 진행은 코로게이션 피치가 254.6mm 라 전용 프로필을 쓴다.
+        //    CORNER 는 도면 프로필을 쓰지 않는다(고정 티칭 슬롯 corner3.* 직접 순회) — 조회 생략.
+        InspectionProfile? profile = null;
+        var chamferSlope = false;
+        if (recipe.SeamType != SeamTypeKind.Corner)
+        {
+            (var profileId, chamferSlope) =
+                InspectionRecipeResolver.SelectProfileId(recipe, req.DrawingPos.WallCode, direction);
+            var (found, profileError) = await FindProfileAsync(db, recipe, profileId, chamferSlope, req.SectionDxfId, ct);
+            if (found is null)
+                return InspectionActionResult.Fail("inspectionFailed", profileError!);
+            profile = found;
         }
 
         // 8) anchor 캐시 판정 — 같은 (orderId, anchorGroupId, direction) 연속이고 주행 없음 → ⑱만 실행.
@@ -471,16 +475,17 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         // 단일화했다. (구 PatternJson 런타임 생성 경로는 폐기 — CrossPatternGenerator 는 교시 시작 템플릿 전용.)
 
         _logger.LogInformation(
-            "검사 시퀀스 시작: recipe={Recipe}{DryRun}, profile='{Profile}'(id={ProfileId}, drawing={DrawingId}), " +
+            "검사 시퀀스 시작: recipe={Recipe}{DryRun}, profile='{Profile}'{Role}(id={ProfileId}, drawing={DrawingId}), " +
             "anchor {AnchorState}, steps={Steps}",
             recipeId, recipe.DryRun ? "[드라이런]" : "", profile?.Name ?? "(미사용 — CORNER 티칭 슬롯)",
+            chamferSlope ? "(챔퍼 수직용)" : "",
             profile?.Id ?? 0, profile?.DrawingId ?? 0,
             anchorHit ? "적중(정렬 생략)" : "신규(정렬 수행)",
             string.Join(",", stepKeys));
         _opLog.Log(OperationLogService.SourceAcs, OpCategory.Action, "검사 구성", null,
             $"jobRef={req.JobRef}, seam={req.SeamType}, wall={req.DrawingPos.WallCode}, recipe={recipeId}" +
             (recipe.DryRun ? "[드라이런]" : "") +
-            $", profile='{profile?.Name ?? "(미사용)"}', 방향={direction}, anchor={req.AnchorGroupId}#{req.SeqInGroup} " +
+            $", profile='{profile?.Name ?? "(미사용)"}'{(chamferSlope ? "(챔퍼 수직용)" : "")}, 방향={direction}, anchor={req.AnchorGroupId}#{req.SeqInGroup} " +
             (anchorHit ? "적중(정렬 생략)" : "신규(정렬 수행)") +
             $", tool={context.Tool}, vel={context.Velocity}%, 카메라 목표 {context.CameraTargetDistanceMm:0}mm, " +
             $"seamStartW=[{string.Join(", ", req.SeamStartW.Select(v => v.ToString("0.###")))}], " +
@@ -551,19 +556,24 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
     /// 도면·최신 저장 기준 자동 선택은 폐기 — 레시피 페이지의 명시 지정만 사용한다(테스트 저장이 실행 대상을 바꾸지 않도록).
     /// sectionDxfId 는 로그용으로만 받는다.</summary>
     private static async Task<(InspectionProfile? Profile, string? Error)> FindProfileAsync(
-        HdAmrDbContext db, InspectionRecipe recipe, string sectionDxfId, CancellationToken ct)
+        HdAmrDbContext db, InspectionRecipe recipe, int? selectedProfileId, bool chamferSlope, string sectionDxfId,
+        CancellationToken ct)
     {
-        if (recipe.InspectionProfileId is not { } profileId)
-            return (null, $"recipe {recipe.Id} 에 티칭 프로필 미지정 (sectionDxfId='{sectionDxfId}') — " +
-                          "검사 레시피 페이지에서 프로필 지정 필요");
+        var role = chamferSlope ? "챔퍼 수직용 티칭 프로필" : "티칭 프로필";
+        if (selectedProfileId is not { } profileId)
+            return (null, chamferSlope
+                ? $"recipe {recipe.Id} 에 챔퍼 수직용 티칭 프로필 미지정 (wall 챔퍼 + 수직 진행, 피치 254.6mm) — " +
+                  "검사 레시피 페이지에서 '챔퍼 수직 프로필' 지정 필요"
+                : $"recipe {recipe.Id} 에 티칭 프로필 미지정 (sectionDxfId='{sectionDxfId}') — " +
+                  "검사 레시피 페이지에서 프로필 지정 필요");
 
         var profile = await db.InspectionProfiles.AsNoTracking().FirstOrDefaultAsync(p => p.Id == profileId, ct);
         if (profile is null)
-            return (null, $"recipe {recipe.Id} 지정 티칭 프로필(id={profileId}) 없음 — 삭제됨, 레시피 재지정 필요");
+            return (null, $"recipe {recipe.Id} 지정 {role}(id={profileId}) 없음 — 삭제됨, 레시피 재지정 필요");
 
         var want = InspectionRecipeResolver.ProfileSeamTypeOf(recipe.Id);
         if (!InspectionRecipeService.IsSeamMatch(profile, want))
-            return (null, $"recipe {recipe.Id} 지정 프로필 '{profile.Name}' 타입({profile.SeamType}) ≠ {want} — 레시피 재지정 필요");
+            return (null, $"recipe {recipe.Id} 지정 {role} '{profile.Name}' 타입({profile.SeamType}) ≠ {want} — 레시피 재지정 필요");
 
         return (profile, null);
     }

@@ -98,6 +98,19 @@
                                                    Text="CORNER3 는 고정 티칭 슬롯(corner3.L/R.*)을 순회하므로 프로필을 지정하지 않습니다." />
                                     </StackPanel>
 
+                                    <!-- 챔퍼 수직 프로필 (LINE 전용) -->
+                                    <StackPanel IsVisible="{Binding IsLine}">
+                                        <TextBlock Classes="section" Text="챔퍼 수직(경사) 프로필 — 254.6mm" />
+                                        <ComboBox MinWidth="360" HorizontalAlignment="Left"
+                                                  ItemsSource="{Binding ProfileOptions}" SelectedItem="{Binding SelectedChamferSlopeProfile}">
+                                            <ComboBox.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:ProfileOption"><TextBlock Text="{Binding Label}" /></DataTemplate>
+                                            </ComboBox.ItemTemplate>
+                                        </ComboBox>
+                                        <TextBlock Classes="hint"
+                                                   Text="챔퍼 면(SL/PL/SU/PU)에서 수직(경사 방향) 용접선일 때 위 프로필 대신 이 프로필의 경유점을 씁니다. 챔퍼 수평·일반 면은 위 프로필을 씁니다. 미지정이면 챔퍼 수직 ACS 액션이 FAILED 입니다." />
+                                    </StackPanel>
+
                                     <!-- 실행 스텝 — 시퀀스 풀에서 끌어오기 -->
                                     <StackPanel Spacing="6">
                                         <Grid ColumnDefinitions="*,Auto">

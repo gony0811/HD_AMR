@@ -115,30 +115,43 @@ public class InspectionRecipeService
     {
         var seed = BuildDefaults().FirstOrDefault(r => r.Id == id);
         if (seed is null) return false;
-        seed.InspectionProfileId = await _db.InspectionRecipes.AsNoTracking()
-            .Where(r => r.Id == id).Select(r => r.InspectionProfileId).FirstOrDefaultAsync(ct);
+        var assigned = await _db.InspectionRecipes.AsNoTracking()
+            .Where(r => r.Id == id).Select(r => new { r.InspectionProfileId, r.ChamferSlopeProfileId })
+            .FirstOrDefaultAsync(ct);
+        seed.InspectionProfileId = assigned?.InspectionProfileId;
+        seed.ChamferSlopeProfileId = assigned?.ChamferSlopeProfileId;
         await SaveAsync(seed, ct);
         _logger.LogInformation("검사 레시피 {Id} 기본값 재적용", id);
         return true;
     }
 
     /// <summary>레시피에 지정할 티칭 프로필 검증 — 저장 전 UI 가 호출. 문제 없으면 null, 있으면 사유.
-    /// 규칙: CORNER3 은 실행 시퀀스가 없어 지정 불가, 프로필 존재, 프로필 SeamType = 레시피 타입, 경유점 2점 이상.</summary>
+    /// 규칙: CORNER3 은 실행 시퀀스가 없어 지정 불가, 프로필 존재, 프로필 SeamType = 레시피 타입, 경유점 2점 이상.
+    /// 챔퍼 수직용 프로필(<see cref="InspectionRecipe.ChamferSlopeProfileId"/>)은 LINE 레시피에만 지정할 수 있고 같은 규칙을 따른다.</summary>
     public async Task<string?> ValidateProfileAssignmentAsync(InspectionRecipe recipe, CancellationToken ct = default)
     {
-        if (recipe.InspectionProfileId is not { } profileId) return null;
+        if (recipe.ChamferSlopeProfileId is not null && recipe.Id != RecipeIds.Line)
+            return $"챔퍼 수직용 프로필은 LINE 레시피에만 지정할 수 있습니다(현재 {recipe.Id}).";
+
+        return await ValidateOneAsync(recipe, recipe.InspectionProfileId, "", ct)
+               ?? await ValidateOneAsync(recipe, recipe.ChamferSlopeProfileId, "챔퍼 수직용 ", ct);
+    }
+
+    private async Task<string?> ValidateOneAsync(InspectionRecipe recipe, int? profileId, string role, CancellationToken ct)
+    {
+        if (profileId is null) return null;
         if (recipe.Id == RecipeIds.Corner3)
             return "CORNER3 검사 시퀀스가 제거되어 티칭 프로필을 지정할 수 없습니다.";
 
         var profile = await _db.InspectionProfiles.AsNoTracking().FirstOrDefaultAsync(p => p.Id == profileId, ct);
         if (profile is null)
-            return $"티칭 프로필(id={profileId})을 찾을 수 없습니다.";
+            return $"{role}티칭 프로필(id={profileId})을 찾을 수 없습니다.";
 
         var want = InspectionRecipeResolver.ProfileSeamTypeOf(recipe.Id);
         if (!IsSeamMatch(profile, want))
-            return $"프로필 '{profile.Name}' 타입({profile.SeamType})이 레시피 {recipe.Id} 타입({want})과 다릅니다.";
+            return $"{role}프로필 '{profile.Name}' 타입({profile.SeamType})이 레시피 {recipe.Id} 타입({want})과 다릅니다.";
         if (CountWaypoints(profile.WaypointsJson) < 2)
-            return $"프로필 '{profile.Name}' 경유점이 2점 미만입니다 — 실행 시 실패합니다.";
+            return $"{role}프로필 '{profile.Name}' 경유점이 2점 미만입니다 — 실행 시 실패합니다.";
         return null;
     }
 

@@ -1,4 +1,6 @@
+using HD.AMR.App.Data.Entities;
 using HD.AMR.App.Service.Inspection;
+using HD.AMR.App.Service.Sequence;
 
 namespace HD.AMR.Tests;
 
@@ -185,5 +187,58 @@ public class InspectionRecipeResolverTests
     public void ProfileSeamTypeOf_CoversWholeCatalog()
     {
         Assert.All(RecipeIds.All, id => Assert.NotNull(InspectionRecipeResolver.ProfileSeamTypeOf(id)));
+    }
+
+    private static InspectionRecipe LineRecipe(int? chamferSlopeProfileId = 20) => new()
+    {
+        Id = RecipeIds.Line,
+        InspectionProfileId = 8,
+        ChamferSlopeProfileId = chamferSlopeProfileId,
+    };
+
+    // 챔퍼 면(SL/PL/SU/PU) 수직 = 경사 방향(피치 254.6mm) → 챔퍼 수직용 프로필.
+    [Theory]
+    [InlineData("SL")]
+    [InlineData("PL")]
+    [InlineData("SU")]
+    [InlineData("PU")]
+    public void SelectProfileId_ChamferVertical_UsesChamferSlopeProfile(string wall)
+    {
+        var (id, slope) = InspectionRecipeResolver.SelectProfileId(LineRecipe(), wall, InspectionMoveDirection.Vertical);
+        Assert.True(slope);
+        Assert.Equal(20, id);
+    }
+
+    // 챔퍼 수평(선체 길이 방향 360mm)과 일반 면은 방향과 무관하게 기본 프로필.
+    [Theory]
+    [InlineData("SU", InspectionMoveDirection.Horizontal)]
+    [InlineData("PL", InspectionMoveDirection.Horizontal)]
+    [InlineData("SM", InspectionMoveDirection.Vertical)]
+    [InlineData("B", InspectionMoveDirection.Vertical)]
+    [InlineData("T", InspectionMoveDirection.Horizontal)]
+    public void SelectProfileId_OtherCases_UseDefaultProfile(string wall, InspectionMoveDirection direction)
+    {
+        var (id, slope) = InspectionRecipeResolver.SelectProfileId(LineRecipe(), wall, direction);
+        Assert.False(slope);
+        Assert.Equal(8, id);
+    }
+
+    // 챔퍼 수직인데 전용 프로필 미지정 → null(기본 프로필로 대체하지 않음 — 호출측이 FAILED 보고).
+    [Fact]
+    public void SelectProfileId_ChamferVerticalUnassigned_ReturnsNullWithoutFallback()
+    {
+        var (id, slope) = InspectionRecipeResolver.SelectProfileId(LineRecipe(null), "SU", InspectionMoveDirection.Vertical);
+        Assert.True(slope);
+        Assert.Null(id);
+    }
+
+    // 챔퍼 수직용 프로필은 LINE 전용 — CROSS4 는 챔퍼 수직이어도 기본 프로필.
+    [Fact]
+    public void SelectProfileId_NonLineRecipe_IgnoresChamferSlopeProfile()
+    {
+        var recipe = new InspectionRecipe { Id = RecipeIds.Cross4, InspectionProfileId = 9, ChamferSlopeProfileId = 20 };
+        var (id, slope) = InspectionRecipeResolver.SelectProfileId(recipe, "SU", InspectionMoveDirection.Vertical);
+        Assert.False(slope);
+        Assert.Equal(9, id);
     }
 }

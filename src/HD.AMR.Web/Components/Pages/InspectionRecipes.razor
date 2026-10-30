@@ -82,6 +82,18 @@
                                     <option value="@p.Id">@p.Name (@(WaypointCount(p))점 · @p.UpdatedAt.ToLocalTime().ToString("MM-dd HH:mm"))</option>
                                 }
                             </select>
+                            @if (row.Id == RecipeIds.Line)
+                            {
+                                <select class="form-select form-select-sm mt-1 @(row.ChamferSlopeProfileId is null ? "border-warning" : "")"
+                                        style="font-size:.8rem" @bind="row.ChamferSlopeProfileId"
+                                        title="챔퍼 면(SL/PL/SU/PU) 수직(경사 방향, 피치 254.6mm) 용접선 전용. 미지정이면 챔퍼 수직 액션 FAILED.">
+                                    <option value="">— 챔퍼 수직 프로필 미지정 —</option>
+                                    @foreach (var p in ProfilesFor(row))
+                                    {
+                                        <option value="@p.Id">챔퍼 수직: @p.Name (@(WaypointCount(p))점)</option>
+                                    }
+                                </select>
+                            }
                         }
                     </td>
                     <td><input type="number" step="0.05" min="0" max="1"

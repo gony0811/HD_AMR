@@ -1,4 +1,6 @@
+using HD.AMR.App.Data.Entities;
 using HD.AMR.App.Models;
+using HD.AMR.App.Service.Sequence;
 
 namespace HD.AMR.App.Service.Inspection;
 
@@ -63,6 +65,22 @@ public static class InspectionRecipeResolver
         if (recipeId == RecipeIds.Cross3R270) return "CROSS3_R270";
         if (recipeId == RecipeIds.Line) return "LINE";
         return "CROSS";   // CROSS4
+    }
+
+    /// <summary>챔퍼 면(SL/PL/SU/PU)에서 수직(경사 방향)으로 진행하는지 — Peak pitch 254.6mm 판정
+    /// (<see cref="Sequence.Steps.WeldSequenceSupport.IsChamferSlopeProgress"/>)과 같은 기준.</summary>
+    public static bool IsChamferSlope(string? wallCode, InspectionMoveDirection direction)
+        => direction == InspectionMoveDirection.Vertical
+           && WallCodes.Find(wallCode)?.Orientation is SurfaceOrientation.ChamferLower or SurfaceOrientation.ChamferUpper;
+
+    /// <summary>이 task 가 쓸 티칭 프로필 id. LINE 레시피의 챔퍼 수직 진행이면 <see cref="InspectionRecipe.ChamferSlopeProfileId"/>
+    /// (경사 방향 254.6mm 경유점), 그 외는 <see cref="InspectionRecipe.InspectionProfileId"/>.
+    /// 챔퍼 수직인데 미지정이면 null 을 돌려준다 — 기본 프로필로 대체하지 않는다(360mm 경유점은 경사면에서 엉뚱한 위치).</summary>
+    public static (int? ProfileId, bool ChamferSlope) SelectProfileId(
+        InspectionRecipe recipe, string? wallCode, InspectionMoveDirection direction)
+    {
+        var chamferSlope = recipe.Id == RecipeIds.Line && IsChamferSlope(wallCode, direction);
+        return (chamferSlope ? recipe.ChamferSlopeProfileId : recipe.InspectionProfileId, chamferSlope);
     }
 
     /// <summary>CORNER3 좌/우 거울 side 판별 — 코너 스텝의 티칭 슬롯 접두사(corner3.L/R) 선택 키.
