@@ -289,6 +289,7 @@ public sealed class Vda5050OrderExecutor
             _errors.Remove("orderValidationError");
             _errors.Remove("emergencyStopActive");
             _errors.Remove("inspectionFailed");
+            _errors.Remove(Inspection.WeldInspectionOrchestrator.StationReachShortfallErrorType);
             _errors.Remove("equipmentError");
             _errors.Remove(DeviceFaultRejectErrorType);
 
@@ -508,9 +509,22 @@ public sealed class Vda5050OrderExecutor
                     if (!result.Success && result.ErrorType is not null)
                     {
                         var errDesc = result.ErrorDescription ?? result.ResultDescription;
-                        // §8.7 예시: errorDescription 은 "{actionId}: 사유" — 시험 액션은 같은 order 에 여러 건이 올 수 있어 구분 키를 붙인다.
-                        ReportError(result.ErrorType,
-                            action.ActionType == "moveToSeamStart" ? $"{action.ActionId}: {errDesc}" : errDesc);
+                        if (result.ErrorType == Inspection.WeldInspectionOrchestrator.StationReachShortfallErrorType)
+                        {
+                            // §6.4 (N23 A안): "{actionId}: normalMm=… requiredMm=… extraBackwardMm=… adjustedBackwardMm=…"
+                            // — extra 는 현재 정차 기준이므로 이미 물러난 양을 함께 실어 ACS 가 원래 정차점 기준 총량을 낸다.
+                            ReportError(result.ErrorType,
+                                $"{action.ActionId}: {errDesc} adjustedBackwardMm={adjustToken?.BackwardMm ?? 0:0}",
+                                errorReferences: new List<VdaErrorReference>
+                                {
+                                    new() { ReferenceKey = "actionId", ReferenceValue = action.ActionId },
+                                    new() { ReferenceKey = "orderId", ReferenceValue = orderId },
+                                });
+                        }
+                        else
+                            // §8.7 예시: errorDescription 은 "{actionId}: 사유" — 시험 액션은 같은 order 에 여러 건이 올 수 있어 구분 키를 붙인다.
+                            ReportError(result.ErrorType,
+                                action.ActionType == "moveToSeamStart" ? $"{action.ActionId}: {errDesc}" : errDesc);
                         if (result.ErrorType == "equipmentError") equipmentDown = true;
                     }
                     _logger.LogInformation("VDA5050 액션 {Result}: {Type} ({ActionId}) — {Desc}",
@@ -552,7 +566,7 @@ public sealed class Vda5050OrderExecutor
     }
 
     /// <summary>정차 보정 결과. <see cref="Failed"/> 면 임무가 이미 실패 처리됐다(호출측은 즉시 반환).</summary>
-    private sealed record StationAdjustOutcome(string? Token, bool Failed);
+    private sealed record StationAdjustOutcome(string? Token, bool Failed, double BackwardMm = 0);
 
     /// <summary>
     /// 정차 온보드 보정(사양 §4.4.2, N23 초안). 허락이 없거나 보정이 필요 없으면 null.
@@ -605,7 +619,7 @@ public sealed class Vda5050OrderExecutor
         var token = Motion.StationAdjustPlanner.Token(-plan.BackwardMm, 0, 0);
         OpLog(OpCategory.Drive, "정차 보정 도착", true, $"{token} {arrived.Reason}", orderId);
         _logger.LogInformation("VDA5050 정차 보정: node={NodeId}, 후진 {Back}mm", node.NodeId, plan.BackwardMm);
-        return new StationAdjustOutcome(token, false);
+        return new StationAdjustOutcome(token, false, plan.BackwardMm);
     }
 
     /// <summary>도착 판정 허용 오차 결정 — ① Order → ② ParameterService(DB) → ③ AmrRestSettings.

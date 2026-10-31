@@ -83,6 +83,26 @@ public class StationAdjustTests
     public void Token_MatchesSpecFormat(double f, double l, double t, string expected)
         => Assert.Equal(expected, StationAdjustPlanner.Token(f, l, t));
 
+    // ── stationReachShortfall 수치 (N23 A안) ─────────────────────────
+
+    [Fact]
+    public void NeededBackward_EnoughReach_IsZero()
+        => Assert.Equal(0, StationAdjustPlanner.NeededBackwardMm(Seam("A", 1300, 1400, 1120)));
+
+    [Fact]
+    public void NeededBackward_FlatSurface_IsNull()
+        => Assert.Null(StationAdjustPlanner.NeededBackwardMm(Seam("floor", 900, 900, 1120)));
+
+    [Fact]
+    public void Shortfall_DescribeIsMachineReadable()
+        => Assert.Equal("normalMm=800 requiredMm=1120 extraBackwardMm=340",
+            new ReachShortfall(800.4, 1120, 340).Describe());
+
+    [Fact]
+    public void Shortfall_UnfixableReportsMinusOne()
+        => Assert.Equal("normalMm=900 requiredMm=1120 extraBackwardMm=-1",
+            new ReachShortfall(900, 1120, StationAdjustPlanner.NeededBackwardMm(Seam("floor", 900, 900, 1120)) ?? -1).Describe());
+
     // ── 실제 환산과의 정합 — 표본 2점 기울기 가정 ────────────────────
 
     private static readonly double[] Mount = { 300, 120, 1650, 0, 0, 0 };

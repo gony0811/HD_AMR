@@ -17,13 +17,15 @@ namespace HD.AMR.App.Service.Inspection;
 /// <param name="Note">진단 문자열.</param>
 /// <param name="Blocker">null 이 아니면 호출측은 <b>폴백 없이 즉시 실패</b>(리치 부족 등).</param>
 /// <param name="OpticalAxis"><paramref name="ComputedPose"/> 계산에 쓴 광축 툴축(<see cref="WeldSequenceSupport.DepthAxisKey"/>).</param>
+/// <param name="Shortfall">Blocker 가 <b>리치 부족</b>이면 그 수치 — `stationReachShortfall` 보고용(N23 A안). 그 외 null.</param>
 public sealed record SeamApproachResult(
     double[]? Base,
     double[]? ComputedPose,
     bool UseComputedOrientation,
     string Note,
     string? Blocker,
-    ToolAxisDir OpticalAxis = ToolAxisDir.PlusZ);
+    ToolAxisDir OpticalAxis = ToolAxisDir.PlusZ,
+    ReachShortfall? Shortfall = null);
 
 /// <summary>
 /// ACS 용접선 점(맵 좌표)을 코봇 BASE 접근점으로 환산한다 — ② 검사위치 이동(시작점)과
@@ -158,12 +160,27 @@ public sealed class SeamApproachResolver
 
             reachNote = $" · 플랜지 뻗음 {reach.FlangeReachMm:0}mm(최소 {limits.MinFlangeReachMm:0}, 면까지 {target.NormalDistanceMm:0}mm)";
             if (!reach.Ok)
+            {
+                // 더 물러나야 할 거리 — 현재 정차에서 벽 정면 반대로 시험 후진한 자리의 법선거리로 기울기를 잰다
+                // (정차 보정 계획과 같은 식, StationAdjustPlanner.NeededBackwardMm).
+                var facing = context.WallFacingThetaRad ?? pose.Angle;
+                var (px, py) = StationAdjustPlanner.BackedOff(pose.X, pose.Y, facing, StationAdjustPlanner.ProbeMm);
+                var probe = SeamBaseTransform.Resolve(new SeamBaseInput(
+                    SeamStartW: seam, SeamEndW: directionW is { Length: 3 } ? directionW : null,
+                    AmrXm: px, AmrYm: py, AmrYawRad: pose.Angle,
+                    MountAtHome: mount, TelescopicStrokeMm: stroke, ZDatumOffsetMm: context.ZDatumOffsetMm,
+                    StandoffMm: standoff, WallFacingThetaRad: context.WallFacingThetaRad, WallCode: context.WallCode,
+                    OpticalAxis: opticalAxis)).NormalDistanceMm;
+                var extra = StationAdjustPlanner.NeededBackwardMm(new StationAdjustSeam(
+                    label, target.NormalDistanceMm, probe, reach.RequiredNormalDistanceMm)) ?? -1;
                 return new SeamApproachResult(null, null, useComputed, "",
                     $"정차 거리 부족 — 필요 ≥ {reach.RequiredNormalDistanceMm:0}mm, 현재 {target.NormalDistanceMm:0}mm " +
                     $"(후퇴 {standoff:0} + 공구 {toolLen:0} + 최소 뻗음 {limits.MinFlangeReachMm:0}). " +
                     $"플랜지 뻗음이 {reach.FlangeReachMm:0}mm 라 팔을 접은 자세가 되고 손목 특이점(rc=38)이 납니다 — " +
                     $"AMR 을 벽에서 {reach.ShortfallMm:0}mm 더 떨어뜨려 정차하세요. " +
-                    $"(최소 뻗음 {limits.MinFlangeReachMm:0}mm 는 실측 전 잠정값 — 용접 위치 시험 화면에서 조정 가능)");
+                    $"(최소 뻗음 {limits.MinFlangeReachMm:0}mm 는 실측 전 잠정값 — 용접 위치 시험 화면에서 조정 가능)",
+                    Shortfall: new ReachShortfall(target.NormalDistanceMm, reach.RequiredNormalDistanceMm, extra));
+            }
         }
 
         // target.TargetPoseBase 는 wall_code 가 유효할 때만 non-null(광축이 면 법선을 향하는 전체 pose).

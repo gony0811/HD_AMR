@@ -59,6 +59,10 @@ public class CobotInspectionMoveStep : ISequenceStep
     /// <summary>이번 task 의 ② 시작 접근점(BASE, mm [x,y,z]) — 오케스트레이터가 anchor 캐시에 프레임과 짝으로 보관.</summary>
     public const string SeamStartBaseBagKey = "seam.startApproachBase";
 
+    /// <summary>② 가 리치 부족으로 실패했을 때 그 수치(<see cref="Motion.ReachShortfall"/>) — 오케스트레이터가
+    /// `stationReachShortfall` 로 보고한다(N23 A안).</summary>
+    public const string ReachShortfallBagKey = "seam.reachShortfall";
+
     /// <summary>anchor 적중 시 캐시 프레임을 쓴 직전 task 의 ② 시작 접근점 — 프레임 평행 이동 기준.</summary>
     public const string AnchorStartBaseBagKey = "anchor.startApproachBase";
 
@@ -331,7 +335,10 @@ public class CobotInspectionMoveStep : ISequenceStep
             context, context.SeamStartW, context.SeamEndW, context.Tool, "[Cobot 검사위치 이동]", ct,
             await GetApproachStandoffMmAsync(_param, _logger));
         if (seam.Blocker is not null)
+        {
+            if (seam.Shortfall is not null) context.Bag[ReachShortfallBagKey] = seam.Shortfall;
             return StepResult.Fail(seam.Blocker);
+        }
         if (seam.Base is null)
             return StepResult.Fail($"[Cobot 검사위치 이동] {seam.Note}");
 

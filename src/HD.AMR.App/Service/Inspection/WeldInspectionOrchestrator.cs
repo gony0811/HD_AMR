@@ -192,8 +192,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
 
             case SequenceRunOutcome.Failed:
                 // 리치 부족이면 "정차 거리 부족 — 필요 ≥ N mm, 현재 M mm …", 이동 실패면 rc=… 가 그대로 실린다(N10 데이터).
-                return InspectionActionResult.Fail("inspectionFailed",
-                    $"reach 불가 — {runResult.Message}");
+                return ShortfallResult(context, $"reach 불가 — {runResult.Message}")
+                       ?? InspectionActionResult.Fail("inspectionFailed", $"reach 불가 — {runResult.Message}");
 
             case SequenceRunOutcome.Completed:
             default:
@@ -239,6 +239,19 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             _lastAnchorEndTcp = null;
         }
     }
+
+    /// <summary>
+    /// ② 가 리치 부족으로 실패했으면 `stationReachShortfall`(사양 §6.4, N23 A안) 결과 — resultDescription 은 사람용 사유,
+    /// errorDescription 은 기계 판독부(<see cref="ReachShortfall.Describe"/>). 실행기가 actionId·보정량을 덧붙인다.
+    /// 다른 원인의 실패면 null(호출측이 inspectionFailed 로 보고).
+    /// </summary>
+    private static InspectionActionResult? ShortfallResult(SequenceContext context, string description)
+        => context.Bag.TryGetValue(CobotInspectionMoveStep.ReachShortfallBagKey, out var v) && v is ReachShortfall sf
+            ? new InspectionActionResult(false, description, StationReachShortfallErrorType, sf.Describe())
+            : null;
+
+    /// <summary>리치 부족 전용 errorType(사양 §6.4, N23 A안).</summary>
+    public const string StationReachShortfallErrorType = "stationReachShortfall";
 
     public async Task<StationAdjustDecision> PlanStationAdjustAsync(IReadOnlyList<VdaAction> actions,
         double nodeXm, double nodeYm, double? nodeThetaRad, CancellationToken ct)
@@ -585,8 +598,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                 InvalidateAnchor();   // 정렬 신뢰 불가 — 다음 액션은 풀시퀀스
                 // 활성 작업물 좌표계 0·공구 복귀(best-effort)는 SequenceService.RunSequenceAsync 가 실패 종료
                 // 시(취소 제외) 수행한다 — UI 풀오토와 이 경로가 같은 반납을 공유한다.
-                return InspectionActionResult.Fail("inspectionFailed",
-                    $"recipe={recipeId} step={runResult.FailedStepKey ?? "?"} fail: {runResult.Message}");
+                var failDesc = $"recipe={recipeId} step={runResult.FailedStepKey ?? "?"} fail: {runResult.Message}";
+                return ShortfallResult(context, failDesc) ?? InspectionActionResult.Fail("inspectionFailed", failDesc);
 
             case SequenceRunOutcome.Completed:
             default:

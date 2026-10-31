@@ -18,6 +18,19 @@ public sealed record StationAdjustLimits(double MaxForwardMm, double MaxBackward
 /// <param name="RequiredMm">필요 법선거리(<see cref="ReachCheck.RequiredNormalDistanceMm"/>).</param>
 public sealed record StationAdjustSeam(string Label, double NormalAtNodeMm, double NormalAtProbeMm, double RequiredMm);
 
+/// <summary>
+/// ② 리치 부족 수치 — `stationReachShortfall` 보고용(사양 §6.4·§4.4.2, N23 A안). 거리는 mm, 현재 정차 기준.
+/// </summary>
+/// <param name="NormalMm">현재 정차에서 코봇 BASE→면 법선거리.</param>
+/// <param name="RequiredMm">필요 법선거리(② 후퇴 + 공구 + 최소 뻗음).</param>
+/// <param name="ExtraBackwardMm">현재 정차에서 더 물러나야 할 거리(여유 포함, 10 mm 올림). −1 = 수평 후진으로 고칠 수 없는 면(바닥·천장).</param>
+public sealed record ReachShortfall(double NormalMm, double RequiredMm, double ExtraBackwardMm)
+{
+    /// <summary>`errorDescription` 의 기계 판독부(공백 구분 key=value).</summary>
+    public string Describe() => string.Create(CultureInfo.InvariantCulture,
+        $"normalMm={NormalMm:0} requiredMm={RequiredMm:0} extraBackwardMm={ExtraBackwardMm:0}");
+}
+
 /// <summary>정차 보정 계획. <see cref="BackwardMm"/> 0 이면 옮기지 않는다.</summary>
 /// <param name="BackwardMm">원래 정차점에서 노드 theta 반대로 물러날 거리 [mm].</param>
 /// <param name="Unfixable">허락 범위로는 리치를 만들 수 없는 구간 — 사유 포함. 이 구간은 ②가 종전대로 실패한다.</param>
@@ -61,14 +74,13 @@ public static class StationAdjustPlanner
             if (shortfall <= 0) continue;
             shortCount++;
 
-            var slope = (s.NormalAtProbeMm - s.NormalAtNodeMm) / ProbeMm;
-            if (slope < MinSlope)
+            if (NeededBackwardMm(s) is not { } need)
             {
+                var slope = (s.NormalAtProbeMm - s.NormalAtNodeMm) / ProbeMm;
                 unfixable.Add($"{s.Label}: 법선거리 {shortfall:0}mm 부족 — 이 면은 수평 후진으로 법선거리가 늘지 않음(기울기 {slope:0.00})");
                 continue;
             }
 
-            var need = Math.Ceiling(shortfall / slope / StepMm) * StepMm;
             if (need > limits.MaxBackwardMm)
             {
                 unfixable.Add($"{s.Label}: 후진 {need:0}mm 필요 — 허락 {limits.MaxBackwardMm:0}mm 초과");
@@ -84,6 +96,19 @@ public static class StationAdjustPlanner
                   (unfixable.Count > 0 ? $" (보정 불가 {unfixable.Count}구간)" : "")
                 : $"용접선 {seams.Count}구간 중 {shortCount}구간 법선거리 부족 — 허락 범위로 보정 불가, 원래 정차점 유지";
         return new StationAdjustPlan(backward, unfixable, summary);
+    }
+
+    /// <summary>
+    /// 표본 1건이 필요 법선거리(+여유)에 닿으려면 표본 기준점에서 물러나야 할 거리 [mm, 10 mm 올림].
+    /// 이미 충분하면 0, 수평 후진으로 법선거리가 늘지 않는 면이면 null.
+    /// </summary>
+    public static double? NeededBackwardMm(StationAdjustSeam s)
+    {
+        var shortfall = s.RequiredMm + MarginMm - s.NormalAtNodeMm;
+        if (shortfall <= 0) return 0;
+        var slope = (s.NormalAtProbeMm - s.NormalAtNodeMm) / ProbeMm;
+        if (slope < MinSlope) return null;
+        return Math.Ceiling(shortfall / slope / StepMm) * StepMm;
     }
 
     /// <summary>원래 정차점에서 theta 반대로 <paramref name="backwardMm"/> 물러난 맵 좌표 (m).</summary>
