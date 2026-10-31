@@ -363,10 +363,12 @@ public class SeamBaseTransformTests
     [Fact]
     public void Resolve_SeamFarAlongWall_DoesNotWarn()
     {
-        // 정상 배치: 벽은 정면 0.5m, 용접선은 벽을 따라 옆으로 1.3m.
-        // BASE→용접선 방위는 법선과 69° 나 벌어지지만 이는 기하학적으로 정상이다(방위 비교로 판정 불가).
+        // 정상 배치: 벽은 AMR 원점 정면 1.0m — 장착(Mount)이 BASE 를 벽 쪽으로 약 300mm 앞에 두므로
+        // 코봇 BASE 기준 약 0.7m 다. 용접선은 벽을 따라 옆으로 약 1.4m.
+        // BASE→용접선 방위는 법선과 60° 넘게 벌어지지만 이는 기하학적으로 정상이다(방위 비교로 판정 불가).
+        // (종전 데이터는 벽을 AMR 원점 0.5m 앞에 둬 BASE 기준 212mm 였다 — 장착 오프셋 누락으로 처음부터 실패)
         var t = SeamBaseTransform.Resolve(
-            Input(new[] { 7.000, 13.920, 1.000 }, amrX: 5.688, amrY: 13.420,
+            Input(new[] { 7.000, 14.420, 1.000 }, amrX: 5.688, amrY: 13.420,
                   yawRad: 89.49 * Math.PI / 180.0, standoff: 400, wallCode: "PM"));
 
         Assert.True(t.NormalDistanceMm > 400, $"법선 거리 {t.NormalDistanceMm:0}mm");
