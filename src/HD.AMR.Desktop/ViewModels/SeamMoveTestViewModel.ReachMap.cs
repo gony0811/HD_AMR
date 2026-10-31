@@ -9,8 +9,9 @@ using Microsoft.Extensions.DependencyInjection;
 namespace HD.AMR.Desktop.ViewModels;
 
 /// <summary>
-/// ⑤ 리치 맵 — 정차 거리(x)·가로(y)·높이(z)·텔레스코픽(h) 격자를 컨트롤러 역기구학으로 훑어
+/// ⑤ 리치 맵 — 정차 거리(x)·가로(y)·높이(z)·텔레스코픽(h) 격자를 역기구학으로 훑어
 /// "어디에 서면 어디까지 닿는가" 를 CSV 로 남긴다(<see cref="ReachMap"/>). 코봇은 움직이지 않는다.
+/// 역기구학은 컨트롤러 또는 FR5-WML 모델(<see cref="Fr5Kinematics"/>, 코봇 미연결 가능) 중에 고른다.
 /// </summary>
 public sealed partial class SeamMoveTestViewModel
 {
@@ -29,6 +30,7 @@ public sealed partial class SeamMoveTestViewModel
     [ObservableProperty] private double _reachZStep = 500;
     [ObservableProperty] private double _reachApproachMm = CobotInspectionMoveStep.DefaultApproachStandoffMm;
     [ObservableProperty] private double _reachFinalMm = 300;
+    [ObservableProperty] private bool _reachOffline;
     [ObservableProperty] private bool _reachRunning;
     [ObservableProperty] private string _reachProgressText = "";
     [ObservableProperty] private string _reachSummaryText = "";
@@ -54,6 +56,8 @@ public sealed partial class SeamMoveTestViewModel
     partial void OnReachZFromChanged(double value) => OnPropertyChanged(nameof(ReachSizeText));
     partial void OnReachZToChanged(double value) => OnPropertyChanged(nameof(ReachSizeText));
     partial void OnReachZStepChanged(double value) => OnPropertyChanged(nameof(ReachSizeText));
+
+    partial void OnReachOfflineChanged(bool value) => RunReachMapCommand.NotifyCanExecuteChanged();
 
     partial void OnReachRunningChanged(bool value)
     {
@@ -87,7 +91,7 @@ public sealed partial class SeamMoveTestViewModel
             FinalStandoffMm: ReachFinalMm);
     }
 
-    private bool CanRunReachMap() => !ReachRunning && !Busy && CobotConnected;
+    private bool CanRunReachMap() => !ReachRunning && !Busy && (ReachOffline || CobotConnected);
 
     [RelayCommand(CanExecute = nameof(CanRunReachMap))]
     private async Task RunReachMap()
@@ -96,7 +100,8 @@ public sealed partial class SeamMoveTestViewModel
         if (spec is null) { Failure(error!); return; }
 
         ReachRunning = true;
-        Busy = true;   // TCP 실시간 읽기·이동을 멈춰 컨트롤러 RPC 를 IK 에 양보한다.
+        var offline = ReachOffline;
+        if (!offline) Busy = true;   // TCP 실시간 읽기·이동을 멈춰 컨트롤러 RPC 를 IK 에 양보한다.
         ReachSummaryText = "";
         _reachCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
         try
@@ -113,7 +118,9 @@ public sealed partial class SeamMoveTestViewModel
                                     ReachMapResult.Label(p.Last.Status);
             });
 
-            var (result, path) = await svc.RunAsync(spec, Tool, progress, _reachCts.Token);
+            var (result, path) = offline
+                ? await Task.Run(() => svc.RunOfflineAsync(spec, progress, _reachCts.Token))   // 계산만 — UI 스레드를 막지 않게
+                : await svc.RunAsync(spec, Tool, progress, _reachCts.Token);
             ReachSummaryText = result.SummaryText();
             Success($"리치 맵 저장: {path}");
         }
@@ -123,7 +130,7 @@ public sealed partial class SeamMoveTestViewModel
         {
             _reachCts?.Dispose();
             _reachCts = null;
-            Busy = false;
+            if (!offline) Busy = false;
             ReachRunning = false;
         }
     }

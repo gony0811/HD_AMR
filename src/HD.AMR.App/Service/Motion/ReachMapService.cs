@@ -61,11 +61,67 @@ public class ReachMapService
         var result = await ReachMap.BuildAsync(spec, robot,
             async (pose, c) => await _cobot.Rpc.GetInverseKinForMoveAsync(pose, tool, 0, c),
             progress, ct);
+        return (result, await SaveAsync(result, "reachmap", ct));
+    }
 
+    /// <summary>
+    /// 컨트롤러 없이 FR5-WML 모델 역기구학(<see cref="Fr5Kinematics"/>)으로 격자를 평가한다 — 코봇 미연결이어도 된다.
+    /// 장착 보정이 저장돼 있으면 그 값을, 없으면 STEP 장착(<see cref="Fr5Kinematics.StepMount"/>)을 쓰고,
+    /// 공구는 검사 툴 설계값(<see cref="Fr5Kinematics.InspectionTool"/>)이다. 결과는 'reachmap_offline_' CSV.
+    /// </summary>
+    public async Task<(ReachMapResult Result, string CsvPath)> RunOfflineAsync(
+        ReachMapSpec spec, IProgress<ReachMapProgress>? progress = null, CancellationToken ct = default)
+    {
+        var mount = await _calib.GetMountAsync();
+        var calibrated = mount.Any(v => Math.Abs(v) > 1e-9);
+        if (!calibrated) mount = Fr5Kinematics.StepMount;
+
+        var tool = Fr5Kinematics.InspectionTool;
+        var limits = await _limits.GetAsync();
+        // 설계 공구는 회전이 없어 광축 = 공구 +Z 다. 저장된 광축 설정은 컨트롤러 공구 #1 프레임 기준이라 여기 쓰지 않는다.
+        var (savedAxis, fromParam) = await WeldSequenceSupport.GetDepthAxisAsync(_param);
+        if (fromParam && savedAxis != ToolAxisDir.PlusZ)
+            _logger.LogWarning("오프라인 리치 맵: 저장된 광축 {Axis} 대신 설계 공구 광축 +Z 로 계산합니다 — 컨트롤러 공구 #1 회전을 확인하세요.", savedAxis);
+        var robot = new ReachMapRobot(mount, ApproachReach.ToolLengthMm(tool), limits, ToolAxisDir.PlusZ);
+        var kin = Fr5Kinematics.Fr5Wml;
+        _logger.LogInformation(
+            "오프라인 리치 맵 시작(FR5-WML 모델): 셀 {Cells}개(면 {Walls}), 장착 {Mount}, 공구 [{Tool}]",
+            spec.CellCount, string.Join(",", spec.WallCodes), calibrated ? "보정값" : "STEP 기본",
+            string.Join(" ", tool));
+
+        var normalized = limits.Normalized();
+        var result = await ReachMap.BuildAsync(spec, robot, OfflineInverseKin(kin, tool, normalized), progress, ct);
+        return (result, await SaveAsync(result, "reachmap_offline", ct));
+    }
+
+    /// <summary>
+    /// 오프라인 역기구학 델리게이트. <see cref="ReachMap"/> 은 셀마다 ② 를 먼저 풀고, 풀렸을 때만 최종을 푼다.
+    /// ② 는 여유 최대 해를, 최종은 그 ② 해에 가장 가까운 해를 골라 두 자세를 같은 가지로 잇는다 — 운영에서
+    /// ②→최종을 연속 이동하는 것과 같은 선택이다(가지가 갈라지면 경로 판정이 '휘두름' 으로 거짓 실패한다).
+    /// </summary>
+    public static Func<double[], CancellationToken, Task<double[]?>> OfflineInverseKin(
+        Fr5Kinematics kin, double[] tool, PostureLimits limits)
+    {
+        double[]? approach = null;   // null = 다음 호출은 ②
+        return (pose, _) =>
+        {
+            if (approach is null)
+            {
+                approach = kin.InverseBest(pose, tool, limits);
+                return Task.FromResult(approach);   // 실패(null)면 ReachMap 이 최종을 부르지 않으므로 다음도 ②
+            }
+            var final = kin.InverseBest(pose, tool, limits, approach);
+            approach = null;
+            return Task.FromResult(final);
+        };
+    }
+
+    private async Task<string> SaveAsync(ReachMapResult result, string prefix, CancellationToken ct)
+    {
         Directory.CreateDirectory(OutputDirectory);
-        var path = Path.Combine(OutputDirectory, $"reachmap_{DateTime.Now:yyyyMMdd_HHmmss}.csv");
+        var path = Path.Combine(OutputDirectory, $"{prefix}_{DateTime.Now:yyyyMMdd_HHmmss}.csv");
         await File.WriteAllTextAsync(path, result.ToCsv(), ct);
         _logger.LogInformation("리치 맵 완료: {Path}\n{Summary}", path, result.SummaryText());
-        return (result, path);
+        return path;
     }
 }

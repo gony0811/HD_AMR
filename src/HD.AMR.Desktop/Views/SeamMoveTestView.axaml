@@ -145,7 +145,7 @@
       <!-- ⑤ 리치 맵 -->
       <Border Classes="card"><StackPanel Spacing="8">
         <TextBlock Classes="cardHead" Text="⑤ 리치 맵 (정차 위치 최적화 근거)"/>
-        <TextBlock Classes="hint" Text="AMR 이 벽을 정면으로 보고 섰다고 두고, 용접선 점을 차체 기준 (x 전방 · y 좌측 · z 바닥 위 높이)으로 격자로 놓아 컨트롤러 역기구학으로 닿는지 판정합니다. 코봇은 움직이지 않습니다. 수직벽에서 x 는 곧 벽 ↔ 로봇 기준점 정차 이격입니다. 바닥(B)은 z 를 0 으로 고정하고, 천장(T)은 z 를 천장 높이로 읽습니다. 셀마다 ② 거친 접근 자세와 최종 작업 자세 둘 다 풀려야 '도달' 입니다(J6 은 운영에서 따로 맞추므로 제외). 장착 보정·공구 길이·자세 허용 범위·광축은 저장값을 씁니다."/>
+        <TextBlock Classes="hint" Text="AMR 이 벽을 정면으로 보고 섰다고 두고, 용접선 점을 차체 기준 (x 전방 · y 좌측 · z 바닥 위 높이)으로 격자로 놓아 역기구학(컨트롤러 또는 오프라인 모델)으로 닿는지 판정합니다. 코봇은 움직이지 않습니다. 수직벽에서 x 는 곧 벽 ↔ 로봇 기준점 정차 이격입니다. 바닥(B)은 z 를 0 으로 고정하고, 천장(T)은 z 를 천장 높이로 읽습니다. 셀마다 ② 거친 접근 자세와 최종 작업 자세 둘 다 풀려야 '도달' 입니다(J6 은 운영에서 따로 맞추므로 제외). 장착 보정·공구 길이·자세 허용 범위·광축은 저장값을 씁니다."/>
         <WrapPanel>
           <StackPanel Margin="0,0,10,8"><TextBlock Classes="axis" Text="wall_code (쉼표)"/><TextBox Width="160" Text="{Binding ReachWallCodes}"/></StackPanel>
           <StackPanel Margin="0,0,10,8"><TextBlock Classes="axis" Text="스트로크 h (mm, 쉼표)"/><TextBox Width="160" Text="{Binding ReachStrokes}"/></StackPanel>
@@ -172,6 +172,8 @@
               <NumericUpDown Classes="num" Value="{Binding ReachZStep}" Minimum="0" Increment="50" FormatString="0"/>
             </StackPanel></StackPanel>
         </WrapPanel>
+        <CheckBox Content="오프라인 (FR5-WML 모델 역기구학 · 코봇 미연결 가능)" IsChecked="{Binding ReachOffline}"
+                  ToolTip.Tip="컨트롤러 대신 STEP 실측 DH 모델로 역기구학을 풉니다. 공구는 설계값(플랜지 Z 375mm, 광축 +Z), 장착 보정이 없으면 STEP 장착(차체 중심 위 1635mm)을 씁니다. 관절 0점·부호는 UR 규약 가정이라 실물 GetForwardKin 대조 전까지는 참고용입니다."/>
         <TextBlock Classes="hint" Text="{Binding ReachSizeText}"/>
         <StackPanel Orientation="Horizontal" Spacing="8">
           <Button Classes="accent" Content="리치 맵 생성" Command="{Binding RunReachMapCommand}"/>
