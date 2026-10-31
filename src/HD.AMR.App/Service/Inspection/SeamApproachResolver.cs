@@ -174,4 +174,47 @@ public sealed class SeamApproachResolver
                 ? $"용접선 접근점(면 이격 {standoff:0}mm — '카메라 거리 정렬' 목표거리)"
                 : $"용접선 접근점(면 이격 {standoff:0}mm)") + reachNote, null, opticalAxis);
     }
+
+    /// <summary>
+    /// 정차 보정 계획용 리치 표본(사양 §4.4.2, N23) — 코봇을 움직이지 않고 정차의 각 용접선에 대해
+    /// <b>원래 정차점</b>과 그로부터 <see cref="StationAdjustPlanner.ProbeMm"/> 후진한 자리의 면 법선거리를 계산한다.
+    /// 실제 AMR 위치가 아니라 정차점을 쓰는 이유: 허락 범위의 기준이 원래 nodePosition 이다.
+    /// ②와 같은 후퇴 거리·공구 길이·최소 뻗음으로 필요 법선거리를 구한다.
+    /// </summary>
+    /// <returns>표본 목록, 또는 계산 불가 사유(Skip) — 사유가 있으면 보정하지 않고 종전대로 진행한다.</returns>
+    public async Task<(IReadOnlyList<StationAdjustSeam>? Seams, string? Skip)> SampleStationAsync(
+        IReadOnlyList<(string Label, double[] SeamStartW, double[]? SeamEndW, string WallCode)> seams,
+        double nodeXm, double nodeYm, double nodeThetaRad, int tool, CancellationToken ct)
+    {
+        var mount = await _calib.GetMountAsync();
+        if (mount.All(v => Math.Abs(v) < 1e-9))
+            return (null, "장착 보정(T_A_B) 미수행");
+        if (_lift.TryGetStrokeMm(out var liftReason) is not { } stroke)
+            return (null, liftReason);
+
+        double toolLen;
+        try { toolLen = ApproachReach.ToolLengthMm(await _cobot.Rpc.GetToolCoordAsync(tool, ct)); }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex) { return (null, $"공구 #{tool} 좌표 조회 실패: {ex.Message}"); }
+        if (toolLen < 1.0) return (null, $"공구 #{tool} 오프셋이 0(플랜지 기준)");
+
+        var approach = await CobotInspectionMoveStep.GetApproachStandoffMmAsync(_param, _logger);
+        var zDatum = await _param.GetDoubleAsync(WeldSequenceSupport.ZDatumOffsetKey) ?? 0.0;
+        var (opticalAxis, _) = await WeldSequenceSupport.GetDepthAxisAsync(_param);
+        var limits = await _limits.GetAsync();
+        var required = ApproachReach.Check(0, approach, toolLen, limits.MinFlangeReachMm).RequiredNormalDistanceMm;
+        var (probeX, probeY) = StationAdjustPlanner.BackedOff(nodeXm, nodeYm, nodeThetaRad, StationAdjustPlanner.ProbeMm);
+
+        double NormalAt(double x, double y, (string Label, double[] SeamStartW, double[]? SeamEndW, string WallCode) s)
+            => SeamBaseTransform.Resolve(new SeamBaseInput(
+                SeamStartW: s.SeamStartW, SeamEndW: s.SeamEndW,
+                AmrXm: x, AmrYm: y, AmrYawRad: nodeThetaRad,
+                MountAtHome: mount, TelescopicStrokeMm: stroke, ZDatumOffsetMm: zDatum,
+                StandoffMm: approach, WallFacingThetaRad: nodeThetaRad, WallCode: s.WallCode,
+                OpticalAxis: opticalAxis)).NormalDistanceMm;
+
+        var list = seams.Select(s => new StationAdjustSeam(
+            s.Label, NormalAt(nodeXm, nodeYm, s), NormalAt(probeX, probeY, s), required)).ToList();
+        return (list, null);
+    }
 }

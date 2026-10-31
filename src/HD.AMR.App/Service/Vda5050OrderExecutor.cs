@@ -397,12 +397,19 @@ public sealed class Vda5050OrderExecutor
             OpLog(OpCategory.Order, "노드 도달", true, $"node={node.NodeId} (seq={node.SequenceId}), 현재 {DescribePose()}", orderId);
             StateChanged?.Invoke();
 
+            // 2.5) 정차 온보드 보정(사양 §4.4.2, N23 초안) — ACS 가 params.stationAdjust 로 허락한 범위 안에서
+            //      리치(면 법선거리)가 모자라는 용접선이 있으면 벽에서 물러나 다시 선다. 코봇은 아직 홈이다
+            //      (주행 전 홈 복귀 보장) — 첫 액션 전에 한 번만 옮겨 task 사이 왕복을 만들지 않는다.
+            var adjustToken = await TryAdjustStationAsync(orderId, node, pos, devXy, devTheta, ct);
+            if (adjustToken is { Failed: true }) return;
+
             // 3) 액션 순차 실행 — 배열 순서 = 실행 순서(§4.2). 액션 없는 Order(actions:[])는
             //    노드 도달만으로 완결(§4.1). startWeldInspection 은 검사 실행기에 위임(§8.5.1 2차 연동).
             //    개별 액션 실패는 다음 액션 계속 — 단 equipmentError(설비 불능)면 잔여 전건 FAILED(§6.4).
             //    마지막 검사 액션에서만 코봇을 홈으로 되돌린다 — 노드 안의 task 는 정렬(작업물 좌표계)을
             //    공유하므로 사이마다 홈에 다녀오면 이점이 사라지고 시간만 든다(§8.1 anchorGroupId).
             var lastInspectionIndex = node.Actions.FindLastIndex(a => a.ActionType == "startWeldInspection");
+            var firstInspectionIndex = node.Actions.FindIndex(a => a.ActionType == "startWeldInspection");
             var equipmentDown = false;
             int failedActions = 0;
             for (var ai = 0; ai < node.Actions.Count; ai++)
@@ -489,6 +496,9 @@ public sealed class Vda5050OrderExecutor
                         ? await _inspection.ExecuteMoveToSeamStartAsync(action, orderId, pos.Theta, ct)
                         : await _inspection.ExecuteAsync(
                             action, orderId, pos.Theta, isLastInspection: ai == lastInspectionIndex, ct);
+                    // 보정한 정차의 첫 검사 액션 결과 앞머리에 보정량 토큰(§4.4.2 규칙 6) — ACS 가 계획 개선용으로 수집.
+                    if (adjustToken?.Token is { } token && ai == firstInspectionIndex)
+                        result = result with { ResultDescription = $"{token} {result.ResultDescription}" };
                     SetActionStatus(action.ActionId, result.Success ? "FINISHED" : "FAILED", result.ResultDescription);
                     if (!result.Success) failedActions++;
                     OpLog(OpCategory.Action, action.ActionType, result.Success,
@@ -539,6 +549,63 @@ public sealed class Vda5050OrderExecutor
             // 신규 orderId 교체 또는 emergencyStop — 후속 상태는 폐기/정지 경로가 정리한다.
             _logger.LogInformation("VDA5050 임무 중단: {OrderId}", _orderId);
         }
+    }
+
+    /// <summary>정차 보정 결과. <see cref="Failed"/> 면 임무가 이미 실패 처리됐다(호출측은 즉시 반환).</summary>
+    private sealed record StationAdjustOutcome(string? Token, bool Failed);
+
+    /// <summary>
+    /// 정차 온보드 보정(사양 §4.4.2, N23 초안). 허락이 없거나 보정이 필요 없으면 null.
+    /// 옮겨 섰으면 보고 토큰을, 옮기다 실패했으면 Failed 를 돌려준다 — 주행이 중간에 끊긴 자리에서
+    /// 검사를 이어 가면 정차점이 어디인지 아무도 모르므로 일반 주행 실패와 같이 임무를 실패시킨다.
+    /// 허락 범위로 고칠 수 없는 구간은 옮기지 않고(또는 고칠 수 있는 구간 기준으로만 옮기고) 그 구간의 ②가
+    /// 종전대로 '정차 거리 부족'으로 실패한다(규칙 5).
+    /// </summary>
+    private async Task<StationAdjustOutcome?> TryAdjustStationAsync(
+        string orderId, OrderNode node, NodePosition pos, double devXy, double devTheta, CancellationToken ct)
+    {
+        var decision = await _inspection.PlanStationAdjustAsync(node.Actions, pos.X, pos.Y, pos.Theta, ct);
+        if (decision.Note.Length > 0)
+            OpLog(OpCategory.Drive, "정차 보정 판단", null,
+                decision.Note + (decision.Plan is { Unfixable.Count: > 0 } p0 ? " — " + string.Join(" / ", p0.Unfixable) : ""),
+                orderId);
+        if (decision.Plan is not { BackwardMm: > 0 } plan || pos.Theta is not { } theta)
+            return null;
+
+        var (ax, ay) = Motion.StationAdjustPlanner.BackedOff(pos.X, pos.Y, theta, plan.BackwardMm);
+        var adjusted = new NodePosition
+        {
+            X = ax, Y = ay, Theta = theta, MapId = pos.MapId,
+            AllowedDeviationXY = pos.AllowedDeviationXY, AllowedDeviationTheta = pos.AllowedDeviationTheta,
+        };
+
+        _inspection.InvalidateAnchor();   // 정차점이 바뀌면 정렬 재수행(§8.1)
+        lock (_gate) _driving = true;
+        StateChanged?.Invoke();
+        var staleErrors = await SnapshotErrorKeysAsync(ct);
+        OpLog(OpCategory.Drive, "정차 보정 주행", null,
+            $"현재 {DescribePose()} → 후진 {plan.BackwardMm:0}mm ({ax:0.###}, {ay:0.###}, θ={theta:0.###}) " +
+            $"(허락 후진 ≤{decision.Limits!.MaxBackwardMm:0}mm)", orderId);
+        await _pauseGate.WaitWhilePausedAsync(ct);
+        var go = await _rest.GoAsync(ax, ay, theta, stopFlag: true, ct);
+        if (!go.Ok)
+        {
+            FailMission($"정차 보정 이동 명령 실패 (code={go.Code}): {go.Message}");
+            return new StationAdjustOutcome(null, true);
+        }
+        var arrived = await WaitForArrivalAsync(adjusted, devXy, devTheta, staleErrors, ct);
+        if (!arrived.Ok)
+        {
+            FailMission($"정차 보정 주행 실패 — {arrived.Reason}");
+            return new StationAdjustOutcome(null, true);
+        }
+        lock (_gate) _driving = false;
+        StateChanged?.Invoke();
+
+        var token = Motion.StationAdjustPlanner.Token(-plan.BackwardMm, 0, 0);
+        OpLog(OpCategory.Drive, "정차 보정 도착", true, $"{token} {arrived.Reason}", orderId);
+        _logger.LogInformation("VDA5050 정차 보정: node={NodeId}, 후진 {Back}mm", node.NodeId, plan.BackwardMm);
+        return new StationAdjustOutcome(token, false);
     }
 
     /// <summary>도착 판정 허용 오차 결정 — ① Order → ② ParameterService(DB) → ③ AmrRestSettings.

@@ -7,6 +7,7 @@
 | 대상 | HD_AMR 통합 운영 S/W 개발팀 (로봇 온보드) |
 | 기준 표준 | **VDA 5050 v2.0** (Interface for the communication between AGV and master control) |
 | 상태 | **확정** — N10(정차 이격)만 잠정값 유지. N12(ACS 생존 신호)는 2026-09-03 승인. N13(검사 타입 카탈로그)은 2026-09-14 제안(계약 무변경). N14(`taskId`·`attempt`)는 2026-09-21 계약 추가·양측 구현 완료(실기 관통 확인 잔여). N17(seam z 기준면)은 2026-09-23 신규 제기. N10(정차 이격)은 2026-09-28 1차 회신(잠정 1.2 m), N18(거리 파라미터 2종 정리)은 2026-09-28 신규 제기 |
+| 개정 1.11 | 2026-10-31 — **§4.4.2 정차 온보드 보정 신설 `[N23]`**(ACS 개정 1.12 초안 `params.stationAdjust` 수용). AMR 1단계 구현 — 도착 후 첫 액션 전에 정차의 용접선별 면 법선거리를 원래 정차점·100 mm 후진점 2표본으로 계산해 허락된 **후진** 범위 안에서 한 번 옮겨 선다. 보고 토큰 `stationAdjusted` 구현. 전진·횡·각은 받기만 함. 필드 없으면 종전 동작 — **계약 하위 호환** |
 | 개정 1.10 | 2026-10-23 — **§10 `[N17]` AMR 입장 확정**: seam z 는 **ACS 가 층 바닥 기준(`z − level_z`)으로 변환해 발행**(부록 B 갱신). 실기 IK 실패(접근점 z ≈ 9.7 m) 근거. AMR 은 좌표 기준 오류(접근점 BASE 거리 > 3 m)를 IK 전에 차단·보고 |
 | 개정 1.9 | 2026-10-07 — **LINE·CROSS4 면 자세별 변종 통합** `[N13 연장]`: LINE/CROSS4 를 면 자세별 5종에서 **면 자세-독립 단일 레시피**(`LINE`/`CROSS4`)로 통합(CROSS3 회전·CORNER 과 동일하게 면 무관). 접근 자세·법선·방향은 런타임이 `wall_code` 로 계산하고, 면별 차이는 티칭 프로필이 흡수하므로 면 자세는 레시피 선택에 쓰지 않는다. 카탈로그 16→8종. **계약 무변경**(ACS 는 `seamType`+`wall_code` 그대로 발행). AMR resolver·시드·구 행 마이그레이션(바인딩 보존)·테스트·§8.5 표 반영 완료 — §8.5·INSPECTION_TYPES.md §9-9 |
 | 개정 1.1 | 2026-09-01 — 로봇(TARS-M) REST 실물 스펙 확보분 반영. **ACS↔AMR 계약(§1~§9·부록 A~C)은 무변경**이며, AMR 온보드가 그 계약을 로봇 REST로 어떻게 이행하는지를 **부록 D**로 신설하고 관련 절에 각주를 달았다. 에러코드 매핑·층 전환 절차는 로봇측 정보 미확보로 **보류**(§6.4·§5.2·§9.2 그대로 유효, 구현만 유보) |
@@ -271,6 +272,35 @@ theta       = 벽을 정면으로 바라보는 방향
 
 **온보드 동작.** 부족하면 액션을 `FAILED` + `inspectionFailed` 로 보고하며, 설명에
 `정차 거리 부족 — 필요 ≥ N mm, 현재 M mm` 를 싣는다(주행 전 차단이 아니라 검사 시도 시점 보고).
+
+#### 4.4.2 정차 온보드 보정 — `params.stationAdjust` `[N23]` (2026-10-31, AMR 1단계 구현)
+
+§4.4.1 의 필요 법선거리를 정차 이격 하나로 모든 영역에 맞추기 어렵다 — 용접선 높이·면 자세마다 필요 거리가 다르다.
+ACS 가 정차마다 **허락 범위**(ACS 개정 1.12 초안 §4.4.2)를 주면 AMR 이 도착 후 리치를 계산해 그 안에서 옮겨 선다.
+`allowedDeviation*` 은 계속 **도착 판정 허용 오차**로만 쓴다(의미 무변경).
+
+| 키 | 의미 | ACS 기본값 | AMR 1단계 |
+|---|---|---|---|
+| `maxForwardMm` | 노드 theta 방향(벽 쪽) 최대 전진 | 0 | 받기만 함 |
+| `maxBackwardMm` | theta 반대(벽에서 멀어짐) 최대 후진 | 400 | **사용** |
+| `maxLateralMm` | theta 직각 좌우 최대 이동 | 200 | 받기만 함 |
+| `maxThetaDeg` | theta 에서 최대 회전 | 5 | 받기만 함 |
+
+**온보드 동작** (`Vda5050OrderExecutor.TryAdjustStationAsync` → `WeldInspectionOrchestrator.PlanStationAdjustAsync`
+→ `SeamApproachResolver.SampleStationAsync` → `StationAdjustPlanner.Plan`):
+
+1. 원래 `nodePosition` 에 도착(`allowedDeviation*` 판정·정차 확인)한 뒤, **첫 액션 전에 한 번** 계획한다. 코봇은 주행 전 홈 복귀가 보장돼 있어 무동작이다.
+2. 노드의 `startWeldInspection` 용접선마다 **원래 정차점**과 거기서 100 mm 후진한 자리에서 면 법선거리(코봇 BASE 기준)를 `SeamBaseTransform` 으로 계산한다.
+   면 법선거리는 AMR 평면 이동에 선형이므로 두 표본의 기울기로 필요 후진량을 정확히 구한다 — 챔퍼처럼 법선이 기운 면도 같은 식이다.
+3. 필요 법선거리 = ② 후퇴(`inspection.approachStandoffMm`) + 공구 #1 길이 + 최소 플랜지 뻗음(§4.4.1)에 **여유 20 mm** 를 더한다.
+   용접선별 필요 후진 = 부족분 ÷ 기울기(10 mm 단위 올림). 허락 이내인 구간 중 **최댓값**만큼 물러난다.
+4. 보정 불가 구간 — 기울기 < 0.05(바닥·천장처럼 수평 이동이 법선거리를 바꾸지 않음) 또는 필요 후진 > `maxBackwardMm` — 은 운영 로그에 남기고,
+   그 구간의 ② 가 종전대로 `정차 거리 부족` 으로 FAILED 한다(규칙 5).
+5. 옮겨 서면 정렬(anchor) 캐시를 무효화하고(§8.1), 첫 검사 액션 `resultDescription` 앞머리에 `stationAdjusted dF=-340 dL=0 dTh=0.0;` 를 붙인다.
+6. 보정 주행이 실패하면(이동 명령 실패·도착 실패) **임무 실패**로 처리한다 — 중간에 끊긴 자리에서 검사를 이어 가면 정차점을 아무도 모른다.
+7. 계산 불가(장착 보정 없음·텔레스코픽 높이 모름·공구 길이 조회 실패·코봇 미연결·노드 theta 없음)면 보정을 생략하고 종전대로 진행한다.
+
+> 재시도 Order 가 오면 AMR 은 원래 정차점으로 돌아가(보정 자리는 `allowedDeviation` 밖) 다시 계획한다 — 결과가 같으면 같은 자리로 다시 물러난다.
 
 ### 4.5 Order 수명주기
 
@@ -565,6 +595,7 @@ ACS 생존신호는 VDA 5050 표준 로봇 `connection` 메시지의 상태 모�
 | `params.seqInGroup` | 그룹 내 순번 (1부터) |
 | `params.taskId` | **(1.6 신설, 선택)** 검사 작업(용접선 1구간)의 **영구 식별자** — GUID 문자열. ACS가 작업 등록 시 발급하며 run 이 바뀌어도 같은 용접선이면 같은 값. AMR은 이 액션의 **모든 CAPTURE_REQ에 같은 값**을 싣는다(비전 v3.2 [15-30], 16B 바이너리) → 비전→SAIGE `productId` (§8.1.1) |
 | `params.attempt` | **(1.6 신설, 선택)** 그 `taskId`의 **몇 번째 시도인지** — 정수 1~255, **ACS 발급**. AMR은 해석·증감 없이 CAPTURE_REQ [31]에 그대로 싣는다 (§8.1.1) |
+| `params.stationAdjust` | **(ACS 1.12 초안, 선택) `[N23]`** 정차 온보드 보정 허용 범위 `{maxForwardMm, maxBackwardMm, maxLateralMm, maxThetaDeg}`(4키 필수·0 이상) — 의미·온보드 동작은 §4.4.2. 같은 정차의 모든 액션에 같은 값. **없으면 보정하지 않는다**(종전). 형식 오류면 보정만 생략하고 검사는 진행(허락이 없을 뿐 검사 계약 위반이 아님 — `taskId` 와 달리 거부하지 않는다) |
 
 `wallNormalW`(벽 법선)는 **전송하지 않는다** — 툴 자세는 AMR이 `wall_code` 티칭으로 결정한다.
 
@@ -883,6 +914,7 @@ ACS는 비상정지와 동시에 **해당 로봇의 활성 run을 자동 중단(
 | N14 | 검사 작업 식별자 관통 | `params.taskId`(GUID 문자열, 영구) + `params.attempt`(1~255, taskId별 누적·ACS 발급) — 둘 다 선택 필드(§8.1·§8.1.1) | ✅ **양측 구현 완료(2026-09-21)** — ACS 발행 / AMR 파서→오케스트레이터→`SequenceContext.AcsTaskId·AcsAttempt`→CAPTURE_REQ v3.2. 키 위치(`params.*`)·attempt 누적 규칙은 구현으로 합의. **실기 관통 확인 잔여**(taskId 바이트 순서 대조와 함께 1회) |
 | N17 | `seamStartW`/`seamEndW` 의 **z 기준면** | ACS 의 T_W_D 는 2D(x,y,yaw) 라 z 는 변환되지 않고 **도면 전역 z**(선창 바닥=0)가 그대로 전송된다. AMR 은 자기 바닥을 0 으로 보므로 **L2 이상에서 층 바닥 높이(level_z)만큼 어긋난다**(L1 은 0 이라 드러나지 않음). 제안: **ACS 가 발행 시 `z − level_z[level−1]` 을 적용해 층 바닥 기준으로 보낸다**(AMR 이 level_z 를 몰라도 됨). 대안은 `level_z` 를 계약에 추가하는 것 | 🔴 **AMR 입장 확정 — ACS 조치 요청(2026-10-23)**: **`seamStartW`/`seamEndW` 의 z 는 해당 `level` 바닥 = 0 기준으로 발행**한다(ACS 가 `z − level_z[level−1]` 적용). AMR 은 층 바닥 높이를 모르며, 층이 바뀔 때마다 AMR 의 수동 보정값을 바꾸는 운용은 불가하다. 대안(`level_z` 계약 추가)은 채택하지 않는다. 근거: 2026-10-23 실기에서 ② 검사위치 이동(`moveToSeamStart`)이 접근점 z ≈ 9742 mm 로 계산돼 IK "config 0–7 모두 도달 불가" 5회 연속 실패 — 도면 전역 z 가 그대로 수신된 것으로 판단. AMR 조치: 접근점이 코봇 BASE 에서 3 m 를 넘으면 IK 전에 액션 `FAILED`("좌표 기준 오류 … N17") 로 즉시 보고(`SeamBaseTransform.CheckCoordinateDatum`). 수동 z 기준 보정(`Sequence.Inspection.ZDatumOffsetMm`)은 시험·임시 우회용으로만 남기며 운영값은 0 |
 | N18 | 검사 액션의 **거리 파라미터 2종 정리** | (a) `params.standoffMm` 이 §4.4 정차 이격과 같은 값인지 다른 값인지 명시 — 같다면 `nodePosition` 에 이미 반영된 값의 중복 전송이므로 **필드 폐기 또는 `stationStandoffMm` 등으로 개칭** 제안. (b) `params.workingDistanceMm` 은 AMR 미사용 — 존치/삭제 확인(존치 시 '참고 전용' 명기 요청). (c) '정차 거리 부족'을 ACS 가 **재정차**로 처리할 의사가 있으면 신호 방식 협의(현행 §6.4 7종에 해당 유형 없음) | ⏳ **신규 제기(2026-09-28)** — AMR 은 검사 툴의 표면 이격을 **온보드 값**으로 정한다(§4.4.1) — ② 거친 접근 거리(파라미터, 기본 400 mm)로 접근하고, ③ 카메라 거리 정렬·④⁺ 레이저 WD(기본 300 mm)가 실측으로 확정한다. 두 파라미터는 계속 수신하되 동작에 쓰지 않는다 — **계약 변경 없이도 현행대로 동작**하며, 정리는 문서 일관성 문제다 |
+| N23 | **정차 온보드 보정 허용 범위** `params.stationAdjust` (§4.4.2·§8.1) — ACS 제기(2026-10-31, ACS 개정 1.12 초안) | ACS가 정차마다 AMR이 리치를 위해 `nodePosition`에서 옮겨 서도 되는 한계 `{maxForwardMm, maxBackwardMm, maxLateralMm, maxThetaDeg}`를 각 검사 액션 `params`에 싣는다. `allowedDeviation*`(도착 판정)은 무변경 | ⏳ **AMR 1단계 구현(2026-10-31)** — (a) 기준=원래 `nodePosition`·프레임=노드 theta 전진/좌측 횡 **수용**. (b) 보고 토큰 `stationAdjusted dF dL dTh;` **수용·구현**(첫 검사 액션 resultDescription 앞머리). (c) 범위 안에서도 리치 불가 → 옮기지 않고 그 액션이 종전 `정차 거리 부족`으로 FAILED — **재정차 신호는 N18 (c)와 함께 계속 협의**. (d) 기본값 차체-벽 여유는 로봇 반폭 확정 후 회신. **1단계 범위: 후진만 사용**(전진·횡·각은 받기만 하고 0 — 최대 리치 판정 모델이 없어 전진 필요를 판정할 수 없고, 횡은 실패 원인이 아니었다) |
 
 **AMR 구현 방식 고지 요약** (상세는 `VDA5050_AMR_REPLY.md` §3): allowedDeviation은 **도착 판정 허용 오차로만** 사용(미지정 시 0.1 m/0.1 rad) · 층별 맵은 AMR 내부 통합 맵으로 운용하되 계약(층별 mapId·좌표)은 그대로 준수 · **새 mapId는 재측위 검증 통과 시에만 보고**(실패 시 `localizationLost`) · 주행 실패 시 미도달 상태로 전 액션 FAILED+`drivingFailed` · 비상정지 시 진행 액션 FAILED+`emergencyStopActive`.
 

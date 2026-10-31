@@ -1,4 +1,5 @@
 using HD.AMR.App.Communication.Vda5050;
+using HD.AMR.App.Service.Motion;
 
 namespace HD.AMR.App.Service.Inspection;
 
@@ -20,6 +21,14 @@ public sealed record InspectionActionResult(
 }
 
 /// <summary>
+/// 정차 온보드 보정 판단(사양 §4.4.2, N23 초안). <see cref="Plan"/> 이 null 이면 보정하지 않는다.
+/// </summary>
+/// <param name="Limits">ACS 가 허락한 범위. null = 허락 없음(필드 미수신·형식 오류).</param>
+/// <param name="Plan">보정 계획. null = 계획 생략(허락 없음·계산 불가).</param>
+/// <param name="Note">운영 로그용 사유(빈 문자열이면 남길 것 없음 — 허락 자체가 없던 경우).</param>
+public sealed record StationAdjustDecision(StationAdjustLimits? Limits, StationAdjustPlan? Plan, string Note);
+
+/// <summary>
 /// VDA5050 `startWeldInspection` 액션 실행기 — <see cref="Service.Vda5050OrderExecutor"/>(singleton)가
 /// 노드 도달 후 액션별로 위임한다. 구현체는 scope 를 생성해 scoped 시퀀스 서비스들을 사용한다.
 /// </summary>
@@ -39,6 +48,13 @@ public interface IWeldInspectionExecutor
     /// </summary>
     Task<InspectionActionResult> ExecuteMoveToSeamStartAsync(VdaAction action, string orderId, double? nodeThetaRad,
                                                              CancellationToken ct);
+
+    /// <summary>
+    /// 노드 도달 직후·첫 액션 전에 정차 보정 계획을 세운다(코봇 무동작). 노드의 startWeldInspection 액션들에서
+    /// `params.stationAdjust` 와 용접선을 모아 원래 정차점 기준 리치를 계산한다. 예외를 던지지 않는다.
+    /// </summary>
+    Task<StationAdjustDecision> PlanStationAdjustAsync(IReadOnlyList<VdaAction> actions,
+        double nodeXm, double nodeYm, double? nodeThetaRad, CancellationToken ct);
 
     /// <summary>정렬(anchor) 캐시 무효화 — 주행 발생·신규 order 시 호출(사양 §8.1 anchorGroupId 계약).</summary>
     void InvalidateAnchor();

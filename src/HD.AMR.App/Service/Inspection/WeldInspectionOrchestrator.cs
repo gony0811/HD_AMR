@@ -8,6 +8,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using HD.AMR.App.Models;
+using HD.AMR.App.Service.Motion;
 
 namespace HD.AMR.App.Service.Inspection;
 
@@ -236,6 +237,53 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             _lastInternalWorkpieceFrame = null;
             _lastAnchorStartBase = null;
             _lastAnchorEndTcp = null;
+        }
+    }
+
+    public async Task<StationAdjustDecision> PlanStationAdjustAsync(IReadOnlyList<VdaAction> actions,
+        double nodeXm, double nodeYm, double? nodeThetaRad, CancellationToken ct)
+    {
+        var inspections = actions.Where(a => a.ActionType == "startWeldInspection").ToList();
+        // ACS 는 같은 정차의 모든 액션에 같은 값을 싣는다 — 첫 액션 기준.
+        StationAdjustLimits? limits = null;
+        foreach (var a in inspections)
+        {
+            limits = WeldInspectionActionParser.TryParseStationAdjust(a, out var limitError);
+            if (limitError is not null)
+                return new StationAdjustDecision(null, null, $"stationAdjust 무시 — {limitError}");
+            if (limits is not null) break;
+        }
+        if (limits is null) return new StationAdjustDecision(null, null, "");
+        if (limits.MaxBackwardMm <= 0)
+            return new StationAdjustDecision(limits, null, "후진 허락 0 — 정차 보정 없음(1단계는 후진만 사용)");
+        if (nodeThetaRad is not { } theta)
+            return new StationAdjustDecision(limits, null, "노드 theta 없음 — 벽 정면 프레임이 없어 정차 보정 생략");
+        if (!_cobot.IsConnected)
+            return new StationAdjustDecision(limits, null, "코봇 RPC 미연결 — 공구 길이를 읽을 수 없어 정차 보정 생략");
+
+        var seams = new List<(string Label, double[] SeamStartW, double[]? SeamEndW, string WallCode)>();
+        foreach (var a in inspections)
+            if (WeldInspectionActionParser.TryParse(a, out var req, out _) && req is not null)
+                seams.Add((req.JobRef, req.SeamStartW, req.SeamEndW, req.DrawingPos.WallCode));
+        if (seams.Count == 0)
+            return new StationAdjustDecision(limits, null, "해석 가능한 용접선 없음 — 정차 보정 생략");
+
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var resolver = scope.ServiceProvider.GetRequiredService<SeamApproachResolver>();
+            // 공구는 본검사 기본 #1 — 프로필 RunTool 은 액션마다 프로필 조회가 필요해 계획 단계에서는 쓰지 않는다.
+            var (samples, skip) = await resolver.SampleStationAsync(seams, nodeXm, nodeYm, theta, tool: 1, ct);
+            if (skip is not null)
+                return new StationAdjustDecision(limits, null, $"정차 보정 생략 — {skip}");
+            var plan = StationAdjustPlanner.Plan(limits, samples!);
+            return new StationAdjustDecision(limits, plan, plan.Summary);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "정차 보정 계획 중 예외");
+            return new StationAdjustDecision(limits, null, $"정차 보정 생략 — 계획 오류: {ex.Message}");
         }
     }
 

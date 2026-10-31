@@ -1,5 +1,6 @@
 using System.Text.Json;
 using HD.AMR.App.Communication.Vda5050;
+using HD.AMR.App.Service.Motion;
 
 namespace HD.AMR.App.Service.Inspection;
 
@@ -174,6 +175,32 @@ public static class WeldInspectionActionParser
 
         request = new MoveToSeamStartRequest(jobRef!, seamStart!, seamEnd!, drawingPos);
         return true;
+    }
+
+    /// <summary>
+    /// `params.stationAdjust`(사양 §4.4.2, N23 초안 — 정차 온보드 보정 허용 범위) 해석.
+    /// 없으면 null·error null(보정 안 함, 종전 동작). 실려 왔는데 4키 중 하나라도 빠지거나 음수면 null + error —
+    /// 검사 자체는 막지 않는다(허락이 없을 뿐 검사 계약 위반은 아니다). 호출측이 사유를 로그로 남긴다.
+    /// </summary>
+    public static StationAdjustLimits? TryParseStationAdjust(VdaAction action, out string? error)
+    {
+        error = null;
+        var paramsEl = action.ActionParameters.FirstOrDefault(p => p.Key == "params") is { } p0 ? ToElement(p0.Value) : null;
+        if (paramsEl is not { ValueKind: JsonValueKind.Object } pr
+            || !pr.TryGetProperty("stationAdjust", out var sa) || sa.ValueKind == JsonValueKind.Null)
+            return null;
+        if (sa.ValueKind != JsonValueKind.Object)
+        { error = $"params.stationAdjust 은 JSON object 여야 합니다 (수신: {sa.ValueKind})"; return null; }
+
+        var values = new double[4];
+        string[] keys = { "maxForwardMm", "maxBackwardMm", "maxLateralMm", "maxThetaDeg" };
+        for (var i = 0; i < keys.Length; i++)
+        {
+            if (GetDouble(sa, keys[i]) is not { } v || double.IsNaN(v) || v < 0)
+            { error = $"params.stationAdjust.{keys[i]} 부적합 (0 이상 숫자 필요)"; return null; }
+            values[i] = v;
+        }
+        return new StationAdjustLimits(values[0], values[1], values[2], values[3]);
     }
 
     // ── 헬퍼 ─────────────────────────────────────────────────────────
