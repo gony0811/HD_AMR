@@ -103,19 +103,25 @@ public class Fr5KinematicsTests
         Assert.Equal(ReachStatus.IkFailed, r.Cells[1].Status);
     }
 
-    /// <summary>② 와 최종은 100mm 떨어진 같은 방향 자세다 — 오프라인 IK 는 둘을 같은 가지로 이어 관절 변화가 작아야 한다.</summary>
+    /// <summary>② → 정렬 준비 → 초점은 광축(+Z)으로 100·300mm 씩 전진한 같은 방향 자세다 — 오프라인 IK 는
+    /// 셋을 같은 가지로 이어 관절 변화가 작아야 하고, 셀이 끝나면 다음 호출을 새 ② 로 받아야 한다.</summary>
     [Fact]
-    public async Task 오프라인_IK_는_최종을_2번_해와_같은_가지로_잇는다()
+    public async Task 오프라인_IK_는_세_자세를_2번_해와_같은_가지로_잇는다()
     {
         var ik = ReachMapService.OfflineInverseKin(Kin, Fr5Kinematics.InspectionTool, PostureLimits.Default);
         var q = new[] { 5.0, -70, 100, -120, -80, 0 };
         var approach = Kin.Forward(q, Fr5Kinematics.InspectionTool);
-        var final = PoseMath.ToPose(PoseMath.Multiply(PoseMath.FromPose(approach),
-            PoseMath.FromPose(new double[] { 0, 0, 100, 0, 0, 0 })));   // 광축(+Z)으로 100mm 전진
+        double[] Advance(double mm) => PoseMath.ToPose(PoseMath.Multiply(PoseMath.FromPose(approach),
+            PoseMath.FromPose(new[] { 0, 0, mm, 0, 0, 0 })));
 
         var ja = (await ik(approach, default))!;
-        var jf = (await ik(final, default))!;
-        Assert.True(Enumerable.Range(0, 5).Max(i => AngleDiff(ja[i], jf[i])) < 30);
+        var jl = (await ik(Advance(100), default))!;
+        var jf = (await ik(Advance(400), default))!;
+        Assert.True(Enumerable.Range(0, 5).Max(i => AngleDiff(ja[i], jl[i])) < 30);
+        Assert.True(Enumerable.Range(0, 5).Max(i => AngleDiff(jl[i], jf[i])) < 40);
+
+        // 다음 셀의 ② 는 시드 없이 여유 최대 해 — 같은 자세를 다시 주면 처음과 같은 해가 나온다.
+        Assert.Equal(ja, (await ik(approach, default))!);
     }
 
     /// <summary>

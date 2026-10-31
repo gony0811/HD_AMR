@@ -45,7 +45,8 @@ public class ReachMapTests
     [Fact]
     public async Task 벽에_가까우면_뻗음부족_적당하면_도달_멀면_IK실패()
     {
-        var r = await ReachMap.BuildAsync(Spec("SM", new[] { 900.0, 1300, 2600 }), Robot(), SphereIk());
+        // 2450: 초점 자세(TCP = 면)까지 BASE 거리 ≈ 2457 < 2500 이라 IK 를 부르고, 가짜 리치 2000 밖이라 실패한다.
+        var r = await ReachMap.BuildAsync(Spec("SM", new[] { 900.0, 1300, 2450 }), Robot(), SphereIk());
 
         Assert.Equal(ReachStatus.FlangeShort, r.Cells[0].Status);   // 900 − 400 − 370 = 130 < 350
         Assert.Equal(130, r.Cells[0].FlangeReachMm, 6);
@@ -67,7 +68,33 @@ public class ReachMapTests
         // 가짜 IK 의 J6=300° 는 ±175 한계 밖이지만 운영은 J6 을 따로 절대각으로 맞추므로 도달이어야 한다.
         var r = await ReachMap.BuildAsync(Spec("SM", new[] { 1300.0 }), Robot(), SphereIk());
         Assert.Equal(ReachStatus.Ok, r.Cells[0].Status);
-        Assert.Equal(0, r.Cells[0].FinalJointsDeg![5]);
+        Assert.Equal(0, r.Cells[0].FocusJointsDeg![5]);
+    }
+
+    [Fact]
+    public async Task 접근_정렬준비_초점_세_자세를_차례로_푼다()
+    {
+        // 수직벽 정면, BASE 가 차체 원점 위 — TCP 의 BASE x = 정차 이격 − 면 후퇴(400 / 300 / 0).
+        var queried = new List<double[]>();
+        var r = await ReachMap.BuildAsync(Spec("SM", new[] { 1300.0 }), Robot(), SphereIk(queried: queried));
+
+        Assert.Equal(ReachStatus.Ok, r.Cells[0].Status);
+        Assert.Equal(new[] { 900.0, 1000, 1300 }, queried.Select(p => Math.Round(p[0], 6)));
+        Assert.Equal(3, r.IkCalls);
+        Assert.NotNull(r.Cells[0].AlignJointsDeg);
+    }
+
+    [Fact]
+    public async Task 초점에서만_안_닿으면_초점_사유로_남는다()
+    {
+        // TCP 가 BASE 에서 1200mm 넘게 나가면 IK 실패 — ②(900)·정렬 준비(1000)는 풀리고 초점(1300)만 막힌다.
+        var r = await ReachMap.BuildAsync(Spec("SM", new[] { 1300.0 }), Robot(),
+            (pose, _) => Task.FromResult<double[]?>(pose[0] <= 1200 ? new[] { 0.0, -60, 90, -120, 40, 0 } : null));
+
+        Assert.Equal(ReachStatus.IkFailed, r.Cells[0].Status);
+        Assert.StartsWith("초점 IK 실패", r.Cells[0].Reason);
+        Assert.NotNull(r.Cells[0].AlignJointsDeg);
+        Assert.Null(r.Cells[0].FocusJointsDeg);
     }
 
     [Fact]

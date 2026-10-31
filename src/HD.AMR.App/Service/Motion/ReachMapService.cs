@@ -54,8 +54,8 @@ public class ReachMapService
 
         var robot = new ReachMapRobot(mount, toolLen, limits, axis);
         _logger.LogInformation(
-            "리치 맵 시작: 셀 {Cells}개(면 {Walls}), ② {Approach}mm / 최종 {Final}mm, 공구 #{Tool} {ToolLen:0}mm, 최소 뻗음 {Min}mm",
-            spec.CellCount, string.Join(",", spec.WallCodes), spec.ApproachStandoffMm, spec.FinalStandoffMm,
+            "리치 맵 시작: 셀 {Cells}개(면 {Walls}), ② {Approach}mm / 정렬 준비 {Align}mm / 초점 {Focus}mm, 공구 #{Tool} {ToolLen:0}mm, 최소 뻗음 {Min}mm",
+            spec.CellCount, string.Join(",", spec.WallCodes), spec.ApproachStandoffMm, spec.AlignStandoffMm, spec.FocusStandoffMm,
             tool, toolLen, limits.MinFlangeReachMm);
 
         var result = await ReachMap.BuildAsync(spec, robot,
@@ -95,24 +95,24 @@ public class ReachMapService
     }
 
     /// <summary>
-    /// 오프라인 역기구학 델리게이트. <see cref="ReachMap"/> 은 셀마다 ② 를 먼저 풀고, 풀렸을 때만 최종을 푼다.
-    /// ② 는 여유 최대 해를, 최종은 그 ② 해에 가장 가까운 해를 골라 두 자세를 같은 가지로 잇는다 — 운영에서
-    /// ②→최종을 연속 이동하는 것과 같은 선택이다(가지가 갈라지면 경로 판정이 '휘두름' 으로 거짓 실패한다).
+    /// 오프라인 역기구학 델리게이트. <see cref="ReachMap"/> 은 셀마다 ② → 정렬 준비 → 초점 순으로 풀고,
+    /// 앞 자세가 풀렸을 때만 다음을 푼다. ② 는 여유 최대 해를, 그 뒤는 바로 앞 자세의 해에 가장 가까운 해를 골라
+    /// 세 자세를 같은 가지로 잇는다 — 운영에서 연속 이동하는 것과 같은 선택이다(가지가 갈라지면 경로 판정이
+    /// '휘두름' 으로 거짓 실패한다).
     /// </summary>
     public static Func<double[], CancellationToken, Task<double[]?>> OfflineInverseKin(
         Fr5Kinematics kin, double[] tool, PostureLimits limits)
     {
-        double[]? approach = null;   // null = 다음 호출은 ②
+        const int posesPerCell = 3;
+        var stage = 0;               // 0 = 다음 호출은 ②
+        double[]? previous = null;
         return (pose, _) =>
         {
-            if (approach is null)
-            {
-                approach = kin.InverseBest(pose, tool, limits);
-                return Task.FromResult(approach);   // 실패(null)면 ReachMap 이 최종을 부르지 않으므로 다음도 ②
-            }
-            var final = kin.InverseBest(pose, tool, limits, approach);
-            approach = null;
-            return Task.FromResult(final);
+            var sol = stage == 0 ? kin.InverseBest(pose, tool, limits) : kin.InverseBest(pose, tool, limits, previous);
+            // 실패(null)면 ReachMap 이 그 셀의 나머지를 부르지 않으므로 다음 호출은 새 셀의 ② 다.
+            stage = sol is null ? 0 : (stage + 1) % posesPerCell;
+            previous = sol;
+            return Task.FromResult(sol);
         };
     }
 

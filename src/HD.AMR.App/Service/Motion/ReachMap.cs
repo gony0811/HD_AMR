@@ -14,10 +14,13 @@ namespace HD.AMR.App.Service.Motion;
 /// ACS 의 '정차 이격'(벽 ↔ 로봇 기준점, VDA §4.4)과 같은 값이 된다 — 표를 그대로 정차 계획에 쓸 수 있다.
 /// T_A_B(장착 보정)와 텔레스코픽 스트로크는 실제 값을 쓴다.
 ///
-/// 셀마다 운영 시퀀스와 같은 두 자세를 본다:
+/// 셀마다 운영 시퀀스와 같은 세 자세를 본다:
 ///  · ② 거친 접근 — 면에서 <see cref="ReachMapSpec.ApproachStandoffMm"/>(기본 400) 물러난 TCP. 팔이 가장 접히는 지점.
-///  · 최종 작업 — 면에서 <see cref="ReachMapSpec.FinalStandoffMm"/>(기본 300, ④⁺ 레이저 WD) 물러난 TCP. 가장 뻗는 지점.
-/// 둘 다 역기구학이 풀리고 <see cref="PostureLimits"/> 를 만족하며, 둘 사이 관절 경로가 손목 특이점을
+///  · 정렬 준비 — 면에서 <see cref="ReachMapSpec.AlignStandoffMm"/>(기본 300, 레이저 WD) 물러난 TCP. 초점 위치로
+///    가기 전에 수평 맞춤 등 사전 작업을 하는 자세다.
+///  · 초점 검사 — TCP(검사 툴 초점)를 면에서 <see cref="ReachMapSpec.FocusStandoffMm"/>(기본 0) 에 둔다. 실제 검사
+///    자세이자 가장 뻗는 지점.
+/// 셋 다 역기구학이 풀리고 <see cref="PostureLimits"/> 를 만족하며, 이어지는 두 구간의 관절 경로가 손목 특이점을
 /// 지나지 않아야 그 셀을 '도달' 로 본다.
 ///
 /// J6 은 판정에서 뺀다 — 운영은 이동 직전에 J6 을 절대각(수직 180° / 수평 90°)으로 따로 맞추므로
@@ -79,52 +82,62 @@ public static class ReachMap
         Func<double[], CancellationToken, Task<double[]?>> inverseKin, CancellationToken ct)
     {
         var approach = SeamBaseTransform.Resolve(Input(robot, code, h, x, y, z, spec.ApproachStandoffMm));
-        var final = SeamBaseTransform.Resolve(Input(robot, code, h, x, y, z, spec.FinalStandoffMm));
+        var align = SeamBaseTransform.Resolve(Input(robot, code, h, x, y, z, spec.AlignStandoffMm));
+        var focus = SeamBaseTransform.Resolve(Input(robot, code, h, x, y, z, spec.FocusStandoffMm));
         var reach = ApproachReach.Check(approach.NormalDistanceMm, spec.ApproachStandoffMm,
                                         robot.ToolLengthMm, limits.MinFlangeReachMm);
 
         ReachCell Cell(ReachStatus status, string reason, double? margin = null,
-                       double[]? jA = null, double[]? jF = null)
+                       double[]? jA = null, double[]? jL = null, double[]? jF = null)
             => new(code, h, x, y, z, status, reason, margin, reach.FlangeReachMm,
-                   approach.NormalDistanceMm, jA, jF);
+                   approach.NormalDistanceMm, jA, jL, jF);
 
         // 면이 코봇 뒤에 있거나 좌표가 팔 규모를 크게 벗어나면 IK 를 부르지 않는다 — 컨트롤러 왕복 절약.
         if (approach.NormalDistanceMm < SeamBaseTransform.MinNormalDistanceMm)
             return (Cell(ReachStatus.OutOfRange, $"면이 코봇 BASE 뒤(법선거리 {approach.NormalDistanceMm:0}mm)"), 0);
-        var far = Math.Max(approach.DistanceMm, final.DistanceMm);
+        var far = Math.Max(approach.DistanceMm, Math.Max(align.DistanceMm, focus.DistanceMm));
         if (far > spec.MaxBaseDistanceMm)
             return (Cell(ReachStatus.OutOfRange, $"BASE→TCP {far:0}mm > {spec.MaxBaseDistanceMm:0}mm"), 0);
 
+        // 운영 순서대로 푼다(② → 정렬 준비 → 초점). 앞 자세가 안 풀리면 뒤는 부르지 않는다.
         var calls = 0;
-        double[]? jA, jF;
+        double[]? jA, jL, jF;
         string? ikError;
         (jA, ikError) = await SolveAsync(approach, inverseKin, ct).ConfigureAwait(false);
         calls++;
         if (jA is null) return (Cell(ReachStatus.IkFailed, $"② IK 실패{ikError}"), calls);
-        (jF, ikError) = await SolveAsync(final, inverseKin, ct).ConfigureAwait(false);
+        (jL, ikError) = await SolveAsync(align, inverseKin, ct).ConfigureAwait(false);
         calls++;
-        if (jF is null) return (Cell(ReachStatus.IkFailed, $"최종 IK 실패{ikError}", jA: jA), calls);
+        if (jL is null) return (Cell(ReachStatus.IkFailed, $"정렬 준비 IK 실패{ikError}", jA: jA), calls);
+        (jF, ikError) = await SolveAsync(focus, inverseKin, ct).ConfigureAwait(false);
+        calls++;
+        if (jF is null) return (Cell(ReachStatus.IkFailed, $"초점 IK 실패{ikError}", jA: jA, jL: jL), calls);
 
         jA = WithoutJ6(limits.NormalizeJoints(jA));
+        jL = WithoutJ6(limits.NormalizeJoints(jL));
         jF = WithoutJ6(limits.NormalizeJoints(jF));
 
         var mA = limits.Evaluate(jA, approach.PlanarDistanceMm);
-        var mF = limits.Evaluate(jF, final.PlanarDistanceMm);
-        var margin = Math.Min(mA.MarginDeg, mF.MarginDeg);
-        if (!mA.Feasible) return (Cell(ReachStatus.PostureLimit, $"② {mA.Limiting}", margin, jA, jF), calls);
-        if (!mF.Feasible) return (Cell(ReachStatus.PostureLimit, $"최종 {mF.Limiting}", margin, jA, jF), calls);
+        var mL = limits.Evaluate(jL, align.PlanarDistanceMm);
+        var mF = limits.Evaluate(jF, focus.PlanarDistanceMm);
+        var margin = Math.Min(mA.MarginDeg, Math.Min(mL.MarginDeg, mF.MarginDeg));
+        if (!mA.Feasible) return (Cell(ReachStatus.PostureLimit, $"② {mA.Limiting}", margin, jA, jL, jF), calls);
+        if (!mL.Feasible) return (Cell(ReachStatus.PostureLimit, $"정렬 준비 {mL.Limiting}", margin, jA, jL, jF), calls);
+        if (!mF.Feasible) return (Cell(ReachStatus.PostureLimit, $"초점 {mF.Limiting}", margin, jA, jL, jF), calls);
 
-        var path = limits.CheckJointPath(jA, jF);
-        if (!path.Ok) return (Cell(ReachStatus.PathUnsafe, $"②→최종 {path.Reason}", margin, jA, jF), calls);
+        var path = limits.CheckJointPath(jA, jL);
+        if (!path.Ok) return (Cell(ReachStatus.PathUnsafe, $"②→정렬 준비 {path.Reason}", margin, jA, jL, jF), calls);
+        path = limits.CheckJointPath(jL, jF);
+        if (!path.Ok) return (Cell(ReachStatus.PathUnsafe, $"정렬 준비→초점 {path.Reason}", margin, jA, jL, jF), calls);
 
         // IK 는 풀렸어도 운영 ② 의 리치 사전 점검이 막는다 — 잠정 최소 뻗음 검증용으로 관절 결과는 남긴다.
         if (!reach.Ok)
             return (Cell(ReachStatus.FlangeShort,
-                $"플랜지 뻗음 {reach.FlangeReachMm:0}mm < 최소 {limits.MinFlangeReachMm:0}mm (IK·자세는 통과)", margin, jA, jF), calls);
+                $"플랜지 뻗음 {reach.FlangeReachMm:0}mm < 최소 {limits.MinFlangeReachMm:0}mm (IK·자세는 통과)", margin, jA, jL, jF), calls);
 
         return margin < spec.GoodMarginDeg
-            ? (Cell(ReachStatus.Tight, $"여유 {margin:0.0}° < {spec.GoodMarginDeg:0}°", margin, jA, jF), calls)
-            : (Cell(ReachStatus.Ok, "도달", margin, jA, jF), calls);
+            ? (Cell(ReachStatus.Tight, $"여유 {margin:0.0}° < {spec.GoodMarginDeg:0}°", margin, jA, jL, jF), calls)
+            : (Cell(ReachStatus.Ok, "도달", margin, jA, jL, jF), calls);
     }
 
     private static SeamBaseInput Input(ReachMapRobot robot, string code, double h, double x, double y, double z, double standoff)
@@ -171,7 +184,9 @@ public static class ReachMap
 /// <param name="Ys">용접선 점의 차체 좌측 가로 오프셋(+ = 좌).</param>
 /// <param name="Zs">용접선 점의 바닥 위 높이. 바닥(B)은 무시하고 0, 천장(T)은 천장 높이로 읽는다.</param>
 /// <param name="ApproachStandoffMm">② 거친 접근 거리 — TCP 의 면 후퇴(inspection.approachStandoffMm).</param>
-/// <param name="FinalStandoffMm">최종 작업거리 — ④⁺ 레이저 WD(Sequence.Laser.WorkingDistanceMm).</param>
+/// <param name="AlignStandoffMm">정렬 준비 거리 — 초점 위치로 가기 전 수평 맞춤 등을 하는 TCP 후퇴
+/// (레이저 WD, Sequence.Laser.WorkingDistanceMm).</param>
+/// <param name="FocusStandoffMm">초점 검사 거리 — TCP(검사 툴 초점)의 면 후퇴. 초점을 용접선 위에 두므로 0.</param>
 /// <param name="GoodMarginDeg">이 여유 미만이면 '빠듯' 으로 분류 [도].</param>
 /// <param name="MaxBaseDistanceMm">BASE→TCP 거리가 이보다 멀면 IK 없이 범위 밖으로 친다.
 /// FR5-WML: 어깨 180 + 리치 1900 + 툴 ≈ 2.45 m.</param>
@@ -182,7 +197,8 @@ public sealed record ReachMapSpec(
     double[] Ys,
     double[] Zs,
     double ApproachStandoffMm = 400,
-    double FinalStandoffMm = 300,
+    double AlignStandoffMm = 300,
+    double FocusStandoffMm = 0,
     double GoodMarginDeg = 10,
     double MaxBaseDistanceMm = 2500)
 {
@@ -194,7 +210,7 @@ public sealed record ReachMapSpec(
         return Enumerable.Range(0, n + 1).Select(i => from + i * step).ToArray();
     }
 
-    /// <summary>셀 수(바닥은 z 1개로 센다) — IK 호출은 셀당 최대 2회.</summary>
+    /// <summary>셀 수(바닥은 z 1개로 센다) — IK 호출은 셀당 최대 3회.</summary>
     public int CellCount => WallCodes
         .Select(Models.WallCodes.Find)
         .Sum(w => StrokesMm.Length * Xs.Length * Ys.Length
@@ -217,13 +233,13 @@ public sealed record ReachMapRobot(
 /// <summary>셀 판정 — 위에서부터 먼저 걸린 사유 하나.</summary>
 public enum ReachStatus
 {
-    /// <summary>두 자세 모두 도달, 여유 충분.</summary>
+    /// <summary>세 자세 모두 도달, 여유 충분.</summary>
     Ok,
     /// <summary>도달하지만 여유가 <see cref="ReachMapSpec.GoodMarginDeg"/> 미만.</summary>
     Tight,
     /// <summary>IK·자세는 통과했지만 플랜지 뻗음이 최소값 미만 — 운영 ② 리치 사전 점검이 막는다.</summary>
     FlangeShort,
-    /// <summary>②→최종 관절 경로가 손목 특이점(J5 부호 반전)을 지난다.</summary>
+    /// <summary>②→정렬 준비 또는 정렬 준비→초점 관절 경로가 손목 특이점(J5 부호 반전)을 지난다.</summary>
     PathUnsafe,
     /// <summary>IK 해가 관절 한계·특이점 여유를 벗어난다.</summary>
     PostureLimit,
@@ -246,7 +262,8 @@ public sealed record ReachCell(
     double FlangeReachMm,
     double NormalDistanceMm,
     double[]? ApproachJointsDeg,
-    double[]? FinalJointsDeg)
+    double[]? AlignJointsDeg,
+    double[]? FocusJointsDeg)
 {
     /// <summary>운영 시퀀스가 실제로 수행할 수 있는 셀인가(빠듯 포함).</summary>
     public bool Usable => Status is ReachStatus.Ok or ReachStatus.Tight;
@@ -300,11 +317,11 @@ public sealed record ReachMapResult(
         var ci = CultureInfo.InvariantCulture;
         var sb = new StringBuilder();
         sb.AppendLine($"# reach map  approachStandoff={Spec.ApproachStandoffMm.ToString(ci)}mm  " +
-                      $"finalStandoff={Spec.FinalStandoffMm.ToString(ci)}mm  tool={Robot.ToolLengthMm.ToString("0.#", ci)}mm  " +
+                      $"alignStandoff={Spec.AlignStandoffMm.ToString(ci)}mm  focusStandoff={Spec.FocusStandoffMm.ToString(ci)}mm  tool={Robot.ToolLengthMm.ToString("0.#", ci)}mm  " +
                       $"minFlange={Robot.Limits.MinFlangeReachMm.ToString(ci)}mm  wrist={Robot.Limits.WristMarginDeg.ToString(ci)}deg  " +
                       $"mount=[{string.Join(" ", Robot.MountAtHome.Select(v => v.ToString("0.##", ci)))}]");
         sb.AppendLine("wall_code,stroke_mm,x_mm,y_mm,z_mm,status,usable,margin_deg,flange_reach_mm,normal_dist_mm," +
-                      "a_j1,a_j2,a_j3,a_j4,a_j5,f_j1,f_j2,f_j3,f_j4,f_j5,reason");
+                      "a_j1,a_j2,a_j3,a_j4,a_j5,l_j1,l_j2,l_j3,l_j4,l_j5,f_j1,f_j2,f_j3,f_j4,f_j5,reason");
         foreach (var c in Cells)
         {
             static string J(double[]? j, int i, CultureInfo ci) => j is { Length: 6 } ? j[i].ToString("0.0", ci) : "";
@@ -319,7 +336,8 @@ public sealed record ReachMapResult(
               .Append(c.FlangeReachMm.ToString("0", ci)).Append(',')
               .Append(c.NormalDistanceMm.ToString("0", ci));
             for (var i = 0; i < 5; i++) sb.Append(',').Append(J(c.ApproachJointsDeg, i, ci));
-            for (var i = 0; i < 5; i++) sb.Append(',').Append(J(c.FinalJointsDeg, i, ci));
+            for (var i = 0; i < 5; i++) sb.Append(',').Append(J(c.AlignJointsDeg, i, ci));
+            for (var i = 0; i < 5; i++) sb.Append(',').Append(J(c.FocusJointsDeg, i, ci));
             sb.Append(",\"").Append(c.Reason.Replace("\"", "'")).AppendLine("\"");
         }
         return sb.ToString();
