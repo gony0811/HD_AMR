@@ -18,6 +18,8 @@ namespace HD.AMR.App.Service.Inspection;
 /// <param name="Blocker">null 이 아니면 호출측은 <b>폴백 없이 즉시 실패</b>(리치 부족 등).</param>
 /// <param name="OpticalAxis"><paramref name="ComputedPose"/> 계산에 쓴 광축 툴축(<see cref="WeldSequenceSupport.DepthAxisKey"/>).</param>
 /// <param name="Shortfall">Blocker 가 <b>리치 부족</b>이면 그 수치 — `stationReachShortfall` 보고용(N23 A안). 그 외 null.</param>
+/// <param name="StrokeMm">환산에 쓴 텔레스코픽 스트로크 [mm] — 자기 간섭 판정용. 환산하지 않았으면 null.</param>
+/// <param name="MountYawDeg">환산에 쓴 장착 yaw(T_A_B rz) [도] — 자기 간섭 판정용. 환산하지 않았으면 null.</param>
 public sealed record SeamApproachResult(
     double[]? Base,
     double[]? ComputedPose,
@@ -25,7 +27,9 @@ public sealed record SeamApproachResult(
     string Note,
     string? Blocker,
     ToolAxisDir OpticalAxis = ToolAxisDir.PlusZ,
-    ReachShortfall? Shortfall = null);
+    ReachShortfall? Shortfall = null,
+    double? StrokeMm = null,
+    double? MountYawDeg = null);
 
 /// <summary>
 /// ACS 용접선 점(맵 좌표)을 코봇 BASE 접근점으로 환산한다 — ② 검사위치 이동(시작점)과
@@ -189,7 +193,8 @@ public sealed class SeamApproachResolver
             target.ApproachBaseMm, target.TargetPoseBase, useComputed,
             (standoffMm is null
                 ? $"용접선 접근점(면 이격 {standoff:0}mm — '카메라 거리 정렬' 목표거리)"
-                : $"용접선 접근점(면 이격 {standoff:0}mm)") + reachNote, null, opticalAxis);
+                : $"용접선 접근점(면 이격 {standoff:0}mm)") + reachNote, null, opticalAxis,
+            StrokeMm: stroke, MountYawDeg: mount[5]);
     }
 
     /// <summary>

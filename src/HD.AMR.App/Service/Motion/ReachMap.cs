@@ -20,8 +20,8 @@ namespace HD.AMR.App.Service.Motion;
 ///    가기 전에 수평 맞춤 등 사전 작업을 하는 자세다.
 ///  · 초점 검사 — TCP(검사 툴 초점)를 면에서 <see cref="ReachMapSpec.FocusStandoffMm"/>(기본 0) 에 둔다. 실제 검사
 ///    자세이자 가장 뻗는 지점.
-/// 셋 다 역기구학이 풀리고 <see cref="PostureLimits"/> 를 만족하며, 이어지는 두 구간의 관절 경로가 손목 특이점을
-/// 지나지 않아야 그 셀을 '도달' 로 본다.
+/// 셋 다 역기구학이 풀리고 <see cref="PostureLimits"/> 를 만족하며, 팔·툴이 차체·리프트 기둥에 닿지 않고
+/// (<see cref="ReachMapRobot.Envelope"/>), 이어지는 두 구간의 관절 경로가 손목 특이점을 지나지 않아야 그 셀을 '도달' 로 본다.
 ///
 /// J6 은 판정에서 뺀다 — 운영은 이동 직전에 J6 을 절대각(수직 180° / 수평 90°)으로 따로 맞추므로
 /// IK 가 고른 J6 값은 의미가 없다(<see cref="Sequence.Steps.CobotInspectionMoveStep.TargetJ6Deg"/>).
@@ -35,10 +35,22 @@ public static class ReachMap
     /// 격자 전체를 평가한다. 셀 순서는 wall_code → 스트로크 → x → y → z.
     /// </summary>
     /// <param name="inverseKin">BASE pose → 관절각[6]. 도달 불가면 null 또는 예외(예외 메시지는 사유로 남긴다).</param>
-    public static async Task<ReachMapResult> BuildAsync(
+    public static Task<ReachMapResult> BuildAsync(
         ReachMapSpec spec,
         ReachMapRobot robot,
         Func<double[], CancellationToken, Task<double[]?>> inverseKin,
+        IProgress<ReachMapProgress>? progress = null,
+        CancellationToken ct = default)
+        => BuildAsync(spec, robot, (pose, _, c) => inverseKin(pose, c), progress, ct);
+
+    /// <summary>
+    /// 격자 전체를 평가한다 — 역기구학이 스트로크도 받는 판(자기 간섭을 피해 가지를 고르는 오프라인 IK 용).
+    /// </summary>
+    /// <param name="inverseKin">(BASE pose, 스트로크 h[mm]) → 관절각[6].</param>
+    public static async Task<ReachMapResult> BuildAsync(
+        ReachMapSpec spec,
+        ReachMapRobot robot,
+        Func<double[], double, CancellationToken, Task<double[]?>> inverseKin,
         IProgress<ReachMapProgress>? progress = null,
         CancellationToken ct = default)
     {
@@ -79,7 +91,7 @@ public static class ReachMap
     private static async Task<(ReachCell Cell, int IkCalls)> EvaluateAsync(
         ReachMapSpec spec, ReachMapRobot robot, PostureLimits limits,
         string code, double h, double x, double y, double z,
-        Func<double[], CancellationToken, Task<double[]?>> inverseKin, CancellationToken ct)
+        Func<double[], double, CancellationToken, Task<double[]?>> inverseKin, CancellationToken ct)
     {
         var approach = SeamBaseTransform.Resolve(Input(robot, code, h, x, y, z, spec.ApproachStandoffMm));
         var align = SeamBaseTransform.Resolve(Input(robot, code, h, x, y, z, spec.AlignStandoffMm));
@@ -103,13 +115,13 @@ public static class ReachMap
         var calls = 0;
         double[]? jA, jL, jF;
         string? ikError;
-        (jA, ikError) = await SolveAsync(approach, inverseKin, ct).ConfigureAwait(false);
+        (jA, ikError) = await SolveAsync(approach, h, inverseKin, ct).ConfigureAwait(false);
         calls++;
         if (jA is null) return (Cell(ReachStatus.IkFailed, $"② IK 실패{ikError}"), calls);
-        (jL, ikError) = await SolveAsync(align, inverseKin, ct).ConfigureAwait(false);
+        (jL, ikError) = await SolveAsync(align, h, inverseKin, ct).ConfigureAwait(false);
         calls++;
         if (jL is null) return (Cell(ReachStatus.IkFailed, $"정렬 준비 IK 실패{ikError}", jA: jA), calls);
-        (jF, ikError) = await SolveAsync(focus, inverseKin, ct).ConfigureAwait(false);
+        (jF, ikError) = await SolveAsync(focus, h, inverseKin, ct).ConfigureAwait(false);
         calls++;
         if (jF is null) return (Cell(ReachStatus.IkFailed, $"초점 IK 실패{ikError}", jA: jA, jL: jL), calls);
 
@@ -124,6 +136,17 @@ public static class ReachMap
         if (!mA.Feasible) return (Cell(ReachStatus.PostureLimit, $"② {mA.Limiting}", margin, jA, jL, jF), calls);
         if (!mL.Feasible) return (Cell(ReachStatus.PostureLimit, $"정렬 준비 {mL.Limiting}", margin, jA, jL, jF), calls);
         if (!mF.Feasible) return (Cell(ReachStatus.PostureLimit, $"초점 {mF.Limiting}", margin, jA, jL, jF), calls);
+
+        if (robot.Envelope is { } env)
+        {
+            var yaw = robot.MountAtHome is { Length: 6 } m6 ? m6[5] : 0;
+            foreach (var (label, j) in new[] { ("②", jA), ("정렬 준비", jL), ("초점", jF) })
+            {
+                var self = env.Evaluate(Fr5Kinematics.Fr5Wml, j, h, yaw);
+                if (self.Collides)
+                    return (Cell(ReachStatus.SelfCollision, $"{label} 자기 간섭 {self}", margin, jA, jL, jF), calls);
+            }
+        }
 
         var path = limits.CheckJointPath(jA, jL);
         if (!path.Ok) return (Cell(ReachStatus.PathUnsafe, $"②→정렬 준비 {path.Reason}", margin, jA, jL, jF), calls);
@@ -156,12 +179,13 @@ public static class ReachMap
             RollRef: ToolRollRef.WallHorizontal);
 
     private static async Task<(double[]? Joints, string? Error)> SolveAsync(
-        SeamBaseTarget target, Func<double[], CancellationToken, Task<double[]?>> inverseKin, CancellationToken ct)
+        SeamBaseTarget target, double strokeMm, Func<double[], double, CancellationToken, Task<double[]?>> inverseKin,
+        CancellationToken ct)
     {
         if (target.TargetPoseBase is null) return (null, " — 목표 자세 없음");
         try
         {
-            var j = await inverseKin(target.TargetPoseBase, ct).ConfigureAwait(false);
+            var j = await inverseKin(target.TargetPoseBase, strokeMm, ct).ConfigureAwait(false);
             return j is { Length: 6 } ? (j, null) : (null, null);
         }
         catch (OperationCanceledException) { throw; }
@@ -223,12 +247,14 @@ public sealed record ReachMapSpec(
 /// <param name="Limits">자세 허용 범위(최소 플랜지 뻗음 포함).</param>
 /// <param name="OpticalAxis">광축 툴축 — 카메라 페이지 설정값.</param>
 /// <param name="ToolSpinDeg">광축 둘레 초기 회전 — 시험 화면과 같은 기준(벽면 수평 + 180°).</param>
+/// <param name="Envelope">자기 간섭 외곽(차체·리프트 기둥·툴). null 이면 자기 간섭을 보지 않는다.</param>
 public sealed record ReachMapRobot(
     double[] MountAtHome,
     double ToolLengthMm,
     PostureLimits Limits,
     ToolAxisDir OpticalAxis = ToolAxisDir.PlusZ,
-    double ToolSpinDeg = 180.0);
+    double ToolSpinDeg = 180.0,
+    CobotEnvelope? Envelope = null);
 
 /// <summary>셀 판정 — 위에서부터 먼저 걸린 사유 하나.</summary>
 public enum ReachStatus
@@ -241,6 +267,8 @@ public enum ReachStatus
     FlangeShort,
     /// <summary>②→정렬 준비 또는 정렬 준비→초점 관절 경로가 손목 특이점(J5 부호 반전)을 지난다.</summary>
     PathUnsafe,
+    /// <summary>팔·검사 툴이 AMR 차체·리프트 기둥·신호탑에 닿는다(<see cref="CobotEnvelope"/>).</summary>
+    SelfCollision,
     /// <summary>IK 해가 관절 한계·특이점 여유를 벗어난다.</summary>
     PostureLimit,
     /// <summary>역기구학 해 없음.</summary>
@@ -349,6 +377,7 @@ public sealed record ReachMapResult(
         ReachStatus.Tight => "빠듯",
         ReachStatus.FlangeShort => "뻗음부족",
         ReachStatus.PathUnsafe => "경로특이점",
+        ReachStatus.SelfCollision => "자기간섭",
         ReachStatus.PostureLimit => "자세한계",
         ReachStatus.IkFailed => "IK실패",
         _ => "범위밖",

@@ -114,14 +114,14 @@ public class Fr5KinematicsTests
         double[] Advance(double mm) => PoseMath.ToPose(PoseMath.Multiply(PoseMath.FromPose(approach),
             PoseMath.FromPose(new[] { 0, 0, mm, 0, 0, 0 })));
 
-        var ja = (await ik(approach, default))!;
-        var jl = (await ik(Advance(100), default))!;
-        var jf = (await ik(Advance(400), default))!;
+        var ja = (await ik(approach, 0, default))!;
+        var jl = (await ik(Advance(100), 0, default))!;
+        var jf = (await ik(Advance(400), 0, default))!;
         Assert.True(Enumerable.Range(0, 5).Max(i => AngleDiff(ja[i], jl[i])) < 30);
         Assert.True(Enumerable.Range(0, 5).Max(i => AngleDiff(jl[i], jf[i])) < 40);
 
         // 다음 셀의 ② 는 시드 없이 여유 최대 해 — 같은 자세를 다시 주면 처음과 같은 해가 나온다.
-        Assert.Equal(ja, (await ik(approach, default))!);
+        Assert.Equal(ja, (await ik(approach, 0, default))!);
     }
 
     /// <summary>

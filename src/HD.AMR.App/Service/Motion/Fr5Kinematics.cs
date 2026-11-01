@@ -64,6 +64,15 @@ public sealed record Fr5Kinematics(double D1, double A2, double A3, double D4, d
         return m;
     }
 
+    /// <summary>관절 프레임 전부 — [0] = BASE(단위행렬), [i] = 관절 i 뒤, [6] = 플랜지. 링크 위치(자기 간섭 판정)용.</summary>
+    public double[][,] Frames(double[] jointsDeg)
+    {
+        var frames = new double[7][,];
+        frames[0] = PoseMath.FromPose(new double[6]);
+        for (var i = 0; i < 6; i++) frames[i + 1] = PoseMath.Multiply(frames[i], Link(i, jointsDeg[i] * Deg2Rad));
+        return frames;
+    }
+
     /// <summary>순기구학 — 관절각[도] → BASE 기준 TCP pose [x,y,z,rx,ry,rz](mm·도, <see cref="PoseMath"/> 규약).</summary>
     public double[] Forward(double[] jointsDeg, double[]? toolOffset = null)
     {
@@ -140,22 +149,27 @@ public sealed record Fr5Kinematics(double D1, double A2, double A3, double D4, d
     /// <param name="seed">주면 허용 범위 안의 해 중 이 관절각(J1~J5)에 가장 가까운 해를 고른다 — 연속 이동처럼
     /// 같은 가지를 유지해, ②→최종처럼 가까운 두 자세가 서로 다른 가지로 갈라져 경로가 휘두르는 것을 막는다.
     /// 범위 안의 해가 없으면 seed 없이 여유 최대 해로 돌아간다.</param>
-    public double[]? InverseBest(double[] tcpPose, double[]? toolOffset, PostureLimits limits, double[]? seed = null)
+    /// <param name="collides">주면 이 판정이 참인 해(자기 간섭 — <see cref="CobotEnvelope"/>)는 고르지 않는다.
+    /// 간섭 없는 해가 하나도 없을 때만 간섭 해를 돌려줘 호출측이 '자기 간섭' 으로 사유를 남기게 한다.</param>
+    public double[]? InverseBest(double[] tcpPose, double[]? toolOffset, PostureLimits limits, double[]? seed = null,
+        Func<double[], bool>? collides = null)
     {
-        double[]? best = null, nearest = null;
-        double bestMargin = double.NegativeInfinity, nearestDist = double.PositiveInfinity;
+        double[]? best = null, bestFree = null, nearest = null;
+        double bestMargin = double.NegativeInfinity, bestFreeMargin = double.NegativeInfinity, nearestDist = double.PositiveInfinity;
         foreach (var sol in InverseAll(tcpPose, toolOffset))
         {
             var j = limits.NormalizeJoints(sol);
             var m = limits.Evaluate(new[] { j[0], j[1], j[2], j[3], j[4], 0.0 });
             if (m.MarginDeg > bestMargin) { bestMargin = m.MarginDeg; best = j; }
+            if (collides?.Invoke(j) == true) continue;
+            if (m.MarginDeg > bestFreeMargin) { bestFreeMargin = m.MarginDeg; bestFree = j; }
             if (seed is { Length: >= 5 } && m.Feasible)
             {
                 var d = Enumerable.Range(0, 5).Max(i => Math.Abs(j[i] - seed[i]));
                 if (d < nearestDist) { nearestDist = d; nearest = j; }
             }
         }
-        return nearest ?? best;
+        return nearest ?? bestFree ?? best;
     }
 
     private static double Wrap(double deg)

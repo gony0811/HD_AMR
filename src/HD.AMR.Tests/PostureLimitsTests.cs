@@ -229,4 +229,20 @@ public class PostureLimitsTests
 
         Assert.True(tight.Evaluate(Joints()).Feasible);
     }
+
+    [Fact]
+    public void 기본_한계는_FR5_실측_J2_J4_비대칭이다()
+    {
+        var d = PostureLimits.Default;
+        Assert.Equal(new[] { -175.0, -265, -160, -265, -175, -175 }, d.JointMinDeg);
+        Assert.Equal(new[] { 175.0, 85, 160, 85, 175, 175 }, d.JointMaxDeg);
+
+        // J2 +90° 는 실물 상한(+85) 밖이고 −270° 로 감아도 하한(−265) 밖 — 진짜 한계 초과다.
+        var over = d.Evaluate(new[] { 0.0, 90, 90, -90, 60, 0 });
+        Assert.False(over.Feasible);
+        Assert.StartsWith("J2", over.Limiting);
+        // J2 +120° 는 −240° 와 같은 자세 — 하한 쪽으로 감아 범위 안이다.
+        Assert.Equal(-240, d.NormalizeJoints(new[] { 0.0, 120, 90, -90, 60, 0 })[1], 6);
+    }
 }
+

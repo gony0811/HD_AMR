@@ -1,5 +1,6 @@
 using HD.AMR.App.Communication;
 using HD.AMR.App.Service.Inspection;
+using HD.AMR.App.Service.Motion;
 using Microsoft.Extensions.Logging;
 
 namespace HD.AMR.App.Service.Sequence.Steps;
@@ -99,6 +100,31 @@ public class CobotInspectionMoveStep : ISequenceStep
         => raw is { } v && v >= MinApproachStandoffMm && v <= MaxApproachStandoffMm
             ? (v, true)
             : (DefaultApproachStandoffMm, false);
+
+    /// <summary>자기 간섭 가드 켜기/끄기 파라미터 — 기본 켜짐. 외곽이 보수적이라(툴 회전 대칭) 현장에서 거짓 거부가
+    /// 확인되면 끌 수 있게 둔다.</summary>
+    public const string SelfCollisionGuardKey = "inspection.selfCollisionGuard";
+
+    /// <summary>
+    /// ② 관절 해가 팔·검사 툴을 차체·리프트 기둥·신호탑에 닿게 하는지(<see cref="CobotEnvelope"/>). 닿으면 사유, 아니면 null.
+    /// 스트로크·장착 yaw 를 모르면(티칭 폴백) 판정하지 않는다.
+    /// </summary>
+    internal static string? SelfCollisionBlocker(double[] joints, SeamApproachResult seam)
+    {
+        if (seam.StrokeMm is not { } stroke || seam.MountYawDeg is not { } yaw) return null;
+        var self = CobotEnvelope.Default.Evaluate(Fr5Kinematics.Fr5Wml, joints, stroke, yaw);
+        return self.Collides
+            ? $"[Cobot 검사위치 이동] 자기 간섭 — 역기구학 해 [{string.Join(", ", joints.Select(v => v.ToString("0.0")))}]° 에서 " +
+              $"{self} (스트로크 {stroke:0}mm). 출발 자세(ready·홈 위치_2)의 IK 가지가 이 목표에 맞지 않습니다 — " +
+              "정차 위치·스트로크를 바꾸거나 다른 가지의 진입 자세를 티칭하세요."
+            : null;
+    }
+
+    private async Task<bool> SelfCollisionGuardOnAsync()
+    {
+        try { return await _param.GetBoolAsync(SelfCollisionGuardKey) ?? true; }
+        catch { return true; }   // DB 미준비 등 — 안전 쪽(켜짐)
+    }
 
     public StepValidation Validate(SequenceContext context)
     {
@@ -391,6 +417,8 @@ public class CobotInspectionMoveStep : ISequenceStep
 
         var reference = await _cobot.Rpc.GetActualJointPosAsync(ct: ct);
         var joints = await _cobot.Rpc.GetInverseKinKeepWristAsync(target, reference, context.Tool, 0, ct);
+        if (await SelfCollisionGuardOnAsync() && SelfCollisionBlocker(joints, seam) is { } selfHit)
+            return StepResult.Fail(selfHit);
 
         var rc = await _cobot.Rpc.MoveJAsync(joints, target,
             tool: context.Tool, user: 0, vel: context.Velocity, ct: ct);
@@ -459,6 +487,11 @@ public class CobotInspectionMoveStep : ISequenceStep
         catch (InvalidOperationException ex)
         {
             _logger.LogWarning("[Cobot 검사위치 이동] 연속 이동 생략 — 목표 자세 계산 실패: {Msg} → 진입 준비 경로", ex.Message);
+            return null;
+        }
+        if (await SelfCollisionGuardOnAsync() && SelfCollisionBlocker(joints, seam) is { } selfHit)
+        {
+            _logger.LogWarning("[Cobot 검사위치 이동] 연속 이동 생략 — {Msg} → 진입 준비 경로", selfHit);
             return null;
         }
 

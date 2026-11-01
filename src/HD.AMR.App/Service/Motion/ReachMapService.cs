@@ -52,7 +52,7 @@ public class ReachMapService
             _logger.LogWarning("리치 맵: 자세 허용 범위가 저장되지 않아 기본값(툴 없는 하드웨어 범위)으로 판정합니다.");
         var (axis, _) = await WeldSequenceSupport.GetDepthAxisAsync(_param);
 
-        var robot = new ReachMapRobot(mount, toolLen, limits, axis);
+        var robot = new ReachMapRobot(mount, toolLen, limits, axis, Envelope: CobotEnvelope.Default);
         _logger.LogInformation(
             "리치 맵 시작: 셀 {Cells}개(면 {Walls}), ② {Approach}mm / 정렬 준비 {Align}mm / 초점 {Focus}mm, 공구 #{Tool} {ToolLen:0}mm, 최소 뻗음 {Min}mm",
             spec.CellCount, string.Join(",", spec.WallCodes), spec.ApproachStandoffMm, spec.AlignStandoffMm, spec.FocusStandoffMm,
@@ -82,7 +82,8 @@ public class ReachMapService
         var (savedAxis, fromParam) = await WeldSequenceSupport.GetDepthAxisAsync(_param);
         if (fromParam && savedAxis != ToolAxisDir.PlusZ)
             _logger.LogWarning("오프라인 리치 맵: 저장된 광축 {Axis} 대신 설계 공구 광축 +Z 로 계산합니다 — 컨트롤러 공구 #1 회전을 확인하세요.", savedAxis);
-        var robot = new ReachMapRobot(mount, ApproachReach.ToolLengthMm(tool), limits, ToolAxisDir.PlusZ);
+        var robot = new ReachMapRobot(mount, ApproachReach.ToolLengthMm(tool), limits, ToolAxisDir.PlusZ,
+            Envelope: CobotEnvelope.Default);
         var kin = Fr5Kinematics.Fr5Wml;
         _logger.LogInformation(
             "오프라인 리치 맵 시작(FR5-WML 모델): 셀 {Cells}개(면 {Walls}), 장착 {Mount}, 공구 [{Tool}]",
@@ -90,7 +91,8 @@ public class ReachMapService
             string.Join(" ", tool));
 
         var normalized = limits.Normalized();
-        var result = await ReachMap.BuildAsync(spec, robot, OfflineInverseKin(kin, tool, normalized), progress, ct);
+        var result = await ReachMap.BuildAsync(spec, robot,
+            OfflineInverseKin(kin, tool, normalized, CobotEnvelope.Default, mount[5]), progress, ct);
         return (result, await SaveAsync(result, "reachmap_offline", ct));
     }
 
@@ -98,17 +100,24 @@ public class ReachMapService
     /// 오프라인 역기구학 델리게이트. <see cref="ReachMap"/> 은 셀마다 ② → 정렬 준비 → 초점 순으로 풀고,
     /// 앞 자세가 풀렸을 때만 다음을 푼다. ② 는 여유 최대 해를, 그 뒤는 바로 앞 자세의 해에 가장 가까운 해를 골라
     /// 세 자세를 같은 가지로 잇는다 — 운영에서 연속 이동하는 것과 같은 선택이다(가지가 갈라지면 경로 판정이
-    /// '휘두름' 으로 거짓 실패한다).
+    /// '휘두름' 으로 거짓 실패한다). <paramref name="envelope"/> 를 주면 팔·툴이 차체·리프트 기둥에 닿는 가지는
+    /// 고르지 않는다(상완이 기둥 옆으로 늘어지는 elbow-down 가지가 흔히 여유 최대로 뽑힌다).
     /// </summary>
-    public static Func<double[], CancellationToken, Task<double[]?>> OfflineInverseKin(
-        Fr5Kinematics kin, double[] tool, PostureLimits limits)
+    /// <param name="mountYawDeg">장착 yaw(T_A_B rz) [도] — 자기 간섭 판정용.</param>
+    public static Func<double[], double, CancellationToken, Task<double[]?>> OfflineInverseKin(
+        Fr5Kinematics kin, double[] tool, PostureLimits limits, CobotEnvelope? envelope = null, double mountYawDeg = 0)
     {
         const int posesPerCell = 3;
         var stage = 0;               // 0 = 다음 호출은 ②
         double[]? previous = null;
-        return (pose, _) =>
+        return (pose, strokeMm, _) =>
         {
-            var sol = stage == 0 ? kin.InverseBest(pose, tool, limits) : kin.InverseBest(pose, tool, limits, previous);
+            Func<double[], bool>? collides = envelope is null
+                ? null
+                : j => envelope.Evaluate(kin, j, strokeMm, mountYawDeg).Collides;
+            var sol = stage == 0
+                ? kin.InverseBest(pose, tool, limits, collides: collides)
+                : kin.InverseBest(pose, tool, limits, previous, collides);
             // 실패(null)면 ReachMap 이 그 셀의 나머지를 부르지 않으므로 다음 호출은 새 셀의 ② 다.
             stage = sol is null ? 0 : (stage + 1) % posesPerCell;
             previous = sol;
