@@ -312,7 +312,7 @@ public sealed record ReachMapRobot(
     double ToolSpinDeg = 180.0,
     CobotEnvelope? Envelope = null,
     IReadOnlyDictionary<string, double[]>? StartJointsByWall = null,
-    double MaxEntryJointTravelDeg = 120.0);
+    double MaxEntryJointTravelDeg = 140.0);
 
 /// <summary>셀 판정 — 위에서부터 먼저 걸린 사유 하나.</summary>
 public enum ReachStatus

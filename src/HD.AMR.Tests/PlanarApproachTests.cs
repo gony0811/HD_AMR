@@ -97,6 +97,29 @@ public class PlanarApproachTests
         Assert.NotNull(CobotInspectionMoveStep.PathStepBlocker(entry, next, entry));
     }
 
+    // 진입 한계 140°(2026-11-02 ACS 분석) — 완화로 들어올 수 있는 손목 뒤집기 해는 따로 막는다.
+    // 14:05 후보 [-661, -274, 881]: J1 117°·J5 +90→−50°(관절 이동 143°).
+    [Fact]
+    public void 손목_뒤집기_해는_진입_한계와_별개로_막는다()
+    {
+        var prep = new[] { 0.18, 4.2, -155.82, 68.99, 90.05, -179.69 };
+        var flipped = new[] { -117.0, -70, -148, -74, -50, -217 };
+        var normal = new[] { 23.0, 13, -145, 84, 108, -178 };   // 14:05 선택된 진입점(23°)
+
+        Assert.True(CobotInspectionMoveStep.IsWristFlip(prep, flipped));
+        Assert.False(CobotInspectionMoveStep.IsWristFlip(prep, normal));
+        Assert.True(CobotInspectionMoveStep.MaxJointTravel(prep, normal) <= CobotInspectionMoveStep.MaxEntryJointTravelDeg);
+    }
+
+    [Fact]
+    public void 진입_한계는_140도()
+    {
+        Assert.Equal(140.0, CobotInspectionMoveStep.MaxEntryJointTravelDeg);
+        // #3 직접 진입(82°)·정상 진입(16~29°)은 통과, J4 먼 길 회전(300°대)은 거부.
+        Assert.True(82.0 <= CobotInspectionMoveStep.MaxEntryJointTravelDeg);
+        Assert.True(308.0 > CobotInspectionMoveStep.MaxEntryJointTravelDeg);
+    }
+
     [Fact]
     public void 진입_관절_이동량은_관절별_최댓값()
     {

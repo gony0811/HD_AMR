@@ -523,8 +523,15 @@ public class CobotInspectionMoveStep : ISequenceStep
     }
 
     /// <summary>진입 MoveJ 의 관절별 최대 이동량 [도]. 넘으면 그 진입점은 쓰지 않는다 — 손목·팔을 크게 휘두르는 해다
-    /// (실기 2026-11-02 13:23 L4-R03C09 H1: 투영 진입점 해가 J4 를 +69°→약 −150° 로, 벽 반대쪽으로 ~220° 돌렸다).</summary>
-    internal const double MaxEntryJointTravelDeg = 120.0;
+    /// (실기 2026-11-02 13:23 L4-R03C09 H1: 투영 진입점 해가 J4 를 +69°→약 −150° 로, 벽 반대쪽으로 ~220° 돌렸다).
+    /// 120° → 140° 완화(ACS 분석, 2026-11-02): 당일 300° 이상 거부는 전부 PU 준비 자세 J4 69° 가 한계 +85° 에 붙어
+    /// 생긴 J4 먼 길 회전이었고(준비 자세 문제), 정상 진입은 16~82° 였다. 완화로 통과할 수 있는 손목 뒤집기 해
+    /// (14:05 후보: J1 117°·J5 +90→−50°, 144°)는 <see cref="IsWristFlip"/> 로 따로 막는다.</summary>
+    internal const double MaxEntryJointTravelDeg = 140.0;
+
+    /// <summary>손목 가지가 바뀌는지 — J5 부호가 다르면 손목이 뒤집히며(J5=0 특이점 통과) J4·J6 이 크게 돈다.</summary>
+    internal static bool IsWristFlip(double[] reference, double[] joints)
+        => Math.Sign(reference[4]) != 0 && Math.Sign(joints[4]) != 0 && Math.Sign(reference[4]) != Math.Sign(joints[4]);
 
     /// <summary>직선 이동 경로 검증 점 사이(≤ <see cref="PlanarSampleMm"/>) 관절별 최대 변화 [도]. 넘으면 그 사이에서 해가
     /// 다른 가지로 갈아탄 것이라 MoveL 이 손목을 급회전하거나 거부한다(같은 13:23 실행: 433° 점프를 통과시켰다).</summary>
@@ -614,6 +621,7 @@ public class CobotInspectionMoveStep : ISequenceStep
             var travel = MaxJointTravel(reference, jc);
             if (travel > MaxEntryJointTravelDeg) { rejects.Add($"{label}: 진입 관절 이동 {travel:0}° > {MaxEntryJointTravelDeg:0}°"); continue; }
             if (FairinoRpcClient.IsElbowFlip(reference, jc)) { rejects.Add($"{label}: 팔꿈치 가지 전환"); continue; }
+            if (IsWristFlip(reference, jc)) { rejects.Add($"{label}: 손목 가지 전환(J5 {reference[4]:0}° → {jc[4]:0}°)"); continue; }
             if (guardOn && SelfCollisionBlocker(jc, seam) is not null) { rejects.Add($"{label}: 자기 간섭"); continue; }
 
             // 진입점 → 들어갈 점(면 방향) → 접근점(법선) 경로
