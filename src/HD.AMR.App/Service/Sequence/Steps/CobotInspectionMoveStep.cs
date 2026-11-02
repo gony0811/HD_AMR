@@ -19,10 +19,11 @@ namespace HD.AMR.App.Service.Sequence.Steps;
 /// 용접선 좌표를 환산할 수 없으면(측위·장착 보정·좌표 없음) 엉뚱한 곳으로 가지 않도록 실패한다 — 예전의
 /// 벽별 검사 준비 티칭 위치 폴백은 쓰지 않는다. 정밀 정렬은 뒤의 ③~⑯이 카메라·레이저로 잡는다.
 ///
-/// 경로(면 법선을 알 때): 접근점으로 한 번에 MoveJ 하지 않고 <b>뒤로 빠져 면을 따라 간 뒤 들어간다</b> —
-/// 진입점(현재 TCP 를 면 이격 + <see cref="PlanarRetreatKey"/> 후퇴 평면에 투영)까지 MoveJ(자세 변화 구간, 손목
-/// 특이점 회피) → 후퇴 평면을 따라 MoveL → 면 법선 방향 MoveL 로 접근점. 움직이기 전에 경로 전체를 역기구학으로
-/// 검증한다. 진입 경유점에서 먼 접근점(챔퍼 아래쪽 끝 등)을 한 번의 관절 보간으로 가면 팔이 면 쪽으로 크게
+/// 경로(면 법선을 알 때): 접근점으로 한 번에 MoveJ 하지 않고 <b>뒤로 빠진 평면(면 이격 + <see cref="PlanarRetreatKey"/>)에서
+/// 들어간다</b> — 진입점까지 MoveJ → (필요하면) 후퇴 평면을 따라 MoveL → 면 법선 방향 MoveL 로 접근점.
+/// 진입점은 접근점 바로 바깥(들어갈 점)을 먼저 보고, 진입 MoveJ 가 크면 현재 TCP 투영점 쪽 후퇴 평면 점을 찾는다.
+/// 움직이기 전에 진입 관절 이동량·경로 연속성까지 역기구학으로 검증하고, 맞는 경로가 없으면 움직이지 않는다.
+/// 진입 경유점에서 먼 접근점(챔퍼 아래쪽 끝 등)을 한 번의 관절 보간으로 가면 팔이 면 쪽으로 크게
 /// 휘둘렸다(실기 2026-11-02 L4-R03C09 PU #3).
 /// </summary>
 public class CobotInspectionMoveStep : ISequenceStep
@@ -520,11 +521,58 @@ public class CobotInspectionMoveStep : ISequenceStep
         return DefaultPlanarRetreatMm;
     }
 
+    /// <summary>진입 MoveJ 의 관절별 최대 이동량 [도]. 넘으면 그 진입점은 쓰지 않는다 — 손목·팔을 크게 휘두르는 해다
+    /// (실기 2026-11-02 13:23 L4-R03C09 H1: 투영 진입점 해가 J4 를 +69°→약 −150° 로, 벽 반대쪽으로 ~220° 돌렸다).</summary>
+    internal const double MaxEntryJointTravelDeg = 120.0;
+
+    /// <summary>직선 이동 경로 검증 점 사이(≤ <see cref="PlanarSampleMm"/>) 관절별 최대 변화 [도]. 넘으면 그 사이에서 해가
+    /// 다른 가지로 갈아탄 것이라 MoveL 이 손목을 급회전하거나 거부한다(같은 13:23 실행: 433° 점프를 통과시켰다).</summary>
+    internal const double MaxPathJointStepDeg = 30.0;
+
+    /// <summary>두 관절각 사이 관절별 변화의 최댓값 [도].</summary>
+    internal static double MaxJointTravel(double[] from, double[] to)
+    {
+        var m = 0.0;
+        for (var i = 0; i < Math.Min(from.Length, to.Length); i++) m = Math.Max(m, Math.Abs(to[i] - from[i]));
+        return m;
+    }
+
     /// <summary>
-    /// 평면 경유 접근 — ① 진입점(현재 TCP 를 후퇴 평면에 투영)으로 MoveJ → ② 후퇴 평면을 따라 들어갈 점까지 MoveL
-    /// → ③ 면 법선 방향으로 접근점까지 MoveL. 자세는 전 구간 접근점 자세(면 법선·J6 정렬)로 고정한다.
-    /// 움직이기 전에 경로 전체를 <see cref="PlanarSampleMm"/> 간격 역기구학으로 검증해(도달·관절 범위·팔꿈치 가지·
-    /// 손목 특이점·자기 간섭) 하나라도 걸리면 움직이지 않고 실패한다.
+    /// 직선 이동 경로의 연속 두 점 해(<paramref name="prev"/>→<paramref name="next"/>)가 이어지지 않는 사유, 이어지면 null.
+    /// 관절 점프·팔꿈치 가지 전환·손목 특이점(J5 부호 반전/여유 부족)을 본다 — 기준 가지는 진입점 해 <paramref name="entry"/>.
+    /// </summary>
+    internal static string? PathStepBlocker(double[] prev, double[] next, double[] entry)
+    {
+        var jump = MaxJointTravel(prev, next);
+        if (jump > MaxPathJointStepDeg)
+            return $"관절이 {jump:0}° 튐(> {MaxPathJointStepDeg:0}°/{PlanarSampleMm:0}mm) — 경로 도중 해 가지가 바뀜";
+        if (FairinoRpcClient.IsElbowFlip(entry, next))
+            return $"팔꿈치 가지 전환(J3 {entry[2]:0.0}° → {next[2]:0.0}°)";
+        if (Math.Sign(next[4]) != Math.Sign(entry[4]) || Math.Abs(next[4]) < PlanarWristMarginDeg)
+            return $"손목 특이점(J5 {entry[4]:0.0}° → {next[4]:0.0}°)";
+        return null;
+    }
+
+    /// <summary>
+    /// 진입점 후보 순서 — ① 들어갈 점 자체(면 방향 이동 없이 바로 진입), ② 현재 TCP 투영점에서 들어갈 점 쪽으로
+    /// <see cref="PlanarSampleMm"/> 간격(투영점 쪽부터 = 진입 MoveJ 가 짧은 순). 면 방향 거리가 짧으면 ①만.
+    /// </summary>
+    internal static List<double[]> EntryCandidates(PlanarApproachPlan plan)
+    {
+        var list = new List<double[]> { plan.Plunge };
+        if (plan.InPlaneMm < PlanarSkipMm) return list;
+        list.Add(plan.Entry);
+        var pts = SampleSegment(plan.Entry, plan.Plunge, PlanarSampleMm);
+        list.AddRange(pts.Take(pts.Count - 1));   // 마지막 점 = 들어갈 점(이미 ①)
+        return list;
+    }
+
+    /// <summary>
+    /// 평면 경유 접근 — 진입점까지 MoveJ → (진입점이 들어갈 점이 아니면) 후퇴 평면을 따라 들어갈 점까지 MoveL
+    /// → 면 법선 방향으로 접근점까지 MoveL. 자세는 전 구간 접근점 자세(면 법선·J6 정렬)로 고정한다.
+    /// 진입점은 <see cref="EntryCandidates"/> 순서로 고르되, 진입 MoveJ 가 관절별 <see cref="MaxEntryJointTravelDeg"/> 이내·
+    /// 같은 팔꿈치 가지·자기 간섭 없음이고 그 뒤 경로 전체가 <see cref="PathStepBlocker"/> 를 통과하는 첫 후보다.
+    /// 모든 판정은 움직이기 전에 끝내고, 맞는 후보가 없으면 움직이지 않고 실패한다.
     /// </summary>
     private async Task<StepResult> PlanarApproachAsync(
         SequenceContext context, SeamApproachResult seam, double[] current, double[] target, double[] reference,
@@ -533,83 +581,91 @@ public class CobotInspectionMoveStep : ISequenceStep
         var retreat = await GetPlanarRetreatMmAsync();
         var plan = PlanPlanarApproach(current, target, WallOutNormal(seam.ComputedPose!, seam.OpticalAxis), retreat);
         double[] Pose(double[] p) => new[] { p[0], p[1], p[2], target[3], target[4], target[5] };
+        string Fmt(double[] v) => string.Join(", ", v.Select(x => x.ToString("0")));
 
-        var skipPlanar = plan.InPlaneMm < PlanarSkipMm;
-        var entryPos = skipPlanar ? plan.Plunge : plan.Entry;
-        var entryPose = Pose(entryPos);
-
-        // ── 경로 검증(모션 없음) ─────────────────────────────────────────
         var guardOn = await SelfCollisionGuardOnAsync();
-        double[] jEntry;
-        try { jEntry = await _cobot.Rpc.GetInverseKinKeepWristAsync(entryPose, reference, context.Tool, 0, ct); }
-        catch (InvalidOperationException ex)
-        {
-            return StepResult.Fail($"[Cobot 검사위치 이동] 후퇴 평면 진입점 도달 불가 — {ex.Message}");
-        }
-        if (ElbowFlipBlocker(reference, jEntry) is { } flip)
-            return StepResult.Fail(flip);
-        if (guardOn && SelfCollisionBlocker(jEntry, seam) is { } selfHit)
-            return StepResult.Fail(selfHit);
+        var candidates = EntryCandidates(plan);
+        var rejects = new List<string>();
 
-        var planar = skipPlanar ? new List<double[]>() : SampleSegment(plan.Entry, plan.Plunge, PlanarSampleMm);
-        var plungeIn = retreat > 0.5 ? new List<double[]> { target.Take(3).ToArray() } : new List<double[]>();
-        var seed = jEntry;
-        double[]? jPlunge = null;
-        double[] jTarget = jEntry;
-        var travelled = 0.0;
-        foreach (var (pt, segment) in planar.Select(p => (p, "면 방향")).Concat(plungeIn.Select(p => (p, "법선 진입"))))
+        // ── 진입점 선택 + 경로 검증(모션 없음) ────────────────────────────
+        double[]? entryPos = null, jEntry = null, jPlunge = null, jTarget = null;
+        foreach (var cand in candidates)
         {
-            double[] j;
-            try { j = await _cobot.Rpc.GetInverseKinNearestAsync(Pose(pt), seed, context.Tool, 0, ct); }
-            catch (InvalidOperationException ex)
+            var label = ReferenceEquals(cand, plan.Plunge) ? "들어갈 점 직접" : $"후퇴 평면 [{Fmt(cand)}]";
+            double[] jc;
+            try { jc = await _cobot.Rpc.GetInverseKinKeepWristAsync(Pose(cand), reference, context.Tool, 0, ct); }
+            catch (InvalidOperationException) { rejects.Add($"{label}: 도달 불가"); continue; }
+
+            var travel = MaxJointTravel(reference, jc);
+            if (travel > MaxEntryJointTravelDeg) { rejects.Add($"{label}: 진입 관절 이동 {travel:0}° > {MaxEntryJointTravelDeg:0}°"); continue; }
+            if (FairinoRpcClient.IsElbowFlip(reference, jc)) { rejects.Add($"{label}: 팔꿈치 가지 전환"); continue; }
+            if (guardOn && SelfCollisionBlocker(jc, seam) is not null) { rejects.Add($"{label}: 자기 간섭"); continue; }
+
+            // 진입점 → 들어갈 점(면 방향) → 접근점(법선) 경로
+            var path = new List<(double[] Pt, bool Planar)>();
+            if (!ReferenceEquals(cand, plan.Plunge))
+                path.AddRange(SampleSegment(cand, plan.Plunge, PlanarSampleMm).Select(p => (p, true)));
+            if (retreat > 0.5)
+                path.AddRange(SampleSegment(plan.Plunge, target, PlanarSampleMm).Select(p => (p, false)));
+
+            var seed = jc;
+            double[] jp = jc;
+            string? why = null;
+            foreach (var (pt, planar) in path)
             {
-                return StepResult.Fail(
-                    $"[Cobot 검사위치 이동] {segment} 이동 경로 [{string.Join(", ", pt.Select(v => v.ToString("0")))}] 도달 불가 — " +
-                    $"정차 위치가 용접선에서 너무 멉니다. ({ex.Message})");
+                double[] j;
+                try { j = await _cobot.Rpc.GetInverseKinNearestAsync(Pose(pt), seed, context.Tool, 0, ct); }
+                catch (InvalidOperationException) { why = $"[{Fmt(pt)}] 도달 불가"; break; }
+                if (PathStepBlocker(seed, j, jc) is { } step) { why = $"[{Fmt(pt)}] {step}"; break; }
+                if (guardOn && SelfCollisionBlocker(j, seam) is not null) { why = $"[{Fmt(pt)}] 자기 간섭"; break; }
+                seed = j;
+                if (planar) jp = j;
             }
-            if (ElbowFlipBlocker(jEntry, j) is { } pathFlip)
-                return StepResult.Fail($"{pathFlip} ({segment} 이동 경로)");
-            if (Math.Sign(j[4]) != Math.Sign(jEntry[4]) || Math.Abs(j[4]) < PlanarWristMarginDeg)
-                return StepResult.Fail(
-                    $"[Cobot 검사위치 이동] {segment} 이동 경로에서 손목 특이점 (J5 {jEntry[4]:0.0}° → {j[4]:0.0}°) — " +
-                    "직선 이동이 rc=38 로 거부되거나 손목이 급회전합니다. 정차 위치를 바꾸세요.");
-            if (guardOn && SelfCollisionBlocker(j, seam) is { } pathHit)
-                return StepResult.Fail($"{pathHit} ({segment} 이동 경로)");
-            seed = j;
-            if (segment == "면 방향") jPlunge = j; else jTarget = j;
-        }
-        if (plungeIn.Count == 0) jTarget = jPlunge ?? jEntry;
-        if (!skipPlanar) travelled = plan.InPlaneMm;
+            if (why is not null) { rejects.Add($"{label}: 경로 {why}"); continue; }
 
+            (entryPos, jEntry, jPlunge, jTarget) = (cand, jc, jp, seed);
+            break;
+        }
+
+        if (entryPos is null)
+            return StepResult.Fail(
+                "[Cobot 검사위치 이동] 안전한 진입 경로 없음 — 움직이지 않았습니다. " +
+                $"후보 {candidates.Count}개 모두 거부: {string.Join(" / ", rejects.Take(4))}" +
+                (rejects.Count > 4 ? $" 외 {rejects.Count - 4}건" : "") +
+                ". 정차 위치를 용접선 쪽으로 옮기거나 이 면의 검사 준비 자세를 확인하세요.");
+
+        var direct = ReferenceEquals(entryPos, plan.Plunge);
+        var planarMm = direct ? 0.0 : Math.Sqrt(Enumerable.Range(0, 3).Sum(i => (plan.Plunge[i] - entryPos[i]) * (plan.Plunge[i] - entryPos[i])));
         _logger.LogInformation(
-            "[Cobot 검사위치 이동] 평면 경유 접근: 진입점 [{E}] → 면 방향 {D:0}mm → 들어갈 점 [{P}] → 법선 {R:0}mm 진입 (경로 검증 {N}점 통과)",
-            string.Join(", ", entryPos.Select(v => v.ToString("0.0"))), travelled,
-            string.Join(", ", plan.Plunge.Select(v => v.ToString("0.0"))), retreat, planar.Count + plungeIn.Count + 1);
+            "[Cobot 검사위치 이동] 평면 경유 접근: 진입점 [{E}] (진입 관절 이동 최대 {T:0}°) → 면 방향 {D:0}mm → 들어갈 점 [{P}] → 법선 {R:0}mm 진입" +
+            "{Rej}",
+            Fmt(entryPos), MaxJointTravel(reference, jEntry!), planarMm, Fmt(plan.Plunge), retreat,
+            rejects.Count == 0 ? "" : $" (앞 후보 거부: {string.Join(" / ", rejects)})");
 
         // ── 실행 ─────────────────────────────────────────────────────────
-        var rc = await _cobot.Rpc.MoveJAsync(jEntry, entryPose, tool: context.Tool, user: 0, vel: context.Velocity, ct: ct);
+        var rc = await _cobot.Rpc.MoveJAsync(jEntry!, Pose(entryPos), tool: context.Tool, user: 0, vel: context.Velocity, ct: ct);
         if (rc != 0)
-            return StepResult.Fail($"후퇴 평면 진입점 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.");
+            return StepResult.Fail($"진입점 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.");
 
-        if (!skipPlanar)
+        if (!direct)
         {
             rc = await _cobot.Rpc.MoveLAsync(Pose(plan.Plunge), jPlunge!, tool: context.Tool, user: 0, vel: context.Velocity, ct: ct);
             if (rc != 0)
                 return StepResult.Fail($"후퇴 평면 면 방향 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.");
         }
 
-        if (plungeIn.Count > 0)
+        if (retreat > 0.5)
         {
-            rc = await _cobot.Rpc.MoveLAsync(target, jTarget, tool: context.Tool, user: 0, vel: context.Velocity, ct: ct);
+            rc = await _cobot.Rpc.MoveLAsync(target, jTarget!, tool: context.Tool, user: 0, vel: context.Velocity, ct: ct);
             if (rc != 0)
                 return StepResult.Fail($"용접선 접근점 법선 진입 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.");
         }
 
-        var route = skipPlanar
+        var route = direct
             ? $"후퇴 {retreat:0}mm 지점 관절 이동(MoveJ) → 법선 진입(MoveL)"
-            : $"후퇴 평면 진입(MoveJ) → 면 방향 {travelled:0}mm 직선 이동(MoveL) → 법선 {retreat:0}mm 진입(MoveL)";
+            : $"후퇴 평면 진입(MoveJ) → 면 방향 {planarMm:0}mm 직선 이동(MoveL) → 법선 {retreat:0}mm 진입(MoveL)";
         return StepResult.Ok(
-            $"진입 경유점 → {seam.Note} {route} 완료 [자세=면 법선{twistNote}, J6={jTarget[5]:0.0}°].{entryNote}");
+            $"진입 경유점 → {seam.Note} {route} 완료 [자세=면 법선{twistNote}, J6={jTarget![5]:0.0}°].{entryNote}");
     }
 
     /// <summary>anchor 적중 task — Bag 의 캐시 프레임(직전 task 위치)을 이번 시작 접근점으로 평행 이동한다.

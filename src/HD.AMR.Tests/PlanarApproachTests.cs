@@ -36,6 +36,59 @@ public class PlanarApproachTests
         Assert.Equal(0.0, Dot(Sub(plan.Plunge, plan.Entry), wallOut), 6);   // 면 방향 이동은 법선 성분이 없다
     }
 
+    // 후보 순서: 들어갈 점 직접 → 투영 진입점 → 들어갈 점 쪽으로(투영점 쪽부터). 들어갈 점은 한 번만.
+    [Fact]
+    public void 진입점_후보는_들어갈_점부터_그다음_투영점_쪽부터()
+    {
+        var plan = CobotInspectionMoveStep.PlanPlanarApproach(
+            new[] { 300.0, 0.0, 800.0 }, new[] { 0.0, 0.0, 0.0 }, new[] { 0.0, 0.0, 1.0 }, 100);
+        var c = CobotInspectionMoveStep.EntryCandidates(plan);
+
+        Assert.Equal(plan.Plunge, c[0]);
+        Assert.Equal(plan.Entry, c[1]);
+        Assert.Equal(new[] { 200.0, 0.0, 100.0 }, c[2]);
+        Assert.Equal(new[] { 100.0, 0.0, 100.0 }, c[3]);
+        Assert.Equal(4, c.Count);
+    }
+
+    [Fact]
+    public void 면_방향_거리가_짧으면_들어갈_점만_후보()
+    {
+        var plan = CobotInspectionMoveStep.PlanPlanarApproach(
+            new[] { 20.0, 0.0, 800.0 }, new[] { 0.0, 0.0, 0.0 }, new[] { 0.0, 0.0, 1.0 }, 100);
+
+        Assert.Single(CobotInspectionMoveStep.EntryCandidates(plan));
+    }
+
+    // 실기 2026-11-02 13:23 H1: 투영 진입점 해가 J4 를 ~220° 돌렸고, 면 방향 경로 도중 해가 433° 튀었는데 통과했다.
+    [Fact]
+    public void 경로_점_사이_관절_점프는_막는다()
+    {
+        var entry = new[] { 0.0, -100, -60, -150, 80, -155 };
+        var prev = new[] { 0.0, -100, -60, -150, 80, -173.7 };
+        var flipped = new[] { 0.0, -100, -60, -10, 80, -33.1 };
+        var smooth = new[] { 2.0, -98, -62, -148, 79, -176 };
+
+        Assert.NotNull(CobotInspectionMoveStep.PathStepBlocker(prev, flipped, entry));
+        Assert.Null(CobotInspectionMoveStep.PathStepBlocker(prev, smooth, entry));
+    }
+
+    [Fact]
+    public void 경로_점에서_J5_부호가_바뀌면_막는다()
+    {
+        var entry = new[] { 0.0, -100, -60, -150, 10, -155 };
+        var next = new[] { 0.0, -100, -60, -150, -3, -155 };
+
+        Assert.NotNull(CobotInspectionMoveStep.PathStepBlocker(entry, next, entry));
+    }
+
+    [Fact]
+    public void 진입_관절_이동량은_관절별_최댓값()
+    {
+        Assert.Equal(219.0, CobotInspectionMoveStep.MaxJointTravel(
+            new[] { 0.18, 4.2, -155.8, 69.0, 90.0, -179.7 }, new[] { 10.0, -50, -140, -150.0, 80, -155 }), 6);
+    }
+
     [Fact]
     public void 경로_샘플은_간격_이하로_끝점까지()
     {
