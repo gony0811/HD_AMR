@@ -453,7 +453,7 @@ public class CobotInspectionMoveStep : ISequenceStep
     /// 같은 anchor 그룹 연속 task — 직전 task 종료 자세에서 진입 준비(후퇴·홈 위치_2·검사 준비 왕복) 없이 다음 시작
     /// 접근점으로 간다(사양 §8.1 "액션 사이 홈 왕복 금지"). 조건이 하나라도 안 맞으면 null — 호출측이 종전 경로로 간다.
     /// 경로: ① 면에 standoff 보다 가까우면 면 법선 방향으로만 standoff 면까지 들어 올림(자세 유지) → ② 그 면을 따라
-    /// 접근점으로 MoveL(같은 면 이격 유지, 자세는 ②와 같은 규칙).
+    /// 접근점으로 MoveL(같은 면 이격 유지, 광축은 면 법선, 광축 둘레 비틀림은 직전 종료 자세 유지 — J6 180° 정렬 안 함).
     /// </summary>
     private async Task<StepResult?> TryChainFromPreviousAsync(
         SequenceContext context, SeamApproachResult seam, CancellationToken ct)
@@ -475,12 +475,13 @@ public class CobotInspectionMoveStep : ISequenceStep
             return null;
         }
 
+        // 비틀림은 직전 종료 자세 그대로 — 같은 그룹은 검사 방향·프레임 자세가 같아 ⑱이 고를 비틀림과 거의 같다.
+        // 진입 경로처럼 J6 180° 로 맞추면 ⑱이 곧바로 되돌린다(2026-10-30 #3: −284.7°→−180°→−284.8°).
         var orientation = AlignOpticalAxisKeepTwist(cur, computed, seam.OpticalAxis);
         var target = new[] { startBase[0], startBase[1], startBase[2], orientation[3], orientation[4], orientation[5] };
         double[] joints;
         try
         {
-            (target, _) = await AlignTwistToJ6Async(_cobot, target, context.Tool, VerticalJ6Deg, ct);
             var reference = await _cobot.Rpc.GetActualJointPosAsync(ct: ct);
             joints = await _cobot.Rpc.GetInverseKinKeepWristAsync(target, reference, context.Tool, 0, ct);
         }
@@ -521,7 +522,7 @@ public class CobotInspectionMoveStep : ISequenceStep
         _logger.LogInformation("[Cobot 검사위치 이동] 연속 이동 완료 — 직전 종료 자세에서 {Dist:0}mm{Lift}", dist, liftNote);
         return StepResult.Ok(
             $"연속 이동(복귀 생략) — 직전 종료 자세에서 {seam.Note} 직선 이동(MoveL) {dist:0}mm{liftNote} " +
-            $"[자세=면 법선, 비틀림 J6 {VerticalJ6Deg:0}° 정렬, J6={joints[5]:0.0}°].");
+            $"[자세=면 법선, 비틀림 직전 종료 유지, J6={joints[5]:0.0}°].");
     }
 
     /// <summary>면 바깥(벽에서 멀어지는) 단위 법선 — 계산 자세의 광축(면을 향함)의 반대.</summary>
