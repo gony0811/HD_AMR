@@ -183,9 +183,7 @@ public class BeadCenteringStep : ISequenceStep
         var (axY, _) = await WeldSequenceSupport.GetImageYAxisAsync(_param);
 
         var anchor = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
-        var offset = new double[6];
-        FlatSurfaceCenteringService.ApplyAxis(offset, axX, -offX);
-        FlatSurfaceCenteringService.ApplyAxis(offset, axY, -offY);
+        var offset = WeldSequenceSupport.ImageShiftToToolOffset(axX, axY, -offX, -offY);
 
         _logger.LogInformation(
             "[Bead{Id} 센터링] 검사캠 시프트: 영상 ({X:+0.0;-0.0}, {Y:+0.0;-0.0})mm 역방향 이동 → 툴 오프셋 [{Ox:0.#}, {Oy:0.#}, {Oz:0.#}]",

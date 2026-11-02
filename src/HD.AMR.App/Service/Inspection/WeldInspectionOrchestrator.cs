@@ -50,6 +50,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
     /// </summary>
     private static readonly HashSet<string> AlignmentStepKeys = new(StringComparer.Ordinal)
     {
+        // ⑤ Peak 탐색 준비 이동 — ⑤가 빠지면 의미가 없고, 남기면 ⑱ 직전 자세만 옮긴다.
+        Sequence.Steps.DepthCamCenterShiftStep.StepKey,
         "peak1Find", "peak1Center", "bead1Find", "bead1Center", "wobjPoint1",
         "peak2Approach", "peak2Find", "peak2Center", "bead2Find", "bead2Center", "wobjPoint2",
         "wobjRegister",

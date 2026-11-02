@@ -167,6 +167,7 @@ builder.Services.AddScoped<ISequenceStep, CameraAlignStep>();
 builder.Services.AddScoped<ISequenceStep, CameraAlignRefineStep>();
 builder.Services.AddScoped<ISequenceStep, FlatSurfaceAlignStep>();
 builder.Services.AddScoped<ISequenceStep, LaserWorkingDistanceStep>();   // 450: ④ 직후 레이저 WD 거리 조정
+builder.Services.AddScoped<ISequenceStep, DepthCamCenterShiftStep>();    // 470: TCP 아래 용접선 → depth 영상 중심 평행이동
 // ⑤~⑫ Peak/Bead 측정 — ⑤⑨·⑥⑩·⑦⑪은 peakId 만 다른 동일 동작이라 한 클래스를 두 번 등록한다.
 // ActivatorUtilities.CreateInstance 는 명시 인자를 생성자 앞쪽부터 매칭하므로 peakId 가 첫 파라미터여야 한다.
 builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<PeakFindStep>(sp, 1));

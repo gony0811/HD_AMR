@@ -288,6 +288,19 @@ public static class WeldSequenceSupport
         catch { return (0, 0); }
     }
 
+    /// <summary>
+    /// 영상 평면 이동량(mm, 영상 +X=화면 오른쪽 / +Y=화면 아래)을 툴 프레임 오프셋[6]으로 바꾼다 —
+    /// 카메라가 영상 (+X, +Y) 방향으로 움직인다. 검사캠 시프트(⑦⁺⑪⁺, 영상 −오프셋)와
+    /// depth 카메라 센터 평행이동(④⁺⁺, 영상 +오프셋)이 공유해 두 이동이 정확히 서로를 상쇄한다.
+    /// </summary>
+    public static double[] ImageShiftToToolOffset(ToolAxisDir imageXAxis, ToolAxisDir imageYAxis, double xMm, double yMm)
+    {
+        var offset = new double[6];
+        FlatSurfaceCenteringService.ApplyAxis(offset, imageXAxis, xMm);
+        FlatSurfaceCenteringService.ApplyAxis(offset, imageYAxis, yMm);
+        return offset;
+    }
+
 
     private static async Task<(ToolAxisDir Axis, bool FromParam)> GetToolAxisAsync(
         ParameterService param, string key, ToolAxisDir fallback)

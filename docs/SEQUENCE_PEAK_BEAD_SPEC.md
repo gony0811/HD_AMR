@@ -455,6 +455,7 @@ double offsetMm = result.OffsetPx * mmPerPx;
 | ③ | `cameraAlign` | 300 | `CameraAlignStep` | — | (기존) 카메라 거리 정렬 400mm |
 | ④ | `flatSurfaceAlign` | 400 | `FlatSurfaceAlignStep` | — | (기존) 평탄면 센터링 — 시작 포즈를 앵커로 Bag 저장 |
 | ④⁺ | `laserWorkingDistance` | 450 | `LaserWorkingDistanceStep` | — | 레이저 3점 평균 → WD 초점거리 조정 후 **앵커로 툴 X/Y 횡복귀**(Z·자세 유지) |
+| ④⁺⁺ | `depthCamCenterShift` | 470 | `DepthCamCenterShiftStep` | — | TCP 아래 용접선을 depth 영상 중심으로 **면과 평행 이동** — 검사캠 오프셋(`Sequence.InspectCam.OffsetX/YMm`) 영상 +방향, ⑦⁺ 검사캠 시프트의 역이동(Z·자세 유지, 오프셋 0 이면 생략) |
 | **⑤** | `peak1Find` | **500** | `PeakFindStep` | 1 | Peak1 찾기 — 검사 준비 위치 정면에서 시작 |
 | **⑥** | `peak1Center` | **600** | `PeakCenteringStep` | 1 | Peak1 센터링 (진행축) |
 | **⑦** | `bead1Find` | **700** | `BeadFindStep` | 1 | Bead1 찾기 |

@@ -108,7 +108,8 @@ public sealed partial class SequenceMonitorViewModel : ObservableObject, IDispos
         "cameraAlign" or "cameraAlignRefine" => MonitorCameraKind.CameraAlign,
         "flatSurfaceAlign" => MonitorCameraKind.Flat,
         "laserWorkingDistance" => MonitorCameraKind.LaserWd,
-        "peak1Find" or "peak2Find" or "peak1Center" or "peak2Center" => MonitorCameraKind.Peak,
+        // depth 센터 평행이동: 용접라인이 Peak ROI 안으로 들어오는지 Depth 라이브로 확인한다.
+        "depthCamCenterShift" or "peak1Find" or "peak2Find" or "peak1Center" or "peak2Center" => MonitorCameraKind.Peak,
         "bead1Find" or "bead2Find" or "bead1Center" or "bead2Center" => MonitorCameraKind.Bead,
         _ => MonitorCameraKind.None,
     };

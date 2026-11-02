@@ -203,6 +203,7 @@ internal static class ServiceRegistration
         services.AddScoped<ISequenceStep, CameraAlignRefineStep>();
         services.AddScoped<ISequenceStep, FlatSurfaceAlignStep>();
         services.AddScoped<ISequenceStep, LaserWorkingDistanceStep>();
+        services.AddScoped<ISequenceStep, DepthCamCenterShiftStep>();
         services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<PeakFindStep>(sp, 1));
         services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<PeakCenteringStep>(sp, 1));
         services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<BeadFindStep>(sp, 1));
