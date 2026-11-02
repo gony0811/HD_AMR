@@ -268,10 +268,10 @@ public class CobotInspectionMoveStep : ISequenceStep
         => FrameMath.FromFrame(UvOffset(c), anchor);
 
     /// <summary>
-    /// ② 접근점이 면에서 물러나는 거리 [mm] = ③ 카메라 목표거리(레시피 값).
-    ///
-    /// ②는 대충 데려다 놓고 ③이 실측 depth 로 확정하는 구조라, ②가 물러나는 거리는 ③이 수렴시킬
-    /// 거리와 <b>같아야 한다</b>. ACS <c>params.standoffMm</c>
+    /// ③ 카메라 목표거리(레시피 값) — 면 이격을 주지 않은 호출(<see cref="SeamApproachResolver.ResolveAsync"/>
+    /// 폴백)과 ⑤ Peak 탐색의 가정 거리에 쓴다. 운영 ② 접근점은 이 값이 아니라 거친 접근 거리
+    /// <see cref="ApproachStandoffKey"/>(기본 400mm)로 물러나고, ③·④⁺(레이저 WD 300mm)가 실측으로 확정한다.
+    /// ACS <c>params.standoffMm</c>
     /// (<see cref="SequenceContext.StandoffMmOverride"/>)은 쓰지 않는다 — 계약에서 그 단어는 §4.4 의
     /// 정차 이격(벽↔로봇 기준점, 이미 nodePosition 에 반영됨)과 같은 이름이고, 툴 이격은 AMR 이
     /// 정할 값이다(§10 N18).

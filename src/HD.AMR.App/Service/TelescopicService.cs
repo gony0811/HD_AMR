@@ -74,6 +74,46 @@ public class TelescopicService : BackgroundService
         get { lock (_stateLock) return _latest is null ? null : _latestUtc; }
     }
 
+    /// <summary>
+    /// 좌표 환산에 쓸 현재 스트로크 [mm, 완전 하강 = 0]. 상태를 못 읽었거나, 높이가 무효(−1)이거나,
+    /// 마지막 수신이 오래됐으면 null 과 사유를 돌려준다 — T_A_B 의 tz 가 스트로크만큼 변하므로(최대 1m)
+    /// 모르는 높이를 0 으로 가정하면 접근점이 그만큼 어긋난다. 호출측은 null 이면 환산을 멈춰야 한다.
+    /// </summary>
+    public double? TryGetStrokeMm(out string? reason)
+    {
+        TelescopicStatus? latest;
+        DateTime at;
+        lock (_stateLock) { latest = _latest; at = _latestUtc; }
+        return ResolveStrokeMm(latest, latest is null ? null : at, DateTime.UtcNow, StrokeMaxAge, out reason);
+    }
+
+    /// <summary>스트로크 값이 유효하다고 볼 최대 경과 시간 — 폴링 5회분, 최소 3초.</summary>
+    private TimeSpan StrokeMaxAge => TimeSpan.FromMilliseconds(Math.Max(3000, _settings.PollIntervalMs * 5));
+
+    /// <summary><see cref="TryGetStrokeMm"/> 의 판정부(순수 함수 — 단위 테스트용).</summary>
+    public static double? ResolveStrokeMm(TelescopicStatus? latest, DateTime? latestUtc, DateTime nowUtc,
+        TimeSpan maxAge, out string? reason)
+    {
+        if (latest is null || latestUtc is null)
+        {
+            reason = "텔레스코픽 상태를 아직 읽지 못했습니다";
+            return null;
+        }
+        if (latest.HeightMm < 0)
+        {
+            reason = "텔레스코픽 높이 응답이 무효입니다(파싱 실패)";
+            return null;
+        }
+        var age = nowUtc - latestUtc.Value;
+        if (age > maxAge)
+        {
+            reason = $"텔레스코픽 높이가 {age.TotalSeconds:0.0}초 전 값입니다(통신 끊김 의심)";
+            return null;
+        }
+        reason = null;
+        return latest.HeightMm;
+    }
+
     /// <summary>이 환경에서 보이는 시리얼 포트 목록 — 화면의 포트 선택 도움용.</summary>
     public static string[] AvailablePorts() => TelescopicClient.AvailablePorts();
 

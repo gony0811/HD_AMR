@@ -40,7 +40,7 @@ public class ApproachReachTests
     [Fact]
     public void 후퇴_거리를_줄이면_필요_정차거리도_그만큼_준다()
     {
-        // ②의 후퇴 거리는 ③ 카메라 목표거리다 — 레시피를 300 으로 낮추면 필요값도 100mm 줄어든다.
+        // ②의 후퇴 거리는 거친 접근 거리(inspection.approachStandoffMm)다 — 300 으로 낮추면 필요값도 100mm 줄어든다.
         var a = ApproachReach.Check(1000, 400, 370, 350);
         var b = ApproachReach.Check(1000, 300, 370, 350);
 

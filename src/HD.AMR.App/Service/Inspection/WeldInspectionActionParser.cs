@@ -88,7 +88,7 @@ public static class WeldInspectionActionParser
         if (seqInGroup is null or < 1) { error = $"params.seqInGroup 부적합 ({seqInGroup?.ToString() ?? "누락"}, 1 이상)"; return false; }
 
         // standoffMm — 수신은 하위호환으로 받되 부재를 허용한다. 툴을 면에서 얼마나 이격할지는 AMR 이
-        // 정하는 값이라(② 는 ③ 카메라 목표거리만큼 물러난다) 런타임이 읽지 않는다. 계약에서 같은 단어가
+        // 정하는 값이라(② 는 inspection.approachStandoffMm 만큼 물러난다) 런타임이 읽지 않는다. 계약에서 같은 단어가
         // §4.4 정차 이격(ACS 소관)에도 쓰여 혼선이 있다 — §10 N18. 값은 로깅·대조용으로만 보관한다.
         var standoff = GetDouble(pr, "standoffMm") ?? 0.0;
 
