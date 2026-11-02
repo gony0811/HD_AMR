@@ -71,6 +71,48 @@ public class ReachMapTests
         Assert.Equal(0, r.Cells[0].FocusJointsDeg![5]);
     }
 
+    // 운영 ② 출발 자세가 있으면 ② 해를 그 자세 기준으로 본다 — 손목을 뒤집은 해로만 닿으면 '도달' 이 아니다.
+    [Fact]
+    public async Task 출발_자세와_가지가_다르면_가지전환()
+    {
+        var robot = Robot() with
+        {
+            StartJointsByWall = new Dictionary<string, double[]> { ["SM"] = new[] { 0.0, -60, 90, -120, -40, 0 } },
+        };
+        var r = await ReachMap.BuildAsync(Spec("SM", new[] { 1300.0 }), robot, SphereIk());   // 가짜 IK 는 J5 +40
+
+        Assert.Equal(ReachStatus.BranchChange, r.Cells[0].Status);
+        Assert.Contains("손목 반전", r.Cells[0].Reason);
+        Assert.False(r.Cells[0].Usable);
+    }
+
+    [Fact]
+    public async Task 출발_자세와_같은_가지면_종전대로_도달()
+    {
+        var robot = Robot() with
+        {
+            StartJointsByWall = new Dictionary<string, double[]> { ["SM"] = new[] { 10.0, -50, 80, -110, 30, 0 } },
+        };
+        var r = await ReachMap.BuildAsync(Spec("SM", new[] { 1300.0 }), robot, SphereIk());
+
+        Assert.Equal(ReachStatus.Ok, r.Cells[0].Status);
+    }
+
+    // ② IK 에 출발 자세를 시드로 넘기고, 정렬 준비·초점은 앞 자세 해를 넘긴다.
+    [Fact]
+    public async Task 시드는_출발_자세_그다음_앞_자세_해()
+    {
+        var start = new[] { 1.0, -61, 91, -121, 41, 0 };
+        var seeds = new List<double[]?>();
+        var robot = Robot() with { StartJointsByWall = new Dictionary<string, double[]> { ["SM"] = start } };
+        await ReachMap.BuildAsync(Spec("SM", new[] { 1300.0 }), robot,
+            (pose, _, seed, _) => { seeds.Add(seed); return Task.FromResult<double[]?>(new[] { 0.0, -60, 90, -120, 40, 0 }); });
+
+        Assert.Equal(3, seeds.Count);
+        Assert.Same(start, seeds[0]);
+        Assert.Equal(new[] { 0.0, -60, 90, -120, 40, 0 }, seeds[1]);
+    }
+
     [Fact]
     public async Task 접근_정렬준비_초점_세_자세를_차례로_푼다()
     {

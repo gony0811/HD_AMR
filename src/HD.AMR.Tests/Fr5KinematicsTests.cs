@@ -104,7 +104,7 @@ public class Fr5KinematicsTests
     }
 
     /// <summary>② → 정렬 준비 → 초점은 광축(+Z)으로 100·300mm 씩 전진한 같은 방향 자세다 — 오프라인 IK 는
-    /// 셋을 같은 가지로 이어 관절 변화가 작아야 하고, 셀이 끝나면 다음 호출을 새 ② 로 받아야 한다.</summary>
+    /// 앞 자세 해를 시드로 받아 셋을 같은 가지로 이어 관절 변화가 작아야 한다. 시드 없는 ② 는 여유 최대 해.</summary>
     [Fact]
     public async Task 오프라인_IK_는_세_자세를_2번_해와_같은_가지로_잇는다()
     {
@@ -114,14 +114,35 @@ public class Fr5KinematicsTests
         double[] Advance(double mm) => PoseMath.ToPose(PoseMath.Multiply(PoseMath.FromPose(approach),
             PoseMath.FromPose(new[] { 0, 0, mm, 0, 0, 0 })));
 
-        var ja = (await ik(approach, 0, default))!;
-        var jl = (await ik(Advance(100), 0, default))!;
-        var jf = (await ik(Advance(400), 0, default))!;
+        var ja = (await ik(approach, 0, null, default))!;
+        var jl = (await ik(Advance(100), 0, ja, default))!;
+        var jf = (await ik(Advance(400), 0, jl, default))!;
         Assert.True(Enumerable.Range(0, 5).Max(i => AngleDiff(ja[i], jl[i])) < 30);
         Assert.True(Enumerable.Range(0, 5).Max(i => AngleDiff(jl[i], jf[i])) < 40);
 
-        // 다음 셀의 ② 는 시드 없이 여유 최대 해 — 같은 자세를 다시 주면 처음과 같은 해가 나온다.
-        Assert.Equal(ja, (await ik(approach, 0, default))!);
+        // 시드 없는 ② 는 여유 최대 해 — 같은 자세를 다시 주면 처음과 같은 해가 나온다.
+        Assert.Equal(ja, (await ik(approach, 0, null, default))!);
+    }
+
+    /// <summary>
+    /// 실기 2026-11-02 L4-R03C09 H2 재현 — 검사 준비(PU) 자세 [0.18, 4.2, −155.82, 68.99, 90.05] 에서 H2 접근점의
+    /// 같은 가지 해는 J4 91° 로 +85° 한계 밖이다. 리치 맵은 이 셀을 '도달' 이 아니라 가지 전환으로 쳐야 한다.
+    /// (H2 지령 관절 [−6.1, −112.16, 136.37(팔꿈치 반전), …] 의 모델 FK 를 목표 자세로 쓴다 — 같은 자세의 다른 해들.)
+    /// </summary>
+    [Fact]
+    public void H2_같은_가지_해는_J4_관절한계()
+    {
+        var start = new[] { 0.18, 4.2, -155.82, 68.99, 90.05, -179.69 };
+        var pose = Kin.Forward(new[] { -6.1, -112.16, 136.37, -69.65, 82.96, -179.98 }, Fr5Kinematics.InspectionTool);
+
+        var why = ReachMapService.SameBranchBlocker(Kin, Fr5Kinematics.InspectionTool, PostureLimits.Default, pose, start);
+
+        Assert.NotNull(why);
+        Assert.Contains("J4", why);
+
+        // 허용 범위 안에서 출발 자세에 가장 가까운 해는 손목을 뒤집은 해 — 가지 전환 판정이 난다.
+        var best = Kin.InverseBest(pose, Fr5Kinematics.InspectionTool, PostureLimits.Default, start)!;
+        Assert.NotNull(ReachMap.BranchChangeReason(PostureLimits.Default.NormalizeJoints(start), best, 120));
     }
 
     /// <summary>
