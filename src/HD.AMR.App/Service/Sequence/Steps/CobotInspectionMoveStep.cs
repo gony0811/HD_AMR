@@ -120,6 +120,17 @@ public class CobotInspectionMoveStep : ISequenceStep
             : null;
     }
 
+    /// <summary>
+    /// ② 관절 해가 출발 자세와 팔꿈치 가지(J3 부호)가 다르면 사유, 같으면 null. 가지가 바뀌면 MoveJ 가 팔을 편 자세를
+    /// 지나 반대편으로 접으며 크게 휘두른다 — 실기 2026-11-02 L4-R03C09 PU #2 에서 J3 −155.8° → +135.1°(291°) 해가 뽑혔다.
+    /// </summary>
+    internal static string? ElbowFlipBlocker(double[] reference, double[] joints)
+        => FairinoRpcClient.IsElbowFlip(reference, joints)
+            ? $"[Cobot 검사위치 이동] 팔꿈치 가지 전환 — 목표 해 J3 {joints[2]:0.0}° 가 출발 자세 J3 {reference[2]:0.0}° 와 " +
+              $"반대편이라 팔 전체가 뒤집히는 관절 이동이 됩니다 (해 [{string.Join(", ", joints.Select(v => v.ToString("0.0")))}]°). " +
+              "같은 가지로는 이 접근점에 도달할 수 없습니다 — 정차 위치를 바꾸거나 이 면에 맞는 진입 자세를 티칭하세요."
+            : null;
+
     private async Task<bool> SelfCollisionGuardOnAsync()
     {
         try { return await _param.GetBoolAsync(SelfCollisionGuardKey) ?? true; }
@@ -417,6 +428,8 @@ public class CobotInspectionMoveStep : ISequenceStep
 
         var reference = await _cobot.Rpc.GetActualJointPosAsync(ct: ct);
         var joints = await _cobot.Rpc.GetInverseKinKeepWristAsync(target, reference, context.Tool, 0, ct);
+        if (ElbowFlipBlocker(reference, joints) is { } flip)
+            return StepResult.Fail(flip);
         if (await SelfCollisionGuardOnAsync() && SelfCollisionBlocker(joints, seam) is { } selfHit)
             return StepResult.Fail(selfHit);
 
@@ -480,14 +493,20 @@ public class CobotInspectionMoveStep : ISequenceStep
         var orientation = AlignOpticalAxisKeepTwist(cur, computed, seam.OpticalAxis);
         var target = new[] { startBase[0], startBase[1], startBase[2], orientation[3], orientation[4], orientation[5] };
         double[] joints;
+        double[] reference;
         try
         {
-            var reference = await _cobot.Rpc.GetActualJointPosAsync(ct: ct);
+            reference = await _cobot.Rpc.GetActualJointPosAsync(ct: ct);
             joints = await _cobot.Rpc.GetInverseKinKeepWristAsync(target, reference, context.Tool, 0, ct);
         }
         catch (InvalidOperationException ex)
         {
             _logger.LogWarning("[Cobot 검사위치 이동] 연속 이동 생략 — 목표 자세 계산 실패: {Msg} → 진입 준비 경로", ex.Message);
+            return null;
+        }
+        if (ElbowFlipBlocker(reference, joints) is { } flip)
+        {
+            _logger.LogWarning("[Cobot 검사위치 이동] 연속 이동 생략 — {Msg} → 진입 준비 경로", flip);
             return null;
         }
         if (await SelfCollisionGuardOnAsync() && SelfCollisionBlocker(joints, seam) is { } selfHit)

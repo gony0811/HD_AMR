@@ -108,7 +108,8 @@ public class CobotSeamEndMoveStep : ISequenceStep
             if (start.Base is { } sb)
             {
                 var (pos, normalMm) = ParallelFromPoint1(p1, sb, seam.Base, seam.OpticalAxis);
-                target = new[] { pos[0], pos[1], pos[2], target[3], target[4], target[5] };
+                // 자세도 점1 그대로 — 순수 평행 이동이라 MoveL 중 손목이 돌지 않는다.
+                target = new[] { pos[0], pos[1], pos[2], p1[3], p1[4], p1[5] };
                 fromPoint1 = true;
                 positionNote = $"점1 기준 면 방향 평행 이동(ACS 시작→끝 법선 성분 {normalMm:+0.0;-0.0}mm 제외, 면 거리 점1 유지)";
                 _logger.LogInformation("[Cobot 용접선 끝점 이동] {Note} — 점1 [{P1}] → 목표 [{T}]",
@@ -122,18 +123,27 @@ public class CobotSeamEndMoveStep : ISequenceStep
             }
         }
 
-        // u/v 오프셋·J6 절대각을 ②와 동일하게 맞춰 MoveL — 점1과 같은 J6 라 직선 이동 중 손목이 돌지 않는다.
+        // 점1 기준이면 위치·자세 모두 점1에서 왔으므로 그대로 MoveL 한다. 예전에는 여기서 J6 를 검사 방향
+        // 절대각(수평 90°)으로 다시 맞췄는데, ②는 2026-10-15 부터 J6 180° 로 접근하므로 수평 용접선에서
+        // 끝점만 광축 둘레로 90° 돌아 IK 112 로 실패했다(실기 2026-11-02 L4-R03C09 PU #1).
         double[] finalTarget;
-        try
+        if (fromPoint1)
         {
-            // 점1 기준이면 u/v 오프셋은 이미 점1 위치에 들어 있다 — 다시 더하지 않는다.
-            (finalTarget, _) = await CobotInspectionMoveStep.AlignTwistToJ6Async(
-                _cobot, fromPoint1 ? target : CobotInspectionMoveStep.ComposeUvTarget(target, context), context.Tool,
-                CobotInspectionMoveStep.TargetJ6Deg(context), ct);
+            finalTarget = target;
         }
-        catch (InvalidOperationException ex)
+        else
         {
-            return StepResult.Fail(ex.Message);
+            // 점1 없음(세미오토 단독) — ②와 같은 규칙(u/v 합성 → J6 180° 정렬)으로 자세를 만든다.
+            try
+            {
+                (finalTarget, _) = await CobotInspectionMoveStep.AlignTwistToJ6Async(
+                    _cobot, CobotInspectionMoveStep.ComposeUvTarget(target, context), context.Tool,
+                    CobotInspectionMoveStep.VerticalJ6Deg, ct);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return StepResult.Fail(ex.Message);
+            }
         }
         var rc = await _cobot.Rpc.MoveLAsync(finalTarget, tool: context.Tool, user: 0,
             vel: context.Velocity, acc: MoveAcc, ovl: MoveOvl, blendR: -1, ct: ct);

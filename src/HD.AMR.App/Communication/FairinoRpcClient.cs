@@ -576,9 +576,12 @@ public class FairinoRpcClient : IDisposable
         if (candidates.Count == 0) throw IkUnreachable(descPose);
 
         // J6 변위를 지배적으로 가중(동률·유사 시 전체 변위로 tie-break) → 현재 와인딩에 가장 가까운 해.
+        // 팔꿈치 가지(J3 부호)가 바뀌는 해는 팔 전체를 뒤집으므로 같은 가지 해가 하나라도 있으면 그쪽을 고른다.
         const double J6Weight = 8.0;
+        const double ElbowFlipPenalty = 10000.0;
         var keep = SelectBestJoints(candidates, referenceJoints,
-            (j, r) => J6Weight * Math.Abs(j[5] - r[5]) + JointDistance(j, r))!.Value;
+            (j, r) => J6Weight * Math.Abs(j[5] - r[5]) + JointDistance(j, r)
+                      + (IsElbowFlip(r, j) ? ElbowFlipPenalty : 0))!.Value;
         var nearest = SelectBestJoints(candidates, referenceJoints, (j, r) => JointDistance(j, r))!.Value;
 
         var keepCost = JointDistance(keep.Joints, referenceJoints);
@@ -631,7 +634,10 @@ public class FairinoRpcClient : IDisposable
             try
             {
                 var j = UnwrapToward(await GetInverseKinAsync(ikPose, config: config, ct: ct), referenceJoints);
-                candidates.Add((config, j));
+                if (WithinHardLimits(j)) candidates.Add((config, j));
+                else _logger.LogInformation(
+                    "{Name} IK config={Config} 제외 — 관절 하드웨어 범위 밖 [{J}]",
+                    _settings.Name, config, string.Join(", ", j.Select(v => v.ToString("0.0"))));
             }
             catch
             {
@@ -661,19 +667,56 @@ public class FairinoRpcClient : IDisposable
         return best;
     }
 
-    /// <summary>각 관절을 ±360° 감아 기준에 가장 가까운 같은 자세 값으로 옮긴다. MoveJ 는 관절 공간에서
+    /// <summary>
+    /// FR5 관절 하드웨어 범위 [도] — J1 ±175 · J2 −265~+85 · J3 ±170 · J4 −265~+85 · J5 ±175.
+    /// J6 은 운용상 ±180° 밖(−270° 등)도 쓰므로 여기서 묶지 않는다(케이블 범위는 호출측 J6 규칙이 관리).
+    /// 장비 사용 범위(<see cref="Service.Motion.PostureLimits"/>)보다 넓은 물리 한계다 — 감김 판정 전용.
+    /// </summary>
+    internal static readonly double[] HardJointMinDeg = { -175, -265, -170, -265, -175, double.NegativeInfinity };
+    internal static readonly double[] HardJointMaxDeg = { 175, 85, 170, 85, 175, double.PositiveInfinity };
+
+    /// <summary>
+    /// 각 관절을 ±360° 감아 기준에 가장 가까운 같은 자세 값으로 옮긴다. MoveJ 는 관절 공간에서
     /// 그대로 보간하므로 IK 가 180.4° 기준에 −179° 를 주면 손목이 359° 돈다 — 181° 로 바꿔 지령해야 한다.
-    /// 감은 값이 컨트롤러 한계를 넘으면 MoveJ 가 거부한다(휘감기보다 안전한 실패).</summary>
+    /// 감은 값은 <b>하드웨어 범위(<see cref="HardJointMinDeg"/>) 안에서만</b> 고른다 — 예전에는 J3 까지 기준 쪽으로
+    /// 감아 IK 의 135.1° 를 −224.9° 로 만들어 rc=32 로 거부됐다(실기 2026-11-02 L4-R03C09 PU #2).
+    /// 범위 안 후보가 없으면 종전처럼 기준에 가장 가까운 값을 둔다 — 한계 초과는 MoveJ 가 거부한다(휘감기보다 안전한 실패).
+    /// </summary>
     internal static double[] UnwrapToward(double[] joints, double[] reference)
     {
         var r = joints.ToArray();
         for (int i = 0; i < Math.Min(r.Length, reference.Length); i++)
         {
-            while (r[i] - reference[i] > 180) r[i] -= 360;
-            while (r[i] - reference[i] < -180) r[i] += 360;
+            var nearest = r[i];
+            while (nearest - reference[i] > 180) nearest -= 360;
+            while (nearest - reference[i] < -180) nearest += 360;
+
+            double? best = null;
+            for (var k = -2; k <= 2; k++)
+            {
+                var v = nearest + 360.0 * k;
+                if (i < HardJointMinDeg.Length && (v < HardJointMinDeg[i] || v > HardJointMaxDeg[i])) continue;
+                if (best is null || Math.Abs(v - reference[i]) < Math.Abs(best.Value - reference[i])) best = v;
+            }
+            r[i] = best ?? nearest;
         }
         return r;
     }
+
+    /// <summary>관절각이 하드웨어 범위(<see cref="HardJointMinDeg"/>~<see cref="HardJointMaxDeg"/>) 안인지.</summary>
+    internal static bool WithinHardLimits(double[] joints)
+    {
+        for (var i = 0; i < Math.Min(joints.Length, HardJointMinDeg.Length); i++)
+            if (joints[i] < HardJointMinDeg[i] || joints[i] > HardJointMaxDeg[i]) return false;
+        return true;
+    }
+
+    /// <summary>팔꿈치 가지가 바뀌는지 — J3 부호가 다르면 팔이 펴진 자세(J3=0)를 지나 반대편으로 접힌다.
+    /// MoveJ 로는 도달하지만 팔 전체를 크게 휘두르는 재구성이라 검사 이동에서는 쓰지 않는다.</summary>
+    internal static bool IsElbowFlip(double[] reference, double[] joints)
+        => reference.Length >= 3 && joints.Length >= 3
+           && Math.Sign(reference[2]) != 0 && Math.Sign(joints[2]) != 0
+           && Math.Sign(reference[2]) != Math.Sign(joints[2]);
 
     /// <summary>실제 관절 이동량 합 — 감김 보정은 <see cref="UnwrapToward"/> 가 먼저 한다.</summary>
     private static double JointDistance(double[] a, double[] b)
