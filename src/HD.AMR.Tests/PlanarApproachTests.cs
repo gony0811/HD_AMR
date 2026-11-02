@@ -104,6 +104,50 @@ public class PlanarApproachTests
             new[] { 0.18, 4.2, -155.8, 69.0, 90.0, -179.7 }, new[] { 10.0, -50, -140, -150.0, 80, -155 }), 6);
     }
 
+    // ── 복귀 경로 재추적(SequenceEntry.PlanRetrace) ── 실기 2026-11-02 13:57 #3 복귀 EMO 대체.
+    // 면 = z 0 평면, 바깥 법선 +z, 접근점 원점, 후퇴 100mm, 진입점 (1500, 0, 100).
+    private static readonly App.Service.Sequence.PlanarApproachRecord Rec = new(
+        new[] { 0.0, 0.0, 1.0 }, new[] { 0.0, 0.0, 0.0 }, 100, new[] { 1500.0, 0.0, 100.0 }, "PU");
+
+    [Fact]
+    public void 복귀는_법선으로_후퇴_평면까지_물러난_뒤_진입점으로()
+    {
+        var plan = SequenceEntry.PlanRetrace(new[] { 0.0, 0.0, 0.0 }, Rec)!;
+
+        Assert.Equal(new[] { 0.0, 0.0, 100.0 }, plan.Lift);
+        Assert.Equal(new[] { 1500.0, 0.0, 100.0 }, plan.Entry);
+        Assert.Equal(1500.0, plan.InPlaneMm, 9);
+    }
+
+    // 검사(⑱) 뒤 다른 자리에 있어도 같은 면 앞이면 같은 방식으로 돌아간다.
+    [Fact]
+    public void 면_위_다른_자리에서도_같은_평면으로_돌아간다()
+    {
+        var plan = SequenceEntry.PlanRetrace(new[] { 360.0, 50.0, 30.0 }, Rec)!;
+
+        Assert.Equal(new[] { 360.0, 50.0, 100.0 }, plan.Lift);
+        Assert.Equal(new[] { 1500.0, 0.0, 100.0 }, plan.Entry);
+    }
+
+    // 이미 후퇴 평면보다 바깥이면 벽 쪽으로 다시 들어가지 않고 그 높이 그대로 면을 따라 간다.
+    [Fact]
+    public void 후퇴_평면보다_바깥이면_그_높이로_면을_따라간다()
+    {
+        var plan = SequenceEntry.PlanRetrace(new[] { 0.0, 0.0, 250.0 }, Rec)!;
+
+        Assert.Null(plan.Lift);
+        Assert.Equal(new[] { 1500.0, 0.0, 250.0 }, plan.Entry);
+    }
+
+    // 그 면 앞이 아니면(기록이 오래됨) 재추적하지 않는다.
+    [Theory]
+    [InlineData(-200.0)]
+    [InlineData(900.0)]
+    public void 그_면_앞이_아니면_재추적하지_않는다(double z)
+    {
+        Assert.Null(SequenceEntry.PlanRetrace(new[] { 0.0, 0.0, z }, Rec));
+    }
+
     [Fact]
     public void 경로_샘플은_간격_이하로_끝점까지()
     {

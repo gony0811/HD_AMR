@@ -170,14 +170,28 @@ internal static class SequenceEntry
         var cur = await cobot.Rpc.GetActualJointPosAsync(ct: ct);
         var mode = ModeOf(cur, ctx);
         var baseKey = mode == PoseMode.Home2 ? Home2Key : "home";
-        if (IsAt(cur, ctx, baseKey)) return done;
+        if (IsAt(cur, ctx, baseKey))
+        {
+            ApproachPathMemory.Clear();
+            return done;
+        }
 
         var onWaypoint = IsAt(cur, ctx, "ready") || IsAt(cur, ctx, Home2Key)
                          || UpperSlotKeys().Any(k => IsAt(cur, ctx, k));
-        if (!onWaypoint && await RetractFromWallAsync(cobot, ctx, logger, ct))
+        if (!onWaypoint)
         {
-            done.Add("벽면 후퇴");
-            cur = await cobot.Rpc.GetActualJointPosAsync(ct: ct);
+            // ② 가 후퇴 평면을 따라 들어왔으면 같은 길로 나온다 — 300mm 후퇴 후 경유점으로 바로 MoveJ 하면, 면을 따라
+            // 멀리 내려간 자세(챔퍼 아래쪽 끝 등)에서 팔이 면 쪽으로 휘둘린다(실기 2026-11-02 13:57 L4-R03C09 #3 복귀 EMO).
+            if (await RetracePlanarAsync(cobot, ctx, logger, ct) is { } retraced)
+            {
+                done.Add(retraced);
+                cur = await cobot.Rpc.GetActualJointPosAsync(ct: ct);
+            }
+            else if (await RetractFromWallAsync(cobot, ctx, logger, ct))
+            {
+                done.Add("벽면 후퇴");
+                cur = await cobot.Rpc.GetActualJointPosAsync(ct: ct);
+            }
         }
 
         if (mode == PoseMode.Home2)
@@ -189,13 +203,130 @@ internal static class SequenceEntry
             }
             await MoveJToTaughtAsync(cobot, ctx, Home2Key, "홈 위치_2", ct);
             done.Add("홈 위치_2 복귀");
+            ApproachPathMemory.Clear();
             logger.LogInformation("기준 자세 복귀(홈 위치_2 모드): {Route}", string.Join(" → ", done));
             return done;
         }
 
         if (await ReturnViaReadyAsync(cobot, ctx, logger, ct)) done.Add("작업 준비 위치 경유");
         if (await EnsureCobotAtHomeAsync(cobot, ctx, ct)) done.Add("홈 복귀");
+        ApproachPathMemory.Clear();
         return done;
+    }
+
+    /// <summary>복귀 경로 재추적 — 기록된 면 이격 평면보다 이만큼 더 벽 쪽(뒤)이면 그 면 앞이 아니라고 본다 [mm].</summary>
+    internal const double RetraceMaxBehindMm = 50.0;
+
+    /// <summary>후퇴 평면보다 이만큼 넘게 바깥이면 그 면 앞이 아니라고(기록이 오래됨) 본다 [mm].</summary>
+    internal const double RetraceMaxAheadMm = 400.0;
+
+    /// <summary>복귀 경로 재추적 계획 — 위치만(BASE mm). 자세는 현재 자세 그대로 유지한다.</summary>
+    /// <param name="Lift">면 법선 방향으로 후퇴 평면까지 물러난 점. 이미 후퇴 평면 이상이면 null.</param>
+    /// <param name="Entry">돌아갈 진입점 — 현재가 후퇴 평면보다 바깥이면 그 높이로 옮긴 진입점.</param>
+    /// <param name="InPlaneMm">면 방향 이동 거리.</param>
+    internal sealed record RetracePlan(double[]? Lift, double[] Entry, double InPlaneMm);
+
+    /// <summary>
+    /// 현재 TCP 위치 <paramref name="cur"/> 에서 ② 기록 <paramref name="rec"/> 의 길을 거슬러 가는 계획.
+    /// 현재가 그 면 앞(면 이격 평면 뒤 <see cref="RetraceMaxBehindMm"/> ~ 후퇴 평면 앞 <see cref="RetraceMaxAheadMm"/>)이
+    /// 아니면 null — 기록이 지금 자세와 무관하다.
+    /// </summary>
+    internal static RetracePlan? PlanRetrace(double[] cur, PlanarApproachRecord rec)
+    {
+        var n = rec.WallOut;
+        var h = 0.0;
+        for (var i = 0; i < 3; i++) h += (cur[i] - rec.ApproachPoint[i]) * n[i];
+        if (h < -RetraceMaxBehindMm || h > rec.RetreatMm + RetraceMaxAheadMm) return null;
+
+        double[]? lift = null;
+        var level = rec.RetreatMm;
+        if (h < rec.RetreatMm - 1.0)
+            lift = Enumerable.Range(0, 3).Select(i => cur[i] + (rec.RetreatMm - h) * n[i]).ToArray();
+        else
+            level = h;   // 이미 후퇴 평면보다 바깥 — 그 높이 그대로 면을 따라 간다(벽 쪽으로 다시 들어가지 않는다)
+
+        var start = lift ?? cur.Take(3).ToArray();
+        var entry = Enumerable.Range(0, 3).Select(i => rec.Entry[i] + (level - rec.RetreatMm) * n[i]).ToArray();
+        var d = Math.Sqrt(Enumerable.Range(0, 3).Sum(i => (entry[i] - start[i]) * (entry[i] - start[i])));
+        return new RetracePlan(lift, entry, d);
+    }
+
+    /// <summary>
+    /// ② 평면 경유 접근 기록(<see cref="ApproachPathMemory"/>)이 있고 현재 TCP 가 그 면 앞이면, 면 법선 방향으로 후퇴
+    /// 평면까지 물러난 뒤(MoveL) 후퇴 평면을 따라 진입점까지(MoveL) 돌아온다. 자세는 현재 자세 그대로.
+    /// 움직이기 전에 경로 전체를 역기구학으로 검증하고, 걸리면 <b>움직이지 않고 예외</b> — 그 자리에서 경유점으로
+    /// MoveJ 하는 종전 경로가 바로 위험한 동작이기 때문이다. 기록이 없거나 지금 자세와 무관하면 null(종전 벽면 후퇴).
+    /// </summary>
+    private static async Task<string?> RetracePlanarAsync(
+        CobotService cobot, SequenceContext ctx, ILogger logger, CancellationToken ct)
+    {
+        if (ApproachPathMemory.Last is not { } rec) return null;
+
+        var pose = await cobot.Rpc.GetTcpPoseInBaseAsync(ctx.Tool, ct);
+        if (PlanRetrace(pose, rec) is not { } plan)
+        {
+            logger.LogInformation("복귀: ② 평면 경유 기록이 현재 자세와 무관(그 면 앞이 아님) — 기록 폐기, 종전 벽면 후퇴");
+            ApproachPathMemory.Clear();
+            return null;
+        }
+
+        var skipPlanar = plan.InPlaneMm < CobotInspectionMoveStep.PlanarSkipMm;
+        if (plan.Lift is null && skipPlanar)
+            return "후퇴 평면 진입점(이미 도착)";
+
+        double[] Pose(double[] p) => new[] { p[0], p[1], p[2], pose[3], pose[4], pose[5] };
+        string Fmt(double[] v) => string.Join(", ", v.Select(x => x.ToString("0")));
+
+        // ── 경로 검증(모션 없음) ─────────────────────────────────────────
+        var curJoints = await cobot.Rpc.GetActualJointPosAsync(ct: ct);
+        var start = pose.Take(3).ToArray();
+        var path = new List<(double[] Pt, bool Planar)>();
+        if (plan.Lift is { } lift)
+            path.AddRange(CobotInspectionMoveStep.SampleSegment(start, lift, CobotInspectionMoveStep.PlanarSampleMm).Select(p => (p, false)));
+        if (!skipPlanar)
+            path.AddRange(CobotInspectionMoveStep.SampleSegment(plan.Lift ?? start, plan.Entry, CobotInspectionMoveStep.PlanarSampleMm)
+                .Select(p => (p, true)));
+
+        var seed = curJoints;
+        double[]? jLift = null, jEntry = null;
+        foreach (var (pt, planar) in path)
+        {
+            double[] j;
+            try { j = await cobot.Rpc.GetInverseKinNearestAsync(Pose(pt), seed, ctx.Tool, 0, ct); }
+            catch (InvalidOperationException ex)
+            {
+                throw new InvalidOperationException(
+                    $"복귀 경로 [{Fmt(pt)}] 도달 불가 — 움직이지 않고 정지합니다. 조그로 면에서 빼낸 뒤 재시도하세요. ({ex.Message})");
+            }
+            if (CobotInspectionMoveStep.PathStepBlocker(seed, j, curJoints) is { } why)
+                throw new InvalidOperationException(
+                    $"복귀 경로 [{Fmt(pt)}] {why} — 움직이지 않고 정지합니다. 조그로 면에서 빼낸 뒤 재시도하세요.");
+            seed = j;
+            if (planar) jEntry = j; else jLift = j;
+        }
+
+        logger.LogInformation(
+            "복귀: ② 평면 경유 역순 — 현재 [{Cur}] → 법선 후퇴 [{Lift}] → 면 방향 {D:0}mm → 진입점 [{Entry}] (면 {Wall}, 경로 검증 {N}점 통과)",
+            Fmt(start), plan.Lift is null ? "생략" : Fmt(plan.Lift), skipPlanar ? 0 : plan.InPlaneMm, Fmt(plan.Entry),
+            rec.WallCode ?? "-", path.Count);
+
+        // ── 실행 ─────────────────────────────────────────────────────────
+        if (plan.Lift is { } l)
+        {
+            var rc = await cobot.Rpc.MoveLAsync(Pose(l), jLift!, tool: ctx.Tool, user: 0, vel: ctx.Velocity, ct: ct);
+            if (rc != 0)
+                throw new InvalidOperationException($"복귀 법선 후퇴(MoveL) 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)} — 정지합니다.");
+        }
+        if (!skipPlanar)
+        {
+            var rc = await cobot.Rpc.MoveLAsync(Pose(plan.Entry), jEntry!, tool: ctx.Tool, user: 0, vel: ctx.Velocity, ct: ct);
+            if (rc != 0)
+                throw new InvalidOperationException($"복귀 면 방향 이동(MoveL) 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)} — 정지합니다.");
+        }
+
+        return skipPlanar
+            ? "법선 후퇴(후퇴 평면)"
+            : $"법선 후퇴 → 후퇴 평면 {plan.InPlaneMm:0}mm 역주행(진입점)";
     }
 
     private static IEnumerable<string> UpperSlotKeys()

@@ -443,6 +443,7 @@ public class CobotInspectionMoveStep : ISequenceStep
         if (await SelfCollisionGuardOnAsync() && SelfCollisionBlocker(joints, seam) is { } selfHit)
             return StepResult.Fail(selfHit);
 
+        ApproachPathMemory.Clear();   // 평면 경유가 아닌 이동 — 앞 기록으로 복귀하면 엉뚱한 면을 따라간다
         var rc = await _cobot.Rpc.MoveJAsync(joints, target,
             tool: context.Tool, user: 0, vel: context.Velocity, ct: ct);
         if (rc != 0)
@@ -592,7 +593,8 @@ public class CobotInspectionMoveStep : ISequenceStep
         string twistNote, string entryNote, CancellationToken ct)
     {
         var retreat = await GetPlanarRetreatMmAsync();
-        var plan = PlanPlanarApproach(current, target, WallOutNormal(seam.ComputedPose!, seam.OpticalAxis), retreat);
+        var wallOut = WallOutNormal(seam.ComputedPose!, seam.OpticalAxis);
+        var plan = PlanPlanarApproach(current, target, wallOut, retreat);
         double[] Pose(double[] p) => new[] { p[0], p[1], p[2], target[3], target[4], target[5] };
         string Fmt(double[] v) => string.Join(", ", v.Select(x => x.ToString("0")));
 
@@ -660,6 +662,10 @@ public class CobotInspectionMoveStep : ISequenceStep
         var rc = await _cobot.Rpc.MoveJAsync(jEntry!, Pose(entryPos), tool: context.Tool, user: 0, vel: context.Velocity, ct: ct);
         if (rc != 0)
             return StepResult.Fail($"진입점 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.");
+
+        // 진입점에 선 순간부터 복귀는 이 길을 거슬러 가야 한다 — 뒤 이동이 실패·정지해도 기록은 남긴다.
+        ApproachPathMemory.Record(new PlanarApproachRecord(
+            wallOut, target.Take(3).ToArray(), retreat, entryPos.ToArray(), context.WallCode));
 
         if (!direct)
         {
