@@ -51,6 +51,21 @@ public class PlanarApproachTests
         Assert.Equal(4, c.Count);
     }
 
+    // 실기 2026-11-02 13:45·13:48 #3: 접근점이 면을 따라 멀면(> 500mm) 들어갈 점으로 바로 MoveJ 하지 않고,
+    // 투영점에서 500mm 이내 후보에서만 진입해 나머지는 후퇴 평면 MoveL 로 간다.
+    [Fact]
+    public void 먼_접근점은_직접_진입하지_않고_투영점_근처에서만_진입()
+    {
+        var plan = CobotInspectionMoveStep.PlanPlanarApproach(
+            new[] { 1500.0, 0.0, 800.0 }, new[] { 0.0, 0.0, 0.0 }, new[] { 0.0, 0.0, 1.0 }, 100);
+        var c = CobotInspectionMoveStep.EntryCandidates(plan);
+
+        Assert.DoesNotContain(c, p => ReferenceEquals(p, plan.Plunge));
+        Assert.Equal(plan.Entry, c[0]);
+        Assert.All(c, p => Assert.True(1500.0 - p[0] <= CobotInspectionMoveStep.MaxEntryInPlaneMm + 1e-6));
+        Assert.Equal(6, c.Count);   // 투영점 + 100·200·300·400·500mm
+    }
+
     [Fact]
     public void 면_방향_거리가_짧으면_들어갈_점만_후보()
     {

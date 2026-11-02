@@ -554,16 +554,29 @@ public class CobotInspectionMoveStep : ISequenceStep
     }
 
     /// <summary>
-    /// 진입점 후보 순서 — ① 들어갈 점 자체(면 방향 이동 없이 바로 진입), ② 현재 TCP 투영점에서 들어갈 점 쪽으로
-    /// <see cref="PlanarSampleMm"/> 간격(투영점 쪽부터 = 진입 MoveJ 가 짧은 순). 면 방향 거리가 짧으면 ①만.
+    /// 진입 MoveJ 가 후퇴 평면에서 현재 TCP 투영점으로부터 갈 수 있는 최대 면 방향 거리 [mm]. 관절 이동량만 보면
+    /// 관절은 조금 움직여도 TCP 가 경사면을 따라 크게 휘는 MoveJ 를 막지 못한다(실기 2026-11-02 13:45·13:48
+    /// L4-R03C09 #3: 관절 최대 82° 라 통과해 챔퍼 아래쪽 끝까지 한 번에 MoveJ → EMO). 이보다 먼 구간은 반드시
+    /// 후퇴 평면을 따라 MoveL 로 간다. H1(면 방향 384mm)은 종전처럼 바로 들어간다.
+    /// </summary>
+    internal const double MaxEntryInPlaneMm = 500.0;
+
+    /// <summary>
+    /// 진입점 후보 순서 — ① 들어갈 점 자체(면 방향 이동 없이 바로 진입: 투영점에서 <see cref="MaxEntryInPlaneMm"/> 이내일 때만),
+    /// ② 현재 TCP 투영점에서 들어갈 점 쪽으로 <see cref="PlanarSampleMm"/> 간격(투영점 쪽부터 = 진입 MoveJ 가 짧은 순,
+    /// 투영점에서 <see cref="MaxEntryInPlaneMm"/> 이내까지). 면 방향 거리가 짧으면 ①만.
     /// </summary>
     internal static List<double[]> EntryCandidates(PlanarApproachPlan plan)
     {
-        var list = new List<double[]> { plan.Plunge };
-        if (plan.InPlaneMm < PlanarSkipMm) return list;
+        if (plan.InPlaneMm < PlanarSkipMm) return new List<double[]> { plan.Plunge };
+
+        var list = new List<double[]>();
+        if (plan.InPlaneMm <= MaxEntryInPlaneMm) list.Add(plan.Plunge);
         list.Add(plan.Entry);
         var pts = SampleSegment(plan.Entry, plan.Plunge, PlanarSampleMm);
-        list.AddRange(pts.Take(pts.Count - 1));   // 마지막 점 = 들어갈 점(이미 ①)
+        var step = plan.InPlaneMm / pts.Count;
+        for (var k = 0; k < pts.Count - 1; k++)   // 마지막 점 = 들어갈 점(①에서 따로 다룸)
+            if ((k + 1) * step <= MaxEntryInPlaneMm + 1e-6) list.Add(pts[k]);
         return list;
     }
 
@@ -630,6 +643,7 @@ public class CobotInspectionMoveStep : ISequenceStep
         if (entryPos is null)
             return StepResult.Fail(
                 "[Cobot 검사위치 이동] 안전한 진입 경로 없음 — 움직이지 않았습니다. " +
+                $"(접근점은 현재 TCP 정면에서 면을 따라 {plan.InPlaneMm:0}mm, 진입 MoveJ 는 {MaxEntryInPlaneMm:0}mm 이내만 허용) " +
                 $"후보 {candidates.Count}개 모두 거부: {string.Join(" / ", rejects.Take(4))}" +
                 (rejects.Count > 4 ? $" 외 {rejects.Count - 4}건" : "") +
                 ". 정차 위치를 용접선 쪽으로 옮기거나 이 면의 검사 준비 자세를 확인하세요.");
