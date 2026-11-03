@@ -325,7 +325,7 @@ public class InspectionRunStep : ISequenceStep
         if (pick is not { } p)
         {
             _logger.LogWarning("[검사 수행] 안전 회전 후보 없음 — 현재 J6 {J6:0.0}°, 후보 {Desc}", current[5], desc);
-            return (0, $"첫 경유점으로 가려면 J6 를 안전 범위(−330°~−160°) 밖으로 돌려야 합니다(센서 헤드 간섭 위험) — 이동하지 않고 중단. " +
+            return (0, $"첫 경유점으로 가려면 J6 를 안전 범위(−330°~−160°, 현재 감김 기준) 밖으로 돌려야 합니다(센서 헤드 간섭 위험) — 이동하지 않고 중단. " +
                        $"현재 J6 {current[5]:0.0}°, 후보 {desc}. 'Cobot 검사위치 이동'의 검사 방향(수평/수직)을 확인하세요.");
         }
 

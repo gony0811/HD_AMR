@@ -73,11 +73,25 @@ public readonly record struct WObjAttitude(double Rz0, double TiltSign)
         => j6Deg >= SafeJ6MinDeg && j6Deg <= SafeJ6MaxDeg;
 
     /// <summary>
+    /// 현재 J6 를 안전 범위 쪽 감김으로 옮기는 360° 배수 [도] — 범위 안이면 0, 어느 감김으로도 범위 밖이면 0(종전 판정).
+    /// 컨트롤러가 같은 물리각을 +180.4° 로 보고하는 날이 있다(실기 2026-11-03: 전날 −179.7° → 당일 +180.4°,
+    /// 케이블 감김 변화 없음). 그때 안전 범위를 실제값 그대로 보면 물리적으로 같은 −90° 회전도 막힌다.
+    /// 범위 폭이 360° 보다 작아 맞는 배수는 많아야 하나다.
+    /// </summary>
+    public static double SafeJ6WindingShiftDeg(double currentJ6)
+    {
+        for (var k = -2; k <= 2; k++)
+            if (IsInSafeJ6Range(currentJ6 + 360.0 * k)) return 360.0 * k;
+        return 0.0;
+    }
+
+    /// <summary>
     /// 절대 모드 비틀림(0/180°) 후보 중 센서 헤드–링크암 간섭이 없는 회전을 고른다. 센서 헤드가 플랜지 한쪽으로
     /// 나와 있어 J6 를 안전 범위(<see cref="SafeJ6MinDeg"/>~<see cref="SafeJ6MaxDeg"/>) 밖으로 돌리면 간섭한다
     /// (실기 2026-10-13: J6 −179.6°→−92° 시계 회전으로 EMO).
     /// 허용: 목표 J6 가 안전 범위 안. 회전 방향·회전량은 따지지 않는다 — 현재 J6 도 범위 안이면 관절 보간
-    /// 경로가 범위 안에 머문다. (예전의 "90°~180° ±5° 또는 반시계 100° 이내" 규칙은 실측 범위로 대체했다 —
+    /// 경로가 범위 안에 머문다. 범위는 현재 J6 의 감김 기준으로 본다(<see cref="SafeJ6WindingShiftDeg"/>) —
+    /// 현재와 목표에 같은 360° 배수를 더하므로 실제 회전량·방향은 그대로다. (예전의 "90°~180° ±5° 또는 반시계 100° 이내" 규칙은 실측 범위로 대체했다 —
     /// 그 규칙에선 바닥 B 처럼 −180°→−314° 가 필요한 배치가 막혔다, 실기 2026-10-16.)
     /// 허용 후보 중 <b>관절 총 변위</b>가 가장 작은 것을 고르고(총 변위를 모르면 |ΔJ6| 최소), 없으면 null
     /// (호출측은 움직이지 않고 실패). 손목을 뒤집은 해(J4·J5 크게 이동)는 MoveL 로 갈 수 없는데 J6 변화만
@@ -91,9 +105,10 @@ public readonly record struct WObjAttitude(double Rz0, double TiltSign)
         double currentJ6, IReadOnlyList<(double TwistDeg, double? J6, double? TotalDeg)> candidates)
     {
         (double TwistDeg, double DeltaJ6, double Total)? best = null;
+        var shift = SafeJ6WindingShiftDeg(currentJ6);
         foreach (var (twist, j6, totalDeg) in candidates)
         {
-            if (j6 is not { } j || !IsInSafeJ6Range(j)) continue;
+            if (j6 is not { } j || !IsInSafeJ6Range(j + shift)) continue;
             var d = j - currentJ6;
             var cost = totalDeg ?? Math.Abs(d);
             if (best is not { } b || cost < b.Total)

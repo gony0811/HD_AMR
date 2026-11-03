@@ -141,6 +141,50 @@ public class WObjAttitudeCcwTwistTests
         Assert.Equal(180.0, pick!.Value.TwistDeg);
     }
 
+    [Fact]
+    public void 반대_감김_보고값에서도_물리적으로_같은_반시계_회전은_허용()
+    {
+        // 실기 2026-11-03 L2-R02C05 F 수평: 현재 J6 +180.4°(= −179.6° 와 같은 물리각), 0°→+90.0°(Δ−90.4),
+        // 180°→+270.0°(Δ+89.6). 실제값 그대로 보면 둘 다 범위 밖이라 검사가 멈췄다.
+        var pick = WObjAttitude.SelectSafeTwist(180.4, new (double, double?, double?)[]
+        {
+            (0.0, 90.0, 150.0),
+            (180.0, 270.0, 151.0),
+        });
+        Assert.NotNull(pick);
+        Assert.Equal(0.0, pick!.Value.TwistDeg);
+        Assert.Equal(-90.4, pick.Value.DeltaJ6, 1);
+    }
+
+    [Fact]
+    public void 반대_감김에서도_시계_회전은_거부()
+    {
+        // +180.4° → +270°(Δ+89.6) = −179.6° → −90° — 실측 범위(−160° 위쪽) 밖, 2026-10-13 EMO 와 같은 방향.
+        var pick = WObjAttitude.SelectSafeTwist(180.4, new (double, double?)[]
+        {
+            (0.0, null),
+            (180.0, 270.0),
+        });
+        Assert.Null(pick);
+    }
+
+    [Fact]
+    public void 다른_감김의_목표는_같은_물리각이어도_거부()
+    {
+        // 현재 +180.4° 에서 −270° 로 가면 실제로 450° 를 돈다 — 현재 감김 기준 −630° 라 범위 밖.
+        var pick = WObjAttitude.SelectSafeTwist(180.4, new (double, double?)[] { (0.0, -270.0) });
+        Assert.Null(pick);
+    }
+
+    [Theory]
+    [InlineData(-179.6, 0.0)]
+    [InlineData(180.4, -360.0)]
+    [InlineData(90.0, -360.0)]
+    [InlineData(-540.0, 360.0)]
+    [InlineData(-92.2, 0.0)]     // 어느 감김으로도 범위 밖 — 종전 판정
+    public void 안전_범위_감김_보정량(double current, double expected)
+        => Assert.Equal(expected, WObjAttitude.SafeJ6WindingShiftDeg(current));
+
     [Theory]
     [InlineData(180.0, -179.6, -180.0)]
     [InlineData(180.0, -210.4, -180.0)]
