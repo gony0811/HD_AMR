@@ -159,6 +159,17 @@ public class InspectionRunStep : ISequenceStep
             attitude = attitude with { TwistOverrideDeg = twist.TwistDeg };
         }
 
+        // 움직이기 전에 경유점 전체를 순서대로 IK 로 풀어 손목 특이점·팔꿈치 가지 전환을 거른다 — 도중에 컨트롤러가
+        // 멈추면 팔이 특이 자세에 남아 다음 task 의 복귀 경로까지 막힌다(실기 2026-11-03 L2-R02C05 H04 #5: J5 0.48°, rc=185).
+        var chainError = await CheckWaypointChainAsync(
+            context, Enumerable.Range(0, waypoints.Count).Where(i => !IsSkipped(waypoints[i]))
+                .Select(i => (i, ToTargetBase(waypoints[i]))).ToList(), ct);
+        if (chainError is not null)
+        {
+            _logger.LogWarning("[검사 수행] 경유점 사전 검증 실패 — {Err}", chainError);
+            return StepResult.Fail($"{chainError} — 움직이지 않고 중단. 정차 위치를 이 용접선 쪽으로 옮기거나 티칭설정 '{profile.Name}' 의 자세를 확인하세요.");
+        }
+
         _logger.LogInformation("[검사 수행] 첫 경유점 #{Idx} 로 스테이징 이동 (프레임 z={Z:0.0}mm)",
             firstIdx + 1, waypoints[firstIdx].Z);
         await _pauseGate.WaitWhilePausedAsync(ct);
@@ -280,6 +291,44 @@ public class InspectionRunStep : ISequenceStep
         }
 
         return StepResult.Ok(msg);
+    }
+
+    /// <summary>
+    /// 경유점 BASE 목표를 순서대로 IK(앞 점 해 기준 최소 변위)로 풀어 <see cref="WaypointChainBlocker"/> 로 판정한다.
+    /// IK 는 계산만 하는 호출이라 코봇은 움직이지 않는다. 통과하면 null.
+    /// </summary>
+    private async Task<string?> CheckWaypointChainAsync(
+        SequenceContext context, IReadOnlyList<(int Index, double[] Target)> targets, CancellationToken ct)
+    {
+        var start = await _cobot.Rpc.GetActualJointPosAsync(ct: ct);
+        var chain = new List<(int Index, double[] Joints)>(targets.Count);
+        var seed = start;
+        foreach (var (idx, target) in targets)
+        {
+            double[] joints;
+            try { joints = await _cobot.Rpc.GetInverseKinNearestAsync(target, seed, context.Tool, 0, ct); }
+            catch (InvalidOperationException ex) { return $"경유점 #{idx + 1} 도달 불가({ex.Message})"; }
+            chain.Add((idx, joints));
+            seed = joints;
+        }
+        return WaypointChainBlocker(start, chain);
+    }
+
+    /// <summary>
+    /// 경유점 관절 해 사슬에서 첫 문제점의 사유, 없으면 null. 손목 특이점(|J5| &lt; <see cref="CobotInspectionMoveStep.PlanarWristMarginDeg"/>
+    /// 또는 출발 자세와 J5 부호 반전 — 사이에서 0 을 지난다)과 팔꿈치 가지 전환을 본다. J6 는 경유점마다 비틀림이 달라
+    /// 크게 바뀌는 것이 정상이라 보지 않는다.
+    /// </summary>
+    internal static string? WaypointChainBlocker(double[] start, IReadOnlyList<(int Index, double[] Joints)> chain)
+    {
+        foreach (var (idx, j) in chain)
+        {
+            if (Math.Abs(j[4]) < CobotInspectionMoveStep.PlanarWristMarginDeg || Math.Sign(j[4]) != Math.Sign(start[4]))
+                return $"경유점 #{idx + 1} 손목 특이점(J5 {start[4]:0.0}° → {j[4]:0.0}°, 해 [{string.Join(", ", j.Select(v => v.ToString("0.0")))}]°)";
+            if (FairinoRpcClient.IsElbowFlip(start, j))
+                return $"경유점 #{idx + 1} 팔꿈치 가지 전환(J3 {start[2]:0.0}° → {j[2]:0.0}°)";
+        }
+        return null;
     }
 
     private async Task<double> GetWObjIdAsync()
