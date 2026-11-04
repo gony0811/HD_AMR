@@ -7,6 +7,7 @@ using HD.AMR.App.Service.Sequence.Steps;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using HD.AMR.App.Models;
 
 namespace HD.AMR.App.Service.Inspection;
@@ -29,6 +30,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly CobotService _cobot;
     private readonly VisionInterfaceService _vision;
+    private readonly GasDetectorService _gas;
+    private readonly InspectionSensorSettings _sensor;
     private readonly ILogger<WeldInspectionOrchestrator> _logger;
 
     private readonly object _sync = new();
@@ -80,6 +83,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         IServiceScopeFactory scopeFactory,
         CobotService cobot,
         VisionInterfaceService vision,
+        GasDetectorService gas,
+        IOptions<InspectionSensorSettings> sensor,
         OperationLogService opLog,
         ILogger<WeldInspectionOrchestrator> logger)
     {
@@ -87,6 +92,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         _scopeFactory = scopeFactory;
         _cobot = cobot;
         _vision = vision;
+        _gas = gas;
+        _sensor = sensor.Value;
         _logger = logger;
     }
 
@@ -322,12 +329,15 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                 "CORNER3 검사 시퀀스가 제거되어 실행할 수 없습니다.");
 
         // 비전 링크 — 드라이런 스텝 집합은 촬영(CAPTURE_REQ)을 하지 않으므로 링크 다운이어도 진행한다.
-        if (!_vision.Client.IsConnected)
+        // 가스 검출 AMR 은 비전 대신 가스 디텍터 링크를 본다(InspectionSensor:Mode).
+        var sensorUp = _sensor.UsesGasDetector ? _gas.IsConnected : _vision.Client.IsConnected;
+        var sensorName = _sensor.UsesGasDetector ? "가스 디텍터" : "비전 S/W";
+        if (!sensorUp)
         {
             if (!recipe.DryRun)
-                return InspectionActionResult.Fail("equipmentError", "비전 S/W 링크 다운 — 검사 실행 불가");
-            _logger.LogInformation("비전 링크 확인 생략(드라이런) — 비전 S/W 링크 다운 상태로 진행 (recipe={Recipe})",
-                recipeId);
+                return InspectionActionResult.Fail("equipmentError", $"{sensorName} 링크 다운 — 검사 실행 불가");
+            _logger.LogInformation("{Sensor} 링크 확인 생략(드라이런) — 링크 다운 상태로 진행 (recipe={Recipe})",
+                sensorName, recipeId);
         }
 
         // 6) 사전 티칭 경유점 조회: 레시피에 지정된 InspectionProfile(검사 레시피 페이지에서 지정).

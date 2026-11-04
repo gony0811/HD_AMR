@@ -1,9 +1,11 @@
 using System.Text.Json;
 using HD.AMR.App.Communication;
+using HD.AMR.App.Communication.GasDetector;
 using HD.AMR.App.Communication.Vision;
 using HD.AMR.App.Data.Entities;
 using HD.AMR.App.Service.Inspection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace HD.AMR.App.Service.Sequence.Steps;
 
@@ -27,6 +29,10 @@ namespace HD.AMR.App.Service.Sequence.Steps;
 /// 프레임: MoveL의 tool = 시퀀스 검사 공구(<see cref="SequenceContext.Tool"/>), user = 0(BASE) 고정.
 /// 컨트롤러는 내부 작업물 프레임을 알지 못하고 최종 변환된 TCP 목표만 받는다.
 /// 비전 실패/무응답은 /inspection 페이지와 동일하게 <b>중단하지 않고</b> 집계만 하고 다음 점으로 진행한다.
+///
+/// 검사 센서(<see cref="InspectionSensorSettings.Mode"/>)가 <c>GasDetector</c> 면 CAPTURE_REQ 대신 경유점마다
+/// <see cref="GasDetectorService.MeasureAsync"/> 로 헬륨 리크레이트를 측정해 OK/NG 판정한다. NG(리크 검출)는 정상적인
+/// 검사 결과라 집계만 하고, 측정 실패(통신)만 비전 실패와 같이 실패율 판정에 넣는다.
 /// (MoveL 실패는 즉시 중단.)
 ///
 /// 일시정지(통신 단절 사양 §3·§4.3, <see cref="MissionPauseGate"/>): 진행 중 경유점 MoveL 은 끝까지 수행하고
@@ -38,6 +44,8 @@ public class InspectionRunStep : ISequenceStep
     private readonly bool _dryRun;
     private readonly CobotService _cobot;
     private readonly VisionInterfaceService _vision;
+    private readonly GasDetectorService _gas;
+    private readonly bool _useGas;
     private readonly DrawingService _drawing;
     private readonly ParameterService _param;
     private readonly MissionPauseGate _pauseGate;
@@ -53,9 +61,12 @@ public class InspectionRunStep : ISequenceStep
     /// <param name="dryRun">true 면 경유점을 <b>이동만</b> 하고 비전 CAPTURE_REQ 를 보내지 않는다(드라이런).
     /// DI 에서 <c>ActivatorUtilities.CreateInstance</c> 로 주입되므로 첫 인자여야 한다.</param>
     public InspectionRunStep(
-        bool dryRun, CobotService cobot, VisionInterfaceService vision, DrawingService drawing,
+        bool dryRun, CobotService cobot, VisionInterfaceService vision, GasDetectorService gas,
+        IOptions<InspectionSensorSettings> sensor, DrawingService drawing,
         ParameterService param, MissionPauseGate pauseGate, ILogger<InspectionRunStep> logger)
     {
+        _gas = gas;
+        _useGas = sensor.Value.UsesGasDetector;
         _dryRun = dryRun;
         _pauseGate = pauseGate;
         _cobot = cobot;
@@ -66,7 +77,12 @@ public class InspectionRunStep : ISequenceStep
     }
 
     public string Key => _dryRun ? "inspectionRunDry" : "inspectionRun";
-    public string DisplayName => _dryRun ? "검사 수행 (도면 순회·비전 없음)" : "검사 수행 (도면 순회)";
+    public string DisplayName => _dryRun
+        ? (_useGas ? "검사 수행 (도면 순회·측정 없음)" : "검사 수행 (도면 순회·비전 없음)")
+        : (_useGas ? "검사 수행 (도면 순회·가스 측정)" : "검사 수행 (도면 순회)");
+
+    /// <summary>요약·로그에 쓰는 센서 이름.</summary>
+    private string SensorName => _useGas ? "가스" : "비전";
     public int DefaultOrder => _dryRun ? 1210 : 1200;
 
     public StepValidation Validate(SequenceContext context)
@@ -75,6 +91,8 @@ public class InspectionRunStep : ISequenceStep
             return StepValidation.Fail("코봇 RPC 미연결");
         if (context.InspectionProfileId <= 0)
             return StepValidation.Fail("티칭설정 미선택 — 파라미터 칸에서 도면·티칭설정을 선택하세요.");
+        if (_useGas && !_dryRun && !_gas.IsConnected)
+            return StepValidation.Fail($"가스 디텍터 미연결 ({_gas.Settings.EndpointText}) — SETTINGS > Gas Detector 에서 통신을 확인하세요.");
         return StepValidation.Ok();
     }
 
@@ -182,6 +200,7 @@ public class InspectionRunStep : ISequenceStep
         var movedSet = new HashSet<int>();
         var skippedSet = new HashSet<int>();
         var visByIndex = new Dictionary<int, bool>();
+        var ngByIndex = new Dictionary<int, bool>();   // 가스 모드: 리크 검출(NG) 점
         var lastMoved = -1;
 
         // v3: 검사 세션 1회 = Run ID 1개(GUID). 각 경유점 캡처 = Task ID 1개.
@@ -237,6 +256,21 @@ public class InspectionRunStep : ISequenceStep
             if (_dryRun)
                 continue;
 
+            // 가스 디텍터: 도착 후 대기·샘플링해 리크레이트 판정. 재측정(일시정지 재개)은 마지막 결과로 덮어쓴다.
+            if (_useGas)
+            {
+                var gas = await _gas.MeasureAsync($"WALL 0x{context.InspectionSurfaceId:X2} #{i + 1}", ct);
+                visByIndex[i] = gas.Judgement != GasJudgement.Error;
+                ngByIndex[i] = gas.Judgement == GasJudgement.Ng;
+                context.Progress?.Invoke(gas.Judgement switch
+                {
+                    GasJudgement.Ok => $"경유점 #{i + 1} 가스 OK ({gas.MaxMbarLs:0.00E+0} mbar·l/s)",
+                    GasJudgement.Ng => $"경유점 #{i + 1} 가스 NG — 리크 {gas.MaxMbarLs:0.00E+0} ≥ 기준 {gas.LimitMbarLs:0.00E+0} mbar·l/s",
+                    _ => $"경유점 #{i + 1} 가스 측정 실패: {gas.Error}",
+                });
+                continue;
+            }
+
             // surface type 우선순위: 경유점 수동 지정 > |θ| 자동 규칙(구 도면 솎기 프로필).
             // (레시피 SurfaceOverride 는 경유점 단위 지정으로 일원화되며 폐기 — 2026-09-18.)
             var surfaceType = w.SurfaceManual
@@ -261,11 +295,15 @@ public class InspectionRunStep : ISequenceStep
 
         int moved = movedSet.Count, skipped = skippedSet.Count;
         int visOk = visByIndex.Values.Count(ok => ok), visFail = visByIndex.Count - visOk;
+        int gasNg = ngByIndex.Values.Count(ng => ng);
+        var sensorSummary = _useGas
+            ? $", 가스 측정 {visOk}/{moved} (NG {gasNg}" + (visFail > 0 ? $", 실패 {visFail})" : ")")
+            : $", 비전 OK {visOk}/{moved}" + (visFail > 0 ? $" (실패 {visFail})" : "");
         var msg =
-            (_dryRun ? "검사 수행 완료(드라이런·비전 없음) — " : "검사 수행 완료 — ") +
+            (_dryRun ? $"검사 수행 완료(드라이런·{SensorName} 없음) — " : "검사 수행 완료 — ") +
             $"티칭설정 '{profile.Name}', 이동 {moved}점" +
             (skipped > 0 ? $"(θ 초과 {skipped}점 제외)" : "") +
-            (_dryRun ? "" : $", 비전 OK {visOk}/{moved}" + (visFail > 0 ? $" (실패 {visFail})" : "")) +
+            (_dryRun ? "" : sensorSummary) +
             $" [내부 wobj #{wobjId}→BASE/user 0, tool {context.Tool}, WallID 0x{context.InspectionSurfaceId:X2}, Run {runId}].";
         _logger.LogInformation("[검사 수행] {Msg}", msg);
 
@@ -276,7 +314,7 @@ public class InspectionRunStep : ISequenceStep
             var failRatio = (double)visFail / moved;
             if (failRatio > maxRatio)
                 return StepResult.Fail(
-                    $"비전 실패율 초과 — {visFail}/{moved} ({failRatio:P0} > 허용 {maxRatio:P0}). {msg}");
+                    $"{SensorName} 실패율 초과 — {visFail}/{moved} ({failRatio:P0} > 허용 {maxRatio:P0}). {msg}");
         }
 
         return StepResult.Ok(msg);

@@ -60,8 +60,15 @@ internal static class ServiceRegistration
         AddHostedSingleton<TelescopicService>(services);
         services.Configure<TelescopicSerialSettings>(config.GetSection("Telescopic"));
 
+        // 검사 센서 선택(InspectionSensor:Mode) — Vision 이면 비전 인터페이스, GasDetector 면 가스 디텍터만 실제로 통신한다.
+        services.Configure<InspectionSensorSettings>(config.GetSection("InspectionSensor"));
+
         AddHostedSingleton<VisionInterfaceService>(services);
         services.Configure<HD.AMR.App.Communication.Vision.VisionInterfaceSettings>(config.GetSection("Vision"));
+
+        // 헬륨 가스 디텍터(INFICON XL3000flex) — RS485(시리얼)/이더넷(TCP) 선택, ASCII 프로토콜.
+        AddHostedSingleton<GasDetectorService>(services);
+        services.Configure<HD.AMR.App.Communication.GasDetector.GasDetectorSettings>(config.GetSection("GasDetector"));
 
         AddHostedSingleton<LaserDisplacementSensorService>(services);
         services.Configure<LaserDisplacementSensorSettings>(config.GetSection("LaserDisplacementSensor"));
@@ -171,6 +178,7 @@ internal static class ServiceRegistration
         services.AddTransient<CobotViewModel>();
         services.AddTransient<CalibrationViewModel>();
         services.AddTransient<VisionInterfaceViewModel>();
+        services.AddTransient<GasDetectorViewModel>();
         services.AddTransient<SequenceViewModel>();
         services.AddTransient<CameraViewModel>();
         services.AddTransient<WeldTrackingViewModel>();

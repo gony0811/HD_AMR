@@ -1,0 +1,222 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:HD.AMR.Desktop.ViewModels"
+             x:Class="HD.AMR.Desktop.Views.GasDetectorView"
+             x:DataType="vm:GasDetectorViewModel">
+    <UserControl.Styles>
+        <Style Selector="TextBlock.axis">
+            <Setter Property="Foreground" Value="{DynamicResource AppMutedTextBrush}" />
+            <Setter Property="FontSize" Value="12" />
+        </Style>
+        <Style Selector="TextBlock.hint">
+            <Setter Property="Foreground" Value="{DynamicResource AppMutedTextBrush}" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+        <Style Selector="TextBlock.val">
+            <Setter Property="FontSize" Value="22" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="HorizontalAlignment" Value="Center" />
+        </Style>
+        <Style Selector="TextBlock.big">
+            <Setter Property="FontSize" Value="34" />
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="HorizontalAlignment" Value="Center" />
+        </Style>
+        <Style Selector="TextBlock.cell">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style Selector="TextBlock.head">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{DynamicResource AppMutedTextBrush}" />
+        </Style>
+    </UserControl.Styles>
+
+    <StackPanel MaxWidth="1100" HorizontalAlignment="Left">
+        <TextBlock Classes="page-title" Text="가스 디텍터 (헬륨 리크)" />
+        <TextBlock Classes="page-subtitle" TextWrapping="Wrap"
+                   Text="INFICON XL3000flex 와 ASCII 프로토콜로 통신합니다. 통신 경로는 RS485(시리얼)와 이더넷(TCP) 중 선택할 수 있고, 검사 시퀀스는 경유점마다 리크레이트를 측정해 판정 기준과 비교합니다." />
+
+        <Border Classes="alert" IsVisible="{Binding IsInactive}">
+            <TextBlock TextWrapping="Wrap"
+                       Text="검사 센서 모드가 Vision 입니다 — 가스 디텍터 통신이 꺼져 있습니다. appsettings.json 의 InspectionSensor:Mode 를 GasDetector 로 바꾼 뒤 다시 시작하세요." />
+        </Border>
+
+        <Border Classes="alert" Classes.info="{Binding !IsError}"
+                IsVisible="{Binding Message, Converter={x:Static ObjectConverters.IsNotNull}}">
+            <TextBlock Text="{Binding Message}" TextWrapping="Wrap" />
+        </Border>
+
+        <!-- 통신 설정 -->
+        <Border Classes="card">
+            <StackPanel Spacing="10">
+                <Grid ColumnDefinitions="*,Auto">
+                    <TextBlock Grid.Column="0" FontWeight="SemiBold" VerticalAlignment="Center"
+                               Text="{Binding ModelText, StringFormat='통신 연결 — {0}'}" />
+                    <Border Grid.Column="1" Classes="badge" Classes.on="{Binding IsConnected}" Classes.off="{Binding !IsConnected}">
+                        <TextBlock Text="{Binding IsConnected, Converter={x:Static vm:BoolTextConverters.Connection}}" />
+                    </Border>
+                </Grid>
+                <TextBlock Classes="axis" Text="{Binding EndpointText, StringFormat='적용 중: {0}'}" />
+                <TextBlock Classes="axis" Text="{Binding TrafficText}" />
+                <Border Classes="alert" IsVisible="{Binding LastError, Converter={x:Static ObjectConverters.IsNotNull}}">
+                    <TextBlock Text="{Binding LastError, StringFormat='통신 오류: {0}'}" TextWrapping="Wrap" />
+                </Border>
+
+                <StackPanel Orientation="Horizontal" Spacing="16">
+                    <RadioButton GroupName="gasTransport" Content="RS485 (시리얼)" IsChecked="{Binding IsSerial}" />
+                    <RadioButton GroupName="gasTransport" Content="이더넷 (TCP)" IsChecked="{Binding IsTcp}" />
+                </StackPanel>
+
+                <!-- 시리얼 -->
+                <Grid ColumnDefinitions="Auto,200,Auto,Auto,120" RowDefinitions="Auto" IsVisible="{Binding IsSerial}">
+                    <TextBlock Grid.Column="0" Text="포트" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <ComboBox Grid.Column="1" ItemsSource="{Binding Ports}" SelectedItem="{Binding PortName}"
+                              HorizontalAlignment="Stretch" />
+                    <Button Grid.Column="2" Content="새로고침" Command="{Binding RefreshPortsCommand}" Margin="8,0,16,0" />
+                    <TextBlock Grid.Column="3" Text="보율" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <TextBox Grid.Column="4" Text="{Binding BaudRate}" />
+                </Grid>
+                <TextBlock Classes="hint" IsVisible="{Binding IsSerial}"
+                           Text="8N1, 핸드셰이크 없음. IO1000 기본 19200 bps(ASCII 프로토콜) — 장비 DIP 스위치/CU1000 설정과 맞추세요. USB-RS485 변환기는 송수신 자동 전환형을 쓰세요." />
+
+                <!-- TCP -->
+                <Grid ColumnDefinitions="Auto,200,Auto,120" IsVisible="{Binding IsTcp}">
+                    <TextBlock Grid.Column="0" Text="IP" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <TextBox Grid.Column="1" Text="{Binding Host}" />
+                    <TextBlock Grid.Column="2" Text="포트" VerticalAlignment="Center" Margin="16,0,8,0" />
+                    <TextBox Grid.Column="3" Text="{Binding TcpPort}" />
+                </Grid>
+                <TextBlock Classes="hint" IsVisible="{Binding IsTcp}"
+                           Text="시리얼-이더넷 디바이스 서버(TCP Server / Raw 모드)에 접속해 RS485 와 같은 ASCII 프레임을 주고받습니다." />
+
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button Classes="accent" Content="적용 · 저장" Command="{Binding ApplyCommand}" />
+                    <Button Content="되돌리기" Command="{Binding RevertCommand}" />
+                    <Button Content="다시 연결" Command="{Binding ReconnectCommand}" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <!-- 실시간 측정 -->
+        <Border Classes="card">
+            <StackPanel Spacing="10">
+                <Grid ColumnDefinitions="*,Auto">
+                    <TextBlock Grid.Column="0" Text="실시간 측정값" FontWeight="SemiBold" VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="1" Classes="axis" Text="{Binding AgeText}" VerticalAlignment="Center" />
+                </Grid>
+                <Grid ColumnDefinitions="2*,*,*">
+                    <StackPanel Grid.Column="0">
+                        <TextBlock Classes="axis" HorizontalAlignment="Center" Text="리크레이트" />
+                        <TextBlock Classes="big" Text="{Binding LeakRateText}" />
+                        <TextBlock Classes="axis" HorizontalAlignment="Center" Text="{Binding UnitText}" />
+                        <TextBlock Classes="axis" HorizontalAlignment="Center" Text="{Binding LeakRateMbarText}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1">
+                        <TextBlock Classes="axis" HorizontalAlignment="Center" Text="운전 상태" />
+                        <TextBlock Classes="val" Text="{Binding ModeText}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="2">
+                        <TextBlock Classes="axis" HorizontalAlignment="Center" Text="실시간 판정" />
+                        <Border Classes="badge" Classes.on="{Binding IsLiveOk}" Classes.off="{Binding IsLiveNg}"
+                                HorizontalAlignment="Center" Margin="0,4,0,0">
+                            <TextBlock Text="{Binding LiveJudgeText}" FontSize="18" FontWeight="SemiBold" />
+                        </Border>
+                        <TextBlock Classes="axis" HorizontalAlignment="Center" Margin="0,4,0,0" Text="{Binding LimitDisplay}" />
+                    </StackPanel>
+                </Grid>
+                <WrapPanel>
+                    <Border Classes="badge" Classes.on="{Binding IsMeasuring}" Classes.off="{Binding !IsMeasuring}" Margin="0,0,6,6">
+                        <TextBlock Text="측정 중" /></Border>
+                    <Border Classes="badge" Classes.off="{Binding Trigger1}" Margin="0,0,6,6">
+                        <TextBlock Text="Trigger 1" /></Border>
+                    <Border Classes="badge" Classes.off="{Binding Trigger2}" Margin="0,0,6,6">
+                        <TextBlock Text="Trigger 2" /></Border>
+                    <Border Classes="badge" Classes.off="{Binding Trigger3}" Margin="0,0,6,6">
+                        <TextBlock Text="Trigger 3" /></Border>
+                    <Border Classes="badge" Classes.off="{Binding Trigger4}" Margin="0,0,6,6">
+                        <TextBlock Text="Trigger 4" /></Border>
+                </WrapPanel>
+                <TextBlock Classes="axis" Text="{Binding ErrorStatusText, StringFormat='장비 에러/경고: {0}'}" />
+                <Border Classes="alert" IsVisible="{Binding HasDeviceError}">
+                    <TextBlock TextWrapping="Wrap" Text="장비가 에러/경고 상태입니다 — 장비 화면에서 원인을 확인한 뒤 '에러 클리어'를 누르세요." />
+                </Border>
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button Content="측정 시작" Command="{Binding StartCommand}" />
+                    <Button Content="측정 정지" Command="{Binding StopCommand}" />
+                    <Button Content="ZERO" Command="{Binding ZeroCommand}" />
+                    <Button Content="에러 클리어" Command="{Binding ClearErrorCommand}" />
+                </StackPanel>
+                <TextBlock Classes="hint"
+                           Text="트리거 배지는 장비에 설정된 트리거 레벨 초과 시 붉게 표시됩니다. 측정 시작·정지·ZERO 가 E06 으로 거부되면 장비의 제어 위치(Control location)를 RS232/IO 로 설정하세요." />
+            </StackPanel>
+        </Border>
+
+        <!-- 판정 기준 -->
+        <Border Classes="card">
+            <StackPanel Spacing="10">
+                <TextBlock Text="경유점 측정 · 판정 기준" FontWeight="SemiBold" />
+                <Grid ColumnDefinitions="Auto,140,Auto,100,Auto,80,Auto,100" RowDefinitions="Auto">
+                    <TextBlock Grid.Column="0" Text="NG 기준 [mbar·l/s]" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <TextBox Grid.Column="1" Text="{Binding LimitText}" />
+                    <TextBlock Grid.Column="2" Text="측정 전 대기 [ms]" VerticalAlignment="Center" Margin="16,0,8,0" />
+                    <TextBox Grid.Column="3" Text="{Binding DwellMs}" />
+                    <TextBlock Grid.Column="4" Text="샘플 수" VerticalAlignment="Center" Margin="16,0,8,0" />
+                    <TextBox Grid.Column="5" Text="{Binding SampleCount}" />
+                    <TextBlock Grid.Column="6" Text="간격 [ms]" VerticalAlignment="Center" Margin="16,0,8,0" />
+                    <TextBox Grid.Column="7" Text="{Binding SampleIntervalMs}" />
+                </Grid>
+                <TextBlock Classes="hint"
+                           Text="경유점 도착 → 대기 → 샘플 N회(mbar·l/s) → 최대값이 기준 이상이면 NG. 통신 실패는 '실패'로 따로 집계합니다. 변경 후 위의 '적용 · 저장'을 누르세요." />
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button Classes="accent" Content="현재 위치에서 1회 측정" Command="{Binding MeasureOnceCommand}" />
+                    <Button Content="적용 · 저장" Command="{Binding ApplyCommand}" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <!-- 측정 결과 -->
+        <Border Classes="card">
+            <StackPanel Spacing="8">
+                <Grid ColumnDefinitions="*,Auto">
+                    <TextBlock Grid.Column="0" FontWeight="SemiBold" VerticalAlignment="Center"
+                               Text="{Binding ResultSummary, StringFormat='측정 결과 — {0}'}" />
+                    <Button Grid.Column="1" Content="목록 지우기" Command="{Binding ClearResultsCommand}" />
+                </Grid>
+                <Grid ColumnDefinitions="50,80,*,100,100,100,60,160">
+                    <TextBlock Grid.Column="0" Classes="head" Text="#" />
+                    <TextBlock Grid.Column="1" Classes="head" Text="시각" />
+                    <TextBlock Grid.Column="2" Classes="head" Text="위치" />
+                    <TextBlock Grid.Column="3" Classes="head" Text="최대" />
+                    <TextBlock Grid.Column="4" Classes="head" Text="평균" />
+                    <TextBlock Grid.Column="5" Classes="head" Text="기준" />
+                    <TextBlock Grid.Column="6" Classes="head" Text="판정" />
+                    <TextBlock Grid.Column="7" Classes="head" Text="비고" />
+                </Grid>
+                <ScrollViewer MaxHeight="360">
+                    <ItemsControl ItemsSource="{Binding Results}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:GasResultRow">
+                                <Grid ColumnDefinitions="50,80,*,100,100,100,60,160" Margin="0,2">
+                                    <TextBlock Grid.Column="0" Classes="cell" Text="{Binding Seq}" />
+                                    <TextBlock Grid.Column="1" Classes="cell" Text="{Binding Time}" />
+                                    <TextBlock Grid.Column="2" Classes="cell" Text="{Binding Label}" TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Grid.Column="3" Classes="cell" Text="{Binding Max}" />
+                                    <TextBlock Grid.Column="4" Classes="cell" Text="{Binding Avg}" />
+                                    <TextBlock Grid.Column="5" Classes="cell" Text="{Binding Limit}" />
+                                    <Border Grid.Column="6" Classes="badge" Classes.on="{Binding IsOk}" Classes.off="{Binding !IsOk}"
+                                            HorizontalAlignment="Left">
+                                        <TextBlock Text="{Binding Judgement}" />
+                                    </Border>
+                                    <TextBlock Grid.Column="7" Classes="cell" Text="{Binding Detail}" TextTrimming="CharacterEllipsis" />
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </StackPanel>
+        </Border>
+    </StackPanel>
+</UserControl>
