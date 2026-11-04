@@ -37,6 +37,8 @@ public sealed class GasDetectorService : BackgroundService
     private volatile bool _reconnectRequested;
     private int _consecutiveTimeouts;
     private bool _retryWarned;
+    // 장비 응답 확인 여부 — 시리얼은 장비가 없어도 포트가 열리므로 "연결/끊김" 로그는 응답 기준으로 끊김당 1회만 남긴다.
+    private bool _linkUp;
 
     public GasDetectorService(IOptions<GasDetectorSettings> options, IOptions<InspectionSensorSettings> sensor,
         IServiceScopeFactory scopeFactory, ILogger<GasDetectorService> logger)
@@ -117,9 +119,8 @@ public sealed class GasDetectorService : BackgroundService
                     await client.OpenAsync(stoppingToken);
                     _client = client;
                     _consecutiveTimeouts = 0;
-                    _retryWarned = false;
                     LastError = null;
-                    _logger.LogInformation("가스 디텍터 연결 ({Endpoint})", s.EndpointText);
+                    _logger.LogDebug("가스 디텍터 포트 열림 ({Endpoint})", s.EndpointText);
                 }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
@@ -175,6 +176,12 @@ public sealed class GasDetectorService : BackgroundService
             }
             _consecutiveTimeouts = 0;
             LastError = null;
+            if (!_linkUp)
+            {
+                _linkUp = true;
+                _retryWarned = false;
+                _logger.LogInformation("가스 디텍터 응답 확인 — 연결 ({Endpoint})", Settings.EndpointText);
+            }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
         catch (TimeoutException ex)
@@ -182,7 +189,11 @@ public sealed class GasDetectorService : BackgroundService
             LastError = ex.Message;
             if (++_consecutiveTimeouts >= Math.Max(1, Settings.MaxConsecutiveTimeouts))
             {
-                _logger.LogWarning("가스 디텍터 연속 무응답 {N}회 — 다시 연결합니다 ({Endpoint})", _consecutiveTimeouts, Settings.EndpointText);
+                if (_linkUp || !_retryWarned)
+                    _logger.LogWarning("가스 디텍터 연속 무응답 {N}회 — 다시 연결합니다 ({Endpoint}). 이후 응답이 올 때까지 경고 생략",
+                        _consecutiveTimeouts, Settings.EndpointText);
+                _linkUp = false;
+                _retryWarned = true;
                 _consecutiveTimeouts = 0;
                 _pollCount = 0;
                 CloseClient();
@@ -197,7 +208,10 @@ public sealed class GasDetectorService : BackgroundService
         catch (Exception ex)
         {
             LastError = ex.Message;
-            _logger.LogWarning("가스 디텍터 폴링 실패 — 다시 연결합니다: {Err}", ex.Message);
+            if (_linkUp || !_retryWarned)
+                _logger.LogWarning("가스 디텍터 폴링 실패 — 다시 연결합니다: {Err}", ex.Message);
+            _linkUp = false;
+            _retryWarned = true;
             _pollCount = 0;
             CloseClient();
         }
@@ -304,6 +318,7 @@ public sealed class GasDetectorService : BackgroundService
     {
         _reconnectRequested = true;
         _retryWarned = false;
+        _linkUp = false;
         _wakeCts.Cancel();
     }
 
