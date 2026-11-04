@@ -378,4 +378,47 @@ public class WeldInspectionActionParserTests
         Assert.Equal(Guid.Parse(TaskIdGuid), req!.TaskId);
         Assert.Equal((byte)3, req.Attempt);
     }
+
+    // ── liftStrokeMm (params.liftStrokeMm, 0~1000mm 선택 필드) ───────────────────────
+
+    [Theory]
+    [InlineData("0", 0)]
+    [InlineData("450", 450)]
+    [InlineData("1000", 1000)]
+    public void Parse_LiftStrokeMm_ValidRange_Accepted(string strokeJson, double expected)
+    {
+        var action = Deserialize(ActionWithParams($", \"liftStrokeMm\": {strokeJson}"));
+
+        var ok = WeldInspectionActionParser.TryParse(action, out var req, out var error);
+
+        Assert.True(ok, error);
+        Assert.Equal(expected, req!.LiftStrokeMm);
+    }
+
+    [Fact]
+    public void Parse_LiftStrokeMm_AbsentOrNull_LeavesNull()
+    {
+        var actionAbsent = Deserialize(GoldenActionJson);
+        Assert.True(WeldInspectionActionParser.TryParse(actionAbsent, out var req1, out var err1), err1);
+        Assert.Null(req1!.LiftStrokeMm);
+
+        var actionNull = Deserialize(ActionWithParams(", \"liftStrokeMm\": null"));
+        Assert.True(WeldInspectionActionParser.TryParse(actionNull, out var req2, out var err2), err2);
+        Assert.Null(req2!.LiftStrokeMm);
+    }
+
+    [Theory]
+    [InlineData("-1")]
+    [InlineData("1000.1")]
+    [InlineData("1500")]
+    [InlineData("\"400\"")]
+    public void Parse_LiftStrokeMm_OutOfRangeOrMalformed_Rejected(string strokeJson)
+    {
+        var action = Deserialize(ActionWithParams($", \"liftStrokeMm\": {strokeJson}"));
+
+        var ok = WeldInspectionActionParser.TryParse(action, out _, out var error);
+
+        Assert.False(ok);
+        Assert.Contains("liftStrokeMm", error);
+    }
 }

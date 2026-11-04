@@ -205,13 +205,14 @@ public sealed class SeamApproachResolver
     /// </summary>
     /// <returns>표본 목록, 또는 계산 불가 사유(Skip) — 사유가 있으면 보정하지 않고 종전대로 진행한다.</returns>
     public async Task<(IReadOnlyList<StationAdjustSeam>? Seams, string? Skip)> SampleStationAsync(
-        IReadOnlyList<(string Label, double[] SeamStartW, double[]? SeamEndW, string WallCode)> seams,
+        IReadOnlyList<(string Label, double[] SeamStartW, double[]? SeamEndW, string WallCode, double? LiftStrokeMm)> seams,
         double nodeXm, double nodeYm, double nodeThetaRad, int tool, CancellationToken ct)
     {
         var mount = await _calib.GetMountAsync();
         if (mount.All(v => Math.Abs(v) < 1e-9))
             return (null, "장착 보정(T_A_B) 미수행");
-        if (_lift.TryGetStrokeMm(out var liftReason) is not { } stroke)
+        var currentStroke = _lift.TryGetStrokeMm(out var liftReason);
+        if (currentStroke is null && seams.Any(s => s.LiftStrokeMm is null))
             return (null, liftReason);
 
         double toolLen;
@@ -221,22 +222,25 @@ public sealed class SeamApproachResolver
         if (toolLen < 1.0) return (null, $"공구 #{tool} 오프셋이 0(플랜지 기준)");
 
         var approach = await CobotInspectionMoveStep.GetApproachStandoffMmAsync(_param, _logger);
-        var zDatum = await _param.GetDoubleAsync(WeldSequenceSupport.ZDatumOffsetKey) ?? 0.0;
+        var zDatum = await paramGetDoubleOrZeroAsync(_param, WeldSequenceSupport.ZDatumOffsetKey);
         var (opticalAxis, _) = await WeldSequenceSupport.GetDepthAxisAsync(_param);
         var limits = await _limits.GetAsync();
         var required = ApproachReach.Check(0, approach, toolLen, limits.MinFlangeReachMm).RequiredNormalDistanceMm;
         var (probeX, probeY) = StationAdjustPlanner.BackedOff(nodeXm, nodeYm, nodeThetaRad, StationAdjustPlanner.ProbeMm);
 
-        double NormalAt(double x, double y, (string Label, double[] SeamStartW, double[]? SeamEndW, string WallCode) s)
+        double NormalAt(double x, double y, (string Label, double[] SeamStartW, double[]? SeamEndW, string WallCode, double? LiftStrokeMm) s)
             => SeamBaseTransform.Resolve(new SeamBaseInput(
                 SeamStartW: s.SeamStartW, SeamEndW: s.SeamEndW,
                 AmrXm: x, AmrYm: y, AmrYawRad: nodeThetaRad,
-                MountAtHome: mount, TelescopicStrokeMm: stroke, ZDatumOffsetMm: zDatum,
+                MountAtHome: mount, TelescopicStrokeMm: s.LiftStrokeMm ?? currentStroke ?? 0.0, ZDatumOffsetMm: zDatum,
                 StandoffMm: approach, WallFacingThetaRad: nodeThetaRad, WallCode: s.WallCode,
                 OpticalAxis: opticalAxis)).NormalDistanceMm;
 
         var list = seams.Select(s => new StationAdjustSeam(
             s.Label, NormalAt(nodeXm, nodeYm, s), NormalAt(probeX, probeY, s), required)).ToList();
         return (list, null);
+
+        static async Task<double> paramGetDoubleOrZeroAsync(ParameterService p, string key)
+            => await p.GetDoubleAsync(key) ?? 0.0;
     }
 }

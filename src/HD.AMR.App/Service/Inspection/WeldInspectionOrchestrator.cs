@@ -29,6 +29,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
 {
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly CobotService _cobot;
+    private readonly TelescopicService _lift;
     private readonly VisionInterfaceService _vision;
     private readonly ILogger<WeldInspectionOrchestrator> _logger;
 
@@ -37,6 +38,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
     private double[]? _lastInternalWorkpieceFrame;                 // 같은 anchor에서 재사용할 BASE 기준 내부 프레임
     private double[]? _lastAnchorStartBase;                        // 그 프레임을 쓴 task 의 ② 시작 접근점(BASE) — 다음 task 프레임 평행 이동 기준
     private double[]? _lastAnchorEndTcp;                           // 그 task 종료 시 TCP(BASE) — 다음 task 연속 이동 판정
+    private double? _lastAnchorStrokeMm;                           // 그 프레임을 쓴 task 의 텔레스코픽 스트로크(mm) — 높이 변경 시 캐시 무효화
     private CancellationTokenSource? _currentRunCts;
 
     /// <summary>
@@ -83,6 +85,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
     public WeldInspectionOrchestrator(
         IServiceScopeFactory scopeFactory,
         CobotService cobot,
+        TelescopicService lift,
         VisionInterfaceService vision,
         OperationLogService opLog,
         ILogger<WeldInspectionOrchestrator> logger)
@@ -90,6 +93,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         _opLog = opLog;
         _scopeFactory = scopeFactory;
         _cobot = cobot;
+        _lift = lift;
         _vision = vision;
         _logger = logger;
     }
@@ -174,6 +178,13 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         SequenceRunResult runResult;
         try
         {
+            if (await EnsureLiftStrokeAsync(
+                    scope.ServiceProvider, req.LiftStrokeMm, req.DrawingPos.WallCode, req.JobRef, orderId, runCts.Token)
+                is { } liftFail)
+            {
+                return liftFail;
+            }
+
             runResult = await sequence.RunSequenceAsync(context, SeamStartStepKeys, runCts.Token);
         }
         finally
@@ -238,8 +249,14 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             _lastInternalWorkpieceFrame = null;
             _lastAnchorStartBase = null;
             _lastAnchorEndTcp = null;
+            _lastAnchorStrokeMm = null;
         }
     }
+
+    /// <summary>anchor 캐시 시점의 리프트 스트로크와 현재 스트로크가 허용 오차를 넘어 달라졌는지 판정한다.</summary>
+    internal static bool IsAnchorStrokeChanged(double? cachedStrokeMm, double? currentStrokeMm,
+        double toleranceMm = TelescopicService.DefaultTargetToleranceMm)
+        => cachedStrokeMm is { } prev && currentStrokeMm is { } cur && Math.Abs(cur - prev) > toleranceMm;
 
     /// <summary>
     /// ② 가 리치 부족으로 실패했으면 `stationReachShortfall`(사양 §6.4, N23 A안) 결과 — resultDescription 은 사람용 사유,
@@ -275,10 +292,10 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         if (!_cobot.IsConnected)
             return new StationAdjustDecision(limits, null, "코봇 RPC 미연결 — 공구 길이를 읽을 수 없어 정차 보정 생략");
 
-        var seams = new List<(string Label, double[] SeamStartW, double[]? SeamEndW, string WallCode)>();
+        var seams = new List<(string Label, double[] SeamStartW, double[]? SeamEndW, string WallCode, double? LiftStrokeMm)>();
         foreach (var a in inspections)
             if (WeldInspectionActionParser.TryParse(a, out var req, out _) && req is not null)
-                seams.Add((req.JobRef, req.SeamStartW, req.SeamEndW, req.DrawingPos.WallCode));
+                seams.Add((req.JobRef, req.SeamStartW, req.SeamEndW, req.DrawingPos.WallCode, req.LiftStrokeMm));
         if (seams.Count == 0)
             return new StationAdjustDecision(limits, null, "해석 가능한 용접선 없음 — 정차 보정 생략");
 
@@ -307,6 +324,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         {
             _currentRunCts?.Cancel();
             _lastAnchor = null;
+            _lastAnchorStrokeMm = null;
         }
         try
         {
@@ -315,6 +333,14 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         catch (Exception ex)
         {
             _logger.LogError(ex, "검사 중단 중 코봇 StopMotion 실패");
+        }
+        try
+        {
+            await _lift.StopMotionAsync(CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "검사 중단 중 리프트 StopMotion 실패");
         }
     }
 
@@ -351,9 +377,10 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
 
         _logger.LogInformation(
             "startWeldInspection 수리: jobRef={JobRef}, seamType={SeamType}, wall={Wall} → recipe={Recipe} " +
-            "(dxf={Dxf}, profileId(촬영)={ProfId}, anchor={Anchor}#{Seq}, taskId={TaskId}, attempt={Attempt})",
+            "(dxf={Dxf}, profileId(촬영)={ProfId}, anchor={Anchor}#{Seq}, liftStroke={Lift}mm, taskId={TaskId}, attempt={Attempt})",
             req.JobRef, req.SeamType, req.DrawingPos.WallCode, recipeId,
             req.SectionDxfId, req.InspectionProfileId, req.AnchorGroupId, req.SeqInGroup,
+            req.LiftStrokeMm?.ToString("0") ?? "(미지정)",
             req.TaskId?.ToString() ?? "(미수신)", req.Attempt?.ToString() ?? "(미수신→1)");
 
         // taskId 미탑재는 계약상 허용(선택 필드)이지만 비전 측 이력 누적 키가 없다는 뜻이라 흔적을 남긴다.
@@ -427,146 +454,9 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             profile = found;
         }
 
-        // 8) anchor 캐시 판정 — 같은 (orderId, anchorGroupId, direction) 연속이고 주행 없음 → ⑱만 실행.
-        //    방향이 달라지면(수평→수직 등) 작업물 좌표계를 재교시해야 하므로 캐시 미적중 처리.
-        //    CORNER 는 정렬 스텝이 없어 캐시 비적용(항상 레시피 스텝 전체 실행, 캐시 갱신도 안 함).
-        bool anchorHit;
-        double[]? cachedInternalFrame;
-        double[]? cachedAnchorStartBase;
-        double[]? cachedAnchorEndTcp;
-        lock (_sync)
-        {
-            anchorHit = recipe.SeamType != SeamTypeKind.Corner
-                        && _lastAnchor == (orderId, req.AnchorGroupId, direction)
-                        && _lastInternalWorkpieceFrame is { Length: 6 };
-            if (!anchorHit && _lastAnchor is { } prev
-                && prev.OrderId == orderId && prev.AnchorGroupId == req.AnchorGroupId
-                && prev.Direction != direction)
-            {
-                _logger.LogInformation("anchor 방향 변경({Old}→{New}) — 작업물 좌표계 재교시 (anchorGroup={Group})",
-                    prev.Direction, direction, req.AnchorGroupId);
-            }
-            cachedInternalFrame = anchorHit ? (double[])_lastInternalWorkpieceFrame!.Clone() : null;
-            cachedAnchorStartBase = anchorHit ? _lastAnchorStartBase?.ToArray() : null;
-            cachedAnchorEndTcp = anchorHit ? _lastAnchorEndTcp?.ToArray() : null;
-        }
-
-        // 레시피가 정한 스텝(미지정이면 등록된 전체)에서 출발해, 이 task 에 맞지 않는 것만 뺀다.
-        //  · anchor 적중 → 정렬 스텝군 제거(첫 task 가 잡아 둔 작업물 좌표계 재사용)
-        //  · 마지막 검사 액션이 아님 → 코봇 홈 복귀 제거(task 사이에 홈 왕복 금지)
-        // 드라이런 레시피는 StepKeysJson 을 무시하고 고정 드라이런 집합을 쓴다 — 수기 StepKeysJson 누락으로
-        // 교시 스텝이 빠져 ⑱이 "작업물 좌표계 없음"으로 실패하던 문제를 원천 차단한다.
-        // 일반 레시피의 풀시퀀스(StepKeysJson 미지정)에서는 드라이런 전용 스텝을 뺀다.
-        var stepKeys = SelectStepKeys(recipe.DryRun, ParseStepKeys(recipe.StepKeysJson),
-            sequence.Steps.Select(st => st.Key), anchorHit, isLastInspection);
-
-        if (stepKeys.Length == 0)
-            return InspectionActionResult.Fail("inspectionFailed",
-                $"recipe {recipeId} 에 실행할 스텝이 남지 않았습니다 — 레시피 실행 스텝 구성을 확인하세요.");
-
-        // 8.5) CORNER3 좌/우 거울 side 판별 — 티칭 슬롯 접두사(corner3.L/R) 선택 키.
-        string? cornerSide = null;
-        if (recipe.SeamType == SeamTypeKind.Corner)
-        {
-            cornerSide = InspectionRecipeResolver.ResolveCornerSide(req.DrawingPos.WallCode, out var sideNote);
-            _logger.LogInformation("CORNER3 side={Side} — {Note} (wall={Wall})",
-                cornerSide, sideNote, req.DrawingPos.WallCode);
-        }
-
-        var cameraTargetMm = recipe.CameraTargetDistanceMm ?? 400;
-        // params.standoffMm 은 런타임에서 쓰지 않는다 — 툴 면 이격은 AMR 이 정하는 값이다(§10 N18).
-        // ②는 면 이격 파라미터(inspection.approachStandoffMm)로 물러나고, ③이 카메라 목표거리로 수렴시킨다.
-        var approachStandoffMm = await CobotInspectionMoveStep.GetApproachStandoffMmAsync(param, _logger);
-        if (req.StandoffMm > 0 && Math.Abs(req.StandoffMm - approachStandoffMm) > 0.001)
-            _logger.LogInformation(
-                "ACS standoffMm={AcsStandoff} 미사용 — 'Cobot 검사위치 이동' 면 이격은 파라미터 {Approach}mm, '카메라 거리 정렬' 목표는 레시피 {Recipe} {Target}mm (jobRef={JobRef})",
-                req.StandoffMm, approachStandoffMm, recipe.Id, cameraTargetMm, req.JobRef);
-        if (req.WorkingDistanceMm is { } acsWd && Math.Abs(acsWd - cameraTargetMm) > 0.001)
-            _logger.LogInformation(
-                "ACS workingDistanceMm={AcsWd} 무시 — 레시피 {Recipe} 카메라 목표거리 {Target}mm 사용 (jobRef={JobRef})",
-                acsWd, recipe.Id, cameraTargetMm, req.JobRef);
-
-        // 9) SequenceContext 구성 — 파라미터 우선순위: ① ACS action → ② 티칭 프로필 → ③ 레시피 → ④ 전역 기본.
-        //    CORNER 는 profile 이 없다 — Tool/Velocity 는 SequenceContext 기본값(단독 실행과 동일).
-        //    공구는 실제 TCP 가 설정된 #1 이어야 한다 — 프로필 RunTool 이 0(미설정/플랜지)이면 1 로 보정.
-        if (profile is { RunTool: <= 0 })
-            _logger.LogWarning("티칭 프로필 '{Profile}' RunTool={RunTool} — 공구 #1 로 보정해 실행 (프로필 저장값 확인 필요)",
-                profile.Name, profile.RunTool);
-        // 장비 튜닝값 — ACS 가 보내는 값이 아니라 현장에서 시퀀스 페이지로 맞춰 저장한 상수다.
-        // 예전에는 페이지만 읽고 이 경로는 기본값(0/0/−65)으로 돌아, 맞춰 놓은 값이 실제 검사에는
-        // 적용되지 않는 조용한 불일치가 있었다. 같은 키를 여기서도 읽어 해소한다.
-        var offsetU = await param.GetDoubleAsync(WeldSequenceSupport.InspectionOffsetUKey) ?? 0.0;
-        var offsetV = await param.GetDoubleAsync(WeldSequenceSupport.InspectionOffsetVKey) ?? 0.0;
-        var camToLaserShiftY = await param.GetDoubleAsync(WeldSequenceSupport.CameraToLaserShiftYKey) ?? -75.0;
-        // z 기준 보정(N17) — ACS 의 z 는 도면 전역(선창 바닥) 기준이라 L2 이상은 층 바닥 높이를 빼야 한다.
-        var zDatumOffset = await param.GetDoubleAsync(WeldSequenceSupport.ZDatumOffsetKey) ?? 0.0;
-
-        var context = new SequenceContext
-        {
-            InspectionDirection = direction,
-            Tool = profile is { RunTool: > 0 } ? profile.RunTool : 1,
-            // 이동 속도: 레시피 MoveVelPercent 우선, 없으면 종전대로 프로필 RunVel(미지정 20).
-            // 검사(스캔) 속도: 레시피 InspectVelPercent — null 이면 ⑱이 이동 속도로 폴백.
-            Velocity = recipe.MoveVelPercent ?? profile?.RunVel ?? 20,
-            InspectVelocity = recipe.InspectVelPercent,
-            InspectionDrawingId = profile?.DrawingId ?? 0,
-            InspectionProfileId = profile?.Id ?? 0,
-            CornerSide = cornerSide,
-            InspectionSurfaceId = WallCodeToSurfaceId(req.DrawingPos.WallCode),
-            // ③ 카메라 거리 정렬 목표 — 레시피 값(빈 값=전역 400). ACS workingDistanceMm 은 산출 근거가 없어
-            // 사용하지 않는다(2026-09-18 결정, 스키마 항목은 유지 — 수신·로그만).
-            CameraTargetDistanceMm = cameraTargetMm,
-            InspectionOffsetU = offsetU,
-            InspectionOffsetV = offsetV,
-            CameraToLaserShiftYmm = camToLaserShiftY,
-            AcsJobRef = req.JobRef,
-            AcsOrderId = orderId,
-            AcsActionId = action.ActionId,
-            // ACS 발급 식별자 → 이 액션의 모든 CAPTURE_REQ(v3.2 [15-30]/[31])에 그대로 실린다(N14).
-            // null 이면 실행 스텝이 Guid.Empty/1 로 폴백.
-            AcsTaskId = req.TaskId,
-            AcsAttempt = req.Attempt,
-            AnchorGroupId = req.AnchorGroupId,
-            SeqInGroup = req.SeqInGroup,
-            StandoffMmOverride = req.StandoffMm > 0 ? req.StandoffMm : null,
-            // ② 검사위치 이동의 목표 좌표 — task 마다 달라지는 유일한 위치 정보(§8.1).
-            SeamStartW = req.SeamStartW,
-            SeamEndW = req.SeamEndW,
-            WallCode = req.DrawingPos.WallCode,
-            WallFacingThetaRad = nodeThetaRad,
-            ZDatumOffsetMm = zDatumOffset,
-            VisionFailRatioMax = recipe.VisionFailRatioMax < 1.0 ? recipe.VisionFailRatioMax : null,
-        };
-        if (cachedInternalFrame is not null)
-            context.Bag[InternalWorkpieceFrame.BagKey] = cachedInternalFrame;
-        // ②가 캐시 프레임을 이번 시작점으로 평행 이동하고(없으면 실패), 직전 종료 자세 그대로면 복귀 없이 연속 이동한다.
-        if (cachedAnchorStartBase is not null)
-            context.Bag[CobotInspectionMoveStep.AnchorStartBaseBagKey] = cachedAnchorStartBase;
-        if (cachedAnchorEndTcp is not null)
-            context.Bag[CobotInspectionMoveStep.PreviousEndTcpBagKey] = cachedAnchorEndTcp;
-
-        // CROSS3/CROSS4 는 LINE 과 동일하게 티칭 프로필 경유점을 실행한다 — 코로게이션 격자 교차부는
-        // 평탄하지 않아 수식 생성으로 법선·깊이를 담을 수 없으므로 6-DOF 캡처 교시(/inspection-points)로
-        // 단일화했다. (구 PatternJson 런타임 생성 경로는 폐기 — CrossPatternGenerator 는 교시 시작 템플릿 전용.)
-
-        _logger.LogInformation(
-            "검사 시퀀스 시작: recipe={Recipe}{DryRun}, profile='{Profile}'{Role}(id={ProfileId}, drawing={DrawingId}), " +
-            "anchor {AnchorState}, steps={Steps}",
-            recipeId, recipe.DryRun ? "[드라이런]" : "", profile?.Name ?? "(미사용 — CORNER 티칭 슬롯)",
-            chamferSlope ? "(챔퍼 수직용)" : "",
-            profile?.Id ?? 0, profile?.DrawingId ?? 0,
-            anchorHit ? "적중(정렬 생략)" : "신규(정렬 수행)",
-            string.Join(",", stepKeys));
-        _opLog.Log(OperationLogService.SourceAcs, OpCategory.Action, "검사 구성", null,
-            $"jobRef={req.JobRef}, seam={req.SeamType}, wall={req.DrawingPos.WallCode}, recipe={recipeId}" +
-            (recipe.DryRun ? "[드라이런]" : "") +
-            $", profile='{profile?.Name ?? "(미사용)"}'{(chamferSlope ? "(챔퍼 수직용)" : "")}, 방향={direction}, anchor={req.AnchorGroupId}#{req.SeqInGroup} " +
-            (anchorHit ? "적중(정렬 생략)" : "신규(정렬 수행)") +
-            $", tool={context.Tool}, vel={context.Velocity}%, 카메라 목표 {context.CameraTargetDistanceMm:0}mm, " +
-            $"seamStartW=[{string.Join(", ", req.SeamStartW.Select(v => v.ToString("0.###")))}], " +
-            $"단계 {stepKeys.Length}개: {string.Join(",", stepKeys)}", orderId);
-
-        // 10) 실행 — 취소 전파용 CTS 를 보관(AbortAsync 가 취소).
+        // 7.5) 리프트 목표 높이(params.liftStrokeMm, 0~1000mm) 적용 — 이동 전에 코봇 홈 위치를 확인(필요 시 복귀)하고,
+        //      목표 높이가 현재와 달라 이동이 필요하면 기존 anchorGroupId 작업물 좌표계 캐시를 먼저 무효화한다.
+        //      도달 완료 후 동기화·진동 안정화를 위해 1초 추가 대기한다.
         CancellationTokenSource runCts;
         lock (_sync)
         {
@@ -575,9 +465,221 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         }
 
         SequenceRunResult runResult;
+        bool anchorHit;
+        string? cornerSide = null;
         try
         {
+            if (await EnsureLiftStrokeAsync(
+                    scope.ServiceProvider, req.LiftStrokeMm, req.DrawingPos.WallCode, req.JobRef, orderId, runCts.Token)
+                is { } liftFail)
+            {
+                return liftFail;
+            }
+
+            // 8) anchor 캐시 판정 — 같은 (orderId, anchorGroupId, direction) 연속이고 주행·리프트 높이 변경 없음 → ⑱만 실행.
+            //    방향이나 리프트 높이가 달라지면 작업물 좌표계를 재교시해야 하므로 캐시 미적중 처리.
+            //    CORNER 는 정렬 스텝이 없어 캐시 비적용(항상 레시피 스텝 전체 실행, 캐시 갱신도 안 함).
+            double[]? cachedInternalFrame;
+            double[]? cachedAnchorStartBase;
+            double[]? cachedAnchorEndTcp;
+            var currentStrokeMm = _lift.TryGetStrokeMm(out _);
+            lock (_sync)
+            {
+                if (IsAnchorStrokeChanged(_lastAnchorStrokeMm, currentStrokeMm))
+                {
+                    _logger.LogInformation(
+                        "anchor 리프트 높이 변경({Old:0}→{New:0}mm) — 기존 작업물 좌표계 캐시 무효화 및 재교시 (anchorGroup={Group})",
+                        _lastAnchorStrokeMm, currentStrokeMm, req.AnchorGroupId);
+                    _lastAnchor = null;
+                    _lastInternalWorkpieceFrame = null;
+                    _lastAnchorStartBase = null;
+                    _lastAnchorEndTcp = null;
+                    _lastAnchorStrokeMm = null;
+                }
+
+                anchorHit = recipe.SeamType != SeamTypeKind.Corner
+                            && _lastAnchor == (orderId, req.AnchorGroupId, direction)
+                            && _lastInternalWorkpieceFrame is { Length: 6 };
+                if (!anchorHit && _lastAnchor is { } prev
+                    && prev.OrderId == orderId && prev.AnchorGroupId == req.AnchorGroupId
+                    && prev.Direction != direction)
+                {
+                    _logger.LogInformation("anchor 방향 변경({Old}→{New}) — 작업물 좌표계 재교시 (anchorGroup={Group})",
+                        prev.Direction, direction, req.AnchorGroupId);
+                }
+                cachedInternalFrame = anchorHit ? (double[])_lastInternalWorkpieceFrame!.Clone() : null;
+                cachedAnchorStartBase = anchorHit ? _lastAnchorStartBase?.ToArray() : null;
+                cachedAnchorEndTcp = anchorHit ? _lastAnchorEndTcp?.ToArray() : null;
+            }
+
+            // 레시피가 정한 스텝(미지정이면 등록된 전체)에서 출발해, 이 task 에 맞지 않는 것만 뺀다.
+            //  · anchor 적중 → 정렬 스텝군 제거(첫 task 가 잡아 둔 작업물 좌표계 재사용)
+            //  · 마지막 검사 액션이 아님 → 코봇 홈 복귀 제거(task 사이에 홈 왕복 금지)
+            // 드라이런 레시피는 StepKeysJson 을 무시하고 고정 드라이런 집합을 쓴다 — 수기 StepKeysJson 누락으로
+            // 교시 스텝이 빠져 ⑱이 "작업물 좌표계 없음"으로 실패하던 문제를 원천 차단한다.
+            // 일반 레시피의 풀시퀀스(StepKeysJson 미지정)에서는 드라이런 전용 스텝을 뺀다.
+            var stepKeys = SelectStepKeys(recipe.DryRun, ParseStepKeys(recipe.StepKeysJson),
+                sequence.Steps.Select(st => st.Key), anchorHit, isLastInspection);
+
+            if (stepKeys.Length == 0)
+                return InspectionActionResult.Fail("inspectionFailed",
+                    $"recipe {recipeId} 에 실행할 스텝이 남지 않았습니다 — 레시피 실행 스텝 구성을 확인하세요.");
+
+            // 8.5) CORNER3 좌/우 거울 side 판별 — 티칭 슬롯 접두사(corner3.L/R) 선택 키.
+            if (recipe.SeamType == SeamTypeKind.Corner)
+            {
+                cornerSide = InspectionRecipeResolver.ResolveCornerSide(req.DrawingPos.WallCode, out var sideNote);
+                _logger.LogInformation("CORNER3 side={Side} — {Note} (wall={Wall})",
+                    cornerSide, sideNote, req.DrawingPos.WallCode);
+            }
+
+            var cameraTargetMm = recipe.CameraTargetDistanceMm ?? 400;
+            // params.standoffMm 은 런타임에서 쓰지 않는다 — 툴 면 이격은 AMR 이 정하는 값이다(§10 N18).
+            // ②는 면 이격 파라미터(inspection.approachStandoffMm)로 물러나고, ③이 카메라 목표거리로 수렴시킨다.
+            var approachStandoffMm = await CobotInspectionMoveStep.GetApproachStandoffMmAsync(param, _logger);
+            if (req.StandoffMm > 0 && Math.Abs(req.StandoffMm - approachStandoffMm) > 0.001)
+                _logger.LogInformation(
+                    "ACS standoffMm={AcsStandoff} 미사용 — 'Cobot 검사위치 이동' 면 이격은 파라미터 {Approach}mm, '카메라 거리 정렬' 목표는 레시피 {Recipe} {Target}mm (jobRef={JobRef})",
+                    req.StandoffMm, approachStandoffMm, recipe.Id, cameraTargetMm, req.JobRef);
+            if (req.WorkingDistanceMm is { } acsWd && Math.Abs(acsWd - cameraTargetMm) > 0.001)
+                _logger.LogInformation(
+                    "ACS workingDistanceMm={AcsWd} 무시 — 레시피 {Recipe} 카메라 목표거리 {Target}mm 사용 (jobRef={JobRef})",
+                    acsWd, recipe.Id, cameraTargetMm, req.JobRef);
+
+            // 9) SequenceContext 구성 — 파라미터 우선순위: ① ACS action → ② 티칭 프로필 → ③ 레시피 → ④ 전역 기본.
+            //    CORNER 는 profile 이 없다 — Tool/Velocity 는 SequenceContext 기본값(단독 실행과 동일).
+            //    공구는 실제 TCP 가 설정된 #1 이어야 한다 — 프로필 RunTool 이 0(미설정/플랜지)이면 1 로 보정.
+            if (profile is { RunTool: <= 0 })
+                _logger.LogWarning("티칭 프로필 '{Profile}' RunTool={RunTool} — 공구 #1 로 보정해 실행 (프로필 저장값 확인 필요)",
+                    profile.Name, profile.RunTool);
+            // 장비 튜닝값 — ACS 가 보내는 값이 아니라 현장에서 시퀀스 페이지로 맞춰 저장한 상수다.
+            // 예전에는 페이지만 읽고 이 경로는 기본값(0/0/−65)으로 돌아, 맞춰 놓은 값이 실제 검사에는
+            // 적용되지 않는 조용한 불일치가 있었다. 같은 키를 여기서도 읽어 해소한다.
+            var offsetU = await param.GetDoubleAsync(WeldSequenceSupport.InspectionOffsetUKey) ?? 0.0;
+            var offsetV = await param.GetDoubleAsync(WeldSequenceSupport.InspectionOffsetVKey) ?? 0.0;
+            var camToLaserShiftY = await param.GetDoubleAsync(WeldSequenceSupport.CameraToLaserShiftYKey) ?? -75.0;
+            // z 기준 보정(N17) — ACS 의 z 는 도면 전역(선창 바닥) 기준이라 L2 이상은 층 바닥 높이를 빼야 한다.
+            var zDatumOffset = await param.GetDoubleAsync(WeldSequenceSupport.ZDatumOffsetKey) ?? 0.0;
+
+            var context = new SequenceContext
+            {
+                InspectionDirection = direction,
+                Tool = profile is { RunTool: > 0 } ? profile.RunTool : 1,
+                // 이동 속도: 레시피 MoveVelPercent 우선, 없으면 종전대로 프로필 RunVel(미지정 20).
+                // 검사(스캔) 속도: 레시피 InspectVelPercent — null 이면 ⑱이 이동 속도로 폴백.
+                Velocity = recipe.MoveVelPercent ?? profile?.RunVel ?? 20,
+                InspectVelocity = recipe.InspectVelPercent,
+                InspectionDrawingId = profile?.DrawingId ?? 0,
+                InspectionProfileId = profile?.Id ?? 0,
+                CornerSide = cornerSide,
+                InspectionSurfaceId = WallCodeToSurfaceId(req.DrawingPos.WallCode),
+                // ③ 카메라 거리 정렬 목표 — 레시피 값(빈 값=전역 400). ACS workingDistanceMm 은 산출 근거가 없어
+                // 사용하지 않는다(2026-09-18 결정, 스키마 항목은 유지 — 수신·로그만).
+                CameraTargetDistanceMm = cameraTargetMm,
+                InspectionOffsetU = offsetU,
+                InspectionOffsetV = offsetV,
+                CameraToLaserShiftYmm = camToLaserShiftY,
+                AcsJobRef = req.JobRef,
+                AcsOrderId = orderId,
+                AcsActionId = action.ActionId,
+                // ACS 발급 식별자 → 이 액션의 모든 CAPTURE_REQ(v3.2 [15-30]/[31])에 그대로 실린다(N14).
+                // null 이면 실행 스텝이 Guid.Empty/1 로 폴백.
+                AcsTaskId = req.TaskId,
+                AcsAttempt = req.Attempt,
+                AnchorGroupId = req.AnchorGroupId,
+                SeqInGroup = req.SeqInGroup,
+                StandoffMmOverride = req.StandoffMm > 0 ? req.StandoffMm : null,
+                // ② 검사위치 이동의 목표 좌표 — task 마다 달라지는 유일한 위치 정보(§8.1).
+                SeamStartW = req.SeamStartW,
+                SeamEndW = req.SeamEndW,
+                WallCode = req.DrawingPos.WallCode,
+                WallFacingThetaRad = nodeThetaRad,
+                ZDatumOffsetMm = zDatumOffset,
+                VisionFailRatioMax = recipe.VisionFailRatioMax < 1.0 ? recipe.VisionFailRatioMax : null,
+            };
+            if (cachedInternalFrame is not null)
+                context.Bag[InternalWorkpieceFrame.BagKey] = cachedInternalFrame;
+            // ②가 캐시 프레임을 이번 시작점으로 평행 이동하고(없으면 실패), 직전 종료 자세 그대로면 복귀 없이 연속 이동한다.
+            if (cachedAnchorStartBase is not null)
+                context.Bag[CobotInspectionMoveStep.AnchorStartBaseBagKey] = cachedAnchorStartBase;
+            if (cachedAnchorEndTcp is not null)
+                context.Bag[CobotInspectionMoveStep.PreviousEndTcpBagKey] = cachedAnchorEndTcp;
+
+            // CROSS3/CROSS4 는 LINE 과 동일하게 티칭 프로필 경유점을 실행한다 — 코로게이션 격자 교차부는
+            // 평탄하지 않아 수식 생성으로 법선·깊이를 담을 수 없으므로 6-DOF 캡처 교시(/inspection-points)로
+            // 단일화했다. (구 PatternJson 런타임 생성 경로는 폐기 — CrossPatternGenerator 는 교시 시작 템플릿 전용.)
+
+            _logger.LogInformation(
+                "검사 시퀀스 시작: recipe={Recipe}{DryRun}, profile='{Profile}'{Role}(id={ProfileId}, drawing={DrawingId}), " +
+                "anchor {AnchorState}, steps={Steps}",
+                recipeId, recipe.DryRun ? "[드라이런]" : "", profile?.Name ?? "(미사용 — CORNER 티칭 슬롯)",
+                chamferSlope ? "(챔퍼 수직용)" : "",
+                profile?.Id ?? 0, profile?.DrawingId ?? 0,
+                anchorHit ? "적중(정렬 생략)" : "신규(정렬 수행)",
+                string.Join(",", stepKeys));
+            _opLog.Log(OperationLogService.SourceAcs, OpCategory.Action, "검사 구성", null,
+                $"jobRef={req.JobRef}, seam={req.SeamType}, wall={req.DrawingPos.WallCode}, recipe={recipeId}" +
+                (recipe.DryRun ? "[드라이런]" : "") +
+                $", profile='{profile?.Name ?? "(미사용)"}'{(chamferSlope ? "(챔퍼 수직용)" : "")}, 방향={direction}, anchor={req.AnchorGroupId}#{req.SeqInGroup} " +
+                (anchorHit ? "적중(정렬 생략)" : "신규(정렬 수행)") +
+                (req.LiftStrokeMm is { } ls ? $", lift={ls:0}mm" : "") +
+                $", tool={context.Tool}, vel={context.Velocity}%, 카메라 목표 {context.CameraTargetDistanceMm:0}mm, " +
+                $"seamStartW=[{string.Join(", ", req.SeamStartW.Select(v => v.ToString("0.###")))}], " +
+                $"단계 {stepKeys.Length}개: {string.Join(",", stepKeys)}", orderId);
+
+            // 10) 실행 — 취소 전파용 CTS 는 보관(AbortAsync 가 취소).
             runResult = await sequence.RunSequenceAsync(context, stepKeys, runCts.Token);
+
+            // 11) 결과 매핑.
+            switch (runResult.Outcome)
+            {
+                case SequenceRunOutcome.Busy:
+                    return InspectionActionResult.Fail("equipmentError",
+                        "onboard sequence busy — UI 등 다른 실행이 장비 점유 중");
+
+                case SequenceRunOutcome.Failed:
+                    InvalidateAnchor();   // 정렬 신뢰 불가 — 다음 액션은 풀시퀀스
+                    // 활성 작업물 좌표계 0·공구 복귀(best-effort)는 SequenceService.RunSequenceAsync 가 실패 종료
+                    // 시(취소 제외) 수행한다 — UI 풀오토와 이 경로가 같은 반납을 공유한다.
+                    var failDesc = $"recipe={recipeId} step={runResult.FailedStepKey ?? "?"} fail: {runResult.Message}";
+                    return ShortfallResult(context, failDesc) ?? InspectionActionResult.Fail("inspectionFailed", failDesc);
+
+                case SequenceRunOutcome.Completed:
+                default:
+                    // CORNER 는 정렬을 수행하지 않으므로 기존 내부 프레임 캐시를 훼손하지 않는다.
+                    if (recipe.SeamType != SeamTypeKind.Corner)
+                    {
+                        if (!context.Bag.TryGetValue(InternalWorkpieceFrame.BagKey, out var value)
+                            || value is not double[] { Length: 6 } internalFrame)
+                        {
+                            InvalidateAnchor();
+                            return InspectionActionResult.Fail("inspectionFailed",
+                                "검사는 완료됐지만 내부 작업물 좌표계가 없어 anchor를 보존할 수 없습니다.");
+                        }
+                        // 프레임과 짝으로 이 task 의 ② 시작 접근점·종료 TCP·리프트 스트로크를 남긴다.
+                        var startBase = context.Bag.TryGetValue(CobotInspectionMoveStep.SeamStartBaseBagKey, out var sb)
+                                        && sb is double[] { Length: 3 } s ? s.ToArray() : null;
+                        double[]? endTcp = null;
+                        try { endTcp = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct); }
+                        catch (Exception ex) when (ex is not OperationCanceledException)
+                        {
+                            _logger.LogWarning(ex, "검사 종료 TCP 조회 실패 — 다음 task 는 연속 이동 없이 복귀 경로로 진입");
+                        }
+                        var strokeAtEnd = _lift.TryGetStrokeMm(out _);
+                        lock (_sync)
+                        {
+                            _lastAnchor = (orderId, req.AnchorGroupId, direction);
+                            _lastInternalWorkpieceFrame = (double[])internalFrame.Clone();
+                            _lastAnchorStartBase = startBase;
+                            _lastAnchorEndTcp = endTcp;
+                            _lastAnchorStrokeMm = strokeAtEnd;
+                        }
+                    }
+                    return InspectionActionResult.Ok(
+                        $"recipe={recipeId} profile='{profile?.Name ?? $"corner3.{cornerSide}"}' anchor={req.AnchorGroupId}#{req.SeqInGroup}" +
+                        (anchorHit ? " (정렬 공유)" : "") +
+                        $" jobRef={req.JobRef} taskId={req.TaskId?.ToString() ?? "—"}");
+            }
         }
         finally
         {
@@ -587,55 +689,125 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                 runCts.Dispose();
             }
         }
+    }
 
-        // 11) 결과 매핑.
-        switch (runResult.Outcome)
+    /// <summary>
+    /// ACS 가 지정한 리프트 높이(<paramref name="requestedStrokeMm"/>, 0~1000mm)로 텔레스코픽 리프트를 맞춘다.
+    /// 이미 목표 높이에 정지해 있으면 이동하지 않고, 높이가 바뀌어야 하면:
+    ///   1) 기존 <c>anchorGroupId</c> 작업물 좌표계 캐시를 즉시 무효화(<see cref="InvalidateAnchor"/>)
+    ///   2) 리프트 이동 전 코봇이 기준 홈(<c>home</c>/<c>home2</c>)에 있는지 확인하고, 아니면 안전 복귀 후 홈 도달 재확인
+    ///   3) 목표 높이로 이동 및 도달 대기 + 1초 안정화 대기(<see cref="TelescopicService.MoveToHeightAndWaitAsync"/>)
+    /// 통과하면 null, 실패하면 즉시 반환할 <see cref="InspectionActionResult"/>.
+    /// </summary>
+    private async Task<InspectionActionResult?> EnsureLiftStrokeAsync(
+        IServiceProvider sp, double? requestedStrokeMm, string? wallCode, string jobRef, string orderId,
+        CancellationToken ct)
+    {
+        if (requestedStrokeMm is not { } reqMm)
+            return null;
+
+        var targetHeightMm = (int)Math.Round(reqMm);
+        if (!_lift.IsConnected)
+            return InspectionActionResult.Fail("equipmentError",
+                $"텔레스코픽 리프트 미연결 — 지령 높이 {targetHeightMm}mm 이동 불가");
+
+        await _lift.RefreshAsync(ct);
+        if (_lift.IsAtTargetHeight(targetHeightMm, out var currentHeightMm, out var statusError))
         {
-            case SequenceRunOutcome.Busy:
-                return InspectionActionResult.Fail("equipmentError",
-                    "onboard sequence busy — UI 등 다른 실행이 장비 점유 중");
-
-            case SequenceRunOutcome.Failed:
-                InvalidateAnchor();   // 정렬 신뢰 불가 — 다음 액션은 풀시퀀스
-                // 활성 작업물 좌표계 0·공구 복귀(best-effort)는 SequenceService.RunSequenceAsync 가 실패 종료
-                // 시(취소 제외) 수행한다 — UI 풀오토와 이 경로가 같은 반납을 공유한다.
-                var failDesc = $"recipe={recipeId} step={runResult.FailedStepKey ?? "?"} fail: {runResult.Message}";
-                return ShortfallResult(context, failDesc) ?? InspectionActionResult.Fail("inspectionFailed", failDesc);
-
-            case SequenceRunOutcome.Completed:
-            default:
-                // CORNER 는 정렬을 수행하지 않으므로 기존 내부 프레임 캐시를 훼손하지 않는다.
-                if (recipe.SeamType != SeamTypeKind.Corner)
+            lock (_sync)
+            {
+                if (IsAnchorStrokeChanged(_lastAnchorStrokeMm, currentHeightMm))
                 {
-                    if (!context.Bag.TryGetValue(InternalWorkpieceFrame.BagKey, out var value)
-                        || value is not double[] { Length: 6 } internalFrame)
-                    {
-                        InvalidateAnchor();
-                        return InspectionActionResult.Fail("inspectionFailed",
-                            "검사는 완료됐지만 내부 작업물 좌표계가 없어 anchor를 보존할 수 없습니다.");
-                    }
-                    // 프레임과 짝으로 이 task 의 ② 시작 접근점·종료 TCP 를 남긴다 — 다음 task 의 프레임 평행 이동·연속 이동 근거.
-                    var startBase = context.Bag.TryGetValue(CobotInspectionMoveStep.SeamStartBaseBagKey, out var sb)
-                                    && sb is double[] { Length: 3 } s ? s.ToArray() : null;
-                    double[]? endTcp = null;
-                    try { endTcp = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct); }
-                    catch (Exception ex) when (ex is not OperationCanceledException)
-                    {
-                        _logger.LogWarning(ex, "검사 종료 TCP 조회 실패 — 다음 task 는 연속 이동 없이 복귀 경로로 진입");
-                    }
-                    lock (_sync)
-                    {
-                        _lastAnchor = (orderId, req.AnchorGroupId, direction);
-                        _lastInternalWorkpieceFrame = (double[])internalFrame.Clone();
-                        _lastAnchorStartBase = startBase;
-                        _lastAnchorEndTcp = endTcp;
-                    }
+                    _logger.LogInformation(
+                        "리프트 높이 변경 감지({Old:0}→{New:0}mm) — 기존 anchorGroupId 작업물 좌표계 캐시 무효화 (jobRef={JobRef})",
+                        _lastAnchorStrokeMm, currentHeightMm, jobRef);
+                    _lastAnchor = null;
+                    _lastInternalWorkpieceFrame = null;
+                    _lastAnchorStartBase = null;
+                    _lastAnchorEndTcp = null;
+                    _lastAnchorStrokeMm = null;
                 }
-                return InspectionActionResult.Ok(
-                    $"recipe={recipeId} profile='{profile?.Name ?? $"corner3.{cornerSide}"}' anchor={req.AnchorGroupId}#{req.SeqInGroup}" +
-                    (anchorHit ? " (정렬 공유)" : "") +
-                    $" jobRef={req.JobRef} taskId={req.TaskId?.ToString() ?? "—"}");
+            }
+            _logger.LogInformation(
+                "리프트 이미 목표 높이 유지: 현재 {Cur}mm (지령 {Target}mm) — 이동 생략 (jobRef={JobRef})",
+                currentHeightMm, targetHeightMm, jobRef);
+            return null;
         }
+        if (statusError is not null)
+            return InspectionActionResult.Fail("equipmentError", $"텔레스코픽 리프트 상태 오류 — {statusError}");
+
+        // 1) 노드 내 TASK 사이에 리프트 높이가 바뀌므로 기존 anchorGroupId 작업물 좌표계 캐시를 무효화한다.
+        InvalidateAnchor();
+        _logger.LogInformation(
+            "리프트 높이 이동 준비({Cur}mm → {Target}mm) — 기존 anchorGroupId 작업물 좌표계 캐시 무효화 (jobRef={JobRef})",
+            currentHeightMm, targetHeightMm, jobRef);
+
+        // 2) 리프트 이동 전 코봇이 홈 위치(home / home2)에 있는지 확인(아직 이전 TASK 종료 위치면 먼저 홈 복귀).
+        var teaching = sp.GetRequiredService<TeachingService>();
+        var positions = await teaching.ListAsync(ct);
+        var homeCtx = new SequenceContext
+        {
+            Positions = positions.ToDictionary(p => p.Key, p => p),
+            Tool = 1,
+            Velocity = 20,
+            WallCode = wallCode,
+        };
+        if (SequenceEntry.ValidateHome(homeCtx) is { IsValid: false } homeErr)
+            return InspectionActionResult.Fail("inspectionFailed",
+                $"리프트 이동 전 코봇 홈 위치 확인 불가 — {homeErr.Message}");
+
+        var curJoints = await _cobot.Rpc.GetActualJointPosAsync(ct: ct);
+        if (!SequenceEntry.IsAtBaseHome(curJoints, homeCtx, out _, out var baseName))
+        {
+            _logger.LogInformation(
+                "리프트 이동 전 코봇이 {BaseName}에 있지 않음 — 안전을 위해 기준 홈 복귀 수행 (jobRef={JobRef})",
+                baseName, jobRef);
+            _opLog.Log(OperationLogService.SourceAcs, OpCategory.Cobot, "리프트 이동 전 홈 복귀", null,
+                $"jobRef={jobRef}, 리프트 {currentHeightMm}→{targetHeightMm}mm 이동 전 코봇 {baseName} 복귀 수행", orderId);
+
+            List<string> route;
+            try
+            {
+                route = await SequenceEntry.ReturnToBaseAsync(_cobot, homeCtx, _logger, ct);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                _opLog.Log(OperationLogService.SourceAcs, OpCategory.Cobot, "리프트 이동 전 홈 복귀 실패", false,
+                    ex.Message, orderId);
+                return InspectionActionResult.Fail("inspectionFailed",
+                    $"리프트 이동 전 코봇 {baseName} 복귀 실패 — 리프트를 이동하지 않고 중단합니다: {ex.Message}");
+            }
+
+            curJoints = await _cobot.Rpc.GetActualJointPosAsync(ct: ct);
+            if (!SequenceEntry.IsAtBaseHome(curJoints, homeCtx, out _, out baseName))
+            {
+                return InspectionActionResult.Fail("inspectionFailed",
+                    $"리프트 이동 전 코봇이 {baseName}에 도달하지 못해 리프트를 이동하지 않고 중단합니다.");
+            }
+            _opLog.Log(OperationLogService.SourceAcs, OpCategory.Cobot, "리프트 이동 전 홈 복귀 완료", true,
+                $"{string.Join(" → ", route)} 완료 ({baseName} 확인)", orderId);
+        }
+        else
+        {
+            _logger.LogInformation("리프트 이동 전 코봇 {BaseName} 위치 확인 완료 (jobRef={JobRef})", baseName, jobRef);
+        }
+
+        // 3) 리프트 목표 높이 이동 + 도달 대기 + 1초 안정화 대기.
+        _opLog.Log(OperationLogService.SourceAcs, OpCategory.Action, "리프트 높이 이동 시작", null,
+            $"jobRef={jobRef}, 현재 {currentHeightMm}mm → 목표 {targetHeightMm}mm (코봇 {baseName} 확인 완료)", orderId);
+
+        var moveResult = await _lift.MoveToHeightAndWaitAsync(targetHeightMm, ct: ct);
+        if (!moveResult.Ok)
+        {
+            _opLog.Log(OperationLogService.SourceAcs, OpCategory.Action, "리프트 높이 이동 실패", false,
+                moveResult.Message, orderId);
+            return InspectionActionResult.Fail("equipmentError", $"리프트 높이 이동 실패 — {moveResult.Message}");
+        }
+
+        _opLog.Log(OperationLogService.SourceAcs, OpCategory.Action, "리프트 높이 이동 완료", true,
+            $"jobRef={jobRef} — {moveResult.Message}", orderId);
+        return null;
     }
 
     /// <summary>레시피에 지정된 티칭설정(InspectionProfile)을 반환. 미지정/없음/타입 불일치면 (null, 사유).

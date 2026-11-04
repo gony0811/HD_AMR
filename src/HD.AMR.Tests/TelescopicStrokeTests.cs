@@ -51,4 +51,23 @@ public class TelescopicStrokeTests
         Assert.Null(TelescopicService.ResolveStrokeMm(Status(640), Now.AddSeconds(-10), Now, MaxAge, out var reason));
         Assert.Contains("10.0초 전", reason);
     }
+
+    [Fact]
+    public void 지정_높이_도달은_정지_상태이고_허용오차_이내일때만_참이다()
+    {
+        Assert.True(TelescopicService.IsTargetReached(Status(482), targetHeightMm: 480, expectedHeightMm: 482));
+        var moving = Status(482) with { Mode = TelescopicProtocol.RunMode.MovingUp };
+        Assert.False(TelescopicService.IsTargetReached(moving, targetHeightMm: 480, expectedHeightMm: 482));
+        var alarm = Status(482) with { ErrorCode = 1 };
+        Assert.False(TelescopicService.IsTargetReached(alarm, targetHeightMm: 480, expectedHeightMm: 482));
+        Assert.False(TelescopicService.IsTargetReached(Status(460), targetHeightMm: 480, expectedHeightMm: 482));
+    }
+
+    [Fact]
+    public void 리프트_높이가_허용오차를_넘어_바뀌면_anchor_캐시_변경으로_판정한다()
+    {
+        Assert.False(HD.AMR.App.Service.Inspection.WeldInspectionOrchestrator.IsAnchorStrokeChanged(400, 403));
+        Assert.True(HD.AMR.App.Service.Inspection.WeldInspectionOrchestrator.IsAnchorStrokeChanged(400, 420));
+        Assert.False(HD.AMR.App.Service.Inspection.WeldInspectionOrchestrator.IsAnchorStrokeChanged(null, 420));
+    }
 }

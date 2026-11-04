@@ -26,7 +26,7 @@ public static class WeldInspectionActionParser
         error = null;
 
         JsonElement? jobRefEl = null, positionEl = null, paramsEl = null;
-        JsonElement? taskIdEl = null, attemptEl = null;
+        JsonElement? taskIdEl = null, attemptEl = null, liftStrokeEl = null;
         foreach (var p in action.ActionParameters)
         {
             var el = ToElement(p.Value);
@@ -35,9 +35,10 @@ public static class WeldInspectionActionParser
                 case "jobRef": jobRefEl = el; break;
                 case "position": positionEl = el; break;
                 case "params": paramsEl = el; break;
-                // 계약상 taskId/attempt 는 params 안이지만, 최상위 key 로 실려 와도 받는다(전환기 방어).
+                // 계약상 taskId/attempt/liftStrokeMm 은 params 안이지만, 최상위 key 로 실려 와도 받는다(전환기 방어).
                 case "taskId": taskIdEl = el; break;
                 case "attempt": attemptEl = el; break;
+                case "liftStrokeMm": liftStrokeEl = el; break;
             }
         }
 
@@ -116,6 +117,9 @@ public static class WeldInspectionActionParser
             attempt = (byte)parsedAttempt;
         }
 
+        if (!TryParseLiftStrokeMm(liftStrokeEl, pr, out var liftStrokeMm, ref error))
+            return false;
+
         request = new WeldInspectionRequest(
             JobRef: jobRef!,
             SeamStartW: seamStart!,
@@ -129,7 +133,8 @@ public static class WeldInspectionActionParser
             AnchorGroupId: anchorGroupId!,
             SeqInGroup: seqInGroup.Value,
             TaskId: taskId,
-            Attempt: attempt);
+            Attempt: attempt,
+            LiftStrokeMm: liftStrokeMm);
         return true;
     }
 
@@ -144,13 +149,15 @@ public static class WeldInspectionActionParser
         request = null;
         error = null;
 
-        JsonElement? jobRefEl = null, positionEl = null;
+        JsonElement? jobRefEl = null, positionEl = null, paramsEl = null, liftStrokeEl = null;
         foreach (var p in action.ActionParameters)
         {
             switch (p.Key)
             {
                 case "jobRef": jobRefEl = ToElement(p.Value); break;
                 case "position": positionEl = ToElement(p.Value); break;
+                case "params": paramsEl = ToElement(p.Value); break;
+                case "liftStrokeMm": liftStrokeEl = ToElement(p.Value); break;
             }
         }
 
@@ -173,7 +180,32 @@ public static class WeldInspectionActionParser
             return false;
         }
 
-        request = new MoveToSeamStartRequest(jobRef!, seamStart!, seamEnd!, drawingPos);
+        var prObj = paramsEl is { ValueKind: JsonValueKind.Object } po ? po : (JsonElement?)null;
+        if (!TryParseLiftStrokeMm(liftStrokeEl, prObj, out var liftStrokeMm, ref error))
+            return false;
+
+        request = new MoveToSeamStartRequest(jobRef!, seamStart!, seamEnd!, drawingPos, liftStrokeMm);
+        return true;
+    }
+
+    /// <summary>
+    /// `params.liftStrokeMm`(단위 mm, 0~1000) 해석. 선택 필드라 없거나 null 이면 null 반환(성공).
+    /// 실려 왔는데 숫자가 아니거나 0~1000 범위 밖이면 거부한다.
+    /// </summary>
+    private static bool TryParseLiftStrokeMm(JsonElement? topEl, JsonElement? paramsObj, out double? strokeMm, ref string? error)
+    {
+        strokeMm = null;
+        var el = topEl ?? (paramsObj is { } pr && pr.TryGetProperty("liftStrokeMm", out var lsEl) ? lsEl : (JsonElement?)null);
+        if (el is not { ValueKind: not JsonValueKind.Null } v)
+            return true;
+
+        if (v.ValueKind != JsonValueKind.Number
+            || !v.TryGetDouble(out var parsed) || !double.IsFinite(parsed) || parsed is < 0.0 or > 1000.0)
+        {
+            error = "params.liftStrokeMm 부적합 (0~1000 mm 숫자 필요)";
+            return false;
+        }
+        strokeMm = parsed;
         return true;
     }
 

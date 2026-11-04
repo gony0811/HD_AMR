@@ -46,7 +46,8 @@ public sealed record WeldInspectionRequest(
     int SeqInGroup,
     // ACS 발급 검사 작업 식별자 [사양 §8.1/§8.1.1, N14] — 둘 다 선택 필드.
     Guid? TaskId = null,            // 용접선 1구간의 영구 GUID → CAPTURE_REQ [15-30] → SAIGE productId. null=구버전 ACS(폴백 Guid.Empty)
-    byte? Attempt = null);          // taskId별 누적 시도 번호 1~255 → CAPTURE_REQ [31]. null=폴백 1. AMR은 증감하지 않는다
+    byte? Attempt = null,           // taskId별 누적 시도 번호 1~255 → CAPTURE_REQ [31]. null=폴백 1. AMR은 증감하지 않는다
+    double? LiftStrokeMm = null);   // ACS 가 평가한 최적 텔레스코픽 리프트 스트로크 [mm, 0~1000]. null=현재 높이 유지
 
 /// <summary>
 /// `moveToSeamStart` 액션 파라미터의 해석 결과 (사양 §8.7 — 코봇 seam 시작점 reach 시험).
@@ -56,4 +57,5 @@ public sealed record MoveToSeamStartRequest(
     string JobRef,
     double[] SeamStartW,            // [x,y,z] m — 맵(월드) 좌표, 코봇툴 접근 목표
     double[] SeamEndW,              // 방향 참고(시험은 시작점까지만)
-    WeldDrawingPos DrawingPos);     // wall_code = 면 법선 자세 키
+    WeldDrawingPos DrawingPos,      // wall_code = 면 법선 자세 키
+    double? LiftStrokeMm = null);   // 선택: 시험할 리프트 스트로크 [mm, 0~1000]

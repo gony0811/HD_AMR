@@ -46,8 +46,8 @@ public class TelescopicSerialSettings
     /// <summary>운영 하한(실제 mm) — 지정 높이 이동 시 이 값 밖이면 명령을 보내지 않는다.</summary>
     public int MinHeightMm { get; set; }
 
-    /// <summary>운영 상한(실제 mm). 기구 행정보다 보수적으로 두는 것이 안전하다.</summary>
-    public int MaxHeightMm { get; set; } = 999;
+    /// <summary>운영 상한(실제 mm). 기구 행정(0~1000mm) 기준.</summary>
+    public int MaxHeightMm { get; set; } = 1000;
 
     /// <summary>
     /// 컨트롤러 높이 1단위당 실제 이동량(mm). 컨트롤러는 모터 축 기준 값을 mm 플래그로 보고하지만,

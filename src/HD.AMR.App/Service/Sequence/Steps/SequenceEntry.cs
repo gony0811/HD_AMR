@@ -372,8 +372,17 @@ internal static class SequenceEntry
             ? new[] { p.J1!.Value, p.J2!.Value, p.J3!.Value, p.J4!.Value, p.J5!.Value, p.J6!.Value }
             : null;
 
-    private static bool IsAt(double[] cur, SequenceContext ctx, string key)
+    internal static bool IsAt(double[] cur, SequenceContext ctx, string key)
         => TaughtJoints(ctx, key) is { } j && IsWithinJointTolerance(cur, j);
+
+    /// <summary>현재 관절각이 현재 자세 모드의 기준 홈(홈 모드=home, 홈 2 모드=home2)에 있는지 판정한다.</summary>
+    internal static bool IsAtBaseHome(double[] cur, SequenceContext ctx, out string baseKey, out string baseName)
+    {
+        var mode = ModeOf(cur, ctx);
+        baseKey = mode == PoseMode.Home2 ? Home2Key : "home";
+        baseName = mode == PoseMode.Home2 ? "홈 위치_2" : "홈 위치";
+        return IsAt(cur, ctx, baseKey);
+    }
 
     /// <summary>티칭 위치(BASE)로 MoveJ — 현재 관절 쪽으로 감기를 맞춘다. 이미 그 자리면 움직이지 않는다.</summary>
     private static async Task MoveJToTaughtAsync(
