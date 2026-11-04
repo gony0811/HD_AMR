@@ -397,6 +397,8 @@ public class TelescopicService : BackgroundService
                 $"지정 높이({heightMm}mm)가 운영 범위({_settings.MinHeightMm}~{_settings.MaxHeightMm}mm) 밖입니다.");
         if (!IsConnected)
             return TelescopicMoveResult.Fail("텔레스코픽 리프트 미연결 — 시리얼 포트 연결을 확인하세요.");
+        if (IsJogging)
+            return TelescopicMoveResult.Fail("텔레스코픽 리프트가 수동 조그 중입니다 — 조그 종료 후 다시 시도하세요.");
 
         await RefreshAsync(ct).ConfigureAwait(false);
         if (IsAtTargetHeight(heightMm, out var startHeightMm, out var statusError, toleranceMm))
@@ -511,6 +513,13 @@ public class TelescopicService : BackgroundService
         {
             try { await StopAsync_Internal(CancellationToken.None).ConfigureAwait(false); }
             catch (Exception ex) { _logger.LogWarning(ex, "텔레스코픽 이동 취소 중 정지 명령 실패"); }
+            throw;
+        }
+        catch (Exception)
+        {
+            // 폴링 중 통신 예외(시리얼 타임아웃·IO) — 지령은 이미 나갔으므로 정지시키지 않으면 무인 이동이 계속된다.
+            try { await StopAsync_Internal(CancellationToken.None).ConfigureAwait(false); }
+            catch (Exception stopEx) { _logger.LogWarning(stopEx, "텔레스코픽 이동 예외 발생 후 비상 정지 명령 실패"); }
             throw;
         }
     }

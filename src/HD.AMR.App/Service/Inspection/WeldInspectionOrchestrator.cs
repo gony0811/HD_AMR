@@ -81,6 +81,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
     };
 
     private readonly OperationLogService _opLog;
+    private readonly SequenceRunGate _runGate;
 
     public WeldInspectionOrchestrator(
         IServiceScopeFactory scopeFactory,
@@ -88,9 +89,11 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         TelescopicService lift,
         VisionInterfaceService vision,
         OperationLogService opLog,
+        SequenceRunGate runGate,
         ILogger<WeldInspectionOrchestrator> logger)
     {
         _opLog = opLog;
+        _runGate = runGate;
         _scopeFactory = scopeFactory;
         _cobot = cobot;
         _lift = lift;
@@ -735,6 +738,12 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         }
         if (statusError is not null)
             return InspectionActionResult.Fail("equipmentError", $"텔레스코픽 리프트 상태 오류 — {statusError}");
+
+        // 0) 장비 점유 확인 — Busy 판정은 RunSequenceAsync 안에서만 하므로, 그 전에 코봇 홈 복귀·리프트 이동을
+        //    하는 이 경로는 여기서 먼저 확인한다(UI 등 다른 실행 중에 코봇·리프트를 건드리지 않는다).
+        if (_runGate.IsBusy)
+            return InspectionActionResult.Fail("equipmentError",
+                $"onboard sequence busy — UI 등 다른 실행이 장비 점유 중이라 리프트 {targetHeightMm}mm 이동 불가");
 
         // 1) 노드 내 TASK 사이에 리프트 높이가 바뀌므로 기존 anchorGroupId 작업물 좌표계 캐시를 무효화한다.
         InvalidateAnchor();
