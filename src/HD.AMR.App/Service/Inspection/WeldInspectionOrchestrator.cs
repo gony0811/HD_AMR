@@ -40,16 +40,15 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
     private CancellationTokenSource? _currentRunCts;
 
     /// <summary>
-    /// <b>작업물 좌표계 교시 스텝군(⑤~⑯)</b> — anchor 적중(같은 노드의 2번째 이후 task) 시 건너뛴다.
+    /// <b>정렬·작업물 좌표계 교시 스텝군(③~⑯)</b> — anchor 적중(같은 노드의 2번째 이후 task) 시 건너뛴다.
     ///
-    /// 첫 task 가 여기서 계산한 내부 작업물 좌표계(T_BW)를 오케스트레이터가 캐시하고 이후 task에 복사한다.
-    /// 컨트롤러 작업물 좌표계에는 등록하지 않는다.
-    ///
-    /// <b>②③④는 건너뛰지 않는다</b> — task 마다 용접선(seamStartW)이 다르므로 ②가 그 위치로 다시
-    /// 이동해야 하고, 위치가 바뀐 이상 ③ 카메라 거리·④ 평탄면 센터링도 그 자리에서 다시 잡아야 한다.
+    /// 첫 task 가 ③~④⁺에서 맞춘 거리·평행도와 ⑤~⑯에서 계산한 내부 작업물 좌표계(T_BW)를 오케스트레이터가
+    /// 캐시해 이후 task 에 복사하고, ②(<see cref="Sequence.Steps.CobotInspectionMoveStep"/>)가 그 프레임을
+    /// 이번 용접선 시작점으로 평행 이동한 뒤 곧바로 ⑱ 검사 수행으로 넘어간다.
     /// </summary>
     private static readonly HashSet<string> AlignmentStepKeys = new(StringComparer.Ordinal)
     {
+        "cameraAlign", "cameraAlignRefine", "flatSurfaceAlign", "laserWorkingDistance",
         // ⑤ Peak 탐색 준비 이동 — ⑤가 빠지면 의미가 없고, 남기면 ⑱ 직전 자세만 옮긴다.
         Sequence.Steps.DepthCamCenterShiftStep.StepKey,
         "peak1Find", "peak1Center", "bead1Find", "bead1Center", "wobjPoint1",

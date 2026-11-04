@@ -61,20 +61,21 @@ public class WeldInspectionStepSelectionTests
         Assert.DoesNotContain("flatSurfaceAlign", keys);
     }
 
-    // anchor 적중: 정렬 스텝군(⑤~⑯)은 빠지고 ②③④는 매 task 다시 실행한다.
+    // anchor 적중: 정렬 스텝군(③~⑯)은 빠지고 ② 검사위치 이동 → ⑱ 검사 수행으로 바로 넘어간다.
     [Fact]
     public void AnchorHit_SkipsAlignmentButKeepsApproach()
     {
         var keys = WeldInspectionOrchestrator.SelectStepKeys(false, null, AllKeys, true, true);
 
+        Assert.DoesNotContain("cameraAlign", keys);
+        Assert.DoesNotContain("cameraAlignRefine", keys);
+        Assert.DoesNotContain("flatSurfaceAlign", keys);
+        Assert.DoesNotContain("laserWorkingDistance", keys);
         Assert.DoesNotContain("depthCamCenterShift", keys);
         Assert.DoesNotContain("peak1Find", keys);
         Assert.DoesNotContain("wobjPoint1", keys);
         Assert.DoesNotContain("wobjRegister", keys);
         Assert.Contains("cobotInspection", keys);
-        Assert.Contains("cameraAlign", keys);
-        Assert.Contains("flatSurfaceAlign", keys);
-        Assert.Contains("laserWorkingDistance", keys);
         Assert.Contains("inspectionRun", keys);
     }
 
