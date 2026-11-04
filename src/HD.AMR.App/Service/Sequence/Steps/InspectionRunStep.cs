@@ -201,6 +201,13 @@ public class InspectionRunStep : ISequenceStep
         var skippedSet = new HashSet<int>();
         var visByIndex = new Dictionary<int, bool>();
         var ngByIndex = new Dictionary<int, bool>();   // 가스 모드: 리크 검출(NG) 점
+        var gasPoints = new SortedDictionary<int, GasPointResult>();   // 가스 모드: 경유점별 scan 기록(SAIGE points[])
+        // 임계값은 Task 시작 시 한 번 잡는다 — 도중에 SAIGE 가 바꾸면 다음 Task 부터 적용(SAIGE §3).
+        var gasThreshold = _useGas && !_dryRun ? _gas.CurrentThreshold : null;
+        var gasStarted = DateTime.UtcNow;
+        if (gasThreshold is not null)
+            _logger.LogInformation("[검사 수행] 가스 판정 임계값 {Th} (초과 NG, NG 시 재측정 최대 {Retry}회)",
+                gasThreshold.Describe(), Math.Clamp(_gas.Settings.MaxRetries, 0, 2));
         var lastMoved = -1;
 
         // v3: 검사 세션 1회 = Run ID 1개(GUID). 각 경유점 캡처 = Task ID 1개.
@@ -256,17 +263,23 @@ public class InspectionRunStep : ISequenceStep
             if (_dryRun)
                 continue;
 
-            // 가스 디텍터: 도착 후 대기·샘플링해 리크레이트 판정. 재측정(일시정지 재개)은 마지막 결과로 덮어쓴다.
+            // 가스 디텍터: 도착 후 대기·샘플링해 임계값 판정(초과 NG), NG 면 같은 자리에서 최대 2회 재측정(SAIGE §2).
+            // 일시정지 재개로 같은 점을 다시 재면 그 점의 결과를 새 측정으로 덮어쓴다.
             if (_useGas)
             {
-                var gas = await _gas.MeasureAsync($"WALL 0x{context.InspectionSurfaceId:X2} #{i + 1}", ct);
-                visByIndex[i] = gas.Judgement != GasJudgement.Error;
-                ngByIndex[i] = gas.Judgement == GasJudgement.Ng;
-                context.Progress?.Invoke(gas.Judgement switch
+                var (gu, gv, _) = FaceLocalMapper.ToFaceLocal((ushort)context.InspectionSurfaceId, w.X, w.Y, w.Z);
+                var scans = await _gas.MeasurePointAsync($"WALL 0x{context.InspectionSurfaceId:X2} #{i + 1}", gasThreshold!, ct);
+                var point = new GasPointResult(i + 1, gu, gv, scans);
+                gasPoints[i] = point;
+                visByIndex[i] = point.Result != GasJudgement.Error;
+                ngByIndex[i] = point.Result == GasJudgement.Ng;
+                var last = scans[^1];
+                var retryNote = scans.Count > 1 ? $" (재측정 {scans.Count - 1}회)" : "";
+                context.Progress?.Invoke(point.Result switch
                 {
-                    GasJudgement.Ok => $"경유점 #{i + 1} 가스 OK ({gas.MaxMbarLs:0.00E+0} mbar·l/s)",
-                    GasJudgement.Ng => $"경유점 #{i + 1} 가스 NG — 리크 {gas.MaxMbarLs:0.00E+0} ≥ 기준 {gas.LimitMbarLs:0.00E+0} mbar·l/s",
-                    _ => $"경유점 #{i + 1} 가스 측정 실패: {gas.Error}",
+                    GasJudgement.Ok => $"경유점 #{i + 1} 가스 OK {last.Value:0.###} {last.Unit}{retryNote}",
+                    GasJudgement.Ng => $"경유점 #{i + 1} 가스 NG — {last.Value:0.###} > 임계 {last.Threshold:0.###} {last.Unit}{retryNote}",
+                    _ => $"경유점 #{i + 1} 가스 측정 실패: {last.Error}{retryNote}",
                 });
                 continue;
             }
@@ -292,6 +305,11 @@ public class InspectionRunStep : ISequenceStep
                     outcome.Code is { } c ? ResultCodeNames.NameOf((ushort)c) : "—");
             }
         }
+
+        // 가스 Task 결과 — 오케스트레이터가 SAIGE 결과 본문으로 만들어 ACS actionState 에 싣는다.
+        if (gasThreshold is not null)
+            context.Bag[GasTaskResult.BagKey] = new GasTaskResult(gasStarted, DateTime.UtcNow, gasThreshold,
+                gasPoints.Values.ToList());
 
         int moved = movedSet.Count, skipped = skippedSet.Count;
         int visOk = visByIndex.Values.Count(ok => ok), visFail = visByIndex.Count - visOk;

@@ -33,7 +33,7 @@ public static partial class Xl3000AsciiProtocol
 
     /// <summary>리크레이트 — 장비에 설정된 단위(LD 128).</summary>
     public const string ReadLeakRate = "*READ?";
-    /// <summary>리크레이트 [mbar·l/s](LD 129) — 판정은 단위 설정과 무관하게 이 값으로 한다.</summary>
+    /// <summary>리크레이트 [mbar·l/s](LD 129) — 참고 표시용. 판정은 SAIGE 임계값 단위(장비 설정 단위, 예: ppm)의 <see cref="ReadLeakRate"/> 로 한다.</summary>
     public const string ReadLeakRateMbar = "*READ:MBAR*l/s?";
     /// <summary>운전 상태 — STBY/ERROR/CAL/ACCL/MEAS/EMI OFF.</summary>
     public const string ReadStatus = "*STATus?";
@@ -151,5 +151,44 @@ public static partial class Xl3000AsciiProtocol
         "G/A" => "g/a",
         "OZ/YR" => "oz/yr",
         _ => response.Trim(),
+    };
+
+    /// <summary>
+    /// 단위 비교용 정규화 — 장비 응답(<c>MBAR*L/S</c>), 화면 표기(<c>mbar·l/s</c>), SAIGE 표기(<c>ppm</c>)를
+    /// 같은 키로 맞춘다(소문자, 공백·<c>*</c>·<c>·</c>·<c>³</c> 정리).
+    /// </summary>
+    public static string NormalizeUnit(string? unit)
+        => (unit ?? "").Trim().ToLowerInvariant()
+            .Replace(" ", "").Replace("*", "").Replace("·", "").Replace("³", "3");
+
+    /// <summary>두 단위 표기가 같은 단위인지.</summary>
+    public static bool SameUnit(string? a, string? b)
+        => NormalizeUnit(a) is { Length: > 0 } na && na == NormalizeUnit(b);
+
+    [GeneratedRegex(@"\d+")]
+    private static partial Regex FirstNumberRegex();
+
+    /// <summary>
+    /// <c>*STATus:ERRor?</c> 응답 → 정수 에러·경고 번호(SAIGE <c>sensor.errorCode</c>). 에러 없음이면 0,
+    /// 번호를 찾지 못하면 null. 응답 형식(예: <c>W45</c>, <c>E12</c>, <c>45</c>)은 장비 확인 전이라 첫 숫자를 쓴다.
+    /// </summary>
+    public static int? ParseErrorCode(string? response)
+    {
+        if (response is null) return null;
+        if (IsNoError(response)) return 0;
+        var m = FirstNumberRegex().Match(response);
+        return m.Success && int.TryParse(m.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var n) ? n : null;
+    }
+
+    /// <summary>운전 상태 → SAIGE <c>sensor.state</c> 값(측정·대기·교정·예열·에러). 목록은 SAIGE 사양 v0.1 에서 미확정.</summary>
+    public static string SensorStateCode(Xl3000Mode mode) => mode switch
+    {
+        Xl3000Mode.Measuring => "MEASURING",
+        Xl3000Mode.Standby => "STANDBY",
+        Xl3000Mode.Calibrating => "CALIBRATING",
+        Xl3000Mode.RunUp => "WARMUP",
+        Xl3000Mode.Error => "ERROR",
+        Xl3000Mode.EmissionOff => "EMISSION_OFF",
+        _ => "UNKNOWN",
     };
 }

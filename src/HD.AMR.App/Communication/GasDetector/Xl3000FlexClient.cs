@@ -85,7 +85,7 @@ public sealed record GasDetectorReading(
     public bool HasDeviceError => ErrorStatus is { } e && !Xl3000AsciiProtocol.IsNoError(e);
 }
 
-/// <summary>경유점 판정.</summary>
+/// <summary>측정 1건(scan)·포인트·Task 판정. Error 는 유효 측정값을 얻지 못한 경우(통신·단위 불일치).</summary>
 public enum GasJudgement
 {
     Ok,
@@ -93,22 +93,32 @@ public enum GasJudgement
     Error,
 }
 
-/// <summary>경유점 1곳의 측정 결과.</summary>
+/// <summary>
+/// 측정 1건(SAIGE <c>scans[]</c> 1개)의 결과 — 대기 후 샘플 N개를 읽어 <b>최대값</b>을 측정값으로 삼는다.
+/// 값·임계값 단위는 <see cref="Unit"/>(장비 인터페이스 단위 = 임계값 단위).
+/// </summary>
 public sealed record GasMeasurementResult(
     int Seq,
     string Label,
+    int Retry,
     DateTime StartedUtc,
     DateTime FinishedUtc,
     int SampleCount,
-    double? MaxMbarLs,
-    double? AvgMbarLs,
-    double LimitMbarLs,
+    double? Value,
+    double? Avg,
+    string Unit,
+    double Threshold,
     GasJudgement Judgement,
     string? Error)
 {
-    /// <summary>판정 규칙 — 유효 샘플이 하나도 없으면 Error, 최대값이 기준 이상이면 NG.</summary>
-    public static GasJudgement Judge(IReadOnlyCollection<double> samplesMbarLs, double limitMbarLs)
-        => samplesMbarLs.Count == 0 ? GasJudgement.Error
-            : samplesMbarLs.Max() >= limitMbarLs ? GasJudgement.Ng
-            : GasJudgement.Ok;
+    /// <summary>측정 시각(SAIGE <c>measuredAt</c>) — 마지막 샘플을 읽은 시각.</summary>
+    public DateTime MeasuredUtc => FinishedUtc;
+
+    /// <summary>판정 규칙(SAIGE 규격 §2) — 측정값이 임계값 이하면 OK, 초과면 NG.</summary>
+    public static GasJudgement Judge(double value, double threshold)
+        => value > threshold ? GasJudgement.Ng : GasJudgement.Ok;
+
+    /// <summary>샘플 묶음 판정 — 유효 샘플이 없으면 Error, 아니면 최대값으로 <see cref="Judge(double,double)"/>.</summary>
+    public static GasJudgement Judge(IReadOnlyCollection<double> samples, double threshold)
+        => samples.Count == 0 ? GasJudgement.Error : Judge(samples.Max(), threshold);
 }

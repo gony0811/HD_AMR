@@ -25,7 +25,7 @@ public static class WeldInspectionActionParser
         error = null;
 
         JsonElement? jobRefEl = null, positionEl = null, paramsEl = null;
-        JsonElement? taskIdEl = null, attemptEl = null;
+        JsonElement? taskIdEl = null, attemptEl = null, roundEl = null;
         foreach (var p in action.ActionParameters)
         {
             var el = ToElement(p.Value);
@@ -37,6 +37,7 @@ public static class WeldInspectionActionParser
                 // 계약상 taskId/attempt 는 params 안이지만, 최상위 key 로 실려 와도 받는다(전환기 방어).
                 case "taskId": taskIdEl = el; break;
                 case "attempt": attemptEl = el; break;
+                case "round": roundEl = el; break;
             }
         }
 
@@ -115,6 +116,17 @@ public static class WeldInspectionActionParser
             attempt = (byte)parsedAttempt;
         }
 
+        // ── round (SAIGE 포밍가스 규격 §2 — 선창 전체 검사 회차 1|2) ─────
+        // 선택 필드: 없으면 null(결과 본문에서 생략). 있으면 1 또는 2 만 허용 — SAIGE 가 그 밖의 값을 40001 로 거부한다.
+        var roundValue = roundEl ?? (pr.TryGetProperty("round", out var rEl) ? rEl : (JsonElement?)null);
+        int? round = null;
+        if (roundValue is { ValueKind: not JsonValueKind.Null } rv)
+        {
+            if (rv.ValueKind != JsonValueKind.Number || !rv.TryGetInt32(out var parsedRound) || parsedRound is not (1 or 2))
+            { error = "params.round 부적합 (1 또는 2)"; return false; }
+            round = parsedRound;
+        }
+
         request = new WeldInspectionRequest(
             JobRef: jobRef!,
             SeamStartW: seamStart!,
@@ -128,7 +140,8 @@ public static class WeldInspectionActionParser
             AnchorGroupId: anchorGroupId!,
             SeqInGroup: seqInGroup.Value,
             TaskId: taskId,
-            Attempt: attempt);
+            Attempt: attempt,
+            Round: round);
         return true;
     }
 

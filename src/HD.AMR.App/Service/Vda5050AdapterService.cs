@@ -40,6 +40,7 @@ public sealed class Vda5050AdapterService : BackgroundService
     private readonly PowerModeService _power;
     private readonly ILogger<Vda5050AdapterService> _logger;
     private readonly OperationLogService _opLog;
+    private readonly GasDetectorService _gas;
 
     private IMqttClient? _client;
     private int _stateHeaderId;
@@ -183,8 +184,9 @@ public sealed class Vda5050AdapterService : BackgroundService
     public Vda5050AdapterService(IOptions<Vda5050AdapterSettings> options, AMRService amr,
         Vda5050OrderExecutor executor, Inspection.IWeldInspectionExecutor inspection,
         CobotService cobot, PowerModeService power, DeviceAlarmState deviceAlarms, OperationLogService opLog,
-        ILoggerFactory loggerFactory)
+        GasDetectorService gas, ILoggerFactory loggerFactory)
     {
+        _gas = gas;
         _deviceAlarms = deviceAlarms;
         _opLog = opLog;
         _s = options.Value;
@@ -402,6 +404,11 @@ public sealed class Vda5050AdapterService : BackgroundService
                         await _executor.CancelOrderAsync();
                         break;
 
+                    case GasThresholdActionType:
+                        // SAIGE 포밍가스 규격 §3 — SAIGE → ACS(PUT /api/gas/threshold) → AMR. 다음 Task 부터 적용.
+                        await HandleGasThresholdAsync(action);
+                        break;
+
                     case "initPosition":
                         // §5.2 + 부록 D-10: 이행 유보(tuneFlag 의미·수렴 판정 미확인). 파싱·로그만 남긴다.
                         // mapId 갱신도 재측위 검증 통과 시에만 하는 계약이라 여기서 바꾸지 않는다.
@@ -516,6 +523,119 @@ public sealed class Vda5050AdapterService : BackgroundService
         }
     }
 
+    /// <summary>가스 임계값 전달 instantAction 이름 — ACS 와 협의할 제안값(SAIGE 규격 §3 의 AMR 구간).</summary>
+    public const string GasThresholdActionType = "setGasThreshold";
+
+    /// <summary>
+    /// <c>setGasThreshold</c> 처리 — actionParameters: tankId, value, unit, requestedBy, requestedAt(epoch ms).
+    /// 결과는 state.information(<c>gasThreshold</c>)에 actionId 와 함께 실어 ACS 가 적용 여부(SAIGE 응답 200/400/503)를 판단하게 한다.
+    /// </summary>
+    private async Task HandleGasThresholdAsync(VdaAction action)
+    {
+        var (tankId, value, unit, requestedBy, requestedAt) = ParseGasThreshold(action);
+        string? error = value is { } v
+            ? await _gas.SetThresholdFromAcsAsync(tankId, v, unit, requestedBy, requestedAt)
+            : "value 누락 또는 숫자 아님";
+        lock (_gasAckLock)
+            _gasThresholdAck = (action.ActionId, error is null, error, DateTime.UtcNow);
+
+        var th = _gas.CurrentThreshold;
+        if (error is null)
+            _opLog.Log(OperationLogService.SourceAcs, OpCategory.Instant, GasThresholdActionType, true,
+                $"임계값 적용 {th.Describe()} — 다음 Task 부터");
+        else
+        {
+            _logger.LogWarning("VDA5050 {Type} 거부: {Err} (tank={Tank}, value={Value}, unit={Unit}) — 이전 값 {Prev} 유지",
+                GasThresholdActionType, error, tankId, value, unit, th.Describe());
+            _opLog.Log(OperationLogService.SourceAcs, OpCategory.Instant, GasThresholdActionType, false,
+                $"거부: {error} — 이전 값 {th.Describe()} 유지");
+        }
+    }
+
+    private readonly object _gasAckLock = new();
+    private (string ActionId, bool Accepted, string? Error, DateTime AtUtc)? _gasThresholdAck;
+
+    internal static (string? TankId, double? Value, string? Unit, string? RequestedBy, long? RequestedAt) ParseGasThreshold(VdaAction action)
+    {
+        string? tankId = null, unit = null, by = null;
+        double? value = null;
+        long? at = null;
+        foreach (var p in action.ActionParameters)
+        {
+            switch (p.Key)
+            {
+                case "tankId": tankId = Str(p.Value); break;
+                case "value": value = Num(p.Value); break;
+                case "unit": unit = Str(p.Value); break;
+                case "requestedBy": by = Str(p.Value); break;
+                case "requestedAt": at = Num(p.Value) is { } d ? (long)d : null; break;
+            }
+        }
+        return (tankId, value, unit, by, at);
+
+        static string? Str(object? v) => v is JsonElement { ValueKind: JsonValueKind.String } e ? e.GetString() : v?.ToString();
+        static double? Num(object? v)
+        {
+            if (v is JsonElement e)
+            {
+                if (e.ValueKind == JsonValueKind.Number && e.TryGetDouble(out var d)) return d;
+                if (e.ValueKind == JsonValueKind.String && double.TryParse(e.GetString(), System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture, out var ds)) return ds;
+                return null;
+            }
+            return v is IConvertible c ? c.ToDouble(System.Globalization.CultureInfo.InvariantCulture) : null;
+        }
+    }
+
+    /// <summary>
+    /// 가스 센서 상태(SAIGE 규격 §4 <c>sensor</c>)와 적용 중 임계값을 state.information 에 싣는다 — ACS 가 SAIGE 로
+    /// 올리는 robot-health-check 의 sensor 블록 원천. 가스 모드가 아니면 싣지 않는다.
+    /// </summary>
+    private void AddGasInformation(Vda5050State state)
+    {
+        if (_gas.GetSensorStatus() is not { } sensor) return;
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        var refs = new List<VdaInfoReference> { new() { ReferenceKey = "state", ReferenceValue = sensor.State } };
+        if (sensor.ErrorCode is { } code)
+            refs.Add(new VdaInfoReference { ReferenceKey = "errorCode", ReferenceValue = code.ToString(inv) });
+        if (sensor.Calibrated is { } cal)
+            refs.Add(new VdaInfoReference { ReferenceKey = "calibrated", ReferenceValue = cal ? "true" : "false" });
+        state.Information.Add(new VdaInformation
+        {
+            InfoType = "gasSensor",
+            InfoLevel = "INFO",
+            InfoDescription = $"XL3000flex {sensor.State}" + (sensor.ErrorCode is { } c && c != 0 ? $" (error/warning {c})" : ""),
+            InfoReferences = refs,
+        });
+
+        var th = _gas.CurrentThreshold;
+        var thRefs = new List<VdaInfoReference>
+        {
+            new() { ReferenceKey = "value", ReferenceValue = th.Value.ToString("R", inv) },
+            new() { ReferenceKey = "unit", ReferenceValue = th.Unit },
+            new() { ReferenceKey = "source", ReferenceValue = th.Source == Communication.GasDetector.GasThresholdSource.Acs ? "SAIGE" : "LOCAL" },
+        };
+        if (th.TankId is { } tank)
+            thRefs.Add(new VdaInfoReference { ReferenceKey = "tankId", ReferenceValue = tank });
+        lock (_gasAckLock)
+        {
+            if (_gasThresholdAck is { } ack)
+            {
+                thRefs.Add(new VdaInfoReference { ReferenceKey = "lastActionId", ReferenceValue = ack.ActionId });
+                thRefs.Add(new VdaInfoReference { ReferenceKey = "lastAccepted", ReferenceValue = ack.Accepted ? "true" : "false" });
+                if (ack.Error is { } err)
+                    thRefs.Add(new VdaInfoReference { ReferenceKey = "lastError", ReferenceValue = err });
+            }
+        }
+        state.Information.Add(new VdaInformation
+        {
+            InfoType = "gasThreshold",
+            InfoLevel = "INFO",
+            InfoDescription = $"가스 판정 임계값 {th.Describe()}",
+            InfoReferences = thRefs,
+        });
+    }
+
     // ── 발행 ──────────────────────────────────────────────────────────
 
     private async Task PublishAsync<T>(string topic, T payload, bool retain, CancellationToken ct)
@@ -601,6 +721,8 @@ public sealed class Vda5050AdapterService : BackgroundService
                 InfoDescription = "AMR Modbus 미연결 — 위치/배터리 상태 없음",
             });
         }
+
+        AddGasInformation(state);
 
         // 배터리 저전력 알람(사양 §8) — PowerModeService 가 디바운스로 유지하는 동안 매 state 에 상주.
         // CRITICAL 에서는 두 에러 모두 발행(ACS 가 severity 로 필터링).

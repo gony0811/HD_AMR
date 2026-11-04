@@ -9,7 +9,7 @@ using HD.AMR.App.Service;
 namespace HD.AMR.Desktop.ViewModels;
 
 /// <summary>측정 결과 표 한 행(표시용 문자열).</summary>
-public sealed record GasResultRow(string Seq, string Time, string Label, string Max, string Avg, string Limit,
+public sealed record GasResultRow(string Seq, string Time, string Label, string Retry, string Value, string Avg, string Limit,
     string Judgement, bool IsOk, bool IsNg, string Detail);
 
 /// <summary>
@@ -30,7 +30,9 @@ public sealed partial class GasDetectorViewModel : ViewModelBase
     [ObservableProperty] private string _baudRate = "";
     [ObservableProperty] private string _host = "";
     [ObservableProperty] private string _tcpPort = "";
-    [ObservableProperty] private string _limitText = "";
+    [ObservableProperty] private string _thresholdText = "";
+    [ObservableProperty] private string _thresholdUnitText = "";
+    [ObservableProperty] private string _maxRetriesText = "";
     [ObservableProperty] private string _dwellMs = "";
     [ObservableProperty] private string _sampleCount = "";
     [ObservableProperty] private string _sampleIntervalMs = "";
@@ -49,7 +51,18 @@ public sealed partial class GasDetectorViewModel : ViewModelBase
         RefreshPorts();
         _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
         _timer.Tick += (_, _) => RefreshLive();
+        _svc.ThresholdChanged += OnThresholdChanged;
     }
+
+    /// <summary>SAIGE(ACS)에서 임계값이 바뀌면 편집 칸도 새 값으로 맞춘다.</summary>
+    private void OnThresholdChanged(GasThreshold th) => Dispatcher.UIThread.Post(() =>
+    {
+        ThresholdText = th.Value.ToString("0.###", CultureInfo.InvariantCulture);
+        ThresholdUnitText = th.Unit;
+        if (th.Source == GasThresholdSource.Acs)
+            Notify($"SAIGE 임계값 수신 — {th.Describe()}. 다음 Task 부터 적용됩니다.", false);
+        RefreshLive();
+    });
 
     public override void OnActivated()
     {
@@ -62,6 +75,7 @@ public sealed partial class GasDetectorViewModel : ViewModelBase
     public override void Dispose()
     {
         base.Dispose();
+        _svc.ThresholdChanged -= OnThresholdChanged;
         _cts.Cancel();
         _cts.Dispose();
     }
@@ -98,12 +112,22 @@ public sealed partial class GasDetectorViewModel : ViewModelBase
     public bool Trigger3 => R?.Triggers is { } t && t[2];
     public bool Trigger4 => R?.Triggers is { } t && t[3];
 
+    private GasThreshold Th => _svc.CurrentThreshold;
+
+    /// <summary>장비 표시 단위가 임계값 단위와 같은지(단위를 아직 모르면 같다고 본다).</summary>
+    public bool IsUnitMismatch => R?.Unit is { } u && !Xl3000AsciiProtocol.SameUnit(u, Th.Unit);
+
     /// <summary>현재 값 기준 실시간 판정(참고용) — 시퀀스 판정은 경유점 샘플 최대값으로 한다.</summary>
-    public bool IsLiveNg => R?.LeakRateMbarLs is { } v && v >= _svc.Settings.LeakRateLimitMbarLs;
-    public bool IsLiveOk => R?.LeakRateMbarLs is { } v && v < _svc.Settings.LeakRateLimitMbarLs;
-    public string LiveJudgeText => R?.LeakRateMbarLs is null ? "—"
-        : IsLiveNg ? "NG (기준 이상)" : "OK";
-    public string LimitDisplay => $"판정 기준 {_svc.Settings.LeakRateLimitMbarLs.ToString("0.0E+0", CultureInfo.InvariantCulture)} mbar·l/s";
+    public bool IsLiveNg => !IsUnitMismatch && R?.LeakRate is { } v && GasMeasurementResult.Judge(v, Th.Value) == GasJudgement.Ng;
+    public bool IsLiveOk => !IsUnitMismatch && R?.LeakRate is { } v && GasMeasurementResult.Judge(v, Th.Value) == GasJudgement.Ok;
+    public string LiveJudgeText => R?.LeakRate is null ? "—"
+        : IsUnitMismatch ? "단위 불일치"
+        : IsLiveNg ? "NG (임계 초과)" : "OK";
+    public string LimitDisplay => $"임계값 {Th.Value.ToString("0.###", CultureInfo.InvariantCulture)} {Th.Unit} (초과 NG)";
+    public string ThresholdSourceText => Th.Source == GasThresholdSource.Acs
+        ? $"출처: SAIGE{(Th.RequestedBy is { } by ? $" · {by}" : "")}{(Th.TankId is { } t ? $" · {t}" : "")} · {Th.AppliedUtc.ToLocalTime():HH:mm:ss} 수신"
+        : "출처: 로컬 설정 (SAIGE 수신 전)";
+    public string UnitMismatchText => $"장비 단위 {R?.Unit} 와 임계값 단위 {Th.Unit} 가 다릅니다 — 측정이 실패 처리됩니다. 장비 인터페이스 단위를 {Th.Unit} 로 설정하세요.";
 
     public string AgeText
     {
@@ -149,6 +173,9 @@ public sealed partial class GasDetectorViewModel : ViewModelBase
         OnPropertyChanged(nameof(IsLiveOk));
         OnPropertyChanged(nameof(LiveJudgeText));
         OnPropertyChanged(nameof(LimitDisplay));
+        OnPropertyChanged(nameof(ThresholdSourceText));
+        OnPropertyChanged(nameof(IsUnitMismatch));
+        OnPropertyChanged(nameof(UnitMismatchText));
         OnPropertyChanged(nameof(AgeText));
         OnPropertyChanged(nameof(CanCommand));
         StartCommand.NotifyCanExecuteChanged();
@@ -170,12 +197,12 @@ public sealed partial class GasDetectorViewModel : ViewModelBase
 
     private static GasResultRow ToRow(GasMeasurementResult r)
     {
-        static string E(double? v) => v is { } x ? x.ToString("0.00E+0", CultureInfo.InvariantCulture) : "—";
+        static string N(double? v) => v is { } x ? x.ToString("0.###", CultureInfo.InvariantCulture) : "—";
         var judge = r.Judgement switch { GasJudgement.Ok => "OK", GasJudgement.Ng => "NG", _ => "실패" };
         return new GasResultRow(r.Seq.ToString(CultureInfo.InvariantCulture), r.FinishedUtc.ToLocalTime().ToString("HH:mm:ss"),
-            r.Label, E(r.MaxMbarLs), E(r.AvgMbarLs), E(r.LimitMbarLs), judge,
+            r.Label, r.Retry == 0 ? "최초" : $"재측정 {r.Retry}", N(r.Value), N(r.Avg), $"{N(r.Threshold)} {r.Unit}", judge,
             r.Judgement == GasJudgement.Ok, r.Judgement == GasJudgement.Ng,
-            r.Error ?? $"{r.SampleCount}샘플");
+            r.Error ?? $"{r.SampleCount}샘플 · {r.Unit}");
     }
 
     // ── 설정 ───────────────────────────────────────────────────
@@ -188,7 +215,10 @@ public sealed partial class GasDetectorViewModel : ViewModelBase
         BaudRate = s.BaudRate.ToString(inv);
         Host = s.Host;
         TcpPort = s.TcpPort.ToString(inv);
-        LimitText = s.LeakRateLimitMbarLs.ToString("0.0E+0", inv);
+        var th = _svc.CurrentThreshold;
+        ThresholdText = th.Value.ToString("0.###", inv);
+        ThresholdUnitText = th.Unit;
+        MaxRetriesText = s.MaxRetries.ToString(inv);
         DwellMs = s.MeasureDwellMs.ToString(inv);
         SampleCount = s.MeasureSampleCount.ToString(inv);
         SampleIntervalMs = s.MeasureSampleIntervalMs.ToString(inv);
@@ -227,9 +257,13 @@ public sealed partial class GasDetectorViewModel : ViewModelBase
                 s.Host = Host.Trim();
                 s.TcpPort = ParseInt(TcpPort, "TCP 포트", 1, 65535);
             }
-            if (!double.TryParse(LimitText.Trim(), NumberStyles.Float, inv, out var limit) || limit <= 0)
-                throw new FormatException("판정 기준은 양수여야 합니다 (예: 1.0E-5).");
-            s.LeakRateLimitMbarLs = limit;
+            if (!double.TryParse(ThresholdText.Trim(), NumberStyles.Float, inv, out var limit) || limit <= 0)
+                throw new FormatException("임계값은 양수여야 합니다 (예: 5.0).");
+            if (string.IsNullOrWhiteSpace(ThresholdUnitText))
+                throw new FormatException("임계값 단위를 입력하세요 (예: ppm).");
+            s.ThresholdValue = limit;
+            s.ThresholdUnit = ThresholdUnitText.Trim();
+            s.MaxRetries = ParseInt(MaxRetriesText, "재측정 횟수", 0, 2);
             s.MeasureDwellMs = ParseInt(DwellMs, "측정 전 대기", 0, 60_000);
             s.MeasureSampleCount = ParseInt(SampleCount, "샘플 수", 1, 100);
             s.MeasureSampleIntervalMs = ParseInt(SampleIntervalMs, "샘플 간격", Xl3000AsciiProtocol.MinSampleIntervalMs, 10_000);
@@ -303,11 +337,11 @@ public sealed partial class GasDetectorViewModel : ViewModelBase
         Busy = true;
         try
         {
-            var r = await _svc.MeasureAsync("수동 측정", _cts.Token);
+            var r = await _svc.MeasureAsync("수동 측정", ct: _cts.Token);
             Notify(r.Judgement switch
             {
-                GasJudgement.Ok => $"OK — 최대 {r.MaxMbarLs:0.00E+0} mbar·l/s",
-                GasJudgement.Ng => $"NG — 최대 {r.MaxMbarLs:0.00E+0} ≥ 기준 {r.LimitMbarLs:0.00E+0} mbar·l/s",
+                GasJudgement.Ok => $"OK — 최대 {r.Value:0.###} {r.Unit} (임계 {r.Threshold:0.###})",
+                GasJudgement.Ng => $"NG — 최대 {r.Value:0.###} > 임계 {r.Threshold:0.###} {r.Unit}",
                 _ => $"측정 실패: {r.Error}",
             }, r.Judgement != GasJudgement.Ok);
         }

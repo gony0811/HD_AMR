@@ -32,6 +32,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
     private readonly VisionInterfaceService _vision;
     private readonly GasDetectorService _gas;
     private readonly InspectionSensorSettings _sensor;
+    private readonly Vda5050AdapterSettings _vdaSettings;
     private readonly ILogger<WeldInspectionOrchestrator> _logger;
 
     private readonly object _sync = new();
@@ -85,9 +86,11 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         VisionInterfaceService vision,
         GasDetectorService gas,
         IOptions<InspectionSensorSettings> sensor,
+        IOptions<Vda5050AdapterSettings> vdaSettings,
         OperationLogService opLog,
         ILogger<WeldInspectionOrchestrator> logger)
     {
+        _vdaSettings = vdaSettings.Value;
         _opLog = opLog;
         _scopeFactory = scopeFactory;
         _cobot = cobot;
@@ -549,6 +552,20 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                         _lastAnchor = (orderId, req.AnchorGroupId, direction);
                         _lastInternalWorkpieceFrame = (double[])internalFrame.Clone();
                     }
+                }
+                // 가스 모드: actionState.resultDescription = SAIGE 결과 본문(JSON, SAIGE 규격 §2) — ACS 가 SAIGE 로 올린다.
+                if (context.Bag.TryGetValue(Communication.GasDetector.GasTaskResult.BagKey, out var gasValue)
+                    && gasValue is Communication.GasDetector.GasTaskResult gasTask)
+                {
+                    var report = Communication.GasDetector.SaigeGasResultReport.Build(
+                        gasTask, req.DrawingPos.Tank, req.TaskId, req.Round, _vdaSettings.SerialNumber);
+                    var json = report.ToJson();
+                    _logger.LogInformation("[가스 결과] task={Task} round={Round} 판정 {Result} ({N}포인트) — ACS 보고",
+                        req.TaskId?.ToString() ?? "—", req.Round?.ToString() ?? "—", report.Result, report.Points.Count);
+                    _opLog.Log(OperationLogService.SourceAcs, OpCategory.Action, "가스 측정 결과", report.Result == "OK",
+                        $"jobRef={req.JobRef}, tank={report.TankId}, task={report.TaskId}, round={report.Round?.ToString() ?? "—"}, " +
+                        $"판정 {report.Result}, 임계 {report.Threshold.Value:0.###} {report.Threshold.Unit}, {report.Points.Count}포인트", orderId);
+                    return InspectionActionResult.Ok(json);
                 }
                 return InspectionActionResult.Ok(
                     $"recipe={recipeId} profile='{profile?.Name ?? $"corner3.{cornerSide}"}' anchor={req.AnchorGroupId}#{req.SeqInGroup}" +

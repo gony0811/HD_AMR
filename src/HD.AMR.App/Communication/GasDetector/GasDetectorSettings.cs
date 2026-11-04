@@ -53,10 +53,20 @@ public class GasDetectorSettings
 
     // ── 경유점 측정·판정 ──
     /// <summary>
-    /// 리크 판정 기준 [mbar·l/s] — 측정 최대값이 이 값 이상이면 NG. 장비 단위 설정과 무관하게 mbar·l/s 로 읽어 비교한다.
-    /// 기본값은 임시값이다 — 현장 합격 기준으로 정해야 한다.
+    /// 판정 임계값 — 측정값이 이 값을 <b>초과</b>하면 NG, 이하면 OK(SAIGE 연동 규격 §2 값 규칙).
+    /// 운영 중에는 SAIGE → ACS → AMR(<c>setGasThreshold</c> instantAction)로 받은 값이 이 자리를 덮는다.
+    /// 기본값은 SAIGE 사양 예시값(임시)이다.
     /// </summary>
-    public double LeakRateLimitMbarLs { get; set; } = 1.0E-5;
+    public double ThresholdValue { get; set; } = 5.0;
+
+    /// <summary>
+    /// 임계값 단위 — 측정값도 이 단위로 비교한다. 장비 인터페이스 단위(<c>*CONFig:UNIT:LRSniff</c>)가 이와 같아야
+    /// 하며, 다르면 측정을 실패로 처리한다(단위가 다른 값을 판정하지 않음). 포밍가스 검사 기본은 <c>ppm</c>.
+    /// </summary>
+    public string ThresholdUnit { get; set; } = "ppm";
+
+    /// <summary>NG 일 때 같은 자리에서 다시 측정하는 최대 횟수(SAIGE 규격: 최초 1회 + 재측정 0~2회).</summary>
+    public int MaxRetries { get; set; } = 2;
 
     /// <summary>경유점 도착 후 첫 샘플까지 대기(ms) — 스니퍼 응답 지연(가스가 프로브까지 오는 시간) 흡수.</summary>
     public int MeasureDwellMs { get; set; } = 2000;

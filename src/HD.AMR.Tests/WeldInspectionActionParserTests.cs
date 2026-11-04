@@ -268,6 +268,35 @@ public class WeldInspectionActionParserTests
     }
     """;
 
+    // ── round (SAIGE 포밍가스 규격 §2 — 회차 1|2, 선택 필드) ──────────────
+    [Theory]
+    [InlineData("1", 1)]
+    [InlineData("2", 2)]
+    public void Parse_Round_Accepted(string roundJson, int expected)
+    {
+        var ok = WeldInspectionActionParser.TryParse(Deserialize(ActionWithParams($", \"round\": {roundJson}")), out var req, out var error);
+        Assert.True(ok, error);
+        Assert.Equal(expected, req!.Round);
+    }
+
+    [Fact]
+    public void Parse_Round_Absent_IsNull()
+    {
+        Assert.True(WeldInspectionActionParser.TryParse(Deserialize(ActionWithParams("")), out var req, out _));
+        Assert.Null(req!.Round);
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("3")]
+    [InlineData("\"1\"")]
+    [InlineData("1.5")]
+    public void Parse_Round_Malformed_Rejected(string roundJson)
+    {
+        Assert.False(WeldInspectionActionParser.TryParse(Deserialize(ActionWithParams($", \"round\": {roundJson}")), out _, out var error));
+        Assert.Contains("round", error);
+    }
+
     [Fact]
     public void Parse_TaskIdAndAttempt_InParams_CarriedThrough()
     {

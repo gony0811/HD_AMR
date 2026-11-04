@@ -15,7 +15,8 @@ namespace HD.AMR.App.Service;
 /// · 통신 경로는 시리얼(RS485)/이더넷(TCP) 중 선택 — <see cref="ApplySettingsAsync"/> 로 실행 중 바꾸면
 ///   DB 파라미터(<c>GasDetector.*</c>)에 저장하고 즉시 다시 연결한다.
 /// · 리크레이트·상태를 주기 폴링해 <see cref="Latest"/> 로 캐싱한다(화면 실시간 표시).
-/// · 검사 시퀀스는 경유점마다 <see cref="MeasureAsync"/> 로 측정·판정(OK/NG)하고 결과는 <see cref="Results"/> 에 쌓인다.
+/// · 검사 시퀀스는 경유점마다 <see cref="MeasurePointAsync"/> 로 측정·판정(임계값 초과 NG, NG 면 최대 2회 재측정)하고
+///   측정 1건(scan)씩 <see cref="Results"/> 에 쌓인다. 임계값은 SAIGE → ACS 로 받는다(<see cref="SetThresholdFromAcsAsync"/>).
 /// </summary>
 public sealed class GasDetectorService : BackgroundService
 {
@@ -39,11 +40,14 @@ public sealed class GasDetectorService : BackgroundService
     private bool _retryWarned;
     // 장비 응답 확인 여부 — 시리얼은 장비가 없어도 포트가 열리므로 "연결/끊김" 로그는 응답 기준으로 끊김당 1회만 남긴다.
     private bool _linkUp;
+    private bool _unitUnknownWarned;
+    private GasThreshold _threshold;
 
     public GasDetectorService(IOptions<GasDetectorSettings> options, IOptions<InspectionSensorSettings> sensor,
         IServiceScopeFactory scopeFactory, ILogger<GasDetectorService> logger)
     {
         _settings = options.Value.Clone();
+        _threshold = LocalThreshold(_settings);
         _sensor = sensor.Value;
         _scopeFactory = scopeFactory;
         _logger = logger;
@@ -84,6 +88,9 @@ public sealed class GasDetectorService : BackgroundService
 
     /// <summary>측정 결과가 추가될 때(호출 스레드에서 발생).</summary>
     public event Action<GasMeasurementResult>? ResultAdded;
+
+    private static GasThreshold LocalThreshold(GasDetectorSettings s)
+        => new(s.ThresholdValue, s.ThresholdUnit, GasThresholdSource.Local, DateTime.UtcNow);
 
     public static string[] AvailablePorts() => SerialGasDetectorTransport.AvailablePorts();
 
@@ -223,13 +230,71 @@ public sealed class GasDetectorService : BackgroundService
         catch (GasDetectorException) { return null; }   // 펌웨어·모드에 따라 지원하지 않는 조회 — 표시만 생략.
     }
 
+    /// <summary>현재 판정 임계값(값·단위·출처). 검사 Task 는 시작할 때 이 값을 잡아 끝까지 쓴다.</summary>
+    public GasThreshold CurrentThreshold { get { lock (_lock) return _threshold; } }
+
+    /// <summary>임계값이 바뀔 때(호출 스레드에서 발생).</summary>
+    public event Action<GasThreshold>? ThresholdChanged;
+
     /// <summary>
-    /// 경유점 1곳 측정 — <see cref="GasDetectorSettings.MeasureDwellMs"/> 대기 후 샘플을 N회 읽어
-    /// 최대값을 판정 기준과 비교한다. 통신 실패는 예외 대신 <see cref="GasJudgement.Error"/> 결과로 돌려준다.
+    /// SAIGE → ACS → AMR 임계값 적용(<c>setGasThreshold</c> instantAction, SAIGE 규격 §3).
+    /// 값은 양수여야 하고, 단위는 장비 인터페이스 단위와 같아야 한다(장비 단위를 아직 모르면 받아 두고 측정할 때 확인).
+    /// 적용하면 DB 에도 저장해 재시작 후에도 마지막 값을 쓴다. 실패 사유를 돌려준다(null = 적용).
     /// </summary>
-    public async Task<GasMeasurementResult> MeasureAsync(string label, CancellationToken ct = default)
+    public async Task<string?> SetThresholdFromAcsAsync(string? tankId, double value, string? unit,
+        string? requestedBy, long? requestedAtMs)
+    {
+        if (!IsActive)
+            return "검사 센서 모드가 가스 디텍터가 아닙니다";
+        if (!double.IsFinite(value) || value <= 0)
+            return $"임계값은 양수여야 합니다 (수신 {value})";
+        if (string.IsNullOrWhiteSpace(unit))
+            return "임계값 단위가 없습니다";
+        if (Latest?.Unit is { } deviceUnit && !Xl3000AsciiProtocol.SameUnit(deviceUnit, unit))
+            return $"임계값 단위 {unit} ≠ 장비 단위 {deviceUnit} — 장비 인터페이스 단위(*CONFig:UNIT:LRSniff)를 맞추세요";
+
+        var th = new GasThreshold(value, unit.Trim(), GasThresholdSource.Acs, DateTime.UtcNow, tankId, requestedBy, requestedAtMs);
+        GasDetectorSettings next;
+        lock (_lock)
+        {
+            _threshold = th;
+            _settings.ThresholdValue = th.Value;
+            _settings.ThresholdUnit = th.Unit;
+            next = _settings.Clone();
+        }
+        await SavePersistedAsync(next);
+        _logger.LogInformation("[가스 임계값] SAIGE 임계값 적용 — {Th}, tank={Tank}, 요청자={By}, 요청시각={At}",
+            th.Describe(), tankId ?? "—", requestedBy ?? "—", requestedAtMs?.ToString(CultureInfo.InvariantCulture) ?? "—");
+        ThresholdChanged?.Invoke(th);
+        return null;
+    }
+
+    /// <summary>SAIGE 상태 전송(§4) <c>sensor</c> 블록용 상태 — 최근 폴링값 기준. 가스 모드가 아니면 null.</summary>
+    public GasSensorStatus? GetSensorStatus()
+    {
+        if (!IsActive) return null;
+        var r = Latest;
+        if (r is null || !IsConnected)
+            return new GasSensorStatus("DISCONNECTED", null, null);
+        return new GasSensorStatus(
+            Xl3000AsciiProtocol.SensorStateCode(r.Mode),
+            Xl3000AsciiProtocol.ParseErrorCode(r.ErrorStatus),
+            // 교정 완료 여부를 직접 주는 ASCII 조회는 확인되지 않았다 — 장비 확인 후 채운다(SAIGE 규격상 선택 항목).
+            null);
+    }
+
+    /// <summary>
+    /// 측정 1건(scan) — <see cref="GasDetectorSettings.MeasureDwellMs"/> 대기 후 장비 설정 단위의 리크레이트
+    /// (<c>*READ?</c>)를 N회 읽어 최대값을 임계값과 비교한다(초과 NG). 장비 단위가 임계값 단위와 다르면 판정하지 않고
+    /// Error. 통신 실패도 예외 대신 <see cref="GasJudgement.Error"/> 결과로 돌려준다.
+    /// </summary>
+    /// <param name="threshold">판정 임계값. null 이면 <see cref="CurrentThreshold"/>.</param>
+    /// <param name="retry">0 = 최초 측정, 1·2 = 재측정(SAIGE <c>scans[].retry</c>).</param>
+    public async Task<GasMeasurementResult> MeasureAsync(string label, GasThreshold? threshold = null, int retry = 0,
+        CancellationToken ct = default)
     {
         var s = Settings;
+        var th = threshold ?? CurrentThreshold;
         var started = DateTime.UtcNow;
         var samples = new List<double>();
         string? error = null;
@@ -237,6 +302,10 @@ public sealed class GasDetectorService : BackgroundService
         if (_client is not { IsOpen: true } client)
         {
             error = $"가스 디텍터 미연결 ({s.EndpointText})";
+        }
+        else if (await CheckUnitAsync(client, th, ct) is { } unitError)
+        {
+            error = unitError;
         }
         else
         {
@@ -249,7 +318,7 @@ public sealed class GasDetectorService : BackgroundService
                 ct.ThrowIfCancellationRequested();
                 try
                 {
-                    samples.Add(await client.ReadLeakRateMbarLsAsync(ct));
+                    samples.Add(await client.ReadLeakRateAsync(ct));
                     lock (_lock) _lastOkUtc = DateTime.UtcNow;
                 }
                 // InvalidOperation/ObjectDisposed — 측정 중 재연결로 포트가 닫힌 경우.
@@ -263,26 +332,71 @@ public sealed class GasDetectorService : BackgroundService
             }
         }
 
-        var judgement = GasMeasurementResult.Judge(samples, s.LeakRateLimitMbarLs);
+        var judgement = GasMeasurementResult.Judge(samples, th.Value);
         GasMeasurementResult result;
         lock (_lock)
         {
-            result = new GasMeasurementResult(++_resultSeq, label, started, DateTime.UtcNow, samples.Count,
+            result = new GasMeasurementResult(++_resultSeq, label, retry, started, DateTime.UtcNow, samples.Count,
                 samples.Count > 0 ? samples.Max() : null, samples.Count > 0 ? samples.Average() : null,
-                s.LeakRateLimitMbarLs, judgement, judgement == GasJudgement.Error ? error ?? "유효 샘플 없음" : null);
+                th.Unit, th.Value, judgement, judgement == GasJudgement.Error ? error ?? "유효 샘플 없음" : null);
             _results.Add(result);
             if (_results.Count > MaxResults)
                 _results.RemoveRange(0, _results.Count - MaxResults);
         }
 
+        var tag = retry > 0 ? $" (재측정 {retry})" : "";
         if (judgement == GasJudgement.Error)
-            _logger.LogWarning("[가스 측정] {Label} 측정 실패: {Err}", label, result.Error);
+            _logger.LogWarning("[가스 측정] {Label}{Tag} 측정 실패: {Err}", label, tag, result.Error);
         else
-            _logger.LogInformation("[가스 측정] {Label} {Judge} — max {Max:0.00E+0} / avg {Avg:0.00E+0} mbar·l/s (기준 {Limit:0.00E+0}, {N}샘플)",
-                label, judgement, result.MaxMbarLs, result.AvgMbarLs, s.LeakRateLimitMbarLs, samples.Count);
+            _logger.LogInformation("[가스 측정] {Label}{Tag} {Judge} — max {Max:0.###} / avg {Avg:0.###} {Unit} (임계 {Limit:0.###}, {N}샘플)",
+                label, tag, judgement, result.Value, result.Avg, th.Unit, th.Value, samples.Count);
 
         ResultAdded?.Invoke(result);
         return result;
+    }
+
+    /// <summary>
+    /// 경유점 1곳 측정 — 최초 측정 후 OK 가 아니면(NG·실패) 같은 자리에서
+    /// <see cref="GasDetectorSettings.MaxRetries"/> 회(0~2)까지 다시 잰다(SAIGE 규격 §2 retry).
+    /// </summary>
+    public async Task<IReadOnlyList<GasMeasurementResult>> MeasurePointAsync(string label, GasThreshold threshold,
+        CancellationToken ct = default)
+    {
+        var maxRetries = Math.Clamp(Settings.MaxRetries, 0, 2);
+        var scans = new List<GasMeasurementResult> { await MeasureAsync(label, threshold, 0, ct) };
+        while (GasPointResult.NeedsRetry(scans[^1].Judgement, scans.Count - 1, maxRetries))
+            scans.Add(await MeasureAsync(label, threshold, scans.Count, ct));
+        return scans;
+    }
+
+    /// <summary>
+    /// 장비 인터페이스 단위가 임계값 단위와 같은지 확인. 다르면 실패 사유를 돌려준다.
+    /// 단위 조회를 지원하지 않는 펌웨어면(Exx) 확인을 건너뛴다 — 경고만 한 번 남긴다.
+    /// </summary>
+    private async Task<string?> CheckUnitAsync(Xl3000FlexClient client, GasThreshold th, CancellationToken ct)
+    {
+        string? unit;
+        try
+        {
+            unit = await TryQueryAsync(client, Xl3000AsciiProtocol.ReadUnitSniff, ct) is { } u
+                ? Xl3000AsciiProtocol.UnitText(u) : Latest?.Unit;
+        }
+        catch (Exception ex) when (ex is TimeoutException or IOException or InvalidOperationException or ObjectDisposedException)
+        {
+            return ex.Message;
+        }
+        if (unit is null)
+        {
+            if (!_unitUnknownWarned)
+            {
+                _logger.LogWarning("가스 디텍터 단위를 확인할 수 없습니다 — 장비 설정 단위가 {Unit} 라고 보고 판정합니다", th.Unit);
+                _unitUnknownWarned = true;
+            }
+            return null;
+        }
+        return Xl3000AsciiProtocol.SameUnit(unit, th.Unit)
+            ? null
+            : $"단위 불일치 — 장비 {unit}, 임계값 {th.Unit}. 장비 인터페이스 단위(*CONFig:UNIT:LRSniff)를 맞추세요";
     }
 
     public void ClearResults()
@@ -300,15 +414,21 @@ public sealed class GasDetectorService : BackgroundService
     /// <summary>설정 변경 — DB 에 저장하고 통신 경로가 바뀌었으면 다시 연결한다.</summary>
     public async Task ApplySettingsAsync(GasDetectorSettings next)
     {
-        bool reconnect;
+        bool reconnect, thresholdChanged;
         lock (_lock)
         {
             reconnect = next.EndpointText != _settings.EndpointText || next.ResponseTimeoutMs != _settings.ResponseTimeoutMs;
+            thresholdChanged = next.ThresholdValue != _threshold.Value || !Xl3000AsciiProtocol.SameUnit(next.ThresholdUnit, _threshold.Unit);
             _settings = next.Clone();
+            if (thresholdChanged)
+                _threshold = LocalThreshold(_settings);
         }
         await SavePersistedAsync(next);
-        _logger.LogInformation("가스 디텍터 설정 변경 ({Endpoint}, 기준 {Limit:0.00E+0} mbar·l/s){Re}",
-            next.EndpointText, next.LeakRateLimitMbarLs, reconnect ? " — 재연결" : "");
+        _logger.LogInformation("가스 디텍터 설정 변경 ({Endpoint}, 임계 {Limit:0.###} {Unit}{Src}){Re}",
+            next.EndpointText, next.ThresholdValue, next.ThresholdUnit, thresholdChanged ? " — 화면 설정으로 변경" : "",
+            reconnect ? " — 재연결" : "");
+        if (thresholdChanged)
+            ThresholdChanged?.Invoke(CurrentThreshold);
         if (reconnect)
             RequestReconnect();
     }
@@ -366,11 +486,17 @@ public sealed class GasDetectorService : BackgroundService
             if (await p.GetIntAsync(KeyPrefix + "BaudRate") is { } baud) s.BaudRate = baud;
             if (await p.GetAsync(KeyPrefix + "Host") is { Length: > 0 } host) s.Host = host;
             if (await p.GetIntAsync(KeyPrefix + "TcpPort") is { } tcp) s.TcpPort = tcp;
-            if (await p.GetDoubleAsync(KeyPrefix + "LeakRateLimitMbarLs") is { } lim) s.LeakRateLimitMbarLs = lim;
+            if (await p.GetDoubleAsync(KeyPrefix + "ThresholdValue") is { } lim) s.ThresholdValue = lim;
+            if (await p.GetAsync(KeyPrefix + "ThresholdUnit") is { Length: > 0 } unit) s.ThresholdUnit = unit;
+            if (await p.GetIntAsync(KeyPrefix + "MaxRetries") is { } retries) s.MaxRetries = retries;
             if (await p.GetIntAsync(KeyPrefix + "MeasureDwellMs") is { } dwell) s.MeasureDwellMs = dwell;
             if (await p.GetIntAsync(KeyPrefix + "MeasureSampleCount") is { } n) s.MeasureSampleCount = n;
             if (await p.GetIntAsync(KeyPrefix + "MeasureSampleIntervalMs") is { } iv) s.MeasureSampleIntervalMs = iv;
-            lock (_lock) _settings = s;
+            lock (_lock)
+            {
+                _settings = s;
+                _threshold = LocalThreshold(s);
+            }
         }
         catch (Exception ex)
         {
@@ -390,7 +516,9 @@ public sealed class GasDetectorService : BackgroundService
             await p.SetAsync(KeyPrefix + "BaudRate", s.BaudRate.ToString(inv), "가스 디텍터 보율");
             await p.SetAsync(KeyPrefix + "Host", s.Host, "가스 디텍터 TCP 호스트");
             await p.SetAsync(KeyPrefix + "TcpPort", s.TcpPort.ToString(inv), "가스 디텍터 TCP 포트");
-            await p.SetDoubleAsync(KeyPrefix + "LeakRateLimitMbarLs", s.LeakRateLimitMbarLs, "리크 판정 기준 [mbar·l/s]");
+            await p.SetDoubleAsync(KeyPrefix + "ThresholdValue", s.ThresholdValue, "가스 판정 임계값 (초과 NG) — SAIGE 수신값이 덮어씀");
+            await p.SetAsync(KeyPrefix + "ThresholdUnit", s.ThresholdUnit, "가스 판정 임계값 단위 (장비 인터페이스 단위와 같아야 함)");
+            await p.SetAsync(KeyPrefix + "MaxRetries", s.MaxRetries.ToString(inv), "NG 시 재측정 최대 횟수 (0~2)");
             await p.SetAsync(KeyPrefix + "MeasureDwellMs", s.MeasureDwellMs.ToString(inv), "경유점 측정 전 대기 [ms]");
             await p.SetAsync(KeyPrefix + "MeasureSampleCount", s.MeasureSampleCount.ToString(inv), "경유점 측정 샘플 수");
             await p.SetAsync(KeyPrefix + "MeasureSampleIntervalMs", s.MeasureSampleIntervalMs.ToString(inv), "경유점 측정 샘플 간격 [ms]");
@@ -401,3 +529,6 @@ public sealed class GasDetectorService : BackgroundService
         }
     }
 }
+
+/// <summary>SAIGE 상태 전송(§4) <c>sensor</c> 블록 — state / errorCode / calibrated(미확인이면 null).</summary>
+public sealed record GasSensorStatus(string State, int? ErrorCode, bool? Calibrated);

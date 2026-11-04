@@ -37,7 +37,7 @@
     <StackPanel MaxWidth="1100" HorizontalAlignment="Left">
         <TextBlock Classes="page-title" Text="가스 디텍터 (헬륨 리크)" />
         <TextBlock Classes="page-subtitle" TextWrapping="Wrap"
-                   Text="INFICON XL3000flex 와 ASCII 프로토콜로 통신합니다. 통신 경로는 RS485(시리얼)와 이더넷(TCP) 중 선택할 수 있고, 검사 시퀀스는 경유점마다 리크레이트를 측정해 판정 기준과 비교합니다." />
+                   Text="INFICON XL3000flex 와 ASCII 프로토콜로 통신합니다. 통신 경로는 RS485(시리얼)와 이더넷(TCP) 중 선택할 수 있고, 검사 시퀀스는 경유점마다 측정값을 SAIGE 임계값과 비교합니다(초과 NG, NG 면 같은 자리에서 최대 2회 재측정)." />
 
         <Border Classes="alert" IsVisible="{Binding IsInactive}">
             <TextBlock TextWrapping="Wrap"
@@ -125,8 +125,12 @@
                             <TextBlock Text="{Binding LiveJudgeText}" FontSize="18" FontWeight="SemiBold" />
                         </Border>
                         <TextBlock Classes="axis" HorizontalAlignment="Center" Margin="0,4,0,0" Text="{Binding LimitDisplay}" />
+                        <TextBlock Classes="axis" HorizontalAlignment="Center" Text="{Binding ThresholdSourceText}" />
                     </StackPanel>
                 </Grid>
+                <Border Classes="alert" IsVisible="{Binding IsUnitMismatch}">
+                    <TextBlock TextWrapping="Wrap" Text="{Binding UnitMismatchText}" />
+                </Border>
                 <WrapPanel>
                     <Border Classes="badge" Classes.on="{Binding IsMeasuring}" Classes.off="{Binding !IsMeasuring}" Margin="0,0,6,6">
                         <TextBlock Text="측정 중" /></Border>
@@ -158,18 +162,24 @@
         <Border Classes="card">
             <StackPanel Spacing="10">
                 <TextBlock Text="경유점 측정 · 판정 기준" FontWeight="SemiBold" />
-                <Grid ColumnDefinitions="Auto,140,Auto,100,Auto,80,Auto,100" RowDefinitions="Auto">
-                    <TextBlock Grid.Column="0" Text="NG 기준 [mbar·l/s]" VerticalAlignment="Center" Margin="0,0,8,0" />
-                    <TextBox Grid.Column="1" Text="{Binding LimitText}" />
-                    <TextBlock Grid.Column="2" Text="측정 전 대기 [ms]" VerticalAlignment="Center" Margin="16,0,8,0" />
-                    <TextBox Grid.Column="3" Text="{Binding DwellMs}" />
-                    <TextBlock Grid.Column="4" Text="샘플 수" VerticalAlignment="Center" Margin="16,0,8,0" />
-                    <TextBox Grid.Column="5" Text="{Binding SampleCount}" />
-                    <TextBlock Grid.Column="6" Text="간격 [ms]" VerticalAlignment="Center" Margin="16,0,8,0" />
-                    <TextBox Grid.Column="7" Text="{Binding SampleIntervalMs}" />
+                <Grid ColumnDefinitions="Auto,100,Auto,80,Auto,60" RowDefinitions="Auto">
+                    <TextBlock Grid.Column="0" Text="임계값" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <TextBox Grid.Column="1" Text="{Binding ThresholdText}" />
+                    <TextBlock Grid.Column="2" Text="단위" VerticalAlignment="Center" Margin="16,0,8,0" />
+                    <TextBox Grid.Column="3" Text="{Binding ThresholdUnitText}" />
+                    <TextBlock Grid.Column="4" Text="NG 재측정 [회]" VerticalAlignment="Center" Margin="16,0,8,0" />
+                    <TextBox Grid.Column="5" Text="{Binding MaxRetriesText}" />
+                </Grid>
+                <Grid ColumnDefinitions="Auto,100,Auto,80,Auto,100" RowDefinitions="Auto">
+                    <TextBlock Grid.Column="0" Text="측정 전 대기 [ms]" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <TextBox Grid.Column="1" Text="{Binding DwellMs}" />
+                    <TextBlock Grid.Column="2" Text="샘플 수" VerticalAlignment="Center" Margin="16,0,8,0" />
+                    <TextBox Grid.Column="3" Text="{Binding SampleCount}" />
+                    <TextBlock Grid.Column="4" Text="간격 [ms]" VerticalAlignment="Center" Margin="16,0,8,0" />
+                    <TextBox Grid.Column="5" Text="{Binding SampleIntervalMs}" />
                 </Grid>
                 <TextBlock Classes="hint"
-                           Text="경유점 도착 → 대기 → 샘플 N회(mbar·l/s) → 최대값이 기준 이상이면 NG. 통신 실패는 '실패'로 따로 집계합니다. 변경 후 위의 '적용 · 저장'을 누르세요." />
+                           Text="경유점 도착 → 대기 → 장비 설정 단위로 샘플 N회 → 최대값이 임계값을 초과하면 NG(같으면 OK). NG 나 측정 실패면 같은 자리에서 재측정합니다. 임계값은 운영 중 SAIGE 가 ACS 를 거쳐 보내 덮어쓰며, 여기 값은 수신 전 기본값입니다. 장비 인터페이스 단위가 임계값 단위와 다르면 측정이 실패 처리됩니다." />
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <Button Classes="accent" Content="현재 위치에서 1회 측정" Command="{Binding MeasureOnceCommand}" />
                     <Button Content="적용 · 저장" Command="{Binding ApplyCommand}" />
@@ -185,32 +195,34 @@
                                Text="{Binding ResultSummary, StringFormat='측정 결과 — {0}'}" />
                     <Button Grid.Column="1" Content="목록 지우기" Command="{Binding ClearResultsCommand}" />
                 </Grid>
-                <Grid ColumnDefinitions="50,80,*,100,100,100,60,160">
+                <Grid ColumnDefinitions="50,80,*,80,90,90,100,60,160">
                     <TextBlock Grid.Column="0" Classes="head" Text="#" />
                     <TextBlock Grid.Column="1" Classes="head" Text="시각" />
                     <TextBlock Grid.Column="2" Classes="head" Text="위치" />
-                    <TextBlock Grid.Column="3" Classes="head" Text="최대" />
-                    <TextBlock Grid.Column="4" Classes="head" Text="평균" />
-                    <TextBlock Grid.Column="5" Classes="head" Text="기준" />
-                    <TextBlock Grid.Column="6" Classes="head" Text="판정" />
-                    <TextBlock Grid.Column="7" Classes="head" Text="비고" />
+                    <TextBlock Grid.Column="3" Classes="head" Text="회차" />
+                    <TextBlock Grid.Column="4" Classes="head" Text="측정값(최대)" />
+                    <TextBlock Grid.Column="5" Classes="head" Text="평균" />
+                    <TextBlock Grid.Column="6" Classes="head" Text="임계값" />
+                    <TextBlock Grid.Column="7" Classes="head" Text="판정" />
+                    <TextBlock Grid.Column="8" Classes="head" Text="비고" />
                 </Grid>
                 <ScrollViewer MaxHeight="360">
                     <ItemsControl ItemsSource="{Binding Results}">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="vm:GasResultRow">
-                                <Grid ColumnDefinitions="50,80,*,100,100,100,60,160" Margin="0,2">
+                                <Grid ColumnDefinitions="50,80,*,80,90,90,100,60,160" Margin="0,2">
                                     <TextBlock Grid.Column="0" Classes="cell" Text="{Binding Seq}" />
                                     <TextBlock Grid.Column="1" Classes="cell" Text="{Binding Time}" />
                                     <TextBlock Grid.Column="2" Classes="cell" Text="{Binding Label}" TextTrimming="CharacterEllipsis" />
-                                    <TextBlock Grid.Column="3" Classes="cell" Text="{Binding Max}" />
-                                    <TextBlock Grid.Column="4" Classes="cell" Text="{Binding Avg}" />
-                                    <TextBlock Grid.Column="5" Classes="cell" Text="{Binding Limit}" />
-                                    <Border Grid.Column="6" Classes="badge" Classes.on="{Binding IsOk}" Classes.off="{Binding !IsOk}"
+                                    <TextBlock Grid.Column="3" Classes="cell" Text="{Binding Retry}" />
+                                    <TextBlock Grid.Column="4" Classes="cell" Text="{Binding Value}" />
+                                    <TextBlock Grid.Column="5" Classes="cell" Text="{Binding Avg}" />
+                                    <TextBlock Grid.Column="6" Classes="cell" Text="{Binding Limit}" />
+                                    <Border Grid.Column="7" Classes="badge" Classes.on="{Binding IsOk}" Classes.off="{Binding !IsOk}"
                                             HorizontalAlignment="Left">
                                         <TextBlock Text="{Binding Judgement}" />
                                     </Border>
-                                    <TextBlock Grid.Column="7" Classes="cell" Text="{Binding Detail}" TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Grid.Column="8" Classes="cell" Text="{Binding Detail}" TextTrimming="CharacterEllipsis" />
                                 </Grid>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
