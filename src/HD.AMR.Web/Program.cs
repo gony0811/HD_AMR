@@ -202,6 +202,7 @@ builder.Services.AddScoped<HD.AMR.App.Service.Vision.LabelDataService>();
 builder.Services.AddSingleton<HD.AMR.App.Service.Vision.WeldTrainingService>();
 // DL 비드 세그멘테이션 추론(ONNX CPU) — 세션 캐시 유지 위해 싱글톤.
 builder.Services.AddSingleton<HD.AMR.App.Service.Vision.OnnxBeadSegmentationService>();
+builder.Services.AddSingleton<HD.AMR.App.Service.Vision.WeldDetectionBenchmarkService>();
 
 var app = builder.Build();
 

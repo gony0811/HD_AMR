@@ -96,6 +96,8 @@ internal static class ServiceRegistration
         // DL 학습 오케스트레이터(학습 프로세스가 페이지와 무관하게 살아야 함) + ONNX 추론(세션 캐시) — 싱글톤.
         services.AddSingleton<WeldTrainingService>();
         services.AddSingleton<OnnxBeadSegmentationService>();
+        // 검출 방식 일괄 비교평가(선 라벨 정답 대비) — 결과(LastReport)를 페이지 이동 후에도 유지.
+        services.AddSingleton<WeldDetectionBenchmarkService>();
 
         // 도면 저장/변환(DrawingService 의존성).
         var uploadDir = Path.Combine(AppDataDir(), "UploadedDrawings");
@@ -182,6 +184,7 @@ internal static class ServiceRegistration
         services.AddTransient<TeachingViewModel>();
         services.AddTransient<LabelEditorViewModel>();
         services.AddTransient<VisionTrainingViewModel>();
+        services.AddTransient<WeldBenchmarkViewModel>();
         services.AddTransient<LaserViewModel>();
         services.AddTransient<HandEyeViewModel>();
         services.AddTransient<ArucoCalibrationViewModel>();

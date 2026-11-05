@@ -83,7 +83,15 @@ public class WeldTrackingService
     public WeldDetectionMethod Method { get; set; } = WeldDetectionMethod.Dl;
 
     /// <summary>현재 방식에 해당하는 검출기.</summary>
-    private IWeldVisionDetector Detector => Method == WeldDetectionMethod.Dl ? _dlDetector : _cvDetector;
+    private IWeldVisionDetector Detector => GetDetector(Method);
+
+    /// <summary>방식별 검출기. 비교평가(<c>WeldDetectionBenchmarkService</c>)가 같은 인스턴스를 공유한다.
+    /// 새 검출 방식을 추가하면 여기만 늘리면 운영·비교평가 양쪽에 반영된다.</summary>
+    public IWeldVisionDetector GetDetector(WeldDetectionMethod method) => method switch
+    {
+        WeldDetectionMethod.Dl => _dlDetector,
+        _ => _cvDetector,
+    };
 
     public bool DetectorAvailable => Detector.IsAvailable;
 

@@ -91,6 +91,9 @@ public sealed class WeldDetectionParams
 
     /// <summary>사용할 .onnx 경로. null 이면 모달리티(Mode)로 <c>weld_seg_{ir|rgb}.onnx</c> 자동 해석.</summary>
     public string? DlModelPath { get; set; }
+
+    /// <summary>얕은 복사(모든 속성이 값/문자열). 비교평가가 운영 파라미터를 건드리지 않고 Mode 만 바꿔 쓸 때 사용.</summary>
+    public WeldDetectionParams Clone() => (WeldDetectionParams)MemberwiseClone();
 }
 
 /// <summary>한 점(이미지 픽셀 좌표).</summary>
