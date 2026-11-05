@@ -40,6 +40,10 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
     [ObservableProperty] private int _opset = 12, _exportImgsz;   // 0 = 학습 imgsz 자동
     [ObservableProperty] private bool _exportRect = true;    // 데이터 비율 직사각 입력(CPU 추론 가속)
     [ObservableProperty] private int _exportModalityIndex = 1;   // 0 rgb, 1 ir
+
+    // ⑤ U-Net (PyTorch, 크롭 학습)
+    [ObservableProperty] private int _unetEpochs = 100, _unetBatch = 8, _unetCrop = 384, _unetPatience = 30;
+    [ObservableProperty] private int _unetBaseIndex;           // 0 base16(빠름), 1 base32(정확)
     [ObservableProperty] private int _rotDirIndex;           // 0 cw, 1 ccw, 2 both
     [ObservableProperty] private string? _convertText, _rotText;
     [ObservableProperty] private bool _working;
@@ -76,6 +80,8 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
     public string PyDetail => Py?.Detail ?? "";
     public int PyKind => Py is null ? 0 : Py.UltralyticsOk ? 1 : Py.PythonOk ? 2 : 3;
     public bool PyReady => Py is { UltralyticsOk: true };
+    public bool TorchReady => Py is { TorchOk: true };
+    public string UnetExportButtonText => $"best.pt → weld_unet_{ExportModality}.onnx";
     public bool NeedInstall => Py is { UltralyticsOk: false };
     public string InstallHint => Py is null ? "" : $"설치: {Py.Exe} -m pip install ultralytics onnx";
     public string ExportButtonText => $"best.pt → weld_seg_{ExportModality}.onnx";
@@ -108,8 +114,12 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
     {
         OnPropertyChanged(nameof(PyDetail)); OnPropertyChanged(nameof(PyKind));
         OnPropertyChanged(nameof(PyReady)); OnPropertyChanged(nameof(NeedInstall)); OnPropertyChanged(nameof(InstallHint));
+        OnPropertyChanged(nameof(TorchReady));
     }
-    partial void OnExportModalityIndexChanged(int value) => OnPropertyChanged(nameof(ExportButtonText));
+    partial void OnExportModalityIndexChanged(int value)
+    {
+        OnPropertyChanged(nameof(ExportButtonText)); OnPropertyChanged(nameof(UnetExportButtonText));
+    }
 
     private async Task PollAsync()
     {
@@ -243,6 +253,22 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
         Message = null;
         try { await _train.StartExportAsync(Opset, ExportImgsz, ExportModality, ExportRect); }
         catch (Exception ex) { Notify($"내보내기 시작 실패: {ex.Message}", true); }
+    }
+
+    [RelayCommand]
+    private async Task StartUnetTrain()
+    {
+        Message = null;
+        try { await _train.StartUnetTrainingAsync(UnetEpochs, UnetBatch, UnetCrop, UnetPatience, UnetBaseIndex == 1 ? 32 : 16); }
+        catch (Exception ex) { Notify($"U-Net 학습 시작 실패: {ex.Message}", true); }
+    }
+
+    [RelayCommand]
+    private async Task StartUnetExport()
+    {
+        Message = null;
+        try { await _train.StartUnetExportAsync(ExportModality); }
+        catch (Exception ex) { Notify($"U-Net 내보내기 시작 실패: {ex.Message}", true); }
     }
 
     [RelayCommand] private void Stop() => _train.Stop();

@@ -27,6 +27,7 @@ public class WeldTrackingService
     private readonly IWeldVisionDetector _cvDetector;
     private readonly IDlWeldVisionDetector _dlDetector;
     private readonly IRidgeWeldVisionDetector _ridgeDetector;
+    private readonly IUnetWeldVisionDetector _unetDetector;
     private readonly RoiProfileStore _store;
     private readonly WeldTrackingSettings _settings;
     private readonly IServiceScopeFactory _scopeFactory;
@@ -55,6 +56,7 @@ public class WeldTrackingService
         IWeldVisionDetector detector,
         IDlWeldVisionDetector dlDetector,
         IRidgeWeldVisionDetector ridgeDetector,
+        IUnetWeldVisionDetector unetDetector,
         RoiProfileStore store,
         IOptions<WeldTrackingSettings> options,
         IServiceScopeFactory scopeFactory,
@@ -64,6 +66,7 @@ public class WeldTrackingService
         _cvDetector = detector;
         _dlDetector = dlDetector;
         _ridgeDetector = ridgeDetector;
+        _unetDetector = unetDetector;
         _store = store;
         _settings = options.Value;
         _scopeFactory = scopeFactory;
@@ -94,6 +97,7 @@ public class WeldTrackingService
     {
         WeldDetectionMethod.Dl => _dlDetector,
         WeldDetectionMethod.Ridge => _ridgeDetector,
+        WeldDetectionMethod.Unet => _unetDetector,
         _ => _cvDetector,
     };
 

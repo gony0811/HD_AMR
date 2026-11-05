@@ -19,7 +19,7 @@
 
 <div class="mb-2">
     <span class="badge @(Svc.DetectorAvailable ? "bg-success" : "bg-secondary")">
-        검출 @(Svc.Method switch { WeldDetectionMethod.Dl => "DL 모델", WeldDetectionMethod.Ridge => "Ridge 필터", _ => "파라미터(CV)" })
+        검출 @(Svc.Method switch { WeldDetectionMethod.Dl => "DL 모델", WeldDetectionMethod.Ridge => "Ridge 필터", WeldDetectionMethod.Unet => "U-Net", _ => "파라미터(CV)" })
         · @(Svc.DetectorAvailable ? "사용가능" : "비활성(Windows 전용)")
     </span>
     <span class="badge bg-info text-dark">상태: @Svc.State</span>
@@ -121,12 +121,16 @@
                     <input type="radio" class="btn-check" name="detmethod" id="dm_ridge"
                            checked="@(Svc.Method == WeldDetectionMethod.Ridge)" @onchange='() => SetMethod(WeldDetectionMethod.Ridge)' />
                     <label class="btn btn-outline-secondary" for="dm_ridge">〰 Ridge 필터</label>
+                    <input type="radio" class="btn-check" name="detmethod" id="dm_unet"
+                           checked="@(Svc.Method == WeldDetectionMethod.Unet)" @onchange='() => SetMethod(WeldDetectionMethod.Unet)' />
+                    <label class="btn btn-outline-secondary" for="dm_unet">🧩 U-Net</label>
                 </div>
                 <span class="text-muted ms-2" style="font-size:.8rem">
                     @(Svc.Method switch
                     {
                         WeldDetectionMethod.Dl => "학습된 weld_seg 모델로 비드를 찾습니다(권장).",
                         WeldDetectionMethod.Ridge => "헤시안 가는 선 필터로 찾습니다(학습 불필요, 진행축 방향 선만).",
+                        WeldDetectionMethod.Unet => "학습된 weld_unet 모델로 픽셀 단위 비드를 찾습니다(박스 단계 없음).",
                         _ => "고전 CV 이진화로 찾습니다(모델 없이 튜닝/폴백용).",
                     })
                 </span>
@@ -215,6 +219,30 @@
         }
 
         @* ── 고전 CV 파라미터 카드 (Method=Param) ── *@
+        @* ── U-Net 검출 카드 (Method=Unet) ── *@
+        @if (Svc.Method == WeldDetectionMethod.Unet)
+        {
+            <div class="card mb-3">
+                <div class="card-header py-1"><strong>U-Net 검출</strong></div>
+                <div class="card-body py-2">
+                    <div class="row g-2 align-items-end">
+                        <div class="col-auto" title="비드 확률 임계값. 낮추면 약한 비드까지, 높이면 확실한 픽셀만.">
+                            <label class="form-label mb-0 small">확률 임계 @Svc.Params.UnetThreshold.ToString("0.00")</label>
+                            <input type="range" min="0.05" max="0.95" step="0.05" @bind="Svc.Params.UnetThreshold" @bind:after="LivePreview" class="form-range" style="width:160px" />
+                        </div>
+                        <div class="col-auto" title="중심선 직선 피팅. RANSAC 권장.">
+                            <label class="form-label mb-0 small">직선 피팅</label>
+                            <select class="form-select form-select-sm" @bind="Svc.Params.LineFit" @bind:after="LivePreview" style="width:110px">
+                                <option value="@WeldLineFitMode.Ransac">RANSAC</option>
+                                <option value="@WeldLineFitMode.LeastSquares">최소제곱</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="small text-muted mt-1">모델: 캡처폴더/dl/models/weld_unet_{ir|rgb}.onnx (Desktop 비전 학습 ⑤ U-Net 탭에서 학습·내보내기)</div>
+                </div>
+            </div>
+        }
+
         @* ── Ridge 검출 카드 (Method=Ridge) ── *@
         @if (Svc.Method == WeldDetectionMethod.Ridge)
         {

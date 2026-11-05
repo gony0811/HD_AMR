@@ -69,6 +69,7 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
     {
         WeldDetectionMethod.Dl => "DL 모델",
         WeldDetectionMethod.Ridge => "Ridge 필터",
+        WeldDetectionMethod.Unet => "U-Net",
         _ => "파라미터(CV)",
     };
     public string StateText => _svc.State.ToString();
@@ -97,7 +98,7 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
     public override async void OnActivated()
     {
         Pitch = _svc.Pitch;
-        MethodIndex = _svc.Method switch { WeldDetectionMethod.Param => 1, WeldDetectionMethod.Ridge => 2, _ => 0 };
+        MethodIndex = _svc.Method switch { WeldDetectionMethod.Param => 1, WeldDetectionMethod.Ridge => 2, WeldDetectionMethod.Unet => 3, _ => 0 };
         _timer.Start();
         RefreshStatus();
         RefreshOverlays();
@@ -171,7 +172,7 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
 
     partial void OnMethodIndexChanged(int value)
     {
-        _svc.Method = value switch { 1 => WeldDetectionMethod.Param, 2 => WeldDetectionMethod.Ridge, _ => WeldDetectionMethod.Dl };
+        _svc.Method = value switch { 1 => WeldDetectionMethod.Param, 2 => WeldDetectionMethod.Ridge, 3 => WeldDetectionMethod.Unet, _ => WeldDetectionMethod.Dl };
         RefreshStatus();
     }
 

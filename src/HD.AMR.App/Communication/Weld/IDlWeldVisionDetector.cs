@@ -13,3 +13,8 @@ public interface IDlWeldVisionDetector : IWeldVisionDetector
 public interface IRidgeWeldVisionDetector : IWeldVisionDetector
 {
 }
+
+/// <summary>U-Net 세그멘테이션 기반 용접라인 검출기 마커. 계약은 <see cref="IWeldVisionDetector"/> 와 동일.</summary>
+public interface IUnetWeldVisionDetector : IWeldVisionDetector
+{
+}

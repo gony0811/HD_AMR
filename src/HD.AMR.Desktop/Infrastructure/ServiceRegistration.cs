@@ -82,12 +82,14 @@ internal static class ServiceRegistration
             services.AddSingleton<IWeldVisionDetector, WeldVisionDetector>();
             services.AddSingleton<IDlWeldVisionDetector, DlWeldVisionDetector>();
             services.AddSingleton<IRidgeWeldVisionDetector, RidgeWeldVisionDetector>();
+            services.AddSingleton<IUnetWeldVisionDetector, UnetWeldVisionDetector>();
         }
         else
         {
             services.AddSingleton<IWeldVisionDetector, NoopWeldVisionDetector>();
             services.AddSingleton<IDlWeldVisionDetector, NoopWeldVisionDetector>();
             services.AddSingleton<IRidgeWeldVisionDetector, NoopWeldVisionDetector>();
+            services.AddSingleton<IUnetWeldVisionDetector, NoopWeldVisionDetector>();
         }
         services.AddSingleton(sp =>
         {

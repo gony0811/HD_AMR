@@ -135,10 +135,15 @@ public sealed class WeldTrainingService
         {
             "-c", "import ultralytics,sys; sys.stdout.write(ultralytics.__version__)"
         });
+        var t = await RunQuickAsync(py, new[]
+        {
+            "-c", "import torch,sys; sys.stdout.write(torch.__version__)"
+        });
         var pyVer = (ver.Output + ver.Error).Trim();
+        var torchTxt = t.Ok ? $" · torch {t.Output.Trim()}" : " · torch 미설치(U-Net 불가)";
         return u.Ok
-            ? new PythonInfo(true, true, py, $"{pyVer} · ultralytics {u.Output.Trim()}")
-            : new PythonInfo(true, false, py, $"{pyVer} · ultralytics 미설치 (pip install ultralytics)");
+            ? new PythonInfo(true, true, py, $"{pyVer} · ultralytics {u.Output.Trim()}{torchTxt}", t.Ok)
+            : new PythonInfo(true, false, py, $"{pyVer} · ultralytics 미설치 (pip install ultralytics){torchTxt}", t.Ok);
     }
 
     // ── ① 마스크 → YOLO-seg 데이터셋 변환(네이티브) ────────────────────────────
@@ -156,6 +161,7 @@ public sealed class WeldTrainingService
         {
             RecreateDir(Path.Combine(paths.Dataset, "images", split));
             RecreateDir(Path.Combine(paths.Dataset, "labels", split));
+            RecreateDir(Path.Combine(paths.Dataset, "masks", split));   // U-Net 용 이진 마스크(이미지와 같은 파일명)
         }
 
         int used = 0, skipped = 0, instances = 0;
@@ -165,7 +171,7 @@ public sealed class WeldTrainingService
             : Array.Empty<string>();
 
         // 1) 유효한 (stem, 라벨) 수집.
-        var items = new List<(string Stem, string ImgPath, string Label, int N)>();
+        var items = new List<(string Stem, string ImgPath, string MaskPath, string Label, int N)>();
         foreach (var maskPath in masks)
         {
             var fname = Path.GetFileName(maskPath);
@@ -175,7 +181,7 @@ public sealed class WeldTrainingService
 
             var (label, n) = await Task.Run(() => MaskToYoloLabel(maskPath));
             if (n == 0) { skipped++; Emit($"[변환] 마스크 비어있음 → 건너뜀: {fname}"); continue; }
-            items.Add((stem, imgPath, label, n));
+            items.Add((stem, imgPath, maskPath, label, n));
         }
 
         // 2) 촬영 세션 단위 train/val 분리(같은 자리 연속 프레임이 양쪽에 섞이는 누수 방지).
@@ -185,10 +191,11 @@ public sealed class WeldTrainingService
             Emit("[변환] 경고: 촬영 세션이 1개뿐 — 같은 세션을 시간순으로 앞/뒤로 나눴습니다. " +
                  "검증 점수가 실제보다 좋게 나올 수 있으니 다른 위치·시간대 촬영본을 추가하세요.");
 
-        foreach (var (stem, imgPath, label, n) in items)
+        foreach (var (stem, imgPath, maskPath, label, n) in items)
         {
             var sub = valSet.Contains(stem) ? "val" : "train";
             File.Copy(imgPath, Path.Combine(paths.Dataset, "images", sub, $"{stem}_{modality}.png"), overwrite: true);
+            File.Copy(maskPath, Path.Combine(paths.Dataset, "masks", sub, $"{stem}_{modality}.png"), overwrite: true);
             await File.WriteAllTextAsync(Path.Combine(paths.Dataset, "labels", sub, $"{stem}_{modality}.txt"), label);
             used++; instances += n;
             Emit($"[변환] {stem}_{modality} → {sub}: 폴리곤 {n}개");
@@ -391,6 +398,78 @@ public sealed class WeldTrainingService
         StartProcess(py, args, paths.Workspace, TrainingPhase.Exporting, "내보내기");
     }
 
+    // ── U-Net 학습 / 내보내기 ─────────────────────────────────────────────────
+    /// <summary>U-Net 학습 산출물 폴더(runs/unet). best.pt / last.pt.</summary>
+    public static string UnetRunDir(TrainingPaths p) => Path.Combine(p.Runs, "unet");
+
+    /// <summary>
+    /// U-Net 학습(CPU, PyTorch). 데이터셋 변환이 만든 images/·masks/{train,val} 을 쓴다.
+    /// 크롭 학습이라 이미지 크기와 무관하고, val Dice 기준으로 best.pt 를 저장·조기 종료한다.
+    /// </summary>
+    public async Task StartUnetTrainingAsync(int epochs, int batch, int crop, int patience, int baseChannels)
+    {
+        if (IsBusy) throw new InvalidOperationException("이미 실행 중인 작업이 있습니다.");
+        var paths = await GetPathsAsync() ?? throw new InvalidOperationException("캡처 폴더 미설정");
+        var masksTrain = Path.Combine(paths.Dataset, "masks", "train");
+        if (!Directory.Exists(masksTrain) || Directory.GetFiles(masksTrain, "*.png").Length == 0)
+            throw new FileNotFoundException("U-Net 용 마스크가 없습니다. ① 데이터셋 변환을 다시 실행하세요.", masksTrain);
+
+        var script = await WriteUnetScriptAsync(paths);
+        var py = await GetPythonAsync();
+        var args = new[]
+        {
+            script, "train", "--data", paths.Dataset, "--out", UnetRunDir(paths),
+            "--epochs", epochs.ToString(), "--batch", batch.ToString(), "--crop", crop.ToString(),
+            "--patience", Math.Max(0, patience).ToString(), "--base", baseChannels.ToString(),
+        };
+        TrainTotalEpochs = epochs;
+        TrainCurrentEpoch = 0;
+        TrainStartUtc = DateTime.UtcNow;
+        TrainEndUtc = null;
+        Emit($"[U-Net 학습] 시작 — epochs={epochs} batch={batch} crop={crop} patience={(patience > 0 ? patience : "끔")} base={baseChannels}");
+        StartProcess(py, args, paths.Workspace, TrainingPhase.Training, "U-Net 학습");
+    }
+
+    /// <summary>U-Net best.pt → models/weld_unet_{modality}.onnx (H/W 동적 축, opset 17).</summary>
+    public async Task StartUnetExportAsync(string? modality = null)
+    {
+        if (IsBusy) throw new InvalidOperationException("이미 실행 중인 작업이 있습니다.");
+        modality = modality == "rgb" ? "rgb" : modality == "ir" ? "ir" : LastConvertedModality;
+        var paths = await GetPathsAsync() ?? throw new InvalidOperationException("캡처 폴더 미설정");
+        var best = Path.Combine(UnetRunDir(paths), "best.pt");
+        if (!File.Exists(best)) throw new FileNotFoundException("U-Net 가중치(best.pt)가 없습니다. 먼저 U-Net 학습을 완료하세요.", best);
+
+        var script = await WriteUnetScriptAsync(paths);
+        var py = await GetPythonAsync();
+        var outPath = Path.Combine(paths.Models, $"weld_unet_{modality}.onnx");
+        Directory.CreateDirectory(paths.Models);
+        TrainTotalEpochs = 0;
+        Emit($"[U-Net 내보내기] 시작 — {best} → {Path.GetFileName(outPath)}");
+        StartProcess(py, new[] { script, "export", "--weights", best, "--out", outPath }, paths.Workspace,
+            TrainingPhase.Exporting, "U-Net 내보내기");
+    }
+
+    // 임베드 리소스(weld_unet.py)를 작업 폴더로 꺼낸다(매번 덮어써 앱 버전과 스크립트를 일치시킴).
+    private static async Task<string> WriteUnetScriptAsync(TrainingPaths paths)
+    {
+        Directory.CreateDirectory(paths.Workspace);
+        var dst = Path.Combine(paths.Workspace, "_weld_unet.py");
+        await using var src = typeof(WeldTrainingService).Assembly.GetManifestResourceStream("weld_unet.py")
+            ?? throw new InvalidOperationException("내장 U-Net 스크립트(weld_unet.py)를 찾지 못했습니다.");
+        await using var fs = File.Create(dst);
+        await src.CopyToAsync(fs);
+        return dst;
+    }
+
+    /// <summary>테스트용: 내장 U-Net 스크립트 본문.</summary>
+    public static string ReadUnetScript()
+    {
+        using var s = typeof(WeldTrainingService).Assembly.GetManifestResourceStream("weld_unet.py")
+            ?? throw new InvalidOperationException("weld_unet.py 리소스 없음");
+        using var r = new StreamReader(s);
+        return r.ReadToEnd();
+    }
+
     // ── 모델 목록 ────────────────────────────────────────────────────────────
     public async Task<List<ModelInfo>> ListModelsAsync()
     {
@@ -586,7 +665,7 @@ public enum TrainingAugmentation { Line, Minimal, Full }
 public enum TrainingPhase { Idle, Converting, Training, Exporting, Done, Error }
 
 public sealed record TrainingPaths(string CaptureDir, string Workspace, string Dataset, string Runs, string Models);
-public sealed record PythonInfo(bool PythonOk, bool UltralyticsOk, string Exe, string Detail);
+public sealed record PythonInfo(bool PythonOk, bool UltralyticsOk, string Exe, string Detail, bool TorchOk = false);
 public sealed record ConvertResult(int Used, int Skipped, int Instances, string DataYaml, int Train = 0, int Val = 0, int Sessions = 0);
 public sealed record RotateResult(int Created, int Skipped);
 public sealed record ModelInfo(string Path, string Name, long Bytes, DateTime Modified);

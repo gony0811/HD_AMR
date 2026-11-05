@@ -25,6 +25,7 @@ public sealed partial class WeldBenchmarkViewModel : ViewModelBase
     [ObservableProperty] private bool _useParam = true;
     [ObservableProperty] private bool _useDl = true;
     [ObservableProperty] private bool _useRidge = true;
+    [ObservableProperty] private bool _useUnet = true;
     [ObservableProperty] private bool _valOnly;
     [ObservableProperty] private bool _useWeldRoi;
     [ObservableProperty] private double _angleTol = WeldLineMetrics.DefaultAngleTolDeg;
@@ -78,6 +79,7 @@ public sealed partial class WeldBenchmarkViewModel : ViewModelBase
         if (UseParam) methods.Add(WeldDetectionMethod.Param);
         if (UseDl) methods.Add(WeldDetectionMethod.Dl);
         if (UseRidge) methods.Add(WeldDetectionMethod.Ridge);
+        if (UseUnet) methods.Add(WeldDetectionMethod.Unet);
         if (methods.Count == 0) { Notify("비교할 검출 방식을 하나 이상 선택하세요.", true); return; }
 
         Running = true; Message = null; Progress = 0; ProgressText = null;

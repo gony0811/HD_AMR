@@ -116,6 +116,31 @@
                     </StackPanel>
                 </TabItem>
 
+                <!-- ⑤ U-Net -->
+                <TabItem Header="⑤ U-Net">
+                    <StackPanel Spacing="8" Margin="0,8,0,0">
+                        <TextBlock Text="U-Net 세그멘테이션 (PyTorch, CPU · 크롭 학습)" FontWeight="SemiBold" />
+                        <Border Classes="alert" IsVisible="{Binding !TorchReady}">
+                            <TextBlock TextWrapping="Wrap" Text="torch 가 감지되지 않았습니다. ultralytics 를 설치하면 함께 설치됩니다(pip install ultralytics). 설치 후 Python 다시 감지." />
+                        </Border>
+                        <TextBlock Classes="hint" TextWrapping="Wrap"
+                                   Text="① 데이터셋 변환(images/·masks/ 세션 분리)을 그대로 씁니다. 박스 검출 단계가 없어 '검출 0건'이 생기지 않고, 픽셀 단위 원해상도 마스크를 냅니다. 에폭마다 val Dice 로 best.pt 를 저장하고 patience 동안 개선이 없으면 조기 종료합니다." />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <StackPanel><TextBlock Classes="axis" Text="크기" /><ComboBox Width="170" SelectedIndex="{Binding UnetBaseIndex}"><ComboBoxItem>base16 (1.9M, 빠름)</ComboBoxItem><ComboBoxItem>base32 (7.8M, 정확)</ComboBoxItem></ComboBox></StackPanel>
+                            <StackPanel><TextBlock Classes="axis" Text="epochs" /><NumericUpDown Value="{Binding UnetEpochs}" Minimum="1" Increment="10" FormatString="0" /></StackPanel>
+                            <StackPanel><TextBlock Classes="axis" Text="batch" /><NumericUpDown Value="{Binding UnetBatch}" Minimum="1" Increment="1" FormatString="0" /></StackPanel>
+                            <StackPanel><TextBlock Classes="axis" Text="crop (16배수)" /><NumericUpDown Value="{Binding UnetCrop}" Minimum="64" Increment="64" FormatString="0" /></StackPanel>
+                            <StackPanel><TextBlock Classes="axis" Text="patience (0=끔)" /><NumericUpDown Value="{Binding UnetPatience}" Minimum="0" Increment="10" FormatString="0" /></StackPanel>
+                            <Button VerticalAlignment="Bottom" Content="U-Net 학습 시작" Classes="accent" Command="{Binding StartUnetTrainCommand}" IsEnabled="{Binding TorchReady}" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <StackPanel><TextBlock Classes="axis" Text="모달리티" /><ComboBox Width="90" SelectedIndex="{Binding ExportModalityIndex}"><ComboBoxItem>RGB</ComboBoxItem><ComboBoxItem>IR</ComboBoxItem></ComboBox></StackPanel>
+                            <Button VerticalAlignment="Bottom" Content="{Binding UnetExportButtonText}" Command="{Binding StartUnetExportCommand}" IsEnabled="{Binding TorchReady}" />
+                        </StackPanel>
+                        <TextBlock Classes="hint" TextWrapping="Wrap" Text="내보낸 모델은 용접 추적·비교평가에서 검출 방식 'U-Net' 으로 사용됩니다. 진행 로그는 아래 로그 창에 표시됩니다(Epoch k/N · val_dice)." />
+                    </StackPanel>
+                </TabItem>
+
                 <!-- ④ 추론 -->
                 <TabItem Header="④ 추론 · 검증">
                     <StackPanel Spacing="8" Margin="0,8,0,0">

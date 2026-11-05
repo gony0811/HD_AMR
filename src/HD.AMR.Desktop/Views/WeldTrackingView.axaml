@@ -85,6 +85,7 @@
                                 <ComboBoxItem>🧠 DL 모델</ComboBoxItem>
                                 <ComboBoxItem>⚙ 파라미터(CV)</ComboBoxItem>
                                 <ComboBoxItem>〰 Ridge 필터(학습 불필요)</ComboBoxItem>
+                                <ComboBoxItem>🧩 U-Net 세그멘테이션</ComboBoxItem>
                             </ComboBox>
                             <!-- 진행축 = 용접선(비드)이 뻗은 방향. Peak 선은 이 축에 수직으로 그려진다.
                                  시퀀스 실행 시 검사방향으로 자동 설정되며, 여기서는 수동 시험용으로 바꾼다. -->

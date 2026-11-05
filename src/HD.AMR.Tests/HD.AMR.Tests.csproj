@@ -26,4 +26,9 @@
     <ProjectReference Include="..\HD.AMR.App\HD.AMR.App.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- UnetSegmenterTests: 입력 밝기>0.5 면 양성 logit 을 내는 168B 그래프(H/W 동적). -->
+    <None Include="TestData\threshold_unet.onnx" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
