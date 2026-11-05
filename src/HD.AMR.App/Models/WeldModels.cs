@@ -44,6 +44,9 @@ public enum WeldThresholdMethod { Otsu, Adaptive, Canny }
 /// <summary>위치 오차 d 의 기준선.</summary>
 public enum WeldReferenceMode { FovCenter, PeakLine }
 
+/// <summary>중심선 직선 피팅 방식.</summary>
+public enum WeldLineFitMode { Ransac, LeastSquares }
+
 /// <summary>비드 검출 방식. Param=고전 CV 파라미터 이진화, Dl=학습된 YOLOv8-seg 모델 추론.</summary>
 public enum WeldDetectionMethod { Param, Dl }
 
@@ -80,6 +83,19 @@ public sealed class WeldDetectionParams
 
     /// <summary>centerline 이동평균 윈도(0/1=끔).</summary>
     public int SmoothingWindow { get; set; } = 5;
+
+    // ── 중심선 직선 피팅(마스크 공통 후처리 — Param/DL 등 모든 검출 방식에 적용) ──────────
+    /// <summary>직선 피팅 방식. Ransac=슬라이스별 모든 비드 run 을 후보로 반사·끊김에 강하게, LeastSquares=기존(최장 run 최소제곱).</summary>
+    public WeldLineFitMode LineFit { get; set; } = WeldLineFitMode.Ransac;
+
+    /// <summary>RANSAC inlier 허용 거리(px, cross 방향).</summary>
+    public double RansacInlierPx { get; set; } = 3.0;
+
+    /// <summary>RANSAC 허용 기울기(진행축 대비 °). 비드는 진행축과 거의 평행하므로 이보다 기운 후보선은 버린다.</summary>
+    public double RansacMaxAngleDeg { get; set; } = 20.0;
+
+    /// <summary>RANSAC 후보 run 최소 길이(px). 이보다 짧은 run(점 잡음)은 후보에서 제외.</summary>
+    public int RansacMinRunPx { get; set; } = 2;
 
     // ── DL 검출(YOLOv8-seg) 전용 ─────────────────────────────────────────────
     // 아래 값들은 WeldDetectionMethod.Dl 에서만 사용된다(고전 CV 경로는 무시).

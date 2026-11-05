@@ -81,6 +81,7 @@ public sealed class WeldDetectionBenchmarkService
             var baseParams = _weld.Params.Clone();
             baseParams.Mode = modality == "ir" ? WeldImageMode.Ir
                 : baseParams.Mode == WeldImageMode.Ir ? WeldImageMode.RgbGrayscale : baseParams.Mode;
+            if (opt.LineFit is { } fitMode) baseParams.LineFit = fitMode;   // null = 운영값 유지
             bool horiz = baseParams.ProgressAxis == WeldProgressAxis.Horizontal;
             var weldRoi = opt.UseWeldRoi ? _weld.WeldRoi : null;
 
@@ -110,10 +111,11 @@ public sealed class WeldDetectionBenchmarkService
 
             var summaries = methods.Select(m => Summarize(m, items.Where(i => i.Method == m).ToList())).ToList();
             string? csv = null;
-            try { csv = WriteCsv(paths, modality, items, summaries); }
+            try { csv = WriteCsv(paths, modality, baseParams.LineFit, items, summaries); }
             catch (Exception ex) { _log.LogWarning(ex, "비교평가 CSV 저장 실패"); }
 
-            var report = new BenchmarkReport(DateTime.Now, modality, stems.Count, opt, items, summaries, csv, warning);
+            var report = new BenchmarkReport(DateTime.Now, modality, stems.Count, opt, items, summaries, csv, warning,
+                baseParams.LineFit);
             LastReport = report;
             return report;
         }
@@ -187,12 +189,12 @@ public sealed class WeldDetectionBenchmarkService
             items.Count == 0 ? double.NaN : items.Average(i => (double)i.Millis));
     }
 
-    private static string WriteCsv(TrainingPaths paths, string modality, IReadOnlyList<BenchmarkItem> items,
+    private static string WriteCsv(TrainingPaths paths, string modality, WeldLineFitMode fit, IReadOnlyList<BenchmarkItem> items,
         IReadOnlyList<MethodSummary> summaries)
     {
         var dir = Path.Combine(paths.Workspace, "bench");
         Directory.CreateDirectory(dir);
-        var file = Path.Combine(dir, $"bench_{DateTime.Now:yyyyMMdd_HHmmss}_{modality}.csv");
+        var file = Path.Combine(dir, $"bench_{DateTime.Now:yyyyMMdd_HHmmss}_{modality}_{fit}.csv");
         string F(double v) => double.IsNaN(v) || double.IsInfinity(v) ? "" : v.ToString("0.###", CultureInfo.InvariantCulture);
         var sb = new StringBuilder();
         sb.AppendLine("stem,method,success,detected,pass,angle_deg,center_offset_px,mean_dist_px,coverage,ms,message");
@@ -218,7 +220,8 @@ public sealed record BenchmarkOptions(
     bool ValOnly = false,
     bool UseWeldRoi = false,
     double AngleTolDeg = WeldLineMetrics.DefaultAngleTolDeg,
-    double CenterTolPx = WeldLineMetrics.DefaultCenterTolPx);
+    double CenterTolPx = WeldLineMetrics.DefaultCenterTolPx,
+    WeldLineFitMode? LineFit = null);
 
 /// <summary>촬영본 1장 × 방식 1개의 결과. Overlay = 검출 오버레이 + 정답(초록) JPEG.</summary>
 public sealed record BenchmarkItem(string Stem, WeldDetectionMethod Method, bool Success, string? Message,
@@ -233,4 +236,5 @@ public sealed record MethodSummary(WeldDetectionMethod Method, int Count, int De
 }
 
 public sealed record BenchmarkReport(DateTime At, string Modality, int ImageCount, BenchmarkOptions Options,
-    IReadOnlyList<BenchmarkItem> Items, IReadOnlyList<MethodSummary> Summaries, string? CsvPath, string? Warning);
+    IReadOnlyList<BenchmarkItem> Items, IReadOnlyList<MethodSummary> Summaries, string? CsvPath, string? Warning,
+    WeldLineFitMode LineFit = WeldLineFitMode.Ransac);

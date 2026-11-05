@@ -29,6 +29,7 @@ public sealed partial class WeldBenchmarkViewModel : ViewModelBase
     [ObservableProperty] private double _angleTol = WeldLineMetrics.DefaultAngleTolDeg;
     [ObservableProperty] private double _centerTol = WeldLineMetrics.DefaultCenterTolPx;
     [ObservableProperty] private bool _failOnly;
+    [ObservableProperty] private int _lineFitIndex;              // 0 운영값, 1 RANSAC, 2 최소제곱
     [ObservableProperty] private int _labeledCount;
     [ObservableProperty] private bool _running;
     [ObservableProperty] private double _progress;
@@ -86,7 +87,8 @@ public sealed partial class WeldBenchmarkViewModel : ViewModelBase
         });
         try
         {
-            var opt = new BenchmarkOptions(Modality, methods, ValOnly, UseWeldRoi, AngleTol, CenterTol);
+            WeldLineFitMode? fit = LineFitIndex switch { 1 => WeldLineFitMode.Ransac, 2 => WeldLineFitMode.LeastSquares, _ => null };
+            var opt = new BenchmarkOptions(Modality, methods, ValOnly, UseWeldRoi, AngleTol, CenterTol, fit);
             var r = await _bench.RunAsync(opt, prog, _cts.Token);
             ShowReport(r);
             Notify(r.Warning ?? $"완료 — 촬영본 {r.ImageCount}장 × {methods.Count}방식", r.Warning is not null);
@@ -107,6 +109,7 @@ public sealed partial class WeldBenchmarkViewModel : ViewModelBase
             Summaries.Add(new SummaryRow(s));
         ReportInfo = $"{r.At:yyyy-MM-dd HH:mm:ss} · {r.Modality.ToUpperInvariant()} · 촬영본 {r.ImageCount}장" +
                      $"{(r.Options.ValOnly ? " · val만" : "")}{(r.Options.UseWeldRoi ? " · Weld ROI" : " · 전체 프레임")}" +
+                     $" · 직선 피팅 {(r.LineFit == WeldLineFitMode.Ransac ? "RANSAC" : "최소제곱")}" +
                      $" · 합격 기준 각도≤{r.Options.AngleTolDeg:0.#}° 중심≤{r.Options.CenterTolPx:0.#}px" +
                      (r.CsvPath is null ? "" : $"\nCSV: {r.CsvPath}");
         OnPropertyChanged(nameof(HasReport));

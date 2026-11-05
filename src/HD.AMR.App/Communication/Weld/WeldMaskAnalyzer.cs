@@ -37,6 +37,11 @@ public static class WeldMaskAnalyzer
         var runLen = new int[sCount];     // 그 run 길이(=비드 폭). 라벨 초안 마스크용.
         var valid = new bool[sCount];
         int validCount = 0;
+        bool ransac = p.LineFit == WeldLineFitMode.Ransac;
+        // RANSAC 후보: 슬라이스별 모든 run(최장 run 만이 아니라 반사로 끊긴 비드 조각까지). Tag = runs 인덱스.
+        var cands = ransac ? new List<RobustLineFit.Candidate>() : null;
+        var runs = ransac ? new List<(int Start, int Len)>() : null;
+        int minRun = Math.Max(1, p.RansacMinRunPx);
 
         for (int s = 0; s < sCount; s++)
         {
@@ -53,8 +58,13 @@ public static class WeldMaskAnalyzer
                     curLen++;
                     if (curLen > bestLen) { bestLen = curLen; bestStart = curStart; }
                 }
-                else { curStart = -1; curLen = 0; }
+                else
+                {
+                    if (curLen >= minRun) AddCand(s, curStart, curLen);
+                    curStart = -1; curLen = 0;
+                }
             }
+            if (curStart >= 0 && curLen >= minRun) AddCand(s, curStart, curLen);
             if (bestStart >= 0)
             {
                 centerCross[s] = bestStart + (bestLen - 1) / 2.0;
@@ -63,6 +73,13 @@ public static class WeldMaskAnalyzer
                 valid[s] = true;
                 validCount++;
             }
+        }
+
+        void AddCand(int sl, int start, int len)
+        {
+            if (cands is null || runs is null) return;
+            cands.Add(new RobustLineFit.Candidate(sl, start + (len - 1) / 2.0, runs.Count));
+            runs.Add((start, len));
         }
 
         double coverage = sCount > 0 ? (double)validCount / sCount : 0;
@@ -74,8 +91,31 @@ public static class WeldMaskAnalyzer
                 OverlayJpeg = EncodeOverlay(bgr, roi, p, null, double.NaN, double.NaN, double.NaN, peakProgressPos, peakLabel, peakRoi, peakCrossStart, peakCrossEnd),
             };
 
-        // 이동평균 smoothing
-        if (p.SmoothingWindow >= 2)
+        // RANSAC: 가장 많은 슬라이스를 일직선으로 지나는 run 들을 골라 centerCross/valid/run 을 그것으로 교체.
+        // 실패하면 기존 최장 run + 최소제곱 경로로 폴백.
+        double confidence = coverage;
+        double ra = 0, rb = 0;
+        bool ransacOk = false;
+        if (ransac && cands is { Count: >= 2 } && runs is not null)
+        {
+            var fit = RobustLineFit.Fit(cands, p.RansacInlierPx, p.RansacMaxAngleDeg);
+            if (fit.Ok)
+            {
+                ransacOk = true; ra = fit.A; rb = fit.B;
+                Array.Clear(valid);
+                validCount = 0;
+                foreach (var (sl, c) in fit.Chosen)
+                {
+                    var (st, ln) = runs[c.Tag];
+                    centerCross[sl] = c.Cross; runStart[sl] = st; runLen[sl] = ln;
+                    valid[sl] = true; validCount++;
+                }
+                confidence = (double)fit.InlierSlices / sCount;
+            }
+        }
+
+        // 이동평균 smoothing(최소제곱 경로 전용 — RANSAC 은 이미 직선 inlier 만 남김)
+        if (!ransacOk && p.SmoothingWindow >= 2)
             SmoothValid(centerCross, valid, p.SmoothingWindow);
 
         // 기준선(d 의 기준): Peak 모드면 Peak 중심선, 아니면 FOV(전체 화면) 가로/세로 센터선(회색 점선).
@@ -85,7 +125,7 @@ public static class WeldMaskAnalyzer
             : (horiz ? fullH : fullW) / 2.0;
 
         // 비드 중심선을 '직선'으로: 유효 (s, cross) 점들에 최소제곱 직선 피팅(cross ≈ a·s + b).
-        var (a, b, fitOk) = FitLine(centerCross, valid, sCount);
+        var (a, b, fitOk) = ransacOk ? (ra, rb, true) : FitLine(centerCross, valid, sCount);
 
         // 측정 진행축 위치 = 자홍 Peak 선 위치(캡처 시 전달됨). 없으면 ROI 중앙. full→ROI-local 변환·클램프.
         double targetS = peakProgressPos is { } pp0 && !double.IsNaN(pp0)
@@ -160,7 +200,7 @@ public static class WeldMaskAnalyzer
         return new WeldDetectionResult
         {
             Success = true,
-            Confidence = Math.Clamp(coverage, 0, 1),
+            Confidence = Math.Clamp(confidence, 0, 1),
             LineFitOk = fitOk,
             Centerline = pts,
             ReferencePos = refPos,
