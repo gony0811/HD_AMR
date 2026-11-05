@@ -292,6 +292,7 @@ app.MapGet("/camera/status", (CameraService svc) => Results.Json(new
     svc.IsConnected,
     svc.IsStreaming,
     svc.IsIrActive,
+    svc.IsEmitterAlternating,
     svc.ConnectionType,
     lastFrameMsAgo = (DateTime.UtcNow - svc.LastFrameAt).TotalMilliseconds,
     color = svc.LatestColor is null ? null : (object)new

@@ -38,6 +38,8 @@ public class CameraService : BackgroundService
     public CameraFrame? LatestIr => _client.LatestIr;
     /// <summary>IR 스트림이 실제로 활성화되어 프레임을 받는 중인지.</summary>
     public bool IsIrActive => _client.IsIrActive;
+    /// <summary>이미터 ON/OFF 교번 중이면 true — LatestIr 는 도트 없는(이미터 OFF) 프레임.</summary>
+    public bool IsEmitterAlternating => _client.IsEmitterAlternating;
     public DateTime LastFrameAt => _client.LastFrameAt;
     public string? ConnectionType => _client.ConnectionType;
 

@@ -41,6 +41,12 @@ public class RealSenseClient : IDisposable
     // IR 스트림이 실제로 활성화됐는지. IR 은 best-effort 라 실패 시 false 로 두고 컬러/깊이만 운용.
     private volatile bool _irActive;
 
+    // 이미터 ON/OFF 교번이 실제로 적용됐는지(StartStream 시 결정). true 면 프레임별 이미터 상태로
+    // 깊이(ON)/IR(OFF) 갱신을 나눈다. 판정기는 RunAsync 스레드에서만 접근.
+    private volatile bool _emitterAlternating;
+    private readonly EmitterFrameClassifier _emitterClassifier = new();
+    private bool _loggedEmitterSource;
+
     // USB 연결 협상 속도("USB3.2"/"USB2.1"/…). D435 는 USB 3.0 필요 — USB2.x 면 고해상도 모드가
     // 아예 없어 프레임이 전혀 안 올 수 있어 진단용으로 노출.
     private string? _connectionType;
@@ -70,6 +76,8 @@ public class RealSenseClient : IDisposable
     public CameraFrame? LatestIr => _latestIr;
     /// <summary>IR 스트림이 실제로 활성화되어 프레임을 받는 중인지.</summary>
     public bool IsIrActive => _irActive;
+    /// <summary>이미터 ON/OFF 교번 중인지. true 면 <see cref="LatestIr"/> 는 이미터 OFF(도트 없는) 프레임이다.</summary>
+    public bool IsEmitterAlternating => _emitterAlternating;
     public DateTime LastFrameAt => _lastFrameAt;
     public string? ConnectionType => _connectionType;
     public RealSenseSettings Settings => _settings;
@@ -290,6 +298,8 @@ public class RealSenseClient : IDisposable
             _loggedFirstColor = false;
             _loggedFirstDepth = false;
             _loggedFirstIr = false;
+            _loggedEmitterSource = false;
+            _emitterClassifier.Reset();
             _logger.LogInformation("{Name} 스트림 시작", _settings.Name);
         }
         finally
@@ -347,6 +357,31 @@ public class RealSenseClient : IDisposable
                     {
                         sensor.Options[Option.EmitterEnabled].Value = _settings.EnableEmitter ? 1f : 0f;
                         _logger.LogInformation("{Name} IR 이미터 = {On}", _settings.Name, _settings.EnableEmitter);
+                    }
+
+                    // 이미터 ON/OFF 교번 — ON 프레임은 깊이, OFF 프레임은 IR(용접선)에 사용.
+                    // IR 이 없으면 OFF 프레임을 쓸 곳이 없어 깊이 FPS 만 반토막 나므로 켜지 않는다.
+                    _emitterAlternating = false;
+                    if (sensor.Options.Supports(Option.EmitterOnOff))
+                    {
+                        bool want = _settings.EmitterAlternate && _settings.EnableEmitter && _irActive;
+                        try
+                        {
+                            sensor.Options[Option.EmitterOnOff].Value = want ? 1f : 0f;
+                            _emitterAlternating = want;
+                            if (want)
+                                _logger.LogInformation(
+                                    "{Name} 이미터 ON/OFF 교번 활성 — ON 프레임=깊이, OFF 프레임=IR (각 유효 FPS 절반)",
+                                    _settings.Name);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "{Name} 이미터 교번 적용 실패 — 상시 모드로 진행", _settings.Name);
+                        }
+                    }
+                    else if (_settings.EmitterAlternate)
+                    {
+                        _logger.LogWarning("{Name} 펌웨어가 EmitterOnOff 를 지원하지 않음 — 교번 없이 진행", _settings.Name);
                     }
 
                     if (_settings.LaserPower >= 0f && sensor.Options.Supports(Option.LaserPower))
@@ -458,6 +493,7 @@ public class RealSenseClient : IDisposable
             try { _pipeline?.Stop(); }
             catch (Exception ex) { _logger.LogWarning(ex, "{Name} pipeline stop 경고", _settings.Name); }
             _streaming = false;
+            _emitterAlternating = false;
             SafeDispose(ref _profile);
             // 정지 시점에 잔존하던 프레임 스냅샷을 비워 UI 가 즉시 "정지" 상태로 보이도록.
             Interlocked.Exchange(ref _latestColor, null);
@@ -542,8 +578,19 @@ public class RealSenseClient : IDisposable
                         using (frames)
                         {
                             if (_settings.EnableColor) TrySwapColor(frames);
-                            if (_settings.EnableDepth) TrySwapDepth(frames, ref depthFilters);
-                            if (_irActive) TrySwapIr(frames);
+                            if (_emitterAlternating)
+                            {
+                                // 교번: ON 프레임 → 깊이만, OFF 프레임 → IR 만. 판정 보류(null)면 둘 다 건너뜀
+                                // (도트 섞인 IR 이나 이미터 없는 깊이가 검출기에 들어가는 것을 막는다).
+                                var on = ClassifyEmitter(frames);
+                                if (on == true && _settings.EnableDepth) TrySwapDepth(frames, ref depthFilters);
+                                else if (on == false) TrySwapIr(frames);
+                            }
+                            else
+                            {
+                                if (_settings.EnableDepth) TrySwapDepth(frames, ref depthFilters);
+                                if (_irActive) TrySwapIr(frames);
+                            }
                         }
 
                         // 첫 color/depth/ir 프레임을 1회씩 로그 — 어느 스트림이 실제로 들어오는지,
@@ -640,6 +687,44 @@ public class RealSenseClient : IDisposable
         Interlocked.Exchange(ref _latestDepth, snap);
     }
 
+    /// <summary>
+    /// 이 프레임셋이 이미터 ON 인지 판정. 1순위 IR 프레임 메타데이터(FrameEmitterMode → FrameLaserPowerMode),
+    /// 없으면 IR 도트 에너지 폴백. Windows 에서 메타데이터가 안 오면 librealsense 의
+    /// <c>realsense_metadata_win10.ps1</c> 로 UVC 메타데이터를 1회 등록하면 1순위 경로가 활성화된다.
+    /// </summary>
+    private bool? ClassifyEmitter(FrameSet frames)
+    {
+        using var ir = frames.InfraredFrame;
+        if (ir is null) return null;
+
+        foreach (var key in new[] { FrameMetadataValue.FrameEmitterMode, FrameMetadataValue.FrameLaserPowerMode })
+        {
+            try
+            {
+                if (!ir.SupportsFrameMetaData(key)) continue;
+                var v = ir.GetFrameMetadata(key);
+                if (!_loggedEmitterSource)
+                {
+                    _loggedEmitterSource = true;
+                    _logger.LogInformation("{Name} 이미터 상태 판정: 프레임 메타데이터({Key})", _settings.Name, key);
+                }
+                return v != 0;   // 0=OFF, 그 외(1=레이저 등)=ON
+            }
+            catch { /* 다음 키 / 폴백 */ }
+        }
+
+        var snap = ExtractTightRows(ir, bytesPerPixel: 1, "ir8");
+        if (snap is null) return null;
+        if (!_loggedEmitterSource)
+        {
+            _loggedEmitterSource = true;
+            _logger.LogWarning(
+                "{Name} 프레임 메타데이터 없음 — IR 도트 에너지로 이미터 상태 판정(폴백). Windows 는 " +
+                "librealsense scripts/realsense_metadata_win10.ps1 등록을 권장합니다.", _settings.Name);
+        }
+        return _emitterClassifier.ClassifyByEnergy(snap.Pixels, snap.Width, snap.Height);
+    }
+
     private void TrySwapIr(FrameSet frames)
     {
         using var frame = frames.InfraredFrame;
@@ -692,6 +777,7 @@ public class RealSenseClient : IDisposable
         _streaming = false;
         _connected = false;
         _irActive = false;
+        _emitterAlternating = false;
 
         SafeDispose(ref _profile);
         SafeDispose(ref _config);
