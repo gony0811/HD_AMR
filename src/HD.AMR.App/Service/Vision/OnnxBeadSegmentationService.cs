@@ -118,38 +118,38 @@ internal static class YoloSeg
     public static (Mat Mask, int Count, float MaxScore) Decode(
         InferenceSession sess, Mat bgr, float conf, float iou, float maskThr)
     {
-        // 입력 정사각 크기(S)를 모델 입력 메타데이터에서 자동으로 읽는다 → export imgsz 와 자동 일치.
-        // 값을 바꿔 학습/내보내기해도 추론이 따라간다. 동적 차원(-1) 등으로 못 읽으면 640 폴백.
+        // 입력 크기(Sh×Sw)를 모델 입력 메타데이터에서 자동으로 읽는다 → export imgsz 와 자동 일치.
+        // 정사각(864×864)과 직사각(512×864) 내보내기 모두 지원. 동적 차원(-1) 등으로 못 읽으면 640 폴백.
         var inName = sess.InputMetadata.Keys.First();
-        int S = 640;
+        int Sh = 640, Sw = 640;
         var inDims = sess.InputMetadata[inName].Dimensions;
-        if (inDims is { Length: 4 } && inDims[2] > 0 && inDims[3] > 0) S = inDims[3];
+        if (inDims is { Length: 4 } && inDims[2] > 0 && inDims[3] > 0) { Sh = inDims[2]; Sw = inDims[3]; }
 
         int W = bgr.Width, H = bgr.Height;
-        double r = Math.Min((double)S / W, (double)S / H);
+        double r = Math.Min((double)Sw / W, (double)Sh / H);
         int newW = (int)Math.Round(W * r), newH = (int)Math.Round(H * r);
-        int dx = (S - newW) / 2, dy = (S - newH) / 2;
+        int dx = (Sw - newW) / 2, dy = (Sh - newH) / 2;
 
         using var resized = new Mat();
         Cv2.Resize(bgr, resized, new Size(newW, newH));
         using var lb = new Mat();
-        Cv2.CopyMakeBorder(resized, lb, dy, S - newH - dy, dx, S - newW - dx,
+        Cv2.CopyMakeBorder(resized, lb, dy, Sh - newH - dy, dx, Sw - newW - dx,
             BorderTypes.Constant, new Scalar(114, 114, 114));
 
-        // 입력 텐서 [1,3,S,S] — BGR→RGB, /255. 평면 순서 R,G,B.
-        var data = new float[3 * S * S];
-        int plane = S * S;
+        // 입력 텐서 [1,3,Sh,Sw] — BGR→RGB, /255. 평면 순서 R,G,B.
+        var data = new float[3 * Sh * Sw];
+        int plane = Sh * Sw;
         var idx = lb.GetGenericIndexer<Vec3b>();
-        for (int y = 0; y < S; y++)
-            for (int x = 0; x < S; x++)
+        for (int y = 0; y < Sh; y++)
+            for (int x = 0; x < Sw; x++)
             {
                 var p = idx[y, x];
-                int o = y * S + x;
+                int o = y * Sw + x;
                 data[o] = p.Item2 / 255f;             // R
                 data[plane + o] = p.Item1 / 255f;     // G
                 data[2 * plane + o] = p.Item0 / 255f; // B
             }
-        var input = new DenseTensor<float>(data, new[] { 1, 3, S, S });
+        var input = new DenseTensor<float>(data, new[] { 1, 3, Sh, Sw });
 
         using var results = sess.Run(new[] { NamedOnnxValue.CreateFromTensor(inName, input) });
 
@@ -210,8 +210,8 @@ internal static class YoloSeg
         }
 
         float maxScore = cand[keep[0]].score;
-        // 검출별 proto 마스크 합성 → 640 마스크 누적.
-        using var comb = new Mat(S, S, MatType.CV_8UC1, Scalar.All(0));
+        // 검출별 proto 마스크 합성 → 입력 해상도(Sh×Sw) 마스크 누적.
+        using var comb = new Mat(Sh, Sw, MatType.CV_8UC1, Scalar.All(0));
         foreach (var ci in keep)
         {
             var c = cand[ci];
@@ -228,18 +228,18 @@ internal static class YoloSeg
             using var mMat = new Mat(ph, pw, MatType.CV_32FC1);
             mMat.SetArray(mm);
             using var up = new Mat();
-            Cv2.Resize(mMat, up, new Size(S, S));
+            Cv2.Resize(mMat, up, new Size(Sw, Sh));
             using var bin = new Mat();
             Cv2.Compare(up, new Scalar(maskThr), bin, CmpType.GT); // 8UC1: 255 where prob>thr
 
             // 박스 영역만 남기고 누적(박스 밖 마스크 노이즈 제거).
-            int bx1 = Math.Clamp((int)Math.Floor(c.x1), 0, S - 1);
-            int by1 = Math.Clamp((int)Math.Floor(c.y1), 0, S - 1);
-            int bx2 = Math.Clamp((int)Math.Ceiling(c.x2), 1, S);
-            int by2 = Math.Clamp((int)Math.Ceiling(c.y2), 1, S);
+            int bx1 = Math.Clamp((int)Math.Floor(c.x1), 0, Sw - 1);
+            int by1 = Math.Clamp((int)Math.Floor(c.y1), 0, Sh - 1);
+            int bx2 = Math.Clamp((int)Math.Ceiling(c.x2), 1, Sw);
+            int by2 = Math.Clamp((int)Math.Ceiling(c.y2), 1, Sh);
             if (bx2 <= bx1 || by2 <= by1) continue;
             var rect = new Rect(bx1, by1, bx2 - bx1, by2 - by1);
-            using var boxMask = new Mat(S, S, MatType.CV_8UC1, Scalar.All(0));
+            using var boxMask = new Mat(Sh, Sw, MatType.CV_8UC1, Scalar.All(0));
             bin[rect].CopyTo(boxMask[rect]);
             Cv2.Max(comb, boxMask, comb);
         }

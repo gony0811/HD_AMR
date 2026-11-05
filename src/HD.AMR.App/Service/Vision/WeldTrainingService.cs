@@ -319,7 +319,18 @@ public sealed class WeldTrainingService
     /// 표본이 적을 때 mosaic 은 오히려 학습을 방해하므로 기본 권장값은 true.
     /// </param>
     /// <param name="brightAug">밝기/채도 증강 강화(조명·노출 편차 대응). 회전 등 기하 증강과 독립적으로 켤 수 있다.</param>
-    public async Task StartTrainingAsync(int epochs, int imgsz, int batch, string baseModel, bool minimalAug, bool brightAug)
+    public Task StartTrainingAsync(int epochs, int imgsz, int batch, string baseModel, bool minimalAug, bool brightAug)
+        => StartTrainingAsync(epochs, imgsz, batch, baseModel,
+            minimalAug ? TrainingAugmentation.Minimal : TrainingAugmentation.Full, brightAug, patience: 0);
+
+    /// <param name="aug">
+    /// 증강 프리셋. <see cref="TrainingAugmentation.Line"/>(권장): mosaic 끔 + 상하/좌우 뒤집기·소각 회전·이동·
+    /// 스케일·밝기 — 가는 선이 쪼개지거나 이어 붙지 않으면서 위치·각도·조명 변화에 일반화. Minimal: 과적합 검증용.
+    /// Full: ultralytics 기본(mosaic 포함 — 가는 선 데이터에는 비권장).
+    /// </param>
+    /// <param name="patience">val 지표가 이 epoch 동안 개선되지 않으면 조기 종료(0=끔). val 이 train 과 같으면 의미 없음.</param>
+    public async Task StartTrainingAsync(int epochs, int imgsz, int batch, string baseModel,
+        TrainingAugmentation aug, bool brightAug, int patience)
     {
         if (IsBusy) throw new InvalidOperationException("이미 실행 중인 작업이 있습니다.");
         var paths = await GetPathsAsync() ?? throw new InvalidOperationException("캡처 폴더 미설정");
@@ -331,24 +342,29 @@ public sealed class WeldTrainingService
         await File.WriteAllTextAsync(script, TrainPy);
 
         var py = await GetPythonAsync();
-        var aug = minimalAug ? "min" : "full";
+        var augKey = aug switch { TrainingAugmentation.Minimal => "min", TrainingAugmentation.Line => "line", _ => "full" };
         var args = new[]
         {
             script, baseModel, dataYaml, imgsz.ToString(), epochs.ToString(),
-            batch.ToString(), "cpu", paths.Runs, "hd", aug, brightAug ? "1" : "0"
+            batch.ToString(), "cpu", paths.Runs, "hd", augKey, brightAug ? "1" : "0", Math.Max(0, patience).ToString()
         };
         // 진행 상태 초기화(진행 바·ETA).
         TrainTotalEpochs = epochs;
         TrainCurrentEpoch = 0;
         TrainStartUtc = DateTime.UtcNow;
         TrainEndUtc = null;
-        Emit($"[학습] 시작 — model={baseModel} epochs={epochs} imgsz={imgsz} batch={batch} device=cpu 증강={(minimalAug ? "최소" : "기본")} 밝기증강={(brightAug ? "켬" : "끔")}");
+        Emit($"[학습] 시작 — model={baseModel} epochs={epochs} imgsz={imgsz} batch={batch} device=cpu 증강={aug} 밝기증강={(brightAug ? "켬" : "끔")} patience={(patience > 0 ? patience : "끔")}");
         StartProcess(py, args, paths.Workspace, TrainingPhase.Training, "학습");
     }
 
     // ── ③ ONNX 내보내기 ──────────────────────────────────────────────────────
     /// <param name="modality">"ir"/"rgb" — 출력 파일명 weld_seg_{modality}.onnx (IR/RGB 모델 동시 보관).</param>
-    public async Task StartExportAsync(int opset = 12, int imgsz = 640, string? modality = null)
+    /// <param name="imgsz">입력 크기(긴 변). 0 이면 학습 때 쓴 imgsz 를 best.pt 에서 읽어 자동으로 맞춘다.</param>
+    /// <param name="rect">
+    /// true 면 데이터셋 이미지 비율로 직사각 입력([h,w], 32 배수)으로 내보낸다. 848×480 이면 864 학습 → 512×864 —
+    /// 정사각 864×864 대비 레터박스 여백 계산이 빠져 CPU 추론이 약 40% 빨라진다(합성곱 모델이라 정확도 동일).
+    /// </param>
+    public async Task StartExportAsync(int opset = 12, int imgsz = 640, string? modality = null, bool rect = false)
     {
         if (IsBusy) throw new InvalidOperationException("이미 실행 중인 작업이 있습니다.");
         modality = modality == "rgb" ? "rgb" : modality == "ir" ? "ir" : LastConvertedModality;
@@ -362,9 +378,16 @@ public sealed class WeldTrainingService
 
         var py = await GetPythonAsync();
         var outName = $"weld_seg_{modality}.onnx";
-        var args = new[] { script, best, opset.ToString(), imgsz.ToString(), paths.Models, outName };
+        var spec = imgsz.ToString();
+        if (rect)
+        {
+            var size = DatasetImageSize(paths.Dataset);
+            if (size is { } sz) spec = $"rect:{imgsz}:{sz.W}x{sz.H}";
+            else Emit("[내보내기] 데이터셋 이미지를 찾지 못해 정사각 입력으로 내보냅니다.");
+        }
+        var args = new[] { script, best, opset.ToString(), spec, paths.Models, outName };
         TrainTotalEpochs = 0; // 내보내기는 epoch 진행 개념 없음.
-        Emit($"[내보내기] 시작 — {best} → {outName} (opset {opset}, imgsz {imgsz})");
+        Emit($"[내보내기] 시작 — {best} → {outName} (opset {opset}, imgsz {(imgsz > 0 ? imgsz : "학습값")}{(rect ? ", 직사각" : "")})");
         StartProcess(py, args, paths.Workspace, TrainingPhase.Exporting, "내보내기");
     }
 
@@ -474,6 +497,33 @@ public sealed class WeldTrainingService
         catch (Exception ex) { return (false, "", ex.Message); }
     }
 
+    /// <summary>데이터셋 첫 이미지의 (W,H). 직사각 내보내기 비율 산출용. 없으면 null.</summary>
+    private static (int W, int H)? DatasetImageSize(string dataset)
+    {
+        foreach (var sub in new[] { "train", "val" })
+        {
+            var dir = Path.Combine(dataset, "images", sub);
+            if (!Directory.Exists(dir)) continue;
+            var f = Directory.GetFiles(dir, "*.png").OrderBy(x => x).FirstOrDefault();
+            if (f is null) continue;
+            using var m = CvIo.ReadMat(f, ImreadModes.Unchanged);
+            if (!m.Empty()) return (m.Width, m.Height);
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// 직사각 내보내기 입력 크기 [h, w]. 긴 변 = size, 짧은 변 = size·(짧은/긴) 을 32 배수로 올림.
+    /// 학습 레터박스와 같은 축척이 되도록 긴 변 기준(ExportPy 와 같은 규칙 — 테스트용으로 C# 에도 둔다).
+    /// </summary>
+    public static (int H, int W) RectExportSize(int size, int imgW, int imgH)
+    {
+        int Up32(double v) => (int)Math.Ceiling(v / 32.0) * 32;
+        return imgW >= imgH
+            ? (Math.Min(size, Up32(size * (double)imgH / imgW)), size)
+            : (size, Math.Min(size, Up32(size * (double)imgW / imgH)));
+    }
+
     private static void RecreateDir(string path)
     {
         if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
@@ -484,28 +534,54 @@ public sealed class WeldTrainingService
     private const string TrainPy =
         "import sys\n" +
         "from ultralytics import YOLO\n" +
-        "model, data, imgsz, epochs, batch, device, project, name, aug, bright = sys.argv[1:11]\n" +
+        "a = sys.argv[1:]\n" +
+        "model, data, imgsz, epochs, batch, device, project, name, aug, bright = a[:10]\n" +
+        "patience = int(a[10]) if len(a) > 10 else 0\n" +
         "kw = dict(data=data, imgsz=int(imgsz), epochs=int(epochs), batch=int(batch),\n" +
-        "          device=device, project=project, name=name, exist_ok=True, plots=True)\n" +
+        "          device=device, project=project, name=name, exist_ok=True, plots=True, single_cls=True)\n" +
+        "if patience > 0:\n" +
+        "    kw.update(patience=patience)\n" +
         "if aug == 'min':\n" +
         "    kw.update(mosaic=0.0, close_mosaic=0, hsv_h=0.0, hsv_s=0.0, hsv_v=0.2,\n" +
         "              translate=0.0, scale=0.0, fliplr=0.0, erasing=0.0)\n" +
+        "elif aug == 'line':\n" +
+        "    # 가는 선 전용: mosaic/copy-paste/erasing 은 선을 끊거나 엉뚱하게 이어 붙여 끔.\n" +
+        "    # 뒤집기·소각 회전·이동·스케일·밝기로 위치·각도·조명 일반화(진행축 가로/세로는 90° 회전 증강본으로).\n" +
+        "    kw.update(mosaic=0.0, close_mosaic=0, mixup=0.0, copy_paste=0.0, erasing=0.0,\n" +
+        "              fliplr=0.5, flipud=0.5, degrees=8.0, translate=0.1, scale=0.25,\n" +
+        "              shear=0.0, perspective=0.0, hsv_h=0.0, hsv_s=0.0, hsv_v=0.4)\n" +
         "if bright == '1':\n" +
         "    kw.update(hsv_v=0.5, hsv_s=0.3)  # 밝기/채도 변동 강화(조명·노출 편차 대응)\n" +
         "YOLO(model).train(**kw)\n" +
         "print('TRAIN_DONE')\n";
 
+    // imgsz 인자: "0"=학습값 자동, "864"=정사각, "rect:{size}:{W}x{H}"=데이터 비율 직사각([h,w], 32 배수, size 0 이면 학습값).
     private const string ExportPy =
-        "import sys, shutil, os\n" +
+        "import sys, shutil, os, math\n" +
         "from ultralytics import YOLO\n" +
-        "best, opset, imgsz, outdir = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]\n" +
+        "best, opset, spec, outdir = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]\n" +
         "outname = sys.argv[5] if len(sys.argv) > 5 else 'weld_seg.onnx'\n" +
-        "path = YOLO(best).export(format='onnx', opset=opset, imgsz=imgsz)\n" +
+        "m = YOLO(best)\n" +
+        "tr = m.overrides.get('imgsz', 640)\n" +
+        "tr = int(max(tr)) if isinstance(tr, (list, tuple)) else int(tr)\n" +
+        "up32 = lambda v: int(math.ceil(v / 32.0) * 32)\n" +
+        "if spec.startswith('rect:'):\n" +
+        "    _, s, wh = spec.split(':')\n" +
+        "    s = int(s) or tr\n" +
+        "    W, H = map(int, wh.split('x'))\n" +
+        "    imgsz = [min(s, up32(s * H / W)), s] if W >= H else [s, min(s, up32(s * W / H))]\n" +
+        "else:\n" +
+        "    imgsz = int(spec) or tr\n" +
+        "print('EXPORT_IMGSZ', imgsz, '(train', tr, ')')\n" +
+        "path = m.export(format='onnx', opset=opset, imgsz=imgsz)\n" +
         "os.makedirs(outdir, exist_ok=True)\n" +
         "dst = os.path.join(outdir, outname)\n" +
         "shutil.copyfile(path, dst)\n" +
         "print('EXPORT_DONE', dst)\n";
 }
+
+/// <summary>학습 증강 프리셋.</summary>
+public enum TrainingAugmentation { Line, Minimal, Full }
 
 public enum TrainingPhase { Idle, Converting, Training, Exporting, Done, Error }
 

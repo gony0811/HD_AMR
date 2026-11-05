@@ -31,10 +31,14 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
     [ObservableProperty] private int _tabIndex;
     [ObservableProperty] private int _modalityIndex;         // ① 0 rgb, 1 ir
     [ObservableProperty] private int _rgbMasks, _irMasks;
-    [ObservableProperty] private int _epochs = 300, _imgsz = 640, _batch = 4;
-    [ObservableProperty] private bool _minimalAug = true, _brightAug;
-    [ObservableProperty] private int _baseModelIndex;        // 0 n, 1 s
-    [ObservableProperty] private int _opset = 12, _exportImgsz = 640;
+    // imgsz 864: IR 848×480 을 거의 원해상도로(640 이면 가는 비드가 0.75배로 줄고 proto 마스크도 성겨짐).
+    [ObservableProperty] private int _epochs = 300, _imgsz = 864, _batch = 4;
+    [ObservableProperty] private bool _brightAug;
+    [ObservableProperty] private int _augPresetIndex;        // 0 선 전용(권장), 1 최소, 2 ultralytics 기본
+    [ObservableProperty] private int _patience = 50;          // 조기 종료(0=끔)
+    [ObservableProperty] private int _baseModelIndex;        // 0 v8n, 1 v8s, 2 11n, 3 11s
+    [ObservableProperty] private int _opset = 12, _exportImgsz;   // 0 = 학습 imgsz 자동
+    [ObservableProperty] private bool _exportRect = true;    // 데이터 비율 직사각 입력(CPU 추론 가속)
     [ObservableProperty] private int _exportModalityIndex = 1;   // 0 rgb, 1 ir
     [ObservableProperty] private int _rotDirIndex;           // 0 cw, 1 ccw, 2 both
     [ObservableProperty] private string? _convertText, _rotText;
@@ -227,7 +231,9 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
     private async Task StartTrain()
     {
         Message = null;
-        try { await _train.StartTrainingAsync(Epochs, Imgsz, Batch, BaseModelIndex == 1 ? "yolov8s-seg.pt" : "yolov8n-seg.pt", MinimalAug, BrightAug); }
+        var model = BaseModelIndex switch { 1 => "yolov8s-seg.pt", 2 => "yolo11n-seg.pt", 3 => "yolo11s-seg.pt", _ => "yolov8n-seg.pt" };
+        var aug = AugPresetIndex switch { 1 => TrainingAugmentation.Minimal, 2 => TrainingAugmentation.Full, _ => TrainingAugmentation.Line };
+        try { await _train.StartTrainingAsync(Epochs, Imgsz, Batch, model, aug, BrightAug, Patience); }
         catch (Exception ex) { Notify($"학습 시작 실패: {ex.Message}", true); }
     }
 
@@ -235,7 +241,7 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
     private async Task StartExport()
     {
         Message = null;
-        try { await _train.StartExportAsync(Opset, ExportImgsz, ExportModality); }
+        try { await _train.StartExportAsync(Opset, ExportImgsz, ExportModality, ExportRect); }
         catch (Exception ex) { Notify($"내보내기 시작 실패: {ex.Message}", true); }
     }
 
