@@ -58,6 +58,37 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
             OnPropertyChanged();
         }
     }
+    /// <summary>DL conf/mask 임계값 — 진행축과 같이 서비스 값을 직접 읽고 쓴다(설정 시 파라미터 저장).</summary>
+    public double DlConfidence
+    {
+        get => _svc.Params.DlConfidence;
+        set
+        {
+            _svc.SetDlThresholds(value, _svc.Params.DlMaskThreshold);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(DlConfidenceText));
+        }
+    }
+
+    public double DlMaskThreshold
+    {
+        get => _svc.Params.DlMaskThreshold;
+        set
+        {
+            _svc.SetDlThresholds(_svc.Params.DlConfidence, value);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(DlMaskThresholdText));
+        }
+    }
+
+    public bool IsDlMethod => _svc.Method == WeldDetectionMethod.Dl;
+    public string DlConfidenceText => $"conf {_svc.Params.DlConfidence:0.00}";
+    public string DlMaskThresholdText => $"mask {_svc.Params.DlMaskThreshold:0.00}";
+    public double DlConfidenceMin => WeldTrackingService.DlConfidenceMin;
+    public double DlConfidenceMax => WeldTrackingService.DlConfidenceMax;
+    public double DlMaskThresholdMin => WeldTrackingService.DlMaskThresholdMin;
+    public double DlMaskThresholdMax => WeldTrackingService.DlMaskThresholdMax;
+
     private string DrawKind => DrawKindIndex == 1 ? "peak" : "weld";
     [ObservableProperty] private int _mx, _my, _mw, _mh;
     [ObservableProperty] private string _loadName = "";
@@ -117,8 +148,13 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
         OnPropertyChanged(nameof(IsStreaming));
         OnPropertyChanged(nameof(DetectorAvailable));
         OnPropertyChanged(nameof(MethodText));
+        OnPropertyChanged(nameof(IsDlMethod));
         OnPropertyChanged(nameof(StateText));
         OnPropertyChanged(nameof(ProgressAxisIndex));
+        OnPropertyChanged(nameof(DlConfidence));
+        OnPropertyChanged(nameof(DlMaskThreshold));
+        OnPropertyChanged(nameof(DlConfidenceText));
+        OnPropertyChanged(nameof(DlMaskThresholdText));
         OnPropertyChanged(nameof(WeldRoiText));
         OnPropertyChanged(nameof(PeakRoiText));
         OnPropertyChanged(nameof(WeldRoi));

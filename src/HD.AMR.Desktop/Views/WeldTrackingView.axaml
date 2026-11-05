@@ -93,6 +93,19 @@
                                 <ComboBoxItem>세로 (Peak 선 가로)</ComboBoxItem>
                             </ComboBox>
                         </StackPanel>
+                        <!-- DL 임계값 — DL 모델 방식에서만 쓰인다. 바꾸면 파라미터(Weld.Dl.*)에 저장되고 시퀀스도 같은 값을 쓴다. -->
+                        <Grid ColumnDefinitions="*,*" IsEnabled="{Binding IsDlMethod}">
+                            <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                                <TextBlock Classes="axis" Text="{Binding DlConfidenceText}" />
+                                <Slider Value="{Binding DlConfidence}" Minimum="{Binding DlConfidenceMin}" Maximum="{Binding DlConfidenceMax}"
+                                        TickFrequency="0.05" IsSnapToTickEnabled="True" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1">
+                                <TextBlock Classes="axis" Text="{Binding DlMaskThresholdText}" />
+                                <Slider Value="{Binding DlMaskThreshold}" Minimum="{Binding DlMaskThresholdMin}" Maximum="{Binding DlMaskThresholdMax}"
+                                        TickFrequency="0.05" IsSnapToTickEnabled="True" />
+                            </StackPanel>
+                        </Grid>
                         <StackPanel Orientation="Horizontal" Spacing="6">
                             <Button Content="1회 검출(Peak)" Classes="accent" Command="{Binding FindPeakCommand}" IsEnabled="{Binding !Busy}" />
                             <Button Content="#1 캡처" Command="{Binding CaptureCommand}" CommandParameter="1" IsEnabled="{Binding DetectorAvailable}" />
