@@ -48,7 +48,10 @@ public enum WeldReferenceMode { FovCenter, PeakLine }
 public enum WeldLineFitMode { Ransac, LeastSquares }
 
 /// <summary>비드 검출 방식. Param=고전 CV 파라미터 이진화, Dl=학습된 YOLOv8-seg 모델 추론.</summary>
-public enum WeldDetectionMethod { Param, Dl }
+public enum WeldDetectionMethod { Param, Dl, Ridge }
+
+/// <summary>Ridge 검출의 선 밝기 극성. Both=밝은/어두운 선 모두.</summary>
+public enum WeldRidgePolarity { Both, Bright, Dark }
 
 /// <summary>용접라인 검출 파라미터(명세서 8장). 1차 구현에 필요한 핵심 튜너블만.</summary>
 public sealed class WeldDetectionParams
@@ -96,6 +99,26 @@ public sealed class WeldDetectionParams
 
     /// <summary>RANSAC 후보 run 최소 길이(px). 이보다 짧은 run(점 잡음)은 후보에서 제외.</summary>
     public int RansacMinRunPx { get; set; } = 2;
+
+    // ── Ridge 검출(헤시안 가는 선 필터, 학습 불필요) 전용 ─────────────────────
+    /// <summary>ridge 스케일 σ 최소/최대(px). 비드 반폭 정도. 3px 폭이면 σ≈1.5, 8px 폭이면 σ≈4.</summary>
+    public double RidgeSigmaMin { get; set; } = 1.5;
+    public double RidgeSigmaMax { get; set; } = 4.0;
+
+    /// <summary>σ_min~σ_max 사이 스케일 개수(등비).</summary>
+    public int RidgeScales { get; set; } = 3;
+
+    /// <summary>선 밝기 극성. 정반사로 밝게도, 그늘로 어둡게도 보이므로 기본 Both.</summary>
+    public WeldRidgePolarity RidgePolarity { get; set; } = WeldRidgePolarity.Both;
+
+    /// <summary>선 방향 허용각(진행축 대비 °). 이보다 기운 선(코로게이션 모서리 등)은 응답 0.</summary>
+    public double RidgeMaxAngleDeg { get; set; } = 25.0;
+
+    /// <summary>전역 잡음 하한 = 중앙값 + k·MAD(로버스트 표준편차). 크면 확실한 선만, 작으면 약한 선까지.</summary>
+    public double RidgeThresholdK { get; set; } = 3.0;
+
+    /// <summary>슬라이스(진행축 1px 단위) 최대 응답 대비 이 비율 이상만 후보(0~1). 작으면 슬라이스당 후보가 많아진다.</summary>
+    public double RidgeRelative { get; set; } = 0.5;
 
     // ── DL 검출(YOLOv8-seg) 전용 ─────────────────────────────────────────────
     // 아래 값들은 WeldDetectionMethod.Dl 에서만 사용된다(고전 CV 경로는 무시).

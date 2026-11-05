@@ -21,7 +21,8 @@
             </ComboBox>
             <TextBlock Classes="axis" VerticalAlignment="Center" Margin="0,0,14,6" Text="{Binding LabeledCount, StringFormat='선 라벨 {0}장'}" />
             <CheckBox Margin="0,0,10,6" Content="Param (고전 CV)" IsChecked="{Binding UseParam}" IsEnabled="{Binding !Running}" />
-            <CheckBox Margin="0,0,14,6" Content="DL (YOLO-seg)" IsChecked="{Binding UseDl}" IsEnabled="{Binding !Running}" />
+            <CheckBox Margin="0,0,10,6" Content="DL (YOLO-seg)" IsChecked="{Binding UseDl}" IsEnabled="{Binding !Running}" />
+            <CheckBox Margin="0,0,14,6" Content="Ridge (헤시안 선 필터)" IsChecked="{Binding UseRidge}" IsEnabled="{Binding !Running}" />
             <CheckBox Margin="0,0,10,6" Content="검증셋(val)만" IsChecked="{Binding ValOnly}" IsEnabled="{Binding !Running}"
                       ToolTip.Tip="데이터셋 변환과 같은 세션 분리 규칙으로, 학습에 쓰지 않은 촬영본만 평가" />
             <CheckBox Margin="0,0,14,6" Content="Weld ROI 사용" IsChecked="{Binding UseWeldRoi}" IsEnabled="{Binding !Running}"
@@ -89,7 +90,7 @@
                     <ListBox ItemsSource="{Binding Stems}" SelectedItem="{Binding SelectedStem}" Height="560" FontFamily="monospace" FontSize="12">
                         <ListBox.ItemTemplate><DataTemplate x:DataType="vm:StemRow"><TextBlock Text="{Binding Label}" /></DataTemplate></ListBox.ItemTemplate>
                     </ListBox>
-                    <TextBlock Classes="axis" TextWrapping="Wrap" Text="✓/✗ = 방식별 합격 (P=Param, D=Dl). 오버레이의 초록 선이 정답." />
+                    <TextBlock Classes="axis" TextWrapping="Wrap" Text="✓/✗ = 방식별 합격 (P=Param, D=Dl, R=Ridge). 오버레이의 초록 선이 정답." />
                 </StackPanel>
                 <ScrollViewer Grid.Column="1" MaxHeight="640">
                     <ItemsControl ItemsSource="{Binding Cards}">

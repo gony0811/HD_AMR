@@ -81,11 +81,13 @@ internal static class ServiceRegistration
         {
             services.AddSingleton<IWeldVisionDetector, WeldVisionDetector>();
             services.AddSingleton<IDlWeldVisionDetector, DlWeldVisionDetector>();
+            services.AddSingleton<IRidgeWeldVisionDetector, RidgeWeldVisionDetector>();
         }
         else
         {
             services.AddSingleton<IWeldVisionDetector, NoopWeldVisionDetector>();
             services.AddSingleton<IDlWeldVisionDetector, NoopWeldVisionDetector>();
+            services.AddSingleton<IRidgeWeldVisionDetector, NoopWeldVisionDetector>();
         }
         services.AddSingleton(sp =>
         {

@@ -24,6 +24,7 @@ public sealed partial class WeldBenchmarkViewModel : ViewModelBase
     [ObservableProperty] private int _modalityIndex = 1;       // 0 rgb, 1 ir
     [ObservableProperty] private bool _useParam = true;
     [ObservableProperty] private bool _useDl = true;
+    [ObservableProperty] private bool _useRidge = true;
     [ObservableProperty] private bool _valOnly;
     [ObservableProperty] private bool _useWeldRoi;
     [ObservableProperty] private double _angleTol = WeldLineMetrics.DefaultAngleTolDeg;
@@ -76,6 +77,7 @@ public sealed partial class WeldBenchmarkViewModel : ViewModelBase
         var methods = new List<WeldDetectionMethod>();
         if (UseParam) methods.Add(WeldDetectionMethod.Param);
         if (UseDl) methods.Add(WeldDetectionMethod.Dl);
+        if (UseRidge) methods.Add(WeldDetectionMethod.Ridge);
         if (methods.Count == 0) { Notify("비교할 검출 방식을 하나 이상 선택하세요.", true); return; }
 
         Running = true; Message = null; Progress = 0; ProgressText = null;
@@ -157,7 +159,7 @@ public sealed class StemRow(string stem, IReadOnlyList<BenchmarkItem> items)
     public string Stem { get; } = stem;
     public IReadOnlyList<BenchmarkItem> Items { get; } = items;
     public bool AllPass => Items.All(i => i.Err.Pass);
-    // 예: "✓P ✗D  012_20261105_101500"
+    // 예: "✓P ✗D ✓R  012_20261105_101500"
     public string Label => string.Join(' ', Items.Select(i => (i.Err.Pass ? "✓" : "✗") + i.Method.ToString()[0])) + "  " + Stem;
 }
 

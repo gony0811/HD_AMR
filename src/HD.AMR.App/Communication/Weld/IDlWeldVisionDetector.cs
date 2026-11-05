@@ -8,3 +8,8 @@ namespace HD.AMR.App.Communication.Weld;
 public interface IDlWeldVisionDetector : IWeldVisionDetector
 {
 }
+
+/// <summary>헤시안 ridge 필터 기반(학습 불필요) 용접라인 검출기 마커. 계약은 <see cref="IWeldVisionDetector"/> 와 동일.</summary>
+public interface IRidgeWeldVisionDetector : IWeldVisionDetector
+{
+}

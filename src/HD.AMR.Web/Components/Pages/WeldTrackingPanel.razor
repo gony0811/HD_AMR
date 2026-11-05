@@ -19,7 +19,7 @@
 
 <div class="mb-2">
     <span class="badge @(Svc.DetectorAvailable ? "bg-success" : "bg-secondary")">
-        검출 @(Svc.Method == WeldDetectionMethod.Dl ? "DL 모델" : "파라미터(CV)")
+        검출 @(Svc.Method switch { WeldDetectionMethod.Dl => "DL 모델", WeldDetectionMethod.Ridge => "Ridge 필터", _ => "파라미터(CV)" })
         · @(Svc.DetectorAvailable ? "사용가능" : "비활성(Windows 전용)")
     </span>
     <span class="badge bg-info text-dark">상태: @Svc.State</span>
@@ -118,11 +118,17 @@
                     <input type="radio" class="btn-check" name="detmethod" id="dm_param"
                            checked="@(Svc.Method == WeldDetectionMethod.Param)" @onchange='() => SetMethod(WeldDetectionMethod.Param)' />
                     <label class="btn btn-outline-secondary" for="dm_param">⚙ 파라미터(CV)</label>
+                    <input type="radio" class="btn-check" name="detmethod" id="dm_ridge"
+                           checked="@(Svc.Method == WeldDetectionMethod.Ridge)" @onchange='() => SetMethod(WeldDetectionMethod.Ridge)' />
+                    <label class="btn btn-outline-secondary" for="dm_ridge">〰 Ridge 필터</label>
                 </div>
                 <span class="text-muted ms-2" style="font-size:.8rem">
-                    @(Svc.Method == WeldDetectionMethod.Dl
-                        ? "학습된 weld_seg 모델로 비드를 찾습니다(권장)."
-                        : "고전 CV 이진화로 찾습니다(모델 없이 튜닝/폴백용).")
+                    @(Svc.Method switch
+                    {
+                        WeldDetectionMethod.Dl => "학습된 weld_seg 모델로 비드를 찾습니다(권장).",
+                        WeldDetectionMethod.Ridge => "헤시안 가는 선 필터로 찾습니다(학습 불필요, 진행축 방향 선만).",
+                        _ => "고전 CV 이진화로 찾습니다(모델 없이 튜닝/폴백용).",
+                    })
                 </span>
             </div>
         </div>
@@ -209,6 +215,57 @@
         }
 
         @* ── 고전 CV 파라미터 카드 (Method=Param) ── *@
+        @* ── Ridge 검출 카드 (Method=Ridge) ── *@
+        @if (Svc.Method == WeldDetectionMethod.Ridge)
+        {
+            <div class="card mb-3">
+                <div class="card-header py-1"><strong>Ridge 검출 (헤시안 가는 선 필터)</strong></div>
+                <div class="card-body py-2">
+                    <div class="row g-2 align-items-end">
+                        <div class="col-auto" title="스케일 σ 최소(px). 비드 반폭 정도.">
+                            <label class="form-label mb-0 small">σ min</label>
+                            <input class="form-control form-control-sm" type="number" step="0.5" @bind="Svc.Params.RidgeSigmaMin" @bind:after="LivePreview" style="width:70px" />
+                        </div>
+                        <div class="col-auto" title="스케일 σ 최대(px).">
+                            <label class="form-label mb-0 small">σ max</label>
+                            <input class="form-control form-control-sm" type="number" step="0.5" @bind="Svc.Params.RidgeSigmaMax" @bind:after="LivePreview" style="width:70px" />
+                        </div>
+                        <div class="col-auto" title="σ min~max 사이 스케일 개수. 많을수록 느림.">
+                            <label class="form-label mb-0 small">스케일 수</label>
+                            <input class="form-control form-control-sm" type="number" min="1" max="6" @bind="Svc.Params.RidgeScales" @bind:after="LivePreview" style="width:70px" />
+                        </div>
+                        <div class="col-auto" title="선 밝기. 정반사면 밝게, 그늘이면 어둡게 보임.">
+                            <label class="form-label mb-0 small">극성</label>
+                            <select class="form-select form-select-sm" @bind="Svc.Params.RidgePolarity" @bind:after="LivePreview" style="width:100px">
+                                <option value="@WeldRidgePolarity.Both">밝/어둡 모두</option>
+                                <option value="@WeldRidgePolarity.Bright">밝은 선</option>
+                                <option value="@WeldRidgePolarity.Dark">어두운 선</option>
+                            </select>
+                        </div>
+                        <div class="col-auto" title="진행축 대비 허용 기울기(°). 코로게이션 모서리 등 다른 방향 선 제거.">
+                            <label class="form-label mb-0 small">허용각°</label>
+                            <input class="form-control form-control-sm" type="number" step="5" @bind="Svc.Params.RidgeMaxAngleDeg" @bind:after="LivePreview" style="width:70px" />
+                        </div>
+                        <div class="col-auto" title="전역 잡음 하한 = 중앙값 + k·MAD. 크면 확실한 선만.">
+                            <label class="form-label mb-0 small">잡음 k</label>
+                            <input class="form-control form-control-sm" type="number" step="0.5" @bind="Svc.Params.RidgeThresholdK" @bind:after="LivePreview" style="width:70px" />
+                        </div>
+                        <div class="col-auto" title="열(슬라이스)마다 최대 응답 대비 이 비율 이상만 후보(0~1).">
+                            <label class="form-label mb-0 small">상대 임계</label>
+                            <input class="form-control form-control-sm" type="number" step="0.05" min="0" max="1" @bind="Svc.Params.RidgeRelative" @bind:after="LivePreview" style="width:70px" />
+                        </div>
+                        <div class="col-auto" title="중심선 직선 피팅. RANSAC 권장.">
+                            <label class="form-label mb-0 small">직선 피팅</label>
+                            <select class="form-select form-select-sm" @bind="Svc.Params.LineFit" @bind:after="LivePreview" style="width:110px">
+                                <option value="@WeldLineFitMode.Ransac">RANSAC</option>
+                                <option value="@WeldLineFitMode.LeastSquares">최소제곱</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        }
+
         @if (Svc.Method == WeldDetectionMethod.Param)
         {
         <div class="card mb-3">

@@ -117,11 +117,13 @@ if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
 {
     builder.Services.AddSingleton<IWeldVisionDetector, WeldVisionDetector>();
     builder.Services.AddSingleton<IDlWeldVisionDetector, HD.AMR.App.Service.Vision.DlWeldVisionDetector>();
+    builder.Services.AddSingleton<IRidgeWeldVisionDetector, RidgeWeldVisionDetector>();
 }
 else
 {
     builder.Services.AddSingleton<IWeldVisionDetector, NoopWeldVisionDetector>();
     builder.Services.AddSingleton<IDlWeldVisionDetector, NoopWeldVisionDetector>();
+    builder.Services.AddSingleton<IRidgeWeldVisionDetector, NoopWeldVisionDetector>();
 }
 builder.Services.AddSingleton(sp =>
 {

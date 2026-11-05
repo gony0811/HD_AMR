@@ -4,9 +4,9 @@ namespace HD.AMR.App.Communication.Weld;
 
 /// <summary>
 /// OpenCV 네이티브가 없는 플랫폼용 폴백. 항상 "검출 비활성" 결과를 돌려준다.
-/// 고전/DL 두 인터페이스를 모두 만족해 비-Windows 에서 양쪽 등록에 재사용된다.
+/// 고전/DL/Ridge 인터페이스를 모두 만족해 비-Windows 에서 양쪽 등록에 재사용된다.
 /// </summary>
-public sealed class NoopWeldVisionDetector : IDlWeldVisionDetector
+public sealed class NoopWeldVisionDetector : IDlWeldVisionDetector, IRidgeWeldVisionDetector
 {
     public bool IsAvailable => false;
 
