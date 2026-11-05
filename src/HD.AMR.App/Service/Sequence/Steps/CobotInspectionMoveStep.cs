@@ -440,6 +440,8 @@ public class CobotInspectionMoveStep : ISequenceStep
         var joints = await _cobot.Rpc.GetInverseKinKeepWristAsync(target, reference, context.Tool, 0, ct);
         if (ElbowFlipBlocker(reference, joints) is { } flip)
             return StepResult.Fail(flip);
+        if (Inspection.WObjAttitude.J6RangeBlocker(reference[5], joints[5]) is { } j6Range)
+            return StepResult.Fail($"[Cobot 검사위치 이동] 용접선 접근점 {j6Range} — 움직이지 않았습니다.");
         if (await SelfCollisionGuardOnAsync() && SelfCollisionBlocker(joints, seam) is { } selfHit)
             return StepResult.Fail(selfHit);
 
@@ -622,6 +624,7 @@ public class CobotInspectionMoveStep : ISequenceStep
             if (travel > MaxEntryJointTravelDeg) { rejects.Add($"{label}: 진입 관절 이동 {travel:0}° > {MaxEntryJointTravelDeg:0}°"); continue; }
             if (FairinoRpcClient.IsElbowFlip(reference, jc)) { rejects.Add($"{label}: 팔꿈치 가지 전환"); continue; }
             if (IsWristFlip(reference, jc)) { rejects.Add($"{label}: 손목 가지 전환(J5 {reference[4]:0}° → {jc[4]:0}°)"); continue; }
+            if (Inspection.WObjAttitude.J6RangeBlocker(reference[5], jc[5]) is { } j6Entry) { rejects.Add($"{label}: {j6Entry}"); continue; }
             if (guardOn && SelfCollisionBlocker(jc, seam) is not null) { rejects.Add($"{label}: 자기 간섭"); continue; }
 
             // 진입점 → 들어갈 점(면 방향) → 접근점(법선) 경로
@@ -640,6 +643,7 @@ public class CobotInspectionMoveStep : ISequenceStep
                 try { j = await _cobot.Rpc.GetInverseKinNearestAsync(Pose(pt), seed, context.Tool, 0, ct); }
                 catch (InvalidOperationException) { why = $"[{Fmt(pt)}] 도달 불가"; break; }
                 if (PathStepBlocker(seed, j, jc) is { } step) { why = $"[{Fmt(pt)}] {step}"; break; }
+                if (Inspection.WObjAttitude.J6RangeBlocker(reference[5], j[5]) is { } j6Path) { why = $"[{Fmt(pt)}] {j6Path}"; break; }
                 if (guardOn && SelfCollisionBlocker(j, seam) is not null) { why = $"[{Fmt(pt)}] 자기 간섭"; break; }
                 seed = j;
                 if (planar) jp = j;
@@ -760,6 +764,11 @@ public class CobotInspectionMoveStep : ISequenceStep
         if (ElbowFlipBlocker(reference, joints) is { } flip)
         {
             _logger.LogWarning("[Cobot 검사위치 이동] 연속 이동 생략 — {Msg} → 진입 준비 경로", flip);
+            return null;
+        }
+        if (Inspection.WObjAttitude.J6RangeBlocker(reference[5], joints[5]) is { } j6Range)
+        {
+            _logger.LogWarning("[Cobot 검사위치 이동] 연속 이동 생략 — {Msg} → 진입 준비 경로", j6Range);
             return null;
         }
         if (await SelfCollisionGuardOnAsync() && SelfCollisionBlocker(joints, seam) is { } selfHit)

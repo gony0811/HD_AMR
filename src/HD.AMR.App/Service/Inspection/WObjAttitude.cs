@@ -61,16 +61,34 @@ public readonly record struct WObjAttitude(double Rz0, double TiltSign)
     public double AbsoluteTwistDeg => TwistOverrideDeg ?? (TiltSign < 0 ? 180.0 : 0.0);
 
     /// <summary>
-    /// 센서 헤드–링크암 간섭·케이블 감김이 없는 J6 <b>실제 관절값</b> 범위 [도] — 물리각 30°~200°.
-    /// 2026-10-16 바닥 자세에서 J6 단일축 조그로 −160°~−330° 를 돌려 간섭 없음을 실측했다.
-    /// 360° 주기로 보지 않는다 — 같은 물리각이라도 +30° 와 −330° 는 케이블 감김이 다르고, 실측은
+    /// 센서 헤드–링크암 간섭·케이블 감김이 없는 J6 <b>실제 관절값</b> 범위 [도] — 물리각 60°~200°.
+    /// 2026-10-16 바닥 자세에서 J6 단일축 조그로 −160°~−330° 를 돌려 간섭 없음을 실측했고, 2026-11-05 운영
+    /// 결정으로 −300° 까지로 좁혔다(대기 자세 −180° 기준 반시계 20°·시계 120°).
+    /// 360° 주기로 보지 않는다 — 같은 물리각이라도 +60° 와 −300° 는 케이블 감김이 다르고, 실측은
     /// 대기 자세(−180°) 쪽 와인딩에서만 했다(현장 J6 는 항상 이 와인딩에서 움직인다).
+    /// 모든 코봇 이동 계획(검사위치 이동 진입·평면 경로·연속 이동, 검사 수행 비틀림·경유점)이 이 범위로 거른다.
     /// </summary>
-    public const double SafeJ6MinDeg = -330.0, SafeJ6MaxDeg = -160.0;
+    public const double SafeJ6MinDeg = -300.0, SafeJ6MaxDeg = -160.0;
+
+    /// <summary>안내 문구용 안전 범위 표기.</summary>
+    public static string SafeJ6RangeText => $"{SafeJ6MinDeg:0}°~{SafeJ6MaxDeg:0}°";
 
     /// <summary>J6 실제 관절값 [도] 가 안전 범위(<see cref="SafeJ6MinDeg"/>~<see cref="SafeJ6MaxDeg"/>) 안인지.</summary>
     public static bool IsInSafeJ6Range(double j6Deg)
         => j6Deg >= SafeJ6MinDeg && j6Deg <= SafeJ6MaxDeg;
+
+    /// <summary>
+    /// 현재 J6 에서 출발한 계획의 J6 해 <paramref name="targetJ6"/> 가 안전 범위 밖이면 사유, 안이면 null.
+    /// 범위는 현재 감김 기준(<see cref="SafeJ6WindingShiftDeg"/>)으로 본다 — 해는 현재 관절 쪽으로 감아 푼 값이어야 한다
+    /// (IK nearest/keep-wrist 결과). 현재·목표가 모두 범위 안이면 관절 보간·직선 보간 경로도 범위 안에 머문다.
+    /// </summary>
+    public static string? J6RangeBlocker(double currentJ6, double targetJ6)
+    {
+        var shift = SafeJ6WindingShiftDeg(currentJ6);
+        return IsInSafeJ6Range(targetJ6 + shift)
+            ? null
+            : $"J6 안전 범위({SafeJ6RangeText}, 현재 감김 기준) 밖 — J6 {currentJ6:0.0}° → {targetJ6:0.0}° (센서 헤드 간섭·케이블 감김 위험)";
+    }
 
     /// <summary>
     /// 현재 J6 를 안전 범위 쪽 감김으로 옮기는 360° 배수 [도] — 범위 안이면 0, 어느 감김으로도 범위 밖이면 0(종전 판정).
@@ -105,10 +123,9 @@ public readonly record struct WObjAttitude(double Rz0, double TiltSign)
         double currentJ6, IReadOnlyList<(double TwistDeg, double? J6, double? TotalDeg)> candidates)
     {
         (double TwistDeg, double DeltaJ6, double Total)? best = null;
-        var shift = SafeJ6WindingShiftDeg(currentJ6);
         foreach (var (twist, j6, totalDeg) in candidates)
         {
-            if (j6 is not { } j || !IsInSafeJ6Range(j + shift)) continue;
+            if (j6 is not { } j || J6RangeBlocker(currentJ6, j) is not null) continue;
             var d = j - currentJ6;
             var cost = totalDeg ?? Math.Abs(d);
             if (best is not { } b || cost < b.Total)
