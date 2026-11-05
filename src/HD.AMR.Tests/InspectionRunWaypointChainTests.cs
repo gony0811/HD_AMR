@@ -45,13 +45,29 @@ public class InspectionRunWaypointChainTests
     }
 
     [Fact]
-    public void J6_가_크게_바뀌어도_손목_여유가_있으면_통과()
+    public void J6_가_크게_바뀌어도_안전_범위_안이고_손목_여유가_있으면_통과()
+    {
+        // 출발 J6 90°(= 감김 기준 −270°) → 150°(−210°): 60° 회전이지만 −300°~−160° 안.
+        var why = InspectionRunStep.WaypointChainBlocker(Start, new (int, double[])[]
+        {
+            (0, new[] { -45.0, -40.0, 80.0, -220.0, 28.0, 90.0 }),
+            (1, new[] { -47.0, -39.0, 81.0, -221.0, 10.0, 150.0 }),
+        });
+        Assert.Null(why);
+    }
+
+    [Theory]
+    [InlineData(-60.0)]    // 감김 기준 −420° — 시계로 150° 더 감김
+    [InlineData(210.0)]    // 감김 기준 −150° — −160° 위쪽(반시계 한계 밖)
+    [InlineData(50.0)]     // 감김 기준 −310° — −300° 아래쪽(시계 한계 밖)
+    public void J6_안전_범위_밖_경유점은_거부(double j6)
     {
         var why = InspectionRunStep.WaypointChainBlocker(Start, new (int, double[])[]
         {
             (0, new[] { -45.0, -40.0, 80.0, -220.0, 28.0, 90.0 }),
-            (1, new[] { -47.0, -39.0, 81.0, -221.0, 10.0, -60.0 }),
+            (1, new[] { -47.0, -39.0, 81.0, -221.0, 10.0, j6 }),
         });
-        Assert.Null(why);
+        Assert.NotNull(why);
+        Assert.Contains("#2 J6 안전 범위", why);
     }
 }
