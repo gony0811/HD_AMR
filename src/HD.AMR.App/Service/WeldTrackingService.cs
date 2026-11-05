@@ -83,7 +83,18 @@ public class WeldTrackingService
         ParameterService.Changed += OnParameterChanged;
         _ = ReloadRoiAsync();
         _ = ReloadDetectionSettingsAsync();
+        _ = ReloadDlThresholdsAsync();
     }
+
+    /// <summary>DL 검출 confidence 임계값 파라미터. 없으면 <see cref="WeldDetectionParams.DlConfidence"/> 기본값.</summary>
+    public const string DlConfidenceKey = "Weld.Dl.Confidence";
+
+    /// <summary>DL 마스크 확률 임계값 파라미터. 없으면 <see cref="WeldDetectionParams.DlMaskThreshold"/> 기본값.</summary>
+    public const string DlMaskThresholdKey = "Weld.Dl.MaskThreshold";
+
+    // 조정 범위 — 이 밖의 값은 검출이 사실상 전부/전무가 되므로 저장·로드 모두 이 범위로 자른다.
+    public const double DlConfidenceMin = 0.05, DlConfidenceMax = 0.90;
+    public const double DlMaskThresholdMin = 0.30, DlMaskThresholdMax = 0.70;
 
     // ── 상태(UI 가 읽음) ────────────────────────────────────────────
     /// <summary>비드 검출 방식. 기본 DL(학습 모델). 파라미터(고전 CV)는 폴백/비교용으로 유지.
@@ -198,6 +209,8 @@ public class WeldTrackingService
             _ = ReloadRoiAsync();
         else if (WeldDetectionSettingsStore.IsKey(name))
             _ = ReloadDetectionSettingsAsync();
+        else if (name is DlConfidenceKey or DlMaskThresholdKey)
+            _ = ReloadDlThresholdsAsync();
     }
 
     /// <summary>저장된 검출 방식·Ridge 파라미터를 읽어 적용한다. 키가 없거나 DB 미준비면 현재 값 유지.</summary>
@@ -242,6 +255,60 @@ public class WeldTrackingService
         {
             Interlocked.Decrement(ref _selfWrites);
             _persistGate.Release();
+        }
+    }
+
+    // ── DL 임계값 ───────────────────────────────────────────────────
+    // ROI 와 같은 방식 — 즉시 Params 에 반영하고(시퀀스도 같은 Params 를 쓴다) 저장은 백그라운드로 한다.
+    /// <summary>DL conf/mask 임계값 설정 + 파라미터 저장. 범위 밖 값은 잘라낸다.</summary>
+    public void SetDlThresholds(double confidence, double maskThreshold)
+    {
+        confidence = Math.Round(Math.Clamp(confidence, DlConfidenceMin, DlConfidenceMax), 2);
+        maskThreshold = Math.Round(Math.Clamp(maskThreshold, DlMaskThresholdMin, DlMaskThresholdMax), 2);
+        if (Params.DlConfidence == confidence && Params.DlMaskThreshold == maskThreshold) return;
+        Params.DlConfidence = confidence;
+        Params.DlMaskThreshold = maskThreshold;
+        _ = PersistDlThresholdsAsync(confidence, maskThreshold);
+    }
+
+    private async Task PersistDlThresholdsAsync(double confidence, double maskThreshold)
+    {
+        await _persistGate.WaitAsync();
+        Interlocked.Increment(ref _selfWrites);
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var param = scope.ServiceProvider.GetRequiredService<ParameterService>();
+            await param.SetDoubleAsync(DlConfidenceKey, confidence, "DL 비드 검출 confidence 임계값");
+            await param.SetDoubleAsync(DlMaskThresholdKey, maskThreshold, "DL 비드 마스크 확률 임계값");
+            _logger.LogInformation("용접 추적 DL 임계값 저장: conf={Conf:0.00}, mask={Mask:0.00}", confidence, maskThreshold);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "용접 추적 DL 임계값 저장 실패");
+            Message = $"DL 임계값 저장 실패: {ex.Message}";
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _selfWrites);
+            _persistGate.Release();
+        }
+    }
+
+    private async Task ReloadDlThresholdsAsync()
+    {
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var param = scope.ServiceProvider.GetRequiredService<ParameterService>();
+            if (await param.GetDoubleAsync(DlConfidenceKey) is { } conf)
+                Params.DlConfidence = Math.Clamp(conf, DlConfidenceMin, DlConfidenceMax);
+            if (await param.GetDoubleAsync(DlMaskThresholdKey) is { } mask)
+                Params.DlMaskThreshold = Math.Clamp(mask, DlMaskThresholdMin, DlMaskThresholdMax);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "용접 추적 DL 임계값 파라미터 읽기 실패 — 이전 값 유지");
         }
     }
 
