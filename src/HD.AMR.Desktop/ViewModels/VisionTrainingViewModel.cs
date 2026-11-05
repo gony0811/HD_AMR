@@ -198,7 +198,8 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
         {
             await RefreshCountsAsync();
             var r = await _train.ConvertAsync(Modality);
-            ConvertText = $"변환 완료 — 사용 {r.Used}건 / 건너뜀 {r.Skipped}건 / 폴리곤 {r.Instances}개\n{r.DataYaml}";
+            ConvertText = $"변환 완료 — 사용 {r.Used}건 / 건너뜀 {r.Skipped}건 / 폴리곤 {r.Instances}개\n" +
+                          $"세션 {r.Sessions}개 → train {r.Train}건 / val {r.Val}건\n{r.DataYaml}";
             ExportModalityIndex = ModalityIndex;
             Notify($"데이터셋 변환 완료 — 사용 {r.Used}건.", false);
         }

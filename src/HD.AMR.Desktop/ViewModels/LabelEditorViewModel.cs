@@ -20,8 +20,9 @@ public sealed partial class LabelEditorViewModel : ViewModelBase
     [ObservableProperty] private string? _dir;
     [ObservableProperty] private CaptureEntryRow? _selected;
     [ObservableProperty] private int _modalityIndex;    // 0 rgb, 1 ir
-    [ObservableProperty] private int _brushModeIndex;   // 0 칠하기, 1 지우기
+    [ObservableProperty] private int _brushModeIndex = 2;   // 0 칠하기, 1 지우기, 2 선(기본 — 일정 두께 라벨)
     [ObservableProperty] private int _radius = 12;
+    [ObservableProperty] private int _lineThickness = WeldLineLabel.DefaultThickness;
     [ObservableProperty] private bool _busy;
     [ObservableProperty] private string? _message;
     [ObservableProperty] private bool _isError;
@@ -31,12 +32,18 @@ public sealed partial class LabelEditorViewModel : ViewModelBase
     public string Modality => ModalityIndex == 1 ? "ir" : "rgb";
     public bool CanRgb => Selected?.HasRgb ?? false;
     public bool CanIr => Selected?.HasIr ?? false;
-    public string SaveHint => Selected is null ? "" : $"비드를 빨갛게 칠하세요. 저장하면 {Selected.Stem}_{Modality}_maskdraft.png 로 덮어씁니다(흑백 이진 마스크).";
+    public bool IsLineMode => BrushModeIndex == 2;
+    public bool IsBrushMode => !IsLineMode;
+    public string SaveHint => Selected is null ? "" : IsLineMode
+        ? $"용접선 중심을 따라 클릭(보통 양 끝 2점, 휘면 중간점 추가). 점 드래그=이동, 우클릭=마지막 점 삭제. " +
+          $"저장하면 {Selected.Stem}_{Modality}_line.json(정답) + _maskdraft.png(두께 {LineThickness}px 마스크)."
+        : $"비드를 빨갛게 칠하세요. 저장하면 {Selected.Stem}_{Modality}_maskdraft.png 로 덮어씁니다(흑백 이진 마스크). " +
+          "선 점이 없으면 기존 선 라벨(_line.json)은 삭제됩니다.";
 
-    /// <summary>(이미지 PNG, 마스크 초안 PNG 또는 null) — 뷰가 MaskCanvas.Open 으로 연결.</summary>
-    public event Action<byte[], byte[]?>? EditorOpenRequested;
-    /// <summary>(erase, radius) 브러시 변경.</summary>
-    public event Action<bool, int>? BrushChanged;
+    /// <summary>(이미지 PNG, 마스크 초안 PNG 또는 null, 선 라벨 또는 null) — 뷰가 MaskCanvas.Open/SetLine 으로 연결.</summary>
+    public event Action<byte[], byte[]?, WeldLineLabel?>? EditorOpenRequested;
+    /// <summary>(lineMode, erase, radius, lineThickness) 도구 변경.</summary>
+    public event Action<bool, bool, int, int>? BrushChanged;
     public event Action? ClearRequested;
 
     // ④ 추론 탭 "학습셋에 추가 + 라벨링" 이동 시 대상 촬영본/모달리티(원본 쿼리 파라미터 sel/mod 대응).
@@ -67,8 +74,14 @@ public sealed partial class LabelEditorViewModel : ViewModelBase
     }
 
     partial void OnDirChanged(string? value) => OnPropertyChanged(nameof(HasDir));
-    partial void OnRadiusChanged(int value) => BrushChanged?.Invoke(BrushModeIndex == 1, value);
-    partial void OnBrushModeIndexChanged(int value) => BrushChanged?.Invoke(value == 1, Radius);
+    partial void OnRadiusChanged(int value) => RaiseTool();
+    partial void OnLineThicknessChanged(int value) { RaiseTool(); OnPropertyChanged(nameof(SaveHint)); }
+    partial void OnBrushModeIndexChanged(int value)
+    {
+        OnPropertyChanged(nameof(IsLineMode)); OnPropertyChanged(nameof(IsBrushMode)); OnPropertyChanged(nameof(SaveHint));
+        RaiseTool();
+    }
+    private void RaiseTool() => BrushChanged?.Invoke(IsLineMode, BrushModeIndex == 1, Radius, LineThickness);
 
     async partial void OnSelectedChanged(CaptureEntryRow? value)
     {
@@ -107,8 +120,11 @@ public sealed partial class LabelEditorViewModel : ViewModelBase
             var img = await With(l => l.ReadAsync($"{Selected.Stem}_{Modality}.png"));
             if (img is null) { Notify("이미지를 읽지 못했습니다.", true); return; }
             var mask = await With(l => l.ReadAsync($"{Selected.Stem}_{Modality}_maskdraft.png"));
-            EditorOpenRequested?.Invoke(img, mask);
-            BrushChanged?.Invoke(BrushModeIndex == 1, Radius);
+            var stem = Selected.Stem;
+            var line = await With(l => l.ReadLineAsync(stem, Modality));
+            EditorOpenRequested?.Invoke(img, mask, line);
+            if (line is not null) LineThickness = line.Thickness;
+            RaiseTool();
         }
         catch (Exception ex) { Notify($"에디터 열기 실패: {ex.Message}", true); }
     }
@@ -116,8 +132,8 @@ public sealed partial class LabelEditorViewModel : ViewModelBase
     [RelayCommand] private Task ReloadDraft() => OpenEditorAsync();
     [RelayCommand] private void ClearMask() => ClearRequested?.Invoke();
 
-    /// <summary>뷰가 MaskCanvas.ExportPng 결과로 호출.</summary>
-    public async Task SaveMaskAsync(byte[]? png)
+    /// <summary>뷰가 MaskCanvas.ExportPng / GetLineLabel 결과로 호출. 선이 없으면 기존 선 라벨은 삭제.</summary>
+    public async Task SaveMaskAsync(byte[]? png, WeldLineLabel? line)
     {
         if (Busy || Selected is null) return;
         if (png is null) { Notify("마스크를 읽지 못했습니다.", true); return; }
@@ -126,8 +142,9 @@ public sealed partial class LabelEditorViewModel : ViewModelBase
         {
             var stem = Selected.Stem;
             var name = await With(l => l.SaveMaskAsync(stem, Modality, png));
+            await With(async l => { await l.SaveLineAsync(stem, Modality, line); return 0; });
             await RefreshListAsync();
-            Notify($"저장 완료: {name}", false);
+            Notify(line is null ? $"저장 완료: {name}" : $"저장 완료: {name} + {stem}_{Modality}_line.json (점 {line.Points.Count}개)", false);
         }
         catch (Exception ex) { Notify($"저장 실패: {ex.Message}", true); }
         finally { Busy = false; }
@@ -148,5 +165,5 @@ public sealed record CaptureEntryRow(CaptureEntry Entry)
     public string Stem => Entry.Stem;
     public bool HasRgb => Entry.HasRgb;
     public bool HasIr => Entry.HasIr;
-    public string Label => $"{((Entry.RgbMask || Entry.IrMask) ? "✓ " : "· ")}{Entry.Stem}";
+    public string Label => $"{((Entry.RgbLine || Entry.IrLine) ? "📏" : (Entry.RgbMask || Entry.IrMask) ? "✓ " : "· ")}{Entry.Stem}";
 }

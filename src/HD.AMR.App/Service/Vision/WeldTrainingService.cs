@@ -151,11 +151,12 @@ public sealed class WeldTrainingService
         if (paths is null) throw new InvalidOperationException("캡처 저장 폴더가 설정되지 않았습니다.");
         if (!Directory.Exists(paths.CaptureDir)) throw new DirectoryNotFoundException(paths.CaptureDir);
 
-        var imagesTrain = Path.Combine(paths.Dataset, "images", "train");
-        var labelsTrain = Path.Combine(paths.Dataset, "labels", "train");
-        // 매 변환마다 train 폴더를 새로 만든다(오래된 라벨/이미지 잔재 제거).
-        RecreateDir(imagesTrain);
-        RecreateDir(labelsTrain);
+        // 매 변환마다 train/val 폴더를 새로 만든다(오래된 라벨/이미지 잔재 제거).
+        foreach (var split in new[] { "train", "val" })
+        {
+            RecreateDir(Path.Combine(paths.Dataset, "images", split));
+            RecreateDir(Path.Combine(paths.Dataset, "labels", split));
+        }
 
         int used = 0, skipped = 0, instances = 0;
         var maskGlob = $"*_{modality}_maskdraft.png";
@@ -163,6 +164,8 @@ public sealed class WeldTrainingService
             ? Directory.GetFiles(paths.CaptureDir, maskGlob).OrderBy(x => x).ToArray()
             : Array.Empty<string>();
 
+        // 1) 유효한 (stem, 라벨) 수집.
+        var items = new List<(string Stem, string ImgPath, string Label, int N)>();
         foreach (var maskPath in masks)
         {
             var fname = Path.GetFileName(maskPath);
@@ -172,18 +175,33 @@ public sealed class WeldTrainingService
 
             var (label, n) = await Task.Run(() => MaskToYoloLabel(maskPath));
             if (n == 0) { skipped++; Emit($"[변환] 마스크 비어있음 → 건너뜀: {fname}"); continue; }
-
-            File.Copy(imgPath, Path.Combine(imagesTrain, $"{stem}_{modality}.png"), overwrite: true);
-            await File.WriteAllTextAsync(Path.Combine(labelsTrain, $"{stem}_{modality}.txt"), label);
-            used++; instances += n;
-            Emit($"[변환] {stem}_{modality}: 폴리곤 {n}개");
+            items.Add((stem, imgPath, label, n));
         }
 
-        // data.yaml — 표본이 적어 val = train 로 두고 과적합 확인(파이프라인 점검용).
+        // 2) 촬영 세션 단위 train/val 분리(같은 자리 연속 프레임이 양쪽에 섞이는 누수 방지).
+        var split2 = DatasetSplitter.Split(items.Select(i => i.Stem));
+        var valSet = split2.Val.ToHashSet();
+        if (split2.SingleSession)
+            Emit("[변환] 경고: 촬영 세션이 1개뿐 — 같은 세션을 시간순으로 앞/뒤로 나눴습니다. " +
+                 "검증 점수가 실제보다 좋게 나올 수 있으니 다른 위치·시간대 촬영본을 추가하세요.");
+
+        foreach (var (stem, imgPath, label, n) in items)
+        {
+            var sub = valSet.Contains(stem) ? "val" : "train";
+            File.Copy(imgPath, Path.Combine(paths.Dataset, "images", sub, $"{stem}_{modality}.png"), overwrite: true);
+            await File.WriteAllTextAsync(Path.Combine(paths.Dataset, "labels", sub, $"{stem}_{modality}.txt"), label);
+            used++; instances += n;
+            Emit($"[변환] {stem}_{modality} → {sub}: 폴리곤 {n}개");
+        }
+        Emit($"[변환] 세션 {split2.SessionCount}개 → train {split2.Train.Count}건 / val {split2.Val.Count}건");
+
+        // data.yaml — val 이 비면(표본 1건 등) 파이프라인 점검용으로 train 을 val 로 쓴다.
+        var valDir = split2.Val.Count > 0 ? "images/val" : "images/train";
+        if (split2.Val.Count == 0) Emit("[변환] 경고: 검증셋이 비어 val = train 으로 둡니다(과적합 확인만 가능).");
         var yaml =
             $"path: {paths.Dataset.Replace('\\', '/')}\n" +
             "train: images/train\n" +
-            "val: images/train\n" +
+            $"val: {valDir}\n" +
             "nc: 1\n" +
             "names: [bead]\n";
         var yamlPath = Path.Combine(paths.Dataset, "data.yaml");
@@ -191,7 +209,7 @@ public sealed class WeldTrainingService
         await File.WriteAllTextAsync(yamlPath, yaml);
 
         Emit($"[변환] 완료 — 사용 {used}건 / 건너뜀 {skipped}건 / 폴리곤 {instances}개 → {yamlPath}");
-        return new ConvertResult(used, skipped, instances, yamlPath);
+        return new ConvertResult(used, skipped, instances, yamlPath, split2.Train.Count, split2.Val.Count, split2.SessionCount);
     }
 
     // ── 데이터 증강: 이미지+마스크 90° 회전본 생성 ────────────────────────────
@@ -243,6 +261,16 @@ public sealed class WeldTrainingService
                         Cv2.Rotate(m, r, flag);
                         CvIo.WriteMat(Path.Combine(dir, $"{newStem}_{kind}.png"), r);
                         any = true;
+                    }
+                    // 선 라벨(정답 JSON)도 같은 방향으로 회전해 이미지·마스크와 정렬 유지.
+                    foreach (var mod in new[] { "rgb", "ir" })
+                    {
+                        var src = Path.Combine(dir, $"{stem}_{mod}_line.json");
+                        if (!File.Exists(src)) continue;
+                        var line = WeldLineLabel.FromJson(File.ReadAllText(src));
+                        if (line is null) continue;
+                        var rot = line.Rotate90(clockwise: flag == RotateFlags.Rotate90Clockwise);
+                        File.WriteAllText(Path.Combine(dir, $"{newStem}_{mod}_line.json"), rot.ToJson());
                     }
                     if (any) created++; else skipped++;
                 }
@@ -483,6 +511,6 @@ public enum TrainingPhase { Idle, Converting, Training, Exporting, Done, Error }
 
 public sealed record TrainingPaths(string CaptureDir, string Workspace, string Dataset, string Runs, string Models);
 public sealed record PythonInfo(bool PythonOk, bool UltralyticsOk, string Exe, string Detail);
-public sealed record ConvertResult(int Used, int Skipped, int Instances, string DataYaml);
+public sealed record ConvertResult(int Used, int Skipped, int Instances, string DataYaml, int Train = 0, int Val = 0, int Sessions = 0);
 public sealed record RotateResult(int Created, int Skipped);
 public sealed record ModelInfo(string Path, string Name, long Bytes, DateTime Modified);

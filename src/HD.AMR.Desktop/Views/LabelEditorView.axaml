@@ -28,7 +28,7 @@
                     <ListBox ItemsSource="{Binding Entries}" SelectedItem="{Binding Selected}" Height="520" FontFamily="monospace" FontSize="12">
                         <ListBox.ItemTemplate><DataTemplate x:DataType="vm:CaptureEntryRow"><TextBlock Text="{Binding Label}" /></DataTemplate></ListBox.ItemTemplate>
                     </ListBox>
-                    <TextBlock Classes="axis" Text="✓ = 마스크 있음" />
+                    <TextBlock Classes="axis" Text="📏 = 선 라벨(정답) · ✓ = 마스크만" />
                 </StackPanel>
 
                 <!-- 우: 에디터 -->
@@ -41,10 +41,12 @@
                                 <ComboBoxItem IsEnabled="{Binding CanIr}">IR</ComboBoxItem>
                             </ComboBox>
                             <ComboBox Width="110" SelectedIndex="{Binding BrushModeIndex}">
-                                <ComboBoxItem>🖌 칠하기</ComboBoxItem><ComboBoxItem>🧽 지우기</ComboBoxItem>
+                                <ComboBoxItem>🖌 칠하기</ComboBoxItem><ComboBoxItem>🧽 지우기</ComboBoxItem><ComboBoxItem>📏 선</ComboBoxItem>
                             </ComboBox>
-                            <TextBlock Classes="axis" VerticalAlignment="Center" Text="{Binding Radius, StringFormat='굵기 {0}'}" />
-                            <Slider Width="140" Minimum="2" Maximum="60" Value="{Binding Radius}" />
+                            <TextBlock Classes="axis" VerticalAlignment="Center" IsVisible="{Binding IsBrushMode}" Text="{Binding Radius, StringFormat='굵기 {0}'}" />
+                            <Slider Width="140" Minimum="2" Maximum="60" IsVisible="{Binding IsBrushMode}" Value="{Binding Radius}" />
+                            <TextBlock Classes="axis" VerticalAlignment="Center" IsVisible="{Binding IsLineMode}" Text="{Binding LineThickness, StringFormat='선 두께 {0}px'}" />
+                            <Slider Width="140" Minimum="3" Maximum="31" TickFrequency="1" IsSnapToTickEnabled="True" IsVisible="{Binding IsLineMode}" Value="{Binding LineThickness}" />
                             <Button Content="초안 다시" Command="{Binding ReloadDraftCommand}" />
                             <Button Content="전체 지우기" Command="{Binding ClearMaskCommand}" />
                             <Button Name="SaveBtn" Content="💾 마스크 저장" Classes="accent" IsEnabled="{Binding !Busy}" />

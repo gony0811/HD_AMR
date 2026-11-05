@@ -52,6 +52,16 @@ public class LabelDataService
             var stem = TrimSuffix(Path.GetFileName(f), "_ir_maskdraft.png");
             if (stem is not null) Get(stem).IrMask = true;
         }
+        foreach (var f in Directory.GetFiles(dir, "*_rgb_line.json"))
+        {
+            var stem = TrimSuffix(Path.GetFileName(f), "_rgb_line.json");
+            if (stem is not null && entries.ContainsKey(stem)) Get(stem).RgbLine = true;
+        }
+        foreach (var f in Directory.GetFiles(dir, "*_ir_line.json"))
+        {
+            var stem = TrimSuffix(Path.GetFileName(f), "_ir_line.json");
+            if (stem is not null && entries.ContainsKey(stem)) Get(stem).IrLine = true;
+        }
 
         return entries.Values.OrderByDescending(e => e.Stem).ToList();
     }
@@ -77,6 +87,31 @@ public class LabelDataService
         var path = Path.Combine(dir, name);
         await File.WriteAllBytesAsync(path, png);
         return name;
+    }
+
+    /// <summary>선 라벨(정답) 읽기 → {stem}_{modality}_line.json. 없거나 손상이면 null.</summary>
+    public async Task<WeldLineLabel?> ReadLineAsync(string stem, string modality)
+    {
+        var dir = await GetDirAsync();
+        modality = modality == "ir" ? "ir" : "rgb";
+        if (dir is null || !IsSafeName(stem + ".png")) return null;
+        var path = Path.Combine(dir, $"{stem}_{modality}_line.json");
+        return File.Exists(path) ? WeldLineLabel.FromJson(await File.ReadAllTextAsync(path)) : null;
+    }
+
+    /// <summary>
+    /// 선 라벨 저장 → {stem}_{modality}_line.json. <paramref name="label"/> 이 null 이면 기존 선 라벨을
+    /// 삭제한다(브러시로만 칠한 마스크에 옛 선 정답이 남아 평가가 어긋나는 것을 막는다).
+    /// </summary>
+    public async Task SaveLineAsync(string stem, string modality, WeldLineLabel? label)
+    {
+        var dir = await GetDirAsync() ?? throw new InvalidOperationException("캡처 저장 폴더가 설정되지 않았습니다.");
+        modality = modality == "ir" ? "ir" : "rgb";
+        if (!IsSafeName(stem + ".png")) throw new ArgumentException("잘못된 파일 stem 입니다.", nameof(stem));
+        var path = Path.Combine(dir, $"{stem}_{modality}_line.json");
+        if (label is null) { if (File.Exists(path)) File.Delete(path); return; }
+        if (!label.IsValid) throw new ArgumentException("선 라벨은 2점 이상이어야 합니다.", nameof(label));
+        await File.WriteAllTextAsync(path, label.ToJson());
     }
 
     /// <summary>
@@ -128,4 +163,7 @@ public class CaptureEntry
     public bool HasIr { get; set; }
     public bool RgbMask { get; set; }
     public bool IrMask { get; set; }
+    /// <summary>선 라벨(정답 JSON) 존재 여부.</summary>
+    public bool RgbLine { get; set; }
+    public bool IrLine { get; set; }
 }
