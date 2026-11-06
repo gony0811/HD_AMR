@@ -95,6 +95,18 @@
                                 <ComboBoxItem>세로 (Peak 선 가로)</ComboBoxItem>
                             </ComboBox>
                         </StackPanel>
+                        <!-- 입력 영상 = 학습한 모델의 모달리티와 맞춰야 한다. DL 모델 '자동'은 입력에 맞춰 weld_seg_{ir|rgb}.onnx 를
+                             사용. Ridge·CV 검출도 이 입력 영상을 쓴다. 바꾸면 파라미터(Weld.ImageMode)에 저장되어 재시작 후에도 유지된다. -->
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBlock Classes="axis" Text="입력" VerticalAlignment="Center" />
+                            <ComboBox SelectedIndex="{Binding ImageModeIndex}" Width="150">
+                                <ComboBoxItem>IR</ComboBoxItem>
+                                <ComboBoxItem>RGB Grayscale</ComboBoxItem>
+                                <ComboBoxItem>RGB HSV(S)</ComboBoxItem>
+                            </ComboBox>
+                        </StackPanel>
+                        <TextBlock Text="⚠ 자동 검사 시퀀스는 IR 모드에서만 실행됩니다. 시퀀스 전에 IR 로 되돌리세요."
+                                   Foreground="#E0A030" FontSize="12" TextWrapping="Wrap" IsVisible="{Binding IsRgbMode}" />
                         <!-- DL 모델 선택 — 학습 models 폴더 .onnx. 고르는 즉시 Weld.Dl.ModelPath 저장(시퀀스·재시작 공유). -->
                         <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding IsDl}">
                             <TextBlock Classes="axis" Text="DL 모델" VerticalAlignment="Center" />

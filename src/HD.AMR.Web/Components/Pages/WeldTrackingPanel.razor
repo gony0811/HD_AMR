@@ -308,7 +308,7 @@
                 <div class="row g-2">
                     <div class="col-auto" title="검출에 쓸 입력 영상. IR=권장(Depth와 정합), RGB Grayscale=컬러 흑백, RGB HSV(S)=채도 채널">
                         <label class="form-label mb-0 small">입력 ⓘ</label>
-                        <select class="form-select form-select-sm" @bind="Svc.Params.Mode" @bind:after="LivePreview" style="width:150px">
+                        <select class="form-select form-select-sm" @bind="Svc.Params.Mode" @bind:after="OnModeChangedLive" style="width:150px">
                             <option value="@WeldImageMode.Ir">IR</option>
                             <option value="@WeldImageMode.RgbGrayscale">RGB Grayscale</option>
                             <option value="@WeldImageMode.RgbHsv">RGB HSV(S)</option>
@@ -683,7 +683,15 @@
     /// <summary>입력(모달리티) 변경: 에디터 스트림 소스가 바뀌므로 캐시버스터를 올리고 재검출.</summary>
     private async Task OnModeChanged()
     {
+        Svc.SaveMode(); // 재시작 후에도 같은 입력 모드로 복원되도록 저장
         _editorKey++;   // ir/color mjpeg 스트림 전환
+        await LivePreview();
+    }
+
+    // 파라미터 카드의 입력 선택 — 저장 후 라이브 재검출(기존 동작 유지).
+    private async Task OnModeChangedLive()
+    {
+        Svc.SaveMode();
         await LivePreview();
     }
 

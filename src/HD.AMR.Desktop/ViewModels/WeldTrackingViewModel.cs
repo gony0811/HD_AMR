@@ -63,6 +63,30 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
             OnPropertyChanged();
         }
     }
+    /// <summary>
+    /// 검출 입력 영상(0 IR, 1 RGB Grayscale, 2 RGB HSV(S)) — 진행축처럼 서비스 값을 직접 읽고 쓴다.
+    /// 바꾸면 파라미터(Weld.ImageMode)에 저장되어 재시작 후에도 유지된다. DL 모델은 이 값에 맞춰
+    /// weld_seg_{ir|rgb}.onnx 를 자동 선택(DL 모델 '자동')하므로, 학습한 모델의 모달리티와 맞춰야 한다.
+    /// </summary>
+    public int ImageModeIndex
+    {
+        get => _svc.Params.Mode switch { WeldImageMode.RgbGrayscale => 1, WeldImageMode.RgbHsv => 2, _ => 0 };
+        set
+        {
+            var mode = value switch { 1 => WeldImageMode.RgbGrayscale, 2 => WeldImageMode.RgbHsv, _ => WeldImageMode.Ir };
+            if (_svc.Params.Mode == mode) return;
+            _svc.Params.Mode = mode;
+            _svc.SaveMode();
+            EditorImage = null; // 다른 카메라 스트림(IR↔컬러)으로 전환 — 이전 영상 잔상 제거
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(IsRgbMode));
+            _ = LoadDlModelsAsync();   // DL 모델 드롭다운 '자동 (weld_seg_{ir|rgb}.onnx)' 표시 갱신
+        }
+    }
+
+    /// <summary>RGB 계열 입력이면 true — 자동 검사 시퀀스는 IR 모드만 허용하므로 경고 표시용.</summary>
+    public bool IsRgbMode => _svc.Params.Mode != WeldImageMode.Ir;
+
     /// <summary>DL conf/mask 임계값 — 진행축과 같이 서비스 값을 직접 읽고 쓴다(설정 시 파라미터 저장).</summary>
     public double DlConfidence
     {
@@ -162,6 +186,8 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
         OnPropertyChanged(nameof(MethodText));
         OnPropertyChanged(nameof(StateText));
         OnPropertyChanged(nameof(ProgressAxisIndex));
+        OnPropertyChanged(nameof(ImageModeIndex));   // 시작 시 비동기로 복원되는 저장값 반영
+        OnPropertyChanged(nameof(IsRgbMode));
         OnPropertyChanged(nameof(DlConfidence));
         OnPropertyChanged(nameof(DlMaskThreshold));
         OnPropertyChanged(nameof(DlConfidenceText));
