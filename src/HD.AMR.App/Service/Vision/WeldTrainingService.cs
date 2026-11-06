@@ -170,6 +170,12 @@ public sealed class WeldTrainingService
             ? Directory.GetFiles(paths.CaptureDir, maskGlob).OrderBy(x => x).ToArray()
             : Array.Empty<string>();
 
+        // 비-Windows 는 OpenCvSharp 네이티브가 없으므로 마스크→폴리곤만 Python(cv2)로 한 번에 계산한다.
+        // 분할·복사·data.yaml 등 나머지는 아래 공통 코드가 그대로 처리해 OS 별 결과가 같다.
+        var pyLabels = UsePythonCv && masks.Length > 0
+            ? await MaskToYoloLabelsViaPythonAsync(masks, paths.Workspace)
+            : null;
+
         // 1) 유효한 (stem, 라벨) 수집.
         var items = new List<(string Stem, string ImgPath, string MaskPath, string Label, int N)>();
         foreach (var maskPath in masks)
@@ -179,7 +185,9 @@ public sealed class WeldTrainingService
             var imgPath = Path.Combine(paths.CaptureDir, $"{stem}_{modality}.png");
             if (!File.Exists(imgPath)) { skipped++; Emit($"[변환] 원본 없음 → 건너뜀: {stem}_{modality}.png"); continue; }
 
-            var (label, n) = await Task.Run(() => MaskToYoloLabel(maskPath));
+            var (label, n) = pyLabels is not null
+                ? pyLabels.GetValueOrDefault(maskPath, ("", 0))
+                : await Task.Run(() => MaskToYoloLabel(maskPath));
             if (n == 0) { skipped++; Emit($"[변환] 마스크 비어있음 → 건너뜀: {fname}"); continue; }
             items.Add((stem, imgPath, maskPath, label, n));
         }
@@ -251,6 +259,8 @@ public sealed class WeldTrainingService
         }
 
         int created = 0, skipped = 0;
+        // 비-Windows 는 이미지 회전만 모아 두었다가 Python(cv2)으로 한 번에 처리한다(선 라벨 JSON 회전은 공통 C#).
+        var pyJobs = new List<(string Src, string Dst, bool Cw)>();
         await Task.Run(() =>
         {
             foreach (var stem in stems)
@@ -262,11 +272,18 @@ public sealed class WeldTrainingService
                     {
                         var src = Path.Combine(dir, $"{stem}_{kind}.png");
                         if (!File.Exists(src)) continue;
+                        var dst = Path.Combine(dir, $"{newStem}_{kind}.png");
+                        if (UsePythonCv)
+                        {
+                            pyJobs.Add((src, dst, flag == RotateFlags.Rotate90Clockwise));
+                            any = true;
+                            continue;
+                        }
                         using var m = CvIo.ReadMat(src, ImreadModes.Unchanged);   // 한글 경로 안전
                         if (m.Empty()) continue;
                         using var r = new Mat();
                         Cv2.Rotate(m, r, flag);
-                        CvIo.WriteMat(Path.Combine(dir, $"{newStem}_{kind}.png"), r);
+                        CvIo.WriteMat(dst, r);
                         any = true;
                     }
                     // 선 라벨(정답 JSON)도 같은 방향으로 회전해 이미지·마스크와 정렬 유지.
@@ -282,6 +299,7 @@ public sealed class WeldTrainingService
                     if (any) created++; else skipped++;
                 }
         });
+        if (pyJobs.Count > 0) await RotateImagesViaPythonAsync(pyJobs, paths.Workspace);
         Emit($"[증강] 90° 회전본 생성 — {created}건 (방향 {direction})");
         return new RotateResult(created, skipped);
     }
@@ -320,6 +338,90 @@ public sealed class WeldTrainingService
         return (sb.ToString(), count);
     }
 
+    // ── 비-Windows(Python cv2) 픽셀 연산 ─────────────────────────────────────
+    // macOS/Linux 에서는 OpenCvSharp 네이티브(win-x64)를 로드할 수 없다. 그래서 OpenCV 가 필요한 픽셀 연산
+    // (마스크→폴리곤, 이미지 회전)만 학습용과 같은 Python 환경의 cv2 로 일괄 수행하고, 분할·복사·data.yaml·
+    // 선 라벨 회전 등 나머지 로직은 OS 무관 공통 C# 이 처리한다 — 변환 로직이 바뀌어도 두 OS 결과가 어긋나지 않게.
+    private static bool UsePythonCv => !OperatingSystem.IsWindows();
+
+    /// <summary>마스크들 → YOLO-seg 라벨(MaskToYoloLabel 과 동일 알고리즘). 키는 입력 마스크 경로.</summary>
+    private async Task<Dictionary<string, (string Text, int Count)>> MaskToYoloLabelsViaPythonAsync(
+        IReadOnlyList<string> masks, string workDir)
+    {
+        Directory.CreateDirectory(workDir);
+        var inPath = Path.Combine(workDir, "_cv_labels_in.json");
+        var outPath = Path.Combine(workDir, "_cv_labels_out.json");
+        await File.WriteAllTextAsync(inPath, System.Text.Json.JsonSerializer.Serialize(masks));
+        if (File.Exists(outPath)) File.Delete(outPath);
+
+        await RunPyCollectAsync("_cv_labels.py", LabelsPy, new[] { inPath, outPath }, workDir);
+
+        using var doc = System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(outPath));
+        var map = new Dictionary<string, (string, int)>();
+        foreach (var e in doc.RootElement.EnumerateObject())
+            map[e.Name] = (e.Value.GetProperty("label").GetString() ?? "", e.Value.GetProperty("count").GetInt32());
+        return map;
+    }
+
+    /// <summary>이미지 90° 회전 일괄 처리(Cv2.Rotate 와 동일). Cw=true 시계, false 반시계.</summary>
+    private async Task RotateImagesViaPythonAsync(IReadOnlyList<(string Src, string Dst, bool Cw)> jobs, string workDir)
+    {
+        Directory.CreateDirectory(workDir);
+        var inPath = Path.Combine(workDir, "_cv_rotate_in.json");
+        var payload = jobs.Select(j => new { src = j.Src, dst = j.Dst, cw = j.Cw }).ToArray();
+        await File.WriteAllTextAsync(inPath, System.Text.Json.JsonSerializer.Serialize(payload));
+        await RunPyCollectAsync("_cv_rotate.py", RotateImgPy, new[] { inPath }, workDir);
+    }
+
+    // Python 스크립트를 동기 실행하며 출력 줄을 로그로 스트리밍하고, 전체 stdout 을 반환한다.
+    private async Task<string> RunPyCollectAsync(string scriptName, string scriptBody, string[] args, string workDir, int timeoutMs = 300000)
+    {
+        Directory.CreateDirectory(workDir);
+        var script = Path.Combine(workDir, scriptName);
+        await File.WriteAllTextAsync(script, scriptBody);
+
+        var py = await GetPythonAsync();
+        var psi = new ProcessStartInfo
+        {
+            FileName = py,
+            WorkingDirectory = workDir,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            StandardOutputEncoding = System.Text.Encoding.UTF8,
+            StandardErrorEncoding = System.Text.Encoding.UTF8,
+        };
+        psi.ArgumentList.Add(script);
+        foreach (var a in args) psi.ArgumentList.Add(a);
+        psi.Environment["PYTHONUNBUFFERED"] = "1";
+        psi.Environment["PYTHONIOENCODING"] = "utf-8";
+
+        var sb = new System.Text.StringBuilder();
+        using var proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
+        proc.OutputDataReceived += (_, e) => { if (e.Data is not null) { Emit(e.Data); lock (sb) sb.AppendLine(e.Data); } };
+        proc.ErrorDataReceived += (_, e) => { if (e.Data is not null) Emit(e.Data); };
+
+        try
+        {
+            proc.Start();
+            proc.BeginOutputReadLine();
+            proc.BeginErrorReadLine();
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"Python 실행 실패 — '{py}' 경로/설치를 확인하세요. ({ex.Message})", ex);
+        }
+
+        using var cts = new CancellationTokenSource(timeoutMs);
+        try { await proc.WaitForExitAsync(cts.Token); }
+        catch (OperationCanceledException) { try { proc.Kill(true); } catch { } throw new TimeoutException("Python 처리 시간 초과."); }
+
+        if (proc.ExitCode != 0)
+            throw new InvalidOperationException($"Python 처리 실패(코드 {proc.ExitCode}). 로그를 확인하세요.");
+        lock (sb) return sb.ToString();
+    }
+
     // ── ② 학습 ───────────────────────────────────────────────────────────────
     /// <param name="minimalAug">
     /// 증강 최소화(소규모/과적합 검증용). true 면 mosaic·기하·색 증강을 끄고 밝기만 약간 준다.
@@ -350,17 +452,20 @@ public sealed class WeldTrainingService
 
         var py = await GetPythonAsync();
         var augKey = aug switch { TrainingAugmentation.Minimal => "min", TrainingAugmentation.Line => "line", _ => "full" };
+        // macOS(Apple Silicon)에서는 GPU(Metal/MPS)를 쓰면 CPU 대비 수 배 빠르다. 그 외 OS 는 기존처럼 CPU.
+        // (MPS 가 일부 연산을 지원하지 않으면 StartProcess 의 PYTORCH_ENABLE_MPS_FALLBACK=1 로 CPU 폴백.)
+        var device = OperatingSystem.IsMacOS() ? "mps" : "cpu";
         var args = new[]
         {
             script, baseModel, dataYaml, imgsz.ToString(), epochs.ToString(),
-            batch.ToString(), "cpu", paths.Runs, "hd", augKey, brightAug ? "1" : "0", Math.Max(0, patience).ToString()
+            batch.ToString(), device, paths.Runs, "hd", augKey, brightAug ? "1" : "0", Math.Max(0, patience).ToString()
         };
         // 진행 상태 초기화(진행 바·ETA).
         TrainTotalEpochs = epochs;
         TrainCurrentEpoch = 0;
         TrainStartUtc = DateTime.UtcNow;
         TrainEndUtc = null;
-        Emit($"[학습] 시작 — model={baseModel} epochs={epochs} imgsz={imgsz} batch={batch} device=cpu 증강={aug} 밝기증강={(brightAug ? "켬" : "끔")} patience={(patience > 0 ? patience : "끔")}");
+        Emit($"[학습] 시작 — model={baseModel} epochs={epochs} imgsz={imgsz} batch={batch} device={device} 증강={aug} 밝기증강={(brightAug ? "켬" : "끔")} patience={(patience > 0 ? patience : "끔")}");
         StartProcess(py, args, paths.Workspace, TrainingPhase.Training, "학습");
     }
 
@@ -520,6 +625,9 @@ public sealed class WeldTrainingService
         // 파이썬 출력 버퍼링 해제 — 진행 로그를 실시간으로 받기 위함.
         psi.Environment["PYTHONUNBUFFERED"] = "1";
         psi.Environment["PYTHONIOENCODING"] = "utf-8";
+        // MPS(Apple GPU)가 지원하지 않는 연산은 조용히 CPU 로 폴백 — device=mps 학습 중 미구현 연산에
+        // 부딪혀도 크래시하지 않게 한다. 비-macOS 에는 영향 없음.
+        psi.Environment["PYTORCH_ENABLE_MPS_FALLBACK"] = "1";
 
         var proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
         proc.OutputDataReceived += (_, e) => Emit(e.Data);
@@ -585,10 +693,29 @@ public sealed class WeldTrainingService
             if (!Directory.Exists(dir)) continue;
             var f = Directory.GetFiles(dir, "*.png").OrderBy(x => x).FirstOrDefault();
             if (f is null) continue;
+            if (UsePythonCv)
+            {
+                // 비-Windows: OpenCvSharp 네이티브가 없으므로 PNG 헤더(IHDR)에서 크기를 직접 읽는다.
+                if (PngSize(f) is { } s) return s;
+                continue;
+            }
             using var m = CvIo.ReadMat(f, ImreadModes.Unchanged);
             if (!m.Empty()) return (m.Width, m.Height);
         }
         return null;
+    }
+
+    /// <summary>PNG 파일의 IHDR(시그니처 8B + 길이 4B + "IHDR" 4B 뒤 너비·높이 빅엔디언 4B씩)에서 크기를 읽는다.</summary>
+    private static (int W, int H)? PngSize(string path)
+    {
+        Span<byte> b = stackalloc byte[24];
+        using var fs = File.OpenRead(path);
+        if (fs.Read(b) < 24) return null;
+        if (b[0] != 0x89 || b[1] != (byte)'P' || b[2] != (byte)'N' || b[3] != (byte)'G') return null;
+        if (b[12] != (byte)'I' || b[13] != (byte)'H' || b[14] != (byte)'D' || b[15] != (byte)'R') return null;
+        int w = System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(b[16..20]);
+        int h = System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(b[20..24]);
+        return w > 0 && h > 0 ? (w, h) : null;
     }
 
     /// <summary>
@@ -633,6 +760,52 @@ public sealed class WeldTrainingService
         "    kw.update(hsv_v=0.5, hsv_s=0.3)  # 밝기/채도 변동 강화(조명·노출 편차 대응)\n" +
         "YOLO(model).train(**kw)\n" +
         "print('TRAIN_DONE')\n";
+
+    // 비-Windows 픽셀 연산 ① 마스크 → YOLO-seg 라벨(MaskToYoloLabel 과 동일 알고리즘). 입력: 마스크 경로 JSON 배열,
+    // 출력: {경로: {label, count}} JSON. 한글 경로 안전을 위해 np.fromfile + imdecode 로 읽는다.
+    private const string LabelsPy =
+        "import sys, json\n" +
+        "import numpy as np, cv2\n" +
+        "src, dst = sys.argv[1], sys.argv[2]\n" +
+        "masks = json.load(open(src, encoding='utf-8'))\n" +
+        "out = {}\n" +
+        "for path in masks:\n" +
+        "    data = np.fromfile(path, dtype=np.uint8)\n" +
+        "    gray = None if data.size == 0 else cv2.imdecode(data, cv2.IMREAD_GRAYSCALE)\n" +
+        "    if gray is None:\n" +
+        "        out[path] = {'label': '', 'count': 0}; continue\n" +
+        "    h, w = gray.shape[:2]\n" +
+        "    _, b = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)\n" +
+        "    contours, _ = cv2.findContours(b, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)\n" +
+        "    min_area = max(16.0, w * h * 0.0002)\n" +
+        "    lines = []\n" +
+        "    for c in contours:\n" +
+        "        if cv2.contourArea(c) < min_area: continue\n" +
+        "        poly = cv2.approxPolyDP(c, 1.5, True)\n" +
+        "        if len(poly) < 3: continue\n" +
+        "        parts = ['0']\n" +
+        "        for p in poly:\n" +
+        "            parts.append('%.6f' % min(max(int(p[0][0]) / w, 0.0), 1.0))\n" +
+        "            parts.append('%.6f' % min(max(int(p[0][1]) / h, 0.0), 1.0))\n" +
+        "        lines.append(' '.join(parts) + '\\n')\n" +
+        "    out[path] = {'label': ''.join(lines), 'count': len(lines)}\n" +
+        "json.dump(out, open(dst, 'w', encoding='utf-8'), ensure_ascii=False)\n" +
+        "print('[변환] 마스크 %d개 폴리곤 추출 완료(Python cv2)' % len(masks), flush=True)\n";
+
+    // 비-Windows 픽셀 연산 ② 이미지 90° 회전(Cv2.Rotate 와 동일, 채널·비트심도 그대로). 입력: [{src,dst,cw}] JSON.
+    private const string RotateImgPy =
+        "import sys, json\n" +
+        "import numpy as np, cv2\n" +
+        "jobs = json.load(open(sys.argv[1], encoding='utf-8'))\n" +
+        "n = 0\n" +
+        "for j in jobs:\n" +
+        "    data = np.fromfile(j['src'], dtype=np.uint8)\n" +
+        "    m = None if data.size == 0 else cv2.imdecode(data, cv2.IMREAD_UNCHANGED)\n" +
+        "    if m is None: continue\n" +
+        "    r = cv2.rotate(m, cv2.ROTATE_90_CLOCKWISE if j['cw'] else cv2.ROTATE_90_COUNTERCLOCKWISE)\n" +
+        "    ok, buf = cv2.imencode('.png', r)\n" +
+        "    if ok: buf.tofile(j['dst']); n += 1\n" +
+        "print('[증강] 이미지 %d장 회전 저장(Python cv2)' % n, flush=True)\n";
 
     // imgsz 인자: "0"=학습값 자동, "864"=정사각, "rect:{size}:{W}x{H}"=데이터 비율 직사각([h,w], 32 배수, size 0 이면 학습값).
     private const string ExportPy =

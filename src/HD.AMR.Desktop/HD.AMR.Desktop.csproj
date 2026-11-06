@@ -1,23 +1,22 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
- 	<OutputType>WinExe</OutputType> <!-- 콘솔이면 Exe -->
-  	<RuntimeIdentifier>win-x64</RuntimeIdentifier>
+ 	<OutputType>WinExe</OutputType> <!-- 콘솔이면 Exe. 비-Windows 에서는 Exe 와 동일 취급 -->
   	<UseAppHost>true</UseAppHost>
         <TargetFramework>net8.0</TargetFramework>
         <Nullable>enable</Nullable>
         <ImplicitUsings>enable</ImplicitUsings>
         <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
         <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+    </PropertyGroup>
+
+    <!-- Windows 배포 설정(운영 타깃). Windows 에서 빌드할 때만 win-x64 로 고정하고 매니페스트를 적용한다.
+         macOS/Linux 에서 빌드하면 이 블록이 비활성화되어 호스트 RID(예: osx-arm64)로 빌드되므로
+         Rider ▶ / dotnet run 으로 바로 실행된다. -->
+    <PropertyGroup Condition=" '$([MSBuild]::IsOSPlatform(`Windows`))' == 'true' ">
+        <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+        <PlatformTarget>x64</PlatformTarget>
         <ApplicationManifest>app.manifest</ApplicationManifest>
-    </PropertyGroup>
-
-    <PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">
-      <PlatformTarget>x64</PlatformTarget>
-    </PropertyGroup>
-
-    <PropertyGroup Condition=" '$(Configuration)' == 'Release' ">
-      <PlatformTarget>x64</PlatformTarget>
     </PropertyGroup>
 
     <ItemGroup>
