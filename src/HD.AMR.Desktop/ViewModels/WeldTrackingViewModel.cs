@@ -81,6 +81,7 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
             OnPropertyChanged();
             OnPropertyChanged(nameof(IsRgbMode));
             _ = LoadDlModelsAsync();   // 모델 드롭다운 '자동 (weld_yolo/weld_unet_{ir|rgb}.onnx)' 표시 갱신
+            if (_svc.ModelModeMismatch() is { } warn) Message = warn;
         }
     }
 
@@ -186,6 +187,9 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
         OnPropertyChanged(nameof(MethodText));
         OnPropertyChanged(nameof(StateText));
         OnPropertyChanged(nameof(ProgressAxisIndex));
+        // 모델 지정(Parameter 화면·시퀀스)으로 서비스의 검출 방식이 바뀌었으면 화면 선택도 맞춘다.
+        var methodIndex = _svc.Method switch { WeldDetectionMethod.Param => 1, WeldDetectionMethod.Ridge => 2, WeldDetectionMethod.Unet => 3, _ => 0 };
+        if (MethodIndex != methodIndex) MethodIndex = methodIndex;
         OnPropertyChanged(nameof(ImageModeIndex));   // 시작 시 비동기로 복원되는 저장값 반영
         OnPropertyChanged(nameof(IsRgbMode));
         OnPropertyChanged(nameof(DlConfidence));
@@ -320,6 +324,15 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
         if (string.Equals(CurrentModelPath ?? "", value.Path, StringComparison.OrdinalIgnoreCase)) return;
         CurrentModelPath = value.Path;
         _ = SaveDlModelAsync(value, ModelKey, ModelLabel);
+        // 파일명(ir/rgb)에 맞춰 입력 모드를 바로 맞춘다(목록이 방식별이라 종류는 이미 일치).
+        if (_svc.AlignToModel(value.Path, IsUnet ? WeldDetectionMethod.Unet : WeldDetectionMethod.Dl) is { } msg)
+        {
+            Message = msg;
+            EditorImage = null;   // IR↔컬러 스트림 전환
+            OnPropertyChanged(nameof(ImageModeIndex));
+            OnPropertyChanged(nameof(IsRgbMode));
+            _ = LoadDlModelsAsync();   // '자동 (…_{ir|rgb})' 표시 갱신
+        }
     }
 
     private async Task SaveDlModelAsync(DlModelOption opt, string key, string label)

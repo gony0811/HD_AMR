@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using HD.AMR.App.Communication.Weld;
 using HD.AMR.App.Models;
+using HD.AMR.App.Service.Vision;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -82,9 +83,16 @@ public class WeldTrackingService
 
         ParameterService.Changed += OnParameterChanged;
         _ = ReloadRoiAsync();
-        _ = ReloadDetectionSettingsAsync();
         _ = ReloadDlThresholdsAsync();
-        _ = ReloadModeAsync();
+        _ = ReloadModeThenDetectionAsync();
+    }
+
+    // 모드를 먼저 복원하고 검출 설정(모델 경로 → 방식·모드 맞춤)을 그 뒤에 적용한다 — 순서가 뒤바뀌면
+    // 모델에 맞춰 바꾼 모드를 늦게 도착한 저장 모드가 덮어쓴다.
+    private async Task ReloadModeThenDetectionAsync()
+    {
+        await ReloadModeAsync();
+        await ReloadDetectionSettingsAsync(changedKey: null);
     }
 
     /// <summary>검출 입력 영상(IR/RGB) 파라미터. 없으면 <see cref="WeldDetectionParams.Mode"/> 기본값(IR).</summary>
@@ -236,7 +244,7 @@ public class WeldTrackingService
         if (CameraRoiKeys.Peak.Contains(name) || CameraRoiKeys.Bead.Contains(name))
             _ = ReloadRoiAsync();
         else if (WeldDetectionSettingsStore.IsKey(name))
-            _ = ReloadDetectionSettingsAsync();
+            _ = ReloadDetectionSettingsAsync(name);
         else if (name is DlConfidenceKey or DlMaskThresholdKey)
             _ = ReloadDlThresholdsAsync();
         else if (name == ImageModeKey)
@@ -288,8 +296,12 @@ public class WeldTrackingService
         }
     }
 
-    /// <summary>저장된 검출 방식·Ridge 파라미터를 읽어 적용한다. 키가 없거나 DB 미준비면 현재 값 유지.</summary>
-    private async Task ReloadDetectionSettingsAsync()
+    /// <summary>
+    /// 저장된 검출 방식·Ridge 파라미터·모델 경로를 읽어 적용한다. 키가 없거나 DB 미준비면 현재 값 유지.
+    /// 그 뒤 모델 파일명에 맞춰 방식·입력 모드를 맞춘다 — 모델 경로 키가 바뀐 거면 그 모델에, 아니면(기동·방식 변경)
+    /// 현재 방식의 모델에.
+    /// </summary>
+    private async Task ReloadDetectionSettingsAsync(string? changedKey = null)
     {
         try
         {
@@ -300,11 +312,113 @@ public class WeldTrackingService
                 values[key] = await param.GetAsync(key);
             if (WeldDetectionSettingsStore.Apply(k => values.GetValueOrDefault(k), Params) is { } m)
                 Method = m;
+
+            var msg = changedKey switch
+            {
+                WeldDetectionSettingsStore.DlModelPathKey => AlignToModel(Params.DlModelPath, WeldDetectionMethod.Dl),
+                WeldDetectionSettingsStore.UnetModelPathKey => AlignToModel(Params.UnetModelPath, WeldDetectionMethod.Unet),
+                _ => AlignToActiveModel(),
+            };
+            if (msg is not null) Message = msg;
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "용접 추적 검출 설정 읽기 실패 — 현재 값 유지");
         }
+    }
+
+    // ── 모델 파일명 → 검출 방식·입력 모드 자동 맞춤 ─────────────────────
+    // 모델 파일명에 종류(weld_yolo/weld_seg=DL, weld_unet=U-Net)와 모달리티(ir/rgb)가 들어 있으므로, 모델을 고르면
+    // (용접 추적 드롭다운·Parameter 화면·시퀀스) 검출 방식과 입력 모드를 그 모델에 맞춰 바꾸고 저장한다.
+    // → 'IR 입력에 RGB 모델' 같은 불일치가 생기지 않는다. 모델이 '자동'(빈값)이면 아무것도 바꾸지 않는다.
+
+    /// <summary>현재 검출 방식(DL/U-Net)의 모델에 방식·모드를 맞춘다. 다른 방식이거나 '자동'이면 null.</summary>
+    public string? AlignToActiveModel() => Method switch
+    {
+        WeldDetectionMethod.Dl => AlignToModel(Params.DlModelPath, WeldDetectionMethod.Dl),
+        WeldDetectionMethod.Unet => AlignToModel(Params.UnetModelPath, WeldDetectionMethod.Unet),
+        _ => null,
+    };
+
+    /// <summary>
+    /// 모델 파일명에 맞춰 검출 방식·입력 모드를 바꾸고 저장한다. 바뀐 게 있으면 안내 문구, 없으면 null.
+    /// </summary>
+    /// <param name="implied">파일명에 종류 표식이 없을 때의 종류(그 모델이 들어 있던 파라미터 기준).</param>
+    public string? AlignToModel(string? modelPath, WeldDetectionMethod implied)
+    {
+        if (string.IsNullOrWhiteSpace(modelPath)) return null;
+        var path = modelPath.Trim().Trim('"').Trim();
+        var name = Path.GetFileName(path);
+        var kind = WeldModelNames.KindOf(path, implied);
+        var changes = new List<string>();
+
+        // 다른 종류 파라미터에 잘못 넣은 모델이면(예: DL 경로에 weld_unet) 맞는 쪽 경로로 옮겨 저장.
+        if (kind != implied)
+        {
+            if (kind == WeldDetectionMethod.Unet) Params.UnetModelPath = path; else Params.DlModelPath = path;
+            _ = PersistModelPathAsync(kind, path);
+        }
+        if (Method != kind)
+        {
+            Method = kind;
+            _ = SaveDetectionSettingsAsync();
+            changes.Add($"검출 방식 {(kind == WeldDetectionMethod.Unet ? "U-Net" : "DL")}");
+        }
+        if (WeldModelNames.ModalityOf(path) is { } mod)
+        {
+            var target = WeldModelNames.ModeFor(mod, Params.Mode);
+            if (Params.Mode != target)
+            {
+                Params.Mode = target;
+                SaveMode();
+                changes.Add($"입력 {(target == WeldImageMode.Ir ? "IR" : "RGB")}");
+            }
+        }
+        if (changes.Count == 0) return null;
+        _logger.LogInformation("모델 {Model} 에 맞춰 변경: {Changes}", name, string.Join(", ", changes));
+        return $"모델 {name} 에 맞춰 {string.Join(", ", changes)} 로 변경";
+    }
+
+    private async Task PersistModelPathAsync(WeldDetectionMethod kind, string path)
+    {
+        var key = kind == WeldDetectionMethod.Unet
+            ? WeldDetectionSettingsStore.UnetModelPathKey
+            : WeldDetectionSettingsStore.DlModelPathKey;
+        await _persistGate.WaitAsync();
+        Interlocked.Increment(ref _selfWrites);
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var param = scope.ServiceProvider.GetRequiredService<ParameterService>();
+            await param.SetAsync(key, path, WeldDetectionSettingsStore.Describe(key));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "모델 경로 저장 실패: {Key}", key);
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _selfWrites);
+            _persistGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// 지정된 모델(현재 방식)의 모달리티가 현재 입력 모드와 다르면 경고 문구, 같거나 '자동'이면 null.
+    /// 사용자가 입력 모드만 손으로 바꿨을 때 안내용(시퀀스는 비드 찾기 전에 모델 기준으로 다시 맞춘다).
+    /// </summary>
+    public string? ModelModeMismatch()
+    {
+        var path = Method switch
+        {
+            WeldDetectionMethod.Dl => Params.DlModelPath,
+            WeldDetectionMethod.Unet => Params.UnetModelPath,
+            _ => null,
+        };
+        if (string.IsNullOrWhiteSpace(path) || WeldModelNames.ModalityOf(path) is not { } mod) return null;
+        bool modelIr = mod == "ir", inputIr = Params.Mode == WeldImageMode.Ir;
+        return modelIr == inputIr ? null
+            : $"⚠ 선택된 모델({Path.GetFileName(path.Trim().Trim('"'))})은 {(modelIr ? "IR" : "RGB")}용인데 입력이 {(inputIr ? "IR" : "RGB")}입니다 — 모델을 바꾸거나 '자동'으로 두세요.";
     }
 
     /// <summary>현재 검출 방식·Ridge 파라미터를 DB 에 저장한다(재시작 후 복원, 다른 화면·시퀀스와 공유).</summary>

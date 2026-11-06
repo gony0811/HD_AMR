@@ -220,13 +220,18 @@ public static class WeldSequenceSupport
         }
         catch { /* DB 미준비 — 인메모리 선택 유지 */ }
 
+        // 지정된 모델 파일명(종류·ir/rgb)에 맞춰 검출 방식·입력 모드를 맞춘다(모델이 기준 — 불일치 방지).
+        var aligned = weld.AlignToActiveModel();
+
         static string Name(string? path) => string.IsNullOrWhiteSpace(path) ? "자동" : Path.GetFileName(path.Trim().Trim('"'));
-        return weld.Method switch
+        var input = weld.Params.Mode == WeldImageMode.Ir ? "IR" : "RGB";
+        var label = weld.Method switch
         {
-            WeldDetectionMethod.Dl => $"DL 모델: {Name(weld.Params.DlModelPath)}",
-            WeldDetectionMethod.Unet => $"U-Net 모델: {Name(weld.Params.UnetModelPath)}",
-            var m => $"검출 방식: {m}",
+            WeldDetectionMethod.Dl => $"DL 모델: {Name(weld.Params.DlModelPath)}, 입력 {input}",
+            WeldDetectionMethod.Unet => $"U-Net 모델: {Name(weld.Params.UnetModelPath)}, 입력 {input}",
+            var m => $"검출 방식: {m}, 입력 {input}",
         };
+        return aligned is null ? label : $"{label} ({aligned})";
     }
 
     /// <summary>

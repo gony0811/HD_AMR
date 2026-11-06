@@ -1,3 +1,5 @@
+using HD.AMR.App.Models;
+
 namespace HD.AMR.App.Service.Vision;
 
 /// <summary>
@@ -35,6 +37,26 @@ public static class WeldModelNames
         var norm = path.Replace('\\', '/');
         return norm.EndsWith("/runs/hd/weights/best.onnx", StringComparison.OrdinalIgnoreCase);
     }
+
+    /// <summary>
+    /// 파일명에서 모델 종류. weld_unet → U-Net, weld_yolo/weld_seg → DL(YOLO). 표식이 없으면 <paramref name="implied"/>
+    /// (어느 파라미터에 들어 있었는지로 추정).
+    /// </summary>
+    public static WeldDetectionMethod KindOf(string path, WeldDetectionMethod implied)
+        => IsUnet(path) ? WeldDetectionMethod.Unet : IsYolo(path) ? WeldDetectionMethod.Dl : implied;
+
+    /// <summary>파일명에서 모달리티("ir"/"rgb"). 영문자에 붙지 않은 ir·rgb 토큰만 인정(예: _ir_, _rgb.). 없으면 null.</summary>
+    public static string? ModalityOf(string path)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(Path.GetFileNameWithoutExtension(path),
+            "(?<![a-z])(ir|rgb)(?![a-z])", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        return m.Success ? m.Value.ToLowerInvariant() : null;
+    }
+
+    /// <summary>모달리티에 맞는 입력 모드. RGB 는 현재가 RGB HSV 면 유지, 아니면 RGB Grayscale.</summary>
+    public static WeldImageMode ModeFor(string modality, WeldImageMode current)
+        => modality == "ir" ? WeldImageMode.Ir
+            : current == WeldImageMode.RgbHsv ? WeldImageMode.RgbHsv : WeldImageMode.RgbGrayscale;
 
     private static bool Contains(string path, string tag)
         => Path.GetFileName(path).Contains(tag, StringComparison.OrdinalIgnoreCase);

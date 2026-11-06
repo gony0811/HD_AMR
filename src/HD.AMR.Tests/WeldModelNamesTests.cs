@@ -60,3 +60,32 @@ public class WeldModelNamesTests
         Assert.True(WeldDetectionSettingsStore.IsKey(WeldDetectionSettingsStore.UnetModelPathKey));
     }
 }
+
+/// <summary>파일명 → 모델 종류·모달리티 해석(용접 추적·시퀀스가 방식·입력 모드를 맞추는 근거).</summary>
+public class WeldModelNameParsingTests
+{
+    [Theory]
+    [InlineData("[4점제외]weld_seg_ir_261106_밝기증강off.onnx", "ir")]
+    [InlineData("weld_seg_rgb_261106_밝기증강on.onnx", "rgb")]
+    [InlineData("weld_yolo_ir.onnx", "ir")]
+    [InlineData("weld_unet_RGB_1106.onnx", "rgb")]
+    [InlineData("weld_seg_ir_1012.onnx", "ir")]
+    [InlineData("weld_seg.onnx", null)]          // 모달리티 표식 없음 → 모드 유지
+    [InlineData("weld_yolo_mirror.onnx", null)]  // 단어 속 'ir' 는 무시
+    public void ModalityOf_ReadsIrRgbToken(string name, string? expected)
+        => Assert.Equal(expected, WeldModelNames.ModalityOf(name));
+
+    [Theory]
+    [InlineData("weld_unet_ir_261106.onnx", WeldDetectionMethod.Dl, WeldDetectionMethod.Unet)]   // DL 칸에 넣어도 U-Net
+    [InlineData("weld_seg_rgb_1106.onnx", WeldDetectionMethod.Unet, WeldDetectionMethod.Dl)]     // U-Net 칸에 넣어도 DL
+    [InlineData("custom_model.onnx", WeldDetectionMethod.Unet, WeldDetectionMethod.Unet)]        // 표식 없으면 넣은 칸 기준
+    public void KindOf_UsesNameTag_ElseImplied(string name, WeldDetectionMethod implied, WeldDetectionMethod expected)
+        => Assert.Equal(expected, WeldModelNames.KindOf(name, implied));
+
+    [Theory]
+    [InlineData("ir", WeldImageMode.RgbHsv, WeldImageMode.Ir)]
+    [InlineData("rgb", WeldImageMode.Ir, WeldImageMode.RgbGrayscale)]
+    [InlineData("rgb", WeldImageMode.RgbHsv, WeldImageMode.RgbHsv)]   // RGB 계열 세부 선택은 유지
+    public void ModeFor_MapsModality(string modality, WeldImageMode current, WeldImageMode expected)
+        => Assert.Equal(expected, WeldModelNames.ModeFor(modality, current));
+}
