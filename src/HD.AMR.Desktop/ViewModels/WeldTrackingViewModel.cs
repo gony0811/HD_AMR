@@ -84,7 +84,7 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
         }
     }
 
-    /// <summary>RGB 계열 입력이면 true — 자동 검사 시퀀스는 IR 모드만 허용하므로 경고 표시용.</summary>
+    /// <summary>RGB 계열 입력이면 true — RGB 시퀀스 동작(IR 기준)·ROI 지정 주의 안내 표시용.</summary>
     public bool IsRgbMode => _svc.Params.Mode != WeldImageMode.Ir;
 
     /// <summary>DL conf/mask 임계값 — 진행축과 같이 서비스 값을 직접 읽고 쓴다(설정 시 파라미터 저장).</summary>

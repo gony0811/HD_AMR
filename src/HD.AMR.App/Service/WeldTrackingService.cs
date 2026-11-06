@@ -143,7 +143,17 @@ public class WeldTrackingService
     public ScaleValidationResult? LastValidation { get; private set; }
 
     /// <summary>측정 d 를 현재 스케일(Depth 자동 ± 보정)로 mm 환산.</summary>
-    public double DMm(PeakMeasurement m) => m.DPixel * EffectiveMmPerPixel(m.DepthZ);
+    public double DMm(PeakMeasurement m) => m.DPixel * EffectiveMmPerPixel(m.DepthZ, m.IrGeometry);
+
+    /// <summary>
+    /// 시퀀스 호출 중(<see cref="FindPeakAsync"/>/<see cref="CapturePeakAsync"/>) 입력이 RGB 이면 true —
+    /// 비드 검출만 컬러로 하고 위치·거리 기준(Peak 오프셋, d, mm 환산)은 IR(=Depth) 좌표로 맞춘다.
+    /// 센터링 이동량이 IR 모드와 같아져 IR 기준으로 교시된 ROI·검사캠 오프셋을 그대로 쓸 수 있다.
+    /// </summary>
+    private volatile bool _seqIrGeometry;
+
+    /// <summary>위치·거리 계산 좌표계가 IR(=Depth)인지. IR 모드이거나 시퀀스 RGB 모드면 true.</summary>
+    private bool GeomIr => Params.Mode == WeldImageMode.Ir || _seqIrGeometry;
 
     public WeldTrackingState State { get; private set; } = WeldTrackingState.Idle;
     public string? Message { get; private set; }
@@ -442,9 +452,11 @@ public class WeldTrackingService
     /// </summary>
     public PeakFindResult FindPeak()
     {
-        var frame = Params.Mode == WeldImageMode.Ir ? _camera.LatestIr : _camera.LatestColor;
+        // Peak 는 Depth 로만 찾는다. 시퀀스 RGB 모드는 GeomIr=true 라 IR 좌표·IR fx 로 오프셋을 낸다(센터링 기준 IR).
+        bool geomIr = GeomIr;
+        var frame = geomIr ? _camera.LatestIr : _camera.LatestColor;
         if (frame is null)
-            return SetPeakFind(PeakFindResult.Fail(Params.Mode == WeldImageMode.Ir
+            return SetPeakFind(PeakFindResult.Fail(geomIr
                 ? "IR 프레임 없음 — 스트림/IR 활성 확인."
                 : "컬러 프레임 없음 — 스트림 시작/연결 확인."));
         if (PeakRoi is null)
@@ -455,7 +467,7 @@ public class WeldTrackingService
         OpenCvSharp.Mat? bgr = null, gray = null;
         try
         {
-            (bgr, gray) = WeldFrameDecoder.Decode(frame, Params.Mode);
+            (bgr, gray) = WeldFrameDecoder.Decode(frame, geomIr ? WeldImageMode.Ir : Params.Mode);
             gray?.Dispose();
             gray = null;
             if (bgr is null || bgr.Empty())
@@ -473,7 +485,7 @@ public class WeldTrackingService
             // 진행축 FOV 센터(= 회색 센터선)로부터의 부호 있는 거리.
             double fovCenter = (horiz ? bgr.Width : bgr.Height) / 2.0;
             double offsetPx = peak.ProgressPos - fovCenter;
-            double mmpp = EffectiveMmPerPixel(peak.DepthValue);
+            double mmpp = EffectiveMmPerPixel(peak.DepthValue, geomIr);
 
             _lastOverlay = WeldMaskAnalyzer.EncodePeakOverlay(
                 bgr, weldRoi, Params, peak.ProgressPos, "PEAK", PeakRoi,
@@ -526,6 +538,8 @@ public class WeldTrackingService
     /// <summary>Peak #1 또는 #2 에서 한 장을 캡처해 d 와 Peak 정보를 측정 슬롯에 저장.</summary>
     public void CapturePeak(int id)
     {
+        if (_seqIrGeometry) { CapturePeakRgbIrGeometry(id); return; }
+
         // Peak(진행축 위치)를 먼저 구해, 오버레이에 자홍색 Peak 선/라벨로 그릴 수 있게 한다.
         // Peak 는 Depth 에서 찾으므로, 검출 프레임이 IR 이면 1:1, RGB 면 공장 캘리브레이션으로
         // Depth↔Color 좌표를 맞춰(방법 ②) ProgressPos 를 검출 프레임 좌표로 변환한다.
@@ -556,14 +570,105 @@ public class WeldTrackingService
             At = DateTime.Now,
             OverlayJpeg = r.OverlayJpeg,
             DepthZ = depthZ,
+            IrGeometry = Params.Mode == WeldImageMode.Ir,
         };
+        StoreMeasurement(id, m, peak);
+    }
+
+    private void StoreMeasurement(int id, PeakMeasurement m, PeakInfo? peak)
+    {
         if (id == 1) { M1 = m; State = WeldTrackingState.Peak1Captured; }
         else { M2 = m; State = WeldTrackingState.Peak2Captured; }
-        Message = $"② 비드 찾기 #{id}: d={DMm(m):0.0}mm ({r.DPixel:0.0}px)"
+        Message = $"② 비드 찾기 #{id}: d={DMm(m):0.0}mm ({m.DPixel:0.0}px{(m.IrGeometry ? "" : ", 컬러")})"
             + (peak is { Found: true } ? $", peak@{peak.ProgressPos:0}px / {peak.DepthValue}mm" : "");
 
         // Pitch(mm)·두 측정이 있고 스케일이 사용 가능할 때만 자동 각도 산출.
         if (M1 is not null && M2 is not null && Pitch > 0 && ScaleAvailable) ComputeAngle();
+    }
+
+    /// <summary>
+    /// 시퀀스 RGB 모드 비드 찾기 — <b>검출은 컬러 영상</b>, <b>위치·거리 기준은 IR(=Depth) 좌표</b>.
+    /// Peak ROI·Bead ROI(<see cref="_override"/>)는 IR 픽셀이다. Peak 는 Depth 에서 직접 구하고, 그 깊이 Z 에서
+    /// Peak 선·IR 화면 중심선·ROI 를 공장 캘리브레이션(Depth→Color)으로 컬러에 정확히 투영해 검출한다.
+    /// d 의 기준선을 'IR 화면 중심선의 투영'으로 두므로, 컬러 d 를 IR 픽셀로 환산하면 IR 모드에서 잰 d 와 같은 값이 된다
+    /// → 센터링 이동량·각도가 IR 모드와 같은 기준이 되고, IR 기준으로 교시된 ROI·검사캠 오프셋을 그대로 쓴다.
+    /// </summary>
+    private void CapturePeakRgbIrGeometry(int id)
+    {
+        WeldDetectionResult Fail(string msg)
+        {
+            var f = WeldDetectionResult.Fail(msg);
+            LastDetect = f;
+            Message = $"② 비드 찾기 #{id} 실패: {msg}";
+            return f;
+        }
+
+        if (!Detector.IsAvailable) { Fail("검출기가 비활성 상태입니다(OpenCV 네이티브 없음 — Windows에서만 지원)."); return; }
+        var depth = _camera.LatestDepth;
+        var color = _camera.LatestColor;
+        if (depth is null) { Fail("Depth 프레임 없음 — 스트림 확인."); return; }
+        if (color is null) { Fail("컬러 프레임 없음 — RGB 모드는 컬러 스트림이 필요합니다."); return; }
+        if (PeakRoi is not { } peakRoiIr || WeldRoi is not { } weldRoiIr) { Fail("Peak/Bead ROI 없음."); return; }
+        if (BuildMapper(depth) is not { } mapper) { Fail("Depth↔컬러 캘리브레이션 없음 — IR 모드로 전환하거나 카메라 연결을 확인하세요."); return; }
+
+        bool horiz = Params.ProgressAxis == WeldProgressAxis.Horizontal;
+        var dp = DepthPeakAnalyzer.Analyze(depth, peakRoiIr, Params.ProgressAxis);
+
+        // 투영 깊이 Z: Peak 깊이 → Bead ROI 중앙 깊이 → 기본 작업거리.
+        double z = dp.Found ? dp.DepthValue : 0;
+        if (z <= 0) z = SampleDepthMm(depth, weldRoiIr.X + weldRoiIr.Width / 2.0, weldRoiIr.Y + weldRoiIr.Height / 2.0);
+        if (z <= 0) z = _settings.DefaultWorkDistanceMm;
+
+        // 측정 진행좌표(IR) = Peak 위치(없으면 Bead ROI 중앙), 기준 cross 좌표(IR) = IR 화면 중심선.
+        double progIr = dp.Found ? dp.ProgressPos
+            : horiz ? weldRoiIr.X + weldRoiIr.Width / 2.0 : weldRoiIr.Y + weldRoiIr.Height / 2.0;
+        double centerCrossIr = (horiz ? depth.Height : depth.Width) / 2.0;
+        if (mapper.DepthToColor(horiz ? progIr : centerCrossIr, horiz ? centerCrossIr : progIr, z) is not { } refC)
+        { Fail("IR 중심선을 컬러로 투영하지 못했습니다(캘리브레이션 확인)."); return; }
+        double progC = horiz ? refC.u : refC.v;
+        double refCrossC = horiz ? refC.v : refC.u;
+
+        if (mapper.MapDepthRoiToColor(weldRoiIr, z, color.Width, color.Height) is not { } weldRoiC)
+        { Fail("Bead ROI 를 컬러 영상으로 투영하지 못했습니다 — ROI 위치/거리를 확인하세요."); return; }
+        var peakRoiC = mapper.MapDepthRoiToColor(peakRoiIr, z, color.Width, color.Height);
+
+        // 오버레이용 Peak cross 구간도 컬러로 투영.
+        double? cStart = null, cEnd = null;
+        if (dp is { Found: true, HasCrossSpan: true }
+            && mapper.DepthToColor(horiz ? dp.ProgressPos : dp.CrossStart, horiz ? dp.CrossStart : dp.ProgressPos, z) is { } ca
+            && mapper.DepthToColor(horiz ? dp.ProgressPos : dp.CrossEnd, horiz ? dp.CrossEnd : dp.ProgressPos, z) is { } cb)
+        {
+            cStart = horiz ? ca.v : ca.u;
+            cEnd = horiz ? cb.v : cb.u;
+        }
+
+        // 기준선 = 투영된 IR 중심선(회색 선이 이 위치에 그려진다), 측정 위치 = 투영된 Peak 선.
+        var r = Detector.DetectWeld(color, weldRoiC, Params, WeldReferenceMode.PeakLine, refCrossC,
+            progC, $"P{id}", peakRoiC, cStart, cEnd);
+        LastDetect = r;
+        _lastOverlay = r.OverlayJpeg;
+        if (!r.Success) { Message = $"② 비드 찾기 #{id} 실패: {r.Message}"; return; }
+
+        // 컬러 d(px) → IR d(px). 같은 깊이에서 두 카메라 초점거리 비율(축 거의 평행).
+        double dIr = r.DPixel * mapper.CrossScaleColorToDepth(horiz);
+        double wu = horiz ? progIr : centerCrossIr + dIr;
+        double wv = horiz ? centerCrossIr + dIr : progIr;
+        double depthZ = SampleDepthMm(depth, wu, wv);
+        if (depthZ <= 0) depthZ = z;
+
+        var m = new PeakMeasurement
+        {
+            PeakId = id,
+            DPixel = dIr,
+            Confidence = r.Confidence,
+            Peak = dp.Found ? dp : null,
+            At = DateTime.Now,
+            OverlayJpeg = r.OverlayJpeg,
+            DepthZ = depthZ,
+            IrGeometry = true,
+        };
+        StoreMeasurement(id, m, m.Peak);
+        Message += $" [RGB 검출·IR 기준, 컬러 d={r.DPixel:0.0}px]";
     }
 
     /// <summary>
@@ -576,7 +681,8 @@ public class WeldTrackingService
         var depth = _camera.LatestDepth;
         if (depth is null || PeakRoi is null) return null;
 
-        if (Params.Mode == WeldImageMode.Ir)
+        // IR 모드·시퀀스 RGB 모드(IR 기준)는 Peak ROI 가 IR(=Depth) 픽셀이라 그대로 분석.
+        if (GeomIr)
             return DepthPeakAnalyzer.Analyze(depth, PeakRoi, Params.ProgressAxis);
 
         // RGB 모드: ROI(컬러)→Depth 매핑해 분석 → peak(Depth)→컬러 재투영.
@@ -639,8 +745,8 @@ public class WeldTrackingService
         }
 
         // 측정마다 그 지점의 스케일로 d 를 mm 로 환산. 자동이면 Z/fx, 고정이면 mm/px.
-        double mmpp1 = EffectiveMmPerPixel(M1.DepthZ);
-        double mmpp2 = EffectiveMmPerPixel(M2.DepthZ);
+        double mmpp1 = EffectiveMmPerPixel(M1.DepthZ, M1.IrGeometry);
+        double mmpp2 = EffectiveMmPerPixel(M2.DepthZ, M2.IrGeometry);
         double d1 = M1.DPixel * mmpp1;   // mm
         double d2 = M2.DPixel * mmpp2;   // mm
 
@@ -684,10 +790,12 @@ public class WeldTrackingService
         try
         {
             _override = new RoiOverride(peakRoi, WeldRoi);
+            _seqIrGeometry = Params.Mode != WeldImageMode.Ir;   // 시퀀스 ROI 는 IR 픽셀 — RGB 여도 IR 기준
             return await Task.Run(FindPeak, ct);
         }
         finally
         {
+            _seqIrGeometry = false;
             _override = null;
             _gate.Release();
         }
@@ -704,11 +812,13 @@ public class WeldTrackingService
         try
         {
             _override = new RoiOverride(peakRoi, weldRoi);
+            _seqIrGeometry = Params.Mode != WeldImageMode.Ir;   // RGB 면 컬러로 검출하되 d·mm 는 IR 기준
             await Task.Run(() => CapturePeak(id), ct);
             return (id == 1 ? M1 : M2, LastDetect);
         }
         finally
         {
+            _seqIrGeometry = false;
             _override = null;
             _gate.Release();
         }
@@ -806,19 +916,22 @@ public class WeldTrackingService
 
     // ── 스케일(mm 환산) ─────────────────────────────────────────────
     /// <summary>Depth 자동 mm/px = Z/fx (기본). 2점 보정계수가 켜져 있으면 곱해 보강한다.</summary>
-    private double EffectiveMmPerPixel(double depthZ)
+    /// <param name="ir">픽셀 좌표계가 IR(=Depth)이면 true, 컬러면 false — 해당 카메라의 fx 를 쓴다.</param>
+    private double EffectiveMmPerPixel(double depthZ, bool ir)
     {
-        double fx = Fx();
+        double fx = Fx(ir);
         if (fx <= 0) return 0;
         double z = depthZ > 0 ? depthZ : _settings.DefaultWorkDistanceMm;
         double mmpp = z / fx;                                          // Depth 자동 기본
         return ScaleCorrectionEnabled ? mmpp * ScaleCorrection : mmpp; // 2점 보정 보강
     }
 
-    /// <summary>현재 검출 모드의 fx(px) = (영상폭/2)/tan(HFov/2). FOV·해상도 기반(간이 intrinsic).</summary>
-    private double Fx()
+    /// <summary>현재 검출 모드의 fx(px). 2점 보정·검증처럼 화면(검출 프레임) 좌표를 다루는 곳에서 쓴다.</summary>
+    private double Fx() => Fx(Params.Mode == WeldImageMode.Ir);
+
+    /// <summary>IR 또는 컬러 카메라의 fx(px) = (영상폭/2)/tan(HFov/2). FOV·해상도 기반(간이 intrinsic).</summary>
+    private double Fx(bool ir)
     {
-        bool ir = Params.Mode == WeldImageMode.Ir;
         var frame = ir ? _camera.LatestIr : _camera.LatestColor;
         int w = frame?.Width ?? (ir ? _camera.Settings.IrWidth : _camera.Settings.ColorWidth);
         double hfov = ir ? _settings.IrHFovDeg : _settings.ColorHFovDeg;

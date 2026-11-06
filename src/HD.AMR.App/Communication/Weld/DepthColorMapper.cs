@@ -50,6 +50,28 @@ public sealed class DepthColorMapper
         return (_cfx * xc / zc + _ccx, _cfy * yc / zc + _ccy);
     }
 
+    /// <summary>
+    /// 같은 깊이에서 컬러 픽셀 거리 → Depth(=IR) 픽셀 거리 배율. 진행축이 가로면 cross 축은 세로(fy), 세로면 가로(fx).
+    /// 두 카메라 축이 거의 평행(D435 회전 ≪1°)하므로 기준점 근처의 작은 거리 환산에 쓴다.
+    /// </summary>
+    public double CrossScaleColorToDepth(bool horizontalProgress)
+        => horizontalProgress ? _dfy / _cfy : _dfx / _cfx;
+
+    /// <summary>Depth 좌표 ROI 를 깊이 zMm 평면 기준으로 Color 좌표 ROI 로 정확 투영(네 꼭짓점 외접 사각형, 클램프). 실패 시 null.</summary>
+    public RoiRect? MapDepthRoiToColor(RoiRect r, double zMm, int colorW, int colorH)
+    {
+        double minU = double.MaxValue, minV = double.MaxValue, maxU = double.MinValue, maxV = double.MinValue;
+        foreach (var (u, v) in new[] { (r.X, r.Y), (r.X + r.Width, r.Y), (r.X, r.Y + r.Height), (r.X + r.Width, r.Y + r.Height) })
+        {
+            if (DepthToColor(u, v, zMm) is not { } c) return null;
+            minU = Math.Min(minU, c.u); maxU = Math.Max(maxU, c.u);
+            minV = Math.Min(minV, c.v); maxV = Math.Max(maxV, c.v);
+        }
+        int x0 = Math.Clamp((int)Math.Floor(minU), 0, colorW - 1), y0 = Math.Clamp((int)Math.Floor(minV), 0, colorH - 1);
+        int x1 = Math.Clamp((int)Math.Ceiling(maxU), 0, colorW), y1 = Math.Clamp((int)Math.Ceiling(maxV), 0, colorH);
+        return x1 - x0 >= 2 && y1 - y0 >= 2 ? new RoiRect(x0, y0, x1 - x0, y1 - y0) : null;
+    }
+
     /// <summary>Color 픽셀 → Depth 픽셀(시차 무시 근사). ROI 영역 지정용.</summary>
     public (double u, double v) ColorToDepthApprox(double u, double v)
         => ((u - _ccx) * (_dfx / _cfx) + _dcx, (v - _ccy) * (_dfy / _cfy) + _dcy);

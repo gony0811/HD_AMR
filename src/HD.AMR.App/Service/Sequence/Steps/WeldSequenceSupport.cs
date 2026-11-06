@@ -367,7 +367,7 @@ public static class WeldSequenceSupport
             : camera.PixelDeltaToMm(0, 1.0 / frame.Height, depthMm).DyMm;
 
     /// <summary>
-    /// ⑤~⑫ 공통 선행조건 — 코봇/카메라 연결, IR 프레임, IR 모드, 검출기 가용성.
+    /// ⑤~⑫ 공통 선행조건 — 코봇/카메라 연결, IR 프레임, (RGB 입력이면) 컬러 프레임·Depth↔컬러 캘리브레이션, 검출기 가용성.
     /// ParameterService 가 비동기라 pitch 검사는 여기 넣지 않고 ExecuteAsync 앞부분에서 한다.
     /// </summary>
     public static StepValidation ValidateCommon(
@@ -377,10 +377,17 @@ public static class WeldSequenceSupport
             return StepValidation.Fail("코봇 RPC 미연결");
         if (!camera.IsConnected)
             return StepValidation.Fail("카메라 미연결");
+        // IR 프레임은 입력 모드와 무관하게 필요하다 — ROI·센터링·mm 환산의 위치 기준이 IR(=Depth) 좌표다.
         if (camera.LatestIr is null)
             return StepValidation.Fail("IR 프레임 없음 — IR 스트림 활성 상태를 확인하세요.");
+        // RGB 입력: 비드는 컬러 영상에서 찾고, IR 기준 ROI·중심선을 공장 캘리브레이션으로 컬러에 투영한다.
         if (weld.Params.Mode != WeldImageMode.Ir)
-            return StepValidation.Fail("IR 모드가 아닙니다 — Weld 페이지에서 IR 모드로 전환하세요.");
+        {
+            if (camera.LatestColor is null)
+                return StepValidation.Fail("컬러 프레임 없음 — RGB 입력 모드는 컬러 스트림이 필요합니다.");
+            if (camera.GetD2CParams() is not { IsValid: true })
+                return StepValidation.Fail("Depth↔컬러 캘리브레이션 없음 — RGB 입력 모드를 쓸 수 없습니다(IR 모드로 전환하거나 카메라 연결 확인).");
+        }
         if (requireDetector && !weld.DetectorAvailable)
             return StepValidation.Fail("비드 검출기 비활성 (OpenCV 네이티브 없음 — Windows 전용)");
 

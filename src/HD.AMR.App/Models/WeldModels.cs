@@ -244,6 +244,12 @@ public sealed class PeakMeasurement
 
     /// <summary>비드 중심점 위치의 깊이(mm, 0=무효). Depth 자동 스케일(mm/px=Z/fx) 환산용.</summary>
     public double DepthZ { get; init; }
+
+    /// <summary>
+    /// <see cref="DPixel"/> 이 IR(=Depth) 픽셀 기준이면 true, 컬러 픽셀 기준이면 false. mm 환산 시 해당 카메라의 fx 를 쓴다.
+    /// 시퀀스는 RGB 로 검출해도 IR 기준으로 환산해 저장하고, 화면 모드가 나중에 바뀌어도 환산이 섞이지 않게 한다.
+    /// </summary>
+    public bool IrGeometry { get; init; } = true;
 }
 
 /// <summary>스케일 모드. AutoDepth=깊이로 mm/px 자동, Fixed=고정 mm/px(2점 보정/수동).</summary>

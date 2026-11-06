@@ -93,13 +93,15 @@ public class BeadFindStep : ISequenceStep
         // 비드 센터링(⑦⁺/⑪⁺)이 cross 축 이동량으로 소비한다.
         context.Bag[WeldSequenceSupport.BeadDMmBagKey(_peakId)] = dMm;
 
+        // d(px)는 측정 슬롯 값(m.DPixel)을 쓴다 — RGB 입력이면 컬러로 검출한 d 를 IR 기준으로 환산한 값이다.
+        var input = _weld.Params.Mode == WeldImageMode.Ir ? "IR" : "RGB(IR 기준)";
         _logger.LogInformation(
-            "[Bead{Id} 찾기] 찾음: d={DMm:0.0}mm ({DPx:0.0}px), coverage={Cov:P0}, 외삽={Ex:0}px, ROI={Roi}",
-            _peakId, dMm, detect.DPixel, detect.Confidence, extrapPx, roiSrc);
+            "[Bead{Id} 찾기] 찾음: d={DMm:0.0}mm ({DPx:0.0}px), 입력={Input}, coverage={Cov:P0}, 외삽={Ex:0}px, ROI={Roi}",
+            _peakId, dMm, m.DPixel, input, detect.Confidence, extrapPx, roiSrc);
 
         var extrapNote = extrapPx > 0 ? $"외삽 {extrapPx:0}px" : "외삽 없음";
         return StepResult.Ok(
-            $"Bead{_peakId} 찾음 — d={dMm:+0.0;-0.0}mm ({detect.DPixel:+0.0;-0.0}px), " +
+            $"Bead{_peakId} 찾음 — d={dMm:+0.0;-0.0}mm ({m.DPixel:+0.0;-0.0}px), 입력 {input}, " +
             $"coverage={detect.Confidence:P0}, {extrapNote}, ROI={roiSrc}");
     }
 
