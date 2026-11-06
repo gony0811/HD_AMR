@@ -40,7 +40,7 @@ public sealed class UnetWeldVisionDetector : IUnetWeldVisionDetector
         if (modelPath is null || !File.Exists(modelPath))
             return WeldDetectionResult.Fail(explicitPath
                 ? $"U-Net 모델 파일이 없습니다: {modelPath ?? p.UnetModelPath} — 저장된 모델 경로(Weld.Unet.ModelPath)를 확인하세요(빈값=자동)."
-                : $"U-Net 모델이 없습니다: {WeldModelNames.UnetExportName(modality)} — 비전 학습의 U-Net 탭에서 학습 → 내보내기({modality})를 먼저 완료하거나 Weld.Unet.ModelPath 에 모델을 지정하세요.");
+                : "U-Net 모델이 지정되지 않았습니다 — 용접 추적에서 U-Net 모델을 선택하거나 파라미터 Weld.Unet.ModelPath 에 파일명을 입력하세요.");
 
         Mat? bgr = null, gray = null;
         try

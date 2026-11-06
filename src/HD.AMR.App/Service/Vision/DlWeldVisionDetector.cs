@@ -42,7 +42,7 @@ public sealed class DlWeldVisionDetector : IDlWeldVisionDetector
         if (modelPath is null || !File.Exists(modelPath))
             return WeldDetectionResult.Fail(explicitPath
                 ? $"DL 모델 파일이 없습니다: {modelPath ?? p.DlModelPath} — 저장된 모델 경로(Weld.Dl.ModelPath)를 확인하세요(빈값=자동)."
-                : $"DL 모델이 없습니다: {Path.GetFileName(modelPath) ?? WeldModelNames.YoloExportName(modality)} — 비전 학습에서 ② 학습 → ③ 내보내기({modality})를 먼저 완료하거나 Weld.Dl.ModelPath 에 모델을 지정하세요.");
+                : "YOLO 모델이 지정되지 않았습니다 — 용접 추적에서 YOLO 모델을 선택하거나 파라미터 Weld.Dl.ModelPath 에 파일명을 입력하세요.");
 
         Mat? bgr = null, gray = null;
         try

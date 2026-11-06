@@ -65,8 +65,8 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
     }
     /// <summary>
     /// 검출 입력 영상(0 IR, 1 RGB Grayscale, 2 RGB HSV(S)) — 진행축처럼 서비스 값을 직접 읽고 쓴다.
-    /// 바꾸면 파라미터(Weld.ImageMode)에 저장되어 재시작 후에도 유지된다. DL 모델은 이 값에 맞춰
-    /// weld_seg_{ir|rgb}.onnx 를 자동 선택(DL 모델 '자동')하므로, 학습한 모델의 모달리티와 맞춰야 한다.
+    /// 바꾸면 파라미터(Weld.ImageMode)에 저장되어 재시작 후에도 유지된다. 모델을 고르면 파일명(ir/rgb)에 맞춰
+    /// 자동 지정되므로 보통은 손댈 필요가 없다(학습한 모델의 모달리티와 맞아야 한다).
     /// </summary>
     public int ImageModeIndex
     {
@@ -80,7 +80,7 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
             EditorImage = null; // 다른 카메라 스트림(IR↔컬러)으로 전환 — 이전 영상 잔상 제거
             OnPropertyChanged();
             OnPropertyChanged(nameof(IsRgbMode));
-            _ = LoadDlModelsAsync();   // 모델 드롭다운 '자동 (weld_yolo/weld_unet_{ir|rgb}.onnx)' 표시 갱신
+            _ = LoadDlModelsAsync();   // 모델 목록 갱신
             if (_svc.ModelModeMismatch() is { } warn) Message = warn;
         }
     }
@@ -127,7 +127,7 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
     public bool DetectorAvailable => _svc.DetectorAvailable;
     public string MethodText => _svc.Method switch
     {
-        WeldDetectionMethod.Dl => "DL 모델",
+        WeldDetectionMethod.Dl => "YOLO 세그멘테이션",
         WeldDetectionMethod.Ridge => "Ridge 필터",
         WeldDetectionMethod.Unet => "U-Net",
         _ => "파라미터(CV)",
@@ -268,7 +268,7 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
     public bool IsUnet => MethodIndex == 3;
     /// <summary>모델 파일을 쓰는 검출 방식(DL·U-Net)이면 모델 드롭다운 표시.</summary>
     public bool IsModelMethod => IsDl || IsUnet;
-    public string ModelLabel => IsUnet ? "U-Net 모델" : "DL 모델";
+    public string ModelLabel => IsUnet ? "U-Net 모델" : "YOLO 모델";
 
     public System.Collections.ObjectModel.ObservableCollection<DlModelOption> DlModels { get; } = new();
     [ObservableProperty] private DlModelOption? _selectedDlModel;
@@ -294,16 +294,15 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
         try
         {
             bool unet = IsUnet;
-            var modality = _svc.Params.Mode == WeldImageMode.Ir ? "ir" : "rgb";
-            var autoName = unet ? WeldModelNames.UnetExportName(modality) : WeldModelNames.YoloExportName(modality);
+            // '자동' 항목은 두지 않는다 — 내보낸 뒤 이름을 바꿔 보관하므로 자동 파일명(weld_yolo_ir.onnx 등)은 보통 없다.
+            // 저장값이 비어 있으면 아무것도 선택하지 않고 '모델을 선택하세요' 로 보여 준다.
             DlModels.Clear();
-            DlModels.Add(new DlModelOption("", $"자동 ({autoName})"));
             foreach (var m in models.Where(m => unet ? WeldModelNames.IsUnet(m.Path) : WeldModelNames.IsYolo(m.Path)))
                 DlModels.Add(new DlModelOption(m.Path, m.Name));
 
             var current = CurrentModelPath?.Trim().Trim('"').Trim() ?? "";
             DlModelOption? match = current.Length == 0
-                ? DlModels[0]
+                ? null
                 : DlModels.FirstOrDefault(o => o.Path.Length > 0 &&
                     (string.Equals(o.Path, current, StringComparison.OrdinalIgnoreCase) ||
                      (!System.IO.Path.IsPathFullyQualified(current) &&
@@ -311,7 +310,7 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
             if (match is null)
             {
                 match = new DlModelOption(current, $"⚠ 파일 없음: {System.IO.Path.GetFileName(current)}", Exists: false);
-                DlModels.Insert(1, match);
+                DlModels.Insert(0, match);
             }
             SelectedDlModel = match;
         }
@@ -331,7 +330,7 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
             EditorImage = null;   // IR↔컬러 스트림 전환
             OnPropertyChanged(nameof(ImageModeIndex));
             OnPropertyChanged(nameof(IsRgbMode));
-            _ = LoadDlModelsAsync();   // '자동 (…_{ir|rgb})' 표시 갱신
+            _ = LoadDlModelsAsync();   // 목록 표시 갱신
         }
     }
 

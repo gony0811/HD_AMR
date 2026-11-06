@@ -82,7 +82,7 @@
                         <TextBlock Text="검출 방식" FontWeight="SemiBold" />
                         <StackPanel Orientation="Horizontal" Spacing="8">
                             <ComboBox SelectedIndex="{Binding MethodIndex}" Width="200">
-                                <ComboBoxItem>🧠 DL 모델</ComboBoxItem>
+                                <ComboBoxItem>🧠 YOLO 세그멘테이션</ComboBoxItem>
                                 <ComboBoxItem>⚙ 파라미터(CV)</ComboBoxItem>
                                 <ComboBoxItem>〰 Ridge 필터(학습 불필요)</ComboBoxItem>
                                 <ComboBoxItem>🧩 U-Net 세그멘테이션</ComboBoxItem>
@@ -95,7 +95,7 @@
                                 <ComboBoxItem>세로 (Peak 선 가로)</ComboBoxItem>
                             </ComboBox>
                         </StackPanel>
-                        <!-- 입력 영상 = 학습한 모델의 모달리티와 맞춰야 한다. 모델 '자동'은 입력에 맞춰 weld_yolo/weld_unet_{ir|rgb}.onnx 를
+                        <!-- 입력 영상 = 학습한 모델의 모달리티와 맞춰야 한다. 모델을 고르면 파일명(ir/rgb)에 맞춰 입력이 자동 지정된다. 모델 미지정이면 weld_yolo/weld_unet_{ir|rgb}.onnx 를
                              사용. Ridge·CV 검출도 이 입력 영상을 쓴다. 바꾸면 파라미터(Weld.ImageMode)에 저장되어 재시작 후에도 유지된다. -->
                         <StackPanel Orientation="Horizontal" Spacing="8">
                             <TextBlock Classes="axis" Text="입력" VerticalAlignment="Center" />
@@ -111,7 +111,8 @@
                              고르는 즉시 Weld.Dl.ModelPath / Weld.Unet.ModelPath 저장(시퀀스·재시작 공유). -->
                         <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding IsModelMethod}">
                             <TextBlock Classes="axis" Text="{Binding ModelLabel}" VerticalAlignment="Center" />
-                            <ComboBox ItemsSource="{Binding DlModels}" SelectedItem="{Binding SelectedDlModel}" MinWidth="320" MaxWidth="520" />
+                            <ComboBox ItemsSource="{Binding DlModels}" SelectedItem="{Binding SelectedDlModel}" MinWidth="320" MaxWidth="520"
+                                      PlaceholderText="모델을 선택하세요" />
                             <Button Content="⟳" Command="{Binding LoadDlModelsCommand}" ToolTip.Tip="모델 목록 새로고침 (내보내기·이름 변경 후)" />
                         </StackPanel>
                         <!-- Ridge 검출 파라미터 — 바꾸는 즉시 DB(Weld.Ridge.*) 저장, 시퀀스·재시작 후에도 동일 값 사용. -->
@@ -138,7 +139,7 @@
                                            Text="σ 최대를 낮추면 넓은 하이라이트(코로게이션 능선) 응답이 줄고, 극성을 비드 쪽으로 고르면 반대 극성의 능선이 빠집니다. 허용각은 진행축 대비 선 기울기 허용치입니다. 바꾼 뒤 Detect 로 확인하세요." />
                             </StackPanel>
                         </Border>
-                        <!-- DL 임계값 — DL 모델 방식에서만 쓰인다. 바꾸면 파라미터(Weld.Dl.*)에 저장되고 시퀀스도 같은 값을 쓴다. -->
+                        <!-- YOLO 임계값 — YOLO 세그멘테이션 방식에서만 쓰인다. 바꾸면 파라미터(Weld.Dl.*)에 저장되고 시퀀스도 같은 값을 쓴다. -->
                         <Grid ColumnDefinitions="*,*" IsVisible="{Binding IsDl}">
                             <StackPanel Grid.Column="0" Margin="0,0,8,0">
                                 <TextBlock Classes="axis" Text="{Binding DlConfidenceText}" />

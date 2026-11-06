@@ -19,7 +19,7 @@
 
 <div class="mb-2">
     <span class="badge @(Svc.DetectorAvailable ? "bg-success" : "bg-secondary")">
-        검출 @(Svc.Method switch { WeldDetectionMethod.Dl => "DL 모델", WeldDetectionMethod.Ridge => "Ridge 필터", WeldDetectionMethod.Unet => "U-Net", _ => "파라미터(CV)" })
+        검출 @(Svc.Method switch { WeldDetectionMethod.Dl => "YOLO 세그멘테이션", WeldDetectionMethod.Ridge => "Ridge 필터", WeldDetectionMethod.Unet => "U-Net", _ => "파라미터(CV)" })
         · @(Svc.DetectorAvailable ? "사용가능" : "비활성(Windows 전용)")
     </span>
     <span class="badge bg-info text-dark">상태: @Svc.State</span>
@@ -114,7 +114,7 @@
                 <div class="btn-group btn-group-sm" role="group">
                     <input type="radio" class="btn-check" name="detmethod" id="dm_dl"
                            checked="@(Svc.Method == WeldDetectionMethod.Dl)" @onchange='() => SetMethod(WeldDetectionMethod.Dl)' />
-                    <label class="btn btn-outline-primary" for="dm_dl">🧠 DL 모델</label>
+                    <label class="btn btn-outline-primary" for="dm_dl">🧠 YOLO 세그멘테이션</label>
                     <input type="radio" class="btn-check" name="detmethod" id="dm_param"
                            checked="@(Svc.Method == WeldDetectionMethod.Param)" @onchange='() => SetMethod(WeldDetectionMethod.Param)' />
                     <label class="btn btn-outline-secondary" for="dm_param">⚙ 파라미터(CV)</label>
@@ -155,7 +155,7 @@
                             <label class="form-label mb-0 small">모델 ⓘ</label>
                             <div class="d-flex gap-1">
                                 <select class="form-select form-select-sm" style="min-width:210px" @bind="Svc.Params.DlModelPath" @bind:after="OnModelChangedAsync">
-                                    <option value="">자동 (weld_yolo_@(Svc.Params.Mode == WeldImageMode.Ir ? "ir" : "rgb").onnx)</option>
+                                    <option value="" disabled>모델을 선택하세요</option>
                                     @foreach (var m in _models)
                                     {
                                         <option value="@m.Path">@m.Name</option>
@@ -545,7 +545,7 @@
 
     /// <summary>현재 검출에 실제로 쓰이는 모델 표시명. 선택 없으면 모달리티 자동 이름.</summary>
     private string EffectiveModelName => string.IsNullOrWhiteSpace(Svc.Params.DlModelPath)
-        ? $"weld_yolo_{(Svc.Params.Mode == WeldImageMode.Ir ? "ir" : "rgb")}.onnx (자동)"
+        ? "미지정 — 모델을 선택하세요"
         : System.IO.Path.GetFileName(Svc.Params.DlModelPath);
 
     protected override void OnInitialized() => _ref = DotNetObjectReference.Create(this);

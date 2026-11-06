@@ -208,7 +208,7 @@ public static class WeldSequenceSupport
                is SurfaceOrientation.ChamferLower or SurfaceOrientation.ChamferUpper;
 
     /// <summary>저장된 비드 검출 모델 선택(DL=YOLO, U-Net)을 <see cref="WeldTrackingService.Params"/> 에 적용한다.
-    /// 키 미존재/DB 미준비면 현재 인메모리 선택을 유지한다. 현재 검출 방식의 모델 표시를 반환(예: "DL 모델: 자동").</summary>
+    /// 키 미존재/DB 미준비면 현재 인메모리 선택을 유지한다. 현재 검출 방식의 모델 표시를 반환(예: "YOLO 모델: weld_yolo_ir_1106.onnx").</summary>
     public static async Task<string> ApplyDlModelAsync(ParameterService param, WeldTrackingService weld)
     {
         try
@@ -223,11 +223,11 @@ public static class WeldSequenceSupport
         // 지정된 모델 파일명(종류·ir/rgb)에 맞춰 검출 방식·입력 모드를 맞춘다(모델이 기준 — 불일치 방지).
         var aligned = weld.AlignToActiveModel();
 
-        static string Name(string? path) => string.IsNullOrWhiteSpace(path) ? "자동" : Path.GetFileName(path.Trim().Trim('"'));
+        static string Name(string? path) => string.IsNullOrWhiteSpace(path) ? "미지정" : Path.GetFileName(path.Trim().Trim('"'));
         var input = weld.Params.Mode == WeldImageMode.Ir ? "IR" : "RGB";
         var label = weld.Method switch
         {
-            WeldDetectionMethod.Dl => $"DL 모델: {Name(weld.Params.DlModelPath)}, 입력 {input}",
+            WeldDetectionMethod.Dl => $"YOLO 모델: {Name(weld.Params.DlModelPath)}, 입력 {input}",
             WeldDetectionMethod.Unet => $"U-Net 모델: {Name(weld.Params.UnetModelPath)}, 입력 {input}",
             var m => $"검출 방식: {m}, 입력 {input}",
         };
