@@ -1,7 +1,8 @@
 """
-용접선 U-Net 세그멘테이션 학습/내보내기 (CPU, PyTorch 만 필요 — ultralytics 설치 시 함께 들어옴).
+용접선 U-Net 세그멘테이션 학습/내보내기 (PyTorch 만 필요 — ultralytics 설치 시 함께 들어옴).
 
   python weld_unet.py train  --data <dataset> --out <runs/unet> [--epochs 100 --batch 8 --crop 384 --patience 30 --base 16]
+                             [--device cpu|mps|cuda]   (기본 cpu. 요청 장치를 못 쓰면 cpu 로 대체)
   python weld_unet.py export --weights <runs/unet/best.pt> --out <models/weld_unet_ir.onnx> [--opset 17]
 
 데이터셋 구조(앱의 '데이터셋 변환'이 만든다):
@@ -170,15 +171,32 @@ def dice_loss(logits, y, eps=1.0):
     return (1 - (2 * inter + eps) / (den + eps)).mean()
 
 
+def pick_device(name):
+    """요청 장치를 쓸 수 있으면 그대로, 아니면 cpu. (mps=Apple GPU, cuda=NVIDIA GPU)"""
+    name = (name or "cpu").lower()
+    if name == "mps" and getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
+        return torch.device("mps")
+    if name == "cuda" and torch.cuda.is_available():
+        return torch.device("cuda")
+    if name != "cpu":
+        print(f"WARN 장치 '{name}' 사용 불가 — cpu 로 학습합니다.", flush=True)
+    return torch.device("cpu")
+
+
+def cpu_state(model):
+    # 저장 가중치는 항상 CPU 텐서로 — GPU(mps/cuda)에서 학습해도 다른 PC(Windows CPU)에서 그대로 로드·내보내기 가능.
+    return {k: v.detach().cpu() for k, v in model.state_dict().items()}
+
+
 @torch.no_grad()
-def evaluate(model, samples):
+def evaluate(model, samples, device):
     model.eval()
     inter = union = psum = tsum = 0.0
     for img, msk in samples:
         h, w = img.shape
         H, W = int(math.ceil(h / 32) * 32), int(math.ceil(w / 32) * 32)
-        x = torch.from_numpy(pad_to(img, H, W)[None, None].astype(np.float32) / 255.0)
-        pred = (torch.sigmoid(model(x))[0, 0, :h, :w].numpy() > 0.5)
+        x = torch.from_numpy(pad_to(img, H, W)[None, None].astype(np.float32) / 255.0).to(device)
+        pred = (torch.sigmoid(model(x))[0, 0, :h, :w].cpu().numpy() > 0.5)
         t = msk.astype(bool)
         inter += np.logical_and(pred, t).sum()
         union += np.logical_or(pred, t).sum()
@@ -204,17 +222,18 @@ def cmd_train(a):
     if not val:
         print("WARN 검증셋(val)이 비어 train 으로 평가합니다(과적합 확인만 가능).", flush=True)
         val = train
-    print(f"DATA train={len(train)} val={len(val)} crop={a.crop} batch={a.batch} base={a.base}", flush=True)
+    device = pick_device(a.device)
+    print(f"DATA train={len(train)} val={len(val)} crop={a.crop} batch={a.batch} base={a.base} device={device.type}", flush=True)
 
     os.makedirs(a.out, exist_ok=True)
-    model = UNet(base=a.base, depth=4)
+    model = UNet(base=a.base, depth=4).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"MODEL UNet base={a.base} params={n_params / 1e6:.2f}M", flush=True)
     opt = torch.optim.AdamW(model.parameters(), lr=a.lr, weight_decay=1e-4)
     steps = max(10, math.ceil(len(train) * a.crops_per_image / a.batch))
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=a.epochs * steps)
     # 양성(비드) 픽셀이 매우 적어 BCE 가 배경으로 쏠리지 않게 가중.
-    pos_weight = torch.tensor([a.pos_weight])
+    pos_weight = torch.tensor([a.pos_weight], device=device)
 
     best, best_ep, t0 = -1.0, 0, time.time()
     for ep in range(1, a.epochs + 1):
@@ -222,6 +241,7 @@ def cmd_train(a):
         tot = 0.0
         for _ in range(steps):
             x, y = make_batch(train, a.batch, a.crop, rng)
+            x, y = x.to(device), y.to(device)
             logits = model(x)
             loss = F.binary_cross_entropy_with_logits(logits, y, pos_weight=pos_weight) + dice_loss(logits, y)
             opt.zero_grad()
@@ -229,13 +249,14 @@ def cmd_train(a):
             opt.step()
             sched.step()
             tot += loss.item()
-        dice, iou = evaluate(model, val)
+        dice, iou = evaluate(model, val, device)
         cfg = {"base": a.base, "depth": 4}
-        torch.save({"model": model.state_dict(), "cfg": cfg, "epoch": ep, "val_dice": dice}, os.path.join(a.out, "last.pt"))
+        state = cpu_state(model)
+        torch.save({"model": state, "cfg": cfg, "epoch": ep, "val_dice": dice}, os.path.join(a.out, "last.pt"))
         mark = ""
         if dice > best:
             best, best_ep = dice, ep
-            torch.save({"model": model.state_dict(), "cfg": cfg, "epoch": ep, "val_dice": dice}, os.path.join(a.out, "best.pt"))
+            torch.save({"model": state, "cfg": cfg, "epoch": ep, "val_dice": dice}, os.path.join(a.out, "best.pt"))
             mark = " *"
         print(f"Epoch {ep}/{a.epochs} loss={tot / steps:.4f} val_dice={dice:.4f} val_iou={iou:.4f} "
               f"best={best:.4f}@{best_ep} lr={sched.get_last_lr()[0]:.2e} t={time.time() - t0:.0f}s{mark}", flush=True)
@@ -277,6 +298,7 @@ def main():
     t.add_argument("--pos-weight", dest="pos_weight", type=float, default=5.0)
     t.add_argument("--crops-per-image", dest="crops_per_image", type=int, default=4)
     t.add_argument("--seed", type=int, default=0)
+    t.add_argument("--device", default="cpu", help="cpu | mps(Apple GPU) | cuda — 못 쓰면 cpu 로 대체")
     e = sub.add_parser("export")
     e.add_argument("--weights", required=True)
     e.add_argument("--out", required=True)

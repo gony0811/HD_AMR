@@ -521,17 +521,20 @@ public sealed class WeldTrainingService
 
         var script = await WriteUnetScriptAsync(paths);
         var py = await GetPythonAsync();
+        // YOLO 학습과 같은 규칙 — macOS 는 Apple GPU(MPS), 그 외는 기존처럼 CPU. 못 쓰면 스크립트가 cpu 로 대체.
+        var device = OperatingSystem.IsMacOS() ? "mps" : "cpu";
         var args = new[]
         {
             script, "train", "--data", paths.Dataset, "--out", UnetRunDir(paths),
             "--epochs", epochs.ToString(), "--batch", batch.ToString(), "--crop", crop.ToString(),
             "--patience", Math.Max(0, patience).ToString(), "--base", baseChannels.ToString(),
+            "--device", device,
         };
         TrainTotalEpochs = epochs;
         TrainCurrentEpoch = 0;
         TrainStartUtc = DateTime.UtcNow;
         TrainEndUtc = null;
-        Emit($"[U-Net 학습] 시작 — epochs={epochs} batch={batch} crop={crop} patience={(patience > 0 ? patience : "끔")} base={baseChannels}");
+        Emit($"[U-Net 학습] 시작 — epochs={epochs} batch={batch} crop={crop} patience={(patience > 0 ? patience : "끔")} base={baseChannels} device={device}");
         StartProcess(py, args, paths.Workspace, TrainingPhase.Training, "U-Net 학습");
     }
 
