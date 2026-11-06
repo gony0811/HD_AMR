@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using HD.AMR.App.Communication.Weld;
 using HD.AMR.App.Models;
+using HD.AMR.App.Service.Sequence;
 using HD.AMR.App.Service.Vision;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -1043,6 +1044,175 @@ public class WeldTrackingService
         }
     }
 
+    // ── 시퀀스 수동 비드 입력 ───────────────────────────────────────
+    /// <summary>
+    /// 수동 비드 입력용 스냅샷 — 현재 IR·컬러·Depth 프레임을 고정하고, 각 영상 좌표의 가이드(Peak 선·기준선·ROI·
+    /// 자동 검출 선)를 계산한다. 사람이 이 스냅샷 위에 선을 그리고, 같은 프레임이 학습 데이터로 저장된다.
+    /// ROI 는 시퀀스 규약대로 IR 픽셀. IR 프레임이 없으면 null.
+    /// </summary>
+    /// <param name="auto">직전 자동 검출 결과(있으면 그 중심선을 초안으로 표시). 좌표는 현재 입력 모드 영상 기준.</param>
+    public async Task<ManualBeadSnapshot?> PrepareManualBeadAsync(
+        int id, RoiRect peakRoi, RoiRect beadRoi, WeldDetectionResult? auto, CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            return await Task.Run(() => BuildManualSnapshot(id, peakRoi, beadRoi, auto), ct);
+        }
+        finally { _gate.Release(); }
+    }
+
+    private ManualBeadSnapshot? BuildManualSnapshot(int id, RoiRect peakRoi, RoiRect beadRoi, WeldDetectionResult? auto)
+    {
+        var ir = _camera.LatestIr;
+        var depth = _camera.LatestDepth;
+        var color = _camera.LatestColor;
+        if (ir is null || depth is null) return null;
+
+        bool horiz = Params.ProgressAxis == WeldProgressAxis.Horizontal;
+        double preferDepth = (horiz ? depth.Width : depth.Height) / 2.0;
+        var dp = DepthPeakAnalyzer.Analyze(depth, peakRoi, Params.ProgressAxis, preferPos: preferDepth);
+
+        // 측정 진행좌표(IR) = Peak 위치(없으면 Bead ROI 중앙), 기준 cross(IR) = FOV 센터선 — 자동 검출과 같은 규약.
+        double progIr = dp.Found ? dp.ProgressPos
+            : horiz ? beadRoi.X + beadRoi.Width / 2.0 : beadRoi.Y + beadRoi.Height / 2.0;
+        double centerCrossIr = (horiz ? ir.Height : ir.Width) / 2.0;
+
+        // 자동 검출 중심선: 피팅에 성공한 결과만 초안으로 쓴다. 좌표는 검출 입력 모드 영상 기준.
+        string autoMod = Params.Mode == WeldImageMode.Ir ? "ir" : "rgb";
+        IReadOnlyList<PixelPoint>? autoLine = auto is { Success: true, LineFitOk: true, Centerline.Count: >= 2 }
+            ? auto.Centerline.ToList() : null;
+
+        var irGuide = new ManualBeadGuide("ir", ir.Width, ir.Height, horiz, progIr, centerCrossIr, dp.Found,
+            dp is { Found: true, HasCrossSpan: true } ? dp.CrossStart : null,
+            dp is { Found: true, HasCrossSpan: true } ? dp.CrossEnd : null,
+            beadRoi, peakRoi, autoMod == "ir" ? autoLine : null);
+
+        // 컬러 가이드: Depth→Color 투영(자동 RGB 검출과 같은 깊이 Z·같은 매핑). 캘리브레이션이 없으면 컬러 입력 불가.
+        double z = dp.Found ? dp.DepthValue : 0;
+        if (z <= 0) z = SampleDepthMm(depth, beadRoi.X + beadRoi.Width / 2.0, beadRoi.Y + beadRoi.Height / 2.0);
+        if (z <= 0) z = _settings.DefaultWorkDistanceMm;
+
+        ManualBeadGuide? colorGuide = null;
+        double crossScale = 0;
+        byte[]? colorPng = null;
+        if (color is not null && BuildMapper(depth) is { } mapper
+            && mapper.DepthToColor(horiz ? progIr : centerCrossIr, horiz ? centerCrossIr : progIr, z) is { } refC)
+        {
+            double? cs = null, ce = null;
+            if (dp is { Found: true, HasCrossSpan: true }
+                && mapper.DepthToColor(horiz ? dp.ProgressPos : dp.CrossStart, horiz ? dp.CrossStart : dp.ProgressPos, z) is { } ca
+                && mapper.DepthToColor(horiz ? dp.ProgressPos : dp.CrossEnd, horiz ? dp.CrossEnd : dp.ProgressPos, z) is { } cb)
+            {
+                cs = horiz ? ca.v : ca.u;
+                ce = horiz ? cb.v : cb.u;
+            }
+            colorGuide = new ManualBeadGuide("rgb", color.Width, color.Height, horiz,
+                horiz ? refC.u : refC.v, horiz ? refC.v : refC.u, dp.Found, cs, ce,
+                mapper.MapDepthRoiToColor(beadRoi, z, color.Width, color.Height),
+                mapper.MapDepthRoiToColor(peakRoi, z, color.Width, color.Height),
+                autoMod == "rgb" ? autoLine : null);
+            crossScale = mapper.CrossScaleColorToDepth(horiz);
+            try { colorPng = CameraService.EncodeColorPng(color); }
+            catch (Exception ex) { _logger.LogWarning(ex, "수동 비드 입력: 컬러 PNG 인코딩 실패 — IR 만 제공"); colorGuide = null; }
+        }
+
+        return new ManualBeadSnapshot
+        {
+            PeakId = id,
+            Horizontal = horiz,
+            Ir = ir,
+            Depth = depth,
+            Color = colorGuide is null ? null : color,
+            IrPng = CameraService.EncodeIrPng(ir),
+            ColorPng = colorPng,
+            Peak = dp.Found ? dp : null,
+            ProjectionZ = z,
+            CrossScaleColorToIr = crossScale,
+            IrGuide = irGuide,
+            ColorGuide = colorGuide,
+            AutoModality = autoMod,
+        };
+    }
+
+    /// <summary>
+    /// 사람이 그린 비드선(<paramref name="modality"/> 영상 픽셀)으로 측정을 만들어 <see cref="M1"/>/<see cref="M2"/> 에 저장한다.
+    /// d 는 자동 검출과 같은 규약 — Peak 진행위치에서 비드선 cross 좌표 − FOV 센터선, IR 픽셀 기준. 컬러에 그린 선은
+    /// 투영된 IR 중심선 기준으로 잰 뒤 초점거리 비율로 IR 픽셀로 환산한다(RGB 자동 검출과 동일).
+    /// 선이 진행축으로 펼쳐지지 않았으면 null.
+    /// </summary>
+    public async Task<PeakMeasurement?> ApplyManualBeadAsync(
+        ManualBeadSnapshot s, string modality, IReadOnlyList<PixelPoint> points, CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            bool rgb = modality == "rgb";
+            var guide = rgb ? s.ColorGuide : s.IrGuide;
+            if (guide is null) return null;
+            if (ManualBeadGeometry.CrossAt(points, s.Horizontal, guide.ProgressPos) is not { } cross) return null;
+
+            double dIr = rgb ? (cross - guide.RefCross) * s.CrossScaleColorToIr : cross - guide.RefCross;
+            double progIr = s.IrGuide.ProgressPos, centerIr = s.IrGuide.RefCross;
+            double depthZ = SampleDepthMm(s.Depth,
+                s.Horizontal ? progIr : centerIr + dIr,
+                s.Horizontal ? centerIr + dIr : progIr);
+            if (depthZ <= 0) depthZ = s.ProjectionZ;
+
+            var overlay = await Task.Run(() => ManualOverlayJpeg(rgb ? s.ColorPng : s.IrPng, guide, points, cross), ct);
+            var m = new PeakMeasurement
+            {
+                PeakId = s.PeakId,
+                DPixel = dIr,
+                Confidence = 1.0,
+                Peak = s.Peak,
+                At = DateTime.Now,
+                OverlayJpeg = overlay,
+                DepthZ = depthZ,
+                IrGeometry = true,
+                Manual = true,
+            };
+            if (overlay is not null) _lastOverlay = overlay;
+            StoreMeasurement(s.PeakId, m, s.Peak);
+            Message += rgb ? $" [수동 입력·RGB, 컬러 d={cross - guide.RefCross:0.0}px]" : " [수동 입력]";
+            return m;
+        }
+        finally { _gate.Release(); }
+    }
+
+    /// <summary>수동 측정 오버레이(Weld 페이지·모니터 표시용). OpenCV 네이티브가 없으면 null.</summary>
+    private byte[]? ManualOverlayJpeg(byte[]? png, ManualBeadGuide g, IReadOnlyList<PixelPoint> pts, double cross)
+    {
+        if (png is null) return null;
+        try
+        {
+            using var src = OpenCvSharp.Cv2.ImDecode(png, OpenCvSharp.ImreadModes.Color);
+            if (src.Empty()) return null;
+            OpenCvSharp.Point P(double x, double y) => new((int)Math.Round(x), (int)Math.Round(y));
+            OpenCvSharp.Point Pc(double prog, double c) => g.Horizontal ? P(prog, c) : P(c, prog);
+            int len = g.Horizontal ? g.Width : g.Height, crossLen = g.Horizontal ? g.Height : g.Width;
+
+            if (g.BeadRoi is { } br)
+                OpenCvSharp.Cv2.Rectangle(src, new OpenCvSharp.Rect(br.X, br.Y, br.Width, br.Height), new OpenCvSharp.Scalar(0, 200, 255), 1);
+            // 회색 기준선(FOV 센터), 자홍 Peak 선, 초록 수동 비드선, 빨간 교점.
+            OpenCvSharp.Cv2.Line(src, Pc(0, g.RefCross), Pc(len, g.RefCross), new OpenCvSharp.Scalar(160, 160, 160), 1);
+            double c0 = g.PeakCrossStart ?? 0, c1 = g.PeakCrossEnd ?? crossLen;
+            OpenCvSharp.Cv2.Line(src, Pc(g.ProgressPos, c0), Pc(g.ProgressPos, c1), new OpenCvSharp.Scalar(255, 0, 255), 2);
+            for (int i = 0; i + 1 < pts.Count; i++)
+                OpenCvSharp.Cv2.Line(src, P(pts[i].X, pts[i].Y), P(pts[i + 1].X, pts[i + 1].Y), new OpenCvSharp.Scalar(0, 255, 0), 2);
+            OpenCvSharp.Cv2.Circle(src, Pc(g.ProgressPos, cross), 5, new OpenCvSharp.Scalar(0, 0, 255), -1);
+            OpenCvSharp.Cv2.PutText(src, "MANUAL", new OpenCvSharp.Point(8, 22), OpenCvSharp.HersheyFonts.HersheySimplex, 0.7,
+                new OpenCvSharp.Scalar(0, 255, 255), 2);
+            OpenCvSharp.Cv2.ImEncode(".jpg", src, out var jpg);
+            return jpg;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "수동 비드 오버레이 생성 실패(OpenCV 없음?) — 오버레이 없이 진행");
+            return null;
+        }
+    }
+
     // ── 내부 ────────────────────────────────────────────────────────
     private WeldDetectionResult RunDetect(double? peakProgressPos = null, string? peakLabel = null,
         double? peakCrossStart = null, double? peakCrossEnd = null)
@@ -1236,4 +1406,29 @@ public class WeldTrackingService
         double dx = a.X - b.X, dy = a.Y - b.Y;
         return Math.Sqrt(dx * dx + dy * dy);
     }
+}
+
+/// <summary>
+/// 수동 비드 입력 스냅샷(<see cref="WeldTrackingService.PrepareManualBeadAsync"/>). 사람이 본 프레임 그대로를
+/// 측정·학습 데이터 저장에 쓴다. <see cref="IrGuide"/>·<see cref="ColorGuide"/> 는 각 영상 픽셀 좌표.
+/// </summary>
+public sealed class ManualBeadSnapshot
+{
+    public int PeakId { get; init; }
+    public bool Horizontal { get; init; }
+    public CameraFrame Ir { get; init; } = null!;
+    public CameraFrame Depth { get; init; } = null!;
+    /// <summary>컬러 프레임 — 캘리브레이션 투영이 가능할 때만(아니면 null, 컬러 입력 불가).</summary>
+    public CameraFrame? Color { get; init; }
+    public byte[] IrPng { get; init; } = [];
+    public byte[]? ColorPng { get; init; }
+    public PeakInfo? Peak { get; init; }
+    public double ProjectionZ { get; init; }
+    public double CrossScaleColorToIr { get; init; }
+    public ManualBeadGuide IrGuide { get; init; } = null!;
+    public ManualBeadGuide? ColorGuide { get; init; }
+    /// <summary>자동 검출 입력 모드("ir"/"rgb") — 자동 선 초안이 이 영상 좌표다.</summary>
+    public string AutoModality { get; init; } = "ir";
+
+    public ManualBeadGuide? GuideFor(string modality) => modality == "rgb" ? ColorGuide : IrGuide;
 }

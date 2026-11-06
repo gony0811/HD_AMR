@@ -39,6 +39,18 @@ public sealed class MaskCanvas : Control
     /// <summary>true 면 클릭이 브러시 대신 중심선 점 편집으로 동작.</summary>
     public bool LineMode { get; set; }
 
+    /// <summary>선 점이 바뀔 때(추가·이동·삭제·지우기).</summary>
+    public event Action? LineChanged;
+
+    private IReadOnlyList<CanvasGuideLine>? _guides;
+
+    /// <summary>이미지 위에 겹쳐 그리는 참고선(원본 픽셀 좌표). 편집·마스크와 무관.</summary>
+    public IReadOnlyList<CanvasGuideLine>? Guides
+    {
+        get => _guides;
+        set { _guides = value; InvalidateVisual(); }
+    }
+
     /// <summary>선 라벨 래스터화 두께(px). 바꾸면 점이 있을 때 즉시 다시 그린다.</summary>
     public int LineThickness
     {
@@ -71,6 +83,7 @@ public sealed class MaskCanvas : Control
             _lineThickness = line.Thickness;
         }
         InvalidateVisual();
+        LineChanged?.Invoke();
     }
 
     private void RasterizeLine()
@@ -85,6 +98,7 @@ public sealed class MaskCanvas : Control
         }
         FlushRows(0, _h);
         InvalidateVisual();
+        LineChanged?.Invoke();
     }
 
     /// <summary>이미지(+선택적 마스크 초안 PNG) 로드. 마스크는 흰색(>127)=비드.</summary>
@@ -124,6 +138,7 @@ public sealed class MaskCanvas : Control
         Array.Clear(_mask); Array.Clear(_bgra);
         _linePts.Clear();
         FlushRows(0, _h); InvalidateVisual();
+        LineChanged?.Invoke();
     }
 
     /// <summary>칠해진 픽셀=흰색, 아니면 검정인 이진 마스크 PNG.</summary>
@@ -255,12 +270,20 @@ public sealed class MaskCanvas : Control
         ctx.DrawImage(_base, new Rect(0, 0, _w, _h), r);
         ctx.DrawImage(_overlay, new Rect(0, 0, _w, _h), r);
 
-        // 선 라벨: 노란 중심선 + 점 핸들(표시 좌표).
-        if (_linePts.Count == 0) return;
         double sx = r.Width / _w, sy = r.Height / _h;
         Point D(Point p) => new(r.X + (p.X + 0.5) * sx, r.Y + (p.Y + 0.5) * sy);
+        if (_guides is not null)
+            using (ctx.PushClip(r))
+                foreach (var g in _guides)
+                    ctx.DrawLine(new Pen(g.Brush, g.Thickness, g.Dashed ? DashStyle.Dash : null), D(g.A), D(g.B));
+
+        // 선 라벨: 노란 중심선 + 점 핸들(표시 좌표).
+        if (_linePts.Count == 0) return;
         var pen = new Pen(Brushes.Yellow, 1.5);
         for (var i = 0; i + 1 < _linePts.Count; i++) ctx.DrawLine(pen, D(_linePts[i]), D(_linePts[i + 1]));
         foreach (var p in _linePts) ctx.DrawEllipse(Brushes.Yellow, null, D(p), 4, 4);
     }
 }
+
+/// <summary><see cref="MaskCanvas.Guides"/> 참고선 한 개(원본 픽셀 좌표).</summary>
+public sealed record CanvasGuideLine(Point A, Point B, IBrush Brush, double Thickness = 1.5, bool Dashed = false);

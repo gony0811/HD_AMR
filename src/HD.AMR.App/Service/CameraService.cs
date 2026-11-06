@@ -417,9 +417,19 @@ public class CameraService : BackgroundService
             throw new ArgumentException("저장 폴더 경로를 입력하세요.", nameof(dir));
 
         // 호출 시점의 최신 프레임을 스냅샷(인코딩 중 교체돼도 일관성 유지).
-        var color = _client.LatestColor;
-        var ir = _client.LatestIr;
-        var depth = _client.LatestDepth;
+        return SaveFramesAsync(dir, _client.LatestColor, _client.LatestIr, _client.LatestDepth, tag: null, ct);
+    }
+
+    /// <summary>
+    /// 지정 프레임(스냅샷)을 <see cref="SaveCaptureAsync"/> 와 같은 규약으로 저장한다. 시퀀스 수동 비드 입력처럼
+    /// "사람이 본 바로 그 프레임"을 학습 데이터로 남길 때 쓴다. <paramref name="tag"/> 가 있으면
+    /// stem 을 "NNN_{tag}_yyyyMMdd_HHmmss" 로 만든다(촬영 경로 식별용, 예: seqP1).
+    /// </summary>
+    public Task<CaptureResult> SaveFramesAsync(string dir, CameraFrame? color, CameraFrame? ir, CameraFrame? depth,
+        string? tag = null, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(dir))
+            throw new ArgumentException("저장 폴더 경로를 입력하세요.", nameof(dir));
         if (color is null && ir is null && depth is null)
             throw new InvalidOperationException("저장할 프레임이 없습니다 — 스트림을 먼저 시작하세요.");
 
@@ -432,8 +442,9 @@ public class CameraService : BackgroundService
             string prefix = CaptureNaming.Prefix(CaptureNaming.NextSeq(dir));
             // 초 단위 타임스탬프. 같은 초에 두 번 캡처하면 _2, _3… 를 붙여 덮어쓰기를 막는다.
             string ts = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-            string stem = $"{prefix}{ts}";
-            for (int k = 2; Directory.GetFiles(dir, stem + "_*").Length > 0; k++) stem = $"{prefix}{ts}_{k}";
+            string head = string.IsNullOrWhiteSpace(tag) ? prefix : $"{prefix}{tag}_";
+            string stem = $"{head}{ts}";
+            for (int k = 2; Directory.GetFiles(dir, stem + "_*").Length > 0; k++) stem = $"{head}{ts}_{k}";
             var files = new List<string>();
 
             if (color is not null)
@@ -458,16 +469,24 @@ public class CameraService : BackgroundService
     }
 
     /// <summary>RGB 프레임 → 무손실 PNG. mjpg 는 디코드 후, rgb24 는 픽셀 직접 래핑.</summary>
-    private static void SaveColorPng(CameraFrame f, string path)
+    private static void SaveColorPng(CameraFrame f, string path) => File.WriteAllBytes(path, EncodeColorPng(f));
+
+    /// <summary>RGB 프레임 → PNG 바이트(<see cref="SaveCaptureAsync"/> 저장본과 동일 픽셀).</summary>
+    public static byte[] EncodeColorPng(CameraFrame f)
     {
         using Image<Rgb24> img = f.PixelFormat == "mjpg"
             ? Image.Load<Rgb24>(f.Pixels)
             : Image.LoadPixelData<Rgb24>(f.Pixels, f.Width, f.Height);
-        img.Save(path, new PngEncoder());
+        using var ms = new MemoryStream();
+        img.Save(ms, new PngEncoder());
+        return ms.ToArray();
     }
 
     /// <summary>IR 프레임 → 8bit 그레이스케일 PNG(스트림 표시와 동일한 오토게인).</summary>
-    private static void SaveIrPng(CameraFrame f, string path)
+    private static void SaveIrPng(CameraFrame f, string path) => File.WriteAllBytes(path, EncodeIrPng(f));
+
+    /// <summary>IR 프레임 → 8bit PNG 바이트(<see cref="SaveCaptureAsync"/> 저장본과 동일 픽셀).</summary>
+    public static byte[] EncodeIrPng(CameraFrame f)
     {
         int n = f.Width * f.Height;
         var gray = new byte[n];
@@ -484,7 +503,9 @@ public class CameraService : BackgroundService
             Array.Copy(f.Pixels, gray, Math.Min(n, f.Pixels.Length));
         }
         using var img = Image.LoadPixelData<L8>(gray, f.Width, f.Height);
-        img.Save(path, new PngEncoder());
+        using var ms = new MemoryStream();
+        img.Save(ms, new PngEncoder());
+        return ms.ToArray();
     }
 
     /// <summary>Depth 프레임 → 16bit 무손실 PNG(픽셀=mm 그대로). 라벨/학습에서 원본 깊이 복원 가능.</summary>

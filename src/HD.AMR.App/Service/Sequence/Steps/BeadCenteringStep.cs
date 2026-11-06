@@ -26,6 +26,7 @@ public class BeadCenteringStep : ISequenceStep
     private readonly CameraService _camera;
     private readonly CobotService _cobot;
     private readonly ParameterService _param;
+    private readonly BeadManualAssist _manual;
     private readonly ILogger<BeadCenteringStep> _logger;
 
     /// <summary>1회 이동 클램프(mm). 매핑 오설정·측정 폭주 가드 — ⑥과 동일 관례.</summary>
@@ -44,6 +45,7 @@ public class BeadCenteringStep : ISequenceStep
         CameraService camera,
         CobotService cobot,
         ParameterService param,
+        BeadManualAssist manual,
         ILogger<BeadCenteringStep> logger)
     {
         _peakId = peakId;
@@ -51,6 +53,7 @@ public class BeadCenteringStep : ISequenceStep
         _camera = camera;
         _cobot = cobot;
         _param = param;
+        _manual = manual;
         _logger = logger;
     }
 
@@ -136,11 +139,20 @@ public class BeadCenteringStep : ISequenceStep
 
         await WeldSequenceSupport.ApplyDlModelAsync(_param, _weld);   // 저장된 DL 모델 선택 적용
         var (m2, detect2) = await _weld.CapturePeakAsync(_peakId, peakRoi, beadRoi, ct);
-        if (detect2 is null || !detect2.Success || m2 is null)
-            return StepResult.Fail(
-                $"이동 후 Bead{_peakId} 재검출 실패 — '{axisKey}' 매핑" +
-                $"(현재 툴{FlatSurfaceCenteringService.AxisName(toolAxis)}) 또는 ROI 를 확인하세요." +
-                (detect2 is null ? "" : $" ({detect2.Message})"));
+        string? autoFail = detect2 is null || !detect2.Success || m2 is null
+            ? $"이동 후 Bead{_peakId} 재검출 실패 — '{axisKey}' 매핑" +
+              $"(현재 툴{FlatSurfaceCenteringService.AxisName(toolAxis)}) 또는 ROI 를 확인하세요." +
+              (detect2 is null ? "" : $" ({detect2.Message})")
+            : null;
+
+        // 재측정도 비드 찾기와 같은 수동 입력 조건을 따른다(수동으로 찾은 뒤 재검출만 실패해 멈추지 않게).
+        var assist = await _manual.RunAsync(_peakId, $"{DisplayName}(재측정)", m2, detect2, autoFail is null, autoFail,
+            peakRoi, beadRoi, context, ct);
+        if (assist.Kind == BeadAssistKind.Manual) m2 = assist.Measurement;
+        else if (!assist.UseAutoPath || autoFail is not null)
+            return StepResult.Fail((autoFail ?? $"이동 후 Bead{_peakId} 재측정 실패") + assist.Note);
+        if (m2 is null)
+            return StepResult.Fail($"이동 후 Bead{_peakId} 재측정 결과가 없습니다.{assist.Note}");
 
         var residualMm = _weld.DMm(m2);
 
@@ -159,7 +171,7 @@ public class BeadCenteringStep : ISequenceStep
 
         return StepResult.Ok(
             $"Bead{_peakId} 센터링 완료 — {clamped:+0.0;-0.0}mm 이동, " +
-            $"잔차 d={residualMm:+0.0;-0.0}mm (이동 전 {initialDMm:+0.0;-0.0}mm), M1 갱신.{shiftedNote}");
+            $"잔차 d={residualMm:+0.0;-0.0}mm (이동 전 {initialDMm:+0.0;-0.0}mm), M1 갱신.{assist.Note}{shiftedNote}");
     }
 
     /// <summary>

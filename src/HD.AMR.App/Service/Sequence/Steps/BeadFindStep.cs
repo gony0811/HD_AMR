@@ -12,6 +12,8 @@ namespace HD.AMR.App.Service.Sequence.Steps;
 ///   2) coverage &lt; 15% — WeldMaskAnalyzer 의 기존 게이트
 ///   3) 직선피팅 실패(LineFitOk=false) — 중앙값 폴백이라 교점이 Peak 위치와 무관해짐
 /// 재시도는 하지 않는다. 실패해도 오버레이 JPEG 는 생성되므로 Weld 페이지에서 원인을 볼 수 있다.
+/// 파라미터 <see cref="BeadManualSettings.TriggerKey"/> 조건에 해당하면 <see cref="BeadManualAssist"/> 가 팝업으로
+/// 사람에게 비드선을 받아 그 선으로 측정하고(학습 데이터로도 저장) 계속 진행한다.
 /// </summary>
 public class BeadFindStep : ISequenceStep
 {
@@ -20,6 +22,7 @@ public class BeadFindStep : ISequenceStep
     private readonly CameraService _camera;
     private readonly CobotService _cobot;
     private readonly ParameterService _param;
+    private readonly BeadManualAssist _manual;
     private readonly ILogger<BeadFindStep> _logger;
 
     /// <param name="peakId">1 또는 2. DI 에서 <c>ActivatorUtilities.CreateInstance</c> 로 주입되므로 첫 인자여야 한다.</param>
@@ -29,6 +32,7 @@ public class BeadFindStep : ISequenceStep
         CameraService camera,
         CobotService cobot,
         ParameterService param,
+        BeadManualAssist manual,
         ILogger<BeadFindStep> logger)
     {
         _peakId = peakId;
@@ -36,6 +40,7 @@ public class BeadFindStep : ISequenceStep
         _camera = camera;
         _cobot = cobot;
         _param = param;
+        _manual = manual;
         _logger = logger;
     }
 
@@ -73,19 +78,32 @@ public class BeadFindStep : ISequenceStep
 
         var (m, detect) = await _weld.CapturePeakAsync(_peakId, peakRoi, beadRoi, ct);
 
-        if (detect is null)
-            return StepResult.Fail($"Bead{_peakId} 검출 결과가 없습니다.");
+        // 자동 판정(기존 게이트). 실패 사유는 수동 입력 팝업에도 그대로 보여준다.
+        string? autoFail =
+            detect is null ? $"Bead{_peakId} 검출 결과가 없습니다."
+            : !detect.Success ? $"Bead{_peakId} 검출 실패 — {detect.Message}"
+            : !detect.LineFitOk ? $"Bead{_peakId} 직선피팅 실패(중앙값 폴백) — 빨간 교점이 Peak 위치와 무관해져 " +
+                                  $"각도 산출 근거로 쓸 수 없습니다. coverage={detect.Confidence:P0}"
+            : m is null ? $"Bead{_peakId} 측정 슬롯 저장 실패."
+            : null;
 
-        if (!detect.Success)
-            return StepResult.Fail($"Bead{_peakId} 검출 실패 — {detect.Message}");
+        // 파라미터 조건에 해당하면 사람에게 비드선을 받는다(학습 데이터로도 저장).
+        var assist = await _manual.RunAsync(_peakId, DisplayName, m, detect, autoFail is null, autoFail,
+            peakRoi, beadRoi, context, ct);
+        if (assist.Kind == BeadAssistKind.Manual && assist.Measurement is { } mm)
+        {
+            var dManual = _weld.DMm(mm);
+            context.Bag[WeldSequenceSupport.BeadDMmBagKey(_peakId)] = dManual;
+            _logger.LogInformation("[Bead{Id} 찾기] 수동 입력: d={DMm:0.0}mm ({DPx:0.0}px), ROI={Roi}",
+                _peakId, dManual, mm.DPixel, roiSrc);
+            return StepResult.Ok(
+                $"Bead{_peakId} 찾음(수동) — d={dManual:+0.0;-0.0}mm ({mm.DPixel:+0.0;-0.0}px){assist.Note}");
+        }
+        if (!assist.UseAutoPath)
+            return StepResult.Fail((autoFail ?? $"Bead{_peakId} 수동 입력 실패") + assist.Note);
 
-        if (!detect.LineFitOk)
-            return StepResult.Fail(
-                $"Bead{_peakId} 직선피팅 실패(중앙값 폴백) — 빨간 교점이 Peak 위치와 무관해져 " +
-                $"각도 산출 근거로 쓸 수 없습니다. coverage={detect.Confidence:P0}");
-
-        if (m is null)
-            return StepResult.Fail($"Bead{_peakId} 측정 슬롯 저장 실패.");
+        if (autoFail is not null || detect is null || m is null)
+            return StepResult.Fail(autoFail ?? $"Bead{_peakId} 검출 결과가 없습니다.");
 
         var dMm = _weld.DMm(m);
         var extrapPx = ComputeExtrapolation(detect, progressAxis == WeldProgressAxis.Horizontal);
@@ -102,7 +120,7 @@ public class BeadFindStep : ISequenceStep
         var extrapNote = extrapPx > 0 ? $"외삽 {extrapPx:0}px" : "외삽 없음";
         return StepResult.Ok(
             $"Bead{_peakId} 찾음 — d={dMm:+0.0;-0.0}mm ({m.DPixel:+0.0;-0.0}px), 입력 {input}, " +
-            $"coverage={detect.Confidence:P0}, {extrapNote}, ROI={roiSrc}");
+            $"coverage={detect.Confidence:P0}, {extrapNote}, ROI={roiSrc}{assist.Note}");
     }
 
     /// <summary>

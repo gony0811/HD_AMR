@@ -256,6 +256,9 @@ public sealed class PeakMeasurement
     /// 시퀀스는 RGB 로 검출해도 IR 기준으로 환산해 저장하고, 화면 모드가 나중에 바뀌어도 환산이 섞이지 않게 한다.
     /// </summary>
     public bool IrGeometry { get; init; } = true;
+
+    /// <summary>사람이 그린 비드선으로 만든 측정이면 true(시퀀스 수동 비드 입력).</summary>
+    public bool Manual { get; init; }
 }
 
 /// <summary>스케일 모드. AutoDepth=깊이로 mm/px 자동, Fixed=고정 mm/px(2점 보정/수동).</summary>
