@@ -56,7 +56,7 @@ public static class WeldSequenceSupport
 
     /// <summary>비드 검출 DL 모델 전체 경로. 빈 문자열 = 자동(weld_seg_{ir|rgb}.onnx).
     /// 카메라 페이지 드롭다운이 저장하고, ⑦⑪·⑦⁺ 가 측정 전 <see cref="ApplyDlModelAsync"/> 로 적용한다.</summary>
-    public const string DlModelPathKey = "Weld.Dl.ModelPath";
+    public const string DlModelPathKey = WeldDetectionSettingsStore.DlModelPathKey;
 
     /// <summary>Peak 간 pitch(mm). ⑧ 이동량이자 ⑫ 각도식의 분모.</summary>
     public const string PitchMmKey = "Weld.Peak.PitchMm";

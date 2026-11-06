@@ -82,10 +82,13 @@ public class WeldTrackingService
 
         ParameterService.Changed += OnParameterChanged;
         _ = ReloadRoiAsync();
+        _ = ReloadDetectionSettingsAsync();
     }
 
     // ── 상태(UI 가 읽음) ────────────────────────────────────────────
-    /// <summary>비드 검출 방식. 기본 DL(학습 모델). 파라미터(고전 CV)는 폴백/비교용으로 유지.</summary>
+    /// <summary>비드 검출 방식. 기본 DL(학습 모델). 파라미터(고전 CV)는 폴백/비교용으로 유지.
+    /// 화면에서 바꾸면 <see cref="SaveDetectionSettingsAsync"/> 로 DB(<see cref="WeldDetectionSettingsStore.MethodKey"/>)에
+    /// 저장되고 기동 시 복원된다.</summary>
     public WeldDetectionMethod Method { get; set; } = WeldDetectionMethod.Dl;
 
     /// <summary>현재 방식에 해당하는 검출기.</summary>
@@ -193,6 +196,53 @@ public class WeldTrackingService
         if (Volatile.Read(ref _selfWrites) > 0) return;
         if (CameraRoiKeys.Peak.Contains(name) || CameraRoiKeys.Bead.Contains(name))
             _ = ReloadRoiAsync();
+        else if (WeldDetectionSettingsStore.IsKey(name))
+            _ = ReloadDetectionSettingsAsync();
+    }
+
+    /// <summary>저장된 검출 방식·Ridge 파라미터를 읽어 적용한다. 키가 없거나 DB 미준비면 현재 값 유지.</summary>
+    private async Task ReloadDetectionSettingsAsync()
+    {
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var param = scope.ServiceProvider.GetRequiredService<ParameterService>();
+            var values = new Dictionary<string, string?>();
+            foreach (var key in WeldDetectionSettingsStore.Keys)
+                values[key] = await param.GetAsync(key);
+            if (WeldDetectionSettingsStore.Apply(k => values.GetValueOrDefault(k), Params) is { } m)
+                Method = m;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "용접 추적 검출 설정 읽기 실패 — 현재 값 유지");
+        }
+    }
+
+    /// <summary>현재 검출 방식·Ridge 파라미터를 DB 에 저장한다(재시작 후 복원, 다른 화면·시퀀스와 공유).</summary>
+    public async Task SaveDetectionSettingsAsync()
+    {
+        var values = WeldDetectionSettingsStore.ToValues(Method, Params);
+        await _persistGate.WaitAsync();
+        Interlocked.Increment(ref _selfWrites);
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var param = scope.ServiceProvider.GetRequiredService<ParameterService>();
+            foreach (var (key, value) in values)
+                if (await param.GetAsync(key) != value)
+                    await param.SetAsync(key, value, WeldDetectionSettingsStore.Describe(key));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "용접 추적 검출 설정 저장 실패");
+            Message = $"검출 설정 저장 실패: {ex.Message}";
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _selfWrites);
+            _persistGate.Release();
+        }
     }
 
     private async Task ReloadRoiAsync()

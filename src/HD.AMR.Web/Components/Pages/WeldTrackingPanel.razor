@@ -252,19 +252,19 @@
                     <div class="row g-2 align-items-end">
                         <div class="col-auto" title="스케일 σ 최소(px). 비드 반폭 정도.">
                             <label class="form-label mb-0 small">σ min</label>
-                            <input class="form-control form-control-sm" type="number" step="0.5" @bind="Svc.Params.RidgeSigmaMin" @bind:after="LivePreview" style="width:70px" />
+                            <input class="form-control form-control-sm" type="number" step="0.5" @bind="Svc.Params.RidgeSigmaMin" @bind:after="OnRidgeChanged" style="width:70px" />
                         </div>
                         <div class="col-auto" title="스케일 σ 최대(px).">
                             <label class="form-label mb-0 small">σ max</label>
-                            <input class="form-control form-control-sm" type="number" step="0.5" @bind="Svc.Params.RidgeSigmaMax" @bind:after="LivePreview" style="width:70px" />
+                            <input class="form-control form-control-sm" type="number" step="0.5" @bind="Svc.Params.RidgeSigmaMax" @bind:after="OnRidgeChanged" style="width:70px" />
                         </div>
                         <div class="col-auto" title="σ min~max 사이 스케일 개수. 많을수록 느림.">
                             <label class="form-label mb-0 small">스케일 수</label>
-                            <input class="form-control form-control-sm" type="number" min="1" max="6" @bind="Svc.Params.RidgeScales" @bind:after="LivePreview" style="width:70px" />
+                            <input class="form-control form-control-sm" type="number" min="1" max="6" @bind="Svc.Params.RidgeScales" @bind:after="OnRidgeChanged" style="width:70px" />
                         </div>
                         <div class="col-auto" title="선 밝기. 정반사면 밝게, 그늘이면 어둡게 보임.">
                             <label class="form-label mb-0 small">극성</label>
-                            <select class="form-select form-select-sm" @bind="Svc.Params.RidgePolarity" @bind:after="LivePreview" style="width:100px">
+                            <select class="form-select form-select-sm" @bind="Svc.Params.RidgePolarity" @bind:after="OnRidgeChanged" style="width:100px">
                                 <option value="@WeldRidgePolarity.Both">밝/어둡 모두</option>
                                 <option value="@WeldRidgePolarity.Bright">밝은 선</option>
                                 <option value="@WeldRidgePolarity.Dark">어두운 선</option>
@@ -272,15 +272,15 @@
                         </div>
                         <div class="col-auto" title="진행축 대비 허용 기울기(°). 코로게이션 모서리 등 다른 방향 선 제거.">
                             <label class="form-label mb-0 small">허용각°</label>
-                            <input class="form-control form-control-sm" type="number" step="5" @bind="Svc.Params.RidgeMaxAngleDeg" @bind:after="LivePreview" style="width:70px" />
+                            <input class="form-control form-control-sm" type="number" step="5" @bind="Svc.Params.RidgeMaxAngleDeg" @bind:after="OnRidgeChanged" style="width:70px" />
                         </div>
                         <div class="col-auto" title="전역 잡음 하한 = 중앙값 + k·MAD. 크면 확실한 선만.">
                             <label class="form-label mb-0 small">잡음 k</label>
-                            <input class="form-control form-control-sm" type="number" step="0.5" @bind="Svc.Params.RidgeThresholdK" @bind:after="LivePreview" style="width:70px" />
+                            <input class="form-control form-control-sm" type="number" step="0.5" @bind="Svc.Params.RidgeThresholdK" @bind:after="OnRidgeChanged" style="width:70px" />
                         </div>
                         <div class="col-auto" title="열(슬라이스)마다 최대 응답 대비 이 비율 이상만 후보(0~1).">
                             <label class="form-label mb-0 small">상대 임계</label>
-                            <input class="form-control form-control-sm" type="number" step="0.05" min="0" max="1" @bind="Svc.Params.RidgeRelative" @bind:after="LivePreview" style="width:70px" />
+                            <input class="form-control form-control-sm" type="number" step="0.05" min="0" max="1" @bind="Svc.Params.RidgeRelative" @bind:after="OnRidgeChanged" style="width:70px" />
                         </div>
                         <div class="col-auto" title="중심선 직선 피팅. RANSAC 권장.">
                             <label class="form-label mb-0 small">직선 피팅</label>
@@ -669,6 +669,14 @@
     {
         if (Svc.Method == m) return;
         Svc.Method = m;
+        await Svc.SaveDetectionSettingsAsync();   // 재시작 후 복원·시퀀스 공유
+        await LivePreview();
+    }
+
+    /// <summary>Ridge 파라미터 변경 — DB 저장(Weld.Ridge.*) 후 미리보기 갱신.</summary>
+    private async Task OnRidgeChanged()
+    {
+        await Svc.SaveDetectionSettingsAsync();
         await LivePreview();
     }
 

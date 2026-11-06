@@ -5,6 +5,7 @@ using CommunityToolkit.Mvvm.Input;
 using HD.AMR.App.Communication.Weld;
 using HD.AMR.App.Models;
 using HD.AMR.App.Service;
+using HD.AMR.App.Service.Vision;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace HD.AMR.Desktop.ViewModels;
@@ -23,11 +24,15 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
     private readonly DispatcherTimer _timer;
     private bool _polling;
 
-    public WeldTrackingViewModel(WeldTrackingService svc, CameraService cam, IServiceScopeFactory scopeFactory)
+    private readonly WeldTrainingService _train;
+
+    public WeldTrackingViewModel(WeldTrackingService svc, CameraService cam, IServiceScopeFactory scopeFactory,
+        WeldTrainingService train)
     {
         _svc = svc;
         _cam = cam;
         _scopeFactory = scopeFactory;
+        _train = train;
         _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(120) };
         _timer.Tick += async (_, _) => await PollAsync();
     }
@@ -40,7 +45,7 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
     [ObservableProperty] private bool _busy;
     [ObservableProperty] private string? _message;
 
-    [ObservableProperty] private int _methodIndex;      // 0 DL, 1 Param
+    [ObservableProperty] private int _methodIndex;      // 0 DL, 1 Param, 2 Ridge, 3 U-Net
     [ObservableProperty] private int _drawKindIndex;    // 0 weld(=Bead ROI), 1 peak
 
     /// <summary>
@@ -99,6 +104,8 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
     {
         Pitch = _svc.Pitch;
         MethodIndex = _svc.Method switch { WeldDetectionMethod.Param => 1, WeldDetectionMethod.Ridge => 2, WeldDetectionMethod.Unet => 3, _ => 0 };
+        RefreshRidge();
+        await LoadDlModelsAsync();
         _timer.Start();
         RefreshStatus();
         RefreshOverlays();
@@ -172,8 +179,133 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
 
     partial void OnMethodIndexChanged(int value)
     {
-        _svc.Method = value switch { 1 => WeldDetectionMethod.Param, 2 => WeldDetectionMethod.Ridge, 3 => WeldDetectionMethod.Unet, _ => WeldDetectionMethod.Dl };
+        var method = value switch { 1 => WeldDetectionMethod.Param, 2 => WeldDetectionMethod.Ridge, 3 => WeldDetectionMethod.Unet, _ => WeldDetectionMethod.Dl };
+        OnPropertyChanged(nameof(IsRidge));
+        OnPropertyChanged(nameof(IsDl));
+        if (_svc.Method == method) { RefreshStatus(); return; }
+        _svc.Method = method;
+        _ = _svc.SaveDetectionSettingsAsync();
         RefreshStatus();
+    }
+
+    // ── DL 모델 선택 — 학습 models 폴더의 .onnx 목록. 고르면 Weld.Dl.ModelPath 에 저장(시퀀스·재시작 공유) ──
+    /// <summary>드롭다운 항목. Path 빈값 = 자동(weld_seg_{ir|rgb}.onnx). Exists=false 는 저장값이 가리키는 파일이 없음.</summary>
+    public sealed record DlModelOption(string Path, string Label, bool Exists = true)
+    {
+        public override string ToString() => Label;
+    }
+
+    public bool IsDl => MethodIndex == 0;
+    public System.Collections.ObjectModel.ObservableCollection<DlModelOption> DlModels { get; } = new();
+    [ObservableProperty] private DlModelOption? _selectedDlModel;
+    private bool _loadingModels;
+
+    /// <summary>모델 목록을 다시 읽고 현재 저장값을 선택한다. 저장값 파일이 없으면 '⚠ 파일 없음' 항목으로 보여준다.</summary>
+    [RelayCommand]
+    private async Task LoadDlModelsAsync()
+    {
+        List<ModelInfo> models;
+        try { models = await _train.ListModelsAsync(); }
+        catch { models = new(); }
+
+        _loadingModels = true;
+        try
+        {
+            var autoName = $"weld_seg_{(_svc.Params.Mode == WeldImageMode.Ir ? "ir" : "rgb")}.onnx";
+            DlModels.Clear();
+            DlModels.Add(new DlModelOption("", $"자동 ({autoName})"));
+            foreach (var m in models) DlModels.Add(new DlModelOption(m.Path, m.Name));
+
+            var current = _svc.Params.DlModelPath?.Trim().Trim('"').Trim() ?? "";
+            DlModelOption? match = current.Length == 0
+                ? DlModels[0]
+                : DlModels.FirstOrDefault(o => o.Path.Length > 0 &&
+                    (string.Equals(o.Path, current, StringComparison.OrdinalIgnoreCase) ||
+                     (!System.IO.Path.IsPathFullyQualified(current) &&
+                      string.Equals(System.IO.Path.GetFileName(o.Path), current, StringComparison.OrdinalIgnoreCase))));
+            if (match is null)
+            {
+                match = new DlModelOption(current, $"⚠ 파일 없음: {System.IO.Path.GetFileName(current)}", Exists: false);
+                DlModels.Insert(1, match);
+            }
+            SelectedDlModel = match;
+        }
+        finally { _loadingModels = false; }
+    }
+
+    partial void OnSelectedDlModelChanged(DlModelOption? value)
+    {
+        if (_loadingModels || value is null || !value.Exists) return;
+        if (string.Equals(_svc.Params.DlModelPath ?? "", value.Path, StringComparison.OrdinalIgnoreCase)) return;
+        _svc.Params.DlModelPath = value.Path;
+        _ = SaveDlModelAsync(value);
+    }
+
+    private async Task SaveDlModelAsync(DlModelOption opt)
+    {
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            await scope.ServiceProvider.GetRequiredService<ParameterService>().SetAsync(
+                WeldDetectionSettingsStore.DlModelPathKey, opt.Path,
+                WeldDetectionSettingsStore.Describe(WeldDetectionSettingsStore.DlModelPathKey));
+            Message = $"DL 모델 저장: {opt.Label}";
+        }
+        catch (Exception ex) { Message = $"DL 모델 저장 실패: {ex.Message}"; }
+        // 저장 실패로 남은 '파일 없음' 항목 정리 — 다음 목록 갱신 때 반영된다.
+        var stale = DlModels.Where(o => !o.Exists).ToList();
+        foreach (var s in stale) DlModels.Remove(s);
+    }
+
+    // ── Ridge 검출 파라미터 — 서비스 Params 를 직접 읽고 쓰며, 바꿀 때마다 DB 저장(재시작 후 복원·시퀀스 공유) ──
+    public bool IsRidge => MethodIndex == 2;
+
+    public double RidgeSigmaMin { get => _svc.Params.RidgeSigmaMin; set => SetRidge(() => _svc.Params.RidgeSigmaMin = Math.Clamp(value, 0.5, 20)); }
+    public double RidgeSigmaMax { get => _svc.Params.RidgeSigmaMax; set => SetRidge(() => _svc.Params.RidgeSigmaMax = Math.Clamp(value, 0.5, 20)); }
+    public int RidgeScales { get => _svc.Params.RidgeScales; set => SetRidge(() => _svc.Params.RidgeScales = Math.Clamp(value, 1, 6)); }
+    public int RidgePolarityIndex
+    {
+        get => (int)_svc.Params.RidgePolarity;
+        set => SetRidge(() => _svc.Params.RidgePolarity = Enum.IsDefined((WeldRidgePolarity)value) ? (WeldRidgePolarity)value : WeldRidgePolarity.Both);
+    }
+    public double RidgeMaxAngleDeg { get => _svc.Params.RidgeMaxAngleDeg; set => SetRidge(() => _svc.Params.RidgeMaxAngleDeg = Math.Clamp(value, 0, 90)); }
+    public double RidgeThresholdK { get => _svc.Params.RidgeThresholdK; set => SetRidge(() => _svc.Params.RidgeThresholdK = Math.Clamp(value, 0, 50)); }
+    public double RidgeRelative { get => _svc.Params.RidgeRelative; set => SetRidge(() => _svc.Params.RidgeRelative = Math.Clamp(value, 0, 1)); }
+
+    private void SetRidge(Action apply)
+    {
+        apply();
+        _ = _svc.SaveDetectionSettingsAsync();
+        RefreshRidge();
+    }
+
+    private void RefreshRidge()
+    {
+        OnPropertyChanged(nameof(RidgeSigmaMin));
+        OnPropertyChanged(nameof(RidgeSigmaMax));
+        OnPropertyChanged(nameof(RidgeScales));
+        OnPropertyChanged(nameof(RidgePolarityIndex));
+        OnPropertyChanged(nameof(RidgeMaxAngleDeg));
+        OnPropertyChanged(nameof(RidgeThresholdK));
+        OnPropertyChanged(nameof(RidgeRelative));
+    }
+
+    /// <summary>Ridge 파라미터를 코드 기본값으로 되돌리고 저장.</summary>
+    [RelayCommand]
+    private void ResetRidge()
+    {
+        var d = new WeldDetectionParams();
+        SetRidge(() =>
+        {
+            _svc.Params.RidgeSigmaMin = d.RidgeSigmaMin;
+            _svc.Params.RidgeSigmaMax = d.RidgeSigmaMax;
+            _svc.Params.RidgeScales = d.RidgeScales;
+            _svc.Params.RidgePolarity = d.RidgePolarity;
+            _svc.Params.RidgeMaxAngleDeg = d.RidgeMaxAngleDeg;
+            _svc.Params.RidgeThresholdK = d.RidgeThresholdK;
+            _svc.Params.RidgeRelative = d.RidgeRelative;
+        });
+        Message = "Ridge 파라미터 기본값 복원";
     }
 
     partial void OnPitchChanged(double value) => _svc.Pitch = value;

@@ -95,6 +95,36 @@
                                 <ComboBoxItem>세로 (Peak 선 가로)</ComboBoxItem>
                             </ComboBox>
                         </StackPanel>
+                        <!-- DL 모델 선택 — 학습 models 폴더 .onnx. 고르는 즉시 Weld.Dl.ModelPath 저장(시퀀스·재시작 공유). -->
+                        <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding IsDl}">
+                            <TextBlock Classes="axis" Text="DL 모델" VerticalAlignment="Center" />
+                            <ComboBox ItemsSource="{Binding DlModels}" SelectedItem="{Binding SelectedDlModel}" MinWidth="320" MaxWidth="520" />
+                            <Button Content="⟳" Command="{Binding LoadDlModelsCommand}" ToolTip.Tip="모델 목록 새로고침 (내보내기·이름 변경 후)" />
+                        </StackPanel>
+                        <!-- Ridge 검출 파라미터 — 바꾸는 즉시 DB(Weld.Ridge.*) 저장, 시퀀스·재시작 후에도 동일 값 사용. -->
+                        <Border Classes="card" IsVisible="{Binding IsRidge}">
+                            <StackPanel Spacing="6">
+                                <TextBlock Text="Ridge 검출 파라미터 (변경 즉시 저장)" FontWeight="SemiBold" />
+                                <WrapPanel Orientation="Horizontal">
+                                    <StackPanel Margin="0,0,8,4"><TextBlock Classes="axis" Text="σ 최소(px)" /><NumericUpDown Value="{Binding RidgeSigmaMin}" Minimum="0.5" Maximum="20" Increment="0.5" FormatString="0.0" Width="110" /></StackPanel>
+                                    <StackPanel Margin="0,0,8,4"><TextBlock Classes="axis" Text="σ 최대(px)" /><NumericUpDown Value="{Binding RidgeSigmaMax}" Minimum="0.5" Maximum="20" Increment="0.5" FormatString="0.0" Width="110" /></StackPanel>
+                                    <StackPanel Margin="0,0,8,4"><TextBlock Classes="axis" Text="스케일 수" /><NumericUpDown Value="{Binding RidgeScales}" Minimum="1" Maximum="6" Increment="1" FormatString="0" Width="100" /></StackPanel>
+                                    <StackPanel Margin="0,0,8,4"><TextBlock Classes="axis" Text="극성" />
+                                        <ComboBox SelectedIndex="{Binding RidgePolarityIndex}" Width="130">
+                                            <ComboBoxItem>밝/어둡 모두</ComboBoxItem>
+                                            <ComboBoxItem>밝은 선</ComboBoxItem>
+                                            <ComboBoxItem>어두운 선</ComboBoxItem>
+                                        </ComboBox>
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,8,4"><TextBlock Classes="axis" Text="허용각(°)" /><NumericUpDown Value="{Binding RidgeMaxAngleDeg}" Minimum="0" Maximum="90" Increment="5" FormatString="0" Width="100" /></StackPanel>
+                                    <StackPanel Margin="0,0,8,4"><TextBlock Classes="axis" Text="임계 k" /><NumericUpDown Value="{Binding RidgeThresholdK}" Minimum="0" Maximum="50" Increment="0.5" FormatString="0.0" Width="100" /></StackPanel>
+                                    <StackPanel Margin="0,0,8,4"><TextBlock Classes="axis" Text="상대 임계(0~1)" /><NumericUpDown Value="{Binding RidgeRelative}" Minimum="0" Maximum="1" Increment="0.05" FormatString="0.00" Width="110" /></StackPanel>
+                                    <Button Margin="0,0,0,4" VerticalAlignment="Bottom" Content="기본값" Command="{Binding ResetRidgeCommand}" />
+                                </WrapPanel>
+                                <TextBlock Classes="hint" TextWrapping="Wrap"
+                                           Text="σ 최대를 낮추면 넓은 하이라이트(코로게이션 능선) 응답이 줄고, 극성을 비드 쪽으로 고르면 반대 극성의 능선이 빠집니다. 허용각은 진행축 대비 선 기울기 허용치입니다. 바꾼 뒤 Detect 로 확인하세요." />
+                            </StackPanel>
+                        </Border>
                         <StackPanel Orientation="Horizontal" Spacing="6">
                             <Button Content="1회 검출(Peak)" Classes="accent" Command="{Binding FindPeakCommand}" IsEnabled="{Binding !Busy}" />
                             <Button Content="#1 캡처" Command="{Binding CaptureCommand}" CommandParameter="1" IsEnabled="{Binding DetectorAvailable}" />
