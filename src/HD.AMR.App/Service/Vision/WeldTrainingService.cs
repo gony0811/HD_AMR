@@ -151,6 +151,11 @@ public sealed class WeldTrainingService
         if (paths is null) throw new InvalidOperationException("캡처 저장 폴더가 설정되지 않았습니다.");
         if (!Directory.Exists(paths.CaptureDir)) throw new DirectoryNotFoundException(paths.CaptureDir);
 
+        // Windows 는 OpenCvSharp 네이티브, 그 외(macOS/Linux)는 네이티브 DLL(realsense2/OpenCvSharpExtern)이
+        // win-x64 전용이라 로드할 수 없으므로 Python(cv2) 서브프로세스로 동일 알고리즘을 수행한다.
+        if (!OperatingSystem.IsWindows())
+            return await ConvertViaPythonAsync(modality, paths);
+
         var imagesTrain = Path.Combine(paths.Dataset, "images", "train");
         var labelsTrain = Path.Combine(paths.Dataset, "labels", "train");
         // 매 변환마다 train 폴더를 새로 만든다(오래된 라벨/이미지 잔재 제거).
@@ -206,6 +211,10 @@ public sealed class WeldTrainingService
         var paths = await GetPathsAsync() ?? throw new InvalidOperationException("캡처 저장 폴더가 설정되지 않았습니다.");
         var dir = paths.CaptureDir;
         if (!Directory.Exists(dir)) throw new DirectoryNotFoundException(dir);
+
+        // Windows 외에서는 OpenCvSharp 네이티브를 못 쓰므로 Python(cv2) 로 회전 수행.
+        if (!OperatingSystem.IsWindows())
+            return await RotateViaPythonAsync(direction, paths);
 
         var dirs = direction switch
         {
@@ -285,6 +294,87 @@ public sealed class WeldTrainingService
         return (sb.ToString(), count);
     }
 
+    // ── 비-Windows(Python cv2) 변환/회전 ──────────────────────────────────────
+    // macOS/Linux 에서는 OpenCvSharp 네이티브(win-x64)를 로드할 수 없으므로, 학습에 쓰는 것과
+    // 동일한 Python 환경의 cv2 로 변환/회전을 수행한다(알고리즘·로그 포맷은 .NET 경로와 동일).
+    private async Task<ConvertResult> ConvertViaPythonAsync(string modality, TrainingPaths paths)
+    {
+        var yamlPath = Path.Combine(paths.Dataset, "data.yaml");
+        var outp = await RunPyCollectAsync("_convert.py", ConvertPy,
+            new[] { paths.CaptureDir, paths.Dataset, modality }, paths.Workspace);
+        var used = ParseResultInt(outp, "used=");
+        var skipped = ParseResultInt(outp, "skipped=");
+        var instances = ParseResultInt(outp, "instances=");
+        return new ConvertResult(used, skipped, instances, yamlPath);
+    }
+
+    private async Task<RotateResult> RotateViaPythonAsync(string direction, TrainingPaths paths)
+    {
+        var outp = await RunPyCollectAsync("_rotate.py", RotatePy,
+            new[] { paths.CaptureDir, direction }, paths.Workspace);
+        return new RotateResult(ParseResultInt(outp, "created="), ParseResultInt(outp, "skipped="));
+    }
+
+    // Python 스크립트를 동기 실행하며 출력 줄을 로그로 스트리밍하고, 전체 stdout 을 반환한다.
+    private async Task<string> RunPyCollectAsync(string scriptName, string scriptBody, string[] args, string workDir, int timeoutMs = 300000)
+    {
+        Directory.CreateDirectory(workDir);
+        var script = Path.Combine(workDir, scriptName);
+        await File.WriteAllTextAsync(script, scriptBody);
+
+        var py = await GetPythonAsync();
+        var psi = new ProcessStartInfo
+        {
+            FileName = py,
+            WorkingDirectory = workDir,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            StandardOutputEncoding = System.Text.Encoding.UTF8,
+            StandardErrorEncoding = System.Text.Encoding.UTF8,
+        };
+        psi.ArgumentList.Add(script);
+        foreach (var a in args) psi.ArgumentList.Add(a);
+        psi.Environment["PYTHONUNBUFFERED"] = "1";
+        psi.Environment["PYTHONIOENCODING"] = "utf-8";
+
+        var sb = new System.Text.StringBuilder();
+        using var proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
+        proc.OutputDataReceived += (_, e) => { if (e.Data is not null) { Emit(e.Data); lock (sb) sb.AppendLine(e.Data); } };
+        proc.ErrorDataReceived += (_, e) => { if (e.Data is not null) Emit(e.Data); };
+
+        try
+        {
+            proc.Start();
+            proc.BeginOutputReadLine();
+            proc.BeginErrorReadLine();
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"Python 실행 실패 — '{py}' 경로/설치를 확인하세요. ({ex.Message})", ex);
+        }
+
+        using var cts = new CancellationTokenSource(timeoutMs);
+        try { await proc.WaitForExitAsync(cts.Token); }
+        catch (OperationCanceledException) { try { proc.Kill(true); } catch { } throw new TimeoutException("Python 처리 시간 초과."); }
+
+        if (proc.ExitCode != 0)
+            throw new InvalidOperationException($"Python 처리 실패(코드 {proc.ExitCode}). 로그를 확인하세요.");
+        lock (sb) return sb.ToString();
+    }
+
+    // "__RESULT__ used=.. skipped=.. instances=.." 같은 줄에서 key 뒤 정수를 뽑는다.
+    private static int ParseResultInt(string output, string key)
+    {
+        int i = output.LastIndexOf(key, StringComparison.Ordinal);
+        if (i < 0) return 0;
+        i += key.Length;
+        int j = i;
+        while (j < output.Length && char.IsDigit(output[j])) j++;
+        return int.TryParse(output.AsSpan(i, j - i), out var v) ? v : 0;
+    }
+
     // ── ② 학습 ───────────────────────────────────────────────────────────────
     /// <param name="minimalAug">
     /// 증강 최소화(소규모/과적합 검증용). true 면 mosaic·기하·색 증강을 끄고 밝기만 약간 준다.
@@ -304,17 +394,20 @@ public sealed class WeldTrainingService
 
         var py = await GetPythonAsync();
         var aug = minimalAug ? "min" : "full";
+        // macOS(Apple Silicon)에서는 GPU(Metal/MPS)를 쓰면 CPU 대비 수 배 빠르다. 그 외 OS 는 기존처럼 CPU.
+        // (MPS 가 일부 연산을 지원하지 않으면 StartProcess 의 PYTORCH_ENABLE_MPS_FALLBACK=1 로 CPU 폴백.)
+        var device = OperatingSystem.IsMacOS() ? "mps" : "cpu";
         var args = new[]
         {
             script, baseModel, dataYaml, imgsz.ToString(), epochs.ToString(),
-            batch.ToString(), "cpu", paths.Runs, "hd", aug, brightAug ? "1" : "0"
+            batch.ToString(), device, paths.Runs, "hd", aug, brightAug ? "1" : "0"
         };
         // 진행 상태 초기화(진행 바·ETA).
         TrainTotalEpochs = epochs;
         TrainCurrentEpoch = 0;
         TrainStartUtc = DateTime.UtcNow;
         TrainEndUtc = null;
-        Emit($"[학습] 시작 — model={baseModel} epochs={epochs} imgsz={imgsz} batch={batch} device=cpu 증강={(minimalAug ? "최소" : "기본")} 밝기증강={(brightAug ? "켬" : "끔")}");
+        Emit($"[학습] 시작 — model={baseModel} epochs={epochs} imgsz={imgsz} batch={batch} device={device} 증강={(minimalAug ? "최소" : "기본")} 밝기증강={(brightAug ? "켬" : "끔")}");
         StartProcess(py, args, paths.Workspace, TrainingPhase.Training, "학습");
     }
 
@@ -390,6 +483,9 @@ public sealed class WeldTrainingService
         // 파이썬 출력 버퍼링 해제 — 진행 로그를 실시간으로 받기 위함.
         psi.Environment["PYTHONUNBUFFERED"] = "1";
         psi.Environment["PYTHONIOENCODING"] = "utf-8";
+        // MPS(Apple GPU)가 지원하지 않는 연산은 조용히 CPU 로 폴백 — device=mps 학습 중 미구현 연산에
+        // 부딪혀도 크래시하지 않게 한다. 비-macOS 에는 영향 없음.
+        psi.Environment["PYTORCH_ENABLE_MPS_FALLBACK"] = "1";
 
         var proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
         proc.OutputDataReceived += (_, e) => Emit(e.Data);
@@ -466,6 +562,103 @@ public sealed class WeldTrainingService
         "    kw.update(hsv_v=0.5, hsv_s=0.3)  # 밝기/채도 변동 강화(조명·노출 편차 대응)\n" +
         "YOLO(model).train(**kw)\n" +
         "print('TRAIN_DONE')\n";
+
+    // ① 마스크 → YOLO-seg 라벨 변환(비-Windows). .NET MaskToYoloLabel+ConvertAsync 와 동일 알고리즘.
+    private const string ConvertPy =
+        "import sys, os, shutil, glob\n" +
+        "import numpy as np, cv2\n" +
+        "capture, dataset, modality = sys.argv[1], sys.argv[2], sys.argv[3]\n" +
+        "images_train = os.path.join(dataset, 'images', 'train')\n" +
+        "labels_train = os.path.join(dataset, 'labels', 'train')\n" +
+        "for d in (images_train, labels_train):\n" +
+        "    if os.path.isdir(d): shutil.rmtree(d)\n" +
+        "    os.makedirs(d, exist_ok=True)\n" +
+        "def imread_u(path, flags):\n" +
+        "    data = np.fromfile(path, dtype=np.uint8)\n" +
+        "    return None if data.size == 0 else cv2.imdecode(data, flags)\n" +
+        "suffix = '_%s_maskdraft.png' % modality\n" +
+        "masks = sorted(glob.glob(os.path.join(capture, '*' + suffix)))\n" +
+        "used = skipped = instances = 0\n" +
+        "for mask_path in masks:\n" +
+        "    fname = os.path.basename(mask_path)\n" +
+        "    stem = fname[:-len(suffix)]\n" +
+        "    img_name = '%s_%s.png' % (stem, modality)\n" +
+        "    img_path = os.path.join(capture, img_name)\n" +
+        "    if not os.path.exists(img_path):\n" +
+        "        skipped += 1; print('[변환] 원본 없음 → 건너뜀: %s' % img_name, flush=True); continue\n" +
+        "    gray = imread_u(mask_path, cv2.IMREAD_GRAYSCALE)\n" +
+        "    if gray is None:\n" +
+        "        skipped += 1; print('[변환] 마스크 비어있음 → 건너뜀: %s' % fname, flush=True); continue\n" +
+        "    h, w = gray.shape[:2]\n" +
+        "    _, binimg = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)\n" +
+        "    contours, _ = cv2.findContours(binimg, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)\n" +
+        "    min_area = max(16.0, w * h * 0.0002)\n" +
+        "    lines, count = [], 0\n" +
+        "    for c in contours:\n" +
+        "        if cv2.contourArea(c) < min_area: continue\n" +
+        "        poly = cv2.approxPolyDP(c, 1.5, True)\n" +
+        "        if len(poly) < 3: continue\n" +
+        "        parts = ['0']\n" +
+        "        for p in poly:\n" +
+        "            nx = min(max(int(p[0][0]) / w, 0.0), 1.0)\n" +
+        "            ny = min(max(int(p[0][1]) / h, 0.0), 1.0)\n" +
+        "            parts.append('%.6f' % nx); parts.append('%.6f' % ny)\n" +
+        "        lines.append(' '.join(parts)); count += 1\n" +
+        "    if count == 0:\n" +
+        "        skipped += 1; print('[변환] 마스크 비어있음 → 건너뜀: %s' % fname, flush=True); continue\n" +
+        "    shutil.copyfile(img_path, os.path.join(images_train, img_name))\n" +
+        "    with open(os.path.join(labels_train, '%s_%s.txt' % (stem, modality)), 'w', encoding='utf-8') as f:\n" +
+        "        f.write('\\n'.join(lines) + '\\n')\n" +
+        "    used += 1; instances += count\n" +
+        "    print('[변환] %s_%s: 폴리곤 %d개' % (stem, modality, count), flush=True)\n" +
+        "os.makedirs(dataset, exist_ok=True)\n" +
+        "yaml_path = os.path.join(dataset, 'data.yaml')\n" +
+        "with open(yaml_path, 'w', encoding='utf-8') as f:\n" +
+        "    f.write('path: %s\\n' % dataset.replace('\\\\', '/'))\n" +
+        "    f.write('train: images/train\\nval: images/train\\nnc: 1\\nnames: [bead]\\n')\n" +
+        "print('[변환] 완료 — 사용 %d건 / 건너뜀 %d건 / 폴리곤 %d개 → %s' % (used, skipped, instances, yaml_path), flush=True)\n" +
+        "print('__RESULT__ used=%d skipped=%d instances=%d' % (used, skipped, instances), flush=True)\n";
+
+    // 이미지+마스크 90° 회전본 생성(비-Windows). GenerateRotatedCopiesAsync 와 동일 규칙.
+    private const string RotatePy =
+        "import sys, os, glob\n" +
+        "import numpy as np, cv2\n" +
+        "capture, direction = sys.argv[1], sys.argv[2]\n" +
+        "if direction == 'both':\n" +
+        "    dirs = [('_cw90', cv2.ROTATE_90_CLOCKWISE), ('_ccw90', cv2.ROTATE_90_COUNTERCLOCKWISE)]\n" +
+        "elif direction == 'ccw':\n" +
+        "    dirs = [('_ccw90', cv2.ROTATE_90_COUNTERCLOCKWISE)]\n" +
+        "else:\n" +
+        "    dirs = [('_cw90', cv2.ROTATE_90_CLOCKWISE)]\n" +
+        "kinds = ['rgb', 'ir', 'rgb_maskdraft', 'ir_maskdraft']\n" +
+        "def imread_u(path, flags):\n" +
+        "    data = np.fromfile(path, dtype=np.uint8)\n" +
+        "    return None if data.size == 0 else cv2.imdecode(data, flags)\n" +
+        "def imwrite_u(path, img):\n" +
+        "    ok, buf = cv2.imencode('.png', img)\n" +
+        "    if ok: buf.tofile(path)\n" +
+        "stems = set()\n" +
+        "for f in glob.glob(os.path.join(capture, '*_ir.png')) + glob.glob(os.path.join(capture, '*_rgb.png')):\n" +
+        "    name = os.path.basename(f)\n" +
+        "    stem = name[:-len('_ir.png')] if name.endswith('_ir.png') else name[:-len('_rgb.png')]\n" +
+        "    if 'cw90' in stem: continue\n" +
+        "    stems.add(stem)\n" +
+        "created = skipped = 0\n" +
+        "for stem in stems:\n" +
+        "    for suffix, flag in dirs:\n" +
+        "        new_stem = stem + suffix\n" +
+        "        any_done = False\n" +
+        "        for kind in kinds:\n" +
+        "            src = os.path.join(capture, '%s_%s.png' % (stem, kind))\n" +
+        "            if not os.path.exists(src): continue\n" +
+        "            m = imread_u(src, cv2.IMREAD_UNCHANGED)\n" +
+        "            if m is None: continue\n" +
+        "            imwrite_u(os.path.join(capture, '%s_%s.png' % (new_stem, kind)), cv2.rotate(m, flag))\n" +
+        "            any_done = True\n" +
+        "        created += 1 if any_done else 0\n" +
+        "        skipped += 0 if any_done else 1\n" +
+        "print('[증강] 90° 회전본 생성 — %d건 (방향 %s)' % (created, direction), flush=True)\n" +
+        "print('__RESULT__ created=%d skipped=%d' % (created, skipped), flush=True)\n";
 
     private const string ExportPy =
         "import sys, shutil, os\n" +
