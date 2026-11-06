@@ -92,6 +92,67 @@ public class RgbIrGeometryTests
         Assert.Null(mapper.MapDepthRoiToColor(new RoiRect(700, 400, 148, 80), 320.0, 848, 480));
     }
 
+    [Theory]
+    [InlineData(100.0, 80.0, 320.0)]
+    [InlineData(424.0, 240.0, 250.0)]
+    [InlineData(700.0, 400.0, 500.0)]
+    public void ColorToDepth_IsExactInverseOfDepthToColor(double u, double v, double z)
+    {
+        // 약간의 회전(0.3°)까지 포함한 캘리브레이션에서도 정확히 되돌아와야 한다.
+        double a = 0.3 * Math.PI / 180, ca = Math.Cos(a), sa = Math.Sin(a);
+        var p = Calib() with { Rot = [ca, 0, sa, 0, 1, 0, -sa, 0, ca], Trans = [15.0, 0.2, 0.0] };
+        var mapper = new DepthColorMapper(p, 848, 480, 848, 480);
+
+        var c = mapper.DepthToColor(u, v, z)!.Value;
+        // 컬러 기준 깊이는 회전·t_z 때문에 Depth 깊이와 아주 조금 다르다 — 실제 사용(같은 Z 로 왕복)과 같은 조건에서 0.5px 이내.
+        var d = mapper.ColorToDepth(c.u, c.v, z)!.Value;
+        Assert.InRange(d.u, u - 0.5, u + 0.5);
+        Assert.InRange(d.v, v - 0.5, v + 0.5);
+    }
+
+    [Fact]
+    public void RoiRoundTrip_IrToColorToIr_ReturnsSameRoi()
+    {
+        // RGB 화면에 표시된 ROI 를 그대로 다시 저장해도 IR 기준 ROI 가 바뀌지 않아야 한다.
+        var mapper = new DepthColorMapper(Calib(), 848, 480, 848, 480);
+        var ir = new RoiRect(300, 180, 240, 120);
+        const double z = 320.0;
+
+        var color = mapper.MapDepthRoiToColor(ir, z, 848, 480)!;
+        var back = mapper.MapColorRoiToDepthAt(color, z, 848, 480)!;
+
+        Assert.InRange(back.X, ir.X - 1, ir.X + 1);
+        Assert.InRange(back.Y, ir.Y - 1, ir.Y + 1);
+        Assert.InRange(back.Width, ir.Width - 1, ir.Width + 1);
+        Assert.InRange(back.Height, ir.Height - 1, ir.Height + 1);
+    }
+
+    [Fact]
+    public void RoiRoundTrip_Repeated_DoesNotCreep()
+    {
+        // 화면 표시(IR→컬러) ↔ 저장(컬러→IR)을 반복해도 ROI 가 점점 커지거나 밀리지 않아야 한다.
+        var mapper = new DepthColorMapper(Calib(), 848, 480, 848, 480);
+        var ir = new RoiRect(310, 170, 220, 110);
+        var cur = ir;
+        for (int i = 0; i < 20; i++)
+            cur = mapper.MapColorRoiToDepthAt(mapper.MapDepthRoiToColor(cur, 320.0, 848, 480)!, 320.0, 848, 480)!;
+
+        Assert.InRange(cur.X, ir.X - 1, ir.X + 1);
+        Assert.InRange(cur.Y, ir.Y - 1, ir.Y + 1);
+        Assert.InRange(cur.Width, ir.Width - 2, ir.Width + 2);
+        Assert.InRange(cur.Height, ir.Height - 2, ir.Height + 2);
+    }
+
+    [Fact]
+    public void ColorDrawnRoi_MapsToDifferentIrPixels_ThanNaiveRatio()
+    {
+        // 예전 방식(컬러 픽셀을 같은 비율로 IR 에 저장)과 정확 역투영은 수십 px 차이 — 이번 수정이 필요한 이유.
+        var mapper = new DepthColorMapper(Calib(), 848, 480, 848, 480);
+        var colorRoi = new RoiRect(350, 200, 150, 80);
+        var exact = mapper.MapColorRoiToDepthAt(colorRoi, 320.0, 848, 480)!;
+        Assert.True(Math.Abs(exact.X - colorRoi.X) > 20 || Math.Abs(exact.Width - colorRoi.Width) > 20);
+    }
+
     [Fact]
     public void Measurement_DefaultsToIrGeometry()
     {

@@ -67,8 +67,44 @@ public sealed class DepthColorMapper
             minU = Math.Min(minU, c.u); maxU = Math.Max(maxU, c.u);
             minV = Math.Min(minV, c.v); maxV = Math.Max(maxV, c.v);
         }
-        int x0 = Math.Clamp((int)Math.Floor(minU), 0, colorW - 1), y0 = Math.Clamp((int)Math.Floor(minV), 0, colorH - 1);
-        int x1 = Math.Clamp((int)Math.Ceiling(maxU), 0, colorW), y1 = Math.Clamp((int)Math.Ceiling(maxV), 0, colorH);
+        // 반올림 — IR→컬러 표시 후 다시 저장(컬러→IR)하는 왕복에서 ROI 가 매번 1px 씩 커지지 않게.
+        int x0 = Math.Clamp((int)Math.Round(minU), 0, colorW - 1), y0 = Math.Clamp((int)Math.Round(minV), 0, colorH - 1);
+        int x1 = Math.Clamp((int)Math.Round(maxU), 0, colorW), y1 = Math.Clamp((int)Math.Round(maxV), 0, colorH);
+        return x1 - x0 >= 2 && y1 - y0 >= 2 ? new RoiRect(x0, y0, x1 - x0, y1 - y0) : null;
+    }
+
+    /// <summary>
+    /// Color 픽셀(u,v) + 그 점의 깊이 Z(mm) → Depth 픽셀. <see cref="DepthToColor"/> 의 역변환(시차 반영).
+    /// Z 는 컬러 카메라 기준 깊이로 쓰지만 D435 는 두 센서가 같은 평면(t_z≈0, 회전≪1°)이라 Depth 의 Z 와 사실상 같다.
+    /// </summary>
+    public (double u, double v)? ColorToDepth(double u, double v, double zMm)
+    {
+        if (zMm <= 0) return null;
+        // 1) Color 카메라 좌표계 3D 역투영
+        double px = (u - _ccx) / _cfx * zMm - _t[0];
+        double py = (v - _ccy) / _cfy * zMm - _t[1];
+        double pz = zMm - _t[2];
+        // 2) Depth 좌표계로: Rᵀ·(p − t)  (R 은 Depth→Color 회전, 직교행렬)
+        double x = _r[0] * px + _r[3] * py + _r[6] * pz;
+        double y = _r[1] * px + _r[4] * py + _r[7] * pz;
+        double z = _r[2] * px + _r[5] * py + _r[8] * pz;
+        if (z <= 0) return null;
+        // 3) Depth 픽셀 투영
+        return (_dfx * x / z + _dcx, _dfy * y / z + _dcy);
+    }
+
+    /// <summary>Color 좌표 ROI 를 깊이 zMm 평면 기준으로 Depth 좌표 ROI 로 정확 역투영(외접 사각형, 클램프). 실패 시 null.</summary>
+    public RoiRect? MapColorRoiToDepthAt(RoiRect r, double zMm, int depthW, int depthH)
+    {
+        double minU = double.MaxValue, minV = double.MaxValue, maxU = double.MinValue, maxV = double.MinValue;
+        foreach (var (u, v) in new[] { (r.X, r.Y), (r.X + r.Width, r.Y), (r.X, r.Y + r.Height), (r.X + r.Width, r.Y + r.Height) })
+        {
+            if (ColorToDepth(u, v, zMm) is not { } d) return null;
+            minU = Math.Min(minU, d.u); maxU = Math.Max(maxU, d.u);
+            minV = Math.Min(minV, d.v); maxV = Math.Max(maxV, d.v);
+        }
+        int x0 = Math.Clamp((int)Math.Round(minU), 0, depthW - 1), y0 = Math.Clamp((int)Math.Round(minV), 0, depthH - 1);
+        int x1 = Math.Clamp((int)Math.Round(maxU), 0, depthW), y1 = Math.Clamp((int)Math.Round(maxV), 0, depthH);
         return x1 - x0 >= 2 && y1 - y0 >= 2 ? new RoiRect(x0, y0, x1 - x0, y1 - y0) : null;
     }
 

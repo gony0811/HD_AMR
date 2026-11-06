@@ -177,8 +177,22 @@ public class WeldTrackingService
 
     // ── ROI 관리 ────────────────────────────────────────────────────
     // 설정 즉시 캐시에 반영하고(화면이 바로 읽음) 파라미터 저장은 백그라운드로 한다 — 시퀀스도 같은 값을 쓴다.
-    public void SetPeakRoi(RoiRect? r) => SetRois(ToNormalized(r), _roi.Bead);
-    public void SetWeldRoi(RoiRect? r) => SetRois(_roi.Peak, ToNormalized(r));
+    // 입력 r 은 현재 검출 프레임(IR 또는 컬러) 픽셀. 저장은 항상 IR 기준이라 RGB 화면에서 그린 ROI 는 IR 로 역투영한다.
+    public void SetPeakRoi(RoiRect? r)
+    {
+        if (TryToNormalized(r, out var n)) SetRois(n, _roi.Bead);
+        else Message = RoiConvertFailMessage("Peak");
+    }
+
+    public void SetWeldRoi(RoiRect? r)
+    {
+        if (TryToNormalized(r, out var n)) SetRois(_roi.Peak, n);
+        else Message = RoiConvertFailMessage("Bead");
+    }
+
+    private static string RoiConvertFailMessage(string label) =>
+        $"{label} ROI 저장 안 됨 — RGB 화면에서 그린 ROI 를 IR 기준으로 바꾸려면 Depth 스트림과 Depth↔컬러 캘리브레이션이 필요합니다. " +
+        "카메라 연결을 확인하거나 IR 모드에서 지정하세요.";
 
     /// <summary>Peak·Weld ROI 사용 해제 — 파라미터 Enabled=false(좌표 보존). 시퀀스는 다른 ROI 로 폴백한다.</summary>
     public void ResetRoi() { SetRois(null, null); Message = "ROI 초기화됨 (Peak/Bead ROI 사용 해제)"; }
@@ -389,29 +403,98 @@ public class WeldTrackingService
         }
     }
 
-    private RoiRect? ToPixel(NormalizedRoi? roi)
+    // ── ROI 좌표계 ──────────────────────────────────────────────────
+    // 저장(파라미터 Camera.Peak/Bead.Roi)은 입력 모드와 무관하게 항상 IR(=Depth) 화면 기준 정규화 좌표다 — 시퀀스가
+    // IR 기준으로 읽기 때문. RGB 화면에서는 그 ROI 를 ROI 위치의 깊이에서 컬러 좌표로 정확 투영해 보여 주고(표시·검출),
+    // RGB 화면에서 그린 ROI 는 IR 좌표로 역투영해 저장한다 → IR·RGB 어느 화면에서 그려도 시퀀스와 같은 위치가 된다.
+    // 두 센서가 떨어져 있어(시차) 컬러 표시 위치는 거리에 따라 조금 달라진다 — 그린 시점의 작업거리에서 정확.
+
+    /// <summary>IR 프레임 크기(=ROI 저장 기준). 스트림이 없으면 설정 해상도.</summary>
+    private (int w, int h) IrFrameSize() => _camera.LatestIr is { } ir
+        ? (ir.Width, ir.Height)
+        : (_camera.Settings.IrWidth, _camera.Settings.IrHeight);
+
+    /// <summary>저장된 정규화 ROI → IR 픽셀.</summary>
+    private RoiRect? IrPixel(NormalizedRoi? roi)
     {
         if (roi is not { } r) return null;
-        var (w, h) = DetectionFrameSize();
+        var (w, h) = IrFrameSize();
         return r.ToPixel(w, h);
     }
 
-    private NormalizedRoi? ToNormalized(RoiRect? r)
+    /// <summary>저장된 정규화 ROI(IR 기준) → 현재 검출 프레임 픽셀(IR 모드는 IR, RGB 모드는 컬러로 투영).</summary>
+    private RoiRect? ToPixel(NormalizedRoi? roi)
     {
-        if (r is null) return null;
-        var (w, h) = DetectionFrameSize();
-        var n = NormalizedRoi.FromPixel(r, w, h);
-        return n.IsValid ? n : null;
+        var ir = IrPixel(roi);
+        if (ir is null || Params.Mode == WeldImageMode.Ir) return ir;
+        if (TryIrRoiToColor(ir, out var color)) return color;   // 컬러 화각 밖이면 null(표시·검출 안 함)
+        // Depth/캘리브레이션이 없어 투영 불가 — 비율로 근사 표시(위치가 정확하지 않음).
+        var (cw, ch) = DetectionFrameSize();
+        return roi!.Value.ToPixel(cw, ch);
     }
 
+    /// <summary>현재 검출 프레임 픽셀 ROI → IR 기준 정규화. RGB 화면 ROI 를 IR 로 바꿀 수 없으면 false(저장하지 않음).</summary>
+    private bool TryToNormalized(RoiRect? r, out NormalizedRoi? n)
+    {
+        n = null;
+        if (r is null) return true;
+        RoiRect? ir = Params.Mode == WeldImageMode.Ir ? r : ColorRoiToIr(r);
+        if (ir is null) return false;
+        var (w, h) = IrFrameSize();
+        var nn = NormalizedRoi.FromPixel(ir, w, h);
+        n = nn.IsValid ? nn : null;
+        return true;
+    }
+
+    /// <summary>IR 픽셀 ROI → 컬러 픽셀 ROI(ROI 중앙 깊이에서 정확 투영). 투영 수단(Depth·컬러·캘리브레이션)이 없으면 false.</summary>
+    private bool TryIrRoiToColor(RoiRect ir, out RoiRect? color)
+    {
+        color = null;
+        var depth = _camera.LatestDepth;
+        var c = _camera.LatestColor;
+        if (depth is null || c is null || BuildMapper(depth) is not { } mapper) return false;
+        var (iw, ih) = IrFrameSize();
+        var d = ScaleRoi(ir, (double)depth.Width / iw, (double)depth.Height / ih, depth.Width, depth.Height);
+        if (d is null) return true;
+        double z = SampleDepthMm(depth, d.X + d.Width / 2.0, d.Y + d.Height / 2.0);
+        if (z <= 0) z = _settings.DefaultWorkDistanceMm;
+        color = mapper.MapDepthRoiToColor(d, z, c.Width, c.Height);
+        return true;
+    }
+
+    /// <summary>컬러 픽셀 ROI → IR 픽셀 ROI(ROI 중앙 깊이에서 정확 역투영). 투영 수단이 없거나 실패하면 null.</summary>
+    private RoiRect? ColorRoiToIr(RoiRect color)
+    {
+        var depth = _camera.LatestDepth;
+        if (depth is null || _camera.LatestColor is null || BuildMapper(depth) is not { } mapper) return null;
+
+        // ROI 중앙의 깊이: 근사 위치에서 샘플 → 그 깊이로 정확 역투영한 위치에서 한 번 더 샘플(시차 보정).
+        double cu = color.X + color.Width / 2.0, cv = color.Y + color.Height / 2.0;
+        var guess = mapper.ColorToDepthApprox(cu, cv);
+        double z = SampleDepthMm(depth, guess.u, guess.v);
+        if (z <= 0) z = _settings.DefaultWorkDistanceMm;
+        if (mapper.ColorToDepth(cu, cv, z) is { } exact && SampleDepthMm(depth, exact.u, exact.v) is var z2 && z2 > 0) z = z2;
+
+        if (mapper.MapColorRoiToDepthAt(color, z, depth.Width, depth.Height) is not { } d) return null;
+        var (iw, ih) = IrFrameSize();
+        return ScaleRoi(d, (double)iw / depth.Width, (double)ih / depth.Height, iw, ih);
+    }
+
+    private static RoiRect? ScaleRoi(RoiRect r, double sx, double sy, int w, int h)
+        => sx == 1 && sy == 1
+            ? r.ClampTo(w, h)
+            : new RoiRect((int)Math.Round(r.X * sx), (int)Math.Round(r.Y * sy),
+                (int)Math.Round(r.Width * sx), (int)Math.Round(r.Height * sy)).ClampTo(w, h);
+
+    // 프로파일 ROI 도 저장 기준과 같게 IR 픽셀로 보관한다(어느 모드에서 저장·로드해도 같은 위치).
     public void SaveProfile(string name)
     {
-        var (w, h) = DetectionFrameSize();
+        var (w, h) = IrFrameSize();
         _store.Save(new RoiProfile
         {
             Name = name,
-            PeakRoi = PeakRoi,
-            WeldRoi = WeldRoi,
+            PeakRoi = IrPixel(_roi.Peak),
+            WeldRoi = IrPixel(_roi.Bead),
             FrameWidth = w,
             FrameHeight = h,
             ScaleCorrection = ScaleCorrection,
@@ -437,11 +520,14 @@ public class WeldTrackingService
         ScaleCorrectionEnabled = p.ScaleCorrectionEnabled;
         if (!applyRoi) return;
 
-        var (w, h) = DetectionFrameSize();
+        // 프로파일 ROI 는 IR 픽셀(SaveProfile) — 화면 모드와 무관하게 IR 크기로 정규화한다.
+        var (w, h) = IrFrameSize();
         var peak = RoiProfileStore.ValidateAndClamp(p.PeakRoi, w, h, out var c1);
         var weld = RoiProfileStore.ValidateAndClamp(p.WeldRoi, w, h, out var c2);
         if (c1 || c2) Message = "Load 된 ROI 가 현재 해상도에 맞게 보정되었습니다.";
-        SetRois(ToNormalized(peak), ToNormalized(weld));
+        NormalizedRoi? Norm(RoiRect? r) => r is null ? null
+            : NormalizedRoi.FromPixel(r, w, h) is { IsValid: true } n ? n : null;
+        SetRois(Norm(peak), Norm(weld));
     }
 
     // ── 검출/측정 ───────────────────────────────────────────────────
@@ -685,11 +771,17 @@ public class WeldTrackingService
         if (GeomIr)
             return DepthPeakAnalyzer.Analyze(depth, PeakRoi, Params.ProgressAxis);
 
-        // RGB 모드: ROI(컬러)→Depth 매핑해 분석 → peak(Depth)→컬러 재투영.
+        // RGB 모드: Peak ROI(Depth 좌표)에서 분석 → peak(Depth)→컬러 재투영.
         var mapper = BuildMapper(depth);
         if (mapper is null) return null;
 
-        var depthRoi = mapper.MapColorRoiToDepth(PeakRoi, depth.Width, depth.Height);
+        // 저장된 ROI 는 IR(=Depth) 기준이라 그대로 Depth 좌표로 쓴다(컬러 투영→역투영 왕복 오차 없음).
+        // 일시 적용 ROI(_override)만 있으면 컬러 좌표로 보고 근사 매핑한다.
+        var (iw, ih) = IrFrameSize();
+        var depthRoi = (_override is null && IrPixel(_roi.Peak) is { } irPeak
+                ? ScaleRoi(irPeak, (double)depth.Width / iw, (double)depth.Height / ih, depth.Width, depth.Height)
+                : null)
+            ?? mapper.MapColorRoiToDepth(PeakRoi, depth.Width, depth.Height);
         var dp = DepthPeakAnalyzer.Analyze(depth, depthRoi, Params.ProgressAxis);
         if (!dp.Found) return dp;
 
@@ -789,8 +881,9 @@ public class WeldTrackingService
         await _gate.WaitAsync(ct);
         try
         {
-            _override = new RoiOverride(peakRoi, WeldRoi);
-            _seqIrGeometry = Params.Mode != WeldImageMode.Ir;   // 시퀀스 ROI 는 IR 픽셀 — RGB 여도 IR 기준
+            // 시퀀스 ROI 는 IR 픽셀 — RGB 여도 IR 기준(오버레이도 IR 영상에 그리므로 Bead ROI 도 IR 픽셀로).
+            _override = new RoiOverride(peakRoi, IrPixel(_roi.Bead));
+            _seqIrGeometry = Params.Mode != WeldImageMode.Ir;
             return await Task.Run(FindPeak, ct);
         }
         finally
