@@ -42,7 +42,7 @@ public sealed class DlWeldVisionDetector : IDlWeldVisionDetector
         if (modelPath is null || !File.Exists(modelPath))
             return WeldDetectionResult.Fail(explicitPath
                 ? $"DL 모델 파일이 없습니다: {modelPath ?? p.DlModelPath} — 저장된 모델 경로(Weld.Dl.ModelPath)를 확인하세요(빈값=자동)."
-                : $"DL 모델이 없습니다: {modelPath ?? $"weld_seg_{modality}.onnx"} — 비전 학습에서 ② 학습 → ③ 내보내기({modality})를 먼저 완료하거나 Weld.Dl.ModelPath 에 모델을 지정하세요.");
+                : $"DL 모델이 없습니다: {Path.GetFileName(modelPath) ?? WeldModelNames.YoloExportName(modality)} — 비전 학습에서 ② 학습 → ③ 내보내기({modality})를 먼저 완료하거나 Weld.Dl.ModelPath 에 모델을 지정하세요.");
 
         Mat? bgr = null, gray = null;
         try
@@ -97,15 +97,13 @@ public sealed class DlWeldVisionDetector : IDlWeldVisionDetector
         return paths is null ? path : Path.Combine(paths.Models, path);
     }
 
-    /// <summary>모달리티별 모델 경로. <c>weld_seg_{modality}.onnx</c> → 없으면 레거시 <c>weld_seg.onnx</c> 폴백.</summary>
+    /// <summary>'자동' 모델 경로: <c>weld_yolo_{m}</c> → 기존 <c>weld_seg_{m}</c> → 레거시 <c>weld_seg.onnx</c>.</summary>
     private string? ResolveModelPath(string modality)
     {
         var paths = _train.GetPathsAsync().GetAwaiter().GetResult();
         if (paths is null) return null;
-        var byModality = Path.Combine(paths.Models, $"weld_seg_{modality}.onnx");
-        if (File.Exists(byModality)) return byModality;
-        var legacy = Path.Combine(paths.Models, "weld_seg.onnx");
-        return File.Exists(legacy) ? legacy : byModality; // 없으면 기대 경로를 반환(호출부에서 존재검사)
+        var candidates = WeldModelNames.YoloAutoCandidates(modality).Select(n => Path.Combine(paths.Models, n)).ToList();
+        return candidates.FirstOrDefault(File.Exists) ?? candidates[0]; // 없으면 기대 경로를 반환(호출부에서 존재검사)
     }
 
     private InferenceSession GetSession(string modelPath)

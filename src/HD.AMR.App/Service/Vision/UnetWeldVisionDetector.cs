@@ -34,10 +34,13 @@ public sealed class UnetWeldVisionDetector : IUnetWeldVisionDetector
         double? peakCrossStart = null, double? peakCrossEnd = null)
     {
         var modality = p.Mode == WeldImageMode.Ir ? "ir" : "rgb";
-        var modelPath = string.IsNullOrWhiteSpace(p.UnetModelPath) ? ResolveModelPath(modality) : p.UnetModelPath;
+        // 명시 경로(Weld.Unet.ModelPath)가 있으면 그걸(파일명만이면 models 폴더 기준), 없으면 모달리티로 자동 해석.
+        bool explicitPath = !string.IsNullOrWhiteSpace(p.UnetModelPath);
+        var modelPath = explicitPath ? ResolveExplicitPath(p.UnetModelPath!) : ResolveModelPath(modality);
         if (modelPath is null || !File.Exists(modelPath))
-            return WeldDetectionResult.Fail(
-                $"U-Net 모델이 없습니다: weld_unet_{modality}.onnx — 비전 학습의 U-Net 탭에서 학습 → 내보내기({modality})를 먼저 완료하세요.");
+            return WeldDetectionResult.Fail(explicitPath
+                ? $"U-Net 모델 파일이 없습니다: {modelPath ?? p.UnetModelPath} — 저장된 모델 경로(Weld.Unet.ModelPath)를 확인하세요(빈값=자동)."
+                : $"U-Net 모델이 없습니다: {WeldModelNames.UnetExportName(modality)} — 비전 학습의 U-Net 탭에서 학습 → 내보내기({modality})를 먼저 완료하거나 Weld.Unet.ModelPath 에 모델을 지정하세요.");
 
         Mat? bgr = null, gray = null;
         try
@@ -77,7 +80,16 @@ public sealed class UnetWeldVisionDetector : IUnetWeldVisionDetector
     private string? ResolveModelPath(string modality)
     {
         var paths = _train.GetPathsAsync().GetAwaiter().GetResult();
-        return paths is null ? null : Path.Combine(paths.Models, $"weld_unet_{modality}.onnx");
+        return paths is null ? null : Path.Combine(paths.Models, WeldModelNames.UnetExportName(modality));
+    }
+
+    /// <summary>명시 경로 해석 — 절대경로면 그대로, 파일명/상대경로면 학습 models 폴더 기준. 앞뒤 공백·따옴표 제거.</summary>
+    private string? ResolveExplicitPath(string raw)
+    {
+        var path = raw.Trim().Trim('"').Trim();
+        if (Path.IsPathFullyQualified(path)) return path;
+        var paths = _train.GetPathsAsync().GetAwaiter().GetResult();
+        return paths is null ? path : Path.Combine(paths.Models, path);
     }
 
     private InferenceSession GetSession(string modelPath)

@@ -145,7 +145,7 @@
                 <TabItem Header="④ 추론 · 검증">
                     <StackPanel Spacing="8" Margin="0,8,0,0">
                         <TextBlock Text="네이티브 ONNX 추론 (CPU)" FontWeight="SemiBold" />
-                        <Border Classes="alert" IsVisible="{Binding NoModels}"><TextBlock Text="모델이 없습니다. ①→②→③ 로 weld_seg.onnx 를 먼저 만드세요." /></Border>
+                        <Border Classes="alert" IsVisible="{Binding NoModels}"><TextBlock Text="모델이 없습니다. ①→②→③ 로 weld_yolo_{ir|rgb}.onnx 를 먼저 만드세요." /></Border>
                         <StackPanel IsVisible="{Binding !NoModels}" Spacing="8">
                             <StackPanel Orientation="Horizontal" Spacing="8">
                                 <StackPanel><TextBlock Classes="axis" Text="모델" /><ComboBox Width="220" ItemsSource="{Binding Models}" SelectedItem="{Binding SelModel}"><ComboBox.ItemTemplate><DataTemplate x:DataType="vis:ModelInfo"><TextBlock Text="{Binding Name}" /></DataTemplate></ComboBox.ItemTemplate></ComboBox></StackPanel>

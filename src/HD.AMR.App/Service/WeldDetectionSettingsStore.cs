@@ -23,11 +23,15 @@ public static class WeldDetectionSettingsStore
     /// Web 모델 드롭다운·Parameter 화면이 쓰고, 여기서는 읽기(복원)만 한다 — <see cref="ToValues"/> 에는 없다.</summary>
     public const string DlModelPathKey = "Weld.Dl.ModelPath";
 
+    /// <summary>U-Net 모델 경로(빈값=자동 <c>weld_unet_{ir|rgb}.onnx</c>). DL 모델 경로와 같은 규칙 — 화면 드롭다운·Parameter 화면이 쓰고
+    /// 여기서는 읽기(복원)만 한다.</summary>
+    public const string UnetModelPathKey = "Weld.Unet.ModelPath";
+
     /// <summary>이 저장소가 읽는 모든 키(기동 복원·변경 이벤트 필터용).</summary>
     public static readonly string[] Keys =
     [
         MethodKey, RidgeSigmaMinKey, RidgeSigmaMaxKey, RidgeScalesKey, RidgePolarityKey,
-        RidgeMaxAngleDegKey, RidgeThresholdKKey, RidgeRelativeKey, DlModelPathKey,
+        RidgeMaxAngleDegKey, RidgeThresholdKKey, RidgeRelativeKey, DlModelPathKey, UnetModelPathKey,
     ];
 
     public static bool IsKey(string name) => Array.IndexOf(Keys, name) >= 0;
@@ -43,7 +47,8 @@ public static class WeldDetectionSettingsStore
         RidgeMaxAngleDegKey => "Ridge 선 방향 허용각(진행축 대비 °)",
         RidgeThresholdKKey => "Ridge 전역 잡음 하한 k (중앙값 + k·MAD)",
         RidgeRelativeKey => "Ridge 슬라이스 상대 임계(0~1)",
-        DlModelPathKey => "비드 검출 DL 모델 경로 (빈값=자동 weld_seg_{ir|rgb}.onnx, 파일명만 쓰면 models 폴더 기준)",
+        DlModelPathKey => "비드 검출 DL(YOLO) 모델 경로 (빈값=자동 weld_yolo_{ir|rgb}.onnx → weld_seg_{ir|rgb}.onnx, 파일명만 쓰면 models 폴더 기준)",
+        UnetModelPathKey => "비드 검출 U-Net 모델 경로 (빈값=자동 weld_unet_{ir|rgb}.onnx, 파일명만 쓰면 models 폴더 기준)",
         _ => key,
     };
 
@@ -78,6 +83,7 @@ public static class WeldDetectionSettingsStore
         if (D(get(RidgeRelativeKey)) is { } rel) p.RidgeRelative = Math.Clamp(rel, 0, 1);
         // 키가 있으면(빈 문자열 포함 = 자동) 그대로 적용. 앞뒤 공백·따옴표는 직접 입력 실수로 보고 제거.
         if (get(DlModelPathKey) is { } path) p.DlModelPath = path.Trim().Trim('"').Trim();
+        if (get(UnetModelPathKey) is { } upath) p.UnetModelPath = upath.Trim().Trim('"').Trim();
 
         return Enum.TryParse<WeldDetectionMethod>(get(MethodKey), true, out var m) && Enum.IsDefined(m) ? m : null;
     }

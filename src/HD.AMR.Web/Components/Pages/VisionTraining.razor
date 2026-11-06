@@ -189,7 +189,7 @@ else
                     <div><label class="form-label mb-0" style="font-size:.85rem">imgsz</label>
                         <input type="number" class="form-control form-control-sm" style="width:90px" @bind="_exportImgsz" /></div>
                     <button class="btn btn-success btn-sm" @onclick="StartExport"
-                            disabled="@(_working || Train.IsBusy || _py is not { UltralyticsOk: true })">best.pt → <code class="text-white">weld_seg_@(_exportModality).onnx</code></button>
+                            disabled="@(_working || Train.IsBusy || _py is not { UltralyticsOk: true })">best.pt → <code class="text-white">weld_yolo_@(_exportModality).onnx</code></button>
                     <button class="btn btn-outline-secondary btn-sm" @onclick="RefreshModels">목록 새로고침</button>
                 </div>
                 <div class="text-muted mt-1" style="font-size:.8rem">
@@ -228,7 +228,7 @@ else
                 </p>
                 @if (_models.Count == 0)
                 {
-                    <div class="alert alert-warning mb-0">모델이 없습니다. ①→②→③ 로 <code>weld_seg.onnx</code> 를 먼저 만드세요.</div>
+                    <div class="alert alert-warning mb-0">모델이 없습니다. ①→②→③ 로 <code>weld_yolo_{ir|rgb}.onnx</code> 를 먼저 만드세요.</div>
                 }
                 else
                 {

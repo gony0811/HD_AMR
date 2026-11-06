@@ -207,19 +207,26 @@ public static class WeldSequenceSupport
            && WallCodes.FindBySurfaceId(context.InspectionSurfaceId)?.Orientation
                is SurfaceOrientation.ChamferLower or SurfaceOrientation.ChamferUpper;
 
-    /// <summary>저장된 비드 검출 DL 모델 선택을 <see cref="WeldTrackingService.Params"/> 에 적용한다.
-    /// 키 미존재/DB 미준비면 현재 인메모리 선택을 유지한다. 적용된 모델 표시명을 반환("자동"/파일명).</summary>
+    /// <summary>저장된 비드 검출 모델 선택(DL=YOLO, U-Net)을 <see cref="WeldTrackingService.Params"/> 에 적용한다.
+    /// 키 미존재/DB 미준비면 현재 인메모리 선택을 유지한다. 현재 검출 방식의 모델 표시를 반환(예: "DL 모델: 자동").</summary>
     public static async Task<string> ApplyDlModelAsync(ParameterService param, WeldTrackingService weld)
     {
         try
         {
             if (await param.GetAsync(DlModelPathKey) is { } v)
                 weld.Params.DlModelPath = v;
+            if (await param.GetAsync(WeldDetectionSettingsStore.UnetModelPathKey) is { } u)
+                weld.Params.UnetModelPath = u;
         }
         catch { /* DB 미준비 — 인메모리 선택 유지 */ }
 
-        var path = weld.Params.DlModelPath;
-        return string.IsNullOrWhiteSpace(path) ? "자동" : Path.GetFileName(path);
+        static string Name(string? path) => string.IsNullOrWhiteSpace(path) ? "자동" : Path.GetFileName(path.Trim().Trim('"'));
+        return weld.Method switch
+        {
+            WeldDetectionMethod.Dl => $"DL 모델: {Name(weld.Params.DlModelPath)}",
+            WeldDetectionMethod.Unet => $"U-Net 모델: {Name(weld.Params.UnetModelPath)}",
+            var m => $"검출 방식: {m}",
+        };
     }
 
     /// <summary>

@@ -128,7 +128,7 @@
                 <span class="text-muted ms-2" style="font-size:.8rem">
                     @(Svc.Method switch
                     {
-                        WeldDetectionMethod.Dl => "학습된 weld_seg 모델로 비드를 찾습니다(권장).",
+                        WeldDetectionMethod.Dl => "학습된 YOLO(weld_yolo/weld_seg) 모델로 비드를 찾습니다(권장).",
                         WeldDetectionMethod.Ridge => "헤시안 가는 선 필터로 찾습니다(학습 불필요, 진행축 방향 선만).",
                         WeldDetectionMethod.Unet => "학습된 weld_unet 모델로 픽셀 단위 비드를 찾습니다(박스 단계 없음).",
                         _ => "고전 CV 이진화로 찾습니다(모델 없이 튜닝/폴백용).",
@@ -149,13 +149,13 @@
                     </span>
                 </div>
                 <div class="card-body">
-                    @* 사용할 .onnx 모델 선택. '자동'이면 입력 모달리티로 weld_seg_{ir|rgb}.onnx 를 찾는다. *@
+                    @* 사용할 .onnx 모델 선택. '자동'이면 입력 모달리티로 weld_yolo_{ir|rgb}.onnx(없으면 weld_seg_)를 찾는다. YOLO 파일만 표시. *@
                     <div class="row g-2 align-items-end mb-1">
-                        <div class="col-auto" title="이 검출에 쓸 학습 모델(.onnx). '자동'은 입력 모달리티에 맞춰 weld_seg_ir/rgb.onnx 사용.">
+                        <div class="col-auto" title="이 검출에 쓸 학습 모델(.onnx). '자동'은 입력 모달리티에 맞춰 weld_yolo_ir/rgb.onnx 사용.">
                             <label class="form-label mb-0 small">모델 ⓘ</label>
                             <div class="d-flex gap-1">
                                 <select class="form-select form-select-sm" style="min-width:210px" @bind="Svc.Params.DlModelPath" @bind:after="OnModelChangedAsync">
-                                    <option value="">자동 (weld_seg_@(Svc.Params.Mode == WeldImageMode.Ir ? "ir" : "rgb").onnx)</option>
+                                    <option value="">자동 (weld_yolo_@(Svc.Params.Mode == WeldImageMode.Ir ? "ir" : "rgb").onnx)</option>
                                     @foreach (var m in _models)
                                     {
                                         <option value="@m.Path">@m.Name</option>
@@ -166,7 +166,7 @@
                         </div>
                     </div>
                     <div class="row g-2 align-items-end">
-                        <div class="col-auto" title="검출 입력 영상 = 학습한 모델의 모달리티와 맞춰야 함. IR이면 weld_seg_ir.onnx 사용.">
+                        <div class="col-auto" title="검출 입력 영상 = 학습한 모델의 모달리티와 맞춰야 함. IR이면 IR 모델 사용.">
                             <label class="form-label mb-0 small">입력 ⓘ</label>
                             <select class="form-select form-select-sm" @bind="Svc.Params.Mode" @bind:after="OnModeChanged" style="width:150px">
                                 <option value="@WeldImageMode.Ir">IR</option>
@@ -238,7 +238,7 @@
                             </select>
                         </div>
                     </div>
-                    <div class="small text-muted mt-1">모델: 캡처폴더/dl/models/weld_unet_{ir|rgb}.onnx (Desktop 비전 학습 ⑤ U-Net 탭에서 학습·내보내기)</div>
+                    <div class="small text-muted mt-1">모델: 캡처폴더/dl/models/weld_unet_{ir|rgb}.onnx 자동, 또는 파라미터 Weld.Unet.ModelPath 에 파일명 지정 (Desktop 비전 학습 ⑤ U-Net 탭에서 학습·내보내기)</div>
                 </div>
             </div>
         }
@@ -545,7 +545,7 @@
 
     /// <summary>현재 검출에 실제로 쓰이는 모델 표시명. 선택 없으면 모달리티 자동 이름.</summary>
     private string EffectiveModelName => string.IsNullOrWhiteSpace(Svc.Params.DlModelPath)
-        ? $"weld_seg_{(Svc.Params.Mode == WeldImageMode.Ir ? "ir" : "rgb")}.onnx (자동)"
+        ? $"weld_yolo_{(Svc.Params.Mode == WeldImageMode.Ir ? "ir" : "rgb")}.onnx (자동)"
         : System.IO.Path.GetFileName(Svc.Params.DlModelPath);
 
     protected override void OnInitialized() => _ref = DotNetObjectReference.Create(this);
@@ -565,7 +565,8 @@
     /// <summary>DL 카드 모델 드롭다운 목록 로드(모델 폴더의 .onnx). 내보내기 후 ⟳ 로 갱신.</summary>
     private async Task LoadModels()
     {
-        try { _models = await Train.ListModelsAsync(); }
+        // DL 드롭다운이므로 YOLO 모델(이름에 weld_yolo/weld_seg)만 — U-Net 파일을 YOLO 로 고르는 실수 방지.
+        try { _models = (await Train.ListModelsAsync()).Where(m => WeldModelNames.IsYolo(m.Path)).ToList(); }
         catch { _models = new(); }
     }
 
@@ -575,7 +576,7 @@
         try
         {
             await Param.SetAsync(WeldSequenceSupport.DlModelPathKey, Svc.Params.DlModelPath ?? "",
-                "비드 검출 DL 모델 경로 (빈값=자동 weld_seg_{ir|rgb}.onnx)");
+                WeldDetectionSettingsStore.Describe(WeldDetectionSettingsStore.DlModelPathKey));
         }
         catch { /* 저장 실패해도 인메모리 선택은 유효 */ }
         await LivePreview();

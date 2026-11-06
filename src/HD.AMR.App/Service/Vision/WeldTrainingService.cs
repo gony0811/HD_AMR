@@ -35,7 +35,7 @@ public sealed class WeldTrainingService
     // 프로세스 종료(정지/완료/실패) 시각. 설정되면 경과시간이 여기서 멈춘다(계속 카운트 방지).
     public DateTime? TrainEndUtc { get; private set; }
 
-    // 마지막으로 데이터셋 변환한 모달리티("ir"/"rgb"). 내보내기 파일명 weld_seg_{modality}.onnx 기본값.
+    // 마지막으로 데이터셋 변환한 모달리티("ir"/"rgb"). 내보내기 파일명 weld_yolo_/weld_unet_{modality}.onnx 기본값.
     public string LastConvertedModality { get; private set; } = "ir";
 
     public WeldTrainingService(IServiceScopeFactory scopes, ILogger<WeldTrainingService> log)
@@ -489,7 +489,7 @@ public sealed class WeldTrainingService
         await File.WriteAllTextAsync(script, ExportPy);
 
         var py = await GetPythonAsync();
-        var outName = $"weld_seg_{modality}.onnx";
+        var outName = WeldModelNames.YoloExportName(modality);
         var spec = imgsz.ToString();
         if (rect)
         {
@@ -549,7 +549,7 @@ public sealed class WeldTrainingService
 
         var script = await WriteUnetScriptAsync(paths);
         var py = await GetPythonAsync();
-        var outPath = Path.Combine(paths.Models, $"weld_unet_{modality}.onnx");
+        var outPath = Path.Combine(paths.Models, WeldModelNames.UnetExportName(modality));
         Directory.CreateDirectory(paths.Models);
         TrainTotalEpochs = 0;
         Emit($"[U-Net 내보내기] 시작 — {best} → {Path.GetFileName(outPath)}");
@@ -815,7 +815,7 @@ public sealed class WeldTrainingService
         "import sys, shutil, os, math\n" +
         "from ultralytics import YOLO\n" +
         "best, opset, spec, outdir = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]\n" +
-        "outname = sys.argv[5] if len(sys.argv) > 5 else 'weld_seg.onnx'\n" +
+        "outname = sys.argv[5] if len(sys.argv) > 5 else 'weld_yolo.onnx'\n" +
         "m = YOLO(best)\n" +
         "tr = m.overrides.get('imgsz', 640)\n" +
         "tr = int(max(tr)) if isinstance(tr, (list, tuple)) else int(tr)\n" +

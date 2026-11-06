@@ -69,7 +69,7 @@ public class BeadFindStep : ISequenceStep
 
         // 저장된 DL 모델 선택 적용 — 카메라 페이지에서 고른 모델(예: 0722)을 재시작 후에도 사용.
         var modelName = await WeldSequenceSupport.ApplyDlModelAsync(_param, _weld);
-        context.Progress?.Invoke($"비드 검출 시작 — DL 모델: {modelName}");
+        context.Progress?.Invoke($"비드 검출 시작 — {modelName}");
 
         var (m, detect) = await _weld.CapturePeakAsync(_peakId, peakRoi, beadRoi, ct);
 

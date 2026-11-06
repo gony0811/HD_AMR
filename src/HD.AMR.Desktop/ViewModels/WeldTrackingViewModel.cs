@@ -80,7 +80,7 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
             EditorImage = null; // 다른 카메라 스트림(IR↔컬러)으로 전환 — 이전 영상 잔상 제거
             OnPropertyChanged();
             OnPropertyChanged(nameof(IsRgbMode));
-            _ = LoadDlModelsAsync();   // DL 모델 드롭다운 '자동 (weld_seg_{ir|rgb}.onnx)' 표시 갱신
+            _ = LoadDlModelsAsync();   // 모델 드롭다운 '자동 (weld_yolo/weld_unet_{ir|rgb}.onnx)' 표시 갱신
         }
     }
 
@@ -242,23 +242,41 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
         var method = value switch { 1 => WeldDetectionMethod.Param, 2 => WeldDetectionMethod.Ridge, 3 => WeldDetectionMethod.Unet, _ => WeldDetectionMethod.Dl };
         OnPropertyChanged(nameof(IsRidge));
         OnPropertyChanged(nameof(IsDl));
-        if (_svc.Method == method) { RefreshStatus(); return; }
+        OnPropertyChanged(nameof(IsModelMethod));
+        OnPropertyChanged(nameof(ModelLabel));
+        if (_svc.Method == method) { RefreshStatus(); _ = LoadDlModelsAsync(); return; }
         _svc.Method = method;
         _ = _svc.SaveDetectionSettingsAsync();
         RefreshStatus();
+        _ = LoadDlModelsAsync();   // 방식에 맞는 모델 목록(YOLO / U-Net)으로 교체
     }
 
-    // ── DL 모델 선택 — 학습 models 폴더의 .onnx 목록. 고르면 Weld.Dl.ModelPath 에 저장(시퀀스·재시작 공유) ──
-    /// <summary>드롭다운 항목. Path 빈값 = 자동(weld_seg_{ir|rgb}.onnx). Exists=false 는 저장값이 가리키는 파일이 없음.</summary>
+    // ── 모델 선택 — 학습 models 폴더의 .onnx 중 현재 검출 방식에 맞는 것만 보여 준다 ──
+    // DL(YOLO): 이름에 weld_yolo/weld_seg → Weld.Dl.ModelPath 저장.  U-Net: 이름에 weld_unet → Weld.Unet.ModelPath 저장.
+    // 파일명에 날짜·특징을 붙여도(예: [4점제외]weld_yolo_ir_261106.onnx) 표식만 남아 있으면 목록에 나온다. 시퀀스·재시작 공유.
+    /// <summary>드롭다운 항목. Path 빈값 = 자동. Exists=false 는 저장값이 가리키는 파일이 없음.</summary>
     public sealed record DlModelOption(string Path, string Label, bool Exists = true)
     {
         public override string ToString() => Label;
     }
 
     public bool IsDl => MethodIndex == 0;
+    public bool IsUnet => MethodIndex == 3;
+    /// <summary>모델 파일을 쓰는 검출 방식(DL·U-Net)이면 모델 드롭다운 표시.</summary>
+    public bool IsModelMethod => IsDl || IsUnet;
+    public string ModelLabel => IsUnet ? "U-Net 모델" : "DL 모델";
+
     public System.Collections.ObjectModel.ObservableCollection<DlModelOption> DlModels { get; } = new();
     [ObservableProperty] private DlModelOption? _selectedDlModel;
     private bool _loadingModels;
+
+    // 현재 방식의 저장 키·현재 값·자동 파일명.
+    private string ModelKey => IsUnet ? WeldDetectionSettingsStore.UnetModelPathKey : WeldDetectionSettingsStore.DlModelPathKey;
+    private string? CurrentModelPath
+    {
+        get => IsUnet ? _svc.Params.UnetModelPath : _svc.Params.DlModelPath;
+        set { if (IsUnet) _svc.Params.UnetModelPath = value; else _svc.Params.DlModelPath = value; }
+    }
 
     /// <summary>모델 목록을 다시 읽고 현재 저장값을 선택한다. 저장값 파일이 없으면 '⚠ 파일 없음' 항목으로 보여준다.</summary>
     [RelayCommand]
@@ -271,12 +289,15 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
         _loadingModels = true;
         try
         {
-            var autoName = $"weld_seg_{(_svc.Params.Mode == WeldImageMode.Ir ? "ir" : "rgb")}.onnx";
+            bool unet = IsUnet;
+            var modality = _svc.Params.Mode == WeldImageMode.Ir ? "ir" : "rgb";
+            var autoName = unet ? WeldModelNames.UnetExportName(modality) : WeldModelNames.YoloExportName(modality);
             DlModels.Clear();
             DlModels.Add(new DlModelOption("", $"자동 ({autoName})"));
-            foreach (var m in models) DlModels.Add(new DlModelOption(m.Path, m.Name));
+            foreach (var m in models.Where(m => unet ? WeldModelNames.IsUnet(m.Path) : WeldModelNames.IsYolo(m.Path)))
+                DlModels.Add(new DlModelOption(m.Path, m.Name));
 
-            var current = _svc.Params.DlModelPath?.Trim().Trim('"').Trim() ?? "";
+            var current = CurrentModelPath?.Trim().Trim('"').Trim() ?? "";
             DlModelOption? match = current.Length == 0
                 ? DlModels[0]
                 : DlModels.FirstOrDefault(o => o.Path.Length > 0 &&
@@ -296,22 +317,21 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
     partial void OnSelectedDlModelChanged(DlModelOption? value)
     {
         if (_loadingModels || value is null || !value.Exists) return;
-        if (string.Equals(_svc.Params.DlModelPath ?? "", value.Path, StringComparison.OrdinalIgnoreCase)) return;
-        _svc.Params.DlModelPath = value.Path;
-        _ = SaveDlModelAsync(value);
+        if (string.Equals(CurrentModelPath ?? "", value.Path, StringComparison.OrdinalIgnoreCase)) return;
+        CurrentModelPath = value.Path;
+        _ = SaveDlModelAsync(value, ModelKey, ModelLabel);
     }
 
-    private async Task SaveDlModelAsync(DlModelOption opt)
+    private async Task SaveDlModelAsync(DlModelOption opt, string key, string label)
     {
         try
         {
             using var scope = _scopeFactory.CreateScope();
             await scope.ServiceProvider.GetRequiredService<ParameterService>().SetAsync(
-                WeldDetectionSettingsStore.DlModelPathKey, opt.Path,
-                WeldDetectionSettingsStore.Describe(WeldDetectionSettingsStore.DlModelPathKey));
-            Message = $"DL 모델 저장: {opt.Label}";
+                key, opt.Path, WeldDetectionSettingsStore.Describe(key));
+            Message = $"{label} 저장: {opt.Label}";
         }
-        catch (Exception ex) { Message = $"DL 모델 저장 실패: {ex.Message}"; }
+        catch (Exception ex) { Message = $"{label} 저장 실패: {ex.Message}"; }
         // 저장 실패로 남은 '파일 없음' 항목 정리 — 다음 목록 갱신 때 반영된다.
         var stale = DlModels.Where(o => !o.Exists).ToList();
         foreach (var s in stale) DlModels.Remove(s);

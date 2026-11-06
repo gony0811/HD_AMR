@@ -84,7 +84,7 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
     public string UnetExportButtonText => $"best.pt → weld_unet_{ExportModality}.onnx";
     public bool NeedInstall => Py is { UltralyticsOk: false };
     public string InstallHint => Py is null ? "" : $"설치: {Py.Exe} -m pip install ultralytics onnx";
-    public string ExportButtonText => $"best.pt → weld_seg_{ExportModality}.onnx";
+    public string ExportButtonText => $"best.pt → weld_yolo_{ExportModality}.onnx";
     private string Modality => ModalityIndex == 1 ? "ir" : "rgb";
     private string ExportModality => ExportModalityIndex == 1 ? "ir" : "rgb";
 
