@@ -1,4 +1,5 @@
 using HD.AMR.App.Communication;
+using HD.AMR.App.Models;
 using Microsoft.Extensions.Logging;
 
 namespace HD.AMR.App.Service.Sequence.Steps;
@@ -71,7 +72,7 @@ public class PeakCenteringStep : ISequenceStep
         if (context.Bag[WeldSequenceSupport.OffsetMmBagKey(_peakId)] is not double initialOffsetMm)
             return StepResult.Fail($"Peak{_peakId} 측정값을 읽을 수 없습니다 — 앞 단계를 다시 실행하세요.");
 
-        var progressAxis = WeldSequenceSupport.ApplyProgressAxis(_weld, context);
+        var (progressAxis, axisSrc) = await WeldSequenceSupport.ApplyProgressAxisAsync(_weld, context, _cobot, _param, ct);
         var axisKey = WeldSequenceSupport.ProgressToolAxisKey(progressAxis);
 
         // ④와 동일 규약: d = 타깃 − 센터(양수 = 진행축 + 방향)를 부호 반전 없이 그대로 싣는다.
@@ -99,8 +100,8 @@ public class PeakCenteringStep : ISequenceStep
         FlatSurfaceCenteringService.ApplyAxis(offset, toolAxis, clamped);
 
         _logger.LogInformation(
-            "Peak{Id} 센터링: 진행축={Prog}, 툴{Axis} {Off:+0.0;-0.0}mm (측정 {Meas:+0.0;-0.0}mm)",
-            _peakId, progressAxis, FlatSurfaceCenteringService.AxisName(toolAxis), clamped, initialOffsetMm);
+            "Peak{Id} 센터링: 진행축={Prog}({Src}), 툴{Axis} {Off:+0.0;-0.0}mm (측정 {Meas:+0.0;-0.0}mm)",
+            _peakId, progressAxis, axisSrc, FlatSurfaceCenteringService.AxisName(toolAxis), clamped, initialOffsetMm);
 
         var rc = await _cobot.Rpc.MoveByToolOffsetAsync(anchor, user: 0, offset,
             tool: context.Tool, vel: context.Velocity, ct: ct);
@@ -114,7 +115,17 @@ public class PeakCenteringStep : ISequenceStep
         if (roi is null)
             return StepResult.Fail("재측정용 Peak ROI 를 만들 수 없습니다.");
 
-        var r2 = await _weld.FindPeakAsync(roi, ct);
+        // 이동 후 같은 Peak 가 있을 예상 이격 = 측정 − 이동. ROI 가 Peak 간격보다 넓으면 옆 Peak 도 들어오므로
+        // 재측정은 그 예상 위치에 가장 가까운 Peak 를 고르게 한다(실기 2026-11-06 19:18 PU: −158.6 측정, −100 이동(클램프) 후
+        // 기대 −58.6 인데 카메라에 더 가까운 옆 Peak +218.8 을 잡아 '이격 증가'로 오판).
+        var expectedMm = initialOffsetMm - clamped;
+        var mmPerPx = context.Bag.TryGetValue(WeldSequenceSupport.PeakFindBagKey(_peakId), out var r1Obj)
+                      && r1Obj is PeakFindResult { OffsetPx: var px1 } && Math.Abs(px1) > 1.0
+            ? initialOffsetMm / px1
+            : 0.0;
+        var expectedPx = mmPerPx > 0 ? expectedMm / mmPerPx : 0.0;
+
+        var r2 = await _weld.FindPeakAsync(roi, ct, expectedPx);
         if (!r2.Found)
             return StepResult.Fail(
                 $"이동 후 Peak{_peakId} 미검출 — '{axisKey}' 매핑" +
@@ -122,10 +133,15 @@ public class PeakCenteringStep : ISequenceStep
 
         var (residualMm, scaleNote) = WeldSequenceSupport.ResolveOffsetMm(r2, _weld, _camera);
 
-        if (Math.Abs(residualMm) >= Math.Abs(initialOffsetMm))
+        // 축 부호가 틀렸으면 Peak 는 측정 + 이동 쪽으로 간다. 재측정이 그쪽 예상에 더 가까울 때만 부호 오설정으로 본다.
+        var wrongSignMm = initialOffsetMm + clamped;
+        _logger.LogInformation(
+            "Peak{Id} 재측정: {Res:+0.0;-0.0}mm (예상 {Exp:+0.0;-0.0}mm, 부호 반대면 {Wrong:+0.0;-0.0}mm, ROI 내 Peak {N}개)",
+            _peakId, residualMm, expectedMm, wrongSignMm, r2.PeakCount);
+        if (Math.Abs(residualMm - wrongSignMm) < Math.Abs(residualMm - expectedMm))
             return StepResult.Fail(
-                $"이격거리가 증가했습니다 ({initialOffsetMm:+0.0;-0.0} → {residualMm:+0.0;-0.0}mm) — " +
-                $"'{axisKey}' 를 현재 툴{FlatSurfaceCenteringService.AxisName(toolAxis)} 의 " +
+                $"Peak 가 반대로 움직였습니다 (이동 전 {initialOffsetMm:+0.0;-0.0} → {residualMm:+0.0;-0.0}mm, " +
+                $"예상 {expectedMm:+0.0;-0.0}mm) — '{axisKey}' 를 현재 툴{FlatSurfaceCenteringService.AxisName(toolAxis)} 의 " +
                 "반대 부호 축으로 설정해 보세요 (카메라 페이지).");
 
         // 후속 단계가 최신 측정값을 쓰도록 갱신.
@@ -134,6 +150,6 @@ public class PeakCenteringStep : ISequenceStep
 
         return StepResult.Ok(
             $"Peak{_peakId} 센터링 완료 — {clamped:+0.0;-0.0}mm 이동, " +
-            $"잔차 {residualMm:+0.0;-0.0}mm (이동 전 {initialOffsetMm:+0.0;-0.0}mm), {scaleNote}");
+            $"잔차 {residualMm:+0.0;-0.0}mm (이동 전 {initialOffsetMm:+0.0;-0.0}mm, 예상 {expectedMm:+0.0;-0.0}mm), {scaleNote}");
     }
 }

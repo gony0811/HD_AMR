@@ -368,6 +368,214 @@ public class CobotInspectionMoveStep : ISequenceStep
         return FrameMath.MatrixToPose(m);
     }
 
+    /// <summary>② 용접선 영상 가로 정렬 켜기/끄기 파라미터 — 기본 켜짐. 접근 자세를 광축 둘레로 돌려 용접선이
+    /// depth 영상에서 가로선(영상 X 축)으로 보이게 한다. 끄면 종전처럼 J6 180° 비틀림만 맞춘다.</summary>
+    public const string LevelSeamInImageKey = "inspection.levelSeamInImage";
+
+    /// <summary>용접선이 광축과 거의 나란하면(영상 평면 성분 &lt; 이 값) 영상 속 방향이 정의되지 않아 정렬하지 않는다.</summary>
+    internal const double MinSeamInPlaneComponent = 0.2;
+
+    /// <summary>정렬 회전이 이 각도보다 작으면 돌리지 않는다 [도].</summary>
+    internal const double SeamLevelMinTwistDeg = 0.5;
+
+    /// <summary>
+    /// <paramref name="pose"/> 를 툴 광축(<paramref name="opticalAxis"/>) 둘레로 몇 도 돌리면 용접선(<paramref name="seamDirBase"/>,
+    /// BASE 단위벡터)이 영상 X 축(<paramref name="imageX"/> 툴축)과 나란해지는지 [도, (−180, 180]].
+    /// 반대 방향(+180°)도 똑같이 가로선이 되므로 호출측이 두 후보 중 J6 안전 범위에 드는 쪽을 고른다.
+    /// 축 매핑이 서로 겹치거나 용접선이 광축과 거의 나란하면 null.
+    /// </summary>
+    internal static double? SeamLevelTwistDeg(double[] pose, double[] seamDirBase,
+        ToolAxisDir opticalAxis, ToolAxisDir imageX, ToolAxisDir imageY)
+    {
+        int iu = (int)opticalAxis / 2, ix = (int)imageX / 2, iy = (int)imageY / 2;
+        if (iu == ix || iu == iy || ix == iy) return null;
+
+        var m = FrameMath.PoseToMatrix(pose);
+        var d = new double[3];   // 용접선 방향의 툴 프레임 성분 d_t = Rᵀ·d
+        for (var j = 0; j < 3; j++)
+            d[j] = m[0, j] * seamDirBase[0] + m[1, j] * seamDirBase[1] + m[2, j] * seamDirBase[2];
+
+        var ex = AxisUnit(imageX);
+        var ey = AxisUnit(imageY);
+        var u = AxisUnit(opticalAxis);
+        var dx = d[0] * ex[0] + d[1] * ex[1] + d[2] * ex[2];
+        var dy = d[0] * ey[0] + d[1] * ey[1] + d[2] * ey[2];
+        if (Math.Sqrt(dx * dx + dy * dy) < MinSeamInPlaneComponent) return null;
+
+        // 툴을 u 둘레로 φ 돌리면 툴 프레임에서 본 용접선은 −φ 돈다. (ex, ey, u) 가 오른손계면 영상 속 각 α 가
+        // α−φ 가 되므로 φ = α, 왼손계(ex×ey = −u)면 α+φ 가 되므로 φ = −α.
+        var cx = new[] { ex[1] * ey[2] - ex[2] * ey[1], ex[2] * ey[0] - ex[0] * ey[2], ex[0] * ey[1] - ex[1] * ey[0] };
+        var hand = Math.Sign(cx[0] * u[0] + cx[1] * u[1] + cx[2] * u[2]);
+        var alpha = Math.Atan2(dy, dx) * 180.0 / Math.PI;
+        return NormalizeDeg(hand * alpha);
+    }
+
+    /// <summary>위치는 그대로 두고 툴축 <paramref name="axis"/> 둘레로 <paramref name="deg"/> 돌린 자세(툴 프레임 회전).</summary>
+    internal static double[] RotateAboutToolAxis(double[] pose, ToolAxisDir axis, double deg)
+    {
+        var m = FrameMath.PoseToMatrix(pose);
+        var k = AxisUnit(axis);
+        var a = deg * Math.PI / 180.0;
+        double c = Math.Cos(a), s = Math.Sin(a), t = 1 - c;
+        double x = k[0], y = k[1], z = k[2];
+        var r = new[,]
+        {
+            { t * x * x + c,     t * x * y - s * z, t * x * z + s * y },
+            { t * x * y + s * z, t * y * y + c,     t * y * z - s * x },
+            { t * x * z - s * y, t * y * z + s * x, t * z * z + c     },
+        };
+        var o = (double[,])m.Clone();
+        for (var i = 0; i < 3; i++)
+            for (var j = 0; j < 3; j++)
+                o[i, j] = m[i, 0] * r[0, j] + m[i, 1] * r[1, j] + m[i, 2] * r[2, j];
+        return FrameMath.MatrixToPose(o);
+    }
+
+    /// <summary>
+    /// ⑤~⑫ 진행축 계산용으로 용접선 방향과 그 면의 광축을 전역 기록한다(<see cref="SeamOrientationMemory"/>).
+    /// 용접선 끝점이나 법선 자세가 없으면 앞 기록이 다른 용접선 것이므로 지운다.
+    /// </summary>
+    private static void RecordSeamOrientation(SeamApproachResult seam, string? wallCode)
+    {
+        if (seam.SeamDirBase is { Length: 3 } dir && seam.ComputedPose is { Length: 6 } pose)
+            SeamOrientationMemory.Record(new SeamOrientationRecord(
+                dir.ToArray(), ToolAxisInBase(pose, seam.OpticalAxis), wallCode));
+        else
+            SeamOrientationMemory.Clear();
+    }
+
+    /// <summary>자세 <paramref name="pose"/> 의 툴축 <paramref name="axis"/> 를 BASE 단위벡터로(R·e).</summary>
+    internal static double[] ToolAxisInBase(double[] pose, ToolAxisDir axis)
+    {
+        var m = FrameMath.PoseToMatrix(pose);
+        var k = AxisUnit(axis);
+        var v = new double[3];
+        for (var i = 0; i < 3; i++) v[i] = m[i, 0] * k[0] + m[i, 1] * k[1] + m[i, 2] * k[2];
+        return v;
+    }
+
+    private static double[] AxisUnit(ToolAxisDir axis)
+    {
+        var v = new double[3];
+        v[(int)axis / 2] = (int)axis % 2 == 0 ? 1.0 : -1.0;
+        return v;
+    }
+
+    private static double NormalizeDeg(double deg)
+    {
+        deg %= 360.0;
+        if (deg <= -180.0) deg += 360.0;
+        else if (deg > 180.0) deg -= 360.0;
+        return deg;
+    }
+
+    /// <summary>제자리 회전에서 J1~J5 가 이보다 많이 움직이는 해는 쓰지 않는다 [도] — 손목을 뒤집거나 팔을 재구성하는 해다.
+    /// 공구 오프셋이 광축과 어긋난 만큼은 J1~J5 도 조금 움직인다.</summary>
+    internal const double MaxLevelArmTravelDeg = 20.0;
+
+    /// <summary>J6 를 뺀 J1~J5 관절별 최대 변화 [도].</summary>
+    internal static double MaxArmTravelExceptJ6(double[] from, double[] to)
+    {
+        var m = 0.0;
+        for (var i = 0; i < Math.Min(5, Math.Min(from.Length, to.Length)); i++) m = Math.Max(m, Math.Abs(to[i] - from[i]));
+        return m;
+    }
+
+    /// <summary>
+    /// ② 접근점에 도착한 뒤 그 자리에서 광축 둘레로 돌려 용접선이 depth 영상에서 가로선으로 보이게 한다. 후보는 φ 와 φ+180°
+    /// (둘 다 가로선)이고, J1~J5 가 거의 그대로(<see cref="MaxLevelArmTravelDeg"/> 이내)이며 J6 가 안전 범위
+    /// (<see cref="WObjAttitude.SafeJ6MinDeg"/>~<see cref="WObjAttitude.SafeJ6MaxDeg"/>, 센서 헤드–링크암 간섭 없음) 안인 해 중
+    /// 관절 변위가 작은 쪽을 고른다. 정렬하지 못해도 단계는 실패시키지 않는다 — 접근점에는 이미 와 있으므로
+    /// 경고만 남기고 종전 진행축(검사 방향 기준)으로 간다. 결과 문구(앞 공백 포함, 정렬 꺼짐이면 빈 문자열)를 돌려준다.
+    /// </summary>
+    private async Task<string> LevelSeamInPlaceAsync(SequenceContext context, SeamApproachResult seam, CancellationToken ct)
+    {
+        bool on;
+        try { on = await _param.GetBoolAsync(LevelSeamInImageKey) ?? true; }
+        catch { on = true; }
+        if (!on) return "";
+
+        if (seam.SeamDirBase is not { Length: 3 } dir)
+        {
+            _logger.LogInformation("[Cobot 검사위치 이동] 용접선 가로 정렬 생략 — 용접선 끝점(seamEndW) 없음");
+            return " 용접선 가로 정렬 생략(끝점 없음).";
+        }
+
+        var (imageX, _) = await WeldSequenceSupport.GetImageXAxisAsync(_param);
+        var (imageY, _) = await WeldSequenceSupport.GetImageYAxisAsync(_param);
+        var cur = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
+        var curJ = (await _cobot.Rpc.GetActualJointPosAsync(ct: ct)).ToArray();
+
+        if (SeamLevelTwistDeg(cur, dir, seam.OpticalAxis, imageX, imageY) is not { } phi)
+        {
+            _logger.LogWarning(
+                "[Cobot 검사위치 이동] 용접선 가로 정렬 생략 — 영상 축 매핑(X→{X}, Y→{Y}, 광축 {U})이 겹치거나 용접선이 광축과 거의 나란함",
+                imageX, imageY, seam.OpticalAxis);
+            return " 용접선 가로 정렬 생략(축 매핑).";
+        }
+
+        if (Math.Abs(phi) < SeamLevelMinTwistDeg)
+        {
+            context.SeamLeveledInImage = true;
+            return $" 용접선 가로 정렬(이미 가로, {phi:+0.0;-0.0;0}°).";
+        }
+
+        var candidates = new List<(double TwistDeg, double? J6, double? TotalDeg)>();
+        var solved = new Dictionary<double, (double[] Pose, double[] Joints)>();
+        var rejects = new List<string>();
+        var guardOn = await SelfCollisionGuardOnAsync();
+        foreach (var twist in new[] { phi, NormalizeDeg(phi + 180.0) })
+        {
+            var p = RotateAboutToolAxis(cur, seam.OpticalAxis, twist);
+            double[] j;
+            try { j = await _cobot.Rpc.GetInverseKinNearestAsync(p, curJ, context.Tool, 0, ct); }
+            catch (InvalidOperationException) { rejects.Add($"{twist:+0.0;-0.0}°: 도달 불가"); candidates.Add((twist, null, null)); continue; }
+
+            var arm = MaxArmTravelExceptJ6(curJ, j);
+            if (arm > MaxLevelArmTravelDeg)
+            {
+                rejects.Add($"{twist:+0.0;-0.0}°: J1~J5 {arm:0}° 이동(손목 재구성)");
+                candidates.Add((twist, null, null));
+                continue;
+            }
+            if (guardOn && SelfCollisionBlocker(j, seam) is not null)
+            {
+                rejects.Add($"{twist:+0.0;-0.0}°: 자기 간섭");
+                candidates.Add((twist, null, null));
+                continue;
+            }
+            var total = Enumerable.Range(0, Math.Min(j.Length, curJ.Length)).Sum(i => Math.Abs(j[i] - curJ[i]));
+            candidates.Add((twist, j[5], total));
+            solved[twist] = (p, j);
+        }
+
+        if (WObjAttitude.SelectSafeTwist(curJ[5], candidates) is not { } pick)
+        {
+            foreach (var c in candidates)
+                if (c.J6 is { } j6) rejects.Add($"{c.TwistDeg:+0.0;-0.0}°: J6 {j6:0.0}° 안전 범위 밖");
+            var why = string.Join(" / ", rejects);
+            _logger.LogWarning(
+                "[Cobot 검사위치 이동] 용접선 가로 정렬 생략 — 영상 속 기울기 {Phi:+0.0;-0.0}°, 맞는 회전 없음: {Why}. 종전 진행축으로 진행",
+                phi, why);
+            return $" 용접선 가로 정렬 생략(기울기 {phi:+0.0;-0.0}°, {why}).";
+        }
+
+        var (pose, joints) = solved[pick.TwistDeg];
+        var rc = await _cobot.Rpc.MoveJAsync(joints, pose, tool: context.Tool, user: 0, vel: context.Velocity, ct: ct);
+        if (rc != 0)
+        {
+            _logger.LogWarning("[Cobot 검사위치 이동] 용접선 가로 정렬 회전 실패 (rc={Rc}){Desc} — 종전 진행축으로 진행",
+                rc, FairinoErrorCodes.Suffix(rc));
+            return $" 용접선 가로 정렬 회전 실패(rc={rc}).";
+        }
+
+        context.SeamLeveledInImage = true;
+        _logger.LogInformation(
+            "[Cobot 검사위치 이동] 용접선 가로 정렬 — 제자리 광축 둘레 {Twist:+0.0;-0.0}° (영상 속 기울기 {Phi:+0.0;-0.0}°), J6 {J0:0.0}° → {J6:0.0}°, J1~J5 최대 {Arm:0.0}°",
+            pick.TwistDeg, phi, curJ[5], joints[5], MaxArmTravelExceptJ6(curJ, joints));
+        return $" 용접선 가로 정렬 {pick.TwistDeg:+0.0;-0.0}°(J6={joints[5]:0.0}°).";
+    }
+
     public async Task<StepResult> ExecuteAsync(SequenceContext context, CancellationToken ct)
     {
         // 접근점은 정차 배치(AMR pose·장착 보정·스트로크)만으로 정해지므로 코봇을 움직이기 전에 환산·리치
@@ -384,6 +592,7 @@ public class CobotInspectionMoveStep : ISequenceStep
             return StepResult.Fail($"[Cobot 검사위치 이동] {seam.Note}");
 
         context.Bag[SeamStartBaseBagKey] = seam.Base.ToArray();
+        RecordSeamOrientation(seam, context.WallCode);
         if (ShiftAnchorFrame(context, seam.Base) is { } shiftError)
             return StepResult.Fail(shiftError);
 
@@ -431,11 +640,21 @@ public class CobotInspectionMoveStep : ISequenceStep
         }
 
         var reference = await _cobot.Rpc.GetActualJointPosAsync(ct: ct);
+        context.SeamLeveledInImage = false;
 
         // 면 법선을 알면 접근점으로 한 번에 MoveJ 하지 않는다 — 진입 경유점에서 멀리 떨어진 접근점(챔퍼 아래쪽 끝 등)까지
         // 관절 보간으로 가면 팔이 면 쪽으로 크게 휘둘린다(실기 2026-11-02 L4-R03C09 PU #3, 231° MoveJ 중 EMO).
         if (usedNormal)
-            return await PlanarApproachAsync(context, seam, current, target, reference, twistNote, entryNote, ct);
+        {
+            var moved = await PlanarApproachAsync(context, seam, current, target, reference, twistNote, entryNote, ct);
+            if (!moved.Success) return moved;
+
+            // 도착한 자리에서 광축 둘레로 돌려 용접선을 depth 영상의 가로선으로 맞춘다. 진입 전에 돌린 자세로 경로를 풀면
+            // 큰 회전(PU 수평 용접선 ≈ 100~130°)에서 keep-wrist IK 가 손목을 뒤집은 해를 골라 진입 후보가 전부 거부됐다
+            // (실기 2026-11-06 15:57·16:00·16:03 PU, 진입 관절 이동 ~290°). 제자리 회전은 거의 J6 만 돈다.
+            var levelNote = await LevelSeamInPlaceAsync(context, seam, ct);
+            return levelNote.Length == 0 ? moved : moved with { Message = moved.Message + levelNote };
+        }
 
         var joints = await _cobot.Rpc.GetInverseKinKeepWristAsync(target, reference, context.Tool, 0, ct);
         if (ElbowFlipBlocker(reference, joints) is { } flip)

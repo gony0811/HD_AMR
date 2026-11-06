@@ -65,6 +65,10 @@ public class SequenceContext
     /// <summary>검사위치 이동 방향 (수평/수직). 수직 J6=180°, 수평 J6=90° (센서 헤드–링크암 간섭 회피).</summary>
     public InspectionMoveDirection InspectionDirection { get; set; } = InspectionMoveDirection.Horizontal;
 
+    /// <summary>② 가 접근 자세를 광축 둘레로 돌려 용접선을 depth 영상의 가로선으로 맞췄는지. true 면 ⑤~⑪ 진행축은
+    /// 검사 방향과 무관하게 영상 가로다(<see cref="Steps.WeldSequenceSupport.GetProgressAxis"/>).</summary>
+    public bool SeamLeveledInImage { get; set; }
+
     /// <summary>③ 카메라 거리 정렬 목표 거리(mm).</summary>
     public double CameraTargetDistanceMm { get; set; } = 400;
 

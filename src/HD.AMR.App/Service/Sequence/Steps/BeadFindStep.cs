@@ -65,7 +65,7 @@ public class BeadFindStep : ISequenceStep
         var roiSrc = $"Peak={peakSrc}, Bead={beadSrc}";
 
         // 측정 축을 ② 검사방향과 정합시킨다 — d 는 진행축과 수직(cross) 방향으로 측정된다.
-        var progressAxis = WeldSequenceSupport.ApplyProgressAxis(_weld, context);
+        var (progressAxis, _) = await WeldSequenceSupport.ApplyProgressAxisAsync(_weld, context, _cobot, _param, ct);
 
         // 저장된 DL 모델 선택 적용 — 카메라 페이지에서 고른 모델(예: 0722)을 재시작 후에도 사용.
         var modelName = await WeldSequenceSupport.ApplyDlModelAsync(_param, _weld);

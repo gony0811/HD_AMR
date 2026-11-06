@@ -47,7 +47,7 @@ public class PeakApproachStep : ISequenceStep
         var pitchDir = await WeldSequenceSupport.GetSignAsync(_param, WeldSequenceSupport.PitchDirKey);
         var moveMm = pitchMm * pitchDir;
 
-        var progressAxis = WeldSequenceSupport.GetProgressAxis(context);
+        var (progressAxis, _) = await WeldSequenceSupport.ResolveProgressAxisAsync(context, _cobot, _param, ct);
         var (toolAxis, axisFromParam) = await WeldSequenceSupport.GetProgressToolAxisAsync(_param, progressAxis);
         if (!axisFromParam)
             _logger.LogWarning(

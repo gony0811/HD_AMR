@@ -197,6 +197,9 @@ public sealed class PeakInfo
     public int DepthValue { get; init; }        // mm
     public double Confidence { get; init; }
 
+    /// <summary>ROI 안에서 찾은 Peak(국소 마루) 수. 선호 위치로 골랐으면 그 후보 수, 전역 최소로 골랐으면 0.</summary>
+    public int PeakCount { get; init; }
+
     // Peak 슬라이스에서 depth-최소부(비드)의 cross 축 구간. 급격한 depth 점프/무효 픽셀에서 끊긴다.
     // 자홍 Peak 선을 이 구간만큼만 그리는 데 쓴다. ProgressPos 와 같은 프레임 좌표(IR=깊이, RGB=재투영).
     public bool HasCrossSpan { get; init; }
@@ -225,6 +228,9 @@ public sealed class PeakFindResult
     /// <summary>Peak 지점의 깊이(mm). mm 환산에 사용.</summary>
     public int DepthMm { get; init; }
     public double Confidence { get; init; }
+
+    /// <summary>ROI 안 Peak 후보 수(<see cref="PeakInfo.PeakCount"/>). 2 이상이면 선호 위치에 가장 가까운 것을 골랐다.</summary>
+    public int PeakCount { get; init; }
 
     /// <summary>mm 환산 가능 여부(fx·깊이 확보). false 면 픽셀 값만 신뢰.</summary>
     public bool ScaleAvailable { get; init; }

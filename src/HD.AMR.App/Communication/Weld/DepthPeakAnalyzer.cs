@@ -23,9 +23,14 @@ public static class DepthPeakAnalyzer
     /// <param name="crossJumpMm">Peak 슬라이스 cross 구간 산출 시, 인접 픽셀 depth 차가 이보다 크면
     /// 비드 경계로 보고 선을 끊는다.</param>
     /// <param name="crossBandMm">cross 구간 산출 시 씨앗(최소) depth 대비 이보다 더 멀어지면 끊는다(상한).</param>
+    /// <param name="preferPos">선호 진행축 좌표(프레임 픽셀). 주면 ROI 안의 Peak(국소 마루) 중 이 위치에 가장 가까운 것을 고른다
+    /// (예: FOV 센터, 센터링 이동 후 예상 위치). ROI 가 Peak 간격보다 넓어 Peak 가 여럿 들어올 때 카메라에 더 가까운
+    /// 옆 Peak 를 잡지 않게 한다. null 이거나 국소 마루를 못 찾으면 종전대로 가장 가까운(깊이 최소) 슬라이스.</param>
+    /// <param name="minPeakProminenceMm">국소 마루 인정 기준 — 양쪽으로 이만큼 이상 멀어져야(깊이 증가) Peak 로 본다.</param>
     public static PeakInfo Analyze(CameraFrame depth, RoiRect roi, WeldProgressAxis axis,
         double promK = 4.0, double iqrK = 4.0, double minPromBandMm = 40.0, double minIqrBandMm = 40.0,
-        double crossJumpMm = 25.0, double crossBandMm = 60.0)
+        double crossJumpMm = 25.0, double crossBandMm = 60.0,
+        double? preferPos = null, double minPeakProminenceMm = 3.0)
     {
         if (depth.PixelFormat != "depth16") return new PeakInfo { Found = false };
         var clamped = roi.ClampTo(depth.Width, depth.Height);
@@ -104,6 +109,23 @@ public static class DepthPeakAnalyzer
         }
         if (bestS < 0) return new PeakInfo { Found = false };
 
+        // 선호 위치가 있으면 국소 마루 중 그 위치에 가장 가까운 것을 고른다.
+        int peakCount = 0;
+        if (gated && preferPos is { } pref)
+        {
+            var eligibleMask = new bool[sCount];
+            for (int s = 0; s < sCount; s++)
+                eligibleMask[s] = hasVal[s] && profile[s] >= promGate && iqr[s] <= iqrGate;
+            var peaks = LocalPeaks(profile, eligibleMask, minPeakProminenceMm);
+            peakCount = peaks.Count;
+            if (peaks.Count > 0)
+            {
+                double prefS = pref - (horiz ? clamped.X : clamped.Y);
+                bestS = peaks.OrderBy(s => Math.Abs(s - prefS)).First();
+                bestV = profile[bestS];
+            }
+        }
+
         // 두드러짐(prominence) 기반 신뢰도: 평균 대비 얼마나 얕은지 + 결측률.
         double sum = 0; int n = meds.Count;
         foreach (var m in meds) sum += m;
@@ -158,10 +180,64 @@ public static class DepthPeakAnalyzer
             ProgressPos = progressPos,
             DepthValue = (int)Math.Round(bestV),
             Confidence = conf,
+            PeakCount = peakCount,
             HasCrossSpan = hasSpan,
             CrossStart = crossStart,
             CrossEnd = crossEnd,
         };
+    }
+
+    /// <summary>
+    /// 적격 슬라이스 프로파일에서 국소 마루(깊이 국소 최소) 위치들. 이동평균으로 다듬은 뒤, 양쪽으로 깊이가
+    /// <paramref name="minProminenceMm"/> 이상 커졌다가 다시 내려오기 전까지(=골짜기까지) 그 구간에서 가장 가까운 점을 하나씩 뽑는다.
+    /// ROI 끝으로 갈수록 계속 가까워지는 경사(끝 쪽이 잘린 마루)는 한쪽이 솟지 않으므로 후보에서 빠진다.
+    /// </summary>
+    internal static List<int> LocalPeaks(double[] profile, bool[] eligible, double minProminenceMm)
+    {
+        int n = profile.Length;
+        // 적격 슬라이스만 이어 붙인 서열(인덱스 보존) — 무효 슬라이스는 건너뛴다.
+        var idx = new List<int>(n);
+        for (int s = 0; s < n; s++) if (eligible[s]) idx.Add(s);
+        var result = new List<int>();
+        if (idx.Count < 3) return result;
+
+        // 이동평균(±k) — 슬라이스 median 잡음(≈1mm)으로 가짜 극소가 생기지 않게.
+        int k = Math.Max(2, idx.Count / 80);
+        var sm = new double[idx.Count];
+        for (int i = 0; i < idx.Count; i++)
+        {
+            int a = Math.Max(0, i - k), b = Math.Min(idx.Count - 1, i + k);
+            double sum = 0;
+            for (int j = a; j <= b; j++) sum += profile[idx[j]];
+            sm[i] = sum / (b - a + 1);
+        }
+
+        // 히스테리시스 극값 탐색: 직전 극대에서 minProminence 이상 내려가면 '마루 구간' 진입, 그 구간 최소에서
+        // minProminence 이상 다시 올라가면 마루 확정. 첫 마루는 왼쪽에서도 그만큼 솟아 있어야 한다.
+        double runMax = sm[0];
+        bool inPeak = false;
+        int minI = -1;
+        double minV = double.MaxValue;
+        for (int i = 0; i < sm.Length; i++)
+        {
+            double v = sm[i];
+            if (!inPeak)
+            {
+                if (v > runMax) runMax = v;
+                if (v <= runMax - minProminenceMm) { inPeak = true; minI = i; minV = v; }
+            }
+            else
+            {
+                if (v < minV) { minV = v; minI = i; }
+                else if (v >= minV + minProminenceMm)
+                {
+                    result.Add(idx[minI]);
+                    inPeak = false;
+                    runMax = v;
+                }
+            }
+        }
+        return result;
     }
 
     /// <summary>리스트의 중앙값(복사 후 정렬, 원본 불변).</summary>

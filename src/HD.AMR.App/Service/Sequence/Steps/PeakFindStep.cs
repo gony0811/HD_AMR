@@ -55,10 +55,11 @@ public class PeakFindStep : ISequenceStep
             return StepResult.Fail("Peak ROI 를 만들 수 없습니다 — IR 프레임/ROI 설정을 확인하세요.");
 
         // 측정 축을 ② 검사방향과 정합시킨다 — Weld 패널 수동 설정과 무관하게 시퀀스가 소유.
-        var progressAxis = WeldSequenceSupport.ApplyProgressAxis(_weld, context);
+        var (progressAxis, axisSrc) = await WeldSequenceSupport.ApplyProgressAxisAsync(_weld, context, _cobot, _param, ct);
+        _logger.LogInformation("[Peak{Id} 찾기] 진행축={Axis} — {Src}", _peakId, progressAxis, axisSrc);
 
-        // 진행축 ROI 길이가 pitch 를 넘으면 ROI 안에 Peak 가 2개 들어올 수 있고, 분석기는 더 가까운 쪽을
-        // 고른다. 판이 기울어 있으면 중앙이 아닌 Peak 를 잡을 수 있어 경고만 남긴다(차단하지 않음).
+        // 진행축 ROI 길이가 pitch 를 넘으면 ROI 안에 Peak 가 2개 들어올 수 있다. 분석기는 그중 FOV 센터에 가장 가까운
+        // Peak 를 고르지만(국소 마루 판정), ROI 끝에 걸린 마루는 판정에서 빠질 수 있어 경고는 남긴다(차단하지 않음).
         // ROI 폭 경고용 가정 거리 — ③ 에서 이 거리로 정렬된 상태를 전제한다. ②의 면 후퇴 거리와 같은
         // 값을 쓰므로 레시피에서 목표거리를 바꾸면 여기도 따라간다(예전에는 400 하드코딩이었다).
         var assumedMm = (int)Math.Round(CobotInspectionMoveStep.ResolveApproachDistanceMm(context));
@@ -87,8 +88,8 @@ public class PeakFindStep : ISequenceStep
         context.Bag[WeldSequenceSupport.OffsetMmBagKey(_peakId)] = offsetMm;
 
         _logger.LogInformation(
-            "[Peak{Id} 찾기] 찾음: offset={Px:0.0}px / {Mm:0.0}mm, depth={D}mm, conf={C:0.00}, ROI={Roi}({X},{Y},{W},{H})",
-            _peakId, r.OffsetPx, offsetMm, r.DepthMm, r.Confidence, roiSrc, roi.X, roi.Y, roi.Width, roi.Height);
+            "[Peak{Id} 찾기] 찾음: offset={Px:0.0}px / {Mm:0.0}mm, depth={D}mm, conf={C:0.00}, ROI 내 Peak {N}개(센터에 가장 가까운 것), ROI={Roi}({X},{Y},{W},{H})",
+            _peakId, r.OffsetPx, offsetMm, r.DepthMm, r.Confidence, r.PeakCount, roiSrc, roi.X, roi.Y, roi.Width, roi.Height);
 
         return StepResult.Ok(
             $"Peak{_peakId} 찾음 — 이격 {offsetMm:+0.0;-0.0}mm ({r.OffsetPx:+0.0;-0.0}px), " +

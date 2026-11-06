@@ -160,6 +160,9 @@ public class WeldTrackingService
     /// </summary>
     private volatile bool _seqIrGeometry;
 
+    /// <summary>Peak 선호 위치 — 진행축 FOV 센터 기준 IR 픽셀. 시퀀스 호출 중에만 0 이 아니다(<see cref="FindPeakAsync"/>).</summary>
+    private double _peakPreferOffsetPx;
+
     /// <summary>위치·거리 계산 좌표계가 IR(=Depth)인지. IR 모드이거나 시퀀스 RGB 모드면 true.</summary>
     private bool GeomIr => Params.Mode == WeldImageMode.Ir || _seqIrGeometry;
 
@@ -700,6 +703,7 @@ public class WeldTrackingService
                 OffsetMm = offsetPx * mmpp,
                 DepthMm = peak.DepthValue,
                 Confidence = peak.Confidence,
+                PeakCount = peak.PeakCount,
                 ScaleAvailable = mmpp > 0,
             };
             LastPeakFind = r;
@@ -881,9 +885,13 @@ public class WeldTrackingService
         var depth = _camera.LatestDepth;
         if (depth is null || PeakRoi is null) return null;
 
+        // ROI 에 Peak 가 여럿이면 선호 위치(기본 FOV 센터, 센터링 재측정은 이동 후 예상 위치)에 가장 가까운 것을 고른다.
+        bool horizAxis = Params.ProgressAxis == WeldProgressAxis.Horizontal;
+        double preferDepth = (horizAxis ? depth.Width : depth.Height) / 2.0 + _peakPreferOffsetPx;
+
         // IR 모드·시퀀스 RGB 모드(IR 기준)는 Peak ROI 가 IR(=Depth) 픽셀이라 그대로 분석.
         if (GeomIr)
-            return DepthPeakAnalyzer.Analyze(depth, PeakRoi, Params.ProgressAxis);
+            return DepthPeakAnalyzer.Analyze(depth, PeakRoi, Params.ProgressAxis, preferPos: preferDepth);
 
         // RGB 모드: Peak ROI(Depth 좌표)에서 분석 → peak(Depth)→컬러 재투영.
         var mapper = BuildMapper(depth);
@@ -896,7 +904,7 @@ public class WeldTrackingService
                 ? ScaleRoi(irPeak, (double)depth.Width / iw, (double)depth.Height / ih, depth.Width, depth.Height)
                 : null)
             ?? mapper.MapColorRoiToDepth(PeakRoi, depth.Width, depth.Height);
-        var dp = DepthPeakAnalyzer.Analyze(depth, depthRoi, Params.ProgressAxis);
+        var dp = DepthPeakAnalyzer.Analyze(depth, depthRoi, Params.ProgressAxis, preferPos: preferDepth);
         if (!dp.Found) return dp;
 
         bool horiz = Params.ProgressAxis == WeldProgressAxis.Horizontal;
@@ -921,7 +929,7 @@ public class WeldTrackingService
         return new PeakInfo
         {
             Found = true, ProgressPos = colorProgress, DepthValue = dp.DepthValue, Confidence = dp.Confidence,
-            HasCrossSpan = hasSpan, CrossStart = cStart, CrossEnd = cEnd,
+            PeakCount = dp.PeakCount, HasCrossSpan = hasSpan, CrossStart = cStart, CrossEnd = cEnd,
         };
     }
 
@@ -990,7 +998,9 @@ public class WeldTrackingService
     // (기존 동기 메서드 내부는 취소할 수 없다. 한 호출이 수 초 이내라 허용 범위로 본다.)
 
     /// <summary>시퀀스용 Peak 찾기. <paramref name="peakRoi"/> 를 일시 적용해 <see cref="FindPeak"/> 수행.</summary>
-    public async Task<PeakFindResult> FindPeakAsync(RoiRect peakRoi, CancellationToken ct = default)
+    /// <param name="preferOffsetPx">ROI 에 Peak 가 여럿일 때 고를 위치 — 진행축 FOV 센터 기준 IR 픽셀(0=센터).
+    /// 센터링 재측정은 이동 후 예상 이격을 넣어 옆 Peak 를 잡지 않게 한다.</param>
+    public async Task<PeakFindResult> FindPeakAsync(RoiRect peakRoi, CancellationToken ct = default, double preferOffsetPx = 0)
     {
         await _gate.WaitAsync(ct);
         try
@@ -998,10 +1008,12 @@ public class WeldTrackingService
             // 시퀀스 ROI 는 IR 픽셀 — RGB 여도 IR 기준(오버레이도 IR 영상에 그리므로 Bead ROI 도 IR 픽셀로).
             _override = new RoiOverride(peakRoi, IrPixel(_roi.Bead));
             _seqIrGeometry = Params.Mode != WeldImageMode.Ir;
+            _peakPreferOffsetPx = preferOffsetPx;
             return await Task.Run(FindPeak, ct);
         }
         finally
         {
+            _peakPreferOffsetPx = 0;
             _seqIrGeometry = false;
             _override = null;
             _gate.Release();

@@ -76,7 +76,7 @@ public class BeadCenteringStep : ISequenceStep
         if (context.Bag[WeldSequenceSupport.BeadDMmBagKey(_peakId)] is not double initialDMm)
             return StepResult.Fail($"Bead{_peakId} 측정값을 읽을 수 없습니다 — 앞 단계를 다시 실행하세요.");
 
-        var progressAxis = WeldSequenceSupport.ApplyProgressAxis(_weld, context);
+        var (progressAxis, _) = await WeldSequenceSupport.ApplyProgressAxisAsync(_weld, context, _cobot, _param, ct);
         var axisKey = WeldSequenceSupport.CrossToolAxisKey(progressAxis);
 
         // ④와 동일 규약: d = 타깃 − 센터(양수 = cross 축 + 방향)를 부호 반전 없이 그대로 싣는다.

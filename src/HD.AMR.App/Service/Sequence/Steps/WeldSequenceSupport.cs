@@ -253,9 +253,10 @@ public static class WeldSequenceSupport
     /// ⑤~⑫ 진행축(코로게이션 Peak 배열 방향의 영상 축)을 ② 검사방향에서 결정한다.
     /// 수직 용접라인(Vertical, J6 180°)은 진행축이 영상 가로가 되고(실기 검증된 기준 케이스),
     /// 수평 용접라인(Horizontal, J6 90° — 광축 둘레 90° 회전)은 진행축이 영상 세로가 된다.
+    /// ② 가 용접선을 영상 가로선으로 맞췄으면(<see cref="SequenceContext.SeamLeveledInImage"/>) 방향과 무관하게 영상 가로다.
     /// </summary>
     public static WeldProgressAxis GetProgressAxis(SequenceContext context)
-        => context.InspectionDirection == InspectionMoveDirection.Vertical
+        => context.SeamLeveledInImage || context.InspectionDirection == InspectionMoveDirection.Vertical
             ? WeldProgressAxis.Horizontal
             : WeldProgressAxis.Vertical;
 
@@ -269,6 +270,77 @@ public static class WeldSequenceSupport
         var axis = GetProgressAxis(context);
         weld.Params.ProgressAxis = axis;
         return axis;
+    }
+
+    /// <summary>현재 광축이 ② 기록 광축과 이 각도 이상 어긋나면 다른 면을 보고 있다고 보고 기록을 쓰지 않는다 [도].</summary>
+    internal const double SeamMemoryMaxOpticalDeviationDeg = 25.0;
+
+    /// <summary>
+    /// 현재 툴 자세 <paramref name="tcpPose"/> 에서 용접선(<paramref name="rec"/>)이 영상에 어느 축으로 보이는지.
+    /// 영상 속 기울기(0~90°, 0=가로)가 45° 이하면 Horizontal. 광축이 기록과 크게 어긋나거나(다른 면) 축 매핑이 겹치거나
+    /// 용접선이 광축과 거의 나란하면 null(→ 호출측 폴백).
+    /// </summary>
+    internal static WeldProgressAxis? ProgressAxisFromSeam(double[] tcpPose, SeamOrientationRecord rec,
+        ToolAxisDir opticalAxis, ToolAxisDir imageX, ToolAxisDir imageY, out double tiltDeg, out string? reject)
+    {
+        tiltDeg = double.NaN;
+        var u = CobotInspectionMoveStep.ToolAxisInBase(tcpPose, opticalAxis);
+        var o = rec.OpticalAxisBase;
+        var cos = Math.Clamp(u[0] * o[0] + u[1] * o[1] + u[2] * o[2], -1.0, 1.0);
+        var dev = Math.Acos(cos) * 180.0 / Math.PI;
+        if (dev > SeamMemoryMaxOpticalDeviationDeg)
+        {
+            reject = $"광축이 ② 기록과 {dev:0}° 어긋남(다른 면)";
+            return null;
+        }
+
+        if (CobotInspectionMoveStep.SeamLevelTwistDeg(tcpPose, rec.SeamDirBase, opticalAxis, imageX, imageY) is not { } phi)
+        {
+            reject = "영상 축 매핑 겹침 또는 용접선이 광축과 나란함";
+            return null;
+        }
+
+        var t = Math.Abs(phi);
+        tiltDeg = t > 90.0 ? 180.0 - t : t;
+        reject = null;
+        return tiltDeg <= 45.0 ? WeldProgressAxis.Horizontal : WeldProgressAxis.Vertical;
+    }
+
+    /// <summary>
+    /// ⑤~⑫ 진행축을 정한다. ② 가 기록한 용접선 방향(<see cref="SeamOrientationMemory"/>)이 있으면 현재 툴 자세에서
+    /// 용접선이 영상에 가로로 보이는지 세로로 보이는지로 정한다 — 수직 용접선이면 툴도 용접선(수직)을 따라 움직인다.
+    /// 기록이 없거나 쓸 수 없으면 종전대로 컨텍스트 검사방향(<see cref="GetProgressAxis"/>)으로 정한다.
+    /// </summary>
+    public static async Task<(WeldProgressAxis Axis, string Source)> ResolveProgressAxisAsync(
+        SequenceContext context, CobotService cobot, ParameterService param, CancellationToken ct)
+    {
+        var fallback = GetProgressAxis(context);
+        var fallbackSrc = context.SeamLeveledInImage ? "② 가로 정렬" :
+            $"검사방향 {(context.InspectionDirection == InspectionMoveDirection.Vertical ? "수직" : "수평")}";
+        if (SeamOrientationMemory.Last is not { } rec)
+            return (fallback, $"{fallbackSrc} (② 용접선 기록 없음)");
+
+        double[] tcp;
+        try { tcp = await cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct); }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex) { return (fallback, $"{fallbackSrc} (TCP 조회 실패: {ex.Message})"); }
+
+        var (optical, _) = await GetDepthAxisAsync(param);
+        var (imageX, _) = await GetImageXAxisAsync(param);
+        var (imageY, _) = await GetImageYAxisAsync(param);
+        if (ProgressAxisFromSeam(tcp, rec, optical, imageX, imageY, out var tilt, out var reject) is not { } axis)
+            return (fallback, $"{fallbackSrc} ({reject})");
+
+        return (axis, $"② 용접선({rec.WallCode ?? "면 미상"}) 영상 기울기 {tilt:0.0}°");
+    }
+
+    /// <summary><see cref="ResolveProgressAxisAsync"/> 결과를 <see cref="WeldTrackingService.Params"/> 에 반영하고 반환한다.</summary>
+    public static async Task<(WeldProgressAxis Axis, string Source)> ApplyProgressAxisAsync(
+        WeldTrackingService weld, SequenceContext context, CobotService cobot, ParameterService param, CancellationToken ct)
+    {
+        var r = await ResolveProgressAxisAsync(context, cobot, param, ct);
+        weld.Params.ProgressAxis = r.Axis;
+        return r;
     }
 
     /// <summary>진행축 이동량을 실을 툴축 매핑 — 진행축이 영상 가로면 ImageX, 세로면 ImageY.</summary>
