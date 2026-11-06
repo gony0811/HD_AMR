@@ -124,6 +124,7 @@ internal static class SequenceEntry
 
         if (mode == PoseMode.Home2)
         {
+            Volatile.Write(ref _lastUpperWall, context.WallCode);   // 이후 면 정보 없는 복귀가 이 면 슬롯만 거슬러 가도록
             var slotKey = TeachingService.WallSlotKey(context.WallCode!);
             if (IsAt(cur, context, slotKey) || IsAt(cur, context, Home2Key) && TaughtJoints(context, slotKey) is null)
             {
@@ -196,7 +197,7 @@ internal static class SequenceEntry
 
         if (mode == PoseMode.Home2)
         {
-            if (UpperViaSlot(cur, ctx) is { } slot)
+            if (UpperViaSlot(cur, ctx, LastUpperWall) is { } slot)
             {
                 await MoveJToTaughtAsync(cobot, ctx, slot.Key, $"검사 준비({slot.Code})", ct);
                 done.Add($"검사 준비({slot.Code}) 경유");
@@ -332,25 +333,28 @@ internal static class SequenceEntry
     private static IEnumerable<string> UpperSlotKeys()
         => WallCodes.All.Where(w => IsUpperRoute(w.Code)).Select(w => TeachingService.WallSlotKey(w.Code));
 
+    private static string? _lastUpperWall;
+
+    /// <summary>마지막으로 홈 위치_2 모드로 진입한 상부 면(T/PU/SU) — 면 정보 없이 호출되는 복귀(주행 전 복귀 등)가
+    /// 그 면의 검사 준비 슬롯을 거슬러 가도록 기억한다. 다른 면의 슬롯을 빌려 쓰지 않기 위함.</summary>
+    internal static string? LastUpperWall => Volatile.Read(ref _lastUpperWall);
+
     /// <summary>홈 2 모드 복귀 때 경유할 상부 면 검사 준비 슬롯 — 진입 경로(홈 2 → 검사 준비 → 접근점)를 거슬러 간다.
-    /// 면은 context 의 wall_code(상부 면일 때), 없으면(주행 전 복귀) 티칭된 T/PU/SU 슬롯 중 가장 가까운 것.
+    /// 면은 context 의 wall_code(상부 면일 때), 없으면(주행 전 복귀) 마지막으로 진입한 상부 면(<paramref name="lastUpperWall"/>).
+    /// <b>그 면의 슬롯만</b> 쓴다 — 비어 있으면(미티칭) 다른 면(T·SU 등)의 슬롯으로 대신하지 않고 바로 홈 2 로 간다
+    /// (2026-11-06 현장: PU 시험 뒤 주행 전 복귀가 가장 가까운 검사 준비 T 를 경유). 면을 모르면 경유 없이 홈 2.
     /// 그 슬롯이 홈 2 보다 가까울 때만 경유한다 — 이미 홈 2 근처면 바로 홈 2 로 간다.</summary>
-    internal static (string Key, string Code)? UpperViaSlot(double[] cur, SequenceContext ctx)
+    internal static (string Key, string Code)? UpperViaSlot(double[] cur, SequenceContext ctx, string? lastUpperWall = null)
     {
         if (TaughtJoints(ctx, Home2Key) is not { } home2) return null;
-        var codes = IsUpperRoute(ctx.WallCode)
-            ? new[] { ctx.WallCode! }
-            : WallCodes.All.Where(w => IsUpperRoute(w.Code)).Select(w => w.Code).ToArray();
+        var code = IsUpperRoute(ctx.WallCode) ? ctx.WallCode!
+            : IsUpperRoute(lastUpperWall) ? lastUpperWall!
+            : null;
+        if (code is null) return null;
 
-        (string Key, string Code, double Dist)? best = null;
-        foreach (var code in codes)
-        {
-            var key = TeachingService.WallSlotKey(code);
-            if (TaughtJoints(ctx, key) is not { } j) continue;
-            var d = JointDistance(cur, j);
-            if (best is null || d < best.Value.Dist) best = (key, code, d);
-        }
-        return best is { } b && b.Dist < JointDistance(cur, home2) ? (b.Key, b.Code) : null;
+        var key = TeachingService.WallSlotKey(code);
+        if (TaughtJoints(ctx, key) is not { } j) return null;
+        return JointDistance(cur, j) < JointDistance(cur, home2) ? (key, code) : null;
     }
 
     /// <summary>관절 거리 — 축별 차이(±360° 감기 정규화)의 최댓값 [도].</summary>

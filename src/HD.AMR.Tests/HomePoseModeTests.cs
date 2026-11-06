@@ -78,15 +78,28 @@ public class HomePoseModeTests
         Assert.True(ValidateRoute(Ctx("F", Home, Ready)).IsValid);
     }
 
-    // 복귀 경유 슬롯 — 작업 면 슬롯이 홈 위치_2 보다 가까울 때만, 면이 없으면 가장 가까운 상부 슬롯.
+    // 복귀 경유 슬롯 — 작업 면(없으면 마지막 진입 상부 면) 슬롯이 홈 위치_2 보다 가까울 때만.
     [Fact]
     public void UpperViaSlot_UsesWallSlotWhenCloserThanHome2()
     {
         var nearT = new double[] { 72, -112, -62, 42, 78, 0 };
         Assert.Equal("T", UpperViaSlot(nearT, Ctx("T", Home, Home2, SlotT, SlotSU))?.Code);
-        Assert.Equal("T", UpperViaSlot(nearT, Ctx(null, Home, Home2, SlotT, SlotSU))?.Code);   // 주행 전 복귀
+        Assert.Equal("T", UpperViaSlot(nearT, Ctx(null, Home, Home2, SlotT, SlotSU), lastUpperWall: "T")?.Code);   // 주행 전 복귀
         Assert.Null(UpperViaSlot(new double[] { 61, -100, -40, 30, 90, 0 }, Ctx("T", Home, Home2, SlotT)));
         Assert.Null(UpperViaSlot(nearT, Ctx("T", Home, Home2)));   // 검사 준비 미티칭 → 바로 홈 위치_2
+    }
+
+    // 작업 면 슬롯이 비어 있으면 다른 면(T·SU) 슬롯으로 대신하지 않는다 — 바로 홈 위치_2 (2026-11-06 현장: PU 뒤 T 경유).
+    [Fact]
+    public void UpperViaSlot_NeverBorrowsOtherWallSlot()
+    {
+        var nearT = new double[] { 72, -112, -62, 42, 78, 0 };
+        Assert.Null(UpperViaSlot(nearT, Ctx("PU", Home, Home2, SlotT, SlotSU)));                         // 시퀀스 복귀
+        Assert.Null(UpperViaSlot(nearT, Ctx(null, Home, Home2, SlotT, SlotSU), lastUpperWall: "PU"));   // 주행 전 복귀
+        Assert.Null(UpperViaSlot(nearT, Ctx(null, Home, Home2, SlotT, SlotSU)));                         // 면 모름 → 경유 없음
+        Assert.Null(UpperViaSlot(nearT, Ctx(null, Home, Home2, SlotT, SlotSU), lastUpperWall: "F"));    // 상부 면 아님
+        // 작업 면 정보가 있으면 마지막 진입 면보다 우선
+        Assert.Null(UpperViaSlot(nearT, Ctx("PU", Home, Home2, SlotT), lastUpperWall: "T"));
     }
 
     [Fact]
