@@ -1,9 +1,6 @@
 using HD.AMR.App.Models;
 using HD.AMR.App.Service.Vision;
 using Microsoft.Extensions.Logging;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Formats.Png;
-using SixLabors.ImageSharp.PixelFormats;
 
 namespace HD.AMR.App.Service.Sequence.Steps;
 
@@ -143,21 +140,8 @@ public sealed class BeadManualAssist
     {
         try
         {
-            var dir = await _labels.GetDirAsync();
-            if (dir is null) return "캡처 폴더 미설정 — 학습 데이터 저장 생략";
-            var guide = s.GuideFor(modality);
-            if (guide is null) return "영상 없음 — 학습 데이터 저장 생략";
-
-            var cap = await _camera.SaveFramesAsync(dir, s.Color, s.Ir, s.Depth, tag: $"seqP{s.PeakId}", ct);
-            var stem = cap.Timestamp;
-            var label = new WeldLineLabel
-            {
-                Width = guide.Width,
-                Height = guide.Height,
-                Points = points.Select(p => new[] { Math.Round(p.X, 1), Math.Round(p.Y, 1) }).ToList(),
-            };
-            await _labels.SaveLineAsync(stem, modality, label);
-            await _labels.SaveMaskAsync(stem, modality, await Task.Run(() => MaskPng(label), ct));
+            if (await _labels.GetDirAsync() is null) return "캡처 폴더 미설정 — 학습 데이터 저장 생략";
+            var stem = await ManualBeadLabelWriter.SaveAsync(_camera, _labels, s, modality, points, $"seqP{s.PeakId}", ct);
             return $"학습 데이터 저장 {stem}_{modality}";
         }
         catch (OperationCanceledException) { throw; }
@@ -166,13 +150,5 @@ public sealed class BeadManualAssist
             _logger.LogWarning(ex, "수동 비드 입력 학습 데이터 저장 실패 — 측정은 계속 사용");
             return $"학습 데이터 저장 실패: {ex.Message}";
         }
-    }
-
-    private static byte[] MaskPng(WeldLineLabel label)
-    {
-        using var img = Image.LoadPixelData<L8>(label.Rasterize(), label.Width, label.Height);
-        using var ms = new MemoryStream();
-        img.Save(ms, new PngEncoder());
-        return ms.ToArray();
     }
 }

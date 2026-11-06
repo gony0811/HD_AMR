@@ -163,6 +163,7 @@ internal static class ServiceRegistration
         // 수동 비드 입력: 요청 허브는 메인 창과 공유(싱글톤), 실행 헬퍼는 스텝과 같은 스코프.
         services.AddSingleton<BeadManualLabelHub>();
         services.AddScoped<HD.AMR.App.Service.Sequence.Steps.BeadManualAssist>();
+        services.AddScoped<HD.AMR.App.Service.Sequence.Steps.BeadManualTestService>();
         AddSequenceSteps(services);
         // SequenceService 는 스텝/상태를 보유 — 페이지 수명 scope 에서 해석(뷰모델이 scope 개방).
         services.AddScoped<SequenceService>();

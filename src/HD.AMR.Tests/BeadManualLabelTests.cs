@@ -116,4 +116,19 @@ public class BeadManualLabelTests
         Assert.False(hub.Submit(Guid.NewGuid(), ManualBeadAnswer.Of(ManualBeadDecision.Reject)));
         Assert.Equal(ManualBeadDecision.Timeout, (await task).Decision);
     }
+
+    [Theory]
+    [InlineData("012_20261107_101500_ir.png", "012_20261107_101500")]
+    [InlineData("012_seqP1_20261107_101500_rgb.png", "012_seqP1_20261107_101500")]
+    [InlineData("007_hard_20261101_090000_depth16.png", "007_hard_20261101_090000")]
+    [InlineData("020_20261107_101500_ir_maskdraft.png", "020_20261107_101500")]
+    [InlineData("020_20261107_101500_ir_line.json", "020_20261107_101500")]
+    public void StemOf_ParsesCaptureFiles(string file, string stem)
+        => Assert.Equal(stem, HD.AMR.App.Service.Sequence.Steps.BeadManualTestService.StemOf(file));
+
+    [Theory]
+    [InlineData("photo.png")]
+    [InlineData("_ir.png")]
+    public void StemOf_RejectsOtherFiles(string file)
+        => Assert.Null(HD.AMR.App.Service.Sequence.Steps.BeadManualTestService.StemOf(file));
 }

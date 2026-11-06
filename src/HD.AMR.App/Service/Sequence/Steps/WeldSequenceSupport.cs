@@ -119,7 +119,13 @@ public static class WeldSequenceSupport
     {
         var f = camera.LatestIr;
         if (f is null) return (null, "IR 프레임 없음");
+        var (roi, src) = await GetPeakRoiAsync(param, f.Width, f.Height);
+        return (roi, src);
+    }
 
+    /// <summary><see cref="GetPeakRoiAsync(ParameterService, CameraService)"/> 의 영상 크기 지정판 — 저장된 촬영본용.</summary>
+    public static async Task<(RoiRect? Roi, string Src)> GetPeakRoiAsync(ParameterService param, int width, int height)
+    {
         var roi = DefaultCenterRoi;
         var src = "중앙 기본 ROI";
 
@@ -134,7 +140,7 @@ public static class WeldSequenceSupport
             src = "평탄면 ROI 폴백";
         }
 
-        return (roi.ToPixel(f.Width, f.Height), src);
+        return (roi.ToPixel(width, height), src);
     }
 
     /// <summary>
@@ -146,7 +152,13 @@ public static class WeldSequenceSupport
     {
         var f = camera.LatestIr;
         if (f is null) return (null, "IR 프레임 없음");
+        var (roi, src) = await GetBeadRoiAsync(param, f.Width, f.Height);
+        return (roi, src);
+    }
 
+    /// <summary><see cref="GetBeadRoiAsync(ParameterService, CameraService)"/> 의 영상 크기 지정판 — 저장된 촬영본용.</summary>
+    public static async Task<(RoiRect? Roi, string Src)> GetBeadRoiAsync(ParameterService param, int width, int height)
+    {
         var roi = DefaultCenterRoi;
         var src = "중앙 기본 ROI";
 
@@ -166,7 +178,7 @@ public static class WeldSequenceSupport
             src = "평탄면 ROI 폴백";
         }
 
-        return (roi.ToPixel(f.Width, f.Height), src);
+        return (roi.ToPixel(width, height), src);
     }
 
     /// <summary>ROI 파라미터가 하나도 없을 때의 폴백 — 화면 중앙 30%.</summary>
