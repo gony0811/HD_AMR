@@ -77,7 +77,11 @@ public class WeldTrackingService
         ParameterService.Changed += OnParameterChanged;
         _ = ReloadRoiAsync();
         _ = ReloadDlThresholdsAsync();
+        _ = ReloadModeAsync();
     }
+
+    /// <summary>검출 입력 영상(IR/RGB) 파라미터. 없으면 <see cref="WeldDetectionParams.Mode"/> 기본값(IR).</summary>
+    public const string ImageModeKey = "Weld.ImageMode";
 
     /// <summary>DL 검출 confidence 임계값 파라미터. 없으면 <see cref="WeldDetectionParams.DlConfidence"/> 기본값.</summary>
     public const string DlConfidenceKey = "Weld.Dl.Confidence";
@@ -190,6 +194,53 @@ public class WeldTrackingService
             _ = ReloadRoiAsync();
         else if (name is DlConfidenceKey or DlMaskThresholdKey)
             _ = ReloadDlThresholdsAsync();
+        else if (name == ImageModeKey)
+            _ = ReloadModeAsync();
+    }
+
+    // ── 검출 입력 영상(모드) ────────────────────────────────────────
+    // UI 가 Params.Mode 를 바꾼 뒤 호출 — 재시작 후에도 같은 모드(IR/RGB)로 복원되도록 파라미터에 저장한다.
+    /// <summary>현재 <see cref="WeldDetectionParams.Mode"/> 를 파라미터로 저장(백그라운드).</summary>
+    public void SaveMode() => _ = PersistModeAsync(Params.Mode);
+
+    private async Task PersistModeAsync(WeldImageMode mode)
+    {
+        await _persistGate.WaitAsync();
+        Interlocked.Increment(ref _selfWrites);
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var param = scope.ServiceProvider.GetRequiredService<ParameterService>();
+            await param.SetAsync(ImageModeKey, mode.ToString(), "용접 추적 검출 입력 영상 (Ir / RgbGrayscale / RgbHsv)");
+            _logger.LogInformation("용접 추적 입력 모드 저장: {Mode}", mode);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "용접 추적 입력 모드 저장 실패");
+            Message = $"입력 모드 저장 실패: {ex.Message}";
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _selfWrites);
+            _persistGate.Release();
+        }
+    }
+
+    private async Task ReloadModeAsync()
+    {
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var param = scope.ServiceProvider.GetRequiredService<ParameterService>();
+            if (await param.GetAsync(ImageModeKey) is { } s
+                && Enum.TryParse<WeldImageMode>(s, ignoreCase: true, out var mode)
+                && Enum.IsDefined(mode))
+                Params.Mode = mode;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "용접 추적 입력 모드 파라미터 읽기 실패 — 이전 값 유지");
+        }
     }
 
     // ── DL 임계값 ───────────────────────────────────────────────────
