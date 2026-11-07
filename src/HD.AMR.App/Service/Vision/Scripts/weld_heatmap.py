@@ -19,6 +19,8 @@
 - 평가: IoU 가 아니라 **원본 픽셀 기준 위치 오차**(영상 가로 중앙에서의 세로 오차, 라벨 구간 평균 오차)와 검출률.
 - 학습/검증 분할은 **촬영 세션 단위**(촬영 시각 간격 --session-gap-min 이상이면 다른 세션). 연속 촬영본이 거의 같아
   무작위 분할은 검증 점수를 부풀린다.
+- 세로 용접선 라벨(회전본 cw90/ccw90 등)은 전치(x↔y)해 가로선으로 학습한다 — 앱은 진행축이 세로면 같은 전치를 한다.
+  배율은 긴 변 기준(--width)이라 회전본도 원본과 같은 축척, 학습은 고정 크기 크롭(--crop-h×--crop-w)으로 배치를 맞춘다.
 - 입력은 3채널(IR 은 그레이를 3채널로 복제). ONNX 는 [1,3,H,W] 0~1 입력 → [1,1,H,W] logit, ImageNet 정규화는 모델 안에
   포함하므로 추론측은 /255 만 하면 된다. H·W 는 32 배수 동적 축.
 - 에폭마다 "Epoch k/N ..." 한 줄을 출력한다(앱 진행 바 파싱 규약, weld_unet.py 와 동일).
@@ -154,12 +156,45 @@ def load_image(path):
 
 
 def resize_sample(img, pts, width):
+    """긴 변을 width 로 맞추는 배율로 줄인다 — 카메라 원본(가로 영상)은 가로=width, 회전본(세로 영상)도 같은 배율이 된다.
+    앱 추론도 같은 규약(배율 = train_width / 프레임 가로)이라 비드 굵기·물결무늬 크기가 학습과 같아진다."""
     h, w = img.shape[:2]
-    s = width / w
-    nh = int(round(h * s / 32)) * 32
-    nw = width // 32 * 32
+    s = width / max(h, w)
+    nw, nh = max(32, int(round(w * s))), max(32, int(round(h * s)))
     sx, sy = nw / w, nh / h
     return cv2.resize(img, (nw, nh), interpolation=cv2.INTER_AREA), pts * np.array([sx, sy], np.float32), (sx, sy)
+
+
+def is_vertical(pts):
+    """선 라벨이 세로에 가까운지(끝점 기준 세로 변화가 가로 변화보다 큼)."""
+    return abs(pts[-1, 1] - pts[0, 1]) > abs(pts[-1, 0] - pts[0, 0])
+
+
+def to_horizontal(img, pts):
+    """세로선이면 전치(x↔y)해 가로선으로 — 모델은 가로선만 배우고, 앱은 세로 진행축일 때 같은 전치를 한다."""
+    if not is_vertical(pts):
+        return img, pts, False
+    return np.ascontiguousarray(np.transpose(img, (1, 0, 2))), pts[:, ::-1].copy(), True
+
+
+def crop_pad(img, pts, ch, cw, rng, pos_frac=0.9):
+    """고정 크기(ch×cw)로 자르기 — 작으면 반사 패딩. pos_frac 확률로 선이 창 안에 들어오게 고른다(배치 크기 통일)."""
+    h, w = img.shape[:2]
+    py, px = max(0, ch - h), max(0, cw - w)
+    if py or px:
+        top, left = py // 2, px // 2
+        img = cv2.copyMakeBorder(img, top, py - top, left, px - left, cv2.BORDER_REFLECT_101)
+        pts = pts + np.array([left, top], np.float32)
+        h, w = img.shape[:2]
+    x0 = rng.randint(0, w - cw)
+    if rng.random() < pos_frac:
+        ly = label_y_at(pts, x0 + cw / 2)
+        ly = float(np.mean(pts[:, 1])) if ly is None else ly
+        lo, hi = int(max(0, ly - ch + 16)), int(min(h - ch, ly - 16))
+        y0 = rng.randint(lo, hi) if hi >= lo else rng.randint(0, h - ch)
+    else:
+        y0 = rng.randint(0, h - ch)
+    return img[y0:y0 + ch, x0:x0 + cw].copy(), pts - np.array([x0, y0], np.float32)
 
 
 def polyline_distance(h, w, pts):
@@ -216,8 +251,9 @@ def augment(img, pts, rng):
 def prepare(samples, width):
     out = []
     for s in samples:
-        img, pts, scale = resize_sample(load_image(s["img"]), s["points"], width)
-        out.append({**s, "im": img, "pts": pts, "scale": scale})
+        img, pts, transposed = to_horizontal(load_image(s["img"]), s["points"])
+        img, pts, scale = resize_sample(img, pts, width)
+        out.append({**s, "im": img, "pts": pts, "scale": scale, "transposed": transposed})
     return out
 
 
@@ -276,8 +312,12 @@ def label_y_at(pts, x):
 
 @torch.no_grad()
 def predict_prob(model, img, device):
-    x = to_tensor(img).unsqueeze(0).to(device)
-    return torch.sigmoid(model(x))[0, 0].float().cpu().numpy()
+    """임의 크기 영상 → 같은 크기 확률맵(32 배수 반사 패딩 후 잘라냄)."""
+    h, w = img.shape[:2]
+    ph, pw = (-h) % 32, (-w) % 32
+    padded = cv2.copyMakeBorder(img, 0, ph, 0, pw, cv2.BORDER_REFLECT_101) if (ph or pw) else img
+    x = to_tensor(padded).unsqueeze(0).to(device)
+    return torch.sigmoid(model(x))[0, 0, :h, :w].float().cpu().numpy()
 
 
 @torch.no_grad()
@@ -330,7 +370,8 @@ def cmd_train(a):
         sys.exit(f"ERROR {a.modality} 선 라벨(*_{a.modality}_line.json)이 있는 촬영본이 없습니다: {a.captures}")
     train, val, n_sess = split_by_session(samples, a.session_gap_min, a.val_frac, a.seed)
     print(f"DATA {len(samples)}장 (세션 {n_sess}개) → 학습 {len(train)} / 검증 {len(val)}"
-          f" · 자동 변환 라벨 {sum(1 for s in samples if (s['origin'] or '').startswith('transfer'))}장", flush=True)
+          f" · 자동 변환 라벨 {sum(1 for s in samples if (s['origin'] or '').startswith('transfer'))}장"
+          f" · 세로선(전치해 학습) {sum(1 for s in samples if is_vertical(s['points']))}장", flush=True)
     if n_sess < 2:
         print("WARN 촬영 세션이 1개뿐 — 검증셋을 학습셋으로 대신합니다(점수는 과대평가). 여러 날·위치에서 라벨을 모으세요.", flush=True)
     if len(samples) < 50:
@@ -360,6 +401,7 @@ def cmd_train(a):
             xs, ys = [], []
             for s in chunk:
                 img, pts = augment(s["im"], s["pts"], rng)
+                img, pts = crop_pad(img, pts, a.crop_h, a.crop_w, rng)
                 xs.append(to_tensor(img))
                 ys.append(torch.from_numpy(heatmap_target(img.shape[0], img.shape[1], pts, a.sigma))[None])
             x = torch.stack(xs).to(device)
@@ -413,6 +455,8 @@ def cmd_predict(a):
     os.makedirs(a.out, exist_ok=True)
     for p in a.images:
         img0 = load_image(p)
+        if a.vertical:   # 세로선 영상 — 앱처럼 전치해서 추론
+            img0 = np.ascontiguousarray(np.transpose(img0, (1, 0, 2)))
         img, _, (sx, sy) = resize_sample(img0, np.zeros((2, 2), np.float32), cfg.get("width", 640))
         prob = predict_prob(model, img, device)
         pts, line, frac = decode_line(prob, a.thr)
@@ -479,7 +523,9 @@ def main():
     t.add_argument("--epochs", type=int, default=150)
     t.add_argument("--batch", type=int, default=8)
     t.add_argument("--repeats", type=int, default=4, help="에폭당 각 영상을 증강해 몇 번 쓸지")
-    t.add_argument("--width", type=int, default=640, help="학습·추론 가로 해상도(32 배수로 내림)")
+    t.add_argument("--width", type=int, default=640, help="영상 긴 변을 이 크기로 줄여 학습(앱 추론도 같은 배율)")
+    t.add_argument("--crop-h", dest="crop_h", type=int, default=320, help="학습 크롭 높이(32 배수)")
+    t.add_argument("--crop-w", dest="crop_w", type=int, default=512, help="학습 크롭 너비(32 배수)")
     t.add_argument("--sigma", type=float, default=2.5, help="중심선 가우시안 폭 [px, 학습 해상도]")
     t.add_argument("--lr", type=float, default=1e-3)
     t.add_argument("--pos-weight", dest="pos_weight", type=float, default=20.0)
@@ -503,6 +549,7 @@ def main():
     p.add_argument("--images", nargs="+", required=True)
     p.add_argument("--out", required=True)
     p.add_argument("--thr", type=float, default=0.3)
+    p.add_argument("--vertical", action="store_true", help="세로 용접선 영상(전치해서 추론, 결과도 전치된 영상으로 저장)")
     p.add_argument("--device", default="auto")
     p.set_defaults(fn=cmd_predict)
 
