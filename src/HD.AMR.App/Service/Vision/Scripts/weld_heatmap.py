@@ -509,27 +509,45 @@ def cmd_eval(a):
 
 
 def cmd_predict(a):
+    """영상마다 히트맵·중심선 오버레이 jpg. 용접선 방향을 모르므로 기본은 가로·세로(전치) 둘 다 풀어 선을 찾은 쪽을 쓴다
+    (앱 ④ 추론 탭과 같은 규칙). --vertical / --horizontal 로 방향을 고정할 수 있다."""
     device = pick_device(a.device)
     model, cfg = load_model(a.weights, device)
     os.makedirs(a.out, exist_ok=True)
+    width = cfg.get("width", 640)
+    orients = [True] if a.vertical else [False] if a.horizontal else [False, True]
     for p in a.images:
         img0 = load_image(p)
-        if a.vertical:   # 세로선 영상 — 앱처럼 전치해서 추론
-            img0 = np.ascontiguousarray(np.transpose(img0, (1, 0, 2)))
-        img, _, (sx, sy) = resize_sample(img0, np.zeros((2, 2), np.float32), cfg.get("width", 640))
-        prob = predict_prob(model, img, device)
-        pts, line, frac = decode_line(prob, a.thr)
+        best = None
+        for vert in orients:
+            work = np.ascontiguousarray(np.transpose(img0, (1, 0, 2))) if vert else img0
+            # 배율은 원본 프레임 긴 변 기준(앱과 같음) — 전치해도 같다.
+            img, _, (sx, sy) = resize_sample(work, np.zeros((2, 2), np.float32), width)
+            prob = predict_prob(model, img, device)
+            pts, line, frac = decode_line(prob, a.thr)
+            key = (line is not None, frac)
+            if best is None or key > best[0]:
+                best = (key, vert, img, prob, pts, line, frac, sx, sy)
+        _, vert, img, prob, pts, line, frac, sx, sy = best
+
+        def to_orig(x, y):
+            """작업 좌표(축소·전치) → 원본 픽셀."""
+            ox, oy = x / sx, y / sy
+            return (int(round(oy)), int(round(ox))) if vert else (int(round(ox)), int(round(oy)))
+
         vis = cv2.cvtColor(img0, cv2.COLOR_RGB2BGR)
-        heat = cv2.applyColorMap((cv2.resize(prob, (img0.shape[1], img0.shape[0])) * 255).astype(np.uint8), cv2.COLORMAP_JET)
+        heat_w = prob.T if vert else prob
+        heat = cv2.applyColorMap((cv2.resize(heat_w, (img0.shape[1], img0.shape[0])) * 255).astype(np.uint8), cv2.COLORMAP_JET)
         vis = cv2.addWeighted(vis, 0.7, heat, 0.3, 0)
         for x, y in pts:
-            cv2.circle(vis, (int(x / sx), int(y / sy)), 1, (0, 255, 255), -1)
+            cv2.circle(vis, to_orig(x, y), 1, (0, 255, 255), -1)
         if line:
             a_, b_ = line
             W = img.shape[1]
-            cv2.line(vis, (0, int(b_ / sy)), (img0.shape[1] - 1, int((a_ * (W - 1) + b_) / sy)), (255, 0, 255), 2)
-        txt = f"cols={frac:.0%} " + ("line OK" if line else "NO LINE")
-        cv2.putText(vis, txt, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0) if line else (0, 0, 255), 2)
+            cv2.line(vis, to_orig(0, b_), to_orig(W - 1, a_ * (W - 1) + b_), (255, 0, 255), 2)
+        txt = f"{'세로' if vert else '가로'} cols={frac:.0%} " + ("line OK" if line else "NO LINE")
+        cv2.putText(vis, f"{'V' if vert else 'H'} cols={frac:.0%} " + ("line OK" if line else "NO LINE"), (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0) if line else (0, 0, 255), 2)
         out = os.path.join(a.out, os.path.splitext(os.path.basename(p))[0] + "_heat.jpg")
         cv2.imwrite(out, vis)
         print(f"PRED {os.path.basename(p)} {txt} -> {out}", flush=True)
@@ -613,7 +631,8 @@ def main():
     p.add_argument("--images", nargs="+", required=True)
     p.add_argument("--out", required=True)
     p.add_argument("--thr", type=float, default=0.3)
-    p.add_argument("--vertical", action="store_true", help="세로 용접선 영상(전치해서 추론, 결과도 전치된 영상으로 저장)")
+    p.add_argument("--vertical", action="store_true", help="세로 용접선으로 고정(기본: 가로·세로 자동)")
+    p.add_argument("--horizontal", action="store_true", help="가로 용접선으로 고정(기본: 가로·세로 자동)")
     p.add_argument("--device", default="auto")
     p.set_defaults(fn=cmd_predict)
 

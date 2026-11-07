@@ -37,6 +37,8 @@ public sealed class OnnxBeadSegmentationService
         if (!File.Exists(imgPath)) throw new FileNotFoundException("이미지가 없습니다.", imgPath);
         if (!File.Exists(modelPath)) throw new FileNotFoundException("모델(.onnx)이 없습니다.", modelPath);
 
+        if (IsHeatmapModel(modelPath))
+            return await Task.Run(() => InferHeatmap(modelPath, File.ReadAllBytes(imgPath), maskThr));
         if (!OperatingSystem.IsWindows())
             return await Task.Run(() => InferManaged(modelPath, File.ReadAllBytes(imgPath), conf, maskThr));
 
@@ -54,6 +56,8 @@ public sealed class OnnxBeadSegmentationService
     {
         if (!File.Exists(modelPath)) throw new FileNotFoundException("모델(.onnx)이 없습니다.", modelPath);
         if (imageBytes is null || imageBytes.Length == 0) throw new ArgumentException("빈 이미지입니다.", nameof(imageBytes));
+        if (IsHeatmapModel(modelPath))
+            return await Task.Run(() => InferHeatmap(modelPath, imageBytes, maskThr));
         if (!OperatingSystem.IsWindows())
             return await Task.Run(() => InferManaged(modelPath, imageBytes, conf, maskThr));
         return await Task.Run(() =>
@@ -101,6 +105,63 @@ public sealed class OnnxBeadSegmentationService
             double covered = count > 0 ? on / (double)(img.Width * img.Height) : 0;
             return new InferResult(count, maxScore, covered, sw.ElapsedMilliseconds, img.Width, img.Height);
         }
+    }
+
+    /// <summary>모델이 중심선 히트맵(weld_heatmap, 입력 3채널·출력 1개 [1,1,H,W])인지.</summary>
+    private bool IsHeatmapModel(string modelPath)
+    {
+        lock (_gate) return HeatmapSegmenter.LooksLikeHeatmap(GetSession(modelPath));
+    }
+
+    /// <summary>히트맵 판정: 진행 슬라이스 중 이 비율 이상에서 중심선을 찾으면 "검출 1건".</summary>
+    internal const double HeatmapFoundFraction = 0.2;
+
+    /// <summary>
+    /// 중심선 히트맵 모델 추론(OpenCV 불필요 — macOS 포함). 진행축을 모르므로 가로·세로(전치) 둘 다 풀어 중심선을 찾은
+    /// 슬라이스 비율이 큰 쪽을 쓴다. 결과: Count=1/0(선 검출 여부), MaxScore=최대 확률, Coverage=중심선을 찾은 슬라이스 비율.
+    /// 오버레이는 찾은 중심선 띠를 붉게 칠한다.
+    /// </summary>
+    private InferResult InferHeatmap(string modelPath, byte[] imageBytes, float threshold)
+    {
+        SixLabors.ImageSharp.Image<SixLabors.ImageSharp.PixelFormats.Rgb24> img;
+        try { img = SixLabors.ImageSharp.Image.Load<SixLabors.ImageSharp.PixelFormats.Rgb24>(imageBytes); }
+        catch (Exception ex) { throw new InvalidOperationException("이미지를 디코드하지 못했습니다(형식 확인).", ex); }
+        using (img)
+        lock (_gate)
+        {
+            int w = img.Width, h = img.Height;
+            var rgb = new byte[w * h * 3];
+            img.CopyPixelDataTo(rgb);
+            var session = GetSession(modelPath);
+            float thr = Math.Clamp(threshold, 0.05f, 0.95f);
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var probH = new float[w * h];
+            var mH = HeatmapSegmenter.RidgeMask(session, rgb, w, h, Math.Max(w, h), horizontal: true, thr, prob: probH);
+            var probV = new float[w * h];
+            var mV = HeatmapSegmenter.RidgeMask(session, rgb, w, h, Math.Max(w, h), horizontal: false, thr, prob: probV);
+            sw.Stop();
+            double fH = SliceFraction(mH, w, h, true), fV = SliceFraction(mV, w, h, false);
+            bool horiz = fH >= fV;
+            var mask = horiz ? mH : mV;
+            var prob = horiz ? probH : probV;
+            double frac = horiz ? fH : fV;
+            LastOverlay = YoloSegManaged.BuildOverlay(img, mask);
+            float max = 0;
+            foreach (var v in prob) if (v > max) max = v;
+            _log.LogInformation("히트맵 추론 {Model}: {Dir} 중심선 슬라이스 {Frac:P0} (가로 {FH:P0} / 세로 {FV:P0}), 최대 확률 {Max:0.00}, {Ms}ms",
+                Path.GetFileName(modelPath), horiz ? "가로" : "세로", frac, fH, fV, max, sw.ElapsedMilliseconds);
+            return new InferResult(frac >= HeatmapFoundFraction ? 1 : 0, max, frac, sw.ElapsedMilliseconds, w, h);
+        }
+    }
+
+    /// <summary>진행 슬라이스(가로면 열, 세로면 행) 중 마스크가 있는 비율.</summary>
+    internal static double SliceFraction(byte[] mask, int w, int h, bool horizontal)
+    {
+        int n = horizontal ? w : h, c = horizontal ? h : w, hit = 0;
+        for (int s = 0; s < n; s++)
+            for (int k = 0; k < c; k++)
+                if (mask[horizontal ? k * w + s : s * w + k] != 0) { hit++; break; }
+        return n == 0 ? 0 : (double)hit / n;
     }
 
     private InferenceSession GetSession(string modelPath)
