@@ -295,23 +295,41 @@ public class InspectionRunStep : ISequenceStep
 
     /// <summary>
     /// 경유점 BASE 목표를 순서대로 IK(앞 점 해 기준 최소 변위)로 풀어 <see cref="WaypointChainBlocker"/> 로 판정한다.
+    /// 끝점만이 아니라 <b>현재 TCP → 첫 경유점(스테이징)</b>과 <b>경유점 사이 MoveL 경로</b>도 위치 100mm·자세 10° 간격으로
+    /// 샘플링해 이어 푼다(<see cref="CobotInspectionMoveStep.PathStepBlocker"/> — 관절 점프·팔꿈치·손목). 끝점이 멀쩡해도
+    /// 그 사이에서 J5 가 0 을 지나면 MoveL 이 도중에 rc=38/185 로 멈추기 때문이다(스테이징은 앞 단계가 끝난 자리에서 출발해 길 수 있다).
     /// IK 는 계산만 하는 호출이라 코봇은 움직이지 않는다. 통과하면 null.
     /// </summary>
     private async Task<string?> CheckWaypointChainAsync(
         SequenceContext context, IReadOnlyList<(int Index, double[] Target)> targets, CancellationToken ct)
     {
         var start = await _cobot.Rpc.GetActualJointPosAsync(ct: ct);
+        var prevPose = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
         var chain = new List<(int Index, double[] Joints)>(targets.Count);
         var seed = start;
+        var first = true;
         foreach (var (idx, target) in targets)
         {
-            double[] joints;
-            try { joints = await _cobot.Rpc.GetInverseKinNearestAsync(target, seed, context.Tool, 0, ct); }
-            catch (InvalidOperationException ex) { return $"경유점 #{idx + 1} 도달 불가({ex.Message})"; }
-            chain.Add((idx, joints));
-            seed = joints;
+            var label = first ? $"첫 경유점 #{idx + 1} 스테이징 경로" : $"경유점 #{idx + 1} 앞 경로";
+            foreach (var pose in CobotInspectionMoveStep.SamplePoseSegment(
+                         prevPose, target, CobotInspectionMoveStep.PlanarSampleMm, CobotInspectionMoveStep.ChainSampleDeg))
+            {
+                double[] j;
+                try { j = await _cobot.Rpc.GetInverseKinNearestAsync(pose, seed, context.Tool, 0, ct); }
+                catch (InvalidOperationException ex) { return $"{label} [{Fmt(pose)}] 도달 불가({ex.Message})"; }
+                if (CobotInspectionMoveStep.PathStepBlocker(seed, j, start) is { } step)
+                    return $"{label} [{Fmt(pose)}] {step}";
+                if (Inspection.WObjAttitude.J6RangeBlocker(start[5], j[5]) is { } j6)
+                    return $"{label} [{Fmt(pose)}] {j6}";
+                seed = j;
+            }
+            chain.Add((idx, seed));   // 마지막 샘플 = 경유점 자신
+            prevPose = target;
+            first = false;
         }
         return WaypointChainBlocker(start, chain);
+
+        static string Fmt(double[] p) => string.Join(", ", p.Take(3).Select(v => v.ToString("0")));
     }
 
     /// <summary>

@@ -390,7 +390,8 @@ public class FairinoRpcClient : IDisposable
     // ── 이동 ───────────────────────────────────────────────────────
     /// <summary>
     /// 직교 직선 이동(MoveL). descPose = [x,y,z,rx,ry,rz]. jointPos 미지정 시 역기구학으로 계산한다
-    /// (FAIRINO MoveL은 관절각이 필요). 모든 인자를 33요소 단일 배열로 전송한다.
+    /// (FAIRINO MoveL은 관절각이 필요 — <see cref="ResolveMoveJointsAsync"/> 로 현재 관절과 연속인 해를 쓴다).
+    /// 모든 인자를 33요소 단일 배열로 전송한다.
     /// </summary>
     public async Task<int> MoveLAsync(double[] descPose, double[]? jointPos = null, int? tool = null, int? user = null,
                                       double? vel = null, double acc = 0.0, double ovl = 100.0, double blendR = -1.0,
@@ -402,7 +403,7 @@ public class FairinoRpcClient : IDisposable
         double v = vel ?? _settings.DefaultVelPct;
         double[] off = (offsetPos is { Length: >= 6 }) ? offsetPos : new double[6];
 
-        double[] j = jointPos ?? await GetInverseKinForMoveAsync(descPose, t, u, ct);
+        double[] j = jointPos ?? await ResolveMoveJointsAsync(descPose, t, u, ct);
 
         var args = new object[]
         {
@@ -515,8 +516,47 @@ public class FairinoRpcClient : IDisposable
             ? FrameMath.FromFrame(offset, anchorPose)
             : anchorPose;
 
-        var joints = await GetInverseKinForMoveAsync(target, t, user, ct);
+        var joints = await ResolveMoveJointsAsync(target, t, user, ct);
         return await MoveJAsync(joints, target, tool: t, user: user, vel: vel, ct: ct);
+    }
+
+    /// <summary>
+    /// 관절값을 따로 주지 않은 이동(MoveL·MoveJByToolOffset)의 지령 관절 해 — <b>현재 관절과 연속인 해</b>.
+    /// 컨트롤러 자동 IK(config −1)는 J6 를 ±180° 범위로 돌려주고 가지(손목·팔꿈치) 선택도 현재 자세를 보지 않는다.
+    /// 그대로 지령하면 현재 J6 −181° 에 해 +179° 처럼 같은 자세를 반대 감김으로 요구하게 된다(MoveJ 는 실제로 한 바퀴 돈다).
+    /// 그래서 ① 자동 해를 현재 관절 쪽으로 ±360° 감아 풀고(<see cref="UnwrapToward"/>), ② 그 해가 현재와 다른 가지
+    /// (<see cref="IsBranchChange"/> — J3/J5 부호 반전)면 config 0–7 중 현재에 가장 가까운 해(<see cref="GetInverseKinNearestAsync"/>)로 바꾼다.
+    /// 가까운 해 탐색이 실패하면 감아 푼 자동 해를 그대로 쓴다(종전 동작 — 도달성 판단은 컨트롤러에 맡긴다).
+    /// 추가 비용은 보통 관절 조회 1회다(가지가 바뀌는 드문 경우에만 IK 8회).
+    /// </summary>
+    private async Task<double[]> ResolveMoveJointsAsync(double[] descPose, int tool, int user, CancellationToken ct)
+    {
+        var auto = await GetInverseKinForMoveAsync(descPose, tool, user, ct);
+        var cur = await GetActualJointPosAsync(ct: ct);
+        var unwrapped = UnwrapToward(auto, cur);
+        if (Math.Abs(unwrapped[5] - auto[5]) > 1.0)
+            _logger.LogInformation("{Name} IK J6 감김 보정: 자동 해 J6={Auto:0.0}° → {J6:0.0}° (현재 J6={Cur:0.0}°)",
+                _settings.Name, auto[5], unwrapped[5], cur[5]);
+        if (!IsBranchChange(cur, unwrapped)) return unwrapped;
+
+        _logger.LogInformation(
+            "{Name} IK 자동 해가 현재와 다른 가지(J3 {C3:0.0}°→{A3:0.0}°, J5 {C5:0.0}°→{A5:0.0}°) — 현재에 가장 가까운 해로 재선택",
+            _settings.Name, cur[2], unwrapped[2], cur[4], unwrapped[4]);
+        try { return await GetInverseKinNearestAsync(descPose, cur, tool, user, ct); }
+        catch (InvalidOperationException ex)
+        {
+            _logger.LogWarning("{Name} 가까운 IK 해 탐색 실패({Msg}) — 감아 푼 자동 해로 지령", _settings.Name, ex.Message);
+            return unwrapped;
+        }
+    }
+
+    /// <summary>현재 관절 <paramref name="reference"/> 대비 <paramref name="joints"/> 가 다른 IK 가지인지 —
+    /// 팔꿈치(J3) 또는 손목(J5) 부호가 바뀌면 그 사이에서 특이점(J3=0 / J5=0)을 지나야 한다. 0 이면 판정하지 않는다.</summary>
+    internal static bool IsBranchChange(double[] reference, double[] joints)
+    {
+        static bool Flip(double a, double b) => Math.Sign(a) != 0 && Math.Sign(b) != 0 && Math.Sign(a) != Math.Sign(b);
+        return reference.Length >= 5 && joints.Length >= 5
+               && (Flip(reference[2], joints[2]) || Flip(reference[4], joints[4]));
     }
 
     /// <summary>
@@ -577,11 +617,7 @@ public class FairinoRpcClient : IDisposable
 
         // J6 변위를 지배적으로 가중(동률·유사 시 전체 변위로 tie-break) → 현재 와인딩에 가장 가까운 해.
         // 팔꿈치 가지(J3 부호)가 바뀌는 해는 팔 전체를 뒤집으므로 같은 가지 해가 하나라도 있으면 그쪽을 고른다.
-        const double J6Weight = 8.0;
-        const double ElbowFlipPenalty = 10000.0;
-        var keep = SelectBestJoints(candidates, referenceJoints,
-            (j, r) => J6Weight * Math.Abs(j[5] - r[5]) + JointDistance(j, r)
-                      + (IsElbowFlip(r, j) ? ElbowFlipPenalty : 0))!.Value;
+        var keep = SelectBestJoints(candidates, referenceJoints, KeepWristCost)!.Value;
         var nearest = SelectBestJoints(candidates, referenceJoints, (j, r) => JointDistance(j, r))!.Value;
 
         var keepCost = JointDistance(keep.Joints, referenceJoints);
@@ -598,6 +634,45 @@ public class FairinoRpcClient : IDisposable
             _settings.Name, keep.Config, candidates.Count, keepCost, referenceJoints[5], keep.Joints[5]);
 
         return keep.Joints;
+    }
+
+    /// <summary>J6 와인딩 유지 비용 — J6 변위를 지배적으로 가중(동률·유사 시 전체 변위로 tie-break)하고,
+    /// 팔꿈치 가지(J3 부호)가 바뀌는 해는 팔 전체를 뒤집으므로 크게 벌점을 준다.</summary>
+    internal static double KeepWristCost(double[] j, double[] r)
+    {
+        const double J6Weight = 8.0;
+        const double ElbowFlipPenalty = 10000.0;
+        return J6Weight * Math.Abs(j[5] - r[5]) + JointDistance(j, r) + (IsElbowFlip(r, j) ? ElbowFlipPenalty : 0);
+    }
+
+    /// <summary>
+    /// config 0–7 역기구학 해를 <b>모두</b> J6 와인딩 유지 순(<see cref="KeepWristCost"/>)으로 돌려준다(같은 해는 하나로).
+    /// <see cref="GetInverseKinKeepWristAsync"/> 는 1등 하나만 주므로, 호출측 검사(손목 반전·J6 범위·간섭)에 걸리면 도달
+    /// 가능한 다른 해가 있어도 실패했다. 이 목록을 순서대로 시험하면 1등이 통과할 때는 종전과 같고, 걸릴 때만 다음 해로 간다.
+    /// 해가 하나도 없으면 예외.
+    /// </summary>
+    public async Task<IReadOnlyList<double[]>> GetInverseKinRankedAsync(
+        double[] descPose, double[] referenceJoints, int tool, int user, CancellationToken ct = default)
+    {
+        var candidates = await SolveIkCandidatesAsync(descPose, referenceJoints, tool, user, ct);
+        if (candidates.Count == 0) throw IkUnreachable(descPose);
+        return RankKeepWrist(candidates.Select(c => c.Joints), referenceJoints);
+    }
+
+    /// <summary>해 목록을 <see cref="KeepWristCost"/> 오름차순으로, 관절별 차이 0.5° 미만인 중복을 빼고 정렬한다.</summary>
+    internal static List<double[]> RankKeepWrist(IEnumerable<double[]> solutions, double[] reference)
+    {
+        var ranked = new List<double[]>();
+        foreach (var j in solutions.OrderBy(j => KeepWristCost(j, reference)))
+            if (!ranked.Any(r => MaxAbsDiff(r, j) < 0.5)) ranked.Add(j);
+        return ranked;
+
+        static double MaxAbsDiff(double[] a, double[] b)
+        {
+            var m = 0.0;
+            for (var i = 0; i < Math.Min(a.Length, b.Length); i++) m = Math.Max(m, Math.Abs(a[i] - b[i]));
+            return m;
+        }
     }
 
     /// <summary>config 0–7 역기구학 해를 모두 풀어 기준에 가장 가까운 ±360 와인딩으로 정렬한 후보 목록.

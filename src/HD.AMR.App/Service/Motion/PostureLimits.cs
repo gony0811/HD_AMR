@@ -29,12 +29,20 @@ namespace HD.AMR.App.Service.Motion;
 public sealed record PostureLimits(
     double[] JointMinDeg,
     double[] JointMaxDeg,
-    double WristMarginDeg = 15.0,
+    double WristMarginDeg = PostureLimits.DefaultWristMarginDeg,
     double ElbowMarginDeg = 8.0,
     double ShoulderRadiusMinMm = 180.0,
     double MaxJointTravelDeg = 200.0,
     double MinFlangeReachMm = 350.0)
 {
+    /// <summary>
+    /// 손목 특이점 여유 |J5| 의 <b>단일 기준값</b> [도] — 시퀀스 경로 검증(<c>CobotInspectionMoveStep.PlanarWristMarginDeg</c>,
+    /// 검사 수행 경유점·연속 이동·끝점 이동·진입 해)과 자세 허용 범위 기본값(리치맵·평면 센터링)이 같은 값을 쓴다.
+    /// 예전에는 시퀀스 5°·자세 허용 범위 15° 로 달라 같은 자세를 단계마다 다르게 판정했다(2026-11-07 10° 로 통일).
+    /// 자세 허용 범위를 화면에서 저장한 적이 있으면 그 저장값이 우선이다.
+    /// </summary>
+    public const double DefaultWristMarginDeg = 10.0;
+
     /// <summary>
     /// 기본값 — FAIRINO FR5-WML 사양 범위(J1 ±175 · <b>J2 −265~+85</b> · J3 ±170 ·
     /// <b>J4 −265~+85</b> · J5 ±175 · J6 ±175(케이블 — 사양은 ±360))에 툴 없는 상태를 가정한다. 실측값이 아니다.

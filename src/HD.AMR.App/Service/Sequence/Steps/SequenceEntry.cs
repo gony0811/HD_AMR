@@ -472,7 +472,7 @@ internal static class SequenceEntry
         }
         else
         {
-            var joints = await cobot.Rpc.GetInverseKinForMoveAsync(readyPose, ctx.Tool, 0, ct);
+            var joints = await ComputedReadyJointsAsync(cobot, ctx, readyPose, cur, ct);
             rc = await cobot.Rpc.MoveJAsync(joints, readyPose,
                 tool: ctx.Tool, user: 0, vel: ctx.Velocity, ct: ct);
         }
@@ -514,7 +514,7 @@ internal static class SequenceEntry
         }
         else
         {
-            var joints = await cobot.Rpc.GetInverseKinForMoveAsync(readyPose, ctx.Tool, 0, ct);
+            var joints = await ComputedReadyJointsAsync(cobot, ctx, readyPose, cur, ct);
             rc = await cobot.Rpc.MoveJAsync(joints, readyPose,
                 tool: ctx.Tool, user: 0, vel: ctx.Velocity, ct: ct);
         }
@@ -525,6 +525,22 @@ internal static class SequenceEntry
 
         logger.LogInformation("홈 복귀 전 작업 준비 위치 경유 완료 ({Src})", src);
         return true;
+    }
+
+    /// <summary>
+    /// ready 미티칭(홈에서 툴 Z 자동 계산) 자세의 MoveJ 관절 해. 컨트롤러 자동 IK(config −1)는 J6 를 ±180° 범위로
+    /// 돌려주므로 그대로 MoveJ 하면 현재 J6 −181° 에 해 +179° 처럼 같은 자세에서도 손목이 한 바퀴 돈다.
+    /// 그래서 현재 관절 쪽으로 감아 푼 최소 변위 해를 쓰고, 그 해가 J6 안전 범위(현재 감김 기준) 밖이면
+    /// 움직이지 않고 실패한다 — 티칭된 ready 경로(<see cref="FairinoRpcClient.UnwrapToward"/>)와 같은 보호.
+    /// </summary>
+    private static async Task<double[]> ComputedReadyJointsAsync(
+        CobotService cobot, SequenceContext ctx, double[] readyPose, double[] cur, CancellationToken ct)
+    {
+        var joints = await cobot.Rpc.GetInverseKinNearestAsync(readyPose, cur, ctx.Tool, 0, ct);
+        if (Inspection.WObjAttitude.J6RangeBlocker(cur[5], joints[5]) is { } j6)
+            throw new InvalidOperationException(
+                $"작업 준비 위치(홈 기준 자동 계산) {j6} — 움직이지 않았습니다. Teaching에서 작업 준비 위치를 저장하세요.");
+        return joints;
     }
 
     private static async Task<(double[]? Pose, double[]? Joints, string Src)> ResolveReadyAsync(

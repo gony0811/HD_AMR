@@ -79,10 +79,12 @@ public sealed class SeamApproachResolver
     /// <param name="tool">리치 사전점검에 쓸 공구 번호.</param>
     /// <param name="label">로그 접두사(예 "②", "끝점").</param>
     /// <param name="standoffMm">면 이격 [mm]. null 이면 ③ 카메라 목표거리(<see cref="CobotInspectionMoveStep.ResolveApproachDistanceMm"/>).</param>
+    /// <param name="tiltUpDeg">광축을 면 법선에서 상하로 기울일 각 [도] — 0 이면 법선 정면(기본). 접근 자세 탐색 전용.</param>
+    /// <param name="tiltSideDeg">광축을 면 법선에서 좌우로 기울일 각 [도] — 0 이면 법선 정면(기본).</param>
     /// <returns>Blocker 가 null 이 아니면 호출측은 즉시 실패해야 한다. Base 가 null 이고 Blocker 도 null 이면 티칭 폴백.</returns>
     public async Task<SeamApproachResult> ResolveAsync(
         SequenceContext context, double[]? approachW, double[]? directionW, int tool, string label, CancellationToken ct,
-        double? standoffMm = null)
+        double? standoffMm = null, double tiltUpDeg = 0, double tiltSideDeg = 0)
     {
         var useComputed = await _param.GetBoolAsync(UseComputedNormalOrientationKey) ?? false;
         // 법선 자세는 '광축 툴축이 면을 향하게' 만든다 — 카메라 페이지의 광축 설정(현장 −Z)을 따라야 한다.
@@ -123,7 +125,9 @@ public sealed class SeamApproachResolver
             StandoffMm: standoff,
             WallFacingThetaRad: context.WallFacingThetaRad,
             WallCode: context.WallCode,
-            OpticalAxis: opticalAxis));
+            OpticalAxis: opticalAxis,
+            TiltUpDeg: tiltUpDeg,
+            TiltSideDeg: tiltSideDeg));
 
         foreach (var note in target.Notes)
             _logger.LogWarning("{Label} 용접선 환산 주의: {Note}", label, note);

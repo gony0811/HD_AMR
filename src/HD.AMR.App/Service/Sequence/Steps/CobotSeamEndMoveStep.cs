@@ -145,7 +145,18 @@ public class CobotSeamEndMoveStep : ISequenceStep
                 return StepResult.Fail(ex.Message);
             }
         }
-        var rc = await _cobot.Rpc.MoveLAsync(finalTarget, tool: context.Tool, user: 0,
+        // 자세가 같아도 J5 는 위치에 따라 변한다 — 긴 용접선이면 평행 이동 도중 손목 특이점에 들어갈 수 있다.
+        // 움직이기 전에 현재 TCP → 끝점 MoveL 경로를 샘플링해 IK 로 이어 풀고, 통과한 도착 관절을 그대로 지령한다.
+        var curPose = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
+        var curJoints = await _cobot.Rpc.GetActualJointPosAsync(ct: ct);
+        var (endJoints, pathBlocker) = await CobotInspectionMoveStep.SolvePosePathAsync(_cobot,
+            CobotInspectionMoveStep.SamplePoseSegment(curPose, finalTarget,
+                CobotInspectionMoveStep.PlanarSampleMm, CobotInspectionMoveStep.ChainSampleDeg),
+            curJoints, context.Tool, ct);
+        if (pathBlocker is not null)
+            return StepResult.Fail($"용접선 끝점 이동 경로 {pathBlocker} — 움직이지 않았습니다.");
+
+        var rc = await _cobot.Rpc.MoveLAsync(finalTarget, endJoints, tool: context.Tool, user: 0,
             vel: context.Velocity, acc: MoveAcc, ovl: MoveOvl, blendR: -1, ct: ct);
         if (rc != 0)
             return StepResult.Fail($"용접선 끝점 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.");

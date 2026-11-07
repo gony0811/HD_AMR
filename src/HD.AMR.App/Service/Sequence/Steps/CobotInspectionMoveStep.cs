@@ -647,22 +647,46 @@ public class CobotInspectionMoveStep : ISequenceStep
         if (usedNormal)
         {
             var moved = await PlanarApproachAsync(context, seam, current, target, reference, twistNote, entryNote, ct);
+            var usedSeam = seam;
+            if (!moved.Success)
+            {
+                // 법선 정면 자세로 갈 수 없으면(특이점·도달 불가·안전 경로 없음) 파라미터가 켜져 있을 때만 광축을 기울여 본다.
+                var (tiltResult, tiltSeam, tiltNote) = await TryTiltedApproachAsync(context, current, reference, twistNote, entryNote, ct);
+                if (tiltResult is { Success: true })
+                {
+                    moved = tiltResult;
+                    usedSeam = tiltSeam!;
+                }
+                else if (tiltNote.Length > 0)
+                {
+                    moved = moved with { Message = moved.Message + tiltNote };
+                }
+            }
             if (!moved.Success) return moved;
 
             // 도착한 자리에서 광축 둘레로 돌려 용접선을 depth 영상의 가로선으로 맞춘다. 진입 전에 돌린 자세로 경로를 풀면
             // 큰 회전(PU 수평 용접선 ≈ 100~130°)에서 keep-wrist IK 가 손목을 뒤집은 해를 골라 진입 후보가 전부 거부됐다
             // (실기 2026-11-06 15:57·16:00·16:03 PU, 진입 관절 이동 ~290°). 제자리 회전은 거의 J6 만 돈다.
-            var levelNote = await LevelSeamInPlaceAsync(context, seam, ct);
+            var levelNote = await LevelSeamInPlaceAsync(context, usedSeam, ct);
             return levelNote.Length == 0 ? moved : moved with { Message = moved.Message + levelNote };
         }
 
-        var joints = await _cobot.Rpc.GetInverseKinKeepWristAsync(target, reference, context.Tool, 0, ct);
-        if (ElbowFlipBlocker(reference, joints) is { } flip)
-            return StepResult.Fail(flip);
-        if (Inspection.WObjAttitude.J6RangeBlocker(reference[5], joints[5]) is { } j6Range)
-            return StepResult.Fail($"[Cobot 검사위치 이동] 용접선 접근점 {j6Range} — 움직이지 않았습니다.");
-        if (await SelfCollisionGuardOnAsync() && SelfCollisionBlocker(joints, seam) is { } selfHit)
-            return StepResult.Fail(selfHit);
+        // MoveJ(관절 보간)라 손목 가지 전환은 허용한다. 1순위(J6 와인딩 유지) 해가 팔꿈치 반전·J6 범위·자기 간섭에 걸리면
+        // 다음 IK 해를 시험한다 — 해가 하나뿐이거나 전부 걸리면 1순위 해의 사유로 실패(종전과 같은 메시지).
+        var sols = await _cobot.Rpc.GetInverseKinRankedAsync(target, reference, context.Tool, 0, ct);
+        var guard = await SelfCollisionGuardOnAsync();
+        string? Blocker(double[] j)
+            => ElbowFlipBlocker(reference, j)
+               ?? (Inspection.WObjAttitude.J6RangeBlocker(reference[5], j[5]) is { } j6r
+                   ? $"[Cobot 검사위치 이동] 용접선 접근점 {j6r} — 움직이지 않았습니다."
+                   : null)
+               ?? (guard ? SelfCollisionBlocker(j, seam) : null);
+        var joints = sols.FirstOrDefault(j => Blocker(j) is null);
+        if (joints is null)
+            return StepResult.Fail(Blocker(sols[0])!);
+        if (!ReferenceEquals(joints, sols[0]))
+            _logger.LogInformation("[Cobot 검사위치 이동] 1순위 IK 해 거부({Why}) — 다른 해 [{J}] 사용",
+                Blocker(sols[0]), string.Join(", ", joints.Select(v => v.ToString("0.0"))));
 
         ApproachPathMemory.Clear();   // 평면 경유가 아닌 이동 — 앞 기록으로 복귀하면 엉뚱한 면을 따라간다
         var rc = await _cobot.Rpc.MoveJAsync(joints, target,
@@ -678,6 +702,89 @@ public class CobotInspectionMoveStep : ISequenceStep
     /// <summary>② 평면 경유 접근의 후퇴 거리 [mm] 파라미터 키 — 접근점 면 이격 평면에서 이만큼 더 물러난 평면을 따라 이동한다.</summary>
     public const string PlanarRetreatKey = "inspection.planarApproachRetreatMm";
 
+    /// <summary>접근 자세 탐색(틸트) 최대각 [도] 파라미터 키. 0 이하·미설정 = 꺼짐(기본) — 법선 정면만 쓴다.
+    /// 켜면 법선 정면 진입이 실패했을 때 광축을 법선에서 상하·좌우로 이 각도까지 기울인 자세를 찾아 다시 진입한다.
+    /// 기울인 만큼 검사 영상이 비스듬해지므로 레시피 허용 입사각 안에서만 쓴다.</summary>
+    public const string ApproachTiltMaxKey = "inspection.approachTiltSearchMaxDeg";
+
+    internal const double MaxApproachTiltDeg = 30.0;
+
+    /// <summary>틸트 탐색에서 실제 진입 경로까지 풀어 볼 후보 수 상한 — 진입 경로 검증은 IK 호출이 많다.</summary>
+    internal const int MaxTiltPlanAttempts = 3;
+
+    /// <summary>틸트 후보 — (상하, 좌우) [도], 5° 간격으로 <paramref name="maxDeg"/> 까지, 기울기 합이 작은 순. (0,0) 제외.
+    /// 순서는 <see cref="ApproachPlanner.Candidates"/>(검사 품질을 덜 건드리는 순)를 따른다.</summary>
+    internal static List<(double Up, double Side)> TiltCandidates(double maxDeg)
+    {
+        var steps = new List<double> { 0 };
+        for (var a = 5.0; a <= maxDeg + 1e-9; a += 5.0) { steps.Add(-a); steps.Add(a); }
+        var space = new ApproachSearchSpace(steps.ToArray(), steps.ToArray(), new[] { 0.0 }, new[] { 0.0 });
+        return ApproachPlanner.Candidates(space)
+            .Where(c => Math.Abs(c.TiltUpDeg) + Math.Abs(c.TiltSideDeg) > 1e-9)
+            .Select(c => (c.TiltUpDeg, c.TiltSideDeg))
+            .ToList();
+    }
+
+    /// <summary>틸트 후보 목표 자세의 IK 해 중 쓸 만한 것이 있는지 — 손목 여유(|J5| ≥ <see cref="PlanarWristMarginDeg"/>,
+    /// 현재와 같은 J5 부호), 같은 팔꿈치 가지, J6 안전 범위. 진입 경로 검증(비쌈) 전에 거르는 값싼 사전 검사.</summary>
+    internal static bool TiltTargetUsable(double[] reference, IEnumerable<double[]> solutions)
+        => solutions.Any(j => Math.Abs(j[4]) >= PlanarWristMarginDeg
+                              && !IsWristFlip(reference, j)
+                              && !FairinoRpcClient.IsElbowFlip(reference, j)
+                              && WObjAttitude.J6RangeBlocker(reference[5], j[5]) is null);
+
+    /// <summary>
+    /// 법선 정면 진입이 실패했을 때의 접근 자세 탐색. <see cref="ApproachTiltMaxKey"/> 가 0 이하면 아무것도 하지 않는다.
+    /// 후보 틸트마다 용접선을 다시 환산하고(위치도 기울인 광축을 따라 standoff 만큼 물러난다), 목표 자세 IK 를 값싸게 거른 뒤,
+    /// 통과한 앞의 <see cref="MaxTiltPlanAttempts"/> 개만 실제 진입 경로(<see cref="PlanarApproachAsync"/>, 모션 전 전부 검증)를 시도한다.
+    /// 반환: (성공 결과 또는 null, 그때의 환산 결과, 실패 시 메시지에 덧붙일 설명).
+    /// </summary>
+    private async Task<(StepResult? Result, SeamApproachResult? Seam, string Note)> TryTiltedApproachAsync(
+        SequenceContext context, double[] current, double[] reference, string twistNote, string entryNote, CancellationToken ct)
+    {
+        double maxDeg;
+        try { maxDeg = await _param.GetDoubleAsync(ApproachTiltMaxKey) ?? 0; }
+        catch { maxDeg = 0; }
+        if (maxDeg <= 0) return (null, null, "");
+        maxDeg = Math.Min(maxDeg, MaxApproachTiltDeg);
+
+        // 법선 정면 진입이 도중 이동 실패(rc≠0)로 끝났으면 팔이 이미 움직였다 — 출발 자세 전제가 깨졌으므로 탐색하지 않는다.
+        var now = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
+        if (!IsSamePose(now, current, ChainPoseTolMm, ChainPoseTolDeg))
+            return (null, null, " · 접근 자세 탐색 생략(진입 도중 이동이 있었음)");
+
+        var standoff = await GetApproachStandoffMmAsync(_param, _logger);
+        var attempts = 0;
+        var screened = 0;
+        foreach (var (up, side) in TiltCandidates(maxDeg))
+        {
+            if (attempts >= MaxTiltPlanAttempts) break;
+            var seam = await _seam.ResolveAsync(context, context.SeamStartW, context.SeamEndW, context.Tool,
+                $"[Cobot 검사위치 이동 틸트 {up:+0;-0;0}/{side:+0;-0;0}°]", ct, standoff, up, side);
+            if (seam.Blocker is not null || seam.Base is null || seam.ComputedPose is not { Length: 6 }) continue;
+
+            var orientation = AlignOpticalAxisKeepTwist(current, seam.ComputedPose, seam.OpticalAxis);
+            var target = new[] { seam.Base[0], seam.Base[1], seam.Base[2], orientation[3], orientation[4], orientation[5] };
+            try { (target, _) = await AlignTwistToJ6Async(_cobot, target, context.Tool, VerticalJ6Deg, ct); }
+            catch (InvalidOperationException) { /* 비틀림 정렬 실패 — 기울인 자세 그대로 시험 */ }
+
+            IReadOnlyList<double[]> sols;
+            try { sols = await _cobot.Rpc.GetInverseKinRankedAsync(target, reference, context.Tool, 0, ct); }
+            catch (InvalidOperationException) { screened++; continue; }
+            screened++;
+            if (!TiltTargetUsable(reference, sols)) continue;
+
+            attempts++;
+            _logger.LogInformation("[Cobot 검사위치 이동] 접근 자세 탐색 — 광축 틸트 상하 {Up:+0;-0;0}° / 좌우 {Side:+0;-0;0}° 로 진입 시도 ({N}/{Max})",
+                up, side, attempts, MaxTiltPlanAttempts);
+            var tiltNote = $", 광축 틸트 상하 {up:+0;-0;0}°/좌우 {side:+0;-0;0}°(법선 정면 진입 불가 — 영상이 비스듬함)";
+            var moved = await PlanarApproachAsync(context, seam, current, target, reference, twistNote + tiltNote, entryNote, ct);
+            if (moved.Success) return (moved, seam, "");
+            _logger.LogInformation("[Cobot 검사위치 이동] 틸트 {Up:+0;-0;0}/{Side:+0;-0;0}° 진입도 불가: {Msg}", up, side, moved.Message);
+        }
+        return (null, null, $" · 접근 자세 탐색(틸트 ≤{maxDeg:0}°): 후보 {screened}개 검사, 진입 시도 {attempts}개 — 쓸 수 있는 자세 없음");
+    }
+
     internal const double DefaultPlanarRetreatMm = 100.0;
     internal const double MaxPlanarRetreatMm = 400.0;
 
@@ -688,7 +795,7 @@ public class CobotInspectionMoveStep : ISequenceStep
     internal const double PlanarSampleMm = 100.0;
 
     /// <summary>경로 검증의 손목 특이점 여유 — |J5| 가 이보다 작으면 MoveL 이 rc=38 로 거부되거나 손목이 급회전한다 [도].</summary>
-    internal const double PlanarWristMarginDeg = 5.0;
+    internal const double PlanarWristMarginDeg = PostureLimits.DefaultWristMarginDeg;
 
     /// <summary>평면 경유 접근 계획 — 위치만(BASE mm). 자세는 전 구간 접근점 자세로 고정한다.</summary>
     /// <param name="Entry">진입점 — 현재 TCP 를 후퇴 평면으로 면 법선 방향 투영한 점.</param>
@@ -749,6 +856,22 @@ public class CobotInspectionMoveStep : ISequenceStep
     /// 생긴 J4 먼 길 회전이었고(준비 자세 문제), 정상 진입은 16~82° 였다. 완화로 통과할 수 있는 손목 뒤집기 해
     /// (14:05 후보: J1 117°·J5 +90→−50°, 144°)는 <see cref="IsWristFlip"/> 로 따로 막는다.</summary>
     internal const double MaxEntryJointTravelDeg = 140.0;
+
+    /// <summary>
+    /// 진입 MoveJ 해 <paramref name="joints"/> 를 쓸 수 없는 사유, 쓸 수 있으면 null — 관절 이동량(<see cref="MaxEntryJointTravelDeg"/>),
+    /// 팔꿈치·손목 가지 전환, 도착 |J5| 여유, J6 안전 범위, (주면) 자기 간섭 순으로 본다.
+    /// </summary>
+    internal static string? EntryJointBlocker(double[] reference, double[] joints, Func<double[], string?>? selfCollision = null)
+    {
+        var travel = MaxJointTravel(reference, joints);
+        if (travel > MaxEntryJointTravelDeg) return $"진입 관절 이동 {travel:0}° > {MaxEntryJointTravelDeg:0}°";
+        if (FairinoRpcClient.IsElbowFlip(reference, joints)) return "팔꿈치 가지 전환";
+        if (IsWristFlip(reference, joints)) return $"손목 가지 전환(J5 {reference[4]:0}° → {joints[4]:0}°)";
+        if (Math.Abs(joints[4]) < PlanarWristMarginDeg) return $"손목 특이점(|J5| {Math.Abs(joints[4]):0.0}° < {PlanarWristMarginDeg:0}°)";
+        if (WObjAttitude.J6RangeBlocker(reference[5], joints[5]) is { } j6) return j6;
+        if (selfCollision?.Invoke(joints) is not null) return "자기 간섭";
+        return null;
+    }
 
     /// <summary>손목 가지가 바뀌는지 — J5 부호가 다르면 손목이 뒤집히며(J5=0 특이점 통과) J4·J6 이 크게 돈다.</summary>
     internal static bool IsWristFlip(double[] reference, double[] joints)
@@ -835,16 +958,25 @@ public class CobotInspectionMoveStep : ISequenceStep
         foreach (var cand in candidates)
         {
             var label = ReferenceEquals(cand, plan.Plunge) ? "들어갈 점 직접" : $"후퇴 평면 [{Fmt(cand)}]";
-            double[] jc;
-            try { jc = await _cobot.Rpc.GetInverseKinKeepWristAsync(Pose(cand), reference, context.Tool, 0, ct); }
+            // 진입 해는 J6 와인딩 유지 순으로 전부 받아 첫 통과 해를 쓴다 — 예전에는 1등 해 하나만 보고, 그 해가 손목을
+            // 뒤집은 해면 같은 자리의 다른(손목 유지) 해가 있어도 이 진입점을 버렸다(실기 2026-11-06 PU "후보 전부 거부").
+            IReadOnlyList<double[]> sols;
+            try { sols = await _cobot.Rpc.GetInverseKinRankedAsync(Pose(cand), reference, context.Tool, 0, ct); }
             catch (InvalidOperationException) { rejects.Add($"{label}: 도달 불가"); continue; }
 
-            var travel = MaxJointTravel(reference, jc);
-            if (travel > MaxEntryJointTravelDeg) { rejects.Add($"{label}: 진입 관절 이동 {travel:0}° > {MaxEntryJointTravelDeg:0}°"); continue; }
-            if (FairinoRpcClient.IsElbowFlip(reference, jc)) { rejects.Add($"{label}: 팔꿈치 가지 전환"); continue; }
-            if (IsWristFlip(reference, jc)) { rejects.Add($"{label}: 손목 가지 전환(J5 {reference[4]:0}° → {jc[4]:0}°)"); continue; }
-            if (Inspection.WObjAttitude.J6RangeBlocker(reference[5], jc[5]) is { } j6Entry) { rejects.Add($"{label}: {j6Entry}"); continue; }
-            if (guardOn && SelfCollisionBlocker(jc, seam) is not null) { rejects.Add($"{label}: 자기 간섭"); continue; }
+            double[]? picked = null;
+            string? firstWhy = null;
+            for (var si = 0; si < sols.Count && picked is null; si++)
+            {
+                var solWhy = EntryJointBlocker(reference, sols[si], guardOn ? j => SelfCollisionBlocker(j, seam) : null);
+                if (solWhy is null) picked = sols[si];
+                else firstWhy ??= solWhy;
+            }
+            if (picked is null) { rejects.Add($"{label}: {firstWhy}{(sols.Count > 1 ? $" (해 {sols.Count}개 모두)" : "")}"); continue; }
+            var jc = picked;
+            if (!ReferenceEquals(jc, sols[0]))
+                _logger.LogInformation("[Cobot 검사위치 이동] {Label}: 1순위 해 거부({Why}) — 다른 IK 해 [{J}] 사용",
+                    label, firstWhy, string.Join(", ", jc.Select(v => v.ToString("0.0"))));
 
             // 진입점 → 들어갈 점(면 방향) → 접근점(법선) 경로
             var path = new List<(double[] Pt, bool Planar)>();
@@ -968,16 +1100,35 @@ public class CobotInspectionMoveStep : ISequenceStep
         // 진입 경로처럼 J6 180° 로 맞추면 ⑱이 곧바로 되돌린다(2026-10-30 #3: −284.7°→−180°→−284.8°).
         var orientation = AlignOpticalAxisKeepTwist(cur, computed, seam.OpticalAxis);
         var target = new[] { startBase[0], startBase[1], startBase[2], orientation[3], orientation[4], orientation[5] };
+        var lift = PlanChainLift(cur, startBase, WallOutNormal(computed, seam.OpticalAxis));
+        var liftEnd = lift is null
+            ? cur
+            : new[] { cur[0] + lift[0], cur[1] + lift[1], cur[2] + lift[2], cur[3], cur[4], cur[5] };
+
+        // 들어 올림·MoveL 은 직교 보간이라 도착 관절은 현재 자세에서 '연속으로 이어지는' 해로 정해진다. 예전에는 도착점만
+        // keep-wrist IK 로 풀어 손목 반전(J5 부호)·특이점 여유를 보지 않았고, 그 해가 손목을 뒤집은 해면 MoveL 이 도중에
+        // J5=0 을 지나 rc=38/185 로 멈췄다. 이제 경로를 샘플링해 이어 풀고(평면 진입과 같은 PathStepBlocker),
+        // 마지막 해를 지령한다. 하나라도 걸리면 움직이지 않고 종전 진입 준비 경로로 넘긴다.
         double[] joints;
         double[] reference;
         try
         {
             reference = await _cobot.Rpc.GetActualJointPosAsync(ct: ct);
-            joints = await _cobot.Rpc.GetInverseKinKeepWristAsync(target, reference, context.Tool, 0, ct);
+            var path = new List<double[]>();
+            if (lift is not null) path.AddRange(SamplePoseSegment(cur, liftEnd, PlanarSampleMm, ChainSampleDeg));
+            path.AddRange(SamplePoseSegment(liftEnd, target, PlanarSampleMm, ChainSampleDeg));
+
+            var (pathJoints, pathBlocker) = await SolvePosePathAsync(_cobot, path, reference, context.Tool, ct);
+            if (pathBlocker is not null)
+            {
+                _logger.LogWarning("[Cobot 검사위치 이동] 연속 이동 생략 — 경로 {Msg} → 진입 준비 경로", pathBlocker);
+                return null;
+            }
+            joints = pathJoints!;
         }
         catch (InvalidOperationException ex)
         {
-            _logger.LogWarning("[Cobot 검사위치 이동] 연속 이동 생략 — 목표 자세 계산 실패: {Msg} → 진입 준비 경로", ex.Message);
+            _logger.LogWarning("[Cobot 검사위치 이동] 연속 이동 생략 — 경로 자세 계산 실패: {Msg} → 진입 준비 경로", ex.Message);
             return null;
         }
         if (ElbowFlipBlocker(reference, joints) is { } flip)
@@ -996,7 +1147,6 @@ public class CobotInspectionMoveStep : ISequenceStep
             return null;
         }
 
-        var lift = PlanChainLift(cur, startBase, WallOutNormal(computed, seam.OpticalAxis));
         var liftNote = "";
         if (lift is not null)
         {
@@ -1042,6 +1192,105 @@ public class CobotInspectionMoveStep : ISequenceStep
               + (cur[2] - approachBase[2]) * wallOut[2];
         if (h >= -1.0) return null;
         return new[] { -h * wallOut[0], -h * wallOut[1], -h * wallOut[2], 0.0, 0.0, 0.0 };
+    }
+
+    /// <summary>
+    /// 직교 경로 샘플(<see cref="SamplePoseSegment"/>)을 <paramref name="startJoints"/> 에서 시작해 앞 점 해 기준 최소 변위 IK 로
+    /// 이어 풀고, 점마다 <see cref="PathStepBlocker"/>(관절 점프·팔꿈치·손목 특이점)와 J6 안전 범위(출발 감김 기준)를 본다.
+    /// 통과하면 (마지막 점의 해, null) — MoveL 에 그대로 지령할 도착 관절이다. 걸리면 (null, "[x, y, z] 사유").
+    /// 도달 불가는 사유로 돌려준다(예외 아님). 코봇은 움직이지 않는다.
+    /// </summary>
+    internal static async Task<(double[]? Joints, string? Blocker)> SolvePosePathAsync(
+        CobotService cobot, IEnumerable<double[]> poses, double[] startJoints, int tool, CancellationToken ct)
+    {
+        var seed = startJoints;
+        foreach (var pose in poses)
+        {
+            var at = string.Join(", ", pose.Take(3).Select(v => v.ToString("0")));
+            double[] j;
+            try { j = await cobot.Rpc.GetInverseKinNearestAsync(pose, seed, tool, 0, ct); }
+            catch (InvalidOperationException) { return (null, $"[{at}] 도달 불가"); }
+            if (PathStepBlocker(seed, j, startJoints) is { } step) return (null, $"[{at}] {step}");
+            if (WObjAttitude.J6RangeBlocker(startJoints[5], j[5]) is { } j6) return (null, $"[{at}] {j6}");
+            seed = j;
+        }
+        return (seed, null);
+    }
+
+    /// <summary>연속 이동 경로 검증의 자세 샘플 간격 [도] — 위치가 짧아도 자세가 많이 돌면 이 간격으로 더 나눈다.</summary>
+    internal const double ChainSampleDeg = 10.0;
+
+    /// <summary>
+    /// 직교 직선 이동(MoveL) 경로를 위치 <paramref name="stepMm"/>·회전 <paramref name="stepDeg"/> 이하 간격으로 나눈
+    /// BASE pose 들(시작 제외, 끝 포함). 위치는 선형, 자세는 상대 회전(축-각)을 같은 비율로 보간한다.
+    /// 상대 회전이 180° 근방(축 퇴화)이면 자세는 끝 자세로 둔다.
+    /// </summary>
+    internal static List<double[]> SamplePoseSegment(double[] from, double[] to, double stepMm, double stepDeg)
+    {
+        var len = Math.Sqrt(Enumerable.Range(0, 3).Sum(i => (to[i] - from[i]) * (to[i] - from[i])));
+        var ra = FrameMath.PoseToMatrix(from);
+        var rb = FrameMath.PoseToMatrix(to);
+
+        // 상대 회전 R = Raᵀ·Rb (시작 자세 프레임 기준) → 축-각
+        var r = new double[3, 3];
+        for (var i = 0; i < 3; i++)
+            for (var j = 0; j < 3; j++)
+            {
+                double s = 0;
+                for (var k = 0; k < 3; k++) s += ra[k, i] * rb[k, j];
+                r[i, j] = s;
+            }
+        var angle = Math.Acos(Math.Clamp((r[0, 0] + r[1, 1] + r[2, 2] - 1.0) / 2.0, -1.0, 1.0));
+        var sin = Math.Sin(angle);
+        double[]? axis = null;
+        if (Math.Abs(sin) > 1e-6)
+            axis = new[] { (r[2, 1] - r[1, 2]) / (2 * sin), (r[0, 2] - r[2, 0]) / (2 * sin), (r[1, 0] - r[0, 1]) / (2 * sin) };
+
+        var angleDeg = angle * 180.0 / Math.PI;
+        var n = Math.Max(1, Math.Max((int)Math.Ceiling(len / stepMm), (int)Math.Ceiling(angleDeg / stepDeg)));
+        var pts = new List<double[]>(n);
+        for (var k = 1; k <= n; k++)
+        {
+            var t = (double)k / n;
+            var m = new double[4, 4];
+            if (k == n || axis is null)
+            {
+                // 끝점 또는 회전 없음/퇴화 — 회전은 끝(회전 없음이면 시작과 같음) 자세
+                var src = k == n || angle > 1e-6 ? rb : ra;
+                for (var i = 0; i < 3; i++) for (var j = 0; j < 3; j++) m[i, j] = src[i, j];
+            }
+            else
+            {
+                var rot = AxisAngle(axis, angle * t);
+                for (var i = 0; i < 3; i++)
+                    for (var j = 0; j < 3; j++)
+                    {
+                        double s = 0;
+                        for (var q = 0; q < 3; q++) s += ra[i, q] * rot[q, j];
+                        m[i, j] = s;
+                    }
+            }
+            for (var i = 0; i < 3; i++) m[i, 3] = from[i] + (to[i] - from[i]) * t;
+            m[3, 3] = 1.0;
+            var pose = FrameMath.MatrixToPose(m);
+            if (k == n) { pose[3] = to[3]; pose[4] = to[4]; pose[5] = to[5]; }   // 끝점은 원래 오일러 표현 그대로
+            pts.Add(pose);
+        }
+        return pts;
+    }
+
+    /// <summary>단위 축 <paramref name="u"/> 둘레 <paramref name="theta"/>[rad] 회전 행렬(Rodrigues).</summary>
+    private static double[,] AxisAngle(double[] u, double theta)
+    {
+        var c = Math.Cos(theta);
+        var s = Math.Sin(theta);
+        var v = 1 - c;
+        return new[,]
+        {
+            { c + u[0] * u[0] * v,        u[0] * u[1] * v - u[2] * s, u[0] * u[2] * v + u[1] * s },
+            { u[1] * u[0] * v + u[2] * s, c + u[1] * u[1] * v,        u[1] * u[2] * v - u[0] * s },
+            { u[2] * u[0] * v - u[1] * s, u[2] * u[1] * v + u[0] * s, c + u[2] * u[2] * v },
+        };
     }
 
     /// <summary>두 BASE pose 가 위치 <paramref name="tolMm"/>·회전 <paramref name="tolDeg"/> 이내인지(회전은 상대 회전각).</summary>
