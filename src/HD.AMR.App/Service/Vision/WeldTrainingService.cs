@@ -566,7 +566,10 @@ public sealed class WeldTrainingService
     /// <c>{stem}_{modality}.png</c> + <c>_line.json</c> 선 라벨을 바로 읽고, 촬영 세션 단위로 검증셋을 나눈다.
     /// 장치는 스크립트가 고른다(cuda → mps → cpu). <paramref name="pretrained"/> 면 첫 실행 때 ImageNet 가중치(약 45MB)를 내려받는다.
     /// </summary>
-    public async Task StartHeatmapTrainingAsync(string modality, int epochs, int batch, int patience, bool pretrained)
+    /// <param name="continueFromPrevious">이어 학습(보강) — 이전 best.pt 에서 시작해 기존+새 라벨 전체로 학습한다.
+    /// 이전 모델 성능을 먼저 재고 그보다 나아질 때만 best.pt 가 바뀐다.</param>
+    public async Task StartHeatmapTrainingAsync(string modality, int epochs, int batch, int patience, bool pretrained,
+        bool continueFromPrevious = false)
     {
         if (IsBusy) throw new InvalidOperationException("이미 실행 중인 작업이 있습니다.");
         modality = modality == "ir" ? "ir" : "rgb";
@@ -576,21 +579,52 @@ public sealed class WeldTrainingService
                 $"{modality.ToUpperInvariant()} 선 라벨(*_{modality}_line.json)이 캡처 폴더에 없습니다 — 수동 비드 입력·라벨 편집으로 먼저 라벨을 만드세요.",
                 paths.CaptureDir);
 
+        var runDir = HeatmapRunDir(paths, modality);
+        var prevBest = Path.Combine(runDir, "best.pt");
+        if (continueFromPrevious && !File.Exists(prevBest))
+            throw new FileNotFoundException(
+                $"이어 학습할 이전 모델(best.pt)이 없습니다 — 먼저 {modality.ToUpperInvariant()} 히트맵 학습을 한 번 완료하세요.", prevBest);
+        // 새 학습은 best.pt 를 덮어쓰므로 이전 것을 prev/ 에 백업한다(이어 학습이면 그 백업에서 시작). 최근 3개만 보관.
+        var backup = BackupHeatmapBest(runDir);
+
         var script = await WriteScriptAsync(paths, "weld_heatmap.py");
         var py = await GetPythonAsync();
         var args = new List<string>
         {
-            script, "train", "--captures", paths.CaptureDir, "--modality", modality, "--out", HeatmapRunDir(paths, modality),
+            script, "train", "--captures", paths.CaptureDir, "--modality", modality, "--out", runDir,
             "--epochs", epochs.ToString(), "--batch", batch.ToString(), "--patience", Math.Max(1, patience).ToString(),
             "--device", "auto",
         };
         if (!pretrained) args.Add("--no-pretrained");
+        if (continueFromPrevious && backup is not null) { args.Add("--init"); args.Add(backup); }
+        if (backup is not null)
+            Emit($"[히트맵 학습] 이전 best.pt 백업 → {Path.GetRelativePath(runDir, backup)}");
         TrainTotalEpochs = epochs;
         TrainCurrentEpoch = 0;
         TrainStartUtc = DateTime.UtcNow;
         TrainEndUtc = null;
-        Emit($"[히트맵 학습] 시작 — {modality.ToUpperInvariant()} epochs={epochs} batch={batch} patience={patience} 사전학습={(pretrained ? "예" : "아니오")}");
+        Emit($"[히트맵 학습] 시작 — {modality.ToUpperInvariant()} epochs={epochs} batch={batch} patience={patience} " +
+             (continueFromPrevious ? "이어 학습(이전 best.pt 에서 시작)" : $"새로 학습(사전학습={(pretrained ? "예" : "아니오")})"));
         StartProcess(py, args.ToArray(), paths.Workspace, TrainingPhase.Training, "히트맵 학습");
+    }
+
+    /// <summary>히트맵 이전 best.pt 백업 보관 개수.</summary>
+    public const int HeatmapBackupKeep = 3;
+
+    /// <summary>runDir/best.pt 를 runDir/prev/best_yyyyMMdd_HHmmss.pt 로 복사하고 오래된 백업을 정리한다. 없으면 null.</summary>
+    internal static string? BackupHeatmapBest(string runDir)
+    {
+        var best = Path.Combine(runDir, "best.pt");
+        if (!File.Exists(best)) return null;
+        var prevDir = Path.Combine(runDir, "prev");
+        Directory.CreateDirectory(prevDir);
+        var dst = Path.Combine(prevDir, $"best_{DateTime.Now:yyyyMMdd_HHmmss}.pt");
+        File.Copy(best, dst, overwrite: true);
+        foreach (var old in Directory.GetFiles(prevDir, "best_*.pt").OrderByDescending(f => f, StringComparer.Ordinal).Skip(HeatmapBackupKeep))
+        {
+            try { File.Delete(old); } catch (IOException) { /* 사용 중이면 다음에 정리 */ }
+        }
+        return dst;
     }
 
     /// <summary>히트맵 best.pt → models/weld_heatmap_{modality}.onnx (train_width 메타데이터 포함).</summary>

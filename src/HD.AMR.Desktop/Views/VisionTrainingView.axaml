@@ -155,13 +155,15 @@
                             <StackPanel><TextBlock Classes="axis" Text="epochs" /><NumericUpDown Value="{Binding HeatEpochs}" Minimum="1" Increment="10" FormatString="0" /></StackPanel>
                             <StackPanel><TextBlock Classes="axis" Text="batch" /><NumericUpDown Value="{Binding HeatBatch}" Minimum="1" Increment="1" FormatString="0" /></StackPanel>
                             <StackPanel><TextBlock Classes="axis" Text="patience" /><NumericUpDown Value="{Binding HeatPatience}" Minimum="1" Increment="10" FormatString="0" /></StackPanel>
-                            <CheckBox VerticalAlignment="Bottom" Content="ImageNet 사전학습 (첫 실행 약 45MB 내려받기)" IsChecked="{Binding HeatPretrained}" />
+                            <CheckBox VerticalAlignment="Bottom" Content="ImageNet 사전학습 (첫 실행 약 45MB 내려받기)" IsChecked="{Binding HeatPretrained}" IsEnabled="{Binding !HeatContinue}" />
+                            <CheckBox VerticalAlignment="Bottom" Content="이전 모델에서 이어 학습(보강)" IsChecked="{Binding HeatContinue}"
+                                      ToolTip.Tip="이전 best.pt 에서 시작해 기존+새 라벨 전체로 학습합니다(30~60 에폭 권장). 이전 모델 성능(BASELINE)을 먼저 재고 그보다 나아질 때만 best.pt 가 바뀝니다. 이전 best.pt 는 학습 폴더 prev/ 에 최근 3개 백업됩니다." />
                             <Button VerticalAlignment="Bottom" Content="히트맵 학습 시작" Classes="accent" Command="{Binding StartHeatmapTrainCommand}" IsEnabled="{Binding TorchReady}" />
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" Spacing="8">
                             <Button VerticalAlignment="Bottom" Content="{Binding HeatmapExportButtonText}" Command="{Binding StartHeatmapExportCommand}" IsEnabled="{Binding TorchReady}" />
                         </StackPanel>
-                        <TextBlock Classes="hint" TextWrapping="Wrap" Text="내보낸 모델은 용접 추적·비교평가·시퀀스에서 검출 방식 'U-Net' 칸의 모델 목록에 나타납니다(입력 3채널로 자동 구분). 진행 로그: Epoch k/N · val_center_px(영상 중앙 위치 오차) · val_found(검출률)." />
+                        <TextBlock Classes="hint" TextWrapping="Wrap" Text="내보낸 모델은 용접 추적·비교평가·시퀀스에서 검출 방식 'U-Net' 칸의 모델 목록에 나타납니다(입력 3채널로 자동 구분). 진행 로그: Epoch k/N · val_center_px(영상 중앙 위치 오차) · val_found(검출률). 이어 학습은 BASELINE(이전 모델) 대비 IMPROVED / NO_IMPROVEMENT 를 마지막에 알려 줍니다 — IMPROVED 일 때만 내보내세요." />
                     </StackPanel>
                 </TabItem>
 

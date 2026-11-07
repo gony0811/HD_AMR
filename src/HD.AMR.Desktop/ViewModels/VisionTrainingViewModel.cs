@@ -48,6 +48,7 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
     // ⑥ 중심선 히트맵 (ResNet18 사전학습 U-Net, 선 라벨 직접 사용)
     [ObservableProperty] private int _heatEpochs = 150, _heatBatch = 8, _heatPatience = 40;
     [ObservableProperty] private bool _heatPretrained = true;
+    [ObservableProperty] private bool _heatContinue;   // 이전 best.pt 에서 이어 학습(보강)
     public string HeatmapExportButtonText => $"best.pt → weld_heatmap_{ExportModality}.onnx";
     [ObservableProperty] private int _rotDirIndex;           // 0 cw, 1 ccw, 2 both
     [ObservableProperty] private string? _convertText, _rotText;
@@ -281,7 +282,7 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
     private async Task StartHeatmapTrain()
     {
         Message = null;
-        try { await _train.StartHeatmapTrainingAsync(ExportModality, HeatEpochs, HeatBatch, HeatPatience, HeatPretrained); }
+        try { await _train.StartHeatmapTrainingAsync(ExportModality, HeatEpochs, HeatBatch, HeatPatience, HeatPretrained, HeatContinue); }
         catch (Exception ex) { Notify($"히트맵 학습 시작 실패: {ex.Message}", true); }
     }
 

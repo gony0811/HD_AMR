@@ -4,6 +4,8 @@
   python weld_heatmap.py train   --captures <캡처폴더> [<폴더2> ...] --modality rgb --out runs/heatmap_rgb
                                  [--epochs 150 --batch 8 --width 640 --sigma 2.5 --patience 40 --device auto]
                                  [--no-pretrained]  (ImageNet 가중치 미사용 — 첫 실행 시 약 45MB 내려받기를 피할 때)
+  python weld_heatmap.py train   --captures <폴더> --modality rgb --out runs/heatmap_rgb --init runs/heatmap_rgb/prev/best_….pt --epochs 50
+                                 (이어 학습·보강: 이전 best.pt 에서 시작, 이전 모델 성능을 먼저 재고 그보다 나을 때만 best.pt 교체)
   python weld_heatmap.py eval    --weights runs/heatmap_rgb/best.pt --captures <폴더> --modality rgb [--split val|all]
   python weld_heatmap.py predict --weights runs/heatmap_rgb/best.pt --images <png...> --out <폴더>   (오버레이 jpg)
   python weld_heatmap.py export  --weights runs/heatmap_rgb/best.pt --out models/weld_heatmap_rgb.onnx
@@ -402,21 +404,47 @@ def cmd_train(a):
         print(f"WARN 라벨 {len(samples)}장은 학습에 크게 부족합니다(권장 150~300장 이상).", flush=True)
 
     device = pick_device(a.device)
+    init_ck = None
+    if a.init:
+        # 이어 학습(보강): 이전 best.pt 의 가중치에서 시작. 학습 해상도는 이전 모델 값을 따른다(축척이 바뀌면 배운 것이 어긋남).
+        init_ck = torch.load(a.init, map_location="cpu", weights_only=False)
+        prev_w = (init_ck.get("cfg") or {}).get("width", a.width)
+        if prev_w != a.width:
+            print(f"WARN 이전 모델 학습 해상도 {prev_w} 를 따릅니다(요청 {a.width}).", flush=True)
+            a.width = prev_w
     tr, va = prepare(train, a.width), prepare(val, a.width)
-    model = HeatmapUNet(pretrained=not a.no_pretrained).to(device)
+    model = HeatmapUNet(pretrained=not a.no_pretrained and init_ck is None)
+    lr = a.lr
+    if init_ck is not None:
+        model.load_state_dict(init_ck["model"])
+        lr = a.lr * a.finetune_lr_scale
+        print(f"INIT 이전 모델에서 이어 학습 — {a.init} (epoch {init_ck.get('epoch')}, 학습률 ×{a.finetune_lr_scale})", flush=True)
+    model = model.to(device)
     enc = [p for n, p in model.named_parameters() if n.split(".")[0] in ("stem", "l1", "l2", "l3", "l4")]
     dec = [p for n, p in model.named_parameters() if n.split(".")[0] not in ("stem", "l1", "l2", "l3", "l4")]
-    opt = torch.optim.AdamW([{"params": enc, "lr": a.lr * 0.3}, {"params": dec, "lr": a.lr}], weight_decay=1e-4)
+    opt = torch.optim.AdamW([{"params": enc, "lr": lr * 0.3}, {"params": dec, "lr": lr}], weight_decay=1e-4)
     # 라벨이 적을 때도 에폭당 최소 MIN_SAMPLES_PER_EPOCH 개를 증강해 쓰도록 반복 횟수를 올린다(회전본 제외로 장수가 줄어도
     # 에폭당 학습량·조기 종료 감각이 비슷하게 유지된다).
     repeats = max(a.repeats, math.ceil(MIN_SAMPLES_PER_EPOCH / max(1, len(tr))))
     steps = max(1, math.ceil(len(tr) * repeats / a.batch))
-    sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=[a.lr * 0.3, a.lr], total_steps=a.epochs * steps, pct_start=0.1)
+    sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=[lr * 0.3, lr], total_steps=a.epochs * steps,
+                                                pct_start=0.05 if init_ck is not None else 0.1)
     pos_w = torch.tensor(a.pos_weight, device=device)
     rng = random.Random(a.seed)
     os.makedirs(a.out, exist_ok=True)
     cfg = {"modality": a.modality, "width": a.width, "sigma": a.sigma}
     best, best_ep, since = None, 0, 0   # (−검출률, 중앙 오차) 사전식 — 검출률이 먼저
+    baseline = None
+    if init_ck is not None:
+        # 이전 모델을 이번 검증셋(새 데이터 포함)으로 먼저 잰다 — 이보다 나아질 때만 best.pt 가 바뀐다.
+        m0 = evaluate(model, va, device, a.thr)
+        baseline = (-m0["found"], m0["center_px"])
+        best = baseline
+        ck0 = {"model": {k: v.detach().cpu() for k, v in model.state_dict().items()}, "cfg": cfg, "epoch": 0,
+               "val": m0, "init": a.init}
+        torch.save(ck0, os.path.join(a.out, "best.pt"))
+        print(f"BASELINE 이전 모델 val_found={m0['found']:.2f} val_center_px={m0['center_px']:.2f} "
+              f"val_p90={m0['center_p90']:.2f} val_mean_px={m0['mean_px']:.2f}", flush=True)
 
     for ep in range(1, a.epochs + 1):
         model.train()
@@ -455,6 +483,10 @@ def cmd_train(a):
         if since >= a.patience:
             print(f"EARLY_STOP {a.patience} epoch 동안 검증 성능 개선 없음", flush=True)
             break
+    if baseline is not None and best_ep == 0:
+        print("NO_IMPROVEMENT 이어 학습이 이전 모델보다 나아지지 않았습니다 — best.pt 는 이전 모델 그대로입니다.", flush=True)
+    elif baseline is not None:
+        print(f"IMPROVED 이전 모델 대비 중앙 오차 {baseline[1]:.2f} → {best[1]:.2f}px, 검출률 {-baseline[0]:.2f} → {-best[0]:.2f}", flush=True)
     print(f"TRAIN_DONE best_found={-best[0]:.2f} best_center_px={best[1]:.2f} epoch={best_ep} -> {os.path.join(a.out, 'best.pt')}", flush=True)
 
 
@@ -560,6 +592,9 @@ def main():
     t.add_argument("--patience", type=int, default=40)
     t.add_argument("--device", default="auto", help="auto | cuda | mps | cpu")
     t.add_argument("--no-pretrained", dest="no_pretrained", action="store_true")
+    t.add_argument("--init", help="이어 학습(보강): 이 체크포인트(.pt) 가중치에서 시작 — 기존+새 라벨 전체로 학습 권장")
+    t.add_argument("--finetune-lr-scale", dest="finetune_lr_scale", type=float, default=0.3,
+                   help="--init 일 때 학습률 배율(기존에 배운 것을 크게 흔들지 않게)")
     t.add_argument("--keep-rotated", dest="keep_rotated", action="store_true",
                    help="회전 증강본(_cw90/_ccw90)도 학습에 포함(기본은 원본이 있으면 제외)")
     t.set_defaults(fn=cmd_train)
