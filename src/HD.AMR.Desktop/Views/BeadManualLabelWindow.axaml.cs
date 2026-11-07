@@ -129,7 +129,9 @@ public partial class BeadManualLabelWindow : Window
         LoadAutoBtn.IsVisible = false;
         RejectBtn.Content = "닫기";
         RejectBtn.Classes.Remove("danger");
-        ConfirmBtn.Content = "✔ 이 선으로 d 계산";
+        // 학습 데이터 저장은 기본으로 켠다 — 선 긋고 확정 한 번으로 라벨이 쌓이게(필요할 때만 체크 해제).
+        SaveCheck.IsChecked = true;
+        ConfirmBtn.Content = "✔ d 계산 + 학습 데이터 저장";
         ResultText.Text = "";
 
         _mod = _svc.DefaultModality;

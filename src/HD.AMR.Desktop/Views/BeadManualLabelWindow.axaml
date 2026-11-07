@@ -26,7 +26,7 @@
             <TextBlock Name="PreviewText" Classes="cap" TextWrapping="Wrap" />
             <TextBlock Name="ResultText" TextWrapping="Wrap" FontWeight="SemiBold" IsVisible="False" />
             <Grid ColumnDefinitions="*,Auto">
-                <CheckBox Name="SaveCheck" Content="확정 시 학습 데이터로 저장" IsVisible="False" />
+                <CheckBox Name="SaveCheck" Content="확정 시 학습 데이터로 저장" IsChecked="True" IsVisible="False" />
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
                     <Button Name="RejectBtn" Content="✖ 실패 처리" Classes="danger" />
                     <Button Name="UseAutoBtn" Content="자동 결과로 진행 (저장 안 함)" />
