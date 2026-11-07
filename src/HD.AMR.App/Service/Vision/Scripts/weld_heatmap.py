@@ -19,7 +19,9 @@
 - 평가: IoU 가 아니라 **원본 픽셀 기준 위치 오차**(영상 가로 중앙에서의 세로 오차, 라벨 구간 평균 오차)와 검출률.
 - 학습/검증 분할은 **촬영 세션 단위**(촬영 시각 간격 --session-gap-min 이상이면 다른 세션). 연속 촬영본이 거의 같아
   무작위 분할은 검증 점수를 부풀린다.
-- 세로 용접선 라벨(회전본 cw90/ccw90 등)은 전치(x↔y)해 가로선으로 학습한다 — 앱은 진행축이 세로면 같은 전치를 한다.
+- 회전 증강본(_cw90/_ccw90)은 원본 라벨이 있으면 뺀다 — 전치하면 원본의 상하/좌우 뒤집기와 같아 학습 중 무작위
+  뒤집기로 이미 생기므로 중복이다(--keep-rotated 로 포함 가능). 90/180/270° 회전 증강은 이 모델에 필요 없다.
+- 세로 용접선 라벨은 전치(x↔y)해 가로선으로 학습한다 — 앱은 진행축이 세로면 같은 전치를 한다.
   배율은 긴 변 기준(--width)이라 회전본도 원본과 같은 축척, 학습은 고정 크기 크롭(--crop-h×--crop-w)으로 배치를 맞춘다.
 - 입력은 3채널(IR 은 그레이를 3채널로 복제). ONNX 는 [1,3,H,W] 0~1 입력 → [1,1,H,W] logit, ImageNet 정규화는 모델 안에
   포함하므로 추론측은 /255 만 하면 된다. H·W 는 32 배수 동적 축.
@@ -41,6 +43,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+MIN_SAMPLES_PER_EPOCH = 300
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
 
@@ -101,6 +104,23 @@ class HeatmapUNet(nn.Module):
 
 # ── 데이터 ────────────────────────────────────────────────────────────────
 TS_RE = re.compile(r"(\d{8}_\d{6})")
+
+
+ROT_RE = re.compile(r"_c?cw90$")
+
+
+def drop_rotated(samples):
+    """회전 증강본(_cw90/_ccw90)을 뺀다 — 원본 라벨이 있을 때만. 전치 학습에서 회전본은 원본의 상하/좌우 뒤집기와
+    같아(학습 중 무작위 뒤집기로 이미 생김) 같은 장면을 중복으로 세고 학습만 느리게 한다.
+    원본 라벨 없이 회전본에만 라벨이 있으면 그 회전본은 남긴다(전치하면 원본과 같은 정보)."""
+    base = {(os.path.dirname(x["img"]), x["stem"]) for x in samples if not ROT_RE.search(x["stem"])}
+    kept, dropped = [], 0
+    for x in samples:
+        if ROT_RE.search(x["stem"]) and (os.path.dirname(x["img"]), ROT_RE.sub("", x["stem"])) in base:
+            dropped += 1
+            continue
+        kept.append(x)
+    return kept, dropped
 
 
 def find_samples(dirs, modality):
@@ -366,12 +386,16 @@ def pick_device(name):
 
 def cmd_train(a):
     samples = find_samples(a.captures, a.modality)
+    rot_dropped = 0
+    if not a.keep_rotated:
+        samples, rot_dropped = drop_rotated(samples)
     if not samples:
         sys.exit(f"ERROR {a.modality} 선 라벨(*_{a.modality}_line.json)이 있는 촬영본이 없습니다: {a.captures}")
     train, val, n_sess = split_by_session(samples, a.session_gap_min, a.val_frac, a.seed)
     print(f"DATA {len(samples)}장 (세션 {n_sess}개) → 학습 {len(train)} / 검증 {len(val)}"
           f" · 자동 변환 라벨 {sum(1 for s in samples if (s['origin'] or '').startswith('transfer'))}장"
-          f" · 세로선(전치해 학습) {sum(1 for s in samples if is_vertical(s['points']))}장", flush=True)
+          f" · 세로선(전치해 학습) {sum(1 for s in samples if is_vertical(s['points']))}장"
+          + (f" · 회전본 제외 {rot_dropped}장(원본과 중복)" if rot_dropped else ""), flush=True)
     if n_sess < 2:
         print("WARN 촬영 세션이 1개뿐 — 검증셋을 학습셋으로 대신합니다(점수는 과대평가). 여러 날·위치에서 라벨을 모으세요.", flush=True)
     if len(samples) < 50:
@@ -383,7 +407,10 @@ def cmd_train(a):
     enc = [p for n, p in model.named_parameters() if n.split(".")[0] in ("stem", "l1", "l2", "l3", "l4")]
     dec = [p for n, p in model.named_parameters() if n.split(".")[0] not in ("stem", "l1", "l2", "l3", "l4")]
     opt = torch.optim.AdamW([{"params": enc, "lr": a.lr * 0.3}, {"params": dec, "lr": a.lr}], weight_decay=1e-4)
-    steps = max(1, math.ceil(len(tr) * a.repeats / a.batch))
+    # 라벨이 적을 때도 에폭당 최소 MIN_SAMPLES_PER_EPOCH 개를 증강해 쓰도록 반복 횟수를 올린다(회전본 제외로 장수가 줄어도
+    # 에폭당 학습량·조기 종료 감각이 비슷하게 유지된다).
+    repeats = max(a.repeats, math.ceil(MIN_SAMPLES_PER_EPOCH / max(1, len(tr))))
+    steps = max(1, math.ceil(len(tr) * repeats / a.batch))
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=[a.lr * 0.3, a.lr], total_steps=a.epochs * steps, pct_start=0.1)
     pos_w = torch.tensor(a.pos_weight, device=device)
     rng = random.Random(a.seed)
@@ -393,7 +420,7 @@ def cmd_train(a):
 
     for ep in range(1, a.epochs + 1):
         model.train()
-        pool = tr * a.repeats
+        pool = tr * repeats
         rng.shuffle(pool)
         tot = 0.0
         for i in range(steps):
@@ -441,7 +468,7 @@ def load_model(path, device):
 def cmd_eval(a):
     device = pick_device(a.device)
     model, cfg = load_model(a.weights, device)
-    samples = find_samples(a.captures, a.modality or cfg.get("modality", "rgb"))
+    samples, _ = drop_rotated(find_samples(a.captures, a.modality or cfg.get("modality", "rgb")))
     if a.split == "val":
         _, samples, _ = split_by_session(samples, a.session_gap_min, a.val_frac, a.seed)
     m = evaluate(model, prepare(samples, cfg.get("width", 640)), device, a.thr)
@@ -533,6 +560,8 @@ def main():
     t.add_argument("--patience", type=int, default=40)
     t.add_argument("--device", default="auto", help="auto | cuda | mps | cpu")
     t.add_argument("--no-pretrained", dest="no_pretrained", action="store_true")
+    t.add_argument("--keep-rotated", dest="keep_rotated", action="store_true",
+                   help="회전 증강본(_cw90/_ccw90)도 학습에 포함(기본은 원본이 있으면 제외)")
     t.set_defaults(fn=cmd_train)
 
     e = sub.add_parser("eval")
