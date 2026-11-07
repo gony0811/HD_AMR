@@ -182,6 +182,9 @@ public partial class BeadManualLabelWindow : Window
         BeadCanvas.Clear();
         _baseGuides = BuildGuides(Guide);
         LoadAutoBtn.IsEnabled = Guide?.AutoLine is { Count: >= 2 };
+        // 시퀀스 모드: 자동 검출이 선을 찾았으면 편집 가능한 초안으로 깔아 둔다 — 틀린 점만 드래그해 고치고 확정하면
+        // 그 선으로 측정하고 학습 데이터로 저장한다. (하늘색 점선 = 원래 검출 선은 비교용으로 그대로 남는다.)
+        if (!_test && LoadAutoBtn.IsEnabled) LoadAutoLine();
         UpdatePreview();
     }
 
@@ -219,9 +222,14 @@ public partial class BeadManualLabelWindow : Window
         {
             Width = g.Width,
             Height = g.Height,
-            Points = auto.Select(p => new[] { p.X, p.Y }).ToList(),
+            Points = ManualBeadGeometry.SimplifyForEdit(auto).Select(p => new[] { p.X, p.Y }).ToList(),
         });
     }
+
+    /// <summary>현재 선이 자동 검출 선 그대로(수정 전)인지.</summary>
+    private static bool IsAutoDraft(IReadOnlyList<PixelPoint> pts, ManualBeadGuide g)
+        => g.AutoLine is { Count: >= 2 } line && ManualBeadGeometry.SimplifyForEdit(line) is var auto && auto.Count == pts.Count
+           && auto.Zip(pts).All(z => Math.Abs(z.First.X - z.Second.X) < 0.5 && Math.Abs(z.First.Y - z.Second.Y) < 0.5);
 
     private List<PixelPoint> CurrentPoints()
         => BeadCanvas.GetLineLabel()?.Points.Select(p => new PixelPoint(p[0], p[1])).ToList() ?? new();
@@ -243,15 +251,17 @@ public partial class BeadManualLabelWindow : Window
         if (g is null)
             PreviewText.Text = "";
         else if (pts.Count < 2)
-            PreviewText.Text = "비드 중심선 위의 점을 2개 이상 찍으세요." + (g.PeakFound ? "" : " (Peak 미발견 — Bead ROI 중앙 위치에서 잽니다)");
+            PreviewText.Text = (g.AutoLine is { Count: >= 2 } ? "자동 검출 선이 있습니다(하늘색 점선) — '자동 검출 선 불러오기'로 고쳐 쓸 수 있습니다. " : "")
+                + "비드 중심선 위의 점을 2개 이상 찍으세요." + (g.PeakFound ? "" : " (Peak 미발견 — Bead ROI 중앙 위치에서 잽니다)");
         else if (cross is not { } c)
             PreviewText.Text = "선이 진행 방향으로 너무 짧습니다 — 비드를 따라 더 떨어진 두 점을 찍으세요.";
         else
         {
             double d = c - g.RefCross;
-            PreviewText.Text = _mod == "rgb"
+            var draftNote = IsAutoDraft(pts, g) ? "자동 검출 선 초안 — 틀렸으면 점을 드래그해 고친 뒤 확정하세요(학습 데이터로 저장). " : "";
+            PreviewText.Text = draftNote + (_mod == "rgb"
                 ? $"Peak 선과의 교점에서 d ≈ {d:+0.0;-0.0}px (컬러 기준, 진행 시 IR 픽셀로 환산)"
-                : $"Peak 선과의 교점에서 d ≈ {d:+0.0;-0.0}px (IR 기준)";
+                : $"Peak 선과의 교점에서 d ≈ {d:+0.0;-0.0}px (IR 기준)");
             // 빨간 교점 표시(작은 X).
             var p = g.Horizontal ? new Point(g.ProgressPos, c) : new Point(c, g.ProgressPos);
             const double k = 6;

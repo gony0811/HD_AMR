@@ -90,7 +90,7 @@ public sealed class BeadManualAssist
         while (true)
         {
             var useAuto = autoOk && jogs == 0;
-            snap = await _weld.PrepareManualBeadAsync(peakId, peakRoi, beadRoi, jogs == 0 ? detect : null, ct);
+            snap = await _weld.PrepareManualBeadAsync(peakId, peakRoi, beadRoi, detect, ct);
             if (snap is null)
             {
                 _logger.LogWarning("[{Stage}] 수동 비드 입력 불가 — IR/Depth 프레임 없음. 자동 결과로 판정.", stage);
@@ -126,6 +126,16 @@ public sealed class BeadManualAssist
             jogs++;
             _logger.LogInformation("[{Stage}] 팝업 조그로 코봇 이동 — 프레임 다시 찍기 ({Jogs}회)", stage, jogs);
             await Task.Delay(RecaptureSettleMs, ct);   // 이동 직후 프레임 흔들림·지연 대기
+
+            // 새 자리에서 자동 검출을 다시 돌려 찾은 선을 팝업에 초안으로 보여준다(측정 슬롯도 새 자리 값으로 갱신 —
+            // 이후 결과는 수동 확정으로만 쓰므로 영향 없음). 실패해도 수동 입력은 계속한다.
+            try { detect = (await _weld.CapturePeakAsync(peakId, peakRoi, beadRoi, ct)).Detect; }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[{Stage}] 조그 후 자동 검출 실패 — 선 초안 없이 수동 입력", stage);
+                detect = null;
+            }
         }
         autoOk = autoOk && jogs == 0;
 

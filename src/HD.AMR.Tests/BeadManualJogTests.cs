@@ -51,3 +51,40 @@ public class BeadManualJogTests
         Assert.Equal("20", seeds[BeadManualSettings.JogStepMmKey]);
     }
 }
+
+/// <summary>자동 검출 선 → 편집 초안 조절점.</summary>
+public class BeadManualDraftTests
+{
+    [Fact]
+    public void 긴_중심선은_양끝을_지키고_8점으로_줄인다()
+    {
+        var line = Enumerable.Range(0, 300).Select(i => new HD.AMR.App.Models.PixelPoint(i, 100 + i * 0.1)).ToList();
+
+        var d = ManualBeadGeometry.SimplifyForEdit(line);
+
+        Assert.Equal(ManualBeadGeometry.EditDraftMaxPoints, d.Count);
+        Assert.Equal(line[0], d[0]);
+        Assert.Equal(line[^1], d[^1]);
+        for (int i = 1; i < d.Count; i++) Assert.True(d[i].X > d[i - 1].X);
+    }
+
+    [Fact]
+    public void 짧은_선은_그대로()
+    {
+        var line = new[] { new HD.AMR.App.Models.PixelPoint(0, 0), new HD.AMR.App.Models.PixelPoint(50, 3) };
+
+        Assert.Equal(line, ManualBeadGeometry.SimplifyForEdit(line));
+    }
+
+    [Fact]
+    public void 초안으로_잰_교점은_원래_직선과_같다()
+    {
+        // 직선 위의 점이면 줄여도 같은 위치에서 같은 cross 가 나와야 한다.
+        var line = Enumerable.Range(0, 200).Select(i => new HD.AMR.App.Models.PixelPoint(i * 2, 50 + i * 0.5)).ToList();
+        var full = ManualBeadGeometry.CrossAt(line, horizontal: true, progressPos: 150);
+        var draft = ManualBeadGeometry.CrossAt(ManualBeadGeometry.SimplifyForEdit(line), horizontal: true, progressPos: 150);
+
+        Assert.NotNull(full);
+        Assert.Equal(full!.Value, draft!.Value, 6);
+    }
+}

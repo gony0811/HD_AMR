@@ -1060,8 +1060,8 @@ public class WeldTrackingService
             var frames = LiveManualFrames();
             if (frames is null) return null;
             string autoMod = Params.Mode == WeldImageMode.Ir ? "ir" : "rgb";
-            IReadOnlyList<PixelPoint>? autoLine = auto is { Success: true, LineFitOk: true, Centerline.Count: >= 2 }
-                ? auto.Centerline.ToList() : null;
+            // 판정(성공·직선피팅)과 무관하게 검출기가 찾은 선이 있으면 보여준다 — 틀렸으면 사람이 고쳐 학습 데이터로 남긴다.
+            IReadOnlyList<PixelPoint>? autoLine = auto is { Centerline.Count: >= 2 } ? auto.Centerline.ToList() : null;
             return await Task.Run(() => BuildManualSnapshot(id, frames, peakRoi, beadRoi, Params.ProgressAxis, autoLine, autoMod), ct);
         }
         finally { _gate.Release(); }

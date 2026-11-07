@@ -217,6 +217,23 @@ public sealed class BeadManualLabelHub
 /// <summary>사람이 찍은 비드선 점들의 기하 계산(순수 함수).</summary>
 public static class ManualBeadGeometry
 {
+    /// <summary>편집 초안의 조절점 수 상한 — 자동 검출 중심선은 수백 점이라 그대로는 드래그로 고칠 수 없다.</summary>
+    public const int EditDraftMaxPoints = 8;
+
+    /// <summary>
+    /// 자동 검출 중심선을 편집용 조절점으로 줄인다 — 양 끝점을 지키고 그 사이를 점 개수 기준 등간격으로 고른다.
+    /// <paramref name="maxPoints"/> 이하이면 그대로. 2 미만 상한은 2 로 본다.
+    /// </summary>
+    public static List<PixelPoint> SimplifyForEdit(IReadOnlyList<PixelPoint> pts, int maxPoints = EditDraftMaxPoints)
+    {
+        maxPoints = Math.Max(2, maxPoints);
+        if (pts.Count <= maxPoints) return pts.ToList();
+        var result = new List<PixelPoint>(maxPoints);
+        for (int k = 0; k < maxPoints; k++)
+            result.Add(pts[(int)Math.Round(k * (pts.Count - 1) / (double)(maxPoints - 1))]);
+        return result;
+    }
+
     /// <summary>
     /// 점들을 진행축 좌표 p 에 대한 직선 cross = a·p + b 로 최소제곱 피팅해 <paramref name="progressPos"/> 에서의 cross 를 반환.
     /// 2점 미만이거나 점들이 진행축으로 펼쳐지지 않았으면(진행축과 수직인 선) null.
