@@ -149,9 +149,9 @@
                     </span>
                 </div>
                 <div class="card-body">
-                    @* 사용할 .onnx 모델 선택. '자동'이면 입력 모달리티로 weld_yolo_{ir|rgb}.onnx(없으면 weld_seg_)를 찾는다. YOLO 파일만 표시. *@
+                    @* 사용할 .onnx 모델 선택(필수 — 비어 있으면 비드 찾기 실패). YOLO 파일만 표시. *@
                     <div class="row g-2 align-items-end mb-1">
-                        <div class="col-auto" title="이 검출에 쓸 학습 모델(.onnx). '자동'은 입력 모달리티에 맞춰 weld_yolo_ir/rgb.onnx 사용.">
+                        <div class="col-auto" title="이 검출에 쓸 학습 모델(.onnx). 반드시 지정 — 비어 있으면 비드 찾기가 '모델 없음'으로 멈춥니다.">
                             <label class="form-label mb-0 small">모델 ⓘ</label>
                             <div class="d-flex gap-1">
                                 <select class="form-select form-select-sm" style="min-width:210px" @bind="Svc.Params.DlModelPath" @bind:after="OnModelChangedAsync">
@@ -228,7 +228,7 @@
                     <div class="row g-2 align-items-end">
                         <div class="col-auto" title="비드 확률 임계값. 낮추면 약한 비드까지, 높이면 확실한 픽셀만.">
                             <label class="form-label mb-0 small">확률 임계 @Svc.Params.UnetThreshold.ToString("0.00")</label>
-                            <input type="range" min="0.05" max="0.95" step="0.05" @bind="Svc.Params.UnetThreshold" @bind:after="LivePreview" class="form-range" style="width:160px" />
+                            <input type="range" min="0.05" max="0.95" step="0.05" @bind="Svc.Params.UnetThreshold" @bind:after="OnUnetThresholdChanged" class="form-range" style="width:160px" />
                         </div>
                         <div class="col-auto" title="중심선 직선 피팅. RANSAC 권장.">
                             <label class="form-label mb-0 small">직선 피팅</label>
@@ -238,7 +238,7 @@
                             </select>
                         </div>
                     </div>
-                    <div class="small text-muted mt-1">모델: 캡처폴더/dl/models/weld_unet_{ir|rgb}.onnx 자동, 또는 파라미터 Weld.Unet.ModelPath 에 파일명 지정 (Desktop 비전 학습 ⑤ U-Net 탭에서 학습·내보내기)</div>
+                    <div class="small text-muted mt-1">모델: 파라미터 Weld.Unet.ModelPath 에 파일명 지정(필수) (Desktop 비전 학습 ③ U-Net 탭에서 학습·내보내기)</div>
                 </div>
             </div>
         }
@@ -543,7 +543,7 @@
 
     private List<ModelInfo> _models = new();
 
-    /// <summary>현재 검출에 실제로 쓰이는 모델 표시명. 선택 없으면 모달리티 자동 이름.</summary>
+    /// <summary>현재 검출에 실제로 쓰이는 모델 표시명. 선택 없으면 '미지정'.</summary>
     private string EffectiveModelName => string.IsNullOrWhiteSpace(Svc.Params.DlModelPath)
         ? "미지정 — 모델을 선택하세요"
         : System.IO.Path.GetFileName(Svc.Params.DlModelPath);
@@ -697,6 +697,9 @@
     }
 
     /// <summary>파라미터 변경 시 자동 재검출(디바운스). 라이브 미리보기 ON + 스트리밍 + 검출 가능할 때만.</summary>
+    // U-Net 확률 임계 — 파라미터(Weld.Unet.Threshold)로 저장해 재시작·다른 화면과 공유.
+    private Task OnUnetThresholdChanged() { Svc.SaveUnetThreshold(); return LivePreview(); }
+
     private async Task LivePreview()
     {
         if (!_livePreview || !Cam.IsStreaming || !Svc.DetectorAvailable) return;

@@ -73,17 +73,17 @@ else
     {
         <div class="card" style="max-width:960px">
             <div class="card-body">
-                <h5 class="card-title">마스크 초안 → YOLO-seg 데이터셋 변환</h5>
+                <h5 class="card-title">면 라벨 → YOLO-seg 데이터셋 변환</h5>
                 <p class="text-muted" style="font-size:.9rem">
-                    선택한 모달리티의 <code>*_maskdraft.png</code> 를 스캔해 폴리곤 라벨(<code>.txt</code>)과
-                    <code>data.yaml</code> 을 생성합니다. (표본이 적어 val = train 으로 둠 — 과적합/배선 점검용)
+                    선택한 모달리티의 <code>*_area.png</code>(면 라벨)를 스캔해 <code>dl/dataset_area</code> 에 폴리곤 라벨(<code>.txt</code>)과
+                    <code>data.yaml</code> 을 생성합니다. 폴더 구성·선 라벨 변환은 Desktop 앱에서 지정하세요.
                 </p>
                 <div class="d-flex align-items-center flex-wrap gap-3">
                     <div class="btn-group btn-group-sm" role="group">
                         <button class="btn @(_modality == "rgb" ? "btn-primary" : "btn-outline-primary")"
-                                @onclick='() => _modality="rgb"'>RGB (마스크 @(_rgbMasks)개)</button>
+                                @onclick='() => _modality="rgb"'>RGB (면 라벨 @(_rgbMasks)개)</button>
                         <button class="btn @(_modality == "ir" ? "btn-primary" : "btn-outline-primary")"
-                                @onclick='() => _modality="ir"'>IR (마스크 @(_irMasks)개)</button>
+                                @onclick='() => _modality="ir"'>IR (면 라벨 @(_irMasks)개)</button>
                     </div>
                     <button class="btn btn-success btn-sm" @onclick="Convert" disabled="@_working">데이터셋 변환</button>
                 </div>
@@ -95,29 +95,6 @@ else
                     </div>
                 }
 
-                <hr />
-                <h6 class="mb-1">데이터 증강 — 90° 회전본 생성</h6>
-                <p class="text-muted" style="font-size:.85rem">
-                    0°/90° 두 방향 비드를 모두 학습하려면, 기존 이미지와 마스크를 <b>함께</b> 90° 회전한 복사본을 만듭니다
-                    (마스크도 같이 회전돼 정렬 유지). 생성 후 위의 <b>데이터셋 변환</b>을 다시 누르세요. 재실행해도 이미 만든
-                    회전본은 중복 생성하지 않습니다.
-                </p>
-                <div class="d-flex align-items-end gap-2 flex-wrap">
-                    <div><label class="form-label mb-0" style="font-size:.85rem">회전 방향</label>
-                        <select class="form-select form-select-sm" style="width:170px" @bind="_rotDir">
-                            <option value="cw">시계 90°</option>
-                            <option value="ccw">반시계 90°</option>
-                            <option value="both">양방향(±90°, 2배)</option>
-                        </select></div>
-                    <button class="btn btn-outline-primary btn-sm" @onclick="GenerateRotated" disabled="@_working">90° 회전본 생성</button>
-                </div>
-                @if (_rot is not null)
-                {
-                    <div class="alert alert-success mt-2 mb-0" style="font-size:.9rem">
-                        회전본 생성 완료 — <b>@_rot.Created</b>건 생성 (건너뜀 @(_rot.Skipped)건).
-                        이제 <b>데이터셋 변환</b>을 다시 실행하세요.
-                    </div>
-                }
             </div>
         </div>
     }
@@ -358,8 +335,6 @@ else
     private string _exportModality = "ir";
 
     private ConvertResult? _convert;
-    private RotateResult? _rot;
-    private string _rotDir = "cw";
     private List<ModelInfo> _models = new();
     private List<CaptureEntry> _entries = new();
     private bool _working;
@@ -476,8 +451,8 @@ else
         try
         {
             _entries = await Lbl.ListAsync();
-            _rgbMasks = _entries.Count(e => e.RgbMask);
-            _irMasks = _entries.Count(e => e.IrMask);
+            _rgbMasks = _entries.Count(e => e.RgbArea);
+            _irMasks = _entries.Count(e => e.IrArea);
             _inferStem ??= _entries.FirstOrDefault()?.Stem;
         }
         catch { /* 무시 */ }
@@ -553,19 +528,6 @@ else
             Notify($"데이터셋 변환 완료 — 사용 {_convert.Used}건.", false);
         }
         catch (Exception ex) { Notify($"변환 실패: {ex.Message}", true); }
-        finally { _working = false; }
-    }
-
-    private async Task GenerateRotated()
-    {
-        _working = true; _message = null;
-        try
-        {
-            _rot = await Train.GenerateRotatedCopiesAsync(_rotDir);
-            await RefreshCounts();
-            Notify($"90° 회전본 {_rot.Created}건 생성 완료. 데이터셋 변환을 다시 실행하세요.", false);
-        }
-        catch (Exception ex) { Notify($"회전본 생성 실패: {ex.Message}", true); }
         finally { _working = false; }
     }
 

@@ -17,8 +17,8 @@ namespace HD.AMR.Desktop.Views;
 /// 칠/지우고, 저장 시 흑백 이진 마스크 PNG 를 돌려준다. 마스크는 이미지 원본 해상도로 유지되며 표시는
 /// 균등 스케일이므로 저장 마스크는 항상 원본 해상도로 정렬된다.
 /// <para><b>선 모드</b>(<see cref="LineMode"/>): 좌클릭으로 비드 중심선 점을 추가하고(기존 점 근처를 누르면 드래그로
-/// 이동), 우클릭으로 마지막 점을 지운다. 점이 바뀔 때마다 마스크를 <see cref="LineThickness"/> 두께로 다시
-/// 래스터화한다(<see cref="WeldLineLabel.Rasterize"/>). 선 이후 브러시로 다듬은 마스크는 점을 다시 바꾸기 전까지 유지된다.</para>
+/// 이동), <b>Shift+좌클릭</b>은 앞 점과 잇지 않고 새 선을 시작한다(떨어진 비드), 우클릭으로 마지막 점을 지운다. 점이 바뀔 때마다 마스크를 <see cref="LineThickness"/> 두께로 다시
+/// 래스터화한다(<see cref="WeldLineLabel.Rasterize"/>). 선 라벨은 점(+두께)만 저장되고 학습 마스크는 변환 시 다시 만든다.</para>
 /// </summary>
 public sealed class MaskCanvas : Control
 {
@@ -29,6 +29,7 @@ public sealed class MaskCanvas : Control
     private int _w, _h;
     private bool _painting;
     private readonly List<Point> _linePts = new();   // 원본 픽셀 좌표
+    private readonly SortedSet<int> _lineBreaks = new();   // 이 인덱스의 점은 앞 점과 잇지 않음(새 선 시작)
     private int _dragIdx = -1;
     private int _lineThickness = WeldLineLabel.DefaultThickness;
 
@@ -51,27 +52,41 @@ public sealed class MaskCanvas : Control
         }
     }
 
-    /// <summary>현재 선 라벨. 점이 2개 미만이면 null.</summary>
+    /// <summary>현재 선 라벨. 이어진 선분이 하나도 없으면(점 2개 미만 등) null.</summary>
     public WeldLineLabel? GetLineLabel()
-        => _w == 0 || _linePts.Count < 2 ? null : new WeldLineLabel
+    {
+        if (_w == 0 || _linePts.Count < 2) return null;
+        var l = new WeldLineLabel
         {
             Width = _w,
             Height = _h,
             Thickness = _lineThickness,
             Points = _linePts.Select(p => new[] { Math.Round(p.X, 1), Math.Round(p.Y, 1) }).ToList(),
+            Breaks = _lineBreaks.Count > 0 ? _lineBreaks.ToList() : null,
         };
+        return l.IsValid ? l : null;
+    }
 
-    /// <summary>저장된 선 라벨 표시(마스크는 건드리지 않음 — 저장 당시 브러시 보정분 유지).</summary>
+    /// <summary>선 조각 수(끊김 + 1). 점이 없으면 0.</summary>
+    public int LineSegmentCount => _linePts.Count == 0 ? 0 : _lineBreaks.Count + 1;
+
+    /// <summary>저장된 선 라벨 표시 — 점을 불러와 두께대로 마스크를 다시 그린다. null/무효면 점만 비운다(마스크 유지).</summary>
     public void SetLine(WeldLineLabel? line)
     {
-        _linePts.Clear();
+        _linePts.Clear(); _lineBreaks.Clear();
         if (line is { IsValid: true } && line.Width == _w && line.Height == _h)
         {
             _linePts.AddRange(line.Points.Select(p => new Point(p[0], p[1])));
+            foreach (var b in line.Breaks ?? new()) if (b > 0 && b < _linePts.Count) _lineBreaks.Add(b);
             _lineThickness = line.Thickness;
+            RasterizeLine();
+            return;
         }
         InvalidateVisual();
     }
+
+    /// <summary>칠해진 픽셀이 하나라도 있는지(빈 면 라벨 저장 = 삭제 판단용).</summary>
+    public bool HasPaint => Array.IndexOf(_mask, (byte)1) >= 0;
 
     private void RasterizeLine()
     {
@@ -122,7 +137,7 @@ public sealed class MaskCanvas : Control
     {
         if (_w == 0) return;
         Array.Clear(_mask); Array.Clear(_bgra);
-        _linePts.Clear();
+        _linePts.Clear(); _lineBreaks.Clear();
         FlushRows(0, _h); InvalidateVisual();
     }
 
@@ -217,12 +232,19 @@ public sealed class MaskCanvas : Control
             if (ToNative(e.GetPosition(this)) is not { } q) return;
             if (e.GetCurrentPoint(this).Properties.IsRightButtonPressed)
             {
-                if (_linePts.Count > 0) { _linePts.RemoveAt(_linePts.Count - 1); RasterizeLine(); }
+                if (_linePts.Count > 0)
+                {
+                    _linePts.RemoveAt(_linePts.Count - 1);
+                    _lineBreaks.Remove(_linePts.Count);   // 지운 점이 새 선의 시작이었으면 끊김도 제거
+                    RasterizeLine();
+                }
                 return;
             }
-            _dragIdx = HitPoint(q.x, q.y);
+            bool newSeg = e.KeyModifiers.HasFlag(KeyModifiers.Shift) && _linePts.Count > 0;
+            _dragIdx = newSeg ? -1 : HitPoint(q.x, q.y);
             if (_dragIdx < 0)
             {
+                if (newSeg) _lineBreaks.Add(_linePts.Count);
                 _linePts.Add(ClampPt(q.x, q.y, _w, _h));
                 _dragIdx = _linePts.Count - 1;
                 RasterizeLine();
@@ -260,7 +282,12 @@ public sealed class MaskCanvas : Control
         double sx = r.Width / _w, sy = r.Height / _h;
         Point D(Point p) => new(r.X + (p.X + 0.5) * sx, r.Y + (p.Y + 0.5) * sy);
         var pen = new Pen(Brushes.Yellow, 1.5);
-        for (var i = 0; i + 1 < _linePts.Count; i++) ctx.DrawLine(pen, D(_linePts[i]), D(_linePts[i + 1]));
-        foreach (var p in _linePts) ctx.DrawEllipse(Brushes.Yellow, null, D(p), 4, 4);
+        for (var i = 0; i + 1 < _linePts.Count; i++)
+            if (!_lineBreaks.Contains(i + 1)) ctx.DrawLine(pen, D(_linePts[i]), D(_linePts[i + 1]));
+        // 새 선의 시작점은 테두리 원으로 구분.
+        var startPen = new Pen(Brushes.Yellow, 2);
+        for (var i = 0; i < _linePts.Count; i++)
+            if (_lineBreaks.Contains(i)) ctx.DrawEllipse(null, startPen, D(_linePts[i]), 6, 6);
+            else ctx.DrawEllipse(Brushes.Yellow, null, D(_linePts[i]), 4, 4);
     }
 }

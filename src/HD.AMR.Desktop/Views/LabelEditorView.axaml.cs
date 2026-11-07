@@ -13,7 +13,17 @@ public partial class LabelEditorView : UserControl
     {
         InitializeComponent();
         _mask = this.FindControl<MaskCanvas>("Mask")!;
-        this.FindControl<Button>("SaveBtn")!.Click += async (_, _) => { if (_vm is not null) await _vm.SaveMaskAsync(_mask.ExportPng(), _mask.GetLineLabel()); };
+        this.FindControl<Button>("SaveBtn")!.Click += async (_, _) =>
+        {
+            if (_vm is not null) await _vm.SaveLabelAsync(_mask.HasPaint ? _mask.ExportPng() : null, _mask.GetLineLabel());
+        };
+        foreach (var name in new[] { "PickDirBtn", "PickDirBtn2" })
+            this.FindControl<Button>(name)!.Click += async (_, _) =>
+            {
+                if (_vm is null) return;
+                var path = await FolderPicker.PickAsync(this, "라벨링 폴더 선택", _vm.Dir);
+                if (path is not null) await _vm.SetDirAsync(path);
+            };
         DataContextChanged += (_, _) =>
         {
             if (_vm is not null) { _vm.EditorOpenRequested -= OnOpen; _vm.BrushChanged -= OnBrush; _vm.ClearRequested -= OnClear; }

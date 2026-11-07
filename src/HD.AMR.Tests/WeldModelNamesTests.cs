@@ -47,7 +47,6 @@ public class WeldModelNamesTests
         Assert.Equal("weld_yolo_ir.onnx", WeldModelNames.YoloExportName("ir"));
         Assert.Equal("weld_unet_rgb.onnx", WeldModelNames.UnetExportName("rgb"));
         // 자동: 새 이름 → 기존 이름 → 레거시
-        Assert.Equal(["weld_yolo_rgb.onnx", "weld_seg_rgb.onnx", "weld_seg.onnx"], WeldModelNames.YoloAutoCandidates("rgb"));
     }
 
     [Fact]
@@ -88,4 +87,30 @@ public class WeldModelNameParsingTests
     [InlineData("rgb", WeldImageMode.RgbHsv, WeldImageMode.RgbHsv)]   // RGB 계열 세부 선택은 유지
     public void ModeFor_MapsModality(string modality, WeldImageMode current, WeldImageMode expected)
         => Assert.Equal(expected, WeldModelNames.ModeFor(modality, current));
+
+    [Fact]
+    public void 새_내보내기_이름에_종류_모달리티_라벨_시각()
+    {
+        var t = new DateTime(2026, 11, 8, 14, 30, 0);
+        Assert.Equal("weld_yolo_ir_area_261108_1430.onnx", WeldModelNames.YoloExportName("ir", LabelKind.Area, t));
+        Assert.Equal("weld_unet_rgb_line_261108_1430.onnx", WeldModelNames.UnetExportName("rgb", LabelKind.Line, t));
+    }
+
+    [Theory]
+    [InlineData("weld_yolo_ir_area_261108_1430.onnx", LabelKind.Area)]
+    [InlineData("[4점제외]weld_yolo_ir_area_261106_밝기증강on.onnx", LabelKind.Area)]
+    [InlineData("weld_unet_rgb_line_261106.onnx", LabelKind.Line)]
+    [InlineData("weld_yolo_ir_261106.onnx", null)]
+    [InlineData("weld_yolo_ir_baseline.onnx", null)]   // 영문자에 붙은 line 은 표식 아님
+    public void 파일명에서_라벨_종류(string name, LabelKind? expected)
+        => Assert.Equal(expected, WeldModelNames.LabelKindOf(name));
+
+    [Fact]
+    public void 새_이름도_모달리티_종류_인식()
+    {
+        Assert.Equal("ir", WeldModelNames.ModalityOf("weld_yolo_ir_area_261108_1430.onnx"));
+        Assert.Equal("rgb", WeldModelNames.ModalityOf("weld_unet_rgb_line_261106.onnx"));
+        Assert.True(WeldModelNames.IsUnet("weld_unet_rgb_line_261106.onnx"));
+        Assert.True(WeldModelNames.IsYolo("weld_yolo_ir_area_261108_1430.onnx"));
+    }
 }

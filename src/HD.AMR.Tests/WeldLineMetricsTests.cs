@@ -95,4 +95,22 @@ public class WeldLineMetricsTests
         Assert.Equal(12, s.OffsetMedian, 6);
         Assert.Equal(20, s.MillisMean, 6);
     }
+
+    [Fact]
+    public void 끊긴_구간은_커버리지_분모에서_빠진다()
+    {
+        var gt = new WeldLineLabel
+        {
+            Width = 848, Height = 480, Thickness = 9,
+            Points = new() { new[] { 0.0, 200.0 }, new[] { 300.0, 200.0 }, new[] { 500.0, 200.0 }, new[] { 847.0, 200.0 } },
+            Breaks = new() { 2 },
+        };
+        // 검출은 정답 두 조각 위만(빈 구간 300~500 은 없음) → 커버리지 ~1.
+        var det = Line(200, 200, 0, 300).Concat(Line(200, 200, 500, 847)).ToList();
+        var e = WeldLineMetrics.Compare(gt, det, horizontal: true);
+        Assert.True(e.Coverage > 0.98, $"coverage={e.Coverage}");
+        Assert.True(e.Pass);
+        // 빈 구간 위의 검출 점은 정답에서 멀다(가까운 끝점까지 거리).
+        Assert.True(WeldLineMetrics.DistToLabel(400, 200, gt) >= 99);
+    }
 }

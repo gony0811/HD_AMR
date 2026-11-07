@@ -3,9 +3,10 @@ using HD.AMR.App.Models;
 namespace HD.AMR.App.Service.Vision;
 
 /// <summary>
-/// 비드 검출 모델(.onnx) 파일명 규칙. 내보내기는 <c>weld_yolo_{ir|rgb}.onnx</c>(YOLO) / <c>weld_unet_{ir|rgb}.onnx</c>(U-Net)로
-/// 만들고, 사용자는 파일명에 날짜·특징을 덧붙여(예: <c>[4점제외]weld_yolo_ir_261106_밝기증강on.onnx</c>) 여러 버전을 보관한다.
-/// 종류 구분은 이름 <b>어디든</b> 들어 있는 표식으로 한다. 기존 YOLO 이름 <c>weld_seg</c> 도 계속 YOLO 로 인식한다.
+/// 비드 검출 모델(.onnx) 파일명 규칙. 내보내기는 <c>weld_{yolo|unet}_{ir|rgb}_{area|line}_{yyMMdd_HHmm}.onnx</c> 로 만든다
+/// (모델 종류·모달리티·학습 라벨 종류·시각 — 덮어쓰지 않고 버전이 쌓인다). 사용자는 앞뒤에 메모를 덧붙여도 된다
+/// (예: <c>[4점제외]weld_yolo_ir_area_261106_밝기증강on.onnx</c>). 종류 구분은 이름 <b>어디든</b> 들어 있는 표식으로 한다.
+/// 기존 YOLO 이름 <c>weld_seg</c> 도 계속 YOLO 로 인식한다.
 /// </summary>
 public static class WeldModelNames
 {
@@ -13,15 +14,32 @@ public static class WeldModelNames
     public const string LegacyYoloTag = "weld_seg";   // 이전 YOLO 내보내기 이름 — 기존 파일 호환
     public const string UnetTag = "weld_unet";
 
-    /// <summary>YOLO 내보내기 파일명.</summary>
+    /// <summary>예전 YOLO 내보내기 파일명(<c>weld_yolo_{m}.onnx</c>).</summary>
     public static string YoloExportName(string modality) => $"{YoloTag}_{modality}.onnx";
 
-    /// <summary>U-Net 내보내기 파일명.</summary>
+    /// <summary>예전 U-Net 내보내기 파일명(<c>weld_unet_{m}.onnx</c>).</summary>
     public static string UnetExportName(string modality) => $"{UnetTag}_{modality}.onnx";
 
-    /// <summary>'자동' 선택 시 YOLO 후보(우선순위): weld_yolo_{m} → weld_seg_{m} → weld_seg.onnx(레거시).</summary>
-    public static IReadOnlyList<string> YoloAutoCandidates(string modality) =>
-        [YoloExportName(modality), $"{LegacyYoloTag}_{modality}.onnx", $"{LegacyYoloTag}.onnx"];
+    /// <summary>라벨 종류 표식("area"/"line").</summary>
+    public static string KindToken(LabelKind kind) => kind == LabelKind.Line ? "line" : "area";
+
+    /// <summary>YOLO 내보내기 파일명: <c>weld_yolo_{m}_{area|line}_{yyMMdd_HHmm}.onnx</c>.</summary>
+    public static string YoloExportName(string modality, LabelKind kind, DateTime when)
+        => $"{YoloTag}_{modality}_{KindToken(kind)}_{when:yyMMdd_HHmm}.onnx";
+
+    /// <summary>U-Net 내보내기 파일명: <c>weld_unet_{m}_{area|line}_{yyMMdd_HHmm}.onnx</c>.</summary>
+    public static string UnetExportName(string modality, LabelKind kind, DateTime when)
+        => $"{UnetTag}_{modality}_{KindToken(kind)}_{when:yyMMdd_HHmm}.onnx";
+
+    /// <summary>파일명의 학습 라벨 종류(영문자에 붙지 않은 area·line 토큰). 없으면 null.</summary>
+    public static LabelKind? LabelKindOf(string path)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(Path.GetFileNameWithoutExtension(path),
+            "(?<![a-z])(area|line)(?![a-z])", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        return !m.Success ? null : m.Value.Equals("line", StringComparison.OrdinalIgnoreCase) ? LabelKind.Line : LabelKind.Area;
+    }
+
+
 
     /// <summary>U-Net 모델 파일인지(이름 어디든 weld_unet).</summary>
     public static bool IsUnet(string path) => Contains(path, UnetTag);

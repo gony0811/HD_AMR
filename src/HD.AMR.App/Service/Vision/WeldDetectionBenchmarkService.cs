@@ -8,7 +8,7 @@ using OpenCvSharp;
 namespace HD.AMR.App.Service.Vision;
 
 /// <summary>
-/// 용접선 검출 방식 <b>일괄 비교평가</b>. 캡처 폴더에서 선 라벨(<c>{stem}_{modality}_line.json</c>)이 있는
+/// 용접선 검출 방식 <b>일괄 비교평가</b>. 데이터셋 폴더(학습+검증)에서 선 라벨(<c>{stem}_{modality}_line.json</c>)이 있는
 /// 촬영본마다 선택한 검출 방식들을 모두 돌리고, 정답 대비 각도·중심 오차(<see cref="WeldLineMetrics"/>)를
 /// 방식별로 요약한다. 검출기는 운영과 같은 인스턴스(<see cref="WeldTrackingService.GetDetector"/>)를 쓰고,
 /// 파라미터는 운영값을 복사해 모달리티만 맞춘다(운영 상태는 건드리지 않음).
@@ -32,18 +32,22 @@ public sealed class WeldDetectionBenchmarkService
     public bool IsRunning => Volatile.Read(ref _running) == 1;
     public BenchmarkReport? LastReport { get; private set; }
 
-    /// <summary>선 라벨이 있는 평가 대상 stem 목록(모달리티별).</summary>
+    /// <summary>선 라벨이 있는 평가 대상 stem 목록(모달리티별). 데이터셋 폴더(학습+검증) 전체에서 찾는다.</summary>
     public async Task<List<string>> ListLabeledStemsAsync(string modality)
+        => (await ListLabeledAsync(LabelFiles.Mod(modality))).Select(x => x.Stem).ToList();
+
+    // (stem, 폴더, 검증 폴더 여부). 같은 stem 이 여러 폴더에 있으면 데이터셋 변환처럼 먼저 나온 것만.
+    private async Task<List<(string Stem, string Dir, bool IsVal)>> ListLabeledAsync(string modality)
     {
-        modality = modality == "ir" ? "ir" : "rgb";
-        var paths = await _train.GetPathsAsync();
-        if (paths is null || !Directory.Exists(paths.CaptureDir)) return new();
-        var suffix = $"_{modality}_line.json";
-        return Directory.GetFiles(paths.CaptureDir, "*" + suffix)
-            .Select(f => Path.GetFileName(f)[..^suffix.Length])
-            .Where(stem => File.Exists(Path.Combine(paths.CaptureDir, $"{stem}_{modality}.png")))
-            .OrderBy(s => s, StringComparer.Ordinal)
-            .ToList();
+        var src = await _train.GetDatasetSourcesAsync();
+        var dirs = src.TrainDirs.Where(d => !LabelFiles.SameDir(d, src.ValDir)).Select(d => (d, false)).ToList();
+        if (src.ValDir is not null) dirs.Add((src.ValDir, true));
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var list = new List<(string, string, bool)>();
+        foreach (var (dir, isVal) in dirs)
+            foreach (var stem in LabelFiles.LabeledStems(dir, modality, LabelKind.Line))
+                if (seen.Add(stem)) list.Add((stem, dir, isVal));
+        return list;
     }
 
     public async Task<BenchmarkReport> RunAsync(BenchmarkOptions opt, IProgress<(int Done, int Total)>? progress = null,
@@ -55,23 +59,29 @@ public sealed class WeldDetectionBenchmarkService
         {
             var modality = opt.Modality == "ir" ? "ir" : "rgb";
             var paths = await _train.GetPathsAsync() ?? throw new InvalidOperationException("캡처 저장 폴더가 설정되지 않았습니다.");
-            var stems = await ListLabeledStemsAsync(modality);
+            var labeled = await ListLabeledAsync(modality);
+            var stems = labeled;
             string? warning = null;
 
             if (opt.ValOnly)
             {
-                // 데이터셋 변환(ConvertAsync)과 같은 규칙으로 분리 → 학습에 안 쓴 촬영본만 평가.
-                var maskStems = Directory.GetFiles(paths.CaptureDir, $"*_{modality}_maskdraft.png")
-                    .Select(f => Path.GetFileName(f)[..^$"_{modality}_maskdraft.png".Length]);
-                var split = DatasetSplitter.Split(maskStems);
-                var val = split.Val.ToHashSet();
-                var filtered = stems.Where(val.Contains).ToList();
+                // 데이터셋 변환(ConvertAsync)과 같은 규칙 — 검증 폴더가 있으면 그 폴더, 없으면 세션 단위 분리의 val.
+                List<(string Stem, string Dir, bool IsVal)> filtered;
+                bool single = false;
+                if (labeled.Any(x => x.IsVal)) filtered = labeled.Where(x => x.IsVal).ToList();
+                else
+                {
+                    var split = DatasetSplitter.Split(labeled.Select(x => x.Stem));
+                    var val = split.Val.ToHashSet();
+                    filtered = labeled.Where(x => val.Contains(x.Stem)).ToList();
+                    single = split.SingleSession;
+                }
                 if (filtered.Count == 0)
                     warning = "검증셋(val)에 선 라벨이 있는 촬영본이 없어 전체로 평가했습니다.";
                 else
                 {
                     stems = filtered;
-                    if (split.SingleSession) warning = "촬영 세션이 1개뿐이라 val 이 학습셋과 같은 자리 영상입니다 — 점수가 낙관적일 수 있습니다.";
+                    if (single) warning = "촬영 세션이 1개뿐이라 val 이 학습셋과 같은 자리 영상입니다 — 점수가 낙관적일 수 있습니다.";
                 }
             }
             if (stems.Count == 0)
@@ -91,11 +101,11 @@ public sealed class WeldDetectionBenchmarkService
 
             await Task.Run(() =>
             {
-                foreach (var stem in stems)
+                foreach (var (stem, dir, _) in stems)
                 {
                     ct.ThrowIfCancellationRequested();
-                    var imgPath = Path.Combine(paths.CaptureDir, $"{stem}_{modality}.png");
-                    var gt = WeldLineLabel.FromJson(File.ReadAllText(Path.Combine(paths.CaptureDir, $"{stem}_{modality}_line.json")));
+                    var imgPath = Path.Combine(dir, LabelFiles.ImageName(stem, modality));
+                    var gt = WeldLineLabel.FromJson(File.ReadAllText(Path.Combine(dir, LabelFiles.LineName(stem, modality))));
                     var bytes = File.ReadAllBytes(imgPath);
 
                     foreach (var m in methods)
@@ -163,8 +173,10 @@ public sealed class WeldDetectionBenchmarkService
             using var m = Cv2.ImDecode(img, ImreadModes.Color);
             if (m.Empty()) return img;
             double sx = m.Width / (double)gt.Width, sy = m.Height / (double)gt.Height;
-            var pts = gt.Points.Select(p => new Point((int)Math.Round(p[0] * sx), (int)Math.Round(p[1] * sy))).ToArray();
-            Cv2.Polylines(m, new[] { pts }, false, new Scalar(0, 255, 0), 2, LineTypes.AntiAlias);
+            var segs = gt.Segments().Where(s => s.Count >= 2)
+                .Select(s => s.Select(p => new Point((int)Math.Round(p[0] * sx), (int)Math.Round(p[1] * sy))).ToArray()).ToArray();
+            Cv2.Polylines(m, segs, false, new Scalar(0, 255, 0), 2, LineTypes.AntiAlias);   // 끊긴 곳은 잇지 않는다
+            var pts = segs[0];
             Cv2.PutText(m, "GT", new Point(pts[0].X + 4, Math.Max(12, pts[0].Y - 6)),
                 HersheyFonts.HersheySimplex, 0.45, new Scalar(0, 255, 0), 1, LineTypes.AntiAlias);
             Cv2.ImEncode(".jpg", m, out var buf, new[] { (int)ImwriteFlags.JpegQuality, 80 });

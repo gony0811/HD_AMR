@@ -69,13 +69,23 @@ public static class WeldLineMetrics
         return best;
     }
 
+    /// <summary>점에서 선 라벨까지 최소 거리. 끊긴 구간(<see cref="WeldLineLabel.Breaks"/>)은 선으로 보지 않는다.</summary>
+    public static double DistToLabel(double x, double y, WeldLineLabel gt)
+    {
+        double best = double.PositiveInfinity;
+        foreach (var (a, b) in gt.Edges())
+            best = Math.Min(best, DistToPolyline(x, y, new[] { a, b }));
+        return best;
+    }
+
     /// <summary>
     /// 정답 대비 검출 결과 오차. 검출 실패·중심선 2점 미만이면 <see cref="LineErrors.Detected"/>=false.
     /// </summary>
     public static LineErrors Compare(WeldLineLabel gt, IReadOnlyList<PixelPoint> centerline, bool horizontal,
         double angleTolDeg = DefaultAngleTolDeg, double centerTolPx = DefaultCenterTolPx)
     {
-        var gtFit = FitLine(Densify(gt.Points));
+        var gtDense = gt.Segments().Where(s => s.Count >= 2).SelectMany(Densify).ToList();
+        var gtFit = FitLine(gtDense);
         var det = centerline.Select(p => (p.X, p.Y)).ToList();
         var detFit = FitLine(det);
         if (gtFit is null || detFit is null) return LineErrors.Missed;
@@ -84,22 +94,26 @@ public static class WeldLineMetrics
         double angle = AngleBetweenDeg((g.Dx, g.Dy), (d.Dx, d.Dy));
         double center = (horizontal ? gt.Width : gt.Height) / 2.0;
         double offset = Math.Abs(CrossAt(d, center, horizontal) - CrossAt(g, center, horizontal));
-        double mean = det.Average(p => DistToPolyline(p.X, p.Y, gt.Points));
+        double mean = det.Average(p => DistToLabel(p.X, p.Y, gt));
 
-        // 커버리지: 정답 진행축 구간 [lo,hi] 을 1px 칸으로 나눠, 정답에서 ±(두께) 안의 검출 점이 있는 칸 비율.
-        double lo = gt.Points.Min(p => horizontal ? p[0] : p[1]);
-        double hi = gt.Points.Max(p => horizontal ? p[0] : p[1]);
+        // 커버리지: 정답 진행축 구간 [lo,hi] 을 1px 칸으로 나눠, 정답 선이 지나는 칸 중
+        // 정답에서 ±(두께) 안의 검출 점이 있는 칸 비율. 끊긴 구간(정답 선이 없는 칸)은 분모에서 뺀다.
+        double lo = gtDense.Min(p => horizontal ? p.X : p.Y);
+        double hi = gtDense.Max(p => horizontal ? p.X : p.Y);
         int bins = Math.Max(1, (int)Math.Ceiling(hi - lo));
+        var hasGt = new bool[bins];
+        foreach (var (x, y) in gtDense) hasGt[Math.Clamp((int)((horizontal ? x : y) - lo), 0, bins - 1)] = true;
         var hit = new bool[bins];
         double tol = Math.Max(gt.Thickness, 3);
         foreach (var (x, y) in det)
         {
             double pr = horizontal ? x : y;
             if (pr < lo || pr > hi) continue;
-            if (DistToPolyline(x, y, gt.Points) > tol) continue;
+            if (DistToLabel(x, y, gt) > tol) continue;
             hit[Math.Min(bins - 1, (int)(pr - lo))] = true;
         }
-        double coverage = hit.Count(h => h) / (double)bins;
+        int gtBins = hasGt.Count(h => h);
+        double coverage = gtBins == 0 ? 0 : Enumerable.Range(0, bins).Count(i => hit[i] && hasGt[i]) / (double)gtBins;
 
         bool pass = !double.IsNaN(offset) && angle <= angleTolDeg && offset <= centerTolPx;
         return new LineErrors(true, angle, double.IsNaN(offset) ? double.PositiveInfinity : offset, mean, coverage, pass);

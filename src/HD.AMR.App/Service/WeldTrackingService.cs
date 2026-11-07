@@ -83,7 +83,7 @@ public class WeldTrackingService
 
         ParameterService.Changed += OnParameterChanged;
         _ = ReloadRoiAsync();
-        _ = ReloadDlThresholdsAsync();
+        _ = ReloadDlThresholdsAsync(seedMissing: true);
         _ = ReloadModeThenDetectionAsync();
     }
 
@@ -104,9 +104,13 @@ public class WeldTrackingService
     /// <summary>DL 마스크 확률 임계값 파라미터. 없으면 <see cref="WeldDetectionParams.DlMaskThreshold"/> 기본값.</summary>
     public const string DlMaskThresholdKey = "Weld.Dl.MaskThreshold";
 
+    /// <summary>U-Net 비드 확률 임계값 파라미터. 없으면 <see cref="WeldDetectionParams.UnetThreshold"/> 기본값.</summary>
+    public const string UnetThresholdKey = "Weld.Unet.Threshold";
+
     // 조정 범위 — 이 밖의 값은 검출이 사실상 전부/전무가 되므로 저장·로드 모두 이 범위로 자른다.
     public const double DlConfidenceMin = 0.05, DlConfidenceMax = 0.90;
     public const double DlMaskThresholdMin = 0.30, DlMaskThresholdMax = 0.70;
+    public const double UnetThresholdMin = 0.05, UnetThresholdMax = 0.95;
 
     // ── 상태(UI 가 읽음) ────────────────────────────────────────────
     /// <summary>비드 검출 방식. 기본 DL(학습 모델). 파라미터(고전 CV)는 폴백/비교용으로 유지.
@@ -248,7 +252,7 @@ public class WeldTrackingService
             _ = ReloadRoiAsync();
         else if (WeldDetectionSettingsStore.IsKey(name))
             _ = ReloadDetectionSettingsAsync(name);
-        else if (name is DlConfidenceKey or DlMaskThresholdKey)
+        else if (name is DlConfidenceKey or DlMaskThresholdKey or UnetThresholdKey)
             _ = ReloadDlThresholdsAsync();
         else if (name == ImageModeKey)
             _ = ReloadModeAsync();
@@ -487,7 +491,46 @@ public class WeldTrackingService
         }
     }
 
-    private async Task ReloadDlThresholdsAsync()
+    /// <summary>U-Net 확률 임계값 설정 + 파라미터 저장(범위 밖 값은 자름). 운영 U-Net 검출이 바로 이 값을 쓴다.</summary>
+    public void SetUnetThreshold(double threshold)
+    {
+        threshold = Math.Round(Math.Clamp(threshold, UnetThresholdMin, UnetThresholdMax), 2);
+        if (Params.UnetThreshold == threshold) return;
+        Params.UnetThreshold = threshold;
+        _ = PersistUnetThresholdAsync(threshold);
+    }
+
+    /// <summary>화면이 <see cref="WeldDetectionParams.UnetThreshold"/> 를 직접 바꾼 뒤 호출 — 현재 값을 파라미터로 저장.</summary>
+    public void SaveUnetThreshold() => _ = PersistUnetThresholdAsync(Params.UnetThreshold);
+
+    private async Task PersistUnetThresholdAsync(double threshold)
+    {
+        await _persistGate.WaitAsync();
+        Interlocked.Increment(ref _selfWrites);
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var param = scope.ServiceProvider.GetRequiredService<ParameterService>();
+            await param.SetDoubleAsync(UnetThresholdKey, threshold, "U-Net 비드 확률 임계값");
+            _logger.LogInformation("용접 추적 U-Net 임계값 저장: {Thr:0.00}", threshold);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "용접 추적 U-Net 임계값 저장 실패");
+            Message = $"U-Net 임계값 저장 실패: {ex.Message}";
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _selfWrites);
+            _persistGate.Release();
+        }
+    }
+
+    /// <param name="seedMissing">
+    /// true(기동 시)면 DB 에 없는 임계값 파라미터를 현재 기본값으로 만들어 둔다 — 화면에서 한 번도 바꾸지 않아도
+    /// Parameter 화면에서 보이고 고칠 수 있게.
+    /// </param>
+    private async Task ReloadDlThresholdsAsync(bool seedMissing = false)
     {
         try
         {
@@ -495,8 +538,20 @@ public class WeldTrackingService
             var param = scope.ServiceProvider.GetRequiredService<ParameterService>();
             if (await param.GetDoubleAsync(DlConfidenceKey) is { } conf)
                 Params.DlConfidence = Math.Clamp(conf, DlConfidenceMin, DlConfidenceMax);
+            else if (seedMissing) await SeedAsync(DlConfidenceKey, Params.DlConfidence, "DL 비드 검출 confidence 임계값");
             if (await param.GetDoubleAsync(DlMaskThresholdKey) is { } mask)
                 Params.DlMaskThreshold = Math.Clamp(mask, DlMaskThresholdMin, DlMaskThresholdMax);
+            else if (seedMissing) await SeedAsync(DlMaskThresholdKey, Params.DlMaskThreshold, "DL 비드 마스크 확률 임계값");
+            if (await param.GetDoubleAsync(UnetThresholdKey) is { } ut)
+                Params.UnetThreshold = Math.Clamp(ut, UnetThresholdMin, UnetThresholdMax);
+            else if (seedMissing) await SeedAsync(UnetThresholdKey, Params.UnetThreshold, "U-Net 비드 확률 임계값");
+
+            async Task SeedAsync(string key, double value, string desc)
+            {
+                Interlocked.Increment(ref _selfWrites);
+                try { await param.SetDoubleAsync(key, value, desc); }
+                finally { Interlocked.Decrement(ref _selfWrites); }
+            }
         }
         catch (Exception ex)
         {

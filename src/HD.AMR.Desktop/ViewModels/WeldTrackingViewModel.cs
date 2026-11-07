@@ -111,6 +111,21 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
         }
     }
 
+    /// <summary>U-Net 비드 확률 임계값 — 설정 시 파라미터(Weld.Unet.Threshold) 저장, 시퀀스도 같은 값을 쓴다.</summary>
+    public double UnetThreshold
+    {
+        get => _svc.Params.UnetThreshold;
+        set
+        {
+            _svc.SetUnetThreshold(value);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(UnetThresholdText));
+        }
+    }
+    public string UnetThresholdText => $"확률 {_svc.Params.UnetThreshold:0.00}";
+    public double UnetThresholdMin => WeldTrackingService.UnetThresholdMin;
+    public double UnetThresholdMax => WeldTrackingService.UnetThresholdMax;
+
     public string DlConfidenceText => $"conf {_svc.Params.DlConfidence:0.00}";
     public string DlMaskThresholdText => $"mask {_svc.Params.DlMaskThreshold:0.00}";
     public double DlConfidenceMin => WeldTrackingService.DlConfidenceMin;
@@ -196,6 +211,8 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
         OnPropertyChanged(nameof(DlMaskThreshold));
         OnPropertyChanged(nameof(DlConfidenceText));
         OnPropertyChanged(nameof(DlMaskThresholdText));
+        OnPropertyChanged(nameof(UnetThreshold));
+        OnPropertyChanged(nameof(UnetThresholdText));
         OnPropertyChanged(nameof(WeldRoiText));
         OnPropertyChanged(nameof(PeakRoiText));
         OnPropertyChanged(nameof(WeldRoi));
@@ -246,6 +263,7 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
         var method = value switch { 1 => WeldDetectionMethod.Param, 2 => WeldDetectionMethod.Ridge, 3 => WeldDetectionMethod.Unet, _ => WeldDetectionMethod.Dl };
         OnPropertyChanged(nameof(IsRidge));
         OnPropertyChanged(nameof(IsDl));
+        OnPropertyChanged(nameof(IsUnet));
         OnPropertyChanged(nameof(IsModelMethod));
         OnPropertyChanged(nameof(ModelLabel));
         if (_svc.Method == method) { RefreshStatus(); _ = LoadDlModelsAsync(); return; }
@@ -307,7 +325,8 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
                     (string.Equals(o.Path, current, StringComparison.OrdinalIgnoreCase) ||
                      (!System.IO.Path.IsPathFullyQualified(current) &&
                       string.Equals(System.IO.Path.GetFileName(o.Path), current, StringComparison.OrdinalIgnoreCase))));
-            if (match is null)
+            // 저장값이 비어 있으면 선택 없음 → '모델을 선택하세요'(시퀀스 비드 찾기는 '모델 없음'으로 멈춘다).
+            if (match is null && current.Length > 0)
             {
                 match = new DlModelOption(current, $"⚠ 파일 없음: {System.IO.Path.GetFileName(current)}", Exists: false);
                 DlModels.Insert(0, match);

@@ -29,11 +29,11 @@ else
                     style="font-family:monospace;font-size:.8rem">
                 @foreach (var e in _entries)
                 {
-                    var mark = (e.RgbMask || e.IrMask) ? "✓ " : "· ";
+                    var mark = (e.RgbArea || e.IrArea) ? "✓ " : "· ";
                     <option value="@e.Stem" selected="@(e.Stem == _selectedStem)">@mark@e.Stem</option>
                 }
             </select>
-            <div class="text-muted mt-1" style="font-size:.75rem">✓ = 마스크 있음</div>
+            <div class="text-muted mt-1" style="font-size:.75rem">✓ = 면 라벨 있음</div>
         </div>
 
         @* 우: 에디터 *@
@@ -78,7 +78,7 @@ else
                             style="position:absolute; left:0; top:0; width:100%; height:100%; cursor:crosshair; touch-action:none"></canvas>
                 </div>
                 <div class="text-muted mt-1" style="font-size:.8rem">
-                    비드를 빨갛게 칠하세요. 저장하면 <code>@(_selectedStem)_@(_modality)_maskdraft.png</code> 로 덮어씁니다(흑백 이진 마스크).
+                    비드를 빨갛게 칠하세요. 저장하면 <code>@(_selectedStem)_@(_modality)_area.png</code> (면 라벨) 로 덮어씁니다. 선 라벨은 Desktop 앱에서 편집하세요.
                 </div>
             }
         </div>
@@ -166,7 +166,7 @@ else
         try
         {
             var imgUrl = $"/camera/label/image?v={_cacheBust}&name={_selectedStem}_{_modality}.png";
-            var maskUrl = $"/camera/label/image?v={_cacheBust}&name={_selectedStem}_{_modality}_maskdraft.png";
+            var maskUrl = $"/camera/label/image?v={_cacheBust}&name={_selectedStem}_{_modality}_area.png";
             await JS.InvokeVoidAsync("hdAmrLabel.open", _baseImg, _maskCanvas, imgUrl, maskUrl);
             await JS.InvokeVoidAsync("hdAmrLabel.setBrush", _brushMode, _radius);
         }
@@ -193,7 +193,7 @@ else
 
     private async Task ReloadDraft()
     {
-        var maskUrl = $"/camera/label/image?v={_cacheBust}&name={_selectedStem}_{_modality}_maskdraft.png";
+        var maskUrl = $"/camera/label/image?v={_cacheBust}&name={_selectedStem}_{_modality}_area.png";
         try { await JS.InvokeVoidAsync("hdAmrLabel.reload", maskUrl); }
         catch { }
     }
@@ -208,7 +208,7 @@ else
             var b64 = await JS.InvokeAsync<string>("hdAmrLabel.exportPng");
             if (string.IsNullOrEmpty(b64)) { Notify("마스크를 읽지 못했습니다.", true); return; }
             var bytes = Convert.FromBase64String(b64);
-            var name = await Lbl.SaveMaskAsync(_selectedStem, _modality, bytes);
+            var name = await Lbl.SaveAreaAsync(_selectedStem, _modality, bytes);
             _cacheBust++;
             await RefreshList();
             Notify($"저장 완료: {name}", false);

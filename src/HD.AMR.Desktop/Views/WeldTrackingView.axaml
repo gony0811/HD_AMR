@@ -152,6 +152,12 @@
                                         TickFrequency="0.05" IsSnapToTickEnabled="True" />
                             </StackPanel>
                         </Grid>
+                        <!-- U-Net 임계값 — U-Net 방식에서만 쓰인다(픽셀 비드 확률 기준). 바꾸면 파라미터(Weld.Unet.Threshold)에 저장되고 시퀀스도 같은 값을 쓴다. -->
+                        <StackPanel IsVisible="{Binding IsUnet}">
+                            <TextBlock Classes="axis" Text="{Binding UnetThresholdText}" />
+                            <Slider Value="{Binding UnetThreshold}" Minimum="{Binding UnetThresholdMin}" Maximum="{Binding UnetThresholdMax}"
+                                    TickFrequency="0.05" IsSnapToTickEnabled="True" />
+                        </StackPanel>
                         <StackPanel Orientation="Horizontal" Spacing="6">
                             <Button Content="1회 검출(Peak)" Classes="accent" Command="{Binding FindPeakCommand}" IsEnabled="{Binding !Busy}" />
                             <Button Content="#1 캡처" Command="{Binding CaptureCommand}" CommandParameter="1" IsEnabled="{Binding DetectorAvailable}" />
