@@ -506,9 +506,9 @@ public partial class BeadManualLabelWindow : Window
             _busy = true; UpdatePreview();
             try
             {
-                var r = await _svc.SaveAsync(_snap, _mod, pts);
-                ResultText.Text = $"RGB 라벨 저장: {r.Stem}_rgb_line.json · _maskdraft.png (캘리브레이션 없음 — d 계산·IR 변환 생략)";
-                ResultText.Foreground = GoodBrush;
+                await _svc.SaveAsync(_snap, _mod, pts);
+                Close();   // 저장 성공 → 바로 닫는다(라벨링 시간 최소화)
+                return;
             }
             catch (Exception ex)
             {
@@ -535,13 +535,9 @@ public partial class BeadManualLabelWindow : Window
             _busy = true; UpdatePreview();
             try
             {
-                var r = await _svc.SaveAsync(_snap, _mod, pts);
-                text += _snap.Frames.SavedPath is null
-                    ? $"\n학습 데이터 저장: {r.Stem}_{_mod} (프레임 + 선 라벨 + 마스크)"
-                    : $"\n라벨 저장(덮어쓰기): {r.Stem}_{_mod}_line.json · _maskdraft.png";
-                text += r.Transferred is { } t
-                    ? $"\n{t.ToUpperInvariant()} 라벨도 깊이·캘리브레이션으로 변환해 저장했습니다 ({r.Stem}_{t}_line.json)."
-                    : r.TransferNote is { } n ? $"\n반대 영상 라벨: {n}" : "";
+                await _svc.SaveAsync(_snap, _mod, pts);
+                Close();   // 저장 성공 → 바로 닫는다(라벨링 시간 최소화). 저장 안 함(체크 해제)이면 결과를 보여주고 남는다.
+                return;
             }
             catch (Exception ex)
             {
