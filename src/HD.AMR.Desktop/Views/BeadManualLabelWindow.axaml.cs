@@ -164,7 +164,8 @@ public partial class BeadManualLabelWindow : Window
         _view = view;
         bool hasRgb = view.ColorGuide is not null && view.ColorPng is not null;
         RgbRadio.IsEnabled = hasRgb;
-        ToolTip.SetTip(RgbRadio, hasRgb ? null : "컬러 영상 또는 Depth↔컬러 캘리브레이션이 없어 RGB 입력을 쓸 수 없습니다.");
+        ToolTip.SetTip(RgbRadio, !hasRgb ? "컬러 영상이 없어 RGB 입력을 쓸 수 없습니다."
+            : view.ColorGuide is { Calibrated: false } ? "캘리브레이션 없음 — RGB 는 라벨 그리기·저장만 가능(안내선·d 계산 없음)." : null);
         var mod = preferMod == "rgb" && hasRgb ? "rgb" : "ir";
         // 같은 모드면 IsCheckedChanged 가 오지 않으므로 직접 다시 그린다.
         if (mod == "rgb" && RgbRadio.IsChecked == true || mod == "ir" && IrRadio.IsChecked == true) ShowModality(mod);
@@ -192,6 +193,14 @@ public partial class BeadManualLabelWindow : Window
     {
         var list = new List<CanvasGuideLine>();
         if (g is null) return list;
+        if (!g.Calibrated)
+        {
+            // 캘리브레이션 없는 컬러: IR 안내선을 옮길 수 없어 자동 검출 선만 그린다.
+            if (g.AutoLine is { Count: >= 2 } a)
+                for (int i = 0; i + 1 < a.Count; i++)
+                    list.Add(new(new Point(a[i].X, a[i].Y), new Point(a[i + 1].X, a[i + 1].Y), AutoBrush, 1.5, Dashed: true));
+            return list;
+        }
         Point Pc(double prog, double cross) => g.Horizontal ? new Point(prog, cross) : new Point(cross, prog);
         int len = g.Horizontal ? g.Width : g.Height, crossLen = g.Horizontal ? g.Height : g.Width;
 
@@ -246,10 +255,19 @@ public partial class BeadManualLabelWindow : Window
         var g = Guide;
         var pts = CurrentPoints();
         var guides = new List<CanvasGuideLine>(_baseGuides);
-        double? cross = g is null ? null : ManualBeadGeometry.CrossAt(pts, g.Horizontal, g.ProgressPos);
+        double? cross = g is not { Calibrated: true } ? null : ManualBeadGeometry.CrossAt(pts, g.Horizontal, g.ProgressPos);
 
         if (g is null)
             PreviewText.Text = "";
+        else if (!g.Calibrated)
+        {
+            PreviewText.Text = "RGB 캘리브레이션 없음 — Peak·기준선 안내와 d 계산 없이 비드선 라벨만 그릴 수 있습니다"
+                + (_test ? " ('학습 데이터로 저장'을 체크하고 확정하면 RGB 라벨만 저장, IR 변환은 안 됨)."
+                         : ". 시퀀스 측정에는 IR 영상을 쓰세요.");
+            BeadCanvas.Guides = guides;
+            ConfirmBtn.IsEnabled = _test && pts.Count >= 2 && !_busy;
+            return;
+        }
         else if (pts.Count < 2)
             PreviewText.Text = (g.AutoLine is { Count: >= 2 } ? "자동 검출 선이 있습니다(하늘색 점선) — '자동 검출 선 불러오기'로 고쳐 쓸 수 있습니다. " : "")
                 + "비드 중심선 위의 점을 2개 이상 찍으세요." + (g.PeakFound ? "" : " (Peak 미발견 — Bead ROI 중앙 위치에서 잽니다)");
@@ -277,7 +295,7 @@ public partial class BeadManualLabelWindow : Window
     private void ConfirmSequence()
     {
         var pts = CurrentPoints();
-        if (Guide is not { } g || ManualBeadGeometry.CrossAt(pts, g.Horizontal, g.ProgressPos) is null) return;
+        if (Guide is not { Calibrated: true } g || ManualBeadGeometry.CrossAt(pts, g.Horizontal, g.ProgressPos) is null) return;
         Answer(new ManualBeadAnswer(ManualBeadDecision.Manual, _mod, pts));
     }
 
@@ -474,6 +492,30 @@ public partial class BeadManualLabelWindow : Window
     {
         if (_svc is null || _snap is null) return;
         var pts = CurrentPoints();
+        if (Guide is { Calibrated: false })
+        {
+            // 캘리브레이션 없는 RGB: d 는 못 재고 라벨만 저장한다.
+            if (SaveCheck.IsChecked != true)
+            {
+                ResultText.Text = "캘리브레이션이 없어 d 를 계산할 수 없습니다 — '확정 시 학습 데이터로 저장'을 체크하면 RGB 라벨만 저장합니다.";
+                ResultText.Foreground = HitBrush;
+                return;
+            }
+            _busy = true; UpdatePreview();
+            try
+            {
+                var r = await _svc.SaveAsync(_snap, _mod, pts);
+                ResultText.Text = $"RGB 라벨 저장: {r.Stem}_rgb_line.json · _maskdraft.png (캘리브레이션 없음 — d 계산·IR 변환 생략)";
+                ResultText.Foreground = GoodBrush;
+            }
+            catch (Exception ex)
+            {
+                ResultText.Text = $"저장 실패: {ex.Message}";
+                ResultText.Foreground = HitBrush;
+            }
+            finally { _busy = false; UpdatePreview(); }
+            return;
+        }
         if (_svc.Evaluate(_snap, _mod, pts) is not { } ev)
         {
             ResultText.Text = "d 를 계산할 수 없습니다 — 선을 진행 방향으로 더 길게 그리세요.";

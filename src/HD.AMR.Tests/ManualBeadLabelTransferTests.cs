@@ -133,4 +133,21 @@ public class ManualBeadLabelTransferTests
         Assert.False(WeldLineLabel.FromJson(human.ToJson())!.IsTransferred);
         Assert.True(WeldLineLabel.FromJson(moved.ToJson())!.IsTransferred);
     }
+
+    [Fact]
+    public void 캘리브레이션_없는_컬러_안내는_라벨_전용이고_IR로_옮기지_않는다()
+    {
+        var g = ManualBeadGuide.LabelOnly("rgb", CW, CH, horizontal: true, autoLine: null);
+        var s = Snapshot(0);
+        var noCalib = new ManualBeadSnapshot
+        {
+            Frames = s.Frames with { D2C = null },
+            Ir = s.Ir, Depth = s.Depth, Color = s.Color, ProjectionZ = 300, ColorGuide = g,
+        };
+
+        Assert.False(g.Calibrated);
+        Assert.Null(g.PeakRoi);
+        Assert.Equal((CW, CH), (g.Width, g.Height));
+        Assert.Null(ManualBeadLabelTransfer.Transfer(noCalib, "rgb", new[] { new PixelPoint(10, 10), new PixelPoint(900, 500) }));
+    }
 }

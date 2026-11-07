@@ -1141,6 +1141,16 @@ public class WeldTrackingService
                 catch (Exception ex) { _logger.LogWarning(ex, "수동 비드 입력: 컬러 PNG 인코딩 실패 — IR 만 제공"); colorPng = null; }
             }
         }
+        if (colorGuide is null && color is not null)
+        {
+            // 캘리브레이션이 없거나 투영이 안 되면 IR 안내선을 컬러로 옮길 수 없다 — 컬러 영상만 보여주고 라벨 그리기·저장만 허용.
+            try
+            {
+                colorPng = CameraService.EncodeColorPng(color);
+                colorGuide = ManualBeadGuide.LabelOnly("rgb", color.Width, color.Height, horiz, autoMod == "rgb" ? autoLine : null);
+            }
+            catch (Exception ex) { _logger.LogWarning(ex, "수동 비드 입력: 컬러 PNG 인코딩 실패 — IR 만 제공"); colorPng = null; }
+        }
 
         return new ManualBeadSnapshot
         {
@@ -1174,7 +1184,7 @@ public class WeldTrackingService
     {
         bool rgb = modality == "rgb";
         var guide = rgb ? s.ColorGuide : s.IrGuide;
-        if (guide is null) return null;
+        if (guide is not { Calibrated: true }) return null;   // 캘리브레이션 없는 컬러 = 라벨 전용, d 없음
         if (ManualBeadGeometry.CrossAt(points, s.Horizontal, guide.ProgressPos) is not { } cross) return null;
 
         double dModality = cross - guide.RefCross;

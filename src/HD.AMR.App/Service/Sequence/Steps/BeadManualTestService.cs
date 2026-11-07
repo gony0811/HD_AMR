@@ -198,7 +198,7 @@ public sealed class BeadManualTestService
             var d2c = fileD2c ?? (live is { IsValid: true } ? live : _camera.GetLastKnownD2CParams());
             string calibSrc = color is null ? "" : fileD2c is not null ? " · 캘리브레이션: 촬영본"
                 : live is { IsValid: true } ? " · 캘리브레이션: 연결된 카메라"
-                : d2c is not null ? " · 캘리브레이션: 마지막 보관값" : " · 캘리브레이션 없음(RGB 사용 불가)";
+                : d2c is not null ? " · 캘리브레이션: 마지막 보관값" : " · 캘리브레이션 없음(RGB 는 라벨만)";
             return new ManualBeadFrames(ir, depth, color, d2c, $"파일 {stem}{calibSrc}", new ManualBeadSavedRef(dir, stem));
         }, ct);
 

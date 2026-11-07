@@ -107,7 +107,15 @@ public sealed record ManualBeadGuide(
     double? PeakCrossEnd,
     RoiRect? BeadRoi,
     RoiRect? PeakRoi,
-    IReadOnlyList<PixelPoint>? AutoLine);
+    IReadOnlyList<PixelPoint>? AutoLine,
+    bool Calibrated = true)
+{
+    /// <summary>캘리브레이션 없는 컬러 영상용 — 안내선(Peak·기준선·ROI)과 d 계산 없이 라벨만 그린다.</summary>
+    public static ManualBeadGuide LabelOnly(string modality, int width, int height, bool horizontal,
+        IReadOnlyList<PixelPoint>? autoLine)
+        => new(modality, width, height, horizontal, (horizontal ? width : height) / 2.0, (horizontal ? height : width) / 2.0,
+            false, null, null, null, null, autoLine, Calibrated: false);
+}
 
 /// <summary>UI 에 보내는 수동 비드 입력 요청.</summary>
 public sealed class ManualBeadRequest
