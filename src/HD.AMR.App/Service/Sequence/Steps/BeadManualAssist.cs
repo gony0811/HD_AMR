@@ -174,8 +174,8 @@ public sealed class BeadManualAssist
         try
         {
             if (await _labels.GetDirAsync() is null) return "캡처 폴더 미설정 — 학습 데이터 저장 생략";
-            var stem = await ManualBeadLabelWriter.SaveAsync(_camera, _labels, s, modality, points, $"seqP{s.PeakId}", ct);
-            return $"학습 데이터 저장 {stem}_{modality}";
+            var r = await ManualBeadLabelWriter.SaveAsync(_camera, _labels, s, modality, points, $"seqP{s.PeakId}", ct);
+            return $"학습 데이터 저장 {r.Summary}";
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)

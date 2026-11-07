@@ -23,6 +23,15 @@ public sealed class WeldLineLabel
     /// <summary>중심선 폴리라인 점들 [x, y]. 2점 이상이어야 유효.</summary>
     public List<double[]> Points { get; set; } = new();
 
+    /// <summary>라벨 출처 — null = 사람이 직접 그림, "transfer:ir"/"transfer:rgb" = 반대 영상 라벨을 깊이·캘리브레이션으로
+    /// 옮긴 것. 옮긴 라벨은 사람이 그린 라벨을 덮어쓰지 않는다.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Origin { get; set; }
+
+    /// <summary>반대 영상에서 옮겨 만든 라벨인지.</summary>
+    [JsonIgnore]
+    public bool IsTransferred => Origin?.StartsWith("transfer", StringComparison.Ordinal) == true;
+
     [JsonIgnore]
     public bool IsValid => Width > 0 && Height > 0 && Points.Count >= 2 && Points.All(p => p is { Length: 2 });
 

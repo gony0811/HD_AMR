@@ -43,8 +43,50 @@ public class CameraService : BackgroundService
     public DateTime LastFrameAt => _client.LastFrameAt;
     public string? ConnectionType => _client.ConnectionType;
 
-    /// <summary>Depth↔Color 정합용 공장 캘리브레이션(있으면). RGB 모드 Peak 재투영에 사용.</summary>
-    public CameraD2CParams? GetD2CParams() => _client.TryGetCameraParam();
+    /// <summary>Depth↔Color 정합용 공장 캘리브레이션(있으면). RGB 모드 Peak 재투영에 사용.
+    /// 읽히면 마지막 값으로 보관한다(<see cref="GetLastKnownD2CParams"/>).</summary>
+    public CameraD2CParams? GetD2CParams()
+    {
+        var p = _client.TryGetCameraParam();
+        if (p is { IsValid: true }) RememberD2C(p);
+        return p;
+    }
+
+    private readonly object _lastD2CLock = new();
+    private CameraD2CParams? _lastD2C;
+    private bool _lastD2CLoaded;
+
+    /// <summary>마지막으로 연결됐던 카메라의 캘리브레이션 보관 파일 — 카메라 없이 옛 촬영본을 열 때 쓴다.</summary>
+    public static string LastD2CPath => Path.Combine(AppContext.BaseDirectory, "camera_d2c_last.json");
+
+    /// <summary>연결된 카메라 값, 없으면 마지막으로 보관한 값(파일). 둘 다 없으면 null.</summary>
+    public CameraD2CParams? GetLastKnownD2CParams()
+    {
+        if (GetD2CParams() is { IsValid: true } live) return live;
+        lock (_lastD2CLock)
+        {
+            if (!_lastD2CLoaded)
+            {
+                _lastD2C ??= CameraD2CFile.TryLoad(LastD2CPath);
+                _lastD2CLoaded = true;
+            }
+            return _lastD2C;
+        }
+    }
+
+    private void RememberD2C(CameraD2CParams p)
+    {
+        lock (_lastD2CLock)
+        {
+            if (_lastD2C is not null && _lastD2C.Rot.SequenceEqual(p.Rot) && _lastD2C.Trans.SequenceEqual(p.Trans)
+                && _lastD2C with { Rot = p.Rot, Trans = p.Trans } == p)
+                return;
+            _lastD2C = p;
+            _lastD2CLoaded = true;
+            try { CameraD2CFile.Save(LastD2CPath, p); }
+            catch (Exception ex) { _logger.LogWarning(ex, "카메라 캘리브레이션 보관 파일 저장 실패: {Path}", LastD2CPath); }
+        }
+    }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -417,7 +459,7 @@ public class CameraService : BackgroundService
             throw new ArgumentException("저장 폴더 경로를 입력하세요.", nameof(dir));
 
         // 호출 시점의 최신 프레임을 스냅샷(인코딩 중 교체돼도 일관성 유지).
-        return SaveFramesAsync(dir, _client.LatestColor, _client.LatestIr, _client.LatestDepth, tag: null, ct);
+        return SaveFramesAsync(dir, _client.LatestColor, _client.LatestIr, _client.LatestDepth, tag: null, ct: ct);
     }
 
     /// <summary>
@@ -425,9 +467,12 @@ public class CameraService : BackgroundService
     /// "사람이 본 바로 그 프레임"을 학습 데이터로 남길 때 쓴다. <paramref name="tag"/> 가 있으면
     /// stem 을 "NNN_{tag}_yyyyMMdd_HHmmss" 로 만든다(촬영 경로 식별용, 예: seqP1).
     /// </summary>
+    /// <param name="d2c">프레임과 함께 저장할 Depth↔Color 캘리브레이션 — null 이면 연결된 카메라 값. 컬러가 있으면
+    /// <c>{stem}_calib.json</c> 으로 남겨 나중에(카메라 없이도) RGB 안내선·IR↔RGB 라벨 변환에 쓴다.</param>
     public Task<CaptureResult> SaveFramesAsync(string dir, CameraFrame? color, CameraFrame? ir, CameraFrame? depth,
-        string? tag = null, CancellationToken ct = default)
+        string? tag = null, CameraD2CParams? d2c = null, CancellationToken ct = default)
     {
+        if (color is not null) d2c ??= GetD2CParams();
         if (string.IsNullOrWhiteSpace(dir))
             throw new ArgumentException("저장 폴더 경로를 입력하세요.", nameof(dir));
         if (color is null && ir is null && depth is null)
@@ -463,6 +508,11 @@ public class CameraService : BackgroundService
                 SaveDepthRawPng(depth, raw); files.Add(raw);
                 string vis = Path.Combine(dir, $"{stem}_depth_vis.png");
                 SaveDepthVisPng(depth, minMm, maxMm, vis); files.Add(vis);
+            }
+            if (color is not null && d2c is { IsValid: true })
+            {
+                string p = CameraD2CFile.PathFor(dir, stem);
+                CameraD2CFile.Save(p, d2c); files.Add(p);
             }
             return new CaptureResult(dir, stem, files);
         }, ct);

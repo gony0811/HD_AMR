@@ -15,3 +15,44 @@ public sealed record CameraD2CParams(
     /// <summary>내부 파라미터가 유효한지(초점거리 양수).</summary>
     public bool IsValid => DepthFx > 0 && ColorFx > 0 && Rot.Length == 9 && Trans.Length == 3;
 }
+
+/// <summary>
+/// <see cref="CameraD2CParams"/> JSON 파일 입출력 — 촬영본마다 <c>{stem}_calib.json</c> 으로 함께 저장해, 카메라가 없는
+/// PC 나 다른 날에도 저장본의 RGB 안내선·IR↔RGB 라벨 변환이 가능하게 한다.
+/// </summary>
+public static class CameraD2CFile
+{
+    public const string Suffix = "_calib.json";
+
+    private static readonly System.Text.Json.JsonSerializerOptions Json = new() { WriteIndented = true };
+
+    public static string PathFor(string dir, string stem) => System.IO.Path.Combine(dir, stem + Suffix);
+
+    public static string ToJson(CameraD2CParams p) => System.Text.Json.JsonSerializer.Serialize(p, Json);
+
+    /// <summary>JSON → 파라미터. 깨졌거나 유효하지 않으면 null.</summary>
+    public static CameraD2CParams? FromJson(string json)
+    {
+        try
+        {
+            var p = System.Text.Json.JsonSerializer.Deserialize<CameraD2CParams>(json);
+            return p is { Rot: not null, Trans: not null } && p.IsValid ? p : null;
+        }
+        catch (System.Text.Json.JsonException) { return null; }
+    }
+
+    /// <summary>파일에서 읽기. 없거나 깨졌으면 null.</summary>
+    public static CameraD2CParams? TryLoad(string path)
+    {
+        try { return System.IO.File.Exists(path) ? FromJson(System.IO.File.ReadAllText(path)) : null; }
+        catch (System.IO.IOException) { return null; }
+        catch (UnauthorizedAccessException) { return null; }
+    }
+
+    /// <summary>파일로 쓰기(유효한 값만). 실패는 무시하지 않고 예외로 둔다 — 호출측이 판단.</summary>
+    public static void Save(string path, CameraD2CParams p)
+    {
+        if (!p.IsValid) return;
+        System.IO.File.WriteAllText(path, ToJson(p));
+    }
+}

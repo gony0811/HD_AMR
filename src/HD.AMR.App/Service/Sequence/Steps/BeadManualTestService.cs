@@ -7,15 +7,25 @@ using SixLabors.ImageSharp.PixelFormats;
 
 namespace HD.AMR.App.Service.Sequence.Steps;
 
+/// <summary>저장 결과 — <see cref="Transferred"/> 는 반대 영상에 옮겨 저장한 라벨("ir"/"rgb"), 못 옮겼으면 null(<see cref="TransferNote"/> 사유).</summary>
+public sealed record ManualBeadSaveResult(string Stem, string Modality, string? Transferred, string? TransferNote)
+{
+    /// <summary>사용자 안내용 한 줄 요약.</summary>
+    public string Summary => Transferred is { } t
+        ? $"{Stem}_{Modality} + {t.ToUpperInvariant()} 자동 변환"
+        : $"{Stem}_{Modality}" + (TransferNote is { } n ? $" ({n})" : "");
+}
+
 /// <summary>
-/// 수동 비드선을 학습 데이터로 저장한다. 라이브 스냅샷이면 캡처 폴더에 새 촬영본(프레임 4장)을 만들고 그 위에 라벨을,
+/// 수동 비드선을 학습 데이터로 저장한다. 라이브 스냅샷이면 캡처 폴더에 새 촬영본(프레임 4장 + 캘리브레이션)을 만들고 그 위에 라벨을,
 /// 저장된 촬영본을 연 것이면 그 촬영본 옆에 라벨(<c>{stem}_{modality}_line.json</c>·<c>_maskdraft.png</c>)만 쓴다(덮어쓰기).
+/// 그린 영상의 라벨을 깊이·캘리브레이션으로 <b>반대 영상(IR↔RGB)에도 옮겨 저장</b>한다(<see cref="ManualBeadLabelTransfer"/>) —
+/// 단, 반대 영상에 사람이 그린 라벨이 이미 있으면 덮어쓰지 않는다.
 /// </summary>
 public static class ManualBeadLabelWriter
 {
-    /// <returns>저장된 stem.</returns>
     /// <exception cref="InvalidOperationException">캡처 폴더 미설정·영상 없음·선 무효.</exception>
-    public static async Task<string> SaveAsync(CameraService camera, LabelDataService labels, ManualBeadSnapshot s,
+    public static async Task<ManualBeadSaveResult> SaveAsync(CameraService camera, LabelDataService labels, ManualBeadSnapshot s,
         string modality, IReadOnlyList<PixelPoint> points, string tag, CancellationToken ct)
     {
         modality = modality == "rgb" ? "rgb" : "ir";
@@ -29,19 +39,64 @@ public static class ManualBeadLabelWriter
         if (!label.IsValid) throw new InvalidOperationException("선 라벨은 2점 이상이어야 합니다.");
         var mask = await Task.Run(() => MaskPng(label), ct);
 
+        var (other, otherNote) = BuildTransferred(s, modality, points);
+        byte[]? otherMask = other is null ? null : await Task.Run(() => MaskPng(other), ct);
+        string otherMod = modality == "ir" ? "rgb" : "ir";
+
         if (s.Frames.SavedPath is { } saved)
         {
             await File.WriteAllTextAsync(Path.Combine(saved.Dir, $"{saved.Stem}_{modality}_line.json"), label.ToJson(), ct);
             await File.WriteAllBytesAsync(Path.Combine(saved.Dir, $"{saved.Stem}_{modality}_maskdraft.png"), mask, ct);
-            return saved.Stem;
+
+            // 촬영본에 캘리브레이션이 없었으면 이번에 쓴 값을 남긴다(다음에 카메라 없이 열어도 RGB 사용 가능).
+            var calibPath = CameraD2CFile.PathFor(saved.Dir, saved.Stem);
+            if (!File.Exists(calibPath) && s.Color is not null && s.Frames.D2C is { IsValid: true } d2c)
+                CameraD2CFile.Save(calibPath, d2c);
+
+            if (other is not null)
+            {
+                var otherLine = Path.Combine(saved.Dir, $"{saved.Stem}_{otherMod}_line.json");
+                var existing = File.Exists(otherLine) ? WeldLineLabel.FromJson(await File.ReadAllTextAsync(otherLine, ct)) : null;
+                if (existing is { IsTransferred: false })
+                    return new(saved.Stem, modality, null, $"{otherMod.ToUpperInvariant()} 라벨은 사람이 그린 것이 있어 유지");
+                await File.WriteAllTextAsync(otherLine, other.ToJson(), ct);
+                await File.WriteAllBytesAsync(Path.Combine(saved.Dir, $"{saved.Stem}_{otherMod}_maskdraft.png"), otherMask!, ct);
+                return new(saved.Stem, modality, otherMod, null);
+            }
+            return new(saved.Stem, modality, null, otherNote);
         }
 
         var dir = await labels.GetDirAsync()
                   ?? throw new InvalidOperationException("캡처 폴더가 설정되지 않았습니다(Camera 페이지에서 폴더 선택).");
-        var cap = await camera.SaveFramesAsync(dir, s.Color, s.Ir, s.Depth, tag, ct);
+        var cap = await camera.SaveFramesAsync(dir, s.Color, s.Ir, s.Depth, tag, s.Frames.D2C, ct);
         await labels.SaveLineAsync(cap.Timestamp, modality, label);
         await labels.SaveMaskAsync(cap.Timestamp, modality, mask);
-        return cap.Timestamp;
+        if (other is not null)
+        {
+            await labels.SaveLineAsync(cap.Timestamp, otherMod, other);
+            await labels.SaveMaskAsync(cap.Timestamp, otherMod, otherMask!);
+            return new(cap.Timestamp, modality, otherMod, null);
+        }
+        return new(cap.Timestamp, modality, null, otherNote);
+    }
+
+    /// <summary>반대 영상 라벨(옮긴 것). 못 만들면 (null, 사유).</summary>
+    private static (WeldLineLabel? Label, string? Note) BuildTransferred(ManualBeadSnapshot s, string modality, IReadOnlyList<PixelPoint> points)
+    {
+        if (s.Color is null || s.Frames.D2C is not { IsValid: true })
+            return (null, "컬러 영상 또는 캘리브레이션 없음 — 반대 영상 변환 생략");
+        if (s.Depth is null) return (null, "깊이 영상 없음 — 반대 영상 변환 생략");
+        if (ManualBeadLabelTransfer.Transfer(s, modality, points) is not { } t)
+            return (null, "반대 영상으로 옮긴 점이 부족 — 변환 생략");
+        var label = new WeldLineLabel
+        {
+            Width = t.Width,
+            Height = t.Height,
+            Thickness = Math.Max(1, (int)Math.Round(WeldLineLabel.DefaultThickness * t.ThicknessScale)),
+            Points = t.Points.Select(p => new[] { Math.Round(p.X, 1), Math.Round(p.Y, 1) }).ToList(),
+            Origin = $"transfer:{modality}",
+        };
+        return label.IsValid ? (label, null) : (null, "옮긴 라벨이 유효하지 않음 — 변환 생략");
     }
 
     private static byte[] MaskPng(WeldLineLabel label)
@@ -137,7 +192,14 @@ public sealed class BeadManualTestService
                 c.CopyPixelDataTo(buf);
                 color = new CameraFrame(buf, c.Width, c.Height, "rgb24", t);
             }
-            return new ManualBeadFrames(ir, depth, color, _camera.GetD2CParams(), $"파일 {stem}", new ManualBeadSavedRef(dir, stem));
+            // 캘리브레이션: 촬영본에 함께 저장된 값 → 연결된 카메라 → 마지막으로 보관한 값.
+            var fileD2c = CameraD2CFile.TryLoad(CameraD2CFile.PathFor(dir, stem));
+            var live = fileD2c is null ? _camera.GetD2CParams() : null;
+            var d2c = fileD2c ?? (live is { IsValid: true } ? live : _camera.GetLastKnownD2CParams());
+            string calibSrc = color is null ? "" : fileD2c is not null ? " · 캘리브레이션: 촬영본"
+                : live is { IsValid: true } ? " · 캘리브레이션: 연결된 카메라"
+                : d2c is not null ? " · 캘리브레이션: 마지막 보관값" : " · 캘리브레이션 없음(RGB 사용 불가)";
+            return new ManualBeadFrames(ir, depth, color, d2c, $"파일 {stem}{calibSrc}", new ManualBeadSavedRef(dir, stem));
         }, ct);
 
         return await RebuildAsync(frames, axis, ct);
@@ -146,8 +208,8 @@ public sealed class BeadManualTestService
     public ManualBeadEvaluation? Evaluate(ManualBeadSnapshot s, string modality, IReadOnlyList<PixelPoint> points)
         => _weld.EvaluateManualBead(s, modality, points);
 
-    /// <summary>학습 데이터 저장. 반환: 저장된 stem.</summary>
-    public Task<string> SaveAsync(ManualBeadSnapshot s, string modality, IReadOnlyList<PixelPoint> points, CancellationToken ct = default)
+    /// <summary>학습 데이터 저장(반대 영상 라벨 자동 변환 포함).</summary>
+    public Task<ManualBeadSaveResult> SaveAsync(ManualBeadSnapshot s, string modality, IReadOnlyList<PixelPoint> points, CancellationToken ct = default)
         => ManualBeadLabelWriter.SaveAsync(_camera, _labels, s, modality, points, tag: "test", ct);
 
     /// <summary>촬영본 파일명 → stem. 알 수 없는 형식이면 null.</summary>
@@ -155,7 +217,7 @@ public sealed class BeadManualTestService
     {
         string[] suffixes =
         [
-            "_ir_maskdraft.png", "_rgb_maskdraft.png", "_ir_line.json", "_rgb_line.json",
+            "_ir_maskdraft.png", "_rgb_maskdraft.png", "_ir_line.json", "_rgb_line.json", CameraD2CFile.Suffix,
             "_depth_vis.png", "_depth16.png", "_ir.png", "_rgb.png",
         ];
         foreach (var sfx in suffixes)
