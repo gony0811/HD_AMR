@@ -22,6 +22,12 @@ public sealed class WeldTrainingService
     public const string ValDirKey = "Vision.Dataset.ValDir";
     /// <summary>데이터셋 변환 시 시계 90° 회전본 포함 여부("1"/"0", 기본 포함).</summary>
     public const string AddRotatedKey = "Vision.Dataset.AddRotated";
+    /// <summary>IR 데이터셋에 이미터 OFF(도트 없음)로 추정되는 촬영본만 쓸지("1"/"0", 기본 0). RGB 에는 영향 없음.</summary>
+    public const string EmitterOffOnlyKey = "Vision.Dataset.EmitterOffOnly";
+    /// <summary>데이터셋 변환 시 이미지에 CLAHE 전처리("1"/"0", 기본 0). 이 데이터셋으로 학습한 모델은 이름에 _clahe 가 붙는다.</summary>
+    public const string ClaheKey = "Vision.Dataset.Clahe";
+    /// <summary>데이터셋·학습 run 폴더의 전처리 표식 파일(내용 "clahe"). 없으면 전처리 없음.</summary>
+    public const string PreprocessMarker = "_preprocess.txt";
 
     private readonly IServiceScopeFactory _scopes;
     private readonly ILogger<WeldTrainingService> _log;
@@ -146,6 +152,62 @@ public sealed class WeldTrainingService
             .SetAsync(AddRotatedKey, on ? "1" : "0", "데이터셋 변환 시 시계 90° 회전본 포함(1/0)");
     }
 
+    /// <summary>IR 데이터셋 '이미터 OFF 만' 여부(저장값 없으면 끔).</summary>
+    public async Task<bool> GetEmitterOffOnlyAsync()
+    {
+        using var s = _scopes.CreateScope();
+        var v = await s.ServiceProvider.GetRequiredService<ParameterService>().GetAsync(EmitterOffOnlyKey);
+        return v?.Trim() == "1";
+    }
+
+    public async Task SetEmitterOffOnlyAsync(bool on)
+    {
+        using var s = _scopes.CreateScope();
+        await s.ServiceProvider.GetRequiredService<ParameterService>()
+            .SetAsync(EmitterOffOnlyKey, on ? "1" : "0", "IR 데이터셋 변환 시 이미터 OFF(도트 없음) 촬영본만 사용(1/0)");
+    }
+
+    public async Task<bool> GetClaheAsync()
+    {
+        using var s = _scopes.CreateScope();
+        var v = await s.ServiceProvider.GetRequiredService<ParameterService>().GetAsync(ClaheKey);
+        return v?.Trim() == "1";
+    }
+
+    public async Task SetClaheAsync(bool on)
+    {
+        using var s = _scopes.CreateScope();
+        await s.ServiceProvider.GetRequiredService<ParameterService>()
+            .SetAsync(ClaheKey, on ? "1" : "0", "데이터셋 변환 시 CLAHE 전처리(1/0) — 이 데이터셋으로 학습한 모델은 _clahe");
+    }
+
+    /// <summary>폴더(데이터셋 또는 학습 run)에 CLAHE 표식이 있는지.</summary>
+    public static bool HasClaheMarker(string dir)
+    {
+        try { var f = Path.Combine(dir, PreprocessMarker); return File.Exists(f) && File.ReadAllText(f).Trim() == "clahe"; }
+        catch (IOException) { return false; }
+    }
+
+    // 학습 시작 때 데이터셋의 전처리 표식을 run 폴더로 복사 — 내보내기 이름(_clahe)은 '학습에 실제로 쓴' 데이터셋 기준.
+    private static void CopyPreprocessMarker(string dataset, string runDir)
+    {
+        Directory.CreateDirectory(runDir);
+        var dst = Path.Combine(runDir, PreprocessMarker);
+        if (HasClaheMarker(dataset)) File.WriteAllText(dst, "clahe");
+        else if (File.Exists(dst)) File.Delete(dst);
+    }
+
+    /// <summary>마지막 학습(best.pt)이 CLAHE 데이터셋으로 학습했는지 — 내보내기 파일명의 _clahe 표식.</summary>
+    public async Task<bool> TrainedClaheAsync(bool unet)
+    {
+        var paths = await GetPathsAsync();
+        return paths is not null && HasClaheMarker(unet ? UnetRunDir(paths) : Path.Combine(paths.Runs, "hd"));
+    }
+
+    /// <summary>'이미터 OFF 만' 필터에서 제외할 IR 촬영본인지 — 이미지로 추정한 상태가 OFF 가 아니면(ON·불확실) 제외.</summary>
+    public static bool ExcludedByEmitter(string modality, bool emitterOffOnly, string imagePath)
+        => emitterOffOnly && modality == "ir" && EmitterDotEstimator.ClassifyFile(imagePath) != EmitterState.Off;
+
     private async Task<string> GetPythonAsync()
     {
         using var s = _scopes.CreateScope();
@@ -202,7 +264,8 @@ public sealed class WeldTrainingService
     public async Task<ConvertResult> ConvertAsync(string modality)
     {
         var src = await GetDatasetSourcesAsync();
-        return await ConvertAsync(modality, LabelKind.Area, src.TrainDirs, src.ValDir, await GetAddRotatedAsync());
+        return await ConvertAsync(modality, LabelKind.Area, src.TrainDirs, src.ValDir, await GetAddRotatedAsync(),
+            await GetEmitterOffOnlyAsync(), await GetClaheAsync());
     }
 
     /// <summary>
@@ -216,8 +279,10 @@ public sealed class WeldTrainingService
     /// true 면 각 촬영본의 시계 90° 회전본(이미지+마스크)을 <b>데이터셋 안에만</b> 추가한다(<c>{stem}_cw90</c>, 원본과 같은 split).
     /// 반시계 방향은 학습 증강의 상하·좌우 뒤집기가 만든다. 원본 폴더에 예전에 만든 회전본 파일은 중복을 막으려고 제외한다.
     /// </param>
+    /// <param name="emitterOffOnly">IR 이면 이미터 OFF(도트 없음)로 추정되는 촬영본만 쓴다(<see cref="EmitterDotEstimator"/>).</param>
+    /// <param name="clahe">데이터셋 이미지에 CLAHE(<see cref="ImageClahe"/>) 적용 — 원본 폴더는 그대로, 데이터셋 사본만. 마스크·라벨은 그대로.</param>
     public async Task<ConvertResult> ConvertAsync(string modality, LabelKind kind, IReadOnlyList<string> trainDirs, string? valDir,
-        bool addRotated = false)
+        bool addRotated = false, bool emitterOffOnly = false, bool clahe = false)
     {
         modality = LabelFiles.Mod(modality);
         LastConvertedModality = modality;
@@ -261,6 +326,12 @@ public sealed class WeldTrainingService
                 if (DatasetSplitter.BaseStem(stem) != stem) { oldRot++; continue; }
                 var imgPath = Path.Combine(dir, LabelFiles.ImageName(stem, modality));
                 if (!File.Exists(imgPath)) { skipped++; Emit($"[변환] 원본 없음 → 건너뜀: {Path.GetFileName(imgPath)}"); continue; }
+                if (ExcludedByEmitter(modality, emitterOffOnly, imgPath))
+                {
+                    skipped++;
+                    Emit($"[변환] 이미터 {EmitterDotEstimator.Text(EmitterDotEstimator.ClassifyFile(imgPath))} → 제외(이미터 OFF 만): {stem}");
+                    continue;
+                }
                 if (!seen.Add(stem)) { skipped++; Emit($"[변환] 다른 폴더와 이름 중복 → 건너뜀: {stem} ({dir})"); continue; }
                 string maskPath;
                 if (kind == LabelKind.Area) maskPath = Path.Combine(dir, LabelFiles.AreaName(stem, modality));
@@ -340,7 +411,10 @@ public sealed class WeldTrainingService
         {
             var sub = valSet.Contains(stem) ? "val" : "train";
             if (sub == "val") nVal++; else nTrain++;
-            File.Copy(imgPath, Path.Combine(dataset, "images", sub, $"{stem}_{modality}.png"), overwrite: true);
+            var dstImg = Path.Combine(dataset, "images", sub, $"{stem}_{modality}.png");
+            // CLAHE: 전체 프레임(회전본은 회전한 영상)에 적용 — 추론도 전체 프레임에 같은 함수를 건 뒤 ROI 를 자른다.
+            if (clahe) await Task.Run(() => ImageClahe.ApplyFile(imgPath, dstImg));
+            else File.Copy(imgPath, dstImg, overwrite: true);
             File.Copy(maskPath, Path.Combine(dataset, "masks", sub, $"{stem}_{modality}.png"), overwrite: true);
             await File.WriteAllTextAsync(Path.Combine(dataset, "labels", sub, $"{stem}_{modality}.txt"), label);
             used++; instances += n;
@@ -350,6 +424,12 @@ public sealed class WeldTrainingService
         Emit(val is not null
             ? $"[변환] 검증 폴더 지정 → train {nTrain}건 / val {nVal}건"
             : $"[변환] 세션 {split2.SessionCount}개 → train {nTrain}건 / val {nVal}건");
+
+        // 전처리 표식 — 학습 시작 때 run 폴더로 복사되어 내보내기 이름(_clahe)·추론 전처리를 정한다.
+        var marker = Path.Combine(dataset, PreprocessMarker);
+        if (clahe) await File.WriteAllTextAsync(marker, "clahe");
+        else if (File.Exists(marker)) File.Delete(marker);
+        if (clahe) Emit($"[변환] CLAHE 전처리 적용(clip {ImageClahe.ClipLimit}, 타일 {ImageClahe.Tiles}×{ImageClahe.Tiles}) — 이 데이터셋으로 학습한 모델은 이름에 _clahe");
 
         // data.yaml — val 이 비면(표본 1건 등) 파이프라인 점검용으로 train 을 val 로 쓴다.
         var valDirYaml = nVal > 0 ? "images/val" : "images/train";
@@ -534,6 +614,7 @@ public sealed class WeldTrainingService
         _lastYoloDataset = dataset;
 
         Directory.CreateDirectory(paths.Runs);
+        CopyPreprocessMarker(dataset, Path.Combine(paths.Runs, "hd"));
         var script = Path.Combine(paths.Workspace, "_train.py");
         await File.WriteAllTextAsync(script, TrainPy);
 
@@ -577,7 +658,7 @@ public sealed class WeldTrainingService
 
         var py = await GetPythonAsync();
         var kind = await TrainedKindAsync(unet: false);
-        var outName = WeldModelNames.YoloExportName(modality, kind, DateTime.Now);
+        var outName = WeldModelNames.YoloExportName(modality, kind, DateTime.Now, await TrainedClaheAsync(unet: false));
         var spec = imgsz.ToString();
         if (rect)
         {
@@ -648,6 +729,7 @@ public sealed class WeldTrainingService
         // 이 학습이 쓴 데이터셋 종류 기록 — 내보내기 파일명의 area/line 표식(앱을 다시 켜도 유지).
         Directory.CreateDirectory(UnetRunDir(paths));
         await File.WriteAllTextAsync(Path.Combine(UnetRunDir(paths), UnetKindMarker), WeldModelNames.KindToken(kind));
+        CopyPreprocessMarker(dataset, UnetRunDir(paths));
         var py = await GetPythonAsync();
         // YOLO 학습과 같은 규칙 — macOS 는 Apple GPU(MPS), 그 외는 기존처럼 CPU. 못 쓰면 스크립트가 cpu 로 대체.
         var device = OperatingSystem.IsMacOS() ? "mps" : "cpu";
@@ -678,7 +760,7 @@ public sealed class WeldTrainingService
         var script = await WriteUnetScriptAsync(paths);
         var py = await GetPythonAsync();
         var kind = await TrainedKindAsync(unet: true);
-        var outPath = Path.Combine(paths.Models, WeldModelNames.UnetExportName(modality, kind, DateTime.Now));
+        var outPath = Path.Combine(paths.Models, WeldModelNames.UnetExportName(modality, kind, DateTime.Now, await TrainedClaheAsync(unet: true)));
         Directory.CreateDirectory(paths.Models);
         TrainTotalEpochs = 0;
         Emit($"[U-Net 내보내기] 시작 — {best} → {Path.GetFileName(outPath)}");
@@ -721,6 +803,7 @@ public sealed class WeldTrainingService
         var train = LabelFiles.NormalizeDirs(src.TrainDirs);
         var val = string.IsNullOrWhiteSpace(src.ValDir) ? null : LabelFiles.NormalizeDirs(new[] { src.ValDir })[0];
         if (val is not null) train.RemoveAll(d => LabelFiles.SameDir(d, val));
+        bool offOnly = await GetEmitterOffOnlyAsync();
 
         return await Task.Run(() =>
         {
@@ -730,7 +813,9 @@ public sealed class WeldTrainingService
             var found = new List<(string Stem, string Dir, bool IsVal)>();
             foreach (var (dir, isVal) in dirs)
                 foreach (var stem in LabelFiles.LabeledStems(dir, modality, kind))
-                    if (DatasetSplitter.BaseStem(stem) == stem && seen.Add(stem)) found.Add((stem, dir, isVal));
+                    if (DatasetSplitter.BaseStem(stem) == stem
+                        && !ExcludedByEmitter(modality, offOnly, Path.Combine(dir, LabelFiles.ImageName(stem, modality)))
+                        && seen.Add(stem)) found.Add((stem, dir, isVal));
 
             var split = DatasetSplitter.Split(found.Where(x => !x.IsVal).Select(x => x.Stem));
             var autoVal = split.Val.ToHashSet();
@@ -930,8 +1015,9 @@ public sealed class WeldTrainingService
         "elif aug == 'line':\n" +
         "    # 가는 선 전용: mosaic/copy-paste/erasing 은 선을 끊거나 엉뚱하게 이어 붙여 끔.\n" +
         "    # 뒤집기·소각 회전·이동·스케일·밝기로 위치·각도·조명 일반화(진행축 가로/세로는 90° 회전 증강본으로).\n" +
+        "    # translate=0.3: 라벨이 화면 중앙에 몰려 위/아래 가장자리 비드를 놓쳐(선창 151/153) 이동 범위를 넓힘.\n" +
         "    kw.update(mosaic=0.0, close_mosaic=0, mixup=0.0, copy_paste=0.0, erasing=0.0,\n" +
-        "              fliplr=0.5, flipud=0.5, degrees=8.0, translate=0.1, scale=0.25,\n" +
+        "              fliplr=0.5, flipud=0.5, degrees=8.0, translate=0.3, scale=0.25,\n" +
         "              shear=0.0, perspective=0.0, hsv_h=0.0, hsv_s=0.0, hsv_v=0.4)\n" +
         "if bright == '1':\n" +
         "    kw.update(hsv_v=0.5, hsv_s=0.3)  # 밝기/채도 변동 강화(조명·노출 편차 대응)\n" +

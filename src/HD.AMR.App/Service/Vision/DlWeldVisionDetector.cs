@@ -55,10 +55,12 @@ public sealed class DlWeldVisionDetector : IDlWeldVisionDetector
             if (roi is null)
                 return WeldDetectionResult.Fail("Weld ROI 가 프레임 범위를 벗어났습니다.");
 
+            // CLAHE 모델(이름에 _clahe)이면 학습 데이터셋과 같은 전처리를 전체 프레임에 걸어 추론(오버레이는 원본).
+            using var claheInput = WeldModelNames.HasClahe(modelPath) ? ImageClaheMat.Apply(bgr) : null;
             lock (_gate)
             {
                 var session = GetSession(modelPath);
-                var (mask, count, _) = YoloSeg.Decode(session, bgr, (float)p.DlConfidence, 0.5f, (float)p.DlMaskThreshold);
+                var (mask, count, _) = YoloSeg.Decode(session, claheInput ?? bgr, (float)p.DlConfidence, 0.5f, (float)p.DlMaskThreshold);
                 using (mask)
                 {
                     if (count == 0)

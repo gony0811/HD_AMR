@@ -39,6 +39,19 @@ public sealed partial class LabelEditorViewModel : ViewModelBase
     public string IrTabText => $"IR ({_all.Count(e => e.HasIr)})";
     public string RgbTabText => $"RGB ({_all.Count(e => e.HasRgb)})";
     public string ListTitle => $"{Modality.ToUpperInvariant()} 촬영본 ({Entries.Count}) · 면 {Entries.Count(e => e.HasArea)} · 선 {Entries.Count(e => e.HasLine)}";
+    /// <summary>IR 탭 이미터 추정 개수(목록 폭이 좁아 제목 아래 별도 줄). RGB 탭이거나 아직 계산 전이면 null.</summary>
+    public string? EmitterSummary
+    {
+        get
+        {
+            if (Modality != "ir" || _emitter.Count == 0) return null;
+            int unk = Entries.Count(e => e.Emitter == EmitterState.Unknown);
+            return $"이미터 OFF {Entries.Count(e => e.Emitter == EmitterState.Off)} · ON {Entries.Count(e => e.Emitter == EmitterState.On)}" +
+                   (unk > 0 ? $" · ? {unk}" : "");
+        }
+    }
+    // IR 촬영본별 이미지로 추정한 이미터 상태(stem → ON/OFF/?). 목록을 읽을 때 계산(파일별 캐시).
+    private Dictionary<string, EmitterState> _emitter = new();
     public LabelKind Kind => KindIndex == 1 ? LabelKind.Line : LabelKind.Area;
     public bool IsLineMode => Kind == LabelKind.Line;
     public bool IsBrushMode => !IsLineMode;
@@ -53,6 +66,16 @@ public sealed partial class LabelEditorViewModel : ViewModelBase
     /// <summary>(lineMode, erase, radius, lineThickness) 도구 변경.</summary>
     public event Action<bool, bool, int, int>? BrushChanged;
     public event Action? ClearRequested;
+    /// <summary>배경 이미지만 교체(라벨은 유지) — "CLAHE로 보기" 전환.</summary>
+    public event Action<byte[]>? BaseImageRequested;
+
+    /// <summary>
+    /// 라벨링 화면 배경을 CLAHE(학습 전처리와 같은 <see cref="ImageClahe"/>)로 보여 준다 — 어두운 곳의 비드가 잘 보이게.
+    /// 보기만 바뀌고 라벨 좌표·저장 파일은 원본 기준 그대로. 앱 실행 중 유지.
+    /// </summary>
+    [ObservableProperty] private bool _viewClahe = _lastViewClahe;
+    private static bool _lastViewClahe;
+    private byte[]? _currentImage;   // 열려 있는 원본 이미지(PNG)
 
     // ④ 추론 탭 "학습셋에 추가 + 라벨링" 이동 시 대상 촬영본/모달리티(원본 쿼리 파라미터 sel/mod 대응).
     private static string? _pendingStem, _pendingMod;
@@ -99,7 +122,9 @@ public sealed partial class LabelEditorViewModel : ViewModelBase
     async partial void OnSelectedChanged(CaptureEntryRow? value)
     {
         OnPropertyChanged(nameof(HasSelection)); OnPropertyChanged(nameof(SaveHint));
-        if (value is not null) await OpenEditorAsync();
+        // 목록만 다시 채워 같은 촬영본·모달리티·종류가 다시 선택된 경우(저장 후 새로고침, 이미터 표시 갱신)는
+        // 에디터를 다시 열지 않는다 — 열면 그리던 내용이 사라진다.
+        if (value is not null && _openedKey != Key(value.Stem)) await OpenEditorAsync();
     }
 
     // 탭 전환 — 목록을 그 모달리티로 다시 채우고, 보던 촬영본이 있으면 그대로 선택(같은 촬영본의 IR↔RGB 비교).
@@ -114,9 +139,10 @@ public sealed partial class LabelEditorViewModel : ViewModelBase
     {
         var mod = Modality;
         Entries.Clear();
-        foreach (var e in _all.Where(e => mod == "ir" ? e.HasIr : e.HasRgb)) Entries.Add(new CaptureEntryRow(e, mod));
+        foreach (var e in _all.Where(e => mod == "ir" ? e.HasIr : e.HasRgb))
+            Entries.Add(new CaptureEntryRow(e, mod, mod == "ir" && _emitter.TryGetValue(e.Stem, out var st) ? st : null));
         Selected = keepStem is null ? null : Entries.FirstOrDefault(e => e.Stem == keepStem);
-        OnPropertyChanged(nameof(IrTabText)); OnPropertyChanged(nameof(RgbTabText)); OnPropertyChanged(nameof(ListTitle));
+        OnPropertyChanged(nameof(IrTabText)); OnPropertyChanged(nameof(RgbTabText)); OnPropertyChanged(nameof(ListTitle)); OnPropertyChanged(nameof(EmitterSummary));
     }
 
     /// <summary>뷰의 폴더 선택기 결과. 빈값이면 캡처 저장 폴더로 되돌린다.</summary>
@@ -143,18 +169,33 @@ public sealed partial class LabelEditorViewModel : ViewModelBase
             var stem = Selected?.Stem;
             _all = await With(l => l.ListAsync());
             Fill(stem);
+            // IR 이미터 상태 추정은 이미지를 읽어야 해서 목록을 먼저 보여 준 뒤 채운다.
+            if (Dir is { } dir)
+            {
+                var irStems = _all.Where(e => e.HasIr).Select(e => e.Stem).ToList();
+                _emitter = await Task.Run(() => irStems.AsParallel()
+                    .Select(s => (s, EmitterDotEstimator.ClassifyFile(Path.Combine(dir, LabelFiles.ImageName(s, "ir")))))
+                    .ToDictionary(x => x.s, x => x.Item2));
+                if (Modality == "ir") Fill(Selected?.Stem ?? stem);
+            }
         }
         catch (Exception ex) { Notify($"목록 로드 실패: {ex.Message}", true); }
     }
 
+    private string? _openedKey;
+    private string Key(string stem) => $"{Dir}|{stem}|{Modality}|{KindIndex}";   // 폴더가 바뀌면 같은 이름도 다시 연다
+
     private async Task OpenEditorAsync()
     {
         if (Selected is null) return;
+        _openedKey = Key(Selected.Stem);
         try
         {
             var stem = Selected.Stem;
             var img = await With(l => l.ReadAsync(LabelFiles.ImageName(stem, Modality)));
             if (img is null) { Notify("이미지를 읽지 못했습니다.", true); return; }
+            _currentImage = img;
+            if (ViewClahe) img = await Task.Run(() => ImageClahe.ApplyEncoded(img));
             // 고른 라벨 종류만 불러온다 — 면: _area.png 마스크, 선: _line.json 점(마스크는 두께대로 다시 그림).
             byte[]? mask = null; WeldLineLabel? line = null;
             if (IsLineMode) line = await With(l => l.ReadLineAsync(stem, Modality));
@@ -167,6 +208,14 @@ public sealed partial class LabelEditorViewModel : ViewModelBase
     }
 
     [RelayCommand] private Task ReloadDraft() => OpenEditorAsync();
+
+    async partial void OnViewClaheChanged(bool value)
+    {
+        _lastViewClahe = value;
+        if (_currentImage is not { } img) return;
+        try { BaseImageRequested?.Invoke(value ? await Task.Run(() => ImageClahe.ApplyEncoded(img)) : img); }
+        catch (Exception ex) { Notify($"CLAHE 보기 실패: {ex.Message}", true); }
+    }
     [RelayCommand] private void ClearMask() => ClearRequested?.Invoke();
 
     /// <summary>
@@ -202,10 +251,11 @@ public sealed partial class LabelEditorViewModel : ViewModelBase
 }
 
 /// <summary>촬영본 목록 행 — 해당 탭 모달리티의 면/선 라벨 보유 표시(▦ 면, 📏 선).</summary>
-public sealed record CaptureEntryRow(CaptureEntry Entry, string Modality)
+public sealed record CaptureEntryRow(CaptureEntry Entry, string Modality, EmitterState? Emitter = null)
 {
     public string Stem => Entry.Stem;
     public bool HasArea => Modality == "ir" ? Entry.IrArea : Entry.RgbArea;
     public bool HasLine => Modality == "ir" ? Entry.IrLine : Entry.RgbLine;
-    public string Label => $"{(HasArea ? "▦" : "·")}{(HasLine ? "📏" : "· ")} {Entry.Stem}";
+    public string Label => $"{(HasArea ? "▦" : "·")}{(HasLine ? "📏" : "· ")} {Entry.Stem}" +
+                           (Emitter is { } e ? $"  {EmitterDotEstimator.Text(e)}" : "");
 }

@@ -21,6 +21,8 @@ public sealed class OnnxBeadSegmentationService
     public byte[]? LastOverlay { get; private set; }
     /// <summary>마지막 추론의 이진 마스크(원본 해상도 W×H, 비드=255). 추론·검증 화면의 용접선 추출용.</summary>
     public byte[]? LastMask { get; private set; }
+    /// <summary>마지막 추론에 CLAHE 전처리를 걸었는지(모델 이름 _clahe).</summary>
+    public bool LastClahe { get; private set; }
 
     public OnnxBeadSegmentationService(WeldTrainingService train, ILogger<OnnxBeadSegmentationService> log)
     {
@@ -38,20 +40,8 @@ public sealed class OnnxBeadSegmentationService
                 ?? throw new InvalidOperationException("라벨링 폴더가 설정되지 않았습니다.");
         var imgPath = Path.Combine(dir, $"{stem}_{modality}.png");
         if (!File.Exists(imgPath)) throw new FileNotFoundException("이미지가 없습니다.", imgPath);
-        if (!File.Exists(modelPath)) throw new FileNotFoundException("모델(.onnx)이 없습니다.", modelPath);
-
-        if (IsUnet(modelPath))
-            return await Task.Run(() => InferUnet(modelPath, File.ReadAllBytes(imgPath), maskThr));
-        if (!OperatingSystem.IsWindows())
-            return await Task.Run(() => InferManaged(modelPath, File.ReadAllBytes(imgPath), conf, maskThr));
-
-        return await Task.Run(() =>
-        {
-            // Cv2.ImRead 는 한글 경로에서 마샬링 실패 → CvIo(유니코드 안전)로 읽는다.
-            using var bgr = CvIo.ReadMat(imgPath, ImreadModes.Color);
-            if (bgr.Empty()) throw new InvalidOperationException("이미지를 읽지 못했습니다.");
-            return Infer(modelPath, bgr, conf, maskThr);
-        });
+        // 바이트로 읽어 공통 경로로(한글 경로 안전 · CLAHE 전처리도 한곳에서).
+        return await RunOnBytesAsync(modelPath, await File.ReadAllBytesAsync(imgPath), conf, maskThr);
     }
 
     /// <summary>업로드/외부 이미지 바이트에 대해 추론. 캡처 폴더 밖의 검증용 이미지에 사용.</summary>
@@ -59,6 +49,9 @@ public sealed class OnnxBeadSegmentationService
     {
         if (!File.Exists(modelPath)) throw new FileNotFoundException("모델(.onnx)이 없습니다.", modelPath);
         if (imageBytes is null || imageBytes.Length == 0) throw new ArgumentException("빈 이미지입니다.", nameof(imageBytes));
+        // CLAHE 로 학습한 모델(이름에 _clahe)이면 학습 데이터셋과 같은 전처리를 전체 이미지에 먼저 건다.
+        LastClahe = WeldModelNames.HasClahe(modelPath);
+        if (LastClahe) imageBytes = await Task.Run(() => ImageClahe.ApplyEncoded(imageBytes));
         if (IsUnet(modelPath))
             return await Task.Run(() => InferUnet(modelPath, imageBytes, maskThr));
         if (!OperatingSystem.IsWindows())

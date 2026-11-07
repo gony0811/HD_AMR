@@ -53,7 +53,9 @@ public sealed class UnetWeldVisionDetector : IUnetWeldVisionDetector
             if (roi is null)
                 return WeldDetectionResult.Fail("Weld ROI 가 프레임 범위를 벗어났습니다.");
 
-            using var roiBgr = new Mat(bgr, new Rect(roi.X, roi.Y, roi.Width, roi.Height));
+            // CLAHE 모델(이름에 _clahe)이면 전체 프레임에 먼저 건 뒤 ROI 를 자른다(타일 격자가 학습과 같아야 함).
+            using var claheInput = WeldModelNames.HasClahe(modelPath) ? ImageClaheMat.Apply(bgr) : null;
+            using var roiBgr = new Mat(claheInput ?? bgr, new Rect(roi.X, roi.Y, roi.Width, roi.Height));
             using var roiGray = new Mat();
             Cv2.CvtColor(roiBgr, roiGray, ColorConversionCodes.BGR2GRAY);
             roiGray.GetArray(out byte[] g);

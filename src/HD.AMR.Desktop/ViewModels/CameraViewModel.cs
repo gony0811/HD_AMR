@@ -199,6 +199,9 @@ public sealed partial class CameraViewModel : ViewModelBase
     public bool IsConnected => _svc.IsConnected;
     public bool IsStreaming => _svc.IsStreaming;
     public bool IsIrActive => _svc.IsIrActive;
+    /// <summary>"이미터 교번: 동작 중 / 꺼짐 / 미지원" — 동작 중이면 IR 은 도트 없는(이미터 OFF) 프레임.</summary>
+    public string EmitterAlternateText => $"이미터 교번: {_svc.EmitterAlternateStatus}";
+    public bool EmitterAlternateOn => _svc.IsEmitterAlternating;
     public string SettingsSummary =>
         $"{_svc.Settings.ColorWidth}×{_svc.Settings.ColorHeight} @{_svc.Settings.ColorFps}fps · 깊이 {_svc.Settings.DepthMinMm}~{_svc.Settings.DepthMaxMm} mm";
 
@@ -259,6 +262,8 @@ public sealed partial class CameraViewModel : ViewModelBase
         OnPropertyChanged(nameof(IsConnected));
         OnPropertyChanged(nameof(IsStreaming));
         OnPropertyChanged(nameof(IsIrActive));
+        OnPropertyChanged(nameof(EmitterAlternateText));
+        OnPropertyChanged(nameof(EmitterAlternateOn));
     }
 
     private async Task LoadAsync()

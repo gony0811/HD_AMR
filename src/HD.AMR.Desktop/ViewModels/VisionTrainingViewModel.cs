@@ -53,7 +53,9 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
     // ③ U-Net (PyTorch, 크롭 학습)
     [ObservableProperty] private int _unetEpochs = 100, _unetBatch = 8, _unetCrop = 384, _unetPatience = 30;
     [ObservableProperty] private int _unetBaseIndex;           // 0 base16(빠름), 1 base32(정확)
-    [ObservableProperty] private bool _addRotated = true;    // ① 변환 시 시계 90° 회전본 포함(데이터셋에만)
+    [ObservableProperty] private bool _addRotated = true;
+    [ObservableProperty] private bool _emitterOffOnly;        // ① IR 변환 시 이미터 OFF(도트 없음) 추정 촬영본만
+    [ObservableProperty] private bool _clahe;                 // ① 변환 시 CLAHE 전처리(학습한 모델은 _clahe)    // ① 변환 시 시계 90° 회전본 포함(데이터셋에만)
     [ObservableProperty] private string? _convertText;
     private bool _loadingSources;
     [ObservableProperty] private bool _working;
@@ -103,11 +105,12 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
     public int PyKind => Py is null ? 0 : Py.UltralyticsOk ? 1 : Py.PythonOk ? 2 : 3;
     public bool PyReady => Py is { UltralyticsOk: true };
     public bool TorchReady => Py is { TorchOk: true };
-    public string UnetExportButtonText => $"best.pt → weld_unet_{ExportModality}_{WeldModelNames.KindToken(_unetTrainedKind)}_(날짜시각).onnx";
+    public string UnetExportButtonText => $"best.pt → weld_unet_{ExportModality}_{WeldModelNames.KindToken(_unetTrainedKind)}{(_unetTrainedClahe ? "_clahe" : "")}_(날짜시각).onnx";
     private LabelKind _yoloTrainedKind = LabelKind.Area, _unetTrainedKind = LabelKind.Line;   // 마지막 학습의 데이터셋 종류(파일명 미리보기)
+    private bool _yoloTrainedClahe, _unetTrainedClahe;                                        // 마지막 학습이 CLAHE 데이터셋인지
     public bool NeedInstall => Py is { UltralyticsOk: false };
     public string InstallHint => Py is null ? "" : $"설치: {Py.Exe} -m pip install ultralytics onnx";
-    public string ExportButtonText => $"best.pt → weld_yolo_{ExportModality}_{WeldModelNames.KindToken(_yoloTrainedKind)}_(날짜시각).onnx";
+    public string ExportButtonText => $"best.pt → weld_yolo_{ExportModality}_{WeldModelNames.KindToken(_yoloTrainedKind)}{(_yoloTrainedClahe ? "_clahe" : "")}_(날짜시각).onnx";
     private string Modality => ModalityIndex == 1 ? "ir" : "rgb";
     private LabelKind ConvertKind => ConvertKindIndex == 1 ? LabelKind.Line : LabelKind.Area;
     public string RgbCountText => $"RGB (면 {RgbArea} · 선 {RgbLine})";
@@ -253,6 +256,14 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
                 if ((mod == "ir" ? e.HasIr : e.HasRgb) && !known.Contains(e.Stem))
                     items.Add(new InferItem(e.Stem, labelDir, null));
         }
+        // IR 이면 촬영본마다 이미지로 추정한 이미터 상태(ON/OFF/?) — 파일별 캐시, 처음만 이미지당 수십 ms.
+        if (mod == "ir")
+        {
+            var states = await Task.Run(() => items.AsParallel()
+                .Select(i => EmitterDotEstimator.ClassifyFile(Path.Combine(i.Dir, LabelFiles.ImageName(i.Stem, mod)))).ToList());
+            if (ver != _inferListVer) return;
+            items = items.Select((it, k) => it with { Emitter = states[k] }).ToList();
+        }
         items.Sort((a, b) => string.CompareOrdinal(a.Stem, b.Stem));
 
         var sel = _lastInferStem ?? InferItem?.Stem;   // 마지막으로 본 이미지 유지
@@ -385,9 +396,29 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
         foreach (var d in src.TrainDirs) TrainDirs.Add(d);
         ValDir = src.ValDir;
         _loadingSources = true;
-        try { AddRotated = await _train.GetAddRotatedAsync(); }
+        try
+        {
+            AddRotated = await _train.GetAddRotatedAsync();
+            EmitterOffOnly = await _train.GetEmitterOffOnlyAsync();
+            Clahe = await _train.GetClaheAsync();
+        }
         finally { _loadingSources = false; }
         OnPropertyChanged(nameof(NoTrainDirs));
+    }
+
+    async partial void OnClaheChanged(bool value)
+    {
+        if (_loadingSources) return;
+        try { await _train.SetClaheAsync(value); }
+        catch (Exception ex) { Notify($"설정 저장 실패: {ex.Message}", true); }
+    }
+
+    async partial void OnEmitterOffOnlyChanged(bool value)
+    {
+        if (_loadingSources) return;
+        try { await _train.SetEmitterOffOnlyAsync(value); }
+        catch (Exception ex) { Notify($"설정 저장 실패: {ex.Message}", true); }
+        await RefreshInferListAsync();   // ④ train/val 구분도 같은 필터를 따른다
     }
 
     async partial void OnAddRotatedChanged(bool value)
@@ -471,7 +502,9 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
             if (!File.Exists(Path.Combine(ds, "data.yaml"))) return $"{LabelFiles.DatasetFolder(k)} — 아직 변환 안 함";
             var mod = Directory.Exists(Path.Combine(ds, "images", "train"))
                 ? Directory.GetFiles(Path.Combine(ds, "images", "train"), "*.png").Select(f => f.EndsWith("_ir.png") ? "IR" : "RGB").FirstOrDefault() ?? "" : "";
-            return $"{LabelFiles.DatasetFolder(k)} — {mod} train {N("train")} / val {N("val")} · {File.GetLastWriteTime(Path.Combine(ds, "data.yaml")):MM-dd HH:mm} 변환";
+            return $"{LabelFiles.DatasetFolder(k)} — {mod} train {N("train")} / val {N("val")}" +
+                   (WeldTrainingService.HasClaheMarker(ds) ? " · CLAHE" : "") +
+                   $" · {File.GetLastWriteTime(Path.Combine(ds, "data.yaml")):MM-dd HH:mm} 변환";
         }
         AreaDatasetInfo = Info(LabelKind.Area);
         LineDatasetInfo = Info(LabelKind.Line);
@@ -485,6 +518,8 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
             var sel = SelModel?.Path ?? _lastModelPath;   // 화면에 다시 들어오면 마지막으로 쓴 모델
             _yoloTrainedKind = await _train.TrainedKindAsync(unet: false);
             _unetTrainedKind = await _train.TrainedKindAsync(unet: true);
+            _yoloTrainedClahe = await _train.TrainedClaheAsync(unet: false);
+            _unetTrainedClahe = await _train.TrainedClaheAsync(unet: true);
             OnPropertyChanged(nameof(ExportButtonText)); OnPropertyChanged(nameof(UnetExportButtonText));
             var list = await _train.ListModelsAsync();
             Models.Clear();
@@ -502,7 +537,7 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
         try
         {
             if (TrainDirs.Count == 0) { Notify("학습 폴더를 1개 이상 추가하세요.", true); return; }
-            var r = await _train.ConvertAsync(Modality, ConvertKind, TrainDirs.ToList(), ValDir, AddRotated);
+            var r = await _train.ConvertAsync(Modality, ConvertKind, TrainDirs.ToList(), ValDir, AddRotated, EmitterOffOnly, Clahe);
             ConvertText = $"{LabelFiles.KindText(r.Kind)} 라벨 변환 완료 — 사용 {r.Used}건" + (r.Rotated > 0 ? $"(90° 회전본 {r.Rotated}건 포함)" : "") +
                           $" / 건너뜀 {r.Skipped}건 / 폴리곤 {r.Instances}개\n" +
                           (ValDir is null ? $"세션 {r.Sessions}개 → " : "검증 폴더 지정 → ") + $"train {r.Train}건 / val {r.Val}건\n{r.DataYaml}";
@@ -621,7 +656,7 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
                    $"(기준 {WeldLineMetrics.DefaultAngleTolDeg:0}° / {WeldLineMetrics.DefaultCenterTolPx:0}px)";
         else head = $"용접선 검출 — 기울기 {lr.TiltDeg:0.0}° (선 라벨이 없어 오차는 계산하지 않음)";
         InferOk = lr.Found && (lr.Errors?.Pass ?? true);
-        InferText = $"{head}\n{(lr.Horizontal ? "가로" : "세로")} 진행 · 검출 {r.Count}개 · 최고점수 {r.MaxScore:0.00} · {r.Millis} ms ({r.Width}×{r.Height})" +
+        InferText = $"{head}\n{(_seg.LastClahe ? "CLAHE 전처리 적용 · " : "")}{(lr.Horizontal ? "가로" : "세로")} 진행 · 검출 {r.Count}개 · 최고점수 {r.MaxScore:0.00} · {r.Millis} ms ({r.Width}×{r.Height})" +
                     "  ·  노랑 실선 = 검출 용접선(직선 인정 구간), 노랑 점선 = 연장선" + (gt is not null ? ", 초록 = 정답 선" : "") + ", 옅은 빨강 = 모델 마스크";
         using var ms = new MemoryStream(lr.OverlayJpeg);
         OverlayImage = new Bitmap(ms);
@@ -647,9 +682,10 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
 }
 
 /// <summary>④ 점검 이미지 항목. <see cref="IsVal"/> null = 데이터셋에 안 들어가는 라벨링 폴더 이미지.</summary>
-public sealed record InferItem(string Stem, string Dir, bool? IsVal)
+public sealed record InferItem(string Stem, string Dir, bool? IsVal, EmitterState? Emitter = null)
 {
-    public string Text => (IsVal switch { true => "[val]   ", false => "[train] ", _ => "[ - ]   " }) + Stem;
+    public string Text => (IsVal switch { true => "[val]   ", false => "[train] ", _ => "[ - ]   " }) + Stem +
+                          (Emitter is { } e ? $"  · 이미터 {EmitterDotEstimator.Text(e)}" : "");
 }
 
 /// <summary>④ 점검 이미지 출처 폴더 한 줄(구분 · 경로 · 개수).</summary>

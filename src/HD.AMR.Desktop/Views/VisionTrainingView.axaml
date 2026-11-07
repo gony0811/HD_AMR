@@ -81,6 +81,10 @@
                             </ComboBox>
                             <CheckBox Content="90° 회전본 포함" IsChecked="{Binding AddRotated}"
                                       ToolTip.Tip="각 이미지의 시계 90° 회전본을 데이터셋 안에만 추가합니다(원본 폴더는 그대로). 반시계 방향은 학습 중 뒤집기 증강이 대신합니다." />
+                            <CheckBox Content="CLAHE 전처리" IsChecked="{Binding Clahe}"
+                                      ToolTip.Tip="데이터셋 이미지에 CLAHE(대비 제한 적응형 히스토그램 평활화, clip 2 · 8×8)를 적용합니다(원본 폴더는 그대로). 이 데이터셋으로 학습한 모델은 이름에 _clahe 가 붙고, 추론(④·용접 추적·시퀀스) 때 같은 전처리가 자동 적용됩니다." />
+                            <CheckBox Content="이미터 OFF만 (IR)" IsChecked="{Binding EmitterOffOnly}"
+                                      ToolTip.Tip="IR 변환 시 이미지로 추정한 이미터 상태가 OFF(도트 없음)인 촬영본만 씁니다. ON·불확실(?)은 제외. RGB 변환에는 영향 없음." />
                             <Button Content="데이터셋 변환" Classes="accent" Command="{Binding ConvertCommand}" IsEnabled="{Binding !Working}" />
                         </StackPanel>
                         <TextBlock Classes="axis" FontFamily="monospace" Text="{Binding AreaDatasetInfo}" />
@@ -171,7 +175,7 @@
                         <Border Classes="alert" IsVisible="{Binding NoModels}"><TextBlock Text="모델이 없습니다. ① 데이터셋 → ② YOLO 또는 ③ U-Net 에서 학습·내보내기로 먼저 만드세요." /></Border>
                         <StackPanel IsVisible="{Binding !NoModels}" Spacing="8">
                             <StackPanel Orientation="Horizontal" Spacing="8">
-                                <StackPanel><TextBlock Classes="axis" Text="모델" /><ComboBox Width="220" ItemsSource="{Binding Models}" SelectedItem="{Binding SelModel}"><ComboBox.ItemTemplate><DataTemplate x:DataType="vis:ModelInfo"><TextBlock Text="{Binding Name}" /></DataTemplate></ComboBox.ItemTemplate></ComboBox></StackPanel>
+                                <StackPanel><TextBlock Classes="axis" Text="모델" /><ComboBox Width="400" ItemsSource="{Binding Models}" SelectedItem="{Binding SelModel}"><ComboBox.ItemTemplate><DataTemplate x:DataType="vis:ModelInfo"><TextBlock Text="{Binding Name}" /></DataTemplate></ComboBox.ItemTemplate></ComboBox></StackPanel>
                                 <StackPanel><TextBlock Classes="axis" Text="점검 이미지" /><ComboBox Width="300" ItemsSource="{Binding InferItems}" SelectedItem="{Binding InferItem}" FontFamily="monospace"><ComboBox.ItemTemplate><DataTemplate x:DataType="vm:InferItem"><TextBlock Text="{Binding Text}" /></DataTemplate></ComboBox.ItemTemplate></ComboBox></StackPanel>
                                 <StackPanel IsVisible="{Binding ShowInferModality}" ToolTip.Tip="모델 이름에 _ir_/_rgb_ 표식이 없어 직접 고릅니다."><TextBlock Classes="axis" Text="모달리티" /><ComboBox Width="90" SelectedIndex="{Binding InferModalityIndex}"><ComboBoxItem>RGB</ComboBoxItem><ComboBoxItem>IR</ComboBoxItem></ComboBox></StackPanel>
                                 <CheckBox VerticalAlignment="Bottom" Content="val만" IsChecked="{Binding InferValOnly}"

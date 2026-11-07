@@ -115,6 +115,18 @@ public sealed class MaskCanvas : Control
         InvalidateVisual();
     }
 
+    /// <summary>배경 이미지만 교체(같은 크기일 때) — 칠한 마스크·선 점은 그대로(예: CLAHE 로 보기 전환).</summary>
+    public void SetBase(byte[] imagePng)
+    {
+        Bitmap nb;
+        using (var ms = new MemoryStream(imagePng)) nb = new Bitmap(ms);
+        if (nb.PixelSize.Width != _w || nb.PixelSize.Height != _h) { nb.Dispose(); return; }
+        var old = _base;
+        _base = nb;
+        old?.Dispose();
+        InvalidateVisual();
+    }
+
     private void LoadMask(byte[] png)
     {
         try

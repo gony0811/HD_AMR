@@ -23,13 +23,22 @@ public static class WeldModelNames
     /// <summary>라벨 종류 표식("area"/"line").</summary>
     public static string KindToken(LabelKind kind) => kind == LabelKind.Line ? "line" : "area";
 
-    /// <summary>YOLO 내보내기 파일명: <c>weld_yolo_{m}_{area|line}_{yyMMdd_HHmm}.onnx</c>.</summary>
-    public static string YoloExportName(string modality, LabelKind kind, DateTime when)
-        => $"{YoloTag}_{modality}_{KindToken(kind)}_{when:yyMMdd_HHmm}.onnx";
+    /// <summary>CLAHE 전처리로 학습한 모델 표식(<see cref="ImageClahe"/>). 이름에 있으면 추론 입력에도 같은 CLAHE 를 건다.</summary>
+    public const string ClaheTag = "clahe";
 
-    /// <summary>U-Net 내보내기 파일명: <c>weld_unet_{m}_{area|line}_{yyMMdd_HHmm}.onnx</c>.</summary>
-    public static string UnetExportName(string modality, LabelKind kind, DateTime when)
-        => $"{UnetTag}_{modality}_{KindToken(kind)}_{when:yyMMdd_HHmm}.onnx";
+    /// <summary>YOLO 내보내기 파일명: <c>weld_yolo_{m}_{area|line}[_clahe]_{yyMMdd_HHmm}.onnx</c>.</summary>
+    public static string YoloExportName(string modality, LabelKind kind, DateTime when, bool clahe = false)
+        => $"{YoloTag}_{modality}_{KindToken(kind)}{(clahe ? "_" + ClaheTag : "")}_{when:yyMMdd_HHmm}.onnx";
+
+    /// <summary>U-Net 내보내기 파일명: <c>weld_unet_{m}_{area|line}[_clahe]_{yyMMdd_HHmm}.onnx</c>.</summary>
+    public static string UnetExportName(string modality, LabelKind kind, DateTime when, bool clahe = false)
+        => $"{UnetTag}_{modality}_{KindToken(kind)}{(clahe ? "_" + ClaheTag : "")}_{when:yyMMdd_HHmm}.onnx";
+
+    /// <summary>CLAHE 모델인지(영문자에 붙지 않은 clahe 토큰).</summary>
+    public static bool HasClahe(string? path)
+        => !string.IsNullOrWhiteSpace(path) && System.Text.RegularExpressions.Regex.IsMatch(
+            Path.GetFileNameWithoutExtension(path.Trim().Trim('"')), "(?<![a-z])clahe(?![a-z])",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
     /// <summary>파일명의 학습 라벨 종류(영문자에 붙지 않은 area·line 토큰). 없으면 null.</summary>
     public static LabelKind? LabelKindOf(string path)

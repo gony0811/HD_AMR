@@ -34,7 +34,8 @@
                         <TabStripItem Content="{Binding IrTabText}" />
                         <TabStripItem Content="{Binding RgbTabText}" />
                     </TabStrip>
-                    <TextBlock Classes="axis" Text="{Binding ListTitle}" />
+                    <TextBlock Classes="axis" Text="{Binding ListTitle}" TextWrapping="Wrap" />
+                    <TextBlock Classes="axis" Text="{Binding EmitterSummary}" IsVisible="{Binding EmitterSummary, Converter={x:Static ObjectConverters.IsNotNull}}" />
                     <ListBox ItemsSource="{Binding Entries}" SelectedItem="{Binding Selected}" Height="520" FontFamily="monospace" FontSize="12">
                         <ListBox.ItemTemplate><DataTemplate x:DataType="vm:CaptureEntryRow"><TextBlock Text="{Binding Label}" /></DataTemplate></ListBox.ItemTemplate>
                     </ListBox>
@@ -46,6 +47,8 @@
                     <Border Classes="alert" IsVisible="{Binding !HasSelection}"><TextBlock Text="왼쪽에서 촬영본을 선택하세요." /></Border>
                     <StackPanel IsVisible="{Binding HasSelection}" Spacing="6">
                         <StackPanel Orientation="Horizontal" Spacing="8">
+                            <CheckBox Content="CLAHE로 보기" IsChecked="{Binding ViewClahe}" VerticalAlignment="Center"
+                                      ToolTip.Tip="배경을 CLAHE(학습 전처리와 같은 방식)로 보여 줍니다. 어두운 곳의 비드가 잘 보입니다. 보기만 바뀌고 라벨은 원본 기준 그대로 저장됩니다." />
                             <ComboBox Width="110" SelectedIndex="{Binding KindIndex}" ToolTip.Tip="면·선 라벨은 따로 저장됩니다(_area.png / _line.json).">
                                 <ComboBoxItem>▦ 면 라벨</ComboBoxItem><ComboBoxItem>📏 선 라벨</ComboBoxItem>
                             </ComboBox>

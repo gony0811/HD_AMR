@@ -26,9 +26,9 @@ public partial class LabelEditorView : UserControl
             };
         DataContextChanged += (_, _) =>
         {
-            if (_vm is not null) { _vm.EditorOpenRequested -= OnOpen; _vm.BrushChanged -= OnBrush; _vm.ClearRequested -= OnClear; }
+            if (_vm is not null) { _vm.EditorOpenRequested -= OnOpen; _vm.BrushChanged -= OnBrush; _vm.ClearRequested -= OnClear; _vm.BaseImageRequested -= OnBase; }
             _vm = DataContext as LabelEditorViewModel;
-            if (_vm is not null) { _vm.EditorOpenRequested += OnOpen; _vm.BrushChanged += OnBrush; _vm.ClearRequested += OnClear; }
+            if (_vm is not null) { _vm.EditorOpenRequested += OnOpen; _vm.BrushChanged += OnBrush; _vm.ClearRequested += OnClear; _vm.BaseImageRequested += OnBase; }
         };
     }
 
@@ -38,4 +38,5 @@ public partial class LabelEditorView : UserControl
         _mask.LineMode = lineMode; _mask.Erase = erase; _mask.Radius = radius; _mask.LineThickness = thickness;
     }
     private void OnClear() => _mask.Clear();
+    private void OnBase(byte[] img) => _mask.SetBase(img);
 }
