@@ -15,6 +15,7 @@
     <ItemGroup>
       <!-- U-Net 학습/내보내기 스크립트. WeldTrainingService 가 실행 시 작업 폴더로 꺼내 python 으로 실행한다. -->
       <EmbeddedResource Include="Service\Vision\Scripts\weld_unet.py" LogicalName="weld_unet.py" />
+      <EmbeddedResource Include="Service\Vision\Scripts\weld_heatmap.py" LogicalName="weld_heatmap.py" />
     </ItemGroup>
 
     <ItemGroup>

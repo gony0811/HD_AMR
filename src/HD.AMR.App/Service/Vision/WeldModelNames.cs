@@ -12,6 +12,8 @@ public static class WeldModelNames
     public const string YoloTag = "weld_yolo";
     public const string LegacyYoloTag = "weld_seg";   // 이전 YOLO 내보내기 이름 — 기존 파일 호환
     public const string UnetTag = "weld_unet";
+    /// <summary>중심선 히트맵 모델(weld_heatmap.py) — 검출 방식은 U-Net 과 같은 칸을 쓴다(입력 채널로 자동 구분).</summary>
+    public const string HeatmapTag = "weld_heatmap";
 
     /// <summary>YOLO 내보내기 파일명.</summary>
     public static string YoloExportName(string modality) => $"{YoloTag}_{modality}.onnx";
@@ -19,12 +21,15 @@ public static class WeldModelNames
     /// <summary>U-Net 내보내기 파일명.</summary>
     public static string UnetExportName(string modality) => $"{UnetTag}_{modality}.onnx";
 
+    /// <summary>중심선 히트맵 내보내기 파일명.</summary>
+    public static string HeatmapExportName(string modality) => $"{HeatmapTag}_{modality}.onnx";
+
     /// <summary>'자동' 선택 시 YOLO 후보(우선순위): weld_yolo_{m} → weld_seg_{m} → weld_seg.onnx(레거시).</summary>
     public static IReadOnlyList<string> YoloAutoCandidates(string modality) =>
         [YoloExportName(modality), $"{LegacyYoloTag}_{modality}.onnx", $"{LegacyYoloTag}.onnx"];
 
-    /// <summary>U-Net 모델 파일인지(이름 어디든 weld_unet).</summary>
-    public static bool IsUnet(string path) => Contains(path, UnetTag);
+    /// <summary>U-Net 칸 모델 파일인지(이름 어디든 weld_unet 또는 weld_heatmap).</summary>
+    public static bool IsUnet(string path) => Contains(path, UnetTag) || Contains(path, HeatmapTag);
 
     /// <summary>
     /// YOLO 모델 파일인지 — 이름 어디든 weld_yolo/weld_seg (U-Net 표식이 있으면 제외). 학습 run 의 YOLO 산출물

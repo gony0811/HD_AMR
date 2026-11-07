@@ -44,6 +44,11 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
     // ⑤ U-Net (PyTorch, 크롭 학습)
     [ObservableProperty] private int _unetEpochs = 100, _unetBatch = 8, _unetCrop = 384, _unetPatience = 30;
     [ObservableProperty] private int _unetBaseIndex;           // 0 base16(빠름), 1 base32(정확)
+
+    // ⑥ 중심선 히트맵 (ResNet18 사전학습 U-Net, 선 라벨 직접 사용)
+    [ObservableProperty] private int _heatEpochs = 150, _heatBatch = 8, _heatPatience = 40;
+    [ObservableProperty] private bool _heatPretrained = true;
+    public string HeatmapExportButtonText => $"best.pt → weld_heatmap_{ExportModality}.onnx";
     [ObservableProperty] private int _rotDirIndex;           // 0 cw, 1 ccw, 2 both
     [ObservableProperty] private string? _convertText, _rotText;
     [ObservableProperty] private bool _working;
@@ -119,6 +124,7 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
     partial void OnExportModalityIndexChanged(int value)
     {
         OnPropertyChanged(nameof(ExportButtonText)); OnPropertyChanged(nameof(UnetExportButtonText));
+        OnPropertyChanged(nameof(HeatmapExportButtonText));
     }
 
     private async Task PollAsync()
@@ -269,6 +275,22 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
         Message = null;
         try { await _train.StartUnetExportAsync(ExportModality); }
         catch (Exception ex) { Notify($"U-Net 내보내기 시작 실패: {ex.Message}", true); }
+    }
+
+    [RelayCommand]
+    private async Task StartHeatmapTrain()
+    {
+        Message = null;
+        try { await _train.StartHeatmapTrainingAsync(ExportModality, HeatEpochs, HeatBatch, HeatPatience, HeatPretrained); }
+        catch (Exception ex) { Notify($"히트맵 학습 시작 실패: {ex.Message}", true); }
+    }
+
+    [RelayCommand]
+    private async Task StartHeatmapExport()
+    {
+        Message = null;
+        try { await _train.StartHeatmapExportAsync(ExportModality); }
+        catch (Exception ex) { Notify($"히트맵 내보내기 시작 실패: {ex.Message}", true); }
     }
 
     [RelayCommand] private void Stop() => _train.Stop();

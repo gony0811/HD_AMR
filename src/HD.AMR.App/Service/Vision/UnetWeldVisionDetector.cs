@@ -7,7 +7,8 @@ using OpenCvSharp;
 namespace HD.AMR.App.Service.Vision;
 
 /// <summary>
-/// U-Net 세그멘테이션(<c>weld_unet_{ir|rgb}.onnx</c>) 기반 용접라인 검출기. Weld ROI 를 그레이로 잘라
+/// U-Net 세그멘테이션(<c>weld_unet_{ir|rgb}.onnx</c>) 또는 중심선 히트맵(<c>weld_heatmap_{ir|rgb}.onnx</c>,
+/// <see cref="HeatmapSegmenter"/> — 입력 채널 수로 자동 구분) 기반 용접라인 검출기. Weld ROI 를 그레이로 잘라
 /// <see cref="UnetSegmenter"/> 로 픽셀별 비드 마스크를 얻고, 공유 분석기(<see cref="WeldMaskAnalyzer"/>, RANSAC)로
 /// 중심선·d·오버레이를 만든다. 학습 PNG 와 같은 해석을 위해 그레이는 항상 BGR→GRAY 로 만든다(HSV 모드 무관).
 /// 세션은 경로+수정시각으로 캐시하고 추론을 직렬화한다(단일 운영자 전제).
@@ -56,13 +57,29 @@ public sealed class UnetWeldVisionDetector : IUnetWeldVisionDetector
                 return WeldDetectionResult.Fail("Weld ROI 가 프레임 범위를 벗어났습니다.");
 
             using var roiBgr = new Mat(bgr, new Rect(roi.X, roi.Y, roi.Width, roi.Height));
-            using var roiGray = new Mat();
-            Cv2.CvtColor(roiBgr, roiGray, ColorConversionCodes.BGR2GRAY);
-            roiGray.GetArray(out byte[] g);
 
             byte[] m;
             lock (_gate)
-                m = UnetSegmenter.Segment(GetSession(modelPath), g, roi.Width, roi.Height, (float)p.UnetThreshold);
+            {
+                var session = GetSession(modelPath);
+                if (HeatmapSegmenter.LooksLikeHeatmap(session))
+                {
+                    // 중심선 히트맵(weld_heatmap): 3채널 RGB 입력, 학습 배율로 줄여 추론 → 슬라이스별 최댓값 띠 마스크.
+                    using var roiRgb = new Mat();
+                    Cv2.CvtColor(roiBgr, roiRgb, ColorConversionCodes.BGR2RGB);
+                    var rgb = new byte[roi.Width * roi.Height * 3];
+                    System.Runtime.InteropServices.Marshal.Copy(roiRgb.Data, rgb, 0, rgb.Length);
+                    m = HeatmapSegmenter.RidgeMask(session, rgb, roi.Width, roi.Height, bgr.Width,
+                        p.ProgressAxis == WeldProgressAxis.Horizontal, (float)p.UnetThreshold);
+                }
+                else
+                {
+                    using var roiGray = new Mat();
+                    Cv2.CvtColor(roiBgr, roiGray, ColorConversionCodes.BGR2GRAY);
+                    roiGray.GetArray(out byte[] g);
+                    m = UnetSegmenter.Segment(session, g, roi.Width, roi.Height, (float)p.UnetThreshold);
+                }
+            }
 
             return WeldMaskAnalyzer.Analyze(bgr, m, roi, p, bgr.Width, bgr.Height,
                 referenceMode, peakReferencePos, peakProgressPos, peakLabel, peakRoi, peakCrossStart, peakCrossEnd);
@@ -98,11 +115,12 @@ public sealed class UnetWeldVisionDetector : IUnetWeldVisionDetector
         if (_cache is { } c && c.Path == modelPath && c.Mtime == mtime) return c.Session;
         _cache?.Session.Dispose();
         var sess = new InferenceSession(modelPath, new SessionOptions { GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL });
-        if (!UnetSegmenter.LooksLikeUnet(sess))
+        if (!UnetSegmenter.LooksLikeUnet(sess) && !HeatmapSegmenter.LooksLikeHeatmap(sess))
         {
             sess.Dispose();
             _cache = null;
-            throw new InvalidOperationException($"U-Net 형식(입력 1채널, 출력 1개)의 모델이 아닙니다: {Path.GetFileName(modelPath)}");
+            throw new InvalidOperationException(
+                $"U-Net(입력 1채널) 또는 중심선 히트맵(입력 3채널) 형식의 모델이 아닙니다: {Path.GetFileName(modelPath)}");
         }
         _cache = (modelPath, mtime, sess);
         _log.LogInformation("U-Net ONNX 세션 로드: {Path}", modelPath);

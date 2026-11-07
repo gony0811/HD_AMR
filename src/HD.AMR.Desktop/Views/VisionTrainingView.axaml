@@ -141,6 +141,30 @@
                     </StackPanel>
                 </TabItem>
 
+                <!-- ⑥ 중심선 히트맵 -->
+                <TabItem Header="⑥ 중심선 히트맵">
+                    <StackPanel Spacing="8" Margin="0,8,0,0">
+                        <TextBlock Text="용접선 중심선 히트맵 (ResNet18 사전학습 U-Net · 선 라벨 직접 학습)" FontWeight="SemiBold" />
+                        <Border Classes="alert" IsVisible="{Binding !TorchReady}">
+                            <TextBlock TextWrapping="Wrap" Text="torch 가 감지되지 않았습니다. pip install ultralytics (torch·torchvision 포함) 후 Python 다시 감지." />
+                        </Border>
+                        <TextBlock Classes="hint" TextWrapping="Wrap"
+                                   Text="데이터셋 변환 없이 캡처 폴더의 선 라벨(_line.json: 수동 비드 입력·라벨 편집·IR↔RGB 자동 변환)을 그대로 씁니다. 비드 마스크 대신 중심선 위치를 학습하고, 촬영 세션 단위로 검증해 영상 중앙 위치 오차(px)가 가장 작은 best.pt 를 저장합니다. RGB 는 용접 물결무늬가 보여 권장 — 라벨 150~300장 이상에서 의미 있는 결과가 나옵니다." />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <StackPanel><TextBlock Classes="axis" Text="모달리티" /><ComboBox Width="90" SelectedIndex="{Binding ExportModalityIndex}"><ComboBoxItem>RGB</ComboBoxItem><ComboBoxItem>IR</ComboBoxItem></ComboBox></StackPanel>
+                            <StackPanel><TextBlock Classes="axis" Text="epochs" /><NumericUpDown Value="{Binding HeatEpochs}" Minimum="1" Increment="10" FormatString="0" /></StackPanel>
+                            <StackPanel><TextBlock Classes="axis" Text="batch" /><NumericUpDown Value="{Binding HeatBatch}" Minimum="1" Increment="1" FormatString="0" /></StackPanel>
+                            <StackPanel><TextBlock Classes="axis" Text="patience" /><NumericUpDown Value="{Binding HeatPatience}" Minimum="1" Increment="10" FormatString="0" /></StackPanel>
+                            <CheckBox VerticalAlignment="Bottom" Content="ImageNet 사전학습 (첫 실행 약 45MB 내려받기)" IsChecked="{Binding HeatPretrained}" />
+                            <Button VerticalAlignment="Bottom" Content="히트맵 학습 시작" Classes="accent" Command="{Binding StartHeatmapTrainCommand}" IsEnabled="{Binding TorchReady}" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button VerticalAlignment="Bottom" Content="{Binding HeatmapExportButtonText}" Command="{Binding StartHeatmapExportCommand}" IsEnabled="{Binding TorchReady}" />
+                        </StackPanel>
+                        <TextBlock Classes="hint" TextWrapping="Wrap" Text="내보낸 모델은 용접 추적·비교평가·시퀀스에서 검출 방식 'U-Net' 칸의 모델 목록에 나타납니다(입력 3채널로 자동 구분). 진행 로그: Epoch k/N · val_center_px(영상 중앙 위치 오차) · val_found(검출률)." />
+                    </StackPanel>
+                </TabItem>
+
                 <!-- ④ 추론 -->
                 <TabItem Header="④ 추론 · 검증">
                     <StackPanel Spacing="8" Margin="0,8,0,0">

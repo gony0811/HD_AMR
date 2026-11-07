@@ -557,13 +557,72 @@ public sealed class WeldTrainingService
             TrainingPhase.Exporting, "U-Net 내보내기");
     }
 
+    // ── 중심선 히트맵 학습 / 내보내기 ───────────────────────────────────────────
+    /// <summary>중심선 히트맵 학습 산출물 폴더(runs/heatmap_{modality}).</summary>
+    public static string HeatmapRunDir(TrainingPaths p, string modality) => Path.Combine(p.Runs, $"heatmap_{modality}");
+
+    /// <summary>
+    /// 중심선 히트맵 학습(weld_heatmap.py, ResNet18 사전학습 인코더 U-Net). 데이터셋 변환 없이 캡처 폴더의
+    /// <c>{stem}_{modality}.png</c> + <c>_line.json</c> 선 라벨을 바로 읽고, 촬영 세션 단위로 검증셋을 나눈다.
+    /// 장치는 스크립트가 고른다(cuda → mps → cpu). <paramref name="pretrained"/> 면 첫 실행 때 ImageNet 가중치(약 45MB)를 내려받는다.
+    /// </summary>
+    public async Task StartHeatmapTrainingAsync(string modality, int epochs, int batch, int patience, bool pretrained)
+    {
+        if (IsBusy) throw new InvalidOperationException("이미 실행 중인 작업이 있습니다.");
+        modality = modality == "ir" ? "ir" : "rgb";
+        var paths = await GetPathsAsync() ?? throw new InvalidOperationException("캡처 폴더 미설정");
+        if (!Directory.EnumerateFiles(paths.CaptureDir, $"*_{modality}_line.json").Any())
+            throw new FileNotFoundException(
+                $"{modality.ToUpperInvariant()} 선 라벨(*_{modality}_line.json)이 캡처 폴더에 없습니다 — 수동 비드 입력·라벨 편집으로 먼저 라벨을 만드세요.",
+                paths.CaptureDir);
+
+        var script = await WriteScriptAsync(paths, "weld_heatmap.py");
+        var py = await GetPythonAsync();
+        var args = new List<string>
+        {
+            script, "train", "--captures", paths.CaptureDir, "--modality", modality, "--out", HeatmapRunDir(paths, modality),
+            "--epochs", epochs.ToString(), "--batch", batch.ToString(), "--patience", Math.Max(1, patience).ToString(),
+            "--device", "auto",
+        };
+        if (!pretrained) args.Add("--no-pretrained");
+        TrainTotalEpochs = epochs;
+        TrainCurrentEpoch = 0;
+        TrainStartUtc = DateTime.UtcNow;
+        TrainEndUtc = null;
+        Emit($"[히트맵 학습] 시작 — {modality.ToUpperInvariant()} epochs={epochs} batch={batch} patience={patience} 사전학습={(pretrained ? "예" : "아니오")}");
+        StartProcess(py, args.ToArray(), paths.Workspace, TrainingPhase.Training, "히트맵 학습");
+    }
+
+    /// <summary>히트맵 best.pt → models/weld_heatmap_{modality}.onnx (train_width 메타데이터 포함).</summary>
+    public async Task StartHeatmapExportAsync(string modality)
+    {
+        if (IsBusy) throw new InvalidOperationException("이미 실행 중인 작업이 있습니다.");
+        modality = modality == "ir" ? "ir" : "rgb";
+        var paths = await GetPathsAsync() ?? throw new InvalidOperationException("캡처 폴더 미설정");
+        var best = Path.Combine(HeatmapRunDir(paths, modality), "best.pt");
+        if (!File.Exists(best))
+            throw new FileNotFoundException($"히트맵 가중치(best.pt)가 없습니다. 먼저 {modality.ToUpperInvariant()} 히트맵 학습을 완료하세요.", best);
+
+        var script = await WriteScriptAsync(paths, "weld_heatmap.py");
+        var py = await GetPythonAsync();
+        var outPath = Path.Combine(paths.Models, WeldModelNames.HeatmapExportName(modality));
+        Directory.CreateDirectory(paths.Models);
+        TrainTotalEpochs = 0;
+        Emit($"[히트맵 내보내기] 시작 — {best} → {Path.GetFileName(outPath)}");
+        StartProcess(py, new[] { script, "export", "--weights", best, "--out", outPath }, paths.Workspace,
+            TrainingPhase.Exporting, "히트맵 내보내기");
+    }
+
     // 임베드 리소스(weld_unet.py)를 작업 폴더로 꺼낸다(매번 덮어써 앱 버전과 스크립트를 일치시킴).
-    private static async Task<string> WriteUnetScriptAsync(TrainingPaths paths)
+    private static Task<string> WriteUnetScriptAsync(TrainingPaths paths) => WriteScriptAsync(paths, "weld_unet.py");
+
+    /// <summary>임베드 리소스 스크립트를 작업 폴더의 <c>_{name}</c> 으로 꺼낸다(매번 덮어씀).</summary>
+    private static async Task<string> WriteScriptAsync(TrainingPaths paths, string name)
     {
         Directory.CreateDirectory(paths.Workspace);
-        var dst = Path.Combine(paths.Workspace, "_weld_unet.py");
-        await using var src = typeof(WeldTrainingService).Assembly.GetManifestResourceStream("weld_unet.py")
-            ?? throw new InvalidOperationException("내장 U-Net 스크립트(weld_unet.py)를 찾지 못했습니다.");
+        var dst = Path.Combine(paths.Workspace, "_" + name);
+        await using var src = typeof(WeldTrainingService).Assembly.GetManifestResourceStream(name)
+            ?? throw new InvalidOperationException($"내장 스크립트({name})를 찾지 못했습니다.");
         await using var fs = File.Create(dst);
         await src.CopyToAsync(fs);
         return dst;
