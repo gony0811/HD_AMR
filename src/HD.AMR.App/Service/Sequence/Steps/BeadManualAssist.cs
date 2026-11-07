@@ -37,6 +37,9 @@ public sealed record BeadAssistOutcome(BeadAssistKind Kind, PeakMeasurement? Mea
 /// </summary>
 public sealed class BeadManualAssist
 {
+    /// <summary>팝업 조그 이동 뒤 프레임을 다시 찍기 전 대기 [ms].</summary>
+    internal const int RecaptureSettleMs = 500;
+
     private readonly BeadManualLabelHub _hub;
     private readonly WeldTrackingService _weld;
     private readonly CameraService _camera;
@@ -73,39 +76,58 @@ public sealed class BeadManualAssist
         if (!BeadManualSettings.ShouldAsk(trigger, autoOk, conf, minConf))
             return new(BeadAssistKind.NotAsked, autoM, "");
 
-        var snap = await _weld.PrepareManualBeadAsync(peakId, peakRoi, beadRoi, detect, ct);
-        if (snap is null)
-        {
-            _logger.LogWarning("[{Stage}] 수동 비드 입력 불가 — IR/Depth 프레임 없음. 자동 결과로 판정.", stage);
-            return new(BeadAssistKind.Unavailable, autoM, " (수동 입력 불가: 프레임 없음)");
-        }
-
         string reason = !autoOk
             ? $"자동 검출 실패 — {autoFailNote ?? "결과 없음"}"
             : conf < minConf
                 ? $"자동 검출 신뢰도 낮음 — coverage {conf:P0} < {minConf:P0}"
                 : $"확인 요청(매번) — 자동 coverage {conf:P0}";
 
-        string defaultMod = snap.AutoModality == "rgb" && snap.ColorGuide is not null ? "rgb" : "ir";
-        var req = new ManualBeadRequest
+        // 팝업에서 조그로 코봇을 옮기면(Recapture) 현재 자리에서 프레임을 다시 찍어 새 요청을 올린다. 옮긴 뒤에는
+        // 자동 결과가 처음 자리 기준이라 쓸 수 없다 — "자동 결과로 진행"을 막고, 시간 초과도 실패로 본다.
+        ManualBeadSnapshot? snap;
+        ManualBeadAnswer answer;
+        var jogs = 0;
+        while (true)
         {
-            PeakId = peakId,
-            Stage = stage,
-            Reason = reason,
-            AutoUsable = autoOk,
-            DefaultModality = defaultMod,
-            IrPng = snap.IrPng,
-            ColorPng = snap.ColorPng,
-            IrGuide = snap.IrGuide,
-            ColorGuide = snap.ColorGuide,
-            DeadlineUtc = DateTime.UtcNow.AddSeconds(timeoutSec),
-        };
+            var useAuto = autoOk && jogs == 0;
+            snap = await _weld.PrepareManualBeadAsync(peakId, peakRoi, beadRoi, jogs == 0 ? detect : null, ct);
+            if (snap is null)
+            {
+                _logger.LogWarning("[{Stage}] 수동 비드 입력 불가 — IR/Depth 프레임 없음. 자동 결과로 판정.", stage);
+                return jogs == 0
+                    ? new(BeadAssistKind.Unavailable, autoM, " (수동 입력 불가: 프레임 없음)")
+                    : new(BeadAssistKind.NoAnswer, null, $" — 조그 {jogs}회 후 프레임을 다시 찍지 못했습니다");
+            }
 
-        context.Progress?.Invoke($"{stage}: 수동 비드 입력 대기(최대 {timeoutSec}s) — {reason}");
-        _logger.LogInformation("[{Stage}] 수동 비드 입력 요청: {Reason} (조건={Trigger}, 대기 {Sec}s)",
-            stage, reason, BeadManualSettings.ToParam(trigger), timeoutSec);
+            string defaultMod = snap.AutoModality == "rgb" && snap.ColorGuide is not null ? "rgb" : "ir";
+            var req = new ManualBeadRequest
+            {
+                PeakId = peakId,
+                Stage = stage,
+                Reason = jogs == 0 ? reason : $"{reason} · 조그 {jogs}회 후 다시 찍은 화면(자동 결과 사용 불가)",
+                AutoUsable = useAuto,
+                DefaultModality = defaultMod,
+                IrPng = snap.IrPng,
+                ColorPng = snap.ColorPng,
+                IrGuide = snap.IrGuide,
+                ColorGuide = snap.ColorGuide,
+                DeadlineUtc = DateTime.UtcNow.AddSeconds(timeoutSec),
+                Tool = context.Tool,
+                JogCount = jogs,
+            };
 
-        var answer = await _hub.AskAsync(req, TimeSpan.FromSeconds(timeoutSec), ct);
+            context.Progress?.Invoke($"{stage}: 수동 비드 입력 대기(최대 {timeoutSec}s) — {req.Reason}");
+            _logger.LogInformation("[{Stage}] 수동 비드 입력 요청: {Reason} (조건={Trigger}, 대기 {Sec}s, 조그 {Jogs}회)",
+                stage, req.Reason, BeadManualSettings.ToParam(trigger), timeoutSec, jogs);
+
+            answer = await _hub.AskAsync(req, TimeSpan.FromSeconds(timeoutSec), ct);
+            if (answer.Decision != ManualBeadDecision.Recapture) break;
+
+            jogs++;
+            _logger.LogInformation("[{Stage}] 팝업 조그로 코봇 이동 — 프레임 다시 찍기 ({Jogs}회)", stage, jogs);
+            await Task.Delay(RecaptureSettleMs, ct);   // 이동 직후 프레임 흔들림·지연 대기
+        }
+        autoOk = autoOk && jogs == 0;
 
         switch (answer.Decision)
         {
@@ -118,7 +140,8 @@ public sealed class BeadManualAssist
                 var saved = await SaveTrainingAsync(snap, answer.Modality, answer.Points, ct);
                 _logger.LogInformation("[{Stage}] 수동 비드 입력 적용: 영상={Mod}, d={DPx:0.0}px, 학습 데이터={Saved}",
                     stage, answer.Modality, m.DPixel, saved);
-                return new(BeadAssistKind.Manual, m, $" [수동 입력 {answer.Modality.ToUpperInvariant()}, {saved}]");
+                var jogNote = jogs > 0 ? $", 조그 {jogs}회 후" : "";
+                return new(BeadAssistKind.Manual, m, $" [수동 입력 {answer.Modality.ToUpperInvariant()}{jogNote}, {saved}]");
             }
             case ManualBeadDecision.UseAuto when autoOk:
                 return new(BeadAssistKind.AutoAccepted, autoM, " [작업자: 자동 결과로 진행]");

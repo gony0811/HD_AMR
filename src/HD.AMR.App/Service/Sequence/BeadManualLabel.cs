@@ -25,10 +25,21 @@ public static class BeadManualSettings
     public const string TriggerKey = "Sequence.BeadManual.Trigger";
     public const string MinConfidenceKey = "Sequence.BeadManual.MinConfidence";
     public const string TimeoutSecKey = "Sequence.BeadManual.TimeoutSec";
+    public const string JogVelPctKey = "Sequence.BeadManual.JogVelPct";
+    public const string JogStepMmKey = "Sequence.BeadManual.JogStepMm";
 
     public const BeadManualTrigger DefaultTrigger = BeadManualTrigger.OnLowConfidence;
     public const double DefaultMinConfidence = 0.5;
     public const int DefaultTimeoutSec = 300;
+
+    /// <summary>팝업 조그 속도 [%] 기본값과 허용 범위.</summary>
+    public const double DefaultJogVelPct = 20, MinJogVelPct = 1, MaxJogVelPct = 100;
+
+    /// <summary>팝업 조그 1회 이동량 [mm] 기본값과 허용 범위.</summary>
+    public const double DefaultJogStepMm = 20, MinJogStepMm = 0.5, MaxJogStepMm = 100;
+
+    public static double ClampJogVelPct(double v) => Math.Clamp(v, MinJogVelPct, MaxJogVelPct);
+    public static double ClampJogStepMm(double v) => Math.Clamp(v, MinJogStepMm, MaxJogStepMm);
 
     /// <summary>파라미터 값 → 조건. 대소문자 무시, 한글 별칭 허용. 알 수 없는 값이면 null.</summary>
     public static BeadManualTrigger? ParseTrigger(string? value)
@@ -73,6 +84,10 @@ public static class BeadManualSettings
             "Bead 찾기 수동 입력 — lowConfidence 조건의 coverage 임계(0~1). 이 값 미만이면 팝업."),
         (TimeoutSecKey, DefaultTimeoutSec.ToString(CultureInfo.InvariantCulture),
             "Bead 찾기 수동 입력 대기 시간(초). 응답이 없으면 자동 결과가 있으면 그걸로 진행, 없으면 실패 처리. 10~3600."),
+        (JogVelPctKey, DefaultJogVelPct.ToString(CultureInfo.InvariantCulture),
+            "수동 비드 입력 팝업 조그 속도(%) — 툴 좌표계 평면 이동. 1~100. 팝업에서 바꾸면 이 값도 바뀐다."),
+        (JogStepMmKey, DefaultJogStepMm.ToString(CultureInfo.InvariantCulture),
+            "수동 비드 입력 팝업 조그 1회 이동량(mm) — 좌/우/상/하 버튼 한 번에 움직이는 거리. 0.5~100. 팝업에서 바꾸면 이 값도 바뀐다."),
     ];
 }
 
@@ -111,6 +126,10 @@ public sealed class ManualBeadRequest
     public ManualBeadGuide IrGuide { get; init; } = null!;
     public ManualBeadGuide? ColorGuide { get; init; }
     public DateTime DeadlineUtc { get; init; }
+    /// <summary>시퀀스가 쓰는 공구 번호 — 팝업 조그가 같은 툴 좌표계로 움직이도록.</summary>
+    public int? Tool { get; init; }
+    /// <summary>이 요청 전에 팝업 조그로 움직인 횟수(0 = 처음 측정 자리).</summary>
+    public int JogCount { get; init; }
 }
 
 public enum ManualBeadDecision
@@ -123,6 +142,8 @@ public enum ManualBeadDecision
     Reject,
     Timeout,
     Canceled,
+    /// <summary>팝업에서 조그로 코봇을 옮겼다 — 현재 자리에서 프레임을 다시 찍어 새 요청을 올린다.</summary>
+    Recapture,
 }
 
 /// <summary>UI 응답. <see cref="Points"/> 는 <see cref="Modality"/> 영상 픽셀 좌표(Manual 일 때만 의미).</summary>

@@ -48,6 +48,12 @@ public partial class BeadManualLabelWindow : Window
     private bool _live;
     private bool _busy;
 
+    // 조그(두 모드 공통)
+    private IServiceScope? _jogScope;
+    private BeadManualJogService? _jog;
+    private bool _jogging;
+    private bool _jogLoading;
+
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(1) };
     private View? _view;
     private string _mod = "ir";
@@ -64,6 +70,14 @@ public partial class BeadManualLabelWindow : Window
         RgbRadio.IsCheckedChanged += (_, _) => { if (RgbRadio.IsChecked == true) ShowModality("rgb"); };
         ClearBtn.Click += (_, _) => BeadCanvas.Clear();
         LoadAutoBtn.Click += (_, _) => LoadAutoLine();
+        JogLeftBtn.Click += async (_, _) => await JogAsync(BeadJogDirection.Left);
+        JogRightBtn.Click += async (_, _) => await JogAsync(BeadJogDirection.Right);
+        JogUpBtn.Click += async (_, _) => await JogAsync(BeadJogDirection.Up);
+        JogDownBtn.Click += async (_, _) => await JogAsync(BeadJogDirection.Down);
+        JogVelBox.ValueChanged += async (_, _) => await SaveJogSettingsAsync();
+        JogStepBox.ValueChanged += async (_, _) => await SaveJogSettingsAsync();
+        JogPanel.IsVisible = false;   // 서비스가 연결되면(InitJog) 보인다
+        Closed += (_, _) => _jogScope?.Dispose();
     }
 
     /// <summary>시퀀스 모드 — 시퀀스 요청에 응답.</summary>
@@ -82,6 +96,8 @@ public partial class BeadManualLabelWindow : Window
         RejectBtn.Click += (_, _) => Answer(ManualBeadAnswer.Of(ManualBeadDecision.Reject));
 
         SetView(new View(req.IrPng, req.ColorPng, req.IrGuide, req.ColorGuide), req.DefaultModality);
+        InitJog(Program.Services);
+        if (req.JogCount > 0) JogStatusText.Text = $"조그 {req.JogCount}회 후 다시 찍은 화면입니다.";
 
         _timer.Tick += (_, _) => UpdateCountdown();
         UpdateCountdown();
@@ -126,6 +142,7 @@ public partial class BeadManualLabelWindow : Window
         ConfirmBtn.Click += async (_, _) => await ConfirmTestAsync();
         RejectBtn.Click += (_, _) => Close();
 
+        InitJog(services);
         _liveTimer.Tick += async (_, _) => await LiveTickAsync();
         Opened += (_, _) => SetLive(true);
         Closed += (_, _) =>
@@ -287,6 +304,67 @@ public partial class BeadManualLabelWindow : Window
         e.Cancel = true;
         PreviewText.Text = "시퀀스가 응답을 기다리고 있습니다 — 아래 버튼으로 진행/실패를 선택하세요.";
     }
+
+    // ── 조그 ───────────────────────────────────────────────────────
+
+    /// <summary>조그 서비스 연결 + 파라미터(속도·1회 이동량)로 입력칸 초기화. 서비스가 없으면 조그 패널을 숨긴다.</summary>
+    private async void InitJog(IServiceProvider? services)
+    {
+        if (services is null) return;
+        try
+        {
+            _jogScope = services.CreateScope();
+            _jog = _jogScope.ServiceProvider.GetService<BeadManualJogService>();
+            if (_jog is null) return;
+            JogPanel.IsVisible = true;
+            var (vel, step) = await _jog.GetSettingsAsync();
+            _jogLoading = true;
+            JogVelBox.Value = (decimal)vel;
+            JogStepBox.Value = (decimal)step;
+        }
+        catch (Exception ex) { JogStatusText.Text = $"조그 설정 읽기 실패: {ex.Message}"; }
+        finally { _jogLoading = false; }
+    }
+
+    private double JogVel => (double)(JogVelBox.Value ?? (decimal)BeadManualSettings.DefaultJogVelPct);
+    private double JogStep => (double)(JogStepBox.Value ?? (decimal)BeadManualSettings.DefaultJogStepMm);
+
+    private async Task SaveJogSettingsAsync()
+    {
+        if (_jog is null || _jogLoading || JogVelBox.Value is null || JogStepBox.Value is null) return;
+        try { await _jog.SaveSettingsAsync(JogVel, JogStep); }
+        catch (Exception ex) { JogStatusText.Text = $"조그 설정 저장 실패: {ex.Message}"; }
+    }
+
+    /// <summary>
+    /// 카메라를 화면 방향으로 1회 이동. 시퀀스 모드는 이동 뒤 "다시 찍기"로 응답해 시퀀스가 현재 자리의 프레임으로
+    /// 새 팝업을 띄운다(이동 뒤 자동 결과는 쓸 수 없음). 테스트 모드는 라이브 화면을 다시 켠다.
+    /// </summary>
+    private async Task JogAsync(BeadJogDirection dir)
+    {
+        if (_jog is null || _jogging || _answered) return;
+        _jogging = true;
+        SetJogEnabled(false);
+        JogStatusText.ClearValue(TextBlock.ForegroundProperty);
+        JogStatusText.Text = $"조그 {BeadManualJogService.Name(dir)} {JogStep:0.#}mm 이동 중…";
+        try
+        {
+            var (ok, msg) = await _jog.JogAsync(dir, JogStep, JogVel, _req?.Tool);
+            JogStatusText.Text = msg;
+            if (!ok) { JogStatusText.Foreground = HitBrush; return; }
+
+            if (_req is not null) Answer(new ManualBeadAnswer(ManualBeadDecision.Recapture, _mod, Array.Empty<PixelPoint>()));
+            else SetLive(true);
+        }
+        finally
+        {
+            _jogging = false;
+            SetJogEnabled(true);
+        }
+    }
+
+    private void SetJogEnabled(bool on)
+        => JogLeftBtn.IsEnabled = JogRightBtn.IsEnabled = JogUpBtn.IsEnabled = JogDownBtn.IsEnabled = on;
 
     // ── 테스트 모드 ─────────────────────────────────────────────────
 

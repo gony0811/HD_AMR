@@ -164,6 +164,7 @@ internal static class ServiceRegistration
         services.AddSingleton<BeadManualLabelHub>();
         services.AddScoped<HD.AMR.App.Service.Sequence.Steps.BeadManualAssist>();
         services.AddScoped<HD.AMR.App.Service.Sequence.Steps.BeadManualTestService>();
+        services.AddScoped<HD.AMR.App.Service.Sequence.Steps.BeadManualJogService>();
         AddSequenceSteps(services);
         // SequenceService 는 스텝/상태를 보유 — 페이지 수명 scope 에서 해석(뷰모델이 scope 개방).
         services.AddScoped<SequenceService>();
