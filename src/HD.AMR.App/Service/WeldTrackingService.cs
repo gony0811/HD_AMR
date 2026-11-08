@@ -99,10 +99,10 @@ public class WeldTrackingService
     public const string ImageModeKey = "Weld.ImageMode";
 
     /// <summary>DL 검출 confidence 임계값 파라미터. 없으면 <see cref="WeldDetectionParams.DlConfidence"/> 기본값.</summary>
-    public const string DlConfidenceKey = "Weld.Dl.Confidence";
+    public const string DlConfidenceKey = "Weld.Yolo.Confidence";
 
     /// <summary>DL 마스크 확률 임계값 파라미터. 없으면 <see cref="WeldDetectionParams.DlMaskThreshold"/> 기본값.</summary>
-    public const string DlMaskThresholdKey = "Weld.Dl.MaskThreshold";
+    public const string DlMaskThresholdKey = "Weld.Yolo.MaskThreshold";
 
     /// <summary>U-Net 비드 확률 임계값 파라미터. 없으면 <see cref="WeldDetectionParams.UnetThreshold"/> 기본값.</summary>
     public const string UnetThresholdKey = "Weld.Unet.Threshold";
@@ -475,8 +475,8 @@ public class WeldTrackingService
         {
             using var scope = _scopeFactory.CreateScope();
             var param = scope.ServiceProvider.GetRequiredService<ParameterService>();
-            await param.SetDoubleAsync(DlConfidenceKey, confidence, "DL 비드 검출 confidence 임계값");
-            await param.SetDoubleAsync(DlMaskThresholdKey, maskThreshold, "DL 비드 마스크 확률 임계값");
+            await param.SetDoubleAsync(DlConfidenceKey, confidence, "YOLO 비드 검출 confidence 임계값");
+            await param.SetDoubleAsync(DlMaskThresholdKey, maskThreshold, "YOLO 비드 마스크 확률 임계값");
             _logger.LogInformation("용접 추적 DL 임계값 저장: conf={Conf:0.00}, mask={Mask:0.00}", confidence, maskThreshold);
         }
         catch (Exception ex)
@@ -538,10 +538,10 @@ public class WeldTrackingService
             var param = scope.ServiceProvider.GetRequiredService<ParameterService>();
             if (await param.GetDoubleAsync(DlConfidenceKey) is { } conf)
                 Params.DlConfidence = Math.Clamp(conf, DlConfidenceMin, DlConfidenceMax);
-            else if (seedMissing) await SeedAsync(DlConfidenceKey, Params.DlConfidence, "DL 비드 검출 confidence 임계값");
+            else if (seedMissing) await SeedAsync(DlConfidenceKey, Params.DlConfidence, "YOLO 비드 검출 confidence 임계값");
             if (await param.GetDoubleAsync(DlMaskThresholdKey) is { } mask)
                 Params.DlMaskThreshold = Math.Clamp(mask, DlMaskThresholdMin, DlMaskThresholdMax);
-            else if (seedMissing) await SeedAsync(DlMaskThresholdKey, Params.DlMaskThreshold, "DL 비드 마스크 확률 임계값");
+            else if (seedMissing) await SeedAsync(DlMaskThresholdKey, Params.DlMaskThreshold, "YOLO 비드 마스크 확률 임계값");
             if (await param.GetDoubleAsync(UnetThresholdKey) is { } ut)
                 Params.UnetThreshold = Math.Clamp(ut, UnetThresholdMin, UnetThresholdMax);
             else if (seedMissing) await SeedAsync(UnetThresholdKey, Params.UnetThreshold, "U-Net 비드 확률 임계값");

@@ -35,13 +35,13 @@ public sealed class DlWeldVisionDetector : IDlWeldVisionDetector
         double? peakProgressPos = null, string? peakLabel = null, RoiRect? peakRoi = null,
         double? peakCrossStart = null, double? peakCrossEnd = null)
     {
-        // 모델은 반드시 지정(Weld.Dl.ModelPath, 파일명만이면 models 폴더 기준). 빈값 자동 선택은 하지 않는다 —
+        // 모델은 반드시 지정(Weld.Yolo.ModelPath, 파일명만이면 models 폴더 기준). 빈값 자동 선택은 하지 않는다 —
         // 어떤 모델로 검출했는지 항상 명확하게.
         if (string.IsNullOrWhiteSpace(p.DlModelPath))
-            return WeldDetectionResult.Fail("YOLO 모델 없음 — 용접 추적 화면에서 YOLO 모델을 선택하거나 파라미터 Weld.Dl.ModelPath 를 지정하세요.");
+            return WeldDetectionResult.Fail("YOLO 모델 없음 — 용접 추적 화면에서 YOLO 모델을 선택하거나 파라미터 Weld.Yolo.ModelPath 를 지정하세요.");
         var modelPath = ResolveExplicitPath(p.DlModelPath);
         if (modelPath is null || !File.Exists(modelPath))
-            return WeldDetectionResult.Fail($"YOLO 모델 파일이 없습니다: {modelPath ?? p.DlModelPath} — 파라미터 Weld.Dl.ModelPath 를 확인하세요.");
+            return WeldDetectionResult.Fail($"YOLO 모델 파일이 없습니다: {modelPath ?? p.DlModelPath} — 파라미터 Weld.Yolo.ModelPath 를 확인하세요.");
 
         Mat? bgr = null, gray = null;
         try

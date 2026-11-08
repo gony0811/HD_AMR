@@ -33,6 +33,17 @@ public class ParameterService
         "Camera.Weld.Roi.W", "Camera.Weld.Roi.H",
     ];
 
+    /// <summary>
+    /// 이름이 바뀐 키(옛 이름 → 새 이름). 기동 시 <see cref="RenameLegacyAsync"/> 가 옮긴다.
+    /// Weld.Dl.* — YOLO 검출 파라미터. 검출 방식 표기(YOLO)에 맞춰 Weld.Yolo.* 로 변경(Weld.Method 값 'Dl' 은 유지).
+    /// </summary>
+    public static readonly (string Old, string New)[] RenamedNames =
+    [
+        ("Weld.Dl.ModelPath", "Weld.Yolo.ModelPath"),
+        ("Weld.Dl.Confidence", "Weld.Yolo.Confidence"),
+        ("Weld.Dl.MaskThreshold", "Weld.Yolo.MaskThreshold"),
+    ];
+
     /// <summary>이름으로 원시 문자열 값을 조회. 없으면 null.</summary>
     public async Task<string?> GetAsync(string name)
         => (await _db.Parameters.AsNoTracking().FirstOrDefaultAsync(p => p.Name == name))?.Value;
@@ -141,6 +152,29 @@ public class ParameterService
             await _db.SaveChangesAsync();
             Changed?.Invoke(p.Name);
         }
+    }
+
+    /// <summary>
+    /// 이름이 바뀐 키(<see cref="RenamedNames"/>) 이전 — 앱 시작 시 <see cref="SeedDefaultsAsync"/> 전에 한 번 호출(멱등).
+    /// 새 이름이 없으면 옛 행의 이름만 바꿔 값·설명을 그대로 옮기고, 새 이름이 이미 있으면(새 값 우선) 옛 행을 지운다.
+    /// 처리한 "옛→새" 목록 반환.
+    /// </summary>
+    public async Task<List<string>> RenameLegacyAsync()
+    {
+        var olds = RenamedNames.Select(r => r.Old).ToArray();
+        var news = RenamedNames.Select(r => r.New).ToArray();
+        var rows = await _db.Parameters.Where(p => olds.Contains(p.Name) || news.Contains(p.Name)).ToListAsync();
+        var done = new List<string>();
+        foreach (var (oldName, newName) in RenamedNames)
+        {
+            var oldRow = rows.FirstOrDefault(p => p.Name == oldName);
+            if (oldRow is null) continue;
+            if (rows.Any(p => p.Name == newName)) _db.Parameters.Remove(oldRow);
+            else { oldRow.Name = newName; oldRow.UpdatedAt = DateTime.UtcNow; }
+            done.Add($"{oldName}→{newName}");
+        }
+        if (done.Count > 0) await _db.SaveChangesAsync();
+        return done;
     }
 
     /// <summary>폐기된 키(<see cref="ObsoleteNames"/>) 삭제 — 앱 시작 시 한 번 호출. 삭제한 이름 목록 반환.</summary>

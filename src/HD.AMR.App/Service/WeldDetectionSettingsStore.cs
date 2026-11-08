@@ -21,7 +21,7 @@ public static class WeldDetectionSettingsStore
 
     /// <summary>YOLO 모델 경로(필수 — 빈값이면 비드 찾기 실패). 전체 경로 또는 models 폴더 기준 파일명.
     /// Web 모델 드롭다운·Parameter 화면이 쓰고, 여기서는 읽기(복원)만 한다 — <see cref="ToValues"/> 에는 없다.</summary>
-    public const string DlModelPathKey = "Weld.Dl.ModelPath";
+    public const string DlModelPathKey = "Weld.Yolo.ModelPath";
 
     /// <summary>U-Net 모델 경로(필수 — 빈값이면 비드 찾기 실패). DL 모델 경로와 같은 규칙 — 화면 드롭다운·Parameter 화면이 쓰고
     /// 여기서는 읽기(복원)만 한다.</summary>

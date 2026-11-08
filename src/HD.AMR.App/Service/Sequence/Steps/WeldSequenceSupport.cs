@@ -215,7 +215,7 @@ public static class WeldSequenceSupport
     public static string? MissingModel(WeldTrackingService weld) => weld.Method switch
     {
         WeldDetectionMethod.Dl when string.IsNullOrWhiteSpace(weld.Params.DlModelPath)
-            => "모델 없음 — 비드 검출 YOLO 모델이 지정되지 않았습니다. 용접 추적 화면에서 모델을 선택하거나 파라미터 Weld.Dl.ModelPath 를 지정하세요.",
+            => "모델 없음 — 비드 검출 YOLO 모델이 지정되지 않았습니다. 용접 추적 화면에서 모델을 선택하거나 파라미터 Weld.Yolo.ModelPath 를 지정하세요.",
         WeldDetectionMethod.Unet when string.IsNullOrWhiteSpace(weld.Params.UnetModelPath)
             => "모델 없음 — 비드 검출 U-Net 모델이 지정되지 않았습니다. 용접 추적 화면에서 모델을 선택하거나 파라미터 Weld.Unet.ModelPath 를 지정하세요.",
         _ => null,

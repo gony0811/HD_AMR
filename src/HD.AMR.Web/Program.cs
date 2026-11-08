@@ -229,6 +229,11 @@ using (var scope = app.Services.CreateScope())
 
     // 파라미터 기본값 시드 — arrival.deviationXy 등 UI에서 조정 가능하도록 미리 생성.
     var param = scope.ServiceProvider.GetRequiredService<ParameterService>();
+    // 이름이 바뀐 키 이전(Weld.Dl.* → Weld.Yolo.*) — 현장 저장값(모델 경로·임계값) 보존.
+    var renamedParams = param.RenameLegacyAsync().GetAwaiter().GetResult();
+    if (renamedParams.Count > 0)
+        scope.ServiceProvider.GetRequiredService<ILogger<Program>>()
+            .LogInformation("파라미터 이름 변경: {Names}", string.Join(", ", renamedParams));
     param.SeedDefaultsAsync().GetAwaiter().GetResult();
 
     // 폐기 키 정리(Camera.Weld.Roi.* 등) — 어떤 코드도 읽지 않아 Parameter 화면에서 혼동만 준다.

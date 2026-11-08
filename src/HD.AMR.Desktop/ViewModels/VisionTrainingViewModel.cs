@@ -180,7 +180,7 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
         _ = RefreshInferListAsync();
     }
 
-    // ── ④ 임계값 — 운영 파라미터(Weld.Dl.Confidence/MaskThreshold, Weld.Unet.Threshold)와 연결 ──
+    // ── ④ 임계값 — 운영 파라미터(Weld.Yolo.Confidence/MaskThreshold, Weld.Unet.Threshold)와 연결 ──
     /// <summary>선택 모델이 U-Net 이면 true(파일명 기준). U-Net 은 conf 없이 확률 임계 하나만 쓴다.</summary>
     public bool InferIsUnet => SelModel?.Name.Contains("unet", StringComparison.OrdinalIgnoreCase) == true;
     public double MaskMin => InferIsUnet ? HD.AMR.App.Service.WeldTrackingService.UnetThresholdMin : HD.AMR.App.Service.WeldTrackingService.DlMaskThresholdMin;
@@ -212,7 +212,7 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
         else
         {
             _weld.SetDlThresholds(Conf, MaskThr);
-            Notify($"파라미터 저장: Weld.Dl.Confidence = {_weld.Params.DlConfidence:0.00}, Weld.Dl.MaskThreshold = {_weld.Params.DlMaskThreshold:0.00}", false);
+            Notify($"파라미터 저장: Weld.Yolo.Confidence = {_weld.Params.DlConfidence:0.00}, Weld.Yolo.MaskThreshold = {_weld.Params.DlMaskThreshold:0.00}", false);
         }
         OnPropertyChanged(nameof(InferOpsText));
     }

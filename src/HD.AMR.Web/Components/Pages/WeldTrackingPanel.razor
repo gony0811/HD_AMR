@@ -115,15 +115,15 @@
                     <input type="radio" class="btn-check" name="detmethod" id="dm_dl"
                            checked="@(Svc.Method == WeldDetectionMethod.Dl)" @onchange='() => SetMethod(WeldDetectionMethod.Dl)' />
                     <label class="btn btn-outline-primary" for="dm_dl">🧠 YOLO 세그멘테이션</label>
+                    <input type="radio" class="btn-check" name="detmethod" id="dm_unet"
+                           checked="@(Svc.Method == WeldDetectionMethod.Unet)" @onchange='() => SetMethod(WeldDetectionMethod.Unet)' />
+                    <label class="btn btn-outline-secondary" for="dm_unet">🧩 U-Net</label>
                     <input type="radio" class="btn-check" name="detmethod" id="dm_param"
                            checked="@(Svc.Method == WeldDetectionMethod.Param)" @onchange='() => SetMethod(WeldDetectionMethod.Param)' />
                     <label class="btn btn-outline-secondary" for="dm_param">⚙ 파라미터(CV)</label>
                     <input type="radio" class="btn-check" name="detmethod" id="dm_ridge"
                            checked="@(Svc.Method == WeldDetectionMethod.Ridge)" @onchange='() => SetMethod(WeldDetectionMethod.Ridge)' />
                     <label class="btn btn-outline-secondary" for="dm_ridge">〰 Ridge 필터</label>
-                    <input type="radio" class="btn-check" name="detmethod" id="dm_unet"
-                           checked="@(Svc.Method == WeldDetectionMethod.Unet)" @onchange='() => SetMethod(WeldDetectionMethod.Unet)' />
-                    <label class="btn btn-outline-secondary" for="dm_unet">🧩 U-Net</label>
                 </div>
                 <span class="text-muted ms-2" style="font-size:.8rem">
                     @(Svc.Method switch

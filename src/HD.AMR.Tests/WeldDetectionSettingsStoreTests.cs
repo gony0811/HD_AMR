@@ -70,7 +70,7 @@ public class WeldDetectionSettingsStoreTests
     [Fact]
     public void DlModelPathKey_IsWatched_AndSharedWithSequence()
     {
-        Assert.True(WeldDetectionSettingsStore.IsKey("Weld.Dl.ModelPath"));
+        Assert.True(WeldDetectionSettingsStore.IsKey("Weld.Yolo.ModelPath"));
         Assert.Equal(WeldDetectionSettingsStore.DlModelPathKey,
             HD.AMR.App.Service.Sequence.Steps.WeldSequenceSupport.DlModelPathKey);
     }

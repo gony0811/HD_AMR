@@ -212,7 +212,7 @@
                                 <TextBlock Classes="axis" VerticalAlignment="Center" Text="{Binding Conf, StringFormat='conf {0:0.00}'}" IsVisible="{Binding !InferIsUnet}" /><Slider Width="140" Minimum="0.05" Maximum="0.9" TickFrequency="0.05" IsSnapToTickEnabled="True" Value="{Binding Conf}" IsVisible="{Binding !InferIsUnet}" />
                                 <TextBlock Classes="axis" VerticalAlignment="Center" Text="{Binding MaskText}" /><Slider Width="140" Minimum="{Binding MaskMin}" Maximum="{Binding MaskMax}" TickFrequency="0.05" IsSnapToTickEnabled="True" Value="{Binding MaskThr}" />
                                 <Button Content="파라미터에 저장" Command="{Binding SaveInferThresholdsCommand}"
-                                        ToolTip.Tip="이 임계값을 용접 추적·시퀀스 검출 파라미터로 저장합니다(YOLO: Weld.Dl.Confidence/MaskThreshold, U-Net: Weld.Unet.Threshold)." />
+                                        ToolTip.Tip="이 임계값을 용접 추적·시퀀스 검출 파라미터로 저장합니다(YOLO: Weld.Yolo.Confidence/MaskThreshold, U-Net: Weld.Unet.Threshold)." />
                                 <TextBlock Classes="axis" VerticalAlignment="Center" Text="{Binding InferOpsText}" />
                             </StackPanel>
                             <Border Classes="alert" IsVisible="{Binding InferText, Converter={x:Static ObjectConverters.IsNotNull}}"><TextBlock Text="{Binding InferText}" TextWrapping="Wrap" /></Border>
