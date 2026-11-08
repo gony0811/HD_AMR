@@ -106,6 +106,10 @@ public static class WeldSequenceSupport
     /// ④⁺는 WD 조정 후 이 점을 현재 면 평행 평면에 투영해 복귀한다(광축 거리·자세 유지).</summary>
     public const string InspectAnchorPoseBagKey = "inspect.anchorPose";
 
+    /// <summary>② 가 환산한 용접선 점 S(면 위, BASE [x,y,z]). ④⁺ 복귀 기준 — 있으면 <see cref="InspectAnchorPoseBagKey"/>보다
+    /// 우선한다(목표 = S + n·dot(C−S, n), 틸트 보정 후에도 광축이 S 를 지난다). 새 ② 접근 또는 UI 초기화 시 교체/삭제.</summary>
+    public const string InspectAnchorSeamPointBagKey = "inspect.anchorSeamPoint";
+
     /// <summary>⑦⁺ Bead1 센터링 완료 직후(검사캠 시프트 <b>전</b>) TCP 포즈(double[6])를 담는 Bag 키.
     /// ⑧이 이 포즈를 앵커로 pitch 이동해, 검사캠 시프트·작업물 좌표계 교시용 이동을 자동 원복한다.</summary>
     public const string Bead1CenteredPoseBagKey = "bead1.centeredPose";

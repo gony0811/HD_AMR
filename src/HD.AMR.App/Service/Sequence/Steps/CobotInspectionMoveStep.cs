@@ -584,6 +584,8 @@ public class CobotInspectionMoveStep : ISequenceStep
         if (result.Success)
             InspectionAlignmentAnchor.CaptureIfMissing(context,
                 await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct));
+        else
+            InspectionAlignmentAnchor.Clear(context);   // 실패한 접근의 용접선 점을 남기지 않는다
         return result;
     }
 
@@ -603,6 +605,8 @@ public class CobotInspectionMoveStep : ISequenceStep
             return StepResult.Fail($"[Cobot 검사위치 이동] {seam.Note}");
 
         context.Bag[SeamStartBaseBagKey] = seam.Base.ToArray();
+        // ④⁺ 복귀 기준 — 접근점(이격 400mm)이 아닌 면 위 용접선 점. 틸트 보정 후에도 광축이 이 점을 지나게 복귀한다.
+        InspectionAlignmentAnchor.SetSeamPoint(context, seam.SeamPointBase);
         RecordSeamOrientation(seam, context.WallCode);
         if (ShiftAnchorFrame(context, seam.Base) is { } shiftError)
             return StepResult.Fail(shiftError);
