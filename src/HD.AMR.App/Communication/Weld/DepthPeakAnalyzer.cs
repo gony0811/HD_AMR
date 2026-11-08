@@ -187,6 +187,90 @@ public static class DepthPeakAnalyzer
         };
     }
 
+    /// <summary>비드선 따라 재측정한 Peak — 진행 좌표·그 자리 깊이(mm)·양쪽 중 낮은 쪽 두드러짐(mm).</summary>
+    public readonly record struct LinePeak(double ProgressPos, double DepthMm, double ProminenceMm);
+
+    /// <summary>
+    /// <b>비드선을 따라</b> Peak 를 다시 잰다. <see cref="Analyze"/> 는 ROI cross 폭 전체의 슬라이스 중앙값으로 Peak 를 잡아,
+    /// 근처의 코로게이션 교차부(노드) 같은 다른 구조물에 끌려 비드선 위 마루 꼭대기에서 수 cm 벗어날 수 있다(저장 데이터
+    /// 143번: 25mm). 여기서는 비드 중심선(직선, 양 끝 밖은 외삽) 위의 깊이만 읽어 <paramref name="startPos"/> ±
+    /// <paramref name="windowPx"/> 안에서 카메라에 가장 가까운 점을 찾는다 — 그 점이 비드선과 마루 꼭대기의 교점이다.
+    ///
+    /// 창 안의 유효 깊이가 절반 미만이거나, 찾은 점이 양쪽으로 <paramref name="minProminenceMm"/> 이상 솟아 있지 않으면
+    /// (창 끝 경사·평탄면) 확신할 수 없으므로 null — 호출측은 원래 Peak 를 그대로 쓴다.
+    /// </summary>
+    /// <param name="depth">"depth16" 프레임.</param>
+    /// <param name="lineA">비드 중심선 위 한 점(depth 픽셀).</param>
+    /// <param name="lineB">비드 중심선 위 다른 한 점(depth 픽셀). 진행축 좌표가 <paramref name="lineA"/> 와 달라야 한다.</param>
+    /// <param name="axis">진행축.</param>
+    /// <param name="startPos">현재 Peak 진행 좌표(depth 픽셀).</param>
+    /// <param name="windowPx">탐색 반경(depth 픽셀).</param>
+    /// <param name="bandPx">선 위 각 점에서 깊이 중앙값을 낼 정사각 반폭(px). 금속광택 결측 대비.</param>
+    public static LinePeak? RefineAlongLine(CameraFrame depth, PixelPoint lineA, PixelPoint lineB, WeldProgressAxis axis,
+        double startPos, double windowPx, double minProminenceMm = 3.0, int bandPx = 3)
+    {
+        if (depth.PixelFormat != "depth16" || windowPx < 3) return null;
+        bool horiz = axis == WeldProgressAxis.Horizontal;
+        double sA = horiz ? lineA.X : lineA.Y, cA = horiz ? lineA.Y : lineA.X;
+        double sB = horiz ? lineB.X : lineB.Y, cB = horiz ? lineB.Y : lineB.X;
+        if (Math.Abs(sB - sA) < 1e-6) return null;
+        double slope = (cB - cA) / (sB - sA);
+
+        var px = MemoryMarshal.Cast<byte, ushort>(depth.Pixels);
+        int W = depth.Width, H = depth.Height;
+        int n = horiz ? W : H, cMax = horiz ? H : W;
+        int s0 = Math.Max(0, (int)Math.Floor(startPos - windowPx)), s1 = Math.Min(n - 1, (int)Math.Ceiling(startPos + windowPx));
+        if (s1 - s0 < 4) return null;
+
+        var raw = new double[s1 - s0 + 1];
+        var vals = new List<int>((2 * bandPx + 1) * (2 * bandPx + 1));
+        int validCount = 0;
+        for (int s = s0; s <= s1; s++)
+        {
+            int c = (int)Math.Round(cA + slope * (s - sA));
+            vals.Clear();
+            if (c >= -bandPx && c < cMax + bandPx)
+                for (int dc = -bandPx; dc <= bandPx; dc++)
+                    for (int ds = -bandPx; ds <= bandPx; ds++)
+                    {
+                        int ss = s + ds, cc = c + dc;
+                        if (ss < 0 || cc < 0 || ss >= n || cc >= cMax) continue;
+                        int idx = horiz ? cc * W + ss : ss * W + cc;
+                        if ((uint)idx < (uint)px.Length && px[idx] > 0) vals.Add(px[idx]);
+                    }
+            if (vals.Count > 0) { vals.Sort(); raw[s - s0] = vals[vals.Count / 2]; validCount++; }
+        }
+        if (validCount < raw.Length / 2) return null;
+
+        // 이동평균(±4, 유효값만) — 슬라이스 잡음으로 가짜 극소가 생기지 않게.
+        var sm = new double[raw.Length];
+        for (int i = 0; i < raw.Length; i++)
+        {
+            double sum = 0; int k = 0;
+            for (int j = Math.Max(0, i - 4); j <= Math.Min(raw.Length - 1, i + 4); j++)
+                if (raw[j] > 0) { sum += raw[j]; k++; }
+            sm[i] = k > 0 ? sum / k : 0;
+        }
+
+        int best = -1; double bestV = double.MaxValue;
+        for (int i = 0; i < sm.Length; i++)
+            if (sm[i] > 0 && sm[i] < bestV) { bestV = sm[i]; best = i; }
+        if (best < 0) return null;
+
+        // 양쪽으로 실제로 멀어져야(솟은 마루) 인정 — 창 끝에서 계속 가까워지는 경사는 꼭대기가 아니다.
+        double leftMax = 0, rightMax = 0;
+        for (int i = 0; i < best; i++) if (sm[i] > 0) leftMax = Math.Max(leftMax, sm[i]);
+        for (int i = best + 1; i < sm.Length; i++) if (sm[i] > 0) rightMax = Math.Max(rightMax, sm[i]);
+        double prom = Math.Min(leftMax - bestV, rightMax - bestV);
+        if (prom < minProminenceMm) return null;
+
+        // 평평한 꼭대기는 최소값과 거의 같은(0.5mm 이내) 구간의 중앙을 쓴다.
+        int lo = best, hi = best;
+        while (lo > 0 && sm[lo - 1] > 0 && sm[lo - 1] <= bestV + 0.5) lo--;
+        while (hi < sm.Length - 1 && sm[hi + 1] > 0 && sm[hi + 1] <= bestV + 0.5) hi++;
+        return new LinePeak(s0 + (lo + hi) / 2.0, bestV, prom);
+    }
+
     /// <summary>
     /// 적격 슬라이스 프로파일에서 국소 마루(깊이 국소 최소) 위치들. 이동평균으로 다듬은 뒤, 양쪽으로 깊이가
     /// <paramref name="minProminenceMm"/> 이상 커졌다가 다시 내려오기 전까지(=골짜기까지) 그 구간에서 가장 가까운 점을 하나씩 뽑는다.

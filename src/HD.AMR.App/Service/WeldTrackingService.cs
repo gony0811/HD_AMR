@@ -754,6 +754,14 @@ public class WeldTrackingService
             peak is { Found: true } ? peak.ProgressPos : null, $"P{id}",
             peak is { Found: true, HasCrossSpan: true } ? peak.CrossStart : null,
             peak is { Found: true, HasCrossSpan: true } ? peak.CrossEnd : null);
+        string refineNote = "";
+        if (r.Success && peak is { Found: true } && Params.Mode == WeldImageMode.Ir
+            && RefinePeakAlongBead(r, peak, 1.0, 1.0) is { } rp)
+        {
+            var r2 = RunDetect(rp.Peak.ProgressPos, $"P{id}",
+                rp.Peak.HasCrossSpan ? rp.Peak.CrossStart : null, rp.Peak.HasCrossSpan ? rp.Peak.CrossEnd : null);
+            if (r2.Success) { r = r2; peak = rp.Peak; refineNote = rp.Note; }
+        }
         LastDetect = r;
         _lastOverlay = r.OverlayJpeg;
         if (!r.Success)
@@ -778,6 +786,42 @@ public class WeldTrackingService
             IrGeometry = Params.Mode == WeldImageMode.Ir,
         };
         StoreMeasurement(id, m, peak);
+        Message += refineNote;
+    }
+
+    /// <summary>⑦ 비드선 따라 Peak 재측정 탐색 반경 [mm] — 저장 데이터에서 화면 전체 Peak 가 비드선 위 꼭대기와 최대 ~40mm 어긋났다.</summary>
+    internal const double BeadLinePeakWindowMm = 40.0;
+
+    /// <summary>
+    /// 비드 검출 성공 후, 그 중심선(검출 프레임 좌표)을 따라 depth 를 읽어 Peak 를 비드선 위 마루 꼭대기로 옮긴다
+    /// (<see cref="DepthPeakAnalyzer.RefineAlongLine"/>). 화면 전체 cross 중앙값으로 잡은 Peak 는 근처 코로게이션 교차부 등에
+    /// 끌릴 수 있기 때문이다. 확신이 없거나(마루가 안 솟음·결측) 이동이 1px 미만이면 null — 원래 Peak 유지.
+    /// <paramref name="toDepthX"/>/<paramref name="toDepthY"/> = 검출 프레임 → depth 픽셀 배율(IR 이면 보통 1).
+    /// </summary>
+    private (PeakInfo Peak, string Note)? RefinePeakAlongBead(WeldDetectionResult r, PeakInfo peak, double toDepthX, double toDepthY,
+        Func<PixelPoint, PixelPoint?>? toDepth = null)
+    {
+        var depth = _camera.LatestDepth;
+        if (depth is null || !r.LineFitOk || r.Centerline.Count < 2) return null;
+        bool horiz = Params.ProgressAxis == WeldProgressAxis.Horizontal;
+        toDepth ??= p => new PixelPoint(p.X * toDepthX, p.Y * toDepthY);
+        if (toDepth(r.Centerline[0]) is not { } a || toDepth(r.Centerline[^1]) is not { } b) return null;
+        double mmpp = EffectiveMmPerPixel(peak.DepthValue, true);
+        if (mmpp <= 0) return null;
+        double scale = horiz ? toDepthX : toDepthY;
+        double start = peak.ProgressPos * scale;
+        var lp = DepthPeakAnalyzer.RefineAlongLine(depth, a, b, Params.ProgressAxis, start, BeadLinePeakWindowMm / mmpp);
+        if (lp is not { } v || Math.Abs(v.ProgressPos - start) < 1.0) return null;
+        double newPos = v.ProgressPos / scale;
+        double deltaPx = newPos - peak.ProgressPos;
+        var moved = new PeakInfo
+        {
+            Found = true, ProgressPos = newPos, DepthValue = (int)Math.Round(v.DepthMm), Confidence = peak.Confidence,
+            PeakCount = peak.PeakCount, HasCrossSpan = peak.HasCrossSpan, CrossStart = peak.CrossStart, CrossEnd = peak.CrossEnd,
+        };
+        _logger.LogInformation("Peak 비드선 보정: {From:0.0} → {To:0.0}px ({Delta:+0.0;-0.0}px ≈ {Mm:+0.0;-0.0}mm), 꼭대기 {Z:0}mm, 두드러짐 {Prom:0.0}mm",
+            peak.ProgressPos, newPos, deltaPx, deltaPx * mmpp / (scale > 0 ? scale : 1), v.DepthMm, v.ProminenceMm);
+        return (moved, $" [Peak 비드선 보정 {deltaPx:+0.0;-0.0}px]");
     }
 
     private void StoreMeasurement(int id, PeakMeasurement m, PeakInfo? peak)
@@ -850,6 +894,27 @@ public class WeldTrackingService
         // 기준선 = 투영된 IR 중심선(회색 선이 이 위치에 그려진다), 측정 위치 = 투영된 Peak 선.
         var r = Detector.DetectWeld(color, weldRoiC, Params, WeldReferenceMode.PeakLine, refCrossC,
             progC, $"P{id}", peakRoiC, cStart, cEnd);
+        // 비드선 따라 Peak 재측정: 컬러 중심선 → depth 좌표(투영 깊이 z)로 옮겨 depth 를 읽는다.
+        string refineNote = "";
+        if (r.Success && dp.Found
+            && RefinePeakAlongBead(r, dp, 1.0, 1.0,
+                   p => mapper.ColorToDepth(p.X, p.Y, z) is { } q ? new PixelPoint(q.u, q.v) : null) is { } rp
+            && mapper.DepthToColor(horiz ? rp.Peak.ProgressPos : centerCrossIr, horiz ? centerCrossIr : rp.Peak.ProgressPos, z) is { } refC2)
+        {
+            // dp 는 IR(=depth) 좌표이고 중심선만 컬러→depth 로 옮겼으므로, 돌려받은 진행 좌표가 곧 새 progIr 이다.
+            double? cs2 = null, ce2 = null;
+            if (dp.HasCrossSpan
+                && mapper.DepthToColor(horiz ? rp.Peak.ProgressPos : dp.CrossStart, horiz ? dp.CrossStart : rp.Peak.ProgressPos, z) is { } ca2
+                && mapper.DepthToColor(horiz ? rp.Peak.ProgressPos : dp.CrossEnd, horiz ? dp.CrossEnd : rp.Peak.ProgressPos, z) is { } cb2)
+            {
+                cs2 = horiz ? ca2.v : ca2.u;
+                ce2 = horiz ? cb2.v : cb2.u;
+            }
+            double progC2 = horiz ? refC2.u : refC2.v, refCross2 = horiz ? refC2.v : refC2.u;
+            var r2 = Detector.DetectWeld(color, weldRoiC, Params, WeldReferenceMode.PeakLine, refCross2,
+                progC2, $"P{id}", peakRoiC, cs2, ce2);
+            if (r2.Success) { r = r2; dp = rp.Peak; progIr = rp.Peak.ProgressPos; refineNote = rp.Note; }
+        }
         LastDetect = r;
         _lastOverlay = r.OverlayJpeg;
         if (!r.Success) { Message = $"② 비드 찾기 #{id} 실패: {r.Message}"; return; }
@@ -873,7 +938,7 @@ public class WeldTrackingService
             IrGeometry = true,
         };
         StoreMeasurement(id, m, m.Peak);
-        Message += $" [RGB 검출·IR 기준, 컬러 d={r.DPixel:0.0}px]";
+        Message += $" [RGB 검출·IR 기준, 컬러 d={r.DPixel:0.0}px]" + refineNote;
     }
 
     /// <summary>
