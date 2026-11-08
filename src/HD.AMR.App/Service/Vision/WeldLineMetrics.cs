@@ -6,7 +6,8 @@ namespace HD.AMR.App.Service.Vision;
 /// 검출된 비드 중심선을 정답 선 라벨(<see cref="WeldLineLabel"/>)과 비교하는 오차 지표. 순수 함수.
 /// <list type="bullet">
 /// <item><b>각도 오차</b>(°): 두 직선(TLS 피팅) 방향 차이. 0~90.</item>
-/// <item><b>중심 오차</b>(px): 진행축 FOV 중심 위치에서 두 직선의 cross-axis 거리 — 시퀀스가 실제로 쓰는 d 와 같은 위치.</item>
+/// <item><b>중심 오차</b>(px): 진행축 FOV 중심 위치에서 두 직선의 cross-axis 거리 — 시퀀스가 실제로 쓰는 d 와 같은 위치.
+/// 정답 선(가지)이 FOV 중심까지 오지 않으면 그 선 구간 안에서 중심에 가장 가까운 위치에서 잰다(구간 밖 외삽 금지).</item>
 /// <item><b>평균 거리</b>(px): 검출 중심선 점들에서 정답 폴리라인까지 수직거리 평균(국소 이탈 감지).</item>
 /// <item><b>커버리지</b>: 정답 선의 진행축 구간 중 검출 점이 덮는 비율.</item>
 /// </list>
@@ -96,6 +97,15 @@ public static class WeldLineMetrics
         return CompareCore(gt, centerline, horizontal, angleTolDeg, centerTolPx);
     }
 
+    /// <summary>정답 선의 가장 긴 가지(진행축 결정용)의 TLS 직선. 가지가 하나면 라벨 전체. 점이 없으면 null.</summary>
+    public static (double Cx, double Cy, double Dx, double Dy)? MainBranchFit(WeldLineLabel gt)
+    {
+        var main = Branches(gt)
+            .Select(b => b.Segments().Where(s => s.Count >= 2).SelectMany(Densify).ToList())
+            .MaxBy(d => d.Count);   // Densify = 1px 간격 → 점 수 ≈ 길이
+        return main is null ? null : FitLine(main);
+    }
+
     /// <summary>조각을 나누는 꺾임 각도(°). 이웃한 두 변의 방향이 이보다 크게 바뀌는 꼭짓점에서 자른다.</summary>
     public const double BranchSplitDeg = 15.0;
 
@@ -171,14 +181,17 @@ public static class WeldLineMetrics
 
         var g = gtFit.Value; var d = detFit.Value;
         double angle = AngleBetweenDeg((g.Dx, g.Dy), (d.Dx, d.Dy));
-        double center = (horizontal ? gt.Width : gt.Height) / 2.0;
+        // 정답 진행축 구간 [lo,hi] — 중심 오차 측정 위치 제한과 커버리지에 쓴다.
+        double lo = gtDense.Min(p => horizontal ? p.X : p.Y);
+        double hi = gtDense.Max(p => horizontal ? p.X : p.Y);
+        // FOV 중심이 정답 구간 밖이면(짧은 가지 등) 구간 안의 가장 가까운 위치에서 잰다 — 멀리 외삽하면
+        // 작은 각도·라벨 꺾임 차이가 수십 px 로 부풀어 맞게 찾은 선도 불합격이 된다.
+        double center = Math.Clamp((horizontal ? gt.Width : gt.Height) / 2.0, lo, hi);
         double offset = Math.Abs(CrossAt(d, center, horizontal) - CrossAt(g, center, horizontal));
         double mean = det.Average(p => DistToLabel(p.X, p.Y, gt));
 
         // 커버리지: 정답 진행축 구간 [lo,hi] 을 1px 칸으로 나눠, 정답 선이 지나는 칸 중
         // 정답에서 ±(두께) 안의 검출 점이 있는 칸 비율. 끊긴 구간(정답 선이 없는 칸)은 분모에서 뺀다.
-        double lo = gtDense.Min(p => horizontal ? p.X : p.Y);
-        double hi = gtDense.Max(p => horizontal ? p.X : p.Y);
         int bins = Math.Max(1, (int)Math.Ceiling(hi - lo));
         var hasGt = new bool[bins];
         foreach (var (x, y) in gtDense) hasGt[Math.Clamp((int)((horizontal ? x : y) - lo), 0, bins - 1)] = true;

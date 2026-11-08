@@ -77,10 +77,13 @@ public static class InferLineCheck
 
     private const double ExtendBandPx = 20;
 
+    // 진행축 = 정답 선의 가장 긴 가지 방향. 전체 라벨의 첫·끝 점을 잇면 여러 가지(교차·모서리)일 때
+    // 엉뚱한 축이 나와 주 비드가 각도 제한(45°)에 걸려 빠지고 짧은 가지가 검출된다(예: 073).
     private static bool IsHorizontal(WeldLineLabel gt)
     {
-        var a = gt.Points[0]; var b = gt.Points[^1];
-        return Math.Abs(b[0] - a[0]) >= Math.Abs(b[1] - a[1]);
+        var f = WeldLineMetrics.MainBranchFit(gt);
+        if (f is null) { var a = gt.Points[0]; var b = gt.Points[^1]; return Math.Abs(b[0] - a[0]) >= Math.Abs(b[1] - a[1]); }
+        return Math.Abs(f.Value.Dx) >= Math.Abs(f.Value.Dy);
     }
 
     private static bool IsHorizontal(byte[] mask, int w, int h)

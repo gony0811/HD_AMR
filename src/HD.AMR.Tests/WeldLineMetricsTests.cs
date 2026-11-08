@@ -166,4 +166,33 @@ public class WeldLineMetricsTests
         Assert.False(e.BranchMatched);
         Assert.True(e.Pass);
     }
+
+    // 선창 073 — 긴 대각선(약 48°) + 오른쪽 위 짧은 가지, 교차부에 짧은 꼬리.
+    private static WeldLineLabel Gt073() => new()
+    {
+        Width = 1280, Height = 720, Thickness = 15,
+        Points = new() { new[] { 380.5, 712.5 }, new[] { 623.5, 445.5 }, new[] { 707.5, 345.0 }, new[] { 763.0, 289.5 }, new[] { 973.0, 40.5 },
+                         new[] { 976.0, 7.5 }, new[] { 1011.5, 8.0 }, new[] { 1013.3, 38.2 }, new[] { 1271.1, 242.6 } },
+        Breaks = new() { 6 },
+    };
+
+    [Fact]
+    public void 진행축은_가장_긴_가지_방향으로_정한다()
+    {
+        // 첫·끝 점(380,712)→(1271,242) 은 가로지만, 주 비드(긴 대각선)는 세로에 더 가깝다.
+        var f = WeldLineMetrics.MainBranchFit(Gt073())!.Value;
+        Assert.True(Math.Abs(f.Dy) > Math.Abs(f.Dx));
+    }
+
+    [Fact]
+    public void 짧은_가지는_FOV_중심까지_외삽하지_않고_가지_구간_안에서_중심_오차를_잰다()
+    {
+        // 오른쪽 위 가지에 평행하게 2px 떨어진 검출 선 — 가지 구간(x 1013~1271)은 화면 중심(640) 밖.
+        double Y(double x) => 38.2 + (x - 1013.3) * (242.6 - 38.2) / (1271.1 - 1013.3) + 2;
+        var det = new List<PixelPoint> { new(1020, Y(1020)), new(1260, Y(1260)) };
+        var e = WeldLineMetrics.Compare(Gt073(), det, horizontal: true);
+        Assert.True(e.BranchMatched);
+        Assert.True(e.CenterOffsetPx < 3, $"offset {e.CenterOffsetPx}");
+        Assert.True(e.Pass);
+    }
 }
