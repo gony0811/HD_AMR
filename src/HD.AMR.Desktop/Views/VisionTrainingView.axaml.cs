@@ -9,6 +9,9 @@ public partial class VisionTrainingView : UserControl
     public VisionTrainingView()
     {
         InitializeComponent();
+        // 격자(*) 칸이 내용 크기로 줄지 않게 페이지 폭을 min(창 폭, MaxWidth 980) 으로 고정(왼쪽 정렬 유지).
+        var pageRoot = this.FindControl<StackPanel>("PageRoot")!;
+        SizeChanged += (_, e) => pageRoot.Width = Math.Min(e.NewSize.Width, pageRoot.MaxWidth);
         this.FindControl<Button>("AddTrainDirBtn")!.Click += async (_, _) =>
         {
             if (DataContext is not VisionTrainingViewModel vm) return;

@@ -186,6 +186,7 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
     public double MaskMin => InferIsUnet ? HD.AMR.App.Service.WeldTrackingService.UnetThresholdMin : HD.AMR.App.Service.WeldTrackingService.DlMaskThresholdMin;
     public double MaskMax => InferIsUnet ? HD.AMR.App.Service.WeldTrackingService.UnetThresholdMax : HD.AMR.App.Service.WeldTrackingService.DlMaskThresholdMax;
     public string MaskText => InferIsUnet ? $"확률 {MaskThr:0.00}" : $"mask {MaskThr:0.00}";
+    public string MaskLabel => InferIsUnet ? "확률" : "mask";   // ④ 임계값 라벨(값은 슬라이더 옆에 따로 표시)
     public string InferOpsText => InferIsUnet
         ? $"파라미터 확률 {_weld.Params.UnetThreshold:0.00}"
         : $"파라미터 conf {_weld.Params.DlConfidence:0.00} · mask {_weld.Params.DlMaskThreshold:0.00}";
@@ -197,7 +198,7 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
         OnPropertyChanged(nameof(InferIsUnet)); OnPropertyChanged(nameof(MaskMin)); OnPropertyChanged(nameof(MaskMax));
         if (InferIsUnet) MaskThr = _weld.Params.UnetThreshold;
         else { Conf = _weld.Params.DlConfidence; MaskThr = _weld.Params.DlMaskThreshold; }
-        OnPropertyChanged(nameof(MaskText)); OnPropertyChanged(nameof(InferOpsText));
+        OnPropertyChanged(nameof(MaskText)); OnPropertyChanged(nameof(MaskLabel)); OnPropertyChanged(nameof(InferOpsText));
     }
 
     /// <summary>④ 슬라이더 값을 운영 파라미터로 저장 — 용접 추적·시퀀스의 검출이 바로 이 값을 쓴다.</summary>
