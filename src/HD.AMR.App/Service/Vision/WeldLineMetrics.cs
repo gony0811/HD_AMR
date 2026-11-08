@@ -84,6 +84,85 @@ public static class WeldLineMetrics
     public static LineErrors Compare(WeldLineLabel gt, IReadOnlyList<PixelPoint> centerline, bool horizontal,
         double angleTolDeg = DefaultAngleTolDeg, double centerTolPx = DefaultCenterTolPx)
     {
+        // 정답 선이 여러 가지(교차·모서리·T자)면 전체를 직선 하나로 평균하면 어느 가지와도 맞지 않는다 →
+        // 검출 선에 가장 가까운 가지 하나와만 비교(BranchMatched=true). 가지가 하나면 기존과 완전히 같다.
+        var branches = Branches(gt);
+        if (branches.Count > 1 && centerline.Count >= 2)
+        {
+            var detDense = Densify(centerline.Select(p => new[] { p.X, p.Y }).ToList());
+            var nearest = branches.MinBy(b => detDense.Average(p => DistToLabel(p.X, p.Y, b)))!;
+            return CompareCore(nearest, centerline, horizontal, angleTolDeg, centerTolPx) with { BranchMatched = true };
+        }
+        return CompareCore(gt, centerline, horizontal, angleTolDeg, centerTolPx);
+    }
+
+    /// <summary>조각을 나누는 꺾임 각도(°). 이웃한 두 변의 방향이 이보다 크게 바뀌는 꼭짓점에서 자른다.</summary>
+    public const double BranchSplitDeg = 15.0;
+
+    /// <summary>다른 가지로 보는 방향 차(°). 조각들의 방향이 이보다 크게 갈라질 때만 여러 가지(교차·모서리·T자)로 본다 —
+    /// 비드 윤곽을 따라 구불구불 그린 일자 비드(꺾임 15~30°)는 한 가지로 남는다.</summary>
+    public const double BranchAngleDeg = 30.0;
+
+    /// <summary>
+    /// 정답 선을 방향이 다른 가지(각각 하나의 선 라벨)로 나눈다. 꺾이는 꼭짓점(<see cref="BranchSplitDeg"/> 초과)에서
+    /// 조각으로 자르고, 교차부를 잇는 짧은 연결 조각(두께×4 와 40px 중 큰 값 미만)은 버린 뒤, 방향 차가
+    /// <see cref="BranchAngleDeg"/> 이하인 조각끼리(끊어 그린 구간 · 교차부를 관통하는 선 · 구불구불한 일자 비드) 한 가지로 묶는다.
+    /// 가지가 하나면 원래 라벨 하나를 돌려준다.
+    /// </summary>
+    public static List<WeldLineLabel> Branches(WeldLineLabel gt, double splitDeg = BranchSplitDeg)
+    {
+        double minLen = Math.Max(gt.Thickness * 4, 40);
+        var runs = new List<List<double[]>>();
+        foreach (var seg in gt.Segments().Where(s => s.Count >= 2))
+        {
+            var run = new List<double[]> { seg[0], seg[1] };
+            for (int i = 2; i < seg.Count; i++)
+            {
+                var a = run[^2]; var b = run[^1]; var c = seg[i];
+                if (AngleBetweenDeg(Dir(a, b), Dir(b, c)) > splitDeg) { runs.Add(run); run = new List<double[]> { b, c }; }
+                else run.Add(c);
+            }
+            runs.Add(run);
+        }
+        runs = runs.Where(r => Length(r) >= minLen).ToList();
+        if (runs.Count <= 1) return new List<WeldLineLabel> { gt };
+
+        // 방향이 비슷한 조각끼리 묶기(방향 차 BranchAngleDeg 이하).
+        var groups = new List<List<List<double[]>>>();
+        foreach (var r in runs)
+        {
+            var rf = FitLine(Densify(r))!.Value;
+            var g = groups.FirstOrDefault(gr =>
+            {
+                var gf = FitLine(gr.SelectMany(Densify).ToList())!.Value;
+                return AngleBetweenDeg((gf.Dx, gf.Dy), (rf.Dx, rf.Dy)) <= BranchAngleDeg;
+            });
+            if (g is null) groups.Add(new List<List<double[]>> { r }); else g.Add(r);
+        }
+        if (groups.Count <= 1) return new List<WeldLineLabel> { gt };
+        return groups.Select(g =>
+        {
+            var pts = new List<double[]>(); var breaks = new List<int>();
+            foreach (var r in g) { if (pts.Count > 0) breaks.Add(pts.Count); pts.AddRange(r); }
+            return new WeldLineLabel { Width = gt.Width, Height = gt.Height, Thickness = gt.Thickness, Points = pts, Breaks = breaks.Count > 0 ? breaks : null };
+        }).ToList();
+
+        static (double, double) Dir(double[] p, double[] q)
+        {
+            double dx = q[0] - p[0], dy = q[1] - p[1], n = Math.Sqrt(dx * dx + dy * dy);
+            return n < 1e-9 ? (1, 0) : (dx / n, dy / n);
+        }
+        static double Length(List<double[]> r)
+        {
+            double s = 0;
+            for (int i = 0; i + 1 < r.Count; i++) s += Math.Sqrt(Math.Pow(r[i + 1][0] - r[i][0], 2) + Math.Pow(r[i + 1][1] - r[i][1], 2));
+            return s;
+        }
+    }
+
+    private static LineErrors CompareCore(WeldLineLabel gt, IReadOnlyList<PixelPoint> centerline, bool horizontal,
+        double angleTolDeg, double centerTolPx)
+    {
         var gtDense = gt.Segments().Where(s => s.Count >= 2).SelectMany(Densify).ToList();
         var gtFit = FitLine(gtDense);
         var det = centerline.Select(p => (p.X, p.Y)).ToList();
@@ -145,7 +224,9 @@ public static class WeldLineMetrics
 }
 
 /// <summary>한 장의 오차. Detected=false 면 나머지 값은 의미 없음.</summary>
-public sealed record LineErrors(bool Detected, double AngleDeg, double CenterOffsetPx, double MeanDistPx, double Coverage, bool Pass)
+/// <param name="BranchMatched">정답 선이 여러 가지라 검출 선에 가장 가까운 가지 하나와 비교했는지(느슨한 채점).</param>
+public sealed record LineErrors(bool Detected, double AngleDeg, double CenterOffsetPx, double MeanDistPx, double Coverage, bool Pass,
+    bool BranchMatched = false)
 {
     public static readonly LineErrors Missed = new(false, double.NaN, double.NaN, double.NaN, 0, false);
 }

@@ -121,17 +121,12 @@
                         <CheckBox Content="밝기 증강 (조명·노출 편차·반사 대응 — 밝기/채도만 변동)" IsChecked="{Binding BrightAug}" />
                         <TextBlock Classes="hint" TextWrapping="Wrap" Text="epochs — CPU 학습은 느립니다. 100~300 권장, patience 로 val 개선이 멈추면 조기 종료(데이터셋 변환에서 val 이 분리돼 있어야 의미 있음). imgsz — 32의 배수. IR 848×480 은 864 권장(640 이면 가는 비드가 축소됨). batch — CPU면 2~8, 기본 4." />
                         <TextBlock Text="ONNX 내보내기" FontWeight="SemiBold" Margin="0,12,0,0" />
-                        <CheckBox Content="학습이 끝나면 자동으로 내보내기 (아래 설정 사용 · 중단/실패 시에는 안 함)" IsChecked="{Binding AutoExport}"
-                                  ToolTip.Tip="학습 시작 시점의 내보내기 설정(모달리티 등)으로, 학습이 정상 종료(조기 종료 포함)되면 바로 ONNX 를 만듭니다." />
+                        <CheckBox Content="학습이 끝나면 자동으로 내보내기 (중단/실패 시에는 안 함)" IsChecked="{Binding AutoExport}"
+                                  ToolTip.Tip="학습이 정상 종료(조기 종료 포함)되면 바로 ONNX 를 만듭니다. 모달리티는 학습에 쓴 데이터셋 기준." />
                         <StackPanel Orientation="Horizontal" Spacing="8">
-                            <StackPanel><TextBlock Classes="axis" Text="모달리티" /><ComboBox Width="90" SelectedIndex="{Binding ExportModalityIndex}"><ComboBoxItem>RGB</ComboBoxItem><ComboBoxItem>IR</ComboBoxItem></ComboBox></StackPanel>
-                            <StackPanel><TextBlock Classes="axis" Text="opset" /><NumericUpDown Value="{Binding Opset}" Minimum="9" Increment="1" FormatString="0" /></StackPanel>
-                            <StackPanel><TextBlock Classes="axis" Text="imgsz (0=학습값)" /><NumericUpDown Value="{Binding ExportImgsz}" Minimum="0" Increment="32" FormatString="0" /></StackPanel>
-                            <CheckBox VerticalAlignment="Bottom" Content="직사각 입력 (CPU 추론 가속)" IsChecked="{Binding ExportRect}"
-                                      ToolTip.Tip="데이터 비율로 [h,w] 입력을 만든다. 848×480 · 864 학습 → 512×864. 정확도 동일, 연산량 약 40% 감소." />
-                            <Button VerticalAlignment="Bottom" Content="{Binding ExportButtonText}" Classes="accent" Command="{Binding StartExportCommand}" IsEnabled="{Binding PyReady}" />
+                            <Button VerticalAlignment="Bottom" Classes="accent" Command="{Binding StartExportCommand}" IsEnabled="{Binding PyReady}"><TextBlock Text="{Binding ExportButtonText}" /></Button>
                         </StackPanel>
-                        <TextBlock Classes="hint" Text="학습이 끝나면 방금 학습한 데이터셋의 모달리티로 내보내세요. IR/RGB 모델이 파일명으로 구분되어 함께 보관되고, ④ 추론·검증의 모델 목록에 나타납니다." />
+                        <TextBlock Classes="hint" TextWrapping="Wrap" Text="모달리티(IR/RGB)·입력 크기는 학습에 쓴 데이터셋 기준으로 자동 결정됩니다(opset 12 · 학습 imgsz · 직사각 입력 고정). IR/RGB 모델이 파일명으로 구분되어 함께 보관되고, ④ 추론·검증의 모델 목록에 나타납니다." />
                     </StackPanel>
                 </TabItem>
 
@@ -158,11 +153,10 @@
                             <Button VerticalAlignment="Bottom" Content="U-Net 학습 시작" Classes="accent" Command="{Binding StartUnetTrainCommand}" IsEnabled="{Binding TorchReady}" />
                         </StackPanel>
                         <TextBlock Text="ONNX 내보내기" FontWeight="SemiBold" Margin="0,12,0,0" />
-                        <CheckBox Content="학습이 끝나면 자동으로 내보내기 (아래 설정 사용 · 중단/실패 시에는 안 함)" IsChecked="{Binding AutoExport}"
-                                  ToolTip.Tip="학습 시작 시점의 내보내기 설정(모달리티 등)으로, 학습이 정상 종료(조기 종료 포함)되면 바로 ONNX 를 만듭니다." />
+                        <CheckBox Content="학습이 끝나면 자동으로 내보내기 (중단/실패 시에는 안 함)" IsChecked="{Binding AutoExport}"
+                                  ToolTip.Tip="학습이 정상 종료(조기 종료 포함)되면 바로 ONNX 를 만듭니다. 모달리티는 학습에 쓴 데이터셋 기준." />
                         <StackPanel Orientation="Horizontal" Spacing="8">
-                            <StackPanel><TextBlock Classes="axis" Text="모달리티" /><ComboBox Width="90" SelectedIndex="{Binding ExportModalityIndex}"><ComboBoxItem>RGB</ComboBoxItem><ComboBoxItem>IR</ComboBoxItem></ComboBox></StackPanel>
-                            <Button VerticalAlignment="Bottom" Content="{Binding UnetExportButtonText}" Command="{Binding StartUnetExportCommand}" IsEnabled="{Binding TorchReady}" />
+                            <Button VerticalAlignment="Bottom" Classes="accent" Command="{Binding StartUnetExportCommand}" IsEnabled="{Binding TorchReady}"><TextBlock Text="{Binding UnetExportButtonText}" /></Button>
                         </StackPanel>
                         <TextBlock Classes="hint" TextWrapping="Wrap" Text="내보낸 모델은 용접 추적·비교평가에서 검출 방식 'U-Net' 으로 사용됩니다. 진행 로그는 아래 로그 창에 표시됩니다(Epoch k/N · val_dice)." />
                     </StackPanel>

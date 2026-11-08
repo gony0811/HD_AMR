@@ -169,7 +169,7 @@ public sealed class MethodCard
 {
     public MethodCard(BenchmarkItem i)
     {
-        Title = $"{i.Method} — {(i.Err.Pass ? "합격" : i.Err.Detected ? "불합격" : "미검출")}";
+        Title = $"{i.Method} — {(i.Err.Pass ? "합격" : i.Err.Detected ? "불합격" : "미검출")}{(i.Err.BranchMatched ? " (가지 일치)" : "")}";
         Detail = i.Err.Detected
             ? $"각도 {i.Err.AngleDeg:0.00}° · 중심 {SummaryRow.Fmt(i.Err.CenterOffsetPx, "0.0")}px · 평균거리 {i.Err.MeanDistPx:0.0}px · 커버리지 {i.Err.Coverage:P0} · {i.Millis}ms"
             : $"{i.Message ?? "검출 실패"} · {i.Millis}ms";

@@ -112,5 +112,58 @@ public class WeldLineMetricsTests
         Assert.True(e.Pass);
         // 빈 구간 위의 검출 점은 정답에서 멀다(가까운 끝점까지 거리).
         Assert.True(WeldLineMetrics.DistToLabel(400, 200, gt) >= 99);
+        Assert.False(e.BranchMatched);   // 같은 직선 위 조각은 한 가지
+    }
+
+    // X 자 교차: 가로선(y=240)과 약 47° 대각선(200,0)-(647,479) 이 가운데서 만난다. 교차부는 짧은 연결 조각으로 이어 그림.
+    private static WeldLineLabel Cross() => new()
+    {
+        Width = 848, Height = 480, Thickness = 9,
+        Points = new()
+        {
+            new[] { 0.0, 240.0 }, new[] { 410.0, 240.0 }, new[] { 418.0, 236.0 }, new[] { 847.0, 236.0 },
+            new[] { 200.0, 0.0 }, new[] { 647.0, 479.0 },
+        },
+        Breaks = new() { 4 },
+    };
+
+    [Fact]
+    public void 여러_가지_정답은_가장_가까운_가지와_비교()
+    {
+        // 가로선을 정확히 찾은 검출 — 전체 평균 직선과 비교하면 불합격이던 경우.
+        var e = WeldLineMetrics.Compare(Cross(), Line(238, 238), horizontal: true);
+        Assert.True(e.BranchMatched);
+        Assert.True(e.Pass, $"angle={e.AngleDeg} offset={e.CenterOffsetPx}");
+        Assert.Equal(2, WeldLineMetrics.Branches(Cross()).Count);
+    }
+
+    [Fact]
+    public void 여러_가지_정답이라도_어느_가지와도_안맞으면_불합격()
+    {
+        var e = WeldLineMetrics.Compare(Cross(), Line(100, 100), horizontal: true);
+        Assert.True(e.BranchMatched);
+        Assert.False(e.Pass);
+    }
+
+    [Fact]
+    public void 구불구불하게_그린_일자_비드는_한_가지()
+    {
+        // 선창 147 처럼 비드 윤곽을 따라 15~30° 씩 꺾어 그린 가로 비드.
+        var gt = new WeldLineLabel
+        {
+            Width = 1280, Height = 720, Thickness = 9,
+            Points = new() { new[] { 5.5, 51.0 }, new[] { 200.5, 42.0 }, new[] { 232.0, 18.0 }, new[] { 287.5, 16.5 }, new[] { 395.5, 42.0 },
+                             new[] { 904.0, 67.5 }, new[] { 976.0, 34.5 }, new[] { 1049.5, 33.0 }, new[] { 1129.0, 52.5 }, new[] { 1271.5, 60.0 } },
+        };
+        Assert.Single(WeldLineMetrics.Branches(gt));
+    }
+
+    [Fact]
+    public void 한_가지_정답은_기존과_결과가_같다()
+    {
+        Assert.Single(WeldLineMetrics.Branches(Gt(200, 210)));
+        var e = WeldLineMetrics.Compare(Gt(200, 210), Line(203, 213), horizontal: true);
+        Assert.False(e.BranchMatched);
+        Assert.True(e.Pass);
     }
 }

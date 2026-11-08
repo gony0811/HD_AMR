@@ -204,6 +204,71 @@ public sealed class WeldTrainingService
         return paths is not null && HasClaheMarker(unet ? UnetRunDir(paths) : Path.Combine(paths.Runs, "hd"));
     }
 
+    // ── 학습 시점 데이터셋 정보(모달리티·원본 이미지 크기) ─────────────────────────
+    // 학습 뒤 데이터셋을 다른 모달리티/해상도로 다시 변환해도, 내보내기는 '학습에 실제로 쓴' 값으로 이름(_ir/_rgb)과
+    // 직사각 입력 비율을 정한다. 기록이 없는 예전 run 은 현재 데이터셋에서 추정(경고 로그).
+    public const string TrainedMetaMarker = "_trained_meta.txt";
+
+    /// <summary>데이터셋 이미지 파일명(…_ir.png / …_rgb.png)으로 본 모달리티. 판단 불가면 null.</summary>
+    public static string? DatasetModality(string dataset)
+    {
+        foreach (var sub in new[] { "train", "val" })
+        {
+            var dir = Path.Combine(dataset, "images", sub);
+            if (!Directory.Exists(dir)) continue;
+            var f = Directory.EnumerateFiles(dir, "*.png").FirstOrDefault();
+            if (f is null) continue;
+            if (f.EndsWith("_ir.png", StringComparison.OrdinalIgnoreCase)) return "ir";
+            if (f.EndsWith("_rgb.png", StringComparison.OrdinalIgnoreCase)) return "rgb";
+        }
+        return null;
+    }
+
+    private static void WriteTrainedMeta(string dataset, string runDir)
+    {
+        Directory.CreateDirectory(runDir);
+        var lines = new List<string>();
+        if (DatasetModality(dataset) is { } mod) lines.Add($"modality={mod}");
+        if (DatasetImageSize(dataset) is { } sz) lines.Add($"size={sz.W}x{sz.H}");
+        File.WriteAllLines(Path.Combine(runDir, TrainedMetaMarker), lines);
+    }
+
+    /// <summary>run 폴더의 학습 시점 기록. 없거나 항목이 빠지면 해당 값 null.</summary>
+    public static (string? Modality, (int W, int H)? Size) ReadTrainedMeta(string runDir)
+    {
+        string? mod = null; (int W, int H)? size = null;
+        try
+        {
+            var f = Path.Combine(runDir, TrainedMetaMarker);
+            if (!File.Exists(f)) return (null, null);
+            foreach (var line in File.ReadAllLines(f))
+            {
+                var kv = line.Split('=', 2);
+                if (kv.Length != 2) continue;
+                var v = kv[1].Trim();
+                if (kv[0].Trim() == "modality" && v is "ir" or "rgb") mod = v;
+                else if (kv[0].Trim() == "size" && v.Split('x') is [var w, var h] && int.TryParse(w, out var iw) && int.TryParse(h, out var ih))
+                    size = (iw, ih);
+            }
+        }
+        catch (IOException) { /* 기록 없음으로 취급 */ }
+        return (mod, size);
+    }
+
+    /// <summary>
+    /// 마지막 학습(best.pt)의 모달리티 — 내보내기 파일명의 _ir/_rgb 표식(④ 추론·운영이 입력 영상을 고르는 기준).
+    /// 학습 시점 기록 → (예전 run) 현재 데이터셋 이미지 → 마지막 변환 모달리티 순. FromRecord=false 면 추정값.
+    /// </summary>
+    public async Task<(string Modality, bool FromRecord)> TrainedModalityAsync(bool unet)
+    {
+        var paths = await GetPathsAsync();
+        if (paths is null) return (LastConvertedModality, false);
+        var runDir = unet ? UnetRunDir(paths) : Path.Combine(paths.Runs, "hd");
+        if (ReadTrainedMeta(runDir).Modality is { } m) return (m, true);
+        var kind = await TrainedKindAsync(unet);
+        return (DatasetModality(paths.DatasetOf(kind)) ?? LastConvertedModality, false);
+    }
+
     /// <summary>'이미터 OFF 만' 필터에서 제외할 IR 촬영본인지 — 이미지로 추정한 상태가 OFF 가 아니면(ON·불확실) 제외.</summary>
     public static bool ExcludedByEmitter(string modality, bool emitterOffOnly, string imagePath)
         => emitterOffOnly && modality == "ir" && EmitterDotEstimator.ClassifyFile(imagePath) != EmitterState.Off;
@@ -615,6 +680,7 @@ public sealed class WeldTrainingService
 
         Directory.CreateDirectory(paths.Runs);
         CopyPreprocessMarker(dataset, Path.Combine(paths.Runs, "hd"));
+        WriteTrainedMeta(dataset, Path.Combine(paths.Runs, "hd"));
         var script = Path.Combine(paths.Workspace, "_train.py");
         await File.WriteAllTextAsync(script, TrainPy);
 
@@ -638,16 +704,26 @@ public sealed class WeldTrainingService
     }
 
     // ── ② YOLO ONNX 내보내기 ──────────────────────────────────────────────────────
-    /// <param name="modality">"ir"/"rgb" — 출력 파일명 weld_yolo_{modality}_{area|line}_{yyMMdd_HHmm}.onnx (덮어쓰지 않음).</param>
+    /// <summary>운영 고정값 — ONNX Runtime(Windows) 호환 opset. UI 에서는 바꾸지 않는다.</summary>
+    public const int YoloExportOpset = 12;
+
+    /// <param name="opset">ONNX opset(기본 <see cref="YoloExportOpset"/>).</param>
+    /// <param name="modality">"ir"/"rgb" — 출력 파일명 weld_yolo_{modality}_{area|line}_{yyMMdd_HHmm}.onnx (덮어쓰지 않음).
+    /// null 이면 학습 시점 기록(<see cref="TrainedModalityAsync"/>)으로 정한다.</param>
     /// <param name="imgsz">입력 크기(긴 변). 0 이면 학습 때 쓴 imgsz 를 best.pt 에서 읽어 자동으로 맞춘다.</param>
     /// <param name="rect">
-    /// true 면 데이터셋 이미지 비율로 직사각 입력([h,w], 32 배수)으로 내보낸다. 848×480 이면 864 학습 → 512×864 —
+    /// true 면 학습 데이터셋 이미지 비율로 직사각 입력([h,w], 32 배수)으로 내보낸다. 848×480 이면 864 학습 → 512×864 —
     /// 정사각 864×864 대비 레터박스 여백 계산이 빠져 CPU 추론이 약 40% 빨라진다(합성곱 모델이라 정확도 동일).
     /// </param>
-    public async Task StartExportAsync(int opset = 12, int imgsz = 640, string? modality = null, bool rect = false)
+    public async Task StartExportAsync(int opset = YoloExportOpset, int imgsz = 0, string? modality = null, bool rect = true)
     {
         if (IsBusy) throw new InvalidOperationException("이미 실행 중인 작업이 있습니다.");
-        modality = modality == "rgb" ? "rgb" : modality == "ir" ? "ir" : LastConvertedModality;
+        if (modality is not ("rgb" or "ir"))
+        {
+            var (m, fromRecord) = await TrainedModalityAsync(unet: false);
+            modality = m;
+            if (!fromRecord) Emit($"[내보내기] 학습 시점 모달리티 기록이 없어(이전 버전 학습) 현재 데이터셋 기준 {m.ToUpperInvariant()} 로 정했습니다 — 다르면 파일명의 _ir/_rgb 를 확인하세요.");
+        }
         var paths = await GetPathsAsync() ?? throw new InvalidOperationException("캡처 폴더 미설정");
         var best = Path.Combine(paths.Runs, "hd", "weights", "best.pt");
         if (!File.Exists(best)) throw new FileNotFoundException("학습된 가중치(best.pt)가 없습니다. 먼저 학습을 완료하세요.", best);
@@ -662,7 +738,9 @@ public sealed class WeldTrainingService
         var spec = imgsz.ToString();
         if (rect)
         {
-            var size = DatasetImageSize(_lastYoloDataset ?? paths.DatasetOf(LabelKind.Area))
+            var size = ReadTrainedMeta(Path.Combine(paths.Runs, "hd")).Size
+                       ?? DatasetImageSize(_lastYoloDataset ?? paths.DatasetOf(kind))
+                       ?? DatasetImageSize(paths.DatasetOf(LabelKind.Area))
                        ?? DatasetImageSize(paths.DatasetOf(LabelKind.Line));
             if (size is { } sz) spec = $"rect:{imgsz}:{sz.W}x{sz.H}";
             else Emit("[내보내기] 데이터셋 이미지를 찾지 못해 정사각 입력으로 내보냅니다.");
@@ -730,6 +808,7 @@ public sealed class WeldTrainingService
         Directory.CreateDirectory(UnetRunDir(paths));
         await File.WriteAllTextAsync(Path.Combine(UnetRunDir(paths), UnetKindMarker), WeldModelNames.KindToken(kind));
         CopyPreprocessMarker(dataset, UnetRunDir(paths));
+        WriteTrainedMeta(dataset, UnetRunDir(paths));
         var py = await GetPythonAsync();
         // YOLO 학습과 같은 규칙 — macOS 는 Apple GPU(MPS), 그 외는 기존처럼 CPU. 못 쓰면 스크립트가 cpu 로 대체.
         var device = OperatingSystem.IsMacOS() ? "mps" : "cpu";
@@ -752,7 +831,12 @@ public sealed class WeldTrainingService
     public async Task StartUnetExportAsync(string? modality = null)
     {
         if (IsBusy) throw new InvalidOperationException("이미 실행 중인 작업이 있습니다.");
-        modality = modality == "rgb" ? "rgb" : modality == "ir" ? "ir" : LastConvertedModality;
+        if (modality is not ("rgb" or "ir"))
+        {
+            var (m, fromRecord) = await TrainedModalityAsync(unet: true);
+            modality = m;
+            if (!fromRecord) Emit($"[U-Net 내보내기] 학습 시점 모달리티 기록이 없어(이전 버전 학습) 현재 데이터셋 기준 {m.ToUpperInvariant()} 로 정했습니다 — 다르면 파일명의 _ir/_rgb 를 확인하세요.");
+        }
         var paths = await GetPathsAsync() ?? throw new InvalidOperationException("캡처 폴더 미설정");
         var best = Path.Combine(UnetRunDir(paths), "best.pt");
         if (!File.Exists(best)) throw new FileNotFoundException("U-Net 가중치(best.pt)가 없습니다. 먼저 U-Net 학습을 완료하세요.", best);

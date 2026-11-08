@@ -45,9 +45,7 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
     [ObservableProperty] private int _augPresetIndex;        // 0 선 전용(권장), 1 최소, 2 ultralytics 기본
     [ObservableProperty] private int _patience = 50;          // 조기 종료(0=끔)
     [ObservableProperty] private int _baseModelIndex;        // 0 v8n, 1 v8s, 2 11n, 3 11s
-    [ObservableProperty] private int _opset = 12, _exportImgsz;   // 0 = 학습 imgsz 자동
-    [ObservableProperty] private bool _exportRect = true;    // 데이터 비율 직사각 입력(CPU 추론 가속)
-    [ObservableProperty] private int _exportModalityIndex = 1;   // 0 rgb, 1 ir
+    // 내보내기 opset·imgsz·직사각 입력은 서비스 고정값(opset 12 · 학습 imgsz · 직사각), 모달리티는 학습 시점 기록으로 자동.
     [ObservableProperty] private bool _autoExport = true;    // ②·③ 학습 정상 종료 시 바로 ONNX 내보내기
 
     // ③ U-Net (PyTorch, 크롭 학습)
@@ -105,12 +103,13 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
     public int PyKind => Py is null ? 0 : Py.UltralyticsOk ? 1 : Py.PythonOk ? 2 : 3;
     public bool PyReady => Py is { UltralyticsOk: true };
     public bool TorchReady => Py is { TorchOk: true };
-    public string UnetExportButtonText => $"best.pt → weld_unet_{ExportModality}_{WeldModelNames.KindToken(_unetTrainedKind)}{(_unetTrainedClahe ? "_clahe" : "")}_(날짜시각).onnx";
+    public string UnetExportButtonText => $"best.pt → weld_unet_{_unetTrainedModality}_{WeldModelNames.KindToken(_unetTrainedKind)}{(_unetTrainedClahe ? "_clahe" : "")}_(날짜시각).onnx";
     private LabelKind _yoloTrainedKind = LabelKind.Area, _unetTrainedKind = LabelKind.Line;   // 마지막 학습의 데이터셋 종류(파일명 미리보기)
     private bool _yoloTrainedClahe, _unetTrainedClahe;                                        // 마지막 학습이 CLAHE 데이터셋인지
+    private string _yoloTrainedModality = "ir", _unetTrainedModality = "ir";                  // 마지막 학습의 모달리티(학습 시점 기록)
     public bool NeedInstall => Py is { UltralyticsOk: false };
     public string InstallHint => Py is null ? "" : $"설치: {Py.Exe} -m pip install ultralytics onnx";
-    public string ExportButtonText => $"best.pt → weld_yolo_{ExportModality}_{WeldModelNames.KindToken(_yoloTrainedKind)}{(_yoloTrainedClahe ? "_clahe" : "")}_(날짜시각).onnx";
+    public string ExportButtonText => $"best.pt → weld_yolo_{_yoloTrainedModality}_{WeldModelNames.KindToken(_yoloTrainedKind)}{(_yoloTrainedClahe ? "_clahe" : "")}_(날짜시각).onnx";
     private string Modality => ModalityIndex == 1 ? "ir" : "rgb";
     private LabelKind ConvertKind => ConvertKindIndex == 1 ? LabelKind.Line : LabelKind.Area;
     public string RgbCountText => $"RGB (면 {RgbArea} · 선 {RgbLine})";
@@ -122,7 +121,6 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
     public bool NoTrainDirs => TrainDirs.Count == 0;
     public string YoloDatasetInfo => YoloKindIndex == 1 ? LineDatasetInfo : AreaDatasetInfo;
     public string UnetDatasetInfo => UnetKindIndex == 1 ? LineDatasetInfo : AreaDatasetInfo;
-    private string ExportModality => ExportModalityIndex == 1 ? "ir" : "rgb";
 
     public VisionTrainingViewModel(WeldTrainingService train, OnnxBeadSegmentationService seg,
         IServiceScopeFactory scopeFactory, INavigationService nav, HD.AMR.App.Service.WeldTrackingService weld)
@@ -330,11 +328,6 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
         return null;
     }
 
-    partial void OnExportModalityIndexChanged(int value)
-    {
-        OnPropertyChanged(nameof(ExportButtonText)); OnPropertyChanged(nameof(UnetExportButtonText));
-    }
-
     private async Task PollAsync()
     {
         if (_lastPhase != TrainingPhase.Done && _train.Phase == TrainingPhase.Done) await RefreshModelsAsync();
@@ -510,17 +503,29 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
         LineDatasetInfo = Info(LabelKind.Line);
     }
 
+    // 마지막 학습(best.pt)의 라벨 종류·CLAHE·모달리티 → 내보내기 버튼의 파일명 미리보기.
+    private async Task RefreshTrainedInfoAsync()
+    {
+        try
+        {
+            _yoloTrainedKind = await _train.TrainedKindAsync(unet: false);
+            _unetTrainedKind = await _train.TrainedKindAsync(unet: true);
+            _yoloTrainedClahe = await _train.TrainedClaheAsync(unet: false);
+            _unetTrainedClahe = await _train.TrainedClaheAsync(unet: true);
+            _yoloTrainedModality = (await _train.TrainedModalityAsync(unet: false)).Modality;
+            _unetTrainedModality = (await _train.TrainedModalityAsync(unet: true)).Modality;
+            OnPropertyChanged(nameof(ExportButtonText)); OnPropertyChanged(nameof(UnetExportButtonText));
+        }
+        catch (Exception ex) { Notify(ex.Message, true); }
+    }
+
     [RelayCommand]
     private async Task RefreshModelsAsync()
     {
         try
         {
             var sel = SelModel?.Path ?? _lastModelPath;   // 화면에 다시 들어오면 마지막으로 쓴 모델
-            _yoloTrainedKind = await _train.TrainedKindAsync(unet: false);
-            _unetTrainedKind = await _train.TrainedKindAsync(unet: true);
-            _yoloTrainedClahe = await _train.TrainedClaheAsync(unet: false);
-            _unetTrainedClahe = await _train.TrainedClaheAsync(unet: true);
-            OnPropertyChanged(nameof(ExportButtonText)); OnPropertyChanged(nameof(UnetExportButtonText));
+            await RefreshTrainedInfoAsync();
             var list = await _train.ListModelsAsync();
             Models.Clear();
             foreach (var m in list) Models.Add(m);
@@ -541,7 +546,6 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
             ConvertText = $"{LabelFiles.KindText(r.Kind)} 라벨 변환 완료 — 사용 {r.Used}건" + (r.Rotated > 0 ? $"(90° 회전본 {r.Rotated}건 포함)" : "") +
                           $" / 건너뜀 {r.Skipped}건 / 폴리곤 {r.Instances}개\n" +
                           (ValDir is null ? $"세션 {r.Sessions}개 → " : "검증 폴더 지정 → ") + $"train {r.Train}건 / val {r.Val}건\n{r.DataYaml}";
-            ExportModalityIndex = ModalityIndex;
             // 방금 만든 데이터셋을 학습 화면 기본값으로(면→YOLO, 선→U-Net 이 흔한 조합이지만 둘 다 맞춘다).
             if (r.Kind == LabelKind.Area) YoloKindIndex = 0; else UnetKindIndex = 1;
             await RefreshCountsAsync();
@@ -559,20 +563,17 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
         var aug = AugPresetIndex switch { 1 => TrainingAugmentation.Minimal, 2 => TrainingAugmentation.Full, _ => TrainingAugmentation.Line };
         // 자동 내보내기 설정은 학습 시작 시점 값으로 고정(학습 중 화면 값을 바꿔도 영향 없음).
         Func<Task>? then = null;
-        if (AutoExport)
-        {
-            int opset = Opset, imgsz = ExportImgsz; var mod = ExportModality; bool rect = ExportRect;
-            then = () => _train.StartExportAsync(opset, imgsz, mod, rect);
-        }
+        if (AutoExport) then = () => _train.StartExportAsync();
         try { await _train.StartTrainingAsync(Epochs, Imgsz, Batch, model, aug, BrightAug, Patience, YoloKindIndex == 1 ? LabelKind.Line : LabelKind.Area, then); }
         catch (Exception ex) { Notify($"학습 시작 실패: {ex.Message}", true); }
+        await RefreshTrainedInfoAsync();
     }
 
     [RelayCommand]
     private async Task StartExport()
     {
         Message = null;
-        try { await _train.StartExportAsync(Opset, ExportImgsz, ExportModality, ExportRect); }
+        try { await _train.StartExportAsync(); }
         catch (Exception ex) { Notify($"내보내기 시작 실패: {ex.Message}", true); }
     }
 
@@ -581,16 +582,17 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
     {
         Message = null;
         Func<Task>? then = null;
-        if (AutoExport) { var mod = ExportModality; then = () => _train.StartUnetExportAsync(mod); }
+        if (AutoExport) then = () => _train.StartUnetExportAsync();
         try { await _train.StartUnetTrainingAsync(UnetEpochs, UnetBatch, UnetCrop, UnetPatience, UnetBaseIndex == 1 ? 32 : 16, UnetKindIndex == 1 ? LabelKind.Line : LabelKind.Area, then); }
         catch (Exception ex) { Notify($"U-Net 학습 시작 실패: {ex.Message}", true); }
+        await RefreshTrainedInfoAsync();
     }
 
     [RelayCommand]
     private async Task StartUnetExport()
     {
         Message = null;
-        try { await _train.StartUnetExportAsync(ExportModality); }
+        try { await _train.StartUnetExportAsync(); }
         catch (Exception ex) { Notify($"U-Net 내보내기 시작 실패: {ex.Message}", true); }
     }
 
@@ -652,7 +654,7 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
         string head;
         if (!lr.Found) head = $"용접선 검출 실패 — {lr.Message}";
         else if (lr.Errors is { } e)
-            head = $"{(e.Pass ? "✓ 합격" : "✗ 불합격")} — 정답 대비 각도 오차 {e.AngleDeg:0.0}° · 중심 오차 {e.CenterOffsetPx:0.0}px " +
+            head = $"{(e.Pass ? "✓ 합격" : "✗ 불합격")}{(e.BranchMatched ? "(가지 일치 — 정답 선이 여러 가지라 가장 가까운 가지와 비교)" : "")} — 정답 대비 각도 오차 {e.AngleDeg:0.0}° · 중심 오차 {e.CenterOffsetPx:0.0}px " +
                    $"(기준 {WeldLineMetrics.DefaultAngleTolDeg:0}° / {WeldLineMetrics.DefaultCenterTolPx:0}px)";
         else head = $"용접선 검출 — 기울기 {lr.TiltDeg:0.0}° (선 라벨이 없어 오차는 계산하지 않음)";
         InferOk = lr.Found && (lr.Errors?.Pass ?? true);
