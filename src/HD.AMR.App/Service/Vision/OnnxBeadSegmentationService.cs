@@ -113,13 +113,20 @@ public sealed class OnnxBeadSegmentationService
         lock (_gate) return HeatmapSegmenter.LooksLikeHeatmap(GetSession(modelPath));
     }
 
-    /// <summary>히트맵 판정: 진행 슬라이스 중 이 비율 이상에서 중심선을 찾으면 "검출 1건".</summary>
-    internal const double HeatmapFoundFraction = 0.2;
+    /// <summary>
+    /// 히트맵 판정: 맞춘 직선의 inlier 슬라이스가 진행 슬라이스의 이 비율 이상이면 "검출 1건".
+    /// 대각선은 화면 일부 슬라이스에만 걸치고 코로게이션 위에서 끊기므로 낮게 둔다.
+    /// </summary>
+    internal const double HeatmapFoundFraction = 0.1;
+
+    /// <summary>직선 inlier 허용 거리 [학습 해상도 px] — 학습 스크립트 decode_line 의 ransac_px 와 같다.</summary>
+    internal const double HeatmapInlierTrainPx = 3.0;
 
     /// <summary>
-    /// 중심선 히트맵 모델 추론(OpenCV 불필요 — macOS 포함). 진행축을 모르므로 가로·세로(전치) 둘 다 풀어 중심선을 찾은
-    /// 슬라이스 비율이 큰 쪽을 쓴다. 결과: Count=1/0(선 검출 여부), MaxScore=최대 확률, Coverage=중심선을 찾은 슬라이스 비율.
-    /// 오버레이는 찾은 중심선 띠를 붉게 칠한다.
+    /// 중심선 히트맵 모델 추론(OpenCV 불필요 — macOS 포함). 진행축을 모르므로 가로·세로(전치) 둘 다 풀고, 슬라이스마다 찾은
+    /// 중심 점들에 RANSAC 직선(기울기 ≤ <see cref="HeatmapSegmenter.MaxLineAngleDeg"/>, 대각선 포함)을 맞춰 inlier 가 많은 쪽을 쓴다.
+    /// 결과: Count=1/0(선 검출 여부), MaxScore=최대 확률, Coverage=직선 inlier 슬라이스 비율.
+    /// 오버레이는 맞춘 직선(잡음 조각 제외, 끊긴 구간은 이어서)을 칠한다. 직선을 못 맞추면 원래 띠 마스크를 보여 준다.
     /// </summary>
     private InferResult InferHeatmap(string modelPath, byte[] imageBytes, float threshold)
     {
@@ -139,18 +146,26 @@ public sealed class OnnxBeadSegmentationService
             var mH = HeatmapSegmenter.RidgeMask(session, rgb, w, h, Math.Max(w, h), horizontal: true, thr, prob: probH);
             var probV = new float[w * h];
             var mV = HeatmapSegmenter.RidgeMask(session, rgb, w, h, Math.Max(w, h), horizontal: false, thr, prob: probV);
+            double inlierPx = Math.Max(2.0, HeatmapInlierTrainPx * Math.Max(w, h) / HeatmapSegmenter.TrainWidth(session));
+            var lH = HeatmapSegmenter.FitLine(HeatmapSegmenter.RidgePoints(mH, w, h, true), inlierPx, w);
+            var lV = HeatmapSegmenter.FitLine(HeatmapSegmenter.RidgePoints(mV, w, h, false), inlierPx, h);
             sw.Stop();
-            double fH = SliceFraction(mH, w, h, true), fV = SliceFraction(mV, w, h, false);
-            bool horiz = fH >= fV;
-            var mask = horiz ? mH : mV;
+            double fH = (lH?.Inliers ?? 0) / (double)Math.Max(1, w), fV = (lV?.Inliers ?? 0) / (double)Math.Max(1, h);
+            bool horiz = lH is null && lV is null
+                ? SliceFraction(mH, w, h, true) >= SliceFraction(mV, w, h, false)
+                : (lH?.Inliers ?? 0) >= (lV?.Inliers ?? 0);
+            var line = horiz ? lH : lV;
             var prob = horiz ? probH : probV;
             double frac = horiz ? fH : fV;
-            LastOverlay = YoloSegManaged.BuildOverlay(img, mask);
+            LastOverlay = YoloSegManaged.BuildOverlay(img,
+                line is { } l ? HeatmapSegmenter.LineMask(w, h, horiz, l) : horiz ? mH : mV);
             float max = 0;
             foreach (var v in prob) if (v > max) max = v;
-            _log.LogInformation("히트맵 추론 {Model}: {Dir} 중심선 슬라이스 {Frac:P0} (가로 {FH:P0} / 세로 {FV:P0}), 최대 확률 {Max:0.00}, {Ms}ms",
-                Path.GetFileName(modelPath), horiz ? "가로" : "세로", frac, fH, fV, max, sw.ElapsedMilliseconds);
-            return new InferResult(frac >= HeatmapFoundFraction ? 1 : 0, max, frac, sw.ElapsedMilliseconds, w, h);
+            double angle = line is { } la ? Math.Atan(la.A) * 180 / Math.PI : double.NaN;
+            _log.LogInformation("히트맵 추론 {Model}: {Dir} 진행, 직선 {Angle:0.0}° inlier {In}/{Pts} 슬라이스 ({Frac:P0}, 가로 {FH:P0} / 세로 {FV:P0}), 최대 확률 {Max:0.00}, {Ms}ms",
+                Path.GetFileName(modelPath), horiz ? "가로" : "세로", angle, line?.Inliers ?? 0, line?.Points ?? 0,
+                frac, fH, fV, max, sw.ElapsedMilliseconds);
+            return new InferResult(line is not null && frac >= HeatmapFoundFraction ? 1 : 0, max, frac, sw.ElapsedMilliseconds, w, h);
         }
     }
 

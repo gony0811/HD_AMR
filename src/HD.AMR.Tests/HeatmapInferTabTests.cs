@@ -47,6 +47,46 @@ public class HeatmapInferTabTests
     }
 
     [Fact]
+    public async Task 대각선_용접선도_직선으로_찾는다()
+    {
+        // 약 40° 기운 선(y = 0.85·x + 5) — 예전 판독은 25°/20° 제한으로 버렸다.
+        var r = await Svc().RunOnBytesAsync(Model(),
+            Png(320, 240, (x, y) => (byte)(Math.Abs(y - (0.85 * x + 5)) <= 2 ? 230 : 40)), 0.25f, 0.5f);
+        Assert.Equal(1, r.Count);
+        Assert.True(r.Coverage > 0.5);
+    }
+
+    [Fact]
+    public void 직선_맞춤은_잡음_조각을_버리고_대각선을_고른다()
+    {
+        // 40° 선 위의 점 60개 + 선 밖 잡음 20개.
+        var pts = new List<(double S, double C)>();
+        for (int s = 0; s < 60; s++) pts.Add((s * 4, 0.84 * s * 4 + 10));
+        for (int i = 0; i < 20; i++) pts.Add((i * 13 + 2, 200 - i * 3));
+        var line = HD.AMR.App.Service.Vision.HeatmapSegmenter.FitLine(pts, 3.0, 320)!.Value;
+
+        Assert.Equal(0.84, line.A, 2);
+        Assert.Equal(10, line.B, 0);
+        Assert.InRange(line.Inliers, 60, 62);
+        Assert.Equal(0, line.S0);
+        Assert.Equal(236, line.S1);
+    }
+
+    [Fact]
+    public void 직선_띠는_기운_선에서도_슬라이스마다_끊기지_않는다()
+    {
+        var l = new HD.AMR.App.Service.Vision.HeatmapSegmenter.RidgeLine(0.9, 5, 10, 100, 50, 50);
+        var m = HD.AMR.App.Service.Vision.HeatmapSegmenter.LineMask(200, 200, true, l);
+        for (int x = 11; x <= 100; x++)
+        {
+            int y = (int)Math.Round(0.9 * x + 5), py = (int)Math.Round(0.9 * (x - 1) + 5);
+            for (int yy = Math.Min(y, py); yy <= Math.Max(y, py); yy++)
+                Assert.Equal(255, m[yy * 200 + x] | m[yy * 200 + x - 1]);
+        }
+        Assert.Equal(0, m[50 * 200 + 5]);   // S0 이전은 비움
+    }
+
+    [Fact]
     public void 슬라이스_비율()
     {
         var m = new byte[4 * 3];

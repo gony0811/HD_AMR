@@ -284,7 +284,12 @@ def to_tensor(img):
 
 
 # ── 디코딩·평가 ───────────────────────────────────────────────────────────
-def decode_line(prob, thr=0.3, ransac_px=3.0, iters=200, seed=0):
+# 직선 맞춤 허용 기울기 [°]. 세로선(>45°)은 전치해서 다루므로 판독 대상은 0~45° — 대각선(30~45°)도 받아들이도록
+# 여유를 둔다(예전 25° 제한은 대각선 용접선을 버리고 잡음 조각으로 수평선을 맞추는 원인이었다).
+MAX_LINE_ANGLE_DEG = 50.0
+
+
+def decode_line(prob, thr=0.3, ransac_px=3.0, iters=200, seed=0, max_angle_deg=MAX_LINE_ANGLE_DEG):
     """확률맵 → (열별 점 [N,2], 직선 (a,b): y = a·x + b, 사용 열 비율). 실패 시 (점, None, 비율)."""
     h, w = prob.shape
     ys = prob.argmax(0)
@@ -311,7 +316,7 @@ def decode_line(prob, thr=0.3, ransac_px=3.0, iters=200, seed=0):
         if abs(x2 - x1) < w * 0.1:
             continue
         a = (y2 - y1) / (x2 - x1)
-        if abs(a) > math.tan(math.radians(25)):   # 거의 수평이라는 조건
+        if abs(a) > math.tan(math.radians(max_angle_deg)):   # 가로 쪽 선(전치로 0~45°)만
             continue
         b = y1 - a * x1
         inl = np.abs(pts[:, 1] - (a * pts[:, 0] + b)) <= ransac_px

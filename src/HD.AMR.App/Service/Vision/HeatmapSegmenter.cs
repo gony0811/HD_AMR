@@ -100,6 +100,98 @@ public static class HeatmapSegmenter
         return mask;
     }
 
+    /// <summary>
+    /// 직선 맞춤 허용 기울기 [°, 진행축 대비]. 진행축이 가로·세로 둘 다 시도되므로 실제 판독 대상은 0~45° —
+    /// 대각선(30~45°) 용접선도 받아들이도록 여유를 둔다.
+    /// </summary>
+    public const double MaxLineAngleDeg = 50.0;
+
+    /// <summary>중심선 직선: 진행 좌표 s(가로면 x, 세로면 y)에서 cross = A·s + B. S0~S1 = inlier 가 걸친 진행 구간.</summary>
+    public readonly record struct RidgeLine(double A, double B, double S0, double S1, int Inliers, int Points);
+
+    /// <summary><see cref="RidgeMask"/> 띠 마스크 → 슬라이스마다 (진행 s, 띠 중심 cross) 한 점.</summary>
+    public static List<(double S, double C)> RidgePoints(byte[] mask, int w, int h, bool horizontal)
+    {
+        int n = horizontal ? w : h, c = horizontal ? h : w;
+        var pts = new List<(double, double)>();
+        for (int s = 0; s < n; s++)
+        {
+            double sum = 0;
+            int cnt = 0;
+            for (int k = 0; k < c; k++)
+                if (mask[horizontal ? k * w + s : s * w + k] != 0) { sum += k; cnt++; }
+            if (cnt > 0) pts.Add((s, sum / cnt));
+        }
+        return pts;
+    }
+
+    /// <summary>
+    /// 슬라이스 점들에 RANSAC 직선 맞춤(결정적 시드). 슬라이스 최댓값은 선이 없는 자리에서도 잡음 조각을 만드므로,
+    /// 가장 많은 점이 지나는 직선 하나만 남기고 나머지는 버린다. 점이 모자라거나 맞춤에 실패하면 null.
+    /// </summary>
+    /// <param name="inlierPx">inlier 허용 cross 거리 [원래 px].</param>
+    /// <param name="sliceCount">진행축 슬라이스 수 — 최소 점 수·두 표본 간 최소 간격의 기준.</param>
+    public static RidgeLine? FitLine(IReadOnlyList<(double S, double C)> pts, double inlierPx, int sliceCount,
+        double maxAngleDeg = MaxLineAngleDeg, int iters = 300, int seed = 0)
+    {
+        if (pts.Count < Math.Max(8, 0.05 * sliceCount)) return null;
+        double maxSlope = Math.Tan(maxAngleDeg * Math.PI / 180.0);
+        var rng = new Random(seed);
+        double bestA = 0, bestB = 0;
+        int bestIn = -1;
+        for (int it = 0; it < iters; it++)
+        {
+            var (s1, c1) = pts[rng.Next(pts.Count)];
+            var (s2, c2) = pts[rng.Next(pts.Count)];
+            if (Math.Abs(s2 - s1) < sliceCount * 0.1) continue;
+            double a = (c2 - c1) / (s2 - s1);
+            if (Math.Abs(a) > maxSlope) continue;
+            double b = c1 - a * s1;
+            int inl = 0;
+            foreach (var (s, c) in pts) if (Math.Abs(c - (a * s + b)) <= inlierPx) inl++;
+            if (inl > bestIn) { bestIn = inl; bestA = a; bestB = b; }
+        }
+        if (bestIn < 2) return null;
+
+        // inlier 로 최소제곱 다시 맞춘 뒤 inlier·구간을 다시 센다.
+        double sx = 0, sy = 0, sxx = 0, sxy = 0;
+        int m = 0;
+        foreach (var (s, c) in pts)
+            if (Math.Abs(c - (bestA * s + bestB)) <= inlierPx) { sx += s; sy += c; sxx += s * s; sxy += s * c; m++; }
+        double den = m * sxx - sx * sx;
+        if (m >= 2 && Math.Abs(den) > 1e-9)
+        {
+            double a = (m * sxy - sx * sy) / den;
+            if (Math.Abs(a) <= maxSlope) { bestA = a; bestB = (sy - a * sx) / m; }
+        }
+        int inliers = 0;
+        double s0 = double.MaxValue, s1v = double.MinValue;
+        foreach (var (s, c) in pts)
+        {
+            if (Math.Abs(c - (bestA * s + bestB)) > inlierPx) continue;
+            inliers++;
+            s0 = Math.Min(s0, s);
+            s1v = Math.Max(s1v, s);
+        }
+        return inliers >= 2 ? new RidgeLine(bestA, bestB, s0, s1v, inliers, pts.Count) : null;
+    }
+
+    /// <summary>맞춘 직선을 S0~S1 구간에 반폭 <paramref name="halfWidth"/> 띠로 칠한 마스크(w×h).</summary>
+    public static byte[] LineMask(int w, int h, bool horizontal, RidgeLine line, int halfWidth = 2)
+    {
+        var mask = new byte[w * h];
+        int n = horizontal ? w : h, cMax = horizontal ? h : w;
+        // 기운 선도 끊기지 않게: 인접 슬라이스 사이 cross 변화만큼 띠를 넓힌다.
+        int extra = (int)Math.Ceiling(Math.Abs(line.A) / 2.0);
+        for (int s = Math.Max(0, (int)Math.Floor(line.S0)); s <= Math.Min(n - 1, (int)Math.Ceiling(line.S1)); s++)
+        {
+            int cc = (int)Math.Round(line.A * s + line.B);
+            for (int k = Math.Max(0, cc - halfWidth - extra); k <= Math.Min(cMax - 1, cc + halfWidth + extra); k++)
+                mask[horizontal ? k * w + s : s * w + k] = 255;
+        }
+        return mask;
+    }
+
     /// <summary>모델 실행: RGB(w×h×3) → 확률(w×h). 32 배수 반사 패딩 후 잘라낸다.</summary>
     public static float[] Infer(InferenceSession session, byte[] rgb, int w, int h)
     {
