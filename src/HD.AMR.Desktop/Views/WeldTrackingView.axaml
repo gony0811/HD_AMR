@@ -156,10 +156,22 @@
                                            Text="σ 최대를 낮추면 넓은 하이라이트(코로게이션 능선) 응답이 줄고, 극성을 비드 쪽으로 고르면 반대 극성의 능선이 빠집니다. 허용각은 진행축 대비 선 기울기 허용치입니다. 바꾼 뒤 Detect 로 확인하세요." />
                             </StackPanel>
                         </Border>
-                        <!-- YOLO 임계값 — YOLO 세그멘테이션 방식에서만 쓰인다. 바꾸면 파라미터(Weld.Yolo.*)에 저장되고 시퀀스도 같은 값을 쓴다. -->
+                        <!-- YOLO 임계값 — 슬라이더는 라이브 검출에 바로 반영, "파라미터에 저장" 때만 Weld.Yolo.* 저장(시퀀스·재시작 공유). -->
                         <StackPanel IsVisible="{Binding IsDl}">
                             <Separator Margin="0,2,0,6" />
-                            <TextBlock FontSize="12"><Run Text="YOLO 임계값" Foreground="{DynamicResource AppMutedTextBrush}" /><Run Text="   변경 즉시 저장" FontSize="11" Foreground="{DynamicResource AppMutedTextBrush}" /></TextBlock>
+                            <Grid ColumnDefinitions="*,Auto,Auto" Margin="0,0,0,6">
+                                <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                    <TextBlock FontSize="12" Text="YOLO 임계값" Foreground="{DynamicResource AppMutedTextBrush}" VerticalAlignment="Center" />
+                                    <Border CornerRadius="4" Padding="6,1" Background="{DynamicResource AppWarnBgBrush}" IsVisible="{Binding DlDirty}">
+                                        <TextBlock FontSize="11" Foreground="{DynamicResource AppWarnFgBrush}" Text="{Binding DlSavedText}" />
+                                    </Border>
+                                    <TextBlock FontSize="11" Foreground="{DynamicResource AppGoodBrush}" Text="✓ 저장됨" VerticalAlignment="Center" IsVisible="{Binding !DlDirty}" />
+                                </StackPanel>
+                                <Button Grid.Column="1" Margin="8,0,0,0" Content="되돌리기" Command="{Binding RevertDlThresholdsCommand}" IsEnabled="{Binding DlDirty}"
+                                        ToolTip.Tip="저장값으로 되돌립니다" />
+                                <Button Grid.Column="2" Margin="8,0,0,0" Content="파라미터에 저장" Command="{Binding SaveDlThresholdsCommand}" IsEnabled="{Binding DlDirty}"
+                                        ToolTip.Tip="이 임계값을 파라미터에 저장 — 시퀀스·재시작 후에도 이 값을 씁니다" />
+                            </Grid>
                             <Grid ColumnDefinitions="44,*,40,24,44,*,40">
                                 <TextBlock Classes="axis" Text="conf" VerticalAlignment="Center" />
                                 <Slider Grid.Column="1" Value="{Binding DlConfidence}" Minimum="{Binding DlConfidenceMin}" Maximum="{Binding DlConfidenceMax}"
@@ -170,17 +182,31 @@
                                         TickFrequency="0.05" IsSnapToTickEnabled="True" />
                                 <TextBlock Grid.Column="6" Text="{Binding DlMaskThreshold, StringFormat='{}{0:0.00}'}" FontSize="12" VerticalAlignment="Center" HorizontalAlignment="Right" />
                             </Grid>
+                            <TextBlock Classes="axis" Margin="0,6,0,0" Text="움직이면 라이브 검출에 바로 반영 · 시퀀스·재시작은 저장한 값 사용" />
                         </StackPanel>
-                        <!-- U-Net 임계값 — U-Net 방식에서만 쓰인다(픽셀 비드 확률 기준). 바꾸면 파라미터(Weld.Unet.Threshold)에 저장되고 시퀀스도 같은 값을 쓴다. -->
+                        <!-- U-Net 임계값 — 슬라이더는 라이브 검출에 바로 반영, "파라미터에 저장" 때만 Weld.Unet.Threshold 저장. -->
                         <StackPanel IsVisible="{Binding IsUnet}">
                             <Separator Margin="0,2,0,6" />
-                            <TextBlock FontSize="12"><Run Text="U-Net 임계값" Foreground="{DynamicResource AppMutedTextBrush}" /><Run Text="   변경 즉시 저장" FontSize="11" Foreground="{DynamicResource AppMutedTextBrush}" /></TextBlock>
+                            <Grid ColumnDefinitions="*,Auto,Auto" Margin="0,0,0,6">
+                                <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                    <TextBlock FontSize="12" Text="U-Net 임계값" Foreground="{DynamicResource AppMutedTextBrush}" VerticalAlignment="Center" />
+                                    <Border CornerRadius="4" Padding="6,1" Background="{DynamicResource AppWarnBgBrush}" IsVisible="{Binding UnetDirty}">
+                                        <TextBlock FontSize="11" Foreground="{DynamicResource AppWarnFgBrush}" Text="{Binding UnetSavedText}" />
+                                    </Border>
+                                    <TextBlock FontSize="11" Foreground="{DynamicResource AppGoodBrush}" Text="✓ 저장됨" VerticalAlignment="Center" IsVisible="{Binding !UnetDirty}" />
+                                </StackPanel>
+                                <Button Grid.Column="1" Margin="8,0,0,0" Content="되돌리기" Command="{Binding RevertUnetThresholdCommand}" IsEnabled="{Binding UnetDirty}"
+                                        ToolTip.Tip="저장값으로 되돌립니다" />
+                                <Button Grid.Column="2" Margin="8,0,0,0" Content="파라미터에 저장" Command="{Binding SaveUnetThresholdCommand}" IsEnabled="{Binding UnetDirty}"
+                                        ToolTip.Tip="이 임계값을 파라미터에 저장 — 시퀀스·재시작 후에도 이 값을 씁니다" />
+                            </Grid>
                             <Grid ColumnDefinitions="44,*,40">
                                 <TextBlock Classes="axis" Text="확률" VerticalAlignment="Center" />
                                 <Slider Grid.Column="1" Value="{Binding UnetThreshold}" Minimum="{Binding UnetThresholdMin}" Maximum="{Binding UnetThresholdMax}"
                                         TickFrequency="0.05" IsSnapToTickEnabled="True" />
                                 <TextBlock Grid.Column="2" Text="{Binding UnetThreshold, StringFormat='{}{0:0.00}'}" FontSize="12" VerticalAlignment="Center" HorizontalAlignment="Right" />
                             </Grid>
+                            <TextBlock Classes="axis" Margin="0,6,0,0" Text="움직이면 라이브 검출에 바로 반영 · 시퀀스·재시작은 저장한 값 사용" />
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" Spacing="6">
                             <Button Content="1회 검출(Peak)" Classes="accent" Command="{Binding FindPeakCommand}" IsEnabled="{Binding !Busy}" />

@@ -93,15 +93,14 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
     /// <summary>RGB 계열 입력이면 true — RGB 시퀀스 동작(IR 기준)·ROI 지정 주의 안내 표시용.</summary>
     public bool IsRgbMode => _svc.Params.Mode != WeldImageMode.Ir;
 
-    /// <summary>DL conf/mask 임계값 — 진행축과 같이 서비스 값을 직접 읽고 쓴다(설정 시 파라미터 저장).</summary>
+    /// <summary>DL conf/mask 임계값 — 슬라이더 값은 라이브 검출에 바로 반영, DB 저장은 "파라미터에 저장" 때만.</summary>
     public double DlConfidence
     {
         get => _svc.Params.DlConfidence;
         set
         {
             _svc.SetDlThresholds(value, _svc.Params.DlMaskThreshold);
-            OnPropertyChanged();
-            OnPropertyChanged(nameof(DlConfidenceText));
+            OnThresholdChanged();
         }
     }
 
@@ -111,22 +110,69 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
         set
         {
             _svc.SetDlThresholds(_svc.Params.DlConfidence, value);
-            OnPropertyChanged();
-            OnPropertyChanged(nameof(DlMaskThresholdText));
+            OnThresholdChanged();
         }
     }
 
-    /// <summary>U-Net 비드 확률 임계값 — 설정 시 파라미터(Weld.Unet.Threshold) 저장, 시퀀스도 같은 값을 쓴다.</summary>
+    /// <summary>U-Net 비드 확률 임계값 — 라이브 검출에 바로 반영, 저장은 버튼으로(Weld.Unet.Threshold).</summary>
     public double UnetThreshold
     {
         get => _svc.Params.UnetThreshold;
         set
         {
             _svc.SetUnetThreshold(value);
-            OnPropertyChanged();
-            OnPropertyChanged(nameof(UnetThresholdText));
+            OnThresholdChanged();
         }
     }
+
+    // ── 임계값 저장 상태 · 저장/되돌리기 ──
+    public bool DlDirty => _svc.DlThresholdsDirty;
+    public bool UnetDirty => _svc.UnetThresholdDirty;
+    public string DlSavedText => $"저장 안 됨 · 저장값 conf {_svc.SavedDlConfidence:0.00} / mask {_svc.SavedDlMaskThreshold:0.00}";
+    public string UnetSavedText => $"저장 안 됨 · 저장값 확률 {_svc.SavedUnetThreshold:0.00}";
+
+    private void NotifyThresholds()
+    {
+        OnPropertyChanged(nameof(DlConfidence)); OnPropertyChanged(nameof(DlMaskThreshold)); OnPropertyChanged(nameof(UnetThreshold));
+        OnPropertyChanged(nameof(DlConfidenceText)); OnPropertyChanged(nameof(DlMaskThresholdText)); OnPropertyChanged(nameof(UnetThresholdText));
+        OnPropertyChanged(nameof(DlDirty)); OnPropertyChanged(nameof(UnetDirty));
+        OnPropertyChanged(nameof(DlSavedText)); OnPropertyChanged(nameof(UnetSavedText));
+    }
+
+    // 슬라이더를 움직이면 멈춘 뒤 250ms 에 현재 프레임을 다시 검출해 오버레이로 보여 준다(스트리밍 중일 때만).
+    private CancellationTokenSource? _liveCts;
+    private async void OnThresholdChanged()
+    {
+        NotifyThresholds();
+        if (!_cam.IsStreaming || !_svc.DetectorAvailable) return;
+        _liveCts?.Cancel();
+        var cts = _liveCts = new CancellationTokenSource();
+        try { await Task.Delay(250, cts.Token); }
+        catch (TaskCanceledException) { return; }
+        if (cts.IsCancellationRequested) return;
+        await Run(() => _svc.DetectOnce());
+    }
+
+    [RelayCommand]
+    private async Task SaveDlThresholds()
+    {
+        if (await _svc.SaveDlThresholdsAsync())
+            Message = $"파라미터 저장: Weld.Yolo.Confidence = {_svc.SavedDlConfidence:0.00}, Weld.Yolo.MaskThreshold = {_svc.SavedDlMaskThreshold:0.00}";
+        else Message = _svc.Message;
+        NotifyThresholds();
+    }
+
+    [RelayCommand]
+    private async Task SaveUnetThreshold()
+    {
+        if (await _svc.SaveUnetThresholdAsync()) Message = $"파라미터 저장: Weld.Unet.Threshold = {_svc.SavedUnetThreshold:0.00}";
+        else Message = _svc.Message;
+        NotifyThresholds();
+    }
+
+    [RelayCommand] private void RevertDlThresholds() { _svc.RevertDlThresholds(); OnThresholdChanged(); }
+    [RelayCommand] private void RevertUnetThreshold() { _svc.RevertUnetThreshold(); OnThresholdChanged(); }
+
     public string UnetThresholdText => $"확률 {_svc.Params.UnetThreshold:0.00}";
     public double UnetThresholdMin => WeldTrackingService.UnetThresholdMin;
     public double UnetThresholdMax => WeldTrackingService.UnetThresholdMax;
@@ -197,6 +243,10 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
     public override void OnDeactivated()
     {
         _timer.Stop();
+        _liveCts?.Cancel();
+        // 시퀀스도 같은 Params 를 쓴다 — 저장 안 한 임계값은 화면을 떠날 때 저장값으로 되돌린다.
+        _svc.RevertDlThresholds();
+        _svc.RevertUnetThreshold();
         EditorImage = OverlayImage = Peak1Image = Peak2Image = null;
     }
 
@@ -212,12 +262,7 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
         if (MethodIndex != methodIndex) MethodIndex = methodIndex;
         OnPropertyChanged(nameof(ImageModeIndex));   // 시작 시 비동기로 복원되는 저장값 반영
         OnPropertyChanged(nameof(IsRgbMode));
-        OnPropertyChanged(nameof(DlConfidence));
-        OnPropertyChanged(nameof(DlMaskThreshold));
-        OnPropertyChanged(nameof(DlConfidenceText));
-        OnPropertyChanged(nameof(DlMaskThresholdText));
-        OnPropertyChanged(nameof(UnetThreshold));
-        OnPropertyChanged(nameof(UnetThresholdText));
+        NotifyThresholds();
         OnPropertyChanged(nameof(WeldRoiText));
         OnPropertyChanged(nameof(PeakRoiText));
         OnPropertyChanged(nameof(WeldRoi));

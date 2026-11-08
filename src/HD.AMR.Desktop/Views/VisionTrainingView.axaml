@@ -1,6 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:HD.AMR.Desktop.ViewModels"
+             xmlns:views="using:HD.AMR.Desktop.Views"
              xmlns:vis="using:HD.AMR.App.Service.Vision"
              xmlns:sys="using:System"
              x:Class="HD.AMR.Desktop.Views.VisionTrainingView"
@@ -242,16 +243,20 @@
                                     <Slider Grid.Column="6" Minimum="{Binding MaskMin}" Maximum="{Binding MaskMax}" TickFrequency="0.05" IsSnapToTickEnabled="True" Value="{Binding MaskThr}" />
                                     <TextBlock Grid.Column="7" FontSize="12" VerticalAlignment="Center" HorizontalAlignment="Right" Text="{Binding MaskThr, StringFormat='{}{0:0.00}'}" />
                                 </Grid>
-                                <Grid ColumnDefinitions="*,Auto,Auto">
-                                    <TextBlock Classes="axis" VerticalAlignment="Center" TextWrapping="Wrap" Text="{Binding InferOpsText}" />
-                                    <Button Grid.Column="1" Margin="8,0,0,0" Content="파라미터에 저장" Command="{Binding SaveInferThresholdsCommand}"
+                                <Grid ColumnDefinitions="*,Auto,Auto,Auto">
+                                    <TextBlock Classes="axis" VerticalAlignment="Center" TextWrapping="Wrap" Text="{Binding InferOpsText}"
+                                               ToolTip.Tip="슬라이더를 움직이면 마지막 추론 이미지를 바로 다시 추론합니다. 파라미터 저장은 버튼을 누를 때만." />
+                                    <Button Grid.Column="1" Margin="8,0,0,0" Content="되돌리기" Command="{Binding RevertInferThresholdsCommand}" IsEnabled="{Binding InferThrDirty}"
+                                            ToolTip.Tip="슬라이더를 저장된 파라미터 값으로 되돌립니다" />
+                                    <Button Grid.Column="2" Margin="8,0,0,0" Content="파라미터에 저장" Command="{Binding SaveInferThresholdsCommand}" IsEnabled="{Binding InferThrDirty}"
                                             ToolTip.Tip="이 임계값을 용접 추적·시퀀스 검출 파라미터로 저장합니다(YOLO: Weld.Yolo.Confidence/MaskThreshold, U-Net: Weld.Unet.Threshold)." />
-                                    <Button Grid.Column="2" Margin="8,0,0,0" Content="추론 실행" Classes="accent" Command="{Binding RunInferCommand}" IsEnabled="{Binding !Inferring}" />
+                                    <Button Grid.Column="3" Margin="8,0,0,0" Content="추론 실행" Classes="accent" Command="{Binding RunInferCommand}" IsEnabled="{Binding !Inferring}" />
                                 </Grid>
                                 <Border Classes="alert" Margin="0" IsVisible="{Binding InferModelWarning, Converter={x:Static ObjectConverters.IsNotNull}}">
                                     <TextBlock TextWrapping="Wrap" Text="{Binding InferModelWarning, StringFormat='⚠ {0}'}" />
                                 </Border>
                                 <Border Classes="alert" Margin="0" IsVisible="{Binding InferText, Converter={x:Static ObjectConverters.IsNotNull}}"><TextBlock Text="{Binding InferText}" TextWrapping="Wrap" /></Border>
+                                <views:OverlayLegend ShowGroundTruth="{Binding InferHasGt}" IsVisible="{Binding OverlayImage, Converter={x:Static ObjectConverters.IsNotNull}}" />
                                 <Border BorderBrush="{DynamicResource AppBorderBrush}" BorderThickness="1" Background="Black" Height="360" IsVisible="{Binding OverlayImage, Converter={x:Static ObjectConverters.IsNotNull}}">
                                     <Image Source="{Binding OverlayImage}" Stretch="Uniform" />
                                 </Border>

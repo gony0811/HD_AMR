@@ -79,6 +79,8 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
     [ObservableProperty] private double _conf = 0.25, _maskThr = 0.50;
     [ObservableProperty] private string? _inferText;
     [ObservableProperty] private bool _inferOk;
+    /// <summary>오버레이에 정답 선(초록)이 그려졌는지 — 범례의 "정답 선" 항목 표시용.</summary>
+    [ObservableProperty] private bool _inferHasGt;
     [ObservableProperty] private Bitmap? _overlayImage;
     [ObservableProperty] private bool _inferring;
     [ObservableProperty] private string? _uploadName;
@@ -188,34 +190,76 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
     public string MaskText => InferIsUnet ? $"확률 {MaskThr:0.00}" : $"mask {MaskThr:0.00}";
     public string MaskLabel => InferIsUnet ? "확률" : "mask";   // ④ 임계값 라벨(값은 슬라이더 옆에 따로 표시)
     public string InferOpsText => InferIsUnet
-        ? $"파라미터 확률 {_weld.Params.UnetThreshold:0.00}"
-        : $"파라미터 conf {_weld.Params.DlConfidence:0.00} · mask {_weld.Params.DlMaskThreshold:0.00}";
-    partial void OnMaskThrChanged(double value) => OnPropertyChanged(nameof(MaskText));
+        ? $"파라미터 확률 {_weld.SavedUnetThreshold:0.00}"
+        : $"파라미터 conf {_weld.SavedDlConfidence:0.00} · mask {_weld.SavedDlMaskThreshold:0.00}";
+    /// <summary>슬라이더 값이 저장된 파라미터와 다른지 — 되돌리기·파라미터에 저장 활성화.</summary>
+    public bool InferThrDirty => InferIsUnet
+        ? Math.Round(MaskThr, 2) != _weld.SavedUnetThreshold
+        : Math.Round(Conf, 2) != _weld.SavedDlConfidence || Math.Round(MaskThr, 2) != _weld.SavedDlMaskThreshold;
+    partial void OnMaskThrChanged(double value) { OnPropertyChanged(nameof(MaskText)); OnInferThresholdChanged(); }
+    partial void OnConfChanged(double value) => OnInferThresholdChanged();
 
-    /// <summary>모델 종류에 맞는 운영 임계값을 슬라이더 시작값으로 불러온다.</summary>
+    // 슬라이더를 움직이면 멈춘 뒤 300ms 에 마지막 추론 이미지(촬영본 또는 업로드)를 다시 추론 — 임계값 트렌드 확인용.
+    private bool _loadingThresholds;
+    private CancellationTokenSource? _reinferCts;
+    private async void OnInferThresholdChanged()
+    {
+        OnPropertyChanged(nameof(InferThrDirty));
+        if (_loadingThresholds || OverlayImage is null || SelModel is null) return;
+        _reinferCts?.Cancel();
+        var cts = _reinferCts = new CancellationTokenSource();
+        try
+        {
+            await Task.Delay(300, cts.Token);
+            while (Inferring) await Task.Delay(50, cts.Token);   // 진행 중 추론이 끝나면 최신 값으로 한 번 더
+        }
+        catch (TaskCanceledException) { return; }
+        if (UploadName is { } name && _uploadBytes is { } bytes) await InferUploadAsync(name, bytes);
+        else if (InferItem is not null) await RunInfer();
+    }
+
+    /// <summary>모델 종류에 맞는 저장된 파라미터 임계값을 슬라이더 시작값으로 불러온다.</summary>
     private void LoadInferThresholds()
     {
         OnPropertyChanged(nameof(InferIsUnet)); OnPropertyChanged(nameof(MaskMin)); OnPropertyChanged(nameof(MaskMax));
-        if (InferIsUnet) MaskThr = _weld.Params.UnetThreshold;
-        else { Conf = _weld.Params.DlConfidence; MaskThr = _weld.Params.DlMaskThreshold; }
+        _loadingThresholds = true;
+        try
+        {
+            if (InferIsUnet) MaskThr = _weld.SavedUnetThreshold;
+            else { Conf = _weld.SavedDlConfidence; MaskThr = _weld.SavedDlMaskThreshold; }
+        }
+        finally { _loadingThresholds = false; }
         OnPropertyChanged(nameof(MaskText)); OnPropertyChanged(nameof(MaskLabel)); OnPropertyChanged(nameof(InferOpsText));
+        OnPropertyChanged(nameof(InferThrDirty));
     }
 
-    /// <summary>④ 슬라이더 값을 운영 파라미터로 저장 — 용접 추적·시퀀스의 검출이 바로 이 값을 쓴다.</summary>
+    /// <summary>④ 슬라이더를 저장된 파라미터 값으로 되돌린다(마지막 추론 이미지는 다시 추론).</summary>
     [RelayCommand]
-    private void SaveInferThresholds()
+    private void RevertInferThresholds()
     {
+        if (InferIsUnet) MaskThr = _weld.SavedUnetThreshold;
+        else { Conf = _weld.SavedDlConfidence; MaskThr = _weld.SavedDlMaskThreshold; }
+    }
+
+    /// <summary>④ 슬라이더 값을 운영 파라미터로 저장 — 용접 추적·시퀀스의 검출이 이 값을 쓴다.</summary>
+    [RelayCommand]
+    private async Task SaveInferThresholds()
+    {
+        bool ok;
         if (InferIsUnet)
         {
             _weld.SetUnetThreshold(MaskThr);
-            Notify($"파라미터 저장: Weld.Unet.Threshold = {_weld.Params.UnetThreshold:0.00}", false);
+            ok = await _weld.SaveUnetThresholdAsync();
+            if (ok) Notify($"파라미터 저장: Weld.Unet.Threshold = {_weld.SavedUnetThreshold:0.00}", false);
         }
         else
         {
             _weld.SetDlThresholds(Conf, MaskThr);
-            Notify($"파라미터 저장: Weld.Yolo.Confidence = {_weld.Params.DlConfidence:0.00}, Weld.Yolo.MaskThreshold = {_weld.Params.DlMaskThreshold:0.00}", false);
+            ok = await _weld.SaveDlThresholdsAsync();
+            if (ok) Notify($"파라미터 저장: Weld.Yolo.Confidence = {_weld.SavedDlConfidence:0.00}, Weld.Yolo.MaskThreshold = {_weld.SavedDlMaskThreshold:0.00}", false);
         }
-        OnPropertyChanged(nameof(InferOpsText));
+        if (!ok) Notify(_weld.Message ?? "파라미터 저장 실패", true);
+        OnPropertyChanged(nameof(InferOpsText)); OnPropertyChanged(nameof(InferThrDirty));
     }
 
     // ④ 판정 기준 — 모델 파일명(weld_{yolo|unet}_{ir|rgb}_{area|line}_…)에서 읽는다.
@@ -659,8 +703,8 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
                    $"(기준 {WeldLineMetrics.DefaultAngleTolDeg:0}° / {WeldLineMetrics.DefaultCenterTolPx:0}px)";
         else head = $"용접선 검출 — 기울기 {lr.TiltDeg:0.0}° (선 라벨이 없어 오차는 계산하지 않음)";
         InferOk = lr.Found && (lr.Errors?.Pass ?? true);
-        InferText = $"{head}\n{(_seg.LastClahe ? "CLAHE 전처리 적용 · " : "")}{(lr.Horizontal ? "가로" : "세로")} 진행 · 검출 {r.Count}개 · 최고점수 {r.MaxScore:0.00} · {r.Millis} ms ({r.Width}×{r.Height})" +
-                    "  ·  노랑 실선 = 검출 용접선(직선 인정 구간), 노랑 점선 = 연장선" + (gt is not null ? ", 초록 = 정답 선" : "") + ", 옅은 빨강 = 모델 마스크";
+        InferText = $"{head}\n{(_seg.LastClahe ? "CLAHE 전처리 적용 · " : "")}{(lr.Horizontal ? "가로" : "세로")} 진행 · 검출 {r.Count}개 · 최고점수 {r.MaxScore:0.00} · {r.Millis} ms ({r.Width}×{r.Height})";
+        InferHasGt = lr.Errors is not null;   // InferLineCheck 는 크기가 맞는 정답 선이 있을 때만 오차 계산·초록 선 표시
         using var ms = new MemoryStream(lr.OverlayJpeg);
         OverlayImage = new Bitmap(ms);
     }

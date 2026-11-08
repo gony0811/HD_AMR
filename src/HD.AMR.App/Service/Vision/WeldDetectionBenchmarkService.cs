@@ -18,14 +18,16 @@ public sealed class WeldDetectionBenchmarkService
 {
     private readonly WeldTrackingService _weld;
     private readonly WeldTrainingService _train;
+    private readonly OnnxBeadSegmentationService _seg;
     private readonly ILogger<WeldDetectionBenchmarkService> _log;
     private int _running;
 
     public WeldDetectionBenchmarkService(WeldTrackingService weld, WeldTrainingService train,
-        ILogger<WeldDetectionBenchmarkService> log)
+        OnnxBeadSegmentationService seg, ILogger<WeldDetectionBenchmarkService> log)
     {
         _weld = weld;
         _train = train;
+        _seg = seg;
         _log = log;
     }
 
@@ -35,6 +37,13 @@ public sealed class WeldDetectionBenchmarkService
     /// <summary>선 라벨이 있는 평가 대상 stem 목록(모달리티별). 데이터셋 폴더(학습+검증) 전체에서 찾는다.</summary>
     public async Task<List<string>> ListLabeledStemsAsync(string modality)
         => (await ListLabeledAsync(LabelFiles.Mod(modality))).Select(x => x.Stem).ToList();
+
+    /// <summary>선 라벨 촬영본 수 — 전체(학습+검증 폴더)와 검증 폴더만. 검증 폴더 미지정이면 Val=0.</summary>
+    public async Task<(int Total, int Val)> CountLabeledAsync(string modality)
+    {
+        var list = await ListLabeledAsync(LabelFiles.Mod(modality));
+        return (list.Count, list.Count(x => x.IsVal));
+    }
 
     // (stem, 폴더, 검증 폴더 여부). 같은 stem 이 여러 폴더에 있으면 데이터셋 변환처럼 먼저 나온 것만.
     private async Task<List<(string Stem, string Dir, bool IsVal)>> ListLabeledAsync(string modality)
@@ -92,6 +101,9 @@ public sealed class WeldDetectionBenchmarkService
             baseParams.Mode = modality == "ir" ? WeldImageMode.Ir
                 : baseParams.Mode == WeldImageMode.Ir ? WeldImageMode.RgbGrayscale : baseParams.Mode;
             if (opt.LineFit is { } fitMode) baseParams.LineFit = fitMode;   // null = 운영값 유지
+            // 평가할 모델 — 지정하면 이 평가에서만 쓴다(운영 파라미터 Weld.Yolo/Unet.ModelPath 는 그대로). null = 운영 모델.
+            if (!string.IsNullOrWhiteSpace(opt.DlModelPath)) baseParams.DlModelPath = opt.DlModelPath;
+            if (!string.IsNullOrWhiteSpace(opt.UnetModelPath)) baseParams.UnetModelPath = opt.UnetModelPath;
             bool horiz = baseParams.ProgressAxis == WeldProgressAxis.Horizontal;
             var weldRoi = opt.UseWeldRoi ? _weld.WeldRoi : null;
 
@@ -99,7 +111,9 @@ public sealed class WeldDetectionBenchmarkService
             int total = stems.Count * methods.Count, done = 0;
             progress?.Report((0, total));
 
-            await Task.Run(() =>
+            // 운영 검출기가 없는 환경(macOS — OpenCV 네이티브 win 전용)은 비전 학습 ④ 추론·검증과 같은 관리 코드 경로로 평가.
+            var managed = methods.Where(m => !_weld.GetDetector(m).IsAvailable).ToHashSet();
+            await Task.Run(async () =>
             {
                 foreach (var (stem, dir, _) in stems)
                 {
@@ -113,7 +127,9 @@ public sealed class WeldDetectionBenchmarkService
                         ct.ThrowIfCancellationRequested();
                         items.Add(gt is null
                             ? new BenchmarkItem(stem, m, false, "선 라벨 손상", LineErrors.Missed, 0, null)
-                            : RunOne(stem, m, bytes, gt, baseParams, weldRoi, horiz, opt));
+                            : managed.Contains(m)
+                                ? await RunManagedAsync(stem, m, bytes, gt, baseParams, weldRoi, opt, paths.Models)
+                                : RunOne(stem, m, bytes, gt, baseParams, weldRoi, horiz, opt));
                         progress?.Report((++done, total));
                     }
                 }
@@ -121,11 +137,18 @@ public sealed class WeldDetectionBenchmarkService
 
             var summaries = methods.Select(m => Summarize(m, items.Where(i => i.Method == m).ToList())).ToList();
             string? csv = null;
-            try { csv = WriteCsv(paths, modality, baseParams.LineFit, items, summaries); }
+            string? ModelOf(WeldDetectionMethod m) => m switch
+            {
+                WeldDetectionMethod.Dl => baseParams.DlModelPath,
+                WeldDetectionMethod.Unet => baseParams.UnetModelPath,
+                _ => null,
+            };
+            var models = methods.Where(m => ModelOf(m) is not null).ToDictionary(m => m, m => ModelOf(m)!);
+            try { csv = WriteCsv(paths, modality, baseParams.LineFit, items, summaries, models); }
             catch (Exception ex) { _log.LogWarning(ex, "비교평가 CSV 저장 실패"); }
 
             var report = new BenchmarkReport(DateTime.Now, modality, stems.Count, opt, items, summaries, csv, warning,
-                baseParams.LineFit);
+                baseParams.LineFit, models, managed.Count > 0);
             LastReport = report;
             return report;
         }
@@ -158,6 +181,55 @@ public sealed class WeldDetectionBenchmarkService
                 : LineErrors.Missed;
             var overlay = DrawGroundTruth(r.OverlayJpeg ?? png, gt);
             return new BenchmarkItem(stem, method, r.Success, r.Message, err, sw.ElapsedMilliseconds, overlay);
+        }
+        catch (Exception ex)
+        {
+            return new BenchmarkItem(stem, method, false, $"오류: {ex.Message}", LineErrors.Missed, 0, null);
+        }
+    }
+
+    /// <summary>
+    /// 운영 검출기 대체 경로(macOS 등) — 비전 학습 ④ 추론·검증과 같은 계산: ONNX 관리 코드 추론(<see cref="OnnxBeadSegmentationService"/>,
+    /// _clahe 모델이면 CLAHE 전처리 포함) → 마스크에서 용접선 추출(<see cref="InferLineCheck"/>, 진행축은 정답 선 방향).
+    /// 임계값은 운영 파라미터(YOLO conf/mask, U-Net threshold), 채점 기준은 이 평가의 각도/중심 기준.
+    /// Weld ROI 를 고르면 전체 프레임 추론 후 마스크를 ROI 밖에서 지운다.
+    /// </summary>
+    private async Task<BenchmarkItem> RunManagedAsync(string stem, WeldDetectionMethod method, byte[] png, WeldLineLabel gt,
+        WeldDetectionParams baseParams, RoiRect? weldRoi, BenchmarkOptions opt, string modelsDir)
+    {
+        var raw = method switch
+        {
+            WeldDetectionMethod.Dl => baseParams.DlModelPath,
+            WeldDetectionMethod.Unet => baseParams.UnetModelPath,
+            _ => null,
+        };
+        if (string.IsNullOrWhiteSpace(raw))
+            return new BenchmarkItem(stem, method, false, "이 환경에서는 운영 검출기를 쓸 수 없고 모델 방식(YOLO·U-Net)만 평가됩니다",
+                LineErrors.Missed, 0, null);
+        var model = raw.Trim().Trim('"').Trim();
+        if (!Path.IsPathFullyQualified(model)) model = Path.Combine(modelsDir, model);
+        try
+        {
+            var sw = Stopwatch.StartNew();
+            float conf = (float)baseParams.DlConfidence;
+            float thr = method == WeldDetectionMethod.Unet ? (float)baseParams.UnetThreshold : (float)baseParams.DlMaskThreshold;
+            var r = await _seg.RunOnBytesAsync(model, png, conf, thr);
+            var mask = _seg.LastMask;
+            if (mask is null || mask.Length != r.Width * r.Height)
+                return new BenchmarkItem(stem, method, false, "마스크를 얻지 못했습니다", LineErrors.Missed, sw.ElapsedMilliseconds, null);
+            if (weldRoi is { } roi)
+            {
+                mask = (byte[])mask.Clone();
+                for (int y = 0; y < r.Height; y++)
+                    for (int x = 0; x < r.Width; x++)
+                        if (x < roi.X || x >= roi.X + roi.Width || y < roi.Y || y >= roi.Y + roi.Height) mask[y * r.Width + x] = 0;
+            }
+            var lr = InferLineCheck.Run(png, mask, r.Width, r.Height, baseParams, gt);
+            sw.Stop();
+            var err = lr.Found
+                ? WeldLineMetrics.Compare(gt, lr.Centerline, lr.Horizontal, opt.AngleTolDeg, opt.CenterTolPx)
+                : LineErrors.Missed;
+            return new BenchmarkItem(stem, method, lr.Found, lr.Message, err, sw.ElapsedMilliseconds, lr.OverlayJpeg);
         }
         catch (Exception ex)
         {
@@ -202,7 +274,7 @@ public sealed class WeldDetectionBenchmarkService
     }
 
     private static string WriteCsv(TrainingPaths paths, string modality, WeldLineFitMode fit, IReadOnlyList<BenchmarkItem> items,
-        IReadOnlyList<MethodSummary> summaries)
+        IReadOnlyList<MethodSummary> summaries, IReadOnlyDictionary<WeldDetectionMethod, string> models)
     {
         var dir = Path.Combine(paths.Workspace, "bench");
         Directory.CreateDirectory(dir);
@@ -215,17 +287,19 @@ public sealed class WeldDetectionBenchmarkService
                 F(i.Err.AngleDeg), F(i.Err.CenterOffsetPx), F(i.Err.MeanDistPx), F(i.Err.Coverage), i.Millis,
                 "\"" + (i.Message ?? "").Replace("\"", "'") + "\""));
         sb.AppendLine();
-        sb.AppendLine("method,n,detected,pass,angle_med,angle_p90,offset_med,offset_p90,coverage_mean,ms_mean");
+        sb.AppendLine("method,n,detected,pass,angle_med,angle_p90,offset_med,offset_p90,coverage_mean,ms_mean,model");
         foreach (var s in summaries)
             sb.AppendLine(string.Join(',', s.Method, s.Count, s.Detected, s.Passed, F(s.AngleMedian), F(s.AngleP90),
-                F(s.OffsetMedian), F(s.OffsetP90), F(s.CoverageMean), F(s.MillisMean)));
+                F(s.OffsetMedian), F(s.OffsetP90), F(s.CoverageMean), F(s.MillisMean),
+                models.TryGetValue(s.Method, out var mp) ? Path.GetFileName(mp) : ""));
         // Excel 한글 깨짐 방지 BOM.
         File.WriteAllText(file, sb.ToString(), new UTF8Encoding(true));
         return file;
     }
 }
 
-/// <summary>비교평가 옵션. UseWeldRoi=false 면 전체 프레임을 ROI 로 쓴다(촬영본마다 위치가 달라 기본 권장).</summary>
+/// <summary>비교평가 옵션. UseWeldRoi=false 면 전체 프레임을 ROI 로 쓴다(촬영본마다 위치가 달라 기본 권장).
+/// DlModelPath/UnetModelPath — 이 평가에서만 쓸 모델(null = 운영 모델). 운영 파라미터는 바꾸지 않는다.</summary>
 public sealed record BenchmarkOptions(
     string Modality,
     IReadOnlyList<WeldDetectionMethod> Methods,
@@ -233,7 +307,9 @@ public sealed record BenchmarkOptions(
     bool UseWeldRoi = false,
     double AngleTolDeg = WeldLineMetrics.DefaultAngleTolDeg,
     double CenterTolPx = WeldLineMetrics.DefaultCenterTolPx,
-    WeldLineFitMode? LineFit = null);
+    WeldLineFitMode? LineFit = null,
+    string? DlModelPath = null,
+    string? UnetModelPath = null);
 
 /// <summary>촬영본 1장 × 방식 1개의 결과. Overlay = 검출 오버레이 + 정답(초록) JPEG.</summary>
 public sealed record BenchmarkItem(string Stem, WeldDetectionMethod Method, bool Success, string? Message,
@@ -249,4 +325,13 @@ public sealed record MethodSummary(WeldDetectionMethod Method, int Count, int De
 
 public sealed record BenchmarkReport(DateTime At, string Modality, int ImageCount, BenchmarkOptions Options,
     IReadOnlyList<BenchmarkItem> Items, IReadOnlyList<MethodSummary> Summaries, string? CsvPath, string? Warning,
-    WeldLineFitMode LineFit = WeldLineFitMode.Ransac);
+    WeldLineFitMode LineFit = WeldLineFitMode.Ransac,
+    IReadOnlyDictionary<WeldDetectionMethod, string>? Models = null,
+    bool ManagedPath = false)
+{
+    /// <summary>추론 경로 표기 — 운영 검출기(Windows) 또는 ④ 추론·검증과 같은 관리 코드 경로(macOS 등).</summary>
+    public string EngineText => ManagedPath ? "④ 추론·검증 경로(운영 검출기 없음)" : "운영 검출기";
+
+    /// <summary>방식별로 실제 평가에 쓴 모델 파일명(모델을 쓰지 않는 방식이면 null).</summary>
+    public string? ModelName(WeldDetectionMethod m) => Models is not null && Models.TryGetValue(m, out var p) ? Path.GetFileName(p) : null;
+}
