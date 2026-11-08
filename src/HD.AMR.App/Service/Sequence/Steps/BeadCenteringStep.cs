@@ -1,4 +1,5 @@
 using HD.AMR.App.Communication;
+using HD.AMR.App.Models;
 using Microsoft.Extensions.Logging;
 
 namespace HD.AMR.App.Service.Sequence.Steps;
@@ -15,6 +16,8 @@ namespace HD.AMR.App.Service.Sequence.Steps;
 /// ⑫ 각도 산출과의 정합(비대칭 정책의 이유):
 ///   - <b>peakId=1</b>: 이동 후(시프트 전) 재측정해 M1 을 잔차(≈0)로 갱신한다. 센터링 이동으로 FOV
 ///     기준선이 d1 만큼 옮겨지므로, 갱신하지 않으면 ⑫의 (d2−d1)/pitch 에서 d1 이 이중 반영된다.
+///     단 ⑦에서 사람이 비드선을 그었으면 재측정(팝업 재등장)하지 않고 그 선을 이동량만큼 영상에서 옮겨
+///     잔차(d1 − 이동량)로 M1 을 갱신한다 — 이 경우 이동 방향 검증은 생략된다.
 ///   - <b>peakId=2</b>: 이동만 하고 재측정하지 않는다. CapturePeak 재측정은 M2 를 잔차≈0 으로 덮고
 ///     각도를 자동 재계산해 θ≈0 으로 오염시키기 때문 — ⑫(order 1200)는 이동 전 저장된 M2 를 쓴다.
 ///   - 검사캠 시프트는 측정이 모두 끝난 뒤(⑦⁺는 재측정 후, ⑧이 역보정) 수행되므로 각도에 개입하지 않는다.
@@ -131,6 +134,31 @@ public class BeadCenteringStep : ISequenceStep
                 : StepResult.Fail(note2);
         }
 
+        // ── peakId=1, ⑦에서 사람이 비드선을 그은 경우: 재측정 팝업을 다시 띄우지 않는다 ──
+        // 같은 자리·같은 표면이라 자동 재검출도 실패할 가능성이 커 팝업이 연달아 뜬다. 대신 그은 선을
+        // 센터링 이동량만큼 영상에서 옮겨 잔차를 계산한다(잔차 = d1 − 이동량). 이동 방향 검증(이격 증가 판정)은
+        // 생략되므로 cross 축 매핑이 현장에서 검증돼 있어야 한다.
+        if (IsManualMeasurement(_weld.M1, _weld.DMm, initialDMm))
+        {
+            var shifted = await _weld.ShiftMeasurementByMoveAsync(_peakId, clamped, ct);
+            if (shifted is not null)
+            {
+                var residualManual = _weld.DMm(shifted);
+                context.Bag[WeldSequenceSupport.BeadDMmBagKey(_peakId)] = residualManual;
+                _logger.LogInformation(
+                    "Bead{Id} 센터링: 수동 비드선 기준 — 재측정 생략, 잔차 d={Res:+0.0;-0.0}mm ({Px:+0.0;-0.0}px, 이동 전 {D1:+0.0;-0.0}mm)",
+                    _peakId, residualManual, shifted.DPixel, initialDMm);
+
+                var (shiftOkM, shiftNoteM) = await ShiftToInspectCamAsync(context, ct);
+                if (!shiftOkM)
+                    return StepResult.Fail(shiftNoteM);
+                return StepResult.Ok(
+                    $"Bead{_peakId} 센터링 완료 — {clamped:+0.0;-0.0}mm 이동, 수동 비드선을 이동량만큼 옮겨 " +
+                    $"잔차 d={residualManual:+0.0;-0.0}mm (이동 전 {initialDMm:+0.0;-0.0}mm), M1 갱신(재측정 생략).{shiftNoteM}");
+            }
+            _logger.LogWarning("Bead{Id} 센터링: 수동 측정 이동 반영 불가(측정/스케일 없음) — 재측정으로 진행", _peakId);
+        }
+
         // ── peakId=1: 재측정으로 M1 을 잔차로 갱신 (⑫ 정합) + 매핑 검증 ──
         var (peakRoi, _) = await WeldSequenceSupport.GetPeakRoiAsync(_param, _camera);
         var (beadRoi, _) = await WeldSequenceSupport.GetBeadRoiAsync(_param, _camera);
@@ -173,6 +201,13 @@ public class BeadCenteringStep : ISequenceStep
             $"Bead{_peakId} 센터링 완료 — {clamped:+0.0;-0.0}mm 이동, " +
             $"잔차 d={residualMm:+0.0;-0.0}mm (이동 전 {initialDMm:+0.0;-0.0}mm), M1 갱신.{assist.Note}{shiftedNote}");
     }
+
+    /// <summary>
+    /// ⑦이 사람이 그은 비드선으로 측정했는지. 측정 슬롯이 이번 ⑦ 결과(<paramref name="initialDMm"/>)와 일치할 때만
+    /// 참 — 다른 실행에서 남은 슬롯을 잘못 쓰지 않게 한다.
+    /// </summary>
+    internal static bool IsManualMeasurement(PeakMeasurement? m, Func<PeakMeasurement, double> toMm, double initialDMm)
+        => m is { Manual: true } && Math.Abs(toMm(m) - initialDMm) < 0.05;
 
     /// <summary>
     /// 검사 카메라 설치 오프셋만큼 2D 개루프 시프트 — 카메라가 영상 (−X, −Y) 방향으로 움직여

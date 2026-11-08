@@ -1298,6 +1298,42 @@ public class WeldTrackingService
         finally { _gate.Release(); }
     }
 
+    /// <summary>
+    /// 센터링 이동 후 재측정 대신, 기존 측정(주로 사람이 그은 비드선)을 cross 이동량만큼 영상에서 옮겨
+    /// 잔차 측정으로 교체한다 — 잔차 d(px) = d1(px) − 이동량(mm)/mm·px⁻¹. 이동은 면과 평행이라 깊이·스케일은 그대로다.
+    /// 측정이 없거나 스케일을 쓸 수 없으면 null(슬롯 변경 없음).
+    /// </summary>
+    public async Task<PeakMeasurement?> ShiftMeasurementByMoveAsync(int id, double moveMm, CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            var src = id == 1 ? M1 : M2;
+            if (src is null) return null;
+            var mmpp = EffectiveMmPerPixel(src.DepthZ, src.IrGeometry);
+            if (mmpp <= 0) return null;
+            var m = ShiftedMeasurement(src, moveMm / mmpp);
+            StoreMeasurement(id, m, src.Peak);
+            Message += " [센터링 이동량 반영 — 재측정 생략]";
+            return m;
+        }
+        finally { _gate.Release(); }
+    }
+
+    /// <summary><paramref name="src"/> 를 cross 방향으로 <paramref name="movePx"/> 만큼 옮긴 측정(나머지 값은 유지).</summary>
+    internal static PeakMeasurement ShiftedMeasurement(PeakMeasurement src, double movePx) => new()
+    {
+        PeakId = src.PeakId,
+        DPixel = src.DPixel - movePx,
+        Confidence = src.Confidence,
+        Peak = src.Peak,
+        At = DateTime.Now,
+        OverlayJpeg = src.OverlayJpeg,   // 이동 전 화면 — 재촬영하지 않으므로 그대로 둔다
+        DepthZ = src.DepthZ,
+        IrGeometry = src.IrGeometry,
+        Manual = src.Manual,
+    };
+
     /// <summary>수동 측정 오버레이(Weld 페이지·모니터 표시용). OpenCV 네이티브가 없으면 null.</summary>
     private byte[]? ManualOverlayJpeg(byte[]? png, ManualBeadGuide g, IReadOnlyList<PixelPoint> pts, double cross)
     {

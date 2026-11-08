@@ -463,7 +463,7 @@ double offsetMm = result.OffsetPx * mmPerPx;
 | **⑤** | `peak1Find` | **500** | `PeakFindStep` | 1 | Peak1 찾기 — 검사 준비 위치 정면에서 시작 |
 | **⑥** | `peak1Center` | **600** | `PeakCenteringStep` | 1 | Peak1 센터링 (진행축) |
 | **⑦** | `bead1Find` | **700** | `BeadFindStep` | 1 | Bead1 찾기 |
-| **⑦⁺** | `bead1Center` | **750** | `BeadCenteringStep` | 1 | Bead1 센터링 (cross 축, 재측정으로 M1 갱신 → 검사캠 시프트) |
+| **⑦⁺** | `bead1Center` | **750** | `BeadCenteringStep` | 1 | Bead1 센터링 (cross 축, 재측정으로 M1 갱신 → 검사캠 시프트). ⑦에서 수동 비드선을 그었으면 재측정 팝업 없이 그 선을 이동량만큼 영상에서 옮겨 잔차(d1 − 이동량)로 M1 갱신 — 이 경우 이동 방향(이격 증가) 검증은 생략 |
 | **⑦⁺⁺** | `wobjPoint1` | **760** | `WObjPointStep` | 1 | 현재 위치를 작업물 좌표계 3점법 **점1(원점)** 로 기록 — 번호는 `Sequence.WObj.Id`, 계산법 0(원점-X축-Z축) 고정 |
 | **⑧** | `peak2Approach` | **800** | `PeakApproachStep` | 2 | Peak2 이동 — ⑦⁺ 앵커(센터링 완료·시프트 전 포즈) 기준 pitch 절대 이동. 검사캠 시프트·교시용 이동 자동 원복 (앵커 없으면 현재 위치 + 플래그 역보정 폴백) |
 | **⑨** | `peak2Find` | **900** | `PeakFindStep` | 2 | Peak2 찾기 |
