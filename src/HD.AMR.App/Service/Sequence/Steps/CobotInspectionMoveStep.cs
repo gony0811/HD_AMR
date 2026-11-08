@@ -578,6 +578,17 @@ public class CobotInspectionMoveStep : ISequenceStep
 
     public async Task<StepResult> ExecuteAsync(SequenceContext context, CancellationToken ct)
     {
+        // 새로운 접근 사이클에서만 교체한다. ④ 정렬 재시도는 이 기준점을 덮어쓰지 않는다.
+        InspectionAlignmentAnchor.Clear(context);
+        var result = await ExecuteCoreAsync(context, ct);
+        if (result.Success)
+            InspectionAlignmentAnchor.CaptureIfMissing(context,
+                await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct));
+        return result;
+    }
+
+    private async Task<StepResult> ExecuteCoreAsync(SequenceContext context, CancellationToken ct)
+    {
         // 접근점은 정차 배치(AMR pose·장착 보정·스트로크)만으로 정해지므로 코봇을 움직이기 전에 환산·리치
         // 점검을 한다 — 1단계 뒤에 실패하면 같은 정차점의 task 마다 ready 왕복을 헛되이 반복한다.
         var seam = await _seam.ResolveAsync(

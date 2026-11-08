@@ -101,8 +101,9 @@ public static class WeldSequenceSupport
     /// ⑧이 이 플래그가 있을 때만 시프트 역보정을 합성하고 플래그를 지운다 — 세미오토 순서 이탈 가드.</summary>
     public const string InspectShiftedBagKey = "inspectCam.shifted";
 
-    /// <summary>④ 시작 시점 TCP 포즈(double[6], BASE 기준 = ② 목표 ⊕ ③ 거리 정렬 지점)를 담는 Bag 키.
-    /// ④⁺가 WD 조정 후 이 위치로 툴 X/Y 횡복귀할 때 기준 앵커로 쓴다(초점거리·자세는 유지).</summary>
+    /// <summary>② 접근 완료 TCP 포즈(double[6], BASE 기준). ④ 재실행 시 덮어쓰지 않는다.
+    /// ② 없이 ④만 실행하면 최초 ④ 시작점으로 초기화한다. 새 ② 접근 또는 UI 초기화 시 교체/삭제.
+    /// ④⁺는 WD 조정 후 이 점을 현재 면 평행 평면에 투영해 복귀한다(광축 거리·자세 유지).</summary>
     public const string InspectAnchorPoseBagKey = "inspect.anchorPose";
 
     /// <summary>⑦⁺ Bead1 센터링 완료 직후(검사캠 시프트 <b>전</b>) TCP 포즈(double[6])를 담는 Bag 키.
