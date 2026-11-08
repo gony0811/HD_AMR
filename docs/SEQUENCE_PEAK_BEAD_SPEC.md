@@ -449,12 +449,16 @@ double offsetMm = result.OffsetPx * mmPerPx;
 
 ### 5.1 전체 구성
 
+정렬 복귀 기준은 TASK별 ② `cobotInspection` 접근 완료 시의 BASE TCP 포즈다. ③ 거리 정렬 및 ④ 평탄면·틸트 정렬을 반복해도 기준을 갱신하지 않는다. 새 ② 접근을 시작하거나 UI 초기화 시 기존 기준을 지운다. ACS는 TASK마다 새 `SequenceContext`를 사용한다. ②를 생략한 세미오토는 최초 ④ 시작점을 기준으로 고정한다.
+
+④⁺ 복귀 목표는 `A + n·dot(C−A, n)`이다(A=고정 접근점, C=WD 조정 후 현재 TCP, n=보정 후 설정 광축 단위벡터). 이 목표는 A를 지나고 n에 평행한 직선 위에 있으며, C에서 광축 방향 이동 없이 횡이동한다. 틸트가 바뀌어도 현재 면 평행 평면 안에서 복귀하고 WD와 자세를 유지하며, 과거 이동 경로를 역순 재생하지 않는다. 실제 면의 요철에 따른 복귀 후 거리 변화는 별도 실기 확인 대상이다.
+
 | # | Key | Order | 클래스 | peakId | 설명 |
 |---|---|---|---|---|---|
 | ② | `cobotInspection` | 200 | `CobotInspectionMoveStep` | — | Cobot 검사위치 이동 — **목표 위치는 ACS `seamStartW`**(맵 좌표 → `SeamBaseTransform` → 코봇 BASE, 면에서 **거친 접근 거리**(파라미터 `inspection.approachStandoffMm`, 기본 400 mm — 최종 작업거리는 ③·④⁺ 레이저 WD 300 mm 가 확정)만큼 후퇴한 접근점 — ACS `params.standoffMm` 은 쓰지 않는다, §10 N18). 이동 전 **리치 사전 점검**: 면까지 법선거리 < 후퇴 + 공구 길이 + 최소 플랜지 뻗음 이면 IK 를 부르기 전에 즉시 실패하고 ACS 에 '정차 거리 부족' 을 보고한다(§4.4.1), **자세는 Wall ID 티칭 위치 값 유지**(같은 벽이면 바라보는 방향은 같고 위치만 벽을 따라 달라진다). 여기는 거친 접근이고 정밀 정렬은 ③~⑯이 맡는다. seamStartW·측위·T_A_B 중 하나라도 없으면 종전대로 티칭 위치로 폴백(로그 남김). **MoveJ 관절 이동**(홈↔검사위치는 긴 이동이라 MoveL 이면 중간에 손목 특이점 J5≈0 을 쓸고 지나갈 수 있다. TCP 경로는 호를 그리므로 티칭 시 간섭 확인). 이동 전 **진입 준비**(`SequenceEntry`): 활성 좌표계 정규화(툴 `context.Tool`/작업물 0, 무변위 MoveJ) + 홈 복귀 — 이전 실행이 반납 못 한 작업물 프레임·펜던트에서 바뀐 활성 공구가 남으면 이후 단계의 앵커(FK→베이스)와 IK 가 그 값으로 해석돼 오이동·rc=38/112 |
 | ③ | `cameraAlign` | 300 | `CameraAlignStep` | — | (기존) 카메라 거리 정렬 400mm |
-| ④ | `flatSurfaceAlign` | 400 | `FlatSurfaceAlignStep` | — | (기존) 평탄면 센터링 — 시작 포즈를 앵커로 Bag 저장 |
-| ④⁺ | `laserWorkingDistance` | 450 | `LaserWorkingDistanceStep` | — | 레이저 3점 평균 → WD 초점거리 조정 후 **앵커로 툴 X/Y 횡복귀**(Z·자세 유지) |
+| ④ | `flatSurfaceAlign` | 400 | `FlatSurfaceAlignStep` | — | 평탄면 센터링 — ② 접근 완료 앵커를 유지(재실행 시 덮어쓰기 금지). ② 없이 단독 실행하면 최초 실행 포즈만 저장 |
+| ④⁺ | `laserWorkingDistance` | 450 | `LaserWorkingDistanceStep` | — | 레이저 3점 평균 → WD 초점거리 조정 후 **최초 접근 앵커를 현재 면 평행 평면으로 투영해 복귀**(설정 광축 성분·자세 유지, 기본 툴 X/Y 복귀). 앵커 없음/복귀 성분 ±300mm 초과는 실패 |
 | ④⁺⁺ | `depthCamCenterShift` | 470 | `DepthCamCenterShiftStep` | — | TCP 아래 용접선을 depth 영상 중심으로 **면과 평행 이동** — 검사캠 오프셋(`Sequence.InspectCam.OffsetX/YMm`) 영상 +방향, ⑦⁺ 검사캠 시프트의 역이동(Z·자세 유지, 오프셋 0 이면 생략) |
 | **⑤** | `peak1Find` | **500** | `PeakFindStep` | 1 | Peak1 찾기 — 검사 준비 위치 정면에서 시작 |
 | **⑥** | `peak1Center` | **600** | `PeakCenteringStep` | 1 | Peak1 센터링 (진행축) |

@@ -22,8 +22,8 @@ namespace HD.AMR.App.Service.Sequence.Steps;
 ///      (2026-10-07/08 현장 로그: 종전 [+Rx, −Ry] 규약에서 툴 Rx +a → 측정 rx ≈ +a 로 오차가 매회 누적,
 ///      툴 Rx 가 측정 ry 도 크게 바꾸는 축 결합까지 있어 고정 부호로는 수렴하지 않았다.)
 ///
-/// 시작 시점 TCP 포즈를 <see cref="WeldSequenceSupport.InspectAnchorPoseBagKey"/> 로 저장한다 —
-/// ④⁺(레이저 WD)가 초점거리 조정 후 이 위치로 툴 X/Y 횡복귀한다(자세·초점거리는 유지).
+/// ②가 저장한 최초 접근 기준점을 유지한다. ② 없이 단독 실행하면 최초 실행 위치만 저장한다.
+/// ④⁺(레이저 WD)는 이 기준점을 보정 후 면 평행 평면으로 투영해 복귀한다(자세·WD 유지).
 /// </summary>
 public class FlatSurfaceAlignStep : ISequenceStep
 {
@@ -121,10 +121,11 @@ public class FlatSurfaceAlignStep : ISequenceStep
 
     private async Task<StepResult> ExecuteCoreAsync(SequenceContext context, CancellationToken ct)
     {
-        // 시작 포즈(= ② 목표 ⊕ ③ 거리 정렬 지점)를 앵커로 저장 — ④⁺가 WD 조정 후
-        // 이 위치로 툴 X/Y 횡복귀한다(⑤가 검사 준비 위치 정면에서 시작하도록).
-        var startPose = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
-        context.Bag[WeldSequenceSupport.InspectAnchorPoseBagKey] = startPose;
+        // ②의 최초 접근점을 고정한다. 세미오토로 ④만 시작한 경우에도 첫 실행에서만 저장해
+        // 여러 번 탐색·정렬하더라도 마지막 시작점으로 기준이 밀리지 않게 한다.
+        if (!context.Bag.ContainsKey(WeldSequenceSupport.InspectAnchorPoseBagKey))
+            InspectionAlignmentAnchor.CaptureIfMissing(context,
+                await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct));
 
         // ── Phase A+B: 평탄영역 탐색 + 코봇 횡이동 (공용 루틴) ─────────
         var (roiX, roiY, roiW, roiH, roiSrc) = await GetDepthRoiAsync();
