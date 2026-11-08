@@ -249,6 +249,8 @@ internal static class SequenceEntry
         var start = lift ?? cur.Take(3).ToArray();
         var entry = Enumerable.Range(0, 3).Select(i => rec.Entry[i] + (level - rec.RetreatMm) * n[i]).ToArray();
         var d = Math.Sqrt(Enumerable.Range(0, 3).Sum(i => (entry[i] - start[i]) * (entry[i] - start[i])));
+        // 면을 따라 이렇게 멀리 가야 한다면 기록이 지금 상황(AMR 이동·수동 조그 뒤)과 무관하다 — 따라가지 않는다.
+        if (d > RetraceMaxInPlaneMm) return null;
         return new RetracePlan(lift, entry, d);
     }
 
@@ -258,6 +260,9 @@ internal static class SequenceEntry
     /// 움직이기 전에 경로 전체를 역기구학으로 검증하고, 걸리면 <b>움직이지 않고 예외</b> — 그 자리에서 경유점으로
     /// MoveJ 하는 종전 경로가 바로 위험한 동작이기 때문이다. 기록이 없거나 지금 자세와 무관하면 null(종전 벽면 후퇴).
     /// </summary>
+    /// <summary>② 평면 경유 기록을 거슬러 갈 때 면 방향 이동의 상한 [mm] — 코봇 리치(~1.85m)를 넘는 거리는 오래된 기록으로 본다.</summary>
+    internal const double RetraceMaxInPlaneMm = 1800.0;
+
     private static async Task<string?> RetracePlanarAsync(
         CobotService cobot, SequenceContext ctx, ILogger logger, CancellationToken ct)
     {
@@ -579,8 +584,8 @@ internal static class SequenceEntry
     }
 
     /// <summary>벽면 후퇴 계획. <paramref name="Horizontal"/> 이면 BASE 오프셋(<paramref name="OffsetBase"/>)으로,
-    /// 아니면 툴 Z+ 오프셋으로 움직인다. <paramref name="Blocker"/> 가 null 이 아니면 움직이면 안 된다.</summary>
-    internal sealed record RetractPlan(bool Horizontal, double[] OffsetBase, double[] EndTcp, string? Blocker);
+    /// 아니면 툴 오프셋(<paramref name="ToolOffset"/> — 광축 반대 방향)으로 움직인다. <paramref name="Blocker"/> 가 null 이 아니면 움직이면 안 된다.</summary>
+    internal sealed record RetractPlan(bool Horizontal, double[] OffsetBase, double[] EndTcp, string? Blocker, double[] ToolOffset);
 
     /// <summary>
     /// 현재 TCP(BASE)에서의 벽면 후퇴를 계획한다 — 움직이기 전에 끝점을 정한다.
@@ -591,10 +596,13 @@ internal static class SequenceEntry
     /// · 끝점이 내려가면서 <see cref="RetractMinDescendEndZMm"/> 아래로 가면 Blocker.
     /// </summary>
     internal static RetractPlan PlanRetract(double[] tcpPose, double distanceMm = RetractDistanceMm,
-        double minDescendEndZMm = RetractMinDescendEndZMm)
+        double minDescendEndZMm = RetractMinDescendEndZMm, ToolAxisDir opticalAxis = ToolAxisDir.MinusZ)
     {
+        // 후퇴 방향 = 광축(카메라가 면을 바라보는 툴축)의 반대. 현장 광축 −Z 면 툴 +Z(종전 동작과 같다).
         var m = FrameMath.PoseToMatrix(tcpPose);
-        double zx = m[0, 2], zy = m[1, 2], zz = m[2, 2];
+        int col = (int)opticalAxis / 2;
+        double away = (int)opticalAxis % 2 == 0 ? -1.0 : 1.0;   // +축 광축이면 −, −축 광축이면 + 방향으로 물러난다
+        double zx = away * m[0, col], zy = away * m[1, col], zz = away * m[2, col];
         var h = Math.Sqrt(zx * zx + zy * zy);
 
         var horizontal = zz < RetractDescendDirZ && h >= RetractMinHorizontalFraction;
@@ -606,12 +614,15 @@ internal static class SequenceEntry
         if (offset[2] < -1.0 && end[2] < minDescendEndZMm)
             blocker = $"벽면 후퇴 끝점이 너무 낮음 — z {tcpPose[2]:0}→{end[2]:0}mm (최저 {minDescendEndZMm:0}mm). " +
                       "후퇴 방향이 AMR 쪽으로 내려가 팔이 접힙니다. 움직이지 않고 정지 — 펜던트/조그로 벽에서 떼어 낸 뒤 재시도하세요.";
-        return new RetractPlan(horizontal, offset, end, blocker);
+        var toolOffset = new double[6];
+        toolOffset[col] = away * distanceMm;
+        return new RetractPlan(horizontal, offset, end, blocker, toolOffset);
     }
 
     /// <summary>현재 위치에서 벽면 후퇴(MoveL) — 방향·끝점은 <see cref="PlanRetract"/>. 벽에서 떨어져 MoveJ 경로에
-    /// 차체 충돌 여유를 확보한다. 이동 실패 시 경고만 남기고 false.
-    /// 끝점이 위험하면 <b>움직이지 않고 예외</b> — false 를 돌려주면 호출측이 그 자리에서 바로 MoveJ 하므로 더 위험하다.</summary>
+    /// 차체 충돌 여유를 확보한다. 성공하면 true.
+    /// 끝점이 위험하거나 후퇴 이동이 실패(rc≠0·예외·현재 포즈 조회 실패)하면 <b>더 움직이지 않고 예외</b> —
+    /// false 를 돌려주면 호출측이 벽 앞 자세 그대로 경유점으로 MoveJ 해 팔이 벽 쪽으로 휘둘린다(실기 EMO 와 같은 동작).</summary>
     public static async Task<bool> RetractFromWallAsync(
         CobotService cobot, SequenceContext ctx, ILogger logger, CancellationToken ct)
     {
@@ -622,11 +633,18 @@ internal static class SequenceEntry
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            logger.LogWarning(ex, "벽면 후퇴 중 예외 — 직접 MoveJ 시도");
-            return false;
+            logger.LogWarning(ex, "벽면 후퇴 전 현재 포즈 조회 실패 — 움직이지 않고 정지");
+            throw new InvalidOperationException(
+                $"벽면 후퇴 불가 — 현재 TCP 포즈를 읽지 못했습니다({ex.Message}). 벽 앞 자세에서 바로 관절 이동하면 " +
+                "팔이 벽 쪽으로 휘둘릴 수 있어 정지합니다. 펜던트/조그로 벽에서 떼어 낸 뒤 재시도하세요.", ex);
         }
 
-        var plan = PlanRetract(currentPose);
+        if (ctx.OpticalAxis is not { } opticalAxis)
+            throw new InvalidOperationException(
+                $"벽면 후퇴 불가 — '{WeldSequenceSupport.DepthAxisKey}' 광축 파라미터가 저장돼 있지 않아 벽에서 멀어지는 방향을 " +
+                "알 수 없습니다. 움직이지 않고 정지합니다. 카메라 페이지에서 광축을 설정·저장하거나 펜던트로 벽에서 떼어 내세요.");
+
+        var plan = PlanRetract(currentPose, opticalAxis: opticalAxis);
         var poseText = string.Join(", ", currentPose.Select(v => v.ToString("0.#")));
         var endText = string.Join(", ", plan.EndTcp.Select(v => v.ToString("0.#")));
         if (plan.Blocker is not null)
@@ -647,30 +665,34 @@ internal static class SequenceEntry
             }
             else
             {
-                logger.LogInformation("벽면 직선 후퇴 시작: 현재=[{Pose}], 툴Z+{Dist}mm → 끝점=[{End}]",
-                    poseText, RetractDistanceMm, endText);
-                var offset = new[] { 0.0, 0.0, RetractDistanceMm, 0.0, 0.0, 0.0 };
+                logger.LogInformation("벽면 직선 후퇴 시작: 현재=[{Pose}], 광축({Axis}) 반대로 {Dist}mm → 끝점=[{End}]",
+                    poseText, opticalAxis, RetractDistanceMm, endText);
                 rc = await cobot.Rpc.MoveByToolOffsetAsync(
-                    currentPose, user: 0, offset, tool: ctx.Tool, vel: ctx.Velocity, ct: ct);
+                    currentPose, user: 0, plan.ToolOffset, tool: ctx.Tool, vel: ctx.Velocity, ct: ct);
             }
 
             if (rc != 0)
             {
-                logger.LogWarning("벽면 후퇴 실패 (rc={Rc}){Desc} — 직접 MoveJ 시도",
+                logger.LogWarning("벽면 후퇴 실패 (rc={Rc}){Desc} — 움직이지 않고 정지",
                     rc, FairinoErrorCodes.Suffix(rc));
-                return false;
+                throw new InvalidOperationException(RetractFailedMessage($"rc={rc}{FairinoErrorCodes.Suffix(rc)}"));
             }
 
             logger.LogInformation("벽면 후퇴 완료 ({Dist}mm{Mode})", RetractDistanceMm, plan.Horizontal ? ", 수평" : "");
             return true;
         }
         catch (OperationCanceledException) { throw; }
+        catch (InvalidOperationException) { throw; }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "벽면 후퇴 중 예외 — 직접 MoveJ 시도");
-            return false;
+            logger.LogWarning(ex, "벽면 후퇴 중 예외 — 움직이지 않고 정지");
+            throw new InvalidOperationException(RetractFailedMessage(ex.Message), ex);
         }
     }
+
+    internal static string RetractFailedMessage(string cause)
+        => $"벽면 후퇴 실패({cause}) — 벽 앞 자세에서 바로 관절 이동하면 팔이 벽 쪽으로 휘둘릴 수 있어 정지합니다. " +
+           "펜던트/조그로 벽에서 떼어 낸 뒤 재시도하세요.";
 
     /// <summary>현재 관절각이 목표(홈/ready)와 전 축 <see cref="HomeToleranceDeg"/> 이내인지.
     /// 각 축 차이는 ±360° 감아 [−180,180]°로 정규화해 비교한다 — J6 같은 축이 +180° vs −180°(= 같은

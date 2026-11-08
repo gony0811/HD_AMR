@@ -580,7 +580,18 @@ public class CobotInspectionMoveStep : ISequenceStep
     {
         // 새로운 접근 사이클에서만 교체한다. ④ 정렬 재시도는 이 기준점을 덮어쓰지 않는다.
         InspectionAlignmentAnchor.Clear(context);
-        var result = await ExecuteCoreAsync(context, ct);
+        StepResult result;
+        try
+        {
+            result = await ExecuteCoreAsync(context, ct);
+        }
+        catch
+        {
+            // 진입 MoveJ 실패·복귀 경로 차단·취소는 예외로 끝난다 — 이번 접근의 용접선 점 S 를 남기면
+            // 이후 세미오토 ④⁺가 엉뚱한 점으로 횡복귀한다.
+            InspectionAlignmentAnchor.Clear(context);
+            throw;
+        }
         if (result.Success)
             InspectionAlignmentAnchor.CaptureIfMissing(context,
                 await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct));
@@ -796,6 +807,12 @@ public class CobotInspectionMoveStep : ISequenceStep
             var moved = await PlanarApproachAsync(context, seam, current, target, reference, twistNote + tiltNote, entryNote, ct);
             if (moved.Success) return (moved, seam, "");
             _logger.LogInformation("[Cobot 검사위치 이동] 틸트 {Up:+0;-0;0}/{Side:+0;-0;0}° 진입도 불가: {Msg}", up, side, moved.Message);
+
+            // 이 후보가 도중까지 움직였으면 다음 후보의 진입 검증(관절 이동량·경로 연속성)이 출발 자세 기준이라 실제와 맞지 않는다 — 중단.
+            var after = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
+            if (!IsSamePose(after, current, ChainPoseTolMm, ChainPoseTolDeg))
+                return (moved, null,
+                    $" · 접근 자세 탐색 중단 — 틸트 {up:+0;-0;0}/{side:+0;-0;0}° 진입이 도중에 실패해 팔이 이미 움직였습니다");
         }
         return (null, null, $" · 접근 자세 탐색(틸트 ≤{maxDeg:0}°): 후보 {screened}개 검사, 진입 시도 {attempts}개 — 쓸 수 있는 자세 없음");
     }

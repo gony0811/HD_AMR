@@ -34,7 +34,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
     private readonly ILogger<WeldInspectionOrchestrator> _logger;
 
     private readonly object _sync = new();
-    private (string OrderId, string AnchorGroupId, InspectionMoveDirection Direction)? _lastAnchor;
+    private (string OrderId, string AnchorGroupId, InspectionMoveDirection Direction, string? WallCode)? _lastAnchor;   // wall_code 포함 — 꺾인 용접선(벽→챔퍼)이 같은 그룹·방향이어도 다른 면 프레임을 재사용하지 않는다
     private double[]? _lastInternalWorkpieceFrame;                 // 같은 anchor에서 재사용할 BASE 기준 내부 프레임
     private double[]? _lastAnchorStartBase;                        // 그 프레임을 쓴 task 의 ② 시작 접근점(BASE) — 다음 task 프레임 평행 이동 기준
     private double[]? _lastAnchorEndTcp;                           // 그 task 종료 시 TCP(BASE) — 다음 task 연속 이동 판정
@@ -75,10 +75,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
 
     /// <summary>드라이런에서만 의미 있는 스텝 — 일반 레시피가 풀시퀀스(StepKeysJson 미지정)로 돌 때 제외한다.
     /// cobotSeamEnd 가 섞이면 bead2Center 직후 끝점으로 이동해 wobjPoint2 가 비전 Bead2 대신 그 위치를 기록한다.</summary>
-    private static readonly HashSet<string> DryRunOnlyStepKeys = new(StringComparer.Ordinal)
-    {
-        "cobotSeamEnd", "inspectionRunDry",
-    };
+    private static IReadOnlySet<string> DryRunOnlyStepKeys => SequenceService.DryRunOnlyStepKeys;
 
     private readonly OperationLogService _opLog;
     private readonly SequenceRunGate _runGate;
@@ -181,6 +178,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         SequenceRunResult runResult;
         try
         {
+            await WaitForIdleGateAsync(req.JobRef, runCts.Token);
             if (await EnsureLiftStrokeAsync(
                     scope.ServiceProvider, req.LiftStrokeMm, req.DrawingPos.WallCode, req.JobRef, orderId, runCts.Token)
                 is { } liftFail)
@@ -244,6 +242,21 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         }
     }
 
+    /// <summary>다른 실행(UI 세미오토 등)이 게이트를 잡고 있으면 끝날 때까지 기다리는 최대 시간.
+    /// 잠깐의 점유를 equipmentError(노드 잔여 액션 전건 FAILED)로 보고하지 않기 위함이다.</summary>
+    internal static readonly TimeSpan BusyWaitTimeout = TimeSpan.FromSeconds(60);
+
+    /// <summary>실행 게이트가 비기를 최대 <see cref="BusyWaitTimeout"/> 기다린다. 끝까지 점유 중이면 그대로 진행하고,
+    /// 이어지는 게이트 획득이 Busy 로 판정한다.</summary>
+    private async Task WaitForIdleGateAsync(string jobRef, CancellationToken ct)
+    {
+        if (!_runGate.IsBusy) return;
+        _logger.LogInformation("다른 시퀀스 실행 중 — 최대 {Sec:0}s 대기 후 진행 (jobRef={JobRef})", BusyWaitTimeout.TotalSeconds, jobRef);
+        var until = DateTime.UtcNow + BusyWaitTimeout;
+        while (_runGate.IsBusy && DateTime.UtcNow < until)
+            await Task.Delay(500, ct);
+    }
+
     public void InvalidateAnchor()
     {
         lock (_sync)
@@ -260,6 +273,12 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
     internal static bool IsAnchorStrokeChanged(double? cachedStrokeMm, double? currentStrokeMm,
         double toleranceMm = TelescopicService.DefaultTargetToleranceMm)
         => cachedStrokeMm is { } prev && currentStrokeMm is { } cur && Math.Abs(cur - prev) > toleranceMm;
+
+    /// <summary>캐시된 anchor 를 리프트 높이 때문에 버려야 하는지 — 높이가 달라졌거나, 캐시가 있는데 캐시 시점·현재
+    /// 높이 중 하나라도 모르면(통신 끊김 등) 같은 높이라고 믿을 수 없으므로 버린다.</summary>
+    internal static bool ShouldInvalidateForStroke(bool anchorCached, double? cachedStrokeMm, double? currentStrokeMm)
+        => IsAnchorStrokeChanged(cachedStrokeMm, currentStrokeMm)
+           || (anchorCached && (cachedStrokeMm is null || currentStrokeMm is null));
 
     /// <summary>
     /// ② 가 리치 부족으로 실패했으면 `stationReachShortfall`(사양 §6.4, N23 A안) 결과 — resultDescription 은 사람용 사유,
@@ -472,6 +491,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         string? cornerSide = null;
         try
         {
+            await WaitForIdleGateAsync(req.JobRef, runCts.Token);
             if (await EnsureLiftStrokeAsync(
                     scope.ServiceProvider, req.LiftStrokeMm, req.DrawingPos.WallCode, req.JobRef, orderId, runCts.Token)
                 is { } liftFail)
@@ -488,7 +508,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             var currentStrokeMm = _lift.TryGetStrokeMm(out _);
             lock (_sync)
             {
-                if (IsAnchorStrokeChanged(_lastAnchorStrokeMm, currentStrokeMm))
+                if (ShouldInvalidateForStroke(_lastAnchor is not null, _lastAnchorStrokeMm, currentStrokeMm))
                 {
                     _logger.LogInformation(
                         "anchor 리프트 높이 변경({Old:0}→{New:0}mm) — 기존 작업물 좌표계 캐시 무효화 및 재교시 (anchorGroup={Group})",
@@ -501,14 +521,15 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                 }
 
                 anchorHit = recipe.SeamType != SeamTypeKind.Corner
-                            && _lastAnchor == (orderId, req.AnchorGroupId, direction)
+                            && _lastAnchor == (orderId, req.AnchorGroupId, direction, req.DrawingPos.WallCode)
                             && _lastInternalWorkpieceFrame is { Length: 6 };
                 if (!anchorHit && _lastAnchor is { } prev
                     && prev.OrderId == orderId && prev.AnchorGroupId == req.AnchorGroupId
-                    && prev.Direction != direction)
+                    && (prev.Direction != direction || prev.WallCode != req.DrawingPos.WallCode))
                 {
-                    _logger.LogInformation("anchor 방향 변경({Old}→{New}) — 작업물 좌표계 재교시 (anchorGroup={Group})",
-                        prev.Direction, direction, req.AnchorGroupId);
+                    _logger.LogInformation(
+                        "anchor 방향/면 변경({Old}/{OldWall}→{New}/{NewWall}) — 작업물 좌표계 재교시 (anchorGroup={Group})",
+                        prev.Direction, prev.WallCode ?? "-", direction, req.DrawingPos.WallCode ?? "-", req.AnchorGroupId);
                 }
                 cachedInternalFrame = anchorHit ? (double[])_lastInternalWorkpieceFrame!.Clone() : null;
                 cachedAnchorStartBase = anchorHit ? _lastAnchorStartBase?.ToArray() : null;
@@ -521,7 +542,14 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             // 드라이런 레시피는 StepKeysJson 을 무시하고 고정 드라이런 집합을 쓴다 — 수기 StepKeysJson 누락으로
             // 교시 스텝이 빠져 ⑱이 "작업물 좌표계 없음"으로 실패하던 문제를 원천 차단한다.
             // 일반 레시피의 풀시퀀스(StepKeysJson 미지정)에서는 드라이런 전용 스텝을 뺀다.
-            var stepKeys = SelectStepKeys(recipe.DryRun, ParseStepKeys(recipe.StepKeysJson),
+            var (recipeKeys, keysError) = ParseStepKeys(recipe.StepKeysJson);
+            keysError ??= recipe.DryRun ? null
+                : ValidateRecipeStepKeys(recipeKeys, sequence.Steps.Select(st => st.Key));
+            if (keysError is not null)
+                return InspectionActionResult.Fail("inspectionFailed",
+                    $"recipe {recipeId} 실행 스텝 구성 오류 — {keysError}");
+
+            var stepKeys = SelectStepKeys(recipe.DryRun, recipeKeys,
                 sequence.Steps.Select(st => st.Key), anchorHit, isLastInspection);
 
             if (stepKeys.Length == 0)
@@ -671,7 +699,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                         var strokeAtEnd = _lift.TryGetStrokeMm(out _);
                         lock (_sync)
                         {
-                            _lastAnchor = (orderId, req.AnchorGroupId, direction);
+                            _lastAnchor = (orderId, req.AnchorGroupId, direction, req.DrawingPos.WallCode);
                             _lastInternalWorkpieceFrame = (double[])internalFrame.Clone();
                             _lastAnchorStartBase = startBase;
                             _lastAnchorEndTcp = endTcp;
@@ -719,7 +747,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         {
             lock (_sync)
             {
-                if (IsAnchorStrokeChanged(_lastAnchorStrokeMm, currentHeightMm))
+                if (ShouldInvalidateForStroke(_lastAnchor is not null, _lastAnchorStrokeMm, currentHeightMm))
                 {
                     _logger.LogInformation(
                         "리프트 높이 변경 감지({Old:0}→{New:0}mm) — 기존 anchorGroupId 작업물 좌표계 캐시 무효화 (jobRef={JobRef})",
@@ -739,84 +767,91 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         if (statusError is not null)
             return InspectionActionResult.Fail("equipmentError", $"텔레스코픽 리프트 상태 오류 — {statusError}");
 
-        // 0) 장비 점유 확인 — Busy 판정은 RunSequenceAsync 안에서만 하므로, 그 전에 코봇 홈 복귀·리프트 이동을
-        //    하는 이 경로는 여기서 먼저 확인한다(UI 등 다른 실행 중에 코봇·리프트를 건드리지 않는다).
-        if (_runGate.IsBusy)
+        // 0) 장비 점유 — 홈 복귀·리프트 이동 동안 실행 게이트를 잡아 UI 시퀀스가 동시에 코봇·리프트를 움직이지 못하게 한다
+        //    (스냅샷 확인만 하면 이동 중 UI 실행이 TryEnter 에 성공한다). 이동이 끝나면 놓고, 이어지는 RunSequenceAsync 가 다시 잡는다.
+        if (!_runGate.TryEnter())
             return InspectionActionResult.Fail("equipmentError",
                 $"onboard sequence busy — UI 등 다른 실행이 장비 점유 중이라 리프트 {targetHeightMm}mm 이동 불가");
-
-        // 1) 노드 내 TASK 사이에 리프트 높이가 바뀌므로 기존 anchorGroupId 작업물 좌표계 캐시를 무효화한다.
-        InvalidateAnchor();
-        _logger.LogInformation(
-            "리프트 높이 이동 준비({Cur}mm → {Target}mm) — 기존 anchorGroupId 작업물 좌표계 캐시 무효화 (jobRef={JobRef})",
-            currentHeightMm, targetHeightMm, jobRef);
-
-        // 2) 리프트 이동 전 코봇이 홈 위치(home / home2)에 있는지 확인(아직 이전 TASK 종료 위치면 먼저 홈 복귀).
-        var teaching = sp.GetRequiredService<TeachingService>();
-        var positions = await teaching.ListAsync(ct);
-        var homeCtx = new SequenceContext
+        try
         {
-            Positions = positions.ToDictionary(p => p.Key, p => p),
-            Tool = 1,
-            Velocity = 20,
-            WallCode = wallCode,
-        };
-        if (SequenceEntry.ValidateHome(homeCtx) is { IsValid: false } homeErr)
-            return InspectionActionResult.Fail("inspectionFailed",
-                $"리프트 이동 전 코봇 홈 위치 확인 불가 — {homeErr.Message}");
-
-        var curJoints = await _cobot.Rpc.GetActualJointPosAsync(ct: ct);
-        if (!SequenceEntry.IsAtBaseHome(curJoints, homeCtx, out _, out var baseName))
-        {
+            // 1) 노드 내 TASK 사이에 리프트 높이가 바뀌므로 기존 anchorGroupId 작업물 좌표계 캐시를 무효화한다.
+            InvalidateAnchor();
             _logger.LogInformation(
-                "리프트 이동 전 코봇이 {BaseName}에 있지 않음 — 안전을 위해 기준 홈 복귀 수행 (jobRef={JobRef})",
-                baseName, jobRef);
-            _opLog.Log(OperationLogService.SourceAcs, OpCategory.Cobot, "리프트 이동 전 홈 복귀", null,
-                $"jobRef={jobRef}, 리프트 {currentHeightMm}→{targetHeightMm}mm 이동 전 코봇 {baseName} 복귀 수행", orderId);
+                "리프트 높이 이동 준비({Cur}mm → {Target}mm) — 기존 anchorGroupId 작업물 좌표계 캐시 무효화 (jobRef={JobRef})",
+                currentHeightMm, targetHeightMm, jobRef);
 
-            List<string> route;
-            try
+            // 2) 리프트 이동 전 코봇이 홈 위치(home / home2)에 있는지 확인(아직 이전 TASK 종료 위치면 먼저 홈 복귀).
+            var teaching = sp.GetRequiredService<TeachingService>();
+            var positions = await teaching.ListAsync(ct);
+            var homeCtx = new SequenceContext
             {
-                route = await SequenceEntry.ReturnToBaseAsync(_cobot, homeCtx, _logger, ct);
-            }
-            catch (OperationCanceledException) { throw; }
-            catch (Exception ex)
-            {
-                _opLog.Log(OperationLogService.SourceAcs, OpCategory.Cobot, "리프트 이동 전 홈 복귀 실패", false,
-                    ex.Message, orderId);
+                Positions = positions.ToDictionary(p => p.Key, p => p),
+                Tool = 1,
+                Velocity = 20,
+                WallCode = wallCode,
+            };
+            await WeldSequenceSupport.LoadOpticalAxisAsync(sp.GetRequiredService<ParameterService>(), homeCtx);
+            if (SequenceEntry.ValidateHome(homeCtx) is { IsValid: false } homeErr)
                 return InspectionActionResult.Fail("inspectionFailed",
-                    $"리프트 이동 전 코봇 {baseName} 복귀 실패 — 리프트를 이동하지 않고 중단합니다: {ex.Message}");
-            }
+                    $"리프트 이동 전 코봇 홈 위치 확인 불가 — {homeErr.Message}");
 
-            curJoints = await _cobot.Rpc.GetActualJointPosAsync(ct: ct);
-            if (!SequenceEntry.IsAtBaseHome(curJoints, homeCtx, out _, out baseName))
+            var curJoints = await _cobot.Rpc.GetActualJointPosAsync(ct: ct);
+            if (!SequenceEntry.IsAtBaseHome(curJoints, homeCtx, out _, out var baseName))
             {
-                return InspectionActionResult.Fail("inspectionFailed",
-                    $"리프트 이동 전 코봇이 {baseName}에 도달하지 못해 리프트를 이동하지 않고 중단합니다.");
+                _logger.LogInformation(
+                    "리프트 이동 전 코봇이 {BaseName}에 있지 않음 — 안전을 위해 기준 홈 복귀 수행 (jobRef={JobRef})",
+                    baseName, jobRef);
+                _opLog.Log(OperationLogService.SourceAcs, OpCategory.Cobot, "리프트 이동 전 홈 복귀", null,
+                    $"jobRef={jobRef}, 리프트 {currentHeightMm}→{targetHeightMm}mm 이동 전 코봇 {baseName} 복귀 수행", orderId);
+
+                List<string> route;
+                try
+                {
+                    route = await SequenceEntry.ReturnToBaseAsync(_cobot, homeCtx, _logger, ct);
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    _opLog.Log(OperationLogService.SourceAcs, OpCategory.Cobot, "리프트 이동 전 홈 복귀 실패", false,
+                        ex.Message, orderId);
+                    return InspectionActionResult.Fail("inspectionFailed",
+                        $"리프트 이동 전 코봇 {baseName} 복귀 실패 — 리프트를 이동하지 않고 중단합니다: {ex.Message}");
+                }
+
+                curJoints = await _cobot.Rpc.GetActualJointPosAsync(ct: ct);
+                if (!SequenceEntry.IsAtBaseHome(curJoints, homeCtx, out _, out baseName))
+                {
+                    return InspectionActionResult.Fail("inspectionFailed",
+                        $"리프트 이동 전 코봇이 {baseName}에 도달하지 못해 리프트를 이동하지 않고 중단합니다.");
+                }
+                _opLog.Log(OperationLogService.SourceAcs, OpCategory.Cobot, "리프트 이동 전 홈 복귀 완료", true,
+                    $"{string.Join(" → ", route)} 완료 ({baseName} 확인)", orderId);
             }
-            _opLog.Log(OperationLogService.SourceAcs, OpCategory.Cobot, "리프트 이동 전 홈 복귀 완료", true,
-                $"{string.Join(" → ", route)} 완료 ({baseName} 확인)", orderId);
+            else
+            {
+                _logger.LogInformation("리프트 이동 전 코봇 {BaseName} 위치 확인 완료 (jobRef={JobRef})", baseName, jobRef);
+            }
+
+            // 3) 리프트 목표 높이 이동 + 도달 대기 + 1초 안정화 대기.
+            _opLog.Log(OperationLogService.SourceAcs, OpCategory.Action, "리프트 높이 이동 시작", null,
+                $"jobRef={jobRef}, 현재 {currentHeightMm}mm → 목표 {targetHeightMm}mm (코봇 {baseName} 확인 완료)", orderId);
+
+            var moveResult = await _lift.MoveToHeightAndWaitAsync(targetHeightMm, ct: ct);
+            if (!moveResult.Ok)
+            {
+                _opLog.Log(OperationLogService.SourceAcs, OpCategory.Action, "리프트 높이 이동 실패", false,
+                    moveResult.Message, orderId);
+                return InspectionActionResult.Fail("equipmentError", $"리프트 높이 이동 실패 — {moveResult.Message}");
+            }
+
+            _opLog.Log(OperationLogService.SourceAcs, OpCategory.Action, "리프트 높이 이동 완료", true,
+                $"jobRef={jobRef} — {moveResult.Message}", orderId);
+            return null;
         }
-        else
+        finally
         {
-            _logger.LogInformation("리프트 이동 전 코봇 {BaseName} 위치 확인 완료 (jobRef={JobRef})", baseName, jobRef);
+            _runGate.Exit();
         }
-
-        // 3) 리프트 목표 높이 이동 + 도달 대기 + 1초 안정화 대기.
-        _opLog.Log(OperationLogService.SourceAcs, OpCategory.Action, "리프트 높이 이동 시작", null,
-            $"jobRef={jobRef}, 현재 {currentHeightMm}mm → 목표 {targetHeightMm}mm (코봇 {baseName} 확인 완료)", orderId);
-
-        var moveResult = await _lift.MoveToHeightAndWaitAsync(targetHeightMm, ct: ct);
-        if (!moveResult.Ok)
-        {
-            _opLog.Log(OperationLogService.SourceAcs, OpCategory.Action, "리프트 높이 이동 실패", false,
-                moveResult.Message, orderId);
-            return InspectionActionResult.Fail("equipmentError", $"리프트 높이 이동 실패 — {moveResult.Message}");
-        }
-
-        _opLog.Log(OperationLogService.SourceAcs, OpCategory.Action, "리프트 높이 이동 완료", true,
-            $"jobRef={jobRef} — {moveResult.Message}", orderId);
-        return null;
     }
 
     /// <summary>레시피에 지정된 티칭설정(InspectionProfile)을 반환. 미지정/없음/타입 불일치면 (null, 사유).
@@ -862,19 +897,40 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             .ToArray();
     }
 
-    private string[]? ParseStepKeys(string? stepKeysJson)
+    /// <summary>레시피 StepKeysJson 해석. 비어 있으면 (null, null) = 풀시퀀스. 형식이 틀리면 오류 — 조용히 풀시퀀스로
+    /// 바꾸면 의도와 다른 스텝이 돈다.</summary>
+    internal static (string[]? Keys, string? Error) ParseStepKeys(string? stepKeysJson)
     {
-        if (string.IsNullOrWhiteSpace(stepKeysJson)) return null;
+        if (string.IsNullOrWhiteSpace(stepKeysJson)) return (null, null);
         try
         {
             var keys = JsonSerializer.Deserialize<string[]>(stepKeysJson);
-            return keys is { Length: > 0 } ? keys : null;
+            return keys is { Length: > 0 } ? (keys, null) : (null, null);
         }
         catch (JsonException ex)
         {
-            _logger.LogWarning(ex, "레시피 StepKeysJson 파싱 실패 — 풀시퀀스로 실행: {Json}", stepKeysJson);
-            return null;
+            return (null, $"StepKeysJson 형식 오류({ex.Message}) — 문자열 배열이어야 합니다: {stepKeysJson}");
         }
+    }
+
+    /// <summary>
+    /// 일반 레시피의 명시 스텝 목록 검사 — 등록되지 않은 키(오타)는 조용히 빠져 홈 복귀 등이 사라지므로 거부하고,
+    /// 드라이런 전용 스텝(끝점 이동이 점2 를 덮어씀)과 ② 누락(anchor 적중 시 프레임을 이번 용접선으로 옮기지 못해
+    /// 직전 용접선을 다시 검사)도 거부한다. 문제없으면 null.
+    /// </summary>
+    internal static string? ValidateRecipeStepKeys(string[]? recipeKeys, IEnumerable<string> registeredKeys)
+    {
+        if (recipeKeys is null) return null;
+        var registered = registeredKeys.ToHashSet(StringComparer.Ordinal);
+        var unknown = recipeKeys.Where(k => !registered.Contains(k)).ToArray();
+        if (unknown.Length > 0)
+            return $"등록되지 않은 스텝 키: {string.Join(", ", unknown.Select(k => $"'{k}'"))}";
+        var dryOnly = recipeKeys.Where(DryRunOnlyStepKeys.Contains).ToArray();
+        if (dryOnly.Length > 0)
+            return $"드라이런 전용 스텝은 일반 레시피에 넣을 수 없습니다: {string.Join(", ", dryOnly)}";
+        if (!recipeKeys.Contains("cobotInspection"))
+            return "'cobotInspection'(Cobot 검사위치 이동)이 빠졌습니다 — 이번 용접선 위치로 이동·프레임 이동을 하지 못합니다";
+        return null;
     }
 
     /// <summary>wall_code → 비전 Surface ID (vision_interface.md §5, 0x01~0x0A) — 정본 표 <see cref="WallCodes"/>.

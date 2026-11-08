@@ -159,6 +159,16 @@ public sealed class DepthDistanceMoveOptions
 
     /// <summary>이동 후 진동/프레임 안정화 대기(ms).</summary>
     public int SettleMs { get; init; } = 500;
+
+    /// <summary>이동 전 측정 거리의 기대값(mm, 예: ② 접근 거리). null 이면 검사하지 않는다.
+    /// 측정이 기대 ± <see cref="ExpectedToleranceMm"/> 밖이면 ROI 안 다른 구조물·무효 픽셀·멈춘 프레임으로 보고 움직이지 않는다.</summary>
+    public double? ExpectedDistanceMm { get; init; }
+
+    /// <summary><see cref="ExpectedDistanceMm"/> 허용폭(mm).</summary>
+    public double ExpectedToleranceMm { get; init; } = 200;
+
+    /// <summary>이 시간보다 오래된 depth 프레임이면 측정하지 않는다(ms) — 스트림 정체 시 같은 값으로 반복 이동 방지.</summary>
+    public int MaxFrameAgeMs { get; init; } = 1000;
 }
 
 /// <summary>깊이 거리 접근 이동 결과.</summary>
@@ -877,6 +887,7 @@ public class FlatSurfaceCenteringService
     /// </summary>
     public async Task<double?> MeasureRoiDistanceAsync(DepthDistanceMoveOptions o, CancellationToken ct)
     {
+        if (DepthFrameAgeMs > o.MaxFrameAgeMs) return null;   // 멈춘 프레임 — 측정 불가로 본다
         var samples = new List<int>(o.Samples);
         for (var i = 0; i < o.Samples; i++)
         {
@@ -906,9 +917,14 @@ public class FlatSurfaceCenteringService
         try
         {
             // ── 측정: ROI 최소 깊이 N회 샘플 평균 (시퀀스 ③ 기존 방식 유지) ──
+            if (DepthFrameAgeMs > o.MaxFrameAgeMs)
+                return DistFail($"depth 프레임이 {DepthFrameAgeMs:0}ms 동안 갱신되지 않았습니다(한계 {o.MaxFrameAgeMs}ms) — " +
+                                "카메라 스트림을 확인하세요. 움직이지 않습니다.");
             var measured = await MeasureRoiDistanceAsync(o, ct);
             if (measured is not { } d)
                 return DistFail("유효한 깊이 측정값이 없습니다.");
+            if (CheckExpectedDistance(d, o.ExpectedDistanceMm, o.ExpectedToleranceMm) is { } expectedFail)
+                return DistFail(expectedFail, d);
 
             double delta = d - o.TargetDistanceMm;
             Report(progress, $"거리 측정 {d:0.#}mm (목표 {o.TargetDistanceMm:0}mm, Δ={delta:+0.#;-0.#}mm)");
@@ -934,21 +950,27 @@ public class FlatSurfaceCenteringService
             if (rc != 0)
                 return DistFail($"접근 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.", d);
 
+            var movedAt = DateTime.UtcNow;
             await Task.Delay(o.SettleMs, ct);
 
-            // 진단: 실측 BASE 변위·재측정 거리 — 광축 매핑이 맞는지 로그로 검증 가능하게.
-            double? d2 = null;
+            // 이동 후 새 프레임을 기다린다 — 이동 전 프레임으로 재측정하면 응답 검증이 무의미하다.
+            for (var waited = 0; _camera.LastFrameAt <= movedAt && waited < 1500; waited += 50)
+                await Task.Delay(50, ct);
+
+            // 재측정(N회 평균)·실측 BASE 변위 — 광축 매핑·프레임이 맞는지 응답으로 검증한다.
+            var d2 = _camera.LastFrameAt > movedAt ? await MeasureRoiDistanceAsync(o, ct) : null;
             try
             {
                 var after = await _cobot.Rpc.GetTcpPoseInBaseAsync(o.Tool, ct);
-                var stat = _camera.ComputeDepthRoiStats(o.RoiX, o.RoiY, o.RoiW, o.RoiH);
-                d2 = stat is { MinMm: > 0 } ? stat.MinMm : null;
                 Report(progress,
                     $"접근 실측: BASE Δ=[{after[0] - anchor[0]:+0.#;-0.#}, {after[1] - anchor[1]:+0.#;-0.#}, " +
                     $"{after[2] - anchor[2]:+0.#;-0.#}]mm, 거리 {d:0}→{(d2 is not null ? $"{d2:0}" : "?")}mm");
             }
             catch (OperationCanceledException) { throw; }
             catch { /* 진단 실패는 결과에 영향 없음 */ }
+
+            if (CheckDistanceResponse(d, d2, delta) is { } responseFail)
+                return DistFail(responseFail, d2 ?? d);
 
             return DistOk(d2 ?? d, delta,
                 $"거리 접근 완료: {d:0.#}→{(d2 is not null ? $"{d2:0.#}" : "?")}mm " +
@@ -963,6 +985,39 @@ public class FlatSurfaceCenteringService
             _logger.LogError(ex, "거리 접근 이동 중 오류");
             return DistFail($"거리 접근 오류: {ex.Message}");
         }
+    }
+
+    private double DepthFrameAgeMs => (DateTime.UtcNow - _camera.LastFrameAt).TotalMilliseconds;
+
+    /// <summary>응답 검증을 생략하는 최소 이동량(mm) — 이보다 작으면 depth 잡음에 묻힌다.</summary>
+    internal const double ResponseCheckMinMoveMm = 10.0;
+
+    /// <summary>이동량 대비 실제 거리 변화가 이 비율보다 작으면 응답 없음으로 본다.</summary>
+    internal const double ResponseMinRatio = 0.3;
+
+    /// <summary>이동 전 측정이 기대 거리 ± 허용폭 밖이면 실패 사유.</summary>
+    internal static string? CheckExpectedDistance(double measuredMm, double? expectedMm, double toleranceMm)
+    {
+        if (expectedMm is not { } e || toleranceMm <= 0 || Math.Abs(measuredMm - e) <= toleranceMm) return null;
+        return $"측정 거리 {measuredMm:0}mm 가 기대 {e:0}±{toleranceMm:0}mm(검사위치 이동의 접근 거리) 밖입니다 — " +
+               "ROI 안 다른 구조물·무효 픽셀(최소 측정거리 미만)·멈춘 프레임일 수 있어 움직이지 않습니다. ROI·카메라를 확인하세요.";
+    }
+
+    /// <summary>
+    /// 광축 방향 <paramref name="commandedMm"/> 이동 뒤 거리 변화가 지령과 같은 부호·충분한 크기인지 검사한다.
+    /// 지령 +면 거리가 줄어야 한다(전진). 반대로 변하거나 거의 안 변하면 광축 매핑 부호 오류·멈춘 프레임으로 본다.
+    /// </summary>
+    internal static string? CheckDistanceResponse(double beforeMm, double? afterMm, double commandedMm)
+    {
+        if (Math.Abs(commandedMm) < ResponseCheckMinMoveMm) return null;
+        if (afterMm is not { } after)
+            return $"광축 {commandedMm:+0.#;-0.#}mm 이동 후 유효한 깊이 측정값이 없습니다(새 프레임 없음 또는 무효 픽셀) — " +
+                   "카메라 스트림·ROI 를 확인하세요. 추가 이동하지 않습니다.";
+        var change = beforeMm - after;   // 줄어든 거리
+        if (change * commandedMm <= 0 || Math.Abs(change) < ResponseMinRatio * Math.Abs(commandedMm))
+            return $"광축 {commandedMm:+0.#;-0.#}mm 이동했는데 거리가 {beforeMm:0}→{after:0}mm 로 기대만큼 변하지 않았습니다 — " +
+                   $"광축 매핑('{Sequence.Steps.WeldSequenceSupport.DepthAxisKey}') 부호나 depth 프레임 정체를 확인하세요. 추가 이동하지 않습니다.";
+        return null;
     }
 
     private DepthDistanceMoveResult DistFail(string msg, double? measured = null)

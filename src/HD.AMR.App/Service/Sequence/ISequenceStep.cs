@@ -46,6 +46,11 @@ public enum InspectionMoveDirection
 /// <summary>단계 간 공유 컨텍스트. 공용 파라미터와 티칭 위치를 담는다.</summary>
 public class SequenceContext
 {
+    /// <summary>카메라 광축 툴축(<see cref="Steps.WeldSequenceSupport.DepthAxisKey"/>). 파라미터가 저장돼 있지 않으면 null —
+    /// 벽면 후퇴는 방향을 알 수 없으므로 움직이지 않고 정지한다(기본 +Z 폴백은 현장 −Z 장착에서 벽 쪽으로 들어간다).
+    /// <see cref="SequenceService"/> 가 실행 시작 시 채우고, 수동 구성 컨텍스트는 <see cref="Steps.WeldSequenceSupport.LoadOpticalAxisAsync"/> 로 채운다.</summary>
+    public ToolAxisDir? OpticalAxis { get; set; }
+
     /// <summary>활성 tool 번호.</summary>
     public int Tool { get; set; } = 1;
 

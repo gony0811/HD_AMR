@@ -19,6 +19,10 @@ public class CameraAlignStep : ISequenceStep
 
     private const double MaxAlignTravelMm = 1000;
 
+    /// <summary>③ 시작 거리가 ② 접근 거리(<c>inspection.approachStandoffMm</c>)에서 이만큼 넘게 다르면 움직이지 않는다(mm, 0=검사 안 함).</summary>
+    public const string ExpectedToleranceKey = "Sequence.CameraAlign.ExpectedTolMm";
+    public const double DefaultExpectedToleranceMm = 200;
+
     // 깊이 ROI 파라미터 키 — CameraView 페이지와 공유.
     private const string RoiEnabledKey = "Camera.Depth.Roi.Enabled";
     private const string RoiXKey = "Camera.Depth.Roi.X";
@@ -64,17 +68,23 @@ public class CameraAlignStep : ISequenceStep
         var (rx, ry, rw, rh, roiSrc) = await GetDepthRoiAsync(_param);
         var (depthAxis, axisFromParam) = await WeldSequenceSupport.GetDepthAxisAsync(_param);
         if (!axisFromParam)
-            _logger.LogWarning(
-                "'{Key}' 광축 매핑 파라미터 없음/범위 밖 — 기본 +Z 사용. 카메라 페이지에서 광축을 설정·저장하세요.",
-                WeldSequenceSupport.DepthAxisKey);
+            return StepResult.Fail(WeldSequenceSupport.OpticalAxisMissingMessage(DisplayName));
         _logger.LogInformation(
             "Sequence [카메라 거리 정렬] 목표={Dist}mm, ROI={Roi}({Rx:0.00},{Ry:0.00},{Rw:0.00},{Rh:0.00}), 광축=툴{Axis}",
             context.CameraTargetDistanceMm, roiSrc, rx, ry, rw, rh, depthAxis);
         context.Progress?.Invoke(
             $"거리 정렬 시작 — 목표 {context.CameraTargetDistanceMm:0}mm (ROI={roiSrc}, 광축=툴{depthAxis})");
 
+        // ②가 이번 사이클에 용접선 접근점으로 왔으면(용접선 점 S 기록) 시작 거리는 대략 접근 거리여야 한다.
+        double? expected = null;
+        var expectedTol = await _param.GetDoubleAsync(ExpectedToleranceKey) ?? DefaultExpectedToleranceMm;
+        if (expectedTol > 0 && context.Bag.ContainsKey(WeldSequenceSupport.InspectAnchorSeamPointBagKey))
+            expected = await CobotInspectionMoveStep.GetApproachStandoffMmAsync(_param, _logger);
+
         var r = await _centering.MoveToDistanceAsync(new DepthDistanceMoveOptions
         {
+            ExpectedDistanceMm = expected,
+            ExpectedToleranceMm = expectedTol,
             RoiX = rx, RoiY = ry, RoiW = rw, RoiH = rh,
             TargetDistanceMm = context.CameraTargetDistanceMm,
             ToleranceMm = 1.0,

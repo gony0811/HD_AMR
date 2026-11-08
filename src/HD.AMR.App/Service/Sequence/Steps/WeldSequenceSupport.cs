@@ -266,6 +266,18 @@ public static class WeldSequenceSupport
     public static Task<(ToolAxisDir Axis, bool FromParam)> GetDepthAxisAsync(ParameterService param)
         => GetToolAxisAsync(param, DepthAxisKey, ToolAxisDir.PlusZ);
 
+    /// <summary>광축 파라미터가 저장돼 있으면 그 축, 없으면 null 을 <see cref="SequenceContext.OpticalAxis"/> 에 채운다.</summary>
+    public static async Task LoadOpticalAxisAsync(ParameterService param, SequenceContext context)
+    {
+        var (axis, fromParam) = await GetDepthAxisAsync(param);
+        context.OpticalAxis = fromParam ? axis : null;
+    }
+
+    /// <summary>광축 파라미터 미설정 시 광축 방향 이동 단계가 내는 실패 메시지.</summary>
+    public static string OpticalAxisMissingMessage(string stage)
+        => $"[{stage}] '{DepthAxisKey}' 광축 파라미터가 저장돼 있지 않습니다 — 기본 +Z 로 움직이면 현장(−Z 장착)에서 " +
+           "벽 쪽으로 반대로 이동할 수 있어 정지합니다. 카메라 페이지에서 광축을 설정·저장하세요.";
+
     /// <summary>
     /// ⑤~⑫ 진행축(코로게이션 Peak 배열 방향의 영상 축)을 ② 검사방향에서 결정한다.
     /// 수직 용접라인(Vertical, J6 180°)은 진행축이 영상 가로가 되고(실기 검증된 기준 케이스),

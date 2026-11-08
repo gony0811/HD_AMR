@@ -280,6 +280,12 @@ public class InspectionRunStep : ISequenceStep
             $" [내부 wobj #{wobjId}→BASE/user 0, tool {context.Tool}, WallID 0x{context.InspectionSurfaceId:X2}, Run {runId}].";
         _logger.LogInformation("[검사 수행] {Msg}", msg);
 
+        // 비전 OK 가 하나도 없으면 실패율 설정과 무관하게 실패 — 순회 중 비전 링크가 끊기면 촬영 요청이 즉시
+        // (false,false)로 끝나 코봇은 이동만 하고 "성공"으로 보고되며 anchor 프레임까지 캐시되던 문제(기본 상한 1.0 = 판정 없음).
+        if (!_dryRun && moved > 0 && visOk == 0)
+            return StepResult.Fail(
+                $"비전 OK 0/{moved} — 촬영 결과를 하나도 받지 못했습니다. 비전 S/W 링크·촬영 응답을 확인하세요. {msg}");
+
         // ACS 경로: 비전 실패율 상한 초과 시 스텝 실패로 승격(→ 액션 FAILED + inspectionFailed, §6.4 재시도 정책).
         // UI 단독 실행(VisionFailRatioMax=null)은 현행대로 집계만 하고 성공 반환. 드라이런은 비전이 없어 판정 생략.
         if (!_dryRun && context.VisionFailRatioMax is { } maxRatio && moved > 0)

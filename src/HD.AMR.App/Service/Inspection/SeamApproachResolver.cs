@@ -92,10 +92,15 @@ public sealed class SeamApproachResolver
         var useComputed = await _param.GetBoolAsync(UseComputedNormalOrientationKey) ?? false;
         // 법선 자세는 '광축 툴축이 면을 향하게' 만든다 — 카메라 페이지의 광축 설정(현장 −Z)을 따라야 한다.
         // 기본 +Z 로 계산하면 툴이 180° 뒤집힌 목표가 나와 손목(J4)이 크게 재구성된다(2026-10-07 현장).
-        var (opticalAxis, _) = await WeldSequenceSupport.GetDepthAxisAsync(_param);
+        var (opticalAxis, axisFromParam) = await WeldSequenceSupport.GetDepthAxisAsync(_param);
 
         if (approachW is not { Length: 3 } seam)
             return new SeamApproachResult(null, null, useComputed, "용접선 좌표 없음 — 티칭 위치로 이동", null);
+
+        // 광축을 모르면 법선 자세·후퇴 방향을 정할 수 없다 — 기본 +Z 로 계산하면 툴이 뒤집힌 목표가 나온다.
+        if (!axisFromParam)
+            return new SeamApproachResult(null, null, useComputed, "",
+                WeldSequenceSupport.OpticalAxisMissingMessage(label.Trim('[', ']')));
 
         if (_amr.LatestStatus is not { } status)
             return new SeamApproachResult(null, null, useComputed,

@@ -46,6 +46,10 @@ public class PeakFindStep : ISequenceStep
 
     public async Task<StepResult> ExecuteAsync(SequenceContext context, CancellationToken ct)
     {
+        // 새 측정 사이클의 시작 — 이전 실행의 M1/M2 가 남아 있으면 새 M1 과 짝지어 각도가 자동 계산돼
+        // 낡은 θ 가 화면에 표시된다. Peak1 찾기에서 측정 슬롯을 비운다.
+        if (_peakId == 1) _weld.ResetMeasurements();
+
         var pitchMm = await WeldSequenceSupport.GetPitchMmAsync(_param, context);
         if (pitchMm <= 0)
             return StepResult.Fail($"'{WeldSequenceSupport.PitchMmKey}' 파라미터가 0 이하입니다.");

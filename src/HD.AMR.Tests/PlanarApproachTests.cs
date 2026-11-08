@@ -162,6 +162,14 @@ public class PlanarApproachTests
         Assert.Equal(new[] { 1500.0, 0.0, 250.0 }, plan.Entry);
     }
 
+    // 면을 따라 코봇 리치를 넘게 가야 하면 오래된 기록으로 보고 따라가지 않는다.
+    [Fact]
+    public void 면_방향으로_너무_멀면_재추적하지_않는다()
+    {
+        Assert.Null(SequenceEntry.PlanRetrace(new[] { -500.0, 0.0, 0.0 }, Rec));   // 진입점까지 2000mm
+        Assert.NotNull(SequenceEntry.PlanRetrace(new[] { 0.0, 0.0, 0.0 }, Rec));   // 1500mm — 정상 기록
+    }
+
     // 그 면 앞이 아니면(기록이 오래됨) 재추적하지 않는다.
     [Theory]
     [InlineData(-200.0)]

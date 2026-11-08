@@ -1099,7 +1099,8 @@ public class WeldTrackingService
             _override = new RoiOverride(peakRoi, weldRoi);
             _seqIrGeometry = Params.Mode != WeldImageMode.Ir;   // RGB 면 컬러로 검출하되 d·mm 는 IR 기준
             await Task.Run(() => CapturePeak(id), ct);
-            return (id == 1 ? M1 : M2, LastDetect);
+            // 검출에 실패했으면 이전 슬롯 값을 돌려주지 않는다(낡은 측정이 이번 결과처럼 쓰이는 함정 제거).
+            return (LastDetect is { Success: true } ? (id == 1 ? M1 : M2) : null, LastDetect);
         }
         finally
         {

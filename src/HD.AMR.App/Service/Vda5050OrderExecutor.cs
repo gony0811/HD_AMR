@@ -340,8 +340,13 @@ public sealed class Vda5050OrderExecutor
             // 허용 오차 결정: ParameterService(DB) → Order → AmrRestSettings
             var (devXy, devTheta) = await ResolveDeviationsAsync(pos);
 
-            // 코봇 홈 복귀 — 팔이 뻗은 채 AMR 이 주행하면 구조물 충돌 위험.
-            await EnsureCobotHomeBeforeDriveAsync(orderId, ct);
+            // 코봇 홈 복귀 — 팔이 뻗은 채 AMR 이 주행하면 구조물 충돌 위험. 복귀가 실패하면 주행하지 않는다.
+            if (await EnsureCobotHomeBeforeDriveAsync(orderId, ct) is { } homeFail)
+            {
+                FailMission($"주행 전 코봇 홈 복귀 실패 — {homeFail} (팔을 뻗은 채 주행하지 않도록 임무 중단, " +
+                            "코봇 상태 확인 후 펜던트로 홈 복귀하세요)");
+                return;
+            }
 
             // 0) 이미 목표 위치면 이동 생략 — 측위 신뢰도가 낮을 때 제자리 go 가 W13(경로탐색 실패)로
             //    전체 임무를 죽이는 것을 방지. 축별 ±devXy + theta 판정(사양과 별개의 현장 합의).
@@ -497,6 +502,10 @@ public sealed class Vda5050OrderExecutor
                         ? await _inspection.ExecuteMoveToSeamStartAsync(action, orderId, pos.Theta, ct)
                         : await _inspection.ExecuteAsync(
                             action, orderId, pos.Theta, isLastInspection: ai == lastInspectionIndex, ct);
+                    // 취소(cancelOrder·신규 order·비상정지)로 끝난 실행은 검사 실패가 아니다 — 시퀀스 엔진은 취소를
+                    // 실패 결과로 돌려주므로, 여기서 inspectionFailed 로 보고·FAILED 처리하기 전에 취소 경로로 넘긴다
+                    // (상위 임무 중단 처리가 액션 상태를 정리한다. errors 에 inspectionFailed 가 남지 않는다).
+                    ct.ThrowIfCancellationRequested();
                     // 보정한 정차의 첫 검사 액션 결과 앞머리에 보정량 토큰(§4.4.2 규칙 6) — ACS 가 계획 개선용으로 수집.
                     if (adjustToken?.Token is { } token && ai == firstInspectionIndex)
                         result = result with { ResultDescription = $"{token} {result.ResultDescription}" };
@@ -655,8 +664,9 @@ public sealed class Vda5050OrderExecutor
     }
 
     /// <summary>AMR 주행 전 코봇 홈 복귀 — 팔이 뻗은 상태에서 주행하면 구조물 충돌 위험.
-    /// 코봇 미연결 또는 홈 미티칭이면 건너뛴다(코봇 없는 주행 전용 시나리오).</summary>
-    private async Task EnsureCobotHomeBeforeDriveAsync(string orderId, CancellationToken ct)
+    /// 코봇 미연결 또는 홈 미티칭이면 건너뛴다(코봇 없는 주행 전용 시나리오).
+    /// 복귀 성공·생략이면 null, 복귀를 시도했는데 실패하면 그 사유 — 호출측은 주행하지 않고 임무를 실패시킨다.</summary>
+    private async Task<string?> EnsureCobotHomeBeforeDriveAsync(string orderId, CancellationToken ct)
     {
         try
         {
@@ -666,7 +676,7 @@ public sealed class Vda5050OrderExecutor
             {
                 _logger.LogDebug("코봇 미연결 — 홈 복귀 건너뜀");
                 OpLog(OpCategory.Cobot, "주행 전 홈 복귀", null, "코봇 미연결 — 건너뜀", orderId);
-                return;
+                return null;
             }
 
             var teaching = scope.ServiceProvider.GetRequiredService<TeachingService>();
@@ -676,18 +686,20 @@ public sealed class Vda5050OrderExecutor
             {
                 _logger.LogWarning("홈 위치 미티칭 — 코봇 홈 복귀 건너뜀");
                 OpLog(OpCategory.Cobot, "주행 전 홈 복귀", false, "홈 위치 미티칭 — 건너뜀(팔이 뻗은 채 주행할 수 있음)", orderId);
-                return;
+                return null;
             }
 
             // 시퀀스 종료 복귀와 같은 경로 — 현재 자세 모드의 기준 자세로(홈 모드: 벽면 후퇴 → ready → 홈,
             // 홈 위치_2 모드: 벽면 후퇴 → 검사 준비 → 홈 위치_2). 홈 위치_2 모드면 그 자세로 주행한다 — 홈 ↔ 홈 2
-            // 전환은 운영자 수동 전용(벽 충돌 위험). 이동 실패는 예외로 올라와 아래 catch 에서 기록되고 주행은 계속된다.
+            // 전환은 운영자 수동 전용(벽 충돌 위험). 이동 실패는 예외로 올라와 아래 catch 에서 기록되고 주행을 막는다.
             var ctx = new Sequence.SequenceContext
             {
                 Positions = positions.ToDictionary(p => p.Key, p => p),
                 Tool = 1,
                 Velocity = 20,
             };
+            await Sequence.Steps.WeldSequenceSupport.LoadOpticalAxisAsync(
+                scope.ServiceProvider.GetRequiredService<ParameterService>(), ctx);
             var cur = await cobot.Rpc.GetActualJointPosAsync(ct: ct);
             var mode = SequenceEntry.ModeOf(cur, ctx);
             OpLog(OpCategory.Cobot, "주행 전 홈 복귀 시작", null,
@@ -698,10 +710,11 @@ public sealed class Vda5050OrderExecutor
             {
                 _logger.LogDebug("코봇 이미 기준 자세({Mode}) — 복귀 불필요", mode);
                 OpLog(OpCategory.Cobot, "주행 전 홈 복귀", null, $"이미 기준 자세({mode}) — 이동 없음", orderId);
-                return;
+                return null;
             }
             _logger.LogInformation("코봇 기준 자세 복귀 완료 ({Route})", string.Join(" → ", done));
             OpLog(OpCategory.Cobot, "주행 전 홈 복귀", true, $"{string.Join(" → ", done)} 완료", orderId);
+            return null;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -709,8 +722,9 @@ public sealed class Vda5050OrderExecutor
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "코봇 홈 복귀 중 예외 — AMR 주행은 계속 진행");
-            OpLog(OpCategory.Cobot, "주행 전 홈 복귀", false, $"예외: {ex.Message} — AMR 주행은 계속 진행", orderId);
+            _logger.LogWarning(ex, "코봇 홈 복귀 중 예외 — 주행하지 않고 임무 중단");
+            OpLog(OpCategory.Cobot, "주행 전 홈 복귀", false, $"예외: {ex.Message} — 주행하지 않고 임무 중단", orderId);
+            return ex.Message;
         }
     }
 

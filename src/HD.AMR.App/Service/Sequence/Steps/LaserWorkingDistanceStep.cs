@@ -96,9 +96,7 @@ public class LaserWorkingDistanceStep : ISequenceStep
 
         var (depthAxis, axisFromParam) = await WeldSequenceSupport.GetDepthAxisAsync(_param);
         if (!axisFromParam)
-            _logger.LogWarning(
-                "'{Key}' 광축 매핑 파라미터 없음/범위 밖 — 기본 +Z 사용. 카메라 페이지에서 광축을 설정·저장하세요.",
-                WeldSequenceSupport.DepthAxisKey);
+            return StepResult.Fail(WeldSequenceSupport.OpticalAxisMissingMessage(DisplayName));
 
         // ── 이동 전 측정 (④ 마지막 모션 직후 진입 — 안정화 대기 필수) ──
         var (z1, note1) = await SampleStableZAsync(ct);
