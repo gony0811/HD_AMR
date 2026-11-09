@@ -129,7 +129,7 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
     {
         WeldDetectionMethod.Dl => "YOLO 세그멘테이션",
         WeldDetectionMethod.Ridge => "Ridge 필터",
-        WeldDetectionMethod.Unet => "U-Net",
+        WeldDetectionMethod.Unet => "U-Net·히트맵",
         _ => "파라미터(CV)",
     };
     public string StateText => _svc.State.ToString();
@@ -256,7 +256,7 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
     }
 
     // ── 모델 선택 — 학습 models 폴더의 .onnx 중 현재 검출 방식에 맞는 것만 보여 준다 ──
-    // DL(YOLO): 이름에 weld_yolo/weld_seg → Weld.Dl.ModelPath 저장.  U-Net: 이름에 weld_unet → Weld.Unet.ModelPath 저장.
+    // DL(YOLO): 이름에 weld_yolo/weld_seg → Weld.Dl.ModelPath 저장.  U-Net: 이름에 weld_unet/weld_heatmap → Weld.Unet.ModelPath 저장.
     // 파일명에 날짜·특징을 붙여도(예: [4점제외]weld_yolo_ir_261106.onnx) 표식만 남아 있으면 목록에 나온다. 시퀀스·재시작 공유.
     /// <summary>드롭다운 항목. Path 빈값 = 자동. Exists=false 는 저장값이 가리키는 파일이 없음.</summary>
     public sealed record DlModelOption(string Path, string Label, bool Exists = true)
@@ -268,7 +268,7 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
     public bool IsUnet => MethodIndex == 3;
     /// <summary>모델 파일을 쓰는 검출 방식(DL·U-Net)이면 모델 드롭다운 표시.</summary>
     public bool IsModelMethod => IsDl || IsUnet;
-    public string ModelLabel => IsUnet ? "U-Net 모델" : "YOLO 모델";
+    public string ModelLabel => IsUnet ? "U-Net·히트맵 모델" : "YOLO 모델";
 
     public System.Collections.ObjectModel.ObservableCollection<DlModelOption> DlModels { get; } = new();
     [ObservableProperty] private DlModelOption? _selectedDlModel;
@@ -290,6 +290,7 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
         try { models = await _train.ListModelsAsync(); }
         catch { models = new(); }
 
+        bool empty = false;
         _loadingModels = true;
         try
         {
@@ -298,7 +299,8 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
             // 저장값이 비어 있으면 아무것도 선택하지 않고 '모델을 선택하세요' 로 보여 준다.
             DlModels.Clear();
             foreach (var m in models.Where(m => unet ? WeldModelNames.IsUnet(m.Path) : WeldModelNames.IsYolo(m.Path)))
-                DlModels.Add(new DlModelOption(m.Path, m.Name));
+                DlModels.Add(new DlModelOption(m.Path, WeldModelNames.DisplayLabel(m.Path)));
+            empty = DlModels.Count == 0;
 
             var current = CurrentModelPath?.Trim().Trim('"').Trim() ?? "";
             DlModelOption? match = current.Length == 0
@@ -315,6 +317,14 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
             SelectedDlModel = match;
         }
         finally { _loadingModels = false; }
+
+        // 목록이 비면 드롭다운이 '모델을 선택하세요' 만 보여 고를 수 없는 것처럼 보인다 — 어디에 무엇을 넣어야 하는지 안내.
+        if (empty && IsModelMethod)
+        {
+            string? modelsDir = null;
+            try { modelsDir = (await _train.GetPathsAsync())?.Models; } catch { /* 경로 미설정 */ }
+            Message = WeldModelNames.EmptyListHint(IsUnet ? WeldDetectionMethod.Unet : WeldDetectionMethod.Dl, modelsDir);
+        }
     }
 
     partial void OnSelectedDlModelChanged(DlModelOption? value)

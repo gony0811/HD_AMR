@@ -31,6 +31,25 @@ public static class WeldModelNames
     /// <summary>U-Net 칸 모델 파일인지(이름 어디든 weld_unet 또는 weld_heatmap).</summary>
     public static bool IsUnet(string path) => Contains(path, UnetTag) || Contains(path, HeatmapTag);
 
+    /// <summary>중심선 히트맵 모델 파일인지(이름 어디든 weld_heatmap). U-Net 칸 모델의 한 종류.</summary>
+    public static bool IsHeatmap(string path) => Contains(path, HeatmapTag);
+
+    /// <summary>모델 드롭다운에 보일 이름 — 히트맵은 U-Net 칸에 섞여 나오므로 표식을 붙여 구분한다.</summary>
+    public static string DisplayLabel(string path)
+        => IsHeatmap(path) ? $"🔥 {Path.GetFileName(path)} (히트맵)" : Path.GetFileName(path);
+
+    /// <summary>
+    /// 방식별 모델 목록이 비었을 때의 안내 문구. 목록은 학습 models 폴더의 .onnx 중 파일명 표식으로 거르므로,
+    /// 파일이 그 폴더에 없거나(다른 PC에서 학습·내보내기만 하고 복사 안 함) 이름에 표식이 없으면 비어 보인다.
+    /// </summary>
+    public static string EmptyListHint(WeldDetectionMethod method, string? modelsDir)
+    {
+        var where = string.IsNullOrWhiteSpace(modelsDir) ? "학습 models 폴더(캡처 폴더 미설정)" : modelsDir;
+        return method == WeldDetectionMethod.Unet
+            ? $"U-Net·히트맵 모델이 없습니다 — {where} 에 이름에 '{UnetTag}' 또는 '{HeatmapTag}' 가 들어간 .onnx 를 넣고 ⟳ 를 누르세요."
+            : $"YOLO 모델이 없습니다 — {where} 에 이름에 '{YoloTag}' 또는 '{LegacyYoloTag}' 가 들어간 .onnx 를 넣고 ⟳ 를 누르세요. (히트맵 모델은 'U-Net·히트맵' 방식에서 고릅니다)";
+    }
+
     /// <summary>
     /// YOLO 모델 파일인지 — 이름 어디든 weld_yolo/weld_seg (U-Net 표식이 있으면 제외). 학습 run 의 YOLO 산출물
     /// <c>runs/hd/weights/best.onnx</c> 도 YOLO 로 본다.

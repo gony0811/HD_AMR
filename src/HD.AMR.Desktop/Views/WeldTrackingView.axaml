@@ -85,7 +85,7 @@
                                 <ComboBoxItem>🧠 YOLO 세그멘테이션</ComboBoxItem>
                                 <ComboBoxItem>⚙ 파라미터(CV)</ComboBoxItem>
                                 <ComboBoxItem>〰 Ridge 필터(학습 불필요)</ComboBoxItem>
-                                <ComboBoxItem>🧩 U-Net 세그멘테이션</ComboBoxItem>
+                                <ComboBoxItem>🧩 U-Net·히트맵 세그멘테이션</ComboBoxItem>
                             </ComboBox>
                             <!-- 진행축 = 용접선(비드)이 뻗은 방향. Peak 선은 이 축에 수직으로 그려진다.
                                  시퀀스 실행 시 검사방향으로 자동 설정되며, 여기서는 수동 시험용으로 바꾼다. -->
@@ -107,7 +107,7 @@
                         </StackPanel>
                         <TextBlock Text="RGB 입력: 시퀀스·자동모드도 비드를 컬러 영상에서 찾되, 센터링·거리 기준은 IR 과 같습니다. ROI 는 이 화면에서 그려도 IR 기준으로 저장됩니다(Depth·카메라 연결 필요). 작업거리가 크게 바뀌면 컬러 화면의 ROI 표시 위치가 조금 밀릴 수 있습니다."
                                    Foreground="#E0A030" FontSize="12" TextWrapping="Wrap" IsVisible="{Binding IsRgbMode}" />
-                        <!-- 모델 선택 — 검출 방식에 맞는 .onnx 만 표시(DL: weld_yolo/weld_seg, U-Net: weld_unet).
+                        <!-- 모델 선택 — 검출 방식에 맞는 .onnx 만 표시(DL: weld_yolo/weld_seg, U-Net·히트맵: weld_unet/weld_heatmap).
                              고르는 즉시 Weld.Dl.ModelPath / Weld.Unet.ModelPath 저장(시퀀스·재시작 공유). -->
                         <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding IsModelMethod}">
                             <TextBlock Classes="axis" Text="{Binding ModelLabel}" VerticalAlignment="Center" />

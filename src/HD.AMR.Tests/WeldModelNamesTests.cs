@@ -88,4 +88,41 @@ public class WeldModelNameParsingTests
     [InlineData("rgb", WeldImageMode.RgbHsv, WeldImageMode.RgbHsv)]   // RGB 계열 세부 선택은 유지
     public void ModeFor_MapsModality(string modality, WeldImageMode current, WeldImageMode expected)
         => Assert.Equal(expected, WeldModelNames.ModeFor(modality, current));
+
+    // 현장 보고: 용접 추적 화면에서 히트맵 모델을 고를 수 없음 — 히트맵은 U-Net 칸 목록에 나와야 하고 YOLO 목록엔 없어야 한다.
+    [Theory]
+    [InlineData("weld_heatmap_ir.onnx")]
+    [InlineData(@"D:\data\dl\models\[대각선]weld_heatmap_rgb_261108.onnx")]
+    [InlineData("WELD_HEATMAP_ir_밝기증강.onnx")]
+    public void HeatmapNames_AreListedInUnetSlot_NotYolo(string name)
+    {
+        Assert.True(WeldModelNames.IsHeatmap(name));
+        Assert.True(WeldModelNames.IsUnet(name));
+        Assert.False(WeldModelNames.IsYolo(name));
+        Assert.Equal(WeldDetectionMethod.Unet, WeldModelNames.KindOf(name, WeldDetectionMethod.Dl));
+        Assert.Contains("히트맵", WeldModelNames.DisplayLabel(name));
+        Assert.Contains(Path.GetFileName(name), WeldModelNames.DisplayLabel(name));
+    }
+
+    [Fact]
+    public void DisplayLabel_NonHeatmap_IsFileName()
+    {
+        Assert.Equal("weld_unet_rgb_261106.onnx", WeldModelNames.DisplayLabel(@"C:\m\weld_unet_rgb_261106.onnx"));
+        Assert.Equal("weld_yolo_ir.onnx", WeldModelNames.DisplayLabel("weld_yolo_ir.onnx"));
+        Assert.False(WeldModelNames.IsHeatmap("weld_unet_ir.onnx"));
+    }
+
+    [Fact]
+    public void EmptyListHint_NamesFolderAndTags()
+    {
+        var unet = WeldModelNames.EmptyListHint(WeldDetectionMethod.Unet, @"C:\source\dl\models");
+        Assert.Contains(@"C:\source\dl\models", unet);
+        Assert.Contains(WeldModelNames.HeatmapTag, unet);
+        Assert.Contains(WeldModelNames.UnetTag, unet);
+
+        var yolo = WeldModelNames.EmptyListHint(WeldDetectionMethod.Dl, null);
+        Assert.Contains(WeldModelNames.YoloTag, yolo);
+        Assert.Contains("미설정", yolo);
+        Assert.Contains("히트맵", yolo);   // 히트맵은 U-Net·히트맵 방식에서 고른다는 안내
+    }
 }
