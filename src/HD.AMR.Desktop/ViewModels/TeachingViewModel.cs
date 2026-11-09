@@ -6,6 +6,7 @@ using HD.AMR.App.Communication;
 using HD.AMR.App.Data.Entities;
 using HD.AMR.App.Service;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace HD.AMR.Desktop.ViewModels;
 
@@ -43,10 +44,13 @@ public sealed partial class TeachingViewModel : ViewModelBase
         _ => "활성 작업물: 미상",
     };
 
-    public TeachingViewModel(IServiceScopeFactory scopeFactory, CobotService cobot)
+    private readonly ILogger<TeachingViewModel> _logger;
+
+    public TeachingViewModel(IServiceScopeFactory scopeFactory, CobotService cobot, ILogger<TeachingViewModel> logger)
     {
         _scopeFactory = scopeFactory;
         _cobot = cobot;
+        _logger = logger;
         _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _timer.Tick += (_, _) => RefreshStatus();
     }
@@ -122,7 +126,7 @@ public sealed partial class TeachingViewModel : ViewModelBase
                 scale = await TeachingMove.LoadJointVelocityScaleAsync(scope.ServiceProvider.GetRequiredService<ParameterService>());
             var all = Rows.Select(r => r.Entity).ToList();
             var r = await TeachingMove.MoveAlongRouteAsync(_cobot, all, p, RunTool, Vel, scale,
-                step => Dispatcher.UIThread.Post(() => Message = $"'{step.Name}' 위치로 이동 중…"), _moveCts.Token);
+                step => Dispatcher.UIThread.Post(() => Message = $"'{step.Name}' 위치로 이동 중…"), _moveCts.Token, _logger);
             var via = r.Plan.IsVia ? $" (경유: {string.Join(" → ", r.Plan.Steps.Select(s => s.Name))})" : "";
             if (r.Plan.Error is { } err) Fail(err);
             else if (r.Ok) Ok($"'{p.Name}' 위치로 이동 완료.{via}");

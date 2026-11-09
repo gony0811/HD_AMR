@@ -342,7 +342,7 @@
                     _msg = $"'{step.Name}' 위치로 이동 중…";
                     _isErr = false;
                     _ = InvokeAsync(StateHasChanged);
-                }, _moveCts.Token);
+                }, _moveCts.Token, Logger);
             var via = r.Plan.IsVia ? $" (경유: {string.Join(" → ", r.Plan.Steps.Select(s => s.Name))})" : "";
             _isErr = !r.Ok;
             _msg = r.Plan.Error is { } err ? err

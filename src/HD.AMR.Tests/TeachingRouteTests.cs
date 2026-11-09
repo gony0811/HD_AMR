@@ -64,27 +64,40 @@ public class TeachingRouteTests
         Assert.Contains("홈 위치_1.6", plan.Error);
     }
 
-    // 경로 중간에서 시작 — 홈 1.5 에서 홈 2 면 1.6 만 거친다.
+    // 홈·홈 2 가 아닌 곳(경유점)에서 홈 2 는 바로 — 경유는 홈 ↔ 홈 2 사이만.
     [Fact]
-    public void FromMiddle_GoesOnlyRemaining()
-        => Assert.Equal(new[] { "home16", "home2" }, Keys(TeachingMove.PlanRoute(Home2, J(H15), All)));
-
-    // 같은 구간(홈 ↔ ready)·인접 이동은 바로.
-    [Fact]
-    public void AdjacentMove_IsDirect()
+    public void FromWaypoint_IsDirect()
     {
-        Assert.Equal(new[] { "ready" }, Keys(TeachingMove.PlanRoute(Ready, J(Home), All)));
-        Assert.Equal(new[] { "home2" }, Keys(TeachingMove.PlanRoute(Home2, J(H16), All)));
+        Assert.Equal(new[] { "home2" }, Keys(TeachingMove.PlanRoute(Home2, J(H15), All)));
+        Assert.Equal(new[] { "home2" }, Keys(TeachingMove.PlanRoute(Home2, J(Ready), All)));
+        Assert.Equal(new[] { "home" }, Keys(TeachingMove.PlanRoute(Home, J(H16), All)));
     }
 
-    // 경로 위가 아닌 임의 자세: 같은 구간 목표면 바로(종전 동작), 다른 구간이면 거부.
+    // 경유점 목표(작업 준비·1.5·1.6)는 홈에서도 바로.
     [Fact]
-    public void OffRoute_SameSegmentDirect_OtherSegmentRefused()
+    public void WaypointTarget_IsDirect()
     {
-        var nearHome = new double[] { 5, -85, 95, -10, 90, 0 };
-        Assert.Equal(new[] { "home" }, Keys(TeachingMove.PlanRoute(Home, nearHome, All)));
-        var plan = TeachingMove.PlanRoute(Home2, nearHome, All);
-        Assert.NotNull(plan.Error);
+        Assert.Equal(new[] { "ready" }, Keys(TeachingMove.PlanRoute(Ready, J(Home), All)));
+        Assert.Equal(new[] { "home16" }, Keys(TeachingMove.PlanRoute(H16, J(Home), All)));
+    }
+
+    // 검사 자세 등 임의 자세에서 홈 2·홈 은 거부 없이 바로(2026-11-09 운영안).
+    [Fact]
+    public void OffRoute_IsDirect()
+    {
+        var inspectPose = new double[] { 5, -85, 95, -10, 90, 0 };
+        var p2 = TeachingMove.PlanRoute(Home2, inspectPose, All);
+        Assert.Null(p2.Error);
+        Assert.Equal(new[] { "home2" }, Keys(p2));
+        Assert.Equal(new[] { "home" }, Keys(TeachingMove.PlanRoute(Home, inspectPose, All)));
+    }
+
+    // 허용오차(2°) 밖이면 홈으로 보지 않는다.
+    [Fact]
+    public void JustOutsideTolerance_IsDirect()
+    {
+        var cur = J(Home); cur[1] += 2.5;
+        Assert.Equal(new[] { "home2" }, Keys(TeachingMove.PlanRoute(Home2, cur, All)));
     }
 
     // 경로 밖 목표(검사 준비 등)와 작업물 좌표계 위치는 종전대로 목표 하나.
