@@ -99,6 +99,51 @@ public class CobotInspectionMoveStep : ISequenceStep
         return value;
     }
 
+    /// <summary>
+    /// 같은 anchor 그룹 연속 task 의 면 이격 [mm] 파라미터 키 — 직전 task 종료 자세(면에 붙은 검사 자세)에서 다음 시작점으로
+    /// 갈 때 이 거리까지만 면에서 들어 올렸다가 옆으로 옮긴다. 예전에는 첫 진입과 같은 접근점(<see cref="ApproachStandoffKey"/>,
+    /// 400mm)까지 빠졌다가 ⑱ 첫 경유점으로 다시 들어와, 이어진 LINE 사이에서 툴이 제자리에서 400mm 왕복했다
+    /// (실기 2026-11-09 16:37 L4-R08C08 #2: 들어 올림 409mm → 스테이징 복귀). anchor 적중이면 ③ 카메라 거리 정렬이 없어
+    /// 첫 진입 하한(<see cref="MinApproachStandoffMm"/>)의 '③ 여지'가 필요 없다.
+    /// </summary>
+    public const string ChainStandoffKey = "inspection.chainStandoffMm";
+
+    /// <summary>연속 이동 면 이격 기본값 [mm] — 골판(주름) 돌출보다 충분히 크게.</summary>
+    public const double DefaultChainStandoffMm = 100.0;
+
+    /// <summary>연속 이동 면 이격 하한 [mm] — 옆으로 옮기는 동안 면(골판 돌출) 충돌 여유.</summary>
+    internal const double MinChainStandoffMm = 30.0;
+
+    /// <summary>
+    /// 파라미터 원값 → 연속 이동 면 이격. 하한 이상·첫 진입 이격 이하면 그 값, 아니면 기본값(첫 진입 이격보다 크면 첫 진입 이격).
+    /// </summary>
+    internal static (double Value, bool Ok) ResolveChainStandoffMm(double? raw, double approachStandoffMm)
+        => raw is { } v && v >= MinChainStandoffMm && v <= approachStandoffMm
+            ? (v, true)
+            : (Math.Min(DefaultChainStandoffMm, approachStandoffMm), raw is null);
+
+    private async Task<double> GetChainStandoffMmAsync(double approachStandoffMm)
+    {
+        double? raw = null;
+        try { raw = await _param.GetDoubleAsync(ChainStandoffKey); }
+        catch { /* DB 미준비 등 — 기본값 폴백 */ }
+        var (value, ok) = ResolveChainStandoffMm(raw, approachStandoffMm);
+        if (!ok)
+            _logger.LogWarning("'{Key}' 값 {Raw} 이(가) 범위({Min:0}~{Max:0}mm) 밖 — {Value:0}mm 사용",
+                ChainStandoffKey, raw, MinChainStandoffMm, approachStandoffMm, value);
+        return value;
+    }
+
+    /// <summary>
+    /// 연속 이동 목표 위치 — 첫 진입 접근점(면에서 <paramref name="approachStandoffMm"/>)을 면 법선을 따라
+    /// <paramref name="chainStandoffMm"/> 거리로 당긴 BASE 점 [x,y,z].
+    /// </summary>
+    internal static double[] ChainTargetBase(double[] approachBase, double[] wallOut, double approachStandoffMm, double chainStandoffMm)
+    {
+        var d = chainStandoffMm - approachStandoffMm;
+        return new[] { approachBase[0] + d * wallOut[0], approachBase[1] + d * wallOut[1], approachBase[2] + d * wallOut[2] };
+    }
+
     /// <summary>파라미터 원값 → ② 면 이격. 범위 안이면 (그 값, true), 아니면 (기본값, false).</summary>
     internal static (double Value, bool Ok) ResolveApproachStandoffMm(double? raw)
         => raw is { } v && v >= MinApproachStandoffMm && v <= MaxApproachStandoffMm
@@ -604,9 +649,10 @@ public class CobotInspectionMoveStep : ISequenceStep
     {
         // 접근점은 정차 배치(AMR pose·장착 보정·스트로크)만으로 정해지므로 코봇을 움직이기 전에 환산·리치
         // 점검을 한다 — 1단계 뒤에 실패하면 같은 정차점의 task 마다 ready 왕복을 헛되이 반복한다.
+        var approachStandoffMm = await GetApproachStandoffMmAsync(_param, _logger);
         var seam = await _seam.ResolveAsync(
             context, context.SeamStartW, context.SeamEndW, context.Tool, "[Cobot 검사위치 이동]", ct,
-            await GetApproachStandoffMmAsync(_param, _logger));
+            approachStandoffMm);
         if (seam.Blocker is not null)
         {
             if (seam.Shortfall is not null) context.Bag[ReachShortfallBagKey] = seam.Shortfall;
@@ -623,7 +669,7 @@ public class CobotInspectionMoveStep : ISequenceStep
             return StepResult.Fail(shiftError);
 
         // ── 같은 anchor 그룹 연속 task: 직전 종료 자세 그대로면 복귀 없이 다음 시작점으로 ─────
-        if (await TryChainFromPreviousAsync(context, seam, ct) is { } chained)
+        if (await TryChainFromPreviousAsync(context, seam, approachStandoffMm, ct) is { } chained)
             return chained;
 
         // ── 1단계: 작업 준비 위치(ready) — 홈 위치_2 모드(상부 면)는 홈 위치_2·검사 준비 ─────
@@ -1124,11 +1170,13 @@ public class CobotInspectionMoveStep : ISequenceStep
     /// <summary>
     /// 같은 anchor 그룹 연속 task — 직전 task 종료 자세에서 진입 준비(후퇴·홈 위치_2·검사 준비 왕복) 없이 다음 시작
     /// 접근점으로 간다(사양 §8.1 "액션 사이 홈 왕복 금지"). 조건이 하나라도 안 맞으면 null — 호출측이 종전 경로로 간다.
-    /// 경로: ① 면에 standoff 보다 가까우면 면 법선 방향으로만 standoff 면까지 들어 올림(자세 유지) → ② 그 면을 따라
-    /// 접근점으로 MoveL(같은 면 이격 유지, 광축은 면 법선, 광축 둘레 비틀림은 직전 종료 자세 유지 — J6 180° 정렬 안 함).
+    /// 경로: ① 면에 연속 이동 이격(<see cref="ChainStandoffKey"/>, 기본 100mm)보다 가까우면 면 법선 방향으로만 그 면까지
+    /// 들어 올림(자세 유지) → ② 그 면을 따라 시작점 정면으로 MoveL(같은 면 이격 유지, 광축은 면 법선, 광축 둘레 비틀림은
+    /// 직전 종료 자세 유지 — J6 180° 정렬 안 함). 첫 진입 접근점(400mm)까지 빠지지 않는다 — ⑱이 곧바로 첫 경유점으로
+    /// 다시 들어오므로 그 왕복은 헛이동이다.
     /// </summary>
     private async Task<StepResult?> TryChainFromPreviousAsync(
-        SequenceContext context, SeamApproachResult seam, CancellationToken ct)
+        SequenceContext context, SeamApproachResult seam, double approachStandoffMm, CancellationToken ct)
     {
         if (!context.Bag.TryGetValue(PreviousEndTcpBagKey, out var pv) || pv is not double[] { Length: 6 } prevEnd)
             return null;
@@ -1150,8 +1198,11 @@ public class CobotInspectionMoveStep : ISequenceStep
         // 비틀림은 직전 종료 자세 그대로 — 같은 그룹은 검사 방향·프레임 자세가 같아 ⑱이 고를 비틀림과 거의 같다.
         // 진입 경로처럼 J6 180° 로 맞추면 ⑱이 곧바로 되돌린다(2026-10-30 #3: −284.7°→−180°→−284.8°).
         var orientation = AlignOpticalAxisKeepTwist(cur, computed, seam.OpticalAxis);
-        var target = new[] { startBase[0], startBase[1], startBase[2], orientation[3], orientation[4], orientation[5] };
-        var lift = PlanChainLift(cur, startBase, WallOutNormal(computed, seam.OpticalAxis));
+        var wallOut = WallOutNormal(computed, seam.OpticalAxis);
+        var chainStandoffMm = await GetChainStandoffMmAsync(approachStandoffMm);
+        var chainBase = ChainTargetBase(startBase, wallOut, approachStandoffMm, chainStandoffMm);
+        var target = new[] { chainBase[0], chainBase[1], chainBase[2], orientation[3], orientation[4], orientation[5] };
+        var lift = PlanChainLift(cur, chainBase, wallOut);
         var liftEnd = lift is null
             ? cur
             : new[] { cur[0] + lift[0], cur[1] + lift[1], cur[2] + lift[2], cur[3], cur[4], cur[5] };
@@ -1220,9 +1271,11 @@ public class CobotInspectionMoveStep : ISequenceStep
         }
 
         var dist = Math.Sqrt(Enumerable.Range(0, 3).Sum(i => (target[i] - cur[i]) * (target[i] - cur[i])));
-        _logger.LogInformation("[Cobot 검사위치 이동] 연속 이동 완료 — 직전 종료 자세에서 {Dist:0}mm{Lift}", dist, liftNote);
+        _logger.LogInformation("[Cobot 검사위치 이동] 연속 이동 완료 — 직전 종료 자세에서 {Dist:0}mm{Lift} (연속 이동 면 이격 {Chain:0}mm)",
+            dist, liftNote, chainStandoffMm);
         return StepResult.Ok(
-            $"연속 이동(복귀 생략) — 직전 종료 자세에서 {seam.Note} 직선 이동(MoveL) {dist:0}mm{liftNote} " +
+            $"연속 이동(복귀 생략) — 직전 종료 자세에서 용접선 시작점 정면(면 이격 {chainStandoffMm:0}mm, 첫 진입 {approachStandoffMm:0}mm 대신) " +
+            $"직선 이동(MoveL) {dist:0}mm{liftNote} " +
             $"[자세=면 법선, 비틀림 직전 종료 유지, J6={joints[5]:0.0}°].");
     }
 

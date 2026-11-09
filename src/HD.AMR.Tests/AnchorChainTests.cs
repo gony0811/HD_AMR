@@ -99,4 +99,53 @@ public class AnchorChainTests
         Assert.True(CobotInspectionMoveStep.IsSamePose(
             new[] { 0.0, 0.0, 0.0, -180.0, 45.0, -178.2 }, new[] { 0.0, 0.0, 0.0, 180.0, 45.0, 181.8 }, 5.0, 2.0));
     }
+
+    // 실기 2026-11-09 16:37 L4-R08C08 #2: #1 이 면에 붙은 검사 자세로 끝났고 #2 시작점이 바로 옆이라, 접근점(400mm)까지
+    // 409mm 들어 올렸다가 ⑱ 첫 경유점으로 다시 들어왔다. 연속 이동은 짧은 이격(기본 100mm)까지만 띄운다.
+    [Fact]
+    public void 연속_이동은_첫_진입_접근점까지_빠지지_않고_짧은_이격까지만_들어_올린다()
+    {
+        var outN = new[] { 1.0, 0.0, 0.0 };                       // 벽은 BASE −X 쪽, 면은 x = −1400
+        var approach = new[] { -1000.0, -60.0, 785.0 };           // 첫 진입 접근점(면 이격 400mm)
+        var cur = new[] { -1409.0, -60.0, 785.0, 0, 0, 0 };       // #1 종료 — 접근점 평면보다 409mm 면 쪽
+
+        var chain = CobotInspectionMoveStep.ChainTargetBase(approach, outN, 400.0, 100.0);
+        Assert.Equal(new[] { -1300.0, -60.0, 785.0 }, chain);     // 면 이격 100mm, 옆 위치는 그대로
+
+        var lift = CobotInspectionMoveStep.PlanChainLift(cur, chain, outN);
+        Assert.NotNull(lift);
+        Assert.Equal(109.0, lift![0], 9);                         // 예전 409mm → 109mm
+        Assert.Equal(0.0, lift[1], 9);
+        Assert.Equal(0.0, lift[2], 9);
+
+        // 예전 동작(접근점까지)과 비교 — 같은 입력에서 409mm 였다.
+        Assert.Equal(409.0, CobotInspectionMoveStep.PlanChainLift(cur, approach, outN)![0], 9);
+    }
+
+    [Fact]
+    public void 연속_이동_목표는_면_법선을_따라서만_당긴다()
+    {
+        var outN = new[] { 0.0, 0.6, 0.8 };                       // 비스듬한 면
+        var chain = CobotInspectionMoveStep.ChainTargetBase(new[] { 10.0, 20.0, 30.0 }, outN, 400.0, 150.0);
+        Assert.Equal(10.0, chain[0], 9);
+        Assert.Equal(20.0 - 250.0 * 0.6, chain[1], 9);
+        Assert.Equal(30.0 - 250.0 * 0.8, chain[2], 9);
+        // 같은 이격이면 접근점 그대로
+        Assert.Equal(new[] { 10.0, 20.0, 30.0 }, CobotInspectionMoveStep.ChainTargetBase(new[] { 10.0, 20.0, 30.0 }, outN, 400.0, 400.0));
+    }
+
+    [Theory]
+    [InlineData(null, 400.0, 100.0, true)]     // 미설정 → 기본 100 (경고 없음)
+    [InlineData(60.0, 400.0, 60.0, true)]
+    [InlineData(30.0, 400.0, 30.0, true)]      // 하한
+    [InlineData(400.0, 400.0, 400.0, true)]    // 첫 진입과 같게 = 예전 동작
+    [InlineData(10.0, 400.0, 100.0, false)]    // 하한 미만 → 기본
+    [InlineData(500.0, 400.0, 100.0, false)]   // 첫 진입보다 큼 → 기본
+    [InlineData(null, 80.0, 80.0, true)]       // 첫 진입 이격이 기본보다 작으면 그 값
+    public void 연속_이동_이격_파라미터_해석(double? raw, double approach, double expected, bool ok)
+    {
+        var (value, valid) = CobotInspectionMoveStep.ResolveChainStandoffMm(raw, approach);
+        Assert.Equal(expected, value);
+        Assert.Equal(ok, valid);
+    }
 }
