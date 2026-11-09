@@ -218,7 +218,8 @@ public class FlatSurfaceAlignStep : ISequenceStep
         _monitor.UpdateStage(FlatDetectionStage.Done, $"틸트 보정 {level.Corrections}회");
         return StepResult.Ok(
             $"평탄면 정렬 완료 (rx={final.Rx:0.###}°, ry={final.Ry:0.###}°, " +
-            $"z={final.Z:0.#}mm, 틸트 보정={level.Corrections}회, σ={align.SigmaMm:0.##}mm).");
+            $"z={final.Z:0.#}mm, 틸트 보정={level.Corrections}회, σ={align.SigmaMm:0.##}mm" +
+            (level.Noise is { } n ? $", 레이저 {n.ShortText()}" : "") + ").");
     }
 
     // ── 헬퍼 ────────────────────────────────────────────────────────────

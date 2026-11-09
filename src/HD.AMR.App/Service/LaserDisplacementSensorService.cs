@@ -133,9 +133,11 @@ public class LaserDisplacementSensorService : BackgroundService
     /// 헤드 기하·standoff·부호·법선방향은 <see cref="Settings"/> 값을 사용한다.
     /// 평행 기준 보정이 없는 <b>원시</b> pose — 기준 캡처·진단용.
     /// </summary>
-    public PlanePose GetRawPlanePose()
+    public PlanePose GetRawPlanePose() => ComputeRawPlanePose(GetReadings());
+
+    /// <summary><see cref="GetRawPlanePose"/> 를 주어진 스냅샷으로 계산(노이즈 통계에서 샘플별 틸트용).</summary>
+    public PlanePose ComputeRawPlanePose(IReadOnlyList<LaserChannelReading> r)
     {
-        var r = GetReadings();
         if (r.Count < 3)
             return PlanePose.Invalid("연결/측정 대기 중 — 3채널이 필요합니다.");
         if (!(r[0].Enabled && r[1].Enabled && r[2].Enabled))
@@ -157,9 +159,11 @@ public class LaserDisplacementSensorService : BackgroundService
     /// <see cref="GetRawPlanePose"/> 에 평행 기준(<see cref="TiltRef"/>)이 있으면 Rx/Ry 에서
     /// 바이어스를 빼서 반환한다. 위치 X/Y/Z(절대 거리)는 불변 — working distance 로직 안전.
     /// </summary>
-    public PlanePose GetPlanePose()
+    public PlanePose GetPlanePose() => ApplyTiltReference(GetRawPlanePose());
+
+    /// <summary>원시 pose 에 평행 기준(<see cref="TiltRef"/>) 바이어스를 뺀다 — <see cref="GetPlanePose"/> 와 같은 규약.</summary>
+    public PlanePose ApplyTiltReference(PlanePose p)
     {
-        var p = GetRawPlanePose();
         var r = _tiltRef;
         if (!p.Valid || r is null) return p;
 
@@ -392,6 +396,32 @@ public class LaserDisplacementSensorService : BackgroundService
             prev = mini;
         }
         return false;
+    }
+
+    /// <summary>
+    /// 노이즈 진단 — <paramref name="samples"/> 개 스냅샷을 <paramref name="intervalMs"/> 간격으로 모아
+    /// 채널별 σ·중앙값·MAD·드리프트·자기상관, 채널 간 상관, 샘플별 틸트(rx/ry, 평행 기준 반영)의 σ 를 계산한다.
+    /// 무효 스냅샷도 그대로 세어 범위 밖 비율로 보고한다. 미연결이면 빈 통계.
+    /// </summary>
+    public async Task<LaserNoiseReport> CaptureNoiseAsync(int samples, int intervalMs, CancellationToken ct)
+    {
+        var list = new List<LaserNoiseSample>(Math.Max(0, samples));
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (var i = 0; i < samples; i++)
+        {
+            ct.ThrowIfCancellationRequested();
+            var r = GetReadings();
+            var pose = ApplyTiltReference(ComputeRawPlanePose(r));
+            list.Add(new LaserNoiseSample(
+                sw.Elapsed.TotalSeconds,
+                r.Select(x => x.Value).ToArray(),
+                r.Select(x => x.Enabled).ToArray(),
+                r.Select(x => x.Warning).ToArray(),
+                pose.Valid ? pose.Rx : null,
+                pose.Valid ? pose.Ry : null));
+            if (i + 1 < samples) await Task.Delay(intervalMs, ct);
+        }
+        return LaserNoiseAnalyzer.Analyze(list, 3);
     }
 
     /// <summary>채널 영점 설정(현재값을 0으로).</summary>
