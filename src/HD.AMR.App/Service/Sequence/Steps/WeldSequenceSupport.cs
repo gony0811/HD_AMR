@@ -114,6 +114,35 @@ public static class WeldSequenceSupport
     /// ⑧이 이 포즈를 앵커로 pitch 이동해, 검사캠 시프트·작업물 좌표계 교시용 이동을 자동 원복한다.</summary>
     public const string Bead1CenteredPoseBagKey = "bead1.centeredPose";
 
+    /// <summary>② 가 환산한 면 바깥 단위 법선(BASE [x,y,z], 면에서 멀어지는 쪽). ⑧ Peak2 이동이 면 거리를 유지하는 기준.
+    /// 계산 법선 자세가 없으면(티칭 폴백) 두지 않는다.</summary>
+    public const string WallOutNormalBagKey = "seam.wallOutNormal";
+
+    /// <summary>
+    /// 툴 좌표 이동량 <paramref name="toolOffset"/>(x,y,z) 을 <paramref name="anchorPose"/> 자세 기준 BASE 벡터로 바꾸고,
+    /// 면 법선 <paramref name="wallOut"/> 성분을 빼 면과 평행한 이동으로 만든다(길이는 원래 이동량 유지).
+    /// ④ 평탄면 정렬이 툴을 국부 면에 맞춰 기울이면(실기 2026-11-09 ry 0.76°) 툴 X 로 360mm 갈 때 면 쪽으로 4.7mm 가 섞여,
+    /// 점2 의 면 거리가 점1 과 달라지고 작업물 좌표계 X 축이 면 쪽으로 기울었다. 면 평행 성분이 거의 없으면 null.
+    /// </summary>
+    internal static double[]? ToolOffsetParallelToWall(double[] anchorPose, double[] toolOffset, double[] wallOut)
+    {
+        var m = HD.AMR.App.Communication.FrameMath.PoseToMatrix(anchorPose);
+        var v = new double[3];
+        for (var i = 0; i < 3; i++)
+            v[i] = m[i, 0] * toolOffset[0] + m[i, 1] * toolOffset[1] + m[i, 2] * toolOffset[2];
+        var len = Math.Sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+
+        var nLen = Math.Sqrt(wallOut[0] * wallOut[0] + wallOut[1] * wallOut[1] + wallOut[2] * wallOut[2]);
+        if (len < 1e-9 || nLen < 1e-9) return null;
+        var n = new[] { wallOut[0] / nLen, wallOut[1] / nLen, wallOut[2] / nLen };
+        var dot = v[0] * n[0] + v[1] * n[1] + v[2] * n[2];
+        var p = new[] { v[0] - dot * n[0], v[1] - dot * n[1], v[2] - dot * n[2] };
+        var pLen = Math.Sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]);
+        if (pLen < 1e-3 * len) return null;
+        var s = len / pLen;
+        return new[] { p[0] * s, p[1] * s, p[2] * s };
+    }
+
     /// <summary>
     /// Peak(코로게이션) 탐색용 ROI — 우선순위: Peak ROI(Depth 뷰에서 저장) → 평탄면 ROI 폴백 → 중앙 30%.
     /// ⑤⑥⑨⑩ 측정과 ⑦⑪의 Peak ROI 인자로 쓴다. 어느 것을 썼는지 Src 로 반환.

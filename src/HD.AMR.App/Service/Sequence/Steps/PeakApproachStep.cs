@@ -90,8 +90,34 @@ public class PeakApproachStep : ISequenceStep
             "Peak2 이동: 진행축={Prog}, 툴{Axis} {Move:+0.0;-0.0}mm (pitch={Pitch:0.#}mm, dir={Dir:+0;-0}{Unshift})",
             progressAxis, FlatSurfaceCenteringService.AxisName(toolAxis), moveMm, pitchMm, pitchDir, unshiftNote);
 
-        var rc = await _cobot.Rpc.MoveByToolOffsetAsync(anchor, user: 0, offset,
-            tool: context.Tool, vel: context.Velocity, ct: ct);
+        // ④ 평탄면 정렬로 툴이 국부 면에 맞춰 기울어 있으면 툴축 그대로 pitch 만큼 갈 때 면 법선 성분이 섞여
+        // 점2 의 면 거리가 점1 과 달라진다(실기 2026-11-09: ry 0.76° → 360mm 에 BASE Z +4.7mm, 작업물 좌표계 X 축이
+        // 면 쪽으로 −0.76° 기울어 검사 중·다음 LINE 마다 4.8mm 씩 면에 가까워짐). ② 면 법선이 있으면 그 성분을 빼
+        // 면과 평행하게(같은 거리 유지) BASE 오프셋으로 이동한다. 자세는 앵커 그대로.
+        int rc;
+        var wallNote = "";
+        double[]? baseMove = null;
+        if (context.Bag.TryGetValue(WeldSequenceSupport.WallOutNormalBagKey, out var nv) && nv is double[] { Length: 3 } wallOut)
+            baseMove = WeldSequenceSupport.ToolOffsetParallelToWall(anchor, offset, wallOut);
+        if (baseMove is not null)
+        {
+            var w = (double[])nv!;
+            var nLen = Math.Sqrt(w[0] * w[0] + w[1] * w[1] + w[2] * w[2]);
+            var anchorH = (anchor[0] * w[0] + anchor[1] * w[1] + anchor[2] * w[2]) / nLen;
+            _logger.LogInformation(
+                "Peak2 이동: 면 평행 BASE 오프셋 [{Dx:+0.0;-0.0}, {Dy:+0.0;-0.0}, {Dz:+0.0;-0.0}]mm (면 법선 거리 유지, 앵커 법선 위치 {H:0.0}mm)",
+                baseMove[0], baseMove[1], baseMove[2], anchorH);
+            rc = await _cobot.Rpc.MoveByOffsetAsync(anchor, user: 0,
+                new[] { baseMove[0], baseMove[1], baseMove[2], 0.0, 0.0, 0.0 },
+                tool: context.Tool, vel: context.Velocity, ct: ct);
+            wallNote = ", 면 거리 유지";
+        }
+        else
+        {
+            _logger.LogWarning("Peak2 이동: ② 면 법선 없음(티칭 폴백) — 툴축 그대로 이동(툴이 기울어 있으면 면 거리가 변할 수 있음)");
+            rc = await _cobot.Rpc.MoveByToolOffsetAsync(anchor, user: 0, offset,
+                tool: context.Tool, vel: context.Velocity, ct: ct);
+        }
         if (rc != 0)
             return StepResult.Fail($"Peak2 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.");
 
@@ -99,6 +125,6 @@ public class PeakApproachStep : ISequenceStep
 
         return StepResult.Ok(
             $"Peak2 위치로 툴{FlatSurfaceCenteringService.AxisName(toolAxis)} {moveMm:+0.0;-0.0}mm 이동 완료 " +
-            $"(pitch={pitchMm:0.#}mm, dir={pitchDir:+0;-0}{unshiftNote}).");
+            $"(pitch={pitchMm:0.#}mm, dir={pitchDir:+0;-0}{unshiftNote}{wallNote}).");
     }
 }

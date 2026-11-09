@@ -665,6 +665,11 @@ public class CobotInspectionMoveStep : ISequenceStep
         // ④⁺ 복귀 기준 — 접근점(이격 400mm)이 아닌 면 위 용접선 점. 틸트 보정 후에도 광축이 이 점을 지나게 복귀한다.
         InspectionAlignmentAnchor.SetSeamPoint(context, seam.SeamPointBase);
         RecordSeamOrientation(seam, context.WallCode);
+        // ⑧ Peak2 이동이 점1 과 같은 면 거리를 유지하는 기준(모델 면 법선 — ④ 국부 틸트와 무관).
+        if (seam.ComputedPose is { Length: 6 } normalPose)
+            context.Bag[WeldSequenceSupport.WallOutNormalBagKey] = WallOutNormal(normalPose, seam.OpticalAxis);
+        else
+            context.Bag.Remove(WeldSequenceSupport.WallOutNormalBagKey);
         if (ShiftAnchorFrame(context, seam.Base) is { } shiftError)
             return StepResult.Fail(shiftError);
 
