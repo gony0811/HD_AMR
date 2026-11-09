@@ -2,7 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="HD.AMR.Desktop.Views.OverlayLegend"
              x:Name="Root">
-    <!-- 용접선 오버레이 범례 — InferLineCheck 가 그리는 색과 같다(비전 학습 ④ · 검출 비교평가 공용). -->
+    <!-- 용접선 오버레이 범례 — InferLineCheck 가 그리는 색과 같다(비전 학습 ⑤ · 검출 비교평가 공용). -->
     <Border BorderBrush="{DynamicResource AppBorderBrush}" BorderThickness="1" CornerRadius="4" Padding="8,6">
         <WrapPanel>
             <TextBlock Text="오버레이" FontSize="12" Foreground="{DynamicResource AppMutedTextBrush}" VerticalAlignment="Center" Margin="0,0,14,0" />

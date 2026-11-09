@@ -256,7 +256,7 @@ public sealed class WeldTrainingService
     }
 
     /// <summary>
-    /// 마지막 학습(best.pt)의 모달리티 — 내보내기 파일명의 _ir/_rgb 표식(④ 추론·운영이 입력 영상을 고르는 기준).
+    /// 마지막 학습(best.pt)의 모달리티 — 내보내기 파일명의 _ir/_rgb 표식(⑤ 추론·운영이 입력 영상을 고르는 기준).
     /// 학습 시점 기록 → (예전 run) 현재 데이터셋 이미지 → 마지막 변환 모달리티 순. FromRecord=false 면 추정값.
     /// </summary>
     public async Task<(string Modality, bool FromRecord)> TrainedModalityAsync(bool unet)
@@ -966,7 +966,7 @@ public sealed class WeldTrainingService
         return r.ReadToEnd();
     }
 
-    // ── train/val 판정(④ 추론 목록 표시용) ─────────────────────────────────────
+    // ── train/val 판정(⑤ 추론 목록 표시용) ─────────────────────────────────────
     /// <summary>
     /// 현재 폴더 설정으로 데이터셋을 변환하면 각 촬영본이 train/val 중 어디로 가는지 계산한다(<see cref="ConvertAsync(string, LabelKind, IReadOnlyList{string}, string?, bool)"/> 와 같은 규칙).
     /// 검증 폴더가 있으면 그 폴더 = val, 없으면 학습 폴더 전체를 촬영 세션 단위로 분리한다.

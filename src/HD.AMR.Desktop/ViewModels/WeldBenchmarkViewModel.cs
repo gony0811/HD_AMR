@@ -51,7 +51,7 @@ public sealed partial class WeldBenchmarkViewModel : ViewModelBase
 
     public string Modality => ModalityIndex == 1 ? "ir" : "rgb";
     public bool HasReport => _bench.LastReport is not null;
-    /// <summary>④ 추론·검증 경로로 평가한 결과인지 — 오버레이 범례(노랑 실선/점선·옅은 빨강 마스크)는 이 경로에서만 맞다.</summary>
+    /// <summary>⑤ 추론·검증 경로로 평가한 결과인지 — 오버레이 범례(노랑 실선/점선·옅은 빨강 마스크)는 이 경로에서만 맞다.</summary>
     public bool ManagedLegend => _bench.LastReport?.ManagedPath == true;
 
     // 라디오 버튼용(양방향) — 대상 모달리티 / 범위 / ROI.
@@ -334,7 +334,7 @@ public sealed class StemRow(string stem, IReadOnlyList<BenchmarkItem> items)
 
 public sealed class MethodCard
 {
-    /// <param name="managed">④ 추론·검증 경로 — 검출선이 양 끝점 2개라 커버리지가 의미 없어 표시하지 않는다.</param>
+    /// <param name="managed">⑤ 추론·검증 경로 — 검출선이 양 끝점 2개라 커버리지가 의미 없어 표시하지 않는다.</param>
     public MethodCard(BenchmarkItem i, bool managed)
     {
         Title = WeldBenchmarkViewModel.MethodName(i.Method);

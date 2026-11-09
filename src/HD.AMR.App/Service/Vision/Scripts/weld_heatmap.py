@@ -515,7 +515,7 @@ def cmd_eval(a):
 
 def cmd_predict(a):
     """영상마다 히트맵·중심선 오버레이 jpg. 용접선 방향을 모르므로 기본은 가로·세로(전치) 둘 다 풀어 선을 찾은 쪽을 쓴다
-    (앱 ④ 추론 탭과 같은 규칙). --vertical / --horizontal 로 방향을 고정할 수 있다."""
+    (앱 ⑤ 추론 탭과 같은 규칙). --vertical / --horizontal 로 방향을 고정할 수 있다."""
     device = pick_device(a.device)
     model, cfg = load_model(a.weights, device)
     os.makedirs(a.out, exist_ok=True)

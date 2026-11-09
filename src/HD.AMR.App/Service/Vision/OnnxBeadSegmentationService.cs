@@ -35,7 +35,7 @@ public sealed class OnnxBeadSegmentationService
         string modelPath, string stem, string modality, float conf, float maskThr, string? dir = null)
     {
         modality = modality == "ir" ? "ir" : "rgb";
-        // dir 생략 = 라벨링 폴더. ④ 목록의 학습·검증 폴더 이미지는 그 폴더를 넘긴다.
+        // dir 생략 = 라벨링 폴더. ⑤ 목록의 학습·검증 폴더 이미지는 그 폴더를 넘긴다.
         dir ??= await _train.GetLabelDirAsync()
                 ?? throw new InvalidOperationException("라벨링 폴더가 설정되지 않았습니다.");
         var imgPath = Path.Combine(dir, $"{stem}_{modality}.png");

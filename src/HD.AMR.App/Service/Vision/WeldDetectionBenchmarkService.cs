@@ -111,7 +111,7 @@ public sealed class WeldDetectionBenchmarkService
             int total = stems.Count * methods.Count, done = 0;
             progress?.Report((0, total));
 
-            // 운영 검출기가 없는 환경(macOS — OpenCV 네이티브 win 전용)은 비전 학습 ④ 추론·검증과 같은 관리 코드 경로로 평가.
+            // 운영 검출기가 없는 환경(macOS — OpenCV 네이티브 win 전용)은 비전 학습 ⑤ 추론·검증과 같은 관리 코드 경로로 평가.
             var managed = methods.Where(m => !_weld.GetDetector(m).IsAvailable).ToHashSet();
             await Task.Run(async () =>
             {
@@ -189,7 +189,7 @@ public sealed class WeldDetectionBenchmarkService
     }
 
     /// <summary>
-    /// 운영 검출기 대체 경로(macOS 등) — 비전 학습 ④ 추론·검증과 같은 계산: ONNX 관리 코드 추론(<see cref="OnnxBeadSegmentationService"/>,
+    /// 운영 검출기 대체 경로(macOS 등) — 비전 학습 ⑤ 추론·검증과 같은 계산: ONNX 관리 코드 추론(<see cref="OnnxBeadSegmentationService"/>,
     /// _clahe 모델이면 CLAHE 전처리 포함) → 마스크에서 용접선 추출(<see cref="InferLineCheck"/>, 진행축은 정답 선 방향).
     /// 임계값은 운영 파라미터(YOLO conf/mask, U-Net threshold), 채점 기준은 이 평가의 각도/중심 기준.
     /// Weld ROI 를 고르면 전체 프레임 추론 후 마스크를 ROI 밖에서 지운다.
@@ -329,8 +329,8 @@ public sealed record BenchmarkReport(DateTime At, string Modality, int ImageCoun
     IReadOnlyDictionary<WeldDetectionMethod, string>? Models = null,
     bool ManagedPath = false)
 {
-    /// <summary>추론 경로 표기 — 운영 검출기(Windows) 또는 ④ 추론·검증과 같은 관리 코드 경로(macOS 등).</summary>
-    public string EngineText => ManagedPath ? "④ 추론·검증 경로(운영 검출기 없음)" : "운영 검출기";
+    /// <summary>추론 경로 표기 — 운영 검출기(Windows) 또는 ⑤ 추론·검증과 같은 관리 코드 경로(macOS 등).</summary>
+    public string EngineText => ManagedPath ? "⑤ 추론·검증 경로(운영 검출기 없음)" : "운영 검출기";
 
     /// <summary>방식별로 실제 평가에 쓴 모델 파일명(모델을 쓰지 않는 방식이면 null).</summary>
     public string? ModelName(WeldDetectionMethod m) => Models is not null && Models.TryGetValue(m, out var p) ? Path.GetFileName(p) : null;

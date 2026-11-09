@@ -3,7 +3,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace HD.AMR.Tests;
 
-/// <summary>학습 화면 ④ 추론 탭의 히트맵 모델 해석(OpenCV 불필요 — macOS 포함).</summary>
+/// <summary>학습 화면 ⑤ 추론 탭의 히트맵 모델 해석(OpenCV 불필요 — macOS 포함).</summary>
 public class HeatmapInferTabTests
 {
     private static OnnxBeadSegmentationService Svc() => new(null!, NullLogger<OnnxBeadSegmentationService>.Instance);

@@ -187,7 +187,7 @@
         <Border Classes="card" IsVisible="{Binding HasReport}">
             <StackPanel Spacing="6">
                 <TextBlock Classes="section" Text="촬영본별 상세" />
-                <!-- 오버레이 범례 — 비전 학습 ④ 추론과 같은 색. 운영 검출기(Windows) 오버레이는 색이 달라 정답 선만 표기. -->
+                <!-- 오버레이 범례 — 비전 학습 ⑤ 추론과 같은 색. 운영 검출기(Windows) 오버레이는 색이 달라 정답 선만 표기. -->
                 <views:OverlayLegend Margin="0,2,0,6" ShowDetection="{Binding ManagedLegend}" />
                 <Grid ColumnDefinitions="260,*">
                     <StackPanel Grid.Column="0" Margin="0,0,14,0" Spacing="4">

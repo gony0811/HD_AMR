@@ -3,10 +3,10 @@ using Avalonia.Controls;
 
 namespace HD.AMR.Desktop.Views;
 
-/// <summary>용접선 오버레이 범례(검출 용접선·연장선·정답 선·모델 마스크). 비전 학습 ④ 와 검출 비교평가가 공유한다.</summary>
+/// <summary>용접선 오버레이 범례(검출 용접선·연장선·정답 선·모델 마스크). 비전 학습 ⑤ 와 검출 비교평가가 공유한다.</summary>
 public partial class OverlayLegend : UserControl
 {
-    /// <summary>검출 선·연장선·모델 마스크 항목 표시(④ 추론·검증 경로의 오버레이일 때).</summary>
+    /// <summary>검출 선·연장선·모델 마스크 항목 표시(⑤ 추론·검증 경로의 오버레이일 때).</summary>
     public static readonly StyledProperty<bool> ShowDetectionProperty =
         AvaloniaProperty.Register<OverlayLegend, bool>(nameof(ShowDetection), true);
 

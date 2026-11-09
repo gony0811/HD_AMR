@@ -4,7 +4,7 @@ using SixLabors.ImageSharp.PixelFormats;
 namespace HD.AMR.App.Service.Vision;
 
 /// <summary>
-/// CLAHE(대비 제한 적응형 히스토그램 평활화) 전처리 — 학습 데이터셋 변환과 모든 추론(④ 추론·검증, 운영 YOLO·U-Net)이
+/// CLAHE(대비 제한 적응형 히스토그램 평활화) 전처리 — 학습 데이터셋 변환과 모든 추론(⑤ 추론·검증, 운영 YOLO·U-Net)이
 /// <b>이 구현 하나</b>를 써서 학습/추론 입력이 항상 같다(OS·OpenCV 유무와 무관). 알고리즘은 OpenCV <c>createCLAHE</c>
 /// (8-bit) 와 같게 구현했다 — 타일별 히스토그램을 clip 한도로 자르고 넘친 양을 고르게 재분배한 누적 LUT 를 만든 뒤,
 /// 픽셀마다 이웃 4 타일 LUT 를 양선형 보간한다.

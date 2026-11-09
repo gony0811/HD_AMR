@@ -77,7 +77,7 @@ public sealed partial class LabelEditorViewModel : ViewModelBase
     private static bool _lastViewClahe;
     private byte[]? _currentImage;   // 열려 있는 원본 이미지(PNG)
 
-    // ④ 추론 탭 "학습셋에 추가 + 라벨링" 이동 시 대상 촬영본/모달리티(원본 쿼리 파라미터 sel/mod 대응).
+    // ⑤ 추론 탭 "학습셋에 추가 + 라벨링" 이동 시 대상 촬영본/모달리티(원본 쿼리 파라미터 sel/mod 대응).
     private static string? _pendingStem, _pendingMod;
     public static void Preselect(string stem, string modality) { _pendingStem = stem; _pendingMod = modality; }
 

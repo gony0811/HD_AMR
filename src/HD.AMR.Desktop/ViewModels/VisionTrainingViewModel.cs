@@ -10,7 +10,7 @@ namespace HD.AMR.Desktop.ViewModels;
 
 /// <summary>
 /// 비전 학습(YOLOv8-seg · CPU 파이프라인). 기존 VisionTraining.razor 이식 —
-/// ① 데이터셋 변환, ② YOLO 학습·ONNX 내보내기, ③ U-Net 학습·내보내기, ④ 네이티브 ONNX 추론(캡처/업로드)·모델 목록.
+/// ① 데이터셋 변환, ② YOLO 학습·ONNX 내보내기, ③ U-Net 학습·내보내기, ④ 중심선 히트맵 학습·내보내기, ⑤ 네이티브 ONNX 추론(캡처/업로드)·모델 목록.
 /// 학습 프로세스는 싱글톤 WeldTrainingService 가 백그라운드로 진행하며 1초 폴링으로 상태/로그를 갱신한다.
 /// </summary>
 public sealed partial class VisionTrainingViewModel : ViewModelBase
@@ -52,11 +52,11 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
     [ObservableProperty] private int _unetEpochs = 100, _unetBatch = 8, _unetCrop = 384, _unetPatience = 30;
     [ObservableProperty] private int _unetBaseIndex;           // 0 base16(빠름), 1 base32(정확)
 
-    // ⑥ 중심선 히트맵 (ResNet18 사전학습 U-Net, 선 라벨 직접 사용)
+    // ④ 중심선 히트맵 (ResNet18 사전학습 U-Net, 선 라벨 직접 사용)
     [ObservableProperty] private int _heatEpochs = 150, _heatBatch = 8, _heatPatience = 40;
     [ObservableProperty] private bool _heatPretrained = true;
     [ObservableProperty] private bool _heatContinue;   // 이전 best.pt 에서 이어 학습(보강)
-    [ObservableProperty] private int _heatModalityIndex;   // ⑥ 학습·내보내기 모달리티 0 RGB(권장), 1 IR
+    [ObservableProperty] private int _heatModalityIndex;   // ④ 학습·내보내기 모달리티 0 RGB(권장), 1 IR
     private string HeatModality => HeatModalityIndex == 1 ? "ir" : "rgb";
     public string HeatmapExportButtonText => $"best.pt → weld_heatmap_{HeatModality}.onnx";
     partial void OnHeatModalityIndexChanged(int value) => OnPropertyChanged(nameof(HeatmapExportButtonText));
@@ -69,17 +69,17 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
     [ObservableProperty] private string? _message;
     [ObservableProperty] private bool _isError;
 
-    // ④ 추론
+    // ⑤ 추론
     [ObservableProperty] private ModelInfo? _selModel;
-    /// <summary>④ 점검 이미지 목록 — 학습·검증 폴더의 라벨 촬영본([train]/[val]) + 라벨링 폴더의 나머지([ - ]).</summary>
+    /// <summary>⑤ 점검 이미지 목록 — 학습·검증 폴더의 라벨 촬영본([train]/[val]) + 라벨링 폴더의 나머지([ - ]).</summary>
     public ObservableCollection<InferItem> InferItems { get; } = new();
     [ObservableProperty] private InferItem? _inferItem;
     [ObservableProperty] private bool _inferValOnly = _lastInferValOnly;
-    // ④ 마지막 선택 — 뷰모델은 화면 이동마다 새로 만들어지므로(Transient) 앱 실행 중에는 정적으로 기억해 되돌린다.
+    // ⑤ 마지막 선택 — 뷰모델은 화면 이동마다 새로 만들어지므로(Transient) 앱 실행 중에는 정적으로 기억해 되돌린다.
     private static string? _lastModelPath, _lastInferStem;
     private static bool _lastInferValOnly;
     [ObservableProperty] private string? _inferSplitText;
-    /// <summary>④ 점검 이미지 출처 폴더 요약(데이터셋 탭과 같은 모양) — 폴더별 train/val 수.</summary>
+    /// <summary>⑤ 점검 이미지 출처 폴더 요약(데이터셋 탭과 같은 모양) — 폴더별 train/val 수.</summary>
     public ObservableCollection<InferSourceRow> InferSources { get; } = new();
     /// <summary>선택 모델이 현재 데이터셋으로 학습되지 않았을 가능성 경고(없으면 null).</summary>
     [ObservableProperty] private string? _inferModelWarning;
@@ -191,13 +191,13 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
         _ = RefreshInferListAsync();
     }
 
-    // ── ④ 임계값 — 운영 파라미터(Weld.Yolo.Confidence/MaskThreshold, Weld.Unet.Threshold)와 연결 ──
+    // ── ⑤ 임계값 — 운영 파라미터(Weld.Yolo.Confidence/MaskThreshold, Weld.Unet.Threshold)와 연결 ──
     /// <summary>선택 모델이 U-Net 이면 true(파일명 기준). U-Net 은 conf 없이 확률 임계 하나만 쓴다.</summary>
     public bool InferIsUnet => SelModel?.Name.Contains("unet", StringComparison.OrdinalIgnoreCase) == true;
     public double MaskMin => InferIsUnet ? HD.AMR.App.Service.WeldTrackingService.UnetThresholdMin : HD.AMR.App.Service.WeldTrackingService.DlMaskThresholdMin;
     public double MaskMax => InferIsUnet ? HD.AMR.App.Service.WeldTrackingService.UnetThresholdMax : HD.AMR.App.Service.WeldTrackingService.DlMaskThresholdMax;
     public string MaskText => InferIsUnet ? $"확률 {MaskThr:0.00}" : $"mask {MaskThr:0.00}";
-    public string MaskLabel => InferIsUnet ? "확률" : "mask";   // ④ 임계값 라벨(값은 슬라이더 옆에 따로 표시)
+    public string MaskLabel => InferIsUnet ? "확률" : "mask";   // ⑤ 임계값 라벨(값은 슬라이더 옆에 따로 표시)
     public string InferOpsText => InferIsUnet
         ? $"파라미터 확률 {_weld.SavedUnetThreshold:0.00}"
         : $"파라미터 conf {_weld.SavedDlConfidence:0.00} · mask {_weld.SavedDlMaskThreshold:0.00}";
@@ -242,7 +242,7 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
         OnPropertyChanged(nameof(InferThrDirty));
     }
 
-    /// <summary>④ 슬라이더를 저장된 파라미터 값으로 되돌린다(마지막 추론 이미지는 다시 추론).</summary>
+    /// <summary>⑤ 슬라이더를 저장된 파라미터 값으로 되돌린다(마지막 추론 이미지는 다시 추론).</summary>
     [RelayCommand]
     private void RevertInferThresholds()
     {
@@ -250,7 +250,7 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
         else { Conf = _weld.SavedDlConfidence; MaskThr = _weld.SavedDlMaskThreshold; }
     }
 
-    /// <summary>④ 슬라이더 값을 운영 파라미터로 저장 — 용접 추적·시퀀스의 검출이 이 값을 쓴다.</summary>
+    /// <summary>⑤ 슬라이더 값을 운영 파라미터로 저장 — 용접 추적·시퀀스의 검출이 이 값을 쓴다.</summary>
     [RelayCommand]
     private async Task SaveInferThresholds()
     {
@@ -271,19 +271,19 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
         OnPropertyChanged(nameof(InferOpsText)); OnPropertyChanged(nameof(InferThrDirty));
     }
 
-    // ④ 판정 기준 — 모델 파일명(weld_{yolo|unet}_{ir|rgb}_{area|line}_…)에서 읽는다.
+    // ⑤ 판정 기준 — 모델 파일명(weld_{yolo|unet}_{ir|rgb}_{area|line}_…)에서 읽는다.
     // 표식이 없는 모델(예: 학습 run 의 best.onnx)만 ②/③ 데이터셋 선택·아래 모달리티 드롭박스를 쓴다.
     private LabelKind InferKind =>
         (SelModel is null ? null : WeldModelNames.LabelKindOf(SelModel.Name))
         ?? (InferIsUnet ? (UnetKindIndex == 1 ? LabelKind.Line : LabelKind.Area)
                         : (YoloKindIndex == 1 ? LabelKind.Line : LabelKind.Area));
-    /// <summary>④ 추론 모달리티 — 모델 파일명 표식, 없으면 드롭박스.</summary>
+    /// <summary>⑤ 추론 모달리티 — 모델 파일명 표식, 없으면 드롭박스.</summary>
     private string InferModality =>
         (SelModel is null ? null : WeldModelNames.ModalityOf(SelModel.Name)) ?? (InferModalityIndex == 1 ? "ir" : "rgb");
     /// <summary>모델 이름에 모달리티 표식이 없을 때만 드롭박스 표시.</summary>
     public bool ShowInferModality => SelModel is not null && WeldModelNames.ModalityOf(SelModel.Name) is null;
 
-    /// <summary>④ 목록 재구성. 판정은 현재 폴더 설정으로 데이터셋 변환과 같은 규칙(<see cref="WeldTrainingService.GetSplitAsync"/>).</summary>
+    /// <summary>⑤ 목록 재구성. 판정은 현재 폴더 설정으로 데이터셋 변환과 같은 규칙(<see cref="WeldTrainingService.GetSplitAsync"/>).</summary>
     private async Task RefreshInferListAsync()
     {
         var ver = ++_inferListVer;
@@ -465,7 +465,7 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
         if (_loadingSources) return;
         try { await _train.SetEmitterOffOnlyAsync(value); }
         catch (Exception ex) { Notify($"설정 저장 실패: {ex.Message}", true); }
-        await RefreshInferListAsync();   // ④ train/val 구분도 같은 필터를 따른다
+        await RefreshInferListAsync();   // ⑤ train/val 구분도 같은 필터를 따른다
     }
 
     async partial void OnAddRotatedChanged(bool value)
@@ -520,7 +520,7 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
     {
         try
         {
-            // 학습·검증 폴더 전체의 라벨 수(변환 대상). ④ 추론 이미지 목록은 라벨링 폴더 기준.
+            // 학습·검증 폴더 전체의 라벨 수(변환 대상). ⑤ 추론 이미지 목록은 라벨링 폴더 기준.
             var dirs = SourceDirs.ToList();
             // 원본 폴더의 예전 회전본(_cw90/_ccw90)은 변환에서 제외되므로 개수에서도 뺀다.
             var all = await Task.Run(() => dirs.SelectMany(LabelDataService.List)
@@ -753,12 +753,12 @@ public sealed partial class VisionTrainingViewModel : ViewModelBase
     private void Notify(string m, bool err) { Message = m; IsError = err; }
 }
 
-/// <summary>④ 점검 이미지 항목. <see cref="IsVal"/> null = 데이터셋에 안 들어가는 라벨링 폴더 이미지.</summary>
+/// <summary>⑤ 점검 이미지 항목. <see cref="IsVal"/> null = 데이터셋에 안 들어가는 라벨링 폴더 이미지.</summary>
 public sealed record InferItem(string Stem, string Dir, bool? IsVal, EmitterState? Emitter = null)
 {
     public string Text => (IsVal switch { true => "[val]   ", false => "[train] ", _ => "[ - ]   " }) + Stem +
                           (Emitter is { } e ? $"  · 이미터 {EmitterDotEstimator.Text(e)}" : "");
 }
 
-/// <summary>④ 점검 이미지 출처 폴더 한 줄(구분 · 경로 · 개수).</summary>
+/// <summary>⑤ 점검 이미지 출처 폴더 한 줄(구분 · 경로 · 개수).</summary>
 public sealed record InferSourceRow(string Label, string Path, string Counts);
