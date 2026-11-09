@@ -160,7 +160,7 @@ public sealed class DepthDistanceMoveOptions
     /// <summary>이동 후 진동/프레임 안정화 대기(ms).</summary>
     public int SettleMs { get; init; } = 500;
 
-    /// <summary>이동 전 측정 거리의 기대값(mm, 예: ② 접근 거리). null 이면 검사하지 않는다.
+    /// <summary>이동 전 측정 거리(카메라–면)의 기대값(mm, 예: ② 접근 거리 + 카메라–TCP 광축 거리). null 이면 검사하지 않는다.
     /// 측정이 기대 ± <see cref="ExpectedToleranceMm"/> 밖이면 ROI 안 다른 구조물·무효 픽셀·멈춘 프레임으로 보고 움직이지 않는다.</summary>
     public double? ExpectedDistanceMm { get; init; }
 
@@ -999,7 +999,7 @@ public class FlatSurfaceCenteringService
     internal static string? CheckExpectedDistance(double measuredMm, double? expectedMm, double toleranceMm)
     {
         if (expectedMm is not { } e || toleranceMm <= 0 || Math.Abs(measuredMm - e) <= toleranceMm) return null;
-        return $"측정 거리 {measuredMm:0}mm 가 기대 {e:0}±{toleranceMm:0}mm(검사위치 이동의 접근 거리) 밖입니다 — " +
+        return $"측정 거리 {measuredMm:0}mm 가 기대 {e:0}±{toleranceMm:0}mm(검사위치 이동 접근 거리 + 카메라–툴 끝 거리) 밖입니다 — " +
                "ROI 안 다른 구조물·무효 픽셀(최소 측정거리 미만)·멈춘 프레임일 수 있어 움직이지 않습니다. ROI·카메라를 확인하세요.";
     }
 

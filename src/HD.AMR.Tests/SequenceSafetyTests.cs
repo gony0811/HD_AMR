@@ -52,6 +52,33 @@ public class SequenceSafetyTests
     public void ExpectedDistanceCheck(double measured, double? expected, double tol, bool ok)
         => Assert.Equal(ok, FlatSurfaceCenteringService.CheckExpectedDistance(measured, expected, tol) is null);
 
+    [Theory]
+    // 2026-11-09 현장 — ② 접근 400mm 직후 depth 측정(카메라–면). 접근 거리(TCP–면)만 기대값으로 쓰면 정상인데도 거부됐다.
+    [InlineData(688, true)]    // 천장 T L4-R08C08 V01 (15:56 거부)
+    [InlineData(691, true)]    // 같은 영역 V02 (15:58 거부)
+    [InlineData(680, true)]    // 천장 T 오전 — 정상 정렬
+    [InlineData(645, true)]    // 경사면 PU — 정상 정렬
+    [InlineData(1200, false)]  // ROI 안 먼 구조물
+    [InlineData(250, false)]   // 최소 측정거리 미만·가까운 구조물
+    public void CameraAlignExpectsApproachPlusCameraOffset(double measured, bool ok)
+    {
+        var expected = CameraAlignStep.ExpectedStartDistanceMm(400, CameraAlignStep.ResolveDepthOffsetMm(null));
+        Assert.Equal(680, expected);
+        Assert.Equal(ok, FlatSurfaceCenteringService.CheckExpectedDistance(measured, expected, CameraAlignStep.DefaultExpectedToleranceMm) is null);
+        // 종전(접근 거리만)이면 현장 정상값도 거부됐다.
+        if (measured is 688 or 691)
+            Assert.NotNull(FlatSurfaceCenteringService.CheckExpectedDistance(measured, 400, CameraAlignStep.DefaultExpectedToleranceMm));
+    }
+
+    [Theory]
+    [InlineData(null, 280)]
+    [InlineData(300.0, 300)]
+    [InlineData(-5.0, 280)]     // 음수 — 기본값
+    [InlineData(900.0, 280)]    // 범위 밖 — 기본값
+    [InlineData(0.0, 0)]        // 0 — 카메라가 TCP 와 같은 높이(종전 동작)
+    public void DepthOffsetParameterIsClamped(double? raw, double expected)
+        => Assert.Equal(expected, CameraAlignStep.ResolveDepthOffsetMm(raw));
+
     [Fact]
     public void RetractGoesOppositeToOpticalAxis()
     {

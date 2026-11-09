@@ -19,9 +19,27 @@ public class CameraAlignStep : ISequenceStep
 
     private const double MaxAlignTravelMm = 1000;
 
-    /// <summary>③ 시작 거리가 ② 접근 거리(<c>inspection.approachStandoffMm</c>)에서 이만큼 넘게 다르면 움직이지 않는다(mm, 0=검사 안 함).</summary>
+    /// <summary>③ 시작 거리가 기대 거리(<see cref="ExpectedStartDistanceMm"/>)에서 이만큼 넘게 다르면 움직이지 않는다(mm, 0=검사 안 함).</summary>
     public const string ExpectedToleranceKey = "Sequence.CameraAlign.ExpectedTolMm";
     public const double DefaultExpectedToleranceMm = 200;
+
+    /// <summary>
+    /// depth 카메라 측정 원점이 툴 TCP 보다 광축 방향으로 뒤에 있는 거리(mm). ② 접근 거리(<c>inspection.approachStandoffMm</c>)는
+    /// <b>TCP–면</b> 거리이고 ③ 이 재는 값은 <b>카메라–면</b> 거리라, ② 직후 측정은 접근 거리보다 이만큼 길다.
+    /// 2026-11-09 실측: 접근 400mm 에서 천장 T 680~691mm·경사면 PU 645mm(≈ +245~291) — 기본값은 그 가운데.
+    /// 툴·카메라 장착이 바뀌면 다시 재서 맞출 것(0~600, 범위 밖이면 기본값).
+    /// </summary>
+    public const string DepthOffsetKey = "Sequence.CameraAlign.DepthOffsetMm";
+    public const double DefaultDepthOffsetMm = 280;
+    public const double MaxDepthOffsetMm = 600;
+
+    /// <summary>② 직후 ③ 시작 측정의 기대 거리 = ② 접근 거리(TCP–면) + 카메라–TCP 광축 거리.</summary>
+    public static double ExpectedStartDistanceMm(double approachStandoffMm, double depthOffsetMm) =>
+        approachStandoffMm + depthOffsetMm;
+
+    /// <summary>파라미터 값 정리 — 없거나 0~<see cref="MaxDepthOffsetMm"/> 밖이면 <see cref="DefaultDepthOffsetMm"/>.</summary>
+    public static double ResolveDepthOffsetMm(double? raw) =>
+        raw is { } v && double.IsFinite(v) && v >= 0 && v <= MaxDepthOffsetMm ? v : DefaultDepthOffsetMm;
 
     // 깊이 ROI 파라미터 키 — CameraView 페이지와 공유.
     private const string RoiEnabledKey = "Camera.Depth.Roi.Enabled";
@@ -79,7 +97,16 @@ public class CameraAlignStep : ISequenceStep
         double? expected = null;
         var expectedTol = await _param.GetDoubleAsync(ExpectedToleranceKey) ?? DefaultExpectedToleranceMm;
         if (expectedTol > 0 && context.Bag.ContainsKey(WeldSequenceSupport.InspectAnchorSeamPointBagKey))
-            expected = await CobotInspectionMoveStep.GetApproachStandoffMmAsync(_param, _logger);
+        {
+            // ② 접근 거리는 TCP–면, ③ 측정은 카메라–면 — 카메라가 TCP 뒤에 있는 만큼 더한다(2026-11-09 현장: 688mm 를 400±200 으로 거부하던 결함).
+            var approach = await CobotInspectionMoveStep.GetApproachStandoffMmAsync(_param, _logger);
+            double? rawOffset = null;
+            try { rawOffset = await _param.GetDoubleAsync(DepthOffsetKey); }
+            catch { /* DB 미준비 등 — 기본값 */ }
+            expected = ExpectedStartDistanceMm(approach, ResolveDepthOffsetMm(rawOffset));
+            _logger.LogInformation("Sequence [카메라 거리 정렬] 시작 거리 기대 {Exp:0}±{Tol:0}mm (② 접근 {App:0} + 카메라–TCP {Off:0})",
+                expected, expectedTol, approach, ResolveDepthOffsetMm(rawOffset));
+        }
 
         var r = await _centering.MoveToDistanceAsync(new DepthDistanceMoveOptions
         {
