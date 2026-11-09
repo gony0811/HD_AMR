@@ -136,11 +136,11 @@ public sealed class LaserTiltCorrector
                 Report($"틸트 응답 측정: 툴 Rx/Ry 각 {o.ProbeDeg}° 프로브 회전");
                 var rcA = await RotateToolAsync(o.Tool, o.ProbeDeg, 0, pose.Z, o, Report, ct);
                 if (rcA != 0)
-                    return TiltLevelResult.Fail($"틸트 응답 프로브 이동 실패 (rc={rcA}){FairinoErrorCodes.Suffix(rcA)}.", iter, pose, null);
+                    return TiltLevelResult.Fail($"틸트 응답 프로브 이동 실패 (rc={rcA}){FairinoErrorCodes.Suffix(rcA)}.", iter, pose, null) with { MotionFailure = true };
                 var pA = (await MeasureAsync(o, ct)).Pose;
                 var rcB = await RotateToolAsync(o.Tool, -o.ProbeDeg, o.ProbeDeg, pA.Valid ? pA.Z : pose.Z, o, Report, ct);
                 if (rcB != 0)
-                    return TiltLevelResult.Fail($"틸트 응답 프로브 이동 실패 (rc={rcB}){FairinoErrorCodes.Suffix(rcB)}.", iter, pose, null);
+                    return TiltLevelResult.Fail($"틸트 응답 프로브 이동 실패 (rc={rcB}){FairinoErrorCodes.Suffix(rcB)}.", iter, pose, null) with { MotionFailure = true };
                 var pB = (await MeasureAsync(o, ct)).Pose;
                 if (!pA.Valid || !pB.Valid)
                     return TiltLevelResult.Fail($"틸트 응답 측정 실패: {(pA.Valid ? pB.Note : pA.Note)}", iter, pose, null);
@@ -167,7 +167,7 @@ public sealed class LaserTiltCorrector
 
             var rc = await RotateToolAsync(o.Tool, applyRx, applyRy, pose.Z, o, Report, ct);
             if (rc != 0)
-                return TiltLevelResult.Fail($"틸트 보정 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.", iter, pose, jac);
+                return TiltLevelResult.Fail($"틸트 보정 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.", iter, pose, jac) with { MotionFailure = true };
 
             predicted = (pose.Rx + jac[0, 0] * applyRx + jac[0, 1] * applyRy,
                          pose.Ry + jac[1, 0] * applyRx + jac[1, 1] * applyRy);
@@ -464,6 +464,9 @@ public sealed record TiltLevelResult(bool Success, string Message, int Correctio
 
     /// <summary>회차별 노이즈 진단.</summary>
     public IReadOnlyList<LaserNoiseReport> NoiseHistory { get; init; } = Array.Empty<LaserNoiseReport>();
+
+    /// <summary>true = 코봇 이동(rc≠0) 실패 — 측정면 문제가 아니라 다른 자리로 재시도해도 소용없다.</summary>
+    public bool MotionFailure { get; init; }
 
     public static TiltLevelResult Fail(string message, int corrections, PlanePose? pose, double[,]? jac)
         => new(false, message, corrections, pose, jac);

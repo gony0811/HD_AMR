@@ -74,6 +74,10 @@ public sealed class FlatCenterAlignOptions
     /// <see cref="Candidates"/> 가 있을 때만 쓴다.</summary>
     public FlatReachOptions? Reach { get; init; }
 
+    /// <summary>레이저 3점 풋프린트 판정(<see cref="LaserFootprintEvaluator"/>). null = 셀 중심(종전).
+    /// <see cref="Candidates"/> 가 있을 때만 쓴다.</summary>
+    public FlatFootprintContext? Footprint { get; init; }
+
     /// <summary>true = 횡이동을 관절 이동(MoveJ)으로 — 직선 이동이 경로 중간 J5=0 을 지나 rc=38 나는 것을 피한다.</summary>
     public bool UseJointMove { get; init; }
 
@@ -122,6 +126,18 @@ public sealed class FlatReachOptions
 
     /// <summary>도달성 판정을 시도할 최대 후보 수 — 후보 1개당 IK 6자세(각 config 0–7)라 RPC 가 많다.</summary>
     public int MaxChecks { get; init; } = 8;
+}
+
+/// <summary>
+/// 평탄 후보 선택에 쓰는 레이저 풋프린트 판정 입력 — 판정 옵션, 이미지→툴 축 매핑(스팟 위치를 이미지로 옮기는 데 필요),
+/// 이전 시도에서 Phase C 가 실패한 자리(정규화 좌표, 같은 시작 자세의 화면 기준).
+/// </summary>
+public sealed class FlatFootprintContext
+{
+    public required LaserFootprintOptions Options { get; init; }
+    public ToolAxisDir ImageXAxis { get; init; } = ToolAxisDir.PlusX;
+    public ToolAxisDir ImageYAxis { get; init; } = ToolAxisDir.PlusY;
+    public IReadOnlyList<(double U, double V)> Excluded { get; init; } = Array.Empty<(double, double)>();
 }
 
 /// <summary>후보 선택 결과. <see cref="Selected"/> 가 null 이면 쓸 수 있는 셀이 없다(<see cref="Note"/> 에 사유).
@@ -351,7 +367,7 @@ public class FlatSurfaceCenteringService
                 if (!refined && o.Candidates is not null)
                 {
                     var sel = await SelectReachableAsync(bestAnalysis, o.RoiX, o.RoiY, o.RoiW, o.RoiH,
-                        o.Candidates, o.Reach, progress, ct);
+                        o.Candidates, o.Reach, progress, ct, o.Footprint);
                     if (sel.Selected is null)
                     {
                         // 히트맵은 남긴다 — 왜 아무 셀도 못 썼는지 화면에서 확인하도록.
@@ -662,13 +678,19 @@ public class FlatSurfaceCenteringService
     /// 평탄 후보를 점수순(<see cref="FlatCandidateSelector.Rank"/>)으로 보며 <b>최종 위치</b>가 도달 가능한 첫 셀을 고른다.
     /// 시퀀스 ④(<see cref="RunAsync"/>)와 카메라 페이지 '평탄 검증'이 같이 쓴다 — 두 화면이 같은 셀을 고르도록.
     /// <paramref name="reach"/> 가 null 이거나 코봇 위치를 못 읽으면 도달성 없이 1순위 후보를 고른다(노트에 표시).
+    ///
+    /// <paramref name="footprint"/> 가 있으면 셀 중심 대신 <b>레이저 3점이 떨어질 자리</b>를 깊이로 평가한다
+    /// (<see cref="LaserFootprintEvaluator.Search"/>): 셀마다 주변을 탐색해 예측 틸트 오차가 가장 작은 자리로 옮기고,
+    /// 기준을 통과한 자리부터 도달성을 본다. 통과 자리가 하나도 도달 불가면 예측 오차가 작은 순으로 다시 본다(경고).
     /// 예외를 던지지 않는다(취소 제외).
     /// </summary>
     public async Task<FlatSelection> SelectReachableAsync(
         CameraService.DepthGridAnalysis analysis, double roiX, double roiY, double roiW, double roiH,
-        FlatCandidateOptions candidates, FlatReachOptions? reach, Action<string>? progress, CancellationToken ct)
+        FlatCandidateOptions candidates, FlatReachOptions? reach, Action<string>? progress, CancellationToken ct,
+        FlatFootprintContext? footprint = null)
     {
-        var rank = FlatCandidateSelector.Rank(analysis, roiX + roiW / 2.0, roiY + roiH / 2.0, candidates,
+        double centerU = roiX + roiW / 2.0, centerV = roiY + roiH / 2.0;
+        var rank = FlatCandidateSelector.Rank(analysis, centerU, centerV, candidates,
             _camera.PixelDeltaToMm, FallbackDepthMm);
         var minCell = analysis.Cells[analysis.BestIndex];
         var minLabel = $"({minCell.Gx + 1},{minCell.Gy + 1})";
@@ -683,6 +705,51 @@ public class FlatSurfaceCenteringService
             Report(progress, note);
             return new FlatSelection(analysis, null, false, note);
         }
+
+        // ── 레이저 풋프린트 판정 → 시도 순서 ──
+        // 통과 자리(점수순) → 미통과 자리(예측 오차순, 경고). 판정 불가(깊이 없음 등)면 종전 셀 중심 순서.
+        var order = new List<(int RankIndex, FlatCandidate C, FootprintEval? E)>();
+        int passCount = 0;
+        if (footprint is { Options.Enabled: true } fp)
+        {
+            var spots = LaserFootprintEvaluator.SpotOffsetsInImageMm(_laser.HeadOffsetsMm, fp.ImageXAxis, fp.ImageYAxis);
+            var frame = analysis.Frame;
+            (double X, double Y) MmPerPx(double z) => _camera.PixelDeltaToMm(1.0 / frame.Width, 1.0 / frame.Height, z);
+
+            var evals = new List<(int RankIndex, FlatCandidate C, FootprintEval? E)>();
+            for (var k = 0; k < rank.Candidates.Count; k++)
+            {
+                var c = rank.Candidates[k];
+                var e = LaserFootprintEvaluator.Search(frame, (c.Cell.U0 + c.Cell.U1) / 2, (c.Cell.V0 + c.Cell.V1) / 2,
+                    roiX, roiY, roiW, roiH, spots, fp.Options, MmPerPx, fp.Excluded);
+                if (e is null) continue;
+                double z = c.Cell.MeanMm > 0 ? c.Cell.MeanMm : FallbackDepthMm;
+                var (dx, dy) = _camera.PixelDeltaToMm(e.U - centerU, e.V - centerV, z);
+                evals.Add((k, c with { DxMm = dx, DyMm = dy, DistanceMm = Math.Sqrt(dx * dx + dy * dy) }, e));
+            }
+
+            if (evals.Count == 0)
+                Report(progress, "⚠ 레이저 풋프린트 판정 불가(깊이 유효 자리 없음" +
+                                 (fp.Excluded.Count > 0 ? "/실패 자리 제외" : "") + ") — 셀 중심으로 고릅니다.");
+            else
+            {
+                var pass = evals.Where(t => t.E!.Passes(fp.Options)).ToList();
+                passCount = pass.Count;
+                order.AddRange(pass);
+                order.AddRange(evals.Where(t => !t.E!.Passes(fp.Options)).OrderBy(t => t.E!.WorstTiltDeg));
+                Report(progress,
+                    $"레이저 풋프린트: 후보 {rank.Candidates.Count}개 중 {evals.Count}개 판정, " +
+                    $"{passCount}개 통과(예측 틸트 오차 ≤ {fp.Options.MaxPredictedTiltDeg:0.##}°, 여유 {fp.Options.MarginMm:0.#}mm)" +
+                    (fp.Excluded.Count > 0 ? $", 실패 자리 {fp.Excluded.Count}곳 제외" : ""));
+            }
+        }
+        if (order.Count == 0)
+            order.AddRange(rank.Candidates.Select((c, k) => (k, c, (FootprintEval?)null)));
+
+        string FpText(FootprintEval? e) => e is null ? "" : $" · {e.ShortText()}";
+        string FpWarn(int idx) => order[idx].E is { } e && footprint is { } f && !e.Passes(f.Options)
+            ? $" ⚠ 풋프린트 기준 미달 — 최소 예측 오차 자리로 진행({e.WorstTiltDeg:0.00}° > {f.Options.MaxPredictedTiltDeg:0.##}°)"
+            : "";
 
         // 도달성 판정 기준 — 현재 TCP·관절. 못 읽으면 판정 없이 진행(읽기 한 번 실패로 검사를 죽이지 않는다).
         double[]? anchor = null, joints0 = null;
@@ -704,11 +771,12 @@ public class FlatSurfaceCenteringService
 
         if (skipReach is not null)
         {
-            var first = rank.Candidates[0];
-            var note = $"후보 {first.Label} σ {first.Cell.SigmaMm:0.00}mm 선택 — 도달성 미확인({skipReach})";
+            var first = order[0].C;
+            var note = $"후보 {first.Label} σ {first.Cell.SigmaMm:0.00}mm 선택{FpText(order[0].E)} — 도달성 미확인({skipReach})" +
+                       FpWarn(0);
             _logger.LogWarning("평탄 후보 도달성 판정 생략: {Why}", skipReach);
             Report(progress, note);
-            return new FlatSelection(Select(analysis, rank, 0), first, false, note);
+            return new FlatSelection(Select(analysis, order, 0), first, false, note);
         }
 
         // 설정된 자세 한계가 현재 자세조차 포함하지 않으면(미설정 기본값 등) 모든 후보가 '출발 자세 위반'으로 떨어진다 —
@@ -721,36 +789,43 @@ public class FlatSurfaceCenteringService
                              "시험 화면 ③ 카드에서 허용 범위를 실제 값으로 맞추세요.");
 
         var tried = new List<string>();
-        int checks = Math.Min(rank.Candidates.Count, Math.Max(1, reach.MaxChecks));
+        int checks = Math.Min(order.Count, Math.Max(1, reach.MaxChecks));
+        // 통과 자리는 MaxChecks 안에서 모두 보고, 남은 예산으로 미통과 자리를 본다.
         for (var k = 0; k < checks; k++)
         {
             ct.ThrowIfCancellationRequested();
-            var c = rank.Candidates[k];
+            var (_, c, e) = order[k];
             var reason = await CheckReachAsync(c, anchor!, joints0!, reach, limits, usePosture, ct);
             var line = $"후보 {k + 1} {c.Label} σ {c.Cell.SigmaMm:0.00} · 잔차 {c.Cell.ResidualMm:0.00} · " +
-                       $"이동 {c.DistanceMm:0}mm · 점수 {c.Score:0.00} → {(reason is null ? "도달 가능" : $"불가: {reason}")}";
+                       $"이동 {c.DistanceMm:0}mm · 점수 {c.Score:0.00}{FpText(e)} → {(reason is null ? "도달 가능" : $"불가: {reason}")}";
             Report(progress, line);
             if (reason is null)
             {
-                var note = c.CellIndex == analysis.BestIndex
+                var note = (c.CellIndex == analysis.BestIndex
                     ? $"σ 최소 셀 {c.Label} 선택 (최종 위치 도달 확인)"
-                    : $"σ 최소 셀 {minLabel} 대신 후보 {k + 1} {c.Label} 선택 (σ {c.Cell.SigmaMm:0.00}mm, 최종 위치 도달 확인)";
-                return new FlatSelection(Select(analysis, rank, k), c, true, note);
+                    : $"σ 최소 셀 {minLabel} 대신 후보 {k + 1} {c.Label} 선택 (σ {c.Cell.SigmaMm:0.00}mm, 최종 위치 도달 확인)")
+                    + FpText(e) + FpWarn(k);
+                return new FlatSelection(Select(analysis, order, k), c, true, note);
             }
             tried.Add($"{c.Label} {reason}");
         }
 
-        var fail = $"도달 가능한 평탄 셀 없음 — 후보 {rank.Candidates.Count}개 중 {checks}개 판정 모두 불가: " +
+        var fail = $"도달 가능한 평탄 셀 없음 — 후보 {order.Count}개 중 {checks}개 판정 모두 불가: " +
                    string.Join(" / ", tried.Take(3)) +
                    " — AMR 정차 위치를 판재 안쪽으로 옮기거나 ROI 를 좁히세요.";
         Report(progress, fail);
         return new FlatSelection(analysis, null, true, fail);
     }
 
+    /// <summary>시도 순서의 k 번째를 선택 셀로 바꿔 끼운다. 풋프린트 판정이 있으면 Best 좌표를 셀 중심이 아니라
+    /// 판정한 자리로 바꾼다 — 이동량(Best − ROI 중심)이 그 자리를 레이저 아래로 가져오도록.</summary>
     private static CameraService.DepthGridAnalysis Select(
-        CameraService.DepthGridAnalysis a, FlatCandidateRanking rank, int k)
-        => FlatCandidateSelector.WithSelected(a, rank.Candidates[k].CellIndex,
-            k + 1 < rank.Candidates.Count ? rank.Candidates[k + 1].CellIndex : -1);
+        CameraService.DepthGridAnalysis a, IReadOnlyList<(int RankIndex, FlatCandidate C, FootprintEval? E)> order, int k)
+    {
+        var sel = FlatCandidateSelector.WithSelected(a, order[k].C.CellIndex,
+            k + 1 < order.Count ? order[k + 1].C.CellIndex : -1);
+        return order[k].E is { } e ? sel with { Best = sel.Best with { U = e.U, V = e.V } } : sel;
+    }
 
     /// <summary>후보 하나의 도달성 — 셀 이동 → 레이저 보정 → 틸트 여유(툴 Rx/Ry ±) 순으로 IK 를 이어 풀며
     /// 자세 한계를 본다. 가능하면 null, 불가면 사유.</summary>

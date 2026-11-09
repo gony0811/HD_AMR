@@ -120,6 +120,7 @@ public class ParameterService
             (SeamStartTagSettings.SizeMmKey, "0",
                 "중심 편차 측정 태그 한 변(mm) — 검은 테두리 바깥 정사각형 실측(흰 여백 제외). 0 이면 측정 안 함."),
             .. FlatCandidateOptions.SeedDefaults(),
+            .. LaserFootprintOptions.SeedDefaults(),
             .. Sequence.BeadManualSettings.SeedDefaults(),
             (FlatReachOptions.TiltMarginKey,
                 FlatReachOptions.DefaultTiltMarginDeg.ToString(CultureInfo.InvariantCulture),

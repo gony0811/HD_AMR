@@ -447,7 +447,15 @@ public sealed partial class CameraViewModel : ViewModelBase
                         Tool = tool,
                     };
                 }
-                sel = await _centering.SelectReachableAsync(best, x, y, w, h, candidates, reach, progress: null, _cts.Token);
+                // 시퀀스 ④와 같은 레이저 3점 풋프린트 판정 — 셀 중심 대신 세 스팟이 떨어질 자리를 고른다.
+                var (fax, fay, _) = await LoadFlatMoveParamsAsync(param);
+                var footprint = new FlatFootprintContext
+                {
+                    Options = await LaserFootprintOptions.LoadAsync(param),
+                    ImageXAxis = fax, ImageYAxis = fay,
+                };
+                sel = await _centering.SelectReachableAsync(best, x, y, w, h, candidates, reach, progress: null, _cts.Token,
+                    footprint);
             }
 
             if (sel.Selected is not { } pick)
@@ -537,6 +545,8 @@ public sealed partial class CameraViewModel : ViewModelBase
                 JointVelocityScale = await FlatMoveSettings.LoadJointVelocityScaleAsync(param),
                 Tool = snap.Tool ?? 1,
                 Velocity = LaserMoveVelocity,
+                // 풋프린트 판정 자리는 mm 단위로 고른 것이라 정규화 데드밴드(0.02)로 이동을 생략하면 놓친다 — 시퀀스 ④와 같게.
+                DeadbandUv = (await LaserFootprintOptions.LoadAsync(param)).Enabled ? 0.0 : 0.02,
             };
 
             NotifyLaser($"{name} 중…", false);

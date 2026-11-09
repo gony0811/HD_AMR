@@ -157,6 +157,14 @@ public class LaserDisplacementSensorService : BackgroundService
             hx, hy, new[] { d[0], d[1], d[2] }, _settings.TiltStandoffMm, _settings.TiltReadingSignForUp);
     }
 
+    /// <summary>헤드 3점 XY 오프셋(툴 좌표, mm, CH1..3) — ④ 풋프린트 판정(<see cref="LaserFootprintEvaluator"/>)용.</summary>
+    public IReadOnlyList<(double X, double Y)> HeadOffsetsMm => new[]
+    {
+        (_settings.Head1OffsetXmm, _settings.Head1OffsetYmm),
+        (_settings.Head2OffsetXmm, _settings.Head2OffsetYmm),
+        (_settings.Head3OffsetXmm, _settings.Head3OffsetYmm),
+    };
+
     /// <summary>헤드 3점 XY 오프셋의 중심(툴 좌표, mm) — 틸트 보정의 회전 중심(<see cref="LaserTiltCorrector"/>).</summary>
     public (double X, double Y) HeadCenterMm =>
         ((_settings.Head1OffsetXmm + _settings.Head2OffsetXmm + _settings.Head3OffsetXmm) / 3.0,

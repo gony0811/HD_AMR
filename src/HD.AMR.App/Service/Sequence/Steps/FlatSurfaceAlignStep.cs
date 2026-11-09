@@ -22,6 +22,11 @@ namespace HD.AMR.App.Service.Sequence.Steps;
 ///      (2026-10-07/08 현장 로그: 종전 [+Rx, −Ry] 규약에서 툴 Rx +a → 측정 rx ≈ +a 로 오차가 매회 누적,
 ///      툴 Rx 가 측정 ry 도 크게 바꾸는 축 결합까지 있어 고정 부호로는 수렴하지 않았다.)
 ///
+/// 레이저 풋프린트(2026-11-10): 셀은 약 46×27mm 인데 레이저 3점은 한 변 38mm 삼각형이라 셀이 평평해도 스팟 하나가
+/// 이웃 비드·코로게이션에 걸렸다(한 점 0.58mm ≈ 1°). 그래서 후보마다 세 스팟이 떨어질 자리를 깊이로 평가해
+/// 위치를 고르고(<see cref="LaserFootprintEvaluator"/>), Phase C 가 측정면 문제로 실패하면 시작 자세로 돌아가
+/// 그 자리를 제외하고 다른 자리로 재시도한다(<see cref="LaserFootprintOptions.MaxSiteRetries"/>회).
+///
 /// ②가 저장한 최초 접근 기준점을 유지한다. ② 없이 단독 실행하면 최초 실행 위치만 저장한다.
 /// ④⁺(레이저 WD)는 이 기준점을 보정 후 면 평행 평면으로 투영해 복귀한다(자세·WD 유지).
 /// </summary>
@@ -143,83 +148,133 @@ public class FlatSurfaceAlignStep : ISequenceStep
 
         var (axisX, axisY) = await GetAxisMapAsync();
         var jointVelScale = await FlatMoveSettings.LoadJointVelocityScaleAsync(_param);
-        var align = await _centering.RunAsync(new FlatCenterAlignOptions
+        var candidates = await FlatCandidateOptions.LoadAsync(_param);
+        var footprint = await LaserFootprintOptions.LoadAsync(_param);
+        var postureLimits = await _limits.GetAsync();
+        var tiltMargin = await _param.GetDoubleAsync(FlatReachOptions.TiltMarginKey) ?? FlatReachOptions.DefaultTiltMarginDeg;
+
+        // 재시도 기준 자세 — Phase C 가 실패하면 여기로 돌아와 같은 화면에서 실패 자리를 빼고 다시 고른다.
+        var startPose = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
+        var excluded = new List<(double U, double V)>();
+        int maxAttempts = 1 + (footprint.Enabled ? footprint.MaxSiteRetries : 0);
+        var failures = new List<string>();
+
+        for (var attempt = 0; ; attempt++)
         {
-            RoiX = roiX, RoiY = roiY, RoiW = roiW, RoiH = roiH,
-            GridSize = GridSize,
-            SamplesPerDetect = 10,
-            DeadbandUv = 0.02, ToleranceMm = 0.0,          // 기존과 동일: 정규화 데드밴드만 사용
-            MaxIterations = 1, VerifyAfterMove = false,    // 기존과 동일: 1회 개루프 이동
-            MaxLateralMoveMm = MaxLateralMoveMm,
-            ImageXAxis = axisX, ImageYAxis = axisY,
-            Tool = context.Tool, Velocity = context.Velocity,
-            Source = "시퀀스",
-            Candidates = await FlatCandidateOptions.LoadAsync(_param),
-            Reach = new FlatReachOptions
+            if (attempt > 0)
             {
-                Limits = await _limits.GetAsync(),
+                context.Progress?.Invoke($"다른 자리로 재시도 {attempt}/{maxAttempts - 1}: 시작 자세로 복귀");
+                _logger.LogInformation("[평탄면 센터링 (레이저 정렬)] 재시도 {Attempt}: 시작 자세 복귀, 제외 자리 {Count}곳",
+                    attempt, excluded.Count);
+                var back = await _centering.MoveToolOffsetAsync(startPose, new double[6], context.Tool, context.Velocity,
+                    joint: true, ct, jointVelScale);
+                if (!back.Ok)
+                    return FailStage($"재시도용 시작 자세 복귀 실패 {back.Describe()}. 이전 실패: {failures[^1]}");
+                await Task.Delay(800, ct);   // 진동·깊이 프레임 갱신 대기
+            }
+
+            var align = await _centering.RunAsync(new FlatCenterAlignOptions
+            {
+                RoiX = roiX, RoiY = roiY, RoiW = roiW, RoiH = roiH,
+                GridSize = GridSize,
+                SamplesPerDetect = 10,
+                // 풋프린트 판정은 셀 중심이 아니라 mm 단위 자리를 고르므로 정규화 데드밴드(0.02 ≈ 수~십수 mm)로
+                // 이동을 생략하면 그 자리를 놓친다 — 그때는 mm 기준(1.5mm)만 쓴다.
+                DeadbandUv = footprint.Enabled ? 0.0 : 0.02,
+                ToleranceMm = footprint.Enabled ? 1.5 : 0.0,
+                MaxIterations = 1, VerifyAfterMove = false,    // 기존과 동일: 1회 개루프 이동
+                MaxLateralMoveMm = MaxLateralMoveMm,
                 ImageXAxis = axisX, ImageYAxis = axisY,
-                CameraToLaserShiftYmm = shiftY,
-                TiltMarginDeg = await _param.GetDoubleAsync(FlatReachOptions.TiltMarginKey)
-                                ?? FlatReachOptions.DefaultTiltMarginDeg,
+                Tool = context.Tool, Velocity = context.Velocity,
+                Source = attempt == 0 ? "시퀀스" : $"시퀀스 재시도 {attempt}",
+                Candidates = candidates,
+                Reach = new FlatReachOptions
+                {
+                    Limits = postureLimits,
+                    ImageXAxis = axisX, ImageYAxis = axisY,
+                    CameraToLaserShiftYmm = shiftY,
+                    TiltMarginDeg = tiltMargin,
+                    Tool = context.Tool,
+                },
+                Footprint = new FlatFootprintContext
+                {
+                    Options = footprint,
+                    ImageXAxis = axisX, ImageYAxis = axisY,
+                    Excluded = excluded.ToArray(),
+                },
+                UseJointMove = true,
+                JointVelocityScale = jointVelScale,
+            }, progress: context.Progress, ct);
+
+            // 공용 루틴은 취소를 삼키고 실패 결과로 반환 — 스텝은 기존처럼 취소 예외로 전파한다.
+            ct.ThrowIfCancellationRequested();
+            if (!align.Success)
+                return StepResult.Fail(failures.Count == 0
+                    ? align.Message
+                    : $"{align.Message} (재시도 {attempt}회차 — 이전 실패: {string.Join(" / ", failures)})");
+
+            // 센터링 직후 화면 — 평탄 셀이 ROI 중심에 와 있고, 다음 이동으로 레이저가 바로 그 자리를 측정한다.
+            // 시퀀스 모니터가 ROI 중심에 예상 측정 범위를 그려 비평탄 실패 원인(측정 자리)을 확인하게 한다.
+            _monitor.SetCenteredFrame(_camera.LatestDepth);
+
+            // ── 카메라 중심 → 레이저 측정 중심 횡이동 ─────────────────────
+            // Phase B는 평탄영역을 카메라 중심에 맞추므로, 레이저 3점 중심이 그 지점 위에
+            // 오도록 장착 오프셋만큼 이동한 뒤 측정한다. 이동량은 시퀀스 페이지 파라미터
+            // (SequenceContext.CameraToLaserShiftYmm, 기본 −75mm)로 설정 — 장착 위치 종속이라 DB 영속.
+            _logger.LogInformation("[평탄면 센터링 (레이저 정렬)] 레이저 중심 보정 횡이동: 툴 Y {Shift}mm", shiftY);
+            context.Progress?.Invoke($"레이저 중심 보정 횡이동: 툴 Y {shiftY:+0.#;-0.#}mm");
+            var shiftAnchor = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
+            var shiftOffset = new[] { 0.0, shiftY, 0.0, 0.0, 0.0, 0.0 };
+            var shift = await _centering.MoveToolOffsetAsync(shiftAnchor, shiftOffset, context.Tool, context.Velocity,
+                joint: true, ct, jointVelScale);
+            if (!shift.Ok)
+                return FailStage($"레이저 중심 보정 이동 실패 {shift.Describe()}.");
+            await Task.Delay(300, ct);
+
+            // ── Phase C: 레이저 3점 측정 → 헤드 틸트(회전) 보정 ────────────
+            _logger.LogInformation("[평탄면 센터링 (레이저 정렬)] Phase C: 레이저 3점 평면 측정 시작");
+            _monitor.UpdateStage(FlatDetectionStage.LaserMeasuring, "레이저 3점 측정");
+
+            // 보정량은 실측 응답(J)으로 푼다 — LaserTiltCorrector(/laser '보정 적용'과 공용).
+            var level = await _tilt.LevelAsync(new TiltLevelOptions
+            {
                 Tool = context.Tool,
+                Velocity = Math.Min(context.Velocity, 10),
+                ThresholdDeg = TiltThresholdDeg,
+                MaxCorrections = MaxTiltCorrections,
+                MaxCorrectionDeg = MaxTiltCorrectionDeg,
             },
-            UseJointMove = true,
-            JointVelocityScale = jointVelScale,
-        }, progress: context.Progress, ct);
+            context.Progress,
+            (iter, pose) =>
+            {
+                _monitor.SetLaser(pose.Rx, pose.Ry, pose.Z);
+                if (iter > 0) _monitor.UpdateStage(FlatDetectionStage.LaserMeasuring, $"틸트 보정 {iter}회차");
+            }, ct);
 
-        // 공용 루틴은 취소를 삼키고 실패 결과로 반환 — 스텝은 기존처럼 취소 예외로 전파한다.
-        ct.ThrowIfCancellationRequested();
-        if (!align.Success)
-            return StepResult.Fail(align.Message);
+            if (level.Success)
+            {
+                var final = level.FinalPose!;
+                _monitor.UpdateStage(FlatDetectionStage.Done, $"틸트 보정 {level.Corrections}회" +
+                    (attempt > 0 ? $" (자리 재시도 {attempt}회)" : ""));
+                return StepResult.Ok(
+                    $"평탄면 정렬 완료 (rx={final.Rx:0.###}°, ry={final.Ry:0.###}°, " +
+                    $"z={final.Z:0.#}mm, 틸트 보정={level.Corrections}회, σ={align.SigmaMm:0.##}mm" +
+                    (attempt > 0 ? $", 자리 재시도={attempt}회" : "") +
+                    (level.Noise is { } n ? $", 레이저 {n.ShortText()}" : "") + ").");
+            }
 
-        // 센터링 직후 화면 — 평탄 셀이 ROI 중심에 와 있고, 다음 이동으로 레이저가 바로 그 자리를 측정한다.
-        // 시퀀스 모니터가 ROI 중심에 예상 측정 범위를 그려 비평탄 실패 원인(측정 자리)을 확인하게 한다.
-        _monitor.SetCenteredFrame(_camera.LatestDepth);
+            // 측정면 문제(비평탄·발산·미달·튐·측정 실패)는 다른 자리로 재시도, 코봇 이동 실패는 그대로 중단.
+            failures.Add(level.Message);
+            if (level.MotionFailure || attempt + 1 >= maxAttempts || align.FlatU is not { } fu || align.FlatV is not { } fv)
+                return FailStage(failures.Count == 1
+                    ? level.Message
+                    : $"{level.Message} (자리 {failures.Count}곳 모두 실패 — 이전: {string.Join(" / ", failures.SkipLast(1))})");
 
-        // ── 카메라 중심 → 레이저 측정 중심 횡이동 ─────────────────────
-        // Phase B는 평탄영역을 카메라 중심에 맞추므로, 레이저 3점 중심이 그 지점 위에
-        // 오도록 장착 오프셋만큼 이동한 뒤 측정한다. 이동량은 시퀀스 페이지 파라미터
-        // (SequenceContext.CameraToLaserShiftYmm, 기본 −75mm)로 설정 — 장착 위치 종속이라 DB 영속.
-        _logger.LogInformation("[평탄면 센터링 (레이저 정렬)] 레이저 중심 보정 횡이동: 툴 Y {Shift}mm", shiftY);
-        context.Progress?.Invoke($"레이저 중심 보정 횡이동: 툴 Y {shiftY:+0.#;-0.#}mm");
-        var shiftAnchor = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
-        var shiftOffset = new[] { 0.0, shiftY, 0.0, 0.0, 0.0, 0.0 };
-        var shift = await _centering.MoveToolOffsetAsync(shiftAnchor, shiftOffset, context.Tool, context.Velocity,
-            joint: true, ct, jointVelScale);
-        if (!shift.Ok)
-            return FailStage($"레이저 중심 보정 이동 실패 {shift.Describe()}.");
-        await Task.Delay(300, ct);
-
-        // ── Phase C: 레이저 3점 측정 → 헤드 틸트(회전) 보정 ────────────
-        _logger.LogInformation("[평탄면 센터링 (레이저 정렬)] Phase C: 레이저 3점 평면 측정 시작");
-        _monitor.UpdateStage(FlatDetectionStage.LaserMeasuring, "레이저 3점 측정");
-
-        // 보정량은 실측 응답(J)으로 푼다 — LaserTiltCorrector(/laser '보정 적용'과 공용).
-        var level = await _tilt.LevelAsync(new TiltLevelOptions
-        {
-            Tool = context.Tool,
-            Velocity = Math.Min(context.Velocity, 10),
-            ThresholdDeg = TiltThresholdDeg,
-            MaxCorrections = MaxTiltCorrections,
-            MaxCorrectionDeg = MaxTiltCorrectionDeg,
-        },
-        context.Progress,
-        (iter, pose) =>
-        {
-            _monitor.SetLaser(pose.Rx, pose.Ry, pose.Z);
-            if (iter > 0) _monitor.UpdateStage(FlatDetectionStage.LaserMeasuring, $"틸트 보정 {iter}회차");
-        }, ct);
-
-        if (!level.Success)
-            return FailStage(level.Message);
-
-        var final = level.FinalPose!;
-        _monitor.UpdateStage(FlatDetectionStage.Done, $"틸트 보정 {level.Corrections}회");
-        return StepResult.Ok(
-            $"평탄면 정렬 완료 (rx={final.Rx:0.###}°, ry={final.Ry:0.###}°, " +
-            $"z={final.Z:0.#}mm, 틸트 보정={level.Corrections}회, σ={align.SigmaMm:0.##}mm" +
-            (level.Noise is { } n ? $", 레이저 {n.ShortText()}" : "") + ").");
+            excluded.Add((fu, fv));
+            _logger.LogWarning("[평탄면 센터링 (레이저 정렬)] Phase C 실패 — 자리 (u={U:0.###}, v={V:0.###}) 제외 후 재시도: {Msg}",
+                fu, fv, level.Message);
+            context.Progress?.Invoke($"⚠ 레이저 틸트 실패 — 이 자리를 제외하고 다른 자리로 재시도합니다: {level.Message}");
+        }
     }
 
     // ── 헬퍼 ────────────────────────────────────────────────────────────
