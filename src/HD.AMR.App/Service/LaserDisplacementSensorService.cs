@@ -143,11 +143,18 @@ public class LaserDisplacementSensorService : BackgroundService
         if (!(r[0].Enabled && r[1].Enabled && r[2].Enabled))
             return PlanePose.Invalid("3채널 모두 측정중(범위 내)이어야 중심 pose를 계산할 수 있습니다.");
 
+        return ComputeRawPlanePose(new[] { r[0].Value, r[1].Value, r[2].Value });
+    }
+
+    /// <summary>3채널 거리값(mm, CH1..3)으로 원시 pose 계산 — 채널별 중앙값 등 집계값용.</summary>
+    public PlanePose ComputeRawPlanePose(IReadOnlyList<double> d)
+    {
+        if (d.Count < 3)
+            return PlanePose.Invalid("3채널 거리값이 필요합니다.");
         var hx = new[] { _settings.Head1OffsetXmm, _settings.Head2OffsetXmm, _settings.Head3OffsetXmm };
         var hy = new[] { _settings.Head1OffsetYmm, _settings.Head2OffsetYmm, _settings.Head3OffsetYmm };
-        var d = new[] { r[0].Value, r[1].Value, r[2].Value };
         return PlanePoseCalculator.ComputePose(
-            hx, hy, d, _settings.TiltStandoffMm, _settings.TiltReadingSignForUp);
+            hx, hy, new[] { d[0], d[1], d[2] }, _settings.TiltStandoffMm, _settings.TiltReadingSignForUp);
     }
 
     /// <summary>헤드 3점 XY 오프셋의 중심(툴 좌표, mm) — 틸트 보정의 회전 중심(<see cref="LaserTiltCorrector"/>).</summary>
@@ -404,24 +411,80 @@ public class LaserDisplacementSensorService : BackgroundService
     /// 무효 스냅샷도 그대로 세어 범위 밖 비율로 보고한다. 미연결이면 빈 통계.
     /// </summary>
     public async Task<LaserNoiseReport> CaptureNoiseAsync(int samples, int intervalMs, CancellationToken ct)
+        => LaserNoiseAnalyzer.Analyze(await CaptureSamplesAsync(samples, intervalMs, ct), 3);
+
+    /// <summary>현재 판독 한 스냅샷을 노이즈 통계 샘플로(<paramref name="timeS"/> = 기준 시각 이후 초).</summary>
+    private LaserNoiseSample Snapshot(double timeS)
+    {
+        var r = GetReadings();
+        var pose = ApplyTiltReference(ComputeRawPlanePose(r));
+        return new LaserNoiseSample(
+            timeS,
+            r.Select(x => x.Value).ToArray(),
+            r.Select(x => x.Enabled).ToArray(),
+            r.Select(x => x.Warning).ToArray(),
+            pose.Valid ? pose.Rx : null,
+            pose.Valid ? pose.Ry : null);
+    }
+
+    /// <summary><paramref name="samples"/> 개 스냅샷을 <paramref name="intervalMs"/> 간격으로 수집.</summary>
+    public async Task<List<LaserNoiseSample>> CaptureSamplesAsync(int samples, int intervalMs, CancellationToken ct)
     {
         var list = new List<LaserNoiseSample>(Math.Max(0, samples));
         var sw = System.Diagnostics.Stopwatch.StartNew();
         for (var i = 0; i < samples; i++)
         {
             ct.ThrowIfCancellationRequested();
-            var r = GetReadings();
-            var pose = ApplyTiltReference(ComputeRawPlanePose(r));
-            list.Add(new LaserNoiseSample(
-                sw.Elapsed.TotalSeconds,
-                r.Select(x => x.Value).ToArray(),
-                r.Select(x => x.Enabled).ToArray(),
-                r.Select(x => x.Warning).ToArray(),
-                pose.Valid ? pose.Rx : null,
-                pose.Valid ? pose.Ry : null));
+            list.Add(Snapshot(sw.Elapsed.TotalSeconds));
             if (i + 1 < samples) await Task.Delay(intervalMs, ct);
         }
-        return LaserNoiseAnalyzer.Analyze(list, 3);
+        return list;
+    }
+
+    /// <summary>
+    /// 로버스트 평면 측정 — N 샘플의 <b>채널별 중앙값</b>으로 pose 를 계산(평행 기준 반영)하고, 같은 샘플의 노이즈 통계를 함께 돌려준다.
+    /// 3샘플 평균은 σ 0.2mm 채널이 있으면 판정값이 0.2° 이상 흔들리고 한 샘플이 튀면 그대로 끌려갔다(11-09 10:40).
+    /// 어느 채널이든 유효 샘플이 절반 미만이면 무효.
+    /// </summary>
+    public async Task<(PlanePose Pose, LaserNoiseReport Noise)> MeasurePlaneAsync(int samples, int intervalMs,
+        CancellationToken ct)
+    {
+        var report = LaserNoiseAnalyzer.Analyze(await CaptureSamplesAsync(samples, intervalMs, ct), 3);
+        var lacking = report.Channels.Where(c => c.ValidSamples * 2 < Math.Max(1, c.Samples)).ToList();
+        if (lacking.Count > 0)
+            return (PlanePose.Invalid(
+                "유효 샘플 부족 — " + string.Join(", ", lacking.Select(c => $"CH{c.Channel} {c.ValidSamples}/{c.Samples}")) +
+                " (범위 밖)"), report);
+        var pose = ApplyTiltReference(ComputeRawPlanePose(report.Channels.Select(c => c.Median).ToArray()));
+        return (pose, report);
+    }
+
+    /// <summary>
+    /// 모션 후 정착 대기(드리프트 기준) — 최근 <paramref name="windowSamples"/> 개 창에서 채널별 기울기가
+    /// <paramref name="maxSlopeMmPerS"/> 를 넘고 <paramref name="significance"/>·SE 보다 클 때만 미정착
+    /// (<see cref="LaserSettleAnalyzer"/>). 잡음이 큰 채널이 있어도 정착 여부를 판단할 수 있다.
+    /// 정착이면 Settled=true, 한도 초과면 false 와 마지막 미정착 사유.
+    /// </summary>
+    public async Task<LaserSettleResult> WaitForSettledAsync(int windowSamples, int intervalMs, int timeoutMs,
+        double maxSlopeMmPerS, double significance, CancellationToken ct)
+    {
+        if (timeoutMs <= 0) return new LaserSettleResult(true, Array.Empty<string>());
+        var window = new Queue<LaserNoiseSample>();
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        LaserSettleResult last = new(false, new[] { "샘플 수집 전" });
+        while (true)
+        {
+            ct.ThrowIfCancellationRequested();
+            window.Enqueue(Snapshot(sw.Elapsed.TotalSeconds));
+            while (window.Count > windowSamples) window.Dequeue();
+            if (window.Count == windowSamples)
+            {
+                last = LaserSettleAnalyzer.Assess(window.ToList(), maxSlopeMmPerS, significance);
+                if (last.Settled) return last;
+            }
+            if (sw.ElapsedMilliseconds >= timeoutMs) return last;
+            await Task.Delay(intervalMs, ct);
+        }
     }
 
     /// <summary>채널 영점 설정(현재값을 0으로).</summary>

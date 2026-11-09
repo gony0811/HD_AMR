@@ -316,3 +316,66 @@ public static class LaserNoiseAnalyzer
         return sxx > 0 && syy > 0 ? sxy / Math.Sqrt(sxx * syy) : double.NaN;
     }
 }
+
+/// <summary>정착 판정 결과. <see cref="Reasons"/> 는 미정착 사유(채널별 드리프트·범위 밖), 정착이면 빈 목록.</summary>
+public sealed record LaserSettleResult(bool Settled, IReadOnlyList<string> Reasons);
+
+/// <summary>
+/// 모션 후 정착 판정 — 창 안 채널별 선형회귀 기울기가 <b>물리적으로 크고(&gt; maxSlope) 통계적으로도 유의(&gt; k·SE)</b>할 때만
+/// "아직 흘러가는 중"으로 본다. 종전 기준(3샘플 평균 간 |Δ|&lt;0.05mm)은 잡음 σ 0.2mm 채널이 있으면 평균 간 차이 자체가
+/// σ≈0.17mm 라 거의 만족할 수 없어 매번 한도까지 기다린 뒤 정착 여부와 무관하게 측정했다(11-09 10:40 CH2).
+/// 기울기 SE 는 추세 제거 잔차의 σ 와 lag-1 자기상관(앰프 평균화로 연속 샘플이 독립이 아님)을 반영한다.
+/// </summary>
+public static class LaserSettleAnalyzer
+{
+    public static LaserSettleResult Assess(IReadOnlyList<LaserNoiseSample> window, double maxSlopeMmPerS,
+        double significance, int channelCount = 3)
+    {
+        var reasons = new List<string>();
+        for (var c = 0; c < channelCount; c++)
+        {
+            var t = new List<double>();
+            var v = new List<double>();
+            foreach (var s in window)
+            {
+                if (c >= s.Values.Count || c >= s.Valid.Count || !s.Valid[c]) continue;
+                t.Add(s.TimeS);
+                v.Add(s.Values[c]);
+            }
+            if (v.Count < Math.Max(3, window.Count / 2))
+            {
+                reasons.Add($"CH{c + 1} 유효 {v.Count}/{window.Count}");
+                continue;
+            }
+
+            var (slope, se) = SlopeWithError(t.ToArray(), v.ToArray());
+            if (Math.Abs(slope) > maxSlopeMmPerS && Math.Abs(slope) > significance * se)
+                reasons.Add(string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                    $"CH{c + 1} 드리프트 {slope:+0.###;-0.###}mm/s(±{se:0.###})"));
+        }
+        return new LaserSettleResult(reasons.Count == 0, reasons);
+    }
+
+    /// <summary>최소제곱 기울기와 그 표준오차. SE = σ_잔차/√Σ(t−t̄)² × √(n/n_eff), n_eff 는 잔차 lag-1 로 계산.</summary>
+    internal static (double Slope, double StdError) SlopeWithError(double[] t, double[] y)
+    {
+        var n = t.Length;
+        if (n < 3) return (0, double.PositiveInfinity);
+        var mt = t.Average();
+        var my = y.Average();
+        double sxx = 0, sxy = 0;
+        for (var i = 0; i < n; i++)
+        {
+            sxx += (t[i] - mt) * (t[i] - mt);
+            sxy += (t[i] - mt) * (y[i] - my);
+        }
+        if (sxx <= 0) return (0, double.PositiveInfinity);
+        var slope = sxy / sxx;
+        var resid = new double[n];
+        for (var i = 0; i < n; i++) resid[i] = y[i] - (my + slope * (t[i] - mt));
+        var sigma = Math.Sqrt(resid.Sum(r => r * r) / (n - 2));
+        var neff = LaserNoiseAnalyzer.EffectiveN(n, LaserNoiseAnalyzer.Lag1(resid));
+        var se = sigma / Math.Sqrt(sxx) * Math.Sqrt(n / Math.Max(1, neff));
+        return (slope, se);
+    }
+}
