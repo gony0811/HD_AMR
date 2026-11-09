@@ -1001,6 +1001,14 @@ public class FairinoRpcClient : IDisposable
     public Task<int> SetSpeedAsync(int velPct, CancellationToken ct = default)
         => InvokeAsync("SetSpeed", p => ToErr(p.SetSpeed(velPct)), ct);
 
+    /// <summary>전역 가속도 배율(%) 설정 — 컨트롤러 전역 상태라 바꾼 쪽이 반드시 되돌려야 한다.
+    /// 조회 API 가 없어 이전 값을 읽을 수 없으므로 복원은 <see cref="DefaultOaccScalePct"/> 로 한다.</summary>
+    public Task<int> SetOaccScaleAsync(double accPct, CancellationToken ct = default)
+        => InvokeAsync("SetOaccScale", p => ToErr(p.SetOaccScale(Math.Clamp(accPct, 1.0, 100.0))), ct);
+
+    /// <summary>전역 가속도 배율 기본값(%) — 복원 대상.</summary>
+    public const double DefaultOaccScalePct = 100.0;
+
     public Task<int> StopMotionAsync(CancellationToken ct = default)
         => InvokeAsync("StopMotion", p => ToErr(p.StopMotion()), ct, faultRecovery: false);
 

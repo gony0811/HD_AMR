@@ -219,6 +219,7 @@ public class InspectionRecipeService
                 CameraTargetDistanceMm = null,     // 전역 기본(400mm) 사용
                 MoveVelPercent = null,             // 이동 속도 — null=프로필 RunVel(미지정 20) 폴백
                 InspectVelPercent = null,          // 검사 속도 — null=이동 속도와 동일
+                InspectAccPercent = null,          // 검사 가속도 — null=변경 안 함
                 VisionFailRatioMax = 1.0,          // 판정 안 함 — 정책 확정 시 하향
                 // (PatternJson 제거) CROSS3/CROSS4 는 /inspection-points 6-DOF 캡처 프로필 경유점을 실행 —
                 // 십자 패턴 런타임 생성은 폐기(캡처 교시 단일화).

@@ -213,6 +213,10 @@ public class InspectionRunStep : ISequenceStep
         else
             _logger.LogInformation("[검사 수행] 검사 Run={RunId}, Task={TaskId}, attempt={Attempt}", runId, taskId, attempt);
 
+        // 검사 가속도: 순회 동안만 전역 가속도 배율 변경 → finally 에서 기본값 복원(성공·실패·취소 공통).
+        var accChanged = await ApplyInspectAccelerationAsync(context, ct);
+        try
+        {
         for (var i = 0; i < waypoints.Count; i++)
         {
             ct.ThrowIfCancellationRequested();
@@ -269,6 +273,11 @@ public class InspectionRunStep : ISequenceStep
                     outcome.Code is { } c ? ResultCodeNames.NameOf((ushort)c) : "—");
             }
         }
+        }
+        finally
+        {
+            if (accChanged) await RestoreAccelerationAsync();
+        }
 
         int moved = movedSet.Count, skipped = skippedSet.Count;
         int visOk = visByIndex.Values.Count(ok => ok), visFail = visByIndex.Count - visOk;
@@ -297,6 +306,49 @@ public class InspectionRunStep : ISequenceStep
         }
 
         return StepResult.Ok(msg);
+    }
+
+    /// <summary>레시피 검사 가속도가 있으면 전역 가속도 배율을 그 값으로 바꾼다. 바꿨으면 true(복원 필요).
+    /// 실패해도 검사는 중단하지 않고 기본 가속도로 진행한다 — 가속도는 품질이 아니라 진동·사이클 조정용이다.</summary>
+    private async Task<bool> ApplyInspectAccelerationAsync(SequenceContext context, CancellationToken ct)
+    {
+        if (context.InspectAcceleration is not { } acc) return false;
+        try
+        {
+            var rc = await _cobot.Rpc.SetOaccScaleAsync(acc, ct);
+            if (rc == 0)
+            {
+                _logger.LogInformation("[검사 수행] 순회 가속도 배율 {Acc}% 적용 (종료 시 {Def}% 복원)", acc, FairinoRpcClient.DefaultOaccScalePct);
+                return true;
+            }
+            _logger.LogWarning("[검사 수행] 순회 가속도 배율 {Acc}% 설정 실패 (rc={Rc}){Desc} — 기본 가속도로 진행",
+                acc, rc, FairinoErrorCodes.Suffix(rc));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "[검사 수행] 순회 가속도 배율 {Acc}% 설정 실패 — 기본 가속도로 진행", acc);
+        }
+        // 설정 실패라도 일부 반영됐을 수 있으므로 복원은 시도한다.
+        return true;
+    }
+
+    /// <summary>전역 가속도 배율 복원. 취소된 뒤에도 반드시 보내야 하므로 호출자 토큰을 쓰지 않는다.</summary>
+    private async Task RestoreAccelerationAsync()
+    {
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var rc = await _cobot.Rpc.SetOaccScaleAsync(FairinoRpcClient.DefaultOaccScalePct, cts.Token);
+            if (rc == 0)
+                _logger.LogInformation("[검사 수행] 가속도 배율 {Def}% 복원", FairinoRpcClient.DefaultOaccScalePct);
+            else
+                _logger.LogError("[검사 수행] 가속도 배율 복원 실패 (rc={Rc}){Desc} — 이후 모션 가속도가 바뀐 채일 수 있습니다",
+                    rc, FairinoErrorCodes.Suffix(rc));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[검사 수행] 가속도 배율 복원 실패 — 이후 모션 가속도가 바뀐 채일 수 있습니다");
+        }
     }
 
     /// <summary>

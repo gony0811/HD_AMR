@@ -207,6 +207,7 @@ CREATE TABLE IF NOT EXISTS InspectionRecipes (
     CameraTargetDistanceMm REAL NULL,
     MoveVelPercent INTEGER NULL,
     InspectVelPercent INTEGER NULL,
+    InspectAccPercent INTEGER NULL,
     InspectionProfileId INTEGER NULL,
     ChamferSlopeProfileId INTEGER NULL,
     VisionFailRatioMax REAL NOT NULL DEFAULT 1.0,
@@ -255,7 +256,7 @@ CREATE TABLE IF NOT EXISTS InspectionRecipes (
             db.Database.ExecuteSqlRaw("ALTER TABLE InspectionRecipes ADD COLUMN DryRun INTEGER NOT NULL DEFAULT 0;");
 
         // 이동/검사 속도 분리 컬럼(% — null=폴백: 이동은 프로필 RunVel, 검사는 이동 속도)도 후방호환 추가.
-        foreach (var velCol in new[] { "MoveVelPercent", "InspectVelPercent" })
+        foreach (var velCol in new[] { "MoveVelPercent", "InspectVelPercent", "InspectAccPercent" })
         {
             var hasVel = db.Database
                 .SqlQueryRaw<long>($"SELECT COUNT(*) AS Value FROM pragma_table_info('InspectionRecipes') WHERE name = '{velCol}'")
@@ -280,9 +281,9 @@ CREATE TABLE IF NOT EXISTS InspectionRecipes (
         {
             db.Database.ExecuteSqlRaw(
                 "INSERT INTO InspectionRecipes (Id, DisplayName, SeamType, Orientation, Enabled, DryRun, StepKeysJson, " +
-                "CameraTargetDistanceMm, MoveVelPercent, InspectVelPercent, InspectionProfileId, VisionFailRatioMax, CreatedAt, UpdatedAt) " +
+                "CameraTargetDistanceMm, MoveVelPercent, InspectVelPercent, InspectAccPercent, InspectionProfileId, VisionFailRatioMax, CreatedAt, UpdatedAt) " +
                 $"SELECT '{newId}', '{name}', SeamType, 'Any', {enabled}, DryRun, StepKeysJson, " +
-                "CameraTargetDistanceMm, MoveVelPercent, InspectVelPercent, InspectionProfileId, VisionFailRatioMax, CreatedAt, UpdatedAt " +
+                "CameraTargetDistanceMm, MoveVelPercent, InspectVelPercent, InspectAccPercent, InspectionProfileId, VisionFailRatioMax, CreatedAt, UpdatedAt " +
                 $"FROM InspectionRecipes WHERE Id LIKE '{newId}-%' " +
                 $"AND NOT EXISTS (SELECT 1 FROM InspectionRecipes WHERE Id = '{newId}') " +
                 "ORDER BY (InspectionProfileId IS NULL), Id LIMIT 1;");

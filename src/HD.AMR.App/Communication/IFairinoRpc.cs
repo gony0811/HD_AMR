@@ -96,6 +96,10 @@ public interface IFairinoRpc : IXmlRpcProxy
     [XmlRpcMethod("SetSpeed")]
     object SetSpeed(int vel);
 
+    /// <summary>전역 가속도 배율(%) 설정. acc: 0~100. 이후 모든 모션에 적용된다.</summary>
+    [XmlRpcMethod("SetOaccScale")]
+    object SetOaccScale(double acc);
+
     /// <summary>현재 관절각(도) 조회. flag: 0=블로킹,1=논블로킹. 반환 [errcode, j0..j5].</summary>
     [XmlRpcMethod("GetActualJointPosDegree")]
     object GetActualJointPosDegree(int flag);

@@ -214,6 +214,12 @@
                                                            Increment="5" Minimum="1" Maximum="100" FormatString="0" />
                                             <TextBlock Classes="hint" Text="⑱ 경유점 순회(검사 스캔) 전용. 빈 값 = 이동 속도와 동일" />
                                         </StackPanel>
+                                        <StackPanel Width="300" Margin="24,0,0,0">
+                                            <TextBlock Classes="section" Text="검사 가속도 [%]" />
+                                            <NumericUpDown Width="170" HorizontalAlignment="Left" Value="{Binding InspectAccPercent}"
+                                                           Increment="5" Minimum="1" Maximum="100" FormatString="0" />
+                                            <TextBlock Classes="hint" Text="⑱ 순회 동안만 적용, 끝나면 100% 복원. 빈 값 = 변경 안 함" />
+                                        </StackPanel>
                                     </WrapPanel>
 
                                     <!-- 버튼 -->

@@ -133,6 +133,13 @@
                                            @bind="row.InspectVelPercent" />
                                     <div class="form-text">⑱ 경유점 순회(검사 스캔) 전용</div>
                                 </div>
+                                <div class="col-auto">
+                                    <label class="form-label mb-1 text-muted">검사 가속도 [%]</label>
+                                    <input type="number" step="5" min="1" max="100" style="width:150px"
+                                           class="form-control form-control-sm" placeholder="(빈 값 = 변경 안 함)"
+                                           @bind="row.InspectAccPercent" />
+                                    <div class="form-text">⑱ 순회 동안만 적용, 끝나면 100% 복원</div>
+                                </div>
                                 <div class="col-12 text-muted">
                                     seamType=<b>@row.SeamType</b>, 면자세=<b>@row.Orientation</b> ·
                                     세부값 편집 후 위 행의 <b>저장</b> 을 누르세요(같은 레시피).

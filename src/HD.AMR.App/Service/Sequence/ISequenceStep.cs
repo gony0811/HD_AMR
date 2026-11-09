@@ -61,6 +61,10 @@ public class SequenceContext
     /// ACS 경로에서 레시피 InspectVelPercent 로 주입된다 — 접근/복귀는 Velocity, 스캔만 이 값.</summary>
     public int? InspectVelocity { get; set; }
 
+    /// <summary>⑱ 경유점 순회 동안만 적용할 전역 가속도 배율 [%]. null = 변경 안 함.
+    /// ACS 경로에서 레시피 InspectAccPercent 로 주입된다 — 순회 후 100% 로 복원.</summary>
+    public int? InspectAcceleration { get; set; }
+
     /// <summary>검사위치 이동 수평 오프셋 u (mm). 좌(+)/우(−) → TOOL X+/X− (실측 확인 매핑).</summary>
     public double InspectionOffsetU { get; set; }
 

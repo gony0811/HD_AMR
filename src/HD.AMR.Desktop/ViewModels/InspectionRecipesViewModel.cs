@@ -180,6 +180,9 @@ public sealed partial class RecipeRow : ObservableObject
     /// <summary>검사 속도 [%] — ⑱ 경유점 순회(스캔) 전용. 비움=이동 속도와 동일.</summary>
     [ObservableProperty] private double? _inspectVelPercent;
 
+    /// <summary>검사 가속도 [%] — ⑱ 순회 동안만 전역 가속도 배율 변경, 끝나면 100% 복원. 비움=변경 안 함.</summary>
+    [ObservableProperty] private double? _inspectAccPercent;
+
     /// <summary>티칭 프로필 선택지 — [0]=미지정, 이후 레시피 타입과 같은 SeamType 프로필(최신 저장순).</summary>
     public List<ProfileOption> ProfileOptions { get; }
 
@@ -212,6 +215,7 @@ public sealed partial class RecipeRow : ObservableObject
     partial void OnCameraTargetDistanceMmChanged(double? value) => IsDirty = true;
     partial void OnMoveVelPercentChanged(double? value) => IsDirty = true;
     partial void OnInspectVelPercentChanged(double? value) => IsDirty = true;
+    partial void OnInspectAccPercentChanged(double? value) => IsDirty = true;
     partial void OnSelectedProfileChanged(ProfileOption? value) => IsDirty = true;
     partial void OnSelectedChamferSlopeProfileChanged(ProfileOption? value) => IsDirty = true;
 
@@ -309,6 +313,7 @@ public sealed partial class RecipeRow : ObservableObject
         _cameraTargetDistanceMm = e.CameraTargetDistanceMm;
         _moveVelPercent = e.MoveVelPercent;
         _inspectVelPercent = e.InspectVelPercent;
+        _inspectAccPercent = e.InspectAccPercent;
 
         var want = InspectionRecipeResolver.ProfileSeamTypeOf(e.Id);
         ProfileOptions = new List<ProfileOption> { ProfileOption.None };
@@ -351,6 +356,7 @@ public sealed partial class RecipeRow : ObservableObject
         _entity.CameraTargetDistanceMm = CameraTargetDistanceMm;
         _entity.MoveVelPercent = MoveVelPercent is { } mv ? Math.Clamp((int)Math.Round(mv), 1, 100) : null;
         _entity.InspectVelPercent = InspectVelPercent is { } iv ? Math.Clamp((int)Math.Round(iv), 1, 100) : null;
+        _entity.InspectAccPercent = InspectAccPercent is { } ia ? Math.Clamp((int)Math.Round(ia), 1, 100) : null;
         _entity.InspectionProfileId = IsCorner3 ? null : SelectedProfile?.Id;
         _entity.ChamferSlopeProfileId = IsLine ? SelectedChamferSlopeProfile?.Id : null;
         return _entity;

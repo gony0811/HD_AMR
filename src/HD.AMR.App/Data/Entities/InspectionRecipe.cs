@@ -67,6 +67,10 @@ public class InspectionRecipe
     /// <summary>코봇 검사 속도 [%] — ⑱ 경유점 순회(검사 스캔) 전용. null = 이동 속도와 동일.</summary>
     public int? InspectVelPercent { get; set; }
 
+    /// <summary>코봇 검사 가속도 [%] — ⑱ 경유점 순회 동안만 전역 가속도 배율(SetOaccScale)을 이 값으로 바꾸고,
+    /// 순회가 끝나면(성공·실패·취소 모두) 100% 로 복원한다. null = 변경 안 함.</summary>
+    public int? InspectAccPercent { get; set; }
+
     // (제거됨) SurfaceOverride — 비전 Surface 강제값. X-Y 교시 경유점은 점별 Surface 를 수동 지정하고
     //   CORNER 스텝은 Corner 고정이라 무효화되어 폐기(2026-09-18). Surface 는 경유점 단위로 일원화.
     // (제거됨) PatternJson — CROSS4 십자 패턴 런타임 생성 파라미터. 캡처 교시 단일화로 폐기(2026-09-15).
