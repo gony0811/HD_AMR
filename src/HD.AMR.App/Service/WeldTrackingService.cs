@@ -1173,6 +1173,33 @@ public class WeldTrackingService
         }
     }
 
+    /// <summary>
+    /// <see cref="CapturePeakAsync"/> 와 같은 검출이지만 측정 슬롯(<see cref="M1"/>/<see cref="M2"/>)·각도·상태를 바꾸지 않는다.
+    /// ⑪⁺ Bead2 센터링 후 작업물 좌표계 점2 잔차 보정용 재측정 — 슬롯을 덮으면 ⑫ 각도가 θ≈0 으로 오염된다.
+    /// 오버레이(<see cref="LastDetect"/>)는 이번 검출로 갱신된다.
+    /// </summary>
+    public async Task<(PeakMeasurement? Measurement, WeldDetectionResult? Detect)> MeasureWithoutStoringAsync(
+        int id, RoiRect peakRoi, RoiRect weldRoi, CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct);
+        var (m1, m2, angle, state, message) = (M1, M2, Angle, State, Message);
+        try
+        {
+            _override = new RoiOverride(peakRoi, weldRoi);
+            _seqIrGeometry = Params.Mode != WeldImageMode.Ir;
+            await Task.Run(() => CapturePeak(id), ct);
+            var measured = LastDetect is { Success: true } ? (id == 1 ? M1 : M2) : null;
+            return (ReferenceEquals(measured, id == 1 ? m1 : m2) ? null : measured, LastDetect);
+        }
+        finally
+        {
+            (M1, M2, Angle, State, Message) = (m1, m2, angle, state, message);
+            _seqIrGeometry = false;
+            _override = null;
+            _gate.Release();
+        }
+    }
+
     // ── 시퀀스 수동 비드 입력 ───────────────────────────────────────
     /// <summary>
     /// 수동 비드 입력용 스냅샷 — 현재 IR·컬러·Depth 프레임을 고정하고, 각 영상 좌표의 가이드(Peak 선·기준선·ROI·
