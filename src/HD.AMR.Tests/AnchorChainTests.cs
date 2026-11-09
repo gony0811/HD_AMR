@@ -148,4 +148,61 @@ public class AnchorChainTests
         Assert.Equal(expected, value);
         Assert.Equal(ok, valid);
     }
+
+    // 실기 2026-11-09 17:46 L4-R08C08 V01: 비드 두 점으로 잰 프레임(X = 비드 방향 −91.97°)과 ACS 시작점 차이
+    // [-12.9, -359.8, -0.1](−92.05°). 종전에는 ACS 차이를 그대로 써서 LINE 마다 옆으로 0.55mm 씩 밀렸다(V01→V04 위로 시프트).
+    private static readonly double[] BeadFrame = { -561.0, 1522.8, 1223.9, -179.54, 0.01, -91.97 };
+
+    [Fact]
+    public void 연속_LINE_프레임은_비드_방향으로만_옮긴다()
+    {
+        var (moved, lateral, normal, alongX) = InternalWorkpieceFrame.TranslateAlongX(
+            BeadFrame, new[] { 0.0, 0.0, 0.0 }, new[] { -12.9, -359.8, -0.1 });
+
+        Assert.True(alongX);
+        Assert.InRange(Math.Abs(lateral), 0.4, 0.7);                       // 버린 ACS 옆 성분 ≈ 0.55mm
+        var m = HD.AMR.App.Communication.FrameMath.PoseToMatrix(BeadFrame);
+        var d = new[] { moved[0] - BeadFrame[0], moved[1] - BeadFrame[1], moved[2] - BeadFrame[2] };
+        double Comp(int col) => d[0] * m[0, col] + d[1] * m[1, col] + d[2] * m[2, col];
+        Assert.InRange(Comp(0), 359.9, 360.1);                              // 진행 거리 유지
+        Assert.Equal(0.0, Comp(1), 9);                                      // 옆(프레임 Y) 이동 없음
+        Assert.Equal(0.0, Comp(2), 9);                                      // 면 거리 유지
+        Assert.Equal(BeadFrame[3..], moved[3..]);                           // 자세 그대로
+    }
+
+    [Fact]
+    public void 세_번_옮겨도_옆으로_누적되지_않는다()
+    {
+        var frame = BeadFrame;
+        var m = HD.AMR.App.Communication.FrameMath.PoseToMatrix(BeadFrame);
+        for (var i = 0; i < 3; i++)
+            frame = InternalWorkpieceFrame.TranslateAlongX(frame, new[] { 0.0, 0.0, 0.0 }, new[] { -12.9, -359.8, -0.1 }).Frame;
+        var d = new[] { frame[0] - BeadFrame[0], frame[1] - BeadFrame[1], frame[2] - BeadFrame[2] };
+        Assert.Equal(0.0, d[0] * m[0, 1] + d[1] * m[1, 1] + d[2] * m[2, 1], 9);   // V04 도 V01 비드선 위
+        Assert.InRange(d[0] * m[0, 0] + d[1] * m[1, 0] + d[2] * m[2, 0], 1079.5, 1080.5);
+    }
+
+    [Fact]
+    public void 옆으로_크게_떨어진_task_는_종전_면_평행_이동으로_폴백한다()
+    {
+        // 프레임 X = BASE −Y 근처. BASE X 로 50mm 옆 성분 → 버리지 않는다.
+        var to = new[] { -12.9 + 50.0, -359.8, -0.1 };
+        var (moved, lateral, _, alongX) = InternalWorkpieceFrame.TranslateAlongX(BeadFrame, new[] { 0.0, 0.0, 0.0 }, to);
+        var (inPlane, _) = InternalWorkpieceFrame.TranslateInPlane(BeadFrame, new[] { 0.0, 0.0, 0.0 }, to);
+
+        Assert.False(alongX);
+        Assert.True(Math.Abs(lateral) > InternalWorkpieceFrame.MaxDroppedLateralMm);
+        for (var i = 0; i < 6; i++) Assert.Equal(inPlane[i], moved[i], 9);
+    }
+
+    [Fact]
+    public void 같은_시작점이면_비드_방향_이동도_그대로()
+    {
+        var start = new[] { -543.7, 1507.3, 807.5 };
+        var (moved, lateral, normal, alongX) = InternalWorkpieceFrame.TranslateAlongX(BeadFrame, start, start);
+        Assert.True(alongX);
+        Assert.Equal(0.0, lateral, 9);
+        Assert.Equal(0.0, normal, 9);
+        for (var i = 0; i < 6; i++) Assert.Equal(BeadFrame[i], moved[i], 9);
+    }
 }

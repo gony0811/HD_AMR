@@ -1164,11 +1164,18 @@ public class CobotInspectionMoveStep : ISequenceStep
             return "[Cobot 검사위치 이동] anchor 공유 프레임의 기준 시작점이 없어 이번 용접선 위치로 옮길 수 없습니다 — " +
                    "직전 구간을 다시 검사하게 되므로 중단합니다. 같은 그룹을 처음부터(정렬 포함) 다시 실행하세요.";
 
-        var (moved, normalMm) = InternalWorkpieceFrame.TranslateInPlane(frame, anchorStart, startBase);
+        // 비드 방향(프레임 X)으로만 옮긴다 — ACS 시작점 차이의 옆 성분(맵·AMR 방향 오차)이 LINE 마다 누적되지 않게.
+        var (moved, lateralMm, normalMm, alongX) = InternalWorkpieceFrame.TranslateAlongX(frame, anchorStart, startBase);
         context.Bag[InternalWorkpieceFrame.BagKey] = moved;
-        _logger.LogInformation(
-            "[Cobot 검사위치 이동] anchor 프레임 평행 이동 Δ=[{Dx:0.0}, {Dy:0.0}, {Dz:0.0}]mm (법선 성분 {N:+0.0;-0.0}mm 제외) — 원점 [{X:0.0}, {Y:0.0}, {Z:0.0}]",
-            moved[0] - frame[0], moved[1] - frame[1], moved[2] - frame[2], normalMm, moved[0], moved[1], moved[2]);
+        if (alongX)
+            _logger.LogInformation(
+                "[Cobot 검사위치 이동] anchor 프레임 평행 이동(비드 방향만) Δ=[{Dx:0.0}, {Dy:0.0}, {Dz:0.0}]mm (ACS 옆 성분 {L:+0.0;-0.0}mm·법선 성분 {N:+0.0;-0.0}mm 제외) — 원점 [{X:0.0}, {Y:0.0}, {Z:0.0}]",
+                moved[0] - frame[0], moved[1] - frame[1], moved[2] - frame[2], lateralMm, normalMm, moved[0], moved[1], moved[2]);
+        else
+            _logger.LogWarning(
+                "[Cobot 검사위치 이동] anchor 프레임 평행 이동 — ACS 옆 성분 {L:+0.0;-0.0}mm 가 {Max:0}mm 초과(같은 그룹 task 가 옆으로 떨어져 있음) → 면 평행 이동 Δ=[{Dx:0.0}, {Dy:0.0}, {Dz:0.0}]mm (법선 성분 {N:+0.0;-0.0}mm 제외) — 원점 [{X:0.0}, {Y:0.0}, {Z:0.0}]",
+                lateralMm, InternalWorkpieceFrame.MaxDroppedLateralMm,
+                moved[0] - frame[0], moved[1] - frame[1], moved[2] - frame[2], normalMm, moved[0], moved[1], moved[2]);
         return null;
     }
 
