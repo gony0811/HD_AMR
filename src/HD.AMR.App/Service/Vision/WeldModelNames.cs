@@ -61,7 +61,10 @@ public static class WeldModelNames
 
     /// <summary>모델 드롭다운에 보일 이름 — 히트맵은 U-Net 칸에 섞여 나오므로 표식을 붙여 구분한다.</summary>
     public static string DisplayLabel(string path)
-        => IsHeatmap(path) ? $"🔥 {Path.GetFileName(path)} (히트맵)" : Path.GetFileName(path);
+        => IsHeatmap(path) ? $"🔥 {FileName(path)} (히트맵)" : FileName(path);
+
+    /// <summary>파일명만 — '\' 와 '/' 를 모두 구분자로 본다(Windows 경로를 macOS 에서 다뤄도 같은 결과).</summary>
+    private static string FileName(string path) => path[(path.LastIndexOfAny(['\\', '/']) + 1)..];
 
     /// <summary>
     /// 방식별 모델 목록이 비었을 때의 안내 문구. 목록은 학습 models 폴더의 .onnx 중 파일명 표식으로 거르므로,

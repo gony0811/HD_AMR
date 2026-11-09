@@ -100,7 +100,8 @@ public class WeldModelNameParsingTests
         Assert.False(WeldModelNames.IsYolo(name));
         Assert.Equal(WeldDetectionMethod.Unet, WeldModelNames.KindOf(name, WeldDetectionMethod.Dl));
         Assert.Contains("히트맵", WeldModelNames.DisplayLabel(name));
-        Assert.Contains(Path.GetFileName(name), WeldModelNames.DisplayLabel(name));
+        Assert.Contains(name[(name.LastIndexOfAny(['\\', '/']) + 1)..], WeldModelNames.DisplayLabel(name));   // Windows 경로도 macOS 에서 같은 결과
+        Assert.DoesNotContain(@"models\", WeldModelNames.DisplayLabel(name));
     }
 
     [Fact]
