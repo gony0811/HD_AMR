@@ -336,9 +336,18 @@
         try
         {
             var scale = await TeachingMove.LoadJointVelocityScaleAsync(Param);
-            var rc = await TeachingMove.MoveToAsync(Cobot, p, _runTool, _vel, scale, _moveCts.Token);
-            _isErr = rc != 0;
-            _msg = rc == 0 ? $"'{p.Name}' 위치로 이동 완료." : $"이동 실패 (rc={rc}).";
+            var r = await TeachingMove.MoveAlongRouteAsync(Cobot, _positions ?? [p], p, _runTool, _vel, scale,
+                step =>
+                {
+                    _msg = $"'{step.Name}' 위치로 이동 중…";
+                    _isErr = false;
+                    _ = InvokeAsync(StateHasChanged);
+                }, _moveCts.Token);
+            var via = r.Plan.IsVia ? $" (경유: {string.Join(" → ", r.Plan.Steps.Select(s => s.Name))})" : "";
+            _isErr = !r.Ok;
+            _msg = r.Plan.Error is { } err ? err
+                 : r.Ok ? $"'{p.Name}' 위치로 이동 완료.{via}"
+                 : $"'{r.FailedAt?.Name}' 이동 실패 (rc={r.Rc}){FairinoErrorCodes.Suffix(r.Rc)}{via}";
         }
         catch (OperationCanceledException)
         {

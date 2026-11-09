@@ -120,8 +120,13 @@ public sealed partial class TeachingViewModel : ViewModelBase
             double scale;
             using (var scope = _scopeFactory.CreateScope())
                 scale = await TeachingMove.LoadJointVelocityScaleAsync(scope.ServiceProvider.GetRequiredService<ParameterService>());
-            var rc = await TeachingMove.MoveToAsync(_cobot, p, RunTool, Vel, scale, _moveCts.Token);
-            if (rc == 0) Ok($"'{p.Name}' 위치로 이동 완료."); else Fail($"이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}");
+            var all = Rows.Select(r => r.Entity).ToList();
+            var r = await TeachingMove.MoveAlongRouteAsync(_cobot, all, p, RunTool, Vel, scale,
+                step => Dispatcher.UIThread.Post(() => Message = $"'{step.Name}' 위치로 이동 중…"), _moveCts.Token);
+            var via = r.Plan.IsVia ? $" (경유: {string.Join(" → ", r.Plan.Steps.Select(s => s.Name))})" : "";
+            if (r.Plan.Error is { } err) Fail(err);
+            else if (r.Ok) Ok($"'{p.Name}' 위치로 이동 완료.{via}");
+            else Fail($"'{r.FailedAt?.Name}' 이동 실패 (rc={r.Rc}){FairinoErrorCodes.Suffix(r.Rc)}{via}");
         }
         catch (OperationCanceledException) { Fail("사용자 정지"); }
         catch (Exception ex) { Fail($"이동 실패: {ex.Message}"); }

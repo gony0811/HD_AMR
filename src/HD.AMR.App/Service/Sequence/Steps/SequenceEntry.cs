@@ -97,10 +97,10 @@ internal static class SequenceEntry
         var upper = IsUpperRoute(wallCode);
         if (upper && mode == PoseMode.Home)
             return $"수동 자세 전환 필요 — 상부 면({wallCode})은 홈 위치_2 자세에서만 검사합니다. 현재 홈 위치 자세입니다. " +
-                   "Teaching에서 홈 위치 → 작업 준비 위치 → 홈 위치_1.5 → 홈 위치_1.6 → 홈 위치_2 로 전환한 뒤 재시도하세요.";
+                   "Teaching에서 홈 위치_2 '이동'(작업 준비·홈 위치_1.5·1.6 자동 경유)으로 전환한 뒤 재시도하세요.";
         if (!upper && mode == PoseMode.Home2)
             return $"수동 자세 전환 필요 — {wallCode ?? "일반"} 면은 홈 위치 자세에서만 검사합니다. 현재 홈 위치_2 자세입니다. " +
-                   "Teaching에서 홈 위치_2 → 홈 위치_1.6 → 홈 위치_1.5 → 작업 준비 위치 → 홈 위치 로 전환한 뒤 재시도하세요.";
+                   "Teaching에서 홈 위치 '이동'(홈 위치_1.6·1.5·작업 준비 자동 경유)으로 전환한 뒤 재시도하세요.";
         return null;
     }
 
