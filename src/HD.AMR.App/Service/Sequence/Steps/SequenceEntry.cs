@@ -653,6 +653,16 @@ internal static class SequenceEntry
             throw new InvalidOperationException(plan.Blocker);
         }
 
+        // 경로 검증(모션 없음) — 직선 후퇴는 툴 자세를 유지하므로 팔이 접히며 손목이 한계까지 돌 수 있다
+        // (실기 2026-11-09 09:20: 수평 후퇴 중 J4 75.8°→85° 한계 정지). 움직이기 전에 경로를 이어 풀어 본다.
+        var pathBlocker = await RetractPathBlockerAsync(cobot, ctx, currentPose, plan.EndTcp, ct);
+        if (pathBlocker is not null)
+        {
+            logger.LogWarning("벽면 후퇴 중단(경로 검증): 현재=[{Pose}] → 끝점=[{End}] — {Msg}", poseText, endText, pathBlocker);
+            throw new InvalidOperationException(
+                $"벽면 후퇴 경로 {pathBlocker} — 움직이지 않고 정지합니다. 펜던트/조그로 손목 여유를 확보하며 벽에서 떼어 낸 뒤 재시도하세요.");
+        }
+
         try
         {
             int rc;
@@ -689,6 +699,47 @@ internal static class SequenceEntry
             throw new InvalidOperationException(RetractFailedMessage(ex.Message), ex);
         }
     }
+
+    /// <summary>
+    /// 벽면 후퇴 직선(현재 TCP → <paramref name="endTcp"/>, 자세 유지)을 <see cref="CobotInspectionMoveStep.PlanarSampleMm"/>
+    /// 간격으로 현재 관절에서 이어 풀어, 점마다 <see cref="CobotInspectionMoveStep.PathStepBlocker"/>(관절 한계 근접·점프·
+    /// 팔꿈치·손목 특이점)를 본다. 걸리면 "[점] 사유", 통과하면 null. 관절·IK 조회 실패도 사유로 돌려준다(움직이지 않는다).
+    /// </summary>
+    private static async Task<string?> RetractPathBlockerAsync(
+        CobotService cobot, SequenceContext ctx, double[] currentPose, double[] endTcp, CancellationToken ct)
+    {
+        double[] curJoints;
+        try { curJoints = await cobot.Rpc.GetActualJointPosAsync(ct: ct); }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return $"검증 불가 — 현재 관절을 읽지 못했습니다({ex.Message})";
+        }
+
+        var seed = curJoints;
+        foreach (var pt in RetractSamplePoints(currentPose, endTcp))
+        {
+            var at = string.Join(", ", pt.Select(v => v.ToString("0")));
+            double[] j;
+            try
+            {
+                j = await cobot.Rpc.GetInverseKinNearestAsync(
+                    new[] { pt[0], pt[1], pt[2], currentPose[3], currentPose[4], currentPose[5] }, seed, ctx.Tool, 0, ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                return $"[{at}] 도달 불가({ex.Message})";
+            }
+            if (CobotInspectionMoveStep.PathStepBlocker(seed, j, curJoints) is { } why)
+                return $"[{at}] {why}";
+            seed = j;
+        }
+        return null;
+    }
+
+    /// <summary>벽면 후퇴 경로 검증 점 — 출발점 제외, 끝점 포함(<see cref="CobotInspectionMoveStep.SampleSegment"/>).</summary>
+    internal static List<double[]> RetractSamplePoints(double[] currentPose, double[] endTcp)
+        => CobotInspectionMoveStep.SampleSegment(currentPose.Take(3).ToArray(), endTcp.Take(3).ToArray(),
+            CobotInspectionMoveStep.PlanarSampleMm);
 
     internal static string RetractFailedMessage(string cause)
         => $"벽면 후퇴 실패({cause}) — 벽 앞 자세에서 바로 관절 이동하면 팔이 벽 쪽으로 휘둘릴 수 있어 정지합니다. " +

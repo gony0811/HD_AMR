@@ -76,4 +76,39 @@ public class RetractPlanTests
         Assert.Equal(200.0, plan.EndTcp[2], 6);
         Assert.Null(plan.Blocker);
     }
+    // 실기 2026-11-09 09:20 주행 전 복귀: 수평 후퇴 중 J4 75.8° → 85.00°(하드 한계) 에서 정지(main=1, sub=19).
+    [Fact]
+    public void 경로_점이_관절_한계에_근접하면_막는다()
+    {
+        var start = new[] { 0.32, 69.76, -149.25, 75.8, 91.83, 178.16 };
+        var atLimit = new[] { 1.3, 72.2, -160.85, 84.96, 92.81, 178.1 };
+        var inside = new[] { 1.0, 71.0, -155.0, 80.0, 92.3, 178.1 };
+
+        var why = CobotInspectionMoveStep.PathStepBlocker(start, atLimit, start);
+        Assert.NotNull(why);
+        Assert.Contains("J4", why);
+        Assert.Null(CobotInspectionMoveStep.PathStepBlocker(start, inside, start));
+    }
+
+    [Fact]
+    public void J6_은_하드웨어_한계로_막지_않는다()
+        => Assert.Null(CobotInspectionMoveStep.JointLimitBlocker(new[] { 0.0, -90, 90, -90, 90, -290 }));
+
+    [Fact]
+    public void 후퇴_경로_검증_점은_100mm_이하_간격에_끝점_포함()
+    {
+        var pose = new[] { -960.4, -144.2, -7.9, 155.0, 85.9, 153.4 };
+        var plan = SequenceEntry.PlanRetract(pose);
+        var pts = SequenceEntry.RetractSamplePoints(pose, plan.EndTcp);
+
+        var prev = pose.Take(3).ToArray();
+        foreach (var pt in pts)
+        {
+            Assert.True(Math.Sqrt(Enumerable.Range(0, 3).Sum(i => (pt[i] - prev[i]) * (pt[i] - prev[i]))) <= 100.0 + 1e-6);
+            prev = pt;
+        }
+        Assert.Equal(plan.EndTcp[0], pts[^1][0], 6);
+        Assert.Equal(plan.EndTcp[1], pts[^1][1], 6);
+        Assert.Equal(plan.EndTcp[2], pts[^1][2], 6);
+    }
 }

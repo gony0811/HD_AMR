@@ -921,12 +921,31 @@ public class CobotInspectionMoveStep : ISequenceStep
         return m;
     }
 
+    /// <summary>경로 검증 점의 관절이 하드웨어 한계(<see cref="FairinoRpcClient.HardJointMinDeg"/>)에서 지켜야 할 여유 [도].
+    /// 검증 점 사이(≤ <see cref="PlanarSampleMm"/>)에서 더 움직이는 몫을 덮는다 — 실기 2026-11-09 09:20 주행 전 복귀의
+    /// 수평 벽면 후퇴: J4 75.8° 에서 출발해 직선 이동 중 +85° 한계에 닿아 정지(main=1, sub=19).</summary>
+    internal const double PathJointLimitMarginDeg = 2.0;
+
+    /// <summary>관절각이 하드웨어 한계에서 <see cref="PathJointLimitMarginDeg"/> 안쪽이 아니면 사유, 안쪽이면 null.
+    /// J6 은 하드웨어 범위로 묶지 않는다(J6 안전 범위는 호출측 규칙).</summary>
+    internal static string? JointLimitBlocker(double[] joints)
+    {
+        for (var i = 0; i < Math.Min(joints.Length, FairinoRpcClient.HardJointMinDeg.Length); i++)
+        {
+            double lo = FairinoRpcClient.HardJointMinDeg[i], hi = FairinoRpcClient.HardJointMaxDeg[i];
+            if (joints[i] < lo + PathJointLimitMarginDeg || joints[i] > hi - PathJointLimitMarginDeg)
+                return $"J{i + 1} 관절 한계 근접({joints[i]:0.0}° ∉ [{lo:0}+{PathJointLimitMarginDeg:0}, {hi:0}−{PathJointLimitMarginDeg:0}])";
+        }
+        return null;
+    }
+
     /// <summary>
     /// 직선 이동 경로의 연속 두 점 해(<paramref name="prev"/>→<paramref name="next"/>)가 이어지지 않는 사유, 이어지면 null.
-    /// 관절 점프·팔꿈치 가지 전환·손목 특이점(J5 부호 반전/여유 부족)을 본다 — 기준 가지는 진입점 해 <paramref name="entry"/>.
+    /// 관절 점프·팔꿈치 가지 전환·손목 특이점(J5 부호 반전/여유 부족)·관절 한계 근접을 본다 — 기준 가지는 진입점 해 <paramref name="entry"/>.
     /// </summary>
     internal static string? PathStepBlocker(double[] prev, double[] next, double[] entry)
     {
+        if (JointLimitBlocker(next) is { } limit) return limit;
         var jump = MaxJointTravel(prev, next);
         if (jump > MaxPathJointStepDeg)
             return $"관절이 {jump:0}° 튐(> {MaxPathJointStepDeg:0}°/{PlanarSampleMm:0}mm) — 경로 도중 해 가지가 바뀜";
