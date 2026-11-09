@@ -34,14 +34,12 @@ public sealed class UnetWeldVisionDetector : IUnetWeldVisionDetector
         double? peakProgressPos = null, string? peakLabel = null, RoiRect? peakRoi = null,
         double? peakCrossStart = null, double? peakCrossEnd = null)
     {
-        var modality = p.Mode == WeldImageMode.Ir ? "ir" : "rgb";
-        // 명시 경로(Weld.Unet.ModelPath)가 있으면 그걸(파일명만이면 models 폴더 기준), 없으면 모달리티로 자동 해석.
-        bool explicitPath = !string.IsNullOrWhiteSpace(p.UnetModelPath);
-        var modelPath = explicitPath ? ResolveExplicitPath(p.UnetModelPath!) : ResolveModelPath(modality);
+        // 모델은 반드시 지정(Weld.Unet.ModelPath, 파일명만이면 models 폴더 기준). 빈값 자동 선택은 하지 않는다.
+        if (string.IsNullOrWhiteSpace(p.UnetModelPath))
+            return WeldDetectionResult.Fail("U-Net 모델 없음 — 용접 추적 화면에서 U-Net 모델을 선택하거나 파라미터 Weld.Unet.ModelPath 를 지정하세요.");
+        var modelPath = ResolveExplicitPath(p.UnetModelPath);
         if (modelPath is null || !File.Exists(modelPath))
-            return WeldDetectionResult.Fail(explicitPath
-                ? $"U-Net 모델 파일이 없습니다: {modelPath ?? p.UnetModelPath} — 저장된 모델 경로(Weld.Unet.ModelPath)를 확인하세요(빈값=자동)."
-                : "U-Net 모델이 지정되지 않았습니다 — 용접 추적에서 U-Net 모델을 선택하거나 파라미터 Weld.Unet.ModelPath 에 파일명을 입력하세요.");
+            return WeldDetectionResult.Fail($"U-Net 모델 파일이 없습니다: {modelPath ?? p.UnetModelPath} — 파라미터 Weld.Unet.ModelPath 를 확인하세요.");
 
         Mat? bgr = null, gray = null;
         try
@@ -56,7 +54,9 @@ public sealed class UnetWeldVisionDetector : IUnetWeldVisionDetector
             if (roi is null)
                 return WeldDetectionResult.Fail("Weld ROI 가 프레임 범위를 벗어났습니다.");
 
-            using var roiBgr = new Mat(bgr, new Rect(roi.X, roi.Y, roi.Width, roi.Height));
+            // CLAHE 모델(이름에 _clahe)이면 전체 프레임에 먼저 건 뒤 ROI 를 자른다(타일 격자가 학습과 같아야 함).
+            using var claheInput = WeldModelNames.HasClahe(modelPath) ? ImageClaheMat.Apply(bgr) : null;
+            using var roiBgr = new Mat(claheInput ?? bgr, new Rect(roi.X, roi.Y, roi.Width, roi.Height));
 
             byte[] m;
             lock (_gate)
@@ -94,11 +94,6 @@ public sealed class UnetWeldVisionDetector : IUnetWeldVisionDetector
         }
     }
 
-    private string? ResolveModelPath(string modality)
-    {
-        var paths = _train.GetPathsAsync().GetAwaiter().GetResult();
-        return paths is null ? null : Path.Combine(paths.Models, WeldModelNames.UnetExportName(modality));
-    }
 
     /// <summary>명시 경로 해석 — 절대경로면 그대로, 파일명/상대경로면 학습 models 폴더 기준. 앞뒤 공백·따옴표 제거.</summary>
     private string? ResolveExplicitPath(string raw)

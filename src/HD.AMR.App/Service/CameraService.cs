@@ -40,6 +40,19 @@ public class CameraService : BackgroundService
     public bool IsIrActive => _client.IsIrActive;
     /// <summary>이미터 ON/OFF 교번 중이면 true — LatestIr 는 도트 없는(이미터 OFF) 프레임.</summary>
     public bool IsEmitterAlternating => _client.IsEmitterAlternating;
+
+    /// <summary>
+    /// 이미터 교번 상태 문구 — "동작 중" / "미지원"(설정은 켰지만 카메라가 지원 안 함) / "꺼짐(사유)".
+    /// 동작 중이면 LatestIr 는 이미터 OFF 프레임(도트 없음).
+    /// </summary>
+    public string EmitterAlternateStatus =>
+        !IsConnected ? "카메라 미연결"
+        : _client.IsEmitterAlternating ? "동작 중"
+        : _client.EmitterAlternateUnsupported ? "미지원"
+        : !_settings.EmitterAlternate ? "꺼짐 (설정 EmitterAlternate=false)"
+        : !_settings.EnableEmitter ? "꺼짐 (이미터 꺼짐)"
+        : !_client.IsIrActive ? "꺼짐 (IR 스트림 없음)"
+        : "꺼짐";
     public DateTime LastFrameAt => _client.LastFrameAt;
     public string? ConnectionType => _client.ConnectionType;
 

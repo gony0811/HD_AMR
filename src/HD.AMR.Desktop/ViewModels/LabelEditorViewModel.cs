@@ -7,20 +7,26 @@ using Microsoft.Extensions.DependencyInjection;
 namespace HD.AMR.Desktop.ViewModels;
 
 /// <summary>
-/// 비드 마스크 라벨링(DL 학습용 초안 수정/생성). 기존 LabelEditor.razor 이식.
-/// 이미지/마스크 파일 I/O 는 LabelDataService(Scoped, 작업마다 scope) — 브러시 편집은 MaskCanvas 컨트롤이 담당하고
+/// 비드 라벨링(DL 학습용). 라벨 종류를 골라 <b>면</b>(칠하기 → <c>_area.png</c>) 또는 <b>선</b>(중심선 → <c>_line.json</c>)을
+/// 따로 편집·저장한다 — 한쪽을 저장해도 다른 쪽은 지워지지 않는다. 대상 폴더는 화면에서 고른다(Vision.Label.Dir).
+/// 촬영본 목록은 IR/RGB 탭으로 나눠 보여 주며, 고른 탭(모달리티)은 촬영본을 바꿔도 유지된다.
+/// 파일 I/O 는 LabelDataService(Scoped, 작업마다 scope) — 편집은 MaskCanvas 컨트롤이 담당하고
 /// 뷰 코드비하인드가 <see cref="EditorOpenRequested"/> 등 이벤트로 연결한다.
 /// </summary>
 public sealed partial class LabelEditorViewModel : ViewModelBase
 {
     private readonly IServiceScopeFactory _scopeFactory;
 
+    /// <summary>현재 탭(모달리티) 이미지가 있는 촬영본만.</summary>
     public ObservableCollection<CaptureEntryRow> Entries { get; } = new();
+    private List<CaptureEntry> _all = new();
+    private static int _lastTab;   // 화면을 나갔다 와도 마지막 탭 유지
 
     [ObservableProperty] private string? _dir;
     [ObservableProperty] private CaptureEntryRow? _selected;
-    [ObservableProperty] private int _modalityIndex;    // 0 rgb, 1 ir
-    [ObservableProperty] private int _brushModeIndex = 2;   // 0 칠하기, 1 지우기, 2 선(기본 — 일정 두께 라벨)
+    [ObservableProperty] private int _modalityTab = _lastTab;   // 0 IR, 1 RGB
+    [ObservableProperty] private int _kindIndex = 1;     // 0 면(칠하기), 1 선
+    [ObservableProperty] private int _brushModeIndex;    // 면 도구: 0 칠하기, 1 지우기
     [ObservableProperty] private int _radius = 12;
     [ObservableProperty] private int _lineThickness = WeldLineLabel.DefaultThickness;
     [ObservableProperty] private bool _busy;
@@ -29,22 +35,47 @@ public sealed partial class LabelEditorViewModel : ViewModelBase
 
     public bool HasDir => Dir is not null;
     public bool HasSelection => Selected is not null;
-    public string Modality => ModalityIndex == 1 ? "ir" : "rgb";
-    public bool CanRgb => Selected?.HasRgb ?? false;
-    public bool CanIr => Selected?.HasIr ?? false;
-    public bool IsLineMode => BrushModeIndex == 2;
+    public string Modality => ModalityTab == 0 ? "ir" : "rgb";
+    public string IrTabText => $"IR ({_all.Count(e => e.HasIr)})";
+    public string RgbTabText => $"RGB ({_all.Count(e => e.HasRgb)})";
+    public string ListTitle => $"{Modality.ToUpperInvariant()} 촬영본 ({Entries.Count}) · 면 {Entries.Count(e => e.HasArea)} · 선 {Entries.Count(e => e.HasLine)}";
+    /// <summary>IR 탭 이미터 추정 개수(목록 폭이 좁아 제목 아래 별도 줄). RGB 탭이거나 아직 계산 전이면 null.</summary>
+    public string? EmitterSummary
+    {
+        get
+        {
+            if (Modality != "ir" || _emitter.Count == 0) return null;
+            int unk = Entries.Count(e => e.Emitter == EmitterState.Unknown);
+            return $"이미터 OFF {Entries.Count(e => e.Emitter == EmitterState.Off)} · ON {Entries.Count(e => e.Emitter == EmitterState.On)}" +
+                   (unk > 0 ? $" · ? {unk}" : "");
+        }
+    }
+    // IR 촬영본별 이미지로 추정한 이미터 상태(stem → ON/OFF/?). 목록을 읽을 때 계산(파일별 캐시).
+    private Dictionary<string, EmitterState> _emitter = new();
+    public LabelKind Kind => KindIndex == 1 ? LabelKind.Line : LabelKind.Area;
+    public bool IsLineMode => Kind == LabelKind.Line;
     public bool IsBrushMode => !IsLineMode;
+    public string SaveButtonText => IsLineMode ? "💾 선 라벨 저장" : "💾 면 라벨 저장";
     public string SaveHint => Selected is null ? "" : IsLineMode
-        ? $"용접선 중심을 따라 클릭(보통 양 끝 2점, 휘면 중간점 추가). 점 드래그=이동, 우클릭=마지막 점 삭제. " +
-          $"저장하면 {Selected.Stem}_{Modality}_line.json(정답) + _maskdraft.png(두께 {LineThickness}px 마스크)."
-        : $"비드를 빨갛게 칠하세요. 저장하면 {Selected.Stem}_{Modality}_maskdraft.png 로 덮어씁니다(흑백 이진 마스크). " +
-          "선 점이 없으면 기존 선 라벨(_line.json)은 삭제됩니다.";
+        ? $"용접선 중심을 따라 클릭(보통 양 끝 2점, 휘면 중간점 추가). Shift+클릭=끊고 새 선 시작(떨어진 비드), 점 드래그=이동, 우클릭=마지막 점 삭제. " +
+          $"저장하면 {LabelFiles.LineName(Selected.Stem, Modality)} (점 + 두께 {LineThickness}px). 면 라벨은 그대로 둡니다. 점을 모두 지우고 저장하면 선 라벨 삭제."
+        : $"비드를 빨갛게 칠하세요. 저장하면 {LabelFiles.AreaName(Selected.Stem, Modality)} (흑백 마스크). 선 라벨은 그대로 둡니다. 모두 지우고 저장하면 면 라벨 삭제.";
 
     /// <summary>(이미지 PNG, 마스크 초안 PNG 또는 null, 선 라벨 또는 null) — 뷰가 MaskCanvas.Open/SetLine 으로 연결.</summary>
     public event Action<byte[], byte[]?, WeldLineLabel?>? EditorOpenRequested;
     /// <summary>(lineMode, erase, radius, lineThickness) 도구 변경.</summary>
     public event Action<bool, bool, int, int>? BrushChanged;
     public event Action? ClearRequested;
+    /// <summary>배경 이미지만 교체(라벨은 유지) — "CLAHE로 보기" 전환.</summary>
+    public event Action<byte[]>? BaseImageRequested;
+
+    /// <summary>
+    /// 라벨링 화면 배경을 CLAHE(학습 전처리와 같은 <see cref="ImageClahe"/>)로 보여 준다 — 어두운 곳의 비드가 잘 보이게.
+    /// 보기만 바뀌고 라벨 좌표·저장 파일은 원본 기준 그대로. 앱 실행 중 유지.
+    /// </summary>
+    [ObservableProperty] private bool _viewClahe = _lastViewClahe;
+    private static bool _lastViewClahe;
+    private byte[]? _currentImage;   // 열려 있는 원본 이미지(PNG)
 
     // ④ 추론 탭 "학습셋에 추가 + 라벨링" 이동 시 대상 촬영본/모달리티(원본 쿼리 파라미터 sel/mod 대응).
     private static string? _pendingStem, _pendingMod;
@@ -61,12 +92,15 @@ public sealed partial class LabelEditorViewModel : ViewModelBase
             await RefreshListAsync();
             if (_pendingStem is not null)
             {
-                var match = Entries.FirstOrDefault(e => e.Stem == _pendingStem);
+                var stem = _pendingStem;
                 var mod = _pendingMod; _pendingStem = _pendingMod = null;
-                if (match is not null)
+                var e = _all.FirstOrDefault(x => x.Stem == stem);
+                if (e is not null)
                 {
-                    ModalityIndex = (mod == "ir" && match.HasIr) ? 1 : (mod == "rgb" && match.HasRgb) ? 0 : match.HasIr ? 1 : 0;
-                    Selected = match;
+                    // 요청 모달리티 이미지가 있으면 그 탭, 없으면 있는 쪽 탭.
+                    int tab = (mod == "ir" && e.HasIr) ? 0 : (mod == "rgb" && e.HasRgb) ? 1 : e.HasIr ? 0 : 1;
+                    if (tab != ModalityTab) ModalityTab = tab;   // 탭 변경이 목록을 다시 채운다
+                    Selected = Entries.FirstOrDefault(x => x.Stem == stem);
                 }
             }
         }
@@ -76,27 +110,56 @@ public sealed partial class LabelEditorViewModel : ViewModelBase
     partial void OnDirChanged(string? value) => OnPropertyChanged(nameof(HasDir));
     partial void OnRadiusChanged(int value) => RaiseTool();
     partial void OnLineThicknessChanged(int value) { RaiseTool(); OnPropertyChanged(nameof(SaveHint)); }
-    partial void OnBrushModeIndexChanged(int value)
+    partial void OnBrushModeIndexChanged(int value) => RaiseTool();
+    async partial void OnKindIndexChanged(int value)
     {
-        OnPropertyChanged(nameof(IsLineMode)); OnPropertyChanged(nameof(IsBrushMode)); OnPropertyChanged(nameof(SaveHint));
-        RaiseTool();
+        OnPropertyChanged(nameof(Kind)); OnPropertyChanged(nameof(IsLineMode)); OnPropertyChanged(nameof(IsBrushMode));
+        OnPropertyChanged(nameof(SaveHint)); OnPropertyChanged(nameof(SaveButtonText));
+        if (Selected is not null) await OpenEditorAsync(); else RaiseTool();
     }
-    private void RaiseTool() => BrushChanged?.Invoke(IsLineMode, BrushModeIndex == 1, Radius, LineThickness);
+    private void RaiseTool() => BrushChanged?.Invoke(IsLineMode, IsBrushMode && BrushModeIndex == 1, Radius, LineThickness);
 
     async partial void OnSelectedChanged(CaptureEntryRow? value)
     {
-        OnPropertyChanged(nameof(HasSelection)); OnPropertyChanged(nameof(CanRgb)); OnPropertyChanged(nameof(CanIr));
-        if (value is null) return;
-        // 사용 가능한 모달리티로 기본 선택 후 에디터 열기.
-        var idx = value.HasRgb ? 0 : value.HasIr ? 1 : 0;
-        if (idx == ModalityIndex) await OpenEditorAsync(); else ModalityIndex = idx;
+        OnPropertyChanged(nameof(HasSelection)); OnPropertyChanged(nameof(SaveHint));
+        // 목록만 다시 채워 같은 촬영본·모달리티·종류가 다시 선택된 경우(저장 후 새로고침, 이미터 표시 갱신)는
+        // 에디터를 다시 열지 않는다 — 열면 그리던 내용이 사라진다.
+        if (value is not null && _openedKey != Key(value.Stem)) await OpenEditorAsync();
     }
 
-    async partial void OnModalityIndexChanged(int value)
+    // 탭 전환 — 목록을 그 모달리티로 다시 채우고, 보던 촬영본이 있으면 그대로 선택(같은 촬영본의 IR↔RGB 비교).
+    partial void OnModalityTabChanged(int value)
     {
+        _lastTab = value;
         OnPropertyChanged(nameof(Modality)); OnPropertyChanged(nameof(SaveHint));
-        if (Selected is not null) await OpenEditorAsync();
+        Fill(Selected?.Stem);
     }
+
+    private void Fill(string? keepStem)
+    {
+        var mod = Modality;
+        Entries.Clear();
+        foreach (var e in _all.Where(e => mod == "ir" ? e.HasIr : e.HasRgb))
+            Entries.Add(new CaptureEntryRow(e, mod, mod == "ir" && _emitter.TryGetValue(e.Stem, out var st) ? st : null));
+        Selected = keepStem is null ? null : Entries.FirstOrDefault(e => e.Stem == keepStem);
+        OnPropertyChanged(nameof(IrTabText)); OnPropertyChanged(nameof(RgbTabText)); OnPropertyChanged(nameof(ListTitle)); OnPropertyChanged(nameof(EmitterSummary));
+    }
+
+    /// <summary>뷰의 폴더 선택기 결과. 빈값이면 캡처 저장 폴더로 되돌린다.</summary>
+    public async Task SetDirAsync(string? dir)
+    {
+        try
+        {
+            await With(async l => { await l.SetDirAsync(dir); return 0; });
+            Selected = null;
+            Dir = await With(l => l.GetDirAsync());
+            await RefreshListAsync();
+            Notify($"라벨링 폴더: {Dir}", false);
+        }
+        catch (Exception ex) { Notify($"폴더 변경 실패: {ex.Message}", true); }
+    }
+
+    [RelayCommand] private Task UseCaptureDir() => SetDirAsync(null);
 
     [RelayCommand]
     private async Task RefreshListAsync()
@@ -104,47 +167,75 @@ public sealed partial class LabelEditorViewModel : ViewModelBase
         try
         {
             var stem = Selected?.Stem;
-            var list = await With(l => l.ListAsync());
-            Entries.Clear();
-            foreach (var e in list) Entries.Add(new CaptureEntryRow(e));
-            if (stem is not null) Selected = Entries.FirstOrDefault(e => e.Stem == stem);
+            _all = await With(l => l.ListAsync());
+            Fill(stem);
+            // IR 이미터 상태 추정은 이미지를 읽어야 해서 목록을 먼저 보여 준 뒤 채운다.
+            if (Dir is { } dir)
+            {
+                var irStems = _all.Where(e => e.HasIr).Select(e => e.Stem).ToList();
+                _emitter = await Task.Run(() => irStems.AsParallel()
+                    .Select(s => (s, EmitterDotEstimator.ClassifyFile(Path.Combine(dir, LabelFiles.ImageName(s, "ir")))))
+                    .ToDictionary(x => x.s, x => x.Item2));
+                if (Modality == "ir") Fill(Selected?.Stem ?? stem);
+            }
         }
         catch (Exception ex) { Notify($"목록 로드 실패: {ex.Message}", true); }
     }
 
+    private string? _openedKey;
+    private string Key(string stem) => $"{Dir}|{stem}|{Modality}|{KindIndex}";   // 폴더가 바뀌면 같은 이름도 다시 연다
+
     private async Task OpenEditorAsync()
     {
         if (Selected is null) return;
+        _openedKey = Key(Selected.Stem);
         try
         {
-            var img = await With(l => l.ReadAsync($"{Selected.Stem}_{Modality}.png"));
-            if (img is null) { Notify("이미지를 읽지 못했습니다.", true); return; }
-            var mask = await With(l => l.ReadAsync($"{Selected.Stem}_{Modality}_maskdraft.png"));
             var stem = Selected.Stem;
-            var line = await With(l => l.ReadLineAsync(stem, Modality));
-            EditorOpenRequested?.Invoke(img, mask, line);
+            var img = await With(l => l.ReadAsync(LabelFiles.ImageName(stem, Modality)));
+            if (img is null) { Notify("이미지를 읽지 못했습니다.", true); return; }
+            _currentImage = img;
+            if (ViewClahe) img = await Task.Run(() => ImageClahe.ApplyEncoded(img));
+            // 고른 라벨 종류만 불러온다 — 면: _area.png 마스크, 선: _line.json 점(마스크는 두께대로 다시 그림).
+            byte[]? mask = null; WeldLineLabel? line = null;
+            if (IsLineMode) line = await With(l => l.ReadLineAsync(stem, Modality));
+            else mask = await With(l => l.ReadAsync(LabelFiles.AreaName(stem, Modality)));
             if (line is not null) LineThickness = line.Thickness;
             RaiseTool();
+            EditorOpenRequested?.Invoke(img, mask, line);
         }
         catch (Exception ex) { Notify($"에디터 열기 실패: {ex.Message}", true); }
     }
 
     [RelayCommand] private Task ReloadDraft() => OpenEditorAsync();
+
+    async partial void OnViewClaheChanged(bool value)
+    {
+        _lastViewClahe = value;
+        if (_currentImage is not { } img) return;
+        try { BaseImageRequested?.Invoke(value ? await Task.Run(() => ImageClahe.ApplyEncoded(img)) : img); }
+        catch (Exception ex) { Notify($"CLAHE 보기 실패: {ex.Message}", true); }
+    }
     [RelayCommand] private void ClearMask() => ClearRequested?.Invoke();
 
-    /// <summary>뷰가 MaskCanvas.ExportPng / GetLineLabel 결과로 호출. 선이 없으면 기존 선 라벨은 삭제.</summary>
-    public async Task SaveMaskAsync(byte[]? png, WeldLineLabel? line)
+    /// <summary>
+    /// 뷰가 MaskCanvas 결과로 호출. 면 모드: 칠한 마스크(<paramref name="png"/>, 비었으면 null) → _area.png.
+    /// 선 모드: 선 라벨(<paramref name="line"/>, 점 2개 미만이면 null) → _line.json. null 은 해당 라벨 삭제.
+    /// </summary>
+    public async Task SaveLabelAsync(byte[]? png, WeldLineLabel? line)
     {
         if (Busy || Selected is null) return;
-        if (png is null) { Notify("마스크를 읽지 못했습니다.", true); return; }
         Busy = true; Message = null;
         try
         {
             var stem = Selected.Stem;
-            var name = await With(l => l.SaveMaskAsync(stem, Modality, png));
-            await With(async l => { await l.SaveLineAsync(stem, Modality, line); return 0; });
+            string? name;
+            if (IsLineMode) name = await With(l => l.SaveLineAsync(stem, Modality, line));
+            else name = await With(l => l.SaveAreaAsync(stem, Modality, png));
             await RefreshListAsync();
-            Notify(line is null ? $"저장 완료: {name}" : $"저장 완료: {name} + {stem}_{Modality}_line.json (점 {line.Points.Count}개)", false);
+            var what = IsLineMode ? "선" : "면";
+            Notify(name is null ? $"{what} 라벨 삭제: {stem}_{Modality} (비어 있음)"
+                : IsLineMode ? $"저장 완료: {name} (점 {line!.Points.Count}개" + (line.Breaks is { Count: > 0 } b ? $", 선 {b.Count + 1}개)" : ")") : $"저장 완료: {name}", false);
         }
         catch (Exception ex) { Notify($"저장 실패: {ex.Message}", true); }
         finally { Busy = false; }
@@ -159,11 +250,12 @@ public sealed partial class LabelEditorViewModel : ViewModelBase
     private void Notify(string m, bool err) { Message = m; IsError = err; }
 }
 
-/// <summary>촬영본 목록 행(✓ = 마스크 있음).</summary>
-public sealed record CaptureEntryRow(CaptureEntry Entry)
+/// <summary>촬영본 목록 행 — 해당 탭 모달리티의 면/선 라벨 보유 표시(▦ 면, 📏 선).</summary>
+public sealed record CaptureEntryRow(CaptureEntry Entry, string Modality, EmitterState? Emitter = null)
 {
     public string Stem => Entry.Stem;
-    public bool HasRgb => Entry.HasRgb;
-    public bool HasIr => Entry.HasIr;
-    public string Label => $"{((Entry.RgbLine || Entry.IrLine) ? "📏" : (Entry.RgbMask || Entry.IrMask) ? "✓ " : "· ")}{Entry.Stem}";
+    public bool HasArea => Modality == "ir" ? Entry.IrArea : Entry.RgbArea;
+    public bool HasLine => Modality == "ir" ? Entry.IrLine : Entry.RgbLine;
+    public string Label => $"{(HasArea ? "▦" : "·")}{(HasLine ? "📏" : "· ")} {Entry.Stem}" +
+                           (Emitter is { } e ? $"  {EmitterDotEstimator.Text(e)}" : "");
 }

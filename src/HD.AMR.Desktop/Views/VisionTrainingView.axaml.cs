@@ -9,6 +9,21 @@ public partial class VisionTrainingView : UserControl
     public VisionTrainingView()
     {
         InitializeComponent();
+        // 격자(*) 칸이 내용 크기로 줄지 않게 페이지 폭을 min(창 폭, MaxWidth 980) 으로 고정(왼쪽 정렬 유지).
+        var pageRoot = this.FindControl<StackPanel>("PageRoot")!;
+        SizeChanged += (_, e) => pageRoot.Width = Math.Min(e.NewSize.Width, pageRoot.MaxWidth);
+        this.FindControl<Button>("AddTrainDirBtn")!.Click += async (_, _) =>
+        {
+            if (DataContext is not VisionTrainingViewModel vm) return;
+            var path = await FolderPicker.PickAsync(this, "학습 폴더 추가", vm.TrainDirs.LastOrDefault());
+            if (path is not null) await vm.AddTrainDirAsync(path);
+        };
+        this.FindControl<Button>("PickValDirBtn")!.Click += async (_, _) =>
+        {
+            if (DataContext is not VisionTrainingViewModel vm) return;
+            var path = await FolderPicker.PickAsync(this, "검증 폴더 선택", vm.ValDir ?? vm.TrainDirs.LastOrDefault());
+            if (path is not null) await vm.SetValDirAsync(path);
+        };
         // 외부 검증용 이미지 업로드(원본 InputFile 대응) — StorageProvider 로 파일을 읽어 VM 에 넘긴다.
         this.FindControl<Button>("UploadBtn")!.Click += async (_, _) =>
         {

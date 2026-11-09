@@ -35,14 +35,13 @@ public sealed class DlWeldVisionDetector : IDlWeldVisionDetector
         double? peakProgressPos = null, string? peakLabel = null, RoiRect? peakRoi = null,
         double? peakCrossStart = null, double? peakCrossEnd = null)
     {
-        var modality = p.Mode == WeldImageMode.Ir ? "ir" : "rgb";
-        // 명시 경로가 있으면 그걸(파일명만이면 models 폴더 기준), 없으면(빈 문자열 포함) 모달리티로 자동 해석.
-        bool explicitPath = !string.IsNullOrWhiteSpace(p.DlModelPath);
-        var modelPath = explicitPath ? ResolveExplicitPath(p.DlModelPath!) : ResolveModelPath(modality);
+        // 모델은 반드시 지정(Weld.Yolo.ModelPath, 파일명만이면 models 폴더 기준). 빈값 자동 선택은 하지 않는다 —
+        // 어떤 모델로 검출했는지 항상 명확하게.
+        if (string.IsNullOrWhiteSpace(p.DlModelPath))
+            return WeldDetectionResult.Fail("YOLO 모델 없음 — 용접 추적 화면에서 YOLO 모델을 선택하거나 파라미터 Weld.Yolo.ModelPath 를 지정하세요.");
+        var modelPath = ResolveExplicitPath(p.DlModelPath);
         if (modelPath is null || !File.Exists(modelPath))
-            return WeldDetectionResult.Fail(explicitPath
-                ? $"DL 모델 파일이 없습니다: {modelPath ?? p.DlModelPath} — 저장된 모델 경로(Weld.Dl.ModelPath)를 확인하세요(빈값=자동)."
-                : "YOLO 모델이 지정되지 않았습니다 — 용접 추적에서 YOLO 모델을 선택하거나 파라미터 Weld.Dl.ModelPath 에 파일명을 입력하세요.");
+            return WeldDetectionResult.Fail($"YOLO 모델 파일이 없습니다: {modelPath ?? p.DlModelPath} — 파라미터 Weld.Yolo.ModelPath 를 확인하세요.");
 
         Mat? bgr = null, gray = null;
         try
@@ -56,10 +55,12 @@ public sealed class DlWeldVisionDetector : IDlWeldVisionDetector
             if (roi is null)
                 return WeldDetectionResult.Fail("Weld ROI 가 프레임 범위를 벗어났습니다.");
 
+            // CLAHE 모델(이름에 _clahe)이면 학습 데이터셋과 같은 전처리를 전체 프레임에 걸어 추론(오버레이는 원본).
+            using var claheInput = WeldModelNames.HasClahe(modelPath) ? ImageClaheMat.Apply(bgr) : null;
             lock (_gate)
             {
                 var session = GetSession(modelPath);
-                var (mask, count, _) = YoloSeg.Decode(session, bgr, (float)p.DlConfidence, 0.5f, (float)p.DlMaskThreshold);
+                var (mask, count, _) = YoloSeg.Decode(session, claheInput ?? bgr, (float)p.DlConfidence, 0.5f, (float)p.DlMaskThreshold);
                 using (mask)
                 {
                     if (count == 0)
@@ -97,14 +98,6 @@ public sealed class DlWeldVisionDetector : IDlWeldVisionDetector
         return paths is null ? path : Path.Combine(paths.Models, path);
     }
 
-    /// <summary>'자동' 모델 경로: <c>weld_yolo_{m}</c> → 기존 <c>weld_seg_{m}</c> → 레거시 <c>weld_seg.onnx</c>.</summary>
-    private string? ResolveModelPath(string modality)
-    {
-        var paths = _train.GetPathsAsync().GetAwaiter().GetResult();
-        if (paths is null) return null;
-        var candidates = WeldModelNames.YoloAutoCandidates(modality).Select(n => Path.Combine(paths.Models, n)).ToList();
-        return candidates.FirstOrDefault(File.Exists) ?? candidates[0]; // 없으면 기대 경로를 반환(호출부에서 존재검사)
-    }
 
     private InferenceSession GetSession(string modelPath)
     {

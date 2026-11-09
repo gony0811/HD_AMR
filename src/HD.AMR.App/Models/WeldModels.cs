@@ -128,14 +128,14 @@ public sealed class WeldDetectionParams
     /// <summary>DL 마스크 확률 임계값(proto 마스크 이진화 기준).</summary>
     public double DlMaskThreshold { get; set; } = 0.50;
 
-    /// <summary>사용할 .onnx 경로. null 이면 모달리티(Mode)로 <c>weld_seg_{ir|rgb}.onnx</c> 자동 해석.</summary>
+    /// <summary>사용할 YOLO .onnx 경로(필수). null/빈 문자열이면 비드 검출 실패(모델 없음).</summary>
     public string? DlModelPath { get; set; }
 
     // ── U-Net 검출 전용 ──────────────────────────────────────────────────────
     /// <summary>U-Net 비드 확률 임계값(0~1). 낮추면 약한 비드까지, 높이면 확실한 픽셀만.</summary>
     public double UnetThreshold { get; set; } = 0.5;
 
-    /// <summary>사용할 U-Net .onnx 경로. null/빈 문자열이면 모달리티로 <c>weld_unet_{ir|rgb}.onnx</c> 자동 해석.</summary>
+    /// <summary>사용할 U-Net .onnx 경로(필수). null/빈 문자열이면 비드 검출 실패(모델 없음).</summary>
     public string? UnetModelPath { get; set; }
 
     /// <summary>얕은 복사(모든 속성이 값/문자열). 비교평가가 운영 파라미터를 건드리지 않고 Mode 만 바꿔 쓸 때 사용.</summary>

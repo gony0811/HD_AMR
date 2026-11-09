@@ -181,6 +181,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         SelectedItem = NavItems[0];
         Navigation.NavigateTo(typeof(HomeViewModel));
+        // 페이지 안에서 다른 페이지로 이동(예: 비교평가 → 비전 학습)해도 사이드바 선택을 맞춘다.
+        if (Navigation is System.ComponentModel.INotifyPropertyChanged npc)
+            npc.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName == nameof(INavigationService.CurrentViewModel)) SyncSelection();
+            };
 
         // 셸 VM 은 앱 수명 싱글턴 — 타이머를 여기서 시작하고 멈추지 않는다.
         _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
@@ -373,7 +379,21 @@ public sealed partial class MainWindowViewModel : ObservableObject
             });
             return;
         }
+        if (_syncingSelection) return;   // 이미 이동한 페이지에 선택만 맞추는 중
         Navigate(newValue);
+    }
+
+    private bool _syncingSelection;
+
+    private void SyncSelection()
+    {
+        var type = Navigation.CurrentViewModel?.GetType();
+        if (type is null || SelectedItem?.Target == type) return;
+        var item = NavItems.FirstOrDefault(i => i.Target == type);
+        if (item is null) return;   // 접힌 그룹 안의 페이지면 선택 표시는 생략
+        _syncingSelection = true;
+        try { SelectedItem = item; }
+        finally { _syncingSelection = false; }
     }
 
     /// <summary>그룹 펼침 시 하위 항목을 헤더 바로 뒤에 삽입, 접힘 시 제거.</summary>

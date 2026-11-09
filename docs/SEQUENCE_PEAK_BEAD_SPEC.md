@@ -604,7 +604,7 @@ anchor 무효화: 주행 발생 · 시퀀스 실패 · 그룹 변경 · 신규 o
 |---|---|---|---|
 | `Weld.Peak.PitchMm` | double | `370` | Peak 간 pitch(mm). ⑧ 이동량 및 ⑫ 각도식 분모 |
 | `Weld.Peak.PitchDir` | double | `+1` | Peak2 이동 방향(진행축 + 기준). `+1` 또는 `−1` |
-| `Weld.Dl.ModelPath` | string | `""`(자동) | 비드 검출 DL 모델 전체 경로 — 카메라 페이지 모델 드롭다운이 저장, ⑦⑪·⑦⁺가 측정 전 적용. 빈값=자동(`weld_seg_{ir\|rgb}.onnx` 고정 파일명) |
+| `Weld.Yolo.ModelPath` | string | `""`(자동) | 비드 검출 DL 모델 전체 경로 — 카메라 페이지 모델 드롭다운이 저장, ⑦⑪·⑦⁺가 측정 전 적용. 빈값=자동(`weld_seg_{ir\|rgb}.onnx` 고정 파일명) |
 | `Sequence.InspectCam.OffsetXMm` | double | `0` | 검사 카메라 시야 중심의 depth 영상 기준 오프셋 X(mm, 화면 오른쪽 +) — ⑦⁺⑪⁺ 검증 후 시프트에 사용 (§4.2) |
 | `Sequence.InspectCam.OffsetYMm` | double | `0` | 위 오프셋의 Y 성분(mm, 화면 아래 +) |
 | ~~`Camera.Axis.XSign`~~ | double | — | **폐기** — 방향은 ④와 공유하는 `Camera.Align.ImageXAxis` 매핑(부호 포함)이 담당 (§4.3) |

@@ -32,8 +32,37 @@ public sealed class WeldLineLabel
     [JsonIgnore]
     public bool IsTransferred => Origin?.StartsWith("transfer", StringComparison.Ordinal) == true;
 
+    /// <summary>
+    /// 끊김 위치 — 여기 적힌 인덱스의 점은 앞 점과 잇지 않고 새 선을 시작한다(떨어진 비드를 한 라벨에).
+    /// 없으면(null) 모든 점을 한 줄로 잇는다 — 예전 파일과 호환. 저장 시 비어 있으면 생략.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<int>? Breaks { get; set; }
+
     [JsonIgnore]
-    public bool IsValid => Width > 0 && Height > 0 && Points.Count >= 2 && Points.All(p => p is { Length: 2 });
+    public bool IsValid => Width > 0 && Height > 0 && Points.All(p => p is { Length: 2 }) && Segments().Any(s => s.Count >= 2);
+
+    /// <summary>끊김으로 나눈 선 조각들(점 1개짜리 조각 포함). 각 조각은 이어진 폴리라인.</summary>
+    public List<List<double[]>> Segments()
+    {
+        var segs = new List<List<double[]>>();
+        var cur = new List<double[]>();
+        var br = Breaks is { Count: > 0 } ? Breaks.ToHashSet() : null;
+        for (int i = 0; i < Points.Count; i++)
+        {
+            if (i > 0 && br?.Contains(i) == true && cur.Count > 0) { segs.Add(cur); cur = new(); }
+            cur.Add(Points[i]);
+        }
+        if (cur.Count > 0) segs.Add(cur);
+        return segs;
+    }
+
+    /// <summary>이어진 선분(a→b)들. 끊긴 곳은 건너뛴다.</summary>
+    public IEnumerable<(double[] A, double[] B)> Edges()
+    {
+        foreach (var s in Segments())
+            for (int i = 0; i + 1 < s.Count; i++) yield return (s[i], s[i + 1]);
+    }
 
     private static readonly JsonSerializerOptions Json = new()
     {
@@ -57,15 +86,16 @@ public sealed class WeldLineLabel
     /// <summary>
     /// 폴리라인을 두께 <see cref="Thickness"/> 로 래스터화한 이진 마스크(row-major, 비드=255, 배경=0).
     /// 각 픽셀 중심에서 가장 가까운 선분까지 거리가 두께/2 이하면 비드. 끝은 둥글게 처리된다.
+    /// 끊긴 곳(<see cref="Breaks"/>)은 칠하지 않고, 점 1개짜리 조각도 칠하지 않는다.
     /// </summary>
     public byte[] Rasterize()
     {
         var mask = new byte[Width * Height];
         double r = Math.Max(0.5, Thickness / 2.0);
         double r2 = r * r;
-        for (int i = 0; i + 1 < Points.Count; i++)
+        foreach (var (pa, pb) in Edges())
         {
-            double ax = Points[i][0], ay = Points[i][1], bx = Points[i + 1][0], by = Points[i + 1][1];
+            double ax = pa[0], ay = pa[1], bx = pb[0], by = pb[1];
             int x0 = Math.Max(0, (int)Math.Floor(Math.Min(ax, bx) - r));
             int x1 = Math.Min(Width - 1, (int)Math.Ceiling(Math.Max(ax, bx) + r));
             int y0 = Math.Max(0, (int)Math.Floor(Math.Min(ay, by) - r));
@@ -95,6 +125,8 @@ public sealed class WeldLineLabel
             Points = Points.Select(p => clockwise
                 ? new[] { h - 1 - p[1], p[0] }
                 : new[] { p[1], w - 1 - p[0] }).ToList(),
+            Breaks = Breaks is null ? null : new List<int>(Breaks),
+            Origin = Origin,
         };
     }
 }

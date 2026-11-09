@@ -1,0 +1,28 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="HD.AMR.Desktop.Views.OverlayLegend"
+             x:Name="Root">
+    <!-- 용접선 오버레이 범례 — InferLineCheck 가 그리는 색과 같다(비전 학습 ④ · 검출 비교평가 공용). -->
+    <Border BorderBrush="{DynamicResource AppBorderBrush}" BorderThickness="1" CornerRadius="4" Padding="8,6">
+        <WrapPanel>
+            <TextBlock Text="오버레이" FontSize="12" Foreground="{DynamicResource AppMutedTextBrush}" VerticalAlignment="Center" Margin="0,0,14,0" />
+            <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,0,18,0" IsVisible="{Binding #Root.ShowDetection}">
+                <Border Width="26" Height="2" Background="#FFE600" VerticalAlignment="Center" />
+                <TextBlock FontSize="12" VerticalAlignment="Center" Text="검출 용접선" />
+                <TextBlock FontSize="12" Foreground="{DynamicResource AppMutedTextBrush}" VerticalAlignment="Center" Text="(직선 인정 구간)" />
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,0,18,0" IsVisible="{Binding #Root.ShowDetection}">
+                <Line StartPoint="0,1" EndPoint="26,1" Stroke="#FFE600" StrokeThickness="2" StrokeDashArray="4,3" VerticalAlignment="Center" />
+                <TextBlock FontSize="12" VerticalAlignment="Center" Text="연장선" />
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,0,18,0" IsVisible="{Binding #Root.ShowGroundTruth}">
+                <Border Width="26" Height="2" Background="#00E600" VerticalAlignment="Center" />
+                <TextBlock FontSize="12" VerticalAlignment="Center" Text="정답 선" />
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding #Root.ShowDetection}">
+                <Border Width="16" Height="10" CornerRadius="2" Background="#59FF4040" BorderBrush="#99FF4040" BorderThickness="1" VerticalAlignment="Center" />
+                <TextBlock FontSize="12" VerticalAlignment="Center" Text="모델 마스크" />
+            </StackPanel>
+        </WrapPanel>
+    </Border>
+</UserControl>

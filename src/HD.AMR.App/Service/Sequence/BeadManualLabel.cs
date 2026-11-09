@@ -79,7 +79,7 @@ public static class BeadManualSettings
         (TriggerKey, ToParam(DefaultTrigger),
             "Bead 찾기 수동 입력 팝업 조건 — off(사용 안 함) / failure(자동 검출 실패 시) / " +
             "lowConfidence(실패 또는 coverage 가 MinConfidence 미만) / always(매번 확인). " +
-            "입력한 비드선은 학습 데이터(캡처 폴더의 _line.json·_maskdraft.png)로 저장되고 그 선으로 시퀀스를 계속한다."),
+            "입력한 비드선은 학습 데이터(라벨링 폴더의 _line.json 선 라벨)로 저장되고 그 선으로 시퀀스를 계속한다."),
         (MinConfidenceKey, DefaultMinConfidence.ToString(CultureInfo.InvariantCulture),
             "Bead 찾기 수동 입력 — lowConfidence 조건의 coverage 임계(0~1). 이 값 미만이면 팝업."),
         (TimeoutSecKey, DefaultTimeoutSec.ToString(CultureInfo.InvariantCulture),

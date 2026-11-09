@@ -19,6 +19,10 @@ public sealed class OnnxBeadSegmentationService
     private (string Path, DateTime Mtime, InferenceSession Session)? _cache;
 
     public byte[]? LastOverlay { get; private set; }
+    /// <summary>마지막 추론의 이진 마스크(원본 해상도 W×H, 비드=255). 추론·검증 화면의 용접선 추출용.</summary>
+    public byte[]? LastMask { get; private set; }
+    /// <summary>마지막 추론에 CLAHE 전처리를 걸었는지(모델 이름 _clahe).</summary>
+    public bool LastClahe { get; private set; }
 
     public OnnxBeadSegmentationService(WeldTrainingService train, ILogger<OnnxBeadSegmentationService> log)
     {
@@ -26,29 +30,18 @@ public sealed class OnnxBeadSegmentationService
         _log = log;
     }
 
-    /// <summary>캡처 폴더의 {stem}_{modality}.png 에 대해 추론. 오버레이는 LastOverlay 에 저장.</summary>
+    /// <summary>라벨링 폴더의 {stem}_{modality}.png 에 대해 추론. 오버레이는 LastOverlay 에 저장.</summary>
     public async Task<InferResult> RunOnCaptureAsync(
-        string modelPath, string stem, string modality, float conf, float maskThr)
+        string modelPath, string stem, string modality, float conf, float maskThr, string? dir = null)
     {
         modality = modality == "ir" ? "ir" : "rgb";
-        var paths = await _train.GetPathsAsync()
-                    ?? throw new InvalidOperationException("캡처 저장 폴더가 설정되지 않았습니다.");
-        var imgPath = Path.Combine(paths.CaptureDir, $"{stem}_{modality}.png");
+        // dir 생략 = 라벨링 폴더. ④ 목록의 학습·검증 폴더 이미지는 그 폴더를 넘긴다.
+        dir ??= await _train.GetLabelDirAsync()
+                ?? throw new InvalidOperationException("라벨링 폴더가 설정되지 않았습니다.");
+        var imgPath = Path.Combine(dir, $"{stem}_{modality}.png");
         if (!File.Exists(imgPath)) throw new FileNotFoundException("이미지가 없습니다.", imgPath);
-        if (!File.Exists(modelPath)) throw new FileNotFoundException("모델(.onnx)이 없습니다.", modelPath);
-
-        if (IsHeatmapModel(modelPath))
-            return await Task.Run(() => InferHeatmap(modelPath, File.ReadAllBytes(imgPath), maskThr));
-        if (!OperatingSystem.IsWindows())
-            return await Task.Run(() => InferManaged(modelPath, File.ReadAllBytes(imgPath), conf, maskThr));
-
-        return await Task.Run(() =>
-        {
-            // Cv2.ImRead 는 한글 경로에서 마샬링 실패 → CvIo(유니코드 안전)로 읽는다.
-            using var bgr = CvIo.ReadMat(imgPath, ImreadModes.Color);
-            if (bgr.Empty()) throw new InvalidOperationException("이미지를 읽지 못했습니다.");
-            return Infer(modelPath, bgr, conf, maskThr);
-        });
+        // 바이트로 읽어 공통 경로로(한글 경로 안전 · CLAHE 전처리도 한곳에서).
+        return await RunOnBytesAsync(modelPath, await File.ReadAllBytesAsync(imgPath), conf, maskThr);
     }
 
     /// <summary>업로드/외부 이미지 바이트에 대해 추론. 캡처 폴더 밖의 검증용 이미지에 사용.</summary>
@@ -56,8 +49,13 @@ public sealed class OnnxBeadSegmentationService
     {
         if (!File.Exists(modelPath)) throw new FileNotFoundException("모델(.onnx)이 없습니다.", modelPath);
         if (imageBytes is null || imageBytes.Length == 0) throw new ArgumentException("빈 이미지입니다.", nameof(imageBytes));
+        // CLAHE 로 학습한 모델(이름에 _clahe)이면 학습 데이터셋과 같은 전처리를 전체 이미지에 먼저 건다.
+        LastClahe = WeldModelNames.HasClahe(modelPath);
+        if (LastClahe) imageBytes = await Task.Run(() => ImageClahe.ApplyEncoded(imageBytes));
         if (IsHeatmapModel(modelPath))
             return await Task.Run(() => InferHeatmap(modelPath, imageBytes, maskThr));
+        if (IsUnet(modelPath))
+            return await Task.Run(() => InferUnet(modelPath, imageBytes, maskThr));
         if (!OperatingSystem.IsWindows())
             return await Task.Run(() => InferManaged(modelPath, imageBytes, conf, maskThr));
         return await Task.Run(() =>
@@ -80,6 +78,11 @@ public sealed class OnnxBeadSegmentationService
             using (mask)
             {
                 LastOverlay = BuildOverlay(bgr, mask);
+                // 마스크(CV_8UC1, 원본 해상도) → 바이트. Clone 은 항상 연속 메모리.
+                var mb = new byte[bgr.Width * bgr.Height];
+                using (var m8 = mask.Clone())
+                    System.Runtime.InteropServices.Marshal.Copy(m8.Data, mb, 0, mb.Length);
+                LastMask = mb;
                 double covered = count > 0 ? Cv2.CountNonZero(mask) / (double)(bgr.Width * bgr.Height) : 0;
                 return new InferResult(count, maxScore, covered, sw.ElapsedMilliseconds, bgr.Width, bgr.Height);
             }
@@ -100,6 +103,7 @@ public sealed class OnnxBeadSegmentationService
             var (mask, count, maxScore) = YoloSegManaged.Decode(session, img, conf, 0.5f, maskThr);
             sw.Stop();
             LastOverlay = YoloSegManaged.BuildOverlay(img, mask);
+            LastMask = mask;
             int on = 0;
             foreach (var b in mask) if (b != 0) on++;
             double covered = count > 0 ? on / (double)(img.Width * img.Height) : 0;
@@ -157,6 +161,7 @@ public sealed class OnnxBeadSegmentationService
             var line = horiz ? lH : lV;
             var prob = horiz ? probH : probV;
             double frac = horiz ? fH : fV;
+            LastMask = horiz ? mH : mV;   // 추론·검증의 용접선 추출용(띠 마스크)
             LastOverlay = YoloSegManaged.BuildOverlay(img,
                 line is { } l ? HeatmapSegmenter.LineMask(w, h, horiz, l) : horiz ? mH : mV);
             float max = 0;
@@ -177,6 +182,42 @@ public sealed class OnnxBeadSegmentationService
             for (int k = 0; k < c; k++)
                 if (mask[horizontal ? k * w + s : s * w + k] != 0) { hit++; break; }
         return n == 0 ? 0 : (double)hit / n;
+    }
+
+    private bool IsUnet(string modelPath)
+    {
+        lock (_gate) return UnetSegmenter.LooksLikeUnet(GetSession(modelPath));
+    }
+
+    /// <summary>
+    /// U-Net(입력 1채널 그레이) 추론 — 운영 U-Net 검출(UnetWeldVisionDetector)과 같은 전처리:
+    /// BGR→GRAY(0.299R+0.587G+0.114B), 확률 임계 <paramref name="thr"/>. OpenCV 없이 동작(Windows·macOS 공통).
+    /// 검출 수는 비드 픽셀이 있으면 1, 점수는 최대 확률.
+    /// </summary>
+    private InferResult InferUnet(string modelPath, byte[] imageBytes, float thr)
+    {
+        SixLabors.ImageSharp.Image<SixLabors.ImageSharp.PixelFormats.Rgb24> img;
+        try { img = SixLabors.ImageSharp.Image.Load<SixLabors.ImageSharp.PixelFormats.Rgb24>(imageBytes); }
+        catch (Exception ex) { throw new InvalidOperationException("이미지를 디코드하지 못했습니다(형식 확인).", ex); }
+        using (img)
+        lock (_gate)
+        {
+            int w = img.Width, h = img.Height;
+            var rgb = new byte[w * h * 3];
+            img.CopyPixelDataTo(rgb);
+            var gray = new byte[w * h];
+            for (int i = 0; i < gray.Length; i++)
+                gray[i] = (byte)Math.Clamp((int)Math.Round(0.299 * rgb[i * 3] + 0.587 * rgb[i * 3 + 1] + 0.114 * rgb[i * 3 + 2]), 0, 255);
+            var prob = new float[w * h];
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var mask = UnetSegmenter.Segment(GetSession(modelPath), gray, w, h, thr, prob);
+            sw.Stop();
+            LastOverlay = YoloSegManaged.BuildOverlay(img, mask);
+            LastMask = mask;
+            int on = 0; float max = 0;
+            for (int i = 0; i < mask.Length; i++) { if (mask[i] != 0) on++; if (prob[i] > max) max = prob[i]; }
+            return new InferResult(on > 0 ? 1 : 0, max, on / (double)(w * h), sw.ElapsedMilliseconds, w, h);
+        }
     }
 
     private InferenceSession GetSession(string modelPath)

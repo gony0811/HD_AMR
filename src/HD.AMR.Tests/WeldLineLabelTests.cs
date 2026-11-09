@@ -134,4 +134,62 @@ public class DatasetSplitterTests
         Assert.Equal(new DateTime(2026, 11, 5, 13, 2, 3), DatasetSplitter.ParseTimestamp("012_hard_20261105_130203_2"));
         Assert.Null(DatasetSplitter.ParseTimestamp("legacy"));
     }
+
+}
+
+/// <summary>선 라벨 끊김(Breaks) — 떨어진 비드를 한 라벨에.</summary>
+public class WeldLineLabelBreakTests
+{
+    // 끊김: 점 0-1 한 선, 점 2-3 다른 선(가로 같은 높이, x 40~60 은 빈 구간).
+    private static WeldLineLabel Broken() => new()
+    {
+        Width = 100, Height = 50, Thickness = 5,
+        Points = new() { new[] { 10.0, 20.0 }, new[] { 40.0, 20.0 }, new[] { 60.0, 20.0 }, new[] { 90.0, 20.0 } },
+        Breaks = new() { 2 },
+    };
+
+    [Fact]
+    public void 끊긴_구간은_칠하지_않는다()
+    {
+        var l = Broken();
+        var m = l.Rasterize();
+        Assert.NotEqual(0, m[20 * 100 + 25]);
+        Assert.NotEqual(0, m[20 * 100 + 75]);
+        Assert.Equal(0, m[20 * 100 + 50]);   // 40~60 사이(두께 반경 밖)
+        Assert.Equal(2, l.Segments().Count);
+        Assert.Equal(2, l.Edges().Count());
+    }
+
+    [Fact]
+    public void 끊김_JSON_왕복_및_예전_파일_호환()
+    {
+        var back = WeldLineLabel.FromJson(Broken().ToJson())!;
+        Assert.Equal(new[] { 2 }, back.Breaks!);
+
+        var plain = new WeldLineLabel { Width = 100, Height = 50, Points = new() { new[] { 10.0, 20.0 }, new[] { 90.0, 20.0 } } }.ToJson();
+        Assert.DoesNotContain("breaks", plain);          // 끊김 없으면 저장 안 함
+        var old = WeldLineLabel.FromJson("{\"width\":100,\"height\":50,\"thickness\":9,\"points\":[[10,20],[90,20]]}")!;
+        Assert.Null(old.Breaks);
+        Assert.Single(old.Segments());
+    }
+
+    [Fact]
+    public void 점_하나짜리_조각만_있으면_무효()
+    {
+        var l = new WeldLineLabel
+        {
+            Width = 100, Height = 50,
+            Points = new() { new[] { 10.0, 20.0 }, new[] { 60.0, 20.0 } },
+            Breaks = new() { 1 },
+        };
+        Assert.False(l.IsValid);
+    }
+
+    [Fact]
+    public void 회전해도_끊김_유지()
+    {
+        var r = Broken().Rotate90(true);
+        Assert.Equal(new[] { 2 }, r.Breaks!);
+        Assert.Equal(0, r.Rasterize()[50 * r.Width + (r.Width - 1 - 20)]);   // 빈 구간(x=50 → 회전 후 y=50)
+    }
 }

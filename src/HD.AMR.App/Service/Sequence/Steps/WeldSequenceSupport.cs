@@ -54,7 +54,7 @@ public static class WeldSequenceSupport
     /// <summary>도착 판정 각도 허용 오차(rad). Order allowedDeviationTheta → 이 키 → AmrRestSettings → 0.1 순 폴백.</summary>
     public const string ArrivalDeviationThetaKey = "arrival.deviationTheta";
 
-    /// <summary>비드 검출 DL 모델 전체 경로. 빈 문자열 = 자동(weld_seg_{ir|rgb}.onnx).
+    /// <summary>비드 검출 YOLO 모델 경로(필수). 빈 문자열 = 모델 없음(비드 찾기 단계 실패).
     /// 카메라 페이지 드롭다운이 저장하고, ⑦⑪·⑦⁺ 가 측정 전 <see cref="ApplyDlModelAsync"/> 로 적용한다.</summary>
     public const string DlModelPathKey = WeldDetectionSettingsStore.DlModelPathKey;
 
@@ -223,6 +223,20 @@ public static class WeldSequenceSupport
         => context.InspectionDirection == InspectionMoveDirection.Vertical
            && WallCodes.FindBySurfaceId(context.InspectionSurfaceId)?.Orientation
                is SurfaceOrientation.ChamferLower or SurfaceOrientation.ChamferUpper;
+
+    /// <summary>
+    /// 학습 모델을 쓰는 검출 방식(YOLO·U-Net)인데 모델이 지정되지 않았으면 경고 문구, 아니면 null.
+    /// 비드 찾기 단계가 <see cref="ApplyDlModelAsync"/> 직후 확인해 로봇을 움직이기 전에 실패로 멈춘다.
+    /// (파일 존재는 검출기가 경로를 해석해 확인한다 — 파일명만 저장된 경우 models 폴더 기준.)
+    /// </summary>
+    public static string? MissingModel(WeldTrackingService weld) => weld.Method switch
+    {
+        WeldDetectionMethod.Dl when string.IsNullOrWhiteSpace(weld.Params.DlModelPath)
+            => "모델 없음 — 비드 검출 YOLO 모델이 지정되지 않았습니다. 용접 추적 화면에서 모델을 선택하거나 파라미터 Weld.Yolo.ModelPath 를 지정하세요.",
+        WeldDetectionMethod.Unet when string.IsNullOrWhiteSpace(weld.Params.UnetModelPath)
+            => "모델 없음 — 비드 검출 U-Net 모델이 지정되지 않았습니다. 용접 추적 화면에서 모델을 선택하거나 파라미터 Weld.Unet.ModelPath 를 지정하세요.",
+        _ => null,
+    };
 
     /// <summary>저장된 비드 검출 모델 선택(DL=YOLO, U-Net)을 <see cref="WeldTrackingService.Params"/> 에 적용한다.
     /// 키 미존재/DB 미준비면 현재 인메모리 선택을 유지한다. 현재 검출 방식의 모델 표시를 반환(예: "YOLO 모델: weld_yolo_ir_1106.onnx").</summary>

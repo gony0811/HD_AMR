@@ -78,6 +78,9 @@ public class RealSenseClient : IDisposable
     public bool IsIrActive => _irActive;
     /// <summary>이미터 ON/OFF 교번 중인지. true 면 <see cref="LatestIr"/> 는 이미터 OFF(도트 없는) 프레임이다.</summary>
     public bool IsEmitterAlternating => _emitterAlternating;
+    /// <summary>설정은 교번인데 카메라(펌웨어)가 지원하지 않거나 적용에 실패해 상시 모드로 도는 중.</summary>
+    public bool EmitterAlternateUnsupported => _emitterAlternateUnsupported;
+    private volatile bool _emitterAlternateUnsupported;
     public DateTime LastFrameAt => _lastFrameAt;
     public string? ConnectionType => _connectionType;
     public RealSenseSettings Settings => _settings;
@@ -362,6 +365,7 @@ public class RealSenseClient : IDisposable
                     // 이미터 ON/OFF 교번 — ON 프레임은 깊이, OFF 프레임은 IR(용접선)에 사용.
                     // IR 이 없으면 OFF 프레임을 쓸 곳이 없어 깊이 FPS 만 반토막 나므로 켜지 않는다.
                     _emitterAlternating = false;
+                    _emitterAlternateUnsupported = false;
                     if (sensor.Options.Supports(Option.EmitterOnOff))
                     {
                         bool want = _settings.EmitterAlternate && _settings.EnableEmitter && _irActive;
@@ -377,11 +381,13 @@ public class RealSenseClient : IDisposable
                         catch (Exception ex)
                         {
                             _logger.LogWarning(ex, "{Name} 이미터 교번 적용 실패 — 상시 모드로 진행", _settings.Name);
+                            _emitterAlternateUnsupported = want;
                         }
                     }
                     else if (_settings.EmitterAlternate)
                     {
                         _logger.LogWarning("{Name} 펌웨어가 EmitterOnOff 를 지원하지 않음 — 교번 없이 진행", _settings.Name);
+                        _emitterAlternateUnsupported = true;
                     }
 
                     if (_settings.LaserPower >= 0f && sensor.Options.Supports(Option.LaserPower))

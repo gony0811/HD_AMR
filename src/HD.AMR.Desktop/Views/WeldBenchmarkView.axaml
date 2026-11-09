@@ -1,115 +1,240 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:HD.AMR.Desktop.ViewModels"
+             xmlns:views="using:HD.AMR.Desktop.Views"
              x:Class="HD.AMR.Desktop.Views.WeldBenchmarkView"
              x:DataType="vm:WeldBenchmarkViewModel">
     <UserControl.Styles>
         <Style Selector="TextBlock.axis"><Setter Property="Foreground" Value="{DynamicResource AppMutedTextBrush}" /><Setter Property="FontSize" Value="12" /></Style>
-        <Style Selector="TextBlock.th"><Setter Property="FontWeight" Value="SemiBold" /><Setter Property="FontSize" Value="12" /></Style>
-        <Style Selector="TextBlock.td"><Setter Property="FontFamily" Value="monospace" /><Setter Property="FontSize" Value="12" /></Style>
+        <Style Selector="TextBlock.lbl"><Setter Property="Foreground" Value="{DynamicResource AppMutedTextBrush}" /><Setter Property="FontSize" Value="12" /><Setter Property="VerticalAlignment" Value="Center" /></Style>
+        <Style Selector="TextBlock.section"><Setter Property="FontWeight" Value="SemiBold" /></Style>
+        <Style Selector="TextBlock.th"><Setter Property="Foreground" Value="{DynamicResource AppMutedTextBrush}" /><Setter Property="FontSize" Value="12" /></Style>
+        <Style Selector="TextBlock.td"><Setter Property="FontFamily" Value="monospace" /><Setter Property="FontSize" Value="12" /><Setter Property="VerticalAlignment" Value="Center" /></Style>
+        <Style Selector="TextBlock.more"><Setter Property="TextDecorations" Value="Underline" /><Setter Property="Foreground" Value="{DynamicResource AppMutedTextBrush}" /><Setter Property="FontSize" Value="12" /><Setter Property="Cursor" Value="Help" /></Style>
+        <Style Selector="RadioButton"><Setter Property="Margin" Value="0,0,16,0" /></Style>
+        <Style Selector="Border.pathbox"><Setter Property="BorderBrush" Value="{DynamicResource AppBorderBrush}" /><Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="4" /><Setter Property="Padding" Value="8,6" /></Style>
+        <!-- 방식별 합격 칩(Y/U) · 판정 배지 -->
+        <Style Selector="Border.chip"><Setter Property="CornerRadius" Value="4" /><Setter Property="Padding" Value="5,0" /><Setter Property="Margin" Value="3,0,0,0" /><Setter Property="BorderThickness" Value="1" />
+            <Setter Property="BorderBrush" Value="{DynamicResource AppDangerBrush}" /></Style>
+        <Style Selector="Border.chip > TextBlock"><Setter Property="FontFamily" Value="monospace" /><Setter Property="FontSize" Value="11" /><Setter Property="Foreground" Value="{DynamicResource AppDangerBrush}" /></Style>
+        <Style Selector="Border.chip.pass"><Setter Property="Background" Value="{DynamicResource AppGoodSoftBrush}" /><Setter Property="BorderBrush" Value="{DynamicResource AppGoodBrush}" /></Style>
+        <Style Selector="Border.chip.pass > TextBlock"><Setter Property="Foreground" Value="{DynamicResource AppGoodBrush}" /></Style>
     </UserControl.Styles>
 
-    <StackPanel MaxWidth="1400" HorizontalAlignment="Left" Spacing="8">
-        <TextBlock Classes="page-title" Text="용접선 검출 비교평가 (선 라벨 정답 대비)" />
-        <TextBlock Classes="axis" TextWrapping="Wrap"
-                   Text="비드 라벨링의 📏 선 라벨이 있는 촬영본에 선택한 방식을 모두 돌려 정답과 비교합니다. 중심 오차는 진행축 FOV 중심 위치에서 측정(시퀀스가 쓰는 d 와 같은 위치). 운영 파라미터(용접 추적 화면)를 복사해 쓰며 운영 상태는 바꾸지 않습니다." />
-
-        <!-- 옵션 -->
-        <WrapPanel Orientation="Horizontal">
-            <ComboBox Width="90" Margin="0,0,8,6" SelectedIndex="{Binding ModalityIndex}" IsEnabled="{Binding !Running}">
-                <ComboBoxItem>RGB</ComboBoxItem><ComboBoxItem>IR</ComboBoxItem>
-            </ComboBox>
-            <TextBlock Classes="axis" VerticalAlignment="Center" Margin="0,0,14,6" Text="{Binding LabeledCount, StringFormat='선 라벨 {0}장'}" />
-            <CheckBox Margin="0,0,10,6" Content="Param (고전 CV)" IsChecked="{Binding UseParam}" IsEnabled="{Binding !Running}" />
-            <CheckBox Margin="0,0,10,6" Content="DL (YOLO-seg)" IsChecked="{Binding UseDl}" IsEnabled="{Binding !Running}" />
-            <CheckBox Margin="0,0,10,6" Content="Ridge (헤시안 선 필터)" IsChecked="{Binding UseRidge}" IsEnabled="{Binding !Running}" />
-            <CheckBox Margin="0,0,14,6" Content="U-Net" IsChecked="{Binding UseUnet}" IsEnabled="{Binding !Running}" />
-            <CheckBox Margin="0,0,10,6" Content="검증셋(val)만" IsChecked="{Binding ValOnly}" IsEnabled="{Binding !Running}"
-                      ToolTip.Tip="데이터셋 변환과 같은 세션 분리 규칙으로, 학습에 쓰지 않은 촬영본만 평가" />
-            <CheckBox Margin="0,0,14,6" Content="Weld ROI 사용" IsChecked="{Binding UseWeldRoi}" IsEnabled="{Binding !Running}"
-                      ToolTip.Tip="끄면 전체 프레임을 ROI 로 사용(촬영본마다 위치가 달라 기본 권장)" />
-            <ComboBox Width="150" Margin="0,0,14,6" SelectedIndex="{Binding LineFitIndex}" IsEnabled="{Binding !Running}"
-                      ToolTip.Tip="중심선 직선 피팅. 운영값=용접 추적 파라미터 그대로. 두 방식을 각각 돌려 비교할 수 있습니다.">
-                <ComboBoxItem>피팅: 운영값</ComboBoxItem><ComboBoxItem>피팅: RANSAC</ComboBoxItem><ComboBoxItem>피팅: 최소제곱</ComboBoxItem>
-            </ComboBox>
-            <TextBlock Classes="axis" VerticalAlignment="Center" Margin="0,0,4,6" Text="각도≤" />
-            <NumericUpDown Width="110" Margin="0,0,4,6" Value="{Binding AngleTol}" Minimum="0.1" Increment="0.5" FormatString="0.0" />
-            <TextBlock Classes="axis" VerticalAlignment="Center" Margin="0,0,10,6" Text="°" />
-            <TextBlock Classes="axis" VerticalAlignment="Center" Margin="0,0,4,6" Text="중심≤" />
-            <NumericUpDown Width="110" Margin="0,0,4,6" Value="{Binding CenterTol}" Minimum="1" Increment="1" FormatString="0" />
-            <TextBlock Classes="axis" VerticalAlignment="Center" Margin="0,0,14,6" Text="px" />
-            <Button Classes="accent" Margin="0,0,6,6" Content="▶ 비교평가 실행" Command="{Binding RunCommand}" IsEnabled="{Binding !Running}" />
-            <Button Margin="0,0,6,6" Content="중단" Command="{Binding CancelCommand}" IsEnabled="{Binding Running}" />
-            <Button Margin="0,0,6,6" Content="새로고침" Command="{Binding RefreshCountCommand}" IsEnabled="{Binding !Running}" />
-        </WrapPanel>
-
-        <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding Running}">
-            <ProgressBar Width="400" Minimum="0" Maximum="100" Value="{Binding Progress}" />
-            <TextBlock Classes="axis" VerticalAlignment="Center" Text="{Binding ProgressText}" />
+    <!-- 다른 페이지와 같은 최대 폭 + 왼쪽 정렬(격자 칸이 내용 크기로 줄지 않게 코드비하인드가 폭 고정) -->
+    <StackPanel Name="PageRoot" MaxWidth="1400" HorizontalAlignment="Left" Spacing="8">
+        <StackPanel Orientation="Horizontal" Spacing="8">
+            <TextBlock Classes="page-title" Text="용접선 검출 비교평가 (선 라벨 정답 대비)" />
+            <TextBlock Classes="more" Text="자세히" VerticalAlignment="Center"
+                       ToolTip.Tip="비드 라벨링의 📏 선 라벨이 있는 촬영본에 선택한 모델을 돌려 정답과 비교합니다. 중심 오차는 진행축 FOV 중심 위치에서 측정(시퀀스가 쓰는 d 와 같은 위치). 임계값·진행축 등은 운영 파라미터(용접 추적 화면)를 복사해 쓰며 운영 상태는 바꾸지 않습니다." />
         </StackPanel>
 
-        <Border Classes="alert" IsVisible="{Binding Message, Converter={x:Static ObjectConverters.IsNotNull}}">
+        <!-- 평가 조건 -->
+        <Border Classes="card">
+            <StackPanel Spacing="10">
+                <TextBlock Classes="section" Text="평가 조건" />
+                <Grid ColumnDefinitions="80,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto">
+                    <!-- 학습 폴더 (요약 · 편집은 비전 학습 ①) -->
+                    <TextBlock Classes="lbl" Text="학습 폴더" />
+                    <Grid Grid.Column="1" ColumnDefinitions="*,96,96">
+                        <Border Classes="pathbox">
+                            <Grid ColumnDefinitions="*,Auto">
+                                <TextBlock FontFamily="monospace" FontSize="12" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                                           Text="{Binding TrainDirsText}" ToolTip.Tip="{Binding TrainDirsTip}" />
+                                <TextBlock Grid.Column="1" Classes="axis" VerticalAlignment="Center" Margin="12,0,0,0" Text="{Binding TrainCountText}" />
+                            </Grid>
+                        </Border>
+                        <Button Grid.Column="1" Grid.ColumnSpan="2" Margin="8,0,0,0" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                                Content="비전 학습에서 편집" Command="{Binding EditInTrainingCommand}" IsEnabled="{Binding !Running}"
+                                ToolTip.Tip="학습 폴더 추가·삭제는 비전 학습 ① 데이터셋에서" />
+                    </Grid>
+
+                    <!-- 검증 폴더 -->
+                    <TextBlock Grid.Row="1" Classes="lbl" Text="검증 폴더" Margin="0,8,0,0" />
+                    <Grid Grid.Row="1" Grid.Column="1" ColumnDefinitions="*,96,96" Margin="0,8,0,0">
+                        <Border Classes="pathbox">
+                            <Grid ColumnDefinitions="*,Auto">
+                                <TextBlock FontFamily="monospace" FontSize="12" VerticalAlignment="Center" TextTrimming="PrefixCharacterEllipsis"
+                                           Text="{Binding ValDirText}" ToolTip.Tip="{Binding ValDirText}" />
+                                <TextBlock Grid.Column="1" Classes="axis" VerticalAlignment="Center" Margin="12,0,0,0" Text="{Binding ValCountText}" />
+                            </Grid>
+                        </Border>
+                        <Button Grid.Column="1" Margin="8,0,0,0" Name="PickValDirBtn" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                                Content="폴더 선택…" IsEnabled="{Binding !Running}" />
+                        <Button Grid.Column="2" Margin="8,0,0,0" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                                Content="지정 해제" Command="{Binding ClearValDirCommand}" IsVisible="{Binding HasValDir}" IsEnabled="{Binding !Running}"
+                                ToolTip.Tip="검증 폴더 설정만 비웁니다(파일 그대로). 이후 val 은 학습 폴더를 촬영 세션 단위로 자동 분리." />
+                    </Grid>
+                    <TextBlock Grid.Row="2" Grid.Column="1" Classes="axis" Margin="0,4,0,0" Text="비전 학습 ① 데이터셋과 같은 설정 · 한쪽에서 바꾸면 양쪽에 반영" />
+
+                    <!-- 대상 -->
+                    <TextBlock Grid.Row="3" Classes="lbl" Text="대상" Margin="0,10,0,0" />
+                    <WrapPanel Grid.Row="3" Grid.Column="1" Margin="0,10,0,0" IsEnabled="{Binding !Running}">
+                        <RadioButton GroupName="bmMod" Content="RGB" IsChecked="{Binding IsRgb}" />
+                        <RadioButton GroupName="bmMod" Content="IR" IsChecked="{Binding IsIr}" Margin="0,0,28,0" />
+                        <RadioButton GroupName="bmScope" Content="{Binding ValText}" IsChecked="{Binding ValOnlyChecked}"
+                                     ToolTip.Tip="검증 폴더(학습에 쓰지 않은 촬영본)만 평가. 검증 폴더가 없으면 데이터셋 변환과 같은 세션 분리 규칙의 val." />
+                        <RadioButton GroupName="bmScope" Content="{Binding AllText}" IsChecked="{Binding AllImages}" Margin="0,0,16,0" />
+                        <Button Content="⟳" Command="{Binding RefreshCountCommand}" ToolTip.Tip="촬영본 수·모델 목록 새로고침" />
+                    </WrapPanel>
+
+                    <!-- 방식 · 모델 (YOLO · U-Net) -->
+                    <TextBlock Grid.Row="4" Classes="lbl" Text="방식 · 모델" VerticalAlignment="Top" Margin="0,16,0,0" />
+                    <StackPanel Grid.Row="4" Grid.Column="1" Margin="0,10,0,0" Spacing="6" IsEnabled="{Binding !Running}">
+                        <Grid ColumnDefinitions="100,*">
+                            <CheckBox Content="YOLO" IsChecked="{Binding UseDl}" />
+                            <ComboBox Grid.Column="1" HorizontalAlignment="Stretch" ItemsSource="{Binding YoloModels}" SelectedItem="{Binding SelectedYoloModel}"
+                                      IsEnabled="{Binding UseDl}" PlaceholderText="이 모달리티의 YOLO 모델 없음" FontFamily="monospace" />
+                        </Grid>
+                        <Grid ColumnDefinitions="100,*">
+                            <CheckBox Content="U-Net" IsChecked="{Binding UseUnet}" />
+                            <ComboBox Grid.Column="1" HorizontalAlignment="Stretch" ItemsSource="{Binding UnetModels}" SelectedItem="{Binding SelectedUnetModel}"
+                                      IsEnabled="{Binding UseUnet}" PlaceholderText="이 모달리티의 U-Net 모델 없음" FontFamily="monospace" />
+                        </Grid>
+                        <TextBlock Classes="axis" Text="기본은 운영 모델 · 여기서 바꿔도 운영 설정은 그대로" />
+                    </StackPanel>
+
+                    <!-- 합격 기준 -->
+                    <TextBlock Grid.Row="5" Classes="lbl" Text="합격 기준" Margin="0,10,0,0" />
+                    <WrapPanel Grid.Row="5" Grid.Column="1" Margin="0,10,0,0" IsEnabled="{Binding !Running}">
+                        <TextBlock Classes="lbl" Text="각도 ≤" Margin="0,0,6,0" />
+                        <NumericUpDown Width="120" Value="{Binding AngleTol}" Minimum="0.1" Increment="0.5" FormatString="0.0" />
+                        <TextBlock Classes="lbl" Text="°" Margin="6,0,20,0" />
+                        <TextBlock Classes="lbl" Text="중심 ≤" Margin="0,0,6,0" />
+                        <NumericUpDown Width="120" Value="{Binding CenterTol}" Minimum="1" Increment="1" FormatString="0" />
+                        <TextBlock Classes="lbl" Text="px" Margin="6,0,20,0" />
+                        <TextBlock Classes="lbl" Text="정답 선이 여러 가지면 가까운 가지와 비교" />
+                    </WrapPanel>
+
+                    <!-- 고급 -->
+                    <TextBlock Grid.Row="6" Classes="lbl" Text="고급" Margin="0,10,0,0" />
+                    <WrapPanel Grid.Row="6" Grid.Column="1" Margin="0,10,0,0" IsEnabled="{Binding !Running}">
+                        <TextBlock Classes="lbl" Text="직선 피팅" Margin="0,0,6,0" />
+                        <ComboBox Width="140" Margin="0,0,24,0" SelectedIndex="{Binding LineFitIndex}"
+                                  ToolTip.Tip="중심선 직선 피팅. 운영값=용접 추적 파라미터 그대로. 두 방식을 각각 돌려 비교할 수 있습니다.">
+                            <ComboBoxItem>운영값</ComboBoxItem><ComboBoxItem>RANSAC</ComboBoxItem><ComboBoxItem>최소제곱</ComboBoxItem>
+                        </ComboBox>
+                        <TextBlock Classes="lbl" Text="ROI" Margin="0,0,10,0" />
+                        <RadioButton GroupName="bmRoi" Content="전체 프레임" IsChecked="{Binding FullFrame}"
+                                     ToolTip.Tip="전체 프레임을 ROI 로 사용(촬영본마다 비드 위치가 달라 기본 권장)" />
+                        <RadioButton GroupName="bmRoi" Content="Weld ROI" IsChecked="{Binding WeldRoiChecked}"
+                                     ToolTip.Tip="용접 추적 화면의 Bead ROI 를 사용" />
+                    </WrapPanel>
+                </Grid>
+
+                <Grid ColumnDefinitions="*,Auto,Auto">
+                    <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center" IsVisible="{Binding Running}">
+                        <ProgressBar Width="320" Minimum="0" Maximum="100" Value="{Binding Progress}" />
+                        <TextBlock Classes="axis" VerticalAlignment="Center" Text="{Binding ProgressText}" />
+                    </StackPanel>
+                    <Button Grid.Column="1" Margin="8,0,0,0" Content="중단" Command="{Binding CancelCommand}" IsEnabled="{Binding Running}" />
+                    <Button Grid.Column="2" Margin="8,0,0,0" Classes="accent" Content="▶ 비교평가 실행" Command="{Binding RunCommand}" IsEnabled="{Binding !Running}" />
+                </Grid>
+            </StackPanel>
+        </Border>
+
+        <Border Classes="alert" Margin="0" IsVisible="{Binding Message, Converter={x:Static ObjectConverters.IsNotNull}}">
             <TextBlock Text="{Binding Message}" TextWrapping="Wrap" />
         </Border>
 
-        <!-- 요약 표 -->
-        <StackPanel IsVisible="{Binding HasReport}" Spacing="4">
-            <TextBlock Classes="axis" TextWrapping="Wrap" Text="{Binding ReportInfo}" />
-            <Border BorderBrush="{DynamicResource AppBorderBrush}" BorderThickness="1" Padding="8">
-                <StackPanel Spacing="4">
-                    <Grid ColumnDefinitions="110,150,90,170,170,90,80">
-                        <TextBlock Grid.Column="0" Classes="th" Text="방식" />
-                        <TextBlock Grid.Column="1" Classes="th" Text="합격률" />
-                        <TextBlock Grid.Column="2" Classes="th" Text="검출률" />
-                        <TextBlock Grid.Column="3" Classes="th" Text="각도 오차° (중앙/90%)" />
-                        <TextBlock Grid.Column="4" Classes="th" Text="중심 오차px (중앙/90%)" />
-                        <TextBlock Grid.Column="5" Classes="th" Text="커버리지" />
-                        <TextBlock Grid.Column="6" Classes="th" Text="평균 ms" />
-                    </Grid>
-                    <ItemsControl ItemsSource="{Binding Summaries}">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate x:DataType="vm:SummaryRow">
-                                <Grid ColumnDefinitions="110,150,90,170,170,90,80" Margin="0,2">
-                                    <TextBlock Grid.Column="0" Classes="td" FontWeight="SemiBold" Text="{Binding Method}" />
-                                    <TextBlock Grid.Column="1" Classes="td" Text="{Binding PassRate}" />
+        <!-- 결과 요약 -->
+        <Border Classes="card" IsVisible="{Binding HasReport}">
+            <StackPanel Spacing="6">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <TextBlock Classes="section" Text="결과 요약" />
+                    <TextBlock Classes="axis" VerticalAlignment="Center" Text="합격률 높은 순" />
+                </StackPanel>
+                <TextBlock Classes="axis" TextWrapping="Wrap" Text="{Binding ReportInfo}" />
+                <Grid ColumnDefinitions="3*,2*,*,1.4*,1.4*,*" Margin="0,4,0,0">
+                    <TextBlock Classes="th" Text="방식 · 모델" />
+                    <TextBlock Grid.Column="1" Classes="th" Text="합격률" />
+                    <TextBlock Grid.Column="2" Classes="th" Text="검출률" />
+                    <TextBlock Grid.Column="3" Classes="th" Text="각도° 중앙/90%" />
+                    <TextBlock Grid.Column="4" Classes="th" Text="중심px 중앙/90%" />
+                    <TextBlock Grid.Column="5" Classes="th" Text="평균 ms" />
+                </Grid>
+                <Separator Margin="0" />
+                <ItemsControl ItemsSource="{Binding Summaries}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:SummaryRow">
+                            <StackPanel>
+                                <Grid ColumnDefinitions="3*,2*,*,1.4*,1.4*,*" Margin="0,6">
+                                    <StackPanel Margin="0,0,12,0">
+                                        <TextBlock FontWeight="SemiBold" Text="{Binding Method}" />
+                                        <TextBlock Classes="axis" FontFamily="monospace" TextTrimming="CharacterEllipsis" Text="{Binding Model}" ToolTip.Tip="{Binding Model}" IsVisible="{Binding HasModel}" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Margin="0,0,16,0" VerticalAlignment="Center" Spacing="3">
+                                        <TextBlock Classes="td" Text="{Binding PassRate}" />
+                                        <ProgressBar Height="6" MinHeight="6" Minimum="0" Maximum="100" Value="{Binding PassPct}" />
+                                    </StackPanel>
                                     <TextBlock Grid.Column="2" Classes="td" Text="{Binding DetectRate}" />
                                     <TextBlock Grid.Column="3" Classes="td" Text="{Binding Angle}" />
                                     <TextBlock Grid.Column="4" Classes="td" Text="{Binding Offset}" />
-                                    <TextBlock Grid.Column="5" Classes="td" Text="{Binding Coverage}" />
-                                    <TextBlock Grid.Column="6" Classes="td" Text="{Binding Millis}" />
+                                    <TextBlock Grid.Column="5" Classes="td" Text="{Binding Millis}" />
                                 </Grid>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                </StackPanel>
-            </Border>
+                                <Separator Margin="0" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <SelectableTextBlock Classes="axis" FontSize="11" Foreground="{DynamicResource AppMutedTextBrush}" Text="{Binding CsvText}"
+                                     IsVisible="{Binding CsvText, Converter={x:Static ObjectConverters.IsNotNull}}" />
+            </StackPanel>
+        </Border>
 
-            <!-- 촬영본별 상세 -->
-            <Grid ColumnDefinitions="300,*" Margin="0,6,0,0">
-                <StackPanel Grid.Column="0" Margin="0,0,10,0" Spacing="4">
-                    <CheckBox Content="불합격 포함 촬영본만" IsChecked="{Binding FailOnly}" />
-                    <ListBox ItemsSource="{Binding Stems}" SelectedItem="{Binding SelectedStem}" Height="560" FontFamily="monospace" FontSize="12">
-                        <ListBox.ItemTemplate><DataTemplate x:DataType="vm:StemRow"><TextBlock Text="{Binding Label}" /></DataTemplate></ListBox.ItemTemplate>
-                    </ListBox>
-                    <TextBlock Classes="axis" TextWrapping="Wrap" Text="✓/✗ = 방식별 합격 (P=Param, D=Dl, R=Ridge, U=Unet). 오버레이의 초록 선이 정답." />
-                </StackPanel>
-                <ScrollViewer Grid.Column="1" MaxHeight="640">
-                    <ItemsControl ItemsSource="{Binding Cards}">
-                        <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate x:DataType="vm:MethodCard">
-                                <Border BorderBrush="{DynamicResource AppBorderBrush}" BorderThickness="1" Padding="6" Margin="0,0,8,8" Width="520">
-                                    <StackPanel Spacing="4">
-                                        <TextBlock FontWeight="SemiBold" Text="{Binding Title}" />
-                                        <TextBlock Classes="axis" TextWrapping="Wrap" Text="{Binding Detail}" />
-                                        <Image Source="{Binding Image}" Stretch="Uniform" MaxHeight="300" />
-                                    </StackPanel>
-                                </Border>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                </ScrollViewer>
-            </Grid>
-        </StackPanel>
+        <!-- 촬영본별 상세 -->
+        <Border Classes="card" IsVisible="{Binding HasReport}">
+            <StackPanel Spacing="6">
+                <TextBlock Classes="section" Text="촬영본별 상세" />
+                <!-- 오버레이 범례 — 비전 학습 ④ 추론과 같은 색. 운영 검출기(Windows) 오버레이는 색이 달라 정답 선만 표기. -->
+                <views:OverlayLegend Margin="0,2,0,6" ShowDetection="{Binding ManagedLegend}" />
+                <Grid ColumnDefinitions="260,*">
+                    <StackPanel Grid.Column="0" Margin="0,0,14,0" Spacing="4">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock Classes="lbl" Text="{Binding Stems.Count, StringFormat='촬영본 {0}'}" />
+                            <CheckBox Grid.Column="1" Content="불합격만" IsChecked="{Binding FailOnly}" />
+                        </Grid>
+                        <ListBox ItemsSource="{Binding Stems}" SelectedItem="{Binding SelectedStem}" Height="560">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate x:DataType="vm:StemRow">
+                                    <Grid ColumnDefinitions="*,Auto">
+                                        <TextBlock FontFamily="monospace" FontSize="12" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Text="{Binding Stem}" ToolTip.Tip="{Binding Stem}" />
+                                        <ItemsControl Grid.Column="1" ItemsSource="{Binding Marks}">
+                                            <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:StemMark">
+                                                    <Border Classes="chip" Classes.pass="{Binding Pass}" ToolTip.Tip="{Binding Tip}"><TextBlock Text="{Binding Letter}" /></Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </Grid>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                        <TextBlock Classes="axis" TextWrapping="Wrap" Text="Y=YOLO · U=U-Net (초록 합격 · 빨강 불합격)" />
+                    </StackPanel>
+                    <ScrollViewer Grid.Column="1" MaxHeight="640">
+                        <ItemsControl ItemsSource="{Binding Cards}">
+                            <ItemsControl.ItemsPanel><ItemsPanelTemplate><UniformGrid Columns="2" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:MethodCard">
+                                    <Border BorderBrush="{DynamicResource AppBorderBrush}" BorderThickness="1" CornerRadius="6" Padding="8" Margin="0,0,8,8">
+                                        <StackPanel Spacing="4">
+                                            <Grid ColumnDefinitions="*,Auto">
+                                                <TextBlock FontWeight="SemiBold" VerticalAlignment="Center" Text="{Binding Title}" />
+                                                <Border Grid.Column="1" Classes="chip" Classes.pass="{Binding IsPass}"><TextBlock Text="{Binding Verdict}" /></Border>
+                                            </Grid>
+                                            <TextBlock Classes="axis" TextWrapping="Wrap" Text="{Binding Detail}" />
+                                            <Image Source="{Binding Image}" Stretch="Uniform" MaxHeight="300" />
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </Grid>
+            </StackPanel>
+        </Border>
     </StackPanel>
 </UserControl>

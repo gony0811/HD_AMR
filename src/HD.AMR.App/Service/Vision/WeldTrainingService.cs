@@ -9,13 +9,25 @@ namespace HD.AMR.App.Service.Vision;
 /// <summary>
 /// DL 비드 세그멘테이션(YOLOv8-seg, CPU) 학습 파이프라인의 UI 오케스트레이터.
 /// ① 마스크 초안 → YOLO-seg 라벨 데이터셋 변환은 .NET(OpenCvSharp)으로 네이티브 수행.
-/// ② 학습 / ③ ONNX 내보내기는 앱이 Python(ultralytics)을 서브프로세스로 실행하고 로그를 스트리밍한다.
+/// ② YOLO 학습·ONNX 내보내기(③ U-Net 도 같은 방식)는 앱이 Python(ultralytics)을 서브프로세스로 실행하고 로그를 스트리밍한다.
 /// 학습 프로세스는 페이지 이동/서킷과 무관하게 살아 있어야 하므로 이 서비스는 싱글톤으로 상태를 보관하며,
 /// 캡처 폴더/파이썬 경로 등 스코프 의존(ParameterService→DbContext)은 필요 시 스코프를 열어 조회한다.
 /// </summary>
 public sealed class WeldTrainingService
 {
     public const string PythonExeKey = "Vision.Python.Exe";
+    /// <summary>데이터셋 변환 학습 폴더 목록(줄바꿈 구분). 비어 있으면 라벨링 폴더 1개.</summary>
+    public const string TrainDirsKey = "Vision.Dataset.TrainDirs";
+    /// <summary>데이터셋 변환 검증 폴더(선택). 비어 있으면 촬영 세션 단위 자동 분리.</summary>
+    public const string ValDirKey = "Vision.Dataset.ValDir";
+    /// <summary>데이터셋 변환 시 시계 90° 회전본 포함 여부("1"/"0", 기본 포함).</summary>
+    public const string AddRotatedKey = "Vision.Dataset.AddRotated";
+    /// <summary>IR 데이터셋에 이미터 OFF(도트 없음)로 추정되는 촬영본만 쓸지("1"/"0", 기본 0). RGB 에는 영향 없음.</summary>
+    public const string EmitterOffOnlyKey = "Vision.Dataset.EmitterOffOnly";
+    /// <summary>데이터셋 변환 시 이미지에 CLAHE 전처리("1"/"0", 기본 0). 이 데이터셋으로 학습한 모델은 이름에 _clahe 가 붙는다.</summary>
+    public const string ClaheKey = "Vision.Dataset.Clahe";
+    /// <summary>데이터셋·학습 run 폴더의 전처리 표식 파일(내용 "clahe"). 없으면 전처리 없음.</summary>
+    public const string PreprocessMarker = "_preprocess.txt";
 
     private readonly IServiceScopeFactory _scopes;
     private readonly ILogger<WeldTrainingService> _log;
@@ -37,6 +49,8 @@ public sealed class WeldTrainingService
 
     // 마지막으로 데이터셋 변환한 모달리티("ir"/"rgb"). 내보내기 파일명 weld_yolo_/weld_unet_{modality}.onnx 기본값.
     public string LastConvertedModality { get; private set; } = "ir";
+    // 마지막 YOLO 학습에 쓴 데이터셋 폴더(직사각 내보내기 비율 산출용).
+    private string? _lastYoloDataset;
 
     public WeldTrainingService(IServiceScopeFactory scopes, ILogger<WeldTrainingService> log)
     {
@@ -94,6 +108,171 @@ public sealed class WeldTrainingService
         return string.IsNullOrWhiteSpace(dir) ? null : dir;
     }
 
+    /// <summary>라벨링 폴더(Vision.Label.Dir, 비어 있으면 캡처 저장 폴더). 없으면 null.</summary>
+    public async Task<string?> GetLabelDirAsync()
+    {
+        using var s = _scopes.CreateScope();
+        var p = s.ServiceProvider.GetRequiredService<ParameterService>();
+        var dir = await p.GetAsync(LabelDataService.LabelDirKey);
+        if (string.IsNullOrWhiteSpace(dir)) dir = await p.GetAsync(LabelDataService.CaptureDirKey);
+        return string.IsNullOrWhiteSpace(dir) ? null : dir;
+    }
+
+    /// <summary>저장된 데이터셋 원본 폴더 구성. 학습 폴더가 비어 있으면 라벨링 폴더 1개.</summary>
+    public async Task<DatasetSources> GetDatasetSourcesAsync()
+    {
+        using var s = _scopes.CreateScope();
+        var p = s.ServiceProvider.GetRequiredService<ParameterService>();
+        var train = LabelFiles.NormalizeDirs((await p.GetAsync(TrainDirsKey) ?? "").Split('\n'));
+        if (train.Count == 0 && await GetLabelDirAsync() is { } d) train.Add(d);
+        var val = await p.GetAsync(ValDirKey);
+        return new DatasetSources(train, string.IsNullOrWhiteSpace(val) ? null : val.Trim());
+    }
+
+    public async Task SetDatasetSourcesAsync(IEnumerable<string> trainDirs, string? valDir)
+    {
+        using var s = _scopes.CreateScope();
+        var p = s.ServiceProvider.GetRequiredService<ParameterService>();
+        await p.SetAsync(TrainDirsKey, string.Join('\n', LabelFiles.NormalizeDirs(trainDirs)), "데이터셋 변환 학습 폴더(줄바꿈 구분)");
+        await p.SetAsync(ValDirKey, valDir?.Trim() ?? "", "데이터셋 변환 검증 폴더(빈값=세션 자동 분리)");
+    }
+
+    /// <summary>데이터셋 변환 시 90° 회전본 포함 여부(저장값 없으면 포함).</summary>
+    public async Task<bool> GetAddRotatedAsync()
+    {
+        using var s = _scopes.CreateScope();
+        var v = await s.ServiceProvider.GetRequiredService<ParameterService>().GetAsync(AddRotatedKey);
+        return v?.Trim() != "0";
+    }
+
+    public async Task SetAddRotatedAsync(bool on)
+    {
+        using var s = _scopes.CreateScope();
+        await s.ServiceProvider.GetRequiredService<ParameterService>()
+            .SetAsync(AddRotatedKey, on ? "1" : "0", "데이터셋 변환 시 시계 90° 회전본 포함(1/0)");
+    }
+
+    /// <summary>IR 데이터셋 '이미터 OFF 만' 여부(저장값 없으면 끔).</summary>
+    public async Task<bool> GetEmitterOffOnlyAsync()
+    {
+        using var s = _scopes.CreateScope();
+        var v = await s.ServiceProvider.GetRequiredService<ParameterService>().GetAsync(EmitterOffOnlyKey);
+        return v?.Trim() == "1";
+    }
+
+    public async Task SetEmitterOffOnlyAsync(bool on)
+    {
+        using var s = _scopes.CreateScope();
+        await s.ServiceProvider.GetRequiredService<ParameterService>()
+            .SetAsync(EmitterOffOnlyKey, on ? "1" : "0", "IR 데이터셋 변환 시 이미터 OFF(도트 없음) 촬영본만 사용(1/0)");
+    }
+
+    public async Task<bool> GetClaheAsync()
+    {
+        using var s = _scopes.CreateScope();
+        var v = await s.ServiceProvider.GetRequiredService<ParameterService>().GetAsync(ClaheKey);
+        return v?.Trim() == "1";
+    }
+
+    public async Task SetClaheAsync(bool on)
+    {
+        using var s = _scopes.CreateScope();
+        await s.ServiceProvider.GetRequiredService<ParameterService>()
+            .SetAsync(ClaheKey, on ? "1" : "0", "데이터셋 변환 시 CLAHE 전처리(1/0) — 이 데이터셋으로 학습한 모델은 _clahe");
+    }
+
+    /// <summary>폴더(데이터셋 또는 학습 run)에 CLAHE 표식이 있는지.</summary>
+    public static bool HasClaheMarker(string dir)
+    {
+        try { var f = Path.Combine(dir, PreprocessMarker); return File.Exists(f) && File.ReadAllText(f).Trim() == "clahe"; }
+        catch (IOException) { return false; }
+    }
+
+    // 학습 시작 때 데이터셋의 전처리 표식을 run 폴더로 복사 — 내보내기 이름(_clahe)은 '학습에 실제로 쓴' 데이터셋 기준.
+    private static void CopyPreprocessMarker(string dataset, string runDir)
+    {
+        Directory.CreateDirectory(runDir);
+        var dst = Path.Combine(runDir, PreprocessMarker);
+        if (HasClaheMarker(dataset)) File.WriteAllText(dst, "clahe");
+        else if (File.Exists(dst)) File.Delete(dst);
+    }
+
+    /// <summary>마지막 학습(best.pt)이 CLAHE 데이터셋으로 학습했는지 — 내보내기 파일명의 _clahe 표식.</summary>
+    public async Task<bool> TrainedClaheAsync(bool unet)
+    {
+        var paths = await GetPathsAsync();
+        return paths is not null && HasClaheMarker(unet ? UnetRunDir(paths) : Path.Combine(paths.Runs, "hd"));
+    }
+
+    // ── 학습 시점 데이터셋 정보(모달리티·원본 이미지 크기) ─────────────────────────
+    // 학습 뒤 데이터셋을 다른 모달리티/해상도로 다시 변환해도, 내보내기는 '학습에 실제로 쓴' 값으로 이름(_ir/_rgb)과
+    // 직사각 입력 비율을 정한다. 기록이 없는 예전 run 은 현재 데이터셋에서 추정(경고 로그).
+    public const string TrainedMetaMarker = "_trained_meta.txt";
+
+    /// <summary>데이터셋 이미지 파일명(…_ir.png / …_rgb.png)으로 본 모달리티. 판단 불가면 null.</summary>
+    public static string? DatasetModality(string dataset)
+    {
+        foreach (var sub in new[] { "train", "val" })
+        {
+            var dir = Path.Combine(dataset, "images", sub);
+            if (!Directory.Exists(dir)) continue;
+            var f = Directory.EnumerateFiles(dir, "*.png").FirstOrDefault();
+            if (f is null) continue;
+            if (f.EndsWith("_ir.png", StringComparison.OrdinalIgnoreCase)) return "ir";
+            if (f.EndsWith("_rgb.png", StringComparison.OrdinalIgnoreCase)) return "rgb";
+        }
+        return null;
+    }
+
+    private static void WriteTrainedMeta(string dataset, string runDir)
+    {
+        Directory.CreateDirectory(runDir);
+        var lines = new List<string>();
+        if (DatasetModality(dataset) is { } mod) lines.Add($"modality={mod}");
+        if (DatasetImageSize(dataset) is { } sz) lines.Add($"size={sz.W}x{sz.H}");
+        File.WriteAllLines(Path.Combine(runDir, TrainedMetaMarker), lines);
+    }
+
+    /// <summary>run 폴더의 학습 시점 기록. 없거나 항목이 빠지면 해당 값 null.</summary>
+    public static (string? Modality, (int W, int H)? Size) ReadTrainedMeta(string runDir)
+    {
+        string? mod = null; (int W, int H)? size = null;
+        try
+        {
+            var f = Path.Combine(runDir, TrainedMetaMarker);
+            if (!File.Exists(f)) return (null, null);
+            foreach (var line in File.ReadAllLines(f))
+            {
+                var kv = line.Split('=', 2);
+                if (kv.Length != 2) continue;
+                var v = kv[1].Trim();
+                if (kv[0].Trim() == "modality" && v is "ir" or "rgb") mod = v;
+                else if (kv[0].Trim() == "size" && v.Split('x') is [var w, var h] && int.TryParse(w, out var iw) && int.TryParse(h, out var ih))
+                    size = (iw, ih);
+            }
+        }
+        catch (IOException) { /* 기록 없음으로 취급 */ }
+        return (mod, size);
+    }
+
+    /// <summary>
+    /// 마지막 학습(best.pt)의 모달리티 — 내보내기 파일명의 _ir/_rgb 표식(④ 추론·운영이 입력 영상을 고르는 기준).
+    /// 학습 시점 기록 → (예전 run) 현재 데이터셋 이미지 → 마지막 변환 모달리티 순. FromRecord=false 면 추정값.
+    /// </summary>
+    public async Task<(string Modality, bool FromRecord)> TrainedModalityAsync(bool unet)
+    {
+        var paths = await GetPathsAsync();
+        if (paths is null) return (LastConvertedModality, false);
+        var runDir = unet ? UnetRunDir(paths) : Path.Combine(paths.Runs, "hd");
+        if (ReadTrainedMeta(runDir).Modality is { } m) return (m, true);
+        var kind = await TrainedKindAsync(unet);
+        return (DatasetModality(paths.DatasetOf(kind)) ?? LastConvertedModality, false);
+    }
+
+    /// <summary>'이미터 OFF 만' 필터에서 제외할 IR 촬영본인지 — 이미지로 추정한 상태가 OFF 가 아니면(ON·불확실) 제외.</summary>
+    public static bool ExcludedByEmitter(string modality, bool emitterOffOnly, string imagePath)
+        => emitterOffOnly && modality == "ir" && EmitterDotEstimator.ClassifyFile(imagePath) != EmitterState.Off;
+
     private async Task<string> GetPythonAsync()
     {
         using var s = _scopes.CreateScope();
@@ -118,7 +297,6 @@ public sealed class WeldTrainingService
         return new TrainingPaths(
             CaptureDir: dir,
             Workspace: ws,
-            Dataset: Path.Combine(ws, "dataset"),
             Runs: Path.Combine(ws, "runs"),
             Models: Path.Combine(ws, "models"));
     }
@@ -146,162 +324,211 @@ public sealed class WeldTrainingService
             : new PythonInfo(true, false, py, $"{pyVer} · ultralytics 미설치 (pip install ultralytics){torchTxt}", t.Ok);
     }
 
-    // ── ① 마스크 → YOLO-seg 데이터셋 변환(네이티브) ────────────────────────────
-    /// <param name="modality">"rgb" 또는 "ir" — 이 모달리티의 마스크 초안만 사용.</param>
+    // ── ① 라벨 → 데이터셋 변환 ────────────────────────────────────────────────
+    /// <summary>저장된 폴더 구성·회전 옵션으로 면 라벨 데이터셋 변환(웹 호환용).</summary>
     public async Task<ConvertResult> ConvertAsync(string modality)
     {
-        modality = modality == "ir" ? "ir" : "rgb";
-        LastConvertedModality = modality;
-        var paths = await GetPathsAsync();
-        if (paths is null) throw new InvalidOperationException("캡처 저장 폴더가 설정되지 않았습니다.");
-        if (!Directory.Exists(paths.CaptureDir)) throw new DirectoryNotFoundException(paths.CaptureDir);
+        var src = await GetDatasetSourcesAsync();
+        return await ConvertAsync(modality, LabelKind.Area, src.TrainDirs, src.ValDir, await GetAddRotatedAsync(),
+            await GetEmitterOffOnlyAsync(), await GetClaheAsync());
+    }
 
+    /// <summary>
+    /// 여러 학습 폴더(+선택적 검증 폴더)의 라벨을 모아 <c>dl/dataset_{area|line}</c> 에 YOLO-seg 데이터셋
+    /// (images·labels·masks/{train,val} + data.yaml)을 만든다. 원본 폴더의 파일은 바꾸지 않는다(복사만).
+    /// </summary>
+    /// <param name="modality">"rgb" 또는 "ir".</param>
+    /// <param name="kind">면 = <c>_area.png</c>, 선 = <c>_line.json</c> 을 두께대로 래스터화한 마스크.</param>
+    /// <param name="valDir">지정하면 이 폴더가 val, 비우면 학습 폴더들을 촬영 세션 단위로 자동 분리.</param>
+    /// <param name="addRotated">
+    /// true 면 각 촬영본의 시계 90° 회전본(이미지+마스크)을 <b>데이터셋 안에만</b> 추가한다(<c>{stem}_cw90</c>, 원본과 같은 split).
+    /// 반시계 방향은 학습 증강의 상하·좌우 뒤집기가 만든다. 원본 폴더에 예전에 만든 회전본 파일은 중복을 막으려고 제외한다.
+    /// </param>
+    /// <param name="emitterOffOnly">IR 이면 이미터 OFF(도트 없음)로 추정되는 촬영본만 쓴다(<see cref="EmitterDotEstimator"/>).</param>
+    /// <param name="clahe">데이터셋 이미지에 CLAHE(<see cref="ImageClahe"/>) 적용 — 원본 폴더는 그대로, 데이터셋 사본만. 마스크·라벨은 그대로.</param>
+    public async Task<ConvertResult> ConvertAsync(string modality, LabelKind kind, IReadOnlyList<string> trainDirs, string? valDir,
+        bool addRotated = false, bool emitterOffOnly = false, bool clahe = false)
+    {
+        modality = LabelFiles.Mod(modality);
+        LastConvertedModality = modality;
+        var paths = await GetPathsAsync() ?? throw new InvalidOperationException("캡처 저장 폴더(작업 폴더 기준)가 설정되지 않았습니다.");
+
+        var train = LabelFiles.NormalizeDirs(trainDirs);
+        var val = string.IsNullOrWhiteSpace(valDir) ? null : LabelFiles.NormalizeDirs(new[] { valDir })[0];
+        if (val is not null) train.RemoveAll(d => LabelFiles.SameDir(d, val));   // 같은 폴더가 양쪽에 있으면 val 우선
+        if (train.Count == 0) throw new InvalidOperationException("학습 폴더를 1개 이상 지정하세요.");
+        foreach (var d in val is null ? train : train.Append(val))
+            if (!Directory.Exists(d)) throw new DirectoryNotFoundException(d);
+
+        var dataset = paths.DatasetOf(kind);
+        var staging = Path.Combine(dataset, "_staging");   // 선 라벨 래스터화·회전본 임시 폴더
         // 매 변환마다 train/val 폴더를 새로 만든다(오래된 라벨/이미지 잔재 제거).
         foreach (var split in new[] { "train", "val" })
         {
-            RecreateDir(Path.Combine(paths.Dataset, "images", split));
-            RecreateDir(Path.Combine(paths.Dataset, "labels", split));
-            RecreateDir(Path.Combine(paths.Dataset, "masks", split));   // U-Net 용 이진 마스크(이미지와 같은 파일명)
+            RecreateDir(Path.Combine(dataset, "images", split));
+            RecreateDir(Path.Combine(dataset, "labels", split));
+            RecreateDir(Path.Combine(dataset, "masks", split));   // U-Net 용 이진 마스크(이미지와 같은 파일명)
+        }
+        RecreateDir(staging);
+
+        Emit($"[변환] {modality.ToUpperInvariant()} · {LabelFiles.KindText(kind)} 라벨{(addRotated ? " + 90° 회전본" : "")} → {dataset}");
+        int used = 0, skipped = 0, instances = 0;
+
+        // 1) 폴더별 라벨 수집. 같은 stem 이 여러 폴더에 있으면 먼저 나온 것만 쓴다(중복 학습·val 누수 방지).
+        var srcs = new List<(string Stem, string ImgPath, string MaskPath, bool IsVal)>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var dirs = train.Select(d => (Dir: d, IsVal: false)).ToList();
+        if (val is not null) dirs.Add((val, true));
+        foreach (var (dir, isVal) in dirs)
+        {
+            var mig = LabelFiles.MigrateLegacy(dir);
+            if (mig.ToArea + mig.Archived > 0)
+                Emit($"[변환] 예전 _maskdraft 정리({dir}) — 면 라벨로 변경 {mig.ToArea}건 · 보관 {mig.Archived}건");
+            int n0 = srcs.Count, oldRot = 0;
+            foreach (var stem in LabelFiles.LabeledStems(dir, modality, kind, requireImage: false))
+            {
+                // 예전 방식으로 원본 폴더에 만든 회전본(_cw90/_ccw90)은 제외 — 회전본은 아래에서 데이터셋에만 만든다.
+                if (DatasetSplitter.BaseStem(stem) != stem) { oldRot++; continue; }
+                var imgPath = Path.Combine(dir, LabelFiles.ImageName(stem, modality));
+                if (!File.Exists(imgPath)) { skipped++; Emit($"[변환] 원본 없음 → 건너뜀: {Path.GetFileName(imgPath)}"); continue; }
+                if (ExcludedByEmitter(modality, emitterOffOnly, imgPath))
+                {
+                    skipped++;
+                    Emit($"[변환] 이미터 {EmitterDotEstimator.Text(EmitterDotEstimator.ClassifyFile(imgPath))} → 제외(이미터 OFF 만): {stem}");
+                    continue;
+                }
+                if (!seen.Add(stem)) { skipped++; Emit($"[변환] 다른 폴더와 이름 중복 → 건너뜀: {stem} ({dir})"); continue; }
+                string maskPath;
+                if (kind == LabelKind.Area) maskPath = Path.Combine(dir, LabelFiles.AreaName(stem, modality));
+                else
+                {
+                    var line = WeldLineLabel.FromJson(await File.ReadAllTextAsync(Path.Combine(dir, LabelFiles.LineName(stem, modality))));
+                    if (line is null) { skipped++; Emit($"[변환] 선 라벨 손상 → 건너뜀: {stem}"); continue; }
+                    maskPath = Path.Combine(staging, $"{stem}_{modality}.png");
+                    await Task.Run(() => LabelFiles.WriteLineMaskPng(line, maskPath));
+                }
+                srcs.Add((stem, imgPath, maskPath, isVal));
+            }
+            Emit($"[변환] {(isVal ? "검증" : "학습")} 폴더 {dir} — {srcs.Count - n0}건" +
+                 (oldRot > 0 ? $" (폴더 안 예전 회전본 {oldRot}건 제외)" : ""));
         }
 
-        int used = 0, skipped = 0, instances = 0;
-        var maskGlob = $"*_{modality}_maskdraft.png";
-        var masks = Directory.Exists(paths.CaptureDir)
-            ? Directory.GetFiles(paths.CaptureDir, maskGlob).OrderBy(x => x).ToArray()
-            : Array.Empty<string>();
+        // 회전본 — 원본 이미지·마스크를 시계 90° 회전해 임시 폴더에 만들고 같은 split 으로 넣는다.
+        int rotated = 0;
+        if (addRotated && srcs.Count > 0)
+        {
+            var rotDir = Path.Combine(staging, "rot");
+            Directory.CreateDirectory(rotDir);
+            var jobs = new List<(string Src, string Dst, bool Cw)>();
+            var rot = new List<(string Stem, string ImgPath, string MaskPath, bool IsVal)>();
+            foreach (var x in srcs)
+            {
+                var rs = x.Stem + "_cw90";
+                var img = Path.Combine(rotDir, $"{rs}_{modality}.png");
+                var msk = Path.Combine(rotDir, $"{rs}_{modality}_mask.png");
+                jobs.Add((x.ImgPath, img, true));
+                jobs.Add((x.MaskPath, msk, true));
+                rot.Add((rs, img, msk, x.IsVal));
+            }
+            await RotatePngsAsync(jobs, paths.Workspace);
+            rot = rot.Where(r => File.Exists(r.ImgPath) && File.Exists(r.MaskPath)).ToList();
+            srcs.AddRange(rot);
+            rotated = rot.Count;
+            Emit($"[변환] 90° 회전본 {rotated}건 추가(데이터셋에만 생성)");
+        }
 
         // 비-Windows 는 OpenCvSharp 네이티브가 없으므로 마스크→폴리곤만 Python(cv2)로 한 번에 계산한다.
         // 분할·복사·data.yaml 등 나머지는 아래 공통 코드가 그대로 처리해 OS 별 결과가 같다.
-        var pyLabels = UsePythonCv && masks.Length > 0
-            ? await MaskToYoloLabelsViaPythonAsync(masks, paths.Workspace)
+        var pyLabels = UsePythonCv && srcs.Count > 0
+            ? await MaskToYoloLabelsViaPythonAsync(srcs.Select(x => x.MaskPath).ToList(), paths.Workspace)
             : null;
 
-        // 1) 유효한 (stem, 라벨) 수집.
-        var items = new List<(string Stem, string ImgPath, string MaskPath, string Label, int N)>();
-        foreach (var maskPath in masks)
+        // 2) 유효한 (stem, 라벨) 수집.
+        var items = new List<(string Stem, string ImgPath, string MaskPath, string Label, int N, bool IsVal)>();
+        foreach (var (stem, imgPath, maskPath, isVal) in srcs)
         {
-            var fname = Path.GetFileName(maskPath);
-            var stem = fname[..^$"_{modality}_maskdraft.png".Length];
-            var imgPath = Path.Combine(paths.CaptureDir, $"{stem}_{modality}.png");
-            if (!File.Exists(imgPath)) { skipped++; Emit($"[변환] 원본 없음 → 건너뜀: {stem}_{modality}.png"); continue; }
-
             var (label, n) = pyLabels is not null
                 ? pyLabels.GetValueOrDefault(maskPath, ("", 0))
                 : await Task.Run(() => MaskToYoloLabel(maskPath));
-            if (n == 0) { skipped++; Emit($"[변환] 마스크 비어있음 → 건너뜀: {fname}"); continue; }
-            items.Add((stem, imgPath, maskPath, label, n));
+            if (n == 0) { skipped++; Emit($"[변환] 라벨 비어있음 → 건너뜀: {stem}_{modality}"); continue; }
+            items.Add((stem, imgPath, maskPath, label, n, isVal));
         }
 
-        // 2) 촬영 세션 단위 train/val 분리(같은 자리 연속 프레임이 양쪽에 섞이는 누수 방지).
-        var split2 = DatasetSplitter.Split(items.Select(i => i.Stem));
-        var valSet = split2.Val.ToHashSet();
-        if (split2.SingleSession)
-            Emit("[변환] 경고: 촬영 세션이 1개뿐 — 같은 세션을 시간순으로 앞/뒤로 나눴습니다. " +
-                 "검증 점수가 실제보다 좋게 나올 수 있으니 다른 위치·시간대 촬영본을 추가하세요.");
+        // 3) train/val 분리 — 검증 폴더가 있으면 그대로, 없으면 촬영 세션 단위(같은 자리 연속 프레임 누수 방지).
+        // (회전본은 BaseStem 으로 원본과 같은 세션에 묶여 항상 원본과 같은 쪽으로 간다.)
+        var split2 = DatasetSplitter.Split(items.Where(i => !i.IsVal).Select(i => i.Stem));
+        HashSet<string> valSet;
+        if (val is not null)
+        {
+            valSet = items.Where(i => i.IsVal).Select(i => i.Stem).ToHashSet();
+            if (valSet.Count == 0) Emit("[변환] 경고: 검증 폴더에 쓸 수 있는 라벨이 없습니다.");
+        }
+        else
+        {
+            valSet = split2.Val.ToHashSet();
+            if (split2.SingleSession)
+                Emit("[변환] 경고: 촬영 세션이 1개뿐 — 같은 세션을 시간순으로 앞/뒤로 나눴습니다. " +
+                     "검증 점수가 실제보다 좋게 나올 수 있으니 다른 위치·시간대 촬영본을 추가하세요.");
+        }
 
-        foreach (var (stem, imgPath, maskPath, label, n) in items)
+        int nTrain = 0, nVal = 0;
+        foreach (var (stem, imgPath, maskPath, label, n, _) in items)
         {
             var sub = valSet.Contains(stem) ? "val" : "train";
-            File.Copy(imgPath, Path.Combine(paths.Dataset, "images", sub, $"{stem}_{modality}.png"), overwrite: true);
-            File.Copy(maskPath, Path.Combine(paths.Dataset, "masks", sub, $"{stem}_{modality}.png"), overwrite: true);
-            await File.WriteAllTextAsync(Path.Combine(paths.Dataset, "labels", sub, $"{stem}_{modality}.txt"), label);
+            if (sub == "val") nVal++; else nTrain++;
+            var dstImg = Path.Combine(dataset, "images", sub, $"{stem}_{modality}.png");
+            // CLAHE: 전체 프레임(회전본은 회전한 영상)에 적용 — 추론도 전체 프레임에 같은 함수를 건 뒤 ROI 를 자른다.
+            if (clahe) await Task.Run(() => ImageClahe.ApplyFile(imgPath, dstImg));
+            else File.Copy(imgPath, dstImg, overwrite: true);
+            File.Copy(maskPath, Path.Combine(dataset, "masks", sub, $"{stem}_{modality}.png"), overwrite: true);
+            await File.WriteAllTextAsync(Path.Combine(dataset, "labels", sub, $"{stem}_{modality}.txt"), label);
             used++; instances += n;
             Emit($"[변환] {stem}_{modality} → {sub}: 폴리곤 {n}개");
         }
-        Emit($"[변환] 세션 {split2.SessionCount}개 → train {split2.Train.Count}건 / val {split2.Val.Count}건");
+        try { Directory.Delete(staging, recursive: true); } catch { /* 무시 */ }
+        Emit(val is not null
+            ? $"[변환] 검증 폴더 지정 → train {nTrain}건 / val {nVal}건"
+            : $"[변환] 세션 {split2.SessionCount}개 → train {nTrain}건 / val {nVal}건");
+
+        // 전처리 표식 — 학습 시작 때 run 폴더로 복사되어 내보내기 이름(_clahe)·추론 전처리를 정한다.
+        var marker = Path.Combine(dataset, PreprocessMarker);
+        if (clahe) await File.WriteAllTextAsync(marker, "clahe");
+        else if (File.Exists(marker)) File.Delete(marker);
+        if (clahe) Emit($"[변환] CLAHE 전처리 적용(clip {ImageClahe.ClipLimit}, 타일 {ImageClahe.Tiles}×{ImageClahe.Tiles}) — 이 데이터셋으로 학습한 모델은 이름에 _clahe");
 
         // data.yaml — val 이 비면(표본 1건 등) 파이프라인 점검용으로 train 을 val 로 쓴다.
-        var valDir = split2.Val.Count > 0 ? "images/val" : "images/train";
-        if (split2.Val.Count == 0) Emit("[변환] 경고: 검증셋이 비어 val = train 으로 둡니다(과적합 확인만 가능).");
+        var valDirYaml = nVal > 0 ? "images/val" : "images/train";
+        if (nVal == 0) Emit("[변환] 경고: 검증셋이 비어 val = train 으로 둡니다(과적합 확인만 가능).");
         var yaml =
-            $"path: {paths.Dataset.Replace('\\', '/')}\n" +
+            $"path: {dataset.Replace('\\', '/')}\n" +
             "train: images/train\n" +
-            $"val: {valDir}\n" +
+            $"val: {valDirYaml}\n" +
             "nc: 1\n" +
             "names: [bead]\n";
-        var yamlPath = Path.Combine(paths.Dataset, "data.yaml");
-        Directory.CreateDirectory(paths.Dataset);
+        var yamlPath = Path.Combine(dataset, "data.yaml");
+        Directory.CreateDirectory(dataset);
         await File.WriteAllTextAsync(yamlPath, yaml);
 
         Emit($"[변환] 완료 — 사용 {used}건 / 건너뜀 {skipped}건 / 폴리곤 {instances}개 → {yamlPath}");
-        return new ConvertResult(used, skipped, instances, yamlPath, split2.Train.Count, split2.Val.Count, split2.SessionCount);
+        return new ConvertResult(used, skipped, instances, yamlPath, nTrain, nVal, split2.SessionCount, kind, rotated);
     }
 
-    // ── 데이터 증강: 이미지+마스크 90° 회전본 생성 ────────────────────────────
-    /// <summary>
-    /// 캡처 폴더의 각 촬영본(이미지 + 마스크 초안)을 <b>쌍으로</b> 90° 회전해 새 촬영본으로 저장한다.
-    /// 0°/90° 두 방향 비드를 모두 학습하기 위한 오프라인 증강. 마스크도 함께 회전하므로 정렬이 유지된다.
-    /// 이미 회전본(stem 에 cw90/ccw90 포함)은 원본에서 제외해 재실행 시 중복 회전을 막는다.
-    /// </summary>
-    /// <param name="direction">"cw"(시계) | "ccw"(반시계) | "both"(양방향)</param>
-    public async Task<RotateResult> GenerateRotatedCopiesAsync(string direction)
+    /// <summary>PNG 90° 회전 일괄 처리(채널·비트심도 유지). Windows = OpenCvSharp, 그 외 = Python cv2(같은 cv2.rotate).</summary>
+    private async Task RotatePngsAsync(IReadOnlyList<(string Src, string Dst, bool Cw)> jobs, string workDir)
     {
-        var paths = await GetPathsAsync() ?? throw new InvalidOperationException("캡처 저장 폴더가 설정되지 않았습니다.");
-        var dir = paths.CaptureDir;
-        if (!Directory.Exists(dir)) throw new DirectoryNotFoundException(dir);
-
-        var dirs = direction switch
-        {
-            "both" => new[] { ("_cw90", RotateFlags.Rotate90Clockwise), ("_ccw90", RotateFlags.Rotate90Counterclockwise) },
-            "ccw" => new[] { ("_ccw90", RotateFlags.Rotate90Counterclockwise) },
-            _ => new[] { ("_cw90", RotateFlags.Rotate90Clockwise) },
-        };
-        var kinds = new[] { "rgb", "ir", "rgb_maskdraft", "ir_maskdraft" };
-
-        // 원본 stem 수집(이미 회전된 것 제외).
-        var stems = new HashSet<string>();
-        foreach (var f in Directory.GetFiles(dir, "*_ir.png").Concat(Directory.GetFiles(dir, "*_rgb.png")))
-        {
-            var name = Path.GetFileName(f);
-            var stem = name.EndsWith("_ir.png") ? name[..^"_ir.png".Length] : name[..^"_rgb.png".Length];
-            if (stem.Contains("cw90")) continue; // cw90/ccw90 모두 제외
-            stems.Add(stem);
-        }
-
-        int created = 0, skipped = 0;
-        // 비-Windows 는 이미지 회전만 모아 두었다가 Python(cv2)으로 한 번에 처리한다(선 라벨 JSON 회전은 공통 C#).
-        var pyJobs = new List<(string Src, string Dst, bool Cw)>();
+        if (jobs.Count == 0) return;
+        if (UsePythonCv) { await RotateImagesViaPythonAsync(jobs, workDir); return; }
         await Task.Run(() =>
         {
-            foreach (var stem in stems)
-                foreach (var (suffix, flag) in dirs)
-                {
-                    var newStem = stem + suffix;
-                    bool any = false;
-                    foreach (var kind in kinds)
-                    {
-                        var src = Path.Combine(dir, $"{stem}_{kind}.png");
-                        if (!File.Exists(src)) continue;
-                        var dst = Path.Combine(dir, $"{newStem}_{kind}.png");
-                        if (UsePythonCv)
-                        {
-                            pyJobs.Add((src, dst, flag == RotateFlags.Rotate90Clockwise));
-                            any = true;
-                            continue;
-                        }
-                        using var m = CvIo.ReadMat(src, ImreadModes.Unchanged);   // 한글 경로 안전
-                        if (m.Empty()) continue;
-                        using var r = new Mat();
-                        Cv2.Rotate(m, r, flag);
-                        CvIo.WriteMat(dst, r);
-                        any = true;
-                    }
-                    // 선 라벨(정답 JSON)도 같은 방향으로 회전해 이미지·마스크와 정렬 유지.
-                    foreach (var mod in new[] { "rgb", "ir" })
-                    {
-                        var src = Path.Combine(dir, $"{stem}_{mod}_line.json");
-                        if (!File.Exists(src)) continue;
-                        var line = WeldLineLabel.FromJson(File.ReadAllText(src));
-                        if (line is null) continue;
-                        var rot = line.Rotate90(clockwise: flag == RotateFlags.Rotate90Clockwise);
-                        File.WriteAllText(Path.Combine(dir, $"{newStem}_{mod}_line.json"), rot.ToJson());
-                    }
-                    if (any) created++; else skipped++;
-                }
+            foreach (var (src, dst, cw) in jobs)
+            {
+                using var m = CvIo.ReadMat(src, ImreadModes.Unchanged);   // 한글 경로 안전
+                if (m.Empty()) continue;
+                using var r = new Mat();
+                Cv2.Rotate(m, r, cw ? RotateFlags.Rotate90Clockwise : RotateFlags.Rotate90Counterclockwise);
+                CvIo.WriteMat(dst, r);
+            }
         });
-        if (pyJobs.Count > 0) await RotateImagesViaPythonAsync(pyJobs, paths.Workspace);
-        Emit($"[증강] 90° 회전본 생성 — {created}건 (방향 {direction})");
-        return new RotateResult(created, skipped);
     }
 
     /// <summary>마스크 PNG → YOLO-seg 라벨 텍스트(클래스0 정규화 폴리곤). 반환: (텍스트, 폴리곤 수).</summary>
@@ -422,7 +649,7 @@ public sealed class WeldTrainingService
         lock (sb) return sb.ToString();
     }
 
-    // ── ② 학습 ───────────────────────────────────────────────────────────────
+    // ── ② YOLO 학습 ───────────────────────────────────────────────────────────────
     /// <param name="minimalAug">
     /// 증강 최소화(소규모/과적합 검증용). true 면 mosaic·기하·색 증강을 끄고 밝기만 약간 준다.
     /// 표본이 적을 때 mosaic 은 오히려 학습을 방해하므로 기본 권장값은 true.
@@ -438,15 +665,22 @@ public sealed class WeldTrainingService
     /// Full: ultralytics 기본(mosaic 포함 — 가는 선 데이터에는 비권장).
     /// </param>
     /// <param name="patience">val 지표가 이 epoch 동안 개선되지 않으면 조기 종료(0=끔). val 이 train 과 같으면 의미 없음.</param>
+    /// <param name="kind">학습할 데이터셋(면 = dataset_area, 선 = dataset_line).</param>
+    /// <param name="afterSuccess">학습이 정상 종료(코드 0, 조기 종료 포함)하면 이어서 실행할 작업(예: 자동 내보내기). 중단·실패면 실행 안 함.</param>
     public async Task StartTrainingAsync(int epochs, int imgsz, int batch, string baseModel,
-        TrainingAugmentation aug, bool brightAug, int patience)
+        TrainingAugmentation aug, bool brightAug, int patience, LabelKind kind = LabelKind.Area, Func<Task>? afterSuccess = null)
     {
         if (IsBusy) throw new InvalidOperationException("이미 실행 중인 작업이 있습니다.");
         var paths = await GetPathsAsync() ?? throw new InvalidOperationException("캡처 폴더 미설정");
-        var dataYaml = Path.Combine(paths.Dataset, "data.yaml");
-        if (!File.Exists(dataYaml)) throw new FileNotFoundException("먼저 데이터셋 변환을 실행하세요.", dataYaml);
+        var dataset = paths.DatasetOf(kind);
+        var dataYaml = Path.Combine(dataset, "data.yaml");
+        if (!File.Exists(dataYaml))
+            throw new FileNotFoundException($"{LabelFiles.KindText(kind)} 데이터셋이 없습니다. ① 데이터셋에서 '{LabelFiles.KindText(kind)}' 으로 변환하세요.", dataYaml);
+        _lastYoloDataset = dataset;
 
         Directory.CreateDirectory(paths.Runs);
+        CopyPreprocessMarker(dataset, Path.Combine(paths.Runs, "hd"));
+        WriteTrainedMeta(dataset, Path.Combine(paths.Runs, "hd"));
         var script = Path.Combine(paths.Workspace, "_train.py");
         await File.WriteAllTextAsync(script, TrainPy);
 
@@ -465,21 +699,31 @@ public sealed class WeldTrainingService
         TrainCurrentEpoch = 0;
         TrainStartUtc = DateTime.UtcNow;
         TrainEndUtc = null;
-        Emit($"[학습] 시작 — model={baseModel} epochs={epochs} imgsz={imgsz} batch={batch} device={device} 증강={aug} 밝기증강={(brightAug ? "켬" : "끔")} patience={(patience > 0 ? patience : "끔")}");
-        StartProcess(py, args, paths.Workspace, TrainingPhase.Training, "학습");
+        Emit($"[학습] 시작 — 데이터셋={LabelFiles.KindText(kind)}({Path.GetFileName(dataset)}) model={baseModel} epochs={epochs} imgsz={imgsz} batch={batch} device={device} 증강={aug} 밝기증강={(brightAug ? "켬" : "끔")} patience={(patience > 0 ? patience : "끔")}");
+        StartProcess(py, args, paths.Workspace, TrainingPhase.Training, "학습", afterSuccess);
     }
 
-    // ── ③ ONNX 내보내기 ──────────────────────────────────────────────────────
-    /// <param name="modality">"ir"/"rgb" — 출력 파일명 weld_seg_{modality}.onnx (IR/RGB 모델 동시 보관).</param>
+    // ── ② YOLO ONNX 내보내기 ──────────────────────────────────────────────────────
+    /// <summary>운영 고정값 — ONNX Runtime(Windows) 호환 opset. UI 에서는 바꾸지 않는다.</summary>
+    public const int YoloExportOpset = 12;
+
+    /// <param name="opset">ONNX opset(기본 <see cref="YoloExportOpset"/>).</param>
+    /// <param name="modality">"ir"/"rgb" — 출력 파일명 weld_yolo_{modality}_{area|line}_{yyMMdd_HHmm}.onnx (덮어쓰지 않음).
+    /// null 이면 학습 시점 기록(<see cref="TrainedModalityAsync"/>)으로 정한다.</param>
     /// <param name="imgsz">입력 크기(긴 변). 0 이면 학습 때 쓴 imgsz 를 best.pt 에서 읽어 자동으로 맞춘다.</param>
     /// <param name="rect">
-    /// true 면 데이터셋 이미지 비율로 직사각 입력([h,w], 32 배수)으로 내보낸다. 848×480 이면 864 학습 → 512×864 —
+    /// true 면 학습 데이터셋 이미지 비율로 직사각 입력([h,w], 32 배수)으로 내보낸다. 848×480 이면 864 학습 → 512×864 —
     /// 정사각 864×864 대비 레터박스 여백 계산이 빠져 CPU 추론이 약 40% 빨라진다(합성곱 모델이라 정확도 동일).
     /// </param>
-    public async Task StartExportAsync(int opset = 12, int imgsz = 640, string? modality = null, bool rect = false)
+    public async Task StartExportAsync(int opset = YoloExportOpset, int imgsz = 0, string? modality = null, bool rect = true)
     {
         if (IsBusy) throw new InvalidOperationException("이미 실행 중인 작업이 있습니다.");
-        modality = modality == "rgb" ? "rgb" : modality == "ir" ? "ir" : LastConvertedModality;
+        if (modality is not ("rgb" or "ir"))
+        {
+            var (m, fromRecord) = await TrainedModalityAsync(unet: false);
+            modality = m;
+            if (!fromRecord) Emit($"[내보내기] 학습 시점 모달리티 기록이 없어(이전 버전 학습) 현재 데이터셋 기준 {m.ToUpperInvariant()} 로 정했습니다 — 다르면 파일명의 _ir/_rgb 를 확인하세요.");
+        }
         var paths = await GetPathsAsync() ?? throw new InvalidOperationException("캡처 폴더 미설정");
         var best = Path.Combine(paths.Runs, "hd", "weights", "best.pt");
         if (!File.Exists(best)) throw new FileNotFoundException("학습된 가중치(best.pt)가 없습니다. 먼저 학습을 완료하세요.", best);
@@ -489,11 +733,15 @@ public sealed class WeldTrainingService
         await File.WriteAllTextAsync(script, ExportPy);
 
         var py = await GetPythonAsync();
-        var outName = WeldModelNames.YoloExportName(modality);
+        var kind = await TrainedKindAsync(unet: false);
+        var outName = WeldModelNames.YoloExportName(modality, kind, DateTime.Now, await TrainedClaheAsync(unet: false));
         var spec = imgsz.ToString();
         if (rect)
         {
-            var size = DatasetImageSize(paths.Dataset);
+            var size = ReadTrainedMeta(Path.Combine(paths.Runs, "hd")).Size
+                       ?? DatasetImageSize(_lastYoloDataset ?? paths.DatasetOf(kind))
+                       ?? DatasetImageSize(paths.DatasetOf(LabelKind.Area))
+                       ?? DatasetImageSize(paths.DatasetOf(LabelKind.Line));
             if (size is { } sz) spec = $"rect:{imgsz}:{sz.W}x{sz.H}";
             else Emit("[내보내기] 데이터셋 이미지를 찾지 못해 정사각 입력으로 내보냅니다.");
         }
@@ -504,6 +752,38 @@ public sealed class WeldTrainingService
     }
 
     // ── U-Net 학습 / 내보내기 ─────────────────────────────────────────────────
+    private const string UnetKindMarker = "_dataset_kind.txt";
+
+    /// <summary>
+    /// 마지막 학습(best.pt)이 쓴 라벨 종류 — 내보내기 파일명의 area/line 표식.
+    /// YOLO: ultralytics 가 남긴 runs/hd/args.yaml 의 data 경로(dataset_area/dataset_line).
+    /// U-Net: 학습 시작 때 남긴 runs/unet/_dataset_kind.txt. 기록이 없으면 YOLO=면, U-Net=선(각 기본 데이터셋).
+    /// </summary>
+    public async Task<LabelKind> TrainedKindAsync(bool unet)
+    {
+        var paths = await GetPathsAsync();
+        if (paths is null) return unet ? LabelKind.Line : LabelKind.Area;
+        try
+        {
+            if (unet)
+            {
+                var f = Path.Combine(UnetRunDir(paths), UnetKindMarker);
+                if (File.Exists(f)) return (await File.ReadAllTextAsync(f)).Trim() == "area" ? LabelKind.Area : LabelKind.Line;
+                return LabelKind.Line;
+            }
+            var args = Path.Combine(paths.Runs, "hd", "args.yaml");
+            if (File.Exists(args))
+                foreach (var line in await File.ReadAllLinesAsync(args))
+                    if (line.TrimStart().StartsWith("data:", StringComparison.Ordinal))
+                    {
+                        if (line.Contains(LabelFiles.DatasetFolder(LabelKind.Line))) return LabelKind.Line;
+                        if (line.Contains(LabelFiles.DatasetFolder(LabelKind.Area))) return LabelKind.Area;
+                    }
+        }
+        catch (IOException) { /* 기본값 */ }
+        return _lastYoloDataset?.EndsWith(LabelFiles.DatasetFolder(LabelKind.Line)) == true ? LabelKind.Line : LabelKind.Area;
+    }
+
     /// <summary>U-Net 학습 산출물 폴더(runs/unet). best.pt / last.pt.</summary>
     public static string UnetRunDir(TrainingPaths p) => Path.Combine(p.Runs, "unet");
 
@@ -511,21 +791,30 @@ public sealed class WeldTrainingService
     /// U-Net 학습(CPU, PyTorch). 데이터셋 변환이 만든 images/·masks/{train,val} 을 쓴다.
     /// 크롭 학습이라 이미지 크기와 무관하고, val Dice 기준으로 best.pt 를 저장·조기 종료한다.
     /// </summary>
-    public async Task StartUnetTrainingAsync(int epochs, int batch, int crop, int patience, int baseChannels)
+    /// <param name="kind">학습할 데이터셋(선 = dataset_line 권장, 면 = dataset_area).</param>
+    /// <param name="afterSuccess">정상 종료 시 이어서 실행할 작업(예: 자동 내보내기). 중단·실패면 실행 안 함.</param>
+    public async Task StartUnetTrainingAsync(int epochs, int batch, int crop, int patience, int baseChannels,
+        LabelKind kind = LabelKind.Line, Func<Task>? afterSuccess = null)
     {
         if (IsBusy) throw new InvalidOperationException("이미 실행 중인 작업이 있습니다.");
         var paths = await GetPathsAsync() ?? throw new InvalidOperationException("캡처 폴더 미설정");
-        var masksTrain = Path.Combine(paths.Dataset, "masks", "train");
+        var dataset = paths.DatasetOf(kind);
+        var masksTrain = Path.Combine(dataset, "masks", "train");
         if (!Directory.Exists(masksTrain) || Directory.GetFiles(masksTrain, "*.png").Length == 0)
-            throw new FileNotFoundException("U-Net 용 마스크가 없습니다. ① 데이터셋 변환을 다시 실행하세요.", masksTrain);
+            throw new FileNotFoundException($"{LabelFiles.KindText(kind)} 데이터셋이 없습니다. ① 데이터셋에서 '{LabelFiles.KindText(kind)}' 으로 변환하세요.", masksTrain);
 
         var script = await WriteUnetScriptAsync(paths);
+        // 이 학습이 쓴 데이터셋 종류 기록 — 내보내기 파일명의 area/line 표식(앱을 다시 켜도 유지).
+        Directory.CreateDirectory(UnetRunDir(paths));
+        await File.WriteAllTextAsync(Path.Combine(UnetRunDir(paths), UnetKindMarker), WeldModelNames.KindToken(kind));
+        CopyPreprocessMarker(dataset, UnetRunDir(paths));
+        WriteTrainedMeta(dataset, UnetRunDir(paths));
         var py = await GetPythonAsync();
         // YOLO 학습과 같은 규칙 — macOS 는 Apple GPU(MPS), 그 외는 기존처럼 CPU. 못 쓰면 스크립트가 cpu 로 대체.
         var device = OperatingSystem.IsMacOS() ? "mps" : "cpu";
         var args = new[]
         {
-            script, "train", "--data", paths.Dataset, "--out", UnetRunDir(paths),
+            script, "train", "--data", dataset, "--out", UnetRunDir(paths),
             "--epochs", epochs.ToString(), "--batch", batch.ToString(), "--crop", crop.ToString(),
             "--patience", Math.Max(0, patience).ToString(), "--base", baseChannels.ToString(),
             "--device", device,
@@ -534,22 +823,28 @@ public sealed class WeldTrainingService
         TrainCurrentEpoch = 0;
         TrainStartUtc = DateTime.UtcNow;
         TrainEndUtc = null;
-        Emit($"[U-Net 학습] 시작 — epochs={epochs} batch={batch} crop={crop} patience={(patience > 0 ? patience : "끔")} base={baseChannels} device={device}");
-        StartProcess(py, args, paths.Workspace, TrainingPhase.Training, "U-Net 학습");
+        Emit($"[U-Net 학습] 시작 — 데이터셋={LabelFiles.KindText(kind)}({Path.GetFileName(dataset)}) epochs={epochs} batch={batch} crop={crop} patience={(patience > 0 ? patience : "끔")} base={baseChannels} device={device}");
+        StartProcess(py, args, paths.Workspace, TrainingPhase.Training, "U-Net 학습", afterSuccess);
     }
 
-    /// <summary>U-Net best.pt → models/weld_unet_{modality}.onnx (H/W 동적 축, opset 17).</summary>
+    /// <summary>U-Net best.pt → models/weld_unet_{modality}_{area|line}_{yyMMdd_HHmm}.onnx (H/W 동적 축, opset 17).</summary>
     public async Task StartUnetExportAsync(string? modality = null)
     {
         if (IsBusy) throw new InvalidOperationException("이미 실행 중인 작업이 있습니다.");
-        modality = modality == "rgb" ? "rgb" : modality == "ir" ? "ir" : LastConvertedModality;
+        if (modality is not ("rgb" or "ir"))
+        {
+            var (m, fromRecord) = await TrainedModalityAsync(unet: true);
+            modality = m;
+            if (!fromRecord) Emit($"[U-Net 내보내기] 학습 시점 모달리티 기록이 없어(이전 버전 학습) 현재 데이터셋 기준 {m.ToUpperInvariant()} 로 정했습니다 — 다르면 파일명의 _ir/_rgb 를 확인하세요.");
+        }
         var paths = await GetPathsAsync() ?? throw new InvalidOperationException("캡처 폴더 미설정");
         var best = Path.Combine(UnetRunDir(paths), "best.pt");
         if (!File.Exists(best)) throw new FileNotFoundException("U-Net 가중치(best.pt)가 없습니다. 먼저 U-Net 학습을 완료하세요.", best);
 
         var script = await WriteUnetScriptAsync(paths);
         var py = await GetPythonAsync();
-        var outPath = Path.Combine(paths.Models, WeldModelNames.UnetExportName(modality));
+        var kind = await TrainedKindAsync(unet: true);
+        var outPath = Path.Combine(paths.Models, WeldModelNames.UnetExportName(modality, kind, DateTime.Now, await TrainedClaheAsync(unet: true)));
         Directory.CreateDirectory(paths.Models);
         TrainTotalEpochs = 0;
         Emit($"[U-Net 내보내기] 시작 — {best} → {Path.GetFileName(outPath)}");
@@ -671,6 +966,41 @@ public sealed class WeldTrainingService
         return r.ReadToEnd();
     }
 
+    // ── train/val 판정(④ 추론 목록 표시용) ─────────────────────────────────────
+    /// <summary>
+    /// 현재 폴더 설정으로 데이터셋을 변환하면 각 촬영본이 train/val 중 어디로 가는지 계산한다(<see cref="ConvertAsync(string, LabelKind, IReadOnlyList{string}, string?, bool)"/> 와 같은 규칙).
+    /// 검증 폴더가 있으면 그 폴더 = val, 없으면 학습 폴더 전체를 촬영 세션 단위로 분리한다.
+    /// 같은 stem 이 여러 폴더에 있으면 먼저 나온 폴더만, 원본 폴더의 예전 회전본(_cw90/_ccw90)은 제외.
+    /// (손상된 선 라벨·빈 마스크처럼 변환 중에야 걸러지는 항목은 반영하지 않으므로 경계 부근이 드물게 다를 수 있다.)
+    /// </summary>
+    public async Task<SplitView> GetSplitAsync(string modality, LabelKind kind)
+    {
+        modality = LabelFiles.Mod(modality);
+        var src = await GetDatasetSourcesAsync();
+        var train = LabelFiles.NormalizeDirs(src.TrainDirs);
+        var val = string.IsNullOrWhiteSpace(src.ValDir) ? null : LabelFiles.NormalizeDirs(new[] { src.ValDir })[0];
+        if (val is not null) train.RemoveAll(d => LabelFiles.SameDir(d, val));
+        bool offOnly = await GetEmitterOffOnlyAsync();
+
+        return await Task.Run(() =>
+        {
+            var dirs = train.Select(d => (Dir: d, IsVal: false)).ToList();
+            if (val is not null) dirs.Add((val, true));
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var found = new List<(string Stem, string Dir, bool IsVal)>();
+            foreach (var (dir, isVal) in dirs)
+                foreach (var stem in LabelFiles.LabeledStems(dir, modality, kind))
+                    if (DatasetSplitter.BaseStem(stem) == stem
+                        && !ExcludedByEmitter(modality, offOnly, Path.Combine(dir, LabelFiles.ImageName(stem, modality)))
+                        && seen.Add(stem)) found.Add((stem, dir, isVal));
+
+            var split = DatasetSplitter.Split(found.Where(x => !x.IsVal).Select(x => x.Stem));
+            var autoVal = split.Val.ToHashSet();
+            var items = found.Select(x => new SplitItem(x.Stem, x.Dir, val is not null ? x.IsVal : autoVal.Contains(x.Stem))).ToList();
+            return new SplitView(items, val is null && split.SingleSession);
+        });
+    }
+
     // ── 모델 목록 ────────────────────────────────────────────────────────────
     public async Task<List<ModelInfo>> ListModelsAsync()
     {
@@ -684,9 +1014,7 @@ public sealed class WeldTrainingService
         }
         if (Directory.Exists(paths.Models))
             foreach (var f in Directory.GetFiles(paths.Models, "*.onnx")) Add(f);
-        // 학습 run 안에 남은 best.onnx 도 노출.
-        var runBest = Path.Combine(paths.Runs, "hd", "weights", "best.onnx");
-        if (File.Exists(runBest) && !list.Any(m => m.Path == runBest)) Add(runBest);
+        // 학습 run 의 runs/hd/weights/best.onnx 는 내보내기 중간 산출물(models 의 정식 이름 파일과 같은 모델)이라 목록에서 뺀다.
         return list.OrderByDescending(m => m.Modified).ToList();
     }
 
@@ -704,7 +1032,8 @@ public sealed class WeldTrainingService
     }
 
     // ── 서브프로세스 실행(스트리밍) ───────────────────────────────────────────
-    private void StartProcess(string exe, IEnumerable<string> args, string workDir, TrainingPhase phase, string label)
+    private void StartProcess(string exe, IEnumerable<string> args, string workDir, TrainingPhase phase, string label,
+        Func<Task>? afterSuccess = null)
     {
         var psi = new ProcessStartInfo
         {
@@ -737,6 +1066,18 @@ public sealed class WeldTrainingService
             StatusText = code == 0 ? $"{label} 완료" : $"{label} 실패(코드 {code})";
             Emit($"[{label}] 종료 코드 {code}");
             lock (_gate) { proc.Dispose(); if (ReferenceEquals(_proc, proc)) _proc = null; }
+            // 후속 작업(자동 내보내기 등) — 프로세스 정리 후(IsBusy=false) 시작. 화면을 떠나 있어도 진행된다.
+            if (code == 0 && afterSuccess is not null)
+                _ = Task.Run(async () =>
+                {
+                    try { await afterSuccess(); }
+                    catch (Exception ex)
+                    {
+                        Phase = TrainingPhase.Error;
+                        StatusText = "자동 내보내기 실패";
+                        Emit($"[자동 내보내기] 실패: {ex.Message}");
+                    }
+                });
         };
 
         try
@@ -780,14 +1121,16 @@ public sealed class WeldTrainingService
         catch (Exception ex) { return (false, "", ex.Message); }
     }
 
-    /// <summary>데이터셋 첫 이미지의 (W,H). 직사각 내보내기 비율 산출용. 없으면 null.</summary>
+    /// <summary>데이터셋 첫 원본 이미지의 (W,H). 직사각 내보내기 비율 산출용. 없으면 null.</summary>
     private static (int W, int H)? DatasetImageSize(string dataset)
     {
         foreach (var sub in new[] { "train", "val" })
         {
             var dir = Path.Combine(dataset, "images", sub);
             if (!Directory.Exists(dir)) continue;
-            var f = Directory.GetFiles(dir, "*.png").OrderBy(x => x).FirstOrDefault();
+            // 90° 회전본(_cw90/_ccw90)은 가로세로가 바뀌어 있으므로 원본 이미지로 비율을 잡는다.
+            var f = Directory.GetFiles(dir, "*.png").OrderBy(x => x)
+                .FirstOrDefault(x => !System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(x), @"_c?cw90_"));
             if (f is null) continue;
             if (UsePythonCv)
             {
@@ -849,8 +1192,9 @@ public sealed class WeldTrainingService
         "elif aug == 'line':\n" +
         "    # 가는 선 전용: mosaic/copy-paste/erasing 은 선을 끊거나 엉뚱하게 이어 붙여 끔.\n" +
         "    # 뒤집기·소각 회전·이동·스케일·밝기로 위치·각도·조명 일반화(진행축 가로/세로는 90° 회전 증강본으로).\n" +
+        "    # translate=0.3: 라벨이 화면 중앙에 몰려 위/아래 가장자리 비드를 놓쳐(선창 151/153) 이동 범위를 넓힘.\n" +
         "    kw.update(mosaic=0.0, close_mosaic=0, mixup=0.0, copy_paste=0.0, erasing=0.0,\n" +
-        "              fliplr=0.5, flipud=0.5, degrees=8.0, translate=0.1, scale=0.25,\n" +
+        "              fliplr=0.5, flipud=0.5, degrees=8.0, translate=0.3, scale=0.25,\n" +
         "              shear=0.0, perspective=0.0, hsv_h=0.0, hsv_s=0.0, hsv_v=0.4)\n" +
         "if bright == '1':\n" +
         "    kw.update(hsv_v=0.5, hsv_s=0.3)  # 밝기/채도 변동 강화(조명·노출 편차 대응)\n" +
@@ -901,7 +1245,7 @@ public sealed class WeldTrainingService
         "    r = cv2.rotate(m, cv2.ROTATE_90_CLOCKWISE if j['cw'] else cv2.ROTATE_90_COUNTERCLOCKWISE)\n" +
         "    ok, buf = cv2.imencode('.png', r)\n" +
         "    if ok: buf.tofile(j['dst']); n += 1\n" +
-        "print('[증강] 이미지 %d장 회전 저장(Python cv2)' % n, flush=True)\n";
+        "print('[변환] 이미지 %d장 90° 회전(Python cv2)' % n, flush=True)\n";
 
     // imgsz 인자: "0"=학습값 자동, "864"=정사각, "rect:{size}:{W}x{H}"=데이터 비율 직사각([h,w], 32 배수, size 0 이면 학습값).
     private const string ExportPy =
@@ -933,8 +1277,19 @@ public enum TrainingAugmentation { Line, Minimal, Full }
 
 public enum TrainingPhase { Idle, Converting, Training, Exporting, Done, Error }
 
-public sealed record TrainingPaths(string CaptureDir, string Workspace, string Dataset, string Runs, string Models);
+/// <summary>작업 폴더 경로들. 작업 폴더(dl/)는 캡처 저장 폴더 기준으로 고정 — 라벨링·데이터 폴더를 바꿔도 모델 경로는 그대로.</summary>
+public sealed record TrainingPaths(string CaptureDir, string Workspace, string Runs, string Models)
+{
+    /// <summary>라벨 종류별 데이터셋 폴더(dl/dataset_area, dl/dataset_line).</summary>
+    public string DatasetOf(LabelKind kind) => Path.Combine(Workspace, LabelFiles.DatasetFolder(kind));
+}
+/// <summary>데이터셋 변환 원본 폴더 구성. ValDir 이 null 이면 세션 단위 자동 분리.</summary>
+public sealed record DatasetSources(List<string> TrainDirs, string? ValDir);
+/// <summary>촬영본 하나의 판정 결과. <see cref="Dir"/> = 이미지가 있는 폴더.</summary>
+public sealed record SplitItem(string Stem, string Dir, bool IsVal);
+/// <param name="SingleSession">자동 분리인데 촬영 세션이 1개뿐(val 이 train 과 같은 자리 영상).</param>
+public sealed record SplitView(List<SplitItem> Items, bool SingleSession);
 public sealed record PythonInfo(bool PythonOk, bool UltralyticsOk, string Exe, string Detail, bool TorchOk = false);
-public sealed record ConvertResult(int Used, int Skipped, int Instances, string DataYaml, int Train = 0, int Val = 0, int Sessions = 0);
-public sealed record RotateResult(int Created, int Skipped);
+public sealed record ConvertResult(int Used, int Skipped, int Instances, string DataYaml, int Train = 0, int Val = 0, int Sessions = 0,
+    LabelKind Kind = LabelKind.Area, int Rotated = 0);
 public sealed record ModelInfo(string Path, string Name, long Bytes, DateTime Modified);

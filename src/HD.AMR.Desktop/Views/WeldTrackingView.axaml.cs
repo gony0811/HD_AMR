@@ -29,6 +29,13 @@ public partial class WeldTrackingView : UserControl
         _host.PointerMoved += OnMoved;
         _host.PointerReleased += OnReleased;
         _host.SizeChanged += (_, _) => DrawRois();
+        // 좌우 카드 폭 동일 — 좌측 정렬 StackPanel 은 폭이 내용 크기로 줄어 *,* 칸이 카드마다 달라지므로
+        // 폭을 min(창 폭, MaxWidth 1180) 으로 고정해 반씩 나눈다.
+        var pageRoot = this.FindControl<StackPanel>("PageRoot")!;
+        SizeChanged += (_, e) => pageRoot.Width = Math.Min(e.NewSize.Width, pageRoot.MaxWidth);
+        // X·Y·W·H 입력 — 카드가 좁으면(창 축소) 4칸 → 2×2 로 바꿔 H 칸이 영역 밖으로 밀리지 않게 한다.
+        var roiNumbers = this.FindControl<Avalonia.Controls.Primitives.UniformGrid>("RoiNumbers")!;
+        roiNumbers.SizeChanged += (_, e) => roiNumbers.Columns = e.NewSize.Width < 440 ? 2 : 4;
         this.FindControl<Button>("BrowseButton")!.Click += OnBrowseClick;
         DataContextChanged += OnDataContextChanged;
     }

@@ -18,7 +18,8 @@ public sealed record ManualBeadSaveResult(string Stem, string Modality, string? 
 
 /// <summary>
 /// 수동 비드선을 학습 데이터로 저장한다. 라이브 스냅샷이면 캡처 폴더에 새 촬영본(프레임 4장 + 캘리브레이션)을 만들고 그 위에 라벨을,
-/// 저장된 촬영본을 연 것이면 그 촬영본 옆에 라벨(<c>{stem}_{modality}_line.json</c>·<c>_maskdraft.png</c>)만 쓴다(덮어쓰기).
+/// 저장된 촬영본을 연 것이면 그 촬영본 옆에 선 라벨(<c>{stem}_{modality}_line.json</c>)만 쓴다(덮어쓰기). 학습 마스크는
+/// 데이터셋 변환 때 선 라벨을 래스터화해 만든다(<see cref="LabelFiles"/> — 면 라벨 <c>_area.png</c> 는 건드리지 않음).
 /// 그린 영상의 라벨을 깊이·캘리브레이션으로 <b>반대 영상(IR↔RGB)에도 옮겨 저장</b>한다(<see cref="ManualBeadLabelTransfer"/>) —
 /// 단, 반대 영상에 사람이 그린 라벨이 이미 있으면 덮어쓰지 않는다.
 /// </summary>
@@ -37,16 +38,13 @@ public static class ManualBeadLabelWriter
             Points = points.Select(p => new[] { Math.Round(p.X, 1), Math.Round(p.Y, 1) }).ToList(),
         };
         if (!label.IsValid) throw new InvalidOperationException("선 라벨은 2점 이상이어야 합니다.");
-        var mask = await Task.Run(() => MaskPng(label), ct);
 
         var (other, otherNote) = BuildTransferred(s, modality, points);
-        byte[]? otherMask = other is null ? null : await Task.Run(() => MaskPng(other), ct);
         string otherMod = modality == "ir" ? "rgb" : "ir";
 
         if (s.Frames.SavedPath is { } saved)
         {
-            await File.WriteAllTextAsync(Path.Combine(saved.Dir, $"{saved.Stem}_{modality}_line.json"), label.ToJson(), ct);
-            await File.WriteAllBytesAsync(Path.Combine(saved.Dir, $"{saved.Stem}_{modality}_maskdraft.png"), mask, ct);
+            await File.WriteAllTextAsync(Path.Combine(saved.Dir, LabelFiles.LineName(saved.Stem, modality)), label.ToJson(), ct);
 
             // 촬영본에 캘리브레이션이 없었으면 이번에 쓴 값을 남긴다(다음에 카메라 없이 열어도 RGB 사용 가능).
             var calibPath = CameraD2CFile.PathFor(saved.Dir, saved.Stem);
@@ -55,12 +53,11 @@ public static class ManualBeadLabelWriter
 
             if (other is not null)
             {
-                var otherLine = Path.Combine(saved.Dir, $"{saved.Stem}_{otherMod}_line.json");
+                var otherLine = Path.Combine(saved.Dir, LabelFiles.LineName(saved.Stem, otherMod));
                 var existing = File.Exists(otherLine) ? WeldLineLabel.FromJson(await File.ReadAllTextAsync(otherLine, ct)) : null;
                 if (existing is { IsTransferred: false })
                     return new(saved.Stem, modality, null, $"{otherMod.ToUpperInvariant()} 라벨은 사람이 그린 것이 있어 유지");
                 await File.WriteAllTextAsync(otherLine, other.ToJson(), ct);
-                await File.WriteAllBytesAsync(Path.Combine(saved.Dir, $"{saved.Stem}_{otherMod}_maskdraft.png"), otherMask!, ct);
                 return new(saved.Stem, modality, otherMod, null);
             }
             return new(saved.Stem, modality, null, otherNote);
@@ -70,11 +67,9 @@ public static class ManualBeadLabelWriter
                   ?? throw new InvalidOperationException("캡처 폴더가 설정되지 않았습니다(Camera 페이지에서 폴더 선택).");
         var cap = await camera.SaveFramesAsync(dir, s.Color, s.Ir, s.Depth, tag, s.Frames.D2C, ct);
         await labels.SaveLineAsync(cap.Timestamp, modality, label);
-        await labels.SaveMaskAsync(cap.Timestamp, modality, mask);
         if (other is not null)
         {
             await labels.SaveLineAsync(cap.Timestamp, otherMod, other);
-            await labels.SaveMaskAsync(cap.Timestamp, otherMod, otherMask!);
             return new(cap.Timestamp, modality, otherMod, null);
         }
         return new(cap.Timestamp, modality, null, otherNote);
@@ -97,14 +92,6 @@ public static class ManualBeadLabelWriter
             Origin = $"transfer:{modality}",
         };
         return label.IsValid ? (label, null) : (null, "옮긴 라벨이 유효하지 않음 — 변환 생략");
-    }
-
-    private static byte[] MaskPng(WeldLineLabel label)
-    {
-        using var img = Image.LoadPixelData<L8>(label.Rasterize(), label.Width, label.Height);
-        using var ms = new MemoryStream();
-        img.Save(ms, new PngEncoder());
-        return ms.ToArray();
     }
 }
 
@@ -217,7 +204,7 @@ public sealed class BeadManualTestService
     {
         string[] suffixes =
         [
-            "_ir_maskdraft.png", "_rgb_maskdraft.png", "_ir_line.json", "_rgb_line.json", CameraD2CFile.Suffix,
+            "_ir_maskdraft.png", "_rgb_maskdraft.png", "_ir_area.png", "_rgb_area.png", "_ir_line.json", "_rgb_line.json", CameraD2CFile.Suffix,
             "_depth_vis.png", "_depth16.png", "_ir.png", "_rgb.png",
         ];
         foreach (var sfx in suffixes)
