@@ -5,6 +5,7 @@
 @using HD.AMR.App.Service
 @inject TeachingService Service
 @inject CobotService Cobot
+@inject TelescopicService Lift
 @inject ParameterService Param
 @inject ILogger<Teaching> Logger
 @implements IDisposable
@@ -342,12 +343,15 @@
                     _msg = $"'{step.Name}' 위치로 이동 중…";
                     _isErr = false;
                     _ = InvokeAsync(StateHasChanged);
-                }, _moveCts.Token, Logger);
-            var via = r.Plan.IsVia ? $" (경유: {string.Join(" → ", r.Plan.Steps.Select(s => s.Name))})" : "";
+                }, _moveCts.Token, Logger, Lift,
+                () =>
+                {
+                    _msg = $"리프트 {TeachingMove.HomeLiftHeightMm}mm 하강 중…";
+                    _isErr = false;
+                    _ = InvokeAsync(StateHasChanged);
+                });
             _isErr = !r.Ok;
-            _msg = r.Plan.Error is { } err ? err
-                 : r.Ok ? $"'{p.Name}' 위치로 이동 완료.{via}"
-                 : $"'{r.FailedAt?.Name}' 이동 실패 (rc={r.Rc}){FairinoErrorCodes.Suffix(r.Rc)}{via}";
+            _msg = TeachingMove.Describe(r, p);
         }
         catch (OperationCanceledException)
         {

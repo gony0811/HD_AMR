@@ -95,18 +95,29 @@ public static class TeachingMove
         return new(steps);
     }
 
-    /// <summary>경로 이동 결과. Rc≠0 이면 <see cref="FailedAt"/> 에서 실패, <see cref="Error"/> 가 있으면 움직이지 않았다.</summary>
-    public sealed record RouteMoveResult(int Rc, RoutePlan Plan, TeachingPosition? FailedAt = null)
+    /// <summary>홈/홈 2 도착 후 리프트를 내리는 높이 [mm].</summary>
+    public const int HomeLiftHeightMm = 0;
+
+    /// <summary>도착 후 리프트를 <see cref="HomeLiftHeightMm"/> 로 내리는 위치(홈 위치·홈 위치_2).</summary>
+    public static bool LowersLiftOnArrival(TeachingPosition target) => target.Key is "home" or "home2";
+
+    /// <summary>경로 이동 결과. Rc≠0 이면 <see cref="FailedAt"/> 에서 실패, <see cref="Error"/> 가 있으면 움직이지 않았다.
+    /// <see cref="Lift"/> 는 홈/홈 2 도착 후 리프트 하강 결과(대상 아니거나 코봇 이동 실패면 null).</summary>
+    public sealed record RouteMoveResult(int Rc, RoutePlan Plan, TeachingPosition? FailedAt = null,
+        TelescopicMoveResult? Lift = null)
     {
-        public bool Ok => Rc == 0 && Plan.Error is null;
+        public bool CobotOk => Rc == 0 && Plan.Error is null;
+        public bool Ok => CobotOk && Lift is not { Ok: false };
     }
 
     /// <summary>티칭 위치로 이동 — 홈 ↔ 홈 2 전환이면 <see cref="PlanRoute"/> 경로대로 경유한다.</summary>
     /// <param name="all">티칭 위치 전체(경유점 조회용).</param>
     /// <param name="onStep">각 구간 이동 직전에 불린다(진행 표시용).</param>
+    /// <param name="lift">주면 홈/홈 2 도착 후 리프트를 <see cref="HomeLiftHeightMm"/> 로 내리고 도달까지 기다린다.</param>
+    /// <param name="onLift">리프트 하강 직전에 불린다(진행 표시용).</param>
     public static async Task<RouteMoveResult> MoveAlongRouteAsync(CobotService cobot, IEnumerable<TeachingPosition> all,
         TeachingPosition target, int tool, double vel, double jointVelScale, Action<TeachingPosition>? onStep,
-        CancellationToken ct, ILogger? logger = null)
+        CancellationToken ct, ILogger? logger = null, TelescopicService? lift = null, Action? onLift = null)
     {
         var cur = await cobot.Rpc.GetActualJointPosAsync(ct: ct);
         var plan = PlanRoute(target, cur, all);
@@ -130,7 +141,35 @@ public static class TeachingMove
             }
         }
         logger?.LogInformation("[Teaching] '{Target}' 이동 완료", target.Name);
-        return new(0, plan);
+
+        if (lift is null || !LowersLiftOnArrival(target))
+            return new(0, plan);
+
+        // 홈/홈 2 = 코봇이 접힌 기준 자세 — 도착을 확인한 뒤에만 리프트를 내린다(이동 실패 시 위에서 이미 반환).
+        onLift?.Invoke();
+        logger?.LogInformation("[Teaching] '{Target}' 도착 — 리프트 {Height}mm 하강", target.Name, HomeLiftHeightMm);
+        var lr = await lift.MoveToHeightAndWaitAsync(HomeLiftHeightMm, ct: ct);
+        if (lr.Ok)
+            logger?.LogInformation("[Teaching] 리프트 하강 완료 — {Msg}", lr.Message);
+        else
+            logger?.LogWarning("[Teaching] 리프트 하강 실패 — {Msg}", lr.Message);
+        return new(0, plan, Lift: lr);
+    }
+
+    /// <summary>화면 표시용 결과 문구(Web·Desktop 공용).</summary>
+    public static string Describe(RouteMoveResult r, TeachingPosition target)
+    {
+        var via = r.Plan.IsVia ? $" (경유: {string.Join(" → ", r.Plan.Steps.Select(s => s.Name))})" : "";
+        if (r.Plan.Error is { } err) return err;
+        if (!r.CobotOk) return $"'{r.FailedAt?.Name}' 이동 실패 (rc={r.Rc}){FairinoErrorCodes.Suffix(r.Rc)}{via}";
+        var liftText = r.Lift switch
+        {
+            null => "",
+            { Ok: true, Moved: false } => $" 리프트 이미 {HomeLiftHeightMm}mm.",
+            { Ok: true } l => $" 리프트 {HomeLiftHeightMm}mm 하강 완료 (현재 {l.FinalHeightMm}mm).",
+            { } l => $" 리프트 {HomeLiftHeightMm}mm 하강 실패 — {l.Message}",
+        };
+        return $"'{target.Name}' 위치로 이동 완료.{via}{liftText}";
     }
 
     /// <summary>티칭 위치로 이동. 반환 rc(0=성공).</summary>
