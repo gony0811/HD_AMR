@@ -177,7 +177,7 @@
    >   생성 경로는 제거 완료**(레시피 `PatternJson` 필드·오케스트레이터 생성·`WaypointsOverride` 삭제). `CrossPatternGenerator`
    >   는 `/inspection-points`·`/inspection`의 "십자 패턴 채우기" **교시 시작 템플릿**으로만 잔존.
    > - **CORNER3**: 평탄면 정렬 미적용 — 고정 티칭 슬롯 `corner3.{L|R}.{approach,face1..3,retreat}` 직접 순회
-   >   (`cornerInspectionRunStep`), SurfaceType=Corner 촬상. 거울 L/R 은 별도 티칭 2세트,
+   >   (`cornerInspectionRunStep`), SurfaceType 은 경유점 수동 지정(구 Corner 폐지). 거울 L/R 은 별도 티칭 2세트,
    >   side 판별 P*→L / S*→R (F/A 코너의 side 규칙은 N13 협의 필요 — 기본 L).
 
 6. **신규 타입(CROSS3·CORNER2) 구현** `[대부분 완료]` — 정본화 + 계약 enum 확장 반영 완료(2026-09-15):

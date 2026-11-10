@@ -107,11 +107,24 @@ STX(1) │ LENGTH(2, LE) │ SEQ(1) │ COMMAND(1) │ FROM(1) │ TO(1) │ DAT
 
 ## 4. Surface Type
 
-| 값 | 이름 |
-|---|---|
-| `0x00` | Flat |
-| `0x01` | Corner |
-| `0x02` | Corrugation |
+비전 측 사양 표 기준 9종. 비전 S/W 는 이 값으로 저장 폴더(Metadata1~9)를 고른다.
+코드 정본: `SurfaceType` enum + `SurfaceTypes` 표(`Communication/Vision/VisionProtocol.cs`).
+
+| 값 | 사양 Type | enum | 저장 폴더 |
+|---|---|---|---|
+| `0x00` | 자동용접부 Flat | `Flat` | Metadata1 |
+| `0x01` | 자동용접부 Corrugation | `Corrugation` | Metadata2 |
+| `0x02` | 3 axis (수) | `Manual3Axis` | Metadata3 |
+| `0x03` | 4 axis (수) | `Manual4Axis` | Metadata4 |
+| `0x04` | 90도 Flat (수) | `Manual90Flat` | Metadata5 |
+| `0x05` | 90도 Corrugation (수) | `Manual90Corrugation` | Metadata6 |
+| `0x06` | 135도 Flat (수) | `Manual135Flat` | Metadata7 |
+| `0x07` | End Membrane Flat (수) | `ManualEndMembraneFlat` | Metadata8 |
+| `0x08` | End Membrane Corrugation (수) | `ManualEndMembraneCorrugation` | Metadata9 |
+
+- (수) = 수동용접. 사양 주석상 `0x04` 이후 순서는 예시 — 확정 시 enum·표만 갱신.
+- **번호 체계 변경**: 구 `0x01=Corner`, `0x02=Corrugation` 은 폐지. 기존 저장값은 `Corner→Flat(0x00)`, `Corrugation→0x01` 로
+  1회 변환한다(DB 프로파일: `SqliteCompatMigrations` 의 `Migration.SurfaceTypeV2` 표식, 경유점 CSV: `# surface-type-schema: 2` 행이 없으면 구 체계로 해석).
 
 ## 5. Wall ID 정의 (v3.2 축 정본)
 

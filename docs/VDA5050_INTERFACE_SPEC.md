@@ -815,7 +815,7 @@ HD_AMR ──(CAPTURE_REQ 34B: taskId[15-30] · attempt[31] · captureSeq[32-33]
 **(5-1) `CROSS4`/`CORNER3` 실행 시퀀스 구현 (2026-09-15 추가, 온보드 — 계약 무변경).** 위 (5)의 "실행 미구현" 부분이 해소됨. 게이트(Enabled)는 실기 검증 전이라 여전히 OFF 이며, 온보드 레시피 관리 UI(`/recipes`)에서 활성화한다.
 - **검사 방향 자동 유도 배선**: §4.4·§8.1 의 계약(seam 벡터 → 수평/수직 유도)이 ACS 경로에 실제 구현됨 — 노드 `theta` 를 검사 실행기에 전달, `SeamDirectionResolver` 가 벽면-로컬 투영으로 판정(45°±10° 경계·10mm 미만 seam 은 수평 폴백 + 로그). LINE 포함 전 타입 공통.
 - **`CROSS3-R*`(회전 4종)/`CROSS4-*`**: 정렬 1회로 등록된 작업물 좌표계 안에서 **`/inspection-points` 6-DOF 캡처 교시 프로필(`PoseAbsolute`)의 경유점을 실행**(코로게이션 법선·깊이 반영). CROSS3 는 회전별 프로필이 서로 다른 툴 자세/경유점을 담는다. 십자 패턴 런타임 생성(레시피 `PatternJson`)은 **제거 완료**(캡처 교시 단일화) — `CrossPatternGenerator`는 교시 시작 템플릿 전용. `anchorGroupId` 정렬 공유는 LINE 과 동일하게 동작.
-- **`CORNER3`**: 평탄면 정렬 체인 미적용 — 고정 티칭 슬롯(`corner3.{L|R}.{approach,face1..3,retreat}`, 좌/우 거울 별도 티칭) 직접 순회, SurfaceType=Corner 촬상. side 판별은 `wall_code` P*→L / S*→R. **F/A(마구리) 코너의 side 규칙 미확정** — N13 협의 필요(아래 ②).
+- **`CORNER3`**: 평탄면 정렬 체인 미적용 — 고정 티칭 슬롯(`corner3.{L|R}.{approach,face1..3,retreat}`, 좌/우 거울 별도 티칭) 직접 순회(SurfaceType 은 경유점 수동 지정 — 구 `Corner` 는 9종 체계에서 폐지). side 판별은 `wall_code` P*→L / S*→R. **F/A(마구리) 코너의 side 규칙 미확정** — N13 협의 필요(아래 ②).
 - **N13 잔여 협의 항목(2026-10-07 갱신)**:
   - ① `params.points` ✅ **HD_AMR 확정안 발송(ACS 사인오프 대기)** — 좌표계 **면-로컬 (u,v) mm, 원점 = 교차 중심**. **CROSS4** = 끝점 4개 순서 **+u→+v→−u→−v (CCW)**, 각 점 원점거리 = arm별 길이(개별화). **CROSS3** = 3점 **[줄기 끝(R0 에서 +u)·통과선 +v·통과선 −v]**. ⚠️ **실행 궤적 아님** — 실행은 캡처 교시 프로필(`PoseAbsolute`); points 는 교시 템플릿 시드 + arm 기하·비전 메타 **참조값**(INSPECTION_TYPES §6).
   - ② CORNER 거울 side 의 F/A 판별 규칙 — **미결**(CROSS 4문항과 무관, 별도 협의).
@@ -826,13 +826,13 @@ HD_AMR ──(CAPTURE_REQ 34B: taskId[15-30] · attempt[31] · captureSeq[32-33]
 
 | 구분 | `seamType` | `Surface` |
 |---|---|---|
-| 의미 | 용접라인의 **형태**(`LINE`/`CROSS`/`CORNER`) | 경유점의 **표면 형상**(Flat/Corner/Corrugation) |
+| 의미 | 용접라인의 **형태**(`LINE`/`CROSS`/`CORNER`) | 경유점의 **표면 형상**(SurfaceType 9종: 자동 Flat/Corrugation + 수동 7종) |
 | 단위 | 용접라인 1개 | 레시피 내 **경유점 1개** |
 | 결정 주체 | **HD_ACS** — 계획 단계에서 **도면으로 추출** → 액션 전달 | **HD_AMR** — 레시피 내부(티칭/유도) |
 | 용도 | AMR이 **어떤 레시피를 로딩**할지 선택 | 경유점마다 **촬영/조명 선택** |
 | 전송 | VDA `params.seamType`로 전송 | **전송 안 함**(AMR 내부 값) |
 
-→ ACS 책임은 `seamType`(+`wall_code`)까지다. 레시피를 로딩한 뒤 각 경유점의 `Surface`(Flat/Corner/Corrugation)에 따라 **조명·촬영을 선택**하는 것은 전적으로 HD_AMR 몫이며, ACS는 `Surface`를 알 필요도 보낼 필요도 없다.
+→ ACS 책임은 `seamType`(+`wall_code`)까지다. 레시피를 로딩한 뒤 각 경유점의 `Surface`(SurfaceType 9종)에 따라 **조명·촬영을 선택**하는 것은 전적으로 HD_AMR 몫이며, ACS는 `Surface`를 알 필요도 보낼 필요도 없다.
 
 ---
 
@@ -1074,20 +1074,20 @@ ACS는 비상정지와 동시에 **해당 로봇의 활성 run을 자동 중단(
 
 ### D.3 검사 레시피 경유점 `Surface` 유도 (온보드 구현 — 비계약)
 
-> `Surface`(Flat/Corner/Corrugation)는 §8.5.1 (6)에서 정리한 대로 **AMR 레시피 내부의 경유점별 촬영/조명 선택 키**이며 **ACS 계약과 무관**하다(ACS는 보내지 않는다). 본 절은 HD_AMR 온보드가 이를 유도하는 **현행 규칙**을 근거와 함께 남긴다. — 근거: `gony0811/HD_AMR` `Communication/Vision/VisionProtocol.cs`·`Service/Sequence/Steps/InspectionRunStep.cs`.
+> `Surface`(SurfaceType 9종)는 §8.5.1 (6)에서 정리한 대로 **AMR 레시피 내부의 경유점별 촬영/조명 선택 키**이며 **ACS 계약과 무관**하다(ACS는 보내지 않는다). 본 절은 HD_AMR 온보드가 이를 유도하는 **현행 규칙**을 근거와 함께 남긴다. — 근거: `gony0811/HD_AMR` `Communication/Vision/VisionProtocol.cs`·`Service/Sequence/Steps/InspectionRunStep.cs`.
 
 **두 층의 "Surface"** — 이름은 비슷하나 역할이 다르다.
 
 | 구분 | 값 | 단위 | 산출 | 용도 |
 |---|---|---|---|---|
-| **SurfaceType** | `Flat`(0x00) / `Corner`(0x01) / `Corrugation`(0x02) | **경유점** | 아래 규칙(θ) + 수동 오버라이드 | 촬영/조명 프리셋 선택 |
+| **SurfaceType** | 자동 `Flat`(0x00) / `Corrugation`(0x01), 수동 `Manual3Axis`(0x02) ~ `ManualEndMembraneCorrugation`(0x08) — 전체 표는 vision_interface.md §4 | **경유점** | 아래 규칙(θ) + 수동 오버라이드 | 촬영/조명 프리셋 선택 |
 | **Surface ID** | 0x01~0x0A (바닥·천장·좌현벽·우현벽·전벽·후벽·하부좌/우챔퍼·상부좌/우챔퍼) | **면(작업물)** | 면 선택 | 면 식별·(u,v) 축 규약 (현재 전부 Type=Flat) |
 
 **SurfaceType 자동 유도 규칙 (현행 코드).**
 - 경유점 툴 각 **`|θ| ≥ CorrugThresholdDeg`**(프로필 파라미터) → **`Corrugation`**, 아니면 **`Flat`**.
   - 근거: `InspectionRunStep.cs` — `Math.Abs(w.Theta) >= profile.CorrugThresholdDeg ? SurfaceType.Corrugation : SurfaceType.Flat`.
   - 의미: 코로게이션 마루는 툴을 기울여(큰 |θ|) 대면하고, 평탄부는 θ≈0. 임계각은 프로필별 값(`CorrugThresholdDeg`, 짝 파라미터 `CorrugStepDeg`).
-- **`Corner`(0x01)** 는 enum에 정의돼 있으나 **현 자동 규칙은 Flat/Corrugation 이진 판정만** 한다. Corner는 **수동 오버라이드**(`SurfaceManual`, Inspection 페이지)로 지정.
+- **자동 규칙은 Flat/Corrugation(0x00/0x01) 이진 판정만** 한다. 수동용접 7종(0x02~0x08)은 **수동 오버라이드**(`SurfaceManual`, Inspection/InspectionPoints 페이지)로 지정. 구 `Corner`(0x01)는 폐지 — 저장값은 Flat 으로 변환됨.
 - 캡처 요청마다 `SurfaceType`(경유점) + `Surface ID`(면)를 함께 실어 비전 S/W로 전송한다(`CaptureReqPayload`).
 
 **연동 관점 (2차 과제).** ACS가 `seamType`(§8.5.1)로 **레시피를 선택**하면, 그 레시피의 **경유점들이 위 규칙으로 각자 `SurfaceType`을 얻어 촬영/조명을 고른다**. 즉 **`seamType`(라인) → 레시피 로딩 / `Surface`(경유점) → 촬영** 의 2단계가 성립한다(§8.5.1 (6)).

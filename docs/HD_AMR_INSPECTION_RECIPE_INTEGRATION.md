@@ -87,13 +87,13 @@ HD_AMR의 `startWeldInspection`은 현재 **스텁**이다.
 
 | 구분 | `seamType` | `Surface` |
 |---|---|---|
-| 의미 | 용접라인 **형태**(LINE/CROSS3/CROSS4/CORNER2/CORNER3) | 경유점 **표면 형상**(Flat/Corner/Corrugation) |
+| 의미 | 용접라인 **형태**(LINE/CROSS3/CROSS4/CORNER2/CORNER3) | 경유점 **표면 형상**(SurfaceType 9종) |
 | 단위 | 용접라인 1개 | 레시피 내 **경유점 1개** |
 | 주체 | **HD_ACS**(도면 추출) → 액션 전송 | **HD_AMR**(레시피 내부) |
 | 용도 | 어떤 **레시피를 로딩**할지 | 경유점별 **촬영/조명** 선택 |
 | 전송 | VDA `params.seamType` | **전송 안 함**(AMR 내부값) |
 
-**2단계로 동작한다:** `seamType`(라인) → **레시피 로딩** / 각 경유점의 `Surface` → **촬영/조명 선택**. `Surface` 유도 규칙(현행 온보드 구현)은 사양서 **부록 D.3**: 경유점 툴 각 `|θ| ≥ CorrugThresholdDeg` → `Corrugation`, 아니면 `Flat`, `Corner`는 수동 오버라이드. ACS는 `Surface`를 알 필요도 보낼 필요도 없다.
+**2단계로 동작한다:** `seamType`(라인) → **레시피 로딩** / 각 경유점의 `Surface` → **촬영/조명 선택**. `Surface` 유도 규칙(현행 온보드 구현)은 사양서 **부록 D.3**: 경유점 툴 각 `|θ| ≥ CorrugThresholdDeg` → `Corrugation`, 아니면 `Flat`, 수동용접 7종(0x02~0x08)은 수동 오버라이드. ACS는 `Surface`를 알 필요도 보낼 필요도 없다.
 
 ## 6. HD_AMR 코드 접점 (구현 관찰, 2026-09-14)
 

@@ -59,10 +59,10 @@ public class VisionProtocolV32Tests
     public void CaptureReq_FullRoundTrip()
     {
         var taskId = Guid.NewGuid();
-        var data = CaptureReqPayload.Build(SurfaceType.Corner, 10, -5, 42000, -3, taskId, 200, 65000);
+        var data = CaptureReqPayload.Build(SurfaceType.ManualEndMembraneCorrugation, 10, -5, 42000, -3, taskId, 200, 65000);
 
         var f = CaptureReqPayload.TryRead(data)!.Value;
-        Assert.Equal(SurfaceType.Corner, f.Type);
+        Assert.Equal(SurfaceType.ManualEndMembraneCorrugation, f.Type);
         Assert.Equal(10, f.WallId);
         Assert.Equal(-5, f.PosX);
         Assert.Equal(42000, f.PosY);

@@ -236,7 +236,7 @@ static class Validator
         byte attempt = d[31];
         int captureSeq = d[32] | (d[33] << 8);
 
-        r.Row("surfaceType", $"{st} ({Names.Surface(st)})", st <= 2, st <= 2 ? "" : "0/1/2 기대");
+        r.Row("surfaceType", $"{st} ({Names.Surface(st)})", st <= 8, st <= 8 ? "" : "0~8 기대");
         r.Row("wallId", $"{wallId} ({Names.Wall(wallId)})", wallId is >= 1 and <= 10, wallId is >= 1 and <= 10 ? "" : "1~10 기대");
         r.Row("u (PosX)", $"{u} mm");
         r.Row("v (PosY)", $"{v} mm");
@@ -324,7 +324,12 @@ static class Names
     { 0x01 => 20, 0x02 => 34, 0x03 => 2, 0x04 => 2, _ => -1 };
 
     public static string Device(byte d) => d switch { 0x01 => "자동화", 0x02 => "비전", _ => "?" };
-    public static string Surface(byte s) => s switch { 0 => "FLAT", 1 => "CORNER", 2 => "CORRUGATION", _ => "?" };
+    public static string Surface(byte s) => s switch
+    {
+        0 => "AUTO_FLAT", 1 => "AUTO_CORRUGATION", 2 => "MANUAL_3AXIS", 3 => "MANUAL_4AXIS",
+        4 => "MANUAL_90_FLAT", 5 => "MANUAL_90_CORRUGATION", 6 => "MANUAL_135_FLAT",
+        7 => "MANUAL_END_MEMBRANE_FLAT", 8 => "MANUAL_END_MEMBRANE_CORRUGATION", _ => "?",
+    };
 
     static readonly string[] Walls =
     { "-", "바닥 B", "천장 T", "좌현벽 PM", "우현벽 SM", "전벽 F", "후벽 A",

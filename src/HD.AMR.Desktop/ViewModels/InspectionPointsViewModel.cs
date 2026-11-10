@@ -193,7 +193,7 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
             var wallId = (ushort)Math.Clamp(WallId, 1, 10);
             var (u, v, h) = FaceLocalMapper.ToFaceLocal(wallId, p.X, p.Y, p.Z);
             _manualCaptureSeq++;
-            var data = CaptureReqPayload.Build((SurfaceType)Math.Clamp(p.Surface, 0, 2), wallId,
+            var data = CaptureReqPayload.Build(SurfaceTypes.OrFlat(p.Surface), wallId,
                 u, v, h, Guid.Empty, attempt: 1, _manualCaptureSeq);
             var timeout = TimeSpan.FromSeconds(Math.Max(.5, VisionTimeoutSec));
             RunErr = false; RunMsg = $"#{Selected + 1} CAPTURE_REQ 전송...";
@@ -238,7 +238,7 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
                 var wallId = (ushort)Math.Clamp(WallId, 1, 10);
                 var (u, v, h) = FaceLocalMapper.ToFaceLocal(wallId, p.X, p.Y, p.Z);
                 captureSeq++;
-                var data = CaptureReqPayload.Build((SurfaceType)Math.Clamp(p.Surface, 0, 2), wallId,
+                var data = CaptureReqPayload.Build(SurfaceTypes.OrFlat(p.Surface), wallId,
                     u, v, h, Guid.Empty, attempt: 1, captureSeq);
                 var outcome = await _vision.Client.RequestCaptureAsync(data, timeout, ct);
                 if (outcome.Success)
@@ -379,7 +379,7 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
 
     // ── CSV (코드비하인드가 파일 I/O 담당) ──
     private static readonly string[] CsvHeaderCols =
-        { "X_mm", "Y_mm", "Z_mm(WD)", "Rx_deg", "Ry_deg", "Rz_deg", "Surface(0=Flat,1=Corner,2=Corrugation)" };
+        { "X_mm", "Y_mm", "Z_mm(WD)", "Rx_deg", "Ry_deg", "Rz_deg", "Surface(SurfaceType 0~8)" };
 
     public string BuildCsv(bool includeRows)
     {
@@ -387,7 +387,8 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
         sb.Append("# HD.AMR 검사 경유점 · 좌표=mm, 각도=deg\r\n");
         sb.Append("# X,Y = 검사평면 좌표(mm) | Z = Working Distance(mm, +선창 내부)\r\n");
         sb.Append("# Rx,Ry,Rz = 툴 자세 오일러각(deg) | Ry = 틸트(θ)\r\n");
-        sb.Append("# Surface: 0=Flat, 1=Corner, 2=Corrugation\r\n");
+        sb.Append("# Surface: ").Append(SurfaceTypes.Legend()).Append("\r\n");
+        sb.Append(SurfaceTypes.CsvSchemaMarker).Append("   (이 행이 없는 구 CSV 는 1=Corner→0, 2=Corrugation→1 로 변환)\r\n");
         sb.Append(string.Join(",", CsvHeaderCols)).Append("\r\n");
         if (includeRows)
             foreach (var p in Points)
@@ -422,6 +423,7 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
     {
         warn = "";
         var list = new List<XyPointVm>();
+        var currentSchema = SurfaceTypes.IsCurrentSchemaCsv(text);
         var lines = text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
         int skipped = 0;
         foreach (var raw in lines)
@@ -434,7 +436,7 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
             list.Add(new XyPointVm(this)
             {
                 X = x, Y = D(c[1]), Z = D(c[2]), Rx = D(c[3]), Theta = D(c[4]), Rz = D(c[5]),
-                Surface = c.Length > 6 && byte.TryParse(c[6].Trim(), out var s) && s <= 2 ? s : 0,
+                Surface = c.Length > 6 ? SurfaceTypes.ParseCsvCell(c[6], currentSchema) : 0,
             });
         }
         if (list.Count == 0) { warn = "유효한 데이터 행이 없습니다."; return null; }

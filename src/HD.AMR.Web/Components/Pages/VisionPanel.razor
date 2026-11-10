@@ -96,10 +96,11 @@
                     <div class="row g-2 align-items-end mb-2">
                         <div class="col-auto">
                             <label class="form-label mb-0">Surface Type</label>
-                            <select class="form-select form-select-sm" @bind="_surfaceType" style="width:150px">
-                                <option value="0">0x00 Flat</option>
-                                <option value="1">0x01 Corner</option>
-                                <option value="2">0x02 Corrugation</option>
+                            <select class="form-select form-select-sm" @bind="_surfaceType" style="width:230px">
+                                @foreach (var st in SurfaceTypes.All)
+                                {
+                                    <option value="@((byte)st.Type)">0x@(((byte)st.Type).ToString("X2")) @st.Label</option>
+                                }
                             </select>
                         </div>
                         <div class="col-auto">
@@ -359,7 +360,7 @@
 
     private byte[] BuildCaptureReqData()
         // v3.2: (u,v,h)·taskId·attempt·captureSeq. 수동 테스트는 h=0·taskId=0 GUID·attempt=seq=1.
-        => CaptureReqPayload.Build((SurfaceType)_surfaceType, (ushort)_surfaceId, _posX, _posY, 0, Guid.Empty, 1, 1);
+        => CaptureReqPayload.Build(SurfaceTypes.OrFlat(_surfaceType), (ushort)_surfaceId, _posX, _posY, 0, Guid.Empty, 1, 1);
 
     private byte[] BuildResultData()
         // v3.2: 결과 코드 2바이트만.

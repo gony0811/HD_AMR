@@ -194,6 +194,8 @@ CREATE TABLE IF NOT EXISTS Parameters (
 CREATE UNIQUE INDEX IF NOT EXISTS IX_Parameters_Name ON Parameters (Name);
 ");
 
+        MigrateSurfaceTypeNumbering(db);
+
         // Backward-compatible schema add for InspectionRecipes (검사 타입 8종 레시피, 사양 §8.5.1; 기존 데이터 보존).
         db.Database.ExecuteSqlRaw(@"
 CREATE TABLE IF NOT EXISTS InspectionRecipes (
@@ -304,5 +306,68 @@ CREATE TABLE IF NOT EXISTS OperationLogs (
 );
 CREATE INDEX IF NOT EXISTS IX_OperationLogs_TimestampUtc ON OperationLogs (TimestampUtc);
 ");
+    }
+
+    /// <summary>1회성 마이그레이션 완료 표식(Parameters.Name). 존재하면 재실행하지 않는다.</summary>
+    public const string SurfaceTypeV2Marker = "Migration.SurfaceTypeV2";
+
+    /// <summary>
+    /// SurfaceType 번호 체계 변경(구 0=Flat/1=Corner/2=Corrugation → 신 9종, 1=Corrugation) 에 맞춰
+    /// InspectionProfiles.WaypointsJson 의 Surface 값을 1회 변환한다. Parameters 의 표식으로 멱등 보장.
+    /// </summary>
+    private static void MigrateSurfaceTypeNumbering(HdAmrDbContext db)
+    {
+        var done = db.Database
+            .SqlQueryRaw<long>($"SELECT COUNT(*) AS Value FROM Parameters WHERE Name = '{SurfaceTypeV2Marker}'")
+            .AsEnumerable().First() > 0;
+        if (done) return;
+
+        var rows = db.Database
+            .SqlQueryRaw<ProfileJsonRow>("SELECT Id, WaypointsJson FROM InspectionProfiles")
+            .AsEnumerable().ToList();
+        foreach (var row in rows)
+        {
+            var converted = WaypointSurfaceMigration.ConvertLegacyJson(row.WaypointsJson);
+            if (converted != row.WaypointsJson)
+                db.Database.ExecuteSqlRaw(
+                    "UPDATE InspectionProfiles SET WaypointsJson = {0} WHERE Id = {1};", converted, row.Id);
+        }
+
+        db.Database.ExecuteSqlRaw(
+            "INSERT INTO Parameters (Name, Value, Description, UpdatedAt) VALUES ({0}, {1}, {2}, {3});",
+            SurfaceTypeV2Marker, "1",
+            "SurfaceType 9종 번호 체계로 경유점 Surface 변환 완료(구 1=Corner→0, 2=Corrugation→1)",
+            DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss.FFFFFFF"));
+    }
+
+    internal sealed class ProfileJsonRow
+    {
+        public int Id { get; set; }
+        public string WaypointsJson { get; set; } = "[]";
+    }
+}
+
+/// <summary>경유점 JSON 의 Surface 필드를 구 번호 → 신 번호로 변환(<see cref="Communication.Vision.SurfaceTypes.FromLegacy"/>).</summary>
+public static class WaypointSurfaceMigration
+{
+    /// <summary>배열 각 원소의 "Surface" 숫자를 변환. 파싱 불가/비배열은 원문 그대로 반환. 바뀐 게 없으면 원문 그대로.</summary>
+    public static string ConvertLegacyJson(string json)
+    {
+        System.Text.Json.Nodes.JsonNode? root;
+        try { root = System.Text.Json.Nodes.JsonNode.Parse(json); }
+        catch (System.Text.Json.JsonException) { return json; }
+        if (root is not System.Text.Json.Nodes.JsonArray arr) return json;
+
+        var changed = false;
+        foreach (var item in arr)
+        {
+            if (item is not System.Text.Json.Nodes.JsonObject obj) continue;
+            if (obj["Surface"] is not System.Text.Json.Nodes.JsonValue v || !v.TryGetValue<int>(out var legacy)) continue;
+            var next = Communication.Vision.SurfaceTypes.FromLegacy((byte)Math.Clamp(legacy, 0, 255));
+            if (next == legacy) continue;
+            obj["Surface"] = next;
+            changed = true;
+        }
+        return changed ? arr.ToJsonString() : json;
     }
 }

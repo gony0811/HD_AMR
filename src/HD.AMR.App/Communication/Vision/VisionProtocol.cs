@@ -136,11 +136,86 @@ public enum DeviceId : byte
     Vision     = 0x02,
 }
 
+/// <summary>
+/// CAPTURE_REQ [0] Surface Type — 비전 측 사양 표 기준 9종(0~1 자동용접부, 2~ 수동용접부).
+/// 비전 S/W 는 이 값으로 저장 폴더(Metadata1~9)를 고른다. 이름·라벨·폴더는 <see cref="SurfaceTypes"/> 표에서 관리.
+/// ※ 구 번호(0=Flat, 1=Corner, 2=Corrugation)로 저장된 값은 <see cref="SurfaceTypes.FromLegacy"/> 로 변환.
+/// ※ 사양 주석상 4번 이후 순서는 "예시" — 확정 시 번호만 이 enum 과 표에서 갱신.
+/// </summary>
 public enum SurfaceType : byte
 {
-    Flat        = 0x00,
-    Corner      = 0x01,
-    Corrugation = 0x02
+    Flat                         = 0x00, // 자동용접부 Flat
+    Corrugation                  = 0x01, // 자동용접부 Corrugation
+    Manual3Axis                  = 0x02, // 3 axis (수)
+    Manual4Axis                  = 0x03, // 4 axis (수)
+    Manual90Flat                 = 0x04, // 90도 Flat (수)
+    Manual90Corrugation          = 0x05, // 90도 Corrugation (수)
+    Manual135Flat                = 0x06, // 135도 Flat (수)
+    ManualEndMembraneFlat        = 0x07, // End Membrane Flat (수)
+    ManualEndMembraneCorrugation = 0x08, // End Membrane Corrugation (수)
+}
+
+/// <summary>Surface Type 표 행. Label=UI 표시, MetadataDir=비전 측 저장 폴더명, IsManual=수동용접부 여부.</summary>
+public sealed record SurfaceTypeInfo(SurfaceType Type, string Label, string MetadataDir, bool IsManual);
+
+/// <summary>Surface Type 정본 표 — UI 드롭다운·로그·CSV 주석·검증이 모두 이 표를 참조한다.</summary>
+public static class SurfaceTypes
+{
+    public static readonly IReadOnlyList<SurfaceTypeInfo> All =
+    [
+        new(SurfaceType.Flat,                         "자동 Flat",                     "Metadata1", false),
+        new(SurfaceType.Corrugation,                  "자동 Corrugation",              "Metadata2", false),
+        new(SurfaceType.Manual3Axis,                  "수동 3축",                      "Metadata3", true),
+        new(SurfaceType.Manual4Axis,                  "수동 4축",                      "Metadata4", true),
+        new(SurfaceType.Manual90Flat,                 "수동 90° Flat",                 "Metadata5", true),
+        new(SurfaceType.Manual90Corrugation,          "수동 90° Corrugation",          "Metadata6", true),
+        new(SurfaceType.Manual135Flat,                "수동 135° Flat",                "Metadata7", true),
+        new(SurfaceType.ManualEndMembraneFlat,        "수동 End Membrane Flat",        "Metadata8", true),
+        new(SurfaceType.ManualEndMembraneCorrugation, "수동 End Membrane Corrugation", "Metadata9", true),
+    ];
+
+    public const byte MaxValue = (byte)SurfaceType.ManualEndMembraneCorrugation;
+
+    public static SurfaceTypeInfo? Find(byte value) => All.FirstOrDefault(t => (byte)t.Type == value);
+
+    public static bool IsDefined(int value) => value is >= 0 and <= 255 && Find((byte)value) is not null;
+
+    /// <summary>표시 라벨. 미정의 값은 0xNN.</summary>
+    public static string Label(byte value) => Find(value)?.Label ?? $"0x{value:X2}";
+
+    public static string Label(SurfaceType type) => Label((byte)type);
+
+    /// <summary>"N=라벨" 을 구분자로 이어 붙인 범례(CSV 주석·도움말용).</summary>
+    public static string Legend(string separator = ", ") =>
+        string.Join(separator, All.Select(t => $"{(byte)t.Type}={t.Label}"));
+
+    /// <summary>임의 정수를 SurfaceType 으로 — 미정의 값은 Flat.</summary>
+    public static SurfaceType OrFlat(int value) => IsDefined(value) ? (SurfaceType)value : SurfaceType.Flat;
+
+    public static bool IsManual(this SurfaceType type) => Find((byte)type)?.IsManual ?? false;
+
+    /// <summary>경유점 CSV 의 신 번호 체계 표식 주석행. 이 행이 없는 CSV 는 구 번호로 보고 <see cref="FromLegacy"/> 변환.</summary>
+    public const string CsvSchemaMarker = "# surface-type-schema: 2";
+
+    /// <summary>CSV 텍스트가 신 번호 체계(표식 행 포함)인지.</summary>
+    public static bool IsCurrentSchemaCsv(string text) =>
+        text.Contains(CsvSchemaMarker, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>CSV Surface 셀 해석 — 신 체계면 0~8 그대로(미정의는 Flat), 구 체계면 <see cref="FromLegacy"/>.</summary>
+    public static byte ParseCsvCell(string cell, bool currentSchema)
+    {
+        if (!byte.TryParse(cell.Trim(), out var s)) return (byte)SurfaceType.Flat;
+        if (!currentSchema) return FromLegacy(s);
+        return IsDefined(s) ? s : (byte)SurfaceType.Flat;
+    }
+
+    /// <summary>구 번호 체계(0=Flat, 1=Corner, 2=Corrugation) → 신 번호. Corner 는 사양에서 빠져 Flat 으로 흡수.</summary>
+    public static byte FromLegacy(byte legacy) => legacy switch
+    {
+        0x01 => (byte)SurfaceType.Flat,         // 구 Corner
+        0x02 => (byte)SurfaceType.Corrugation,  // 구 Corrugation
+        _    => (byte)SurfaceType.Flat,
+    };
 }
 
 public enum ResultCode : ushort

@@ -255,7 +255,7 @@ public class InspectionRunStep : ISequenceStep
             // surface type 우선순위: 경유점 수동 지정 > |θ| 자동 규칙(구 도면 솎기 프로필).
             // (레시피 SurfaceOverride 는 경유점 단위 지정으로 일원화되며 폐기 — 2026-09-18.)
             var surfaceType = w.SurfaceManual
-                ? (SurfaceType)w.Surface
+                ? SurfaceTypes.OrFlat(w.Surface)
                 : Math.Abs(w.Theta) >= profile.CorrugThresholdDeg
                     ? SurfaceType.Corrugation
                     : SurfaceType.Flat;

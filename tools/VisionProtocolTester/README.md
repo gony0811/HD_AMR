@@ -35,7 +35,7 @@ dotnet run --project tools/VisionProtocolTester
 
 - **프레임**: `STX=0x02`, `ETX=0x03`, `LENGTH == 3 + DATA`, `CHECKSUM == XOR(LENGTH~DATA)`
 - **라우팅**: `FROM=0x01`(자동화) → `TO=0x02`(비전)
-- **CAPTURE_REQ(34B)**: `surfaceType∈{0,1,2}`, `wallId∈1~10`, `u/v/h` Int32 LE,
+- **CAPTURE_REQ(34B)**: `surfaceType∈0~8`(0~1 자동 Flat/Corrugation, 2~8 수동), `wallId∈1~10`, `u/v/h` Int32 LE,
   `taskId` GUID(RFC 4122 빅엔디안) 복원, `attempt≥1`, `captureSeq≥1`
 - **HEARTBEAT(20B)**: 타임스탬프 14자리 ASCII + 예약 6B
 - **재동기화**: 깨진 프레임 후 STX 재탐색 복구
