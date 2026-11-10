@@ -107,7 +107,7 @@ STX(1) │ LENGTH(2, LE) │ SEQ(1) │ COMMAND(1) │ FROM(1) │ TO(1) │ DAT
 
 ## 4. Surface Type
 
-비전 측 사양 표 기준 9종. 비전 S/W 는 이 값으로 저장 폴더(Metadata1~9)를 고른다.
+비전 측 사양 표 기준 10종(135도 Corrugation 추가). 비전 S/W 는 이 값으로 저장 폴더(Metadata1~10)를 고른다.
 코드 정본: `SurfaceType` enum + `SurfaceTypes` 표(`Communication/Vision/VisionProtocol.cs`).
 
 | 값 | 사양 Type | enum | 저장 폴더 |
@@ -119,8 +119,9 @@ STX(1) │ LENGTH(2, LE) │ SEQ(1) │ COMMAND(1) │ FROM(1) │ TO(1) │ DAT
 | `0x04` | 90도 Flat (수) | `Manual90Flat` | Metadata5 |
 | `0x05` | 90도 Corrugation (수) | `Manual90Corrugation` | Metadata6 |
 | `0x06` | 135도 Flat (수) | `Manual135Flat` | Metadata7 |
-| `0x07` | End Membrane Flat (수) | `ManualEndMembraneFlat` | Metadata8 |
-| `0x08` | End Membrane Corrugation (수) | `ManualEndMembraneCorrugation` | Metadata9 |
+| `0x07` | 135도 Corrugation (수) | `Manual135Corrugation` | Metadata8 |
+| `0x08` | End Membrane Flat (수) | `ManualEndMembraneFlat` | Metadata9 |
+| `0x09` | End Membrane Corrugation (수) | `ManualEndMembraneCorrugation` | Metadata10 |
 
 - (수) = 수동용접. 사양 주석상 `0x04` 이후 순서는 예시 — 확정 시 enum·표만 갱신.
 - **번호 체계 변경**: 구 `0x01=Corner`, `0x02=Corrugation` 은 폐지. 기존 저장값은 `Corner→Flat(0x00)`, `Corrugation→0x01` 로

@@ -16,8 +16,9 @@ public class SurfaceTypeCatalogTests
     [InlineData(SurfaceType.Manual90Flat,                 4, "Metadata5", true)]
     [InlineData(SurfaceType.Manual90Corrugation,          5, "Metadata6", true)]
     [InlineData(SurfaceType.Manual135Flat,                6, "Metadata7", true)]
-    [InlineData(SurfaceType.ManualEndMembraneFlat,        7, "Metadata8", true)]
-    [InlineData(SurfaceType.ManualEndMembraneCorrugation, 8, "Metadata9", true)]
+    [InlineData(SurfaceType.Manual135Corrugation,         7, "Metadata8", true)]
+    [InlineData(SurfaceType.ManualEndMembraneFlat,        8, "Metadata9", true)]
+    [InlineData(SurfaceType.ManualEndMembraneCorrugation, 9, "Metadata10", true)]
     public void 사양표_번호_폴더_수동여부(SurfaceType type, byte value, string dir, bool manual)
     {
         Assert.Equal(value, (byte)type);
@@ -37,7 +38,7 @@ public class SurfaceTypeCatalogTests
     }
 
     [Theory]
-    [InlineData(9)]
+    [InlineData(10)]
     [InlineData(255)]
     [InlineData(-1)]
     public void 미정의_값은_Flat(int value)
@@ -83,8 +84,8 @@ public class SurfaceTypeCatalogTests
         Assert.Equal(1, SurfaceTypes.ParseCsvCell("2", currentSchema: false));   // 구 Corrugation
         Assert.Equal(0, SurfaceTypes.ParseCsvCell("1", currentSchema: false));   // 구 Corner
         Assert.Equal(2, SurfaceTypes.ParseCsvCell("2", currentSchema: true));    // 신 Manual3Axis
-        Assert.Equal(8, SurfaceTypes.ParseCsvCell(" 8 ", currentSchema: true));
-        Assert.Equal(0, SurfaceTypes.ParseCsvCell("9", currentSchema: true));    // 미정의 → Flat
+        Assert.Equal(9, SurfaceTypes.ParseCsvCell(" 9 ", currentSchema: true));
+        Assert.Equal(0, SurfaceTypes.ParseCsvCell("10", currentSchema: true));   // 미정의 → Flat
         Assert.True(SurfaceTypes.IsCurrentSchemaCsv($"# a\r\n{SurfaceTypes.CsvSchemaMarker}\r\n1,2,3"));
         Assert.False(SurfaceTypes.IsCurrentSchemaCsv("# Surface: 0=Flat, 1=Corner\r\n1,2,3"));
     }

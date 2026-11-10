@@ -49,7 +49,7 @@ public class InspectionProfile
 /// <summary>
 /// 저장용 경유점 한 점. X=로봇 x, Z=로봇 z(=DXF Y), Theta=적용 θ(도),
 /// ThetaManual=θ가 자동 계산값이 아니라 수동 입력값인지 여부.
-/// Surface=적용 표면 타입(SurfaceType 기저값 0~8 — 정본 표 SurfaceTypes. 구 번호 1=Corner/2=Corrugation 저장분은
+/// Surface=적용 표면 타입(SurfaceType 기저값 0~9 — 정본 표 SurfaceTypes. 구 번호 1=Corner/2=Corrugation 저장분은
 /// SqliteCompatMigrations 가 1회 변환),
 /// SurfaceManual=자동 규칙이 아니라 수동 선택값인지 여부.
 /// Y=로봇 y(mm). RzDeg=툴 RZ 추가 회전(도, 프레임 유지값 rz0 에 가산 — CROSS4 교차 arm 이 −90 사용).

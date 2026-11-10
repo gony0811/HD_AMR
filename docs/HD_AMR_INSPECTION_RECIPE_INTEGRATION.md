@@ -93,7 +93,7 @@ HD_AMR의 `startWeldInspection`은 현재 **스텁**이다.
 | 용도 | 어떤 **레시피를 로딩**할지 | 경유점별 **촬영/조명** 선택 |
 | 전송 | VDA `params.seamType` | **전송 안 함**(AMR 내부값) |
 
-**2단계로 동작한다:** `seamType`(라인) → **레시피 로딩** / 각 경유점의 `Surface` → **촬영/조명 선택**. `Surface` 유도 규칙(현행 온보드 구현)은 사양서 **부록 D.3**: 경유점 툴 각 `|θ| ≥ CorrugThresholdDeg` → `Corrugation`, 아니면 `Flat`, 수동용접 7종(0x02~0x08)은 수동 오버라이드. ACS는 `Surface`를 알 필요도 보낼 필요도 없다.
+**2단계로 동작한다:** `seamType`(라인) → **레시피 로딩** / 각 경유점의 `Surface` → **촬영/조명 선택**. `Surface` 유도 규칙(현행 온보드 구현)은 사양서 **부록 D.3**: 경유점 툴 각 `|θ| ≥ CorrugThresholdDeg` → `Corrugation`, 아니면 `Flat`, 수동용접 8종(0x02~0x09)은 수동 오버라이드. ACS는 `Surface`를 알 필요도 보낼 필요도 없다.
 
 ## 6. HD_AMR 코드 접점 (구현 관찰, 2026-09-14)
 

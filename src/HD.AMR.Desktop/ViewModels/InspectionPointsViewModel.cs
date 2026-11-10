@@ -379,7 +379,7 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
 
     // ── CSV (코드비하인드가 파일 I/O 담당) ──
     private static readonly string[] CsvHeaderCols =
-        { "X_mm", "Y_mm", "Z_mm(WD)", "Rx_deg", "Ry_deg", "Rz_deg", "Surface(SurfaceType 0~8)" };
+        { "X_mm", "Y_mm", "Z_mm(WD)", "Rx_deg", "Ry_deg", "Rz_deg", "Surface(SurfaceType 0~9)" };
 
     public string BuildCsv(bool includeRows)
     {

@@ -137,8 +137,8 @@ public enum DeviceId : byte
 }
 
 /// <summary>
-/// CAPTURE_REQ [0] Surface Type — 비전 측 사양 표 기준 9종(0~1 자동용접부, 2~ 수동용접부).
-/// 비전 S/W 는 이 값으로 저장 폴더(Metadata1~9)를 고른다. 이름·라벨·폴더는 <see cref="SurfaceTypes"/> 표에서 관리.
+/// CAPTURE_REQ [0] Surface Type — 비전 측 사양 표 기준 10종(0~1 자동용접부, 2~ 수동용접부).
+/// 비전 S/W 는 이 값으로 저장 폴더(Metadata1~10)를 고른다. 이름·라벨·폴더는 <see cref="SurfaceTypes"/> 표에서 관리.
 /// ※ 구 번호(0=Flat, 1=Corner, 2=Corrugation)로 저장된 값은 <see cref="SurfaceTypes.FromLegacy"/> 로 변환.
 /// ※ 사양 주석상 4번 이후 순서는 "예시" — 확정 시 번호만 이 enum 과 표에서 갱신.
 /// </summary>
@@ -151,8 +151,9 @@ public enum SurfaceType : byte
     Manual90Flat                 = 0x04, // 90도 Flat (수)
     Manual90Corrugation          = 0x05, // 90도 Corrugation (수)
     Manual135Flat                = 0x06, // 135도 Flat (수)
-    ManualEndMembraneFlat        = 0x07, // End Membrane Flat (수)
-    ManualEndMembraneCorrugation = 0x08, // End Membrane Corrugation (수)
+    Manual135Corrugation         = 0x07, // 135도 Corrugation (수)
+    ManualEndMembraneFlat        = 0x08, // End Membrane Flat (수)
+    ManualEndMembraneCorrugation = 0x09, // End Membrane Corrugation (수)
 }
 
 /// <summary>Surface Type 표 행. Label=UI 표시, MetadataDir=비전 측 저장 폴더명, IsManual=수동용접부 여부.</summary>
@@ -170,8 +171,9 @@ public static class SurfaceTypes
         new(SurfaceType.Manual90Flat,                 "수동 90° Flat",                 "Metadata5", true),
         new(SurfaceType.Manual90Corrugation,          "수동 90° Corrugation",          "Metadata6", true),
         new(SurfaceType.Manual135Flat,                "수동 135° Flat",                "Metadata7", true),
-        new(SurfaceType.ManualEndMembraneFlat,        "수동 End Membrane Flat",        "Metadata8", true),
-        new(SurfaceType.ManualEndMembraneCorrugation, "수동 End Membrane Corrugation", "Metadata9", true),
+        new(SurfaceType.Manual135Corrugation,         "수동 135° Corrugation",         "Metadata8", true),
+        new(SurfaceType.ManualEndMembraneFlat,        "수동 End Membrane Flat",        "Metadata9", true),
+        new(SurfaceType.ManualEndMembraneCorrugation, "수동 End Membrane Corrugation", "Metadata10", true),
     ];
 
     public const byte MaxValue = (byte)SurfaceType.ManualEndMembraneCorrugation;
@@ -201,7 +203,7 @@ public static class SurfaceTypes
     public static bool IsCurrentSchemaCsv(string text) =>
         text.Contains(CsvSchemaMarker, StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>CSV Surface 셀 해석 — 신 체계면 0~8 그대로(미정의는 Flat), 구 체계면 <see cref="FromLegacy"/>.</summary>
+    /// <summary>CSV Surface 셀 해석 — 신 체계면 0~9 그대로(미정의는 Flat), 구 체계면 <see cref="FromLegacy"/>.</summary>
     public static byte ParseCsvCell(string cell, bool currentSchema)
     {
         if (!byte.TryParse(cell.Trim(), out var s)) return (byte)SurfaceType.Flat;
