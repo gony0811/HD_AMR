@@ -175,6 +175,11 @@ public class SequenceContext
     /// <summary>CORNER3 좌/우 거울 side ("L"/"R") — 코너 스텝의 티칭 슬롯 키 접두사 선택
     /// (corner3.L.* / corner3.R.*). CORNER 외 경로에서는 null.</summary>
     public string? CornerSide { get; set; }
+
+    /// <summary>용접선 시작점의 면-로컬 좌표와 면 위 용접선 방향 — 있으면 ⑱ CAPTURE_REQ 의 (u,v) 를 면 좌표로 계산한다
+    /// (<see cref="Communication.Vision.FaceLocalMapper"/>). null 이면 기존처럼 작업물 좌표(용접선 시작점 기준)를 그대로 보낸다.
+    /// 현재는 수동 실행 입력만 채운다 — ACS 경로(drawingPos.u/v)는 면 위 방향 판정 규칙 확정 후 연결.</summary>
+    public Communication.Vision.FaceSeamPlacement? FacePlacement { get; set; }
 }
 
 /// <summary>시퀀스 전체 실행 상태.</summary>

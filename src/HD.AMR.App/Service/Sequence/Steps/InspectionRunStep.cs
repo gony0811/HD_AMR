@@ -261,7 +261,7 @@ public class InspectionRunStep : ISequenceStep
                     : SurfaceType.Flat;
             // v3.2: 코봇 wobj pose → 면-로컬 (u,v,h). 축·부호는 wobj 티칭 규약(§5)에 흡수(FaceLocalMapper).
             var wallId = (ushort)context.InspectionSurfaceId;
-            var (u, v, h) = FaceLocalMapper.ToFaceLocal(wallId, w.X, w.Y, w.Z);
+            var (u, v, h) = FaceLocalMapper.ToFaceLocal(wallId, w.X, w.Y, w.Z, context.FacePlacement);
             captureSeq++;
             var data = CaptureReqPayload.Build(surfaceType, wallId, u, v, h, taskId, attempt, captureSeq);
             var outcome = await _vision.Client.RequestCaptureAsync(data, visionTimeout, ct);

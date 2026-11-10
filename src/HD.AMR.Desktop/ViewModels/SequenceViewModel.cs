@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using HD.AMR.App.Communication.Vision;
 using HD.AMR.App.Data.Entities;
 using HD.AMR.App.Models;
 using HD.AMR.App.Service;
@@ -58,6 +59,10 @@ public sealed partial class SequenceViewModel : ViewModelBase
     private const string SeamEndXKey = "Sequence.Test.SeamEndW.X";
     private const string SeamEndYKey = "Sequence.Test.SeamEndW.Y";
     private const string SeamEndZKey = "Sequence.Test.SeamEndW.Z";
+    private const string FaceUvEnabledKey = "Sequence.Test.FaceUv.Enabled";
+    private const string FaceOriginUKey = "Sequence.Test.FaceUv.OriginU";
+    private const string FaceOriginVKey = "Sequence.Test.FaceUv.OriginV";
+    private const string FaceSeamDirKey = "Sequence.Test.FaceUv.SeamDir";
 
     /// <summary>방향 콤보 "자동(용접선)" 인덱스 — ACS 처럼 seam 벡터·벽 정면 theta 로 유도.</summary>
     private const int DirectionAutoIndex = 2;
@@ -107,6 +112,12 @@ public sealed partial class SequenceViewModel : ViewModelBase
     [ObservableProperty] private double _seamEndX;
     [ObservableProperty] private double _seamEndY;
     [ObservableProperty] private double _seamEndZ;
+
+    // 비전 CAPTURE_REQ (u,v) 면 좌표 계산 — 용접선 시작점의 면-로컬 좌표 [m](ACS drawingPos.u/v 와 같은 단위)와 면 위 용접선 방향
+    [ObservableProperty] private bool _faceUvEnabled;
+    [ObservableProperty] private double _faceOriginU;
+    [ObservableProperty] private double _faceOriginV;
+    [ObservableProperty] private int _faceSeamDirIndex;      // FaceSeamDirection: 0 +U, 1 −U, 2 +V, 3 −V
 
     public SequenceViewModel(IServiceScopeFactory scopeFactory, CobotService cobot, AMRService amr)
     {
@@ -186,6 +197,10 @@ public sealed partial class SequenceViewModel : ViewModelBase
             SeamEndX = await _param.GetDoubleAsync(SeamEndXKey) ?? 0;
             SeamEndY = await _param.GetDoubleAsync(SeamEndYKey) ?? 0;
             SeamEndZ = await _param.GetDoubleAsync(SeamEndZKey) ?? 0;
+            FaceUvEnabled = (await _param.GetDoubleAsync(FaceUvEnabledKey) ?? 0) != 0;
+            FaceOriginU = await _param.GetDoubleAsync(FaceOriginUKey) ?? 0;
+            FaceOriginV = await _param.GetDoubleAsync(FaceOriginVKey) ?? 0;
+            FaceSeamDirIndex = Math.Clamp((int)(await _param.GetDoubleAsync(FaceSeamDirKey) ?? 0), 0, 3);
 
             RebuildSurfaceOptions();
             await LoadProfilesAsync();
@@ -243,6 +258,10 @@ public sealed partial class SequenceViewModel : ViewModelBase
         // 벽 정면 = ACS 정차 노드 theta. ①을 쓰면 그 목표 theta, 아니면 null(SeamBaseTransform 이 AMR yaw 사용).
         _context.WallFacingThetaRad = _context.AmrTargetThetaRad;
         _context.ZDatumOffsetMm = ZDatumOffsetMm;
+        // 비전 (u,v) 면 좌표 — 꺼져 있으면 null(작업물 좌표 = 용접선 시작점 기준 그대로 전송).
+        _context.FacePlacement = FaceUvEnabled
+            ? new FaceSeamPlacement(FaceOriginU * 1000.0, FaceOriginV * 1000.0, (FaceSeamDirection)Math.Clamp(FaceSeamDirIndex, 0, 3))
+            : null;
 
         if (DirectionIndex == DirectionAutoIndex)
         {
@@ -293,6 +312,10 @@ public sealed partial class SequenceViewModel : ViewModelBase
     partial void OnSeamEndXChanged(double value) => SaveAcsTest();
     partial void OnSeamEndYChanged(double value) => SaveAcsTest();
     partial void OnSeamEndZChanged(double value) => SaveAcsTest();
+    partial void OnFaceUvEnabledChanged(bool value) => SaveAcsTest();
+    partial void OnFaceOriginUChanged(double value) => SaveAcsTest();
+    partial void OnFaceOriginVChanged(double value) => SaveAcsTest();
+    partial void OnFaceSeamDirIndexChanged(int value) => SaveAcsTest();
 
     private async void SaveOffsets()
     {
@@ -338,6 +361,10 @@ public sealed partial class SequenceViewModel : ViewModelBase
         await _param.SetDoubleAsync(SeamEndXKey, SeamEndX);
         await _param.SetDoubleAsync(SeamEndYKey, SeamEndY);
         await _param.SetDoubleAsync(SeamEndZKey, SeamEndZ);
+        await _param.SetDoubleAsync(FaceUvEnabledKey, FaceUvEnabled ? 1 : 0);
+        await _param.SetDoubleAsync(FaceOriginUKey, FaceOriginU);
+        await _param.SetDoubleAsync(FaceOriginVKey, FaceOriginV);
+        await _param.SetDoubleAsync(FaceSeamDirKey, FaceSeamDirIndex);
     }
 
     /// <summary>① 목표에 현재 AMR 위치를 채운다 — 지금 자리를 정차점으로 저장해 두고 반복 테스트용.</summary>

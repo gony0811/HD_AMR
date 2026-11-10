@@ -245,6 +245,27 @@
                                         0x@(_context.InspectionSurfaceId.ToString("X2"))@(InspectionSurfaceName() is { } sn ? $" {sn}" : "") (②에서 설정)
                                     </span>
                                 </label>
+                                <label title="끄면 CAPTURE_REQ (u,v) 에 작업물 좌표(용접선 시작점 기준 X,Y)를 그대로 보냅니다. 켜면 시작점 면 좌표와 면 위 용접선 방향으로 면-로컬 좌표를 계산합니다 (수동 실행 전용).">
+                                    <input type="checkbox" class="form-check-input" @bind="_faceUvEnabled" @bind:after="SaveFaceUvAsync"
+                                           disabled="@Seq.IsBusy" /> 비전 (u,v) 면 좌표
+                                </label>
+                                <label title="용접선 시작점의 면-로컬 u — ACS drawingPos.u 와 같은 값(m)">시작점 u (m)
+                                    <input type="number" step="0.001" class="form-control form-control-sm"
+                                           @bind="_faceOriginU" @bind:after="SaveFaceUvAsync" disabled="@(Seq.IsBusy || !_faceUvEnabled)" />
+                                </label>
+                                <label title="용접선 시작점의 면-로컬 v — ACS drawingPos.v 와 같은 값(m)">시작점 v (m)
+                                    <input type="number" step="0.001" class="form-control form-control-sm"
+                                           @bind="_faceOriginV" @bind:after="SaveFaceUvAsync" disabled="@(Seq.IsBusy || !_faceUvEnabled)" />
+                                </label>
+                                <label title="면 위에서 본 용접선 방향(시작점→끝점, 작업물 X+). 면별 U/V 축은 비전 사양 §5">용접선 방향(면)
+                                    <select class="form-select form-select-sm" @bind="_faceSeamDir" @bind:after="SaveFaceUvAsync"
+                                            disabled="@(Seq.IsBusy || !_faceUvEnabled)">
+                                        <option value="@FaceSeamDirection.PlusU">+U</option>
+                                        <option value="@FaceSeamDirection.MinusU">−U</option>
+                                        <option value="@FaceSeamDirection.PlusV">+V</option>
+                                        <option value="@FaceSeamDirection.MinusV">−V</option>
+                                    </select>
+                                </label>
                             </div>
                         }
                     </td>
@@ -306,6 +327,15 @@
     private const string InspectionProfileKey = "Sequence.Inspection.ProfileId";
     private const string InspectionSurfaceKey = "Sequence.Inspection.SurfaceId";
 
+    // ⑱ 비전 CAPTURE_REQ (u,v) 면 좌표 계산(수동 실행 전용) — Desktop 시퀀스 화면과 같은 키.
+    private const string FaceUvEnabledKey = "Sequence.Test.FaceUv.Enabled";
+    private const string FaceOriginUKey = "Sequence.Test.FaceUv.OriginU";
+    private const string FaceOriginVKey = "Sequence.Test.FaceUv.OriginV";
+    private const string FaceSeamDirKey = "Sequence.Test.FaceUv.SeamDir";
+    private bool _faceUvEnabled;
+    private double _faceOriginU, _faceOriginV;   // m (ACS drawingPos.u/v 단위)
+    private FaceSeamDirection _faceSeamDir = FaceSeamDirection.PlusU;
+
     // ⑤~⑫ Peak/Bead 파라미터 — 스텝(WeldSequenceSupport)이 실행 시 같은 키를 DB에서 읽는다.
     private const string XSignKey = "Camera.Axis.XSign";
     private const string PitchMmKey = "Weld.Peak.PitchMm";
@@ -349,6 +379,11 @@
         _context.InspectionProfileId = (int)(await Param.GetDoubleAsync(InspectionProfileKey) ?? 0);
         _context.InspectionSurfaceId = (int)(await Param.GetDoubleAsync(InspectionSurfaceKey) ?? 0x01);
         await LoadInspectionProfilesAsync();
+        _faceUvEnabled = (await Param.GetDoubleAsync(FaceUvEnabledKey) ?? 0) != 0;
+        _faceOriginU = await Param.GetDoubleAsync(FaceOriginUKey) ?? 0;
+        _faceOriginV = await Param.GetDoubleAsync(FaceOriginVKey) ?? 0;
+        _faceSeamDir = (FaceSeamDirection)Math.Clamp((int)(await Param.GetDoubleAsync(FaceSeamDirKey) ?? 0), 0, 3);
+        ApplyFacePlacement();
 
         _ = RefreshLoopAsync();
     }
@@ -369,6 +404,21 @@
     {
         await LoadInspectionProfilesAsync();
         await SaveInspectionAsync();
+    }
+
+    /// <summary>비전 (u,v) 면 좌표 설정을 context 에 반영 — 꺼져 있으면 null(작업물 좌표 그대로 전송).</summary>
+    private void ApplyFacePlacement() =>
+        _context.FacePlacement = _faceUvEnabled
+            ? new FaceSeamPlacement(_faceOriginU * 1000.0, _faceOriginV * 1000.0, _faceSeamDir)
+            : null;
+
+    private async Task SaveFaceUvAsync()
+    {
+        ApplyFacePlacement();
+        await Param.SetDoubleAsync(FaceUvEnabledKey, _faceUvEnabled ? 1 : 0, "⑱ 검사 수행: 비전 (u,v) 면 좌표 계산 사용");
+        await Param.SetDoubleAsync(FaceOriginUKey, _faceOriginU, "⑱ 검사 수행: 용접선 시작점 면-로컬 u (m)");
+        await Param.SetDoubleAsync(FaceOriginVKey, _faceOriginV, "⑱ 검사 수행: 용접선 시작점 면-로컬 v (m)");
+        await Param.SetDoubleAsync(FaceSeamDirKey, (int)_faceSeamDir, "⑱ 검사 수행: 면 위 용접선 방향 (0 +U, 1 −U, 2 +V, 3 −V)");
     }
 
     private async Task SaveInspectionAsync()
