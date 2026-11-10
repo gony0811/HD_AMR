@@ -4,6 +4,7 @@
 @using System.Text
 @using Microsoft.AspNetCore.Components.Forms
 @using HD.AMR.App.Data.Entities
+@using HD.AMR.App.Models
 @using HD.AMR.App.Service
 @using HD.AMR.App.Service.Inspection
 @using HD.AMR.App.Communication.Vision
@@ -190,8 +191,17 @@
             <input class="form-control form-control-sm" type="number" step="0.1" min="0" style="width:110px" @bind="_settleSec" /></div>
         <div class="col-auto"><label class="form-label mb-0" title="ACS 검사 실행 시 비전 촬영 요청(CAPTURE_REQ) 후 응답을 기다리는 최대 시간. 초과하면 그 점은 비전 실패로 집계. 드라이런에는 쓰이지 않음">비전 응답 대기(초)</label>
             <input class="form-control form-control-sm" type="number" step="0.5" min="0.5" style="width:120px" @bind="_visionTimeoutSec" /></div>
-        <div class="col-auto"><label class="form-label mb-0" title="CAPTURE_REQ Wall ID (1~10)">Wall ID</label>
-            <input class="form-control form-control-sm" type="number" min="1" max="10" style="width:80px" @bind="_wallId" /></div>
+        <div class="col-auto"><label class="form-label mb-0" title="CAPTURE_REQ Wall ID — Wall Code 정본 10면 중 선택">Wall ID</label>
+            <select class="form-select form-select-sm" style="width:190px" @bind="_wallId">
+                @if (WallCodes.FindBySurfaceId(_wallId) is null)
+                {
+                    <option value="@_wallId">@TeachingService.SurfaceLabel(_wallId) (정본 표에 없음)</option>
+                }
+                @foreach (var w in WallCodes.All)
+                {
+                    <option value="@w.SurfaceId">@TeachingService.SurfaceLabel(w.SurfaceId)</option>
+                }
+            </select></div>
         <div class="col-auto">
             <button class="btn btn-success" @onclick="RunPoints" disabled="@(_isRunning || _points.Count < 1 || !Cobot.IsConnected)">
                 @(_isRunning ? "실행 중..." : "실행")

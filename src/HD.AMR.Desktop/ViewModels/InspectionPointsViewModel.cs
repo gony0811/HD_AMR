@@ -5,6 +5,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HD.AMR.App.Communication.Vision;
 using HD.AMR.App.Data.Entities;
+using HD.AMR.App.Models;
 using HD.AMR.App.Service;
 using HD.AMR.App.Service.Inspection;
 using Microsoft.Extensions.DependencyInjection;
@@ -40,7 +41,25 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
     [ObservableProperty] private double _settleSec = 0.5;
     /// <summary>ACS 검사 시 비전 CAPTURE_REQ 응답 대기(초) — 프로필 DelaySec. 드라이런에는 쓰이지 않음.</summary>
     [ObservableProperty] private double _visionTimeoutSec = HD.AMR.App.Service.Sequence.Steps.InspectionRunStep.DefaultVisionTimeoutSec;
+    /// <summary>CAPTURE_REQ Wall ID(Surface ID). 선택 목록은 Wall Code 정본 표(<see cref="WallCodes"/>)에서 만든다.</summary>
     [ObservableProperty] private int _wallId = 1;
+
+    /// <summary>Wall ID 선택 목록 — "0x01 · B 바닥" 형태. 현재 값이 정본 표에 없으면 맨 앞에 그대로 표시한다.</summary>
+    public ObservableCollection<SurfaceOption> WallOptions { get; } = new();
+
+    partial void OnWallIdChanged(int value) => RebuildWallOptions();
+
+    private void RebuildWallOptions()
+    {
+        var wanted = WallCodes.All.Select(w => w.SurfaceId).ToList();
+        if (WallCodes.FindBySurfaceId(WallId) is null) wanted.Insert(0, WallId);
+        if (WallOptions.Select(o => o.SurfaceId).SequenceEqual(wanted)) return;
+        WallOptions.Clear();
+        foreach (var id in wanted)
+            WallOptions.Add(new SurfaceOption(id, WallCodes.FindBySurfaceId(id) is null
+                ? $"{TeachingService.SurfaceLabel(id)} (정본 표에 없음)"
+                : TeachingService.SurfaceLabel(id)));
+    }
     [ObservableProperty] private bool _isRunning;
     [ObservableProperty] private string? _runMsg;
     [ObservableProperty] private bool _runErr;
@@ -72,6 +91,7 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
         _scopeFactory = scopeFactory;
         _cobot = cobot;
         _vision = vision;
+        RebuildWallOptions();
     }
 
     public override async void OnActivated()
