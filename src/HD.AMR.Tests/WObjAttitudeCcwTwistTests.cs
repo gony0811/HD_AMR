@@ -4,7 +4,7 @@ using HD.AMR.App.Service.Sequence.Steps;
 namespace HD.AMR.Tests;
 
 /// <summary>
-/// 검사 수행 첫 경유점의 비틀림(0/180°) 선택 — J6 는 안전 범위(실제값 −300°~−160°, 2026-10-16 실측 −330° 를
+/// 검사 수행 첫 경유점의 비틀림(0/180°) 선택 — J6 는 안전 범위(실제값 −310°~−160°, 2026-10-16 실측 −330° 를
 /// 2026-11-05 운영 결정으로 좁힘)를 벗어나면 안 된다.
 /// 실기 2026-10-13 16:12: 수평 비드, 현재 J6 −179.6°, cos(rz0=−94.2°) 부호로 180° 를 골라 J6 −92.2° 로
 /// 시계 회전 → EMO. 반시계 후보(0°)는 약 −274°(물리 +90° = 수평 검사 자세).
@@ -51,7 +51,7 @@ public class WObjAttitudeCcwTwistTests
     public void 바닥_B_실기값_시계_134도는_좁힌_범위_밖이라_거부()
     {
         // 실기 2026-10-16 B-A0001 #2: 현재 −180°, 0°→−132.8°(범위 밖), 180°→−313.9°(Δ−134°).
-        // −330° 실측 범위에선 허용했지만, 2026-11-05 범위를 −300° 로 좁혀 이 배치는 움직이지 않고 실패한다.
+        // −330° 실측 범위에선 허용했지만, 2026-11-05 범위를 좁혀(현재 −310°) 이 배치는 움직이지 않고 실패한다.
         var pick = WObjAttitude.SelectSafeTwist(-180.0, new (double, double?, double?)[]
         {
             (0.0, -132.8, 101.0),
@@ -76,7 +76,7 @@ public class WObjAttitudeCcwTwistTests
     {
         var pick = WObjAttitude.SelectSafeTwist(-270.0, new (double, double?)[]
         {
-            (0.0, -305.0),     // −300° 밖
+            (0.0, -315.0),     // −310° 밖
             (180.0, -155.0),   // 실측 −160° 밖
         });
         Assert.Null(pick);
@@ -120,8 +120,10 @@ public class WObjAttitudeCcwTwistTests
     [InlineData(-270.0, true)]
     [InlineData(-179.6, true)]
     [InlineData(-300.0, true)]
+    [InlineData(-310.0, true)]
+    [InlineData(-305.3, true)]    // 실기 2026-11-10 PU 용접선 가로 정렬 후보
     [InlineData(-160.0, true)]
-    [InlineData(-300.5, false)]
+    [InlineData(-310.5, false)]
     [InlineData(-313.9, false)]   // 옛 실측 범위(−330°) 안이던 바닥 B 값
     [InlineData(-155.0, false)]
     [InlineData(96.3, false)]     // 물리각은 범위 안이지만 와인딩이 달라 실측 밖
@@ -190,13 +192,13 @@ public class WObjAttitudeCcwTwistTests
     }
 
     [Theory]
-    [InlineData(-180.0, -300.0, true)]
+    [InlineData(-180.0, -310.0, true)]
     [InlineData(-180.0, -160.0, true)]
     [InlineData(-180.0, -125.6, false)]   // 실기 2026-11-05 천장 T 진입점 해(+54°)
-    [InlineData(-180.0, -300.5, false)]
-    [InlineData(180.4, 60.0, true)]       // +180° 감김 보고값 — 같은 물리 범위 +60°~+200°
+    [InlineData(-180.0, -310.5, false)]
+    [InlineData(180.4, 50.0, true)]       // +180° 감김 보고값 — 같은 물리 범위 +50°~+200°
     [InlineData(180.4, 200.0, true)]
-    [InlineData(180.4, 55.0, false)]
+    [InlineData(180.4, 45.0, false)]
     [InlineData(180.4, 205.0, false)]
     public void 현재_감김_기준_J6_범위_판정(double current, double target, bool ok)
         => Assert.Equal(ok, WObjAttitude.J6RangeBlocker(current, target) is null);
