@@ -113,6 +113,10 @@ public class ParameterService
                 Sequence.Steps.CobotInspectionMoveStep.DefaultChainStandoffMm.ToString(CultureInfo.InvariantCulture),
                 "같은 anchor 그룹 연속 LINE — 직전 검사 종료 자세에서 다음 시작점으로 옮길 때 면에서 TCP 를 띄우는 거리(mm). " +
                 "첫 진입 이격(inspection.approachStandoffMm)까지 빠지지 않는다. 30~첫 진입 이격 밖이거나 비면 100."),
+            (Sequence.Steps.CobotInspectionMoveStep.ChainContinueTolKey,
+                Sequence.Steps.CobotInspectionMoveStep.DefaultChainContinueTolMm.ToString(CultureInfo.InvariantCulture),
+                "이어지는 용접선 판정 거리(mm) — 직전 검사 종료 위치와 다음 시작점이 면을 따라 이 거리 안이면 면에서 띄우지 않고 " +
+                "그 높이에서 바로 이어 간다. 0 = 끔(항상 inspection.chainStandoffMm 까지 띄움). 0~100 밖이면 50."),
             (SeamStartTagSettings.DictionaryKey, "DictAprilTag_36h11",
                 "moveToSeamStart 도달 후 중심 편차 측정 태그 사전(DictAprilTag_36h11 등). ArUco 장착 보정 설정과 별개."),
             (SeamStartTagSettings.MarkerIdKey, "",

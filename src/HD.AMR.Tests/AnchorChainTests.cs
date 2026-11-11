@@ -122,6 +122,42 @@ public class AnchorChainTests
         Assert.Equal(409.0, CobotInspectionMoveStep.PlanChainLift(cur, approach, outN)![0], 9);
     }
 
+    // 실기 2026-11-12 L4-R09C09(천장): 한 줄로 이어진 V01→V04 — 앞 끝이 곧 다음 시작인데 사이마다 75~83mm 띄웠다.
+    [Fact]
+    public void 이어지는_용접선은_띄우지_않고_지금_높이에서_시작점_정면으로만_간다()
+    {
+        var outN = new[] { 0.0, 0.0, -1.0 };                      // 천장 — 면에서 멀어지는 방향 = 아래
+        var chain = new[] { 500.0, 300.0, 1100.0 };               // 다음 시작점 정면, 면 이격 100mm (면 z = 1200)
+        var cur = new[] { 503.0, 296.0, 1176.0, 180.0, 45.0, 90.0 };   // 직전 종료 — 면 이격 24mm, 옆으로 5mm
+
+        var t = CobotInspectionMoveStep.ContinuingSeamTargetBase(cur, chain, outN, 100.0, 50.0);
+        Assert.NotNull(t);
+        Assert.Equal(new[] { 500.0, 300.0, 1176.0 }, t);          // 옆 위치 = 시작점, 높이 = 지금 그대로
+        Assert.Null(CobotInspectionMoveStep.PlanChainLift(cur, t!, outN));   // 들어 올림 없음
+    }
+
+    [Theory]
+    [InlineData(560.0, 1176.0, 50.0)]     // 옆으로 60mm — 이어지지 않는 용접선
+    [InlineData(503.0, 1176.0, 0.0)]      // 기능 끔
+    [InlineData(503.0, 1195.0, 50.0)]     // 면 이격 5mm — 너무 붙음
+    [InlineData(503.0, 1090.0, 50.0)]     // 이미 연속 이동 평면보다 바깥
+    public void 이어지지_않거나_위험하면_종전대로_띄운다(double curX, double curZ, double tol)
+    {
+        var outN = new[] { 0.0, 0.0, -1.0 };
+        var chain = new[] { 500.0, 300.0, 1100.0 };
+        Assert.Null(CobotInspectionMoveStep.ContinuingSeamTargetBase(
+            new[] { curX, 300.0, curZ, 0, 0, 0 }, chain, outN, 100.0, tol));
+    }
+
+    [Theory]
+    [InlineData(null, 50.0, true)]
+    [InlineData(0.0, 0.0, true)]
+    [InlineData(80.0, 80.0, true)]
+    [InlineData(150.0, 50.0, false)]
+    [InlineData(-1.0, 50.0, false)]
+    public void 이어지는_용접선_판정_거리_파라미터_해석(double? raw, double expected, bool ok)
+        => Assert.Equal((expected, ok), CobotInspectionMoveStep.ResolveChainContinueTolMm(raw));
+
     [Fact]
     public void 연속_이동_목표는_면_법선을_따라서만_당긴다()
     {
