@@ -41,6 +41,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
     private double? _lastAnchorStrokeMm;                           // 그 프레임을 쓴 task 의 텔레스코픽 스트로크(mm) — 높이 변경 시 캐시 무효화
     private CancellationTokenSource? _currentRunCts;
     private readonly Dictionary<string, BundleAssignment> _bundleByAction = new();
+    private readonly List<BundleAssignment> _bundleOrder = new();   // 노드 액션 순서 — 리더 실패 시 남은 TASK 재묶음용
     private readonly Dictionary<string, (double[] Frame, double[]? Start, double[]? EndTcp)> _bundleFrames = new();
     private readonly HashSet<string> _dissolvedBundles = new(StringComparer.Ordinal);
 
@@ -270,12 +271,14 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         lock (_sync)
         {
             _bundleByAction.Clear();
+            _bundleOrder.Clear();
             _bundleFrames.Clear();
             _dissolvedBundles.Clear();
             foreach (var a in assignments)
             {
                 if (a.Role == BundleRole.None) continue;
                 _bundleByAction[a.ActionId] = a;
+                _bundleOrder.Add(a);
                 _logger.LogInformation(
                     "TASK 묶음 {Role}: {Job} bundle={Id} wall={Wall} lift={Lift} dir={Dir}",
                     a.Role, a.JobRef, a.BundleId, a.WallCode, a.LiftStrokeMm?.ToString("0") ?? "-", a.Direction);
@@ -584,7 +587,37 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                     cachedInternalFrame = null;
                     cachedAnchorStartBase = null;
                     cachedAnchorEndTcp = null;
-                    _logger.LogWarning("묶음 {Id} 미사용 — {Job} 은 단독 교시로 진행합니다.", bundle.BundleId, req.JobRef);
+
+                    // 리더가 실패해 공통 좌표계가 없으면(점2 교시 실패로 푼 묶음은 제외) 실패한 TASK 만 빼고
+                    // 남은 TASK 끼리 다시 묶는다 — 이 TASK 가 새 리더로 두 점 교시를 하고 뒤 TASK 는 그 좌표계를 쓴다.
+                    IReadOnlyList<BundleAssignment>? rebundled = null;
+                    if (!dissolved)
+                    {
+                        lock (_sync)
+                        {
+                            rebundled = TaskBundlePlanner.Rebundle(
+                                _bundleOrder, bundle.BundleId!, action.ActionId, req.SeamStartW, req.SeamEndW);
+                            if (rebundled is not null)
+                            {
+                                foreach (var a in rebundled)
+                                {
+                                    _bundleByAction[a.ActionId] = a;
+                                    var at = _bundleOrder.FindIndex(o => o.ActionId == a.ActionId);
+                                    if (at >= 0) _bundleOrder[at] = a;
+                                }
+                            }
+                        }
+                    }
+                    if (rebundled is not null)
+                    {
+                        _logger.LogWarning(
+                            "묶음 {Old} 리더 실패 — {Job} 을 새 리더로 남은 {N}건을 다시 묶습니다 (bundle={New}, 팔로워: {Followers}).",
+                            bundle.BundleId, req.JobRef, rebundled.Count, rebundled[0].BundleId,
+                            string.Join(", ", rebundled.Skip(1).Select(a => a.JobRef)));
+                        bundle = rebundled[0];
+                    }
+                    else
+                        _logger.LogWarning("묶음 {Id} 미사용 — {Job} 은 단독 교시로 진행합니다.", bundle.BundleId, req.JobRef);
                 }
                 else
                 {

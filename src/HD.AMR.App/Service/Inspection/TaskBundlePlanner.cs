@@ -113,6 +113,39 @@ public static class TaskBundlePlanner
         return (Math.Max(1, n), sign);
     }
 
+    /// <summary>
+    /// 리더가 실패해 공통 좌표계를 남기지 못한 묶음을, 실패한 TASK 를 빼고 <b>남은 TASK 끼리 다시 묶는다</b>.
+    /// <paramref name="newLeaderActionId"/>(지금 시작하려는 팔로워)가 새 리더가 되어 자기 시작점(점1)과 묶음의
+    /// 마지막 TASK 시작점(점2)으로 다시 교시하고, 그 뒤 TASK 는 새 묶음의 팔로워가 된다.
+    /// 남은 TASK 가 새 리더 하나뿐이면 묶을 것이 없으므로 null(단독 교시).
+    /// </summary>
+    /// <param name="ordered">노드 액션 순서의 배정 목록(<see cref="Assign(IReadOnlyList{BundleTaskInput})"/> 결과).</param>
+    /// <returns>바뀐 배정만(새 리더 + 뒤따르는 팔로워). 묶을 수 없으면 null.</returns>
+    public static IReadOnlyList<BundleAssignment>? Rebundle(
+        IReadOnlyList<BundleAssignment> ordered, string bundleId, string newLeaderActionId,
+        double[]? leaderStartW, double[]? leaderEndW)
+    {
+        if (leaderStartW is not { Length: 3 } || leaderEndW is not { Length: 3 }) return null;
+
+        var members = ordered.Where(a => a.Role != BundleRole.None && a.BundleId == bundleId).ToList();
+        var idx = members.FindIndex(a => a.ActionId == newLeaderActionId);
+        if (idx < 0 || idx == members.Count - 1) return null;          // 묶음 밖이거나 마지막 하나만 남음
+        var last = members[^1];
+        if (last.LastStartW is not { Length: 3 }) return null;
+
+        var result = new List<BundleAssignment>(members.Count - idx);
+        for (var k = idx; k < members.Count; k++)
+            result.Add(members[k] with
+            {
+                Role = k == idx ? BundleRole.Leader : BundleRole.Follower,
+                BundleId = newLeaderActionId,
+                FirstStartW = Clone3(leaderStartW),
+                FirstEndW = Clone3(leaderEndW),
+                LastStartW = Clone3(last.LastStartW),
+            });
+        return result;
+    }
+
     /// <summary>묶음 리더의 점2(마지막 TASK 시작점)를 도달 점검에 한 점 더 넣는다.</summary>
     public static IReadOnlyList<ReachPoint> Point2ReachPoints(IReadOnlyList<BundleAssignment> assignments, bool allowBackup)
         => assignments.Where(a => a.Role == BundleRole.Leader && a.LastStartW is { Length: 3 })
