@@ -150,7 +150,7 @@ public class InspectionRunStep : ISequenceStep
             return StepResult.Fail(
                 $"티칭설정 '{profile.Name}' 경유점이 모두 th_max({profile.ThMax}°) 초과로 제외되었습니다.");
         // 절대 모드는 첫 경유점에서 툴을 광축 둘레로 0/180° 중 하나로 맞추는데, 그 회전은 J6 안전 범위
-        // (J6 −300°~−160°) 안에 머물러야 한다 — 밖으로 돌면 센서 헤드–링크암 간섭(실기). IK 로 미리 확인한다.
+        // (J6 −310°~−160°) 안에 머물러야 한다 — 밖으로 돌면 센서 헤드–링크암 간섭(실기). IK 로 미리 확인한다.
         if (profile.PoseAbsolute)
         {
             var twist = await SelectSafeTwistAsync(context, waypoints[firstIdx], frame, attitude, ct);
@@ -417,7 +417,7 @@ public class InspectionRunStep : ISequenceStep
     }
 
     /// <summary>
-    /// 절대 모드 첫 경유점의 비틀림 후보(0/180°)를 IK 로 풀어 J6 안전 범위(−300°~−160°)를 벗어나지 않는 쪽을
+    /// 절대 모드 첫 경유점의 비틀림 후보(0/180°)를 IK 로 풀어 J6 안전 범위(−310°~−160°)를 벗어나지 않는 쪽을
     /// 고른다(<see cref="Inspection.WObjAttitude.SelectSafeTwist"/>). IK 는 현재 관절 기준 최소 변위 해라
     /// 손목을 뒤집지 않는 해 = MoveL 이 실제로 갈 J6 와 같다. 고를 수 없으면 Error 에 사유를 담는다.
     /// </summary>
