@@ -179,12 +179,15 @@ public sealed class Vda5050AdapterService : BackgroundService
         => new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private readonly DeviceAlarmState _deviceAlarms;
+    /// <summary>수동 비드 입력 팝업 대기 — 떠 있는 동안 state.errors[] 로 ACS 에 알린다.</summary>
+    private readonly Sequence.BeadManualLabelHub? _beadHub;
 
     public Vda5050AdapterService(IOptions<Vda5050AdapterSettings> options, AMRService amr,
         Vda5050OrderExecutor executor, Inspection.IWeldInspectionExecutor inspection,
         CobotService cobot, PowerModeService power, DeviceAlarmState deviceAlarms, OperationLogService opLog,
-        ILoggerFactory loggerFactory)
+        ILoggerFactory loggerFactory, Sequence.BeadManualLabelHub? beadHub = null)
     {
+        _beadHub = beadHub;
         _deviceAlarms = deviceAlarms;
         _opLog = opLog;
         _s = options.Value;
@@ -618,6 +621,10 @@ public sealed class Vda5050AdapterService : BackgroundService
                 ErrorLevel = "FATAL",
                 ErrorDescription = $"SoC {_power.LastObservedSoc:0.0}% ≤ {PowerModeService.CriticalThresholdPercent}% — 안전정지",
             });
+
+        // 수동 비드 입력 대기 — 팝업이 떠 있는 동안만 WARNING 으로 싣는다(실패 아님, 작업자 입력 요청).
+        if (_beadHub?.Pending is { } beadRequest)
+            state.Errors.Add(ManualBeadNotice.ToError(beadRequest));
 
         // 장치 통신 HEAVY 알람 — 장치별 FATAL. 복구 후에도 RESET 전까지 상주(order 수신 불가 사유).
         foreach (var a in _deviceAlarms.Snapshot())

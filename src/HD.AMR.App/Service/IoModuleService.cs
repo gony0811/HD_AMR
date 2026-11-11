@@ -34,6 +34,9 @@ public class IoModuleService : BackgroundService
     private readonly IoStartResumeControl _startResume = new();
     private readonly IoAlarmResetControl _alarmReset = new();
     private readonly DeviceAlarmState _deviceAlarms;
+    /// <summary>수동 비드 입력 팝업 대기 여부 — 떠 있는 동안 타워램프 녹색 점멸.</summary>
+    private readonly Sequence.BeadManualLabelHub? _beadHub;
+    private bool _attentionBlinking;
     private readonly SemaphoreSlim _outputWriteLock = new(1, 1);
 
     private readonly object _stateLock = new();
@@ -42,8 +45,10 @@ public class IoModuleService : BackgroundService
 
     public IoModuleService(IOptions<IoModuleModbusTcpSettings> options, ILoggerFactory loggerFactory,
         AMRService amr, CobotService cobot, OperationLogService opLog, Vda5050AdapterService vda,
-        Vda5050OrderExecutor executor, CommLossMonitorService commLoss, DeviceAlarmState deviceAlarms)
+        Vda5050OrderExecutor executor, CommLossMonitorService commLoss, DeviceAlarmState deviceAlarms,
+        Sequence.BeadManualLabelHub? beadHub = null)
     {
+        _beadHub = beadHub;
         _executor = executor;
         _deviceAlarms = deviceAlarms;
         _commLoss = commLoss;
@@ -417,7 +422,19 @@ public class IoModuleService : BackgroundService
         var manual = inputs[IoPointMap.In.Manual];
         var alarm = IoTowerLampPolicy.IsAlarm(inputs, GetState()?.Outputs, _emoControl.EmoActive,
             _amr.LatestStatus?.ErrorCode is > 0, _cobot.State?.ErrorCode is > 0, _deviceAlarms.HasHeavyAlarm);
-        var desired = IoTowerLampPolicy.Resolve(auto, manual, alarm, paused: _executor.IsPaused);
+        // 수동 비드 입력 팝업이 떠 있으면 녹색 점멸(1초에 한 번) — 팝업이 닫히면 아래 정책이 원래 상태로 되돌린다.
+        var attention = _beadHub?.Pending is not null;
+        var paused = _executor.IsPaused;
+        var blinking = attention && !alarm && !paused;
+        if (blinking != _attentionBlinking)
+        {
+            _attentionBlinking = blinking;
+            _logger.LogInformation(blinking
+                ? "타워램프 녹색 점멸 시작 — 수동 비드 입력 대기"
+                : "타워램프 녹색 점멸 종료 — 운전 모드 표시로 복귀");
+        }
+        var desired = IoTowerLampPolicy.Resolve(auto, manual, alarm, paused, attention,
+            ManualBeadNotice.BlinkOn(Environment.TickCount64));
         if (desired is null)
             return;
 
@@ -437,8 +454,10 @@ public class IoModuleService : BackgroundService
             word = SetBit(word, IoPointMap.Out.TowerLampYellow, desired.Value.Yellow);
             word = SetBit(word, IoPointMap.Out.TowerLampGreen, desired.Value.Green);
             await WriteOutputWordAsync(word, ct);
-            _logger.LogInformation("타워램프 동기화: RED={Red}, YELLOW={Yellow}, GREEN={Green}",
-                desired.Value.Red, desired.Value.Yellow, desired.Value.Green);
+            // 점멸 중에는 0.5초마다 출력이 바뀌므로 줄마다 남기지 않는다(시작·종료만 위에서 기록).
+            if (!blinking)
+                _logger.LogInformation("타워램프 동기화: RED={Red}, YELLOW={Yellow}, GREEN={Green}",
+                    desired.Value.Red, desired.Value.Yellow, desired.Value.Green);
         }
         finally
         {
