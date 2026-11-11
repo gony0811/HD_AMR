@@ -124,6 +124,11 @@ public class ParameterService
             (Sequence.Steps.WObjPointStep.ResidualCorrectionKey, "true",
                 "⑦⁺/⑪⁺ 비드 센터링 후 남은 cross 잔차를 작업물 좌표계 점1/점2 기록에 보정(true). 잔차가 X축을 돌려 연속 LINE 이 " +
                 "V01 에서 멀수록 옆으로 벗어나는 것을 줄인다. 점2 는 각도(⑫)를 건드리지 않는 별도 재측정으로 잔차를 잰다."),
+            (Sequence.Steps.WObjRegisterStep.Point1HeightKey,
+                Inspection.InternalWorkpieceFrame.DefaultCorrugationTopHeightMm.ToString(CultureInfo.InvariantCulture),
+                "작업물 좌표계 — 점1 을 기록한 TCP 높이가 티칭 프로필 Z=0(평탄부 초점 높이)에서 떨어진 거리(mm). " +
+                "33.8 = 점1 을 주름 꼭대기 초점 높이에서 기록(종전). 0 = 점1 을 평탄부 초점 높이(레이저 WD 로 맞춘 높이)에서 기록 — " +
+                "33.8 인 채로 WD 높이에서 점1 을 기록하면 순회 전체가 면 쪽으로 33.8mm 들어간다. 뒤에 .T/.PU 등 면 코드를 붙인 키로 면별 지정 가능. 0~100."),
             .. Sequence.BeadManualSettings.SeedDefaults(),
             (FlatReachOptions.TiltMarginKey,
                 FlatReachOptions.DefaultTiltMarginDeg.ToString(CultureInfo.InvariantCulture),
