@@ -32,7 +32,8 @@ public class LaserWorkingDistanceStep : ISequenceStep
     private readonly ParameterService _param;
     private readonly ILogger<LaserWorkingDistanceStep> _logger;
 
-    /// <summary>목표 Working Distance(mm) 파라미터 키. 없으면 <see cref="DefaultWorkingDistanceMm"/>.</summary>
+    /// <summary>목표 Working Distance(mm) 공통 파라미터 키. 없으면 <see cref="DefaultWorkingDistanceMm"/>.
+    /// 면별 값은 뒤에 <c>.{wall_code}</c> 를 붙인 키로 따로 둘 수 있다(<see cref="LaserWorkingDistanceSetting"/>).</summary>
     public const string WorkingDistanceKey = "Sequence.Laser.WorkingDistanceMm";
 
     /// <summary>파라미터 미설정 시 레이저 WD [mm]. 리치 맵 정렬 준비 거리의 기본값과 같다.</summary>
@@ -121,9 +122,11 @@ public class LaserWorkingDistanceStep : ISequenceStep
 
     private async Task<StepResult> AdjustAsync(SequenceContext context, CancellationToken ct)
     {
-        var wd = await GetWorkingDistanceMmAsync();
+        // 면별 값(…WorkingDistanceMm.{wall_code})이 있으면 그것, 없으면 공통 값.
+        var wall = LaserWorkingDistanceSetting.WallOf(context);
+        var (wd, wdSource) = await LaserWorkingDistanceSetting.ResolveAsync(_param, wall);
         if (wd is < 100 or > 1000)
-            return StepResult.Fail($"'{WorkingDistanceKey}' 범위 초과 ({wd:0.#}mm) — 100~1000mm 로 설정하세요.");
+            return StepResult.Fail($"'{wdSource}' 범위 초과 ({wd:0.#}mm) — 100~1000mm 로 설정하세요.");
 
         var (depthAxis, axisFromParam) = await WeldSequenceSupport.GetDepthAxisAsync(_param);
         if (!axisFromParam)
@@ -136,12 +139,14 @@ public class LaserWorkingDistanceStep : ISequenceStep
 
         var delta = z1.Value - wd;
         _logger.LogInformation(
-            "[레이저 WD 거리 조정] WD 조정: z={Z:0.##}mm, 목표={Wd:0.#}mm, Δ={Delta:+0.##;-0.##}mm",
-            z1.Value, wd, delta);
+            "[레이저 WD 거리 조정] WD 조정: 면={Wall}, z={Z:0.##}mm, 목표={Wd:0.#}mm({Source}), Δ={Delta:+0.##;-0.##}mm",
+            wall ?? "-", z1.Value, wd, wdSource, delta);
+        await LogDiagnosticsAsync("이동 전", context, wall, wd, wdSource, depthAxis, ct);
 
         if (Math.Abs(delta) <= ToleranceMm)
         {
             var (retOk0, retNote0) = await ReturnLateralAsync(context, depthAxis, ct);
+            if (retOk0) await LogDiagnosticsAsync("완료(이동 생략)", context, wall, wd, wdSource, depthAxis, ct);
             return retOk0
                 ? StepResult.Ok(
                     $"이미 WD 근방 — z={z1.Value:0.##}mm (목표 {wd:0.#}mm, 잔차 {delta:+0.##;-0.##}mm), 이동 생략.{retNote0}")
@@ -151,7 +156,7 @@ public class LaserWorkingDistanceStep : ISequenceStep
         if (Math.Abs(delta) > MaxTravelMm)
             return StepResult.Fail(
                 $"이동량 {delta:+0.#;-0.#}mm 가 한계 ±{MaxTravelMm:0}mm 초과 — " +
-                $"측정값(z={z1.Value:0.#}mm) 또는 '{WorkingDistanceKey}' 설정을 확인하세요.");
+                $"측정값(z={z1.Value:0.#}mm) 또는 '{wdSource}' 설정을 확인하세요.");
 
         // ── 개루프 1회 이동 ─────────────────────────────────────────────
         // delta>0 = 대상이 목표보다 멀다 = 전방(광축) 접근. ③ MoveToDistanceAsync 와 동일 부호 규약.
@@ -183,10 +188,12 @@ public class LaserWorkingDistanceStep : ISequenceStep
         _logger.LogInformation(
             "[레이저 WD 거리 조정] WD 검증: z={Z:0.##}mm, 잔차={Res:+0.##;-0.##}mm, 측정변화={Chg:+0.##;-0.##}mm (기대 {Exp:+0.##;-0.##}mm)",
             z2.Value, residual, change, -delta);
+        await LogDiagnosticsAsync("이동 후", context, wall, wd, wdSource, depthAxis, ct);
 
         if (Math.Abs(residual) <= ToleranceMm)
         {
             var (retOk, retNote) = await ReturnLateralAsync(context, depthAxis, ct);
+            if (retOk) await LogDiagnosticsAsync("완료(횡복귀 후)", context, wall, wd, wdSource, depthAxis, ct);
             return retOk
                 ? StepResult.Ok(
                     $"WD 도달 — z={z2.Value:0.##}mm (목표 {wd:0.#}mm, 이동 {delta:+0.##;-0.##}mm, " +
@@ -211,10 +218,38 @@ public class LaserWorkingDistanceStep : ISequenceStep
         return StepResult.Fail(head + "측정이 부분적으로만 반응 — 센서 노이즈/스케일 설정을 확인하세요.");
     }
 
-    private async Task<double> GetWorkingDistanceMmAsync()
+    /// <summary>
+    /// 면별 WD 차이의 원인 조사용 진단 로그(<see cref="LaserWorkingDistanceSetting.Diagnostics"/>).
+    /// 읽기만 하고 로봇을 움직이지 않는다. 읽기 실패는 경고만 남기고 검사를 막지 않는다.
+    /// "완료" 단계의 값이 실제 촬영 때의 상태다(횡복귀 뒤라 레이저가 닿는 자리가 "이동 후"와 다를 수 있다).
+    /// </summary>
+    private async Task LogDiagnosticsAsync(string phase, SequenceContext context, string? wall,
+        double wd, string wdSource, ToolAxisDir depthAxis, CancellationToken ct)
     {
-        try { return await _param.GetDoubleAsync(WorkingDistanceKey) ?? DefaultWorkingDistanceMm; }
-        catch { return DefaultWorkingDistanceMm; }
+        try
+        {
+            var readings = _laser.GetReadings();
+            var raw = _laser.ComputeRawPlanePose(readings);
+            var corrected = _laser.ApplyTiltReference(raw);
+
+            double[]? joints = null, tcp = null;
+            try
+            {
+                joints = await _cobot.Rpc.GetActualJointPosAsync(ct: ct);
+                tcp = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning("[WD 진단] 코봇 자세를 읽지 못함 — 레이저 값만 기록: {Msg}", ex.Message);
+            }
+
+            _logger.LogInformation("{Line}", LaserWorkingDistanceSetting.Diagnostics(
+                phase, wall, context.InspectionDirection, wd, wdSource, readings, raw, corrected, joints, tcp, depthAxis));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning("[WD 진단] 기록 실패({Phase}): {Msg}", phase, ex.Message);
+        }
     }
 
     /// <summary>

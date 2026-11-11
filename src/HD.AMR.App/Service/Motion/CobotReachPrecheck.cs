@@ -196,16 +196,10 @@ public sealed class CobotReachPrecheck
             _logger.LogWarning("도달 사전 점검: 자세 허용 범위가 저장되지 않아 기본값으로 판정합니다.");
 
         var approach = await CobotInspectionMoveStep.GetApproachStandoffMmAsync(_param, _logger).ConfigureAwait(false);
-        double align = LaserWorkingDistanceStep.DefaultWorkingDistanceMm;
-        try
-        {
-            align = await _param.GetDoubleAsync(LaserWorkingDistanceStep.WorkingDistanceKey).ConfigureAwait(false)
-                    ?? LaserWorkingDistanceStep.DefaultWorkingDistanceMm;
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            _logger.LogWarning(ex, "도달 사전 점검: 레이저 WD 를 읽지 못해 {Mm}mm 로 판정합니다.", align);
-        }
+        // 공통 레이저 WD — 면별 값(…WorkingDistanceMm.{wall_code})은 점마다 JudgeAsync 에서 다시 찾는다.
+        var (align, alignSource) = await LaserWorkingDistanceSetting.ResolveAsync(_param, wallCode: null).ConfigureAwait(false);
+        if (alignSource.StartsWith("기본값(", StringComparison.Ordinal))
+            _logger.LogWarning("도달 사전 점검: 레이저 WD 를 읽지 못해 {Mm}mm 로 판정합니다 — {Source}", align, alignSource);
         var zDatum = await _param.GetDoubleAsync(WeldSequenceSupport.ZDatumOffsetKey).ConfigureAwait(false) ?? 0;
 
         double toolLen;
@@ -252,7 +246,15 @@ public sealed class CobotReachPrecheck
         var body = ReachStationFrame.WorldToBodyMm(point.SeamW, xm, ym, yaw, ctx.ZDatumMm);
         var z = ReachStationFrame.CellZMm(point.WallCode, body[2]);
 
-        var stored = ReachMapCsv.FindLatest(ReachMapService.OutputDirectory, ctx.Stamp, point.WallCode!, h, body[0], body[1], z);
+        // 정렬 준비 거리 = 이 면의 레이저 WD(면별 값이 있으면 그것) — ④⁺ 가 실제로 맞추는 거리와 같아야 한다.
+        if (!ctx.AlignByWall.TryGetValue(point.WallCode!, out var alignMm))
+        {
+            (alignMm, _) = await LaserWorkingDistanceSetting.ResolveAsync(_param, point.WallCode).ConfigureAwait(false);
+            ctx.AlignByWall[point.WallCode!] = alignMm;
+        }
+        var stamp = ctx.Stamp with { AlignMm = alignMm };
+
+        var stored = ReachMapCsv.FindLatest(ReachMapService.OutputDirectory, stamp, point.WallCode!, h, body[0], body[1], z);
         if (stored is not null)
             return FromCell(point, h, body[0], body[1], z, stored.Status, stored.Usable, stored.Reason, "저장 맵");
 
@@ -266,7 +268,7 @@ public sealed class CobotReachPrecheck
         {
             var spec = new ReachMapSpec(
                 new[] { point.WallCode! }, new[] { h }, new[] { body[0] }, new[] { body[1] }, new[] { z },
-                ctx.Stamp.ApproachMm, ctx.Stamp.AlignMm, ctx.Stamp.FocusMm);
+                stamp.ApproachMm, stamp.AlignMm, stamp.FocusMm);
             var result = ctx.UseController
                 ? await _maps.EvaluateAsync(spec, tool: 1, progress: null, announce: false, ct).ConfigureAwait(false)
                 : await _maps.EvaluateOfflineAsync(spec, progress: null, announce: false, ct).ConfigureAwait(false);
@@ -286,7 +288,11 @@ public sealed class CobotReachPrecheck
         => new(usable, status,
             $"{point.Label}: {ReachMapResult.Label(status)} ({reason}) — 차체 x={x:0} y={y:0} z={z:0} mm, 리프트 {stroke:0} mm [{via}]");
 
-    private sealed record SimContext(ReachMapStamp Stamp, ToolAxisDir Axis, bool UseController, double ZDatumMm);
+    private sealed record SimContext(ReachMapStamp Stamp, ToolAxisDir Axis, bool UseController, double ZDatumMm)
+    {
+        /// <summary>면별 정렬 준비 거리(레이저 WD) — 한 번의 점검 안에서 면마다 한 번만 읽는다.</summary>
+        public Dictionary<string, double> AlignByWall { get; } = new(StringComparer.OrdinalIgnoreCase);
+    }
 
     private sealed record PointVerdict(bool Usable, ReachStatus Status, string Reason)
     {
