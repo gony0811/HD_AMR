@@ -28,6 +28,40 @@ public class TaskBundlePlannerTests
         Assert.Equal(0.72, plan[0].LastStartW![0]);
     }
 
+    // 실기 2026-11-12 03:56 천장 L4-R03C17: AMR 이 용접선에 45° 로 서서 가로·세로 선이 모두 Horizontal 로 분류됐고,
+    // CROSS4 뒤 90° 꺾인 V04 가 앞 가로선 좌표계를 물려받아 순회했다(비상정지).
+    [Fact]
+    public void 분류가_같아도_90도_꺾인_용접선은_묶지_않는다()
+    {
+        var h = InspectionMoveDirection.Horizontal;
+        var plan = TaskBundlePlanner.Assign(new[]
+        {
+            Task("h1", "T", 0, h, 0, 0.36),
+            Task("h2", "T", 0, h, 0.36, 0.36),
+            new BundleTaskInput("v4", "v4", "T", 0, h, new[] { 0.36, 0.0, 1.0 }, new[] { 0.36, -0.36, 1.0 }),
+        });
+        Assert.Equal(BundleRole.Leader, plan[0].Role);
+        Assert.Equal(BundleRole.Follower, plan[1].Role);
+        Assert.Equal(BundleRole.None, plan[2].Role);
+        Assert.Equal(0.36, plan[0].LastStartW![0]);   // 점2 는 꺾인 선이 아니라 h2 시작점
+    }
+
+    [Theory]
+    [InlineData(0.36, 0.0, true)]       // 같은 방향
+    [InlineData(0.36, 0.10, true)]      // 15.5° — 허용
+    [InlineData(0.36, 0.16, false)]     // 24° — 꺾임
+    [InlineData(0.0, 0.36, false)]      // 90°
+    [InlineData(-0.36, 0.0, false)]     // 반대 방향
+    [InlineData(0.0, 0.0, false)]       // 길이 0
+    public void 같은_줄_판정(double dx, double dy, bool expected)
+    {
+        var a0 = new[] { 1.0, 2.0, 3.0 };
+        var a1 = new[] { 1.36, 2.0, 3.0 };
+        var b0 = new[] { 5.0, 5.0, 3.0 };
+        Assert.Equal(expected, TaskBundlePlanner.SameSeamLine(a0, a1, b0, new[] { 5.0 + dx, 5.0 + dy, 3.0 }));
+        Assert.False(TaskBundlePlanner.SameSeamLine(a0, a1, b0, null));
+    }
+
     [Fact]
     public void 리프트가_다르면_묶지_않는다()
     {

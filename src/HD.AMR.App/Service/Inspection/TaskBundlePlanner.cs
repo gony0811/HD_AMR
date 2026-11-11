@@ -165,7 +165,29 @@ public static class TaskBundlePlanner
             || Math.Abs(origin.LiftStrokeMm.Value - next.LiftStrokeMm.Value) > LiftToleranceMm)
             return false;
         return origin.SeamStartW is { Length: 3 } && next.SeamStartW is { Length: 3 }
-               && origin.SeamEndW is { Length: 3 };
+               && origin.SeamEndW is { Length: 3 }
+               && SameSeamLine(origin.SeamStartW, origin.SeamEndW, next.SeamStartW, next.SeamEndW);
+    }
+
+    /// <summary>두 용접선을 같은 줄로 보는 방향 차 한계 [도].</summary>
+    public const double SeamParallelTolDeg = 20.0;
+
+    /// <summary>
+    /// 두 용접선(시작→끝, 맵 좌표 m)이 같은 방향인지 — 좌표계를 함께 쓸 수 있는 조건. 방향 차가
+    /// <see cref="SeamParallelTolDeg"/> 이하(같은 진행 방향)일 때만 true. 끝점이 없거나 길이가 0 이면 false.
+    /// 수직/수평 분류만으로는 AMR 이 용접선에 비스듬히(45° 부근) 섰을 때 직교하는 두 선을 가르지 못한다.
+    /// </summary>
+    public static bool SameSeamLine(double[]? startA, double[]? endA, double[]? startB, double[]? endB)
+    {
+        if (startA is not { Length: 3 } || endA is not { Length: 3 } || startB is not { Length: 3 } || endB is not { Length: 3 })
+            return false;
+        double ax = endA[0] - startA[0], ay = endA[1] - startA[1], az = endA[2] - startA[2];
+        double bx = endB[0] - startB[0], by = endB[1] - startB[1], bz = endB[2] - startB[2];
+        var la = Math.Sqrt(ax * ax + ay * ay + az * az);
+        var lb = Math.Sqrt(bx * bx + by * by + bz * bz);
+        if (la < 1e-6 || lb < 1e-6) return false;
+        var cos = (ax * bx + ay * by + az * bz) / (la * lb);
+        return cos >= Math.Cos(SeamParallelTolDeg * Math.PI / 180.0);
     }
 
     private static BundleAssignment Solo(BundleTaskInput t) => new(

@@ -36,7 +36,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
     private readonly object _sync = new();
     private (string OrderId, string AnchorGroupId, InspectionMoveDirection Direction, string? WallCode)? _lastAnchor;   // wall_code 포함 — 꺾인 용접선(벽→챔퍼)이 같은 그룹·방향이어도 다른 면 프레임을 재사용하지 않는다
     private double[]? _lastInternalWorkpieceFrame;                 // 같은 anchor에서 재사용할 BASE 기준 내부 프레임
-    private double[]? _lastAnchorStartBase;                        // 그 프레임을 쓴 task 의 ② 시작 접근점(BASE) — 다음 task 프레임 평행 이동 기준
+    private (double[] Start, double[] End)? _lastAnchorSeamW;     // 그 프레임을 쓴 task 의 용접선(맵) — 꺾인 용접선이 같은 프레임을 물려받지 않게
+    private double[]? _lastAnchorStartBase;                       // 그 프레임을 쓴 task 의 ② 시작 접근점(BASE) — 다음 task 프레임 평행 이동 기준
     private double[]? _lastAnchorEndTcp;                           // 그 task 종료 시 TCP(BASE) — 다음 task 연속 이동 판정
     private double? _lastAnchorStrokeMm;                           // 그 프레임을 쓴 task 의 텔레스코픽 스트로크(mm) — 높이 변경 시 캐시 무효화
     private CancellationTokenSource? _currentRunCts;
@@ -576,6 +577,17 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                 anchorHit = recipe.SeamType != SeamTypeKind.Corner
                             && _lastAnchor == (orderId, req.AnchorGroupId, direction, req.DrawingPos.WallCode)
                             && _lastInternalWorkpieceFrame is { Length: 6 };
+                // 수직/수평 분류가 같아도 실제 용접선이 꺾여 있으면 좌표계를 물려받지 않는다 — AMR 이 용접선에 45° 로 서면
+                // 분류가 모호해 둘 다 Horizontal 로 떨어진다(실기 2026-11-12 03:56 L4-R03C17: CROSS4 뒤 90° 꺾인 V04 가
+                // 앞 가로선 좌표계로 순회).
+                if (anchorHit && _lastAnchorSeamW is { } prevSeam
+                    && !TaskBundlePlanner.SameSeamLine(prevSeam.Start, prevSeam.End, req.SeamStartW, req.SeamEndW))
+                {
+                    anchorHit = false;
+                    _logger.LogInformation(
+                        "anchor 용접선 방향 변경(직전 용접선과 {Tol:0}° 넘게 꺾임) — 작업물 좌표계 재교시 (anchorGroup={Group}, jobRef={JobRef})",
+                        TaskBundlePlanner.SeamParallelTolDeg, req.AnchorGroupId, req.JobRef);
+                }
                 if (!anchorHit && _lastAnchor is { } prev
                     && prev.OrderId == orderId && prev.AnchorGroupId == req.AnchorGroupId
                     && (prev.Direction != direction || prev.WallCode != req.DrawingPos.WallCode))
@@ -741,7 +753,19 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                 WallFacingThetaRad = nodeThetaRad,
                 ZDatumOffsetMm = zDatumOffset,
                 VisionFailRatioMax = recipe.VisionFailRatioMax < 1.0 ? recipe.VisionFailRatioMax : null,
+                // 촬영 위치(CAPTURE_REQ u,v)를 면 좌표로 — ACS 시작·끝점 면 좌표에서 원점과 용접선 방향을 얻는다.
+                // 없으면(구버전 ACS·사선) null = 종전처럼 용접선 시작점 기준 좌표가 나간다.
+                FacePlacement = Communication.Vision.FaceLocalMapper.PlacementFromSeam(
+                    req.DrawingPos.U, req.DrawingPos.V, req.DrawingPos.UEnd, req.DrawingPos.VEnd),
             };
+            if (context.FacePlacement is { } fp)
+                _logger.LogInformation(
+                    "촬영 위치 면 좌표 환산: wall={Wall}, 시작점 (u,v)=({U:0},{V:0})mm, 용접선 방향 {Dir} (jobRef={JobRef})",
+                    req.DrawingPos.WallCode, fp.OriginUMm, fp.OriginVMm, fp.Direction, req.JobRef);
+            else
+                _logger.LogWarning(
+                    "촬영 위치를 면 좌표로 환산하지 못함 — 용접선 시작점 기준 좌표로 보냄 (drawingPos u/v/uEnd/vEnd 없음 또는 사선, jobRef={JobRef})",
+                    req.JobRef);
             if (cachedInternalFrame is not null)
                 context.Bag[InternalWorkpieceFrame.BagKey] = cachedInternalFrame;
             // ②가 캐시 프레임을 이번 시작점으로 평행 이동하고(없으면 실패), 직전 종료 자세 그대로면 복귀 없이 연속 이동한다.
@@ -828,6 +852,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                             else
                             {
                                 _lastAnchor = (orderId, req.AnchorGroupId, direction, req.DrawingPos.WallCode);
+                                _lastAnchorSeamW = (req.SeamStartW.ToArray(), req.SeamEndW.ToArray());
                                 _lastInternalWorkpieceFrame = (double[])internalFrame.Clone();
                                 _lastAnchorStartBase = startBase;
                                 _lastAnchorEndTcp = endTcp;

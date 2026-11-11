@@ -265,7 +265,9 @@ public static class WeldInspectionActionParser
             V: GetDouble(dp, "v"),
             X: GetDouble(dp, "x") ?? 0,
             Y: GetDouble(dp, "y") ?? 0,
-            Z: GetDouble(dp, "z") ?? 0);
+            Z: GetDouble(dp, "z") ?? 0,
+            UEnd: GetDouble(dp, "uEnd"),
+            VEnd: GetDouble(dp, "vEnd"));
         return true;
     }
 

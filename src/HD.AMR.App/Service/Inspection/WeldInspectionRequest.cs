@@ -26,7 +26,10 @@ public enum SeamTypeKind
 public sealed record WeldDrawingPos(
     string Tank, int Level, string WallCode,
     double? U, double? V,
-    double X, double Y, double Z);
+    double X, double Y, double Z,
+    // 용접선 끝점의 벽면-로컬 좌표 [m] (drawingPos.uEnd/vEnd, 사양 1.16 — 선택). 촬영 위치를 면 좌표로 환산할 때
+    // 면 위 용접선 방향을 정한다. 구버전 ACS 는 보내지 않는다(null).
+    double? UEnd = null, double? VEnd = null);
 
 /// <summary>
 /// `startWeldInspection` 액션 파라미터의 해석 결과 (사양 §8.1 — jobRef/position/params 3쌍).
