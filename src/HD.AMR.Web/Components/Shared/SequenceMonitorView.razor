@@ -118,12 +118,15 @@
 
     // 이동 스텝(센터링·pitch): 로봇 이동이 보이도록 RGB 라이브. 1번·2번 동일.
     private bool IsMoveStep => StepKey is "peak1Center" or "peak2Center"
-        or "bead1Center" or "bead2Center" or "peak2Approach" or "depthCamCenterShift";
+        or "bead1Center" or "bead2Center" or "peak2Approach" or "depthCamCenterShift"
+        or "taskStartReturn";
 
     private string? ViewUrl => StepKey switch
     {
         "cobotInspection" or "inspectionRun" => $"/camera/color.mjpeg?k=m{_streamKey}",
-        "cameraAlign" or "cameraAlignRefine" or "flatSurfaceAlign" or "laserWorkingDistance" => $"/camera/depth.mjpeg?k=m{_streamKey}",
+        "cameraAlign" or "cameraAlignRefine" or "flatSurfaceAlign" or "laserWorkingDistance"
+            or "flatSurfaceSearchTaskStart" or "laserWorkingDistanceTaskStart"
+            => $"/camera/depth.mjpeg?k=m{_streamKey}",
         _ when IsFindStep => Weld.LastOverlay is not null
             ? $"/camera/weld/overlay.jpg?k=o{_overlayKey}"
             : $"/camera/ir.mjpeg?k=m{_streamKey}",
@@ -149,7 +152,8 @@
     }
 
     private bool ShowDistancePanel => StepKey is "cameraAlign" or "cameraAlignRefine";
-    private bool ShowLaserPanel => StepKey is "flatSurfaceAlign" or "laserWorkingDistance";
+    private bool ShowLaserPanel => StepKey is "flatSurfaceAlign" or "laserWorkingDistance"
+        or "flatSurfaceSearchTaskStart" or "laserWorkingDistanceTaskStart";
 
     private double? ResidualMm => _roiStats is { } s && s.MinMm > 0
         ? s.MinMm - TargetDistanceMm

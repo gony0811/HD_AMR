@@ -65,7 +65,15 @@ public class LaserWorkingDistanceStep : ISequenceStep
     /// <summary>이 값 미만의 횡복귀 성분은 무시한다(mm).</summary>
     private const double SkipReturnMm = 0.5;
 
+    private readonly string _key;
+    private readonly string _displayName;
+    private readonly int _order;
+
+    /// <param name="key">④⁺ 는 <c>laserWorkingDistance</c>. 검사 시작 재조정은 <see cref="TaskStartKey"/>.</param>
+    /// <param name="displayName">시퀀스 목록에 보일 이름.</param>
+    /// <param name="order">DefaultOrder. ④⁺=450, 검사 시작=1190.</param>
     public LaserWorkingDistanceStep(
+        string key, string displayName, int order,
         CobotService cobot, LaserDisplacementSensorService laser,
         ParameterService param, ILogger<LaserWorkingDistanceStep> logger)
     {
@@ -73,11 +81,17 @@ public class LaserWorkingDistanceStep : ISequenceStep
         _laser = laser;
         _param = param;
         _logger = logger;
+        _key = key;
+        _displayName = displayName;
+        _order = order;
     }
 
-    public string Key => "laserWorkingDistance";
-    public string DisplayName => "레이저 WD 거리 조정";
-    public int DefaultOrder => 450;
+    /// <summary>검사 시작점 WD 재조정 키.</summary>
+    public const string TaskStartKey = "laserWorkingDistanceTaskStart";
+
+    public string Key => _key;
+    public string DisplayName => _displayName;
+    public int DefaultOrder => _order;
 
     public StepValidation Validate(SequenceContext context)
     {

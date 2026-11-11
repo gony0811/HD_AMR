@@ -53,9 +53,11 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         "cameraAlign", "cameraAlignRefine", "flatSurfaceAlign", "laserWorkingDistance",
         // ⑤ Peak 탐색 준비 이동 — ⑤가 빠지면 의미가 없고, 남기면 ⑱ 직전 자세만 옮긴다.
         Sequence.Steps.DepthCamCenterShiftStep.StepKey,
-        "peak1Find", "peak1Center", "bead1Find", "bead1Center", "wobjPoint1",
+        "peak1Find", "peak1Center", "bead1Find", "bead1Center",         "wobjPoint1",
         "peak2Approach", "peak2Find", "peak2Center", "bead2Find", "bead2Center", "wobjPoint2",
         "wobjRegister",
+        // 점2(끝쪽) 교시 후, 검사 순회 전에 시작점에서 평탄면·WD 를 다시 맞춘다. anchor 적중 시 교시와 함께 생략.
+        "taskStartReturn", FlatSurfaceAlignStep.TaskStartKey, LaserWorkingDistanceStep.TaskStartKey,
         // 드라이런 2점 교시의 끝점 이동 — anchor 적중 시 캐시 프레임 재사용으로 재교시 생략.
         "cobotSeamEnd",
     };

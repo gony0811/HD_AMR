@@ -42,6 +42,9 @@ public class FlatSurfaceAlignStep : ISequenceStep
     private readonly FlatDetectionMonitor _monitor;
     private readonly ILogger<FlatSurfaceAlignStep> _logger;
 
+    /// <summary>false 면 Phase C(레이저 틸트 수평 얼라인)를 하지 않는다. 검사 시작점 재탐색용.</summary>
+    private readonly bool _levelSurface;
+
     // ── 설정 상수 ──────────────────────────────────────────────────────
     /// <summary>평탄 판정 틸트 임계값(도). |rx|, |ry| 모두 이 값 이내이면 정렬 완료.</summary>
     private const double TiltThresholdDeg = 1.0;
@@ -75,7 +78,10 @@ public class FlatSurfaceAlignStep : ISequenceStep
     private const string AlignImageXAxisKey = "Camera.Align.ImageXAxis";
     private const string AlignImageYAxisKey = "Camera.Align.ImageYAxis";
 
+    /// <param name="levelSurface">true(④)면 탐색 뒤 틸트 수평 얼라인. false(검사 시작 재탐색)면 자리만 맞추고 수평 얼라인은 하지 않는다.
+    /// <c>ActivatorUtilities.CreateInstance</c> 가 명시 인자를 앞에서부터 매칭하므로 첫 인자다.</param>
     public FlatSurfaceAlignStep(
+        bool levelSurface,
         CobotService cobot, CameraService camera, FlatSurfaceCenteringService centering,
         LaserDisplacementSensorService laser, LaserTiltCorrector tilt, ParameterService param,
         PostureLimitsService limits, FlatDetectionMonitor monitor, ILogger<FlatSurfaceAlignStep> logger)
@@ -89,11 +95,15 @@ public class FlatSurfaceAlignStep : ISequenceStep
         _param = param;
         _monitor = monitor;
         _logger = logger;
+        _levelSurface = levelSurface;
     }
 
-    public string Key => "flatSurfaceAlign";
-    public string DisplayName => "평탄면 센터링 (레이저 정렬)";
-    public int DefaultOrder => 400;
+    /// <summary>검사 시작점 재탐색 — 평탄 자리만, 수평 얼라인 없음.</summary>
+    public const string TaskStartKey = "flatSurfaceSearchTaskStart";
+
+    public string Key => _levelSurface ? "flatSurfaceAlign" : TaskStartKey;
+    public string DisplayName => _levelSurface ? "평탄면 센터링 (레이저 정렬)" : "검사 시작 평탄면 탐색";
+    public int DefaultOrder => _levelSurface ? 400 : 1180;
 
     public StepValidation Validate(SequenceContext context)
     {
@@ -193,7 +203,8 @@ public class FlatSurfaceAlignStep : ISequenceStep
                     Limits = postureLimits,
                     ImageXAxis = axisX, ImageYAxis = axisY,
                     CameraToLaserShiftYmm = shiftY,
-                    TiltMarginDeg = tiltMargin,
+                    // 수평 얼라인을 하지 않으면 틸트 여유분까지 도달해야 할 이유가 없다.
+                    TiltMarginDeg = _levelSurface ? tiltMargin : 0,
                     Tool = context.Tool,
                 },
                 Footprint = new FlatFootprintContext
@@ -230,6 +241,17 @@ public class FlatSurfaceAlignStep : ISequenceStep
             if (!shift.Ok)
                 return FailStage($"레이저 중심 보정 이동 실패 {shift.Describe()}.");
             await Task.Delay(300, ct);
+
+            // 검사 시작점 재탐색은 자리만 맞춘다. 틸트 수평 얼라인(Phase C)은 ④에서 이미 했고,
+            // 여기서 다시 돌리면 교시해 둔 자세가 돌아간다.
+            if (!_levelSurface)
+            {
+                _monitor.UpdateStage(FlatDetectionStage.Done,
+                    "수평 얼라인 생략" + (attempt > 0 ? $" (자리 재시도 {attempt}회)" : ""));
+                return StepResult.Ok(
+                    $"평탄면 탐색 완료 — 수평 얼라인 생략 (σ={align.SigmaMm:0.##}mm" +
+                    (attempt > 0 ? $", 자리 재시도={attempt}회" : "") + ").");
+            }
 
             // ── Phase C: 레이저 3점 측정 → 헤드 틸트(회전) 보정 ────────────
             _logger.LogInformation("[평탄면 센터링 (레이저 정렬)] Phase C: 레이저 3점 평면 측정 시작");
