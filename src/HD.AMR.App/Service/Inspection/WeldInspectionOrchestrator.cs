@@ -266,6 +266,26 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             await Task.Delay(500, ct);
     }
 
+    /// <summary>
+    /// 묶음 TASK 하나가 끝난 뒤 공유 상태를 갱신한다.
+    /// <list type="bullet">
+    /// <item>리더: 교시한 좌표계·그 시작 접근점·종료 TCP 를 새로 둔다.</item>
+    /// <item>팔로워: 좌표계와 시작 접근점은 리더 것을 그대로 두고(다음 TASK 도 리더 시작점 기준으로 평행 이동),
+    /// <b>종료 TCP 만 이 TASK 것으로</b> 바꾼다. 리더의 종료 TCP 를 계속 넘기면 세 번째 TASK 부터 "현재 TCP 가 직전 종료와
+    /// 다름"으로 연속 이동이 거부돼 TASK 마다 홈으로 복귀했다가 다시 진입한다(실기 2026-11-11 T L4-R08C17 #3·#4).</item>
+    /// </list>
+    /// 팔로워인데 공유 좌표계가 없으면 null(바꾸지 않음).
+    /// </summary>
+    internal static (double[] Frame, double[]? Start, double[]? EndTcp)? NextBundleFrame(
+        BundleRole role, (double[] Frame, double[]? Start, double[]? EndTcp)? existing,
+        double[] frame, double[]? startBase, double[]? endTcp)
+        => role switch
+        {
+            BundleRole.Leader => ((double[])frame.Clone(), startBase?.ToArray(), endTcp?.ToArray()),
+            BundleRole.Follower when existing is { } e => (e.Frame, e.Start, endTcp?.ToArray()),
+            _ => null,
+        };
+
     public void BeginBundles(IReadOnlyList<BundleAssignment> assignments)
     {
         lock (_sync)
@@ -812,8 +832,11 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                                 _lastAnchorStartBase = startBase;
                                 _lastAnchorEndTcp = endTcp;
                                 _lastAnchorStrokeMm = strokeAtEnd;
-                                if (bundle?.Role == BundleRole.Leader && bundle.BundleId is { } bid)
-                                    _bundleFrames[bid] = ((double[])internalFrame.Clone(), startBase?.ToArray(), endTcp?.ToArray());
+                                if (bundle?.BundleId is { } bid
+                                    && NextBundleFrame(bundle.Role,
+                                        _bundleFrames.TryGetValue(bid, out var shared0) ? shared0 : null,
+                                        internalFrame, startBase, endTcp) is { } next)
+                                    _bundleFrames[bid] = next;
                             }
                         }
                         if (dissolved)

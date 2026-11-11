@@ -75,6 +75,35 @@ public class TaskBundleRebundleTests
     }
 
     [Fact]
+    public void 팔로워가_끝나면_좌표계는_리더_것_그대로_종료_TCP_만_그_TASK_것으로_바뀐다()
+    {
+        var frame = new[] { 1.0, 2, 3, 0, 0, 0 };
+        var start = new[] { 10.0, 20, 30 };
+        var leaderEnd = new[] { -563.0, 1259, 1183, 180, 0, 88 };
+        var leader = WeldInspectionOrchestrator.NextBundleFrame(BundleRole.Leader, null, frame, start, leaderEnd);
+        Assert.NotNull(leader);
+
+        // 팔로워 #2 가 자기(평행 이동된) 프레임·시작점으로 끝남 — 실기 #2 종료 자리.
+        var followerEnd = new[] { -565.0, 906.4, 1183, 180, 0, 88 };
+        var after = WeldInspectionOrchestrator.NextBundleFrame(
+            BundleRole.Follower, leader, new[] { 9.0, 9, 9, 0, 0, 0 }, new[] { 99.0, 99, 99 }, followerEnd);
+
+        Assert.NotNull(after);
+        Assert.Equal(frame, after!.Value.Frame);          // 좌표계 = 리더 교시 그대로
+        Assert.Equal(start, after.Value.Start);           // 평행 이동 기준 = 리더 시작 접근점
+        Assert.Equal(followerEnd, after.Value.EndTcp);    // 다음 TASK 의 연속 이동 기준 = 방금 끝난 자리
+    }
+
+    [Fact]
+    public void 공유_좌표계가_없는_팔로워와_단독_TASK_는_공유_상태를_만들지_않는다()
+    {
+        var frame = new[] { 1.0, 2, 3, 0, 0, 0 };
+
+        Assert.Null(WeldInspectionOrchestrator.NextBundleFrame(BundleRole.Follower, null, frame, null, null));
+        Assert.Null(WeldInspectionOrchestrator.NextBundleFrame(BundleRole.None, null, frame, null, null));
+    }
+
+    [Fact]
     public void 다른_묶음과_단독_TASK_는_건드리지_않는다()
     {
         // a·b 묶음 / c 는 리프트가 달라 단독 / d·e·f 묶음
