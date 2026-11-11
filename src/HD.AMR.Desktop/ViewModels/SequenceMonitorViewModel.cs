@@ -106,8 +106,8 @@ public sealed partial class SequenceMonitorViewModel : ObservableObject, IDispos
     private static MonitorCameraKind KindOf(string? key) => key switch
     {
         "cameraAlign" or "cameraAlignRefine" => MonitorCameraKind.CameraAlign,
-        "flatSurfaceAlign" or "flatSurfaceSearchTaskStart" => MonitorCameraKind.Flat,
-        "laserWorkingDistance" or "laserWorkingDistanceTaskStart" => MonitorCameraKind.LaserWd,
+        "flatSurfaceAlign" => MonitorCameraKind.Flat,
+        "laserWorkingDistance" => MonitorCameraKind.LaserWd,
         // depth 센터 평행이동: 용접라인이 Peak ROI 안으로 들어오는지 Depth 라이브로 확인한다.
         "depthCamCenterShift" or "peak1Find" or "peak2Find" or "peak1Center" or "peak2Center" => MonitorCameraKind.Peak,
         "bead1Find" or "bead2Find" or "bead1Center" or "bead2Center" => MonitorCameraKind.Bead,

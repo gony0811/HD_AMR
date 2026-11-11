@@ -216,12 +216,8 @@ internal static class ServiceRegistration
         services.AddScoped<ISequenceStep, CobotInspectionMoveStep>();
         services.AddScoped<ISequenceStep, CameraAlignStep>();
         services.AddScoped<ISequenceStep, CameraAlignRefineStep>();
-        services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<FlatSurfaceAlignStep>(sp, true));   // 400
-        services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<FlatSurfaceAlignStep>(sp, false));   // 1180
-        services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<LaserWorkingDistanceStep>(
-            sp, "laserWorkingDistance", "레이저 WD 거리 조정", 450));
-        services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<LaserWorkingDistanceStep>(
-            sp, LaserWorkingDistanceStep.TaskStartKey, "검사 시작 WD 조정", 1190));
+        services.AddScoped<ISequenceStep, FlatSurfaceAlignStep>();
+        services.AddScoped<ISequenceStep, LaserWorkingDistanceStep>();
         services.AddScoped<ISequenceStep, DepthCamCenterShiftStep>();
         services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<PeakFindStep>(sp, 1));
         services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<PeakCenteringStep>(sp, 1));
@@ -235,7 +231,6 @@ internal static class ServiceRegistration
         services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<BeadCenteringStep>(sp, 2));
         services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<WObjPointStep>(sp, 2));
         services.AddScoped<ISequenceStep, WObjRegisterStep>();
-        services.AddScoped<ISequenceStep, TaskStartReturnStep>();   // 1175: 검사 시작점 복귀
         // 드라이런 2점 교시 끝점 이동(1155) — seamEndW 접근점으로 MoveL. wobjPoint2 가 그 자리에서 점2를 기록.
         services.AddScoped<ISequenceStep, CobotSeamEndMoveStep>();
         // ⑱ 검사 수행 — 일반(비전 캡처)과 드라이런(이동만) 두 변형. dryRun 이 첫 생성자 인자.

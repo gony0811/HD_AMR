@@ -173,12 +173,8 @@ builder.Services.AddScoped<ISequenceStep, AmrMoveStep>();   // 100: AMR 위치 �
 builder.Services.AddScoped<ISequenceStep, CobotInspectionMoveStep>();
 builder.Services.AddScoped<ISequenceStep, CameraAlignStep>();
 builder.Services.AddScoped<ISequenceStep, CameraAlignRefineStep>();
-builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<FlatSurfaceAlignStep>(sp, true));   // 400: ④ 평탄면 + 수평 얼라인
-builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<FlatSurfaceAlignStep>(sp, false));   // 1180: 검사 시작 평탄면 탐색(수평 얼라인 없음)
-builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<LaserWorkingDistanceStep>(
-    sp, "laserWorkingDistance", "레이저 WD 거리 조정", 450));
-builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<LaserWorkingDistanceStep>(
-    sp, LaserWorkingDistanceStep.TaskStartKey, "검사 시작 WD 조정", 1190));
+builder.Services.AddScoped<ISequenceStep, FlatSurfaceAlignStep>();
+builder.Services.AddScoped<ISequenceStep, LaserWorkingDistanceStep>();   // 450: ④ 직후 레이저 WD 거리 조정
 builder.Services.AddScoped<ISequenceStep, DepthCamCenterShiftStep>();    // 470: TCP 아래 용접선 → depth 영상 중심 평행이동
 // ⑤~⑫ Peak/Bead 측정 — ⑤⑨·⑥⑩·⑦⑪은 peakId 만 다른 동일 동작이라 한 클래스를 두 번 등록한다.
 // ActivatorUtilities.CreateInstance 는 명시 인자를 생성자 앞쪽부터 매칭하므로 peakId 가 첫 파라미터여야 한다.
@@ -194,7 +190,6 @@ builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstanc
 builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<BeadCenteringStep>(sp, 2));   // 1150
 builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<WObjPointStep>(sp, 2));   // 1160: 작업물 좌표계 점2(X방향)
 builder.Services.AddScoped<ISequenceStep, WObjRegisterStep>();   // 1170: 가상 점3(툴Z+50mm) + 좌표계 등록
-builder.Services.AddScoped<ISequenceStep, TaskStartReturnStep>();   // 1175: 점2(끝쪽)에서 검사 시작점으로 복귀
 // 드라이런 2점 교시 끝점 이동(1155) — seamEndW 접근점으로 MoveL. wobjPoint2 가 그 자리에서 점2를 기록.
 builder.Services.AddScoped<ISequenceStep, CobotSeamEndMoveStep>();
 // ⑱ 검사 수행 — 일반(비전 캡처)과 드라이런(이동만) 두 변형. dryRun 이 첫 생성자 인자.

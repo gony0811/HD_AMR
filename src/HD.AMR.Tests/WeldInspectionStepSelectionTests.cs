@@ -10,9 +10,7 @@ public class WeldInspectionStepSelectionTests
         "amrMove", "cobotInspection", "cameraAlign", "cameraAlignRefine", "flatSurfaceAlign", "laserWorkingDistance",
         "depthCamCenterShift", "peak1Find", "peak1Center", "bead1Find", "bead1Center", "wobjPoint1",
         "peak2Approach", "peak2Find", "peak2Center", "bead2Find", "bead2Center",
-        "cobotSeamEnd", "wobjPoint2", "wobjRegister",
-        "taskStartReturn", "flatSurfaceSearchTaskStart", "laserWorkingDistanceTaskStart",
-        "inspectionRun", "inspectionRunDry",
+        "cobotSeamEnd", "wobjPoint2", "wobjRegister", "inspectionRun", "inspectionRunDry",
         "wobjReset", "cobotHome", "monitorClose",
     };
 
@@ -27,13 +25,6 @@ public class WeldInspectionStepSelectionTests
         Assert.Contains("flatSurfaceAlign", keys);
         Assert.Contains("depthCamCenterShift", keys);
         Assert.Contains("wobjPoint2", keys);
-        Assert.Contains("taskStartReturn", keys);
-        Assert.Contains("flatSurfaceSearchTaskStart", keys);
-        Assert.Contains("laserWorkingDistanceTaskStart", keys);
-        Assert.True(Array.IndexOf(keys, "wobjRegister") < Array.IndexOf(keys, "taskStartReturn"));
-        Assert.True(Array.IndexOf(keys, "taskStartReturn") < Array.IndexOf(keys, "flatSurfaceSearchTaskStart"));
-        Assert.True(Array.IndexOf(keys, "flatSurfaceSearchTaskStart") < Array.IndexOf(keys, "laserWorkingDistanceTaskStart"));
-        Assert.True(Array.IndexOf(keys, "laserWorkingDistanceTaskStart") < Array.IndexOf(keys, "inspectionRun"));
         Assert.Contains("inspectionRun", keys);
         Assert.Contains("cobotHome", keys);
     }
@@ -84,9 +75,6 @@ public class WeldInspectionStepSelectionTests
         Assert.DoesNotContain("peak1Find", keys);
         Assert.DoesNotContain("wobjPoint1", keys);
         Assert.DoesNotContain("wobjRegister", keys);
-        Assert.DoesNotContain("taskStartReturn", keys);
-        Assert.DoesNotContain("flatSurfaceSearchTaskStart", keys);
-        Assert.DoesNotContain("laserWorkingDistanceTaskStart", keys);
         Assert.Contains("cobotInspection", keys);
         Assert.Contains("inspectionRun", keys);
     }
