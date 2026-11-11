@@ -40,6 +40,9 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
     private double[]? _lastAnchorEndTcp;                           // 그 task 종료 시 TCP(BASE) — 다음 task 연속 이동 판정
     private double? _lastAnchorStrokeMm;                           // 그 프레임을 쓴 task 의 텔레스코픽 스트로크(mm) — 높이 변경 시 캐시 무효화
     private CancellationTokenSource? _currentRunCts;
+    private readonly Dictionary<string, BundleAssignment> _bundleByAction = new();
+    private readonly Dictionary<string, (double[] Frame, double[]? Start, double[]? EndTcp)> _bundleFrames = new();
+    private readonly HashSet<string> _dissolvedBundles = new(StringComparer.Ordinal);
 
     /// <summary>
     /// <b>정렬·작업물 좌표계 교시 스텝군(③~⑯)</b> — anchor 적중(같은 노드의 2번째 이후 task) 시 건너뛴다.
@@ -56,6 +59,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         "peak1Find", "peak1Center", "bead1Find", "bead1Center", "wobjPoint1",
         "peak2Approach", "peak2Find", "peak2Center", "bead2Find", "bead2Center", "wobjPoint2",
         "wobjRegister",
+        FlatSurfaceAlignStep.BundlePoint2Key, LaserWorkingDistanceStep.BundlePoint2Key,
         // 드라이런 2점 교시의 끝점 이동 — anchor 적중 시 캐시 프레임 재사용으로 재교시 생략.
         "cobotSeamEnd",
     };
@@ -259,6 +263,24 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         var until = DateTime.UtcNow + BusyWaitTimeout;
         while (_runGate.IsBusy && DateTime.UtcNow < until)
             await Task.Delay(500, ct);
+    }
+
+    public void BeginBundles(IReadOnlyList<BundleAssignment> assignments)
+    {
+        lock (_sync)
+        {
+            _bundleByAction.Clear();
+            _bundleFrames.Clear();
+            _dissolvedBundles.Clear();
+            foreach (var a in assignments)
+            {
+                if (a.Role == BundleRole.None) continue;
+                _bundleByAction[a.ActionId] = a;
+                _logger.LogInformation(
+                    "TASK 묶음 {Role}: {Job} bundle={Id} wall={Wall} lift={Lift} dir={Dir}",
+                    a.Role, a.JobRef, a.BundleId, a.WallCode, a.LiftStrokeMm?.ToString("0") ?? "-", a.Direction);
+            }
+        }
     }
 
     public void InvalidateAnchor()
@@ -544,6 +566,36 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                 cachedAnchorEndTcp = anchorHit ? _lastAnchorEndTcp?.ToArray() : null;
             }
 
+            BundleAssignment? bundle = null;
+            lock (_sync) _bundleByAction.TryGetValue(action.ActionId, out bundle);
+            if (bundle?.Role == BundleRole.Follower)
+            {
+                var dissolved = false;
+                (double[] Frame, double[]? Start, double[]? EndTcp) shared = default;
+                var hasFrame = false;
+                lock (_sync)
+                {
+                    dissolved = _dissolvedBundles.Contains(bundle.BundleId!);
+                    hasFrame = !dissolved && _bundleFrames.TryGetValue(bundle.BundleId!, out shared);
+                }
+                if (dissolved || !hasFrame)
+                {
+                    anchorHit = false;
+                    cachedInternalFrame = null;
+                    cachedAnchorStartBase = null;
+                    cachedAnchorEndTcp = null;
+                    _logger.LogWarning("묶음 {Id} 미사용 — {Job} 은 단독 교시로 진행합니다.", bundle.BundleId, req.JobRef);
+                }
+                else
+                {
+                    anchorHit = true;
+                    cachedInternalFrame = (double[])shared.Frame.Clone();
+                    cachedAnchorStartBase = shared.Start?.ToArray();
+                    cachedAnchorEndTcp = shared.EndTcp?.ToArray();
+                    _logger.LogInformation("묶음 {Id} 공통 좌표계 — {Job} 교시 생략", bundle.BundleId, req.JobRef);
+                }
+            }
+
             // 레시피가 정한 스텝(미지정이면 등록된 전체)에서 출발해, 이 task 에 맞지 않는 것만 뺀다.
             //  · anchor 적중 → 정렬 스텝군 제거(첫 task 가 잡아 둔 작업물 좌표계 재사용)
             //  · 마지막 검사 액션이 아님 → 코봇 홈 복귀 제거(task 사이에 홈 왕복 금지)
@@ -644,6 +696,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                 context.Bag[CobotInspectionMoveStep.AnchorStartBaseBagKey] = cachedAnchorStartBase;
             if (cachedAnchorEndTcp is not null)
                 context.Bag[CobotInspectionMoveStep.PreviousEndTcpBagKey] = cachedAnchorEndTcp;
+            if (bundle?.Role == BundleRole.Leader)
+                BundleTeach.Activate(context, bundle);
 
             // CROSS3/CROSS4 는 LINE 과 동일하게 티칭 프로필 경유점을 실행한다 — 코로게이션 격자 교차부는
             // 평탄하지 않아 수식 생성으로 법선·깊이를 담을 수 없으므로 6-DOF 캡처 교시(/inspection-points)로
@@ -706,14 +760,31 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                             _logger.LogWarning(ex, "검사 종료 TCP 조회 실패 — 다음 task 는 연속 이동 없이 복귀 경로로 진입");
                         }
                         var strokeAtEnd = _lift.TryGetStrokeMm(out _);
+                        var dissolved = context.Bag.TryGetValue(BundleTeach.DissolvedKey, out var dissolvedFlag) && dissolvedFlag is true;
                         lock (_sync)
                         {
-                            _lastAnchor = (orderId, req.AnchorGroupId, direction, req.DrawingPos.WallCode);
-                            _lastInternalWorkpieceFrame = (double[])internalFrame.Clone();
-                            _lastAnchorStartBase = startBase;
-                            _lastAnchorEndTcp = endTcp;
-                            _lastAnchorStrokeMm = strokeAtEnd;
+                            if (bundle?.Role == BundleRole.Leader && dissolved)
+                            {
+                                _dissolvedBundles.Add(bundle.BundleId!);
+                                _lastAnchor = null;
+                                _lastInternalWorkpieceFrame = null;
+                                _lastAnchorStartBase = null;
+                                _lastAnchorEndTcp = null;
+                                _lastAnchorStrokeMm = null;
+                            }
+                            else
+                            {
+                                _lastAnchor = (orderId, req.AnchorGroupId, direction, req.DrawingPos.WallCode);
+                                _lastInternalWorkpieceFrame = (double[])internalFrame.Clone();
+                                _lastAnchorStartBase = startBase;
+                                _lastAnchorEndTcp = endTcp;
+                                _lastAnchorStrokeMm = strokeAtEnd;
+                                if (bundle?.Role == BundleRole.Leader && bundle.BundleId is { } bid)
+                                    _bundleFrames[bid] = ((double[])internalFrame.Clone(), startBase?.ToArray(), endTcp?.ToArray());
+                            }
                         }
+                        if (dissolved)
+                            _logger.LogWarning("묶음 {Id} 점2 교시 실패 — 공통 좌표계를 공유하지 않습니다.", bundle?.BundleId);
                     }
                     return InspectionActionResult.Ok(
                         $"recipe={recipeId} profile='{profile?.Name ?? $"corner3.{cornerSide}"}' anchor={req.AnchorGroupId}#{req.SeqInGroup}" +

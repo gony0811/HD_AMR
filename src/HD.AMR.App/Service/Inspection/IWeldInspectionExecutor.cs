@@ -59,6 +59,9 @@ public interface IWeldInspectionExecutor
     /// <summary>정렬(anchor) 캐시 무효화 — 주행 발생·신규 order 시 호출(사양 §8.1 anchorGroupId 계약).</summary>
     void InvalidateAnchor();
 
+    /// <summary>이 노드의 연속 TASK 묶음. 주행 전 도달 점검과 액션 실행이 같은 계획을 쓴다.</summary>
+    void BeginBundles(IReadOnlyList<BundleAssignment> assignments);
+
     /// <summary>진행 중 검사 시퀀스 즉시 중단(emergencyStop 경로) — 시퀀스 취소 + 코봇 모션 정지.</summary>
     Task AbortAsync();
 }

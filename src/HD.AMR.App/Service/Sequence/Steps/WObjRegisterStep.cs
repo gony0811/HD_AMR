@@ -60,6 +60,13 @@ public class WObjRegisterStep : ISequenceStep
         }
 
         context.Bag[InternalWorkpieceFrame.BagKey] = frame;
+        var slopeNote = "";
+        if (context.Bag.TryGetValue(BundleTeach.Point2WdKey, out var wd) && wd is true)
+        {
+            var slope = InternalWorkpieceFrame.SlopeAlongSeamDeg(p1, p2);
+            slopeNote = $" 묶음 보정 — X는 비드 센터(Y), Z는 두 점 WD 실측에 직교(기울기 {slope:+0.00;-0.00}°).";
+            _logger.LogInformation("내부 작업물 좌표계 묶음 보정: 기울기 {Slope:+0.00;-0.00}°", slope);
+        }
         var span = Math.Sqrt(
             Math.Pow(p2[0] - p1[0], 2) + Math.Pow(p2[1] - p1[1], 2) + Math.Pow(p2[2] - p1[2], 2));
 
@@ -74,7 +81,7 @@ public class WObjRegisterStep : ISequenceStep
             $"내부 작업물 좌표계 계산 완료 — 교시 간격 {span:0.0}mm, 바닥 원점 " +
             $"[{frame[0]:0.0}, {frame[1]:0.0}, {frame[2]:0.0}], RPY " +
             $"[{frame[3]:0.00}, {frame[4]:0.00}, {frame[5]:0.00}] " +
-            $"(Top에서 작업물 Z−{InternalWorkpieceFrame.DefaultCorrugationTopHeightMm:0.0}mm, 컨트롤러 등록 없음).");
+            $"(Top에서 작업물 Z−{InternalWorkpieceFrame.DefaultCorrugationTopHeightMm:0.0}mm, 컨트롤러 등록 없음).{slopeNote}");
     }
 
     private async Task<double> GetWObjIdAsync()

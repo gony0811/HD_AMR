@@ -1,4 +1,5 @@
 using HD.AMR.App.Communication;
+using HD.AMR.App.Service.Inspection;
 using Microsoft.Extensions.Logging;
 
 namespace HD.AMR.App.Service.Sequence.Steps;
@@ -20,9 +21,6 @@ public class PeakApproachStep : ISequenceStep
     private readonly ParameterService _param;
     private readonly ILogger<PeakApproachStep> _logger;
 
-    /// <summary>모션 후 안정화 대기(ms).</summary>
-    private const int SettleMs = 500;
-
     public PeakApproachStep(CobotService cobot, ParameterService param, ILogger<PeakApproachStep> logger)
     {
         _cobot = cobot;
@@ -40,91 +38,44 @@ public class PeakApproachStep : ISequenceStep
 
     public async Task<StepResult> ExecuteAsync(SequenceContext context, CancellationToken ct)
     {
-        var pitchMm = await WeldSequenceSupport.GetPitchMmAsync(_param, context);
-        if (pitchMm <= 0)
-            return StepResult.Fail($"'{WeldSequenceSupport.PitchMmKey}' 파라미터가 0 이하입니다.");
+        if (BundleTeach.IsActive(context)
+            && context.Bag.TryGetValue(BundleTeach.FirstStartKey, out var fs) && fs is double[] { Length: 3 } firstStart
+            && context.Bag.TryGetValue(BundleTeach.FirstEndKey, out var fe) && fe is double[] { Length: 3 } firstEnd
+            && context.Bag.TryGetValue(BundleTeach.LastStartKey, out var ls) && ls is double[] { Length: 3 } lastStart)
+        {
+            var pitchMm = await WeldSequenceSupport.GetPitchMmAsync(_param, context);
+            var configured = await WeldSequenceSupport.GetSignAsync(_param, WeldSequenceSupport.PitchDirKey);
+            var (count, geom) = TaskBundlePlanner.PitchPlan(firstStart, firstEnd, lastStart, pitchMm);
+            var sign = configured * geom;
+            _logger.LogInformation(
+                "[Peak2 이동] 묶음 점2 추정 — 피치 {Pitch:0.#}mm × {N}회, 부호 {Sign:+0;-0} (기하 {Geom:+0;-0})",
+                pitchMm, count, sign, geom);
+            context.Progress?.Invoke($"묶음 점2로 면을 따라 피치 {count}회 이동");
+
+            StepResult? failed = null;
+            for (var i = 0; i < count; i++)
+            {
+                var step = await BundleTeach.MoveOnePitchAsync(
+                    _cobot, _param, _logger, context, sign, fromBead1: i == 0, ct);
+                if (!step.Success) { failed = step; break; }
+            }
+            if (failed is null)
+                return StepResult.Ok($"묶음 점2 추정 완료 — 면 위 피치 {count}회(직선 점프 없음).");
+
+            if (!BundleTeach.TryMarkDissolved(context))
+                return failed;
+            _logger.LogWarning("묶음 점2 피치 추정 실패 — 단독 교시로 전환: {Msg}", failed.Message);
+            context.Progress?.Invoke($"⚠ 묶음 점2 피치 실패, 단독 교시로 진행: {failed.Message}");
+            var back = await BundleTeach.RepositionToSoloAsync(_cobot, _param, _logger, context, ct);
+            return back.Success
+                ? StepResult.Ok($"묶음 해제 — 단독 피치 1회. 원인: {failed.Message}")
+                : StepResult.Fail($"{failed.Message} / {back.Message}");
+        }
 
         var pitchDir = await WeldSequenceSupport.GetSignAsync(_param, WeldSequenceSupport.PitchDirKey);
-        var moveMm = pitchMm * pitchDir;
-
-        var (progressAxis, _) = await WeldSequenceSupport.ResolveProgressAxisAsync(context, _cobot, _param, ct);
-        var (toolAxis, axisFromParam) = await WeldSequenceSupport.GetProgressToolAxisAsync(_param, progressAxis);
-        if (!axisFromParam)
-            _logger.LogWarning(
-                "'{Key}' 매핑 파라미터 없음/범위 밖 — 기본값 사용. 카메라 페이지에서 매핑을 설정·저장하세요.",
-                WeldSequenceSupport.ProgressToolAxisKey(progressAxis));
-
-        var offset = new double[6];
-        FlatSurfaceCenteringService.ApplyAxis(offset, toolAxis, moveMm);
-
-        // 앵커 선택: ⑦⁺가 저장한 "센터링 완료·검사캠 시프트 전" 포즈가 있으면 그 포즈 기준으로 이동한다 —
-        // 검사캠 시프트·작업물 좌표계 교시용 이동 등 ⑦⁺ 이후의 모든 변위가 자동 원복되어
-        // ⑨⑪이 대상 코로게이션/비드를 depth ROI 중앙 근처에서 측정할 수 있다.
-        double[] anchor;
-        var unshiftNote = "";
-        if (context.Bag.TryGetValue(WeldSequenceSupport.Bead1CenteredPoseBagKey, out var ap)
-            && ap is double[] anchorPose && anchorPose.Length == 6)
-        {
-            anchor = anchorPose;
-            context.Bag.Remove(WeldSequenceSupport.InspectShiftedBagKey);   // 앵커 복귀로 시프트 상태 해소
-            unshiftNote = ", 앵커 기준(교시 이동 원복)";
-        }
-        else
-        {
-            // 폴백: 앵커 없음(상태 초기화 후 단독 실행 등) — 현재 포즈 기준 + 플래그 기반 시프트 역보정.
-            _logger.LogWarning("[Peak2 이동 (pitch)] Bead1 센터링 앵커 없음 — 현재 위치 기준으로 pitch 이동합니다.");
-            anchor = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
-            if (context.Bag.TryGetValue(WeldSequenceSupport.InspectShiftedBagKey, out var shifted) && shifted is true)
-            {
-                var (offX, offY) = await WeldSequenceSupport.GetInspectCamOffsetAsync(_param);
-                var (axX, _) = await WeldSequenceSupport.GetImageXAxisAsync(_param);
-                var (axY, _) = await WeldSequenceSupport.GetImageYAxisAsync(_param);
-                FlatSurfaceCenteringService.ApplyAxis(offset, axX, offX);
-                FlatSurfaceCenteringService.ApplyAxis(offset, axY, offY);
-                context.Bag.Remove(WeldSequenceSupport.InspectShiftedBagKey);
-                unshiftNote = $", 검사캠 시프트 역보정(영상 {offX:+0.0;-0.0}/{offY:+0.0;-0.0}mm)";
-            }
-        }
-
-        _logger.LogInformation(
-            "Peak2 이동: 진행축={Prog}, 툴{Axis} {Move:+0.0;-0.0}mm (pitch={Pitch:0.#}mm, dir={Dir:+0;-0}{Unshift})",
-            progressAxis, FlatSurfaceCenteringService.AxisName(toolAxis), moveMm, pitchMm, pitchDir, unshiftNote);
-
-        // ④ 평탄면 정렬로 툴이 국부 면에 맞춰 기울어 있으면 툴축 그대로 pitch 만큼 갈 때 면 법선 성분이 섞여
-        // 점2 의 면 거리가 점1 과 달라진다(실기 2026-11-09: ry 0.76° → 360mm 에 BASE Z +4.7mm, 작업물 좌표계 X 축이
-        // 면 쪽으로 −0.76° 기울어 검사 중·다음 LINE 마다 4.8mm 씩 면에 가까워짐). ② 면 법선이 있으면 그 성분을 빼
-        // 면과 평행하게(같은 거리 유지) BASE 오프셋으로 이동한다. 자세는 앵커 그대로.
-        int rc;
-        var wallNote = "";
-        double[]? baseMove = null;
-        if (context.Bag.TryGetValue(WeldSequenceSupport.WallOutNormalBagKey, out var nv) && nv is double[] { Length: 3 } wallOut)
-            baseMove = WeldSequenceSupport.ToolOffsetParallelToWall(anchor, offset, wallOut);
-        if (baseMove is not null)
-        {
-            var w = (double[])nv!;
-            var nLen = Math.Sqrt(w[0] * w[0] + w[1] * w[1] + w[2] * w[2]);
-            var anchorH = (anchor[0] * w[0] + anchor[1] * w[1] + anchor[2] * w[2]) / nLen;
-            _logger.LogInformation(
-                "Peak2 이동: 면 평행 BASE 오프셋 [{Dx:+0.0;-0.0}, {Dy:+0.0;-0.0}, {Dz:+0.0;-0.0}]mm (면 법선 거리 유지, 앵커 법선 위치 {H:0.0}mm)",
-                baseMove[0], baseMove[1], baseMove[2], anchorH);
-            rc = await _cobot.Rpc.MoveByOffsetAsync(anchor, user: 0,
-                new[] { baseMove[0], baseMove[1], baseMove[2], 0.0, 0.0, 0.0 },
-                tool: context.Tool, vel: context.Velocity, ct: ct);
-            wallNote = ", 면 거리 유지";
-        }
-        else
-        {
-            _logger.LogWarning("Peak2 이동: ② 면 법선 없음(티칭 폴백) — 툴축 그대로 이동(툴이 기울어 있으면 면 거리가 변할 수 있음)");
-            rc = await _cobot.Rpc.MoveByToolOffsetAsync(anchor, user: 0, offset,
-                tool: context.Tool, vel: context.Velocity, ct: ct);
-        }
-        if (rc != 0)
-            return StepResult.Fail($"Peak2 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.");
-
-        await Task.Delay(SettleMs, ct);
-
-        return StepResult.Ok(
-            $"Peak2 위치로 툴{FlatSurfaceCenteringService.AxisName(toolAxis)} {moveMm:+0.0;-0.0}mm 이동 완료 " +
-            $"(pitch={pitchMm:0.#}mm, dir={pitchDir:+0;-0}{unshiftNote}{wallNote}).");
+        var one = await BundleTeach.MoveOnePitchAsync(_cobot, _param, _logger, context, pitchDir, fromBead1: true, ct);
+        return one.Success
+            ? StepResult.Ok("Peak2 위치로 " + one.Message)
+            : one;
     }
 }

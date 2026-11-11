@@ -76,7 +76,10 @@ public class PeakCenteringStep : ISequenceStep
         return StepValidation.Ok();
     }
 
-    public async Task<StepResult> ExecuteAsync(SequenceContext context, CancellationToken ct)
+    public Task<StepResult> ExecuteAsync(SequenceContext context, CancellationToken ct)
+        => BundleTeach.RunWithPoint2FallbackAsync(_peakId, context, _cobot, _param, _logger, ct, RunAsync);
+
+    private async Task<StepResult> RunAsync(SequenceContext context, CancellationToken ct)
     {
         if (context.Bag[WeldSequenceSupport.OffsetMmBagKey(_peakId)] is not double initialOffsetMm)
             return StepResult.Fail($"Peak{_peakId} 측정값을 읽을 수 없습니다 — 앞 단계를 다시 실행하세요.");

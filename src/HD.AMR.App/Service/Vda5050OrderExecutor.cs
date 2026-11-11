@@ -340,6 +340,9 @@ public sealed class Vda5050OrderExecutor
         var pos = node.NodePosition!;
         try
         {
+            // 연속 TASK 묶음(같은 리프트·면·수직/수평). 도달 점검과 교시가 같은 계획을 쓴다.
+            _inspection.BeginBundles(TaskBundlePlanner.Assign(node.Actions, pos.Theta));
+
             // 코봇 도달·순회 — 홈 복귀·주행·리프트보다 먼저. 불가이면 아무것도 움직이지 않는다.
             if (await PrecheckReachBeforeDriveAsync(orderId, node, ct) is { } reachBlock)
             {
@@ -1142,7 +1145,9 @@ public sealed class Vda5050OrderExecutor
         }
 
         var allowBackup = backward is > 0;
-        var points = CobotReachPrecheck.FromActions(node.Actions, allowBackup);
+        var points = CobotReachPrecheck.FromActions(node.Actions, allowBackup).ToList();
+        points.AddRange(TaskBundlePlanner.Point2ReachPoints(
+            TaskBundlePlanner.Assign(node.Actions, pos.Theta), allowBackup));
         if (points.Count == 0) return null;
 
         using var scope = _scopeFactory.CreateScope();

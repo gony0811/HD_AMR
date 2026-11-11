@@ -9,7 +9,8 @@ public class WeldInspectionStepSelectionTests
     {
         "amrMove", "cobotInspection", "cameraAlign", "cameraAlignRefine", "flatSurfaceAlign", "laserWorkingDistance",
         "depthCamCenterShift", "peak1Find", "peak1Center", "bead1Find", "bead1Center", "wobjPoint1",
-        "peak2Approach", "peak2Find", "peak2Center", "bead2Find", "bead2Center",
+        "peak2Approach", "flatSurfaceSearchBundlePoint2", "laserWorkingDistanceBundlePoint2",
+        "peak2Find", "peak2Center", "bead2Find", "bead2Center",
         "cobotSeamEnd", "wobjPoint2", "wobjRegister", "inspectionRun", "inspectionRunDry",
         "wobjReset", "cobotHome", "monitorClose",
     };
@@ -25,6 +26,11 @@ public class WeldInspectionStepSelectionTests
         Assert.Contains("flatSurfaceAlign", keys);
         Assert.Contains("depthCamCenterShift", keys);
         Assert.Contains("wobjPoint2", keys);
+        Assert.Contains("flatSurfaceSearchBundlePoint2", keys);
+        Assert.Contains("laserWorkingDistanceBundlePoint2", keys);
+        Assert.True(Array.IndexOf(keys, "peak2Approach") < Array.IndexOf(keys, "flatSurfaceSearchBundlePoint2"));
+        Assert.True(Array.IndexOf(keys, "flatSurfaceSearchBundlePoint2") < Array.IndexOf(keys, "laserWorkingDistanceBundlePoint2"));
+        Assert.True(Array.IndexOf(keys, "laserWorkingDistanceBundlePoint2") < Array.IndexOf(keys, "peak2Find"));
         Assert.Contains("inspectionRun", keys);
         Assert.Contains("cobotHome", keys);
     }
@@ -75,6 +81,8 @@ public class WeldInspectionStepSelectionTests
         Assert.DoesNotContain("peak1Find", keys);
         Assert.DoesNotContain("wobjPoint1", keys);
         Assert.DoesNotContain("wobjRegister", keys);
+        Assert.DoesNotContain("flatSurfaceSearchBundlePoint2", keys);
+        Assert.DoesNotContain("laserWorkingDistanceBundlePoint2", keys);
         Assert.Contains("cobotInspection", keys);
         Assert.Contains("inspectionRun", keys);
     }

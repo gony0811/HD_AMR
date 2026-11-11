@@ -65,7 +65,12 @@ public class LaserWorkingDistanceStep : ISequenceStep
     /// <summary>이 값 미만의 횡복귀 성분은 무시한다(mm).</summary>
     private const double SkipReturnMm = 0.5;
 
+    private readonly string _key;
+    private readonly string _displayName;
+    private readonly int _order;
+
     public LaserWorkingDistanceStep(
+        string key, string displayName, int order,
         CobotService cobot, LaserDisplacementSensorService laser,
         ParameterService param, ILogger<LaserWorkingDistanceStep> logger)
     {
@@ -73,11 +78,16 @@ public class LaserWorkingDistanceStep : ISequenceStep
         _laser = laser;
         _param = param;
         _logger = logger;
+        _key = key;
+        _displayName = displayName;
+        _order = order;
     }
 
-    public string Key => "laserWorkingDistance";
-    public string DisplayName => "레이저 WD 거리 조정";
-    public int DefaultOrder => 450;
+    public const string BundlePoint2Key = "laserWorkingDistanceBundlePoint2";
+
+    public string Key => _key;
+    public string DisplayName => _displayName;
+    public int DefaultOrder => _order;
 
     public StepValidation Validate(SequenceContext context)
     {
@@ -90,6 +100,26 @@ public class LaserWorkingDistanceStep : ISequenceStep
     }
 
     public async Task<StepResult> ExecuteAsync(SequenceContext context, CancellationToken ct)
+    {
+        if (_key == BundlePoint2Key && !BundleTeach.IsActive(context))
+            return StepResult.Ok("묶음 점2가 아님 — WD 재조정 생략.");
+
+        var result = await AdjustAsync(context, ct);
+        if (_key != BundlePoint2Key || result.Success || !BundleTeach.TryMarkDissolved(context))
+        {
+            if (result.Success && _key == BundlePoint2Key)
+                context.Bag[BundleTeach.Point2WdKey] = true;
+            return result;
+        }
+        _logger.LogWarning("묶음 점2 WD 실패 — 단독 교시로 전환: {Msg}", result.Message);
+        context.Progress?.Invoke($"⚠ 묶음 점2 WD 실패, 단독 교시로 진행: {result.Message}");
+        var back = await BundleTeach.RepositionToSoloAsync(_cobot, _param, _logger, context, ct);
+        return back.Success
+            ? StepResult.Ok($"묶음 해제 — 단독 교시. 원인: {result.Message}")
+            : StepResult.Fail($"{result.Message} / {back.Message}");
+    }
+
+    private async Task<StepResult> AdjustAsync(SequenceContext context, CancellationToken ct)
     {
         var wd = await GetWorkingDistanceMmAsync();
         if (wd is < 100 or > 1000)

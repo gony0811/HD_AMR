@@ -44,7 +44,10 @@ public class PeakFindStep : ISequenceStep
         // Peak 탐색은 깊이만 쓰므로 비드 검출기(OpenCV)는 필요 없다.
         => WeldSequenceSupport.ValidateCommon(_cobot, _camera, _weld, requireDetector: false);
 
-    public async Task<StepResult> ExecuteAsync(SequenceContext context, CancellationToken ct)
+    public Task<StepResult> ExecuteAsync(SequenceContext context, CancellationToken ct)
+        => BundleTeach.RunWithPoint2FallbackAsync(_peakId, context, _cobot, _param, _logger, ct, RunAsync);
+
+    private async Task<StepResult> RunAsync(SequenceContext context, CancellationToken ct)
     {
         // 새 측정 사이클의 시작 — 이전 실행의 M1/M2 가 남아 있으면 새 M1 과 짝지어 각도가 자동 계산돼
         // 낡은 θ 가 화면에 표시된다. Peak1 찾기에서 측정 슬롯을 비운다.

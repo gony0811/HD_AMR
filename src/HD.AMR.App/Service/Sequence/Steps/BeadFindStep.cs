@@ -60,7 +60,10 @@ public class BeadFindStep : ISequenceStep
         return StepValidation.Ok();
     }
 
-    public async Task<StepResult> ExecuteAsync(SequenceContext context, CancellationToken ct)
+    public Task<StepResult> ExecuteAsync(SequenceContext context, CancellationToken ct)
+        => BundleTeach.RunWithPoint2FallbackAsync(_peakId, context, _cobot, _param, _logger, ct, RunAsync);
+
+    private async Task<StepResult> RunAsync(SequenceContext context, CancellationToken ct)
     {
         // Peak ROI(코로게이션, Depth 뷰 저장)와 Bead ROI(비드, IR 뷰 저장)를 각각 사용한다.
         var (peakRoi, peakSrc) = await WeldSequenceSupport.GetPeakRoiAsync(_param, _camera);
