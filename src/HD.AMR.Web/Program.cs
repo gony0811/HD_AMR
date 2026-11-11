@@ -88,6 +88,8 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<CommLossMonitorSer
 // 장치 통신 HEAVY 알람(비전·Depth·레이저·IO·코봇·AMR) — 공유 상태 + 감시. 알람 중 order 거부, RESET 으로 해제.
 builder.Services.Configure<DeviceHealthSettings>(builder.Configuration.GetSection("DeviceHealth"));
 builder.Services.AddSingleton<DeviceAlarmState>();
+// 코봇 도달·순회 경고 배너 — HEAVY 알람과 분리(order 를 잠그지 않음). 확인 버튼으로 지운다.
+builder.Services.AddSingleton<OperatorAlarmState>();
 builder.Services.AddSingleton<DeviceHealthMonitorService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<DeviceHealthMonitorService>());
 // AMR 장비 자체 상태 변화(모드·이동·조그·오류)를 운영 로그(출처 AMR)로 기록.
@@ -163,6 +165,8 @@ builder.Services.AddScoped<HD.AMR.App.Service.Motion.PostureLimitsService>();
 builder.Services.AddScoped<HD.AMR.App.Service.Inspection.SeamApproachResolver>();
 // 정차 거리·높이 격자를 컨트롤러 IK 로 훑는 리치 맵(코봇 이동 없음).
 builder.Services.AddScoped<HD.AMR.App.Service.Motion.ReachMapService>();
+// AMR·리프트 이동 전 코봇 도달·순회 사전 점검(저장 리치 맵 또는 1셀 IK).
+builder.Services.AddScoped<HD.AMR.App.Service.Motion.CobotReachPrecheck>();
 
 // 시퀀스 단계 등록 (ISequenceStep). 새 단계 추가 시 여기에 한 줄만 추가.
 builder.Services.AddScoped<ISequenceStep, AmrMoveStep>();   // 100: AMR 위치 이동 (페이지 테스트 전용)

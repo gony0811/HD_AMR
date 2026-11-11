@@ -135,6 +135,8 @@ internal static class ServiceRegistration
         // 장치 통신 HEAVY 알람(비전·Depth·레이저·IO·코봇·AMR) — 공유 상태 + 감시. 알람 중 order 거부, RESET 으로 해제.
         services.Configure<DeviceHealthSettings>(config.GetSection("DeviceHealth"));
         services.AddSingleton<DeviceAlarmState>();
+        // 코봇 도달·순회 경고 배너 — HEAVY 알람과 분리(order 를 잠그지 않음).
+        services.AddSingleton<OperatorAlarmState>();
         AddHostedSingleton<DeviceHealthMonitorService>(services);
         // AMR 장비 자체 상태 변화(모드·이동·조그·오류)를 운영 로그(출처 AMR)로 기록.
         services.AddHostedService<AmrActivityLogService>();
@@ -149,6 +151,7 @@ internal static class ServiceRegistration
         services.AddScoped<HD.AMR.App.Service.Inspection.SeamApproachResolver>();
         // 정차 거리·높이 격자를 컨트롤러 IK 로 훑는 리치 맵(코봇 이동 없음) — 용접 위치 시험 ⑤.
         services.AddScoped<HD.AMR.App.Service.Motion.ReachMapService>();
+        services.AddScoped<HD.AMR.App.Service.Motion.CobotReachPrecheck>();
         services.AddScoped<ArucoHandEyeService>();
         services.AddScoped<HandEyeAutoRoutine>();   // 핸드아이 자동 캡처(코봇 자동 이동) — ArucoHandEyeService(Scoped) 의존.
         services.AddScoped<ArucoMountAutoRoutine>(); // AMR+코봇 자동 이동 ArUco 장착보정 표본 수집.

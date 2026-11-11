@@ -179,6 +179,10 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         try
         {
             await WaitForIdleGateAsync(req.JobRef, runCts.Token);
+            // 리프트를 올리기 전에 시작점 도달을 본다. 시험이동은 끝점까지 가지 않으므로 시작점만.
+            var testPoints = CobotReachPrecheck.FromActions(new[] { action }, allowInspectionBackup: false);
+            if (await BlockIfUnreachableAsync(scope.ServiceProvider, testPoints, orderId, runCts.Token) is { } testBlock)
+                return testBlock;
             if (await EnsureLiftStrokeAsync(
                     scope.ServiceProvider, req.LiftStrokeMm, req.DrawingPos.WallCode, req.JobRef, orderId, runCts.Token)
                 is { } liftFail)
@@ -492,6 +496,10 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         try
         {
             await WaitForIdleGateAsync(req.JobRef, runCts.Token);
+            // 정차 보정까지 끝난 실제 자리에서 다시 본다. 여기서 막히면 리프트를 올리지 않는다.
+            var taskPoints = CobotReachPrecheck.FromActions(new[] { action }, allowInspectionBackup: false);
+            if (await BlockIfUnreachableAsync(scope.ServiceProvider, taskPoints, orderId, runCts.Token) is { } reachBlock)
+                return reachBlock;
             if (await EnsureLiftStrokeAsync(
                     scope.ServiceProvider, req.LiftStrokeMm, req.DrawingPos.WallCode, req.JobRef, orderId, runCts.Token)
                 is { } liftFail)
@@ -721,6 +729,32 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                 runCts.Dispose();
             }
         }
+    }
+
+    /// <summary>
+    /// 리프트 이동 직전 도달 재확인. 통과하면 null. 막히면 배너를 올리고 그대로 반환할 실패 결과.
+    /// 주행 전 점검이 정차 좌표로 통과해도, 도착 오차·정차 보정 뒤의 실제 자리는 다를 수 있다.
+    /// </summary>
+    private async Task<InspectionActionResult?> BlockIfUnreachableAsync(
+        IServiceProvider sp, IReadOnlyList<Motion.ReachPoint> points, string orderId, CancellationToken ct)
+    {
+        if (points.Count == 0) return null;
+        var pre = sp.GetRequiredService<Motion.CobotReachPrecheck>();
+        Motion.ReachGateResult gate;
+        try
+        {
+            gate = await pre.CheckHereAsync(points, ct);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            gate = Motion.ReachGateResult.Block(
+                $"코봇 도달 사전 점검 오류 — {ex.Message}. 확인하지 못해 리프트를 올리지 않습니다.",
+                points.Any(p => p.TestMove));
+        }
+        if (gate.Ok) return null;
+        pre.Raise(gate, OperationLogService.SourceAcs, orderId);
+        return InspectionActionResult.Fail(Motion.CobotReachPrecheck.BlockedErrorType, gate.Message);
     }
 
     /// <summary>

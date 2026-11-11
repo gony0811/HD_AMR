@@ -3,6 +3,8 @@ using HD.AMR.App.Communication;
 using HD.AMR.App.Communication.Vda5050;
 using HD.AMR.App.Enums;
 using HD.AMR.App.Models;
+using HD.AMR.App.Service.Inspection;
+using HD.AMR.App.Service.Motion;
 using HD.AMR.App.Service.Sequence.Steps;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -290,6 +292,7 @@ public sealed class Vda5050OrderExecutor
             _errors.Remove("emergencyStopActive");
             _errors.Remove("inspectionFailed");
             _errors.Remove(Inspection.WeldInspectionOrchestrator.StationReachShortfallErrorType);
+            _errors.Remove(CobotReachPrecheck.BlockedErrorType);
             _errors.Remove("equipmentError");
             _errors.Remove(DeviceFaultRejectErrorType);
 
@@ -337,6 +340,13 @@ public sealed class Vda5050OrderExecutor
         var pos = node.NodePosition!;
         try
         {
+            // 코봇 도달·순회 — 홈 복귀·주행·리프트보다 먼저. 불가이면 아무것도 움직이지 않는다.
+            if (await PrecheckReachBeforeDriveAsync(orderId, node, ct) is { } reachBlock)
+            {
+                FailMission(reachBlock);
+                return;
+            }
+
             // 허용 오차 결정: ParameterService(DB) → Order → AmrRestSettings
             var (devXy, devTheta) = await ResolveDeviationsAsync(pos);
 
@@ -535,6 +545,18 @@ public sealed class Vda5050OrderExecutor
                             ReportError(result.ErrorType,
                                 action.ActionType == "moveToSeamStart" ? $"{action.ActionId}: {errDesc}" : errDesc);
                         if (result.ErrorType == "equipmentError") equipmentDown = true;
+                        if (result.ErrorType == CobotReachPrecheck.BlockedErrorType)
+                        {
+                            for (var j = ai + 1; j < node.Actions.Count; j++)
+                            {
+                                var rest = node.Actions[j];
+                                SetActionStatus(rest.ActionId, "FAILED", "코봇 도달 불가로 잔여 액션을 실행하지 않습니다");
+                                failedActions++;
+                                OpLog(OpCategory.Action, rest.ActionType, false,
+                                    $"[{j + 1}/{node.Actions.Count}] {DescribeAction(rest)} — 코봇 도달 불가로 실행하지 않음", orderId);
+                            }
+                            break;
+                        }
                     }
                     _logger.LogInformation("VDA5050 액션 {Result}: {Type} ({ActionId}) — {Desc}",
                         result.Success ? "완료" : "실패", action.ActionType, action.ActionId, result.ResultDescription);
@@ -1090,6 +1112,70 @@ public sealed class Vda5050OrderExecutor
         while (rad > Math.PI) rad -= 2 * Math.PI;
         while (rad < -Math.PI) rad += 2 * Math.PI;
         return rad;
+    }
+
+    /// <summary>
+    /// 노드의 검사·시험이동을 정차 좌표로 미리 판정한다. 점이 없으면 null(이동 그대로).
+    /// 막히면 배너·로그·VDA 오류를 남기고 사유를 돌려준다 — 호출측은 주행하지 않는다.
+    /// 자동 시퀀스의 뻗음 부족만, ACS 가 허락한 최대 후진 자리에서 닿으면 통과(정차 보정이 고친다).
+    /// </summary>
+    private async Task<string?> PrecheckReachBeforeDriveAsync(string orderId, OrderNode node, CancellationToken ct)
+    {
+        var pos = node.NodePosition;
+        if (pos is null) return null;
+
+        double? backward = null;
+        foreach (var action in node.Actions)
+        {
+            if (action.ActionType != "startWeldInspection") continue;
+            var limits = WeldInspectionActionParser.TryParseStationAdjust(action, out var limitError);
+            if (limitError is not null)
+            {
+                _logger.LogInformation("도달 사전 점검: stationAdjust 무시 — {Err}", limitError);
+                continue;
+            }
+            if (limits is not null)
+            {
+                backward = limits.MaxBackwardMm;
+                break;
+            }
+        }
+
+        var allowBackup = backward is > 0;
+        var points = CobotReachPrecheck.FromActions(node.Actions, allowBackup);
+        if (points.Count == 0) return null;
+
+        using var scope = _scopeFactory.CreateScope();
+        var pre = scope.ServiceProvider.GetRequiredService<CobotReachPrecheck>();
+        ReachGateResult gate;
+        if (pos.Theta is not { } yaw)
+        {
+            gate = ReachGateResult.Block(
+                "노드 theta 가 없습니다 — 코봇 도달 시뮬레이션을 할 수 없어 AMR 을 움직이지 않습니다.",
+                points.Any(p => p.TestMove));
+        }
+        else
+        {
+            (double X, double Y)? backup = allowBackup
+                ? StationAdjustPlanner.BackedOff(pos.X, pos.Y, yaw, backward!.Value)
+                : null;
+            try
+            {
+                gate = await pre.CheckAsync(points, pos.X, pos.Y, yaw, backup, ct);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                gate = ReachGateResult.Block(
+                    $"코봇 도달 사전 점검 오류 — {ex.Message}. 확인하지 못해 AMR 을 움직이지 않습니다.",
+                    points.Any(p => p.TestMove));
+            }
+        }
+
+        if (gate.Ok) return null;
+        pre.Raise(gate, OperationLogService.SourceAcs, orderId);
+        ReportError(CobotReachPrecheck.BlockedErrorType, gate.Message);
+        return gate.Message;
     }
 
     /// <summary>임무 실패 — 미도달 상태로 전 미종결 액션 FAILED(§6.4 drivingFailed 계약의 액션 처리부).

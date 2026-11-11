@@ -35,7 +35,8 @@ public class LaserWorkingDistanceStep : ISequenceStep
     /// <summary>목표 Working Distance(mm) 파라미터 키. 없으면 <see cref="DefaultWorkingDistanceMm"/>.</summary>
     public const string WorkingDistanceKey = "Sequence.Laser.WorkingDistanceMm";
 
-    private const double DefaultWorkingDistanceMm = 300.0;
+    /// <summary>파라미터 미설정 시 레이저 WD [mm]. 리치 맵 정렬 준비 거리의 기본값과 같다.</summary>
+    public const double DefaultWorkingDistanceMm = 300.0;
 
     /// <summary>수렴 판정 허용오차(mm).</summary>
     private const double ToleranceMm = 1.0;
