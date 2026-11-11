@@ -149,6 +149,10 @@ public class FlatSurfaceAlignStep : ISequenceStep
             InspectionAlignmentAnchor.CaptureIfMissing(context,
                 await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct));
 
+        // 묶음 점2: 탐색을 시작한 자리(피치 이동으로 온 점2 근처)를 남긴다 — 점2 WD 조정 뒤 여기로 돌아온다.
+        if (!_levelSurface)
+            context.Bag[BundleTeach.Point2ReturnPoseKey] = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
+
         // ── Phase A+B: 평탄영역 탐색 + 코봇 횡이동 (공용 루틴) ─────────
         var (roiX, roiY, roiW, roiH, roiSrc) = await GetDepthRoiAsync();
         _logger.LogInformation("[평탄면 센터링 (레이저 정렬)] Phase A/B: 평탄영역 탐색+횡이동 시작 (grid={Grid}×{Grid}, ROI={Roi})",

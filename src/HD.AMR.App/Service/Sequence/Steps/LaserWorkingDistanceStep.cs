@@ -258,7 +258,18 @@ public class LaserWorkingDistanceStep : ISequenceStep
     /// </summary>
     private async Task<(bool Ok, string Note)> ReturnLateralAsync(SequenceContext context, ToolAxisDir depthAxis, CancellationToken ct)
     {
-        var (reference, refSource) = InspectionAlignmentAnchor.GetReturnReference(context);
+        double[]? reference;
+        string refSource;
+        if (_key == BundlePoint2Key)
+        {
+            // 점2 는 점2 자리로 돌아간다 — ② 용접선 시작점(점1 쪽)으로 가면 안 된다.
+            // 평탄면 탐색을 하지 않았으면(자리 기록 없음) 툴은 아직 점2 자리에 있으므로 옆으로 움직일 것이 없다.
+            if (!context.Bag.TryGetValue(BundleTeach.Point2ReturnPoseKey, out var p2) || p2 is not double[] { Length: 6 } point2)
+                return (true, "");
+            (reference, refSource) = (point2, "묶음 점2 위치");
+        }
+        else
+            (reference, refSource) = InspectionAlignmentAnchor.GetReturnReference(context);
         if (reference is null)
             return (false, "최초 접근 앵커 없음 — 검사위치 이동 또는 평탄면 정렬 단계를 먼저 실행하세요.");
 
