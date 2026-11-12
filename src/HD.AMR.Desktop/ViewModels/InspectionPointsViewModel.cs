@@ -118,6 +118,33 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
         AfterPointsChanged();
     }
 
+    /// <summary>기준 행 위에 새 행을 끼워 넣는다 — 앞뒤 행의 중간값으로 채운다.</summary>
+    [RelayCommand]
+    private void InsertPointAbove(XyPointVm p) => InsertPoint(p, above: true);
+
+    /// <summary>기준 행 아래에 새 행을 끼워 넣는다.</summary>
+    [RelayCommand]
+    private void InsertPointBelow(XyPointVm p) => InsertPoint(p, above: false);
+
+    private void InsertPoint(XyPointVm p, bool above)
+    {
+        if (IsRunning) return;
+        var at = HD.AMR.App.Service.Inspection.InspectionPointInsert.InsertIndex(Points.Count, Points.IndexOf(p), above);
+        var poses = Points.Select(x => x.Pose()).ToList();
+        var pose = HD.AMR.App.Service.Inspection.InspectionPointInsert.NewPose(poses, at)
+                   ?? new[] { 0.0, 0.0, DefaultZ, 0.0, 0.0, 0.0 };
+        var from = HD.AMR.App.Service.Inspection.InspectionPointInsert.InheritFrom(Points.Count, at);
+        var added = new XyPointVm(this)
+        {
+            X = pose[0], Y = pose[1], Z = pose[2], Rx = pose[3], Theta = pose[4], Rz = pose[5],
+            Surface = from >= 0 ? Points[from].Surface : 0,
+        };
+        Points.Insert(at, added);
+        Selected = at;
+        AfterPointsChanged();
+        Notify($"#{at + 1} 자리에 행 삽입 ({Points.Count}점)", false);
+    }
+
     [RelayCommand]
     private void RemovePoint(XyPointVm p)
     {

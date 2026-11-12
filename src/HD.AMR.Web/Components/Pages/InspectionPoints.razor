@@ -155,7 +155,11 @@
                                         disabled="@(_isRunning || !Cobot.IsConnected)">이동</button>
                                 <button class="btn btn-sm btn-outline-success" @onclick="() => InspectPointAsync(idx)"
                                         disabled="@(_isRunning || !Vision.Client.IsConnected)">검사</button>
-                                <button class="btn btn-sm btn-outline-danger" @onclick="() => RemovePoint(idx)" disabled="@_isRunning">－</button>
+                                <button class="btn btn-sm btn-outline-secondary" title="이 행 위에 새 행 삽입 (앞뒤 행의 중간값)"
+                                        @onclick="() => InsertPoint(idx, true)" disabled="@_isRunning">↑＋</button>
+                                <button class="btn btn-sm btn-outline-secondary" title="이 행 아래에 새 행 삽입 (앞뒤 행의 중간값)"
+                                        @onclick="() => InsertPoint(idx, false)" disabled="@_isRunning">↓＋</button>
+                                <button class="btn btn-sm btn-outline-danger" title="이 행 삭제" @onclick="() => RemovePoint(idx)" disabled="@_isRunning">－</button>
                             </td>
                         </tr>
                     }
@@ -349,6 +353,24 @@
             : new XyPoint { X = 0, Y = 0, Z = _defaultZ };
         _points.Add(p);
         _selected = _points.Count - 1;
+        RecomputeViewBox();
+    }
+
+    /// <summary>기준 행 위/아래에 새 행을 끼워 넣는다 — 앞뒤 행의 중간값으로 채운다.</summary>
+    private void InsertPoint(int i, bool above)
+    {
+        if (_isRunning) return;
+        var at = HD.AMR.App.Service.Inspection.InspectionPointInsert.InsertIndex(_points.Count, i, above);
+        var poses = _points.Select(x => new[] { x.X, x.Y, x.Z, x.Rx, x.Theta, x.Rz }).ToList();
+        var pose = HD.AMR.App.Service.Inspection.InspectionPointInsert.NewPose(poses, at)
+                   ?? new[] { 0.0, 0.0, _defaultZ, 0.0, 0.0, 0.0 };
+        var from = HD.AMR.App.Service.Inspection.InspectionPointInsert.InheritFrom(_points.Count, at);
+        _points.Insert(at, new XyPoint
+        {
+            X = pose[0], Y = pose[1], Z = pose[2], Rx = pose[3], Theta = pose[4], Rz = pose[5],
+            Surface = from >= 0 ? _points[from].Surface : (byte)0,
+        });
+        _selected = at;
         RecomputeViewBox();
     }
 
