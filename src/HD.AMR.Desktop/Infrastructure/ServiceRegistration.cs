@@ -127,6 +127,8 @@ internal static class ServiceRegistration
             HD.AMR.App.Service.Inspection.WeldInspectionOrchestrator>();
         // VDA 5050 어댑터(ACS↔AMR) — connection/state 발행 + order 실행 + instantActions. Enabled=false 면 유휴.
         services.Configure<HD.AMR.App.Communication.Vda5050.Vda5050AdapterSettings>(config.GetSection("Vda5050"));
+        // 주행 중 코봇 반경 장애물 감시(파라미터 cobotGuard.enabled, 기본 끔) — 실행기·어댑터·IO 가 상태를 본다.
+        AddHostedSingleton<CobotObstacleGuard>(services);
         services.AddSingleton<Vda5050OrderExecutor>();
         AddHostedSingleton<Vda5050AdapterService>(services);
         // 통신 단절 Fail-Safe(docs/HD_AMR_통신단절_FailSafe_사양.md) — 일시정지 게이트 + 단절 감시(GRACE→PAUSE→HOLD).

@@ -62,6 +62,8 @@ public sealed class Vda5050OrderExecutor
 
     // ── 일시정지(통신 단절 사양 §3–5) ──
     private readonly MissionPauseGate _pauseGate;
+    /// <summary>주행 중 코봇 반경 장애물 감시(파라미터 cobotGuard.enabled). 없으면 감시하지 않는다.</summary>
+    private readonly CobotObstacleGuard? _obstacleGuard;
     private bool _paused;
     private PauseReason _pauseReason;
     private string? _orderMapId;   // 재개 전 mapId 일치 확인용(§4.2)
@@ -98,8 +100,9 @@ public sealed class Vda5050OrderExecutor
         Inspection.IWeldInspectionExecutor inspection, PowerModeService power,
         IOptions<AmrRestSettings> restOptions, IServiceScopeFactory scopeFactory,
         MissionPauseGate pauseGate, DeviceAlarmState deviceAlarms, OperationLogService opLog,
-        ILogger<Vda5050OrderExecutor> logger)
+        ILogger<Vda5050OrderExecutor> logger, CobotObstacleGuard? obstacleGuard = null)
     {
+        _obstacleGuard = obstacleGuard;
         _rest = rest;
         _deviceAlarms = deviceAlarms;
         _amr = amr;
@@ -821,6 +824,8 @@ public sealed class Vda5050OrderExecutor
         var deadline = DateTime.UtcNow.AddSeconds(_restSettings.DriveTimeoutSec);
         var started = DateTime.UtcNow;
         var lastDiagLog = DateTime.MinValue;
+        // 주행 대기 동안만 코봇 반경 장애물을 감시한다(꺼져 있으면 아무 일도 하지 않는다).
+        using var obstacleWatch = _obstacleGuard?.Watch();
         const int diagIntervalSec = 30;
 
         double lastDxy = double.NaN, lastDTheta = double.NaN;
@@ -904,6 +909,27 @@ public sealed class Vda5050OrderExecutor
                 entryLogged = false;
             }
 
+            // 코봇 반경 장애물 — 감시가 이미 주행을 세웠다. 사라질 때까지 기다렸다가 같은 목표로 다시 지령한다.
+            // 기다린 시간은 주행 타임아웃에 그대로 들어간다(끝내 안 사라지면 실패로 보고).
+            if (_obstacleGuard?.Active is { } obstacle)
+            {
+                StateChanged?.Invoke();
+                if (!await _obstacleGuard.WaitClearAsync(deadline, ct))
+                    return (false, $"코봇 반경 장애물이 사라지지 않아 주행 중단 — {obstacle.Hit.Describe()}, " +
+                                   $"감시 영역 {obstacle.Zone.Describe()}, 정지 {(DateTime.UtcNow - obstacle.SinceUtc).TotalSeconds:0}s " +
+                                   $"(최종 {lastPoseDesc})");
+                StateChanged?.Invoke();
+                await _pauseGate.WaitWhilePausedAsync(ct);
+                staleErrors = await SnapshotErrorKeysAsync(ct);
+                OpLog(OpCategory.Drive, "주행 재지령", null,
+                    $"코봇 반경 장애물 해소 — 현재 {DescribePose()} → 같은 목표 ({pos.X:0.###}, {pos.Y:0.###}, θ={pos.Theta ?? 0.0:0.###}) 재이동");
+                var again = await _rest.GoAsync(pos.X, pos.Y, pos.Theta ?? 0.0, stopFlag: true, ct);
+                if (!again.Ok)
+                    return (false, $"장애물 해소 후 이동 명령 실패 (code={again.Code}): {again.Message}");
+                settle.Reset();
+                entryLogged = false;
+            }
+
             if (DateTime.UtcNow > deadline)
             {
                 _logger.LogWarning("VDA5050 주행 타임아웃: 최종 {Pose}, 잔여 dxy={Dxy:F3}m, dθ={DTheta:F3}rad " +
@@ -979,7 +1005,8 @@ public sealed class Vda5050OrderExecutor
             if (status.Ok && status.Data is JsonElement data)
             {
                 var fresh = GetErrorEntries(data).Where(e => !staleErrors.Contains(e.Key)).ToList();
-                if (fresh.Count > 0)
+                // 장애물 감시가 방금 세웠으면 그 정지가 남긴 항목일 수 있다 — 다음 바퀴에서 해소를 기다리고 기준선을 다시 잡는다.
+                if (fresh.Count > 0 && _obstacleGuard?.Active is null)
                     return (false, $"로봇 이동 오류 보고: [{string.Join(",", fresh.Select(e => e.Text))}]");
             }
 

@@ -36,6 +36,8 @@ public class IoModuleService : BackgroundService
     private readonly DeviceAlarmState _deviceAlarms;
     /// <summary>수동 비드 입력 팝업 대기 여부 — 떠 있는 동안 타워램프 녹색 점멸.</summary>
     private readonly Sequence.BeadManualLabelHub? _beadHub;
+    /// <summary>코봇 반경 장애물로 주행을 세운 상태 — 그동안 타워램프 황색 + 부저.</summary>
+    private readonly CobotObstacleGuard? _obstacleGuard;
     private bool _attentionBlinking;
     private readonly SemaphoreSlim _outputWriteLock = new(1, 1);
 
@@ -46,9 +48,10 @@ public class IoModuleService : BackgroundService
     public IoModuleService(IOptions<IoModuleModbusTcpSettings> options, ILoggerFactory loggerFactory,
         AMRService amr, CobotService cobot, OperationLogService opLog, Vda5050AdapterService vda,
         Vda5050OrderExecutor executor, CommLossMonitorService commLoss, DeviceAlarmState deviceAlarms,
-        Sequence.BeadManualLabelHub? beadHub = null)
+        Sequence.BeadManualLabelHub? beadHub = null, CobotObstacleGuard? obstacleGuard = null)
     {
         _beadHub = beadHub;
+        _obstacleGuard = obstacleGuard;
         _executor = executor;
         _deviceAlarms = deviceAlarms;
         _commLoss = commLoss;
@@ -234,7 +237,9 @@ public class IoModuleService : BackgroundService
                     {
                         await _startResume.ApplyAsync(inputs, _executor.IsPaused,
                             () => _vda.RequestResumeAsync("조작반 START 버튼", OperationLogService.SourceIo));
-                        await _commLossBuzzer.ApplyAsync(_commLoss.Stage == CommLossStage.Hold, SetBuzzerAsync, stoppingToken);
+                        await _commLossBuzzer.ApplyAsync(
+                            _commLoss.Stage == CommLossStage.Hold || _obstacleGuard?.Active is not null,
+                            SetBuzzerAsync, stoppingToken);
                     }
                     catch (OperationCanceledException) { throw; }
                     catch (Exception ex)
@@ -424,7 +429,8 @@ public class IoModuleService : BackgroundService
             _amr.LatestStatus?.ErrorCode is > 0, _cobot.State?.ErrorCode is > 0, _deviceAlarms.HasHeavyAlarm);
         // 수동 비드 입력 팝업이 떠 있으면 녹색 점멸(1초에 한 번) — 팝업이 닫히면 아래 정책이 원래 상태로 되돌린다.
         var attention = _beadHub?.Pending is not null;
-        var paused = _executor.IsPaused;
+        // 코봇 반경 장애물로 선 동안은 일시정지와 같은 황색.
+        var paused = _executor.IsPaused || _obstacleGuard?.Active is not null;
         var blinking = attention && !alarm && !paused;
         if (blinking != _attentionBlinking)
         {

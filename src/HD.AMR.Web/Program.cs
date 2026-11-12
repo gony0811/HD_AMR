@@ -78,6 +78,8 @@ builder.Services.AddSingleton<AmrDriveService>();
 // AMRService(Modbus 상태)를 참조해 state를 매핑. Enabled=false 면 유휴. AMR/Cobot 과 동일 패턴.
 builder.Services.Configure<HD.AMR.App.Communication.Vda5050.Vda5050AdapterSettings>(
     builder.Configuration.GetSection("Vda5050"));
+builder.Services.AddSingleton<CobotObstacleGuard>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<CobotObstacleGuard>());
 builder.Services.AddSingleton<Vda5050OrderExecutor>();
 builder.Services.AddSingleton<Vda5050AdapterService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<Vda5050AdapterService>());
