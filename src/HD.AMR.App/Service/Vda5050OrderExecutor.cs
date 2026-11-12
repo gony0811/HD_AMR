@@ -773,7 +773,7 @@ public sealed class Vda5050OrderExecutor
             await Sequence.Steps.WeldSequenceSupport.LoadOpticalAxisAsync(
                 scope.ServiceProvider.GetRequiredService<ParameterService>(), ctx);
             var cur = await cobot.Rpc.GetActualJointPosAsync(ct: ct);
-            var mode = SequenceEntry.ModeOf(cur, ctx);
+            var mode = SequenceEntry.ResolveMode(cur, ctx);
             OpLog(OpCategory.Cobot, label + " 시작", null,
                 $"자세 모드 {mode}, 현재 관절 [{string.Join(", ", cur.Select(v => v.ToString("0.#")))}]", orderId);
 

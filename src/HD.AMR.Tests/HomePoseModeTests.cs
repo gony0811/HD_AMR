@@ -106,4 +106,26 @@ public class HomePoseModeTests
     public void JointDistance_WrapsAround360()
         => Assert.Equal(1.0, JointDistance(
             new double[] { 0, 0, 0, 0, 0, 179.5 }, new double[] { 0, 0, 0, 0, 0, -179.5 }), 6);
+
+    [Fact]
+    public void 벽_앞에_뻗은_자세는_가까운_쪽이_아니라_시작할_때의_모드를_따른다()
+    {
+        // 실기 2026-11-13 05:01 T L4-R10C11 — 홈 위치_2 로 시작, 면을 따라 멀리 뻗은 자세가 관절 거리로는 홈 쪽이었다.
+        Assert.Equal(PoseMode.Home2, PickMode(atHome2Side: false, atHomeSide: false, nearest: PoseMode.Home, remembered: PoseMode.Home2));
+        Assert.Equal(PoseMode.Home, PickMode(false, false, nearest: PoseMode.Home2, remembered: PoseMode.Home));
+    }
+
+    [Fact]
+    public void 기준_자세나_경유점_위에_있으면_그_자리가_모드를_정한다()
+    {
+        Assert.Equal(PoseMode.Home2, PickMode(atHome2Side: true, atHomeSide: false, nearest: PoseMode.Home, remembered: PoseMode.Home));
+        Assert.Equal(PoseMode.Home, PickMode(false, atHomeSide: true, nearest: PoseMode.Home2, remembered: PoseMode.Home2));
+    }
+
+    [Fact]
+    public void 기억이_없으면_종전처럼_가까운_쪽이다()
+    {
+        Assert.Equal(PoseMode.Home, PickMode(false, false, PoseMode.Home, remembered: null));
+        Assert.Equal(PoseMode.Home2, PickMode(false, false, PoseMode.Home2, remembered: null));
+    }
 }
