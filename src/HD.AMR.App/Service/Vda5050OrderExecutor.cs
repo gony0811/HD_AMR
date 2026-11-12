@@ -346,11 +346,37 @@ public sealed class Vda5050OrderExecutor
             // 연속 TASK 묶음(같은 리프트·면·수직/수평). 도달 점검과 교시가 같은 계획을 쓴다.
             _inspection.BeginBundles(TaskBundlePlanner.Assign(node.Actions, pos.Theta));
 
-            // 코봇 도달·순회 — 홈 복귀·주행·리프트보다 먼저. 불가이면 아무것도 움직이지 않는다.
-            if (await PrecheckReachBeforeDriveAsync(orderId, node, ct) is { } reachBlock)
+            // 코봇 도달·순회 — 홈 복귀·주행·리프트보다 먼저. 닿는 용접선이 하나도 없으면 아무것도 움직이지 않는다.
+            // 일부만 닿지 않으면 그 용접선만 실패로 끝내고 나머지는 수행한다.
+            var reach = await PrecheckReachBeforeDriveAsync(orderId, node, ct);
+            if (reach.Block is { } reachBlock)
             {
                 FailMission(reachBlock);
                 return;
+            }
+            var skippedActions = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var (bad, why) in reach.Unreachable)
+            {
+                skippedActions.Add(bad.ActionId);
+                SetActionStatus(bad.ActionId, "FAILED", $"코봇 도달 불가로 실행하지 않음 — {why}");
+                OpLog(OpCategory.Action, bad.ActionType, false,
+                    $"{DescribeAction(bad)} — 코봇 도달 불가로 실행하지 않음(나머지 용접선은 수행): {why}", orderId);
+            }
+            if (skippedActions.Count > 0 || reach.DissolveBundles)
+            {
+                var runnable = node.Actions.Where(a => !skippedActions.Contains(a.ActionId)).ToList();
+                _inspection.BeginBundles(reach.DissolveBundles
+                    ? Array.Empty<BundleAssignment>()
+                    : TaskBundlePlanner.Assign(runnable, pos.Theta));
+                if (skippedActions.Count > 0)
+                {
+                    _logger.LogWarning("코봇 도달 사전 점검: 용접선 {Bad}/{All}건 불가 — 그 용접선만 실패 처리하고 나머지를 수행합니다",
+                        skippedActions.Count, node.Actions.Count);
+                    ReportError(CobotReachPrecheck.BlockedErrorType,
+                        $"용접선 {skippedActions.Count}건 도달 불가 — 실행하지 않음(나머지는 수행): " +
+                        string.Join(" | ", reach.Unreachable.Select(u => u.Reason)));
+                    StateChanged?.Invoke();
+                }
             }
 
             // 허용 오차 결정: ParameterService(DB) → Order → AmrRestSettings
@@ -430,14 +456,18 @@ public sealed class Vda5050OrderExecutor
             //    개별 액션 실패는 다음 액션 계속 — 단 equipmentError(설비 불능)면 잔여 전건 FAILED(§6.4).
             //    마지막 검사 액션에서만 코봇을 홈으로 되돌린다 — 노드 안의 task 는 정렬(작업물 좌표계)을
             //    공유하므로 사이마다 홈에 다녀오면 이점이 사라지고 시간만 든다(§8.1 anchorGroupId).
-            var lastInspectionIndex = node.Actions.FindLastIndex(a => a.ActionType == "startWeldInspection");
-            var firstInspectionIndex = node.Actions.FindIndex(a => a.ActionType == "startWeldInspection");
+            //    사전 점검에서 닿지 않아 이미 실패로 끝낸 용접선은 건너뛴다 — 홈 복귀는 실제로 수행하는 마지막 검사에 붙는다.
+            var lastInspectionIndex = node.Actions.FindLastIndex(a =>
+                a.ActionType == "startWeldInspection" && !skippedActions.Contains(a.ActionId));
+            var firstInspectionIndex = node.Actions.FindIndex(a =>
+                a.ActionType == "startWeldInspection" && !skippedActions.Contains(a.ActionId));
             var equipmentDown = false;
-            int failedActions = 0;
+            int failedActions = skippedActions.Count;
             for (var ai = 0; ai < node.Actions.Count; ai++)
             {
                 var action = node.Actions[ai];
                 ct.ThrowIfCancellationRequested();
+                if (skippedActions.Contains(action.ActionId)) continue;
                 // 일시정지 중이면 다음 action 을 시작하지 않는다(사양 §3).
                 await _pauseGate.WaitWhilePausedAsync(ct);
 
@@ -1160,14 +1190,16 @@ public sealed class Vda5050OrderExecutor
     }
 
     /// <summary>
-    /// 노드의 검사·시험이동을 정차 좌표로 미리 판정한다. 점이 없으면 null(이동 그대로).
-    /// 막히면 배너·로그·VDA 오류를 남기고 사유를 돌려준다 — 호출측은 주행하지 않는다.
+    /// 노드의 검사·시험이동을 정차 좌표로 미리 판정한다. 점이 없으면 통과(이동 그대로).
+    /// 막히면(<see cref="ReachPrecheckOutcome.Block"/>) 배너·로그·VDA 오류를 남기고 사유를 돌려준다 — 호출측은 주행하지 않는다.
+    /// 검사 용접선 중 일부만 닿지 않으면 막지 않고 그 용접선 목록(<see cref="ReachPrecheckOutcome.Unreachable"/>)을 돌려준다 —
+    /// 호출측이 그 용접선만 실패로 끝내고 나머지를 수행한다.
     /// 자동 시퀀스의 뻗음 부족만, ACS 가 허락한 최대 후진 자리에서 닿으면 통과(정차 보정이 고친다).
     /// </summary>
-    private async Task<string?> PrecheckReachBeforeDriveAsync(string orderId, OrderNode node, CancellationToken ct)
+    private async Task<ReachPrecheckOutcome> PrecheckReachBeforeDriveAsync(string orderId, OrderNode node, CancellationToken ct)
     {
         var pos = node.NodePosition;
-        if (pos is null) return null;
+        if (pos is null) return ReachPrecheckOutcome.Pass;
 
         double? backward = null;
         foreach (var action in node.Actions)
@@ -1190,7 +1222,7 @@ public sealed class Vda5050OrderExecutor
         var points = CobotReachPrecheck.FromActions(node.Actions, allowBackup).ToList();
         points.AddRange(TaskBundlePlanner.Point2ReachPoints(
             TaskBundlePlanner.Assign(node.Actions, pos.Theta), allowBackup));
-        if (points.Count == 0) return null;
+        if (points.Count == 0) return ReachPrecheckOutcome.Pass;
 
         using var scope = _scopeFactory.CreateScope();
         var pre = scope.ServiceProvider.GetRequiredService<CobotReachPrecheck>();
@@ -1219,10 +1251,51 @@ public sealed class Vda5050OrderExecutor
             }
         }
 
-        if (gate.Ok) return null;
+        if (gate.Ok) return ReachPrecheckOutcome.Pass;
+
+        // 하나라도 닿지 않는다 — 용접선별로 다시 본다. 닿는 것이 있으면 닿지 않는 것만 빼고 수행한다.
+        if (pos.Theta is { } y2 && !points.Any(p => p.TestMove))
+        {
+            try
+            {
+                (double X, double Y)? backup2 = allowBackup
+                    ? StationAdjustPlanner.BackedOff(pos.X, pos.Y, y2, backward!.Value)
+                    : null;
+                var inspections = node.Actions.Where(a => a.ActionType == "startWeldInspection").ToList();
+                var bad = new List<(VdaAction Action, string Reason)>();
+                var good = new List<VdaAction>();
+                foreach (var a in inspections)
+                {
+                    var own = CobotReachPrecheck.FromActions(new[] { a }, allowBackup);
+                    if (own.Count == 0) { good.Add(a); continue; }
+                    var g = await pre.CheckAsync(own, pos.X, pos.Y, y2, backup2, ct);
+                    if (g.Ok) good.Add(a); else bad.Add((a, g.Message));
+                }
+                if (ReachPartialPolicy.CanRunPartially(inspections.Count, bad.Count))
+                {
+                    // 남은 용접선끼리 묶었을 때의 점2 도 닿아야 한다 — 안 닿으면 묶지 않고 하나씩 교시한다.
+                    var point2 = TaskBundlePlanner.Point2ReachPoints(TaskBundlePlanner.Assign(good, pos.Theta), allowBackup);
+                    var bundleOk = point2.Count == 0 || (await pre.CheckAsync(point2, pos.X, pos.Y, y2, backup2, ct)).Ok;
+                    return new ReachPrecheckOutcome(null, bad, DissolveBundles: !bundleOk);
+                }
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "용접선별 도달 재점검 오류 — 정차 전체를 실행하지 않습니다");
+            }
+        }
+
         pre.Raise(gate, OperationLogService.SourceAcs, orderId);
         ReportError(CobotReachPrecheck.BlockedErrorType, gate.Message);
-        return gate.Message;
+        return new ReachPrecheckOutcome(gate.Message, Array.Empty<(VdaAction, string)>(), false);
+    }
+
+    /// <summary>주행 전 도달 점검 결과. Block 이 있으면 정차 전체를 실행하지 않는다.</summary>
+    private sealed record ReachPrecheckOutcome(
+        string? Block, IReadOnlyList<(VdaAction Action, string Reason)> Unreachable, bool DissolveBundles)
+    {
+        public static readonly ReachPrecheckOutcome Pass = new(null, Array.Empty<(VdaAction, string)>(), false);
     }
 
     /// <summary>임무 실패 — 미도달 상태로 전 미종결 액션 FAILED(§6.4 drivingFailed 계약의 액션 처리부).
@@ -1610,6 +1683,17 @@ public sealed class Vda5050OrderExecutor
 /// 중간 용접선의 일반 실패는 다음 용접선이 접근 경로를 다시 잡으므로 복귀하지 않는다.
 /// moveToSeamStart(시험)는 ② 접근 자세에 멈춰 있는 것이 목적이라 대상이 아니다.
 /// </summary>
+/// <summary>
+/// 정차의 용접선 일부가 닿지 않을 때 나머지를 수행할 수 있는가. 닿는 것이 하나라도 있어야 한다 —
+/// 전부 닿지 않으면 종전처럼 정차 전체를 실행하지 않는다(주행·리프트도 하지 않음).
+/// 전부 따로는 닿는데 함께는 막힌 경우(묶음 점2)는 묶음만 풀고 모두 수행한다.
+/// </summary>
+internal static class ReachPartialPolicy
+{
+    public static bool CanRunPartially(int inspections, int unreachable)
+        => inspections > 0 && unreachable < inspections;
+}
+
 internal static class InspectionHomePolicy
 {
     public static bool ShouldReturnHome(string actionType, bool success, bool isLastInspection, string? errorType)

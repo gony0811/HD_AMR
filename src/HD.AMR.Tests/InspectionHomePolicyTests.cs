@@ -26,4 +26,14 @@ public class InspectionHomePolicyTests
     [Fact]
     public void 코봇_이동_시험은_접근_자세에_머무는_것이_목적이라_복귀하지_않는다()
         => Assert.False(InspectionHomePolicy.ShouldReturnHome("moveToSeamStart", false, isLastInspection: true, "inspectionFailed"));
+
+    [Theory]
+    [InlineData(6, 1, true)]    // 6개 중 1개 불가 — 나머지 5개 수행
+    [InlineData(6, 5, true)]
+    [InlineData(6, 0, true)]    // 따로는 다 닿는다 — 묶음만 풀고 수행
+    [InlineData(6, 6, false)]   // 전부 불가 — 정차 전체 미실행
+    [InlineData(1, 1, false)]
+    [InlineData(0, 0, false)]
+    public void 닿는_용접선이_하나라도_있으면_닿지_않는_것만_빼고_수행한다(int inspections, int unreachable, bool expected)
+        => Assert.Equal(expected, ReachPartialPolicy.CanRunPartially(inspections, unreachable));
 }
