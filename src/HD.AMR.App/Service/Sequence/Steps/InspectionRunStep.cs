@@ -261,7 +261,12 @@ public class InspectionRunStep : ISequenceStep
                     : SurfaceType.Flat;
             // v3.2: 코봇 wobj pose → 면-로컬 (u,v,h). 축·부호는 wobj 티칭 규약(§5)에 흡수(FaceLocalMapper).
             var wallId = (ushort)context.InspectionSurfaceId;
-            var (u, v, h) = FaceLocalMapper.ToFaceLocal(wallId, w.X, w.Y, w.Z, context.FacePlacement);
+            var (u, v, rawH) = FaceLocalMapper.ToFaceLocal(wallId, w.X, w.Y, w.Z, context.FacePlacement);
+            // 음수 높이는 비전이 거부한다 — 0 으로 올려 보낸다(코봇 위치는 그대로).
+            var h = FaceLocalMapper.CaptureHeight(rawH);
+            if (h != rawH)
+                _logger.LogInformation("[검사 수행] 경유점 #{Idx} 촬영 높이 {Raw}mm → {H}mm 로 올려 전송(비전은 음수 높이를 받지 않음)",
+                    i + 1, rawH, h);
             captureSeq++;
             var data = CaptureReqPayload.Build(surfaceType, wallId, u, v, h, taskId, attempt, captureSeq);
             var outcome = await _vision.Client.RequestCaptureAsync(data, visionTimeout, ct);

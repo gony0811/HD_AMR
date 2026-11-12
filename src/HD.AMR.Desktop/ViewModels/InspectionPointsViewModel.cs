@@ -238,7 +238,8 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
         try
         {
             var wallId = (ushort)Math.Clamp(WallId, 1, 10);
-            var (u, v, h) = FaceLocalMapper.ToFaceLocal(wallId, p.X, p.Y, p.Z);
+            var (u, v, rawH) = FaceLocalMapper.ToFaceLocal(wallId, p.X, p.Y, p.Z);
+            var h = FaceLocalMapper.CaptureHeight(rawH);   // 비전은 음수 높이를 받지 않는다
             _manualCaptureSeq++;
             var data = CaptureReqPayload.Build(SurfaceTypes.OrFlat(p.Surface), wallId,
                 u, v, h, Guid.Empty, attempt: 1, _manualCaptureSeq);
@@ -283,7 +284,8 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
 
                 var p = Points[i];
                 var wallId = (ushort)Math.Clamp(WallId, 1, 10);
-                var (u, v, h) = FaceLocalMapper.ToFaceLocal(wallId, p.X, p.Y, p.Z);
+                var (u, v, rawH) = FaceLocalMapper.ToFaceLocal(wallId, p.X, p.Y, p.Z);
+                var h = FaceLocalMapper.CaptureHeight(rawH);   // 비전은 음수 높이를 받지 않는다
                 captureSeq++;
                 var data = CaptureReqPayload.Build(SurfaceTypes.OrFlat(p.Surface), wallId,
                     u, v, h, Guid.Empty, attempt: 1, captureSeq);

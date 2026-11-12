@@ -16,6 +16,12 @@ namespace HD.AMR.App.Communication.Vision;
 /// </summary>
 public static class FaceLocalMapper
 {
+    /// <summary>
+    /// 촬영 요청에 싣는 높이 h [mm] — 0 미만이면 0 으로 올린다. 비전 S/W 가 음수 높이를 위치 오류(ERR_POSITION)로
+    /// 거부한다(실기 2026-11-12·13 CROSS-4-V1 의 교차 중심 4점 Z −12). 코봇이 가는 위치는 바꾸지 않는다 — 알려 주는 값만.
+    /// </summary>
+    public static int CaptureHeight(int h) => h < 0 ? 0 : h;
+
     /// <summary>코봇 wobj pose(mm) → 면-로컬 (u, v, h) mm 정수.</summary>
     /// <param name="wallId">Wall ID 1~10 (벽별 축 규약을 적용할 때 사용).</param>
     /// <param name="x">코봇 wobj X (mm).</param>

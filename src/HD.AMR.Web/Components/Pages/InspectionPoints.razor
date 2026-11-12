@@ -505,7 +505,8 @@
                 if (_settleSec > 0) await Task.Delay(TimeSpan.FromSeconds(_settleSec), ct);
 
                 var wallId = (ushort)Math.Clamp(_wallId, 1, 10);
-                var (u, v, h) = FaceLocalMapper.ToFaceLocal(wallId, p.X, p.Y, p.Z);
+                var (u, v, rawH) = FaceLocalMapper.ToFaceLocal(wallId, p.X, p.Y, p.Z);
+                var h = FaceLocalMapper.CaptureHeight(rawH);   // 비전은 음수 높이를 받지 않는다
                 captureSeq++;
                 var data = CaptureReqPayload.Build(SurfaceTypes.OrFlat(p.Surface), wallId,
                     u, v, h, Guid.Empty, attempt: 1, captureSeq);
@@ -602,7 +603,8 @@
         {
             var p = _points[i];
             var wallId = (ushort)Math.Clamp(_wallId, 1, 10);
-            var (u, v, h) = FaceLocalMapper.ToFaceLocal(wallId, p.X, p.Y, p.Z);
+            var (u, v, rawH) = FaceLocalMapper.ToFaceLocal(wallId, p.X, p.Y, p.Z);
+            var h = FaceLocalMapper.CaptureHeight(rawH);   // 비전은 음수 높이를 받지 않는다
             _manualCaptureSeq++;
             var data = CaptureReqPayload.Build(SurfaceTypes.OrFlat(p.Surface), wallId,
                 u, v, h, Guid.Empty, attempt: 1, _manualCaptureSeq);
