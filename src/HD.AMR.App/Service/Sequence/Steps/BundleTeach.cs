@@ -130,6 +130,23 @@ public static class BundleTeach
             }
         }
 
+        // 방향은 용접선이 정한다 — 툴 진행축이 끝점 반대쪽을 향하게 정렬됐으면 이동을 뒤집는다.
+        var seamNote = "";
+        if (context.Bag.TryGetValue(WeldSequenceSupport.SeamDirBaseBagKey, out var sd) && sd is double[] { Length: 3 } seamDir
+            && WeldSequenceSupport.PitchMoveOpposesSeam(
+                WeldSequenceSupport.ToolOffsetInBase(anchor, PitchOnly(toolAxis, moveMm)), seamDir, pitchDir))
+        {
+            // 진행축 성분(moveMm)만 뒤집는다 — 검사캠 시프트 역보정 성분은 방향과 무관하다.
+            var flip = new double[6];
+            FlatSurfaceCenteringService.ApplyAxis(flip, toolAxis, -2 * moveMm);
+            for (var i = 0; i < 3; i++) offset[i] += flip[i];
+            moveMm = -moveMm;
+            seamNote = ", 용접선 방향에 맞춰 뒤집음";
+            logger.LogInformation(
+                "피치 이동: 툴 진행축이 용접선 끝점 반대쪽 — 이동을 뒤집습니다 (용접선 BASE 방향 [{X:+0.00;-0.00}, {Y:+0.00;-0.00}, {Z:+0.00;-0.00}])",
+                seamDir[0], seamDir[1], seamDir[2]);
+        }
+
         int rc;
         var wallNote = "";
         if (context.Bag.TryGetValue(WeldSequenceSupport.WallOutNormalBagKey, out var nv) && nv is double[] { Length: 3 } wallOut
@@ -155,7 +172,15 @@ public static class BundleTeach
         await Task.Delay(500, ct);
         return StepResult.Ok(
             $"피치 이동 툴{FlatSurfaceCenteringService.AxisName(toolAxis)} {moveMm:+0.0;-0.0}mm " +
-            $"(pitch={pitchMm:0.#}mm, dir={pitchDir:+0;-0}, 진행축={progressAxis}{unshiftNote}{wallNote}).");
+            $"(pitch={pitchMm:0.#}mm, dir={pitchDir:+0;-0}, 진행축={progressAxis}{unshiftNote}{wallNote}{seamNote}).");
+    }
+
+    /// <summary>진행축 성분만 담은 툴 이동량(x,y,z) — 방향 판정에 검사캠 시프트 역보정이 섞이지 않게 한다.</summary>
+    private static double[] PitchOnly(ToolAxisDir toolAxis, double moveMm)
+    {
+        var o = new double[6];
+        FlatSurfaceCenteringService.ApplyAxis(o, toolAxis, moveMm);
+        return new[] { o[0], o[1], o[2] };
     }
 
     private static double[]? TaskStartPose(SequenceContext context)

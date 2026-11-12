@@ -723,6 +723,11 @@ public class CobotInspectionMoveStep : ISequenceStep
             context.Bag[WeldSequenceSupport.WallOutNormalBagKey] = WallOutNormal(normalPose, seam.OpticalAxis);
         else
             context.Bag.Remove(WeldSequenceSupport.WallOutNormalBagKey);
+        // ⑧ Peak2 이동이 용접선 끝점 쪽으로 가는 기준 — 가로 정렬이 툴을 어느 쪽으로 돌렸든 방향은 용접선이 정한다.
+        if (seam.SeamDirBase is { Length: 3 } seamDir)
+            context.Bag[WeldSequenceSupport.SeamDirBaseBagKey] = seamDir.ToArray();
+        else
+            context.Bag.Remove(WeldSequenceSupport.SeamDirBaseBagKey);
         if (ShiftAnchorFrame(context, seam.Base) is { } shiftError)
             return StepResult.Fail(shiftError);
 
