@@ -60,12 +60,46 @@ public class WObjPointStep : ISequenceStep
         => FrameMath.FromFrame(toolOffset, poseBase);
 
     /// <param name="pointNum">1(원점) 또는 2(X축 방향). DI 에서 <c>ActivatorUtilities.CreateInstance</c> 로 주입되므로 첫 인자여야 한다.</param>
-    public WObjPointStep(int pointNum, CobotService cobot, ParameterService param, ILogger<WObjPointStep> logger)
+    private readonly LaserDisplacementSensorService _laser;
+    private readonly CameraService _camera;
+
+    public WObjPointStep(int pointNum, CobotService cobot, ParameterService param,
+        LaserDisplacementSensorService laser, CameraService camera, ILogger<WObjPointStep> logger)
     {
         _pointNum = pointNum;
         _cobot = cobot;
         _param = param;
+        _laser = laser;
+        _camera = camera;
         _logger = logger;
+    }
+
+    /// <summary>
+    /// 점 기록 순간의 면 거리 스냅샷을 남기고, 점2 에서는 점1 과 비교한다(<see cref="WObjPointProbe"/>) — 읽기 전용 진단.
+    /// 센서를 못 읽어도 기록 단계는 그대로 진행한다.
+    /// </summary>
+    private async Task LogProbeAsync(SequenceContext context, double[] sensorPose)
+    {
+        try
+        {
+            var probe = new WObjPointProbe(
+                (double[])sensorPose.Clone(),
+                WObjPointProbe.LaserOf(_laser.IsConnected ? _laser.GetReadings() : Array.Empty<Models.LaserChannelReading>()),
+                WObjPointProbe.CenterDepthMm(_camera.LatestDepth));
+            context.Bag[WObjPointProbe.BagKey(_pointNum)] = probe;
+            _logger.LogInformation("{Line}", probe.Describe(_pointNum));
+
+            if (_pointNum == 2
+                && context.Bag.TryGetValue(WObjPointProbe.BagKey(1), out var v) && v is WObjPointProbe first)
+            {
+                var (depthAxis, _) = await WeldSequenceSupport.GetDepthAxisAsync(_param);
+                _logger.LogInformation("{Line}", WObjPointProbe.Compare(first, probe, depthAxis));
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning("[점 거리 진단] 기록 실패(점{N}): {Msg}", _pointNum, ex.Message);
+        }
     }
 
     private string PointName => _pointNum == 1 ? "점1(Top 기준)" : "점2(X+방향)";
@@ -86,6 +120,7 @@ public class WObjPointStep : ISequenceStep
 
         // 컨트롤러의 SetWObjCoordPoint 버퍼는 사용하지 않는다. 선택된 TCP의 BASE 포즈만 내부 보관한다.
         var pose = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
+        await LogProbeAsync(context, pose);   // 진단 — 보정 전(센서가 실제로 있는 자리) 포즈 기준
         string correctionNote = "";
         if (context.Bag.TryGetValue(PointCrossCorrectionBagKey(_pointNum), out var cv) && cv is double[] { Length: 6 } corr)
         {

@@ -90,6 +90,39 @@ internal static class SequenceEntry
             : PoseMode.Home;
     }
 
+    private static int _rememberedMode = -1;   // −1 = 모름
+
+    /// <summary>마지막으로 확인된 자세 모드 — 기준 자세·경유점 위에 있었거나 진입 준비가 통과한 모드. 앱을 다시 띄우면 모른다(null).</summary>
+    internal static PoseMode? RememberedMode
+        => Volatile.Read(ref _rememberedMode) is var m && m >= 0 ? (PoseMode)m : null;
+
+    internal static void RememberMode(PoseMode mode) => Volatile.Write(ref _rememberedMode, (int)mode);
+
+    /// <summary>테스트용 — 기억을 지운다.</summary>
+    internal static void ForgetMode() => Volatile.Write(ref _rememberedMode, -1);
+
+    /// <summary>
+    /// 지금 따를 자세 모드. 기준 자세·경유점 위에 있으면 그 자리가 정한다. 벽 앞에 뻗은 채(검사 도중 멈춘 자세)면
+    /// <b>시작할 때의 모드</b>(<paramref name="remembered"/>)를 따른다 — 관절 거리로 가까운 쪽을 고르면, 천장에서 면을 따라
+    /// 멀리 뻗은 자세가 홈 위치 쪽으로 판정돼 홈 위치_2 로 시작한 검사가 홈 위치로 돌아갔다(실기 2026-11-13 05:01 T L4-R10C11).
+    /// 기억이 없으면(앱 재시작 직후) 종전처럼 가까운 쪽.
+    /// </summary>
+    internal static PoseMode PickMode(bool atHome2Side, bool atHomeSide, PoseMode nearest, PoseMode? remembered)
+        => atHome2Side ? PoseMode.Home2
+         : atHomeSide ? PoseMode.Home
+         : remembered ?? nearest;
+
+    /// <summary>현재 관절각에서 따를 자세 모드(<see cref="PickMode"/>). 기준 자세·경유점 위면 그 모드를 기억해 둔다.</summary>
+    internal static PoseMode ResolveMode(double[] cur, SequenceContext ctx)
+    {
+        var atHome2 = TaughtJoints(ctx, Home2Key) is not null
+                      && (IsAt(cur, ctx, Home2Key) || UpperSlotKeys().Any(k => IsAt(cur, ctx, k)));
+        var atHome = !atHome2 && (IsAt(cur, ctx, "home") || IsAt(cur, ctx, "ready"));
+        var mode = PickMode(atHome2, atHome, ModeOf(cur, ctx), RememberedMode);
+        if (atHome2 || atHome) RememberMode(mode);
+        return mode;
+    }
+
     /// <summary>작업 면과 자세 모드가 맞지 않을 때의 실패 사유. 맞으면 null.
     /// 자동 운전은 모드를 바꾸지 않으므로(홈 1.5·1.6 경유 금지) 운영자 수동 전환이 필요하다.</summary>
     internal static string? ModeMismatch(PoseMode mode, string? wallCode)
@@ -115,12 +148,13 @@ internal static class SequenceEntry
         var frames = $"활성 좌표계 툴 #{context.Tool}/작업물 0 정규화";
 
         var cur = await cobot.Rpc.GetActualJointPosAsync(ct: ct);
-        var mode = ModeOf(cur, context);
+        var mode = ResolveMode(cur, context);
         if (ModeMismatch(mode, context.WallCode) is { } mismatch)
         {
             logger.LogWarning("진입 준비 중단: {Msg}", mismatch);
             return (false, mismatch);
         }
+        RememberMode(mode);   // 이 모드로 검사를 시작한다 — 도중에 멈춰도 복귀는 이 모드의 기준 자세로
 
         if (mode == PoseMode.Home2)
         {
@@ -158,7 +192,7 @@ internal static class SequenceEntry
 
     /// <summary>
     /// 현재 자세 모드의 기준 자세로 안전하게 돌아온다 — 시퀀스 진입·종료, AMR 주행 전 복귀가 모두 이 경로를 쓴다.
-    /// 자세 모드(<see cref="ModeOf"/>)는 바꾸지 않는다:
+    /// 자세 모드(<see cref="ResolveMode"/> — 벽 앞에 뻗은 채면 시작할 때의 모드)는 바꾸지 않는다:
     /// · 홈 모드: 벽면 후퇴 → ready → 홈 (종전 경로)
     /// · 홈 2 모드: 벽면 후퇴 → 상부 면 검사 준비(티칭돼 있고 홈 2 보다 가까울 때) → 홈 2. 홈으로는 가지 않는다.
     /// 경유점(ready·홈 2·상부 면 검사 준비) 위에 있을 때는 벽 앞이 아니므로 벽면 후퇴를 하지 않는다.
@@ -169,7 +203,7 @@ internal static class SequenceEntry
     {
         var done = new List<string>();
         var cur = await cobot.Rpc.GetActualJointPosAsync(ct: ct);
-        var mode = ModeOf(cur, ctx);
+        var mode = ResolveMode(cur, ctx);
         var baseKey = mode == PoseMode.Home2 ? Home2Key : "home";
         if (IsAt(cur, ctx, baseKey))
         {
@@ -387,7 +421,7 @@ internal static class SequenceEntry
     /// <summary>현재 관절각이 현재 자세 모드의 기준 홈(홈 모드=home, 홈 2 모드=home2)에 있는지 판정한다.</summary>
     internal static bool IsAtBaseHome(double[] cur, SequenceContext ctx, out string baseKey, out string baseName)
     {
-        var mode = ModeOf(cur, ctx);
+        var mode = ResolveMode(cur, ctx);
         baseKey = mode == PoseMode.Home2 ? Home2Key : "home";
         baseName = mode == PoseMode.Home2 ? "홈 위치_2" : "홈 위치";
         return IsAt(cur, ctx, baseKey);

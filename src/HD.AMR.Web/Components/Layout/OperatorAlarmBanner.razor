@@ -1,0 +1,59 @@
+@using HD.AMR.App.Service
+@inject OperatorAlarmState Alarm
+@implements IDisposable
+
+@if (_alarm is { } a)
+{
+    <div class="alert @(a.IsError ? "alert-danger" : "alert-warning") rounded-0 mb-0 d-flex align-items-center gap-3 px-4" role="alert">
+        <div class="flex-grow-1">
+            <strong>@(a.IsError ? "코봇 이동 불가" : "코봇 도달 경고")</strong>
+            <span class="ms-2">@a.Text</span>
+        </div>
+        <button type="button" class="btn btn-sm btn-outline-dark" @onclick="Dismiss">확인</button>
+    </div>
+}
+
+@code {
+    private OperatorAlarm? _alarm;
+    private CancellationTokenSource? _cts;
+
+    protected override void OnInitialized()
+    {
+        _alarm = Alarm.Current;
+        Alarm.Changed += OnChanged;
+        _cts = new CancellationTokenSource();
+        _ = PollLoop(_cts.Token);
+    }
+
+    private void OnChanged() => _ = InvokeAsync(Refresh);
+
+    private void Refresh()
+    {
+        _alarm = Alarm.Current;
+        StateHasChanged();
+    }
+
+    private void Dismiss()
+    {
+        Alarm.Clear();
+        Refresh();
+    }
+
+    private async Task PollLoop(CancellationToken ct)
+    {
+        try
+        {
+            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+            while (await timer.WaitForNextTickAsync(ct))
+                await InvokeAsync(Refresh);
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    public void Dispose()
+    {
+        Alarm.Changed -= OnChanged;
+        _cts?.Cancel();
+        _cts?.Dispose();
+    }
+}

@@ -135,6 +135,59 @@ public class CobotInspectionMoveStep : ISequenceStep
     }
 
     /// <summary>
+    /// 이어지는 용접선 판정 거리 [mm] 파라미터 키 — 직전 종료 위치와 다음 시작점이 면을 따라 이 거리 안이면(앞 용접선
+    /// 끝 = 다음 용접선 시작) 면에서 띄우지 않고 그 높이에서 바로 이어 간다. 0 이면 끔(항상 <see cref="ChainStandoffKey"/> 까지 띄움).
+    /// 실기 2026-11-12 L4-R09C09: 한 줄로 이어진 V01→V04 사이마다 75~83mm 띄웠다가 ⑱ 첫 경유점으로 다시 들어왔다.
+    /// </summary>
+    public const string ChainContinueTolKey = "inspection.chainContinueTolMm";
+
+    /// <summary>이어지는 용접선 판정 거리 기본값 [mm].</summary>
+    public const double DefaultChainContinueTolMm = 50.0;
+
+    /// <summary>이어지는 용접선 판정 거리 상한 [mm] — 이보다 멀리는 낮은 높이로 옆 이동하지 않는다(골판 돌출).</summary>
+    internal const double MaxChainContinueTolMm = 100.0;
+
+    /// <summary>띄우지 않고 이어 갈 때 현재 TCP 의 면 이격 하한 [mm] — 이보다 면에 붙어 있으면 종전대로 띄운다.</summary>
+    internal const double MinContinueHeightMm = 10.0;
+
+    /// <summary>파라미터 원값 → 이어지는 용접선 판정 거리. 0~상한이면 (그 값, true), 비면 (기본, true), 범위 밖이면 (기본, false).</summary>
+    internal static (double Value, bool Ok) ResolveChainContinueTolMm(double? raw)
+        => raw is { } v
+            ? (v >= 0 && v <= MaxChainContinueTolMm ? (v, true) : (DefaultChainContinueTolMm, false))
+            : (DefaultChainContinueTolMm, true);
+
+    private async Task<double> GetChainContinueTolMmAsync()
+    {
+        double? raw = null;
+        try { raw = await _param.GetDoubleAsync(ChainContinueTolKey); }
+        catch { /* DB 미준비 등 — 기본값 폴백 */ }
+        var (value, ok) = ResolveChainContinueTolMm(raw);
+        if (!ok)
+            _logger.LogWarning("'{Key}' 값 {Raw} 이(가) 범위(0~{Max:0}mm) 밖 — {Value:0}mm 사용",
+                ChainContinueTolKey, raw, MaxChainContinueTolMm, value);
+        return value;
+    }
+
+    /// <summary>
+    /// 이어지는 용접선이면 띄우지 않는 연속 이동 목표 — 다음 시작점 정면, 높이는 현재 TCP 그대로인 BASE 점 [x,y,z].
+    /// 조건: 현재 TCP 가 연속 이동 평면(<paramref name="chainBase"/>, 면 이격 <paramref name="chainStandoffMm"/>)보다 면 쪽이고,
+    /// 면을 따라 잰 거리가 <paramref name="tolMm"/> 이하이며, 현재 면 이격이 <see cref="MinContinueHeightMm"/> 이상.
+    /// 하나라도 아니면 null — 호출측이 종전대로 띄운다.
+    /// </summary>
+    internal static double[]? ContinuingSeamTargetBase(
+        double[] cur, double[] chainBase, double[] wallOut, double chainStandoffMm, double tolMm)
+    {
+        if (tolMm <= 0) return null;
+        double dx = cur[0] - chainBase[0], dy = cur[1] - chainBase[1], dz = cur[2] - chainBase[2];
+        var h = dx * wallOut[0] + dy * wallOut[1] + dz * wallOut[2];      // 연속 이동 평면 기준 높이(면 쪽이 음수)
+        if (h >= -1.0) return null;                                       // 이미 그 평면 이상 — 띄울 일이 없다
+        if (chainStandoffMm + h < MinContinueHeightMm) return null;       // 면에 너무 붙음
+        double lx = dx - h * wallOut[0], ly = dy - h * wallOut[1], lz = dz - h * wallOut[2];
+        if (Math.Sqrt(lx * lx + ly * ly + lz * lz) > tolMm) return null;  // 이어지지 않는 용접선
+        return new[] { chainBase[0] + h * wallOut[0], chainBase[1] + h * wallOut[1], chainBase[2] + h * wallOut[2] };
+    }
+
+    /// <summary>
     /// 연속 이동 목표 위치 — 첫 진입 접근점(면에서 <paramref name="approachStandoffMm"/>)을 면 법선을 따라
     /// <paramref name="chainStandoffMm"/> 거리로 당긴 BASE 점 [x,y,z].
     /// </summary>
@@ -670,6 +723,11 @@ public class CobotInspectionMoveStep : ISequenceStep
             context.Bag[WeldSequenceSupport.WallOutNormalBagKey] = WallOutNormal(normalPose, seam.OpticalAxis);
         else
             context.Bag.Remove(WeldSequenceSupport.WallOutNormalBagKey);
+        // ⑧ Peak2 이동이 용접선 끝점 쪽으로 가는 기준 — 가로 정렬이 툴을 어느 쪽으로 돌렸든 방향은 용접선이 정한다.
+        if (seam.SeamDirBase is { Length: 3 } seamDir)
+            context.Bag[WeldSequenceSupport.SeamDirBaseBagKey] = seamDir.ToArray();
+        else
+            context.Bag.Remove(WeldSequenceSupport.SeamDirBaseBagKey);
         if (ShiftAnchorFrame(context, seam.Base) is { } shiftError)
             return StepResult.Fail(shiftError);
 
@@ -1213,7 +1271,16 @@ public class CobotInspectionMoveStep : ISequenceStep
         var wallOut = WallOutNormal(computed, seam.OpticalAxis);
         var chainStandoffMm = await GetChainStandoffMmAsync(approachStandoffMm);
         var chainBase = ChainTargetBase(startBase, wallOut, approachStandoffMm, chainStandoffMm);
-        var target = new[] { chainBase[0], chainBase[1], chainBase[2], orientation[3], orientation[4], orientation[5] };
+        // 이어지는 용접선(앞 끝 = 다음 시작) — 띄우지 않고 지금 높이에서 시작점 정면으로만 맞춘다. ⑱이 곧바로 첫 경유점으로 간다.
+        var continuing = ContinuingSeamTargetBase(cur, chainBase, wallOut, chainStandoffMm, await GetChainContinueTolMmAsync());
+        var heightMm = chainStandoffMm;
+        if (continuing is not null)
+        {
+            heightMm = chainStandoffMm + (cur[0] - chainBase[0]) * wallOut[0] + (cur[1] - chainBase[1]) * wallOut[1]
+                     + (cur[2] - chainBase[2]) * wallOut[2];
+            chainBase = continuing;
+        }
+        var target =new[] { chainBase[0], chainBase[1], chainBase[2], orientation[3], orientation[4], orientation[5] };
         var lift = PlanChainLift(cur, chainBase, wallOut);
         var liftEnd = lift is null
             ? cur
@@ -1283,11 +1350,12 @@ public class CobotInspectionMoveStep : ISequenceStep
         }
 
         var dist = Math.Sqrt(Enumerable.Range(0, 3).Sum(i => (target[i] - cur[i]) * (target[i] - cur[i])));
-        _logger.LogInformation("[Cobot 검사위치 이동] 연속 이동 완료 — 직전 종료 자세에서 {Dist:0}mm{Lift} (연속 이동 면 이격 {Chain:0}mm)",
-            dist, liftNote, chainStandoffMm);
+        var contNote = continuing is null ? "" : ", 이어지는 용접선 — 띄우지 않음";
+        _logger.LogInformation("[Cobot 검사위치 이동] 연속 이동 완료 — 직전 종료 자세에서 {Dist:0}mm{Lift}{Cont} (면 이격 {Height:0}mm, 연속 이동 설정 {Chain:0}mm)",
+            dist, liftNote, contNote, heightMm, chainStandoffMm);
         return StepResult.Ok(
-            $"연속 이동(복귀 생략) — 직전 종료 자세에서 용접선 시작점 정면(면 이격 {chainStandoffMm:0}mm, 첫 진입 {approachStandoffMm:0}mm 대신) " +
-            $"직선 이동(MoveL) {dist:0}mm{liftNote} " +
+            $"연속 이동(복귀 생략) — 직전 종료 자세에서 용접선 시작점 정면(면 이격 {heightMm:0}mm, 첫 진입 {approachStandoffMm:0}mm 대신) " +
+            $"직선 이동(MoveL) {dist:0}mm{liftNote}{contNote} " +
             $"[자세=면 법선, 비틀림 직전 종료 유지, J6={joints[5]:0.0}°].");
     }
 

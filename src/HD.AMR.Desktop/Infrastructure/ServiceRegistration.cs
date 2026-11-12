@@ -127,6 +127,8 @@ internal static class ServiceRegistration
             HD.AMR.App.Service.Inspection.WeldInspectionOrchestrator>();
         // VDA 5050 어댑터(ACS↔AMR) — connection/state 발행 + order 실행 + instantActions. Enabled=false 면 유휴.
         services.Configure<HD.AMR.App.Communication.Vda5050.Vda5050AdapterSettings>(config.GetSection("Vda5050"));
+        // 주행 중 코봇 반경 장애물 감시(파라미터 cobotGuard.enabled, 기본 끔) — 실행기·어댑터·IO 가 상태를 본다.
+        AddHostedSingleton<CobotObstacleGuard>(services);
         services.AddSingleton<Vda5050OrderExecutor>();
         AddHostedSingleton<Vda5050AdapterService>(services);
         // 통신 단절 Fail-Safe(docs/HD_AMR_통신단절_FailSafe_사양.md) — 일시정지 게이트 + 단절 감시(GRACE→PAUSE→HOLD).
@@ -135,6 +137,8 @@ internal static class ServiceRegistration
         // 장치 통신 HEAVY 알람(비전·Depth·레이저·IO·코봇·AMR) — 공유 상태 + 감시. 알람 중 order 거부, RESET 으로 해제.
         services.Configure<DeviceHealthSettings>(config.GetSection("DeviceHealth"));
         services.AddSingleton<DeviceAlarmState>();
+        // 코봇 도달·순회 경고 배너 — HEAVY 알람과 분리(order 를 잠그지 않음).
+        services.AddSingleton<OperatorAlarmState>();
         AddHostedSingleton<DeviceHealthMonitorService>(services);
         // AMR 장비 자체 상태 변화(모드·이동·조그·오류)를 운영 로그(출처 AMR)로 기록.
         services.AddHostedService<AmrActivityLogService>();
@@ -149,6 +153,7 @@ internal static class ServiceRegistration
         services.AddScoped<HD.AMR.App.Service.Inspection.SeamApproachResolver>();
         // 정차 거리·높이 격자를 컨트롤러 IK 로 훑는 리치 맵(코봇 이동 없음) — 용접 위치 시험 ⑤.
         services.AddScoped<HD.AMR.App.Service.Motion.ReachMapService>();
+        services.AddScoped<HD.AMR.App.Service.Motion.CobotReachPrecheck>();
         services.AddScoped<ArucoHandEyeService>();
         services.AddScoped<HandEyeAutoRoutine>();   // 핸드아이 자동 캡처(코봇 자동 이동) — ArucoHandEyeService(Scoped) 의존.
         services.AddScoped<ArucoMountAutoRoutine>(); // AMR+코봇 자동 이동 ArUco 장착보정 표본 수집.
@@ -213,8 +218,12 @@ internal static class ServiceRegistration
         services.AddScoped<ISequenceStep, CobotInspectionMoveStep>();
         services.AddScoped<ISequenceStep, CameraAlignStep>();
         services.AddScoped<ISequenceStep, CameraAlignRefineStep>();
-        services.AddScoped<ISequenceStep, FlatSurfaceAlignStep>();
-        services.AddScoped<ISequenceStep, LaserWorkingDistanceStep>();
+        services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<FlatSurfaceAlignStep>(sp, true));
+        services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<FlatSurfaceAlignStep>(sp, false));
+        services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<LaserWorkingDistanceStep>(
+            sp, "laserWorkingDistance", "레이저 WD 거리 조정", 450));
+        services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<LaserWorkingDistanceStep>(
+            sp, LaserWorkingDistanceStep.BundlePoint2Key, "묶음 점2 WD 조정", 820));
         services.AddScoped<ISequenceStep, DepthCamCenterShiftStep>();
         services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<PeakFindStep>(sp, 1));
         services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<PeakCenteringStep>(sp, 1));

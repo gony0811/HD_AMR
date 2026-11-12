@@ -20,7 +20,7 @@
 - **captureSeq 는 로봇 발번.** 검사 실행(=TASK) 내 촬영마다 1부터 증가.
 - **(u,v,h) 는 코봇 wobj pose 직접.** `FaceLocalMapper` 가 코봇 (X,Y,Z)→(u,v,h) 매핑(현재 항등).
   축·부호는 wobj 티칭 규약(§5)에 흡수, h=0=벽 표면 정합은 물리 캘리브레이션 확인 대상.
-- **taskId 바이트 순서**: RFC 4122 빅엔디안(`GuidBinary`). 비전 S/W 와 최종 확인.
+- **taskId 바이트 순서**: 리틀엔디안(.NET `Guid.ToByteArray` 배치 — 앞 세 묶음 4·2·2바이트는 뒤집힘, 뒤 8바이트는 문자열 순서; `GuidBinary`). 수신 측이 .NET `new Guid(byte[])` 로 읽으면 ACS taskId 문자열과 같다. 2026-11-12 이전 빌드는 RFC 4122 빅엔디안으로 보냈다 — 그때 저장된 ID 는 앞 세 묶음이 뒤집혀 있다.
 
 ## 1. 통신 개요
 
@@ -92,7 +92,7 @@ STX(1) │ LENGTH(2, LE) │ SEQ(1) │ COMMAND(1) │ FROM(1) │ TO(1) │ DAT
 | [3-6] | PosX = u (mm) | Int32 LE (면-로컬) |
 | [7-10] | PosY = v (mm) | Int32 LE (면-로컬) |
 | [11-14] | PosZ = h (mm) | Int32 LE (표면 높이) |
-| [15-30] | taskId | GUID 16B 바이너리 (RFC 4122 빅엔디안) |
+| [15-30] | taskId | GUID 16B 바이너리 (리틀엔디안 — .NET `Guid.ToByteArray` 배치) |
 | [31] | attempt | UInt8 (1부터, ACS 발급) |
 | [32-33] | captureSeq | UInt16 LE (시도 내 1부터, 로봇 발번) |
 

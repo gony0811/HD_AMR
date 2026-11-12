@@ -155,7 +155,11 @@
                                         disabled="@(_isRunning || !Cobot.IsConnected)">이동</button>
                                 <button class="btn btn-sm btn-outline-success" @onclick="() => InspectPointAsync(idx)"
                                         disabled="@(_isRunning || !Vision.Client.IsConnected)">검사</button>
-                                <button class="btn btn-sm btn-outline-danger" @onclick="() => RemovePoint(idx)" disabled="@_isRunning">－</button>
+                                <button class="btn btn-sm btn-outline-secondary" title="이 행 위에 새 행 삽입 (앞뒤 행의 중간값)"
+                                        @onclick="() => InsertPoint(idx, true)" disabled="@_isRunning">↑＋</button>
+                                <button class="btn btn-sm btn-outline-secondary" title="이 행 아래에 새 행 삽입 (앞뒤 행의 중간값)"
+                                        @onclick="() => InsertPoint(idx, false)" disabled="@_isRunning">↓＋</button>
+                                <button class="btn btn-sm btn-outline-danger" title="이 행 삭제" @onclick="() => RemovePoint(idx)" disabled="@_isRunning">－</button>
                             </td>
                         </tr>
                     }
@@ -352,6 +356,24 @@
         RecomputeViewBox();
     }
 
+    /// <summary>기준 행 위/아래에 새 행을 끼워 넣는다 — 앞뒤 행의 중간값으로 채운다.</summary>
+    private void InsertPoint(int i, bool above)
+    {
+        if (_isRunning) return;
+        var at = HD.AMR.App.Service.Inspection.InspectionPointInsert.InsertIndex(_points.Count, i, above);
+        var poses = _points.Select(x => new[] { x.X, x.Y, x.Z, x.Rx, x.Theta, x.Rz }).ToList();
+        var pose = HD.AMR.App.Service.Inspection.InspectionPointInsert.NewPose(poses, at)
+                   ?? new[] { 0.0, 0.0, _defaultZ, 0.0, 0.0, 0.0 };
+        var from = HD.AMR.App.Service.Inspection.InspectionPointInsert.InheritFrom(_points.Count, at);
+        _points.Insert(at, new XyPoint
+        {
+            X = pose[0], Y = pose[1], Z = pose[2], Rx = pose[3], Theta = pose[4], Rz = pose[5],
+            Surface = from >= 0 ? _points[from].Surface : (byte)0,
+        });
+        _selected = at;
+        RecomputeViewBox();
+    }
+
     private void RemovePoint(int i)
     {
         if (i < 0 || i >= _points.Count) return;
@@ -483,7 +505,8 @@
                 if (_settleSec > 0) await Task.Delay(TimeSpan.FromSeconds(_settleSec), ct);
 
                 var wallId = (ushort)Math.Clamp(_wallId, 1, 10);
-                var (u, v, h) = FaceLocalMapper.ToFaceLocal(wallId, p.X, p.Y, p.Z);
+                var (u, v, rawH) = FaceLocalMapper.ToFaceLocal(wallId, p.X, p.Y, p.Z);
+                var h = FaceLocalMapper.CaptureHeight(rawH);   // 비전은 음수 높이를 받지 않는다
                 captureSeq++;
                 var data = CaptureReqPayload.Build(SurfaceTypes.OrFlat(p.Surface), wallId,
                     u, v, h, Guid.Empty, attempt: 1, captureSeq);
@@ -580,7 +603,8 @@
         {
             var p = _points[i];
             var wallId = (ushort)Math.Clamp(_wallId, 1, 10);
-            var (u, v, h) = FaceLocalMapper.ToFaceLocal(wallId, p.X, p.Y, p.Z);
+            var (u, v, rawH) = FaceLocalMapper.ToFaceLocal(wallId, p.X, p.Y, p.Z);
+            var h = FaceLocalMapper.CaptureHeight(rawH);   // 비전은 음수 높이를 받지 않는다
             _manualCaptureSeq++;
             var data = CaptureReqPayload.Build(SurfaceTypes.OrFlat(p.Surface), wallId,
                 u, v, h, Guid.Empty, attempt: 1, _manualCaptureSeq);

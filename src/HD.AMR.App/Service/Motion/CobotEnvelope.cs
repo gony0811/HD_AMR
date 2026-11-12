@@ -114,6 +114,104 @@ public sealed record CobotEnvelope
         return best;
     }
 
+    /// <summary>검사 툴 전체 외곽 반경 [mm] — D435i 쪽 최대(STEP). 바닥 투영 외곽은 J6 각을 모르고도 안전 쪽으로 이 값을 쓴다.</summary>
+    public double ToolOuterRadiusMm { get; init; } = 245;
+
+    /// <summary>
+    /// 관절각 한 벌에서 코봇(팔·검사 툴)을 바닥에 투영한 외곽 — 차체 좌표(+X 전방·+Y 좌측) mm 의 볼록 다각형(반시계).
+    /// BASE 가 차체 중심 위라 차체 중심도 안에 든다. 리프트 높이와 무관하다. 주행 중 장애물 감시 영역에 쓴다.
+    /// </summary>
+    /// <param name="mountYawDeg">장착 yaw(T_A_B rz) [도].</param>
+    public IReadOnlyList<(double X, double Y)> Footprint(Fr5Kinematics kin, double[] jointsDeg, double mountYawDeg)
+    {
+        var fr = kin.Frames(jointsDeg);
+        var yaw = mountYawDeg * Math.PI / 180;
+        double cy = Math.Cos(yaw), sy = Math.Sin(yaw);
+        double[] O(int i) => new[] { fr[i][0, 3], fr[i][1, 3], fr[i][2, 3] };
+        double[] Axis(int i, int col) => new[] { fr[i][0, col], fr[i][1, col], fr[i][2, col] };
+        double[] Along(double[] p, double[] axis, double mm) => new[] { p[0] + axis[0] * mm, p[1] + axis[1] * mm, p[2] + axis[2] * mm };
+
+        var pts = new List<(double X, double Y)> { (0, 0) };
+        void Add(double bx, double by) => pts.Add((cy * bx - sy * by, sy * bx + cy * by));
+        // 링크 끝점마다 반경 원(수평)을 두른다 — 캡슐의 바닥 투영은 두 끝 원의 볼록 껍질 안이다.
+        void Disc(double[] p, double r)
+        {
+            for (var k = 0; k < 12; k++)
+            {
+                var a = 2 * Math.PI * k / 12;
+                Add(p[0] + r * Math.Cos(a), p[1] + r * Math.Sin(a));
+            }
+        }
+
+        var z1 = Axis(1, 2);
+        var s1 = Along(O(1), z1, ShoulderOffsetMm);
+        var e1 = Along(O(2), z1, ShoulderOffsetMm);
+        var e2 = Along(O(2), z1, ForearmOffsetMm);
+        var w1 = Along(O(3), z1, ForearmOffsetMm);
+        Disc(O(1), ShoulderRadiusMm); Disc(s1, ShoulderRadiusMm);
+        Disc(e1, UpperArmRadiusMm); Disc(e2, ElbowRadiusMm);
+        Disc(w1, ForearmRadiusMm); Disc(O(4), WristRadiusMm); Disc(O(5), WristRadiusMm); Disc(O(6), WristRadiusMm);
+
+        // 검사 툴은 반경이 커서(245) 원통 양 끝 테두리를 그대로 투영한다(끝점 + 반경 원으로 잡으면 축 방향으로 반경만큼 길어진다).
+        var toolTo = ToolSegments.Count > 0 ? ToolSegments.Max(t => t.ToMm) : 0;
+        double[] x6 = Axis(6, 0), y6 = Axis(6, 1), z6 = Axis(6, 2);
+        foreach (var along in new[] { 0.0, toolTo })
+        {
+            var c = Along(O(6), z6, along);
+            for (var k = 0; k < 24; k++)
+            {
+                var a = 2 * Math.PI * k / 24;
+                double ca = Math.Cos(a) * ToolOuterRadiusMm, sa = Math.Sin(a) * ToolOuterRadiusMm;
+                Add(c[0] + x6[0] * ca + y6[0] * sa, c[1] + x6[1] * ca + y6[1] * sa);
+            }
+        }
+        return ConvexHull(pts);
+    }
+
+    /// <summary>볼록 껍질(반시계, Andrew monotone chain).</summary>
+    public static IReadOnlyList<(double X, double Y)> ConvexHull(IEnumerable<(double X, double Y)> points)
+    {
+        var p = points.Distinct().OrderBy(q => q.X).ThenBy(q => q.Y).ToList();
+        if (p.Count < 3) return p;
+        static double Cross((double X, double Y) o, (double X, double Y) a, (double X, double Y) b)
+            => (a.X - o.X) * (b.Y - o.Y) - (a.Y - o.Y) * (b.X - o.X);
+        var h = new List<(double X, double Y)>(p.Count * 2);
+        foreach (var q in p)
+        {
+            while (h.Count >= 2 && Cross(h[^2], h[^1], q) <= 0) h.RemoveAt(h.Count - 1);
+            h.Add(q);
+        }
+        var lower = h.Count + 1;
+        for (var i = p.Count - 2; i >= 0; i--)
+        {
+            while (h.Count >= lower && Cross(h[^2], h[^1], p[i]) <= 0) h.RemoveAt(h.Count - 1);
+            h.Add(p[i]);
+        }
+        h.RemoveAt(h.Count - 1);
+        return h;
+    }
+
+    /// <summary>점에서 볼록 다각형(반시계)까지 거리 [입력 단위]. 안쪽이면 0.</summary>
+    public static double DistanceToConvex(IReadOnlyList<(double X, double Y)> hull, double x, double y)
+    {
+        if (hull.Count == 0) return double.PositiveInfinity;
+        if (hull.Count == 1) return Math.Sqrt(Math.Pow(x - hull[0].X, 2) + Math.Pow(y - hull[0].Y, 2));
+        var inside = hull.Count >= 3;
+        var best = double.PositiveInfinity;
+        for (var i = 0; i < hull.Count; i++)
+        {
+            var a = hull[i];
+            var b = hull[(i + 1) % hull.Count];
+            double ex = b.X - a.X, ey = b.Y - a.Y;
+            if (ex * (y - a.Y) - ey * (x - a.X) < 0) inside = false;
+            var len2 = ex * ex + ey * ey;
+            var t = len2 < 1e-12 ? 0 : Math.Clamp(((x - a.X) * ex + (y - a.Y) * ey) / len2, 0, 1);
+            double dx = x - (a.X + ex * t), dy = y - (a.Y + ey * t);
+            best = Math.Min(best, Math.Sqrt(dx * dx + dy * dy));
+        }
+        return inside ? 0 : best;
+    }
+
     /// <summary>선분–축정렬 상자 최단거리 [mm]. 선분 위 점에서 상자까지 거리는 볼록이라 삼분 탐색으로 찾는다.</summary>
     public static double SegmentBoxDistanceMm(double[] a, double[] b, double[] min, double[] max)
     {

@@ -41,6 +41,7 @@ public class FlatSurfaceAlignStep : ISequenceStep
     private readonly PostureLimitsService _limits;
     private readonly FlatDetectionMonitor _monitor;
     private readonly ILogger<FlatSurfaceAlignStep> _logger;
+    private readonly bool _levelSurface;
 
     // ── 설정 상수 ──────────────────────────────────────────────────────
     /// <summary>평탄 판정 틸트 임계값(도). |rx|, |ry| 모두 이 값 이내이면 정렬 완료.</summary>
@@ -75,11 +76,14 @@ public class FlatSurfaceAlignStep : ISequenceStep
     private const string AlignImageXAxisKey = "Camera.Align.ImageXAxis";
     private const string AlignImageYAxisKey = "Camera.Align.ImageYAxis";
 
+    /// <param name="levelSurface">true(④)면 탐색 뒤 틸트 수평 얼라인. false(묶음 점2)면 자리만 맞춘다.</param>
     public FlatSurfaceAlignStep(
+        bool levelSurface,
         CobotService cobot, CameraService camera, FlatSurfaceCenteringService centering,
         LaserDisplacementSensorService laser, LaserTiltCorrector tilt, ParameterService param,
         PostureLimitsService limits, FlatDetectionMonitor monitor, ILogger<FlatSurfaceAlignStep> logger)
     {
+        _levelSurface = levelSurface;
         _tilt = tilt;
         _limits = limits;
         _cobot = cobot;
@@ -91,9 +95,11 @@ public class FlatSurfaceAlignStep : ISequenceStep
         _logger = logger;
     }
 
-    public string Key => "flatSurfaceAlign";
-    public string DisplayName => "평탄면 센터링 (레이저 정렬)";
-    public int DefaultOrder => 400;
+    public const string BundlePoint2Key = "flatSurfaceSearchBundlePoint2";
+
+    public string Key => _levelSurface ? "flatSurfaceAlign" : BundlePoint2Key;
+    public string DisplayName => _levelSurface ? "평탄면 센터링 (레이저 정렬)" : "묶음 점2 평탄면 탐색";
+    public int DefaultOrder => _levelSurface ? 400 : 810;
 
     public StepValidation Validate(SequenceContext context)
     {
@@ -109,10 +115,21 @@ public class FlatSurfaceAlignStep : ISequenceStep
 
     public async Task<StepResult> ExecuteAsync(SequenceContext context, CancellationToken ct)
     {
+        if (!_levelSurface && !BundleTeach.IsActive(context))
+            return StepResult.Ok("묶음 점2가 아님 — 평탄면 재탐색 생략.");
+
         var startedAt = DateTime.Now;
         try
         {
-            return await ExecuteCoreAsync(context, ct);
+            var result = await ExecuteCoreAsync(context, ct);
+            if (_levelSurface || result.Success || !BundleTeach.TryMarkDissolved(context))
+                return result;
+            _logger.LogWarning("묶음 점2 평탄면 실패 — 단독 교시로 전환: {Msg}", result.Message);
+            context.Progress?.Invoke($"⚠ 묶음 점2 평탄면 실패, 단독 교시로 진행: {result.Message}");
+            var back = await BundleTeach.RepositionToSoloAsync(_cobot, _param, _logger, context, ct);
+            return back.Success
+                ? StepResult.Ok($"묶음 해제 — 단독 교시. 원인: {result.Message}")
+                : StepResult.Fail($"{result.Message} / {back.Message}");
         }
         catch (OperationCanceledException)
         {
@@ -131,6 +148,10 @@ public class FlatSurfaceAlignStep : ISequenceStep
         if (!context.Bag.ContainsKey(WeldSequenceSupport.InspectAnchorPoseBagKey))
             InspectionAlignmentAnchor.CaptureIfMissing(context,
                 await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct));
+
+        // 묶음 점2: 탐색을 시작한 자리(피치 이동으로 온 점2 근처)를 남긴다 — 점2 WD 조정 뒤 여기로 돌아온다.
+        if (!_levelSurface)
+            context.Bag[BundleTeach.Point2ReturnPoseKey] = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
 
         // ── Phase A+B: 평탄영역 탐색 + 코봇 횡이동 (공용 루틴) ─────────
         var (roiX, roiY, roiW, roiH, roiSrc) = await GetDepthRoiAsync();
@@ -193,7 +214,7 @@ public class FlatSurfaceAlignStep : ISequenceStep
                     Limits = postureLimits,
                     ImageXAxis = axisX, ImageYAxis = axisY,
                     CameraToLaserShiftYmm = shiftY,
-                    TiltMarginDeg = tiltMargin,
+                    TiltMarginDeg = _levelSurface ? tiltMargin : 0,
                     Tool = context.Tool,
                 },
                 Footprint = new FlatFootprintContext
@@ -230,6 +251,13 @@ public class FlatSurfaceAlignStep : ISequenceStep
             if (!shift.Ok)
                 return FailStage($"레이저 중심 보정 이동 실패 {shift.Describe()}.");
             await Task.Delay(300, ct);
+
+            if (!_levelSurface)
+            {
+                _monitor.UpdateStage(FlatDetectionStage.Done, "수평 얼라인 생략");
+                return StepResult.Ok(
+                    $"평탄면 탐색 완료 — 수평 얼라인 생략 (σ={align.SigmaMm:0.##}mm).");
+            }
 
             // ── Phase C: 레이저 3점 측정 → 헤드 틸트(회전) 보정 ────────────
             _logger.LogInformation("[평탄면 센터링 (레이저 정렬)] Phase C: 레이저 3점 평면 측정 시작");

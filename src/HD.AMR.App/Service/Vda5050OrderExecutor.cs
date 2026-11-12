@@ -3,6 +3,8 @@ using HD.AMR.App.Communication;
 using HD.AMR.App.Communication.Vda5050;
 using HD.AMR.App.Enums;
 using HD.AMR.App.Models;
+using HD.AMR.App.Service.Inspection;
+using HD.AMR.App.Service.Motion;
 using HD.AMR.App.Service.Sequence.Steps;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -60,6 +62,8 @@ public sealed class Vda5050OrderExecutor
 
     // ── 일시정지(통신 단절 사양 §3–5) ──
     private readonly MissionPauseGate _pauseGate;
+    /// <summary>주행 중 코봇 반경 장애물 감시(파라미터 cobotGuard.enabled). 없으면 감시하지 않는다.</summary>
+    private readonly CobotObstacleGuard? _obstacleGuard;
     private bool _paused;
     private PauseReason _pauseReason;
     private string? _orderMapId;   // 재개 전 mapId 일치 확인용(§4.2)
@@ -96,8 +100,9 @@ public sealed class Vda5050OrderExecutor
         Inspection.IWeldInspectionExecutor inspection, PowerModeService power,
         IOptions<AmrRestSettings> restOptions, IServiceScopeFactory scopeFactory,
         MissionPauseGate pauseGate, DeviceAlarmState deviceAlarms, OperationLogService opLog,
-        ILogger<Vda5050OrderExecutor> logger)
+        ILogger<Vda5050OrderExecutor> logger, CobotObstacleGuard? obstacleGuard = null)
     {
+        _obstacleGuard = obstacleGuard;
         _rest = rest;
         _deviceAlarms = deviceAlarms;
         _amr = amr;
@@ -290,6 +295,7 @@ public sealed class Vda5050OrderExecutor
             _errors.Remove("emergencyStopActive");
             _errors.Remove("inspectionFailed");
             _errors.Remove(Inspection.WeldInspectionOrchestrator.StationReachShortfallErrorType);
+            _errors.Remove(CobotReachPrecheck.BlockedErrorType);
             _errors.Remove("equipmentError");
             _errors.Remove(DeviceFaultRejectErrorType);
 
@@ -337,6 +343,42 @@ public sealed class Vda5050OrderExecutor
         var pos = node.NodePosition!;
         try
         {
+            // 연속 TASK 묶음(같은 리프트·면·수직/수평). 도달 점검과 교시가 같은 계획을 쓴다.
+            _inspection.BeginBundles(TaskBundlePlanner.Assign(node.Actions, pos.Theta));
+
+            // 코봇 도달·순회 — 홈 복귀·주행·리프트보다 먼저. 닿는 용접선이 하나도 없으면 아무것도 움직이지 않는다.
+            // 일부만 닿지 않으면 그 용접선만 실패로 끝내고 나머지는 수행한다.
+            var reach = await PrecheckReachBeforeDriveAsync(orderId, node, ct);
+            if (reach.Block is { } reachBlock)
+            {
+                FailMission(reachBlock);
+                return;
+            }
+            var skippedActions = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var (bad, why) in reach.Unreachable)
+            {
+                skippedActions.Add(bad.ActionId);
+                SetActionStatus(bad.ActionId, "FAILED", $"코봇 도달 불가로 실행하지 않음 — {why}");
+                OpLog(OpCategory.Action, bad.ActionType, false,
+                    $"{DescribeAction(bad)} — 코봇 도달 불가로 실행하지 않음(나머지 용접선은 수행): {why}", orderId);
+            }
+            if (skippedActions.Count > 0 || reach.DissolveBundles)
+            {
+                var runnable = node.Actions.Where(a => !skippedActions.Contains(a.ActionId)).ToList();
+                _inspection.BeginBundles(reach.DissolveBundles
+                    ? Array.Empty<BundleAssignment>()
+                    : TaskBundlePlanner.Assign(runnable, pos.Theta));
+                if (skippedActions.Count > 0)
+                {
+                    _logger.LogWarning("코봇 도달 사전 점검: 용접선 {Bad}/{All}건 불가 — 그 용접선만 실패 처리하고 나머지를 수행합니다",
+                        skippedActions.Count, node.Actions.Count);
+                    ReportError(CobotReachPrecheck.BlockedErrorType,
+                        $"용접선 {skippedActions.Count}건 도달 불가 — 실행하지 않음(나머지는 수행): " +
+                        string.Join(" | ", reach.Unreachable.Select(u => u.Reason)));
+                    StateChanged?.Invoke();
+                }
+            }
+
             // 허용 오차 결정: ParameterService(DB) → Order → AmrRestSettings
             var (devXy, devTheta) = await ResolveDeviationsAsync(pos);
 
@@ -414,14 +456,18 @@ public sealed class Vda5050OrderExecutor
             //    개별 액션 실패는 다음 액션 계속 — 단 equipmentError(설비 불능)면 잔여 전건 FAILED(§6.4).
             //    마지막 검사 액션에서만 코봇을 홈으로 되돌린다 — 노드 안의 task 는 정렬(작업물 좌표계)을
             //    공유하므로 사이마다 홈에 다녀오면 이점이 사라지고 시간만 든다(§8.1 anchorGroupId).
-            var lastInspectionIndex = node.Actions.FindLastIndex(a => a.ActionType == "startWeldInspection");
-            var firstInspectionIndex = node.Actions.FindIndex(a => a.ActionType == "startWeldInspection");
+            //    사전 점검에서 닿지 않아 이미 실패로 끝낸 용접선은 건너뛴다 — 홈 복귀는 실제로 수행하는 마지막 검사에 붙는다.
+            var lastInspectionIndex = node.Actions.FindLastIndex(a =>
+                a.ActionType == "startWeldInspection" && !skippedActions.Contains(a.ActionId));
+            var firstInspectionIndex = node.Actions.FindIndex(a =>
+                a.ActionType == "startWeldInspection" && !skippedActions.Contains(a.ActionId));
             var equipmentDown = false;
-            int failedActions = 0;
+            int failedActions = skippedActions.Count;
             for (var ai = 0; ai < node.Actions.Count; ai++)
             {
                 var action = node.Actions[ai];
                 ct.ThrowIfCancellationRequested();
+                if (skippedActions.Contains(action.ActionId)) continue;
                 // 일시정지 중이면 다음 action 을 시작하지 않는다(사양 §3).
                 await _pauseGate.WaitWhilePausedAsync(ct);
 
@@ -506,6 +552,16 @@ public sealed class Vda5050OrderExecutor
                     // 실패 결과로 돌려주므로, 여기서 inspectionFailed 로 보고·FAILED 처리하기 전에 취소 경로로 넘긴다
                     // (상위 임무 중단 처리가 액션 상태를 정리한다. errors 에 inspectionFailed 가 남지 않는다).
                     ct.ThrowIfCancellationRequested();
+                    // 이 정차의 검사가 실패로 끝나면 홈 복귀 단계(마지막 검사 순서의 맨 끝)까지 가지 못해 팔이 뻗은 채 남는다.
+                    // 액션을 종결 보고하기 전에 기준 자세로 되돌린다 — 다음 지령이 없어도 팔이 남지 않고,
+                    // ACS 는 액션이 끝난 뒤에야 다음 정차를 보내므로 복귀 중에 새 지령이 끼어들지 않는다.
+                    if (InspectionHomePolicy.ShouldReturnHome(action.ActionType, result.Success,
+                            isLastInspection: ai == lastInspectionIndex, result.ErrorType))
+                    {
+                        var afterFailHome = await EnsureCobotHomeBeforeDriveAsync(orderId, ct, AfterFailHomeLabel);
+                        if (afterFailHome is not null)
+                            _logger.LogWarning("검사 실패 후 코봇 홈 복귀 실패 — 팔이 뻗은 채 남을 수 있습니다: {Reason}", afterFailHome);
+                    }
                     // 보정한 정차의 첫 검사 액션 결과 앞머리에 보정량 토큰(§4.4.2 규칙 6) — ACS 가 계획 개선용으로 수집.
                     if (adjustToken?.Token is { } token && ai == firstInspectionIndex)
                         result = result with { ResultDescription = $"{token} {result.ResultDescription}" };
@@ -535,6 +591,18 @@ public sealed class Vda5050OrderExecutor
                             ReportError(result.ErrorType,
                                 action.ActionType == "moveToSeamStart" ? $"{action.ActionId}: {errDesc}" : errDesc);
                         if (result.ErrorType == "equipmentError") equipmentDown = true;
+                        if (result.ErrorType == CobotReachPrecheck.BlockedErrorType)
+                        {
+                            for (var j = ai + 1; j < node.Actions.Count; j++)
+                            {
+                                var rest = node.Actions[j];
+                                SetActionStatus(rest.ActionId, "FAILED", "코봇 도달 불가로 잔여 액션을 실행하지 않습니다");
+                                failedActions++;
+                                OpLog(OpCategory.Action, rest.ActionType, false,
+                                    $"[{j + 1}/{node.Actions.Count}] {DescribeAction(rest)} — 코봇 도달 불가로 실행하지 않음", orderId);
+                            }
+                            break;
+                        }
                     }
                     _logger.LogInformation("VDA5050 액션 {Result}: {Type} ({ActionId}) — {Desc}",
                         result.Success ? "완료" : "실패", action.ActionType, action.ActionId, result.ResultDescription);
@@ -663,10 +731,14 @@ public sealed class Vda5050OrderExecutor
              :                     (settings, "Settings");
     }
 
-    /// <summary>AMR 주행 전 코봇 홈 복귀 — 팔이 뻗은 상태에서 주행하면 구조물 충돌 위험.
+    /// <summary>AMR 주행 전(또는 정차의 검사가 실패로 끝난 직후 — <paramref name="label"/>) 코봇 홈 복귀 — 팔이 뻗은 상태에서 주행하면 구조물 충돌 위험.
     /// 코봇 미연결 또는 홈 미티칭이면 건너뛴다(코봇 없는 주행 전용 시나리오).
     /// 복귀 성공·생략이면 null, 복귀를 시도했는데 실패하면 그 사유 — 호출측은 주행하지 않고 임무를 실패시킨다.</summary>
-    private async Task<string?> EnsureCobotHomeBeforeDriveAsync(string orderId, CancellationToken ct)
+    private const string BeforeDriveHomeLabel = "주행 전 홈 복귀";
+    private const string AfterFailHomeLabel = "검사 실패 후 홈 복귀";
+
+    private async Task<string?> EnsureCobotHomeBeforeDriveAsync(string orderId, CancellationToken ct,
+        string label = BeforeDriveHomeLabel)
     {
         try
         {
@@ -675,7 +747,7 @@ public sealed class Vda5050OrderExecutor
             if (!cobot.IsConnected)
             {
                 _logger.LogDebug("코봇 미연결 — 홈 복귀 건너뜀");
-                OpLog(OpCategory.Cobot, "주행 전 홈 복귀", null, "코봇 미연결 — 건너뜀", orderId);
+                OpLog(OpCategory.Cobot, label, null, "코봇 미연결 — 건너뜀", orderId);
                 return null;
             }
 
@@ -685,7 +757,7 @@ public sealed class Vda5050OrderExecutor
             if (home is null || !home.IsTaught)
             {
                 _logger.LogWarning("홈 위치 미티칭 — 코봇 홈 복귀 건너뜀");
-                OpLog(OpCategory.Cobot, "주행 전 홈 복귀", false, "홈 위치 미티칭 — 건너뜀(팔이 뻗은 채 주행할 수 있음)", orderId);
+                OpLog(OpCategory.Cobot, label, false, "홈 위치 미티칭 — 건너뜀(팔이 뻗은 채 남을 수 있음)", orderId);
                 return null;
             }
 
@@ -701,19 +773,19 @@ public sealed class Vda5050OrderExecutor
             await Sequence.Steps.WeldSequenceSupport.LoadOpticalAxisAsync(
                 scope.ServiceProvider.GetRequiredService<ParameterService>(), ctx);
             var cur = await cobot.Rpc.GetActualJointPosAsync(ct: ct);
-            var mode = SequenceEntry.ModeOf(cur, ctx);
-            OpLog(OpCategory.Cobot, "주행 전 홈 복귀 시작", null,
+            var mode = SequenceEntry.ResolveMode(cur, ctx);
+            OpLog(OpCategory.Cobot, label + " 시작", null,
                 $"자세 모드 {mode}, 현재 관절 [{string.Join(", ", cur.Select(v => v.ToString("0.#")))}]", orderId);
 
             var done = await SequenceEntry.ReturnToBaseAsync(cobot, ctx, _logger, ct);
             if (done.Count == 0)
             {
                 _logger.LogDebug("코봇 이미 기준 자세({Mode}) — 복귀 불필요", mode);
-                OpLog(OpCategory.Cobot, "주행 전 홈 복귀", null, $"이미 기준 자세({mode}) — 이동 없음", orderId);
+                OpLog(OpCategory.Cobot, label, null, $"이미 기준 자세({mode}) — 이동 없음", orderId);
                 return null;
             }
             _logger.LogInformation("코봇 기준 자세 복귀 완료 ({Route})", string.Join(" → ", done));
-            OpLog(OpCategory.Cobot, "주행 전 홈 복귀", true, $"{string.Join(" → ", done)} 완료", orderId);
+            OpLog(OpCategory.Cobot, label, true, $"{string.Join(" → ", done)} 완료", orderId);
             return null;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -722,8 +794,9 @@ public sealed class Vda5050OrderExecutor
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "코봇 홈 복귀 중 예외 — 주행하지 않고 임무 중단");
-            OpLog(OpCategory.Cobot, "주행 전 홈 복귀", false, $"예외: {ex.Message} — 주행하지 않고 임무 중단", orderId);
+            var consequence = label == BeforeDriveHomeLabel ? "주행하지 않고 임무 중단" : "팔이 뻗은 채 남을 수 있음";
+            _logger.LogWarning(ex, "코봇 홈 복귀 중 예외({Label}) — {Consequence}", label, consequence);
+            OpLog(OpCategory.Cobot, label, false, $"예외: {ex.Message} — {consequence}", orderId);
             return ex.Message;
         }
     }
@@ -796,6 +869,8 @@ public sealed class Vda5050OrderExecutor
         var deadline = DateTime.UtcNow.AddSeconds(_restSettings.DriveTimeoutSec);
         var started = DateTime.UtcNow;
         var lastDiagLog = DateTime.MinValue;
+        // 주행 대기 동안만 코봇 반경 장애물을 감시한다(꺼져 있으면 아무 일도 하지 않는다).
+        using var obstacleWatch = _obstacleGuard?.Watch();
         const int diagIntervalSec = 30;
 
         double lastDxy = double.NaN, lastDTheta = double.NaN;
@@ -879,6 +954,27 @@ public sealed class Vda5050OrderExecutor
                 entryLogged = false;
             }
 
+            // 코봇 반경 장애물 — 감시가 이미 주행을 세웠다. 사라질 때까지 기다렸다가 같은 목표로 다시 지령한다.
+            // 기다린 시간은 주행 타임아웃에 그대로 들어간다(끝내 안 사라지면 실패로 보고).
+            if (_obstacleGuard?.Active is { } obstacle)
+            {
+                StateChanged?.Invoke();
+                if (!await _obstacleGuard.WaitClearAsync(deadline, ct))
+                    return (false, $"코봇 반경 장애물이 사라지지 않아 주행 중단 — {obstacle.Hit.Describe()}, " +
+                                   $"감시 영역 {obstacle.Zone.Describe()}, 정지 {(DateTime.UtcNow - obstacle.SinceUtc).TotalSeconds:0}s " +
+                                   $"(최종 {lastPoseDesc})");
+                StateChanged?.Invoke();
+                await _pauseGate.WaitWhilePausedAsync(ct);
+                staleErrors = await SnapshotErrorKeysAsync(ct);
+                OpLog(OpCategory.Drive, "주행 재지령", null,
+                    $"코봇 반경 장애물 해소 — 현재 {DescribePose()} → 같은 목표 ({pos.X:0.###}, {pos.Y:0.###}, θ={pos.Theta ?? 0.0:0.###}) 재이동");
+                var again = await _rest.GoAsync(pos.X, pos.Y, pos.Theta ?? 0.0, stopFlag: true, ct);
+                if (!again.Ok)
+                    return (false, $"장애물 해소 후 이동 명령 실패 (code={again.Code}): {again.Message}");
+                settle.Reset();
+                entryLogged = false;
+            }
+
             if (DateTime.UtcNow > deadline)
             {
                 _logger.LogWarning("VDA5050 주행 타임아웃: 최종 {Pose}, 잔여 dxy={Dxy:F3}m, dθ={DTheta:F3}rad " +
@@ -954,7 +1050,8 @@ public sealed class Vda5050OrderExecutor
             if (status.Ok && status.Data is JsonElement data)
             {
                 var fresh = GetErrorEntries(data).Where(e => !staleErrors.Contains(e.Key)).ToList();
-                if (fresh.Count > 0)
+                // 장애물 감시가 방금 세웠으면 그 정지가 남긴 항목일 수 있다 — 다음 바퀴에서 해소를 기다리고 기준선을 다시 잡는다.
+                if (fresh.Count > 0 && _obstacleGuard?.Active is null)
                     return (false, $"로봇 이동 오류 보고: [{string.Join(",", fresh.Select(e => e.Text))}]");
             }
 
@@ -1090,6 +1187,115 @@ public sealed class Vda5050OrderExecutor
         while (rad > Math.PI) rad -= 2 * Math.PI;
         while (rad < -Math.PI) rad += 2 * Math.PI;
         return rad;
+    }
+
+    /// <summary>
+    /// 노드의 검사·시험이동을 정차 좌표로 미리 판정한다. 점이 없으면 통과(이동 그대로).
+    /// 막히면(<see cref="ReachPrecheckOutcome.Block"/>) 배너·로그·VDA 오류를 남기고 사유를 돌려준다 — 호출측은 주행하지 않는다.
+    /// 검사 용접선 중 일부만 닿지 않으면 막지 않고 그 용접선 목록(<see cref="ReachPrecheckOutcome.Unreachable"/>)을 돌려준다 —
+    /// 호출측이 그 용접선만 실패로 끝내고 나머지를 수행한다.
+    /// 자동 시퀀스의 뻗음 부족만, ACS 가 허락한 최대 후진 자리에서 닿으면 통과(정차 보정이 고친다).
+    /// </summary>
+    private async Task<ReachPrecheckOutcome> PrecheckReachBeforeDriveAsync(string orderId, OrderNode node, CancellationToken ct)
+    {
+        var pos = node.NodePosition;
+        if (pos is null) return ReachPrecheckOutcome.Pass;
+
+        double? backward = null;
+        foreach (var action in node.Actions)
+        {
+            if (action.ActionType != "startWeldInspection") continue;
+            var limits = WeldInspectionActionParser.TryParseStationAdjust(action, out var limitError);
+            if (limitError is not null)
+            {
+                _logger.LogInformation("도달 사전 점검: stationAdjust 무시 — {Err}", limitError);
+                continue;
+            }
+            if (limits is not null)
+            {
+                backward = limits.MaxBackwardMm;
+                break;
+            }
+        }
+
+        var allowBackup = backward is > 0;
+        var points = CobotReachPrecheck.FromActions(node.Actions, allowBackup).ToList();
+        points.AddRange(TaskBundlePlanner.Point2ReachPoints(
+            TaskBundlePlanner.Assign(node.Actions, pos.Theta), allowBackup));
+        if (points.Count == 0) return ReachPrecheckOutcome.Pass;
+
+        using var scope = _scopeFactory.CreateScope();
+        var pre = scope.ServiceProvider.GetRequiredService<CobotReachPrecheck>();
+        ReachGateResult gate;
+        if (pos.Theta is not { } yaw)
+        {
+            gate = ReachGateResult.Block(
+                "노드 theta 가 없습니다 — 코봇 도달 시뮬레이션을 할 수 없어 AMR 을 움직이지 않습니다.",
+                points.Any(p => p.TestMove));
+        }
+        else
+        {
+            (double X, double Y)? backup = allowBackup
+                ? StationAdjustPlanner.BackedOff(pos.X, pos.Y, yaw, backward!.Value)
+                : null;
+            try
+            {
+                gate = await pre.CheckAsync(points, pos.X, pos.Y, yaw, backup, ct);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                gate = ReachGateResult.Block(
+                    $"코봇 도달 사전 점검 오류 — {ex.Message}. 확인하지 못해 AMR 을 움직이지 않습니다.",
+                    points.Any(p => p.TestMove));
+            }
+        }
+
+        if (gate.Ok) return ReachPrecheckOutcome.Pass;
+
+        // 하나라도 닿지 않는다 — 용접선별로 다시 본다. 닿는 것이 있으면 닿지 않는 것만 빼고 수행한다.
+        if (pos.Theta is { } y2 && !points.Any(p => p.TestMove))
+        {
+            try
+            {
+                (double X, double Y)? backup2 = allowBackup
+                    ? StationAdjustPlanner.BackedOff(pos.X, pos.Y, y2, backward!.Value)
+                    : null;
+                var inspections = node.Actions.Where(a => a.ActionType == "startWeldInspection").ToList();
+                var bad = new List<(VdaAction Action, string Reason)>();
+                var good = new List<VdaAction>();
+                foreach (var a in inspections)
+                {
+                    var own = CobotReachPrecheck.FromActions(new[] { a }, allowBackup);
+                    if (own.Count == 0) { good.Add(a); continue; }
+                    var g = await pre.CheckAsync(own, pos.X, pos.Y, y2, backup2, ct);
+                    if (g.Ok) good.Add(a); else bad.Add((a, g.Message));
+                }
+                if (ReachPartialPolicy.CanRunPartially(inspections.Count, bad.Count))
+                {
+                    // 남은 용접선끼리 묶었을 때의 점2 도 닿아야 한다 — 안 닿으면 묶지 않고 하나씩 교시한다.
+                    var point2 = TaskBundlePlanner.Point2ReachPoints(TaskBundlePlanner.Assign(good, pos.Theta), allowBackup);
+                    var bundleOk = point2.Count == 0 || (await pre.CheckAsync(point2, pos.X, pos.Y, y2, backup2, ct)).Ok;
+                    return new ReachPrecheckOutcome(null, bad, DissolveBundles: !bundleOk);
+                }
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "용접선별 도달 재점검 오류 — 정차 전체를 실행하지 않습니다");
+            }
+        }
+
+        pre.Raise(gate, OperationLogService.SourceAcs, orderId);
+        ReportError(CobotReachPrecheck.BlockedErrorType, gate.Message);
+        return new ReachPrecheckOutcome(gate.Message, Array.Empty<(VdaAction, string)>(), false);
+    }
+
+    /// <summary>주행 전 도달 점검 결과. Block 이 있으면 정차 전체를 실행하지 않는다.</summary>
+    private sealed record ReachPrecheckOutcome(
+        string? Block, IReadOnlyList<(VdaAction Action, string Reason)> Unreachable, bool DissolveBundles)
+    {
+        public static readonly ReachPrecheckOutcome Pass = new(null, Array.Empty<(VdaAction, string)>(), false);
     }
 
     /// <summary>임무 실패 — 미도달 상태로 전 미종결 액션 FAILED(§6.4 drivingFailed 계약의 액션 처리부).
@@ -1468,5 +1674,33 @@ public sealed class Vda5050OrderExecutor
             _missionCts = null;
             _missionTask = null;
         }
+    }
+}
+
+/// <summary>
+/// 정차의 검사가 실패로 끝났을 때 코봇을 기준 자세로 되돌릴지. 홈 복귀는 정차의 마지막 검사 순서 맨 끝 단계라,
+/// 그 검사가 중간에 실패하면 실행되지 않는다. 뒤 검사를 실행하지 않게 되는 실패(설비 불능·코봇 도달 불가)도 같다.
+/// 중간 용접선의 일반 실패는 다음 용접선이 접근 경로를 다시 잡으므로 복귀하지 않는다.
+/// moveToSeamStart(시험)는 ② 접근 자세에 멈춰 있는 것이 목적이라 대상이 아니다.
+/// </summary>
+/// <summary>
+/// 정차의 용접선 일부가 닿지 않을 때 나머지를 수행할 수 있는가. 닿는 것이 하나라도 있어야 한다 —
+/// 전부 닿지 않으면 종전처럼 정차 전체를 실행하지 않는다(주행·리프트도 하지 않음).
+/// 전부 따로는 닿는데 함께는 막힌 경우(묶음 점2)는 묶음만 풀고 모두 수행한다.
+/// </summary>
+internal static class ReachPartialPolicy
+{
+    public static bool CanRunPartially(int inspections, int unreachable)
+        => inspections > 0 && unreachable < inspections;
+}
+
+internal static class InspectionHomePolicy
+{
+    public static bool ShouldReturnHome(string actionType, bool success, bool isLastInspection, string? errorType)
+    {
+        if (actionType != "startWeldInspection" || success) return false;
+        return isLastInspection
+            || errorType == "equipmentError"
+            || errorType == Motion.CobotReachPrecheck.BlockedErrorType;
     }
 }

@@ -42,17 +42,18 @@ public class VisionProtocolV32Tests
     }
 
     [Fact]
-    public void CaptureReq_TaskId_Is_BigEndian_Rfc4122()
+    public void CaptureReq_TaskId_Is_LittleEndian_DotNetLayout()
     {
-        // 하이픈 문자열을 왼쪽부터 읽은 바이트와 [15..] 16바이트가 일치해야 한다.
+        // 리틀엔디안(.NET Guid.ToByteArray 배치) — 앞 세 묶음(4·2·2바이트)은 뒤집히고 뒤 8바이트는 문자열 순서 그대로.
+        // 수신 측이 new Guid(byte[]) 로 읽으면 ACS 가 발급한 문자열과 같다.
         var taskId = Guid.Parse("3a9f2c14-8e51-4d7a-b2c9-1f6e0a5d3b47");
         var data = CaptureReqPayload.Build(SurfaceType.Flat, 1, 0, 0, 0, taskId, 1, 1);
-        Assert.Equal(0x3a, data[15]);
-        Assert.Equal(0x9f, data[16]);
-        Assert.Equal(0x2c, data[17]);
-        Assert.Equal(0x14, data[18]);
-        Assert.Equal(0x3b, data[29]);
-        Assert.Equal(0x47, data[30]);
+        Assert.Equal(new byte[] { 0x14, 0x2c, 0x9f, 0x3a }, data[15..19]);   // 3a9f2c14
+        Assert.Equal(new byte[] { 0x51, 0x8e }, data[19..21]);               // 8e51
+        Assert.Equal(new byte[] { 0x7a, 0x4d }, data[21..23]);               // 4d7a
+        Assert.Equal(new byte[] { 0xb2, 0xc9, 0x1f, 0x6e, 0x0a, 0x5d, 0x3b, 0x47 }, data[23..31]);
+        Assert.Equal(taskId.ToByteArray(), data[15..31]);
+        Assert.Equal(taskId, new Guid(data[15..31]));
     }
 
     [Fact]

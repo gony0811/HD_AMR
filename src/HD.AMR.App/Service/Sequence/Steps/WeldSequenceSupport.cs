@@ -118,6 +118,36 @@ public static class WeldSequenceSupport
     /// 계산 법선 자세가 없으면(티칭 폴백) 두지 않는다.</summary>
     public const string WallOutNormalBagKey = "seam.wallOutNormal";
 
+    /// <summary>② 가 환산한 용접선 방향(접근한 점 → 반대쪽 점) 단위벡터(BASE [x,y,z]). ⑧ Peak2 이동 방향의 기준.
+    /// 끝점이 없으면 두지 않는다.</summary>
+    public const string SeamDirBaseBagKey = "seam.dirBase";
+
+    /// <summary>
+    /// 피치 이동(BASE 벡터)이 용접선 방향과 반대인가. <paramref name="pitchDir"/> = +1 은 용접선 끝점 쪽, −1 은 그 반대다.
+    /// 용접선 가로 정렬은 툴을 광축 둘레로 0° 또는 180° 중 J6 안전 범위에 드는 쪽으로 돌리므로, 툴 진행축 + 방향이
+    /// 끝점 쪽일 수도 반대쪽일 수도 있다(실기 2026-11-13 F L4-R01C04 — 점2 를 끝점 반대쪽 한 피치에 잡아 옆 구간을 검사).
+    /// 용접선과 거의 수직인 이동(코사인 0.2 미만)은 판단하지 않는다.
+    /// </summary>
+    internal static bool PitchMoveOpposesSeam(double[] baseMove, double[] seamDir, int pitchDir)
+    {
+        var len = Math.Sqrt(baseMove[0] * baseMove[0] + baseMove[1] * baseMove[1] + baseMove[2] * baseMove[2]);
+        var sLen = Math.Sqrt(seamDir[0] * seamDir[0] + seamDir[1] * seamDir[1] + seamDir[2] * seamDir[2]);
+        if (len < 1e-9 || sLen < 1e-9) return false;
+        var cos = (baseMove[0] * seamDir[0] + baseMove[1] * seamDir[1] + baseMove[2] * seamDir[2]) / (len * sLen);
+        if (Math.Abs(cos) < 0.2) return false;
+        return cos * (pitchDir >= 0 ? 1 : -1) < 0;
+    }
+
+    /// <summary>툴 좌표 이동량을 <paramref name="anchorPose"/> 자세 기준 BASE 벡터로 바꾼다(회전만).</summary>
+    internal static double[] ToolOffsetInBase(double[] anchorPose, double[] toolOffset)
+    {
+        var m = HD.AMR.App.Communication.FrameMath.PoseToMatrix(anchorPose);
+        var v = new double[3];
+        for (var i = 0; i < 3; i++)
+            v[i] = m[i, 0] * toolOffset[0] + m[i, 1] * toolOffset[1] + m[i, 2] * toolOffset[2];
+        return v;
+    }
+
     /// <summary>
     /// 툴 좌표 이동량 <paramref name="toolOffset"/>(x,y,z) 을 <paramref name="anchorPose"/> 자세 기준 BASE 벡터로 바꾸고,
     /// 면 법선 <paramref name="wallOut"/> 성분을 빼 면과 평행한 이동으로 만든다(길이는 원래 이동량 유지).

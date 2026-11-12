@@ -36,10 +36,15 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
     private readonly object _sync = new();
     private (string OrderId, string AnchorGroupId, InspectionMoveDirection Direction, string? WallCode)? _lastAnchor;   // wall_code 포함 — 꺾인 용접선(벽→챔퍼)이 같은 그룹·방향이어도 다른 면 프레임을 재사용하지 않는다
     private double[]? _lastInternalWorkpieceFrame;                 // 같은 anchor에서 재사용할 BASE 기준 내부 프레임
-    private double[]? _lastAnchorStartBase;                        // 그 프레임을 쓴 task 의 ② 시작 접근점(BASE) — 다음 task 프레임 평행 이동 기준
+    private (double[] Start, double[] End)? _lastAnchorSeamW;     // 그 프레임을 쓴 task 의 용접선(맵) — 꺾인 용접선이 같은 프레임을 물려받지 않게
+    private double[]? _lastAnchorStartBase;                       // 그 프레임을 쓴 task 의 ② 시작 접근점(BASE) — 다음 task 프레임 평행 이동 기준
     private double[]? _lastAnchorEndTcp;                           // 그 task 종료 시 TCP(BASE) — 다음 task 연속 이동 판정
     private double? _lastAnchorStrokeMm;                           // 그 프레임을 쓴 task 의 텔레스코픽 스트로크(mm) — 높이 변경 시 캐시 무효화
     private CancellationTokenSource? _currentRunCts;
+    private readonly Dictionary<string, BundleAssignment> _bundleByAction = new();
+    private readonly List<BundleAssignment> _bundleOrder = new();   // 노드 액션 순서 — 리더 실패 시 남은 TASK 재묶음용
+    private readonly Dictionary<string, (double[] Frame, double[]? Start, double[]? EndTcp)> _bundleFrames = new();
+    private readonly HashSet<string> _dissolvedBundles = new(StringComparer.Ordinal);
 
     /// <summary>
     /// <b>정렬·작업물 좌표계 교시 스텝군(③~⑯)</b> — anchor 적중(같은 노드의 2번째 이후 task) 시 건너뛴다.
@@ -56,6 +61,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         "peak1Find", "peak1Center", "bead1Find", "bead1Center", "wobjPoint1",
         "peak2Approach", "peak2Find", "peak2Center", "bead2Find", "bead2Center", "wobjPoint2",
         "wobjRegister",
+        FlatSurfaceAlignStep.BundlePoint2Key, LaserWorkingDistanceStep.BundlePoint2Key,
         // 드라이런 2점 교시의 끝점 이동 — anchor 적중 시 캐시 프레임 재사용으로 재교시 생략.
         "cobotSeamEnd",
     };
@@ -179,6 +185,10 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         try
         {
             await WaitForIdleGateAsync(req.JobRef, runCts.Token);
+            // 리프트를 올리기 전에 시작점 도달을 본다. 시험이동은 끝점까지 가지 않으므로 시작점만.
+            var testPoints = CobotReachPrecheck.FromActions(new[] { action }, allowInspectionBackup: false);
+            if (await BlockIfUnreachableAsync(scope.ServiceProvider, testPoints, orderId, runCts.Token) is { } testBlock)
+                return testBlock;
             if (await EnsureLiftStrokeAsync(
                     scope.ServiceProvider, req.LiftStrokeMm, req.DrawingPos.WallCode, req.JobRef, orderId, runCts.Token)
                 is { } liftFail)
@@ -255,6 +265,46 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         var until = DateTime.UtcNow + BusyWaitTimeout;
         while (_runGate.IsBusy && DateTime.UtcNow < until)
             await Task.Delay(500, ct);
+    }
+
+    /// <summary>
+    /// 묶음 TASK 하나가 끝난 뒤 공유 상태를 갱신한다.
+    /// <list type="bullet">
+    /// <item>리더: 교시한 좌표계·그 시작 접근점·종료 TCP 를 새로 둔다.</item>
+    /// <item>팔로워: 좌표계와 시작 접근점은 리더 것을 그대로 두고(다음 TASK 도 리더 시작점 기준으로 평행 이동),
+    /// <b>종료 TCP 만 이 TASK 것으로</b> 바꾼다. 리더의 종료 TCP 를 계속 넘기면 세 번째 TASK 부터 "현재 TCP 가 직전 종료와
+    /// 다름"으로 연속 이동이 거부돼 TASK 마다 홈으로 복귀했다가 다시 진입한다(실기 2026-11-11 T L4-R08C17 #3·#4).</item>
+    /// </list>
+    /// 팔로워인데 공유 좌표계가 없으면 null(바꾸지 않음).
+    /// </summary>
+    internal static (double[] Frame, double[]? Start, double[]? EndTcp)? NextBundleFrame(
+        BundleRole role, (double[] Frame, double[]? Start, double[]? EndTcp)? existing,
+        double[] frame, double[]? startBase, double[]? endTcp)
+        => role switch
+        {
+            BundleRole.Leader => ((double[])frame.Clone(), startBase?.ToArray(), endTcp?.ToArray()),
+            BundleRole.Follower when existing is { } e => (e.Frame, e.Start, endTcp?.ToArray()),
+            _ => null,
+        };
+
+    public void BeginBundles(IReadOnlyList<BundleAssignment> assignments)
+    {
+        lock (_sync)
+        {
+            _bundleByAction.Clear();
+            _bundleOrder.Clear();
+            _bundleFrames.Clear();
+            _dissolvedBundles.Clear();
+            foreach (var a in assignments)
+            {
+                if (a.Role == BundleRole.None) continue;
+                _bundleByAction[a.ActionId] = a;
+                _bundleOrder.Add(a);
+                _logger.LogInformation(
+                    "TASK 묶음 {Role}: {Job} bundle={Id} wall={Wall} lift={Lift} dir={Dir}",
+                    a.Role, a.JobRef, a.BundleId, a.WallCode, a.LiftStrokeMm?.ToString("0") ?? "-", a.Direction);
+            }
+        }
     }
 
     public void InvalidateAnchor()
@@ -492,6 +542,10 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         try
         {
             await WaitForIdleGateAsync(req.JobRef, runCts.Token);
+            // 정차 보정까지 끝난 실제 자리에서 다시 본다. 여기서 막히면 리프트를 올리지 않는다.
+            var taskPoints = CobotReachPrecheck.FromActions(new[] { action }, allowInspectionBackup: false);
+            if (await BlockIfUnreachableAsync(scope.ServiceProvider, taskPoints, orderId, runCts.Token) is { } reachBlock)
+                return reachBlock;
             if (await EnsureLiftStrokeAsync(
                     scope.ServiceProvider, req.LiftStrokeMm, req.DrawingPos.WallCode, req.JobRef, orderId, runCts.Token)
                 is { } liftFail)
@@ -523,6 +577,17 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                 anchorHit = recipe.SeamType != SeamTypeKind.Corner
                             && _lastAnchor == (orderId, req.AnchorGroupId, direction, req.DrawingPos.WallCode)
                             && _lastInternalWorkpieceFrame is { Length: 6 };
+                // 수직/수평 분류가 같아도 실제 용접선이 꺾여 있으면 좌표계를 물려받지 않는다 — AMR 이 용접선에 45° 로 서면
+                // 분류가 모호해 둘 다 Horizontal 로 떨어진다(실기 2026-11-12 03:56 L4-R03C17: CROSS4 뒤 90° 꺾인 V04 가
+                // 앞 가로선 좌표계로 순회).
+                if (anchorHit && _lastAnchorSeamW is { } prevSeam
+                    && !TaskBundlePlanner.SameSeamLine(prevSeam.Start, prevSeam.End, req.SeamStartW, req.SeamEndW))
+                {
+                    anchorHit = false;
+                    _logger.LogInformation(
+                        "anchor 용접선 방향 변경(직전 용접선과 {Tol:0}° 넘게 꺾임) — 작업물 좌표계 재교시 (anchorGroup={Group}, jobRef={JobRef})",
+                        TaskBundlePlanner.SeamParallelTolDeg, req.AnchorGroupId, req.JobRef);
+                }
                 if (!anchorHit && _lastAnchor is { } prev
                     && prev.OrderId == orderId && prev.AnchorGroupId == req.AnchorGroupId
                     && (prev.Direction != direction || prev.WallCode != req.DrawingPos.WallCode))
@@ -534,6 +599,66 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                 cachedInternalFrame = anchorHit ? (double[])_lastInternalWorkpieceFrame!.Clone() : null;
                 cachedAnchorStartBase = anchorHit ? _lastAnchorStartBase?.ToArray() : null;
                 cachedAnchorEndTcp = anchorHit ? _lastAnchorEndTcp?.ToArray() : null;
+            }
+
+            BundleAssignment? bundle = null;
+            lock (_sync) _bundleByAction.TryGetValue(action.ActionId, out bundle);
+            if (bundle?.Role == BundleRole.Follower)
+            {
+                var dissolved = false;
+                (double[] Frame, double[]? Start, double[]? EndTcp) shared = default;
+                var hasFrame = false;
+                lock (_sync)
+                {
+                    dissolved = _dissolvedBundles.Contains(bundle.BundleId!);
+                    hasFrame = !dissolved && _bundleFrames.TryGetValue(bundle.BundleId!, out shared);
+                }
+                if (dissolved || !hasFrame)
+                {
+                    anchorHit = false;
+                    cachedInternalFrame = null;
+                    cachedAnchorStartBase = null;
+                    cachedAnchorEndTcp = null;
+
+                    // 리더가 실패해 공통 좌표계가 없으면(점2 교시 실패로 푼 묶음은 제외) 실패한 TASK 만 빼고
+                    // 남은 TASK 끼리 다시 묶는다 — 이 TASK 가 새 리더로 두 점 교시를 하고 뒤 TASK 는 그 좌표계를 쓴다.
+                    IReadOnlyList<BundleAssignment>? rebundled = null;
+                    if (!dissolved)
+                    {
+                        lock (_sync)
+                        {
+                            rebundled = TaskBundlePlanner.Rebundle(
+                                _bundleOrder, bundle.BundleId!, action.ActionId, req.SeamStartW, req.SeamEndW);
+                            if (rebundled is not null)
+                            {
+                                foreach (var a in rebundled)
+                                {
+                                    _bundleByAction[a.ActionId] = a;
+                                    var at = _bundleOrder.FindIndex(o => o.ActionId == a.ActionId);
+                                    if (at >= 0) _bundleOrder[at] = a;
+                                }
+                            }
+                        }
+                    }
+                    if (rebundled is not null)
+                    {
+                        _logger.LogWarning(
+                            "묶음 {Old} 리더 실패 — {Job} 을 새 리더로 남은 {N}건을 다시 묶습니다 (bundle={New}, 팔로워: {Followers}).",
+                            bundle.BundleId, req.JobRef, rebundled.Count, rebundled[0].BundleId,
+                            string.Join(", ", rebundled.Skip(1).Select(a => a.JobRef)));
+                        bundle = rebundled[0];
+                    }
+                    else
+                        _logger.LogWarning("묶음 {Id} 미사용 — {Job} 은 단독 교시로 진행합니다.", bundle.BundleId, req.JobRef);
+                }
+                else
+                {
+                    anchorHit = true;
+                    cachedInternalFrame = (double[])shared.Frame.Clone();
+                    cachedAnchorStartBase = shared.Start?.ToArray();
+                    cachedAnchorEndTcp = shared.EndTcp?.ToArray();
+                    _logger.LogInformation("묶음 {Id} 공통 좌표계 — {Job} 교시 생략", bundle.BundleId, req.JobRef);
+                }
             }
 
             // 레시피가 정한 스텝(미지정이면 등록된 전체)에서 출발해, 이 task 에 맞지 않는 것만 뺀다.
@@ -628,7 +753,19 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                 WallFacingThetaRad = nodeThetaRad,
                 ZDatumOffsetMm = zDatumOffset,
                 VisionFailRatioMax = recipe.VisionFailRatioMax < 1.0 ? recipe.VisionFailRatioMax : null,
+                // 촬영 위치(CAPTURE_REQ u,v)를 면 좌표로 — ACS 시작·끝점 면 좌표에서 원점과 용접선 방향을 얻는다.
+                // 없으면(구버전 ACS·사선) null = 종전처럼 용접선 시작점 기준 좌표가 나간다.
+                FacePlacement = Communication.Vision.FaceLocalMapper.PlacementFromSeam(
+                    req.DrawingPos.U, req.DrawingPos.V, req.DrawingPos.UEnd, req.DrawingPos.VEnd),
             };
+            if (context.FacePlacement is { } fp)
+                _logger.LogInformation(
+                    "촬영 위치 면 좌표 환산: wall={Wall}, 시작점 (u,v)=({U:0},{V:0})mm, 용접선 방향 {Dir} (jobRef={JobRef})",
+                    req.DrawingPos.WallCode, fp.OriginUMm, fp.OriginVMm, fp.Direction, req.JobRef);
+            else
+                _logger.LogWarning(
+                    "촬영 위치를 면 좌표로 환산하지 못함 — 용접선 시작점 기준 좌표로 보냄 (drawingPos u/v/uEnd/vEnd 없음 또는 사선, jobRef={JobRef})",
+                    req.JobRef);
             if (cachedInternalFrame is not null)
                 context.Bag[InternalWorkpieceFrame.BagKey] = cachedInternalFrame;
             // ②가 캐시 프레임을 이번 시작점으로 평행 이동하고(없으면 실패), 직전 종료 자세 그대로면 복귀 없이 연속 이동한다.
@@ -636,6 +773,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                 context.Bag[CobotInspectionMoveStep.AnchorStartBaseBagKey] = cachedAnchorStartBase;
             if (cachedAnchorEndTcp is not null)
                 context.Bag[CobotInspectionMoveStep.PreviousEndTcpBagKey] = cachedAnchorEndTcp;
+            if (bundle?.Role == BundleRole.Leader)
+                BundleTeach.Activate(context, bundle);
 
             // CROSS3/CROSS4 는 LINE 과 동일하게 티칭 프로필 경유점을 실행한다 — 코로게이션 격자 교차부는
             // 평탄하지 않아 수식 생성으로 법선·깊이를 담을 수 없으므로 6-DOF 캡처 교시(/inspection-points)로
@@ -698,14 +837,35 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                             _logger.LogWarning(ex, "검사 종료 TCP 조회 실패 — 다음 task 는 연속 이동 없이 복귀 경로로 진입");
                         }
                         var strokeAtEnd = _lift.TryGetStrokeMm(out _);
+                        var dissolved = context.Bag.TryGetValue(BundleTeach.DissolvedKey, out var dissolvedFlag) && dissolvedFlag is true;
                         lock (_sync)
                         {
-                            _lastAnchor = (orderId, req.AnchorGroupId, direction, req.DrawingPos.WallCode);
-                            _lastInternalWorkpieceFrame = (double[])internalFrame.Clone();
-                            _lastAnchorStartBase = startBase;
-                            _lastAnchorEndTcp = endTcp;
-                            _lastAnchorStrokeMm = strokeAtEnd;
+                            if (bundle?.Role == BundleRole.Leader && dissolved)
+                            {
+                                _dissolvedBundles.Add(bundle.BundleId!);
+                                _lastAnchor = null;
+                                _lastInternalWorkpieceFrame = null;
+                                _lastAnchorStartBase = null;
+                                _lastAnchorEndTcp = null;
+                                _lastAnchorStrokeMm = null;
+                            }
+                            else
+                            {
+                                _lastAnchor = (orderId, req.AnchorGroupId, direction, req.DrawingPos.WallCode);
+                                _lastAnchorSeamW = (req.SeamStartW.ToArray(), req.SeamEndW.ToArray());
+                                _lastInternalWorkpieceFrame = (double[])internalFrame.Clone();
+                                _lastAnchorStartBase = startBase;
+                                _lastAnchorEndTcp = endTcp;
+                                _lastAnchorStrokeMm = strokeAtEnd;
+                                if (bundle?.BundleId is { } bid
+                                    && NextBundleFrame(bundle.Role,
+                                        _bundleFrames.TryGetValue(bid, out var shared0) ? shared0 : null,
+                                        internalFrame, startBase, endTcp) is { } next)
+                                    _bundleFrames[bid] = next;
+                            }
                         }
+                        if (dissolved)
+                            _logger.LogWarning("묶음 {Id} 점2 교시 실패 — 공통 좌표계를 공유하지 않습니다.", bundle?.BundleId);
                     }
                     return InspectionActionResult.Ok(
                         $"recipe={recipeId} profile='{profile?.Name ?? $"corner3.{cornerSide}"}' anchor={req.AnchorGroupId}#{req.SeqInGroup}" +
@@ -721,6 +881,32 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                 runCts.Dispose();
             }
         }
+    }
+
+    /// <summary>
+    /// 리프트 이동 직전 도달 재확인. 통과하면 null. 막히면 배너를 올리고 그대로 반환할 실패 결과.
+    /// 주행 전 점검이 정차 좌표로 통과해도, 도착 오차·정차 보정 뒤의 실제 자리는 다를 수 있다.
+    /// </summary>
+    private async Task<InspectionActionResult?> BlockIfUnreachableAsync(
+        IServiceProvider sp, IReadOnlyList<Motion.ReachPoint> points, string orderId, CancellationToken ct)
+    {
+        if (points.Count == 0) return null;
+        var pre = sp.GetRequiredService<Motion.CobotReachPrecheck>();
+        Motion.ReachGateResult gate;
+        try
+        {
+            gate = await pre.CheckHereAsync(points, ct);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            gate = Motion.ReachGateResult.Block(
+                $"코봇 도달 사전 점검 오류 — {ex.Message}. 확인하지 못해 리프트를 올리지 않습니다.",
+                points.Any(p => p.TestMove));
+        }
+        if (gate.Ok) return null;
+        pre.Raise(gate, OperationLogService.SourceAcs, orderId);
+        return InspectionActionResult.Fail(Motion.CobotReachPrecheck.BlockedErrorType, gate.Message);
     }
 
     /// <summary>

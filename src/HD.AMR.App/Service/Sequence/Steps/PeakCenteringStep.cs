@@ -43,6 +43,29 @@ public class PeakCenteringStep : ISequenceStep
     /// <summary>잔차 보정 이동 최대 횟수.</summary>
     private const int MaxCorrections = 2;
 
+    /// <summary>
+    /// 축 부호 검사를 하는 최소 이동량(mm). 검사는 재측정값이 "제대로 갔을 때(측정 − 이동)"와 "부호가 반대일 때(측정 + 이동)"
+    /// 중 어느 쪽에 가까운지로 판정하는데, 두 예상값의 간격이 이동량의 2배뿐이라 이동이 작으면 Peak 측정 흔들림(수 mm)만으로
+    /// 뒤집힌다(실기 2026-11-12 T L4-R10C09: −4.8mm 측정, 4.8mm 이동, 재측정 −4.8mm → 두 예상값 0 / −9.6 의 한가운데라
+    /// "반대로 움직였다"로 오판. 같은 실행의 Peak1 은 같은 축 설정으로 −36.3 → −2.1mm 로 정상이었다).
+    /// </summary>
+    internal const double MinSignCheckMoveMm = 15.0;
+
+    /// <summary>측정 이격이 이미 허용 잔차 안이면 이동할 필요가 없다(허용치 0 = 보정 안 함 설정이면 항상 이동).</summary>
+    internal static bool AlreadyCentered(double offsetMm, double residualMaxMm)
+        => residualMaxMm > 0 && Math.Abs(offsetMm) <= residualMaxMm;
+
+    /// <summary>
+    /// 재측정 결과가 축 부호 오설정을 가리키는지. 이동량이 <see cref="MinSignCheckMoveMm"/> 미만이면 판정하지 않는다(false).
+    /// </summary>
+    internal static bool LooksLikeWrongSign(double initialOffsetMm, double movedMm, double residualMm)
+    {
+        if (Math.Abs(movedMm) < MinSignCheckMoveMm) return false;
+        var expected = initialOffsetMm - movedMm;
+        var wrongSign = initialOffsetMm + movedMm;
+        return Math.Abs(residualMm - wrongSign) < Math.Abs(residualMm - expected);
+    }
+
     /// <param name="peakId">1 또는 2. DI 에서 <c>ActivatorUtilities.CreateInstance</c> 로 주입되므로 첫 인자여야 한다.</param>
     public PeakCenteringStep(
         int peakId,
@@ -76,7 +99,10 @@ public class PeakCenteringStep : ISequenceStep
         return StepValidation.Ok();
     }
 
-    public async Task<StepResult> ExecuteAsync(SequenceContext context, CancellationToken ct)
+    public Task<StepResult> ExecuteAsync(SequenceContext context, CancellationToken ct)
+        => BundleTeach.RunWithPoint2FallbackAsync(_peakId, context, _cobot, _param, _logger, ct, RunAsync);
+
+    private async Task<StepResult> RunAsync(SequenceContext context, CancellationToken ct)
     {
         if (context.Bag[WeldSequenceSupport.OffsetMmBagKey(_peakId)] is not double initialOffsetMm)
             return StepResult.Fail($"Peak{_peakId} 측정값을 읽을 수 없습니다 — 앞 단계를 다시 실행하세요.");
@@ -92,6 +118,12 @@ public class PeakCenteringStep : ISequenceStep
         if (Math.Abs(moveMm) < SkipMoveMm)
             return StepResult.Ok(
                 $"Peak{_peakId} 이미 센터 근방 ({initialOffsetMm:+0.0;-0.0}mm) — 이동 생략.");
+
+        // 이미 허용 잔차 안이면 움직이지 않는다 — 센터링 후 남아도 되는 잔차와 같은 기준.
+        var residualMax = await _param.GetDoubleAsync(ResidualMaxKey) ?? DefaultResidualMaxMm;
+        if (AlreadyCentered(initialOffsetMm, residualMax))
+            return StepResult.Ok(
+                $"Peak{_peakId} 이미 허용 범위 안 ({initialOffsetMm:+0.0;-0.0}mm, 허용 ±{residualMax:0.#}mm) — 이동 생략.");
 
         var clamped = Math.Clamp(moveMm, -MaxCenteringMoveMm, MaxCenteringMoveMm);
         if (Math.Abs(clamped - moveMm) > 1e-6)
@@ -147,7 +179,11 @@ public class PeakCenteringStep : ISequenceStep
         _logger.LogInformation(
             "Peak{Id} 재측정: {Res:+0.0;-0.0}mm (예상 {Exp:+0.0;-0.0}mm, 부호 반대면 {Wrong:+0.0;-0.0}mm, ROI 내 Peak {N}개)",
             _peakId, residualMm, expectedMm, wrongSignMm, r2.PeakCount);
-        if (Math.Abs(residualMm - wrongSignMm) < Math.Abs(residualMm - expectedMm))
+        if (Math.Abs(clamped) < MinSignCheckMoveMm)
+            _logger.LogInformation(
+                "Peak{Id} 이동량 {Move:+0.0;-0.0}mm 가 {Min:0}mm 미만 — 축 부호 검사 생략(측정 흔들림과 구분되지 않음)",
+                _peakId, clamped, MinSignCheckMoveMm);
+        if (LooksLikeWrongSign(initialOffsetMm, clamped, residualMm))
             return StepResult.Fail(
                 $"Peak 가 반대로 움직였습니다 (이동 전 {initialOffsetMm:+0.0;-0.0} → {residualMm:+0.0;-0.0}mm, " +
                 $"예상 {expectedMm:+0.0;-0.0}mm) — '{axisKey}' 를 현재 툴{FlatSurfaceCenteringService.AxisName(toolAxis)} 의 " +
@@ -155,7 +191,6 @@ public class PeakCenteringStep : ISequenceStep
 
         // ── 잔차 보정 — 1회 이동(클램프·개루프 오차)으로 남은 진행축 잔차가 허용치를 넘으면 추가 이동 ──
         // 잔차 때문에 검사를 실패시키지는 않는다: 보정이 안 되면(미검출·발산) 직전 위치로 되돌리고 경고만 남긴 채 진행한다.
-        var residualMax = await _param.GetDoubleAsync(ResidualMaxKey) ?? DefaultResidualMaxMm;
         var corrections = 0;
         string? residualWarn = null;
         while (residualMax > 0 && Math.Abs(residualMm) > residualMax)

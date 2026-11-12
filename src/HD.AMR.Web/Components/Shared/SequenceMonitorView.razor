@@ -123,7 +123,9 @@
     private string? ViewUrl => StepKey switch
     {
         "cobotInspection" or "inspectionRun" => $"/camera/color.mjpeg?k=m{_streamKey}",
-        "cameraAlign" or "cameraAlignRefine" or "flatSurfaceAlign" or "laserWorkingDistance" => $"/camera/depth.mjpeg?k=m{_streamKey}",
+        "cameraAlign" or "cameraAlignRefine" or "flatSurfaceAlign" or "laserWorkingDistance"
+            or "flatSurfaceSearchBundlePoint2" or "laserWorkingDistanceBundlePoint2"
+            => $"/camera/depth.mjpeg?k=m{_streamKey}",
         _ when IsFindStep => Weld.LastOverlay is not null
             ? $"/camera/weld/overlay.jpg?k=o{_overlayKey}"
             : $"/camera/ir.mjpeg?k=m{_streamKey}",
@@ -149,7 +151,8 @@
     }
 
     private bool ShowDistancePanel => StepKey is "cameraAlign" or "cameraAlignRefine";
-    private bool ShowLaserPanel => StepKey is "flatSurfaceAlign" or "laserWorkingDistance";
+    private bool ShowLaserPanel => StepKey is "flatSurfaceAlign" or "laserWorkingDistance"
+        or "flatSurfaceSearchBundlePoint2" or "laserWorkingDistanceBundlePoint2";
 
     private double? ResidualMm => _roiStats is { } s && s.MinMm > 0
         ? s.MinMm - TargetDistanceMm

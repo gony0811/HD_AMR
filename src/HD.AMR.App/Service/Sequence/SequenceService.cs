@@ -1,4 +1,7 @@
 using HD.AMR.App.Data.Entities;
+using HD.AMR.App.Models;
+using HD.AMR.App.Service.Motion;
+using HD.AMR.App.Service.Sequence.Steps;
 using Microsoft.Extensions.Logging;
 
 namespace HD.AMR.App.Service.Sequence;
@@ -18,6 +21,7 @@ public class SequenceService
     private readonly OperationLogService _opLog;
     private readonly MissionPauseGate _pauseGate;
     private readonly ParameterService _param;
+    private readonly CobotReachPrecheck _reach;
 
     /// <summary>운영 로그 출처 — ACS 필드가 실려 있으면 ACS, 아니면 수동(UI).</summary>
     private static string SourceOf(SequenceContext c)
@@ -40,8 +44,10 @@ public class SequenceService
         OperationLogService opLog,
         MissionPauseGate pauseGate,
         ParameterService param,
+        CobotReachPrecheck reach,
         ILogger<SequenceService> logger)
     {
+        _reach = reach;
         _param = param;
         _pauseGate = pauseGate;
         _teachingService = teachingService;
@@ -118,6 +124,14 @@ public class SequenceService
             if (selected.Count == 0)
                 return new SequenceRunResult(SequenceRunOutcome.Failed, null,
                     $"실행할 단계가 없습니다 (요청 키: {string.Join(",", stepKeys ?? Array.Empty<string>())}).");
+
+            if (await BlockedByReachAsync(context, selected, ct) is { } reachBlock)
+            {
+                _runCts.Dispose();
+                _runCts = null;
+                UpdateStatus(AmrMoveStep.StepKey, StepState.Failed, reachBlock);
+                return new SequenceRunResult(SequenceRunOutcome.Failed, AmrMoveStep.StepKey, reachBlock);
+            }
 
             RunState = SequenceRunState.Running;
             ResetStatuses();
@@ -210,6 +224,14 @@ public class SequenceService
 
             _runCts = CancellationTokenSource.CreateLinkedTokenSource(externalCt);
             var ct = _runCts.Token;
+
+            if (await BlockedByReachAsync(context, new[] { step }, ct) is { } reachBlock)
+            {
+                _runCts.Dispose();
+                _runCts = null;
+                UpdateStatus(step.Key, StepState.Failed, reachBlock);
+                return StepResult.Fail(reachBlock);
+            }
 
             RunState = SequenceRunState.Running;
             await LoadPositionsAsync(context, ct);
@@ -362,6 +384,46 @@ public class SequenceService
         var list = await _teachingService.ListAsync(ct);
         context.Positions = list.ToDictionary(p => p.Key, p => p);
         await HD.AMR.App.Service.Sequence.Steps.WeldSequenceSupport.LoadOpticalAxisAsync(_param, context);
+    }
+
+    /// <summary>
+    /// AMR 을 옮기기로 한 실행이고 용접선·면이 있으면, 이동 전에 도달·순회를 본다.
+    /// 웹 시퀀스 페이지처럼 용접선이 비어 있으면 티칭 위치 폴백이라 점검하지 않는다(동작 유지).
+    /// 막히면 경고 배너·로그를 남기고 사유를 돌려준다.
+    /// </summary>
+    private async Task<string?> BlockedByReachAsync(SequenceContext context, IReadOnlyList<ISequenceStep> selected, CancellationToken ct)
+    {
+        if (context is not { AmrTargetX: { } x, AmrTargetY: { } y, AmrTargetThetaRad: { } yaw })
+            return null;
+        if (!selected.Any(s => s.Key == AmrMoveStep.StepKey))
+            return null;
+        if (context.SeamStartW is not { Length: 3 } start)
+            return null;
+
+        var wall = string.IsNullOrWhiteSpace(context.WallCode)
+            ? WallCodes.FindBySurfaceId(context.InspectionSurfaceId)?.Code
+            : context.WallCode;
+        var points = new List<ReachPoint>
+        {
+            new("시퀀스 시작", wall, StrokeMm: null, start, TestMove: false, AllowBackup: false),
+        };
+        if (context.SeamEndW is { Length: 3 } end)
+            points.Add(new ReachPoint("시퀀스 끝", wall, StrokeMm: null, end, TestMove: false, AllowBackup: false));
+
+        ReachGateResult gate;
+        try
+        {
+            gate = await _reach.CheckAsync(points, x, y, yaw, backup: null, ct);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            gate = ReachGateResult.Block(
+                $"코봇 도달 사전 점검 오류 — {ex.Message}. 확인하지 못해 AMR 을 움직이지 않습니다.", asError: false);
+        }
+        if (gate.Ok) return null;
+        _reach.Raise(gate, SourceOf(context), context.AcsOrderId);
+        return gate.Message;
     }
 
     private void ResetStatuses()

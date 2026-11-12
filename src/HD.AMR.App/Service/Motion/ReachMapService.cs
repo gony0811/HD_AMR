@@ -62,6 +62,17 @@ public class ReachMapService
     public async Task<(ReachMapResult Result, string CsvPath)> RunAsync(
         ReachMapSpec spec, int tool, IProgress<ReachMapProgress>? progress = null, CancellationToken ct = default)
     {
+        var result = await EvaluateAsync(spec, tool, progress, announce: true, ct).ConfigureAwait(false);
+        return (result, await SaveAsync(result, "reachmap", ct).ConfigureAwait(false));
+    }
+
+    /// <summary>
+    /// <see cref="RunAsync"/> 와 같은 컨트롤러 역기구학 평가. CSV 는 쓰지 않는다 — 시퀀스 사전 점검이 한 점만 물을 때.
+    /// </summary>
+    /// <param name="announce">false 면 시작 로그를 남기지 않는다(점마다 호출될 때).</param>
+    public async Task<ReachMapResult> EvaluateAsync(
+        ReachMapSpec spec, int tool, IProgress<ReachMapProgress>? progress = null, bool announce = true, CancellationToken ct = default)
+    {
         if (!_cobot.IsConnected)
             throw new InvalidOperationException("코봇이 연결되어 있지 않습니다 — 리치 맵은 컨트롤러 역기구학을 씁니다.");
 
@@ -74,25 +85,25 @@ public class ReachMapService
             throw new InvalidOperationException($"공구 #{tool} 오프셋이 0 입니다 — 검사 툴 공구 번호를 확인하세요.");
 
         var limits = await _limits.GetAsync();
-        if (!await _limits.IsConfiguredAsync())
+        if (!await _limits.IsConfiguredAsync() && announce)
             _logger.LogWarning("리치 맵: 자세 허용 범위가 저장되지 않아 기본값(툴 없는 하드웨어 범위)으로 판정합니다.");
         var (axis, _) = await WeldSequenceSupport.GetDepthAxisAsync(_param);
 
         var starts = await LoadStartJointsAsync(spec.WallCodes, ct);
         var robot = new ReachMapRobot(mount, toolLen, limits, axis, Envelope: CobotEnvelope.Default,
             StartJointsByWall: starts, MaxEntryJointTravelDeg: CobotInspectionMoveStep.MaxEntryJointTravelDeg);
-        _logger.LogInformation(
-            "리치 맵 시작: 셀 {Cells}개(면 {Walls}), ② {Approach}mm / 정렬 준비 {Align}mm / 초점 {Focus}mm, 공구 #{Tool} {ToolLen:0}mm, 최소 뻗음 {Min}mm, 출발 자세 {Starts}",
-            spec.CellCount, string.Join(",", spec.WallCodes), spec.ApproachStandoffMm, spec.AlignStandoffMm, spec.FocusStandoffMm,
-            tool, toolLen, limits.MinFlangeReachMm, starts.Count == 0 ? "없음" : string.Join(",", starts.Keys));
+        if (announce)
+            _logger.LogInformation(
+                "리치 맵 시작: 셀 {Cells}개(면 {Walls}), ② {Approach}mm / 정렬 준비 {Align}mm / 초점 {Focus}mm, 공구 #{Tool} {ToolLen:0}mm, 최소 뻗음 {Min}mm, 출발 자세 {Starts}",
+                spec.CellCount, string.Join(",", spec.WallCodes), spec.ApproachStandoffMm, spec.AlignStandoffMm, spec.FocusStandoffMm,
+                tool, toolLen, limits.MinFlangeReachMm, starts.Count == 0 ? "없음" : string.Join(",", starts.Keys));
 
         // 시드가 있으면 컨트롤러 config 0–7 중 시드에 가장 가까운(하드웨어 범위 안) 해 — 운영 ② 와 같은 선택.
-        var result = await ReachMap.BuildAsync(spec, robot,
+        return await ReachMap.BuildAsync(spec, robot,
             async (pose, _, seed, c) => seed is { Length: 6 }
                 ? await _cobot.Rpc.GetInverseKinNearestAsync(pose, seed, tool, 0, c)
                 : await _cobot.Rpc.GetInverseKinForMoveAsync(pose, tool, 0, c),
             null, progress, ct);
-        return (result, await SaveAsync(result, "reachmap", ct));
     }
 
     /// <summary>
@@ -103,6 +114,15 @@ public class ReachMapService
     public async Task<(ReachMapResult Result, string CsvPath)> RunOfflineAsync(
         ReachMapSpec spec, IProgress<ReachMapProgress>? progress = null, CancellationToken ct = default)
     {
+        var result = await EvaluateOfflineAsync(spec, progress, announce: true, ct).ConfigureAwait(false);
+        return (result, await SaveAsync(result, "reachmap_offline", ct).ConfigureAwait(false));
+    }
+
+    /// <summary><see cref="RunOfflineAsync"/> 와 같은 오프라인 평가. CSV 는 쓰지 않는다.</summary>
+    /// <param name="announce">false 면 시작 로그를 남기지 않는다.</param>
+    public async Task<ReachMapResult> EvaluateOfflineAsync(
+        ReachMapSpec spec, IProgress<ReachMapProgress>? progress = null, bool announce = true, CancellationToken ct = default)
+    {
         var mount = await _calib.GetMountAsync();
         var calibrated = mount.Any(v => Math.Abs(v) > 1e-9);
         if (!calibrated) mount = Fr5Kinematics.StepMount;
@@ -111,23 +131,23 @@ public class ReachMapService
         var limits = await _limits.GetAsync();
         // 설계 공구는 회전이 없어 광축 = 공구 +Z 다. 저장된 광축 설정은 컨트롤러 공구 #1 프레임 기준이라 여기 쓰지 않는다.
         var (savedAxis, fromParam) = await WeldSequenceSupport.GetDepthAxisAsync(_param);
-        if (fromParam && savedAxis != ToolAxisDir.PlusZ)
+        if (announce && fromParam && savedAxis != ToolAxisDir.PlusZ)
             _logger.LogWarning("오프라인 리치 맵: 저장된 광축 {Axis} 대신 설계 공구 광축 +Z 로 계산합니다 — 컨트롤러 공구 #1 회전을 확인하세요.", savedAxis);
         var starts = await LoadStartJointsAsync(spec.WallCodes, ct);
         var robot = new ReachMapRobot(mount, ApproachReach.ToolLengthMm(tool), limits, ToolAxisDir.PlusZ,
             Envelope: CobotEnvelope.Default, StartJointsByWall: starts,
             MaxEntryJointTravelDeg: CobotInspectionMoveStep.MaxEntryJointTravelDeg);
         var kin = Fr5Kinematics.Fr5Wml;
-        _logger.LogInformation(
-            "오프라인 리치 맵 시작(FR5-WML 모델): 셀 {Cells}개(면 {Walls}), 장착 {Mount}, 공구 [{Tool}], 출발 자세 {Starts}",
-            spec.CellCount, string.Join(",", spec.WallCodes), calibrated ? "보정값" : "STEP 기본",
-            string.Join(" ", tool), starts.Count == 0 ? "없음" : string.Join(",", starts.Keys));
+        if (announce)
+            _logger.LogInformation(
+                "오프라인 리치 맵 시작(FR5-WML 모델): 셀 {Cells}개(면 {Walls}), 장착 {Mount}, 공구 [{Tool}], 출발 자세 {Starts}",
+                spec.CellCount, string.Join(",", spec.WallCodes), calibrated ? "보정값" : "STEP 기본",
+                string.Join(" ", tool), starts.Count == 0 ? "없음" : string.Join(",", starts.Keys));
 
         var normalized = limits.Normalized();
-        var result = await ReachMap.BuildAsync(spec, robot,
+        return await ReachMap.BuildAsync(spec, robot,
             OfflineInverseKin(kin, tool, normalized, CobotEnvelope.Default, mount[5]),
             (pose, start, _) => SameBranchBlocker(kin, tool, normalized, pose, start), progress, ct);
-        return (result, await SaveAsync(result, "reachmap_offline", ct));
     }
 
     /// <summary>

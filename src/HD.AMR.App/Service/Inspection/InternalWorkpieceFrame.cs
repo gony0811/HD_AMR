@@ -43,6 +43,29 @@ public static class InternalWorkpieceFrame
             new[] { 0.0, 0.0, -corrugationTopHeightMm, 0.0, 0.0, 0.0 }, topFrame);
     }
 
+    /// <summary>
+    /// 점1 툴 +Z 대비 점1→점2 가 기운 각 [도]. 두 점이 같은 WD(면 이격)에 있으면 이 각이 면을 따라 누운 기울기라
+    /// <see cref="Compute"/> 가 X에 직교시킨 Z에 반영된다(묶음 Z 보정).
+    /// </summary>
+    public static double SlopeAlongSeamDeg(double[] topPoseBase, double[] xDirectionPoseBase)
+    {
+        RequirePose(topPoseBase, nameof(topPoseBase));
+        RequirePose(xDirectionPoseBase, nameof(xDirectionPoseBase));
+        var zPoint = FrameMath.FromFrame(new[] { 0.0, 0.0, VirtualZPointOffsetMm, 0.0, 0.0, 0.0 }, topPoseBase);
+        var n = new[] { zPoint[0] - topPoseBase[0], zPoint[1] - topPoseBase[1], zPoint[2] - topPoseBase[2] };
+        var nLen = Math.Sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+        if (nLen < 1e-9) return 0;
+        var d = new[]
+        {
+            xDirectionPoseBase[0] - topPoseBase[0],
+            xDirectionPoseBase[1] - topPoseBase[1],
+            xDirectionPoseBase[2] - topPoseBase[2],
+        };
+        var along = (d[0] * n[0] + d[1] * n[1] + d[2] * n[2]) / nLen;
+        var tang = Math.Sqrt(Math.Max(0, d[0] * d[0] + d[1] * d[1] + d[2] * d[2] - along * along));
+        return Math.Atan2(along, tang) * 180.0 / Math.PI;
+    }
+
     /// <summary>내부 작업물 pose를 선택된 TCP의 BASE 목표 pose로 변환한다.</summary>
     public static double[] ToBasePose(double[] poseInWorkpiece, double[] frameBase)
     {

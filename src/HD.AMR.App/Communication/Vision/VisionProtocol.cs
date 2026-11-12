@@ -97,14 +97,16 @@ public static class CaptureResPayload
 }
 
 /// <summary>
-/// GUID ↔ 16바이트 바이너리 변환. RFC 4122 표준(빅엔디안) 바이트 순서를 사용해, 하이픈 문자열을
-/// 왼쪽부터 읽은 순서와 바이트 배열이 일치한다(수신 측 문자열 변환이 모호하지 않음).
-/// ※ GUID 바이트 순서는 연동 시험 시 비전 S/W 와 최종 확인 대상.
+/// GUID ↔ 16바이트 바이너리 변환. <b>리틀엔디안(.NET <c>Guid.ToByteArray</c> 배치)</b> — 앞 세 묶음(4·2·2바이트)은
+/// 바이트가 뒤집혀 나가고 뒤 8바이트는 문자열 순서 그대로다. 수신 측(비전·SAIGE)이 .NET 기본 방식
+/// (<c>new Guid(byte[])</c>)으로 읽으면 ACS 가 발급한 taskId 문자열과 같아진다.
+/// 2026-11-12 이전에는 RFC 4122(빅엔디안)로 보냈고, 그때 수신 측에 보인 taskId 는 ACS 값과 앞 세 묶음이 뒤집혀 있었다
+/// (같은 용접선이 다른 ID 로 저장됨 — VDA 사양서 N16).
 /// </summary>
 internal static class GuidBinary
 {
-    public static void Write(Span<byte> dst, Guid id) => id.TryWriteBytes(dst, bigEndian: true, out _);
-    public static Guid Read(ReadOnlySpan<byte> src)    => new(src[..16], bigEndian: true);
+    public static void Write(Span<byte> dst, Guid id) => id.TryWriteBytes(dst, bigEndian: false, out _);
+    public static Guid Read(ReadOnlySpan<byte> src)    => new(src[..16], bigEndian: false);
 }
 
 /// <summary>
