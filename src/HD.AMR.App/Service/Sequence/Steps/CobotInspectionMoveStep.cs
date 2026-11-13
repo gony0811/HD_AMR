@@ -926,6 +926,71 @@ public class CobotInspectionMoveStep : ISequenceStep
         return (null, null, $" · 접근 자세 탐색(틸트 ≤{maxDeg:0}°): 후보 {screened}개 검사, 진입 시도 {attempts}개 — 쓸 수 있는 자세 없음");
     }
 
+    /// <summary>
+    /// 평면 경유 진입(후퇴 평면을 따라 이동, 진입 MoveJ 는 면 방향 <see cref="MaxEntryInPlaneMm"/> 이내)을 쓰는 면 코드 목록
+    /// 파라미터 키 — 쉼표로 구분. 미설정이면 <see cref="DefaultPlanarEntryWalls"/>, "*" 면 모든 면(종전 동작), 빈 값이면 어느 면도 쓰지 않는다.
+    /// 목록에 없는 면은 <b>직접 진입</b>이다: 면 방향 거리 제한 없이 들어갈 점까지 MoveJ 한 번에 가되, 움직이기 전에 그 관절 이동
+    /// 경로를 따라가며 자기 간섭·면 여유를 본다(<see cref="JointPathBlocker"/>). ACS 리치 시뮬레이터 <c>Acs:Reach:PlanarEntryWalls</c> 와
+    /// 같은 값이어야 한다 — 다르면 ACS 가 고른 정차를 여기서 거부하거나 그 반대가 된다.
+    /// </summary>
+    public const string PlanarEntryWallsKey = "inspection.planarEntryWalls";
+
+    /// <summary>평면 경유 진입 기본 면 — 머리 위 경사면(실기 2026-11-02 PU: 접근점까지 한 번에 MoveJ 하다 팔이 면 쪽으로 휘둘림).</summary>
+    internal const string DefaultPlanarEntryWalls = "PU,SU";
+
+    /// <summary><paramref name="wallCode"/> 가 평면 경유 진입을 쓰는 면인가. <paramref name="setting"/> 은
+    /// <see cref="PlanarEntryWallsKey"/> 값(null = 기본). 면 코드를 모르면 안전 쪽(평면 경유).</summary>
+    internal static bool UsesPlanarEntry(string? setting, string? wallCode)
+    {
+        if (string.IsNullOrWhiteSpace(wallCode)) return true;
+        var list = (setting ?? DefaultPlanarEntryWalls)
+            .Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return list.Any(w => w == "*" || string.Equals(w, wallCode.Trim(), StringComparison.OrdinalIgnoreCase));
+    }
+
+    private async Task<bool> UsesPlanarEntryAsync(string? wallCode)
+    {
+        string? setting = null;
+        try { setting = await _param.GetAsync(PlanarEntryWallsKey); }
+        catch { /* DB 미준비 — 기본값 */ }
+        return UsesPlanarEntry(setting, wallCode);
+    }
+
+    /// <summary>직접 진입 MoveJ 경로 점검 간격 — 관절별 최대 변화 [도].</summary>
+    internal const double EntryPathStepDeg = 5.0;
+
+    /// <summary>직접 진입 MoveJ 경로가 지켜야 할 면 여유 [mm]. 출발·도착 자세의 면 여유가 이보다 작으면 그 작은 쪽이 기준이다
+    /// (경로가 양 끝보다 면에 더 가까워지지 않을 것).</summary>
+    internal const double EntryPathMarginMm = 100.0;
+
+    /// <summary>
+    /// 직접 진입 MoveJ(관절 보간) 경로가 막히는 사유, 지나갈 수 있으면 null — 컨트롤러 없이 오프라인 기구학으로 본다.
+    /// <paramref name="from"/> → <paramref name="to"/> 를 관절별 최대 <see cref="EntryPathStepDeg"/> 간격으로 나눈 중간 자세마다
+    /// ① 자기 간섭(<paramref name="selfCollision"/> — 차체·기둥·신호탑)이 없고 ② 면 여유(<paramref name="wallClearance"/>)가
+    /// min(<see cref="EntryPathMarginMm"/>, 출발 여유, 도착 여유) 아래로 내려가지 않는지 본다.
+    /// 평면 경유가 하던 "팔이 면 쪽으로 휘둘리지 않는가"를 경로 자체로 확인한다.
+    /// </summary>
+    internal static string? JointPathBlocker(double[] from, double[] to,
+        Func<double[], string?>? selfCollision, Func<double[], (double ClearanceMm, string Part)>? wallClearance)
+    {
+        var n = Math.Min(from.Length, to.Length);
+        var steps = (int)Math.Ceiling(MaxJointTravel(from, to) / EntryPathStepDeg);
+        if (steps <= 1) return null;
+        double[] At(double t) => to.Select((v, i) => i < n ? from[i] + (v - from[i]) * t : v).ToArray();
+        var floor = wallClearance is null
+            ? double.NegativeInfinity
+            : Math.Min(EntryPathMarginMm, Math.Min(wallClearance(At(0)).ClearanceMm, wallClearance(to).ClearanceMm)) - 1.0;
+        for (var k = 1; k < steps; k++)
+        {
+            var j = At((double)k / steps);
+            if (selfCollision?.Invoke(j) is not null)
+                return $"관절 이동 경로 {100.0 * k / steps:0}% 지점 자기 간섭";
+            if (wallClearance?.Invoke(j) is { } w && w.ClearanceMm < floor)
+                return $"관절 이동 경로 {100.0 * k / steps:0}% 지점 면 여유 {w.ClearanceMm:0}mm < {floor + 1:0}mm ({w.Part})";
+        }
+        return null;
+    }
+
     internal const double DefaultPlanarRetreatMm = 100.0;
     internal const double MaxPlanarRetreatMm = 400.0;
 
@@ -1078,17 +1143,20 @@ public class CobotInspectionMoveStep : ISequenceStep
     /// ② 현재 TCP 투영점에서 들어갈 점 쪽으로 <see cref="PlanarSampleMm"/> 간격(투영점 쪽부터 = 진입 MoveJ 가 짧은 순,
     /// 투영점에서 <see cref="MaxEntryInPlaneMm"/> 이내까지). 면 방향 거리가 짧으면 ①만.
     /// </summary>
-    internal static List<double[]> EntryCandidates(PlanarApproachPlan plan)
+    /// <param name="planar">false = 직접 진입(<see cref="PlanarEntryWallsKey"/> 에 없는 면) — 면 방향 거리 제한 없이
+    /// 들어갈 점 직접을 맨 앞에 두고, 투영점부터 들어갈 점 앞까지 전부 후보로 둔다(진입 MoveJ 는 경로 점검을 거친다).</param>
+    internal static List<double[]> EntryCandidates(PlanarApproachPlan plan, bool planar = true)
     {
         if (plan.InPlaneMm < PlanarSkipMm) return new List<double[]> { plan.Plunge };
 
+        var cap = planar ? MaxEntryInPlaneMm : double.PositiveInfinity;
         var list = new List<double[]>();
-        if (plan.InPlaneMm <= MaxEntryInPlaneMm) list.Add(plan.Plunge);
+        if (plan.InPlaneMm <= cap) list.Add(plan.Plunge);
         list.Add(plan.Entry);
         var pts = SampleSegment(plan.Entry, plan.Plunge, PlanarSampleMm);
         var step = plan.InPlaneMm / pts.Count;
         for (var k = 0; k < pts.Count - 1; k++)   // 마지막 점 = 들어갈 점(①에서 따로 다룸)
-            if ((k + 1) * step <= MaxEntryInPlaneMm + 1e-6) list.Add(pts[k]);
+            if ((k + 1) * step <= cap + 1e-6) list.Add(pts[k]);
         return list;
     }
 
@@ -1110,8 +1178,17 @@ public class CobotInspectionMoveStep : ISequenceStep
         string Fmt(double[] v) => string.Join(", ", v.Select(x => x.ToString("0")));
 
         var guardOn = await SelfCollisionGuardOnAsync();
-        var candidates = EntryCandidates(plan);
+        // 평면 경유를 쓰지 않는 면은 직접 진입 — 면 방향 거리 제한을 두지 않는 대신 진입 MoveJ 의 관절 이동 경로를 점검한다.
+        var planarEntry = await UsesPlanarEntryAsync(context.WallCode);
+        var candidates = EntryCandidates(plan, planarEntry);
         var rejects = new List<string>();
+        // 면 위의 한 점 — 용접선 점(없으면 접근점에서 후퇴 평면 반대쪽으로 볼 수 없으므로 접근점 자체: 여유를 이격만큼 작게 본다).
+        var wallPoint = seam.SeamPointBase is { Length: 3 } sp ? sp : target.Take(3).ToArray();
+        string? PathBlocker(double[] j) => planarEntry
+            ? null
+            : JointPathBlocker(reference, j,
+                guardOn ? q => SelfCollisionBlocker(q, seam) : null,
+                q => CobotEnvelope.Default.WallClearance(Fr5Kinematics.Fr5Wml, q, wallPoint, wallOut));
 
         // ── 진입점 선택 + 경로 검증(모션 없음) ────────────────────────────
         double[]? entryPos = null, jEntry = null, jPlunge = null, jTarget = null;
@@ -1128,7 +1205,8 @@ public class CobotInspectionMoveStep : ISequenceStep
             string? firstWhy = null;
             for (var si = 0; si < sols.Count && picked is null; si++)
             {
-                var solWhy = EntryJointBlocker(reference, sols[si], guardOn ? j => SelfCollisionBlocker(j, seam) : null);
+                var solWhy = EntryJointBlocker(reference, sols[si], guardOn ? j => SelfCollisionBlocker(j, seam) : null)
+                             ?? PathBlocker(sols[si]);
                 if (solWhy is null) picked = sols[si];
                 else firstWhy ??= solWhy;
             }
@@ -1168,7 +1246,8 @@ public class CobotInspectionMoveStep : ISequenceStep
         if (entryPos is null)
             return StepResult.Fail(
                 "[Cobot 검사위치 이동] 안전한 진입 경로 없음 — 움직이지 않았습니다. " +
-                $"(접근점은 현재 TCP 정면에서 면을 따라 {plan.InPlaneMm:0}mm, 진입 MoveJ 는 {MaxEntryInPlaneMm:0}mm 이내만 허용) " +
+                $"(접근점은 현재 TCP 정면에서 면을 따라 {plan.InPlaneMm:0}mm, " +
+                (planarEntry ? $"진입 MoveJ 는 {MaxEntryInPlaneMm:0}mm 이내만 허용) " : "직접 진입 — 관절 이동 경로 점검) ") +
                 $"후보 {candidates.Count}개 모두 거부: {string.Join(" / ", rejects.Take(4))}" +
                 (rejects.Count > 4 ? $" 외 {rejects.Count - 4}건" : "") +
                 ". 정차 위치를 용접선 쪽으로 옮기거나 이 면의 검사 준비 자세를 확인하세요.");
@@ -1176,9 +1255,9 @@ public class CobotInspectionMoveStep : ISequenceStep
         var direct = ReferenceEquals(entryPos, plan.Plunge);
         var planarMm = direct ? 0.0 : Math.Sqrt(Enumerable.Range(0, 3).Sum(i => (plan.Plunge[i] - entryPos[i]) * (plan.Plunge[i] - entryPos[i])));
         _logger.LogInformation(
-            "[Cobot 검사위치 이동] 평면 경유 접근: 진입점 [{E}] (진입 관절 이동 최대 {T:0}°) → 면 방향 {D:0}mm → 들어갈 점 [{P}] → 법선 {R:0}mm 진입" +
+            "[Cobot 검사위치 이동] {Mode}: 진입점 [{E}] (진입 관절 이동 최대 {T:0}°) → 면 방향 {D:0}mm → 들어갈 점 [{P}] → 법선 {R:0}mm 진입" +
             "{Rej}",
-            Fmt(entryPos), MaxJointTravel(reference, jEntry!), planarMm, Fmt(plan.Plunge), retreat,
+            planarEntry ? "평면 경유 접근" : "직접 진입(경로 점검 통과)", Fmt(entryPos), MaxJointTravel(reference, jEntry!), planarMm, Fmt(plan.Plunge), retreat,
             rejects.Count == 0 ? "" : $" (앞 후보 거부: {string.Join(" / ", rejects)})");
 
         // ── 실행 ─────────────────────────────────────────────────────────

@@ -114,6 +114,50 @@ public sealed record CobotEnvelope
         return best;
     }
 
+    /// <summary>
+    /// 관절각 한 벌에서 팔·검사 툴이 면 평면에서 떨어진 최소 거리 [mm](BASE 좌표). 음수면 면을 넘어간다.
+    /// <paramref name="wallPointBase"/> 는 면 위의 한 점, <paramref name="wallOutBase"/> 는 면에서 코봇 쪽을 향하는 단위 법선.
+    /// 팔 링크는 캡슐, 검사 툴은 플랜지에서 몸체 끝까지 전체 외곽 반경(<see cref="ToolOuterRadiusMm"/>) 원통으로 본다 —
+    /// J6 각을 몰라도 안전 쪽이다. 직접 진입 MoveJ 경로가 면 쪽으로 휘둘리는지 보는 데 쓴다.
+    /// </summary>
+    public (double ClearanceMm, string Part) WallClearance(Fr5Kinematics kin, double[] jointsDeg, double[] wallPointBase, double[] wallOutBase)
+    {
+        var fr = kin.Frames(jointsDeg);
+        double[] O(int i) => new[] { fr[i][0, 3], fr[i][1, 3], fr[i][2, 3] };
+        double[] Z(int i) => new[] { fr[i][0, 2], fr[i][1, 2], fr[i][2, 2] };
+        double[] Along(double[] q, double[] axis, double mm) => new[] { q[0] + axis[0] * mm, q[1] + axis[1] * mm, q[2] + axis[2] * mm };
+        double H(double[] q) => (q[0] - wallPointBase[0]) * wallOutBase[0] + (q[1] - wallPointBase[1]) * wallOutBase[1]
+                              + (q[2] - wallPointBase[2]) * wallOutBase[2];
+
+        var z1 = Z(1);
+        var z6 = Z(6);
+        var s1 = Along(O(1), z1, ShoulderOffsetMm);
+        var e1 = Along(O(2), z1, ShoulderOffsetMm);
+        var e2 = Along(O(2), z1, ForearmOffsetMm);
+        var w1 = Along(O(3), z1, ForearmOffsetMm);
+        var best = (ClearanceMm: double.PositiveInfinity, Part: "");
+        void Capsule(string name, double[] a, double[] b, double r)
+        {
+            var cl = Math.Min(H(a), H(b)) - r;
+            if (cl < best.ClearanceMm) best = (cl, name);
+        }
+        Capsule("어깨(J2)", O(1), s1, ShoulderRadiusMm);
+        Capsule("상완", s1, e1, UpperArmRadiusMm);
+        Capsule("팔꿈치(J3)", e1, e2, ElbowRadiusMm);
+        Capsule("전완", e2, w1, ForearmRadiusMm);
+        Capsule("손목1(J4)", w1, O(4), WristRadiusMm);
+        Capsule("손목2(J5)", O(4), O(5), WristRadiusMm);
+        Capsule("손목3(J6)", O(5), O(6), WristRadiusMm);
+
+        // 검사 툴 원통 — 끝 원판의 테두리가 면에 가장 가깝다: 중심 높이 − 반경 × (광축과 면이 이루는 각의 사인).
+        var toolTo = ToolSegments.Count > 0 ? ToolSegments.Max(t => t.ToMm) : 0;
+        var along = z6[0] * wallOutBase[0] + z6[1] * wallOutBase[1] + z6[2] * wallOutBase[2];
+        var rim = ToolOuterRadiusMm * Math.Sqrt(Math.Max(0, 1 - along * along));
+        var tool = Math.Min(H(O(6)), H(Along(O(6), z6, toolTo))) - rim;
+        if (tool < best.ClearanceMm) best = (tool, "검사 툴");
+        return best;
+    }
+
     /// <summary>검사 툴 전체 외곽 반경 [mm] — D435i 쪽 최대(STEP). 바닥 투영 외곽은 J6 각을 모르고도 안전 쪽으로 이 값을 쓴다.</summary>
     public double ToolOuterRadiusMm { get; init; } = 245;
 
