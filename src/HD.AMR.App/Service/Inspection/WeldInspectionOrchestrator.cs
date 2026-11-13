@@ -925,6 +925,16 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             return null;
 
         var targetHeightMm = (int)Math.Round(reqMm);
+        // 리프트를 쓰지 않는 운영(Telescopic:Enabled = false) — 높이 지령을 무시하고 고정 높이에서 그대로 검사한다.
+        if (_lift.IsDisabled)
+        {
+            var fixedMm = _lift.Settings.DisabledStrokeMm;
+            if (Math.Abs(fixedMm - reqMm) > TelescopicService.DefaultTargetToleranceMm)
+                _logger.LogWarning(
+                    "리프트 비활성 — 지령 높이 {Target}mm 를 무시하고 고정 높이 {Fixed:0}mm 에서 진행합니다 (jobRef={JobRef})",
+                    targetHeightMm, fixedMm, jobRef);
+            return null;
+        }
         if (!_lift.IsConnected)
             return InspectionActionResult.Fail("equipmentError",
                 $"텔레스코픽 리프트 미연결 — 지령 높이 {targetHeightMm}mm 이동 불가");

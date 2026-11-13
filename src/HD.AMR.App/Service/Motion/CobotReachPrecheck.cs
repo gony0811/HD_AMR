@@ -236,7 +236,7 @@ public sealed class CobotReachPrecheck
             return PointVerdict.Fail(ReachStatus.OutOfRange, $"{point.Label}: wall_code '{point.WallCode ?? "(없음)"}' 을 알 수 없습니다.");
 
         double h;
-        if (point.StrokeMm is { } requested)
+        if (_lift.PlannedStrokeMm(point.StrokeMm) is { } requested)   // 리프트가 꺼져 있으면 지령 대신 고정 높이
             h = requested;
         else if (_lift.TryGetStrokeMm(out var liftWhy) is { } current)
             h = current;

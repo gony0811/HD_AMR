@@ -250,7 +250,7 @@ public sealed class SeamApproachResolver
             => SeamBaseTransform.Resolve(new SeamBaseInput(
                 SeamStartW: s.SeamStartW, SeamEndW: s.SeamEndW,
                 AmrXm: x, AmrYm: y, AmrYawRad: nodeThetaRad,
-                MountAtHome: mount, TelescopicStrokeMm: s.LiftStrokeMm ?? currentStroke ?? 0.0, ZDatumOffsetMm: zDatum,
+                MountAtHome: mount, TelescopicStrokeMm: _lift.PlannedStrokeMm(s.LiftStrokeMm) ?? currentStroke ?? 0.0, ZDatumOffsetMm: zDatum,
                 StandoffMm: approach, WallFacingThetaRad: nodeThetaRad, WallCode: s.WallCode,
                 OpticalAxis: opticalAxis)).NormalDistanceMm;
 

@@ -47,6 +47,19 @@ public class TelescopicService : BackgroundService
     public bool IsConnected => _client.IsOpen;
     public TelescopicSerialSettings Settings => _settings;
 
+    /// <summary>리프트를 쓰지 않는 운영인가(<c>Telescopic:Enabled = false</c>) — 높이 지령을 무시하고 고정 높이로 진행한다.</summary>
+    public bool IsDisabled => !_settings.Enabled;
+
+    /// <summary>
+    /// 계획에 쓸 리프트 높이 — 리프트가 꺼져 있으면 지령과 무관하게 고정 높이(<see cref="TelescopicSerialSettings.DisabledStrokeMm"/>),
+    /// 켜져 있으면 지령 그대로(없으면 null).
+    /// </summary>
+    public double? PlannedStrokeMm(double? requestedMm) => PlanStroke(_settings.Enabled, _settings.DisabledStrokeMm, requestedMm);
+
+    /// <summary><see cref="PlannedStrokeMm"/> 의 판정부(순수 함수 — 단위 테스트용).</summary>
+    public static double? PlanStroke(bool enabled, double disabledStrokeMm, double? requestedMm)
+        => enabled ? requestedMm : disabledStrokeMm;
+
     /// <summary>마지막 연결/통신 오류(정상 시 null).</summary>
     public string? LastError { get; private set; }
 
@@ -81,6 +94,12 @@ public class TelescopicService : BackgroundService
     /// </summary>
     public double? TryGetStrokeMm(out string? reason)
     {
+        // 리프트를 쓰지 않는 운영 — 읽을 상태가 없으므로 설정한 고정 높이를 현재 높이로 본다.
+        if (IsDisabled)
+        {
+            reason = null;
+            return _settings.DisabledStrokeMm;
+        }
         TelescopicStatus? latest;
         DateTime at;
         lock (_stateLock) { latest = _latest; at = _latestUtc; }
