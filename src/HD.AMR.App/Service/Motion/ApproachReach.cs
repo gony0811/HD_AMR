@@ -34,6 +34,19 @@ public static class ApproachReach
         return new ReachCheck(flange >= minFlangeReachMm, flange, required, required - normalDistanceMm);
     }
 
+    /// <summary>
+    /// 이 면에 최소 플랜지 뻗음 규칙을 적용하는가 — 천장(T)만 뺀다(2026-11-13).
+    ///
+    /// 근거가 된 실측(230mm 손목 특이점 3회, 2026-09-28)은 <b>수직벽</b>이었다. 천장은 툴이 위를 향해 ② 자세의
+    /// J5 가 90° 근처에 머물러 접힌 팔에서도 손목 특이점이 생기지 않는다(ACS 리치 시뮬레이터 — 리프트를 올려
+    /// 뻗음 143mm 까지 |J5| 90°·자세 여유 유지, 그보다 가까우면 상완–리프트 기둥 간섭·가지 전환이 따로 막는다).
+    /// 이 규칙이 천장에서는 리프트를 올린 정차만 막아(2026-11-11 리프트 100·200 정차 52건 거부) 먼 용접선의
+    /// 팔 뻗음 실패를 풀 수단을 없앴다. 경사면·바닥은 유지(경사면은 단독으로 막는 경우 없음, 바닥은 걸리지 않음).
+    /// ACS <c>ReachSimulator.FlangeRuleApplies</c> 와 같은 규칙 — 바꾸면 함께 맞출 것.
+    /// </summary>
+    public static bool AppliesTo(string? wallCode)
+        => !string.Equals(wallCode?.Trim(), "T", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>플랜지→TCP 오프셋의 병진 길이 [mm]. 공구 #0(플랜지)·미설정이면 0.</summary>
     public static double ToolLengthMm(double[]? toolCoord)
         => toolCoord is { Length: >= 3 }

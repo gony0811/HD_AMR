@@ -256,7 +256,14 @@ public sealed class CobotReachPrecheck
 
         var stored = ReachMapCsv.FindLatest(ReachMapService.OutputDirectory, stamp, point.WallCode!, h, body[0], body[1], z);
         if (stored is not null)
+        {
+            // 규칙 변경 전에 만든 맵의 천장 '뻗음부족' 칸 — 리치 맵은 IK·자세·경로를 모두 통과한 뒤에만 이 상태를
+            // 붙이므로(ReachMap) 규칙을 빼면 그대로 도달이다.
+            if (stored.Status == ReachStatus.FlangeShort && !ApproachReach.AppliesTo(point.WallCode))
+                return FromCell(point, h, body[0], body[1], z, ReachStatus.Ok, true,
+                    $"도달 — 천장은 최소 뻗음 규칙 제외(저장 맵: {stored.Reason})", "저장 맵");
             return FromCell(point, h, body[0], body[1], z, stored.Status, stored.Usable, stored.Reason, "저장 맵");
+        }
 
         if (!ctx.UseController && ctx.Axis != ToolAxisDir.PlusZ)
             return PointVerdict.Fail(ReachStatus.OutOfRange,

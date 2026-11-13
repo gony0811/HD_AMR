@@ -140,6 +140,18 @@ public class ReachMapTests
     }
 
     [Fact]
+    public async Task 천장은_최소_뻗음_규칙을_적용하지_않는다()
+    {
+        // 천장까지 BASE 법선 거리 2600 − 1650 = 950 → 플랜지 뻗음 950 − 400 − 370 = 180 < 350.
+        // 수직벽이면 뻗음부족이지만 천장(T)은 규칙 제외(2026-11-13) — IK·자세가 통과하면 도달이다.
+        var r = await ReachMap.BuildAsync(Spec("T", new[] { 300.0 }, zs: new[] { 2600.0 }), Robot(), SphereIk());
+
+        Assert.Equal(180, r.Cells[0].FlangeReachMm, 6);
+        Assert.NotEqual(ReachStatus.FlangeShort, r.Cells[0].Status);
+        Assert.True(r.Cells[0].Usable, r.Cells[0].Reason);
+    }
+
+    [Fact]
     public async Task 바닥은_높이를_훑지_않는다()
     {
         var spec = Spec("B", new[] { 800.0, 1000 }, zs: new[] { 0.0, 1000, 2000 });

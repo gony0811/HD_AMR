@@ -176,8 +176,11 @@ public sealed class SeamApproachResolver
                 "{Label} 리치 점검: 면까지 {Normal:0}mm − 후퇴 {Approach:0} − 공구 {Tool:0} = 플랜지 뻗음 {Flange:0}mm (최소 {Min:0}mm)",
                 label, target.NormalDistanceMm, standoff, toolLen, reach.FlangeReachMm, limits.MinFlangeReachMm);
 
-            reachNote = $" · 플랜지 뻗음 {reach.FlangeReachMm:0}mm(최소 {limits.MinFlangeReachMm:0}, 면까지 {target.NormalDistanceMm:0}mm)";
-            if (!reach.Ok)
+            var flangeRule = ApproachReach.AppliesTo(context.WallCode);
+            reachNote = flangeRule
+                ? $" · 플랜지 뻗음 {reach.FlangeReachMm:0}mm(최소 {limits.MinFlangeReachMm:0}, 면까지 {target.NormalDistanceMm:0}mm)"
+                : $" · 플랜지 뻗음 {reach.FlangeReachMm:0}mm(천장 — 최소 뻗음 규칙 제외, 면까지 {target.NormalDistanceMm:0}mm)";
+            if (!reach.Ok && flangeRule)
             {
                 // 더 물러나야 할 거리 — 현재 정차에서 벽 정면 반대로 시험 후진한 자리의 법선거리로 기울기를 잰다
                 // (정차 보정 계획과 같은 식, StationAdjustPlanner.NeededBackwardMm).
@@ -252,7 +255,8 @@ public sealed class SeamApproachResolver
                 OpticalAxis: opticalAxis)).NormalDistanceMm;
 
         var list = seams.Select(s => new StationAdjustSeam(
-            s.Label, NormalAt(nodeXm, nodeYm, s), NormalAt(probeX, probeY, s), required)).ToList();
+            s.Label, NormalAt(nodeXm, nodeYm, s), NormalAt(probeX, probeY, s),
+            ApproachReach.AppliesTo(s.WallCode) ? required : 0)).ToList();   // 천장은 최소 뻗음 규칙 제외 — 후진할 이유 없음
         return (list, null);
 
         static async Task<double> paramGetDoubleOrZeroAsync(ParameterService p, string key)
