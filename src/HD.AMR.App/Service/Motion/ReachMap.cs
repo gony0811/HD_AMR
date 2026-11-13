@@ -188,7 +188,7 @@ public static class ReachMap
         if (!path.Ok) return (Cell(ReachStatus.PathUnsafe, $"정렬 준비→초점 {path.Reason}", margin, jA, jL, jF), calls);
 
         // IK 는 풀렸어도 운영 ② 의 리치 사전 점검이 막는다 — 잠정 최소 뻗음 검증용으로 관절 결과는 남긴다.
-        if (!reach.Ok)
+        if (!reach.Ok && ApproachReach.AppliesTo(code))
             return (Cell(ReachStatus.FlangeShort,
                 $"플랜지 뻗음 {reach.FlangeReachMm:0}mm < 최소 {limits.MinFlangeReachMm:0}mm (IK·자세는 통과)", margin, jA, jL, jF), calls);
 

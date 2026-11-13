@@ -21,6 +21,21 @@ public class ApproachReachTests
         Assert.Equal(120, r.ShortfallMm, 6);     // 벽에서 120mm 더 떨어뜨려야 한다
     }
 
+    [Theory]
+    [InlineData("T", false)]
+    [InlineData("t", false)]
+    [InlineData(" T ", false)]
+    [InlineData("SM", true)]
+    [InlineData("PU", true)]
+    [InlineData("SL", true)]
+    [InlineData("B", true)]
+    [InlineData(null, true)]
+    public void 최소_뻗음_규칙은_천장만_뺀다(string? wallCode, bool applies)
+    {
+        // 근거 실측(230mm)은 수직벽 — 천장은 접힌 팔에서도 손목 특이점이 나지 않는다(ACS 리치 시뮬레이터 2026-11-13).
+        Assert.Equal(applies, ApproachReach.AppliesTo(wallCode));
+    }
+
     [Fact]
     public void 최소값_경계는_통과한다()
     {
