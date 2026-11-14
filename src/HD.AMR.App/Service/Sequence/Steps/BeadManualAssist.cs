@@ -27,6 +27,12 @@ public sealed record BeadAssistOutcome(BeadAssistKind Kind, PeakMeasurement? Mea
     /// <summary>자동 결과 판정 로직을 그대로 타야 하는 경우.</summary>
     public bool UseAutoPath => Kind is BeadAssistKind.NotAsked or BeadAssistKind.Unavailable
         or BeadAssistKind.AutoAccepted or BeadAssistKind.AutoAfterTimeout;
+
+    /// <summary>팝업 조그로 자리를 옮긴 횟수(0 = 처음 측정 자리 그대로).</summary>
+    public int Jogs { get; init; }
+
+    /// <summary>수동 입력 자리에서 Peak 가 진행축 FOV 센터에서 벗어난 거리 [mm] — 없으면 null.</summary>
+    public double? PeakOffsetMm { get; init; }
 }
 
 /// <summary>
@@ -166,7 +172,11 @@ public sealed class BeadManualAssist
                 _logger.LogInformation("[{Stage}] 수동 비드 입력 적용: 영상={Mod}, d={DPx:0.0}px, 학습 데이터={Saved}",
                     stage, answer.Modality, m.DPixel, saved);
                 var jogNote = jogs > 0 ? $", 조그 {jogs}회 후" : "";
-                return new(BeadAssistKind.Manual, m, $" [수동 입력 {answer.Modality.ToUpperInvariant()}{jogNote}, {saved}]");
+                var peakOffsetMm = _weld.ManualPeakOffsetMm(snap, m);
+                if (jogs > 0 && peakOffsetMm is { } po)
+                    _logger.LogInformation("[{Stage}] 조그 후 Peak 진행축 이격 {Off:+0.0;-0.0}mm (비드선 위 재측정)", stage, po);
+                return new(BeadAssistKind.Manual, m, $" [수동 입력 {answer.Modality.ToUpperInvariant()}{jogNote}, {saved}]")
+                    { Jogs = jogs, PeakOffsetMm = peakOffsetMm };
             }
             case ManualBeadDecision.UseAuto when autoOk:
                 return new(BeadAssistKind.AutoAccepted, autoM, " [작업자: 자동 결과로 진행]");

@@ -97,6 +97,10 @@ public static class WeldSequenceSupport
     /// <summary>비드 위치오차 d(mm, cross 축)를 담는 Bag 키. id 는 1 또는 2. ⑦⑪이 쓰고 비드 센터링이 소비.</summary>
     public static string BeadDMmBagKey(int id) => $"bead{id}.dMm";
 
+    /// <summary>⑦/⑪ 수동 입력을 팝업 조그 뒤에 했을 때, 그 자리에서 Peak 가 진행축 센터에서 벗어난 거리 [mm](double).
+    /// ⑦⁺/⑪⁺ 비드 센터링이 cross 이동과 함께 진행축으로도 맞춘다. 조그가 없었으면 넣지 않는다.</summary>
+    public static string BeadPeakOffsetMmBagKey(int id) => $"bead{id}.peakOffsetMm";
+
     /// <summary>⑦⁺⑪⁺가 검사캠 오프셋 시프트를 적용한 상태임을 알리는 Bag 키(bool).
     /// ⑧이 이 플래그가 있을 때만 시프트 역보정을 합성하고 플래그를 지운다 — 세미오토 순서 이탈 가드.</summary>
     public const string InspectShiftedBagKey = "inspectCam.shifted";

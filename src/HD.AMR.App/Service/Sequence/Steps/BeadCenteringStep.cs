@@ -61,6 +61,15 @@ public class BeadCenteringStep : ISequenceStep
     internal static double ResidualAfterClamp(double dMm)
         => dMm - Math.Clamp(dMm, -MaxCenteringMoveMm, MaxCenteringMoveMm);
 
+    /// <summary>
+    /// 수동 입력을 팝업 조그 뒤에 한 경우의 진행축 보정 이동량 [mm] — Peak 가 센터에서 <paramref name="toleranceMm"/>
+    /// (⑥ Peak 센터링 허용 잔차)보다 더 벗어나 있으면 그만큼(1회 이동 한계로 자름), 아니면 0.
+    /// </summary>
+    internal static double ProgressCorrectionMm(double? peakOffsetMm, double toleranceMm)
+        => peakOffsetMm is { } o && double.IsFinite(o) && Math.Abs(o) > Math.Max(0, toleranceMm)
+            ? Math.Clamp(o, -MaxCenteringMoveMm, MaxCenteringMoveMm)
+            : 0.0;
+
     private string LargeResidualFail(double dMm, double residualMm) =>
         $"Bead{_peakId} 이격 {dMm:+0.0;-0.0}mm — 1회 이동 한계 ±{MaxCenteringMoveMm:0}mm 로는 잔차 {residualMm:+0.0;-0.0}mm 가 남아 " +
         $"점 보정 상한 ±{WObjPointStep.MaxResidualCorrectionMm:0}mm 를 넘습니다. 움직이지 않고 중단 — 작업물 좌표계가 기울어집니다. " +
@@ -128,7 +137,22 @@ public class BeadCenteringStep : ISequenceStep
         // 검사캠 오프셋은 여기 합성하지 않는다 — depth 시야 중심에서 검증을 끝낸 뒤 별도 시프트.
         var moveMm = initialDMm;
 
-        if (Math.Abs(moveMm) < SkipMoveMm)
+        // ⑦/⑪ 수동 입력을 조그 뒤에 했으면 그 자리의 Peak 진행축 이격도 함께 맞춘다(⑥ 은 조그 전 자리에서 끝났다).
+        var peakOffKey = WeldSequenceSupport.BeadPeakOffsetMmBagKey(_peakId);
+        var peakOffsetMm = context.Bag.TryGetValue(peakOffKey, out var pov) && pov is double pod ? pod : (double?)null;
+        context.Bag.Remove(peakOffKey);   // 다시 실행해도 이중으로 움직이지 않게
+        var progressMm = ProgressCorrectionMm(peakOffsetMm,
+            await _param.GetDoubleAsync(PeakCenteringStep.ResidualMaxKey) ?? PeakCenteringStep.DefaultResidualMaxMm);
+        var progressNote = "";
+        if (progressMm != 0)
+        {
+            progressNote = $" 조그 후 Peak 진행축 보정 {progressMm:+0.0;-0.0}mm" +
+                           (Math.Abs(progressMm - peakOffsetMm!.Value) > 1e-6
+                               ? $"(이격 {peakOffsetMm.Value:+0.0;-0.0}mm 를 한계 ±{MaxCenteringMoveMm:0}mm 로 자름)."
+                               : ".");
+        }
+
+        if (Math.Abs(moveMm) < SkipMoveMm && progressMm == 0)
         {
             // 이동하지 않았으므로 측정 d 가 곧 잔차다.
             var skipCorr = RecordPointCorrection(context, toolAxis, initialDMm, "센터링 생략 — 측정 d");
@@ -160,6 +184,14 @@ public class BeadCenteringStep : ISequenceStep
         var anchor = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
         var offset = new double[6];
         FlatSurfaceCenteringService.ApplyAxis(offset, toolAxis, clamped);
+        if (progressMm != 0)
+        {
+            var (progToolAxis, _) = await WeldSequenceSupport.GetProgressToolAxisAsync(_param, progressAxis);
+            FlatSurfaceCenteringService.ApplyAxis(offset, progToolAxis, progressMm);
+            _logger.LogInformation(
+                "Bead{Id} 센터링: 조그 후 Peak 진행축 보정 — 툴{Axis} {Off:+0.0;-0.0}mm (Peak 이격 {Meas:+0.0;-0.0}mm)",
+                _peakId, FlatSurfaceCenteringService.AxisName(progToolAxis), progressMm, peakOffsetMm);
+        }
 
         _logger.LogInformation(
             "Bead{Id} 센터링: 진행축={Prog}, cross 툴{Axis} {Off:+0.0;-0.0}mm (측정 d={Meas:+0.0;-0.0}mm)",
@@ -180,7 +212,7 @@ public class BeadCenteringStep : ISequenceStep
             return ok2
                 ? StepResult.Ok(
                     $"Bead2 센터링 완료 — 툴{FlatSurfaceCenteringService.AxisName(toolAxis)} {clamped:+0.0;-0.0}mm 이동 " +
-                    $"(각도 산출 정합을 위해 M2 는 갱신하지 않음).{corr2}{note2}{ResidualNote(residualWarn)}")
+                    $"(각도 산출 정합을 위해 M2 는 갱신하지 않음).{progressNote}{corr2}{note2}{ResidualNote(residualWarn)}")
                 : StepResult.Fail(note2);
         }
 
@@ -207,7 +239,7 @@ public class BeadCenteringStep : ISequenceStep
                     return StepResult.Fail(shiftNoteM);
                 return StepResult.Ok(
                     $"Bead{_peakId} 센터링 완료 — {clamped:+0.0;-0.0}mm 이동, 수동 비드선을 이동량만큼 옮겨 " +
-                    $"잔차 d={residualManual:+0.0;-0.0}mm (이동 전 {initialDMm:+0.0;-0.0}mm), M1 갱신(재측정 생략).{corrM}{shiftNoteM}{ResidualNote(residualWarn)}");
+                    $"잔차 d={residualManual:+0.0;-0.0}mm (이동 전 {initialDMm:+0.0;-0.0}mm), M1 갱신(재측정 생략).{progressNote}{corrM}{shiftNoteM}{ResidualNote(residualWarn)}");
             }
             _logger.LogWarning("Bead{Id} 센터링: 수동 측정 이동 반영 불가(측정/스케일 없음) — 재측정으로 진행", _peakId);
         }
@@ -266,7 +298,7 @@ public class BeadCenteringStep : ISequenceStep
 
         return StepResult.Ok(
             $"Bead{_peakId} 센터링 완료 — {clamped:+0.0;-0.0}mm 이동, " +
-            $"잔차 d={residualMm:+0.0;-0.0}mm (이동 전 {initialDMm:+0.0;-0.0}mm), M1 갱신.{corr1}{assist.Note}{shiftedNote}{ResidualNote(residualWarn)}");
+            $"잔차 d={residualMm:+0.0;-0.0}mm (이동 전 {initialDMm:+0.0;-0.0}mm), M1 갱신.{progressNote}{corr1}{assist.Note}{shiftedNote}{ResidualNote(residualWarn)}");
     }
 
     /// <summary>

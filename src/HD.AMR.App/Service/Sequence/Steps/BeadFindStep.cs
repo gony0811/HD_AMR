@@ -93,12 +93,16 @@ public class BeadFindStep : ISequenceStep
             : null;
 
         // 파라미터 조건에 해당하면 사람에게 비드선을 받는다(학습 데이터로도 저장).
+        context.Bag.Remove(WeldSequenceSupport.BeadPeakOffsetMmBagKey(_peakId));
         var assist = await _manual.RunAsync(_peakId, DisplayName, m, detect, autoFail is null, autoFail,
             peakRoi, beadRoi, context, ct);
         if (assist.Kind == BeadAssistKind.Manual && assist.Measurement is { } mm)
         {
             var dManual = _weld.DMm(mm);
             context.Bag[WeldSequenceSupport.BeadDMmBagKey(_peakId)] = dManual;
+            // 조그로 자리를 옮겼으면 ⑥ Peak 센터링이 맞춘 진행축 위치가 달라졌을 수 있다 — 센터링 단계가 함께 맞춘다.
+            if (assist is { Jogs: > 0, PeakOffsetMm: { } peakOff })
+                context.Bag[WeldSequenceSupport.BeadPeakOffsetMmBagKey(_peakId)] = peakOff;
             _logger.LogInformation("[Bead{Id} 찾기] 수동 입력: d={DMm:0.0}mm ({DPx:0.0}px), ROI={Roi}",
                 _peakId, dManual, mm.DPixel, roiSrc);
             return StepResult.Ok(

@@ -73,4 +73,30 @@ public class BeadManualLineGuardTests
     [Fact]
     public void NonFiniteResidual_IsUncorrectable()
         => Assert.True(BeadCenteringStep.IsUncorrectableResidual(double.NaN));
+
+    [Theory]
+    // Peak 이격, 허용 -> 진행축 보정 이동
+    [InlineData(40.7, 5.0, 40.7)]      // 실기 2026-11-14 15:19 A: 조그 후 약 41 mm
+    [InlineData(-12.0, 5.0, -12.0)]
+    [InlineData(4.0, 5.0, 0.0)]        // 허용 안 — 움직이지 않는다
+    [InlineData(-5.0, 5.0, 0.0)]
+    [InlineData(180.0, 5.0, 100.0)]    // 1회 이동 한계
+    [InlineData(-250.0, 5.0, -100.0)]
+    public void ProgressCorrection_MovesOnlyBeyondTolerance(double offset, double tol, double expected)
+        => Assert.Equal(expected, BeadCenteringStep.ProgressCorrectionMm(offset, tol), 6);
+
+    [Fact]
+    public void ProgressCorrection_NoOffset_NoMove()
+    {
+        Assert.Equal(0, BeadCenteringStep.ProgressCorrectionMm(null, 5));
+        Assert.Equal(0, BeadCenteringStep.ProgressCorrectionMm(double.NaN, 5));
+    }
+
+    [Fact]
+    public void PeakOffset_SameConventionAsPeakFind()
+    {
+        // 영상 폭 848(센터 424), 비드선 위 Peak 482.5px, 0.695 mm/px -> +40.7 mm (진행축 + 방향)
+        Assert.Equal(40.66, HD.AMR.App.Service.WeldTrackingService.PeakOffsetMm(482.5, 424, 0.695), 2);
+        Assert.Equal(-69.5, HD.AMR.App.Service.WeldTrackingService.PeakOffsetMm(324, 424, 0.695), 2);
+    }
 }

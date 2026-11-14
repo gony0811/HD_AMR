@@ -1354,6 +1354,36 @@ public class WeldTrackingService
         return new ManualBeadEvaluation(modality, cross, dModality, dIr, mmpp > 0 ? dIr * mmpp : null, depthZ, s.Peak is not null);
     }
 
+    /// <summary>진행축 FOV 센터로부터 Peak 까지의 부호 있는 거리 [mm] — ① Peak 찾기와 같은 규약(양수 = 진행축 + 방향).</summary>
+    internal static double PeakOffsetMm(double peakProgressPx, double fovCenterPx, double mmPerPx)
+        => (peakProgressPx - fovCenterPx) * mmPerPx;
+
+    /// <summary>
+    /// 수동 비드 입력 스냅샷에서 Peak(코로게이션 꼭대기)가 진행축 FOV 센터에서 얼마나 벗어나 있는지 [mm].
+    /// 팝업 조그로 자리를 옮기면 ⑥ Peak 센터링이 맞춰 둔 진행축 위치가 더는 맞지 않을 수 있다(실기 2026-11-14 15:19 A:
+    /// 옆으로 100 mm 조그한 뒤 Peak 가 센터에서 약 41 mm). Peak 는 그린 비드선 위에서 다시 잰다
+    /// (<see cref="DepthPeakAnalyzer.RefineAlongLine"/> — 화면 전체 Peak 는 옆 굴곡에 끌릴 수 있다). Peak·스케일이 없으면 null.
+    /// </summary>
+    public double? ManualPeakOffsetMm(ManualBeadSnapshot s, PeakMeasurement m)
+    {
+        if (!s.IrGuide.PeakFound) return null;
+        double mmpp = EffectiveMmPerPixel(m.DepthZ, ir: true);
+        if (mmpp <= 0) return null;
+        double pos = s.IrGuide.ProgressPos;
+        if (s.Depth is { } depth)
+        {
+            // 비드선은 진행축과 거의 나란하다(방향 검증 통과분) — Peak 근방에서는 cross = 기준선 + d 인 직선으로 본다.
+            double cross = s.IrGuide.RefCross + m.DPixel;
+            double far = s.Horizontal ? s.Ir.Width : s.Ir.Height;
+            var a = s.Horizontal ? new PixelPoint(0, cross) : new PixelPoint(cross, 0);
+            var b = s.Horizontal ? new PixelPoint(far, cross) : new PixelPoint(cross, far);
+            var axis = s.Horizontal ? WeldProgressAxis.Horizontal : WeldProgressAxis.Vertical;
+            if (DepthPeakAnalyzer.RefineAlongLine(depth, a, b, axis, pos, BeadLinePeakWindowMm / mmpp) is { } lp)
+                pos = lp.ProgressPos;
+        }
+        return PeakOffsetMm(pos, (s.Horizontal ? s.Ir.Width : s.Ir.Height) / 2.0, mmpp);
+    }
+
     /// <summary>
     /// 사람이 그린 비드선으로 측정을 만들어 <see cref="M1"/>/<see cref="M2"/> 에 저장한다(<see cref="EvaluateManualBead"/> 규약).
     /// 선이 진행축으로 펼쳐지지 않았으면 null.
