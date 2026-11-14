@@ -48,16 +48,16 @@ public class WObjAttitudeCcwTwistTests
     }
 
     [Fact]
-    public void 바닥_B_실기값_시계_134도는_좁힌_범위_밖이라_거부()
+    public void 바닥_B_실기값_시계_134도는_넓힌_범위_안이라_허용()
     {
         // 실기 2026-10-16 B-A0001 #2: 현재 −180°, 0°→−132.8°(범위 밖), 180°→−313.9°(Δ−134°).
-        // −330° 실측 범위에선 허용했지만, 2026-11-05 범위를 좁혀(현재 −310°) 이 배치는 움직이지 않고 실패한다.
+        // 2026-11-05~11-13 범위(−300°·−310°)에서는 거부됐고, 2026-11-14 −320° 로 넓혀 다시 180° 후보를 쓴다.
         var pick = WObjAttitude.SelectSafeTwist(-180.0, new (double, double?, double?)[]
         {
             (0.0, -132.8, 101.0),
             (180.0, -313.9, 188.0),
         });
-        Assert.Null(pick);
+        Assert.NotNull(pick);
     }
 
     [Fact]
@@ -76,8 +76,8 @@ public class WObjAttitudeCcwTwistTests
     {
         var pick = WObjAttitude.SelectSafeTwist(-270.0, new (double, double?)[]
         {
-            (0.0, -315.0),     // −310° 밖
-            (180.0, -155.0),   // 실측 −160° 밖
+            (0.0, -325.0),     // −320° 밖
+            (180.0, -140.0),   // −145° 밖
         });
         Assert.Null(pick);
     }
@@ -107,10 +107,10 @@ public class WObjAttitudeCcwTwistTests
     [Fact]
     public void 범위_밖으로_나가는_시계_후보는_거부()
     {
-        // 현재 −270° → −150°·−80° 은 실측 범위(−160° 위쪽) 밖.
+        // 현재 −270° → −140°·−80° 은 범위(−145° 위쪽) 밖.
         var pick = WObjAttitude.SelectSafeTwist(-270.0, new (double, double?)[]
         {
-            (0.0, -150.0),
+            (0.0, -140.0),
             (180.0, -80.0),
         });
         Assert.Null(pick);
@@ -123,9 +123,13 @@ public class WObjAttitudeCcwTwistTests
     [InlineData(-310.0, true)]
     [InlineData(-305.3, true)]    // 실기 2026-11-10 PU 용접선 가로 정렬 후보
     [InlineData(-160.0, true)]
-    [InlineData(-310.5, false)]
-    [InlineData(-313.9, false)]   // 옛 실측 범위(−330°) 안이던 바닥 B 값
-    [InlineData(-155.0, false)]
+    [InlineData(-310.5, true)]
+    [InlineData(-314.9, true)]    // 실기 2026-11-14 F CROSS4 경유점 #45 — 종전 −310° 로 거부되던 값
+    [InlineData(-320.0, true)]
+    [InlineData(-145.0, true)]
+    [InlineData(-155.0, true)]
+    [InlineData(-320.5, false)]
+    [InlineData(-144.5, false)]
     [InlineData(96.3, false)]     // 물리각은 범위 안이지만 와인딩이 달라 실측 밖
     [InlineData(30.0, false)]
     [InlineData(-92.2, false)]
@@ -192,14 +196,14 @@ public class WObjAttitudeCcwTwistTests
     }
 
     [Theory]
-    [InlineData(-180.0, -310.0, true)]
-    [InlineData(-180.0, -160.0, true)]
+    [InlineData(-180.0, -320.0, true)]
+    [InlineData(-180.0, -145.0, true)]
     [InlineData(-180.0, -125.6, false)]   // 실기 2026-11-05 천장 T 진입점 해(+54°)
-    [InlineData(-180.0, -310.5, false)]
-    [InlineData(180.4, 50.0, true)]       // +180° 감김 보고값 — 같은 물리 범위 +50°~+200°
-    [InlineData(180.4, 200.0, true)]
-    [InlineData(180.4, 45.0, false)]
-    [InlineData(180.4, 205.0, false)]
+    [InlineData(-180.0, -320.5, false)]
+    [InlineData(180.4, 40.0, true)]       // +180° 감김 보고값 — 같은 물리 범위 +40°~+215°
+    [InlineData(180.4, 215.0, true)]
+    [InlineData(180.4, 39.0, false)]
+    [InlineData(180.4, 216.0, false)]
     public void 현재_감김_기준_J6_범위_판정(double current, double target, bool ok)
         => Assert.Equal(ok, WObjAttitude.J6RangeBlocker(current, target) is null);
 

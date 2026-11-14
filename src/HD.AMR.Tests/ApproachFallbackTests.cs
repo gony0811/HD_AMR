@@ -48,9 +48,11 @@ public class ApproachFallbackTests
     [Fact]
     public void 진입_해가_J6_안전_범위_밖이면_거부()
     {
-        var outOfRange = new[] { 2.0, -60, 100, -130, 40, -320 };
+        // 관절 이동량(140° 이하)에 먼저 걸리지 않게 J6 −200° 에서 출발한다 — −325° 는 범위(−320°~−145°) 밖.
+        var from = new[] { 0.0, -60, 100, -130, 40, -200 };
+        var outOfRange = new[] { 2.0, -60, 100, -130, 40, -325 };
 
-        Assert.Contains("J6 안전 범위", CobotInspectionMoveStep.EntryJointBlocker(Reference, outOfRange));
+        Assert.Contains("J6 안전 범위", CobotInspectionMoveStep.EntryJointBlocker(from, outOfRange));
     }
 
     [Fact]
