@@ -46,6 +46,26 @@ public class BeadCenteringStep : ISequenceStep
     public const string ResidualMaxKey = "Sequence.Bead.CenterResidualMaxMm";
     public const double DefaultResidualMaxMm = 10.0;
 
+    /// <summary>
+    /// 센터링 후 잔차가 점 보정 상한(<see cref="WObjPointStep.MaxResidualCorrectionMm"/>)을 넘으면 실패시킬지. 미설정 = 켬.
+    /// 이 잔차는 점 기록에서 보정되지 않아 그대로 작업물 X축 회전이 된다(65mm/400mm ≈ 9°) — 기울어진 좌표계로
+    /// 순회하지 않도록 그 용접선을 실패로 끝낸다. false 면 종전대로 경고만 남기고 진행.
+    /// </summary>
+    public const string FailOnLargeResidualKey = "Sequence.Bead.FailOnLargeResidual";
+
+    /// <summary>점 보정으로 흡수할 수 없는 잔차인가 — |잔차| &gt; 점 보정 상한.</summary>
+    internal static bool IsUncorrectableResidual(double residualMm)
+        => !double.IsFinite(residualMm) || Math.Abs(residualMm) > WObjPointStep.MaxResidualCorrectionMm;
+
+    /// <summary>1회 이동 한계로 자른 뒤 남을 잔차 [mm](부호 유지).</summary>
+    internal static double ResidualAfterClamp(double dMm)
+        => dMm - Math.Clamp(dMm, -MaxCenteringMoveMm, MaxCenteringMoveMm);
+
+    private string LargeResidualFail(double dMm, double residualMm) =>
+        $"Bead{_peakId} 이격 {dMm:+0.0;-0.0}mm — 1회 이동 한계 ±{MaxCenteringMoveMm:0}mm 로는 잔차 {residualMm:+0.0;-0.0}mm 가 남아 " +
+        $"점 보정 상한 ±{WObjPointStep.MaxResidualCorrectionMm:0}mm 를 넘습니다. 움직이지 않고 중단 — 작업물 좌표계가 기울어집니다. " +
+        "비드가 화면 중앙 근처에 오도록 정차 위치·캘리브레이션을 확인하거나, 수동 입력이면 검사할 비드를 다시 그리세요.";
+
     /// <param name="peakId">1 또는 2. DI 에서 <c>ActivatorUtilities.CreateInstance</c> 로 주입되므로 첫 인자여야 한다.</param>
     public BeadCenteringStep(
         int peakId,
@@ -119,6 +139,9 @@ public class BeadCenteringStep : ISequenceStep
         }
 
         var residualMax = await _param.GetDoubleAsync(ResidualMaxKey) ?? DefaultResidualMaxMm;
+        var failOnLarge = await _param.GetBoolAsync(FailOnLargeResidualKey) ?? true;
+        if (failOnLarge && IsUncorrectableResidual(ResidualAfterClamp(moveMm)))
+            return StepResult.Fail(LargeResidualFail(initialDMm, ResidualAfterClamp(moveMm)));
         string? residualWarn = null;
         if (residualMax > 0 && Math.Abs(moveMm) - MaxCenteringMoveMm > residualMax)
             residualWarn = $"이격 {initialDMm:+0.0;-0.0}mm 가 1회 이동 한계 ±{MaxCenteringMoveMm:0}mm 를 넘어 " +
@@ -227,6 +250,11 @@ public class BeadCenteringStep : ISequenceStep
 
         if (residualMax > 0 && Math.Abs(residualMm) > residualMax)
             residualWarn = $"잔차 {residualMm:+0.0;-0.0}mm 가 허용 ±{residualMax:0.#}mm 초과 — 그대로 진행";
+
+        if (failOnLarge && IsUncorrectableResidual(residualMm))
+            return StepResult.Fail(
+                $"Bead{_peakId} 센터링 후 잔차 {residualMm:+0.0;-0.0}mm 가 점 보정 상한 ±{WObjPointStep.MaxResidualCorrectionMm:0}mm 를 넘습니다 " +
+                $"(이동 전 {initialDMm:+0.0;-0.0}mm) — 작업물 좌표계가 기울어지므로 중단.{assist.Note}");
 
         context.Bag[WeldSequenceSupport.BeadDMmBagKey(_peakId)] = residualMm;
         var corr1 = RecordPointCorrection(context, toolAxis, residualMm, "재측정 잔차");

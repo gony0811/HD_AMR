@@ -242,6 +242,49 @@ public static class ManualBeadGeometry
         return result;
     }
 
+    /// <summary>수동 비드선이 진행축에서 벗어나도 되는 최대 기울기 [도] — 넘으면 다른 용접선을 그린 것으로 본다.</summary>
+    public const double MaxLineTiltDeg = 30.0;
+
+    /// <summary>진행축 위치에서의 교점이 영상 밖으로 나가도 되는 여유(영상 cross 길이 대비 비율).</summary>
+    public const double CrossOutsideMarginRatio = 0.25;
+
+    /// <summary>그린 선의 진행축 대비 기울기 [도, 0~90]. 2점 미만이거나 점이 한곳에 모여 있으면 null.</summary>
+    public static double? TiltDeg(IReadOnlyList<PixelPoint> pts, bool horizontal)
+    {
+        if (pts.Count < 2) return null;
+        double n = pts.Count, sp = 0, sc = 0, spp = 0, scc = 0;
+        foreach (var q in pts)
+        {
+            double p = horizontal ? q.X : q.Y, c = horizontal ? q.Y : q.X;
+            sp += p; sc += c; spp += p * p; scc += c * c;
+        }
+        double sdP = Math.Sqrt(Math.Max(0, spp / n - sp / n * (sp / n)));
+        double sdC = Math.Sqrt(Math.Max(0, scc / n - sc / n * (sc / n)));
+        if (sdP < 1e-6 && sdC < 1e-6) return null;
+        return Math.Atan2(sdC, sdP) * 180.0 / Math.PI;
+    }
+
+    /// <summary>
+    /// 사람이 그린 비드선을 측정에 쓸 수 없는 사유, 쓸 수 있으면 null. 검사 대상 비드는 영상에서 진행축 방향
+    /// (보통 가로 — ② 가 용접선을 가로로 맞춘다)으로 지나간다. 진행축과 직각에 가까운 선은 다른(직교) 용접선이고,
+    /// 그대로 받으면 직선을 Peak 위치까지 연장한 교점이 영상 밖 수 m 로 튀어 작업물 좌표계가 돌아간다
+    /// (2026-11-14 A 면 L4-R01C09-6: 세로선 입력 → d=−3,788 mm).
+    /// </summary>
+    /// <param name="crossExtent">영상의 cross 방향 길이 [px] — 진행축이 가로면 영상 높이.</param>
+    public static string? LineProblem(IReadOnlyList<PixelPoint> pts, bool horizontal, double progressPos, double crossExtent)
+    {
+        string along = horizontal ? "가로" : "세로", across = horizontal ? "세로" : "가로";
+        string hint = $"검사할 비드는 화면에서 {along}로 지나갑니다. 보이지 않으면 조그로 옮긴 뒤 {along} 방향 비드를 따라 그리세요.";
+        if (TiltDeg(pts, horizontal) is not { } tilt) return $"선이 너무 짧습니다 — {hint}";
+        if (tilt > MaxLineTiltDeg)
+            return $"입력한 선이 {across} 방향입니다(기울기 {tilt:0}° > {MaxLineTiltDeg:0}°) — {hint}";
+        if (CrossAt(pts, horizontal, progressPos) is not { } cross) return $"선이 너무 짧습니다 — {hint}";
+        double margin = crossExtent * CrossOutsideMarginRatio;
+        if (crossExtent > 0 && (cross < -margin || cross > crossExtent + margin))
+            return $"입력한 선을 Peak 위치까지 연장하면 화면 밖({cross:0}px)입니다 — {hint}";
+        return null;
+    }
+
     /// <summary>
     /// 점들을 진행축 좌표 p 에 대한 직선 cross = a·p + b 로 최소제곱 피팅해 <paramref name="progressPos"/> 에서의 cross 를 반환.
     /// 2점 미만이거나 점들이 진행축으로 펼쳐지지 않았으면(진행축과 수직인 선) null.

@@ -125,6 +125,9 @@ public class ParameterService
                 "중심 편차 측정 태그 한 변(mm) — 검은 테두리 바깥 정사각형 실측(흰 여백 제외). 0 이면 측정 안 함."),
             .. FlatCandidateOptions.SeedDefaults(),
             .. LaserFootprintOptions.SeedDefaults(),
+            (Sequence.Steps.BeadCenteringStep.FailOnLargeResidualKey, "true",
+                "⑦⁺/⑪⁺ 비드 센터링 — 1회 이동(±100mm) 뒤 남는 잔차가 점 보정 상한(±30mm)을 넘으면 그 용접선을 실패 처리(true). " +
+                "넘는 잔차는 보정되지 않아 작업물 좌표계가 기울어진 채 순회한다. false 면 종전대로 경고만 남기고 진행."),
             (Sequence.Steps.WObjPointStep.ResidualCorrectionKey, "true",
                 "⑦⁺/⑪⁺ 비드 센터링 후 남은 cross 잔차를 작업물 좌표계 점1/점2 기록에 보정(true). 잔차가 X축을 돌려 연속 LINE 이 " +
                 "V01 에서 멀수록 옆으로 벗어나는 것을 줄인다. 점2 는 각도(⑫)를 건드리지 않는 별도 재측정으로 잔차를 잰다."),

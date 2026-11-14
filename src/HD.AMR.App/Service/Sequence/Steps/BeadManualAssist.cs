@@ -87,6 +87,7 @@ public sealed class BeadManualAssist
         ManualBeadSnapshot? snap;
         ManualBeadAnswer answer;
         var jogs = 0;
+        string? redo = null;   // 직전 입력을 받지 못한 사유 — 팝업 사유 앞에 붙여 다시 묻는다
         while (true)
         {
             var useAuto = autoOk && jogs == 0;
@@ -104,7 +105,8 @@ public sealed class BeadManualAssist
             {
                 PeakId = peakId,
                 Stage = stage,
-                Reason = jogs == 0 ? reason : $"{reason} · 조그 {jogs}회 후 다시 찍은 화면(자동 결과 사용 불가)",
+                Reason = (redo is null ? "" : $"⚠ 다시 입력하세요 — {redo}\n") +
+                         (jogs == 0 ? reason : $"{reason} · 조그 {jogs}회 후 다시 찍은 화면(자동 결과 사용 불가)"),
                 AutoUsable = useAuto,
                 DefaultModality = defaultMod,
                 IrPng = snap.IrPng,
@@ -121,8 +123,21 @@ public sealed class BeadManualAssist
                 stage, req.Reason, BeadManualSettings.ToParam(trigger), timeoutSec, jogs);
 
             answer = await _hub.AskAsync(req, TimeSpan.FromSeconds(timeoutSec), ct);
+            if (answer.Decision == ManualBeadDecision.Manual)
+            {
+                // 방향이 다른 선(직교 용접선)·화면 밖으로 튀는 선은 받지 않고 같은 자리에서 다시 묻는다.
+                var g = answer.Modality == "rgb" ? snap.ColorGuide : snap.IrGuide;
+                redo = g is not { Calibrated: true }
+                    ? null   // 라벨 전용 영상 — 아래 ApplyManualBeadAsync 가 종전대로 판정
+                    : ManualBeadGeometry.LineProblem(answer.Points, snap.Horizontal, g.ProgressPos,
+                        snap.Horizontal ? g.Height : g.Width);
+                if (redo is null) break;
+                _logger.LogWarning("[{Stage}] 수동 비드 입력 거부 — {Why} (다시 입력 요청)", stage, redo);
+                continue;
+            }
             if (answer.Decision != ManualBeadDecision.Recapture) break;
 
+            redo = null;
             jogs++;
             _logger.LogInformation("[{Stage}] 팝업 조그로 코봇 이동 — 프레임 다시 찍기 ({Jogs}회)", stage, jogs);
             await Task.Delay(RecaptureSettleMs, ct);   // 이동 직후 프레임 흔들림·지연 대기
