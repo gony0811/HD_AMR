@@ -24,6 +24,12 @@ public class CameraAlignStep : ISequenceStep
     public const double DefaultExpectedToleranceMm = 200;
 
     /// <summary>
+    /// 기대보다 가깝게 측정돼도(목표 거리 이상이면) 정렬을 계속할지 — 파라미터 키. 미설정 = 켬.
+    /// 끄면 가까운 쪽도 기대 − 허용폭까지만 받는다(종전 대칭 동작).
+    /// </summary>
+    public const string AllowCloserKey = "Sequence.CameraAlign.AllowCloserThanExpected";
+
+    /// <summary>
     /// depth 카메라 측정 원점이 툴 TCP 보다 광축 방향으로 뒤에 있는 거리(mm). ② 접근 거리(<c>inspection.approachStandoffMm</c>)는
     /// <b>TCP–면</b> 거리이고 ③ 이 재는 값은 <b>카메라–면</b> 거리라, ② 직후 측정은 접근 거리보다 이만큼 길다.
     /// 2026-11-09 실측: 접근 400mm 에서 천장 T 680~691mm·경사면 PU 645mm(≈ +245~291) — 기본값은 그 가운데.
@@ -108,10 +114,16 @@ public class CameraAlignStep : ISequenceStep
                 expected, expectedTol, approach, ResolveDepthOffsetMm(rawOffset));
         }
 
+        // 가까운 쪽은 목표 거리까지 받는다 — 벽이 모델보다 가까우면 덜 전진할 뿐이다(먼 쪽은 그대로 막는다).
+        bool allowCloser;
+        try { allowCloser = await _param.GetBoolAsync(AllowCloserKey) ?? true; }
+        catch { allowCloser = true; }
+
         var r = await _centering.MoveToDistanceAsync(new DepthDistanceMoveOptions
         {
             ExpectedDistanceMm = expected,
             ExpectedToleranceMm = expectedTol,
+            ExpectedNearFloorMm = allowCloser ? context.CameraTargetDistanceMm : null,
             RoiX = rx, RoiY = ry, RoiW = rw, RoiH = rh,
             TargetDistanceMm = context.CameraTargetDistanceMm,
             ToleranceMm = 1.0,

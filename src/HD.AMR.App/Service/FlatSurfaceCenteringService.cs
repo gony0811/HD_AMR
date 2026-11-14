@@ -183,6 +183,14 @@ public sealed class DepthDistanceMoveOptions
     /// <summary><see cref="ExpectedDistanceMm"/> 허용폭(mm).</summary>
     public double ExpectedToleranceMm { get; init; } = 200;
 
+    /// <summary>
+    /// 기대보다 <b>가깝게</b> 측정됐을 때 받아들이는 하한(mm) — 보통 목표 거리. null 이면 가까운 쪽도 기대 − 허용폭까지만(대칭).
+    /// 먼 쪽(기대 + 허용폭)은 이 값과 무관하게 그대로 막는다: 멀게 잘못 재면 그만큼 벽 쪽으로 더 전진하지만,
+    /// 가깝게 재면 덜 전진할 뿐이다. 벽이 모델보다 가까운 경우(캘리브레이션 오차 — 실기 2026-11-14 F: 측정 437~466 mm,
+    /// 기대 680)에도 정렬을 계속할 수 있게 한다.
+    /// </summary>
+    public double? ExpectedNearFloorMm { get; init; }
+
     /// <summary>이 시간보다 오래된 depth 프레임이면 측정하지 않는다(ms) — 스트림 정체 시 같은 값으로 반복 이동 방지.</summary>
     public int MaxFrameAgeMs { get; init; } = 1000;
 }
@@ -998,8 +1006,15 @@ public class FlatSurfaceCenteringService
             var measured = await MeasureRoiDistanceAsync(o, ct);
             if (measured is not { } d)
                 return DistFail("유효한 깊이 측정값이 없습니다.");
-            if (CheckExpectedDistance(d, o.ExpectedDistanceMm, o.ExpectedToleranceMm) is { } expectedFail)
+            if (CheckExpectedDistance(d, o.ExpectedDistanceMm, o.ExpectedToleranceMm, o.ExpectedNearFloorMm) is { } expectedFail)
                 return DistFail(expectedFail, d);
+            if (CloserThanModelMm(d, o.ExpectedDistanceMm, o.ExpectedToleranceMm) is { } closerMm)
+            {
+                _logger.LogWarning(
+                    "거리 접근: 면이 모델보다 {Closer:0}mm 가깝습니다 (측정 {D:0}mm, 기대 {E:0}±{T:0}mm) — 측정값 기준으로 정렬을 계속합니다. " +
+                    "맵 캘리브레이션(도면↔맵)을 확인하세요.", closerMm, d, o.ExpectedDistanceMm, o.ExpectedToleranceMm);
+                Report(progress, $"면이 모델보다 {closerMm:0}mm 가까움 — 측정값 기준으로 정렬 (캘리브레이션 확인 필요)");
+            }
 
             double delta = d - o.TargetDistanceMm;
             Report(progress, $"거리 측정 {d:0.#}mm (목표 {o.TargetDistanceMm:0}mm, Δ={delta:+0.#;-0.#}mm)");
@@ -1070,13 +1085,24 @@ public class FlatSurfaceCenteringService
     /// <summary>이동량 대비 실제 거리 변화가 이 비율보다 작으면 응답 없음으로 본다.</summary>
     internal const double ResponseMinRatio = 0.3;
 
-    /// <summary>이동 전 측정이 기대 거리 ± 허용폭 밖이면 실패 사유.</summary>
-    internal static string? CheckExpectedDistance(double measuredMm, double? expectedMm, double toleranceMm)
+    /// <summary>
+    /// 이동 전 측정이 허용 구간 밖이면 실패 사유. 구간 = [기대 − 허용폭, 기대 + 허용폭]이고,
+    /// <paramref name="nearFloorMm"/> 를 주면 가까운 쪽 하한만 그 값까지 넓힌다(비대칭 — 먼 쪽은 그대로).
+    /// </summary>
+    internal static string? CheckExpectedDistance(double measuredMm, double? expectedMm, double toleranceMm, double? nearFloorMm = null)
     {
-        if (expectedMm is not { } e || toleranceMm <= 0 || Math.Abs(measuredMm - e) <= toleranceMm) return null;
-        return $"측정 거리 {measuredMm:0}mm 가 기대 {e:0}±{toleranceMm:0}mm(검사위치 이동 접근 거리 + 카메라–툴 끝 거리) 밖입니다 — " +
+        if (expectedMm is not { } e || toleranceMm <= 0) return null;
+        var lower = nearFloorMm is { } nf ? Math.Min(e - toleranceMm, nf) : e - toleranceMm;
+        var upper = e + toleranceMm;
+        if (measuredMm >= lower && measuredMm <= upper) return null;
+        var range = nearFloorMm is null ? $"기대 {e:0}±{toleranceMm:0}mm" : $"허용 {lower:0}~{upper:0}mm(기대 {e:0}mm)";
+        return $"측정 거리 {measuredMm:0}mm 가 {range}(검사위치 이동 접근 거리 + 카메라–툴 끝 거리) 밖입니다 — " +
                "ROI 안 다른 구조물·무효 픽셀(최소 측정거리 미만)·멈춘 프레임일 수 있어 움직이지 않습니다. ROI·카메라를 확인하세요.";
     }
+
+    /// <summary>측정이 기대 − 허용폭보다 가까우면 모델보다 가까운 양(기대 − 측정, mm). 아니면 null.</summary>
+    internal static double? CloserThanModelMm(double measuredMm, double? expectedMm, double toleranceMm)
+        => expectedMm is { } e && toleranceMm > 0 && measuredMm < e - toleranceMm ? e - measuredMm : null;
 
     /// <summary>
     /// 광축 방향 <paramref name="commandedMm"/> 이동 뒤 거리 변화가 지령과 같은 부호·충분한 크기인지 검사한다.
