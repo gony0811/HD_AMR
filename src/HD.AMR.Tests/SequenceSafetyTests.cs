@@ -45,6 +45,20 @@ public class SequenceSafetyTests
         => Assert.NotNull(FlatSurfaceCenteringService.CheckDistanceResponse(500, null, 100));
 
     [Theory]
+    // before, after, commanded, 통과? — 목표 300±10. 변화가 작아도 같은 방향이고 이동 후 목표 범위 안이면 통과.
+    [InlineData(310.3, 308.0, 10.3, true)]    // 실기 2026-11-14 F L4-R01C04-2
+    [InlineData(310.3, 310.3, 10.3, false)]   // 전혀 안 변함 — 멈춘 값 의심
+    [InlineData(310.3, 312.0, 10.3, false)]   // 반대로 변함 — 광축 부호 의심
+    [InlineData(330.0, 325.0, 30.0, false)]   // 같은 방향이지만 목표 범위 밖 + 변화 부족
+    [InlineData(288.0, 290.5, -12.0, true)]   // 후퇴 방향도 같은 규칙
+    public void DistanceResponse_SmallChange_PassesOnlyInsideTarget(double before, double after, double commanded, bool ok)
+        => Assert.Equal(ok, FlatSurfaceCenteringService.CheckDistanceResponse(before, after, commanded, 300, 10) is null);
+
+    [Fact]
+    public void DistanceResponse_WithoutTarget_KeepsOldRule()
+        => Assert.NotNull(FlatSurfaceCenteringService.CheckDistanceResponse(310.3, 308.0, 10.3));
+
+    [Theory]
     [InlineData(420, 400.0, 200, true)]
     [InlineData(900, 400.0, 200, false)]   // ROI 안 먼 구조물 — 벽 쪽으로 500mm 전진하려던 경우
     [InlineData(900, null, 200, true)]     // ② 미실행 — 검사 안 함

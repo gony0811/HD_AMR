@@ -372,6 +372,8 @@ public sealed class Vda5050OrderExecutor
                 {
                     _logger.LogWarning("코봇 도달 사전 점검: 용접선 {Bad}/{All}건 불가 — 그 용접선만 실패 처리하고 나머지를 수행합니다",
                         skippedActions.Count, node.Actions.Count);
+                    foreach (var (bad, why) in reach.Unreachable)
+                        _logger.LogWarning("코봇 도달 사전 점검: 제외 {Action} — {Why}", DescribeAction(bad), why);
                     ReportError(CobotReachPrecheck.BlockedErrorType,
                         $"용접선 {skippedActions.Count}건 도달 불가 — 실행하지 않음(나머지는 수행): " +
                         string.Join(" | ", reach.Unreachable.Select(u => u.Reason)));

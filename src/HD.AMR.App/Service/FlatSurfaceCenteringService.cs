@@ -1059,7 +1059,7 @@ public class FlatSurfaceCenteringService
             catch (OperationCanceledException) { throw; }
             catch { /* 진단 실패는 결과에 영향 없음 */ }
 
-            if (CheckDistanceResponse(d, d2, delta) is { } responseFail)
+            if (CheckDistanceResponse(d, d2, delta, o.TargetDistanceMm, o.ToleranceMm) is { } responseFail)
                 return DistFail(responseFail, d2 ?? d);
 
             return DistOk(d2 ?? d, delta,
@@ -1107,14 +1107,21 @@ public class FlatSurfaceCenteringService
     /// <summary>
     /// 광축 방향 <paramref name="commandedMm"/> 이동 뒤 거리 변화가 지령과 같은 부호·충분한 크기인지 검사한다.
     /// 지령 +면 거리가 줄어야 한다(전진). 반대로 변하거나 거의 안 변하면 광축 매핑 부호 오류·멈춘 프레임으로 본다.
+    /// 단, 변화가 작아도 <b>지령과 같은 방향으로 변했고 이동 후 거리가 목표 ± 허용 안</b>이면 통과시킨다 — 이동 후 측정은
+    /// 항상 새 프레임이라(호출부가 새 프레임을 기다린다) 멈춘 프레임이 아니고, 부호가 반대면 거리가 반대로 변해 여기 걸리지 않는다.
+    /// 작은 이동(10 mm 남짓)은 ROI 최소 깊이의 잡음·요철(주름 교차부)에 묻힌다(실기 2026-11-14 F L4-R01C04-2 CROSS4:
+    /// 10.3 mm 이동에 310.3→308 mm, 목표 300±10 안인데 실패). 통과시켜도 추가 이동은 하지 않는다.
     /// </summary>
-    internal static string? CheckDistanceResponse(double beforeMm, double? afterMm, double commandedMm)
+    internal static string? CheckDistanceResponse(double beforeMm, double? afterMm, double commandedMm,
+        double? targetMm = null, double toleranceMm = 0)
     {
         if (Math.Abs(commandedMm) < ResponseCheckMinMoveMm) return null;
         if (afterMm is not { } after)
             return $"광축 {commandedMm:+0.#;-0.#}mm 이동 후 유효한 깊이 측정값이 없습니다(새 프레임 없음 또는 무효 픽셀) — " +
                    "카메라 스트림·ROI 를 확인하세요. 추가 이동하지 않습니다.";
         var change = beforeMm - after;   // 줄어든 거리
+        if (change * commandedMm > 0 && targetMm is { } target && toleranceMm > 0 && Math.Abs(after - target) <= toleranceMm)
+            return null;
         if (change * commandedMm <= 0 || Math.Abs(change) < ResponseMinRatio * Math.Abs(commandedMm))
             return $"광축 {commandedMm:+0.#;-0.#}mm 이동했는데 거리가 {beforeMm:0}→{after:0}mm 로 기대만큼 변하지 않았습니다 — " +
                    $"광축 매핑('{Sequence.Steps.WeldSequenceSupport.DepthAxisKey}') 부호나 depth 프레임 정체를 확인하세요. 추가 이동하지 않습니다.";
