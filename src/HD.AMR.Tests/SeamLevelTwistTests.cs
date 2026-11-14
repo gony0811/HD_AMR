@@ -127,7 +127,19 @@ public class SeamLevelTwistTests
         InspectionMoveDirection direction, bool leveled, WeldProgressAxis expected)
     {
         var c = new SequenceContext { InspectionDirection = direction, SeamLeveledInImage = leveled };
-        Assert.Equal(expected, WeldSequenceSupport.GetProgressAxis(c));
+        Assert.Equal(expected, WeldSequenceSupport.ProgressAxisFor(c, alwaysHorizontal: false));
+    }
+
+    [Theory]
+    [InlineData(InspectionMoveDirection.Horizontal, false)]   // 실기 2026-11-14 15:33 A: 기록 없음 + 수평 → 종전엔 Vertical
+    [InlineData(InspectionMoveDirection.Vertical, false)]
+    [InlineData(InspectionMoveDirection.Horizontal, true)]
+    public void ProgressAxis_AlwaysHorizontal_IgnoresDirectionAndLevelFlag(InspectionMoveDirection direction, bool leveled)
+    {
+        var c = new SequenceContext { InspectionDirection = direction, SeamLeveledInImage = leveled };
+        Assert.Equal(WeldProgressAxis.Horizontal, WeldSequenceSupport.ProgressAxisFor(c, alwaysHorizontal: true));
+        Assert.True(WeldSequenceSupport.ProgressAxisAlwaysHorizontal);   // 기본값 = 켬
+        Assert.Equal(WeldProgressAxis.Horizontal, WeldSequenceSupport.GetProgressAxis(c));
     }
 
     [Fact]

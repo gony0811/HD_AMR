@@ -362,7 +362,23 @@ public static class WeldSequenceSupport
     /// ② 가 용접선을 영상 가로선으로 맞췄으면(<see cref="SequenceContext.SeamLeveledInImage"/>) 방향과 무관하게 영상 가로다.
     /// </summary>
     public static WeldProgressAxis GetProgressAxis(SequenceContext context)
-        => context.SeamLeveledInImage || context.InspectionDirection == InspectionMoveDirection.Vertical
+        => ProgressAxisFor(context, ProgressAxisAlwaysHorizontal);
+
+    /// <summary>
+    /// 진행축을 항상 영상 가로로 둘지 — 파라미터(미설정 = 켬). ② 가 툴을 돌려 용접선을 늘 영상 가로선으로 맞추므로
+    /// Peak·Bead 찾기와 센터링은 가로 용접선만 보면 된다. 종전에는 "② 가로 정렬" 표시·용접선 기록이 없으면(앱 재시작 뒤,
+    /// 단계 단독 실행) 검사방향으로 되돌아가 수평 용접선을 영상 세로로 잘못 봤다(실기 2026-11-14 15:33 A: 진행축=Vertical →
+    /// Peak 센터링이 엉뚱한 축으로 움직여 잔차 +82 mm, 가로로 그린 수동 비드선은 방향 검증에서 거부).
+    /// false 면 종전 규칙(가로 정렬 표시·용접선 기록·검사방향 순).
+    /// </summary>
+    public const string ProgressAxisAlwaysHorizontalKey = "Sequence.Weld.ProgressAxisAlwaysHorizontal";
+
+    /// <summary><see cref="ProgressAxisAlwaysHorizontalKey"/> 의 마지막으로 읽은 값 — 파라미터를 읽을 수 없는 동기 경로용.</summary>
+    public static bool ProgressAxisAlwaysHorizontal { get; set; } = true;
+
+    /// <summary>진행축 결정 규칙(순수 함수). <paramref name="alwaysHorizontal"/> 이면 항상 영상 가로.</summary>
+    internal static WeldProgressAxis ProgressAxisFor(SequenceContext context, bool alwaysHorizontal)
+        => alwaysHorizontal || context.SeamLeveledInImage || context.InspectionDirection == InspectionMoveDirection.Vertical
             ? WeldProgressAxis.Horizontal
             : WeldProgressAxis.Vertical;
 
@@ -420,7 +436,13 @@ public static class WeldSequenceSupport
     public static async Task<(WeldProgressAxis Axis, string Source)> ResolveProgressAxisAsync(
         SequenceContext context, CobotService cobot, ParameterService param, CancellationToken ct)
     {
-        var fallback = GetProgressAxis(context);
+        try { ProgressAxisAlwaysHorizontal = await param.GetBoolAsync(ProgressAxisAlwaysHorizontalKey) ?? true; }
+        catch (OperationCanceledException) { throw; }
+        catch { /* 파라미터를 못 읽으면 마지막 값 유지 */ }
+        if (ProgressAxisAlwaysHorizontal)
+            return (WeldProgressAxis.Horizontal, "가로 고정 (② 가 용접선을 영상 가로로 정렬)");
+
+        var fallback = ProgressAxisFor(context, alwaysHorizontal: false);
         var fallbackSrc = context.SeamLeveledInImage ? "② 가로 정렬" :
             $"검사방향 {(context.InspectionDirection == InspectionMoveDirection.Vertical ? "수직" : "수평")}";
         if (SeamOrientationMemory.Last is not { } rec)
