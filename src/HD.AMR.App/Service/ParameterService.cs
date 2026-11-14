@@ -84,8 +84,19 @@ public class ParameterService
             existing.UpdatedAt = DateTime.UtcNow;
         }
         await _db.SaveChangesAsync();
+        if (IsSafeJ6Key(name)) await ApplySafeJ6RangeAsync();
         Changed?.Invoke(name);
     }
+
+    private static bool IsSafeJ6Key(string name)
+        => name is Inspection.WObjAttitude.SafeJ6MinKey or Inspection.WObjAttitude.SafeJ6MaxKey;
+
+    /// <summary>J6 안전 범위 파라미터를 읽어 <see cref="Inspection.WObjAttitude"/> 에 적용한다(기동·저장·삭제 때).
+    /// 잘못된 값(하한 ≥ 상한, 대기 자세 −180° 미포함, 폭 360° 이상)이면 기본값을 쓰고 false.</summary>
+    public async Task<bool> ApplySafeJ6RangeAsync()
+        => Inspection.WObjAttitude.ApplySafeJ6Range(
+            await GetDoubleAsync(Inspection.WObjAttitude.SafeJ6MinKey),
+            await GetDoubleAsync(Inspection.WObjAttitude.SafeJ6MaxKey));
 
     public Task SetDoubleAsync(string name, double value, string? description = null)
         => SetAsync(name, value.ToString(CultureInfo.InvariantCulture), description);
@@ -125,6 +136,15 @@ public class ParameterService
                 "중심 편차 측정 태그 한 변(mm) — 검은 테두리 바깥 정사각형 실측(흰 여백 제외). 0 이면 측정 안 함."),
             .. FlatCandidateOptions.SeedDefaults(),
             .. LaserFootprintOptions.SeedDefaults(),
+            (Inspection.WObjAttitude.SafeJ6MinKey,
+                Inspection.WObjAttitude.DefaultSafeJ6MinDeg.ToString(CultureInfo.InvariantCulture),
+                "J6 안전 범위 하한(도, 실제 관절값 — 대기 자세 −180° 쪽 감김 기준). 이보다 더 감기는 J6 로는 움직이지 않는다 " +
+                "(센서 헤드–링크암 간섭·케이블 감김 방지). 진입·용접선 가로 정렬·연속 이동·검사 순회 공통. 저장하면 바로 적용. " +
+                "−180 이하여야 하고 상한보다 작아야 한다 — 잘못된 값이면 기본값(−320~−140)을 쓴다. ACS 의 Acs:Reach:SafeJ6MinDeg 와 같게 둘 것."),
+            (Inspection.WObjAttitude.SafeJ6MaxKey,
+                Inspection.WObjAttitude.DefaultSafeJ6MaxDeg.ToString(CultureInfo.InvariantCulture),
+                "J6 안전 범위 상한(도, 실제 관절값). −180 이상이어야 하고 하한보다 커야 한다. 저장하면 바로 적용. " +
+                "ACS 의 Acs:Reach:SafeJ6MaxDeg 와 같게 둘 것."),
             (Sequence.Steps.WeldSequenceSupport.ProgressAxisAlwaysHorizontalKey, "true",
                 "Peak·Bead 찾기와 센터링의 진행축을 항상 영상 가로로 둔다(true). ② 가 툴을 돌려 용접선을 늘 영상 가로선으로 맞추기 때문이다. " +
                 "false 면 종전 규칙(가로 정렬 표시·용접선 기록이 없으면 검사방향으로 결정 — 수평 용접선은 영상 세로)."),
@@ -165,6 +185,7 @@ public class ParameterService
             });
         }
         await _db.SaveChangesAsync();
+        await ApplySafeJ6RangeAsync();   // 기동 시 저장된 J6 안전 범위 적용
     }
 
     /// <summary>id 로 파라미터 1건 삭제. 없으면 무시.</summary>
@@ -175,6 +196,7 @@ public class ParameterService
         {
             _db.Parameters.Remove(p);
             await _db.SaveChangesAsync();
+            if (IsSafeJ6Key(p.Name)) await ApplySafeJ6RangeAsync();
             Changed?.Invoke(p.Name);
         }
     }

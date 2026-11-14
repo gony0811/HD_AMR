@@ -61,7 +61,7 @@ public readonly record struct WObjAttitude(double Rz0, double TiltSign)
     public double AbsoluteTwistDeg => TwistOverrideDeg ?? (TiltSign < 0 ? 180.0 : 0.0);
 
     /// <summary>
-    /// 센서 헤드–링크암 간섭·케이블 감김이 없는 J6 <b>실제 관절값</b> 범위 [도] — 물리각 40°~215°.
+    /// 센서 헤드–링크암 간섭·케이블 감김이 없는 J6 <b>실제 관절값</b> 범위 [도] — 기본 물리각 40°~220°.
     /// 2026-10-16 바닥 자세에서 J6 단일축 조그로 −160°~−330° 를 돌려 간섭 없음을 실측했고, 2026-11-05 운영
     /// 결정으로 −300° 까지로 좁혔다가, 2026-11-10 −310° 로 완화했다(대기 자세 −180° 기준 반시계 20°·시계 130°).
     /// 시계 120° 로는 영상 속 용접선 기울기 +20°~+60° 를 어느 쪽 후보(φ, φ−180°)로도 정렬할 수 없었다
@@ -72,7 +72,36 @@ public readonly record struct WObjAttitude(double Rz0, double TiltSign)
     /// 대기 자세(−180°) 쪽 와인딩에서만 했다(현장 J6 는 항상 이 와인딩에서 움직인다).
     /// 모든 코봇 이동 계획(검사위치 이동 진입·평면 경로·연속 이동, 검사 수행 비틀림·경유점)이 이 범위로 거른다.
     /// </summary>
-    public const double SafeJ6MinDeg = -320.0, SafeJ6MaxDeg = -145.0;
+    public const double DefaultSafeJ6MinDeg = -320.0, DefaultSafeJ6MaxDeg = -140.0;
+
+    /// <summary>J6 안전 범위 하한·상한 파라미터 키 [도, 실제 관절값] — 파라미터 화면에서 바꾸면 다음 판정부터 쓴다
+    /// (<see cref="Service.ParameterService"/> 가 기동·저장 때 <see cref="ApplySafeJ6Range"/> 를 부른다).</summary>
+    public const string SafeJ6MinKey = "inspection.safeJ6MinDeg", SafeJ6MaxKey = "inspection.safeJ6MaxDeg";
+
+    /// <summary>지금 적용 중인 J6 안전 범위 [도]. 2026-11-14 −320°~−140°(기본)로 넓히고 파라미터로 뺐다.</summary>
+    public static double SafeJ6MinDeg { get; private set; } = DefaultSafeJ6MinDeg;
+    public static double SafeJ6MaxDeg { get; private set; } = DefaultSafeJ6MaxDeg;
+
+    /// <summary>
+    /// 파라미터 값 → 적용할 범위. 값이 없으면 기본값. 대기 자세(−180°)를 포함하지 않거나, 하한 ≥ 상한이거나,
+    /// 폭이 360° 이상(감김 기준 판정이 무의미)이거나, 유한하지 않으면 통째로 기본값으로 되돌린다(Ok = false).
+    /// </summary>
+    public static (double Min, double Max, bool Ok) ResolveSafeJ6Range(double? min, double? max)
+    {
+        var lo = min ?? DefaultSafeJ6MinDeg;
+        var hi = max ?? DefaultSafeJ6MaxDeg;
+        var ok = double.IsFinite(lo) && double.IsFinite(hi) && lo < hi && hi - lo < 360.0 && lo <= -180.0 && hi >= -180.0;
+        return ok ? (lo, hi, true) : (DefaultSafeJ6MinDeg, DefaultSafeJ6MaxDeg, false);
+    }
+
+    /// <summary>파라미터 값을 검증해 적용한다. 잘못된 값이면 기본값을 적용하고 false.</summary>
+    public static bool ApplySafeJ6Range(double? min, double? max)
+    {
+        var (lo, hi, ok) = ResolveSafeJ6Range(min, max);
+        SafeJ6MinDeg = lo;
+        SafeJ6MaxDeg = hi;
+        return ok;
+    }
 
     /// <summary>안내 문구용 안전 범위 표기.</summary>
     public static string SafeJ6RangeText => $"{SafeJ6MinDeg:0}°~{SafeJ6MaxDeg:0}°";

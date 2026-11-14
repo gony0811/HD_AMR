@@ -58,7 +58,7 @@ public class InspectionRunWaypointChainTests
 
     [Theory]
     [InlineData(-60.0)]    // 감김 기준 −420° — 시계로 150° 더 감김
-    [InlineData(220.0)]    // 감김 기준 −140° — −145° 위쪽(반시계 한계 밖)
+    [InlineData(225.0)]    // 감김 기준 −135° — −140° 위쪽(반시계 한계 밖)
     [InlineData(35.0)]     // 감김 기준 −325° — −320° 아래쪽(시계 한계 밖)
     public void J6_안전_범위_밖_경유점은_거부(double j6)
     {
