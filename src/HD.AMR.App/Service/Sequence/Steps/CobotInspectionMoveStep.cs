@@ -188,6 +188,39 @@ public class CobotInspectionMoveStep : ISequenceStep
     }
 
     /// <summary>
+    /// 연속 이동 목표를 <b>실측 작업물 좌표계</b>에서 잡는다 — 모델(ACS 도면) 좌표는 첫 접근에만 쓰고, 정렬·교시가 끝난 뒤에는
+    /// 잰 값을 믿는다. <paramref name="frameOrigin"/> = 이번 용접선 시작점으로 옮긴 좌표계 원점(BASE, 점 기록 높이).
+    /// 현재 TCP 의 원점 평면 위 높이가 <see cref="MinContinueHeightMm"/> 이상이면 그 높이를 그대로 둔 채 시작점 정면으로
+    /// 옆으로만 옮기고, 그보다 면에 붙어 있으면 연속 이동 이격(<paramref name="chainStandoffMm"/>)까지 띄운 점을 목표로 한다
+    /// (면에서 멀어지는 방향). 어느 쪽도 면 쪽으로 다가가지 않는다. 반환: (목표 [x,y,z], 원점 평면 위 높이 mm, 높이를 유지했는지).
+    /// </summary>
+    internal static (double[] Target, double HeightMm, bool KeptHeight) ChainTargetFromMeasuredFrame(
+        double[] cur, double[] frameOrigin, double[] wallOut, double chainStandoffMm)
+    {
+        var h = (cur[0] - frameOrigin[0]) * wallOut[0] + (cur[1] - frameOrigin[1]) * wallOut[1]
+              + (cur[2] - frameOrigin[2]) * wallOut[2];
+        var keep = h >= MinContinueHeightMm;
+        var height = keep ? h : Math.Max(chainStandoffMm, h);
+        return (new[] { frameOrigin[0] + height * wallOut[0], frameOrigin[1] + height * wallOut[1], frameOrigin[2] + height * wallOut[2] },
+            height, keep);
+    }
+
+    /// <summary>
+    /// 연속 이동이 면 쪽으로 가지 않게 한 목표 — 현재 TCP 가 연속 이동 평면(<paramref name="chainBase"/>)보다 바깥(면에서 먼 쪽)에
+    /// 있으면 그 높이를 그대로 둔 채 옆으로만 옮긴 BASE 점 [x,y,z] 와 평면 위 높이(mm). 평면 이하면 null(종전 경로 — 들어 올림).
+    /// 연속 이동 평면은 <b>모델(ACS 도면) 면</b> 기준이라, 실제 면이 모델보다 가까우면 평면이 실제 면 안쪽에 놓인다 —
+    /// 그 평면으로 내려가면 툴이 면에 닿는다(실기 2026-11-14 A L4-R01C09-2→3: 면이 모델보다 347 mm 가까워 목표가 면 쪽 240 mm,
+    /// 이동 2.4초 뒤 코봇 결함 정지). 직전 검사가 끝난 높이는 실측(작업물 좌표계) 기준이라 그 높이를 믿는다.
+    /// </summary>
+    internal static (double[] Target, double AboveMm)? ChainTargetKeepingHeight(double[] cur, double[] chainBase, double[] wallOut)
+    {
+        var h = (cur[0] - chainBase[0]) * wallOut[0] + (cur[1] - chainBase[1]) * wallOut[1]
+              + (cur[2] - chainBase[2]) * wallOut[2];
+        if (h <= 1.0) return null;
+        return (new[] { chainBase[0] + h * wallOut[0], chainBase[1] + h * wallOut[1], chainBase[2] + h * wallOut[2] }, h);
+    }
+
+    /// <summary>
     /// 연속 이동 목표 위치 — 첫 진입 접근점(면에서 <paramref name="approachStandoffMm"/>)을 면 법선을 따라
     /// <paramref name="chainStandoffMm"/> 거리로 당긴 BASE 점 [x,y,z].
     /// </summary>
@@ -1350,14 +1383,46 @@ public class CobotInspectionMoveStep : ISequenceStep
         var wallOut = WallOutNormal(computed, seam.OpticalAxis);
         var chainStandoffMm = await GetChainStandoffMmAsync(approachStandoffMm);
         var chainBase = ChainTargetBase(startBase, wallOut, approachStandoffMm, chainStandoffMm);
+        // 실측 작업물 좌표계가 있으면(anchor 적중 — ShiftAnchorFrame 이 이번 시작점으로 옮겨 둠) 목표를 거기서 잡는다.
+        // 모델 좌표(startBase)는 첫 접근에만 쓴다 — 면이 모델과 다르면 모델 기준 목표가 면 안쪽·옆으로 어긋난다.
+        var measured = context.Bag.TryGetValue(InternalWorkpieceFrame.BagKey, out var mf) && mf is double[] { Length: 6 } frame
+            ? ChainTargetFromMeasuredFrame(cur, frame, wallOut, chainStandoffMm)
+            : ((double[] Target, double HeightMm, bool KeptHeight)?)null;
         // 이어지는 용접선(앞 끝 = 다음 시작) — 띄우지 않고 지금 높이에서 시작점 정면으로만 맞춘다. ⑱이 곧바로 첫 경유점으로 간다.
-        var continuing = ContinuingSeamTargetBase(cur, chainBase, wallOut, chainStandoffMm, await GetChainContinueTolMmAsync());
+        var continuing = measured is null
+            ? ContinuingSeamTargetBase(cur, chainBase, wallOut, chainStandoffMm, await GetChainContinueTolMmAsync())
+            : null;
         var heightMm = chainStandoffMm;
-        if (continuing is not null)
+        var measuredNote = "";
+        if (measured is { } mt)
+        {
+            var modelOffMm = Math.Sqrt(Enumerable.Range(0, 3).Sum(i => (mt.Target[i] - chainBase[i]) * (mt.Target[i] - chainBase[i])));
+            _logger.LogInformation(
+                "[Cobot 검사위치 이동] 연속 이동 목표 = 실측 작업물 좌표계 시작점 [{O}] 정면, 높이 {H:0}mm({Keep}) — 모델 기준 목표와 {Off:0}mm 차이",
+                string.Join(", ", ((double[])mf!).Take(3).Select(v => v.ToString("0.#"))), mt.HeightMm,
+                mt.KeptHeight ? "현재 높이 유지" : "연속 이동 이격까지 띄움", modelOffMm);
+            chainBase = mt.Target;
+            heightMm = mt.HeightMm;
+            measuredNote = mt.KeptHeight ? ", 실측 좌표계 기준·현재 높이 유지" : ", 실측 좌표계 기준";
+        }
+        else if (continuing is not null)
         {
             heightMm = chainStandoffMm + (cur[0] - chainBase[0]) * wallOut[0] + (cur[1] - chainBase[1]) * wallOut[1]
                      + (cur[2] - chainBase[2]) * wallOut[2];
             chainBase = continuing;
+        }
+        // 면 쪽으로는 가지 않는다 — 현재 높이가 연속 이동 평면(모델 면 기준)보다 바깥이면 그 높이 그대로 옆으로만 옮긴다.
+        var keptNote = "";
+        if (measured is null && continuing is null && ChainTargetKeepingHeight(cur, chainBase, wallOut) is { } kept)
+        {
+            _logger.LogWarning(
+                "[Cobot 검사위치 이동] 연속 이동: 목표 평면(모델 면 이격 {Chain:0}mm)이 현재 위치보다 면 쪽 {H:0}mm — 면 쪽으로 가지 않고 " +
+                "현재 높이를 유지한 채 옆으로만 이동합니다{Cal}",
+                chainStandoffMm, kept.AboveMm,
+                kept.AboveMm > approachStandoffMm - chainStandoffMm + 50 ? " (실제 면이 모델보다 가까움 — 캘리브레이션 확인)" : "");
+            chainBase = kept.Target;
+            heightMm = chainStandoffMm + kept.AboveMm;
+            keptNote = $", 면 쪽 이동 없음(현재 높이 유지 — 목표 평면보다 {kept.AboveMm:0}mm 바깥)";
         }
         var target =new[] { chainBase[0], chainBase[1], chainBase[2], orientation[3], orientation[4], orientation[5] };
         var lift = PlanChainLift(cur, chainBase, wallOut);
@@ -1429,11 +1494,11 @@ public class CobotInspectionMoveStep : ISequenceStep
         }
 
         var dist = Math.Sqrt(Enumerable.Range(0, 3).Sum(i => (target[i] - cur[i]) * (target[i] - cur[i])));
-        var contNote = continuing is null ? "" : ", 이어지는 용접선 — 띄우지 않음";
+        var contNote = measured is not null ? measuredNote : continuing is null ? keptNote : ", 이어지는 용접선 — 띄우지 않음";
         _logger.LogInformation("[Cobot 검사위치 이동] 연속 이동 완료 — 직전 종료 자세에서 {Dist:0}mm{Lift}{Cont} (면 이격 {Height:0}mm, 연속 이동 설정 {Chain:0}mm)",
             dist, liftNote, contNote, heightMm, chainStandoffMm);
         return StepResult.Ok(
-            $"연속 이동(복귀 생략) — 직전 종료 자세에서 용접선 시작점 정면(면 이격 {heightMm:0}mm, 첫 진입 {approachStandoffMm:0}mm 대신) " +
+            $"연속 이동(복귀 생략) — 직전 종료 자세에서 용접선 시작점 정면({(measured is null ? "면 이격" : "실측 좌표계 위")} {heightMm:0}mm, 첫 진입 {approachStandoffMm:0}mm 대신) " +
             $"직선 이동(MoveL) {dist:0}mm{liftNote}{contNote} " +
             $"[자세=면 법선, 비틀림 직전 종료 유지, J6={joints[5]:0.0}°].");
     }
