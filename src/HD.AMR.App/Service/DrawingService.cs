@@ -159,6 +159,9 @@ public class DrawingService
     public Task<InspectionProfile?> GetProfileAsync(int id, CancellationToken ct = default) =>
         _db.InspectionProfiles.AsNoTracking().FirstOrDefaultAsync(p => p.Id == id, ct);
 
+    /// <summary>프로필이 저장·삭제됨 — ACS 전송 서비스(<see cref="AcsProfileSyncService"/>)가 듣고 바로 올려 보낸다.</summary>
+    public static event Action? ProfilesChanged;
+
     /// <summary>프로파일 저장. Id==0 이면 신규 생성, 아니면 기존 행 갱신.</summary>
     public async Task<InspectionProfile> SaveProfileAsync(InspectionProfile profile, CancellationToken ct = default)
     {
@@ -199,6 +202,7 @@ public class DrawingService
             }
         }
         await _db.SaveChangesAsync(ct);
+        ProfilesChanged?.Invoke();
         return profile;
     }
 
@@ -219,6 +223,7 @@ public class DrawingService
         }
         _db.InspectionProfiles.Remove(profile);
         await _db.SaveChangesAsync(ct);
+        ProfilesChanged?.Invoke();
         return recipes.Select(r => r.Id).ToList();
     }
 
