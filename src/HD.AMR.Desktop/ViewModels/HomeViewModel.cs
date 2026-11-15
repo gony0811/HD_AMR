@@ -113,7 +113,7 @@ public sealed partial class HomeViewModel : ViewModelBase
         : _vda.AcsConnectionLiveness == AcsLiveness.Offline ? "OFFLINE"
         : _vda.AcsConnectionLiveness == AcsLiveness.Broken ? "CONNECTIONBROKEN"
         : _vda.AcsConnectionLiveness == AcsLiveness.Online || _vda.AcsRecentlyActive ? "연결" : "대기";
-    public string CurrentMapText => $"현재 맵 {_vda.CurrentMapId}";
+    public string CurrentMapText => $"현재 층 {HD.AMR.App.Communication.Vda5050.FloorMap.Display(_vda.CurrentMapId)}";
     public string MapIdHint => MapIdStatus ?? "재측위 검증 없이 mapId만 변경 — 실제 층 일치는 운영자 확인";
     public bool CanApplyMap => !string.IsNullOrEmpty(SelectedMapId) && SelectedMapId != _vda.CurrentMapId;
 
@@ -131,7 +131,7 @@ public sealed partial class HomeViewModel : ViewModelBase
     private void ApplyMapId()
     {
         _vda.SetMapId(SelectedMapId);
-        MapIdStatus = $"적용됨 {DateTime.Now:HH:mm:ss} — 현재 맵 {_vda.CurrentMapId} (state 즉시 발행)";
+        MapIdStatus = $"적용됨 {DateTime.Now:HH:mm:ss} — 현재 층 {HD.AMR.App.Communication.Vda5050.FloorMap.Display(_vda.CurrentMapId)} (state 즉시 발행)";
         OnPropertyChanged(string.Empty);
     }
 

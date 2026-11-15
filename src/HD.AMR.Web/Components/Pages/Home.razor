@@ -114,12 +114,12 @@
                 <span class="stat-title">ACS</span>
                 <span class="pill @AcsPillClass ms-auto">@AcsPillText</span>
             </div>
-            <div class="stat-value">현재 맵 @Vda.CurrentMapId</div>
+            <div class="stat-value">현재 층 @HD.AMR.App.Communication.Vda5050.FloorMap.Display(Vda.CurrentMapId)</div>
             <div class="input-group input-group-sm">
                 <select class="form-select form-select-sm" @bind="_selectedMapId">
                     @foreach (var id in MapIdOptions)
                     {
-                        <option value="@id">@id</option>
+                        <option value="@id">@HD.AMR.App.Communication.Vda5050.FloorMap.Display(id)</option>
                     }
                 </select>
                 <button class="btn btn-warning btn-sm" disabled="@(_selectedMapId == Vda.CurrentMapId)"
@@ -186,7 +186,7 @@
     private void ApplyMapId()
     {
         Vda.SetMapId(_selectedMapId);
-        _mapIdStatus = $"적용됨 {DateTime.Now:HH:mm:ss} — 현재 맵 {Vda.CurrentMapId} (state 즉시 발행)";
+        _mapIdStatus = $"적용됨 {DateTime.Now:HH:mm:ss} — 현재 층 {HD.AMR.App.Communication.Vda5050.FloorMap.Display(Vda.CurrentMapId)} (state 즉시 발행)";
     }
 
     private CancellationTokenSource? _cts;

@@ -54,6 +54,9 @@ public class Vda5050AdapterSettings
     /// <summary>수동 층 전환 UI 의 층 목록. 비우면 옛 설정 <see cref="AvailableMapIds"/> 에서 뽑고, 그것도 없으면 1~4.</summary>
     public int[] Levels { get; set; } = [];
 
+    /// <summary>맨 아래층의 화면 표기 번호 — 0(기본) = L0·L1·L2·L3, 1 = L1·L2·L3·L4. 화면 표기만 바꾼다(맵 ID·ACS 보고는 그대로).</summary>
+    public int LevelLabelBase { get; set; } = 0;
+
     /// <summary>(옛 설정 — 호환) 현재 층 mapId. 층 번호만 뽑아 쓴다(선창 이름 부분은 무시).</summary>
     public string MapId { get; set; } = "";
 

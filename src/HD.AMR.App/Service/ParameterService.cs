@@ -85,8 +85,14 @@ public class ParameterService
         }
         await _db.SaveChangesAsync();
         if (IsSafeJ6Key(name)) await ApplySafeJ6RangeAsync();
+        if (name == Motion.Fr5Kinematics.LinksKey) await ApplyKinematicsLinksAsync();
         Changed?.Invoke(name);
     }
+
+    /// <summary>링크 치수 파라미터를 읽어 <see cref="Motion.Fr5Kinematics.Fr5Wml"/> 에 적용한다(기동·저장·삭제 때).
+    /// 6개가 아니거나 공칭에서 5 mm 넘게 벗어나면 공칭을 쓰고 false.</summary>
+    public async Task<bool> ApplyKinematicsLinksAsync()
+        => Motion.Fr5Kinematics.ApplyLinks(await GetAsync(Motion.Fr5Kinematics.LinksKey));
 
     private static bool IsSafeJ6Key(string name)
         => name is Inspection.WObjAttitude.SafeJ6MinKey or Inspection.WObjAttitude.SafeJ6MaxKey;
@@ -136,6 +142,11 @@ public class ParameterService
                 "중심 편차 측정 태그 한 변(mm) — 검은 테두리 바깥 정사각형 실측(흰 여백 제외). 0 이면 측정 안 함."),
             .. FlatCandidateOptions.SeedDefaults(),
             .. LaserFootprintOptions.SeedDefaults(),
+            (Motion.Fr5Kinematics.LinksKey,
+                Motion.Fr5Kinematics.FormatLinks(Motion.Fr5Kinematics.WeldAmrLinksMm),
+                "코봇 FR5-WML 링크 치수 d1,a2,a3,d4,d5,d6 [mm] — 오프라인 기구학(리치 맵·도달 사전 점검·자기 간섭)이 쓴다. " +
+                "컨트롤러의 DH 보정값을 반영한 값이며 장비마다 다르다(기본값 = 2026-11-16 용접검사 AMR 실측, 공칭은 180,-970,-816,159,114,106). " +
+                "6개가 아니거나 공칭에서 5 mm 넘게 벗어나면 공칭을 쓴다. ACS 의 Acs:Reach:LinksMm 와 같게 둘 것(다르면 프로필 전송 때 경고)."),
             (Inspection.WObjAttitude.SafeJ6MinKey,
                 Inspection.WObjAttitude.DefaultSafeJ6MinDeg.ToString(CultureInfo.InvariantCulture),
                 "J6 안전 범위 하한(도, 실제 관절값 — 대기 자세 −180° 쪽 감김 기준). 이보다 더 감기는 J6 로는 움직이지 않는다 " +
@@ -186,6 +197,7 @@ public class ParameterService
         }
         await _db.SaveChangesAsync();
         await ApplySafeJ6RangeAsync();   // 기동 시 저장된 J6 안전 범위 적용
+        await ApplyKinematicsLinksAsync();  // 기동 시 저장된 링크 치수(DH 보정) 적용
     }
 
     /// <summary>id 로 파라미터 1건 삭제. 없으면 무시.</summary>
@@ -197,6 +209,7 @@ public class ParameterService
             _db.Parameters.Remove(p);
             await _db.SaveChangesAsync();
             if (IsSafeJ6Key(p.Name)) await ApplySafeJ6RangeAsync();
+            if (p.Name == Motion.Fr5Kinematics.LinksKey) await ApplyKinematicsLinksAsync();
             Changed?.Invoke(p.Name);
         }
     }
