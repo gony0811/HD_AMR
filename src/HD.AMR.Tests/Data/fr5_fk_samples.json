@@ -1,0 +1,7 @@
+{
+  "note": "실물 FR5-WML GetForwardKin 대조 표본. HD_AMR tools/fr5_fk_capture.py 가 만든 파일로 통째로 바꾼다(HD_AMR src/HD.AMR.Tests/Data 의 같은 파일도 함께). samples 가 비어 있으면 대조 테스트는 건너뛴다.",
+  "capturedAt": null,
+  "tool": null,
+  "wobj": null,
+  "samples": []
+}

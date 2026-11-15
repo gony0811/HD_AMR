@@ -85,8 +85,14 @@ public class ParameterService
         }
         await _db.SaveChangesAsync();
         if (IsSafeJ6Key(name)) await ApplySafeJ6RangeAsync();
+        if (name == Motion.Fr5Kinematics.D6Key) await ApplyKinematicsD6Async();
         Changed?.Invoke(name);
     }
+
+    /// <summary>d6 파라미터를 읽어 <see cref="Motion.Fr5Kinematics.Fr5Wml"/> 에 적용한다(기동·저장·삭제 때).
+    /// 범위(50~250 mm) 밖이면 기본값을 쓰고 false.</summary>
+    public async Task<bool> ApplyKinematicsD6Async()
+        => Motion.Fr5Kinematics.ApplyD6(await GetDoubleAsync(Motion.Fr5Kinematics.D6Key));
 
     private static bool IsSafeJ6Key(string name)
         => name is Inspection.WObjAttitude.SafeJ6MinKey or Inspection.WObjAttitude.SafeJ6MaxKey;
@@ -136,6 +142,11 @@ public class ParameterService
                 "중심 편차 측정 태그 한 변(mm) — 검은 테두리 바깥 정사각형 실측(흰 여백 제외). 0 이면 측정 안 함."),
             .. FlatCandidateOptions.SeedDefaults(),
             .. LaserFootprintOptions.SeedDefaults(),
+            (Motion.Fr5Kinematics.D6Key,
+                Motion.Fr5Kinematics.DefaultD6Mm.ToString(CultureInfo.InvariantCulture),
+                "코봇 FR5-WML 기구학 d6(J5 → 플랜지 면) [mm] — 오프라인 기구학(리치 맵·도달 사전 점검·자기 간섭)이 쓴다. " +
+                "미확정: STEP 실측 106 / FAIRINO 공식 표 160. tools/fr5_fk_capture.py 로 실물과 대조한 뒤 맞는 값을 넣는다. " +
+                "50~250 밖이면 106. 바꾸면 리치 맵을 다시 만들 것. ACS 의 Acs:Reach:D6Mm 와 같게 둘 것."),
             (Inspection.WObjAttitude.SafeJ6MinKey,
                 Inspection.WObjAttitude.DefaultSafeJ6MinDeg.ToString(CultureInfo.InvariantCulture),
                 "J6 안전 범위 하한(도, 실제 관절값 — 대기 자세 −180° 쪽 감김 기준). 이보다 더 감기는 J6 로는 움직이지 않는다 " +
@@ -186,6 +197,7 @@ public class ParameterService
         }
         await _db.SaveChangesAsync();
         await ApplySafeJ6RangeAsync();   // 기동 시 저장된 J6 안전 범위 적용
+        await ApplyKinematicsD6Async();  // 기동 시 저장된 d6 적용
     }
 
     /// <summary>id 로 파라미터 1건 삭제. 없으면 무시.</summary>
@@ -197,6 +209,7 @@ public class ParameterService
             _db.Parameters.Remove(p);
             await _db.SaveChangesAsync();
             if (IsSafeJ6Key(p.Name)) await ApplySafeJ6RangeAsync();
+            if (p.Name == Motion.Fr5Kinematics.D6Key) await ApplyKinematicsD6Async();
             Changed?.Invoke(p.Name);
         }
     }

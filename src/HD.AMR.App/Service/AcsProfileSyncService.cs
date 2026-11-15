@@ -49,7 +49,32 @@ public static class AcsProfilePayload
     /// Full = 목록이 전체다(ACS 는 목록에 없는 프로필을 삭제된 것으로 표시한다). 읽지 못한 프로필이 있으면 false.
     /// Assignments = 유형·면·방향별 프로필 지정표 전체(ACS 는 통째로 바꾼다).
     /// </summary>
-    public sealed record Body(string Source, bool Full, IReadOnlyList<Profile> Profiles, IReadOnlyList<Assignment> Assignments);
+    public sealed record Body(string Source, bool Full, IReadOnlyList<Profile> Profiles, IReadOnlyList<Assignment> Assignments,
+        RobotModel? Robot = null);
+
+    /// <summary>
+    /// 이 AMR 이 쓰는 코봇 모델 값 — ACS 리치 시뮬레이터가 같은 값을 쓰는지 대조하라고 함께 보낸다(ACS 는 다르면 경고만 한다).
+    /// D6Mm = J5 → 플랜지 면, WristMarginDeg = 경로 손목 여유 |J5|, ToolLengthMm = 플랜지 면 → 검사 초점.
+    /// </summary>
+    public sealed record RobotModel(double D6Mm, double WristMarginDeg, double ToolLengthMm);
+
+    /// <summary>지금 값 — d6 는 파라미터(<see cref="Motion.Fr5Kinematics.D6Key"/>)가 적용된 값이다.</summary>
+    public static RobotModel CurrentRobotModel() => new(
+        Motion.Fr5Kinematics.Fr5Wml.D6, Motion.PostureLimits.DefaultWristMarginDeg, Motion.Fr5Kinematics.InspectionTool[2]);
+
+    /// <summary>ACS 응답에서 코봇 모델 값 차이(robotModelMismatch)를 꺼낸다 — 없거나 구버전 ACS 면 빈 목록.</summary>
+    public static IReadOnlyList<string> RobotModelMismatch(string responseJson)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(responseJson);
+            return doc.RootElement.ValueKind == JsonValueKind.Object
+                   && doc.RootElement.TryGetProperty("robotModelMismatch", out var m) && m.ValueKind == JsonValueKind.Array
+                ? m.EnumerateArray().Select(e => e.GetString() ?? "").Where(s => s.Length > 0).ToList()
+                : Array.Empty<string>();
+        }
+        catch (JsonException) { return Array.Empty<string>(); }
+    }
 
     /// <summary>ACS 계약의 용접선 유형 이름 ↔ AMR 유형. 코너는 티칭 프로필로 순회하지 않아 지정표에 없다.</summary>
     private static readonly (string Name, SeamTypeKind Kind)[] SeamTypes =
@@ -129,6 +154,7 @@ public sealed class AcsProfileSyncService : BackgroundService
     private readonly SemaphoreSlim _signal = new(0, 1);
     private readonly HttpClient _http = new();
     private bool? _lastOk;
+    private string? _lastMismatch;
 
     public AcsProfileSyncService(IOptions<AcsProfileSyncSettings> settings, IOptions<Vda5050AdapterSettings> vda,
         IServiceScopeFactory scopes, ILogger<AcsProfileSyncService> logger)
@@ -191,7 +217,8 @@ public sealed class AcsProfileSyncService : BackgroundService
                 profiles = await scope.ServiceProvider.GetRequiredService<DrawingService>().ListProfilesAsync(ct);
                 recipes = await scope.ServiceProvider.GetRequiredService<InspectionRecipeService>().ListAsync(ct);
             }
-            var body = AcsProfilePayload.Build(_vda.SerialNumber, profiles, out var skipped, recipes);
+            var body = AcsProfilePayload.Build(_vda.SerialNumber, profiles, out var skipped, recipes)
+                with { Robot = AcsProfilePayload.CurrentRobotModel() };
             if (skipped.Count > 0)
                 _logger.LogWarning("검사 프로필 ACS 전송 — 경유점을 읽지 못해 뺀 프로필: {Names}", string.Join(", ", skipped));
 
@@ -204,6 +231,14 @@ public sealed class AcsProfileSyncService : BackgroundService
             {
                 Report(false, $"ACS 응답 {(int)res.StatusCode} — {Trim(text)}");
                 return;
+            }
+            // 코봇 모델 값(d6·손목 여유·초점 거리)이 ACS 와 다르면 시뮬레이션과 실제 동작이 어긋난다 — 달라질 때마다 한 번 알린다
+            var mismatch = string.Join(" / ", AcsProfilePayload.RobotModelMismatch(text));
+            if (mismatch != _lastMismatch)
+            {
+                _lastMismatch = mismatch;
+                if (mismatch.Length > 0) _logger.LogWarning("코봇 모델 값이 ACS 와 다릅니다 — {Mismatch}", mismatch);
+                else _logger.LogInformation("코봇 모델 값이 ACS 와 같습니다.");
             }
             var changed = text.Contains("\"added\":0") && text.Contains("\"changed\":0") && text.Contains("\"removed\":0")
                           && !text.Contains("\"assignmentsChanged\":true") ? "" : $" — {Trim(text)}";

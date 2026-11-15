@@ -130,4 +130,24 @@ public class AcsProfilePayloadTests
     {
         Assert.Equal(expected, AcsProfilePayload.ResolveBaseUri(baseUrl, brokerHost, 5199)?.ToString());
     }
+
+    [Fact]
+    public void 코봇_모델_값을_함께_보내고_ACS_가_알려_준_차이를_읽는다()
+    {
+        var robot = AcsProfilePayload.CurrentRobotModel();
+        Assert.Equal(HD.AMR.App.Service.Motion.Fr5Kinematics.Fr5Wml.D6, robot.D6Mm);
+        Assert.Equal(HD.AMR.App.Service.Motion.PostureLimits.DefaultWristMarginDeg, robot.WristMarginDeg);
+        Assert.Equal(375, robot.ToolLengthMm);
+
+        var body = AcsProfilePayload.Build("AMR-01", new[] { Profile(18, "LINE-1", "[]") }, out _) with { Robot = robot };
+        var json = System.Text.Json.JsonSerializer.Serialize(body, AcsProfilePayload.Json);
+        Assert.Contains("\"robot\":{\"d6Mm\":", json);
+        Assert.Contains("\"wristMarginDeg\":10", json);
+        Assert.Contains("\"toolLengthMm\":375", json);
+
+        Assert.Equal(new[] { "d6 다름" }, AcsProfilePayload.RobotModelMismatch("{\"added\":0,\"robotModelMismatch\":[\"d6 다름\"]}"));
+        Assert.Empty(AcsProfilePayload.RobotModelMismatch("{\"added\":0,\"robotModelMismatch\":null}"));
+        Assert.Empty(AcsProfilePayload.RobotModelMismatch("{\"added\":0}"));   // 구버전 ACS
+        Assert.Empty(AcsProfilePayload.RobotModelMismatch("not json"));
+    }
 }

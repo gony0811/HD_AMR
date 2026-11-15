@@ -22,11 +22,45 @@ public sealed record Fr5Kinematics(double D1, double A2, double A3, double D4, d
     private const double Rad2Deg = 180.0 / Math.PI;
     private static readonly double[] Alpha = { Math.PI / 2, 0, 0, Math.PI / 2, -Math.PI / 2, 0 };
 
+    /// <summary>d6 후보 — 장비 STEP 축선에서 잰 값 [mm]. FAIRINO 공식 표에서는 FR10 의 값이다.</summary>
+    public const double D6StepMm = 106;
+    /// <summary>d6 후보 — FAIRINO 공식 FR5 DH 표 값 [mm].</summary>
+    public const double D6DatasheetMm = 160;
+    /// <summary>
+    /// 지금 쓰는 d6 기본값 [mm] — <b>미확정</b>. 실물 대조(<see cref="Fr5FkCheck"/>, tools/fr5_fk_capture.py) 결과가 나오기 전까지
+    /// 종전 값(STEP 106)을 유지한다. 160 이면 플랜지 면이 54 mm 달라지고 관절각이 달라진다.
+    /// 실제로 쓰는 값은 파라미터 <see cref="D6Key"/> 가 정한다 — ACS 의 <c>Acs:Reach:D6Mm</c> 와 같게 둘 것.
+    /// </summary>
+    public const double DefaultD6Mm = D6StepMm;
+    /// <summary>파라미터로 받는 d6 허용 범위 [mm] — 밖이면 기본값을 쓴다.</summary>
+    public const double MinD6Mm = 50, MaxD6Mm = 250;
+    /// <summary>d6 파라미터 이름.</summary>
+    public const string D6Key = "cobot.kinematics.d6Mm";
+
     /// <summary>
     /// FR5-WML — 장비 STEP(E26003-E-A000-000-0, 2026-10-28)의 관절 축선에서 실측했다.
     /// d4 = 어깨 가로 185 − 팔꿈치 가로 140 + 손목 114. STEP 자세를 역으로 풀어 J2~J5 축을 0.02mm·0.01° 로 재현.
+    /// d6 만 파라미터(<see cref="D6Key"/>)로 바뀐다 — <see cref="ApplyD6"/>.
     /// </summary>
-    public static Fr5Kinematics Fr5Wml { get; } = new(180, -970, -816, 159, 114, 106);
+    public static Fr5Kinematics Fr5Wml { get; private set; } = new(180, -970, -816, 159, 114, DefaultD6Mm);
+
+    /// <summary>d6 만 바꾼 기구학.</summary>
+    public Fr5Kinematics WithD6(double d6Mm) => this with { D6 = d6Mm };
+
+    /// <summary>파라미터 값 → 쓸 d6. 없거나 범위(<see cref="MinD6Mm"/>~<see cref="MaxD6Mm"/>) 밖·무한대면 기본값(없을 때만 Ok).</summary>
+    public static (double D6Mm, bool Ok) ResolveD6(double? configured) =>
+        configured is { } v && double.IsFinite(v) && v >= MinD6Mm && v <= MaxD6Mm ? (v, true) : (DefaultD6Mm, configured is null);
+
+    /// <summary>
+    /// 파라미터 d6 를 <see cref="Fr5Wml"/> 에 적용한다(기동·저장·삭제 때). 잘못된 값이면 기본값을 쓰고 false.
+    /// 값이 바뀌면 이미 만들어 둔 오프라인 리치 맵(reachmaps)은 옛 d6 로 계산된 것이다 — 다시 만들 것.
+    /// </summary>
+    public static bool ApplyD6(double? configured)
+    {
+        var (d6, ok) = ResolveD6(configured);
+        Fr5Wml = Fr5Wml.WithD6(d6);
+        return ok;
+    }
 
     /// <summary>
     /// 검사 툴 TCP — 플랜지 기준 [x,y,z,rx,ry,rz]. 렌즈 광축이 J6 축과 동축(STEP 실측 편심 0)이고
