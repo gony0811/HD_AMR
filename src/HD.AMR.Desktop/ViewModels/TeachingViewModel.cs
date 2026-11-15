@@ -117,18 +117,10 @@ public sealed partial class TeachingViewModel : ViewModelBase
         _moveCts = new CancellationTokenSource();
         try
         {
-            double[] target;
-            if (p.UserFrame is int n && n > 0 && p.RelX.HasValue)
-            {
-                // 작업물 추종: 현재(재등록된) 프레임 T_N 에 상대 pose 적용 → 베이스 목표.
-                var tN = await _cobot.Rpc.GetWObjCoordAsync(n, _moveCts.Token);
-                var rel = new[] { p.RelX!.Value, p.RelY!.Value, p.RelZ!.Value, p.RelRx!.Value, p.RelRy!.Value, p.RelRz!.Value };
-                target = FrameMath.FromFrame(rel, tN);
-            }
-            else
-                target = new[] { p.X!.Value, p.Y!.Value, p.Z!.Value, p.Rx!.Value, p.Ry!.Value, p.Rz!.Value };
-
-            var rc = await _cobot.Rpc.MoveLAsync(target, tool: RunTool, user: 0, vel: Vel, ct: _moveCts.Token);
+            double scale;
+            using (var scope = _scopeFactory.CreateScope())
+                scale = await TeachingMove.LoadJointVelocityScaleAsync(scope.ServiceProvider.GetRequiredService<ParameterService>());
+            var rc = await TeachingMove.MoveToAsync(_cobot, p, RunTool, Vel, scale, _moveCts.Token);
             if (rc == 0) Ok($"'{p.Name}' 위치로 이동 완료."); else Fail($"이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}");
         }
         catch (OperationCanceledException) { Fail("사용자 정지"); }
@@ -247,6 +239,8 @@ public sealed partial class TeachingRowVm : ObservableObject
     public bool IsTaught => Entity.IsTaught;
     public bool HasUserFrame => Entity.UserFrame is > 0;
     public string UserFrameText => Entity.UserFrame is int n && n > 0 ? $"작업물 #{n}" : "";
+    public string MoveTip => TeachingMove.UsesJointMove(Entity)
+        ? "저장된 관절값으로 이동 (MoveJ)" : "저장된 위치로 이동 (MoveL, 작업물 좌표계 기준)";
 
     public string X => F(Entity.X); public string Y => F(Entity.Y); public string Z => F(Entity.Z);
     public string Rx => F(Entity.Rx); public string Ry => F(Entity.Ry); public string Rz => F(Entity.Rz);

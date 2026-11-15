@@ -61,21 +61,10 @@ public class AmrMoveStep : ISequenceStep
 
         double x = context.AmrTargetX!.Value, y = context.AmrTargetY!.Value, theta = context.AmrTargetThetaRad!.Value;
 
-        // 1) 코봇 홈 복귀 — 벽면 후퇴 → ready 경유 → 홈 (CobotHomeReturnStep 과 같은 경로).
-        var home = context.Positions["home"];
-        var homeJoints = new[]
-        {
-            home.J1!.Value, home.J2!.Value, home.J3!.Value,
-            home.J4!.Value, home.J5!.Value, home.J6!.Value,
-        };
-        var cur = await _cobot.Rpc.GetActualJointPosAsync(ct: ct);
-        if (!SequenceEntry.IsWithinJointTolerance(cur, homeJoints))
-        {
-            context.Progress?.Invoke("AMR 주행 전 코봇 홈 복귀…");
-            await SequenceEntry.RetractFromWallAsync(_cobot, context, _logger, ct);
-            await SequenceEntry.ReturnViaReadyAsync(_cobot, context, _logger, ct);
-            await SequenceEntry.EnsureCobotAtHomeAsync(_cobot, context, ct);
-        }
+        // 1) 코봇 기준 자세 복귀 — CobotHomeReturnStep 과 같은 경로. 홈 위치_2 모드면 홈 위치_2 자세로 주행한다.
+        var back = await SequenceEntry.ReturnToBaseAsync(_cobot, context, _logger, ct);
+        if (back.Count > 0)
+            context.Progress?.Invoke($"AMR 주행 전 코봇 {string.Join(" → ", back)} 완료.");
 
         // 2) 주행 + 정차 대기. 정지(취소) 시 AMR 도 세운다 — SequenceService.StopAsync 는 코봇만 정지한다.
         context.Progress?.Invoke($"AMR 이동 → ({x:0.###}, {y:0.###}) m, θ={theta * 180 / Math.PI:0.##}°");

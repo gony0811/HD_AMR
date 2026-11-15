@@ -4,7 +4,7 @@ using HD.AMR.App.Service.Sequence.Steps;
 namespace HD.AMR.Tests;
 
 /// <summary>
-/// 검사 수행 첫 경유점의 비틀림(0/180°) 선택 — J6 는 안전 범위(물리 90°~180°)를 벗어나면 안 된다(센서 헤드–링크암 간섭).
+/// 검사 수행 첫 경유점의 비틀림(0/180°) 선택 — J6 는 안전 범위(실제값 −330°~−160°, 2026-10-16 실측)를 벗어나면 안 된다.
 /// 실기 2026-10-13 16:12: 수평 비드, 현재 J6 −179.6°, cos(rz0=−94.2°) 부호로 180° 를 골라 J6 −92.2° 로
 /// 시계 회전 → EMO. 반시계 후보(0°)는 약 −274°(물리 +90° = 수평 검사 자세).
 /// </summary>
@@ -47,12 +47,25 @@ public class WObjAttitudeCcwTwistTests
     }
 
     [Fact]
-    public void 반시계라도_허용_최대량을_넘으면_버린다()
+    public void 바닥_B_실기값_반시계_134도도_범위_안이면_허용()
     {
-        var pick = WObjAttitude.SelectSafeTwist(0.0, new (double, double?)[]
+        // 실기 2026-10-16 B-A0001 #2: 현재 −180°, 0°→−132.8°(범위 밖), 180°→−313.9°(범위 안, Δ−134°).
+        // 옛 규칙(반시계 100° 이내)에선 둘 다 거부돼 검사가 멈췄다.
+        var pick = WObjAttitude.SelectSafeTwist(-180.0, new (double, double?, double?)[]
         {
-            (0.0, -WObjAttitude.MaxCounterClockwiseDeg - 1),
-            (180.0, 170.0),
+            (0.0, -132.8, 101.0),
+            (180.0, -313.9, 188.0),
+        });
+        Assert.Equal(180.0, pick!.Value.TwistDeg);
+    }
+
+    [Fact]
+    public void 실측_한계를_넘는_반시계_후보는_거부()
+    {
+        var pick = WObjAttitude.SelectSafeTwist(-270.0, new (double, double?)[]
+        {
+            (0.0, -335.0),     // 실측 −330° 밖
+            (180.0, -155.0),   // 실측 −160° 밖
         });
         Assert.Null(pick);
     }
@@ -80,12 +93,12 @@ public class WObjAttitudeCcwTwistTests
     }
 
     [Fact]
-    public void 범위_안이라도_범위_밖으로_나가는_시계_후보는_거부()
+    public void 범위_밖으로_나가는_시계_후보는_거부()
     {
-        // 현재 −270°(물리 90°) → −170°(물리 190°, 범위 밖)·−80°(물리 280°) 은 모두 간섭 구간.
+        // 현재 −270° → −150°·−80° 은 실측 범위(−160° 위쪽) 밖.
         var pick = WObjAttitude.SelectSafeTwist(-270.0, new (double, double?)[]
         {
-            (0.0, -170.0),
+            (0.0, -150.0),
             (180.0, -80.0),
         });
         Assert.Null(pick);
@@ -94,10 +107,14 @@ public class WObjAttitudeCcwTwistTests
     [Theory]
     [InlineData(-270.0, true)]
     [InlineData(-179.6, true)]
-    [InlineData(96.3, true)]
+    [InlineData(-330.0, true)]
+    [InlineData(-160.0, true)]
+    [InlineData(-330.5, false)]
+    [InlineData(-155.0, false)]
+    [InlineData(96.3, false)]     // 물리각은 범위 안이지만 와인딩이 달라 실측 밖
+    [InlineData(30.0, false)]
     [InlineData(-92.2, false)]
-    [InlineData(0.4, false)]
-    public void 안전_범위_판정은_360도_주기(double j6, bool expected)
+    public void 안전_범위_판정은_실제_관절값(double j6, bool expected)
         => Assert.Equal(expected, WObjAttitude.IsInSafeJ6Range(j6));
 
     [Fact]

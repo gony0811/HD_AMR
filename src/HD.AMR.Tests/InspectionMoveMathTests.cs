@@ -22,6 +22,23 @@ public class InspectionMoveMathTests
             InspectionDirection = dir,
         };
 
+    // ── ② 면 이격 파라미터 ──────────────────────────────────────────
+
+    // 범위(200~1000mm) 안이면 그 값, 비었거나 밖이면 기본 400 — 잘못 넣어도 벽에 붙지 않는다.
+    [Theory]
+    [InlineData(300.0, 300.0, true)]
+    [InlineData(200.0, 200.0, true)]
+    [InlineData(1000.0, 1000.0, true)]
+    [InlineData(150.0, 400.0, false)]
+    [InlineData(1200.0, 400.0, false)]
+    [InlineData(null, 400.0, false)]
+    public void 면_이격_파라미터는_범위_밖이면_기본값(double? raw, double expected, bool ok)
+    {
+        var (value, valid) = CobotInspectionMoveStep.ResolveApproachStandoffMm(raw);
+        Assert.Equal(expected, value, 6);
+        Assert.Equal(ok, valid);
+    }
+
     // ── 후퇴 거리 ───────────────────────────────────────────────────
 
     [Fact]

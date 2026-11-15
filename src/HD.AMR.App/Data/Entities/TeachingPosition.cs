@@ -3,7 +3,7 @@ namespace HD.AMR.App.Data.Entities;
 /// <summary>
 /// Teaching 페이지에서 관리하는 고정 슬롯형 기준 자세 한 개(예: 홈 위치, 검사 준비 위치).
 /// 좌표는 코봇 BASE 좌표계 기준(X,Y,Z mm / Rx,Ry,Rz deg). 캡처 시점의 관절각(J1~J6)도 함께 보관한다.
-/// 이동은 BASE 자세로 MoveL(직선) 수행. 슬롯은 미리 생성되며 티칭 전에는 좌표가 비어 있다(null).
+/// 이동은 베이스 기준이면 캡처 관절값으로 MoveJ, 작업물 좌표계 기준이면 BASE 자세로 MoveL(<see cref="Service.TeachingMove"/>). 슬롯은 미리 생성되며 티칭 전에는 좌표가 비어 있다(null).
 /// </summary>
 public class TeachingPosition
 {

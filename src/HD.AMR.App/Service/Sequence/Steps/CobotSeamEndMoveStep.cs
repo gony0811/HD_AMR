@@ -30,16 +30,18 @@ public class CobotSeamEndMoveStep : ISequenceStep
 {
     private readonly CobotService _cobot;
     private readonly SeamApproachResolver _seam;
+    private readonly ParameterService _param;
     private readonly ILogger<CobotSeamEndMoveStep> _logger;
 
     private const double MoveAcc = 100.0;
     private const double MoveOvl = 100.0;
 
-    public CobotSeamEndMoveStep(CobotService cobot, SeamApproachResolver seam,
+    public CobotSeamEndMoveStep(CobotService cobot, SeamApproachResolver seam, ParameterService param,
         ILogger<CobotSeamEndMoveStep> logger)
     {
         _cobot = cobot;
         _seam = seam;
+        _param = param;
         _logger = logger;
     }
 
@@ -79,11 +81,12 @@ public class CobotSeamEndMoveStep : ISequenceStep
         var (taught, _) = await CobotInspectionMoveStep.ComputeTargetPoseAsync(_cobot, inspection, ct);
 
         // 위치는 용접선 끝점 접근점 — 끝점을 approachW 로, 시작점을 방향(접선)용으로 넘긴다.
-        // 면 이격은 점1(②)과 같은 고정값이어야 한다 — 예전엔 ③ 카메라 목표거리(레시피 300)를 써서 점1(400)과
+        // 면 이격은 점1(②)과 같은 값(파라미터 inspection.approachStandoffMm)이어야 한다 — 예전엔 ③ 카메라 목표거리(레시피 300)를 써서 점1(400)과
         // 100mm 달랐고, 점1→점2 가 벽에 비스듬해져 작업물 좌표계·경유점 전체가 틀어졌다(실기 2026-10-15 F-A0002).
+        var standoff = await CobotInspectionMoveStep.GetApproachStandoffMmAsync(_param, _logger);
         var seam = await _seam.ResolveAsync(
             context, context.SeamEndW, context.SeamStartW, context.Tool, "끝점", ct,
-            CobotInspectionMoveStep.ApproachStandoffMm);
+            standoff);
         if (seam.Blocker is not null)
             return StepResult.Fail(seam.Blocker);   // 리치 부족 — 폴백 없이 실패
         if (seam.Base is null)
@@ -101,7 +104,7 @@ public class CobotSeamEndMoveStep : ISequenceStep
         {
             var start = await _seam.ResolveAsync(
                 context, context.SeamStartW, context.SeamEndW, context.Tool, "시작점(평행 이동 기준)", ct,
-                CobotInspectionMoveStep.ApproachStandoffMm);
+                standoff);
             if (start.Base is { } sb)
             {
                 var (pos, normalMm) = ParallelFromPoint1(p1, sb, seam.Base, seam.OpticalAxis);

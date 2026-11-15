@@ -75,7 +75,7 @@
                     </StackPanel>
                     <StackPanel Margin="0,0,12,8"><TextBlock Classes="axis" Text="검사캠 X" /><NumericUpDown Value="{Binding InspectCamOffsetX}" Increment="0.1" IsEnabled="{Binding !Busy}" /></StackPanel>
                     <StackPanel Margin="0,0,12,8"><TextBlock Classes="axis" Text="검사캠 Y" /><NumericUpDown Value="{Binding InspectCamOffsetY}" Increment="0.1" IsEnabled="{Binding !Busy}" /></StackPanel>
-                    <StackPanel Margin="0,0,12,8"><TextBlock Classes="axis" Text="z 기준 보정(mm)" ToolTip.Tip="도면 전역 z → AMR 바닥 기준: 해당 층 바닥 높이(level_z)를 뺀다. 1층=0" /><NumericUpDown Value="{Binding ZDatumOffsetMm}" Increment="1" IsEnabled="{Binding !Busy}" /></StackPanel>
+                    <StackPanel Margin="0,0,12,8"><TextBlock Classes="axis" Text="z 기준 보정(mm)" ToolTip.Tip="운영값 0 — ACS 가 층 바닥 기준 z 를 보낸다(N17). 도면 전역 z 가 올 때만 임시로 층 바닥 높이(level_z)를 넣어 뺀다" /><NumericUpDown Value="{Binding ZDatumOffsetMm}" Increment="1" IsEnabled="{Binding !Busy}" /></StackPanel>
                     <StackPanel Margin="0,0,12,8"><TextBlock Classes="axis" Text="작업물 번호" /><NumericUpDown Value="{Binding WobjId}" Minimum="0" Maximum="14" Increment="1" FormatString="0" IsEnabled="{Binding !Busy}" /></StackPanel>
                     <StackPanel Margin="0,0,12,8"><TextBlock Classes="axis" Text="Pitch" /><NumericUpDown Value="{Binding PitchMm}" Minimum="1" Increment="1" IsEnabled="{Binding !Busy}" /></StackPanel>
                     <StackPanel Width="130" Margin="0,0,12,8">

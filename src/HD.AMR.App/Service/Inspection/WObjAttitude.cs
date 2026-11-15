@@ -60,35 +60,25 @@ public readonly record struct WObjAttitude(double Rz0, double TiltSign)
     /// </summary>
     public double AbsoluteTwistDeg => TwistOverrideDeg ?? (TiltSign < 0 ? 180.0 : 0.0);
 
-    /// <summary>시작 자세에서 허용하는 J6 증가(시계방향) 여유 [도] — IK·자세 오차 흡수용.</summary>
-    public const double ClockwiseToleranceDeg = 5.0;
+    /// <summary>
+    /// 센서 헤드–링크암 간섭·케이블 감김이 없는 J6 <b>실제 관절값</b> 범위 [도] — 물리각 30°~200°.
+    /// 2026-10-16 바닥 자세에서 J6 단일축 조그로 −160°~−330° 를 돌려 간섭 없음을 실측했다.
+    /// 360° 주기로 보지 않는다 — 같은 물리각이라도 +30° 와 −330° 는 케이블 감김이 다르고, 실측은
+    /// 대기 자세(−180°) 쪽 와인딩에서만 했다(현장 J6 는 항상 이 와인딩에서 움직인다).
+    /// </summary>
+    public const double SafeJ6MinDeg = -330.0, SafeJ6MaxDeg = -160.0;
 
-    /// <summary>시작 자세에서 허용하는 J6 감소(반시계방향) 최대량 [도] — 설계상 −90°(대기 180° → 수평 90°) + 여유.</summary>
-    public const double MaxCounterClockwiseDeg = 100.0;
-
-    /// <summary>센서 헤드–링크암 간섭이 없는 J6 물리 범위 [도](360° 주기) — 수평 90° ~ 수직(대기) 180°.</summary>
-    public const double SafeJ6MinDeg = 90.0, SafeJ6MaxDeg = 180.0;
-
-    /// <summary>안전 범위 경계 여유 [도] — IK·정차 방향 오차 흡수용.</summary>
-    public const double SafeJ6MarginDeg = 5.0;
-
-    /// <summary>J6 [도] 가 안전 범위(<see cref="SafeJ6MinDeg"/>~<see cref="SafeJ6MaxDeg"/> ± 여유, 360° 주기) 안인지.</summary>
+    /// <summary>J6 실제 관절값 [도] 가 안전 범위(<see cref="SafeJ6MinDeg"/>~<see cref="SafeJ6MaxDeg"/>) 안인지.</summary>
     public static bool IsInSafeJ6Range(double j6Deg)
-    {
-        var a = ((j6Deg % 360.0) + 360.0) % 360.0;
-        return a >= SafeJ6MinDeg - SafeJ6MarginDeg && a <= SafeJ6MaxDeg + SafeJ6MarginDeg;
-    }
+        => j6Deg >= SafeJ6MinDeg && j6Deg <= SafeJ6MaxDeg;
 
     /// <summary>
     /// 절대 모드 비틀림(0/180°) 후보 중 센서 헤드–링크암 간섭이 없는 회전을 고른다. 센서 헤드가 플랜지 한쪽으로
-    /// 나와 있어 J6 를 안전 범위(물리 90°~180°) 밖으로 돌리면 간섭한다(실기 2026-10-13: 수평 비드에서
-    /// rz0=−94° 일 때 cos 부호로 180° 를 골라 J6 −179.6°→−92° 로 시계 회전).
-    /// 허용(둘 중 하나):
-    ///  · 범위 내 이동 — 현재·목표 J6 가 모두 안전 범위 안이고 |ΔJ6| ≤ <see cref="MaxCounterClockwiseDeg"/>.
-    ///    범위 폭이 90°라 경로도 범위 안에 머문다. 수평 자세(90°, 범위 끝)에서 정차 방향 오차 때문에
-    ///    대기 자세 쪽으로 몇 도 되돌아가는 경우가 여기 해당한다(실기 2026-10-15 PL: Δ+6.2°).
-    ///  · 반시계 회전 — −<see cref="MaxCounterClockwiseDeg"/> ≤ ΔJ6 ≤ +<see cref="ClockwiseToleranceDeg"/>
-    ///    (현재 J6 가 범위 밖일 때의 종전 규칙).
+    /// 나와 있어 J6 를 안전 범위(<see cref="SafeJ6MinDeg"/>~<see cref="SafeJ6MaxDeg"/>) 밖으로 돌리면 간섭한다
+    /// (실기 2026-10-13: J6 −179.6°→−92° 시계 회전으로 EMO).
+    /// 허용: 목표 J6 가 안전 범위 안. 회전 방향·회전량은 따지지 않는다 — 현재 J6 도 범위 안이면 관절 보간
+    /// 경로가 범위 안에 머문다. (예전의 "90°~180° ±5° 또는 반시계 100° 이내" 규칙은 실측 범위로 대체했다 —
+    /// 그 규칙에선 바닥 B 처럼 −180°→−314° 가 필요한 배치가 막혔다, 실기 2026-10-16.)
     /// 허용 후보 중 <b>관절 총 변위</b>가 가장 작은 것을 고르고(총 변위를 모르면 |ΔJ6| 최소), 없으면 null
     /// (호출측은 움직이지 않고 실패). 손목을 뒤집은 해(J4·J5 크게 이동)는 MoveL 로 갈 수 없는데 J6 변화만
     /// 보면 그쪽이 작게 나올 수 있다(실기 2026-10-15 F-A0002: Δ0° 동률·총 변위 87° vs 308°,
@@ -100,15 +90,11 @@ public readonly record struct WObjAttitude(double Rz0, double TiltSign)
     public static (double TwistDeg, double DeltaJ6)? SelectSafeTwist(
         double currentJ6, IReadOnlyList<(double TwistDeg, double? J6, double? TotalDeg)> candidates)
     {
-        var currentSafe = IsInSafeJ6Range(currentJ6);
         (double TwistDeg, double DeltaJ6, double Total)? best = null;
         foreach (var (twist, j6, totalDeg) in candidates)
         {
-            if (j6 is not { } j) continue;
+            if (j6 is not { } j || !IsInSafeJ6Range(j)) continue;
             var d = j - currentJ6;
-            var withinRange = currentSafe && IsInSafeJ6Range(j) && Math.Abs(d) <= MaxCounterClockwiseDeg;
-            var counterClockwise = d <= ClockwiseToleranceDeg && d >= -MaxCounterClockwiseDeg;
-            if (!withinRange && !counterClockwise) continue;
             var cost = totalDeg ?? Math.Abs(d);
             if (best is not { } b || cost < b.Total)
                 best = (twist, d, cost);

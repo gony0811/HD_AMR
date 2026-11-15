@@ -7,7 +7,7 @@ public class WeldInspectionStepSelectionTests
     // 등록된 전체 스텝 키(DefaultOrder 순) — Program.cs / ServiceRegistration.cs 등록 집합과 같다.
     private static readonly string[] AllKeys =
     {
-        "amrMove", "cobotInspection", "cameraAlign", "flatSurfaceAlign", "laserWorkingDistance",
+        "amrMove", "cobotInspection", "cameraAlign", "cameraAlignRefine", "flatSurfaceAlign", "laserWorkingDistance",
         "peak1Find", "peak1Center", "bead1Find", "bead1Center", "wobjPoint1",
         "peak2Approach", "peak2Find", "peak2Center", "bead2Find", "bead2Center",
         "cobotSeamEnd", "wobjPoint2", "wobjRegister", "inspectionRun", "inspectionRunDry",

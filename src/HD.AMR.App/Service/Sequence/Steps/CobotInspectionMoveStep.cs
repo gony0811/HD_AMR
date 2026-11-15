@@ -11,7 +11,7 @@ namespace HD.AMR.App.Service.Sequence.Steps;
 ///     진입 준비(활성 좌표계 정규화 → 필요 시 벽면 후퇴·홈 복귀 → ready)를 그대로 쓴다. 홈→검사 위치를
 ///     바로 MoveJ 하면 900mm 이하 영역에서 툴이 차체와 부딪힐 수 있어 ready 를 반드시 거친다.
 ///  2. <b>용접선 시작점 접근</b> — 해당 작업의 용접선 시작점(seamStartW, 맵 좌표)을 코봇 BASE 로 환산해
-///     (<see cref="SeamBaseTransform"/>) 면 법선 반대로 <see cref="ApproachStandoffMm"/>(400mm) 물러난 점으로
+///     (<see cref="SeamBaseTransform"/>) 면 법선 반대로 <see cref="ApproachStandoffKey"/>(기본 400mm) 물러난 점으로
 ///     <b>툴(TCP)</b>을 MoveJ 로 보낸다. 자세는 wall_code 가 유효하면 광축이 면을 바라보는 계산 자세,
 ///     없으면 1단계 도착(ready) 자세를 유지한다.
 ///
@@ -25,13 +25,15 @@ public class CobotInspectionMoveStep : ISequenceStep
 {
     private readonly CobotService _cobot;
     private readonly SeamApproachResolver _seam;
+    private readonly ParameterService _param;
     private readonly ILogger<CobotInspectionMoveStep> _logger;
 
-    public CobotInspectionMoveStep(CobotService cobot, SeamApproachResolver seam,
+    public CobotInspectionMoveStep(CobotService cobot, SeamApproachResolver seam, ParameterService param,
         ILogger<CobotInspectionMoveStep> logger)
     {
         _cobot = cobot;
         _seam = seam;
+        _param = param;
         _logger = logger;
     }
 
@@ -50,8 +52,36 @@ public class CobotInspectionMoveStep : ISequenceStep
                 .FirstOrDefault()
             : null;
 
-    /// <summary>② 2단계 접근점이 용접선 시작점에서 물러나는 거리 [mm] — 툴(TCP) 기준.</summary>
-    public const double ApproachStandoffMm = 400.0;
+    /// <summary>② 2단계 접근점이 용접선 시작점에서 물러나는 거리 [mm] 파라미터 키 — 툴(TCP) 기준, 모든 면 공통.
+    /// 끝점 이동(<see cref="CobotSeamEndMoveStep"/>)도 같은 값을 써야 점1·점2 면 거리가 일치한다.</summary>
+    public const string ApproachStandoffKey = "inspection.approachStandoffMm";
+
+    /// <summary>② 면 이격 기본값 [mm] — 파라미터가 없거나 범위 밖일 때.</summary>
+    public const double DefaultApproachStandoffMm = 400.0;
+
+    /// <summary>② 면 이격 허용 범위 [mm]. 하한은 ③ 카메라 거리 정렬이 들어갈 여지와 벽 충돌 여유.</summary>
+    internal const double MinApproachStandoffMm = 200.0;
+    internal const double MaxApproachStandoffMm = 1000.0;
+
+    /// <summary>② 면 이격 [mm] — 파라미터 <see cref="ApproachStandoffKey"/>, 없거나 범위 밖이면 기본 400(경고 로그).</summary>
+    public static async Task<double> GetApproachStandoffMmAsync(ParameterService param, ILogger? logger = null)
+    {
+        double? raw = null;
+        try { raw = await param.GetDoubleAsync(ApproachStandoffKey); }
+        catch { /* DB 미준비 등 — 기본값 폴백 */ }
+        var (value, ok) = ResolveApproachStandoffMm(raw);
+        if (!ok)
+            logger?.LogWarning("'{Key}' 값 {Raw} 이(가) 비었거나 범위({Min:0}~{Max:0}mm) 밖 — 기본 {Default:0}mm 사용",
+                ApproachStandoffKey, raw?.ToString() ?? "(없음)", MinApproachStandoffMm, MaxApproachStandoffMm,
+                DefaultApproachStandoffMm);
+        return value;
+    }
+
+    /// <summary>파라미터 원값 → ② 면 이격. 범위 안이면 (그 값, true), 아니면 (기본값, false).</summary>
+    internal static (double Value, bool Ok) ResolveApproachStandoffMm(double? raw)
+        => raw is { } v && v >= MinApproachStandoffMm && v <= MaxApproachStandoffMm
+            ? (v, true)
+            : (DefaultApproachStandoffMm, false);
 
     public StepValidation Validate(SequenceContext context)
     {
@@ -62,8 +92,9 @@ public class CobotInspectionMoveStep : ISequenceStep
         if (SequenceEntry.ValidateHome(context) is { IsValid: false } homeError)
             return homeError;
 
-        if (!context.Positions.TryGetValue("ready", out var ready) || !ready.IsTaught)
-            return StepValidation.Fail("작업 준비 위치(ready) 미티칭 — Teaching에서 먼저 저장하세요.");
+        // 진입 기준 자세 — 상부 면은 홈 위치_2, 그 외는 ready.
+        if (SequenceEntry.ValidateRoute(context) is { IsValid: false } routeError)
+            return routeError;
 
         if (context.SeamStartW is not { Length: 3 })
             return StepValidation.Fail("용접선 시작점(seamStartW) 없음 — ACS 작업의 용접선 좌표가 필요합니다.");
@@ -284,14 +315,18 @@ public class CobotInspectionMoveStep : ISequenceStep
         // 접근점은 정차 배치(AMR pose·장착 보정·스트로크)만으로 정해지므로 코봇을 움직이기 전에 환산·리치
         // 점검을 한다 — 1단계 뒤에 실패하면 같은 정차점의 task 마다 ready 왕복을 헛되이 반복한다.
         var seam = await _seam.ResolveAsync(
-            context, context.SeamStartW, context.SeamEndW, context.Tool, "[Cobot 검사위치 이동]", ct, ApproachStandoffMm);
+            context, context.SeamStartW, context.SeamEndW, context.Tool, "[Cobot 검사위치 이동]", ct,
+            await GetApproachStandoffMmAsync(_param, _logger));
         if (seam.Blocker is not null)
             return StepResult.Fail(seam.Blocker);
         if (seam.Base is null)
             return StepResult.Fail($"[Cobot 검사위치 이동] {seam.Note}");
 
-        // ── 1단계: 작업 준비 위치(ready) ─────────────────────────────
-        var entryNote = await SequenceEntry.PrepareAsync(_cobot, context, _logger, ct);
+        // ── 1단계: 작업 준비 위치(ready) — 홈 위치_2 모드(상부 면)는 홈 위치_2·검사 준비 ─────
+        // 자세 모드가 면과 맞지 않으면(수동 전환 필요) 움직이지 않고 실패한다.
+        var (entryOk, entryNote) = await SequenceEntry.PrepareAsync(_cobot, context, _logger, ct);
+        if (!entryOk)
+            return StepResult.Fail(entryNote);
 
         // ── 2단계: 용접선 시작점에서 400mm 떨어진 접근점 ───────────────
         // 자세: ready 도착 자세에서 광축만 면 법선으로 최소 회전시킨다 — 광축 둘레 비틀림(J6)은 그대로.
@@ -310,7 +345,7 @@ public class CobotInspectionMoveStep : ISequenceStep
 
         // 광축 둘레 비틀림을 대기 자세 J6(180°)로 맞춘다. 벽은 ready 비틀림이 이미 ≈180° 라 변화가 없지만,
         // 천장처럼 광축을 크게 돌리면 비틀림이 밀려(실기 2026-10-15 T: J6 −210°=물리 150°) 수평 검사의
-        // 90° 회전이 안전 범위(90°~180°) 밖으로 나갔다. 맞추지 못하면 경고만 남기고 종전 자세로 간다.
+        // 90° 회전이 당시 안전 범위(물리 90°~180°) 밖으로 나갔다. 맞추지 못하면 경고만 남기고 종전 자세로 간다.
         var twistNote = "";
         if (usedNormal)
         {
@@ -336,6 +371,6 @@ public class CobotInspectionMoveStep : ISequenceStep
 
         var pose = usedNormal ? "자세=면 법선" : "자세=작업 준비 위치 유지(wall_code 없음)";
         return StepResult.Ok(
-            $"작업 준비 위치 → {seam.Note} 관절 이동(MoveJ) 완료 [{pose}{twistNote}, J6={joints[5]:0.0}°].{entryNote}");
+            $"진입 경유점 → {seam.Note} 관절 이동(MoveJ) 완료 [{pose}{twistNote}, J6={joints[5]:0.0}°].{entryNote}");
     }
 }

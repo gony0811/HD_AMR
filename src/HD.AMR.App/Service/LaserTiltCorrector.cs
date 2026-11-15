@@ -50,17 +50,22 @@ public sealed class LaserTiltCorrector
         (double Rx, double Ry)? predicted = null;
         double lastAppliedMag = 0;
 
+        // 첫 측정 전에도 회전 후와 같은 정착·판독 안정화 대기 — 직전 횡이동 직후 앰프 필터가 덜 수렴한 값은
+        // 기울기가 부풀려져(10-29: 로그 rx 9.3° vs 같은 시점 채널값 5.7°) 과보정 → '비평탄'·rc=112 로 이어졌다.
+        await WaitSettledAsync(o, Report, ct);
+
         for (var iter = 0; ; iter++)
         {
             ct.ThrowIfCancellationRequested();
 
-            var pose = await SampleAsync(ct);
+            var (pose, ch, outlierFail) = await SampleGuardedAsync(Report, ct);
             if (!pose.Valid)
                 return TiltLevelResult.Fail($"레이저 평면 측정 실패: {pose.Note}", iter, null, jac);
+            if (outlierFail is not null)
+                return TiltLevelResult.Fail(outlierFail, iter, pose, jac);
 
             onMeasured?.Invoke(iter, pose);
-            var ch = _laser.GetReadings();
-            var chText = ch.Count >= 3 ? $" [CH {ch[0].Value:0.##}/{ch[1].Value:0.##}/{ch[2].Value:0.##}mm]" : "";
+            var chText = ch.Count >= 3 ? $" [CH {ch[0]:0.##}/{ch[1]:0.##}/{ch[2]:0.##}mm]" : "";
             Report($"측정 {iter + 1}: rx={pose.Rx:0.###}°, ry={pose.Ry:0.###}°, z={pose.Z:0.#}mm{chText}");
 
             // 반응 확인 — 강체 평면이면 직전 보정의 예측대로 변해야 한다.
@@ -91,11 +96,11 @@ public sealed class LaserTiltCorrector
             if (jac is null)
             {
                 Report($"틸트 응답 측정: 툴 Rx/Ry 각 {o.ProbeDeg}° 프로브 회전");
-                var rcA = await RotateToolAsync(o.Tool, o.ProbeDeg, 0, o, Report, ct);
+                var rcA = await RotateToolAsync(o.Tool, o.ProbeDeg, 0, pose.Z, o, Report, ct);
                 if (rcA != 0)
                     return TiltLevelResult.Fail($"틸트 응답 프로브 이동 실패 (rc={rcA}){FairinoErrorCodes.Suffix(rcA)}.", iter, pose, null);
                 var pA = await SampleAsync(ct);
-                var rcB = await RotateToolAsync(o.Tool, -o.ProbeDeg, o.ProbeDeg, o, Report, ct);
+                var rcB = await RotateToolAsync(o.Tool, -o.ProbeDeg, o.ProbeDeg, pA.Valid ? pA.Z : pose.Z, o, Report, ct);
                 if (rcB != 0)
                     return TiltLevelResult.Fail($"틸트 응답 프로브 이동 실패 (rc={rcB}){FairinoErrorCodes.Suffix(rcB)}.", iter, pose, null);
                 var pB = await SampleAsync(ct);
@@ -115,12 +120,14 @@ public sealed class LaserTiltCorrector
             }
 
             var (uRx, uRy) = Solve(jac, pose.Rx, pose.Ry);
-            var applyRx = Math.Clamp(uRx, -o.MaxCorrectionDeg, o.MaxCorrectionDeg);
-            var applyRy = Math.Clamp(uRy, -o.MaxCorrectionDeg, o.MaxCorrectionDeg);
+            var (dRx, dRy, damped) = DampSmall(uRx, uRy);
+            var applyRx = Math.Clamp(dRx, -o.MaxCorrectionDeg, o.MaxCorrectionDeg);
+            var applyRy = Math.Clamp(dRy, -o.MaxCorrectionDeg, o.MaxCorrectionDeg);
             Report($"보정 {iter + 1}: 툴 Rx={applyRx:+0.###;-0.###}°, Ry={applyRy:+0.###;-0.###}° 회전" +
-                   (applyRx != uRx || applyRy != uRy ? $" (계산 {uRx:0.###}°, {uRy:0.###}° → ±{o.MaxCorrectionDeg}° 클램프)" : ""));
+                   (damped ? $" (계산 {uRx:0.###}°, {uRy:0.###}° → {SmallCorrectionDeg}° 미만 감쇠 ×{SmallCorrectionDamping})" : "") +
+                   (applyRx != dRx || applyRy != dRy ? $" (계산 {uRx:0.###}°, {uRy:0.###}° → ±{o.MaxCorrectionDeg}° 클램프)" : ""));
 
-            var rc = await RotateToolAsync(o.Tool, applyRx, applyRy, o, Report, ct);
+            var rc = await RotateToolAsync(o.Tool, applyRx, applyRy, pose.Z, o, Report, ct);
             if (rc != 0)
                 return TiltLevelResult.Fail($"틸트 보정 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.", iter, pose, jac);
 
@@ -130,14 +137,89 @@ public sealed class LaserTiltCorrector
         }
     }
 
+    /// <summary>이 각도(°) 미만 보정은 감쇠 — 두 축 모두 이 안일 때.</summary>
+    internal const double SmallCorrectionDeg = 2.0;
+
+    /// <summary>작은 보정 감쇠 비율.</summary>
+    internal const double SmallCorrectionDamping = 0.5;
+
+    /// <summary>
+    /// 두 축 보정량이 모두 <see cref="SmallCorrectionDeg"/> 미만이면 <see cref="SmallCorrectionDamping"/> 배로 줄인다.
+    /// 1° 안팎에서는 실제 응답이 공칭의 ~2배라 보정마다 부호만 뒤집혀 ±1° 를 오갔다
+    /// (10-28 10:57 평탄면 rx +1.07 → −1.03 → +1.02°, 기준 1° 미달로 3회 소진). 응답이 공칭대로여도 절반씩 수렴해 기준을 통과한다.
+    /// </summary>
+    public static (double Rx, double Ry, bool Damped) DampSmall(double uRx, double uRy)
+        => Math.Abs(uRx) < SmallCorrectionDeg && Math.Abs(uRy) < SmallCorrectionDeg
+            ? (uRx * SmallCorrectionDamping, uRy * SmallCorrectionDamping, true)
+            : (uRx, uRy, false);
+
     /// <summary>공칭 응답 — 헤드 캘리브레이션 규약(툴 +Rx → 측정 rx gain −1, 툴 +Ry → 측정 ry gain +1).</summary>
     public static double[,] NominalJacobian() => new[,] { { -1.0, 0.0 }, { 0.0, 1.0 } };
 
-    /// <summary>보정 후 실측이 예측과 맞는가 — 허용 오차 max(2°, 0.5×|적용 회전|), 축별.</summary>
+    /// <summary>
+    /// 보정 후 실측이 예측과 맞는가 — 허용 오차 max(3°, 0.5×|적용 회전|), 축별.
+    /// 헤드 간격 ~30mm 에서 1mm 가 ~2° 라 종전 2° 는 판 표면 잡음 수준이었다(10-28 10:40 평탄면에서 rx 0.95° 초과로 NG).
+    /// 최종 합격(ThresholdDeg)·발산 가드는 그대로라 완화로 오합격이 늘지 않고, 비드 판정이 한 회차 늦어질 뿐이다.
+    /// </summary>
     public static bool IsResponseConsistent(double predRx, double predRy, double rx, double ry, double appliedMagDeg)
     {
-        var tol = Math.Max(2.0, 0.5 * appliedMagDeg);
+        var tol = Math.Max(3.0, 0.5 * appliedMagDeg);
         return Math.Abs(rx - predRx) <= tol && Math.Abs(ry - predRy) <= tol;
+    }
+
+    /// <summary>단일 채널 튐 시 재측정 최대 횟수.</summary>
+    internal const int MaxOutlierRetries = 2;
+
+    /// <summary>한 채널이 나머지 두 채널 평균과 이만큼(mm) 이상 다르면 튐.</summary>
+    internal const double OutlierDeviationMm = 10;
+
+    /// <summary>튐 판정 시 나머지 두 채널끼리는 이 안(mm)이어야 한다(실제 면 기울기 몇 ° 는 2~5mm 차) — 둘도 갈라지면 단일 튐이 아니라 면 자체가 고르지 않다.</summary>
+    internal const double OutlierPeerAgreementMm = 5;
+
+    private const int OutlierRetryDelayMs = 1000;
+
+    /// <summary>
+    /// 한 채널만 튄 값(나머지 두 채널은 서로 일치)이면 그 채널 번호(0-based), 아니면 −1.
+    /// 헤드 간격이 ~30mm 라 한 채널 10mm 튐이 수십 ° 가짜 틸트가 된다(10-28 10:25 CH2 −61mm → rx −53°/ry 67°).
+    /// </summary>
+    public static int FindOutlierChannel(IReadOnlyList<double> v)
+    {
+        if (v.Count < 3) return -1;
+        for (var i = 0; i < 3; i++)
+        {
+            double a = v[(i + 1) % 3], b = v[(i + 2) % 3];
+            if (Math.Abs(a - b) <= OutlierPeerAgreementMm && Math.Abs(v[i] - (a + b) / 2) >= OutlierDeviationMm)
+                return i;
+        }
+        return -1;
+    }
+
+    /// <summary>
+    /// <see cref="SampleAsync"/> + 단일 채널 튐 가드 — 튀면 1초 뒤 재측정, 최대 <see cref="MaxOutlierRetries"/>회.
+    /// 일시 튐(필터 지연·진동)은 1~2초 안에 사라지고, 끝내 남으면 렌즈·표면 문제라 더 재도 소용없어 NG 메시지를 돌려준다.
+    /// </summary>
+    private async Task<(PlanePose Pose, IReadOnlyList<double> Channels, string? OutlierFail)> SampleGuardedAsync(
+        Action<string> report, CancellationToken ct)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            var pose = await SampleAsync(ct);
+            var ch = _laser.GetReadings().Select(r => r.Value).ToList();
+            if (!pose.Valid) return (pose, ch, null);
+
+            var bad = FindOutlierChannel(ch);
+            if (bad < 0) return (pose, ch, null);
+
+            var dev = ch[bad] - (ch[(bad + 1) % 3] + ch[(bad + 2) % 3]) / 2;
+            var chText = $"CH {ch[0]:0.##}/{ch[1]:0.##}/{ch[2]:0.##}mm";
+            if (attempt >= MaxOutlierRetries)
+                return (pose, ch,
+                    $"레이저 CH{bad + 1} 단독 이상값 ({dev:+0.#;-0.#}mm, {chText}) — 재측정 {MaxOutlierRetries}회 후에도 지속. " +
+                    $"헤드{bad + 1} 렌즈 오염·빔 정렬 또는 스팟 위치의 반사/모서리를 확인하세요.");
+
+            report($"CH{bad + 1} 단독 튐 ({dev:+0.#;-0.#}mm, {chText}) — {OutlierRetryDelayMs / 1000.0:0.#}s 후 재측정 ({attempt + 1}/{MaxOutlierRetries})");
+            await Task.Delay(OutlierRetryDelayMs, ct);
+        }
     }
 
     /// <summary>레이저 3점 측정을 3회 샘플링해 평균 pose 반환(100ms 간격).</summary>
@@ -174,23 +256,53 @@ public sealed class LaserTiltCorrector
             new double[] { 0, 0, 1 }, true, null);
     }
 
-    /// <summary>현재 자세 기준 툴 회전 오프셋(위치 고정, Rz=0 — 3점 거리로 yaw 미결정) 후
-    /// 정착 대기 + 레이저 판독 안정화 대기(앰프 평균화 필터 지연 — 덜 수렴한 값은 가짜 틸트가 된다).</summary>
-    private async Task<int> RotateToolAsync(int tool, double rx, double ry, TiltLevelOptions o,
+    /// <summary>
+    /// 현재 자세 기준 툴 회전(Rz=0 — 3점 거리로 yaw 미결정)을 <b>레이저 3점 중심(벽 위 스팟)</b>을 축으로 수행한 뒤
+    /// 정착 대기 + 레이저 판독 안정화 대기(앰프 평균화 필터 지연 — 덜 수렴한 값은 가짜 틸트가 된다).
+    /// 헤드는 TCP 에서 약 150mm 옆(툴 Y)에 있어 TCP 축으로 돌리면 7° 에 스팟이 벽 위로 40~55mm 미끄러져
+    /// 평탄 셀을 벗어났다(10-28 09:55/09:57 '비평탄'). 회전 중심을 스팟으로 옮기면 기울기만 바뀐다.
+    /// </summary>
+    private async Task<int> RotateToolAsync(int tool, double rx, double ry, double pivotZmm, TiltLevelOptions o,
         Action<string> report, CancellationToken ct)
     {
+        var (cx, cy) = _laser.HeadCenterMm;
+        var pivot = new[] { cx, cy, -pivotZmm };
+        var offset = PivotRotationOffset(rx, ry, pivot);
+        report($"회전 중심 = 레이저 3점 중심 (툴 {pivot[0]:0.#}, {pivot[1]:0.#}, {pivot[2]:0.#}mm) → " +
+               $"보상 이동 [{offset[0]:+0.#;-0.#}, {offset[1]:+0.#;-0.#}, {offset[2]:+0.#;-0.#}]mm");
+
         var anchor = await _cobot.Rpc.GetTcpPoseInBaseAsync(tool, ct);
-        var rc = await _cobot.Rpc.MoveByToolOffsetAsync(anchor, user: 0,
-            new[] { 0.0, 0.0, 0.0, rx, ry, 0.0 }, tool: tool, vel: o.Velocity, ct: ct);
+        var rc = await _cobot.Rpc.MoveByToolOffsetAsync(anchor, user: 0, offset, tool: tool, vel: o.Velocity, ct: ct);
         if (rc != 0) return rc;
 
+        await WaitSettledAsync(o, report, ct);
+        return 0;
+    }
+
+    /// <summary>정착 대기(<see cref="TiltLevelOptions.SettleMs"/>) + 레이저 판독 안정화 대기(3채널 |Δ|&lt;0.05mm, 한도
+    /// <see cref="TiltLevelOptions.StabilizeTimeoutMs"/>). 회전 후와 첫 측정 전이 같은 기준을 써야 예측·실측 비교가 맞는다.</summary>
+    private async Task WaitSettledAsync(TiltLevelOptions o, Action<string> report, CancellationToken ct)
+    {
         await Task.Delay(o.SettleMs, ct);
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var stable = await _laser.WaitForStableReadingsAsync(100, o.StabilizeTimeoutMs, ct);
         report(stable
             ? $"판독 안정 ({(o.SettleMs + sw.ElapsedMilliseconds) / 1000.0:0.0}s)"
             : $"판독 안정화 한도({o.StabilizeTimeoutMs}ms) 초과 — 필터 지연/진동 가능, 측정을 계속합니다.");
-        return 0;
+    }
+
+    /// <summary>
+    /// 툴 좌표 점 <paramref name="pivot"/> 을 고정한 채 툴을 (rx, ry) 회전시키는 툴 오프셋 [dx,dy,dz,rx,ry,0].
+    /// 툴 오프셋 이동은 목표 = 앵커 ∘ [R|d] 이므로 p 가 제자리에 있으려면 d = p − R·p.
+    /// 피벗은 툴-1 좌표 실제 스팟 (헤드 X, Y, −z) — 빔은 −Z, z = Standoff + 거리평균(<see cref="TcpTouchCalibrator"/> 규약).
+    /// </summary>
+    public static double[] PivotRotationOffset(double rx, double ry, double[] pivot)
+    {
+        var r = FrameMath.PoseToMatrix(new[] { 0.0, 0.0, 0.0, rx, ry, 0.0 });
+        var d = new double[3];
+        for (var i = 0; i < 3; i++)
+            d[i] = pivot[i] - (r[i, 0] * pivot[0] + r[i, 1] * pivot[1] + r[i, 2] * pivot[2]);
+        return new[] { d[0], d[1], d[2], rx, ry, 0.0 };
     }
 
     /// <summary>프로브 측정으로 응답 행렬 J(측정 [rx,ry] / 툴 [Rx,Ry], 소각 선형화)를 만든다.

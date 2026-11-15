@@ -38,8 +38,9 @@ public class NominalTiltResponseTests
 
     // 2026-10-08 ACS 실행: 보정 Rx+1.26/Ry−3.03(|u|≈3.3) 후 예측 대비 수 도 어긋남 → 비평탄.
     [Theory]
-    [InlineData(0.0, 0.0, 1.9, -1.9, 3.3, true)]    // 2° 이내
-    [InlineData(0.0, 0.0, 2.1, 0.0, 3.3, false)]    // 2° 초과
+    [InlineData(0.0, 0.0, 2.9, -2.9, 3.3, true)]    // 3° 이내
+    [InlineData(0.0, 0.0, 3.1, 0.0, 3.3, false)]    // 3° 초과
+    [InlineData(0.0, 0.0, -2.947, -0.251, 3.54, true)]  // 10-28 10:40 평탄면 — 종전 2° 에서 오판 NG
     [InlineData(0.0, 0.0, 4.9, 0.0, 10.0, true)]    // 큰 회전은 0.5×|u| 허용
     [InlineData(0.0, 0.0, -5.35, -0.65, 3.3, false)]
     public void ResponseConsistency(double pRx, double pRy, double rx, double ry, double mag, bool expected)

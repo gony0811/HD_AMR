@@ -5,6 +5,7 @@
 @using HD.AMR.App.Service
 @inject TeachingService Service
 @inject CobotService Cobot
+@inject ParameterService Param
 @inject ILogger<Teaching> Logger
 @implements IDisposable
 
@@ -180,7 +181,7 @@
                             <button class="btn btn-sm btn-outline-primary icon-btn" title="현재 로봇 위치를 이 항목에 저장"
                                     @onclick="() => CaptureAsync(p.Id)"
                                     disabled="@(!Cobot.IsConnected || _isBusy || p.Id == _editId)">@Icon(IconDownload)</button>
-                            <button class="btn btn-sm btn-outline-success icon-btn" title="저장된 위치로 이동 (MoveL)"
+                            <button class="btn btn-sm btn-outline-success icon-btn" title="@(TeachingMove.UsesJointMove(p) ? "저장된 관절값으로 이동 (MoveJ)" : "저장된 위치로 이동 (MoveL, 작업물 좌표계 기준)")"
                                     @onclick="() => MoveToAsync(p)"
                                     disabled="@(!Cobot.IsConnected || _isBusy || !p.IsTaught || p.Id == _editId)">@Icon(IconPlay)</button>
                             <button class="btn btn-sm btn-outline-danger icon-btn" title="저장된 좌표 초기화"
@@ -334,19 +335,8 @@
         _moveCts = new CancellationTokenSource();
         try
         {
-            double[] target;
-            if (p.UserFrame is int n && n > 0 && p.RelX.HasValue)
-            {
-                // 작업물 추종: 현재(재등록된) 프레임 T_N에 상대 pose를 적용해 베이스 목표 계산.
-                var tN = await Cobot.Rpc.GetWObjCoordAsync(n, _moveCts.Token);
-                var rel = new[] { p.RelX!.Value, p.RelY!.Value, p.RelZ!.Value, p.RelRx!.Value, p.RelRy!.Value, p.RelRz!.Value };
-                target = FrameMath.FromFrame(rel, tN);
-            }
-            else
-            {
-                target = new[] { p.X!.Value, p.Y!.Value, p.Z!.Value, p.Rx!.Value, p.Ry!.Value, p.Rz!.Value };
-            }
-            var rc = await Cobot.Rpc.MoveLAsync(target, tool: _runTool, user: 0, vel: _vel, ct: _moveCts.Token);
+            var scale = await TeachingMove.LoadJointVelocityScaleAsync(Param);
+            var rc = await TeachingMove.MoveToAsync(Cobot, p, _runTool, _vel, scale, _moveCts.Token);
             _isErr = rc != 0;
             _msg = rc == 0 ? $"'{p.Name}' 위치로 이동 완료." : $"이동 실패 (rc={rc}).";
         }

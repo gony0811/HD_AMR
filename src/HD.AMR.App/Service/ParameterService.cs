@@ -94,12 +94,26 @@ public class ParameterService
             ("arrival.deviationTheta", "0.1", "도착 판정 각도 허용 오차(rad)"),
             ("inspection.useComputedNormalOrientation", "false",
                 "'Cobot 검사위치 이동' 자세 = 계산된 면 법선(true) / 티칭 포즈(false). 현장 검증 후 켠다. 측위·장착보정·wall_code 가 없으면 자동으로 티칭 폴백."),
+            (Sequence.Steps.CobotInspectionMoveStep.ApproachStandoffKey,
+                Sequence.Steps.CobotInspectionMoveStep.DefaultApproachStandoffMm.ToString(CultureInfo.InvariantCulture),
+                "② Cobot 검사위치 이동 — 용접선 시작점에서 벽면 법선 방향으로 TCP 를 물리는 거리(mm). 정차 이격·이동 경로 시험용. " +
+                "모든 벽 동일 적용, 용접선 끝점 이동·ACS 시험 접근도 같은 값. 200~1000 밖이거나 비면 400."),
             (SeamStartTagSettings.DictionaryKey, "DictAprilTag_36h11",
                 "moveToSeamStart 도달 후 중심 편차 측정 태그 사전(DictAprilTag_36h11 등). ArUco 장착 보정 설정과 별개."),
             (SeamStartTagSettings.MarkerIdKey, "",
                 "중심 편차 측정 태그 기대 ID. 비우면 화면에서 가장 큰 태그."),
             (SeamStartTagSettings.SizeMmKey, "0",
                 "중심 편차 측정 태그 한 변(mm) — 검은 테두리 바깥 정사각형 실측(흰 여백 제외). 0 이면 측정 안 함."),
+            .. FlatCandidateOptions.SeedDefaults(),
+            (FlatReachOptions.TiltMarginKey,
+                FlatReachOptions.DefaultTiltMarginDeg.ToString(CultureInfo.InvariantCulture),
+                "④ 평탄 후보 도달성 판정의 틸트 보정 여유(°) — 레이저 위치에서 툴 Rx/Ry 를 ± 이만큼 돌려도 자세 한계 안이어야 후보로 인정. 0 = 생략."),
+            (FlatMoveSettings.JointVelocityScaleKey,
+                FlatMoveSettings.DefaultJointVelocityScale.ToString(CultureInfo.InvariantCulture),
+                "④ 평탄면 센터링 관절 이동(MoveJ) 속도 비율 — 시퀀스/카메라 페이지 속도에 곱한다(0~1). MoveJ 는 같은 % 에서 MoveL 보다 약 2배 빨라 0.45 로 종전 체감 속도에 맞춤."),
+            (TeachingMove.JointVelocityScaleKey,
+                TeachingMove.DefaultJointVelocityScale.ToString(CultureInfo.InvariantCulture),
+                "Teaching '이동'(저장 관절값 MoveJ) 속도 비율 — 화면 속도에 곱한다(0~1). MoveJ 는 같은 % 에서 MoveL 보다 약 2배 빨라 0.45 로 종전 체감 속도에 맞춤."),
         ];
 
         var existing = await _db.Parameters.Select(p => p.Name).ToListAsync();

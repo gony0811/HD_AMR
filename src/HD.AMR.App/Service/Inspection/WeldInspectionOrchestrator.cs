@@ -127,9 +127,9 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         var sequence = scope.ServiceProvider.GetRequiredService<SequenceService>();
         var param = scope.ServiceProvider.GetRequiredService<ParameterService>();
 
-        // 접근 거리 = 본검사 ②와 동일한 고정 면 이격(CobotInspectionMoveStep.ApproachStandoffMm) — 같은 단계를
+        // 접근 거리 = 본검사 ②와 동일한 면 이격(파라미터 inspection.approachStandoffMm) — 같은 단계를
         // 그대로 실행하므로 시험 결과(reach 가부)가 실제 검사 접근과 일치한다(standoff 산정 데이터).
-        const double approachMm = CobotInspectionMoveStep.ApproachStandoffMm;
+        var approachMm = await CobotInspectionMoveStep.GetApproachStandoffMmAsync(param, _logger);
 
         var context = new SequenceContext
         {
@@ -401,11 +401,12 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
 
         var cameraTargetMm = recipe.CameraTargetDistanceMm ?? 400;
         // params.standoffMm 은 런타임에서 쓰지 않는다 — 툴 면 이격은 AMR 이 정하는 값이다(§10 N18).
-        // ②는 고정 면 이격(CobotInspectionMoveStep.ApproachStandoffMm)으로 물러나고, ③이 카메라 목표거리로 수렴시킨다.
-        if (req.StandoffMm > 0 && Math.Abs(req.StandoffMm - CobotInspectionMoveStep.ApproachStandoffMm) > 0.001)
+        // ②는 면 이격 파라미터(inspection.approachStandoffMm)로 물러나고, ③이 카메라 목표거리로 수렴시킨다.
+        var approachStandoffMm = await CobotInspectionMoveStep.GetApproachStandoffMmAsync(param, _logger);
+        if (req.StandoffMm > 0 && Math.Abs(req.StandoffMm - approachStandoffMm) > 0.001)
             _logger.LogInformation(
-                "ACS standoffMm={AcsStandoff} 미사용 — 'Cobot 검사위치 이동' 면 이격은 고정 {Approach}mm, '카메라 거리 정렬' 목표는 레시피 {Recipe} {Target}mm (jobRef={JobRef})",
-                req.StandoffMm, CobotInspectionMoveStep.ApproachStandoffMm, recipe.Id, cameraTargetMm, req.JobRef);
+                "ACS standoffMm={AcsStandoff} 미사용 — 'Cobot 검사위치 이동' 면 이격은 파라미터 {Approach}mm, '카메라 거리 정렬' 목표는 레시피 {Recipe} {Target}mm (jobRef={JobRef})",
+                req.StandoffMm, approachStandoffMm, recipe.Id, cameraTargetMm, req.JobRef);
         if (req.WorkingDistanceMm is { } acsWd && Math.Abs(acsWd - cameraTargetMm) > 0.001)
             _logger.LogInformation(
                 "ACS workingDistanceMm={AcsWd} 무시 — 레시피 {Recipe} 카메라 목표거리 {Target}mm 사용 (jobRef={JobRef})",
