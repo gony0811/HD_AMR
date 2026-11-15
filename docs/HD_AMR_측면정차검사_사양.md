@@ -55,6 +55,7 @@ HD_ACS와의 협의(ACS 사양서 VDA 1.19 개정 예정)와 HD_AMR 운영 결�
 ### 3.2 수신 검증 (order 단위, 거부 시 order 폐기)
 
 `Vda5050OrderExecutor.Validate` 단계에서 검사한다. 실패하면 order 전체를 실행하지 않고 `errors[]`에 `orderValidationError`를 올린다(기존 거부 경로와 동일).
+description에는 **orderId를 반드시 넣는다**(N11 계약 — 기존 형식 `orderId=<id>: <사유>`).
 
 |#|조건|거부 사유 예|
 |-|-|-|
@@ -62,6 +63,9 @@ HD_ACS와의 협의(ACS 사양서 VDA 1.19 개정 예정)와 HD_AMR 운영 결�
 |V2|한 노드 안에서 액션별 `stationMode`가 섞임(누락 = FRONT로 보고 비교)|`stationMode 혼재 (FRONT×2, SIDE_LEFT×1)`|
 |V3|SIDE인데 `wall_code`가 PM/SM/F/A가 아님|`측면 검사는 수직벽(PM/SM/F/A)만 — wall_code=B`|
 |V4|SIDE인데 노드 theta 누락|`측면 검사에 노드 theta 필요`|
+|V5|SIDE인데 좌/우 검증(§4) 불일치|`SIDE_LR_MISMATCH: ...` (앞머리 고정)|
+
+* V3 은 ACS 확인 완료(2026-11-15): ACS도 PM/SM/F/A 외에는 측면 설정을 받지 않는다.
 
 ### 3.3 하위 호환 / 배포 순서
 
@@ -74,8 +78,17 @@ ACS의 좌/우 표시와 HD_AMR 계산이 다르면 벽 반대쪽으로 팔을 �
 
 * 계산: 정차 노드 (x, y, theta) 기준으로 각 액션의 `seamStartW`·`seamEndW`를 차체 좌표로 바꾼다(`ReachStationFrame.WorldToBodyMm`). 차체 y(좌측 +)를 본다.
 * 판정: 두 점 모두 `sign(y)`가 stationMode와 같고 `|y| ≥ Side.LrMinLateralMm`(기본 200 mm)이면 통과.
-* 실패: 해당 액션 `FAILED`, resultDescription `SIDE_LR_MISMATCH: ...`(§7). 코봇·리프트는 움직이지 않는다.
-* 시점: 주행 전 도달 사전 점검과 같은 단계에서 먼저 판정한다(주행 전에 알 수 있음). 액션 실행 직전에 한 번 더 확인한다.
+* 노드 위치와 용접선 좌표만으로 계산하므로(시뮬레이션 불필요) **order 수신 검증에서 판정한다**(V5). 한 정차의 용접선은 같은 벽면이라 좌/우가 모두 같다.
+
+보고 방식은 **판정 시점**에 따라 다르다(ACS 확인 2026-11-15). ACS는 `orderValidationError`를 "Order를 실행하지 않고 폐기"로 처리하기 때문이다.
+
+|시점|보고|errorType|
+|-|-|-|
+|실행 시작 전 (수신 검증 V5) — **정상 경로**|order 전체 폐기, `errors[]`|`orderValidationError`, description = `orderId=<id>: SIDE_LR_MISMATCH: ...`|
+|실행 중 (액션 실행 직전 재확인)|그 액션만 `FAILED`, resultDescription = `SIDE_LR_MISMATCH: ...`|`inspectionFailed` (`orderValidationError` 보내지 않음)|
+
+* 실행 중 재확인은 실측 정차 pose로 다시 계산하는 방어 장치다. 정상이면 수신 검증에서 이미 걸러진다.
+* 어느 경우든 코봇·리프트는 움직이지 않는다.
 
 ## 5. 코봇 자세 / 운용 흐름
 
@@ -138,7 +151,9 @@ ACS 현장 실적 대조 도구가 앞머리 문구로 분류한다. **문구를
 |-|-|-|
 |`SIDE_REACH_NORMAL:`|벽 방향 거리 부족|`inspectionFailed`|
 |`SIDE_REACH_ALONG:`|벽 따라 앞뒤 위치 부족|`inspectionFailed`|
-|`SIDE_LR_MISMATCH:`|stationMode 좌/우와 계산 결과 불일치|`orderValidationError`|
+|`SIDE_LR_MISMATCH:`|stationMode 좌/우와 계산 결과 불일치|실행 전 `orderValidationError` / 실행 중 `inspectionFailed` (§4)|
+
+* ACS 실적 대조 도구는 errorType과 관계없이 **앞머리로만** 분류한다(`SIDE_REACH_*` = 도달 실패, `SIDE_LR_MISMATCH` = 규칙 거부·도달 대조 제외).
 
 * 형식: `<앞머리> <사람용 설명> | key=value ...` 예)
   `SIDE_REACH_NORMAL: 벽까지 옆 거리 범위 밖 | mode=SIDE_LEFT lateralMm=1180 minMm=650 maxMm=1050 relZMm=420`
@@ -192,7 +207,7 @@ ACS 현장 실적 대조 도구가 앞머리 문구로 분류한다. **문구를
 |영역|파일|내용|
 |-|-|-|
 |파싱|`Service/Inspection/WeldInspectionActionParser.cs`, `WeldInspectionRequest.cs`|`params.stationMode` 파싱(누락 = FRONT, 미정의 = 오류). moveToSeamStart 파서도 동일|
-|수신 검증|`Service/Vda5050OrderExecutor.cs` `Validate`|V1~V4(§3.2)|
+|수신 검증|`Service/Vda5050OrderExecutor.cs` `Validate`|V1~V5(§3.2), description에 orderId|
 |벽 방향 계산|신규 `Service/Inspection/StationMode.cs`|enum + `WallFacing(theta, mode)` + 좌/우 검증(§4)|
 |주행·정차 보정|`Vda5050OrderExecutor.cs` `RunMissionAsync`, `TryAdjustStationAsync`|AMR 이동은 theta 그대로. SIDE면 정차 보정 생략|
 |사전 점검·부분 수행|`Vda5050OrderExecutor.cs`(1224~), `Service/Motion/CobotReachPrecheck.cs`|측면 맵 조회, SIDE면 backup 끔, 좌/우 검증 선행|
@@ -244,8 +259,8 @@ ACS 현장 실적 대조 도구가 앞머리 문구로 분류한다. **문구를
 |-|-|-|
 |O1|주행 S/W가 벽 옆에 나란히 서는 정차 목표를 받는지(벽 근처 장애물 여유 설정)|HD_AMR 현장/제조사|
 |O2|J1 회전 방향(부호), 케이블 여유, 리프트 기둥 간섭|HD_AMR 현장|
-|O3|측면 대상 면을 수직벽 4종으로 한정(V3) — ACS에 통보|HD_AMR → ACS|
-|O4|`SIDE_LR_MISMATCH`의 errorType을 `orderValidationError`로 할지 ACS 확인|HD_AMR → ACS|
+|~~O3~~|측면 대상 면 수직벽 4종 한정 — **ACS 동의·반영 완료**(2026-11-15)|완료|
+|~~O4~~|`SIDE_LR_MISMATCH` errorType — **확정**: 실행 전 orderValidationError, 실행 중 inspectionFailed(§4)|완료|
 |O5|2차: 벽 따라 앞뒤 위치 보정(전진·후진 재정차) — SIDE_REACH_ALONG 빈도를 보고 판단|운영|
 
 ## 13. 구현 순서
