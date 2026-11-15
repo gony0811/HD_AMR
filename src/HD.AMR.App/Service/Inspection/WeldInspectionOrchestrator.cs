@@ -884,6 +884,16 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                     if (context.Bag.TryGetValue(Communication.GasDetector.GasTaskResult.BagKey, out var gasValue)
                         && gasValue is Communication.GasDetector.GasTaskResult gasTask)
                     {
+                        // 측정 실패(유효 측정값이 없는 포인트)가 있으면 결과를 보고하지 않고 검사 실패로 끝낸다 —
+                        // SAIGE 는 OK·NG 판정과 포인트마다 측정 1건 이상만 받는다. ACS 가 실패로 기록하고 재검사한다.
+                        if (gasTask.MeasurementFailure() is { } gasFailure)
+                        {
+                            _logger.LogWarning("[가스 결과] task={Task} round={Round} 측정 실패 — 검사 실패로 종결: {Reason}",
+                                req.TaskId?.ToString() ?? "—", req.Round?.ToString() ?? "—", gasFailure);
+                            _opLog.Log(OperationLogService.SourceAcs, OpCategory.Action, "가스 측정 실패", false,
+                                $"jobRef={req.JobRef}, task={req.TaskId?.ToString() ?? "—"}, round={req.Round?.ToString() ?? "—"} — {gasFailure}", orderId);
+                            return InspectionActionResult.Fail("inspectionFailed", $"가스 측정 FAIL — {gasFailure}");
+                        }
                         var report = Communication.GasDetector.SaigeGasResultReport.Build(
                             gasTask, req.DrawingPos.Tank, req.TaskId, req.Round, _vdaSettings.SerialNumber);
                         var json = report.ToJson();

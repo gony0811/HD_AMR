@@ -91,7 +91,11 @@ SAIGE 규격은 ACS ↔ SAIGE 구간만 정한다. AMR ↔ ACS 구간은 아래�
 ```
 
 - 시퀀스가 실패(FAILED)하면 결과 본문을 싣지 않는다 — 기존처럼 에러 사유 문자열.
-- 통신 실패로 값이 없는 scan 은 `value` 가 필수라 싣지 않고, 그런 포인트만 남으면 포인트·Task `result` 가 `"ERROR"` 다.
+- 판정은 `OK` · `NG` · `FAIL` 세 가지다. `FAIL` = 측정 실패(통신 실패 등으로 유효 측정값이 하나도 없는 포인트).
+- **FAIL 포인트가 하나라도 있으면 그 Task 는 검사 실패** — 결과 본문을 보고하지 않고 액션을 `FAILED`(`inspectionFailed`,
+  resultDescription = `가스 측정 FAIL — 포인트 n … FAIL(유효 측정값 없음)`)로 끝낸다. NG 포인트가 함께 있어도 같다.
+  SAIGE 규격(초안 v0.1 §2)은 판정을 OK·NG 만 받고 포인트마다 측정 1건 이상을 요구하기 때문이다. ACS 가 실패로 기록하고 재검사한다.
+- 재측정에서 값이 나온 포인트는 유효하다 — 값이 없던 scan 만 빼고 싣는다(`value` 가 필수라).
   **SAIGE 규격에 없는 값** — 처리 방식 협의 필요.
 
 ### 5.3 임계값 — instantAction `setGasThreshold`
@@ -130,7 +134,8 @@ ACS 가 SAIGE 의 `PUT /api/gas/threshold` 를 받으면 같은 필드를 instan
 - **에러 응답 형식** — `*STATus:ERRor?` 의 번호 표기(W/E 접두 등)를 실기 확인. 현재는 첫 숫자를 `errorCode` 로 쓴다.
 - **calibrated** — 교정 상태 조회 방법(ASCII 명령 또는 경고 번호) 확인.
 - **ACS 인터페이스(§5)** — `round`, 결과 JSON 전달, `setGasThreshold`, information 항목 모두 이노로보틱스와 확정.
-- **측정 실패 포인트 표기** — §5.2 `"ERROR"` 처리를 SAIGE 와 협의.
+- **측정 실패(FAIL)를 SAIGE 에도 남길지** — 지금은 FAIL Task 를 ACS 가 실패로만 기록하고 SAIGE 로는 보내지 않는다(§5.2).
+  SAIGE 화면에도 FAIL 을 보이려면 SAIGE 규격의 판정 값에 `FAIL` 을 넣는 협의가 필요하다.
 - **임계값 기본값** — 로컬 기본 5.0 ppm 은 SAIGE 예시값(임시)이다. 운영은 SAIGE 수신값을 쓴다.
 
 ## 7. 사용 명령
