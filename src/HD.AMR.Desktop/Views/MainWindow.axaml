@@ -70,7 +70,7 @@
                 BorderBrush="{DynamicResource AppBorderBrush}" BorderThickness="1">
             <StackPanel Spacing="2">
                 <TextBlock Text="HD현대 AMR" Foreground="{DynamicResource AppTextBrush}" FontWeight="SemiBold" FontSize="12" />
-                <TextBlock Text="Avalonia 데스크톱 (이관 중)" Foreground="{DynamicResource AppMutedTextBrush}" FontSize="11" TextWrapping="Wrap" />
+                <TextBlock Text="{Binding RobotTypeLabel}" Foreground="{DynamicResource AppMutedTextBrush}" FontSize="11" TextWrapping="Wrap" />
             </StackPanel>
         </Border>
     </Grid>

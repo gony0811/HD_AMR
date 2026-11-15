@@ -134,6 +134,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     /// <summary>상단 검사 센서 배지 이름 — 비전 AMR 은 "비전", 가스 검출 AMR 은 "가스".</summary>
     public string SensorBadgeLabel => _sensor.UsesGasDetector ? "가스" : "비전";
+
+    /// <summary>좌측 하단 카드 — 이 AMR 이 어떤 검사 로봇인지(설정 InspectionSensor:Mode).</summary>
+    public string RobotTypeLabel => _sensor.UsesGasDetector ? "가스 검사 로봇" : "용접 검사 로봇";
     public string DepthStatusText => IsDepthConnected ? "연결" : "미연결";
     public string LaserStatusText => IsLaserConnected ? "연결" : "미연결";
     public string EmoButtonText => IsEmoActive ? "■ 비상정지 해제" : "■ 비상정지";
