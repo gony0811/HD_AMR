@@ -147,6 +147,9 @@ internal static class ServiceRegistration
         // 코봇 도달·순회 경고 배너 — HEAVY 알람과 분리(order 를 잠그지 않음).
         services.AddSingleton<OperatorAlarmState>();
         AddHostedSingleton<DeviceHealthMonitorService>(services);
+        // 검사 프로필(순회 경유점)을 ACS 로 올려 보냄 — ACS 가 정차 위치를 고를 때 순회를 미리 계산한다.
+        services.Configure<AcsProfileSyncSettings>(config.GetSection("AcsProfileSync"));
+        AddHostedSingleton<AcsProfileSyncService>(services);
         // AMR 장비 자체 상태 변화(모드·이동·조그·오류)를 운영 로그(출처 AMR)로 기록.
         services.AddHostedService<AmrActivityLogService>();
 
