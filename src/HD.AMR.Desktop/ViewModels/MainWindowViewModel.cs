@@ -25,6 +25,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly VisionInterfaceService _vision;
     private readonly LaserDisplacementSensorService _laser;
     private readonly DeviceAlarmState _deviceAlarms;
+    private readonly OperatorAlarmState _operatorAlarm;
     private readonly DispatcherTimer _timer;
 
     public INavigationService Navigation { get; }
@@ -58,6 +59,23 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private bool _hasDeviceAlarm;
 
     [ObservableProperty] private string _deviceAlarmText = "";
+
+    // 코봇 도달·순회 경고 — 장치 HEAVY 알람과 별개. 확인으로 지운다. 시험이동 불가는 적색, 자동 시퀀스는 황색.
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowOperatorWarning))]
+    [NotifyPropertyChangedFor(nameof(ShowOperatorError))]
+    [NotifyCanExecuteChangedFor(nameof(DismissOperatorAlarmCommand))]
+    private bool _hasOperatorAlarm;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowOperatorWarning))]
+    [NotifyPropertyChangedFor(nameof(ShowOperatorError))]
+    private bool _operatorAlarmIsError;
+
+    [ObservableProperty] private string _operatorAlarmText = "";
+
+    public bool ShowOperatorWarning => HasOperatorAlarm && !OperatorAlarmIsError;
+    public bool ShowOperatorError => HasOperatorAlarm && OperatorAlarmIsError;
 
     [ObservableProperty]
     private bool _isAcsConnected;
@@ -129,12 +147,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public MainWindowViewModel(INavigationService navigation, AMRService amr, CobotService cobot,
         IoModuleService io, Vda5050AdapterService vda, CommLossMonitorService commLoss,
         Vda5050OrderExecutor executor, OperationLogService opLog, CameraService camera,
-        VisionInterfaceService vision, LaserDisplacementSensorService laser, DeviceAlarmState deviceAlarms)
+        VisionInterfaceService vision, LaserDisplacementSensorService laser, DeviceAlarmState deviceAlarms,
+        OperatorAlarmState operatorAlarm)
     {
         _camera = camera;
         _vision = vision;
         _laser = laser;
         _deviceAlarms = deviceAlarms;
+        _operatorAlarm = operatorAlarm;
         _commLoss = commLoss;
         _executor = executor;
         _opLog = opLog;
@@ -171,6 +191,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 new("용접 추적",     "📈", typeof(WeldTrackingViewModel)),
                 new("비드 라벨링",   "🏷", typeof(LabelEditorViewModel)),
                 new("비전 학습",     "🧠", typeof(VisionTrainingViewModel)),
+                new("검출 비교평가", "📊", typeof(WeldBenchmarkViewModel)),
                 new("Lift",          "🛗", typeof(LiftViewModel)),
                 new("장착 보정 (ArUco)", "🎯", typeof(ArucoCalibrationViewModel)),
                 new("QR Pose Teaching", "🧭", typeof(CalibrationViewModel)),
@@ -180,6 +201,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         SelectedItem = NavItems[0];
         Navigation.NavigateTo(typeof(HomeViewModel));
+        // 페이지 안에서 다른 페이지로 이동(예: 비교평가 → 비전 학습)해도 사이드바 선택을 맞춘다.
+        if (Navigation is System.ComponentModel.INotifyPropertyChanged npc)
+            npc.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName == nameof(INavigationService.CurrentViewModel)) SyncSelection();
+            };
 
         // 셸 VM 은 앱 수명 싱글턴 — 타이머를 여기서 시작하고 멈추지 않는다.
         _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
@@ -208,6 +235,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 (a.Stage == DeviceAlarmStage.Active ? $"통신 두절({a.Detail})" : "복구됨·RESET 대기") +
                 $" [{a.SinceUtc.ToLocalTime():HH:mm:ss}]")) +
             "  — ACS order 수신 불가";
+
+        var op = _operatorAlarm.Current;
+        HasOperatorAlarm = op is not null;
+        OperatorAlarmIsError = op?.IsError == true;
+        OperatorAlarmText = op?.Text ?? "";
         // ACS: 브로커(로컬 MQTT) 접속만으로는 "연결"이라 할 수 없다 — ACS 생존(connection 토픽
         // Last Will 기반 liveness) 또는 최근 60초 내 ACS 메시지 수신까지 확인돼야 초록 "연결".
         bool acsAlive = _vda.AcsConnectionLiveness == HD.AMR.App.Service.AcsLiveness.Online
@@ -274,6 +306,13 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     /// <summary>장치 HEAVY 알람 리셋 — 복구된(RESET 대기) 알람만 해제된다. IO 모듈이 끊겨 조작반 RESET 을
     /// 읽을 수 없을 때도 화면에서 해제할 수 있게 둔다. 결과는 운영 로그(장치 알람)에 남는다.</summary>
+    [RelayCommand(CanExecute = nameof(HasOperatorAlarm))]
+    private void DismissOperatorAlarm()
+    {
+        _operatorAlarm.Clear();
+        RefreshStatus();
+    }
+
     [RelayCommand(CanExecute = nameof(HasDeviceAlarm))]
     private void ResetDeviceAlarms()
     {
@@ -372,7 +411,21 @@ public sealed partial class MainWindowViewModel : ObservableObject
             });
             return;
         }
+        if (_syncingSelection) return;   // 이미 이동한 페이지에 선택만 맞추는 중
         Navigate(newValue);
+    }
+
+    private bool _syncingSelection;
+
+    private void SyncSelection()
+    {
+        var type = Navigation.CurrentViewModel?.GetType();
+        if (type is null || SelectedItem?.Target == type) return;
+        var item = NavItems.FirstOrDefault(i => i.Target == type);
+        if (item is null) return;   // 접힌 그룹 안의 페이지면 선택 표시는 생략
+        _syncingSelection = true;
+        try { SelectedItem = item; }
+        finally { _syncingSelection = false; }
     }
 
     /// <summary>그룹 펼침 시 하위 항목을 헤더 바로 뒤에 삽입, 접힘 시 제거.</summary>

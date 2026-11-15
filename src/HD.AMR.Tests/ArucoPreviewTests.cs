@@ -33,7 +33,7 @@ public class ArucoPreviewTests
         return new CameraFrame(pixels, rgb.Width, rgb.Height, "rgb24", DateTime.UtcNow);
     }
 
-    [Fact]
+    [WindowsFact]
     public void DetectAndRender_FindsTargetMarker()
     {
         var result = ArucoPoseEstimator.DetectAndRender(MakeMarkerFrame(), MarkerId);
@@ -43,7 +43,7 @@ public class ArucoPreviewTests
         Assert.NotEmpty(result.Jpeg);
     }
 
-    [Fact]
+    [WindowsFact]
     public void DetectAndRender_ReportsTargetMissingButListsDetected()
     {
         var result = ArucoPoseEstimator.DetectAndRender(MakeMarkerFrame(), targetId: 3);
@@ -52,7 +52,7 @@ public class ArucoPreviewTests
         Assert.Contains(MarkerId, result.DetectedIds);
     }
 
-    [Fact]
+    [WindowsFact]
     public void DetectAndRender_BlankFrameStillReturnsImage()
     {
         using var gray = new Mat(480, 640, MatType.CV_8UC3, new Scalar(128, 128, 128));
@@ -63,7 +63,7 @@ public class ArucoPreviewTests
         Assert.NotEmpty(result.Jpeg);
     }
 
-    [Fact]
+    [WindowsFact]
     public void DetectMarkerInfos_ReturnsIdAndArea()
     {
         var infos = ArucoPoseEstimator.DetectMarkerInfos(MakeMarkerFrame(markerPx: 200));
@@ -73,14 +73,14 @@ public class ArucoPreviewTests
         Assert.InRange(info.AreaPx, 150 * 150, 220 * 220);
     }
 
-    [Fact]
+    [WindowsFact]
     public void DetectMarkerInfos_EmptyOnBlankFrame()
     {
         using var gray = new Mat(480, 640, MatType.CV_8UC3, new Scalar(128, 128, 128));
         Assert.Empty(ArucoPoseEstimator.DetectMarkerInfos(ToFrame(gray)));
     }
 
-    [Fact]
+    [Fact]   // OpenCV 호출 전에 거부하므로 모든 OS 에서 실행
     public void DetectAndRender_RejectsUnknownPixelFormat()
     {
         var frame = new CameraFrame(new byte[16], 2, 2, "z16", DateTime.UtcNow);

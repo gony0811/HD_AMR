@@ -63,7 +63,9 @@ public class CameraAlignRefineStep : ISequenceStep
             return StepResult.Fail("깊이 프레임이 없습니다.");
 
         var (rx, ry, rw, rh, roiSrc) = await CameraAlignStep.GetDepthRoiAsync(_param);
-        var (depthAxis, _) = await WeldSequenceSupport.GetDepthAxisAsync(_param);
+        var (depthAxis, axisFromParam) = await WeldSequenceSupport.GetDepthAxisAsync(_param);
+        if (!axisFromParam)
+            return StepResult.Fail(WeldSequenceSupport.OpticalAxisMissingMessage(DisplayName));
         var target = context.CameraTargetDistanceMm;
         _logger.LogInformation(
             "Sequence [카메라 거리 재정렬] 목표={Dist}±{Tol}mm, ROI={Roi}({Rx:0.00},{Ry:0.00},{Rw:0.00},{Rh:0.00}), 광축=툴{Axis}",

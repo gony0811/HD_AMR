@@ -16,6 +16,12 @@ namespace HD.AMR.App.Communication.Vision;
 /// </summary>
 public static class FaceLocalMapper
 {
+    /// <summary>
+    /// 촬영 요청에 싣는 높이 h [mm] — 0 미만이면 0 으로 올린다. 비전 S/W 가 음수 높이를 위치 오류(ERR_POSITION)로
+    /// 거부한다(실기 2026-11-12·13 CROSS-4-V1 의 교차 중심 4점 Z −12). 코봇이 가는 위치는 바꾸지 않는다 — 알려 주는 값만.
+    /// </summary>
+    public static int CaptureHeight(int h) => h < 0 ? 0 : h;
+
     /// <summary>코봇 wobj pose(mm) → 면-로컬 (u, v, h) mm 정수.</summary>
     /// <param name="wallId">Wall ID 1~10 (벽별 축 규약을 적용할 때 사용).</param>
     /// <param name="x">코봇 wobj X (mm).</param>
@@ -29,5 +35,70 @@ public static class FaceLocalMapper
         return (Round(x), Round(y), Round(z));
     }
 
+    /// <summary>
+    /// 내부 작업물 좌표계 pose(mm) → 면-로컬 (u, v, h) mm 정수 — 용접선 시작점의 면 좌표와 용접선 방향을 반영.
+    /// <para>내부 작업물 프레임(<c>InternalWorkpieceFrame</c>)은 원점 = 용접선 시작점, X+ = 용접선 방향,
+    /// Z+ = 면 바깥(선창 안쪽 = +h) 이다. 면-로컬 (u,v,h) 도 같은 법선의 오른손 좌표계이므로, 면 위에서 본
+    /// 용접선 방향 ex 하나로 회전이 정해진다(ey = ex 를 +90° 회전).</para>
+    /// <code>u = u0 + X·ex.u + Y·ey.u,  v = v0 + X·ex.v + Y·ey.v,  h = Z</code>
+    /// <paramref name="placement"/> 가 null 이면 기존 항등 매핑(<see cref="ToFaceLocal(ushort,double,double,double)"/>)과 같다.
+    /// </summary>
+    public static (int u, int v, int h) ToFaceLocal(ushort wallId, double x, double y, double z, FaceSeamPlacement? placement)
+    {
+        if (placement is null) return ToFaceLocal(wallId, x, y, z);
+        var (exU, exV) = placement.Direction switch
+        {
+            FaceSeamDirection.PlusU  => (1.0, 0.0),
+            FaceSeamDirection.MinusU => (-1.0, 0.0),
+            FaceSeamDirection.PlusV  => (0.0, 1.0),
+            FaceSeamDirection.MinusV => (0.0, -1.0),
+            _ => throw new ArgumentOutOfRangeException(nameof(placement), placement.Direction, "용접선 방향 값이 올바르지 않습니다."),
+        };
+        // 작업물 Y = Z(면 바깥) × X. 면 축 (u, v, 안쪽 법선)이 오른손이면 ey = ex 를 +90° 회전, 왼손이면 −90°.
+        var (eyU, eyV) = IsLeftHanded(wallId) ? (exV, -exU) : (-exV, exU);
+        return (Round(placement.OriginUMm + x * exU + y * eyU),
+                Round(placement.OriginVMm + x * exV + y * eyV),
+                Round(z));
+    }
+
+    /// <summary>
+    /// 면 축 (u, v)와 선창 안쪽 법선이 왼손 좌표계인 면 — 천장 T(2)·우현 수직벽 SM(4)·하부 우현 챔퍼 SL(8)·상부 우현 챔퍼 SU(10).
+    /// 축 정의는 vision_interface.md §5(= HD_ACS TankGeometry.GenerateWalls). u × v 가 안쪽 법선과 반대인 면이다.
+    /// 예: 천장은 u = 선미→선수, v = 우현→좌현 이라 u × v = 위쪽인데 안쪽 법선은 아래쪽.
+    /// </summary>
+    public static bool IsLeftHanded(ushort wallId) => wallId is 2 or 4 or 8 or 10;
+
+    /// <summary>
+    /// ACS 가 보낸 용접선 시작·끝점의 면 좌표 [m] → 촬영 위치 환산용 배치. 방향은 (끝 − 시작)의 큰 축.
+    /// 끝점이 없거나, 두 점이 같거나(1mm 미만), 면 축에서 <paramref name="maxSkewDeg"/> 넘게 비스듬하면 null —
+    /// 호출측은 종전처럼 작업물 좌표를 그대로 보낸다.
+    /// </summary>
+    public static FaceSeamPlacement? PlacementFromSeam(
+        double? startUm, double? startVm, double? endUm, double? endVm, double maxSkewDeg = 10.0)
+    {
+        if (startUm is not { } u0 || startVm is not { } v0 || endUm is not { } u1 || endVm is not { } v1) return null;
+        double du = u1 - u0, dv = v1 - v0;
+        var len = Math.Sqrt(du * du + dv * dv);
+        if (!(len >= 0.001)) return null;
+        var along = Math.Max(Math.Abs(du), Math.Abs(dv));
+        if (Math.Acos(Math.Min(1.0, along / len)) * 180.0 / Math.PI > maxSkewDeg) return null;
+        var dir = Math.Abs(du) >= Math.Abs(dv)
+            ? (du >= 0 ? FaceSeamDirection.PlusU : FaceSeamDirection.MinusU)
+            : (dv >= 0 ? FaceSeamDirection.PlusV : FaceSeamDirection.MinusV);
+        return new FaceSeamPlacement(u0 * 1000.0, v0 * 1000.0, dir);
+    }
+
     private static int Round(double mm) => (int)Math.Round(mm);
 }
+
+/// <summary>면 위에서 본 용접선 방향(작업물 X+ 가 향하는 면-로컬 축). 면별 U/V 축 정의는 vision_interface.md §5.</summary>
+public enum FaceSeamDirection
+{
+    PlusU = 0,
+    MinusU = 1,
+    PlusV = 2,
+    MinusV = 3,
+}
+
+/// <summary>용접선 시작점(작업물 원점)의 면-로컬 좌표 [mm]와 면 위 용접선 방향 — CAPTURE_REQ (u,v) 를 면 좌표로 보내기 위한 배치 정보.</summary>
+public sealed record FaceSeamPlacement(double OriginUMm, double OriginVMm, FaceSeamDirection Direction);

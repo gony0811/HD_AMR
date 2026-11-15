@@ -46,6 +46,11 @@ public enum InspectionMoveDirection
 /// <summary>단계 간 공유 컨텍스트. 공용 파라미터와 티칭 위치를 담는다.</summary>
 public class SequenceContext
 {
+    /// <summary>카메라 광축 툴축(<see cref="Steps.WeldSequenceSupport.DepthAxisKey"/>). 파라미터가 저장돼 있지 않으면 null —
+    /// 벽면 후퇴는 방향을 알 수 없으므로 움직이지 않고 정지한다(기본 +Z 폴백은 현장 −Z 장착에서 벽 쪽으로 들어간다).
+    /// <see cref="SequenceService"/> 가 실행 시작 시 채우고, 수동 구성 컨텍스트는 <see cref="Steps.WeldSequenceSupport.LoadOpticalAxisAsync"/> 로 채운다.</summary>
+    public ToolAxisDir? OpticalAxis { get; set; }
+
     /// <summary>활성 tool 번호.</summary>
     public int Tool { get; set; } = 1;
 
@@ -56,6 +61,10 @@ public class SequenceContext
     /// ACS 경로에서 레시피 InspectVelPercent 로 주입된다 — 접근/복귀는 Velocity, 스캔만 이 값.</summary>
     public int? InspectVelocity { get; set; }
 
+    /// <summary>⑱ 경유점 순회 동안만 적용할 전역 가속도 배율 [%]. null = 변경 안 함.
+    /// ACS 경로에서 레시피 InspectAccPercent 로 주입된다 — 순회 후 100% 로 복원.</summary>
+    public int? InspectAcceleration { get; set; }
+
     /// <summary>검사위치 이동 수평 오프셋 u (mm). 좌(+)/우(−) → TOOL X+/X− (실측 확인 매핑).</summary>
     public double InspectionOffsetU { get; set; }
 
@@ -64,6 +73,10 @@ public class SequenceContext
 
     /// <summary>검사위치 이동 방향 (수평/수직). 수직 J6=180°, 수평 J6=90° (센서 헤드–링크암 간섭 회피).</summary>
     public InspectionMoveDirection InspectionDirection { get; set; } = InspectionMoveDirection.Horizontal;
+
+    /// <summary>② 가 접근 자세를 광축 둘레로 돌려 용접선을 depth 영상의 가로선으로 맞췄는지. true 면 ⑤~⑪ 진행축은
+    /// 검사 방향과 무관하게 영상 가로다(<see cref="Steps.WeldSequenceSupport.GetProgressAxis"/>).</summary>
+    public bool SeamLeveledInImage { get; set; }
 
     /// <summary>③ 카메라 거리 정렬 목표 거리(mm).</summary>
     public double CameraTargetDistanceMm { get; set; } = 400;
@@ -162,6 +175,11 @@ public class SequenceContext
     /// <summary>CORNER3 좌/우 거울 side ("L"/"R") — 코너 스텝의 티칭 슬롯 키 접두사 선택
     /// (corner3.L.* / corner3.R.*). CORNER 외 경로에서는 null.</summary>
     public string? CornerSide { get; set; }
+
+    /// <summary>용접선 시작점의 면-로컬 좌표와 면 위 용접선 방향 — 있으면 ⑱ CAPTURE_REQ 의 (u,v) 를 면 좌표로 계산한다
+    /// (<see cref="Communication.Vision.FaceLocalMapper"/>). null 이면 기존처럼 작업물 좌표(용접선 시작점 기준)를 그대로 보낸다.
+    /// 수동 실행은 화면 입력, ACS 실행은 drawingPos 의 시작·끝점 면 좌표(u,v / uEnd,vEnd)로 채운다.</summary>
+    public Communication.Vision.FaceSeamPlacement? FacePlacement { get; set; }
 }
 
 /// <summary>시퀀스 전체 실행 상태.</summary>

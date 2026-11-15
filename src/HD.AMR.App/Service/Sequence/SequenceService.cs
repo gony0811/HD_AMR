@@ -1,4 +1,7 @@
 using HD.AMR.App.Data.Entities;
+using HD.AMR.App.Models;
+using HD.AMR.App.Service.Motion;
+using HD.AMR.App.Service.Sequence.Steps;
 using Microsoft.Extensions.Logging;
 
 namespace HD.AMR.App.Service.Sequence;
@@ -17,6 +20,8 @@ public class SequenceService
     private readonly SequenceRunGate _gate;
     private readonly OperationLogService _opLog;
     private readonly MissionPauseGate _pauseGate;
+    private readonly ParameterService _param;
+    private readonly CobotReachPrecheck _reach;
 
     /// <summary>운영 로그 출처 — ACS 필드가 실려 있으면 ACS, 아니면 수동(UI).</summary>
     private static string SourceOf(SequenceContext c)
@@ -38,8 +43,12 @@ public class SequenceService
         SequenceRunGate gate,
         OperationLogService opLog,
         MissionPauseGate pauseGate,
+        ParameterService param,
+        CobotReachPrecheck reach,
         ILogger<SequenceService> logger)
     {
+        _reach = reach;
+        _param = param;
         _pauseGate = pauseGate;
         _teachingService = teachingService;
         _cobotService = cobotService;
@@ -71,11 +80,28 @@ public class SequenceService
     /// <summary>실행 중인지 여부.</summary>
     public bool IsBusy => RunState != SequenceRunState.Idle;
 
+    /// <summary>드라이런 2점 교시에서만 의미 있는 단계 — 일반 풀오토·풀시퀀스에서는 제외한다.
+    /// cobotSeamEnd 가 섞이면 bead2Center 직후 용접선 끝점으로 이동해 wobjPoint2 가 비전 Bead2 대신 끝점을 기록하고,
+    /// inspectionRunDry 가 섞이면 검사 경로를 두 번 순회한다.</summary>
+    public static readonly IReadOnlySet<string> DryRunOnlyStepKeys =
+        new HashSet<string>(StringComparer.Ordinal) { "cobotSeamEnd", "inspectionRunDry" };
+
     /// <summary>
-    /// 풀오토: 모든 활성 단계를 순서대로 실행. 실패 시 즉시 중단.
+    /// 풀오토(UI): 드라이런 전용 단계를 뺀 모든 단계를 순서대로 실행. 실패 시 즉시 중단.
+    /// 시작 시 <see cref="SequenceContext.Bag"/> 을 비운다 — 이전 실행의 앵커·작업물 좌표계·측정값(다른 용접선·다른 AMR
+    /// 위치 기준 BASE 좌표)이 남아 이번 실행의 이동 기준으로 쓰이지 않게 한다. 세미오토 단독 실행은 Bag 을 유지한다.
     /// </summary>
+    /// <summary>풀오토가 실행할 단계 키 — 드라이런 전용 단계 제외(순서 유지).</summary>
+    internal static List<string> FullAutoStepKeys(IEnumerable<string> registered)
+        => registered.Where(k => !DryRunOnlyStepKeys.Contains(k)).ToList();
+
     public async Task<bool> RunAllAsync(SequenceContext context, CancellationToken externalCt = default)
-        => (await RunSequenceAsync(context, stepKeys: null, externalCt)).Outcome == SequenceRunOutcome.Completed;
+    {
+        if (IsBusy) return false;
+        context.Bag.Clear();
+        var keys = FullAutoStepKeys(_steps.Select(s => s.Key));
+        return (await RunSequenceAsync(context, keys, externalCt)).Outcome == SequenceRunOutcome.Completed;
+    }
 
     /// <summary>
     /// 단계 부분 실행 — <paramref name="stepKeys"/>에 포함된 단계만 DefaultOrder 순으로 실행
@@ -98,6 +124,14 @@ public class SequenceService
             if (selected.Count == 0)
                 return new SequenceRunResult(SequenceRunOutcome.Failed, null,
                     $"실행할 단계가 없습니다 (요청 키: {string.Join(",", stepKeys ?? Array.Empty<string>())}).");
+
+            if (await BlockedByReachAsync(context, selected, ct) is { } reachBlock)
+            {
+                _runCts.Dispose();
+                _runCts = null;
+                UpdateStatus(AmrMoveStep.StepKey, StepState.Failed, reachBlock);
+                return new SequenceRunResult(SequenceRunOutcome.Failed, AmrMoveStep.StepKey, reachBlock);
+            }
 
             RunState = SequenceRunState.Running;
             ResetStatuses();
@@ -169,6 +203,7 @@ public class SequenceService
         }
         finally
         {
+            CleanupAfterAbnormalExit();
             _gate.Exit();
         }
     }
@@ -190,6 +225,14 @@ public class SequenceService
             _runCts = CancellationTokenSource.CreateLinkedTokenSource(externalCt);
             var ct = _runCts.Token;
 
+            if (await BlockedByReachAsync(context, new[] { step }, ct) is { } reachBlock)
+            {
+                _runCts.Dispose();
+                _runCts = null;
+                UpdateStatus(step.Key, StepState.Failed, reachBlock);
+                return StepResult.Fail(reachBlock);
+            }
+
             RunState = SequenceRunState.Running;
             await LoadPositionsAsync(context, ct);
             context.Progress = _monitor.Log;   // 스텝 진행 라인 → 모니터 창 콘솔
@@ -209,8 +252,23 @@ public class SequenceService
         }
         finally
         {
+            CleanupAfterAbnormalExit();
             _gate.Exit();
         }
+    }
+
+    /// <summary>위치 로드·단계 검증 등에서 예외가 나 정상 종료 경로를 건너뛰었으면 상태를 정리한다 —
+    /// 그대로 두면 RunState 가 Running 으로 남아 UI 가 새로고침 전까지 실행할 수 없고 모니터 창이 "실행 중"으로 멈춘다.</summary>
+    private void CleanupAfterAbnormalExit()
+    {
+        if (RunState == SequenceRunState.Idle) return;
+        _logger.LogWarning("시퀀스가 예외로 중단됨 — 실행 상태 정리 (단계={Step})", CurrentStepKey ?? "-");
+        RunState = SequenceRunState.Idle;
+        CurrentStepKey = null;
+        _runCts?.Dispose();
+        _runCts = null;
+        try { _monitor.EndRun(anyFailure: true); } catch { /* 정리 실패는 무시 */ }
+        RaiseStateChanged();
     }
 
     /// <summary>활성 작업물 좌표계 0(베이스)·공구 <paramref name="tool"/> 복귀 — 실패 종료 경로의 best-effort 반납.
@@ -266,8 +324,10 @@ public class SequenceService
 
     private async Task<StepResult> RunSingleStepAsync(ISequenceStep step, SequenceContext context, CancellationToken ct)
     {
-        // 1) Validate
-        var validation = step.Validate(context);
+        // 1) Validate — 예외도 검증 실패로 처리(엔진 상태가 Running 으로 남지 않게)
+        StepValidation validation;
+        try { validation = step.Validate(context); }
+        catch (Exception ex) { validation = StepValidation.Fail($"검증 중 예외: {ex.Message}"); }
         if (!validation.IsValid)
         {
             var msg = validation.Message ?? "선행조건 미충족";
@@ -323,6 +383,47 @@ public class SequenceService
     {
         var list = await _teachingService.ListAsync(ct);
         context.Positions = list.ToDictionary(p => p.Key, p => p);
+        await HD.AMR.App.Service.Sequence.Steps.WeldSequenceSupport.LoadOpticalAxisAsync(_param, context);
+    }
+
+    /// <summary>
+    /// AMR 을 옮기기로 한 실행이고 용접선·면이 있으면, 이동 전에 도달·순회를 본다.
+    /// 웹 시퀀스 페이지처럼 용접선이 비어 있으면 티칭 위치 폴백이라 점검하지 않는다(동작 유지).
+    /// 막히면 경고 배너·로그를 남기고 사유를 돌려준다.
+    /// </summary>
+    private async Task<string?> BlockedByReachAsync(SequenceContext context, IReadOnlyList<ISequenceStep> selected, CancellationToken ct)
+    {
+        if (context is not { AmrTargetX: { } x, AmrTargetY: { } y, AmrTargetThetaRad: { } yaw })
+            return null;
+        if (!selected.Any(s => s.Key == AmrMoveStep.StepKey))
+            return null;
+        if (context.SeamStartW is not { Length: 3 } start)
+            return null;
+
+        var wall = string.IsNullOrWhiteSpace(context.WallCode)
+            ? WallCodes.FindBySurfaceId(context.InspectionSurfaceId)?.Code
+            : context.WallCode;
+        var points = new List<ReachPoint>
+        {
+            new("시퀀스 시작", wall, StrokeMm: null, start, TestMove: false, AllowBackup: false),
+        };
+        if (context.SeamEndW is { Length: 3 } end)
+            points.Add(new ReachPoint("시퀀스 끝", wall, StrokeMm: null, end, TestMove: false, AllowBackup: false));
+
+        ReachGateResult gate;
+        try
+        {
+            gate = await _reach.CheckAsync(points, x, y, yaw, backup: null, ct);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            gate = ReachGateResult.Block(
+                $"코봇 도달 사전 점검 오류 — {ex.Message}. 확인하지 못해 AMR 을 움직이지 않습니다.", asError: false);
+        }
+        if (gate.Ok) return null;
+        _reach.Raise(gate, SourceOf(context), context.AcsOrderId);
+        return gate.Message;
     }
 
     private void ResetStatuses()

@@ -7,6 +7,7 @@
 | 대상 | HD_AMR 통합 운영 S/W 개발팀 (로봇 온보드) |
 | 기준 표준 | **VDA 5050 v2.0** (Interface for the communication between AGV and master control) |
 | 상태 | **확정** — N10(정차 이격)만 잠정값 유지. N12(ACS 생존 신호)는 2026-09-03 승인. N13(검사 타입 카탈로그)은 2026-09-14 제안(계약 무변경). N14(`taskId`·`attempt`)는 2026-09-21 계약 추가·양측 구현 완료(실기 관통 확인 잔여). N17(seam z 기준면)은 2026-09-23 신규 제기. N10(정차 이격)은 2026-09-28 1차 회신(잠정 1.2 m), N18(거리 파라미터 2종 정리)은 2026-09-28 신규 제기 |
+| 개정 1.11 | 2026-10-31 — **§4.4.2 정차 온보드 보정 신설 `[N23]`**(ACS 개정 1.12 초안 `params.stationAdjust` 수용). AMR 1단계 구현 — 도착 후 첫 액션 전에 정차의 용접선별 면 법선거리를 원래 정차점·100 mm 후진점 2표본으로 계산해 허락된 **후진** 범위 안에서 한 번 옮겨 선다. 보고 토큰 `stationAdjusted` 구현. 전진·횡·각은 받기만 함. 필드 없으면 종전 동작 — **계약 하위 호환** |
 | 개정 1.10 | 2026-10-23 — **§10 `[N17]` AMR 입장 확정**: seam z 는 **ACS 가 층 바닥 기준(`z − level_z`)으로 변환해 발행**(부록 B 갱신). 실기 IK 실패(접근점 z ≈ 9.7 m) 근거. AMR 은 좌표 기준 오류(접근점 BASE 거리 > 3 m)를 IK 전에 차단·보고 |
 | 개정 1.9 | 2026-10-07 — **LINE·CROSS4 면 자세별 변종 통합** `[N13 연장]`: LINE/CROSS4 를 면 자세별 5종에서 **면 자세-독립 단일 레시피**(`LINE`/`CROSS4`)로 통합(CROSS3 회전·CORNER 과 동일하게 면 무관). 접근 자세·법선·방향은 런타임이 `wall_code` 로 계산하고, 면별 차이는 티칭 프로필이 흡수하므로 면 자세는 레시피 선택에 쓰지 않는다. 카탈로그 16→8종. **계약 무변경**(ACS 는 `seamType`+`wall_code` 그대로 발행). AMR resolver·시드·구 행 마이그레이션(바인딩 보존)·테스트·§8.5 표 반영 완료 — §8.5·INSPECTION_TYPES.md §9-9 |
 | 개정 1.1 | 2026-09-01 — 로봇(TARS-M) REST 실물 스펙 확보분 반영. **ACS↔AMR 계약(§1~§9·부록 A~C)은 무변경**이며, AMR 온보드가 그 계약을 로봇 REST로 어떻게 이행하는지를 **부록 D**로 신설하고 관련 절에 각주를 달았다. 에러코드 매핑·층 전환 절차는 로봇측 정보 미확보로 **보류**(§6.4·§5.2·§9.2 그대로 유효, 구현만 유보) |
@@ -209,12 +210,15 @@ ACS가 발행하는 `nodePosition`은 다음과 같이 산출된 **벽면 이격
 theta       = 벽을 정면으로 바라보는 방향
 ```
 
-- **정차 이격(기본 0.8 m, 영역별 설정 가능)이 이미 반영되어 있다** — 목표점이 벽면에 붙어 있지 않다.
-  이격 값은 "벽면 ↔ 로봇 기준점(중심)" 거리이므로, 실제 차체-벽 여유 = 이격 − 로봇 반폭 − allowedDeviationXY.
+- **정차 이격(기본 수직벽 1.2 m·경사면 0.8 m, 영역별 설정 가능)이 이미 반영되어 있다** — 목표점이 벽면에 붙어 있지 않다.
+  이격 값은 "벽면 ↔ 로봇 기준점(중심)" 거리이므로, 실제 차체-벽 여유 = 이격 − **로봇 중심→앞 길이** − allowedDeviationXY.
+  (검사 정차는 theta 가 벽 정면이라 벽을 향하는 것은 차체 **앞면**이다 — 종전 표기 "반폭"은 정정, 2026-10-31.)
+  AMR 운용 외곽(STEP `E26003-E-A000-000-0(261028)` 파싱, 2026-10-31 — 인양용 호이스트 블록·안테나는 **탈거 운용**): 길이 730 × 폭 700 mm, **중심→앞 395**(전방 카메라 포함, 외피 365)·**중심→뒤 365**·반폭 350, 회전 중심 = 차체 중심, 제자리 회전 반경 ≈ 506 mm. 벽 여유 = 이격 − 395 − allowedDeviationXY(ACS 현장 설정 0.2 m) — 수직벽 기본 1.2 m면 ≈ 605 mm, 경사면 0.8 m면 ≈ 205 mm(경사면은 바닥 접점까지의 수평 거리 기준).
 - **용어 주의 `[N18]`.** 본 절의 *정차 이격*(벽↔로봇 기준점, 기본 0.8 m)과 §8.1 `params.standoffMm`
   (골든 예시 400 mm)은 **크기가 달라 같은 값일 수 없다.** 전자는 차체 배치(ACS 소관, 이미 `nodePosition`
   에 반영됨), 후자는 액션 파라미터다. AMR 은 **둘 다 동작에 쓰지 않는다** — 검사 툴의 표면 이격은
-  온보드 레시피의 카메라 목표거리(기본 400 mm)로 정한다(§4.4.1).
+  온보드가 정한다: ② 거친 접근 거리(기본 400 mm)로 접근한 뒤 ③ 카메라 거리 정렬·④⁺ 레이저 WD(기본 300 mm)로
+  확정한다(§4.4.1).
 - 바닥(B)/천장(T) 영역은 수평 법선이 없어 이격 없이 중심 투영이 오며, 운영자 수동 지정 좌표가 올 수도 있다.
 - **책임 경계**: ACS의 정차점은 "목표"일 뿐이며, 접근 경로 계획·장애물(벽 포함) 충돌 회피는 **AMR 자율 주행 책임**이다.
   목표점이 도달 불가하면 진입을 강행하지 말고 `state.errors`(주행 실패 유형)로 보고할 것 (§6.4, §9.5 실패 정책으로 처리).
@@ -236,7 +240,7 @@ theta       = 벽을 정면으로 바라보는 방향
 
 ```
 벽 ↔ 코봇 BASE 최소 법선거리
-    = 카메라 목표거리(= ② 검사위치 이동의 면 후퇴 거리, 기본 400 mm)
+    = ② 거친 접근 거리(TCP 의 면 후퇴 거리, 파라미터 `inspection.approachStandoffMm`, 기본 400 mm)
     + 검사 툴 길이(플랜지→TCP 병진, 실측 약 370 mm)
     + 최소 플랜지 뻗음(팔을 접지 않고 자세를 만들 수 있는 최소값, 잠정 350 mm)
 
@@ -245,7 +249,16 @@ theta       = 벽을 정면으로 바라보는 방향
     + allowedDeviationXY + 벽면 요철·펜더 여유
 ```
 
+첫 항은 최종 작업거리가 아니다. ② 는 면에서 400 mm 까지 **대강 가져가는** 단계이고, 이후 ③ depth 카메라
+거리 정렬과 ④⁺ 레이저 WD 조정(`Sequence.Laser.WorkingDistanceMm`, 기본 300 mm — 레이저 측정 범위)이
+초점 위치로 가기 전 수평 맞춤 등을 하는 **정렬 준비 자세**를 만들고, 마지막에 TCP(검사 툴 초점, 플랜지 +375 mm)를
+용접선 위에 두는 **초점 검사 자세**로 들어간다. 그래서 시퀀스 중 팔이 **가장 접히는 지점은 ②** 이고, 리치 점검도
+②에서 한다 — 정렬 준비 자세의 플랜지 뻗음은 이보다 100 mm, 초점 검사 자세는 400 mm 크다.
+오프라인 리치 맵(`ReachMap`)은 이 세 자세(400 → 300 → 0)를 같은 IK 가지로 이어 모두 판정한다.
+
 **잠정 수치**: 400 + 370 + 350 = **1.12 m** ⇒ 여유 포함 **잠정 1.2 m 요청**.
+② 거친 접근 거리를 줄이면 필요 법선거리도 같은 양만큼 준다(하한: ③ 이 용접선을 depth 카메라 시야·최소
+측정거리 안에서 볼 수 있어야 하고, 정차 편차를 감안한 벽 충돌 여유가 있어야 한다).
 현행 기본 **0.8 m 로는 부족하다**(그 값이면 플랜지 뻗음이 30 mm 로 사실상 0).
 
 **실측 근거(3회, 2026-09-28).** 벽에서 1.0 m 정차 → 후퇴 400 → 툴 370 ⇒ 플랜지 뻗음 **230 mm**.
@@ -259,10 +272,44 @@ theta       = 벽을 정면으로 바라보는 방향
 4. 여유 50 mm 를 더해 ③ 카드 *최소 플랜지 뻗음* 에 저장 — 이 값이 곧 ② 검사위치 이동의 차단 임계이자
    위 산출식의 세 번째 항이다.
 
-바닥(B)/천장(T)은 수평 이격이 무의미하므로 같은 식을 **법선축**(텔레스코픽 높이 + 앙각)으로 적용한다.
+바닥(B)은 같은 식을 **법선축**(텔레스코픽 높이 + 앙각)으로 적용한다(BASE 가 바닥 위 1.6 m 넘게 있어 실제로 걸리지 않는다).
+**천장(T)은 이 규칙을 적용하지 않는다(2026-11-13).** 근거 실측은 수직벽이었고, 천장은 툴이 위를 향해 ② 자세 J5 가 90° 근처에
+머물러 접힌 팔에서도 손목 특이점이 생기지 않는다(ACS 리치 시뮬레이터 — 리프트를 올려 뻗음 143 mm 까지 자세 여유 유지, 더 가까우면
+상완–리프트 기둥 간섭·가지 전환이 따로 막는다). 이 규칙이 천장에서는 리프트를 올린 정차만 막았다(2026-11-11 리프트 100·200 정차 52건).
+경사면은 그대로 적용한다(단독으로 막는 경우 없음). 구현: HD_AMR `ApproachReach.AppliesTo` · ACS `ReachSimulator.FlangeRuleApplies`.
 
 **온보드 동작.** 부족하면 액션을 `FAILED` + `inspectionFailed` 로 보고하며, 설명에
 `정차 거리 부족 — 필요 ≥ N mm, 현재 M mm` 를 싣는다(주행 전 차단이 아니라 검사 시도 시점 보고).
+
+#### 4.4.2 정차 온보드 보정 — `params.stationAdjust` `[N23]` (2026-10-31, AMR 1단계 구현)
+
+§4.4.1 의 필요 법선거리를 정차 이격 하나로 모든 영역에 맞추기 어렵다 — 용접선 높이·면 자세마다 필요 거리가 다르다.
+ACS 가 정차마다 **허락 범위**(ACS 개정 1.12 초안 §4.4.2)를 주면 AMR 이 도착 후 리치를 계산해 그 안에서 옮겨 선다.
+`allowedDeviation*` 은 계속 **도착 판정 허용 오차**로만 쓴다(의미 무변경).
+
+| 키 | 의미 | ACS 기본값 | AMR 1단계 |
+|---|---|---|---|
+| `maxForwardMm` | 노드 theta 방향(벽 쪽) 최대 전진 | 0 | 받기만 함 |
+| `maxBackwardMm` | theta 반대(벽에서 멀어짐) 최대 후진 | 400 | **사용** |
+| `maxLateralMm` | theta 직각 좌우 최대 이동 | 200 | 받기만 함 |
+| `maxThetaDeg` | theta 에서 최대 회전 | 5 | 받기만 함 |
+
+**온보드 동작** (`Vda5050OrderExecutor.TryAdjustStationAsync` → `WeldInspectionOrchestrator.PlanStationAdjustAsync`
+→ `SeamApproachResolver.SampleStationAsync` → `StationAdjustPlanner.Plan`):
+
+1. 원래 `nodePosition` 에 도착(`allowedDeviation*` 판정·정차 확인)한 뒤, **첫 액션 전에 한 번** 계획한다. 코봇은 주행 전 홈 복귀가 보장돼 있어 무동작이다.
+2. 노드의 `startWeldInspection` 용접선마다 **원래 정차점**과 거기서 100 mm 후진한 자리에서 면 법선거리(코봇 BASE 기준)를 `SeamBaseTransform` 으로 계산한다.
+   면 법선거리는 AMR 평면 이동에 선형이므로 두 표본의 기울기로 필요 후진량을 정확히 구한다 — 챔퍼처럼 법선이 기운 면도 같은 식이다.
+3. 필요 법선거리 = ② 후퇴(`inspection.approachStandoffMm`) + 공구 #1 길이 + 최소 플랜지 뻗음(§4.4.1)에 **여유 20 mm** 를 더한다.
+   용접선별 필요 후진 = 부족분 ÷ 기울기(10 mm 단위 올림). 허락 이내인 구간 중 **최댓값**만큼 물러난다.
+4. 보정 불가 구간 — 기울기 < 0.05(바닥·천장처럼 수평 이동이 법선거리를 바꾸지 않음) 또는 필요 후진 > `maxBackwardMm` — 은 운영 로그에 남기고,
+   그 구간의 ② 가 `정차 거리 부족` 으로 FAILED 하고 **`stationReachShortfall`**(§6.4)을 보고한다(규칙 5) — 수치는 `SeamApproachResolver` 가 실제 선 자리와
+   100 mm 후진점 2표본으로 계산(`StationAdjustPlanner.NeededBackwardMm`), 이미 물러난 양은 실행기가 `adjustedBackwardMm` 로 덧붙인다.
+5. 옮겨 서면 정렬(anchor) 캐시를 무효화하고(§8.1), 첫 검사 액션 `resultDescription` 앞머리에 `stationAdjusted dF=-340 dL=0 dTh=0.0;` 를 붙인다.
+6. 보정 주행이 실패하면(이동 명령 실패·도착 실패) **임무 실패**로 처리한다 — 중간에 끊긴 자리에서 검사를 이어 가면 정차점을 아무도 모른다.
+7. 계산 불가(장착 보정 없음·텔레스코픽 높이 모름·공구 길이 조회 실패·코봇 미연결·노드 theta 없음)면 보정을 생략하고 종전대로 진행한다.
+
+> 재시도 Order 가 오면 AMR 은 원래 정차점으로 돌아가(보정 자리는 `allowedDeviation` 밖) 다시 계획한다 — 결과가 같으면 같은 자리로 다시 물러난다.
 
 ### 4.5 Order 수명주기
 
@@ -446,6 +493,7 @@ AMR이 표준 준수 구현(전체 필드 발행)을 하는 것을 **권장**하
 | `orderValidationError` | Order 검증 실패로 폐기 — description에 orderId·사유 (§4.5.2) | WARNING |
 | `drivingFailed` | 목표 도달 불가·이동 미시작·주행 타임아웃 — **해당 Order의 전 액션을 FAILED로 종결 처리**(노드 미도달 상태) | WARNING |
 | `inspectionFailed` | 검사 액션 실패 — description에 actionId·사유 (actionStatus FAILED와 병기) | WARNING |
+| `stationReachShortfall` | **(N23 A안, 2026-10-31)** ② 검사위치 이동이 **리치(면 법선거리) 부족**으로 실패 — `inspectionFailed` 대신 이 유형으로 보고(그 액션은 FAILED). `errorReferences` `actionId`·`orderId`. description: `{actionId}: normalMm=800 requiredMm=1120 extraBackwardMm=340 adjustedBackwardMm=0` — `extraBackwardMm` = **실제 선 자리**에서 더 물러날 거리(여유 20 mm 포함, 10 mm 올림, −1 = 후진으로 해결 불가한 면: 바닥·천장), `adjustedBackwardMm` = 정차 보정(§4.4.2)으로 이미 물러난 양. 원래 정차점 기준 총량 = extra + adjusted. ACS: **액션별** `STATION_REACH_SHORTFALL` 알람(실패 집계는 액션 종결 경로 그대로, **자동 재정차 없음**) | WARNING |
 | `equipmentError` | 코봇/카메라/레이저/비전 등 온보드 장비 이상 | WARNING (지속 불가 시 FATAL) |
 | `localizationLost` | 맵 일치율 저하·재측위 실패·initPosition 거부 | WARNING |
 | `emergencyStopActive` | emergencyStop 수신에 의한 기능 정지 중 | WARNING |
@@ -553,10 +601,11 @@ ACS 생존신호는 VDA 5050 표준 로봇 `connection` 메시지의 상태 모�
 | `params.inspectionProfileId` | 검사(촬영/측정) 프로파일 ID (검사 타입 분류·레시피 계약은 §8.5 참고 — 제안, 현행 자유 문자열 무변경) |
 | `params.standoffMm` | 표면 이격 거리 [mm] — **AMR 미사용(수신·로깅만), 의미 확인 필요 `[N18]`**: §4.4 의 '정차 이격'(벽↔로봇 기준점, 기본 0.8 m)과 같은 단어인데 골든 예시는 400 mm 라 같은 값일 수 없다 |
 | `params.workingDistanceMm` | (선택) 작업 거리 [mm] — **AMR 미사용(수신·로깅만) `[N18]`** |
-| `params.anchorGroupId` | 정렬(anchor) 공유 그룹 — **같은 그룹의 연속 액션은 사이에 주행이 없었다면 정렬 재수행 생략 가능**. AMR 구현: 그룹 첫 액션이 ⑤~⑯에서 작업물 좌표계(T_N)를 등록하면, 이후 액션은 **⑤~⑯만 건너뛴다**. ②③④(검사위치 이동·카메라 거리·평탄면 센터링)는 매 액션 수행한다 — 액션마다 `seamStartW` 가 다르므로 ②가 그 위치로 다시 가야 하기 때문. 무효화: 주행 발생·시퀀스 실패·그룹 변경·신규 order. 코봇 홈 복귀는 **노드의 마지막 검사 액션에서만** 수행한다(액션 사이 홈 왕복 금지) |
+| `params.anchorGroupId` | 정렬(anchor) 공유 그룹 — **같은 그룹의 연속 액션은 사이에 주행이 없었다면 정렬 재수행 생략 가능**. AMR 구현: 그룹 첫 액션이 ⑤~⑯에서 작업물 좌표계(T_N)를 등록하면, 이후 액션은 **③~⑯(카메라 거리·평탄면·레이저 WD 정렬 포함)을 건너뛴다**. ②(검사위치 이동)만 매 액션 수행해 캐시한 좌표계를 이번 용접선 시작점으로 평행 이동한다. 캐시 키는 (orderId, anchorGroupId, 검사 방향, wall_code)이며 리프트 높이가 바뀌거나 알 수 없으면 버린다 — 액션마다 `seamStartW` 가 다르므로 ②가 그 위치로 다시 가야 하기 때문. 무효화: 주행 발생·시퀀스 실패·그룹 변경·신규 order. 코봇 홈 복귀는 **노드의 마지막 검사 액션에서만** 수행한다(액션 사이 홈 왕복 금지) |
 | `params.seqInGroup` | 그룹 내 순번 (1부터) |
 | `params.taskId` | **(1.6 신설, 선택)** 검사 작업(용접선 1구간)의 **영구 식별자** — GUID 문자열. ACS가 작업 등록 시 발급하며 run 이 바뀌어도 같은 용접선이면 같은 값. AMR은 이 액션의 **모든 CAPTURE_REQ에 같은 값**을 싣는다(비전 v3.2 [15-30], 16B 바이너리) → 비전→SAIGE `productId` (§8.1.1) |
 | `params.attempt` | **(1.6 신설, 선택)** 그 `taskId`의 **몇 번째 시도인지** — 정수 1~255, **ACS 발급**. AMR은 해석·증감 없이 CAPTURE_REQ [31]에 그대로 싣는다 (§8.1.1) |
+| `params.stationAdjust` | **(ACS 1.12 초안, 선택) `[N23]`** 정차 온보드 보정 허용 범위 `{maxForwardMm, maxBackwardMm, maxLateralMm, maxThetaDeg}`(4키 필수·0 이상) — 의미·온보드 동작은 §4.4.2. 같은 정차의 모든 액션에 같은 값. **없으면 보정하지 않는다**(종전). 형식 오류면 보정만 생략하고 검사는 진행(허락이 없을 뿐 검사 계약 위반이 아님 — `taskId` 와 달리 거부하지 않는다) |
 
 `wallNormalW`(벽 법선)는 **전송하지 않는다** — 툴 자세는 AMR이 `wall_code` 티칭으로 결정한다.
 
@@ -574,7 +623,7 @@ HD_AMR ──(CAPTURE_REQ 34B: taskId[15-30] · attempt[31] · captureSeq[32-33]
 | 항목 | 규약 |
 |---|---|
 | 발급 주체 | **HD_ACS** — `taskId`는 작업 등록 시, `attempt`는 Order 발행 시. AMR·비전 자체 발급·증감 금지 |
-| `taskId` 형식 | GUID 문자열(하이픈 36자). 비전 프레임에는 **RFC 4122 빅엔디안 16바이트**로 싣는다(바이트 순서는 §10 N16) |
+| `taskId` 형식 | GUID 문자열(하이픈 36자). 비전 프레임에는 **리틀엔디안 16바이트(.NET `Guid.ToByteArray` 배치 — 앞 세 묶음 4·2·2바이트 뒤집힘)**로 싣는다(2026-11-12 변경 — 그 전 빌드는 RFC 4122 빅엔디안, §10 N16) |
 | `taskId` 수명 | 검사 작업(용접선 1구간) 단위 **영구** — run 이 바뀌어도, 재검사해도 같은 값 |
 | `attempt` 규칙 | `taskId`별 누적 1~255 — **run 경계와 무관**하게 증가. 따라서 `(taskId, attempt, captureSeq)` 가 전역 유일 |
 | 액션 1건 ↔ 값 | 액션 1건 = TASK 1개 — 두 값은 그 액션의 **모든 촬영에 공통**이고, 촬영마다 증가하는 `captureSeq`(1부터)만 **AMR이 발번** |
@@ -770,7 +819,7 @@ HD_AMR ──(CAPTURE_REQ 34B: taskId[15-30] · attempt[31] · captureSeq[32-33]
 **(5-1) `CROSS4`/`CORNER3` 실행 시퀀스 구현 (2026-09-15 추가, 온보드 — 계약 무변경).** 위 (5)의 "실행 미구현" 부분이 해소됨. 게이트(Enabled)는 실기 검증 전이라 여전히 OFF 이며, 온보드 레시피 관리 UI(`/recipes`)에서 활성화한다.
 - **검사 방향 자동 유도 배선**: §4.4·§8.1 의 계약(seam 벡터 → 수평/수직 유도)이 ACS 경로에 실제 구현됨 — 노드 `theta` 를 검사 실행기에 전달, `SeamDirectionResolver` 가 벽면-로컬 투영으로 판정(45°±10° 경계·10mm 미만 seam 은 수평 폴백 + 로그). LINE 포함 전 타입 공통.
 - **`CROSS3-R*`(회전 4종)/`CROSS4-*`**: 정렬 1회로 등록된 작업물 좌표계 안에서 **`/inspection-points` 6-DOF 캡처 교시 프로필(`PoseAbsolute`)의 경유점을 실행**(코로게이션 법선·깊이 반영). CROSS3 는 회전별 프로필이 서로 다른 툴 자세/경유점을 담는다. 십자 패턴 런타임 생성(레시피 `PatternJson`)은 **제거 완료**(캡처 교시 단일화) — `CrossPatternGenerator`는 교시 시작 템플릿 전용. `anchorGroupId` 정렬 공유는 LINE 과 동일하게 동작.
-- **`CORNER3`**: 평탄면 정렬 체인 미적용 — 고정 티칭 슬롯(`corner3.{L|R}.{approach,face1..3,retreat}`, 좌/우 거울 별도 티칭) 직접 순회, SurfaceType=Corner 촬상. side 판별은 `wall_code` P*→L / S*→R. **F/A(마구리) 코너의 side 규칙 미확정** — N13 협의 필요(아래 ②).
+- **`CORNER3`**: 평탄면 정렬 체인 미적용 — 고정 티칭 슬롯(`corner3.{L|R}.{approach,face1..3,retreat}`, 좌/우 거울 별도 티칭) 직접 순회(SurfaceType 은 경유점 수동 지정 — 구 `Corner` 는 10종 체계에서 폐지). side 판별은 `wall_code` P*→L / S*→R. **F/A(마구리) 코너의 side 규칙 미확정** — N13 협의 필요(아래 ②).
 - **N13 잔여 협의 항목(2026-10-07 갱신)**:
   - ① `params.points` ✅ **HD_AMR 확정안 발송(ACS 사인오프 대기)** — 좌표계 **면-로컬 (u,v) mm, 원점 = 교차 중심**. **CROSS4** = 끝점 4개 순서 **+u→+v→−u→−v (CCW)**, 각 점 원점거리 = arm별 길이(개별화). **CROSS3** = 3점 **[줄기 끝(R0 에서 +u)·통과선 +v·통과선 −v]**. ⚠️ **실행 궤적 아님** — 실행은 캡처 교시 프로필(`PoseAbsolute`); points 는 교시 템플릿 시드 + arm 기하·비전 메타 **참조값**(INSPECTION_TYPES §6).
   - ② CORNER 거울 side 의 F/A 판별 규칙 — **미결**(CROSS 4문항과 무관, 별도 협의).
@@ -781,13 +830,13 @@ HD_AMR ──(CAPTURE_REQ 34B: taskId[15-30] · attempt[31] · captureSeq[32-33]
 
 | 구분 | `seamType` | `Surface` |
 |---|---|---|
-| 의미 | 용접라인의 **형태**(`LINE`/`CROSS`/`CORNER`) | 경유점의 **표면 형상**(Flat/Corner/Corrugation) |
+| 의미 | 용접라인의 **형태**(`LINE`/`CROSS`/`CORNER`) | 경유점의 **표면 형상**(SurfaceType 10종: 자동 Flat/Corrugation + 수동 8종) |
 | 단위 | 용접라인 1개 | 레시피 내 **경유점 1개** |
 | 결정 주체 | **HD_ACS** — 계획 단계에서 **도면으로 추출** → 액션 전달 | **HD_AMR** — 레시피 내부(티칭/유도) |
 | 용도 | AMR이 **어떤 레시피를 로딩**할지 선택 | 경유점마다 **촬영/조명 선택** |
 | 전송 | VDA `params.seamType`로 전송 | **전송 안 함**(AMR 내부 값) |
 
-→ ACS 책임은 `seamType`(+`wall_code`)까지다. 레시피를 로딩한 뒤 각 경유점의 `Surface`(Flat/Corner/Corrugation)에 따라 **조명·촬영을 선택**하는 것은 전적으로 HD_AMR 몫이며, ACS는 `Surface`를 알 필요도 보낼 필요도 없다.
+→ ACS 책임은 `seamType`(+`wall_code`)까지다. 레시피를 로딩한 뒤 각 경유점의 `Surface`(SurfaceType 10종)에 따라 **조명·촬영을 선택**하는 것은 전적으로 HD_AMR 몫이며, ACS는 `Surface`를 알 필요도 보낼 필요도 없다.
 
 ---
 
@@ -868,13 +917,14 @@ ACS는 비상정지와 동시에 **해당 로봇의 활성 run을 자동 중단(
 | N7 | actionParameters.value 직렬화 | JSON object 그대로 | ✅ object 수용 + 문자열 재파싱도 수용 — **폴백 스위치 불요 확정** |
 | N8 | 두절 구간 상세 이력 | 최신 state 스냅샷으로 충분 | ✅ 동의 (소급 재전송 미구현) |
 | N9 | MQTT 보안 | 평문 :1883 (폐쇄망) | ✅ 동의 (TLS 필요 판단 시 재협의) |
-| N10 | 정차 이격(standoff) 적정값 | 기본 0.8 m (영역별 조정) | 🔁 **1차 회신(2026-09-28, 잠정)** — **0.8 m 는 부족**(그 값이면 플랜지 뻗음 30 mm). 산출식 §4.4.1: 카메라 목표거리 + 툴 길이 + 최소 플랜지 뻗음 (+ T_A_B 전방 오프셋·편차 여유) ⇒ 400 + 370 + 350 = 1.12 m, **잠정 1.2 m 요청**. 근거: 벽 1.0 m 정차 실측 3회가 전부 손목 특이점(|J5| 2.1°)/`rc=38` — 플랜지 뻗음 230 mm. 최소 플랜지 뻗음 실측·T_A_B tx 확정 후 최종 회신. 온보드는 부족 시 액션 `FAILED` + `inspectionFailed` 로 "정차 거리 부족 — 필요 ≥ N mm, 현재 M mm" 보고 |
+| N10 | 정차 이격(standoff) 적정값 | 기본 0.8 m (영역별 조정) → **수직벽 1.2 m · 경사면 0.8 m** | ✅ **확정(2026-10-31)** — FR5-WML 오프라인 리치 분석(STEP 실측 DH·툴 TCP 375 mm, CT1 L1·L4 용접선 5316개)으로 1.2 m 요청을 확인: 수직벽 A·F·SM·PM 은 0.8 m 에서 0개·1.2 m 에서 전부 도달. 경사면은 필요 이동이 흩어져 0.8 m 유지. ACS 설정 `Acs:Area:VerticalStationStandoffM`. ← 🔁 **1차 회신(2026-09-28, 잠정)** — **0.8 m 는 부족**(그 값이면 플랜지 뻗음 30 mm). 산출식 §4.4.1: ② 거친 접근 거리 + 툴 길이 + 최소 플랜지 뻗음 (+ T_A_B 전방 오프셋·편차 여유) ⇒ 400 + 370 + 350 = 1.12 m, **잠정 1.2 m 요청**. 근거: 벽 1.0 m 정차 실측 3회가 전부 손목 특이점(|J5| 2.1°)/`rc=38` — 플랜지 뻗음 230 mm. 최소 플랜지 뻗음 실측·T_A_B tx 확정 후 최종 회신. 온보드는 부족 시 액션 `FAILED` + `inspectionFailed` 로 "정차 거리 부족 — 필요 ≥ N mm, 현재 M mm" 보고 |
 | N11 | Order 거부 보고 방식 | 폐기 + `orderValidationError` | ✅ 동의 (§4.5.2 그대로 구현) |
 | N12 | ACS 생존 신호 | ACS 전용 `connection` 토픽 + ONLINE/OFFLINE/Last Will, QoS 1·retain (§7.2) | ✅ **승인** (2026-09-03) |
 | N13 | 검사 타입 카탈로그·레시피 계약 | 검사 타입 카탈로그(§8.5) + **`seamType` × `wall_code` → 레시피 매핑(§8.5.1)** + HD_AMR 타입별 레시피 라이브러리 운용 | ⏳ **대기** — **온보드 카탈로그 정본화(2026-09-15): 독립 5종 형상**(`LINE`·`CROSS3` 3갈래·`CROSS4` 4갈래·`CORNER2` 2면·`CORNER3` 3면 = 17 profileId, §8.5/INSPECTION_TYPES.md). **계약 `seamType` enum 은 현행 3값(LINE/CROSS/CORNER) 무변경** — `CROSS3` 추가·`CORNER`→`CORNER2`/`CORNER3` 분리는 계약 변경이라 **본 N13에서 협의**. 현행: ACS 3종 선반영(2026-09-14), HD_AMR 매핑·실행 배선 완료(§8.5.1 (5)) — `LINE-*` 5종 실행 활성, `CROSS4-*`/`CORNER3` 매핑 후 게이트 OFF. **CROSS 캡처 교시로 단일화(2026-09-15)**: `/inspection-points` 6-DOF 캡처 절대 프로필을 실행(코로게이션 대응) — 패턴 수식(`PatternJson`) 런타임 생성 경로 **제거 완료**(레시피 필드·오케스트레이터 생성·`WaypointsOverride`·UI·DB 컬럼). `CrossPatternGenerator`는 교시 템플릿 전용. `wall_code` 규약 ACS 확정(정본 10코드, §8.4 `W03`→`SM` 교정). **계약 enum 확장 반영(2026-09-15)**: seamType = `LINE`/`CROSS3`/`CROSS4`/`CORNER2`/`CORNER3` — **파서·resolver·시드 구현 완료**(legacy `CROSS`/`CORNER` 수용). ACS 는 canonical 값 발행 전환 필요(값 합의). `CORNER2` 는 매핑·시드 완료이나 **실행 스텝 미구현(게이트 OFF)** — corner2 슬롯/캡처 배선 후속. **CROSS3 회전 4종 확장(2026-10-07)**: CROSS3 를 면 자세별 5종에서 회전별 4종(`CROSS3_R0`/`R90`/`R180`/`R270`, 면 무관)으로 재설계 — AMR(파서·resolver·16종 시드·UI·테스트) 반영 완료. **CROSS 통합 질의 4건 HD_AMR 확정안 발송(2026-10-07, 회신본 `ACS_REPLY_CROSS_UNIFY_2026-10-07.md`)**: R0 기준(줄기=면-로컬 +u)·회전 부호(법선 둘레 CCW, 작업물 좌표 기준)·`params.points`(면-로컬 (u,v), CCW 순, arm별 길이, 비실행 참조값)·정차(거친 정면 정차 + wobj 정렬 흡수). **ACS 사인오프 대기** — 4개 문자열·R0 기준·CCW 부호 확정 필요 |
 | N14 | 검사 작업 식별자 관통 | `params.taskId`(GUID 문자열, 영구) + `params.attempt`(1~255, taskId별 누적·ACS 발급) — 둘 다 선택 필드(§8.1·§8.1.1) | ✅ **양측 구현 완료(2026-09-21)** — ACS 발행 / AMR 파서→오케스트레이터→`SequenceContext.AcsTaskId·AcsAttempt`→CAPTURE_REQ v3.2. 키 위치(`params.*`)·attempt 누적 규칙은 구현으로 합의. **실기 관통 확인 잔여**(taskId 바이트 순서 대조와 함께 1회) |
 | N17 | `seamStartW`/`seamEndW` 의 **z 기준면** | ACS 의 T_W_D 는 2D(x,y,yaw) 라 z 는 변환되지 않고 **도면 전역 z**(선창 바닥=0)가 그대로 전송된다. AMR 은 자기 바닥을 0 으로 보므로 **L2 이상에서 층 바닥 높이(level_z)만큼 어긋난다**(L1 은 0 이라 드러나지 않음). 제안: **ACS 가 발행 시 `z − level_z[level−1]` 을 적용해 층 바닥 기준으로 보낸다**(AMR 이 level_z 를 몰라도 됨). 대안은 `level_z` 를 계약에 추가하는 것 | 🔴 **AMR 입장 확정 — ACS 조치 요청(2026-10-23)**: **`seamStartW`/`seamEndW` 의 z 는 해당 `level` 바닥 = 0 기준으로 발행**한다(ACS 가 `z − level_z[level−1]` 적용). AMR 은 층 바닥 높이를 모르며, 층이 바뀔 때마다 AMR 의 수동 보정값을 바꾸는 운용은 불가하다. 대안(`level_z` 계약 추가)은 채택하지 않는다. 근거: 2026-10-23 실기에서 ② 검사위치 이동(`moveToSeamStart`)이 접근점 z ≈ 9742 mm 로 계산돼 IK "config 0–7 모두 도달 불가" 5회 연속 실패 — 도면 전역 z 가 그대로 수신된 것으로 판단. AMR 조치: 접근점이 코봇 BASE 에서 3 m 를 넘으면 IK 전에 액션 `FAILED`("좌표 기준 오류 … N17") 로 즉시 보고(`SeamBaseTransform.CheckCoordinateDatum`). 수동 z 기준 보정(`Sequence.Inspection.ZDatumOffsetMm`)은 시험·임시 우회용으로만 남기며 운영값은 0 |
-| N18 | 검사 액션의 **거리 파라미터 2종 정리** | (a) `params.standoffMm` 이 §4.4 정차 이격과 같은 값인지 다른 값인지 명시 — 같다면 `nodePosition` 에 이미 반영된 값의 중복 전송이므로 **필드 폐기 또는 `stationStandoffMm` 등으로 개칭** 제안. (b) `params.workingDistanceMm` 은 AMR 미사용 — 존치/삭제 확인(존치 시 '참고 전용' 명기 요청). (c) '정차 거리 부족'을 ACS 가 **재정차**로 처리할 의사가 있으면 신호 방식 협의(현행 §6.4 7종에 해당 유형 없음) | ⏳ **신규 제기(2026-09-28)** — AMR 은 검사 툴의 표면 이격을 **온보드 레시피 카메라 목표거리**로 정한다(§4.4.1). ② 접근점 후퇴와 ③ 카메라 거리 정렬이 같은 값을 봐야 하기 때문(②가 물러난 자리를 ③이 실측으로 확정). 두 파라미터는 계속 수신하되 동작에 쓰지 않는다 — **계약 변경 없이도 현행대로 동작**하며, 정리는 문서 일관성 문제다 |
+| N18 | 검사 액션의 **거리 파라미터 2종 정리** | (a) `params.standoffMm` 이 §4.4 정차 이격과 같은 값인지 다른 값인지 명시 — 같다면 `nodePosition` 에 이미 반영된 값의 중복 전송이므로 **필드 폐기 또는 `stationStandoffMm` 등으로 개칭** 제안. (b) `params.workingDistanceMm` 은 AMR 미사용 — 존치/삭제 확인(존치 시 '참고 전용' 명기 요청). (c) '정차 거리 부족'을 ACS 가 **재정차**로 처리할 의사가 있으면 신호 방식 협의(현행 §6.4 7종에 해당 유형 없음) | ⏳ **신규 제기(2026-09-28)** — AMR 은 검사 툴의 표면 이격을 **온보드 값**으로 정한다(§4.4.1) — ② 거친 접근 거리(파라미터, 기본 400 mm)로 접근하고, ③ 카메라 거리 정렬·④⁺ 레이저 WD(기본 300 mm)가 실측으로 확정한다. 두 파라미터는 계속 수신하되 동작에 쓰지 않는다 — **계약 변경 없이도 현행대로 동작**하며, 정리는 문서 일관성 문제다 · **(c) 재정차 신호는 N23 A안 `stationReachShortfall`(§6.4)로 해소(2026-10-31)** |
+| N23 | **정차 온보드 보정 허용 범위** `params.stationAdjust` (§4.4.2·§8.1) — ACS 제기(2026-10-31, ACS 개정 1.12 초안) | ACS가 정차마다 AMR이 리치를 위해 `nodePosition`에서 옮겨 서도 되는 한계 `{maxForwardMm, maxBackwardMm, maxLateralMm, maxThetaDeg}`를 각 검사 액션 `params`에 싣는다. `allowedDeviation*`(도착 판정)은 무변경 | ⏳ **AMR 1단계 구현(2026-10-31)** — (a) 기준=원래 `nodePosition`·프레임=노드 theta 전진/좌측 횡 **수용**. (b) 보고 토큰 `stationAdjusted dF dL dTh;` **수용·구현**(첫 검사 액션 resultDescription 앞머리). (c) **확정(2026-10-31, A안)**: 범위 안에서도 리치 불가 → 옮기지 않고 그 액션 FAILED + 전용 errorType **`stationReachShortfall`**(§6.4, 수치 포함) 보고 — ACS 액션별 알람·자동 재정차 없음(N18 (c) 재정차 신호 항목은 이것으로 해소). (d) **회신(2026-10-31)**: 운용 외곽 앞 395(카메라 포함)·뒤 365·반폭 350 mm, 회전 중심 = 차체 중심(§4.4, STEP 파싱, 호이스트·안테나 탈거 운용). 원래 정차점 벽 여유 ≈ 205 mm, 후진 400 시 뒤로 765 mm 공간 필요 — 영역별 뒤 공간 판단·후진 상한은 ACS 몫 — ACS가 전역 설정 + 영역별 덮어쓰기(`station_max_backward_mm`, 0=후진 금지)로 확정(2026-10-31). AMR은 받은 `maxBackwardMm`만 따른다. **1단계 범위: 후진만 사용**(전진·횡·각은 받기만 하고 0 — 최대 리치 판정 모델이 없어 전진 필요를 판정할 수 없고, 횡은 실패 원인이 아니었다) |
 
 **AMR 구현 방식 고지 요약** (상세는 `VDA5050_AMR_REPLY.md` §3): allowedDeviation은 **도착 판정 허용 오차로만** 사용(미지정 시 0.1 m/0.1 rad) · 층별 맵은 AMR 내부 통합 맵으로 운용하되 계약(층별 mapId·좌표)은 그대로 준수 · **새 mapId는 재측위 검증 통과 시에만 보고**(실패 시 `localizationLost`) · 주행 실패 시 미도달 상태로 전 액션 FAILED+`drivingFailed` · 비상정지 시 진행 액션 FAILED+`emergencyStopActive`.
 
@@ -1028,20 +1078,20 @@ ACS는 비상정지와 동시에 **해당 로봇의 활성 run을 자동 중단(
 
 ### D.3 검사 레시피 경유점 `Surface` 유도 (온보드 구현 — 비계약)
 
-> `Surface`(Flat/Corner/Corrugation)는 §8.5.1 (6)에서 정리한 대로 **AMR 레시피 내부의 경유점별 촬영/조명 선택 키**이며 **ACS 계약과 무관**하다(ACS는 보내지 않는다). 본 절은 HD_AMR 온보드가 이를 유도하는 **현행 규칙**을 근거와 함께 남긴다. — 근거: `gony0811/HD_AMR` `Communication/Vision/VisionProtocol.cs`·`Service/Sequence/Steps/InspectionRunStep.cs`.
+> `Surface`(SurfaceType 10종)는 §8.5.1 (6)에서 정리한 대로 **AMR 레시피 내부의 경유점별 촬영/조명 선택 키**이며 **ACS 계약과 무관**하다(ACS는 보내지 않는다). 본 절은 HD_AMR 온보드가 이를 유도하는 **현행 규칙**을 근거와 함께 남긴다. — 근거: `gony0811/HD_AMR` `Communication/Vision/VisionProtocol.cs`·`Service/Sequence/Steps/InspectionRunStep.cs`.
 
 **두 층의 "Surface"** — 이름은 비슷하나 역할이 다르다.
 
 | 구분 | 값 | 단위 | 산출 | 용도 |
 |---|---|---|---|---|
-| **SurfaceType** | `Flat`(0x00) / `Corner`(0x01) / `Corrugation`(0x02) | **경유점** | 아래 규칙(θ) + 수동 오버라이드 | 촬영/조명 프리셋 선택 |
+| **SurfaceType** | 자동 `Flat`(0x00) / `Corrugation`(0x01), 수동 `Manual3Axis`(0x02) ~ `ManualEndMembraneCorrugation`(0x09) — 전체 표는 vision_interface.md §4 | **경유점** | 아래 규칙(θ) + 수동 오버라이드 | 촬영/조명 프리셋 선택 |
 | **Surface ID** | 0x01~0x0A (바닥·천장·좌현벽·우현벽·전벽·후벽·하부좌/우챔퍼·상부좌/우챔퍼) | **면(작업물)** | 면 선택 | 면 식별·(u,v) 축 규약 (현재 전부 Type=Flat) |
 
 **SurfaceType 자동 유도 규칙 (현행 코드).**
 - 경유점 툴 각 **`|θ| ≥ CorrugThresholdDeg`**(프로필 파라미터) → **`Corrugation`**, 아니면 **`Flat`**.
   - 근거: `InspectionRunStep.cs` — `Math.Abs(w.Theta) >= profile.CorrugThresholdDeg ? SurfaceType.Corrugation : SurfaceType.Flat`.
   - 의미: 코로게이션 마루는 툴을 기울여(큰 |θ|) 대면하고, 평탄부는 θ≈0. 임계각은 프로필별 값(`CorrugThresholdDeg`, 짝 파라미터 `CorrugStepDeg`).
-- **`Corner`(0x01)** 는 enum에 정의돼 있으나 **현 자동 규칙은 Flat/Corrugation 이진 판정만** 한다. Corner는 **수동 오버라이드**(`SurfaceManual`, Inspection 페이지)로 지정.
+- **자동 규칙은 Flat/Corrugation(0x00/0x01) 이진 판정만** 한다. 수동용접 8종(0x02~0x09)은 **수동 오버라이드**(`SurfaceManual`, Inspection/InspectionPoints 페이지)로 지정. 구 `Corner`(0x01)는 폐지 — 저장값은 Flat 으로 변환됨.
 - 캡처 요청마다 `SurfaceType`(경유점) + `Surface ID`(면)를 함께 실어 비전 S/W로 전송한다(`CaptureReqPayload`).
 
 **연동 관점 (2차 과제).** ACS가 `seamType`(§8.5.1)로 **레시피를 선택**하면, 그 레시피의 **경유점들이 위 규칙으로 각자 `SurfaceType`을 얻어 촬영/조명을 고른다**. 즉 **`seamType`(라인) → 레시피 로딩 / `Surface`(경유점) → 촬영** 의 2단계가 성립한다(§8.5.1 (6)).

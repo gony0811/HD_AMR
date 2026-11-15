@@ -7,12 +7,17 @@ public readonly record struct TowerLampState(bool Red, bool Yellow, bool Green);
 public static class IoTowerLampPolicy
 {
     /// <param name="paused">임무 일시정지(통신 단절 PAUSE/HOLD·startPause) — 황색(통신 단절 사양 §3). 알람보다 낮고 운전 모드보다 높다.</param>
-    public static TowerLampState? Resolve(bool auto, bool manual, bool alarm, bool paused = false)
+    /// <param name="attention">작업자 입력 대기(수동 비드 입력 팝업) — 녹색 점멸. 알람·일시정지보다 낮고 운전 모드보다 높다.</param>
+    /// <param name="blinkOn">점멸 중 지금 켜질 차례인지(<see cref="ManualBeadNotice.BlinkOn"/>).</param>
+    public static TowerLampState? Resolve(bool auto, bool manual, bool alarm, bool paused = false,
+        bool attention = false, bool blinkOn = false)
     {
         if (alarm)
             return new TowerLampState(Red: true, Yellow: false, Green: false);
         if (paused)
             return new TowerLampState(Red: false, Yellow: true, Green: false);
+        if (attention)
+            return new TowerLampState(Red: false, Yellow: false, Green: blinkOn);
         if (manual)
             return new TowerLampState(Red: false, Yellow: true, Green: false);
         if (auto)

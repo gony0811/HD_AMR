@@ -28,55 +28,20 @@ public static class WeldMaskAnalyzer
         double? peakProgressPos = null, string? peakLabel = null, RoiRect? peakRoi = null,
         double? peakCrossStart = null, double? peakCrossEnd = null)
     {
-        // 경계 스캔 → centerline
-        bool horiz = p.ProgressAxis == WeldProgressAxis.Horizontal;
-        int sCount = horiz ? roi.Width : roi.Height;
-        int crossCount = horiz ? roi.Height : roi.Width;
-        var centerCross = new double[sCount];
-        var runStart = new int[sCount];   // 슬라이스 비드 run 시작(ROI cross 좌표)
-        var runLen = new int[sCount];     // 그 run 길이(=비드 폭). 라벨 초안 마스크용.
-        var valid = new bool[sCount];
-        int validCount = 0;
-
-        for (int s = 0; s < sCount; s++)
-        {
-            // 열(또는 행)에서 마스크가 '연속으로 가장 긴 구간'(=비드 본체)을 찾고 그 중점을 쓴다.
-            // 첫~끝 span 방식과 달리, 위/아래로 떨어진 반사 점 하나에 중점이 끌려가지 않는다.
-            int bestStart = -1, bestLen = 0, curStart = -1, curLen = 0;
-            for (int c = 0; c < crossCount; c++)
-            {
-                int x = horiz ? s : c;
-                int y = horiz ? c : s;
-                if (m[y * roi.Width + x] > 0)
-                {
-                    if (curStart < 0) { curStart = c; curLen = 0; }
-                    curLen++;
-                    if (curLen > bestLen) { bestLen = curLen; bestStart = curStart; }
-                }
-                else { curStart = -1; curLen = 0; }
-            }
-            if (bestStart >= 0)
-            {
-                centerCross[s] = bestStart + (bestLen - 1) / 2.0;
-                runStart[s] = bestStart;
-                runLen[s] = bestLen;
-                valid[s] = true;
-                validCount++;
-            }
-        }
-
-        double coverage = sCount > 0 ? (double)validCount / sCount : 0;
-        if (validCount < 3 || coverage < 0.15)
+        // 경계 스캔 → centerline (OpenCV 무관 — WeldCenterlineScanner 로 분리해 macOS 추론 검증에서도 같은 방식 사용)
+        var sc = WeldCenterlineScanner.Scan(m, roi, p);
+        bool horiz = sc.Horizontal;
+        if (!sc.Ok)
             return new WeldDetectionResult
             {
                 Success = false,
-                Message = $"비드 후보 부족(coverage={coverage:P0}) — ROI/파라미터를 조정하세요.",
+                Message = $"비드 후보 부족(coverage={sc.Coverage:P0}) — ROI/파라미터를 조정하세요.",
                 OverlayJpeg = EncodeOverlay(bgr, roi, p, null, double.NaN, double.NaN, double.NaN, peakProgressPos, peakLabel, peakRoi, peakCrossStart, peakCrossEnd),
             };
-
-        // 이동평균 smoothing
-        if (p.SmoothingWindow >= 2)
-            SmoothValid(centerCross, valid, p.SmoothingWindow);
+        int sCount = sc.SCount;
+        var centerCross = sc.CenterCross; var valid = sc.Valid; var runStart = sc.RunStart; var runLen = sc.RunLen;
+        int validCount = sc.ValidCount;
+        double confidence = sc.Confidence;
 
         // 기준선(d 의 기준): Peak 모드면 Peak 중심선, 아니면 FOV(전체 화면) 가로/세로 센터선(회색 점선).
         double crossOffset = horiz ? roi.Y : roi.X;
@@ -84,8 +49,7 @@ public static class WeldMaskAnalyzer
             ? pr
             : (horiz ? fullH : fullW) / 2.0;
 
-        // 비드 중심선을 '직선'으로: 유효 (s, cross) 점들에 최소제곱 직선 피팅(cross ≈ a·s + b).
-        var (a, b, fitOk) = FitLine(centerCross, valid, sCount);
+        var (a, b, fitOk) = (sc.A, sc.B, sc.FitOk);
 
         // 측정 진행축 위치 = 자홍 Peak 선 위치(캡처 시 전달됨). 없으면 ROI 중앙. full→ROI-local 변환·클램프.
         double targetS = peakProgressPos is { } pp0 && !double.IsNaN(pp0)
@@ -118,25 +82,7 @@ public static class WeldMaskAnalyzer
         double d = weldCenterFull - refPos;
 
         // 초록 중심선 = 피팅 직선의 두 끝점(유효 s 범위) → 최대한 일직선. 피팅 실패 시 슬라이스 중점으로 폴백.
-        int sFirst = -1, sLast = -1;
-        for (int s = 0; s < sCount; s++) if (valid[s]) { if (sFirst < 0) sFirst = s; sLast = s; }
-        var pts = new List<PixelPoint>(fitOk ? 2 : validCount);
-        if (fitOk && sFirst >= 0)
-        {
-            foreach (int s in new[] { sFirst, sLast })
-            {
-                double cross = a * s + b;
-                pts.Add(horiz ? new PixelPoint(roi.X + s, roi.Y + cross) : new PixelPoint(roi.X + cross, roi.Y + s));
-            }
-        }
-        else
-        {
-            for (int s = 0; s < sCount; s++)
-            {
-                if (!valid[s]) continue;
-                pts.Add(horiz ? new PixelPoint(roi.X + s, roi.Y + centerCross[s]) : new PixelPoint(roi.X + centerCross[s], roi.Y + s));
-            }
-        }
+        var pts = WeldCenterlineScanner.Points(sc, roi);
 
         // 비드 폭 span(라벨 초안 마스크용)은 실제 마스크 run 그대로 유지.
         var spans = new List<BeadSpan>(validCount);
@@ -160,7 +106,7 @@ public static class WeldMaskAnalyzer
         return new WeldDetectionResult
         {
             Success = true,
-            Confidence = Math.Clamp(coverage, 0, 1),
+            Confidence = Math.Clamp(confidence, 0, 1),
             LineFitOk = fitOk,
             Centerline = pts,
             ReferencePos = refPos,
@@ -183,41 +129,6 @@ public static class WeldMaskAnalyzer
         double? peakCrossStart = null, double? peakCrossEnd = null)
         => EncodeOverlay(bgr, roi, p, null, double.NaN, double.NaN, double.NaN,
             peakProgressPos, peakLabel, peakRoi, peakCrossStart, peakCrossEnd);
-
-    /// <summary>
-    /// 유효 (s, cross) 점들에 최소제곱 직선(cross = a·s + b)을 피팅한다. 비드 중심선을 '일직선'으로
-    /// 그리고, 임의의 진행 위치에서 중심 cross 를 안정적으로 얻기 위함. 점&lt;2 또는 특이(수직)면 ok=false.
-    /// </summary>
-    private static (double A, double B, bool Ok) FitLine(double[] cross, bool[] valid, int n)
-    {
-        double sx = 0, sy = 0, sxx = 0, sxy = 0; int m = 0;
-        for (int s = 0; s < n; s++)
-        {
-            if (!valid[s]) continue;
-            sx += s; sy += cross[s]; sxx += (double)s * s; sxy += (double)s * cross[s]; m++;
-        }
-        if (m < 2) return (0, 0, false);
-        double denom = m * sxx - sx * sx;
-        if (Math.Abs(denom) < 1e-6) return (0, 0, false);
-        double a = (m * sxy - sx * sy) / denom;
-        double b = (sy - a * sx) / m;
-        return (a, b, true);
-    }
-
-    /// <summary>유효 구간에 대해 이동평균. 결측 구간은 건너뛰고 주변 유효값만 평균.</summary>
-    private static void SmoothValid(double[] v, bool[] valid, int window)
-    {
-        var src = (double[])v.Clone();
-        int half = Math.Max(1, window / 2);
-        for (int i = 0; i < v.Length; i++)
-        {
-            if (!valid[i]) continue;
-            double sum = 0; int n = 0;
-            for (int j = i - half; j <= i + half; j++)
-                if (j >= 0 && j < v.Length && valid[j]) { sum += src[j]; n++; }
-            if (n > 0) v[i] = sum / n;
-        }
-    }
 
     /// <summary>인덱스 주변 ±r 의 유효값 평균(타깃 지점 노이즈 완화). 없으면 가장 가까운 유효값.</summary>
     private static double SampleAround(double[] v, bool[] valid, int idx, int r)

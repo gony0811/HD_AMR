@@ -1,5 +1,6 @@
 using System.Text.Json;
 using HD.AMR.App.Communication.Vda5050;
+using HD.AMR.App.Service.Motion;
 
 namespace HD.AMR.App.Service.Inspection;
 
@@ -25,7 +26,7 @@ public static class WeldInspectionActionParser
         error = null;
 
         JsonElement? jobRefEl = null, positionEl = null, paramsEl = null;
-        JsonElement? taskIdEl = null, attemptEl = null;
+        JsonElement? taskIdEl = null, attemptEl = null, liftStrokeEl = null;
         foreach (var p in action.ActionParameters)
         {
             var el = ToElement(p.Value);
@@ -34,9 +35,10 @@ public static class WeldInspectionActionParser
                 case "jobRef": jobRefEl = el; break;
                 case "position": positionEl = el; break;
                 case "params": paramsEl = el; break;
-                // 계약상 taskId/attempt 는 params 안이지만, 최상위 key 로 실려 와도 받는다(전환기 방어).
+                // 계약상 taskId/attempt/liftStrokeMm 은 params 안이지만, 최상위 key 로 실려 와도 받는다(전환기 방어).
                 case "taskId": taskIdEl = el; break;
                 case "attempt": attemptEl = el; break;
+                case "liftStrokeMm": liftStrokeEl = el; break;
             }
         }
 
@@ -88,7 +90,7 @@ public static class WeldInspectionActionParser
         if (seqInGroup is null or < 1) { error = $"params.seqInGroup 부적합 ({seqInGroup?.ToString() ?? "누락"}, 1 이상)"; return false; }
 
         // standoffMm — 수신은 하위호환으로 받되 부재를 허용한다. 툴을 면에서 얼마나 이격할지는 AMR 이
-        // 정하는 값이라(② 는 ③ 카메라 목표거리만큼 물러난다) 런타임이 읽지 않는다. 계약에서 같은 단어가
+        // 정하는 값이라(② 는 inspection.approachStandoffMm 만큼 물러난다) 런타임이 읽지 않는다. 계약에서 같은 단어가
         // §4.4 정차 이격(ACS 소관)에도 쓰여 혼선이 있다 — §10 N18. 값은 로깅·대조용으로만 보관한다.
         var standoff = GetDouble(pr, "standoffMm") ?? 0.0;
 
@@ -115,6 +117,9 @@ public static class WeldInspectionActionParser
             attempt = (byte)parsedAttempt;
         }
 
+        if (!TryParseLiftStrokeMm(liftStrokeEl, pr, out var liftStrokeMm, ref error))
+            return false;
+
         request = new WeldInspectionRequest(
             JobRef: jobRef!,
             SeamStartW: seamStart!,
@@ -128,7 +133,8 @@ public static class WeldInspectionActionParser
             AnchorGroupId: anchorGroupId!,
             SeqInGroup: seqInGroup.Value,
             TaskId: taskId,
-            Attempt: attempt);
+            Attempt: attempt,
+            LiftStrokeMm: liftStrokeMm);
         return true;
     }
 
@@ -143,13 +149,15 @@ public static class WeldInspectionActionParser
         request = null;
         error = null;
 
-        JsonElement? jobRefEl = null, positionEl = null;
+        JsonElement? jobRefEl = null, positionEl = null, paramsEl = null, liftStrokeEl = null;
         foreach (var p in action.ActionParameters)
         {
             switch (p.Key)
             {
                 case "jobRef": jobRefEl = ToElement(p.Value); break;
                 case "position": positionEl = ToElement(p.Value); break;
+                case "params": paramsEl = ToElement(p.Value); break;
+                case "liftStrokeMm": liftStrokeEl = ToElement(p.Value); break;
             }
         }
 
@@ -172,8 +180,59 @@ public static class WeldInspectionActionParser
             return false;
         }
 
-        request = new MoveToSeamStartRequest(jobRef!, seamStart!, seamEnd!, drawingPos);
+        var prObj = paramsEl is { ValueKind: JsonValueKind.Object } po ? po : (JsonElement?)null;
+        if (!TryParseLiftStrokeMm(liftStrokeEl, prObj, out var liftStrokeMm, ref error))
+            return false;
+
+        request = new MoveToSeamStartRequest(jobRef!, seamStart!, seamEnd!, drawingPos, liftStrokeMm);
         return true;
+    }
+
+    /// <summary>
+    /// `params.liftStrokeMm`(단위 mm, 0~1000) 해석. 선택 필드라 없거나 null 이면 null 반환(성공).
+    /// 실려 왔는데 숫자가 아니거나 0~1000 범위 밖이면 거부한다.
+    /// </summary>
+    private static bool TryParseLiftStrokeMm(JsonElement? topEl, JsonElement? paramsObj, out double? strokeMm, ref string? error)
+    {
+        strokeMm = null;
+        var el = topEl ?? (paramsObj is { } pr && pr.TryGetProperty("liftStrokeMm", out var lsEl) ? lsEl : (JsonElement?)null);
+        if (el is not { ValueKind: not JsonValueKind.Null } v)
+            return true;
+
+        if (v.ValueKind != JsonValueKind.Number
+            || !v.TryGetDouble(out var parsed) || !double.IsFinite(parsed) || parsed is < 0.0 or > 1000.0)
+        {
+            error = "params.liftStrokeMm 부적합 (0~1000 mm 숫자 필요)";
+            return false;
+        }
+        strokeMm = parsed;
+        return true;
+    }
+
+    /// <summary>
+    /// `params.stationAdjust`(사양 §4.4.2, N23 초안 — 정차 온보드 보정 허용 범위) 해석.
+    /// 없으면 null·error null(보정 안 함, 종전 동작). 실려 왔는데 4키 중 하나라도 빠지거나 음수면 null + error —
+    /// 검사 자체는 막지 않는다(허락이 없을 뿐 검사 계약 위반은 아니다). 호출측이 사유를 로그로 남긴다.
+    /// </summary>
+    public static StationAdjustLimits? TryParseStationAdjust(VdaAction action, out string? error)
+    {
+        error = null;
+        var paramsEl = action.ActionParameters.FirstOrDefault(p => p.Key == "params") is { } p0 ? ToElement(p0.Value) : null;
+        if (paramsEl is not { ValueKind: JsonValueKind.Object } pr
+            || !pr.TryGetProperty("stationAdjust", out var sa) || sa.ValueKind == JsonValueKind.Null)
+            return null;
+        if (sa.ValueKind != JsonValueKind.Object)
+        { error = $"params.stationAdjust 은 JSON object 여야 합니다 (수신: {sa.ValueKind})"; return null; }
+
+        var values = new double[4];
+        string[] keys = { "maxForwardMm", "maxBackwardMm", "maxLateralMm", "maxThetaDeg" };
+        for (var i = 0; i < keys.Length; i++)
+        {
+            if (GetDouble(sa, keys[i]) is not { } v || double.IsNaN(v) || v < 0)
+            { error = $"params.stationAdjust.{keys[i]} 부적합 (0 이상 숫자 필요)"; return null; }
+            values[i] = v;
+        }
+        return new StationAdjustLimits(values[0], values[1], values[2], values[3]);
     }
 
     // ── 헬퍼 ─────────────────────────────────────────────────────────
@@ -206,7 +265,9 @@ public static class WeldInspectionActionParser
             V: GetDouble(dp, "v"),
             X: GetDouble(dp, "x") ?? 0,
             Y: GetDouble(dp, "y") ?? 0,
-            Z: GetDouble(dp, "z") ?? 0);
+            Z: GetDouble(dp, "z") ?? 0,
+            UEnd: GetDouble(dp, "uEnd"),
+            VEnd: GetDouble(dp, "vEnd"));
         return true;
     }
 

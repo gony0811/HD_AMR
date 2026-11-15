@@ -538,7 +538,7 @@ else
             string extra;
             if (mask is { } mk)
             {
-                string mp = Path.Combine(r.Dir, $"{r.Timestamp}_{mk.Modality}_maskdraft.png");
+                string mp = Path.Combine(r.Dir, HD.AMR.App.Service.Vision.LabelFiles.AreaName(r.Timestamp, mk.Modality));
                 await File.WriteAllBytesAsync(mp, mk.Png);
                 extra = $" + 마스크초안({mk.Modality}, 신뢰도 {mk.Confidence:P0})";
             }

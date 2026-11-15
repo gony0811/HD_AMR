@@ -180,12 +180,21 @@ public sealed partial class RecipeRow : ObservableObject
     /// <summary>검사 속도 [%] — ⑱ 경유점 순회(스캔) 전용. 비움=이동 속도와 동일.</summary>
     [ObservableProperty] private double? _inspectVelPercent;
 
+    /// <summary>검사 가속도 [%] — ⑱ 순회 동안만 전역 가속도 배율 변경, 끝나면 100% 복원. 비움=변경 안 함.</summary>
+    [ObservableProperty] private double? _inspectAccPercent;
+
     /// <summary>티칭 프로필 선택지 — [0]=미지정, 이후 레시피 타입과 같은 SeamType 프로필(최신 저장순).</summary>
     public List<ProfileOption> ProfileOptions { get; }
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(ProfileMissing))]
     private ProfileOption? _selectedProfile;
+
+    /// <summary>LINE 전용 — 챔퍼 면 수직(경사 방향, 피치 254.6mm) 진행에 쓸 티칭 프로필. 선택지는 <see cref="ProfileOptions"/> 와 같다.</summary>
+    [ObservableProperty] private ProfileOption? _selectedChamferSlopeProfile;
+
+    /// <summary>챔퍼 수직용 프로필은 LINE 레시피에만 있다.</summary>
+    public bool IsLine => _entity.Id == RecipeIds.Line;
 
     /// <summary>생성(로드) 이후 편집되었고 아직 저장하지 않음 — 목록에 ● 표시.</summary>
     [ObservableProperty] private bool _isDirty;
@@ -206,7 +215,9 @@ public sealed partial class RecipeRow : ObservableObject
     partial void OnCameraTargetDistanceMmChanged(double? value) => IsDirty = true;
     partial void OnMoveVelPercentChanged(double? value) => IsDirty = true;
     partial void OnInspectVelPercentChanged(double? value) => IsDirty = true;
+    partial void OnInspectAccPercentChanged(double? value) => IsDirty = true;
     partial void OnSelectedProfileChanged(ProfileOption? value) => IsDirty = true;
+    partial void OnSelectedChamferSlopeProfileChanged(ProfileOption? value) => IsDirty = true;
 
     /// <summary>저장 완료 — 미저장 표시 해제.</summary>
     public void MarkSaved() => IsDirty = false;
@@ -302,6 +313,7 @@ public sealed partial class RecipeRow : ObservableObject
         _cameraTargetDistanceMm = e.CameraTargetDistanceMm;
         _moveVelPercent = e.MoveVelPercent;
         _inspectVelPercent = e.InspectVelPercent;
+        _inspectAccPercent = e.InspectAccPercent;
 
         var want = InspectionRecipeResolver.ProfileSeamTypeOf(e.Id);
         ProfileOptions = new List<ProfileOption> { ProfileOption.None };
@@ -309,6 +321,7 @@ public sealed partial class RecipeRow : ObservableObject
             .Where(p => InspectionRecipeService.IsSeamMatch(p, want))
             .Select(p => new ProfileOption(p.Id, $"{p.Name} ({CountWaypoints(p.WaypointsJson)}점 · {p.UpdatedAt.ToLocalTime():MM-dd HH:mm})")));
         _selectedProfile = ProfileOptions.FirstOrDefault(o => o.Id == e.InspectionProfileId) ?? ProfileOption.None;
+        _selectedChamferSlopeProfile = ProfileOptions.FirstOrDefault(o => o.Id == e.ChamferSlopeProfileId) ?? ProfileOption.None;
     }
 
     /// <summary>저장된 StepKeysJson → 키 목록. null/빈/깨진 값은 빈 목록(= 풀시퀀스).</summary>
@@ -343,7 +356,9 @@ public sealed partial class RecipeRow : ObservableObject
         _entity.CameraTargetDistanceMm = CameraTargetDistanceMm;
         _entity.MoveVelPercent = MoveVelPercent is { } mv ? Math.Clamp((int)Math.Round(mv), 1, 100) : null;
         _entity.InspectVelPercent = InspectVelPercent is { } iv ? Math.Clamp((int)Math.Round(iv), 1, 100) : null;
+        _entity.InspectAccPercent = InspectAccPercent is { } ia ? Math.Clamp((int)Math.Round(ia), 1, 100) : null;
         _entity.InspectionProfileId = IsCorner3 ? null : SelectedProfile?.Id;
+        _entity.ChamferSlopeProfileId = IsLine ? SelectedChamferSlopeProfile?.Id : null;
         return _entity;
     }
 }

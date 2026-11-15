@@ -1,4 +1,5 @@
 using HD.AMR.App.Communication;
+using HD.AMR.App.Models;
 using Microsoft.Extensions.Logging;
 
 namespace HD.AMR.App.Service.Sequence.Steps;
@@ -10,10 +11,11 @@ namespace HD.AMR.App.Service.Sequence.Steps;
 /// 세로면 <see cref="WeldSequenceSupport.ImageYAxisKey"/>)의 툴축 매핑(부호 포함)을 쓴다 —
 /// 과거 BASE X 하드코딩은 헤드 방향에 따라 광축(툴 ±Z) 성분이 섞이는 좌표계 오류였음(③의 BASE −Y 버그와 동일 계열).
 ///
-/// 개루프 1회 이동 후 재측정을 <b>한 번만</b> 수행한다(모션 없음). 반복 수렴 루프는 두지 않는다.
-/// 센터링 정밀도 자체는 중요하지 않다 — 후속 비드 찾기가 그 프레임에서 Peak 를 다시 재기 때문이다.
-/// 재측정의 실제 목적은 ImageXAxis 매핑 오설정을 조기에 잡아내는 것이다.
-/// 축/부호가 틀리면 이격이 오히려 커지므로, 그때 명시적으로 실패시킨다.
+/// 개루프 1회 이동 후 재측정해 ImageXAxis 매핑 오설정(이격이 오히려 커짐)을 잡아낸다.
+/// 잔차가 <see cref="ResidualMaxKey"/>(기본 5mm)를 넘으면 최대 2회 보정 이동한다. 그래도 남으면 실패시키지 않고
+/// 경고만 남긴 채 진행한다(보정이 발산하거나 Peak 를 놓치면 그 보정 이동은 되돌린다) —
+/// 이후 ⑦⁺/⑪⁺는 cross 축만 움직이므로 진행축 잔차가 그대로 작업물 좌표계 점1/점2 의 오차가 된다
+/// (예: Peak1 −158mm 측정 → 100mm 클램프 이동 → 잔차 −58mm 가 원점 밀림으로 남던 문제).
 /// </summary>
 public class PeakCenteringStep : ISequenceStep
 {
@@ -32,6 +34,37 @@ public class PeakCenteringStep : ISequenceStep
 
     /// <summary>모션 후 안정화 대기(ms).</summary>
     private const int SettleMs = 500;
+
+    /// <summary>센터링 후 남아도 되는 진행축 잔차(mm). 넘으면 보정 이동을 더 한다(그래도 남으면 경고 후 진행, 0=보정 안 함).
+    /// 잔차는 그대로 작업물 좌표계 점1/점2 의 진행축 오차가 된다(⑦⁺/⑪⁺는 cross 축만 움직인다).</summary>
+    public const string ResidualMaxKey = "Sequence.Peak.CenterResidualMaxMm";
+    public const double DefaultResidualMaxMm = 5.0;
+
+    /// <summary>잔차 보정 이동 최대 횟수.</summary>
+    private const int MaxCorrections = 2;
+
+    /// <summary>
+    /// 축 부호 검사를 하는 최소 이동량(mm). 검사는 재측정값이 "제대로 갔을 때(측정 − 이동)"와 "부호가 반대일 때(측정 + 이동)"
+    /// 중 어느 쪽에 가까운지로 판정하는데, 두 예상값의 간격이 이동량의 2배뿐이라 이동이 작으면 Peak 측정 흔들림(수 mm)만으로
+    /// 뒤집힌다(실기 2026-11-12 T L4-R10C09: −4.8mm 측정, 4.8mm 이동, 재측정 −4.8mm → 두 예상값 0 / −9.6 의 한가운데라
+    /// "반대로 움직였다"로 오판. 같은 실행의 Peak1 은 같은 축 설정으로 −36.3 → −2.1mm 로 정상이었다).
+    /// </summary>
+    internal const double MinSignCheckMoveMm = 15.0;
+
+    /// <summary>측정 이격이 이미 허용 잔차 안이면 이동할 필요가 없다(허용치 0 = 보정 안 함 설정이면 항상 이동).</summary>
+    internal static bool AlreadyCentered(double offsetMm, double residualMaxMm)
+        => residualMaxMm > 0 && Math.Abs(offsetMm) <= residualMaxMm;
+
+    /// <summary>
+    /// 재측정 결과가 축 부호 오설정을 가리키는지. 이동량이 <see cref="MinSignCheckMoveMm"/> 미만이면 판정하지 않는다(false).
+    /// </summary>
+    internal static bool LooksLikeWrongSign(double initialOffsetMm, double movedMm, double residualMm)
+    {
+        if (Math.Abs(movedMm) < MinSignCheckMoveMm) return false;
+        var expected = initialOffsetMm - movedMm;
+        var wrongSign = initialOffsetMm + movedMm;
+        return Math.Abs(residualMm - wrongSign) < Math.Abs(residualMm - expected);
+    }
 
     /// <param name="peakId">1 또는 2. DI 에서 <c>ActivatorUtilities.CreateInstance</c> 로 주입되므로 첫 인자여야 한다.</param>
     public PeakCenteringStep(
@@ -66,12 +99,15 @@ public class PeakCenteringStep : ISequenceStep
         return StepValidation.Ok();
     }
 
-    public async Task<StepResult> ExecuteAsync(SequenceContext context, CancellationToken ct)
+    public Task<StepResult> ExecuteAsync(SequenceContext context, CancellationToken ct)
+        => BundleTeach.RunWithPoint2FallbackAsync(_peakId, context, _cobot, _param, _logger, ct, RunAsync);
+
+    private async Task<StepResult> RunAsync(SequenceContext context, CancellationToken ct)
     {
         if (context.Bag[WeldSequenceSupport.OffsetMmBagKey(_peakId)] is not double initialOffsetMm)
             return StepResult.Fail($"Peak{_peakId} 측정값을 읽을 수 없습니다 — 앞 단계를 다시 실행하세요.");
 
-        var progressAxis = WeldSequenceSupport.ApplyProgressAxis(_weld, context);
+        var (progressAxis, axisSrc) = await WeldSequenceSupport.ApplyProgressAxisAsync(_weld, context, _cobot, _param, ct);
         var axisKey = WeldSequenceSupport.ProgressToolAxisKey(progressAxis);
 
         // ④와 동일 규약: d = 타깃 − 센터(양수 = 진행축 + 방향)를 부호 반전 없이 그대로 싣는다.
@@ -82,6 +118,12 @@ public class PeakCenteringStep : ISequenceStep
         if (Math.Abs(moveMm) < SkipMoveMm)
             return StepResult.Ok(
                 $"Peak{_peakId} 이미 센터 근방 ({initialOffsetMm:+0.0;-0.0}mm) — 이동 생략.");
+
+        // 이미 허용 잔차 안이면 움직이지 않는다 — 센터링 후 남아도 되는 잔차와 같은 기준.
+        var residualMax = await _param.GetDoubleAsync(ResidualMaxKey) ?? DefaultResidualMaxMm;
+        if (AlreadyCentered(initialOffsetMm, residualMax))
+            return StepResult.Ok(
+                $"Peak{_peakId} 이미 허용 범위 안 ({initialOffsetMm:+0.0;-0.0}mm, 허용 ±{residualMax:0.#}mm) — 이동 생략.");
 
         var clamped = Math.Clamp(moveMm, -MaxCenteringMoveMm, MaxCenteringMoveMm);
         if (Math.Abs(clamped - moveMm) > 1e-6)
@@ -99,8 +141,8 @@ public class PeakCenteringStep : ISequenceStep
         FlatSurfaceCenteringService.ApplyAxis(offset, toolAxis, clamped);
 
         _logger.LogInformation(
-            "Peak{Id} 센터링: 진행축={Prog}, 툴{Axis} {Off:+0.0;-0.0}mm (측정 {Meas:+0.0;-0.0}mm)",
-            _peakId, progressAxis, FlatSurfaceCenteringService.AxisName(toolAxis), clamped, initialOffsetMm);
+            "Peak{Id} 센터링: 진행축={Prog}({Src}), 툴{Axis} {Off:+0.0;-0.0}mm (측정 {Meas:+0.0;-0.0}mm)",
+            _peakId, progressAxis, axisSrc, FlatSurfaceCenteringService.AxisName(toolAxis), clamped, initialOffsetMm);
 
         var rc = await _cobot.Rpc.MoveByToolOffsetAsync(anchor, user: 0, offset,
             tool: context.Tool, vel: context.Velocity, ct: ct);
@@ -114,7 +156,17 @@ public class PeakCenteringStep : ISequenceStep
         if (roi is null)
             return StepResult.Fail("재측정용 Peak ROI 를 만들 수 없습니다.");
 
-        var r2 = await _weld.FindPeakAsync(roi, ct);
+        // 이동 후 같은 Peak 가 있을 예상 이격 = 측정 − 이동. ROI 가 Peak 간격보다 넓으면 옆 Peak 도 들어오므로
+        // 재측정은 그 예상 위치에 가장 가까운 Peak 를 고르게 한다(실기 2026-11-06 19:18 PU: −158.6 측정, −100 이동(클램프) 후
+        // 기대 −58.6 인데 카메라에 더 가까운 옆 Peak +218.8 을 잡아 '이격 증가'로 오판).
+        var expectedMm = initialOffsetMm - clamped;
+        var mmPerPx = context.Bag.TryGetValue(WeldSequenceSupport.PeakFindBagKey(_peakId), out var r1Obj)
+                      && r1Obj is PeakFindResult { OffsetPx: var px1 } && Math.Abs(px1) > 1.0
+            ? initialOffsetMm / px1
+            : 0.0;
+        var expectedPx = mmPerPx > 0 ? expectedMm / mmPerPx : 0.0;
+
+        var r2 = await _weld.FindPeakAsync(roi, ct, expectedPx);
         if (!r2.Found)
             return StepResult.Fail(
                 $"이동 후 Peak{_peakId} 미검출 — '{axisKey}' 매핑" +
@@ -122,11 +174,70 @@ public class PeakCenteringStep : ISequenceStep
 
         var (residualMm, scaleNote) = WeldSequenceSupport.ResolveOffsetMm(r2, _weld, _camera);
 
-        if (Math.Abs(residualMm) >= Math.Abs(initialOffsetMm))
+        // 축 부호가 틀렸으면 Peak 는 측정 + 이동 쪽으로 간다. 재측정이 그쪽 예상에 더 가까울 때만 부호 오설정으로 본다.
+        var wrongSignMm = initialOffsetMm + clamped;
+        _logger.LogInformation(
+            "Peak{Id} 재측정: {Res:+0.0;-0.0}mm (예상 {Exp:+0.0;-0.0}mm, 부호 반대면 {Wrong:+0.0;-0.0}mm, ROI 내 Peak {N}개)",
+            _peakId, residualMm, expectedMm, wrongSignMm, r2.PeakCount);
+        if (Math.Abs(clamped) < MinSignCheckMoveMm)
+            _logger.LogInformation(
+                "Peak{Id} 이동량 {Move:+0.0;-0.0}mm 가 {Min:0}mm 미만 — 축 부호 검사 생략(측정 흔들림과 구분되지 않음)",
+                _peakId, clamped, MinSignCheckMoveMm);
+        if (LooksLikeWrongSign(initialOffsetMm, clamped, residualMm))
             return StepResult.Fail(
-                $"이격거리가 증가했습니다 ({initialOffsetMm:+0.0;-0.0} → {residualMm:+0.0;-0.0}mm) — " +
-                $"'{axisKey}' 를 현재 툴{FlatSurfaceCenteringService.AxisName(toolAxis)} 의 " +
+                $"Peak 가 반대로 움직였습니다 (이동 전 {initialOffsetMm:+0.0;-0.0} → {residualMm:+0.0;-0.0}mm, " +
+                $"예상 {expectedMm:+0.0;-0.0}mm) — '{axisKey}' 를 현재 툴{FlatSurfaceCenteringService.AxisName(toolAxis)} 의 " +
                 "반대 부호 축으로 설정해 보세요 (카메라 페이지).");
+
+        // ── 잔차 보정 — 1회 이동(클램프·개루프 오차)으로 남은 진행축 잔차가 허용치를 넘으면 추가 이동 ──
+        // 잔차 때문에 검사를 실패시키지는 않는다: 보정이 안 되면(미검출·발산) 직전 위치로 되돌리고 경고만 남긴 채 진행한다.
+        var corrections = 0;
+        string? residualWarn = null;
+        while (residualMax > 0 && Math.Abs(residualMm) > residualMax)
+        {
+            if (corrections >= MaxCorrections)
+            {
+                residualWarn = $"잔차 {residualMm:+0.0;-0.0}mm 가 허용 ±{residualMax:0.#}mm 초과(보정 {corrections}회 후) — 그대로 진행";
+                break;
+            }
+
+            var corr = Math.Clamp(residualMm, -MaxCenteringMoveMm, MaxCenteringMoveMm);
+            var corrOffset = new double[6];
+            FlatSurfaceCenteringService.ApplyAxis(corrOffset, toolAxis, corr);
+            var here = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
+            _logger.LogInformation("Peak{Id} 잔차 보정 {N}회차: 툴{Axis} {Off:+0.0;-0.0}mm (잔차 {Res:+0.0;-0.0}mm)",
+                _peakId, corrections + 1, FlatSurfaceCenteringService.AxisName(toolAxis), corr, residualMm);
+            var rcCorr = await _cobot.Rpc.MoveByToolOffsetAsync(here, user: 0, corrOffset,
+                tool: context.Tool, vel: context.Velocity, ct: ct);
+            if (rcCorr != 0)
+                return StepResult.Fail($"센터링 잔차 보정 이동 실패 (rc={rcCorr}){FairinoErrorCodes.Suffix(rcCorr)}.");
+            await Task.Delay(SettleMs, ct);
+            corrections++;
+
+            var expectedCorrPx = mmPerPx > 0 ? (residualMm - corr) / mmPerPx : 0.0;
+            var r3 = await _weld.FindPeakAsync(roi, ct, expectedCorrPx);
+            double? next = r3.Found ? WeldSequenceSupport.ResolveOffsetMm(r3, _weld, _camera).Item1 : null;
+            if (next is not { } n || Math.Abs(n) >= Math.Abs(residualMm))
+            {
+                // 보정이 오히려 나빠졌거나 Peak 를 놓쳤다 — 보정 이동을 되돌려 직전(더 나은) 위치에서 진행한다.
+                var back = new double[6];
+                FlatSurfaceCenteringService.ApplyAxis(back, toolAxis, -corr);
+                var cur = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
+                var rcBack = await _cobot.Rpc.MoveByToolOffsetAsync(cur, user: 0, back,
+                    tool: context.Tool, vel: context.Velocity, ct: ct);
+                if (rcBack != 0)
+                    return StepResult.Fail($"센터링 잔차 보정 되돌림 이동 실패 (rc={rcBack}){FairinoErrorCodes.Suffix(rcBack)}.");
+                await Task.Delay(SettleMs, ct);
+                residualWarn = next is null
+                    ? $"잔차 보정 후 Peak 미검출 — 보정 이동을 되돌리고 잔차 {residualMm:+0.0;-0.0}mm 로 진행"
+                    : $"잔차 보정이 수렴하지 않음({residualMm:+0.0;-0.0}→{next:+0.0;-0.0}mm) — 되돌리고 잔차 {residualMm:+0.0;-0.0}mm 로 진행";
+                break;
+            }
+            residualMm = n;
+            r2 = r3;
+        }
+        if (residualWarn is not null)
+            _logger.LogWarning("Peak{Id} 센터링: {Warn} — 작업물 좌표계 원점이 진행축으로 그만큼 밀릴 수 있습니다.", _peakId, residualWarn);
 
         // 후속 단계가 최신 측정값을 쓰도록 갱신.
         context.Bag[WeldSequenceSupport.PeakFindBagKey(_peakId)] = r2;
@@ -134,6 +245,8 @@ public class PeakCenteringStep : ISequenceStep
 
         return StepResult.Ok(
             $"Peak{_peakId} 센터링 완료 — {clamped:+0.0;-0.0}mm 이동, " +
-            $"잔차 {residualMm:+0.0;-0.0}mm (이동 전 {initialOffsetMm:+0.0;-0.0}mm), {scaleNote}");
+            $"잔차 {residualMm:+0.0;-0.0}mm (이동 전 {initialOffsetMm:+0.0;-0.0}mm, 예상 {expectedMm:+0.0;-0.0}mm" +
+            (corrections > 0 ? $", 잔차 보정 {corrections}회" : "") + $"), {scaleNote}" +
+            (residualWarn is not null ? $" ⚠ {residualWarn}" : ""));
     }
 }

@@ -45,13 +45,8 @@ public static class FrameDescriber
         return $"ts={ts}";
     }
 
-    private static string SurfaceTypeName(byte t) => t switch
-    {
-        0x00 => "Flat",
-        0x01 => "Corner",
-        0x02 => "Corrugation",
-        _    => $"0x{t:X2}",
-    };
+    private static string SurfaceTypeName(byte t) =>
+        SurfaceTypes.Find(t) is { } s ? $"{s.Type}({t})" : $"0x{t:X2}";
 
     /// <summary>GUID 앞 8자리만 요약(0 GUID 는 '-').</summary>
     private static string ShortId(Guid id) =>

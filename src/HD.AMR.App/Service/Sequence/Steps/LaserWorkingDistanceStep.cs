@@ -20,9 +20,10 @@ namespace HD.AMR.App.Service.Sequence.Steps;
 /// MoveL rc=0 반환 후에도 모션이 끝나지 않았거나 센서 내부 평균화 필터가 수렴 중이면 고정 딜레이 판정은
 /// 과도 상태 값을 읽는다(실기에서 이동 39mm 중 75%만 반영된 시점에 판정해 오실패한 사례).
 ///
-/// WD 판정 성공 후에는 ④가 저장한 앵커(<see cref="WeldSequenceSupport.InspectAnchorPoseBagKey"/>)로
-/// <b>툴 X/Y 횡복귀</b>한다 — ④의 평탄 셀 탐색 횡이동을 되돌려 ⑤가 검사 준비 위치 정면에서
-/// 코로게이션/용접라인을 찾게 한다. Z(초점거리)·회전(평행도)은 건드리지 않는다.
+/// WD 판정 성공 후에는 ②가 저장한 용접선 점 S(<see cref="WeldSequenceSupport.InspectAnchorSeamPointBagKey"/>,
+/// 없으면 최초 접근 앵커 <see cref="WeldSequenceSupport.InspectAnchorPoseBagKey"/>)를 현재 면 평행 평면으로 투영해
+/// 복귀한다 — 평행도 보정 후에도 광축이 용접선을 지난다. ④ 재시도 횟수와 무관하게 동일한 기준점을 쓴다.
+/// 설정된 광축 성분(기본 툴 Z)·회전(평행도)은 건드리지 않는다.
 /// </summary>
 public class LaserWorkingDistanceStep : ISequenceStep
 {
@@ -31,10 +32,12 @@ public class LaserWorkingDistanceStep : ISequenceStep
     private readonly ParameterService _param;
     private readonly ILogger<LaserWorkingDistanceStep> _logger;
 
-    /// <summary>목표 Working Distance(mm) 파라미터 키. 없으면 <see cref="DefaultWorkingDistanceMm"/>.</summary>
+    /// <summary>목표 Working Distance(mm) 공통 파라미터 키. 없으면 <see cref="DefaultWorkingDistanceMm"/>.
+    /// 면별 값은 뒤에 <c>.{wall_code}</c> 를 붙인 키로 따로 둘 수 있다(<see cref="LaserWorkingDistanceSetting"/>).</summary>
     public const string WorkingDistanceKey = "Sequence.Laser.WorkingDistanceMm";
 
-    private const double DefaultWorkingDistanceMm = 300.0;
+    /// <summary>파라미터 미설정 시 레이저 WD [mm]. 리치 맵 정렬 준비 거리의 기본값과 같다.</summary>
+    public const double DefaultWorkingDistanceMm = 300.0;
 
     /// <summary>수렴 판정 허용오차(mm).</summary>
     private const double ToleranceMm = 1.0;
@@ -63,7 +66,12 @@ public class LaserWorkingDistanceStep : ISequenceStep
     /// <summary>이 값 미만의 횡복귀 성분은 무시한다(mm).</summary>
     private const double SkipReturnMm = 0.5;
 
+    private readonly string _key;
+    private readonly string _displayName;
+    private readonly int _order;
+
     public LaserWorkingDistanceStep(
+        string key, string displayName, int order,
         CobotService cobot, LaserDisplacementSensorService laser,
         ParameterService param, ILogger<LaserWorkingDistanceStep> logger)
     {
@@ -71,11 +79,16 @@ public class LaserWorkingDistanceStep : ISequenceStep
         _laser = laser;
         _param = param;
         _logger = logger;
+        _key = key;
+        _displayName = displayName;
+        _order = order;
     }
 
-    public string Key => "laserWorkingDistance";
-    public string DisplayName => "레이저 WD 거리 조정";
-    public int DefaultOrder => 450;
+    public const string BundlePoint2Key = "laserWorkingDistanceBundlePoint2";
+
+    public string Key => _key;
+    public string DisplayName => _displayName;
+    public int DefaultOrder => _order;
 
     public StepValidation Validate(SequenceContext context)
     {
@@ -89,15 +102,35 @@ public class LaserWorkingDistanceStep : ISequenceStep
 
     public async Task<StepResult> ExecuteAsync(SequenceContext context, CancellationToken ct)
     {
-        var wd = await GetWorkingDistanceMmAsync();
+        if (_key == BundlePoint2Key && !BundleTeach.IsActive(context))
+            return StepResult.Ok("묶음 점2가 아님 — WD 재조정 생략.");
+
+        var result = await AdjustAsync(context, ct);
+        if (_key != BundlePoint2Key || result.Success || !BundleTeach.TryMarkDissolved(context))
+        {
+            if (result.Success && _key == BundlePoint2Key)
+                context.Bag[BundleTeach.Point2WdKey] = true;
+            return result;
+        }
+        _logger.LogWarning("묶음 점2 WD 실패 — 단독 교시로 전환: {Msg}", result.Message);
+        context.Progress?.Invoke($"⚠ 묶음 점2 WD 실패, 단독 교시로 진행: {result.Message}");
+        var back = await BundleTeach.RepositionToSoloAsync(_cobot, _param, _logger, context, ct);
+        return back.Success
+            ? StepResult.Ok($"묶음 해제 — 단독 교시. 원인: {result.Message}")
+            : StepResult.Fail($"{result.Message} / {back.Message}");
+    }
+
+    private async Task<StepResult> AdjustAsync(SequenceContext context, CancellationToken ct)
+    {
+        // 면별 값(…WorkingDistanceMm.{wall_code})이 있으면 그것, 없으면 공통 값.
+        var wall = LaserWorkingDistanceSetting.WallOf(context);
+        var (wd, wdSource) = await LaserWorkingDistanceSetting.ResolveAsync(_param, wall);
         if (wd is < 100 or > 1000)
-            return StepResult.Fail($"'{WorkingDistanceKey}' 범위 초과 ({wd:0.#}mm) — 100~1000mm 로 설정하세요.");
+            return StepResult.Fail($"'{wdSource}' 범위 초과 ({wd:0.#}mm) — 100~1000mm 로 설정하세요.");
 
         var (depthAxis, axisFromParam) = await WeldSequenceSupport.GetDepthAxisAsync(_param);
         if (!axisFromParam)
-            _logger.LogWarning(
-                "'{Key}' 광축 매핑 파라미터 없음/범위 밖 — 기본 +Z 사용. 카메라 페이지에서 광축을 설정·저장하세요.",
-                WeldSequenceSupport.DepthAxisKey);
+            return StepResult.Fail(WeldSequenceSupport.OpticalAxisMissingMessage(DisplayName));
 
         // ── 이동 전 측정 (④ 마지막 모션 직후 진입 — 안정화 대기 필수) ──
         var (z1, note1) = await SampleStableZAsync(ct);
@@ -106,12 +139,14 @@ public class LaserWorkingDistanceStep : ISequenceStep
 
         var delta = z1.Value - wd;
         _logger.LogInformation(
-            "[레이저 WD 거리 조정] WD 조정: z={Z:0.##}mm, 목표={Wd:0.#}mm, Δ={Delta:+0.##;-0.##}mm",
-            z1.Value, wd, delta);
+            "[레이저 WD 거리 조정] WD 조정: 면={Wall}, z={Z:0.##}mm, 목표={Wd:0.#}mm({Source}), Δ={Delta:+0.##;-0.##}mm",
+            wall ?? "-", z1.Value, wd, wdSource, delta);
+        await LogDiagnosticsAsync("이동 전", context, wall, wd, wdSource, depthAxis, ct);
 
         if (Math.Abs(delta) <= ToleranceMm)
         {
-            var (retOk0, retNote0) = await ReturnLateralAsync(context, ct);
+            var (retOk0, retNote0) = await ReturnLateralAsync(context, depthAxis, ct);
+            if (retOk0) await LogDiagnosticsAsync("완료(이동 생략)", context, wall, wd, wdSource, depthAxis, ct);
             return retOk0
                 ? StepResult.Ok(
                     $"이미 WD 근방 — z={z1.Value:0.##}mm (목표 {wd:0.#}mm, 잔차 {delta:+0.##;-0.##}mm), 이동 생략.{retNote0}")
@@ -121,7 +156,7 @@ public class LaserWorkingDistanceStep : ISequenceStep
         if (Math.Abs(delta) > MaxTravelMm)
             return StepResult.Fail(
                 $"이동량 {delta:+0.#;-0.#}mm 가 한계 ±{MaxTravelMm:0}mm 초과 — " +
-                $"측정값(z={z1.Value:0.#}mm) 또는 '{WorkingDistanceKey}' 설정을 확인하세요.");
+                $"측정값(z={z1.Value:0.#}mm) 또는 '{wdSource}' 설정을 확인하세요.");
 
         // ── 개루프 1회 이동 ─────────────────────────────────────────────
         // delta>0 = 대상이 목표보다 멀다 = 전방(광축) 접근. ③ MoveToDistanceAsync 와 동일 부호 규약.
@@ -153,10 +188,12 @@ public class LaserWorkingDistanceStep : ISequenceStep
         _logger.LogInformation(
             "[레이저 WD 거리 조정] WD 검증: z={Z:0.##}mm, 잔차={Res:+0.##;-0.##}mm, 측정변화={Chg:+0.##;-0.##}mm (기대 {Exp:+0.##;-0.##}mm)",
             z2.Value, residual, change, -delta);
+        await LogDiagnosticsAsync("이동 후", context, wall, wd, wdSource, depthAxis, ct);
 
         if (Math.Abs(residual) <= ToleranceMm)
         {
-            var (retOk, retNote) = await ReturnLateralAsync(context, ct);
+            var (retOk, retNote) = await ReturnLateralAsync(context, depthAxis, ct);
+            if (retOk) await LogDiagnosticsAsync("완료(횡복귀 후)", context, wall, wd, wdSource, depthAxis, ct);
             return retOk
                 ? StepResult.Ok(
                     $"WD 도달 — z={z2.Value:0.##}mm (목표 {wd:0.#}mm, 이동 {delta:+0.##;-0.##}mm, " +
@@ -181,42 +218,76 @@ public class LaserWorkingDistanceStep : ISequenceStep
         return StepResult.Fail(head + "측정이 부분적으로만 반응 — 센서 노이즈/스케일 설정을 확인하세요.");
     }
 
-    private async Task<double> GetWorkingDistanceMmAsync()
+    /// <summary>
+    /// 면별 WD 차이의 원인 조사용 진단 로그(<see cref="LaserWorkingDistanceSetting.Diagnostics"/>).
+    /// 읽기만 하고 로봇을 움직이지 않는다. 읽기 실패는 경고만 남기고 검사를 막지 않는다.
+    /// "완료" 단계의 값이 실제 촬영 때의 상태다(횡복귀 뒤라 레이저가 닿는 자리가 "이동 후"와 다를 수 있다).
+    /// </summary>
+    private async Task LogDiagnosticsAsync(string phase, SequenceContext context, string? wall,
+        double wd, string wdSource, ToolAxisDir depthAxis, CancellationToken ct)
     {
-        try { return await _param.GetDoubleAsync(WorkingDistanceKey) ?? DefaultWorkingDistanceMm; }
-        catch { return DefaultWorkingDistanceMm; }
+        try
+        {
+            var readings = _laser.GetReadings();
+            var raw = _laser.ComputeRawPlanePose(readings);
+            var corrected = _laser.ApplyTiltReference(raw);
+
+            double[]? joints = null, tcp = null;
+            try
+            {
+                joints = await _cobot.Rpc.GetActualJointPosAsync(ct: ct);
+                tcp = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning("[WD 진단] 코봇 자세를 읽지 못함 — 레이저 값만 기록: {Msg}", ex.Message);
+            }
+
+            _logger.LogInformation("{Line}", LaserWorkingDistanceSetting.Diagnostics(
+                phase, wall, context.InspectionDirection, wd, wdSource, readings, raw, corrected, joints, tcp, depthAxis));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning("[WD 진단] 기록 실패({Phase}): {Msg}", phase, ex.Message);
+        }
     }
 
     /// <summary>
-    /// ④가 저장한 앵커(검사 준비 위치)로 <b>툴 X/Y 만</b> 횡복귀한다 — Z(초점거리)·회전(평행도) 유지.
-    /// 앵커 위치를 현재 툴 좌표계 기준으로 변환(<see cref="FrameMath.ToFrame"/>)해 X/Y 성분만 이동.
-    /// 앵커가 없으면(④ 미실행·세미오토 단독) 경고만 남기고 생략한다.
+    /// 복귀 기준점(②의 용접선 점 S, 없으면 최초 접근점 A)을 지나는 보정 후 광축 직선 위로, 현재 면 평행 평면 안에서
+    /// 복귀한다(목표 = P + n·dot(C−P, n)). 현재 광축 거리·자세는 유지한다. 기준점이 없으면 실패한다.
     /// </summary>
-    private async Task<(bool Ok, string Note)> ReturnLateralAsync(SequenceContext context, CancellationToken ct)
+    private async Task<(bool Ok, string Note)> ReturnLateralAsync(SequenceContext context, ToolAxisDir depthAxis, CancellationToken ct)
     {
-        if (!context.Bag.TryGetValue(WeldSequenceSupport.InspectAnchorPoseBagKey, out var v)
-            || v is not double[] anchorPose || anchorPose.Length != 6)
+        double[]? reference;
+        string refSource;
+        if (_key == BundlePoint2Key)
         {
-            _logger.LogWarning("[레이저 WD 거리 조정] 횡복귀 생략 — 검사 준비 앵커 없음 ('평탄면 센터링 (레이저 정렬)' 단계를 먼저 실행해야 저장됨).");
-            return (true, "");
+            // 점2 는 점2 자리로 돌아간다 — ② 용접선 시작점(점1 쪽)으로 가면 안 된다.
+            // 평탄면 탐색을 하지 않았으면(자리 기록 없음) 툴은 아직 점2 자리에 있으므로 옆으로 움직일 것이 없다.
+            if (!context.Bag.TryGetValue(BundleTeach.Point2ReturnPoseKey, out var p2) || p2 is not double[] { Length: 6 } point2)
+                return (true, "");
+            (reference, refSource) = (point2, "묶음 점2 위치");
         }
+        else
+            (reference, refSource) = InspectionAlignmentAnchor.GetReturnReference(context);
+        if (reference is null)
+            return (false, "최초 접근 앵커 없음 — 검사위치 이동 또는 평탄면 정렬 단계를 먼저 실행하세요.");
 
         var cur = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
-        var rel = FrameMath.ToFrame(anchorPose, cur);   // 앵커를 현재 툴 좌표계 기준 상대 포즈로
-        double dx = rel[0], dy = rel[1];
+        var offset = InspectionAlignmentAnchor.ReturnOffset(reference, cur, depthAxis);
+        double dx = offset[0], dy = offset[1], dz = offset[2];
 
-        if (Math.Abs(dx) < SkipReturnMm && Math.Abs(dy) < SkipReturnMm)
+        if (Math.Abs(dx) < SkipReturnMm && Math.Abs(dy) < SkipReturnMm && Math.Abs(dz) < SkipReturnMm)
             return (true, "");
 
-        if (Math.Abs(dx) > MaxReturnMm || Math.Abs(dy) > MaxReturnMm)
+        if (Math.Abs(dx) > MaxReturnMm || Math.Abs(dy) > MaxReturnMm || Math.Abs(dz) > MaxReturnMm)
             return (false,
-                $"검사 준비 위치 횡복귀량 (X{dx:+0.0;-0.0}, Y{dy:+0.0;-0.0})mm 가 한계 ±{MaxReturnMm:0}mm 초과 — " +
+                $"검사 준비 위치 횡복귀량 (X{dx:+0.0;-0.0}, Y{dy:+0.0;-0.0}, Z{dz:+0.0;-0.0})mm 가 한계 ±{MaxReturnMm:0}mm 초과 — " +
                 "앵커 포즈/자세를 확인하세요.");
 
         _logger.LogInformation(
-            "[레이저 WD 거리 조정] 검사 준비 위치 횡복귀: 툴 X{Dx:+0.0;-0.0} / Y{Dy:+0.0;-0.0} mm (Z·자세 유지)", dx, dy);
+            "[레이저 WD 거리 조정] {Ref} 정면 횡복귀: 툴 X{Dx:+0.0;-0.0} / Y{Dy:+0.0;-0.0} / Z{Dz:+0.0;-0.0} mm (광축 {Axis}·자세 유지)", refSource, dx, dy, dz, depthAxis);
 
-        var offset = new[] { dx, dy, 0.0, 0.0, 0.0, 0.0 };
         var rc = await _cobot.Rpc.MoveByToolOffsetAsync(cur, user: 0, offset,
             tool: context.Tool, vel: context.Velocity, ct: ct);
         if (rc != 0)
@@ -224,7 +295,7 @@ public class LaserWorkingDistanceStep : ISequenceStep
 
         await Task.Delay(300, ct);
 
-        return (true, $" 검사 준비 위치 횡복귀(툴 X{dx:+0.0;-0.0}/Y{dy:+0.0;-0.0}mm).");
+        return (true, $" {refSource} 정면 횡복귀(툴 X{dx:+0.0;-0.0}/Y{dy:+0.0;-0.0}/Z{dz:+0.0;-0.0}mm).");
     }
 
     /// <summary>

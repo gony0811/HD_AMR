@@ -33,6 +33,17 @@ public class ParameterService
         "Camera.Weld.Roi.W", "Camera.Weld.Roi.H",
     ];
 
+    /// <summary>
+    /// 이름이 바뀐 키(옛 이름 → 새 이름). 기동 시 <see cref="RenameLegacyAsync"/> 가 옮긴다.
+    /// Weld.Dl.* — YOLO 검출 파라미터. 검출 방식 표기(YOLO)에 맞춰 Weld.Yolo.* 로 변경(Weld.Method 값 'Dl' 은 유지).
+    /// </summary>
+    public static readonly (string Old, string New)[] RenamedNames =
+    [
+        ("Weld.Dl.ModelPath", "Weld.Yolo.ModelPath"),
+        ("Weld.Dl.Confidence", "Weld.Yolo.Confidence"),
+        ("Weld.Dl.MaskThreshold", "Weld.Yolo.MaskThreshold"),
+    ];
+
     /// <summary>이름으로 원시 문자열 값을 조회. 없으면 null.</summary>
     public async Task<string?> GetAsync(string name)
         => (await _db.Parameters.AsNoTracking().FirstOrDefaultAsync(p => p.Name == name))?.Value;
@@ -73,8 +84,19 @@ public class ParameterService
             existing.UpdatedAt = DateTime.UtcNow;
         }
         await _db.SaveChangesAsync();
+        if (IsSafeJ6Key(name)) await ApplySafeJ6RangeAsync();
         Changed?.Invoke(name);
     }
+
+    private static bool IsSafeJ6Key(string name)
+        => name is Inspection.WObjAttitude.SafeJ6MinKey or Inspection.WObjAttitude.SafeJ6MaxKey;
+
+    /// <summary>J6 안전 범위 파라미터를 읽어 <see cref="Inspection.WObjAttitude"/> 에 적용한다(기동·저장·삭제 때).
+    /// 잘못된 값(하한 ≥ 상한, 대기 자세 −180° 미포함, 폭 360° 이상)이면 기본값을 쓰고 false.</summary>
+    public async Task<bool> ApplySafeJ6RangeAsync()
+        => Inspection.WObjAttitude.ApplySafeJ6Range(
+            await GetDoubleAsync(Inspection.WObjAttitude.SafeJ6MinKey),
+            await GetDoubleAsync(Inspection.WObjAttitude.SafeJ6MaxKey));
 
     public Task SetDoubleAsync(string name, double value, string? description = null)
         => SetAsync(name, value.ToString(CultureInfo.InvariantCulture), description);
@@ -98,6 +120,14 @@ public class ParameterService
                 Sequence.Steps.CobotInspectionMoveStep.DefaultApproachStandoffMm.ToString(CultureInfo.InvariantCulture),
                 "② Cobot 검사위치 이동 — 용접선 시작점에서 벽면 법선 방향으로 TCP 를 물리는 거리(mm). 정차 이격·이동 경로 시험용. " +
                 "모든 벽 동일 적용, 용접선 끝점 이동·ACS 시험 접근도 같은 값. 200~1000 밖이거나 비면 400."),
+            (Sequence.Steps.CobotInspectionMoveStep.ChainStandoffKey,
+                Sequence.Steps.CobotInspectionMoveStep.DefaultChainStandoffMm.ToString(CultureInfo.InvariantCulture),
+                "같은 anchor 그룹 연속 LINE — 직전 검사 종료 자세에서 다음 시작점으로 옮길 때 면에서 TCP 를 띄우는 거리(mm). " +
+                "첫 진입 이격(inspection.approachStandoffMm)까지 빠지지 않는다. 30~첫 진입 이격 밖이거나 비면 100."),
+            (Sequence.Steps.CobotInspectionMoveStep.ChainContinueTolKey,
+                Sequence.Steps.CobotInspectionMoveStep.DefaultChainContinueTolMm.ToString(CultureInfo.InvariantCulture),
+                "이어지는 용접선 판정 거리(mm) — 직전 검사 종료 위치와 다음 시작점이 면을 따라 이 거리 안이면 면에서 띄우지 않고 " +
+                "그 높이에서 바로 이어 간다. 0 = 끔(항상 inspection.chainStandoffMm 까지 띄움). 0~100 밖이면 50."),
             (SeamStartTagSettings.DictionaryKey, "DictAprilTag_36h11",
                 "moveToSeamStart 도달 후 중심 편차 측정 태그 사전(DictAprilTag_36h11 등). ArUco 장착 보정 설정과 별개."),
             (SeamStartTagSettings.MarkerIdKey, "",
@@ -105,6 +135,32 @@ public class ParameterService
             (SeamStartTagSettings.SizeMmKey, "0",
                 "중심 편차 측정 태그 한 변(mm) — 검은 테두리 바깥 정사각형 실측(흰 여백 제외). 0 이면 측정 안 함."),
             .. FlatCandidateOptions.SeedDefaults(),
+            .. LaserFootprintOptions.SeedDefaults(),
+            (Inspection.WObjAttitude.SafeJ6MinKey,
+                Inspection.WObjAttitude.DefaultSafeJ6MinDeg.ToString(CultureInfo.InvariantCulture),
+                "J6 안전 범위 하한(도, 실제 관절값 — 대기 자세 −180° 쪽 감김 기준). 이보다 더 감기는 J6 로는 움직이지 않는다 " +
+                "(센서 헤드–링크암 간섭·케이블 감김 방지). 진입·용접선 가로 정렬·연속 이동·검사 순회 공통. 저장하면 바로 적용. " +
+                "−180 이하여야 하고 상한보다 작아야 한다 — 잘못된 값이면 기본값(−320~−140)을 쓴다. ACS 의 Acs:Reach:SafeJ6MinDeg 와 같게 둘 것."),
+            (Inspection.WObjAttitude.SafeJ6MaxKey,
+                Inspection.WObjAttitude.DefaultSafeJ6MaxDeg.ToString(CultureInfo.InvariantCulture),
+                "J6 안전 범위 상한(도, 실제 관절값). −180 이상이어야 하고 하한보다 커야 한다. 저장하면 바로 적용. " +
+                "ACS 의 Acs:Reach:SafeJ6MaxDeg 와 같게 둘 것."),
+            (Sequence.Steps.WeldSequenceSupport.ProgressAxisAlwaysHorizontalKey, "true",
+                "Peak·Bead 찾기와 센터링의 진행축을 항상 영상 가로로 둔다(true). ② 가 툴을 돌려 용접선을 늘 영상 가로선으로 맞추기 때문이다. " +
+                "false 면 종전 규칙(가로 정렬 표시·용접선 기록이 없으면 검사방향으로 결정 — 수평 용접선은 영상 세로)."),
+            (Sequence.Steps.BeadCenteringStep.FailOnLargeResidualKey, "true",
+                "⑦⁺/⑪⁺ 비드 센터링 — 1회 이동(±100mm) 뒤 남는 잔차가 점 보정 상한(±30mm)을 넘으면 그 용접선을 실패 처리(true). " +
+                "넘는 잔차는 보정되지 않아 작업물 좌표계가 기울어진 채 순회한다. false 면 종전대로 경고만 남기고 진행."),
+            (Sequence.Steps.WObjPointStep.ResidualCorrectionKey, "true",
+                "⑦⁺/⑪⁺ 비드 센터링 후 남은 cross 잔차를 작업물 좌표계 점1/점2 기록에 보정(true). 잔차가 X축을 돌려 연속 LINE 이 " +
+                "V01 에서 멀수록 옆으로 벗어나는 것을 줄인다. 점2 는 각도(⑫)를 건드리지 않는 별도 재측정으로 잔차를 잰다."),
+            (Sequence.Steps.WObjRegisterStep.Point1HeightKey,
+                Inspection.InternalWorkpieceFrame.DefaultCorrugationTopHeightMm.ToString(CultureInfo.InvariantCulture),
+                "작업물 좌표계 — 점1 을 기록한 TCP 높이가 티칭 프로필 Z=0(평탄부 초점 높이)에서 떨어진 거리(mm). " +
+                "33.8 = 점1 을 주름 꼭대기 초점 높이에서 기록(종전). 0 = 점1 을 평탄부 초점 높이(레이저 WD 로 맞춘 높이)에서 기록 — " +
+                "33.8 인 채로 WD 높이에서 점1 을 기록하면 순회 전체가 면 쪽으로 33.8mm 들어간다. 뒤에 .T/.PU 등 면 코드를 붙인 키로 면별 지정 가능. 0~100."),
+            .. Sequence.BeadManualSettings.SeedDefaults(),
+            .. Motion.CobotObstacleZone.SeedDefaults(),
             (FlatReachOptions.TiltMarginKey,
                 FlatReachOptions.DefaultTiltMarginDeg.ToString(CultureInfo.InvariantCulture),
                 "④ 평탄 후보 도달성 판정의 틸트 보정 여유(°) — 레이저 위치에서 툴 Rx/Ry 를 ± 이만큼 돌려도 자세 한계 안이어야 후보로 인정. 0 = 생략."),
@@ -129,6 +185,7 @@ public class ParameterService
             });
         }
         await _db.SaveChangesAsync();
+        await ApplySafeJ6RangeAsync();   // 기동 시 저장된 J6 안전 범위 적용
     }
 
     /// <summary>id 로 파라미터 1건 삭제. 없으면 무시.</summary>
@@ -139,8 +196,32 @@ public class ParameterService
         {
             _db.Parameters.Remove(p);
             await _db.SaveChangesAsync();
+            if (IsSafeJ6Key(p.Name)) await ApplySafeJ6RangeAsync();
             Changed?.Invoke(p.Name);
         }
+    }
+
+    /// <summary>
+    /// 이름이 바뀐 키(<see cref="RenamedNames"/>) 이전 — 앱 시작 시 <see cref="SeedDefaultsAsync"/> 전에 한 번 호출(멱등).
+    /// 새 이름이 없으면 옛 행의 이름만 바꿔 값·설명을 그대로 옮기고, 새 이름이 이미 있으면(새 값 우선) 옛 행을 지운다.
+    /// 처리한 "옛→새" 목록 반환.
+    /// </summary>
+    public async Task<List<string>> RenameLegacyAsync()
+    {
+        var olds = RenamedNames.Select(r => r.Old).ToArray();
+        var news = RenamedNames.Select(r => r.New).ToArray();
+        var rows = await _db.Parameters.Where(p => olds.Contains(p.Name) || news.Contains(p.Name)).ToListAsync();
+        var done = new List<string>();
+        foreach (var (oldName, newName) in RenamedNames)
+        {
+            var oldRow = rows.FirstOrDefault(p => p.Name == oldName);
+            if (oldRow is null) continue;
+            if (rows.Any(p => p.Name == newName)) _db.Parameters.Remove(oldRow);
+            else { oldRow.Name = newName; oldRow.UpdatedAt = DateTime.UtcNow; }
+            done.Add($"{oldName}→{newName}");
+        }
+        if (done.Count > 0) await _db.SaveChangesAsync();
+        return done;
     }
 
     /// <summary>폐기된 키(<see cref="ObsoleteNames"/>) 삭제 — 앱 시작 시 한 번 호출. 삭제한 이름 목록 반환.</summary>

@@ -81,20 +81,50 @@ public sealed class OperationLogService
         return await db.OperationLogs.AsNoTracking().Select(l => l.Category).Distinct().OrderBy(c => c).ToListAsync(ct);
     }
 
+    /// <summary>운영 로그 1건의 DB 쓰기 최대 시도 횟수 — 잠김일 때만 다시 시도한다(대기 합계 약 6초).</summary>
+    internal const int MaxWriteAttempts = 6;
+
+    /// <summary>n 번째 시도가 잠김으로 실패한 뒤 다음 시도까지 기다릴 시간 [ms] — 200, 400, 800, 1600, 3200.</summary>
+    internal static int RetryDelayMs(int attempt) => 200 * (1 << Math.Clamp(attempt - 1, 0, 4));
+
+    /// <summary>SQLite 잠김(BUSY 5 / LOCKED 6)으로 인한 실패인가 — 예외 사슬 어디에 있든 본다.</summary>
+    internal static bool IsDbLocked(Exception? ex)
+    {
+        for (; ex is not null; ex = ex.InnerException)
+            if (ex is Microsoft.Data.Sqlite.SqliteException { SqliteErrorCode: 5 or 6 }) return true;
+        return false;
+    }
+
     private async Task ConsumeAsync()
     {
         await foreach (var entry in _queue.Reader.ReadAllAsync())
         {
-            try
+            // DB 가 잠겨 있으면(SQLite busy/locked — 다른 쓰기·열린 읽기와 겹침) 버리지 않고 잠시 뒤 다시 쓴다.
+            // 소비자가 하나라 기다리는 동안 뒤 항목은 큐에 쌓였다가 순서대로 기록된다.
+            for (var attempt = 1; ; attempt++)
             {
-                using var scope = _scopeFactory.CreateScope();
-                var db = scope.ServiceProvider.GetRequiredService<HdAmrDbContext>();
-                db.OperationLogs.Add(entry);
-                await db.SaveChangesAsync();
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "운영 로그 DB 기록 실패 — 항목 유실: [{Cat}] {Name}", entry.Category, entry.Name);
+                try
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var db = scope.ServiceProvider.GetRequiredService<HdAmrDbContext>();
+                    entry.Id = 0;
+                    db.OperationLogs.Add(entry);
+                    await db.SaveChangesAsync();
+                    if (attempt > 1)
+                        _logger.LogInformation("운영 로그 DB 기록 — 잠김으로 {N}회째에 성공: [{Cat}] {Name}",
+                            attempt, entry.Category, entry.Name);
+                    break;
+                }
+                catch (Exception ex) when (IsDbLocked(ex) && attempt < MaxWriteAttempts)
+                {
+                    await Task.Delay(RetryDelayMs(attempt));
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "운영 로그 DB 기록 실패 — 항목 유실({N}회 시도): [{Cat}] {Name}",
+                        attempt, entry.Category, entry.Name);
+                    break;
+                }
             }
             try { Changed?.Invoke(); }
             catch (Exception ex) { _logger.LogWarning(ex, "운영 로그 Changed 구독자 예외"); }

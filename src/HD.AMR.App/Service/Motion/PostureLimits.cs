@@ -29,19 +29,30 @@ namespace HD.AMR.App.Service.Motion;
 public sealed record PostureLimits(
     double[] JointMinDeg,
     double[] JointMaxDeg,
-    double WristMarginDeg = 15.0,
+    double WristMarginDeg = PostureLimits.DefaultWristMarginDeg,
     double ElbowMarginDeg = 8.0,
     double ShoulderRadiusMinMm = 180.0,
     double MaxJointTravelDeg = 200.0,
     double MinFlangeReachMm = 350.0)
 {
     /// <summary>
-    /// 기본값 — FR 계열 하드웨어 범위(±175°)에 툴 없는 상태를 가정한다. <b>실장 후에는 반드시 좁혀서
+    /// 손목 특이점 여유 |J5| 의 <b>단일 기준값</b> [도] — 시퀀스 경로 검증(<c>CobotInspectionMoveStep.PlanarWristMarginDeg</c>,
+    /// 검사 수행 경유점·연속 이동·끝점 이동·진입 해)과 자세 허용 범위 기본값(리치맵·평면 센터링)이 같은 값을 쓴다.
+    /// 예전에는 시퀀스 5°·자세 허용 범위 15° 로 달라 같은 자세를 단계마다 다르게 판정했다(2026-11-07 10° 로 통일).
+    /// 자세 허용 범위를 화면에서 저장한 적이 있으면 그 저장값이 우선이다.
+    /// </summary>
+    public const double DefaultWristMarginDeg = 10.0;
+
+    /// <summary>
+    /// 기본값 — FAIRINO FR5-WML 사양 범위(J1 ±175 · <b>J2 −265~+85</b> · J3 ±170 ·
+    /// <b>J4 −265~+85</b> · J5 ±175 · J6 ±175(케이블 — 사양은 ±360))에 툴 없는 상태를 가정한다. 실측값이 아니다.
+    /// J3 ±160 은 일반 FR5(리치 922mm) 값이었다(2026-11-02 정정). J2·J4 는 비대칭이라 ±175 로 두면
+    /// 실물이 못 가는 +85~+175 를 허용하고, 실물이 가는 −175~−265 를 막는다. <b>실장 후에는 반드시 좁혀서
     /// 저장할 것</b>: 툴이 링크에 닿는 각을 조그로 찾아 그 안쪽으로 넣는다.
     /// </summary>
     public static PostureLimits Default => new(
-        JointMinDeg: new[] { -175.0, -175.0, -160.0, -175.0, -175.0, -175.0 },
-        JointMaxDeg: new[] { 175.0, 175.0, 160.0, 175.0, 175.0, 175.0 });
+        JointMinDeg: new[] { -175.0, -265.0, -170.0, -265.0, -175.0, -175.0 },
+        JointMaxDeg: new[] { 175.0, 85.0, 170.0, 85.0, 175.0, 175.0 });
 
     public PostureLimits Normalized()
     {

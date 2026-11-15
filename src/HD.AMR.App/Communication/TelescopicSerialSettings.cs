@@ -18,6 +18,13 @@ public class TelescopicSerialSettings
     /// </summary>
     public bool Enabled { get; set; } = true;
 
+    /// <summary>
+    /// <see cref="Enabled"/> 가 false 일 때 리프트가 서 있다고 보는 높이 [mm, 완전 하강 = 0]. 리프트를 쓰지 않는 운영에서는
+    /// ACS 의 높이 지령(<c>liftStrokeMm</c>)을 무시하고 이 높이로 좌표 환산·도달 점검을 한다 — 실제 리프트가 이 높이에
+    /// 있어야 한다(다르면 접근점이 그만큼 위아래로 어긋난다).
+    /// </summary>
+    public double DisabledStrokeMm { get; set; } = 0;
+
     /// <summary>시리얼 포트 이름. Windows 는 <c>COM4</c> 형태, macOS/Linux 는 <c>/dev/tty.*</c>.</summary>
     public string PortName { get; set; } = "COM4";
 
@@ -46,8 +53,8 @@ public class TelescopicSerialSettings
     /// <summary>운영 하한(실제 mm) — 지정 높이 이동 시 이 값 밖이면 명령을 보내지 않는다.</summary>
     public int MinHeightMm { get; set; }
 
-    /// <summary>운영 상한(실제 mm). 기구 행정보다 보수적으로 두는 것이 안전하다.</summary>
-    public int MaxHeightMm { get; set; } = 999;
+    /// <summary>운영 상한(실제 mm). 기구 행정(0~1000mm) 기준.</summary>
+    public int MaxHeightMm { get; set; } = 1000;
 
     /// <summary>
     /// 컨트롤러 높이 1단위당 실제 이동량(mm). 컨트롤러는 모터 축 기준 값을 mm 플래그로 보고하지만,

@@ -77,7 +77,7 @@
     </Border>
 
     <!-- ── 우: 상단 상태바 + 현재 페이지 ── -->
-    <Grid Grid.Column="1" RowDefinitions="Auto,Auto,*">
+    <Grid Grid.Column="1" RowDefinitions="Auto,Auto,Auto,*">
 
         <!-- 상태바(ACS 앱바 톤): 좌측 연결 상태칩, 우측 끝 비상정지(EMO) 토글 -->
         <Border Grid.Row="0"
@@ -186,8 +186,29 @@
             </DockPanel>
         </Border>
 
+        <!-- 코봇 도달·순회 경고. 황색 = 자동 시퀀스를 시작하지 않음, 적색 = 시험이동 불가. 확인으로 지운다. -->
+        <Panel Grid.Row="1">
+            <Border IsVisible="{Binding ShowOperatorWarning}" Background="#F6C445" Padding="24,8">
+                <DockPanel>
+                    <Button DockPanel.Dock="Right" Content="확인" Command="{Binding DismissOperatorAlarmCommand}"
+                            VerticalAlignment="Center" Margin="12,0,0,0" />
+                    <TextBlock Text="{Binding OperatorAlarmText}" Foreground="#1A1A1A"
+                               FontWeight="SemiBold" VerticalAlignment="Center" TextWrapping="Wrap" />
+                </DockPanel>
+            </Border>
+            <Border IsVisible="{Binding ShowOperatorError}"
+                    Background="{DynamicResource AppDangerBrush}" Padding="24,8">
+                <DockPanel>
+                    <Button DockPanel.Dock="Right" Content="확인" Command="{Binding DismissOperatorAlarmCommand}"
+                            VerticalAlignment="Center" Margin="12,0,0,0" />
+                    <TextBlock Text="{Binding OperatorAlarmText}" Foreground="{DynamicResource AppOnAccentTextBrush}"
+                               FontWeight="SemiBold" VerticalAlignment="Center" TextWrapping="Wrap" />
+                </DockPanel>
+            </Border>
+        </Panel>
+
         <!-- 장치 HEAVY 알람 배너 — 알람 중 ACS order 수신 불가. 복구 후 RESET(조작반 또는 아래 버튼)으로 해제. -->
-        <Border Grid.Row="1" IsVisible="{Binding HasDeviceAlarm}"
+        <Border Grid.Row="2" IsVisible="{Binding HasDeviceAlarm}"
                 Background="{DynamicResource AppDangerBrush}" Padding="24,8">
             <DockPanel>
                 <Button DockPanel.Dock="Right" Content="알람 리셋" Command="{Binding ResetDeviceAlarmsCommand}"
@@ -201,7 +222,7 @@
         <!-- 현재 페이지 -->
         <!-- Padding 은 ScrollViewer 가 아니라 ContentControl 에 둔다: Avalonia 11.2 의 ScrollContentPresenter 는
              Padding 을 measure/Extent 에 반영하지 않아 하단 패딩만큼 콘텐츠가 스크롤 밖으로 잘린다. -->
-        <ScrollViewer Grid.Row="2">
+        <ScrollViewer Grid.Row="3">
             <ContentControl Content="{Binding Navigation.CurrentViewModel}" Padding="24" />
         </ScrollViewer>
     </Grid>

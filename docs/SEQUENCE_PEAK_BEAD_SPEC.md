@@ -449,16 +449,21 @@ double offsetMm = result.OffsetPx * mmPerPx;
 
 ### 5.1 전체 구성
 
+정렬 복귀 기준은 TASK별 ② `cobotInspection` 접근 완료 시의 BASE TCP 포즈다. ③ 거리 정렬 및 ④ 평탄면·틸트 정렬을 반복해도 기준을 갱신하지 않는다. 새 ② 접근을 시작하거나 UI 초기화 시 기존 기준을 지운다. ACS는 TASK마다 새 `SequenceContext`를 사용한다. ②를 생략한 세미오토는 최초 ④ 시작점을 기준으로 고정한다.
+
+④⁺ 복귀 목표는 `P + n·dot(C−P, n)`이다(P=복귀 기준점, C=WD 조정 후 현재 TCP, n=보정 후 설정 광축 단위벡터). P는 ②가 환산한 **면 위 용접선 점 S**(`inspect.anchorSeamPoint`)이고, S가 없을 때(② 없이 세미오토)만 고정 접근점 A를 쓴다. A는 면에서 접근 거리(기본 400mm)만큼 떨어져 있어 평행도 보정으로 광축이 θ 바뀌면 A 기준 복귀는 용접선에서 약 400·sinθ(1°≈7mm, 2°≈14mm, 5°≈35mm) 비켜 가지만, S 기준이면 보정 후 광축이 항상 S를 지난다. 이 목표는 P를 지나고 n에 평행한 직선 위에 있으며, C에서 광축 방향 이동 없이 횡이동한다. 틸트가 바뀌어도 현재 면 평행 평면 안에서 복귀하고 WD와 자세를 유지하며, 과거 이동 경로를 역순 재생하지 않는다. 실제 면의 요철에 따른 복귀 후 거리 변화는 별도 실기 확인 대상이다.
+
 | # | Key | Order | 클래스 | peakId | 설명 |
 |---|---|---|---|---|---|
-| ② | `cobotInspection` | 200 | `CobotInspectionMoveStep` | — | Cobot 검사위치 이동 — **목표 위치는 ACS `seamStartW`**(맵 좌표 → `SeamBaseTransform` → 코봇 BASE, 면에서 **③ 카메라 목표거리**만큼 후퇴한 접근점 — ACS `params.standoffMm` 은 쓰지 않는다, §10 N18). 이동 전 **리치 사전 점검**: 면까지 법선거리 < 후퇴 + 공구 길이 + 최소 플랜지 뻗음 이면 IK 를 부르기 전에 즉시 실패하고 ACS 에 '정차 거리 부족' 을 보고한다(§4.4.1), **자세는 Wall ID 티칭 위치 값 유지**(같은 벽이면 바라보는 방향은 같고 위치만 벽을 따라 달라진다). 여기는 거친 접근이고 정밀 정렬은 ③~⑯이 맡는다. seamStartW·측위·T_A_B 중 하나라도 없으면 종전대로 티칭 위치로 폴백(로그 남김). **MoveJ 관절 이동**(홈↔검사위치는 긴 이동이라 MoveL 이면 중간에 손목 특이점 J5≈0 을 쓸고 지나갈 수 있다. TCP 경로는 호를 그리므로 티칭 시 간섭 확인). 이동 전 **진입 준비**(`SequenceEntry`): 활성 좌표계 정규화(툴 `context.Tool`/작업물 0, 무변위 MoveJ) + 홈 복귀 — 이전 실행이 반납 못 한 작업물 프레임·펜던트에서 바뀐 활성 공구가 남으면 이후 단계의 앵커(FK→베이스)와 IK 가 그 값으로 해석돼 오이동·rc=38/112 |
+| ② | `cobotInspection` | 200 | `CobotInspectionMoveStep` | — | Cobot 검사위치 이동 — **목표 위치는 ACS `seamStartW`**(맵 좌표 → `SeamBaseTransform` → 코봇 BASE, 면에서 **거친 접근 거리**(파라미터 `inspection.approachStandoffMm`, 기본 400 mm — 최종 작업거리는 ③·④⁺ 레이저 WD 300 mm 가 확정)만큼 후퇴한 접근점 — ACS `params.standoffMm` 은 쓰지 않는다, §10 N18). 이동 전 **리치 사전 점검**: 면까지 법선거리 < 후퇴 + 공구 길이 + 최소 플랜지 뻗음 이면 IK 를 부르기 전에 즉시 실패하고 ACS 에 '정차 거리 부족' 을 보고한다(§4.4.1), **자세는 Wall ID 티칭 위치 값 유지**(같은 벽이면 바라보는 방향은 같고 위치만 벽을 따라 달라진다). 여기는 거친 접근이고 정밀 정렬은 ③~⑯이 맡는다. seamStartW·측위·T_A_B 중 하나라도 없으면 종전대로 티칭 위치로 폴백(로그 남김). **MoveJ 관절 이동**(홈↔검사위치는 긴 이동이라 MoveL 이면 중간에 손목 특이점 J5≈0 을 쓸고 지나갈 수 있다. TCP 경로는 호를 그리므로 티칭 시 간섭 확인). 이동 전 **진입 준비**(`SequenceEntry`): 활성 좌표계 정규화(툴 `context.Tool`/작업물 0, 무변위 MoveJ) + 홈 복귀 — 이전 실행이 반납 못 한 작업물 프레임·펜던트에서 바뀐 활성 공구가 남으면 이후 단계의 앵커(FK→베이스)와 IK 가 그 값으로 해석돼 오이동·rc=38/112 |
 | ③ | `cameraAlign` | 300 | `CameraAlignStep` | — | (기존) 카메라 거리 정렬 400mm |
-| ④ | `flatSurfaceAlign` | 400 | `FlatSurfaceAlignStep` | — | (기존) 평탄면 센터링 — 시작 포즈를 앵커로 Bag 저장 |
-| ④⁺ | `laserWorkingDistance` | 450 | `LaserWorkingDistanceStep` | — | 레이저 3점 평균 → WD 초점거리 조정 후 **앵커로 툴 X/Y 횡복귀**(Z·자세 유지) |
+| ④ | `flatSurfaceAlign` | 400 | `FlatSurfaceAlignStep` | — | 평탄면 센터링 — ② 접근 완료 앵커를 유지(재실행 시 덮어쓰기 금지). ② 없이 단독 실행하면 최초 실행 포즈만 저장 |
+| ④⁺ | `laserWorkingDistance` | 450 | `LaserWorkingDistanceStep` | — | 레이저 3점 평균 → WD 초점거리 조정 후 **② 용접선 점 S(없으면 최초 접근 앵커)를 현재 면 평행 평면으로 투영해 복귀**(설정 광축 성분·자세 유지, 기본 툴 X/Y 복귀). 앵커 없음/복귀 성분 ±300mm 초과는 실패 |
+| ④⁺⁺ | `depthCamCenterShift` | 470 | `DepthCamCenterShiftStep` | — | TCP 아래 용접선을 depth 영상 중심으로 **면과 평행 이동** — 검사캠 오프셋(`Sequence.InspectCam.OffsetX/YMm`) 영상 +방향, ⑦⁺ 검사캠 시프트의 역이동(Z·자세 유지, 오프셋 0 이면 생략) |
 | **⑤** | `peak1Find` | **500** | `PeakFindStep` | 1 | Peak1 찾기 — 검사 준비 위치 정면에서 시작 |
 | **⑥** | `peak1Center` | **600** | `PeakCenteringStep` | 1 | Peak1 센터링 (진행축) |
 | **⑦** | `bead1Find` | **700** | `BeadFindStep` | 1 | Bead1 찾기 |
-| **⑦⁺** | `bead1Center` | **750** | `BeadCenteringStep` | 1 | Bead1 센터링 (cross 축, 재측정으로 M1 갱신 → 검사캠 시프트) |
+| **⑦⁺** | `bead1Center` | **750** | `BeadCenteringStep` | 1 | Bead1 센터링 (cross 축, 재측정으로 M1 갱신 → 검사캠 시프트). ⑦에서 수동 비드선을 그었으면 재측정 팝업 없이 그 선을 이동량만큼 영상에서 옮겨 잔차(d1 − 이동량)로 M1 갱신 — 이 경우 이동 방향(이격 증가) 검증은 생략 |
 | **⑦⁺⁺** | `wobjPoint1` | **760** | `WObjPointStep` | 1 | 현재 위치를 작업물 좌표계 3점법 **점1(원점)** 로 기록 — 번호는 `Sequence.WObj.Id`, 계산법 0(원점-X축-Z축) 고정 |
 | **⑧** | `peak2Approach` | **800** | `PeakApproachStep` | 2 | Peak2 이동 — ⑦⁺ 앵커(센터링 완료·시프트 전 포즈) 기준 pitch 절대 이동. 검사캠 시프트·교시용 이동 자동 원복 (앵커 없으면 현재 위치 + 플래그 역보정 폴백) |
 | **⑨** | `peak2Find` | **900** | `PeakFindStep` | 2 | Peak2 찾기 |
@@ -599,7 +604,7 @@ anchor 무효화: 주행 발생 · 시퀀스 실패 · 그룹 변경 · 신규 o
 |---|---|---|---|
 | `Weld.Peak.PitchMm` | double | `370` | Peak 간 pitch(mm). ⑧ 이동량 및 ⑫ 각도식 분모 |
 | `Weld.Peak.PitchDir` | double | `+1` | Peak2 이동 방향(진행축 + 기준). `+1` 또는 `−1` |
-| `Weld.Dl.ModelPath` | string | `""`(자동) | 비드 검출 DL 모델 전체 경로 — 카메라 페이지 모델 드롭다운이 저장, ⑦⑪·⑦⁺가 측정 전 적용. 빈값=자동(`weld_seg_{ir\|rgb}.onnx` 고정 파일명) |
+| `Weld.Yolo.ModelPath` | string | `""`(자동) | 비드 검출 DL 모델 전체 경로 — 카메라 페이지 모델 드롭다운이 저장, ⑦⑪·⑦⁺가 측정 전 적용. 빈값=자동(`weld_seg_{ir\|rgb}.onnx` 고정 파일명) |
 | `Sequence.InspectCam.OffsetXMm` | double | `0` | 검사 카메라 시야 중심의 depth 영상 기준 오프셋 X(mm, 화면 오른쪽 +) — ⑦⁺⑪⁺ 검증 후 시프트에 사용 (§4.2) |
 | `Sequence.InspectCam.OffsetYMm` | double | `0` | 위 오프셋의 Y 성분(mm, 화면 아래 +) |
 | ~~`Camera.Axis.XSign`~~ | double | — | **폐기** — 방향은 ④와 공유하는 `Camera.Align.ImageXAxis` 매핑(부호 포함)이 담당 (§4.3) |

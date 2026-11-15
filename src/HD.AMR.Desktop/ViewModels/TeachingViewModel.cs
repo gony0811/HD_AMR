@@ -6,6 +6,7 @@ using HD.AMR.App.Communication;
 using HD.AMR.App.Data.Entities;
 using HD.AMR.App.Service;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace HD.AMR.Desktop.ViewModels;
 
@@ -18,6 +19,7 @@ public sealed partial class TeachingViewModel : ViewModelBase
 {
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly CobotService _cobot;
+    private readonly TelescopicService _lift;
     private readonly DispatcherTimer _timer;
     private CancellationTokenSource? _moveCts;
 
@@ -43,10 +45,15 @@ public sealed partial class TeachingViewModel : ViewModelBase
         _ => "활성 작업물: 미상",
     };
 
-    public TeachingViewModel(IServiceScopeFactory scopeFactory, CobotService cobot)
+    private readonly ILogger<TeachingViewModel> _logger;
+
+    public TeachingViewModel(IServiceScopeFactory scopeFactory, CobotService cobot, TelescopicService lift,
+        ILogger<TeachingViewModel> logger)
     {
         _scopeFactory = scopeFactory;
         _cobot = cobot;
+        _lift = lift;
+        _logger = logger;
         _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _timer.Tick += (_, _) => RefreshStatus();
     }
@@ -120,8 +127,12 @@ public sealed partial class TeachingViewModel : ViewModelBase
             double scale;
             using (var scope = _scopeFactory.CreateScope())
                 scale = await TeachingMove.LoadJointVelocityScaleAsync(scope.ServiceProvider.GetRequiredService<ParameterService>());
-            var rc = await TeachingMove.MoveToAsync(_cobot, p, RunTool, Vel, scale, _moveCts.Token);
-            if (rc == 0) Ok($"'{p.Name}' 위치로 이동 완료."); else Fail($"이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}");
+            var all = Rows.Select(r => r.Entity).ToList();
+            var r = await TeachingMove.MoveAlongRouteAsync(_cobot, all, p, RunTool, Vel, scale,
+                step => Dispatcher.UIThread.Post(() => Message = $"'{step.Name}' 위치로 이동 중…"), _moveCts.Token, _logger,
+                _lift, () => Dispatcher.UIThread.Post(() => Message = $"리프트 {TeachingMove.HomeLiftHeightMm}mm 하강 중…"));
+            var text = TeachingMove.Describe(r, p);
+            if (r.Ok) Ok(text); else Fail(text);
         }
         catch (OperationCanceledException) { Fail("사용자 정지"); }
         catch (Exception ex) { Fail($"이동 실패: {ex.Message}"); }

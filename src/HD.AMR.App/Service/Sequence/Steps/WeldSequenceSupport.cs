@@ -54,9 +54,9 @@ public static class WeldSequenceSupport
     /// <summary>도착 판정 각도 허용 오차(rad). Order allowedDeviationTheta → 이 키 → AmrRestSettings → 0.1 순 폴백.</summary>
     public const string ArrivalDeviationThetaKey = "arrival.deviationTheta";
 
-    /// <summary>비드 검출 DL 모델 전체 경로. 빈 문자열 = 자동(weld_seg_{ir|rgb}.onnx).
+    /// <summary>비드 검출 YOLO 모델 경로(필수). 빈 문자열 = 모델 없음(비드 찾기 단계 실패).
     /// 카메라 페이지 드롭다운이 저장하고, ⑦⑪·⑦⁺ 가 측정 전 <see cref="ApplyDlModelAsync"/> 로 적용한다.</summary>
-    public const string DlModelPathKey = "Weld.Dl.ModelPath";
+    public const string DlModelPathKey = WeldDetectionSettingsStore.DlModelPathKey;
 
     /// <summary>Peak 간 pitch(mm). ⑧ 이동량이자 ⑫ 각도식의 분모.</summary>
     public const string PitchMmKey = "Weld.Peak.PitchMm";
@@ -97,17 +97,85 @@ public static class WeldSequenceSupport
     /// <summary>비드 위치오차 d(mm, cross 축)를 담는 Bag 키. id 는 1 또는 2. ⑦⑪이 쓰고 비드 센터링이 소비.</summary>
     public static string BeadDMmBagKey(int id) => $"bead{id}.dMm";
 
+    /// <summary>⑦/⑪ 수동 입력을 팝업 조그 뒤에 했을 때, 그 자리에서 Peak 가 진행축 센터에서 벗어난 거리 [mm](double).
+    /// ⑦⁺/⑪⁺ 비드 센터링이 cross 이동과 함께 진행축으로도 맞춘다. 조그가 없었으면 넣지 않는다.</summary>
+    public static string BeadPeakOffsetMmBagKey(int id) => $"bead{id}.peakOffsetMm";
+
     /// <summary>⑦⁺⑪⁺가 검사캠 오프셋 시프트를 적용한 상태임을 알리는 Bag 키(bool).
     /// ⑧이 이 플래그가 있을 때만 시프트 역보정을 합성하고 플래그를 지운다 — 세미오토 순서 이탈 가드.</summary>
     public const string InspectShiftedBagKey = "inspectCam.shifted";
 
-    /// <summary>④ 시작 시점 TCP 포즈(double[6], BASE 기준 = ② 목표 ⊕ ③ 거리 정렬 지점)를 담는 Bag 키.
-    /// ④⁺가 WD 조정 후 이 위치로 툴 X/Y 횡복귀할 때 기준 앵커로 쓴다(초점거리·자세는 유지).</summary>
+    /// <summary>② 접근 완료 TCP 포즈(double[6], BASE 기준). ④ 재실행 시 덮어쓰지 않는다.
+    /// ② 없이 ④만 실행하면 최초 ④ 시작점으로 초기화한다. 새 ② 접근 또는 UI 초기화 시 교체/삭제.
+    /// ④⁺는 WD 조정 후 이 점을 현재 면 평행 평면에 투영해 복귀한다(광축 거리·자세 유지).</summary>
     public const string InspectAnchorPoseBagKey = "inspect.anchorPose";
+
+    /// <summary>② 가 환산한 용접선 점 S(면 위, BASE [x,y,z]). ④⁺ 복귀 기준 — 있으면 <see cref="InspectAnchorPoseBagKey"/>보다
+    /// 우선한다(목표 = S + n·dot(C−S, n), 틸트 보정 후에도 광축이 S 를 지난다). 새 ② 접근 또는 UI 초기화 시 교체/삭제.</summary>
+    public const string InspectAnchorSeamPointBagKey = "inspect.anchorSeamPoint";
 
     /// <summary>⑦⁺ Bead1 센터링 완료 직후(검사캠 시프트 <b>전</b>) TCP 포즈(double[6])를 담는 Bag 키.
     /// ⑧이 이 포즈를 앵커로 pitch 이동해, 검사캠 시프트·작업물 좌표계 교시용 이동을 자동 원복한다.</summary>
     public const string Bead1CenteredPoseBagKey = "bead1.centeredPose";
+
+    /// <summary>② 가 환산한 면 바깥 단위 법선(BASE [x,y,z], 면에서 멀어지는 쪽). ⑧ Peak2 이동이 면 거리를 유지하는 기준.
+    /// 계산 법선 자세가 없으면(티칭 폴백) 두지 않는다.</summary>
+    public const string WallOutNormalBagKey = "seam.wallOutNormal";
+
+    /// <summary>② 가 환산한 용접선 방향(접근한 점 → 반대쪽 점) 단위벡터(BASE [x,y,z]). ⑧ Peak2 이동 방향의 기준.
+    /// 끝점이 없으면 두지 않는다.</summary>
+    public const string SeamDirBaseBagKey = "seam.dirBase";
+
+    /// <summary>
+    /// 피치 이동(BASE 벡터)이 용접선 방향과 반대인가. <paramref name="pitchDir"/> = +1 은 용접선 끝점 쪽, −1 은 그 반대다.
+    /// 용접선 가로 정렬은 툴을 광축 둘레로 0° 또는 180° 중 J6 안전 범위에 드는 쪽으로 돌리므로, 툴 진행축 + 방향이
+    /// 끝점 쪽일 수도 반대쪽일 수도 있다(실기 2026-11-13 F L4-R01C04 — 점2 를 끝점 반대쪽 한 피치에 잡아 옆 구간을 검사).
+    /// 용접선과 거의 수직인 이동(코사인 0.2 미만)은 판단하지 않는다.
+    /// </summary>
+    internal static bool PitchMoveOpposesSeam(double[] baseMove, double[] seamDir, int pitchDir)
+    {
+        var len = Math.Sqrt(baseMove[0] * baseMove[0] + baseMove[1] * baseMove[1] + baseMove[2] * baseMove[2]);
+        var sLen = Math.Sqrt(seamDir[0] * seamDir[0] + seamDir[1] * seamDir[1] + seamDir[2] * seamDir[2]);
+        if (len < 1e-9 || sLen < 1e-9) return false;
+        var cos = (baseMove[0] * seamDir[0] + baseMove[1] * seamDir[1] + baseMove[2] * seamDir[2]) / (len * sLen);
+        if (Math.Abs(cos) < 0.2) return false;
+        return cos * (pitchDir >= 0 ? 1 : -1) < 0;
+    }
+
+    /// <summary>툴 좌표 이동량을 <paramref name="anchorPose"/> 자세 기준 BASE 벡터로 바꾼다(회전만).</summary>
+    internal static double[] ToolOffsetInBase(double[] anchorPose, double[] toolOffset)
+    {
+        var m = HD.AMR.App.Communication.FrameMath.PoseToMatrix(anchorPose);
+        var v = new double[3];
+        for (var i = 0; i < 3; i++)
+            v[i] = m[i, 0] * toolOffset[0] + m[i, 1] * toolOffset[1] + m[i, 2] * toolOffset[2];
+        return v;
+    }
+
+    /// <summary>
+    /// 툴 좌표 이동량 <paramref name="toolOffset"/>(x,y,z) 을 <paramref name="anchorPose"/> 자세 기준 BASE 벡터로 바꾸고,
+    /// 면 법선 <paramref name="wallOut"/> 성분을 빼 면과 평행한 이동으로 만든다(길이는 원래 이동량 유지).
+    /// ④ 평탄면 정렬이 툴을 국부 면에 맞춰 기울이면(실기 2026-11-09 ry 0.76°) 툴 X 로 360mm 갈 때 면 쪽으로 4.7mm 가 섞여,
+    /// 점2 의 면 거리가 점1 과 달라지고 작업물 좌표계 X 축이 면 쪽으로 기울었다. 면 평행 성분이 거의 없으면 null.
+    /// </summary>
+    internal static double[]? ToolOffsetParallelToWall(double[] anchorPose, double[] toolOffset, double[] wallOut)
+    {
+        var m = HD.AMR.App.Communication.FrameMath.PoseToMatrix(anchorPose);
+        var v = new double[3];
+        for (var i = 0; i < 3; i++)
+            v[i] = m[i, 0] * toolOffset[0] + m[i, 1] * toolOffset[1] + m[i, 2] * toolOffset[2];
+        var len = Math.Sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+
+        var nLen = Math.Sqrt(wallOut[0] * wallOut[0] + wallOut[1] * wallOut[1] + wallOut[2] * wallOut[2]);
+        if (len < 1e-9 || nLen < 1e-9) return null;
+        var n = new[] { wallOut[0] / nLen, wallOut[1] / nLen, wallOut[2] / nLen };
+        var dot = v[0] * n[0] + v[1] * n[1] + v[2] * n[2];
+        var p = new[] { v[0] - dot * n[0], v[1] - dot * n[1], v[2] - dot * n[2] };
+        var pLen = Math.Sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]);
+        if (pLen < 1e-3 * len) return null;
+        var s = len / pLen;
+        return new[] { p[0] * s, p[1] * s, p[2] * s };
+    }
 
     /// <summary>
     /// Peak(코로게이션) 탐색용 ROI — 우선순위: Peak ROI(Depth 뷰에서 저장) → 평탄면 ROI 폴백 → 중앙 30%.
@@ -119,7 +187,13 @@ public static class WeldSequenceSupport
     {
         var f = camera.LatestIr;
         if (f is null) return (null, "IR 프레임 없음");
+        var (roi, src) = await GetPeakRoiAsync(param, f.Width, f.Height);
+        return (roi, src);
+    }
 
+    /// <summary><see cref="GetPeakRoiAsync(ParameterService, CameraService)"/> 의 영상 크기 지정판 — 저장된 촬영본용.</summary>
+    public static async Task<(RoiRect? Roi, string Src)> GetPeakRoiAsync(ParameterService param, int width, int height)
+    {
         var roi = DefaultCenterRoi;
         var src = "중앙 기본 ROI";
 
@@ -134,7 +208,7 @@ public static class WeldSequenceSupport
             src = "평탄면 ROI 폴백";
         }
 
-        return (roi.ToPixel(f.Width, f.Height), src);
+        return (roi.ToPixel(width, height), src);
     }
 
     /// <summary>
@@ -146,7 +220,13 @@ public static class WeldSequenceSupport
     {
         var f = camera.LatestIr;
         if (f is null) return (null, "IR 프레임 없음");
+        var (roi, src) = await GetBeadRoiAsync(param, f.Width, f.Height);
+        return (roi, src);
+    }
 
+    /// <summary><see cref="GetBeadRoiAsync(ParameterService, CameraService)"/> 의 영상 크기 지정판 — 저장된 촬영본용.</summary>
+    public static async Task<(RoiRect? Roi, string Src)> GetBeadRoiAsync(ParameterService param, int width, int height)
+    {
         var roi = DefaultCenterRoi;
         var src = "중앙 기본 ROI";
 
@@ -166,7 +246,7 @@ public static class WeldSequenceSupport
             src = "평탄면 ROI 폴백";
         }
 
-        return (roi.ToPixel(f.Width, f.Height), src);
+        return (roi.ToPixel(width, height), src);
     }
 
     /// <summary>ROI 파라미터가 하나도 없을 때의 폴백 — 화면 중앙 30%.</summary>
@@ -207,19 +287,45 @@ public static class WeldSequenceSupport
            && WallCodes.FindBySurfaceId(context.InspectionSurfaceId)?.Orientation
                is SurfaceOrientation.ChamferLower or SurfaceOrientation.ChamferUpper;
 
-    /// <summary>저장된 비드 검출 DL 모델 선택을 <see cref="WeldTrackingService.Params"/> 에 적용한다.
-    /// 키 미존재/DB 미준비면 현재 인메모리 선택을 유지한다. 적용된 모델 표시명을 반환("자동"/파일명).</summary>
+    /// <summary>
+    /// 학습 모델을 쓰는 검출 방식(YOLO·U-Net)인데 모델이 지정되지 않았으면 경고 문구, 아니면 null.
+    /// 비드 찾기 단계가 <see cref="ApplyDlModelAsync"/> 직후 확인해 로봇을 움직이기 전에 실패로 멈춘다.
+    /// (파일 존재는 검출기가 경로를 해석해 확인한다 — 파일명만 저장된 경우 models 폴더 기준.)
+    /// </summary>
+    public static string? MissingModel(WeldTrackingService weld) => weld.Method switch
+    {
+        WeldDetectionMethod.Dl when string.IsNullOrWhiteSpace(weld.Params.DlModelPath)
+            => "모델 없음 — 비드 검출 YOLO 모델이 지정되지 않았습니다. 용접 추적 화면에서 모델을 선택하거나 파라미터 Weld.Yolo.ModelPath 를 지정하세요.",
+        WeldDetectionMethod.Unet when string.IsNullOrWhiteSpace(weld.Params.UnetModelPath)
+            => "모델 없음 — 비드 검출 U-Net 모델이 지정되지 않았습니다. 용접 추적 화면에서 모델을 선택하거나 파라미터 Weld.Unet.ModelPath 를 지정하세요.",
+        _ => null,
+    };
+
+    /// <summary>저장된 비드 검출 모델 선택(DL=YOLO, U-Net)을 <see cref="WeldTrackingService.Params"/> 에 적용한다.
+    /// 키 미존재/DB 미준비면 현재 인메모리 선택을 유지한다. 현재 검출 방식의 모델 표시를 반환(예: "YOLO 모델: weld_yolo_ir_1106.onnx").</summary>
     public static async Task<string> ApplyDlModelAsync(ParameterService param, WeldTrackingService weld)
     {
         try
         {
             if (await param.GetAsync(DlModelPathKey) is { } v)
                 weld.Params.DlModelPath = v;
+            if (await param.GetAsync(WeldDetectionSettingsStore.UnetModelPathKey) is { } u)
+                weld.Params.UnetModelPath = u;
         }
         catch { /* DB 미준비 — 인메모리 선택 유지 */ }
 
-        var path = weld.Params.DlModelPath;
-        return string.IsNullOrWhiteSpace(path) ? "자동" : Path.GetFileName(path);
+        // 지정된 모델 파일명(종류·ir/rgb)에 맞춰 검출 방식·입력 모드를 맞춘다(모델이 기준 — 불일치 방지).
+        var aligned = weld.AlignToActiveModel();
+
+        static string Name(string? path) => string.IsNullOrWhiteSpace(path) ? "미지정" : Path.GetFileName(path.Trim().Trim('"'));
+        var input = weld.Params.Mode == WeldImageMode.Ir ? "IR" : "RGB";
+        var label = weld.Method switch
+        {
+            WeldDetectionMethod.Dl => $"YOLO 모델: {Name(weld.Params.DlModelPath)}, 입력 {input}",
+            WeldDetectionMethod.Unet => $"U-Net 모델: {Name(weld.Params.UnetModelPath)}, 입력 {input}",
+            var m => $"검출 방식: {m}, 입력 {input}",
+        };
+        return aligned is null ? label : $"{label} ({aligned})";
     }
 
     /// <summary>
@@ -237,13 +343,42 @@ public static class WeldSequenceSupport
     public static Task<(ToolAxisDir Axis, bool FromParam)> GetDepthAxisAsync(ParameterService param)
         => GetToolAxisAsync(param, DepthAxisKey, ToolAxisDir.PlusZ);
 
+    /// <summary>광축 파라미터가 저장돼 있으면 그 축, 없으면 null 을 <see cref="SequenceContext.OpticalAxis"/> 에 채운다.</summary>
+    public static async Task LoadOpticalAxisAsync(ParameterService param, SequenceContext context)
+    {
+        var (axis, fromParam) = await GetDepthAxisAsync(param);
+        context.OpticalAxis = fromParam ? axis : null;
+    }
+
+    /// <summary>광축 파라미터 미설정 시 광축 방향 이동 단계가 내는 실패 메시지.</summary>
+    public static string OpticalAxisMissingMessage(string stage)
+        => $"[{stage}] '{DepthAxisKey}' 광축 파라미터가 저장돼 있지 않습니다 — 기본 +Z 로 움직이면 현장(−Z 장착)에서 " +
+           "벽 쪽으로 반대로 이동할 수 있어 정지합니다. 카메라 페이지에서 광축을 설정·저장하세요.";
+
     /// <summary>
     /// ⑤~⑫ 진행축(코로게이션 Peak 배열 방향의 영상 축)을 ② 검사방향에서 결정한다.
     /// 수직 용접라인(Vertical, J6 180°)은 진행축이 영상 가로가 되고(실기 검증된 기준 케이스),
     /// 수평 용접라인(Horizontal, J6 90° — 광축 둘레 90° 회전)은 진행축이 영상 세로가 된다.
+    /// ② 가 용접선을 영상 가로선으로 맞췄으면(<see cref="SequenceContext.SeamLeveledInImage"/>) 방향과 무관하게 영상 가로다.
     /// </summary>
     public static WeldProgressAxis GetProgressAxis(SequenceContext context)
-        => context.InspectionDirection == InspectionMoveDirection.Vertical
+        => ProgressAxisFor(context, ProgressAxisAlwaysHorizontal);
+
+    /// <summary>
+    /// 진행축을 항상 영상 가로로 둘지 — 파라미터(미설정 = 켬). ② 가 툴을 돌려 용접선을 늘 영상 가로선으로 맞추므로
+    /// Peak·Bead 찾기와 센터링은 가로 용접선만 보면 된다. 종전에는 "② 가로 정렬" 표시·용접선 기록이 없으면(앱 재시작 뒤,
+    /// 단계 단독 실행) 검사방향으로 되돌아가 수평 용접선을 영상 세로로 잘못 봤다(실기 2026-11-14 15:33 A: 진행축=Vertical →
+    /// Peak 센터링이 엉뚱한 축으로 움직여 잔차 +82 mm, 가로로 그린 수동 비드선은 방향 검증에서 거부).
+    /// false 면 종전 규칙(가로 정렬 표시·용접선 기록·검사방향 순).
+    /// </summary>
+    public const string ProgressAxisAlwaysHorizontalKey = "Sequence.Weld.ProgressAxisAlwaysHorizontal";
+
+    /// <summary><see cref="ProgressAxisAlwaysHorizontalKey"/> 의 마지막으로 읽은 값 — 파라미터를 읽을 수 없는 동기 경로용.</summary>
+    public static bool ProgressAxisAlwaysHorizontal { get; set; } = true;
+
+    /// <summary>진행축 결정 규칙(순수 함수). <paramref name="alwaysHorizontal"/> 이면 항상 영상 가로.</summary>
+    internal static WeldProgressAxis ProgressAxisFor(SequenceContext context, bool alwaysHorizontal)
+        => alwaysHorizontal || context.SeamLeveledInImage || context.InspectionDirection == InspectionMoveDirection.Vertical
             ? WeldProgressAxis.Horizontal
             : WeldProgressAxis.Vertical;
 
@@ -257,6 +392,83 @@ public static class WeldSequenceSupport
         var axis = GetProgressAxis(context);
         weld.Params.ProgressAxis = axis;
         return axis;
+    }
+
+    /// <summary>현재 광축이 ② 기록 광축과 이 각도 이상 어긋나면 다른 면을 보고 있다고 보고 기록을 쓰지 않는다 [도].</summary>
+    internal const double SeamMemoryMaxOpticalDeviationDeg = 25.0;
+
+    /// <summary>
+    /// 현재 툴 자세 <paramref name="tcpPose"/> 에서 용접선(<paramref name="rec"/>)이 영상에 어느 축으로 보이는지.
+    /// 영상 속 기울기(0~90°, 0=가로)가 45° 이하면 Horizontal. 광축이 기록과 크게 어긋나거나(다른 면) 축 매핑이 겹치거나
+    /// 용접선이 광축과 거의 나란하면 null(→ 호출측 폴백).
+    /// </summary>
+    internal static WeldProgressAxis? ProgressAxisFromSeam(double[] tcpPose, SeamOrientationRecord rec,
+        ToolAxisDir opticalAxis, ToolAxisDir imageX, ToolAxisDir imageY, out double tiltDeg, out string? reject)
+    {
+        tiltDeg = double.NaN;
+        var u = CobotInspectionMoveStep.ToolAxisInBase(tcpPose, opticalAxis);
+        var o = rec.OpticalAxisBase;
+        var cos = Math.Clamp(u[0] * o[0] + u[1] * o[1] + u[2] * o[2], -1.0, 1.0);
+        var dev = Math.Acos(cos) * 180.0 / Math.PI;
+        if (dev > SeamMemoryMaxOpticalDeviationDeg)
+        {
+            reject = $"광축이 ② 기록과 {dev:0}° 어긋남(다른 면)";
+            return null;
+        }
+
+        if (CobotInspectionMoveStep.SeamLevelTwistDeg(tcpPose, rec.SeamDirBase, opticalAxis, imageX, imageY) is not { } phi)
+        {
+            reject = "영상 축 매핑 겹침 또는 용접선이 광축과 나란함";
+            return null;
+        }
+
+        var t = Math.Abs(phi);
+        tiltDeg = t > 90.0 ? 180.0 - t : t;
+        reject = null;
+        return tiltDeg <= 45.0 ? WeldProgressAxis.Horizontal : WeldProgressAxis.Vertical;
+    }
+
+    /// <summary>
+    /// ⑤~⑫ 진행축을 정한다. ② 가 기록한 용접선 방향(<see cref="SeamOrientationMemory"/>)이 있으면 현재 툴 자세에서
+    /// 용접선이 영상에 가로로 보이는지 세로로 보이는지로 정한다 — 수직 용접선이면 툴도 용접선(수직)을 따라 움직인다.
+    /// 기록이 없거나 쓸 수 없으면 종전대로 컨텍스트 검사방향(<see cref="GetProgressAxis"/>)으로 정한다.
+    /// </summary>
+    public static async Task<(WeldProgressAxis Axis, string Source)> ResolveProgressAxisAsync(
+        SequenceContext context, CobotService cobot, ParameterService param, CancellationToken ct)
+    {
+        try { ProgressAxisAlwaysHorizontal = await param.GetBoolAsync(ProgressAxisAlwaysHorizontalKey) ?? true; }
+        catch (OperationCanceledException) { throw; }
+        catch { /* 파라미터를 못 읽으면 마지막 값 유지 */ }
+        if (ProgressAxisAlwaysHorizontal)
+            return (WeldProgressAxis.Horizontal, "가로 고정 (② 가 용접선을 영상 가로로 정렬)");
+
+        var fallback = ProgressAxisFor(context, alwaysHorizontal: false);
+        var fallbackSrc = context.SeamLeveledInImage ? "② 가로 정렬" :
+            $"검사방향 {(context.InspectionDirection == InspectionMoveDirection.Vertical ? "수직" : "수평")}";
+        if (SeamOrientationMemory.Last is not { } rec)
+            return (fallback, $"{fallbackSrc} (② 용접선 기록 없음)");
+
+        double[] tcp;
+        try { tcp = await cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct); }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex) { return (fallback, $"{fallbackSrc} (TCP 조회 실패: {ex.Message})"); }
+
+        var (optical, _) = await GetDepthAxisAsync(param);
+        var (imageX, _) = await GetImageXAxisAsync(param);
+        var (imageY, _) = await GetImageYAxisAsync(param);
+        if (ProgressAxisFromSeam(tcp, rec, optical, imageX, imageY, out var tilt, out var reject) is not { } axis)
+            return (fallback, $"{fallbackSrc} ({reject})");
+
+        return (axis, $"② 용접선({rec.WallCode ?? "면 미상"}) 영상 기울기 {tilt:0.0}°");
+    }
+
+    /// <summary><see cref="ResolveProgressAxisAsync"/> 결과를 <see cref="WeldTrackingService.Params"/> 에 반영하고 반환한다.</summary>
+    public static async Task<(WeldProgressAxis Axis, string Source)> ApplyProgressAxisAsync(
+        WeldTrackingService weld, SequenceContext context, CobotService cobot, ParameterService param, CancellationToken ct)
+    {
+        var r = await ResolveProgressAxisAsync(context, cobot, param, ct);
+        weld.Params.ProgressAxis = r.Axis;
+        return r;
     }
 
     /// <summary>진행축 이동량을 실을 툴축 매핑 — 진행축이 영상 가로면 ImageX, 세로면 ImageY.</summary>
@@ -286,6 +498,19 @@ public static class WeldSequenceSupport
             return (x, y);
         }
         catch { return (0, 0); }
+    }
+
+    /// <summary>
+    /// 영상 평면 이동량(mm, 영상 +X=화면 오른쪽 / +Y=화면 아래)을 툴 프레임 오프셋[6]으로 바꾼다 —
+    /// 카메라가 영상 (+X, +Y) 방향으로 움직인다. 검사캠 시프트(⑦⁺⑪⁺, 영상 −오프셋)와
+    /// depth 카메라 센터 평행이동(④⁺⁺, 영상 +오프셋)이 공유해 두 이동이 정확히 서로를 상쇄한다.
+    /// </summary>
+    public static double[] ImageShiftToToolOffset(ToolAxisDir imageXAxis, ToolAxisDir imageYAxis, double xMm, double yMm)
+    {
+        var offset = new double[6];
+        FlatSurfaceCenteringService.ApplyAxis(offset, imageXAxis, xMm);
+        FlatSurfaceCenteringService.ApplyAxis(offset, imageYAxis, yMm);
+        return offset;
     }
 
 
@@ -354,7 +579,7 @@ public static class WeldSequenceSupport
             : camera.PixelDeltaToMm(0, 1.0 / frame.Height, depthMm).DyMm;
 
     /// <summary>
-    /// ⑤~⑫ 공통 선행조건 — 코봇/카메라 연결, IR 프레임, IR 모드, 검출기 가용성.
+    /// ⑤~⑫ 공통 선행조건 — 코봇/카메라 연결, IR 프레임, (RGB 입력이면) 컬러 프레임·Depth↔컬러 캘리브레이션, 검출기 가용성.
     /// ParameterService 가 비동기라 pitch 검사는 여기 넣지 않고 ExecuteAsync 앞부분에서 한다.
     /// </summary>
     public static StepValidation ValidateCommon(
@@ -364,10 +589,17 @@ public static class WeldSequenceSupport
             return StepValidation.Fail("코봇 RPC 미연결");
         if (!camera.IsConnected)
             return StepValidation.Fail("카메라 미연결");
+        // IR 프레임은 입력 모드와 무관하게 필요하다 — ROI·센터링·mm 환산의 위치 기준이 IR(=Depth) 좌표다.
         if (camera.LatestIr is null)
             return StepValidation.Fail("IR 프레임 없음 — IR 스트림 활성 상태를 확인하세요.");
+        // RGB 입력: 비드는 컬러 영상에서 찾고, IR 기준 ROI·중심선을 공장 캘리브레이션으로 컬러에 투영한다.
         if (weld.Params.Mode != WeldImageMode.Ir)
-            return StepValidation.Fail("IR 모드가 아닙니다 — Weld 페이지에서 IR 모드로 전환하세요.");
+        {
+            if (camera.LatestColor is null)
+                return StepValidation.Fail("컬러 프레임 없음 — RGB 입력 모드는 컬러 스트림이 필요합니다.");
+            if (camera.GetD2CParams() is not { IsValid: true })
+                return StepValidation.Fail("Depth↔컬러 캘리브레이션 없음 — RGB 입력 모드를 쓸 수 없습니다(IR 모드로 전환하거나 카메라 연결 확인).");
+        }
         if (requireDetector && !weld.DetectorAvailable)
             return StepValidation.Fail("비드 검출기 비활성 (OpenCV 네이티브 없음 — Windows 전용)");
 

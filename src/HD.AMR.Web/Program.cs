@@ -78,6 +78,8 @@ builder.Services.AddSingleton<AmrDriveService>();
 // AMRService(Modbus 상태)를 참조해 state를 매핑. Enabled=false 면 유휴. AMR/Cobot 과 동일 패턴.
 builder.Services.Configure<HD.AMR.App.Communication.Vda5050.Vda5050AdapterSettings>(
     builder.Configuration.GetSection("Vda5050"));
+builder.Services.AddSingleton<CobotObstacleGuard>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<CobotObstacleGuard>());
 builder.Services.AddSingleton<Vda5050OrderExecutor>();
 builder.Services.AddSingleton<Vda5050AdapterService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<Vda5050AdapterService>());
@@ -88,6 +90,8 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<CommLossMonitorSer
 // 장치 통신 HEAVY 알람(비전·Depth·레이저·IO·코봇·AMR) — 공유 상태 + 감시. 알람 중 order 거부, RESET 으로 해제.
 builder.Services.Configure<DeviceHealthSettings>(builder.Configuration.GetSection("DeviceHealth"));
 builder.Services.AddSingleton<DeviceAlarmState>();
+// 코봇 도달·순회 경고 배너 — HEAVY 알람과 분리(order 를 잠그지 않음). 확인 버튼으로 지운다.
+builder.Services.AddSingleton<OperatorAlarmState>();
 builder.Services.AddSingleton<DeviceHealthMonitorService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<DeviceHealthMonitorService>());
 // AMR 장비 자체 상태 변화(모드·이동·조그·오류)를 운영 로그(출처 AMR)로 기록.
@@ -117,11 +121,15 @@ if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
 {
     builder.Services.AddSingleton<IWeldVisionDetector, WeldVisionDetector>();
     builder.Services.AddSingleton<IDlWeldVisionDetector, HD.AMR.App.Service.Vision.DlWeldVisionDetector>();
+    builder.Services.AddSingleton<IRidgeWeldVisionDetector, RidgeWeldVisionDetector>();
+    builder.Services.AddSingleton<IUnetWeldVisionDetector, HD.AMR.App.Service.Vision.UnetWeldVisionDetector>();
 }
 else
 {
     builder.Services.AddSingleton<IWeldVisionDetector, NoopWeldVisionDetector>();
     builder.Services.AddSingleton<IDlWeldVisionDetector, NoopWeldVisionDetector>();
+    builder.Services.AddSingleton<IRidgeWeldVisionDetector, NoopWeldVisionDetector>();
+    builder.Services.AddSingleton<IUnetWeldVisionDetector, NoopWeldVisionDetector>();
 }
 builder.Services.AddSingleton(sp =>
 {
@@ -157,14 +165,23 @@ builder.Services.AddScoped<QrLocalizationService>();
 builder.Services.AddScoped<HD.AMR.App.Service.Motion.PostureLimitsService>();
 // 용접선 점(맵 좌표) → 코봇 BASE 접근점 환산 — ② 검사위치 이동과 드라이런 끝점 이동이 공유.
 builder.Services.AddScoped<HD.AMR.App.Service.Inspection.SeamApproachResolver>();
+// 정차 거리·높이 격자를 컨트롤러 IK 로 훑는 리치 맵(코봇 이동 없음).
+builder.Services.AddScoped<HD.AMR.App.Service.Motion.ReachMapService>();
+// AMR·리프트 이동 전 코봇 도달·순회 사전 점검(저장 리치 맵 또는 1셀 IK).
+builder.Services.AddScoped<HD.AMR.App.Service.Motion.CobotReachPrecheck>();
 
 // 시퀀스 단계 등록 (ISequenceStep). 새 단계 추가 시 여기에 한 줄만 추가.
 builder.Services.AddScoped<ISequenceStep, AmrMoveStep>();   // 100: AMR 위치 이동 (페이지 테스트 전용)
 builder.Services.AddScoped<ISequenceStep, CobotInspectionMoveStep>();
 builder.Services.AddScoped<ISequenceStep, CameraAlignStep>();
 builder.Services.AddScoped<ISequenceStep, CameraAlignRefineStep>();
-builder.Services.AddScoped<ISequenceStep, FlatSurfaceAlignStep>();
-builder.Services.AddScoped<ISequenceStep, LaserWorkingDistanceStep>();   // 450: ④ 직후 레이저 WD 거리 조정
+builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<FlatSurfaceAlignStep>(sp, true));
+builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<FlatSurfaceAlignStep>(sp, false));   // 810: 묶음 점2 평탄면(수평 얼라인 없음)
+builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<LaserWorkingDistanceStep>(
+    sp, "laserWorkingDistance", "레이저 WD 거리 조정", 450));
+builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<LaserWorkingDistanceStep>(
+    sp, LaserWorkingDistanceStep.BundlePoint2Key, "묶음 점2 WD 조정", 820));
+builder.Services.AddScoped<ISequenceStep, DepthCamCenterShiftStep>();    // 470: TCP 아래 용접선 → depth 영상 중심 평행이동
 // ⑤~⑫ Peak/Bead 측정 — ⑤⑨·⑥⑩·⑦⑪은 peakId 만 다른 동일 동작이라 한 클래스를 두 번 등록한다.
 // ActivatorUtilities.CreateInstance 는 명시 인자를 생성자 앞쪽부터 매칭하므로 peakId 가 첫 파라미터여야 한다.
 builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<PeakFindStep>(sp, 1));
@@ -188,6 +205,9 @@ builder.Services.AddScoped<ISequenceStep, WObjResetStep>();   // 1300: 활성 �
 builder.Services.AddScoped<ISequenceStep, CobotHomeReturnStep>();   // 1350: 코봇 홈 복귀 (MoveJ)
 builder.Services.AddScoped<ISequenceStep, MonitorCloseStep>();   // 1400: 모니터링 창 닫기 (최종)
 // 시퀀스 모니터링 허브 — 별도 브라우저 창(/sequence-monitor, 다른 서킷)이 구독하므로 싱글톤.
+builder.Services.AddSingleton<HD.AMR.App.Service.Sequence.BeadManualLabelHub>();
+builder.Services.AddScoped<HD.AMR.App.Service.Sequence.Steps.BeadManualAssist>();
+builder.Services.AddScoped<HD.AMR.App.Service.Sequence.Steps.BeadManualJogService>();
 builder.Services.AddSingleton<SequenceMonitorService>();  // 1200: ⑱ 검사 수행(도면 경유점 순회 + 비전 캡처)
 // 시퀀스 전역 실행 잠금 — SequenceService 는 서킷별 scoped 라 UI/ACS 동시 실행을 막으려면 전역 게이트가 필요.
 builder.Services.AddSingleton<SequenceRunGate>();
@@ -199,6 +219,7 @@ builder.Services.AddScoped<HD.AMR.App.Service.Vision.LabelDataService>();
 builder.Services.AddSingleton<HD.AMR.App.Service.Vision.WeldTrainingService>();
 // DL 비드 세그멘테이션 추론(ONNX CPU) — 세션 캐시 유지 위해 싱글톤.
 builder.Services.AddSingleton<HD.AMR.App.Service.Vision.OnnxBeadSegmentationService>();
+builder.Services.AddSingleton<HD.AMR.App.Service.Vision.WeldDetectionBenchmarkService>();
 
 var app = builder.Build();
 
@@ -221,6 +242,11 @@ using (var scope = app.Services.CreateScope())
 
     // 파라미터 기본값 시드 — arrival.deviationXy 등 UI에서 조정 가능하도록 미리 생성.
     var param = scope.ServiceProvider.GetRequiredService<ParameterService>();
+    // 이름이 바뀐 키 이전(Weld.Dl.* → Weld.Yolo.*) — 현장 저장값(모델 경로·임계값) 보존.
+    var renamedParams = param.RenameLegacyAsync().GetAwaiter().GetResult();
+    if (renamedParams.Count > 0)
+        scope.ServiceProvider.GetRequiredService<ILogger<Program>>()
+            .LogInformation("파라미터 이름 변경: {Names}", string.Join(", ", renamedParams));
     param.SeedDefaultsAsync().GetAwaiter().GetResult();
 
     // 폐기 키 정리(Camera.Weld.Roi.* 등) — 어떤 코드도 읽지 않아 Parameter 화면에서 혼동만 준다.
@@ -289,6 +315,7 @@ app.MapGet("/camera/status", (CameraService svc) => Results.Json(new
     svc.IsConnected,
     svc.IsStreaming,
     svc.IsIrActive,
+    svc.IsEmitterAlternating,
     svc.ConnectionType,
     lastFrameMsAgo = (DateTime.UtcNow - svc.LastFrameAt).TotalMilliseconds,
     color = svc.LatestColor is null ? null : (object)new

@@ -45,6 +45,42 @@ public sealed class LaserTiltCorrector
             progress?.Invoke(m);
         }
 
+        var noise = new NoiseHistory();
+        var result = await LevelCoreAsync(o, Report, onMeasured, noise, ct);
+        return result with
+        {
+            Message = result.Success ? result.Message : AnnotateFailure(result.Message, noise.Last),
+            Noise = noise.Last,
+            NoiseHistory = noise.All,
+        };
+    }
+
+    /// <summary>회차별 노이즈 통계 누적(진단 전용 — 판정에는 쓰지 않는다).</summary>
+    private sealed class NoiseHistory
+    {
+        private readonly List<LaserNoiseReport> _all = new();
+        public IReadOnlyList<LaserNoiseReport> All => _all;
+        public LaserNoiseReport? Last => _all.Count > 0 ? _all[^1] : null;
+        public void Add(LaserNoiseReport r) => _all.Add(r);
+    }
+
+    /// <summary>
+    /// 실패 메시지에 마지막 측정의 노이즈 진단을 붙인다. 불안정이면 앞에 <c>[측정 불안정]</c> 을 달아
+    /// 로그만으로 "잡음 때문에 실패"와 "면·기하 문제로 실패"를 구분할 수 있게 한다.
+    /// </summary>
+    public static string AnnotateFailure(string message, LaserNoiseReport? noise)
+    {
+        if (noise is null) return message;
+        var reasons = noise.InstabilityReasons();
+        return reasons.Count > 0
+            ? $"[측정 불안정] {message} — 레이저 판독 흔들림: {string.Join(", ", reasons)} ({noise.ShortText()})"
+            : $"{message} (측정 노이즈 정상: {noise.ShortText()})";
+    }
+
+    private async Task<TiltLevelResult> LevelCoreAsync(TiltLevelOptions o, Action<string> Report,
+        Action<int, PlanePose>? onMeasured, NoiseHistory noise, CancellationToken ct)
+    {
+
         double[,]? jac = o.MeasureResponse ? null : NominalJacobian();
         double prevTilt = double.PositiveInfinity;
         (double Rx, double Ry)? predicted = null;
@@ -58,15 +94,17 @@ public sealed class LaserTiltCorrector
         {
             ct.ThrowIfCancellationRequested();
 
-            var (pose, ch, outlierFail) = await SampleGuardedAsync(Report, ct);
+            var (pose, ch, outlierFail, sampleNoise) = await SampleGuardedAsync(o, Report, ct);
+            var noiseText = RecordNoise(sampleNoise, iter, noise);
             if (!pose.Valid)
                 return TiltLevelResult.Fail($"레이저 평면 측정 실패: {pose.Note}", iter, null, jac);
             if (outlierFail is not null)
                 return TiltLevelResult.Fail(outlierFail, iter, pose, jac);
 
             onMeasured?.Invoke(iter, pose);
-            var chText = ch.Count >= 3 ? $" [CH {ch[0]:0.##}/{ch[1]:0.##}/{ch[2]:0.##}mm]" : "";
-            Report($"측정 {iter + 1}: rx={pose.Rx:0.###}°, ry={pose.Ry:0.###}°, z={pose.Z:0.#}mm{chText}");
+            var chLabel = sampleNoise is not null ? $"{sampleNoise.Channels[0].Samples}샘플 중앙값 CH" : "CH";
+            var chText = ch.Count >= 3 ? $" [{chLabel} {ch[0]:0.##}/{ch[1]:0.##}/{ch[2]:0.##}mm]" : "";
+            Report($"측정 {iter + 1}: rx={pose.Rx:0.###}°, ry={pose.Ry:0.###}°, z={pose.Z:0.#}mm{chText}{noiseText}");
 
             // 반응 확인 — 강체 평면이면 직전 보정의 예측대로 변해야 한다.
             if (predicted is { } pr && !IsResponseConsistent(pr.Rx, pr.Ry, pose.Rx, pose.Ry, lastAppliedMag))
@@ -98,12 +136,12 @@ public sealed class LaserTiltCorrector
                 Report($"틸트 응답 측정: 툴 Rx/Ry 각 {o.ProbeDeg}° 프로브 회전");
                 var rcA = await RotateToolAsync(o.Tool, o.ProbeDeg, 0, pose.Z, o, Report, ct);
                 if (rcA != 0)
-                    return TiltLevelResult.Fail($"틸트 응답 프로브 이동 실패 (rc={rcA}){FairinoErrorCodes.Suffix(rcA)}.", iter, pose, null);
-                var pA = await SampleAsync(ct);
+                    return TiltLevelResult.Fail($"틸트 응답 프로브 이동 실패 (rc={rcA}){FairinoErrorCodes.Suffix(rcA)}.", iter, pose, null) with { MotionFailure = true };
+                var pA = (await MeasureAsync(o, ct)).Pose;
                 var rcB = await RotateToolAsync(o.Tool, -o.ProbeDeg, o.ProbeDeg, pA.Valid ? pA.Z : pose.Z, o, Report, ct);
                 if (rcB != 0)
-                    return TiltLevelResult.Fail($"틸트 응답 프로브 이동 실패 (rc={rcB}){FairinoErrorCodes.Suffix(rcB)}.", iter, pose, null);
-                var pB = await SampleAsync(ct);
+                    return TiltLevelResult.Fail($"틸트 응답 프로브 이동 실패 (rc={rcB}){FairinoErrorCodes.Suffix(rcB)}.", iter, pose, null) with { MotionFailure = true };
+                var pB = (await MeasureAsync(o, ct)).Pose;
                 if (!pA.Valid || !pB.Valid)
                     return TiltLevelResult.Fail($"틸트 응답 측정 실패: {(pA.Valid ? pB.Note : pA.Note)}", iter, pose, null);
 
@@ -129,12 +167,29 @@ public sealed class LaserTiltCorrector
 
             var rc = await RotateToolAsync(o.Tool, applyRx, applyRy, pose.Z, o, Report, ct);
             if (rc != 0)
-                return TiltLevelResult.Fail($"틸트 보정 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.", iter, pose, jac);
+                return TiltLevelResult.Fail($"틸트 보정 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.", iter, pose, jac) with { MotionFailure = true };
 
             predicted = (pose.Rx + jac[0, 0] * applyRx + jac[0, 1] * applyRy,
                          pose.Ry + jac[1, 0] * applyRx + jac[1, 1] * applyRy);
             lastAppliedMag = Math.Sqrt(applyRx * applyRx + applyRy * applyRy);
         }
+    }
+
+    /// <summary>
+    /// 판정 측정과 같은 샘플의 노이즈 통계를 기록한다(<see cref="TiltLevelOptions.NoiseSamples"/>=0 이면 없음).
+    /// 채널별 상세는 로그에, 진행 메시지에는 한 줄 요약을 붙일 문자열을 돌려준다.
+    /// </summary>
+    private string RecordNoise(LaserNoiseReport? report, int iter, NoiseHistory noise)
+    {
+        if (report is null) return "";
+        noise.Add(report);
+        var reasons = report.InstabilityReasons();
+        if (reasons.Count > 0)
+            _logger.LogWarning("틸트 보정 측정 {Iter} 노이즈 불안정 ({Reasons}): {Detail}",
+                iter + 1, string.Join(", ", reasons), report.DetailText());
+        else
+            _logger.LogInformation("틸트 보정 측정 {Iter} 노이즈: {Detail}", iter + 1, report.DetailText());
+        return $" | {report.ShortText()}" + (reasons.Count > 0 ? $" ⚠ {string.Join(", ", reasons)}" : "");
     }
 
     /// <summary>이 각도(°) 미만 보정은 감쇠 — 두 축 모두 이 안일 때.</summary>
@@ -198,31 +253,45 @@ public sealed class LaserTiltCorrector
     /// <see cref="SampleAsync"/> + 단일 채널 튐 가드 — 튀면 1초 뒤 재측정, 최대 <see cref="MaxOutlierRetries"/>회.
     /// 일시 튐(필터 지연·진동)은 1~2초 안에 사라지고, 끝내 남으면 렌즈·표면 문제라 더 재도 소용없어 NG 메시지를 돌려준다.
     /// </summary>
-    private async Task<(PlanePose Pose, IReadOnlyList<double> Channels, string? OutlierFail)> SampleGuardedAsync(
-        Action<string> report, CancellationToken ct)
+    private async Task<(PlanePose Pose, IReadOnlyList<double> Channels, string? OutlierFail, LaserNoiseReport? Noise)>
+        SampleGuardedAsync(TiltLevelOptions o, Action<string> report, CancellationToken ct)
     {
         for (var attempt = 0; ; attempt++)
         {
-            var pose = await SampleAsync(ct);
-            var ch = _laser.GetReadings().Select(r => r.Value).ToList();
-            if (!pose.Valid) return (pose, ch, null);
+            var (pose, noise) = await MeasureAsync(o, ct);
+            // 튐 판정 채널값: 로버스트 측정이면 판정에 쓴 채널 중앙값, 아니면 최신 스냅샷.
+            IReadOnlyList<double> ch = noise is not null
+                ? noise.Channels.Select(c => c.Median).ToList()
+                : _laser.GetReadings().Select(r => r.Value).ToList();
+            if (!pose.Valid) return (pose, ch, null, noise);
 
             var bad = FindOutlierChannel(ch);
-            if (bad < 0) return (pose, ch, null);
+            if (bad < 0) return (pose, ch, null, noise);
 
             var dev = ch[bad] - (ch[(bad + 1) % 3] + ch[(bad + 2) % 3]) / 2;
             var chText = $"CH {ch[0]:0.##}/{ch[1]:0.##}/{ch[2]:0.##}mm";
             if (attempt >= MaxOutlierRetries)
                 return (pose, ch,
                     $"레이저 CH{bad + 1} 단독 이상값 ({dev:+0.#;-0.#}mm, {chText}) — 재측정 {MaxOutlierRetries}회 후에도 지속. " +
-                    $"헤드{bad + 1} 렌즈 오염·빔 정렬 또는 스팟 위치의 반사/모서리를 확인하세요.");
+                    $"헤드{bad + 1} 렌즈 오염·빔 정렬 또는 스팟 위치의 반사/모서리를 확인하세요.", noise);
 
             report($"CH{bad + 1} 단독 튐 ({dev:+0.#;-0.#}mm, {chText}) — {OutlierRetryDelayMs / 1000.0:0.#}s 후 재측정 ({attempt + 1}/{MaxOutlierRetries})");
             await Task.Delay(OutlierRetryDelayMs, ct);
         }
     }
 
-    /// <summary>레이저 3점 측정을 3회 샘플링해 평균 pose 반환(100ms 간격).</summary>
+    /// <summary>
+    /// 판정용 평면 측정. <see cref="TiltLevelOptions.NoiseSamples"/> &gt; 0 이면 N 샘플 <b>채널별 중앙값</b> pose + 같은 샘플의
+    /// 노이즈 통계(<see cref="LaserDisplacementSensorService.MeasurePlaneAsync"/>), 0 이면 종전 3샘플 평균(<see cref="SampleAsync"/>).
+    /// 11-09 10:40: 3샘플 판정값 ry 2.25° vs 바로 뒤 20샘플 0.55±0.11° — 잡음·정착 중 샘플에 끌려 '발산'으로 오판했다.
+    /// </summary>
+    private async Task<(PlanePose Pose, LaserNoiseReport? Noise)> MeasureAsync(TiltLevelOptions o, CancellationToken ct)
+    {
+        if (o.NoiseSamples <= 0) return (await SampleAsync(ct), null);
+        return await _laser.MeasurePlaneAsync(o.NoiseSamples, o.NoiseIntervalMs, ct);
+    }
+
+    /// <summary>레이저 3점 측정을 3회 샘플링해 평균 pose 반환(100ms 간격) — 종전 방식(NoiseSamples=0).</summary>
     public async Task<PlanePose> SampleAsync(CancellationToken ct)
     {
         double rxSum = 0, rySum = 0, rzSum = 0, zSum = 0;
@@ -279,12 +348,22 @@ public sealed class LaserTiltCorrector
         return 0;
     }
 
-    /// <summary>정착 대기(<see cref="TiltLevelOptions.SettleMs"/>) + 레이저 판독 안정화 대기(3채널 |Δ|&lt;0.05mm, 한도
-    /// <see cref="TiltLevelOptions.StabilizeTimeoutMs"/>). 회전 후와 첫 측정 전이 같은 기준을 써야 예측·실측 비교가 맞는다.</summary>
+    /// <summary>정착 대기(<see cref="TiltLevelOptions.SettleMs"/>) + 레이저 판독 정착 대기(한도
+    /// <see cref="TiltLevelOptions.StabilizeTimeoutMs"/>). 회전 후와 첫 측정 전이 같은 기준을 써야 예측·실측 비교가 맞는다.
+    /// <see cref="TiltLevelOptions.NoiseSamples"/> &gt; 0 이면 드리프트 기준(<see cref="LaserSettleAnalyzer"/>), 0 이면 종전 |Δ|&lt;0.05mm.</summary>
     private async Task WaitSettledAsync(TiltLevelOptions o, Action<string> report, CancellationToken ct)
     {
         await Task.Delay(o.SettleMs, ct);
         var sw = System.Diagnostics.Stopwatch.StartNew();
+        if (o.NoiseSamples > 0)
+        {
+            var settle = await _laser.WaitForSettledAsync(o.SettleWindowSamples, o.NoiseIntervalMs,
+                o.StabilizeTimeoutMs, o.MaxSettleSlopeMmPerS, o.SettleSignificance, ct);
+            report(settle.Settled
+                ? $"판독 정착 ({(o.SettleMs + sw.ElapsedMilliseconds) / 1000.0:0.0}s, 기울기 < {o.MaxSettleSlopeMmPerS}mm/s)"
+                : $"판독 정착 한도({o.StabilizeTimeoutMs}ms) 초과 — {string.Join(", ", settle.Reasons)}. 측정을 계속합니다.");
+            return;
+        }
         var stable = await _laser.WaitForStableReadingsAsync(100, o.StabilizeTimeoutMs, ct);
         report(stable
             ? $"판독 안정 ({(o.SettleMs + sw.ElapsedMilliseconds) / 1000.0:0.0}s)"
@@ -358,12 +437,37 @@ public sealed class TiltLevelOptions
     /// <summary>true = 첫 보정 전 3° 프로브로 응답 J 를 실측(진단용). false(기본) = 공칭 J=diag(−1,+1) —
     /// 헤드 캘리브레이션 결과가 적용돼 있으면 성립한다.</summary>
     public bool MeasureResponse { get; init; }
+
+    /// <summary>판정 측정 샘플 수 — 이 샘플의 채널별 중앙값으로 틸트를 계산하고 같은 샘플로 노이즈 통계를 낸다
+    /// (기본 20 × 50ms ≈ 1s/측정). 0 = 종전 방식(3샘플 평균 판정, |Δ| 기준 안정화, 노이즈 통계 없음).</summary>
+    public int NoiseSamples { get; init; } = 20;
+
+    /// <summary>판정 측정·정착 판정 샘플 간격(ms).</summary>
+    public int NoiseIntervalMs { get; init; } = 50;
+
+    /// <summary>정착 판정 창 샘플 수(기본 20 × 50ms ≈ 1s).</summary>
+    public int SettleWindowSamples { get; init; } = 20;
+
+    /// <summary>정착 기울기 한도(mm/s) — 0.05mm/s 면 1s 측정 창 동안 0.05mm(틸트 ~0.1°) 이하로만 흐른다.</summary>
+    public double MaxSettleSlopeMmPerS { get; init; } = 0.05;
+
+    /// <summary>정착 판정 유의 배수 — 기울기가 이 배수 × SE 이하면 잡음으로 보고 드리프트로 치지 않는다.</summary>
+    public double SettleSignificance { get; init; } = 2.0;
 }
 
 /// <summary>수평 보정 결과. <see cref="Jacobian"/> 은 측정된 응답 행렬(측정 전 실패면 null).</summary>
 public sealed record TiltLevelResult(bool Success, string Message, int Corrections, PlanePose? FinalPose,
     double[,]? Jacobian)
 {
+    /// <summary>마지막 측정의 노이즈 진단(캡처 안 했으면 null).</summary>
+    public LaserNoiseReport? Noise { get; init; }
+
+    /// <summary>회차별 노이즈 진단.</summary>
+    public IReadOnlyList<LaserNoiseReport> NoiseHistory { get; init; } = Array.Empty<LaserNoiseReport>();
+
+    /// <summary>true = 코봇 이동(rc≠0) 실패 — 측정면 문제가 아니라 다른 자리로 재시도해도 소용없다.</summary>
+    public bool MotionFailure { get; init; }
+
     public static TiltLevelResult Fail(string message, int corrections, PlanePose? pose, double[,]? jac)
         => new(false, message, corrections, pose, jac);
 }

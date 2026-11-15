@@ -17,13 +17,24 @@ namespace HD.AMR.App.Service.Inspection;
 /// <param name="Note">진단 문자열.</param>
 /// <param name="Blocker">null 이 아니면 호출측은 <b>폴백 없이 즉시 실패</b>(리치 부족 등).</param>
 /// <param name="OpticalAxis"><paramref name="ComputedPose"/> 계산에 쓴 광축 툴축(<see cref="WeldSequenceSupport.DepthAxisKey"/>).</param>
+/// <param name="Shortfall">Blocker 가 <b>리치 부족</b>이면 그 수치 — `stationReachShortfall` 보고용(N23 A안). 그 외 null.</param>
+/// <param name="StrokeMm">환산에 쓴 텔레스코픽 스트로크 [mm] — 자기 간섭 판정용. 환산하지 않았으면 null.</param>
+/// <param name="MountYawDeg">환산에 쓴 장착 yaw(T_A_B rz) [도] — 자기 간섭 판정용. 환산하지 않았으면 null.</param>
+/// <param name="SeamDirBase">용접선 방향(접근점→반대쪽 점)의 코봇 BASE 단위벡터 — 영상 가로 정렬용. 반대쪽 점이 없으면 null.</param>
+/// <param name="SeamPointBase">용접선 점 자체(면 위, 이격 전)의 코봇 BASE 위치 [mm]. ④⁺가 평행도 보정 후
+/// 이 점 정면으로 복귀하는 기준(접근점 <paramref name="Base"/>는 이격 거리만큼 떨어져 있어 틸트 변화 시 옆으로 어긋난다).</param>
 public sealed record SeamApproachResult(
     double[]? Base,
     double[]? ComputedPose,
     bool UseComputedOrientation,
     string Note,
     string? Blocker,
-    ToolAxisDir OpticalAxis = ToolAxisDir.PlusZ);
+    ToolAxisDir OpticalAxis = ToolAxisDir.PlusZ,
+    ReachShortfall? Shortfall = null,
+    double? StrokeMm = null,
+    double? MountYawDeg = null,
+    double[]? SeamDirBase = null,
+    double[]? SeamPointBase = null);
 
 /// <summary>
 /// ACS 용접선 점(맵 좌표)을 코봇 BASE 접근점으로 환산한다 — ② 검사위치 이동(시작점)과
@@ -71,18 +82,25 @@ public sealed class SeamApproachResolver
     /// <param name="tool">리치 사전점검에 쓸 공구 번호.</param>
     /// <param name="label">로그 접두사(예 "②", "끝점").</param>
     /// <param name="standoffMm">면 이격 [mm]. null 이면 ③ 카메라 목표거리(<see cref="CobotInspectionMoveStep.ResolveApproachDistanceMm"/>).</param>
+    /// <param name="tiltUpDeg">광축을 면 법선에서 상하로 기울일 각 [도] — 0 이면 법선 정면(기본). 접근 자세 탐색 전용.</param>
+    /// <param name="tiltSideDeg">광축을 면 법선에서 좌우로 기울일 각 [도] — 0 이면 법선 정면(기본).</param>
     /// <returns>Blocker 가 null 이 아니면 호출측은 즉시 실패해야 한다. Base 가 null 이고 Blocker 도 null 이면 티칭 폴백.</returns>
     public async Task<SeamApproachResult> ResolveAsync(
         SequenceContext context, double[]? approachW, double[]? directionW, int tool, string label, CancellationToken ct,
-        double? standoffMm = null)
+        double? standoffMm = null, double tiltUpDeg = 0, double tiltSideDeg = 0)
     {
         var useComputed = await _param.GetBoolAsync(UseComputedNormalOrientationKey) ?? false;
         // 법선 자세는 '광축 툴축이 면을 향하게' 만든다 — 카메라 페이지의 광축 설정(현장 −Z)을 따라야 한다.
         // 기본 +Z 로 계산하면 툴이 180° 뒤집힌 목표가 나와 손목(J4)이 크게 재구성된다(2026-10-07 현장).
-        var (opticalAxis, _) = await WeldSequenceSupport.GetDepthAxisAsync(_param);
+        var (opticalAxis, axisFromParam) = await WeldSequenceSupport.GetDepthAxisAsync(_param);
 
         if (approachW is not { Length: 3 } seam)
             return new SeamApproachResult(null, null, useComputed, "용접선 좌표 없음 — 티칭 위치로 이동", null);
+
+        // 광축을 모르면 법선 자세·후퇴 방향을 정할 수 없다 — 기본 +Z 로 계산하면 툴이 뒤집힌 목표가 나온다.
+        if (!axisFromParam)
+            return new SeamApproachResult(null, null, useComputed, "",
+                WeldSequenceSupport.OpticalAxisMissingMessage(label.Trim('[', ']')));
 
         if (_amr.LatestStatus is not { } status)
             return new SeamApproachResult(null, null, useComputed,
@@ -94,7 +112,12 @@ public sealed class SeamApproachResolver
             return new SeamApproachResult(null, null, useComputed,
                 "장착 보정(T_A_B) 미수행 — 용접선 좌표를 환산할 수 없어 티칭 위치로 이동", null);
 
-        var stroke = _lift.Latest is { HeightMm: >= 0 } lift ? lift.HeightMm : 0;
+        // 스트로크를 모르면 0 으로 가정하지 않는다 — T_A_B 의 tz 가 그만큼(최대 1m) 어긋나 접근점이 엉뚱한
+        // 높이로 잡힌다. 티칭 폴백도 하지 않고 즉시 실패한다(폴백 위치도 현재 높이를 전제로 교시됐다).
+        if (_lift.TryGetStrokeMm(out var liftReason) is not { } stroke)
+            return new SeamApproachResult(null, null, useComputed, "",
+                $"{label} {liftReason} — 코봇 BASE 높이(T_A_B tz)를 알 수 없어 용접선 좌표를 환산하지 않습니다. " +
+                "텔레스코픽 연결을 확인하세요.");
 
         var standoff = standoffMm ?? CobotInspectionMoveStep.ResolveApproachDistanceMm(context);
 
@@ -110,7 +133,9 @@ public sealed class SeamApproachResolver
             StandoffMm: standoff,
             WallFacingThetaRad: context.WallFacingThetaRad,
             WallCode: context.WallCode,
-            OpticalAxis: opticalAxis));
+            OpticalAxis: opticalAxis,
+            TiltUpDeg: tiltUpDeg,
+            TiltSideDeg: tiltSideDeg));
 
         foreach (var note in target.Notes)
             _logger.LogWarning("{Label} 용접선 환산 주의: {Note}", label, note);
@@ -151,14 +176,32 @@ public sealed class SeamApproachResolver
                 "{Label} 리치 점검: 면까지 {Normal:0}mm − 후퇴 {Approach:0} − 공구 {Tool:0} = 플랜지 뻗음 {Flange:0}mm (최소 {Min:0}mm)",
                 label, target.NormalDistanceMm, standoff, toolLen, reach.FlangeReachMm, limits.MinFlangeReachMm);
 
-            reachNote = $" · 플랜지 뻗음 {reach.FlangeReachMm:0}mm(최소 {limits.MinFlangeReachMm:0}, 면까지 {target.NormalDistanceMm:0}mm)";
-            if (!reach.Ok)
+            var flangeRule = ApproachReach.AppliesTo(context.WallCode);
+            reachNote = flangeRule
+                ? $" · 플랜지 뻗음 {reach.FlangeReachMm:0}mm(최소 {limits.MinFlangeReachMm:0}, 면까지 {target.NormalDistanceMm:0}mm)"
+                : $" · 플랜지 뻗음 {reach.FlangeReachMm:0}mm(천장 — 최소 뻗음 규칙 제외, 면까지 {target.NormalDistanceMm:0}mm)";
+            if (!reach.Ok && flangeRule)
+            {
+                // 더 물러나야 할 거리 — 현재 정차에서 벽 정면 반대로 시험 후진한 자리의 법선거리로 기울기를 잰다
+                // (정차 보정 계획과 같은 식, StationAdjustPlanner.NeededBackwardMm).
+                var facing = context.WallFacingThetaRad ?? pose.Angle;
+                var (px, py) = StationAdjustPlanner.BackedOff(pose.X, pose.Y, facing, StationAdjustPlanner.ProbeMm);
+                var probe = SeamBaseTransform.Resolve(new SeamBaseInput(
+                    SeamStartW: seam, SeamEndW: directionW is { Length: 3 } ? directionW : null,
+                    AmrXm: px, AmrYm: py, AmrYawRad: pose.Angle,
+                    MountAtHome: mount, TelescopicStrokeMm: stroke, ZDatumOffsetMm: context.ZDatumOffsetMm,
+                    StandoffMm: standoff, WallFacingThetaRad: context.WallFacingThetaRad, WallCode: context.WallCode,
+                    OpticalAxis: opticalAxis)).NormalDistanceMm;
+                var extra = StationAdjustPlanner.NeededBackwardMm(new StationAdjustSeam(
+                    label, target.NormalDistanceMm, probe, reach.RequiredNormalDistanceMm)) ?? -1;
                 return new SeamApproachResult(null, null, useComputed, "",
                     $"정차 거리 부족 — 필요 ≥ {reach.RequiredNormalDistanceMm:0}mm, 현재 {target.NormalDistanceMm:0}mm " +
                     $"(후퇴 {standoff:0} + 공구 {toolLen:0} + 최소 뻗음 {limits.MinFlangeReachMm:0}). " +
                     $"플랜지 뻗음이 {reach.FlangeReachMm:0}mm 라 팔을 접은 자세가 되고 손목 특이점(rc=38)이 납니다 — " +
                     $"AMR 을 벽에서 {reach.ShortfallMm:0}mm 더 떨어뜨려 정차하세요. " +
-                    $"(최소 뻗음 {limits.MinFlangeReachMm:0}mm 는 실측 전 잠정값 — 용접 위치 시험 화면에서 조정 가능)");
+                    $"(최소 뻗음 {limits.MinFlangeReachMm:0}mm 는 실측 전 잠정값 — 용접 위치 시험 화면에서 조정 가능)",
+                    Shortfall: new ReachShortfall(target.NormalDistanceMm, reach.RequiredNormalDistanceMm, extra));
+            }
         }
 
         // target.TargetPoseBase 는 wall_code 가 유효할 때만 non-null(광축이 면 법선을 향하는 전체 pose).
@@ -167,6 +210,56 @@ public sealed class SeamApproachResolver
             target.ApproachBaseMm, target.TargetPoseBase, useComputed,
             (standoffMm is null
                 ? $"용접선 접근점(면 이격 {standoff:0}mm — '카메라 거리 정렬' 목표거리)"
-                : $"용접선 접근점(면 이격 {standoff:0}mm)") + reachNote, null, opticalAxis);
+                : $"용접선 접근점(면 이격 {standoff:0}mm)") + reachNote, null, opticalAxis,
+            StrokeMm: stroke, MountYawDeg: mount[5], SeamDirBase: target.SeamDirectionBase,
+            SeamPointBase: target.SeamStartBaseMm);
+    }
+
+    /// <summary>
+    /// 정차 보정 계획용 리치 표본(사양 §4.4.2, N23) — 코봇을 움직이지 않고 정차의 각 용접선에 대해
+    /// <b>원래 정차점</b>과 그로부터 <see cref="StationAdjustPlanner.ProbeMm"/> 후진한 자리의 면 법선거리를 계산한다.
+    /// 실제 AMR 위치가 아니라 정차점을 쓰는 이유: 허락 범위의 기준이 원래 nodePosition 이다.
+    /// ②와 같은 후퇴 거리·공구 길이·최소 뻗음으로 필요 법선거리를 구한다.
+    /// </summary>
+    /// <returns>표본 목록, 또는 계산 불가 사유(Skip) — 사유가 있으면 보정하지 않고 종전대로 진행한다.</returns>
+    public async Task<(IReadOnlyList<StationAdjustSeam>? Seams, string? Skip)> SampleStationAsync(
+        IReadOnlyList<(string Label, double[] SeamStartW, double[]? SeamEndW, string WallCode, double? LiftStrokeMm)> seams,
+        double nodeXm, double nodeYm, double nodeThetaRad, int tool, CancellationToken ct)
+    {
+        var mount = await _calib.GetMountAsync();
+        if (mount.All(v => Math.Abs(v) < 1e-9))
+            return (null, "장착 보정(T_A_B) 미수행");
+        var currentStroke = _lift.TryGetStrokeMm(out var liftReason);
+        if (currentStroke is null && seams.Any(s => s.LiftStrokeMm is null))
+            return (null, liftReason);
+
+        double toolLen;
+        try { toolLen = ApproachReach.ToolLengthMm(await _cobot.Rpc.GetToolCoordAsync(tool, ct)); }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex) { return (null, $"공구 #{tool} 좌표 조회 실패: {ex.Message}"); }
+        if (toolLen < 1.0) return (null, $"공구 #{tool} 오프셋이 0(플랜지 기준)");
+
+        var approach = await CobotInspectionMoveStep.GetApproachStandoffMmAsync(_param, _logger);
+        var zDatum = await paramGetDoubleOrZeroAsync(_param, WeldSequenceSupport.ZDatumOffsetKey);
+        var (opticalAxis, _) = await WeldSequenceSupport.GetDepthAxisAsync(_param);
+        var limits = await _limits.GetAsync();
+        var required = ApproachReach.Check(0, approach, toolLen, limits.MinFlangeReachMm).RequiredNormalDistanceMm;
+        var (probeX, probeY) = StationAdjustPlanner.BackedOff(nodeXm, nodeYm, nodeThetaRad, StationAdjustPlanner.ProbeMm);
+
+        double NormalAt(double x, double y, (string Label, double[] SeamStartW, double[]? SeamEndW, string WallCode, double? LiftStrokeMm) s)
+            => SeamBaseTransform.Resolve(new SeamBaseInput(
+                SeamStartW: s.SeamStartW, SeamEndW: s.SeamEndW,
+                AmrXm: x, AmrYm: y, AmrYawRad: nodeThetaRad,
+                MountAtHome: mount, TelescopicStrokeMm: _lift.PlannedStrokeMm(s.LiftStrokeMm) ?? currentStroke ?? 0.0, ZDatumOffsetMm: zDatum,
+                StandoffMm: approach, WallFacingThetaRad: nodeThetaRad, WallCode: s.WallCode,
+                OpticalAxis: opticalAxis)).NormalDistanceMm;
+
+        var list = seams.Select(s => new StationAdjustSeam(
+            s.Label, NormalAt(nodeXm, nodeYm, s), NormalAt(probeX, probeY, s),
+            ApproachReach.AppliesTo(s.WallCode) ? required : 0)).ToList();   // 천장은 최소 뻗음 규칙 제외 — 후진할 이유 없음
+        return (list, null);
+
+        static async Task<double> paramGetDoubleOrZeroAsync(ParameterService p, string key)
+            => await p.GetDoubleAsync(key) ?? 0.0;
     }
 }

@@ -44,8 +44,14 @@ public enum WeldThresholdMethod { Otsu, Adaptive, Canny }
 /// <summary>위치 오차 d 의 기준선.</summary>
 public enum WeldReferenceMode { FovCenter, PeakLine }
 
+/// <summary>중심선 직선 피팅 방식.</summary>
+public enum WeldLineFitMode { Ransac, LeastSquares }
+
 /// <summary>비드 검출 방식. Param=고전 CV 파라미터 이진화, Dl=학습된 YOLOv8-seg 모델 추론.</summary>
-public enum WeldDetectionMethod { Param, Dl }
+public enum WeldDetectionMethod { Param, Dl, Ridge, Unet }
+
+/// <summary>Ridge 검출의 선 밝기 극성. Both=밝은/어두운 선 모두.</summary>
+public enum WeldRidgePolarity { Both, Bright, Dark }
 
 /// <summary>용접라인 검출 파라미터(명세서 8장). 1차 구현에 필요한 핵심 튜너블만.</summary>
 public sealed class WeldDetectionParams
@@ -81,6 +87,39 @@ public sealed class WeldDetectionParams
     /// <summary>centerline 이동평균 윈도(0/1=끔).</summary>
     public int SmoothingWindow { get; set; } = 5;
 
+    // ── 중심선 직선 피팅(마스크 공통 후처리 — Param/DL 등 모든 검출 방식에 적용) ──────────
+    /// <summary>직선 피팅 방식. Ransac=슬라이스별 모든 비드 run 을 후보로 반사·끊김에 강하게, LeastSquares=기존(최장 run 최소제곱).</summary>
+    public WeldLineFitMode LineFit { get; set; } = WeldLineFitMode.Ransac;
+
+    /// <summary>RANSAC inlier 허용 거리(px, cross 방향).</summary>
+    public double RansacInlierPx { get; set; } = 3.0;
+
+    /// <summary>RANSAC 허용 기울기(진행축 대비 °). 비드는 진행축과 거의 평행하므로 이보다 기운 후보선은 버린다.</summary>
+    public double RansacMaxAngleDeg { get; set; } = 20.0;
+
+    /// <summary>RANSAC 후보 run 최소 길이(px). 이보다 짧은 run(점 잡음)은 후보에서 제외.</summary>
+    public int RansacMinRunPx { get; set; } = 2;
+
+    // ── Ridge 검출(헤시안 가는 선 필터, 학습 불필요) 전용 ─────────────────────
+    /// <summary>ridge 스케일 σ 최소/최대(px). 비드 반폭 정도. 3px 폭이면 σ≈1.5, 8px 폭이면 σ≈4.</summary>
+    public double RidgeSigmaMin { get; set; } = 1.5;
+    public double RidgeSigmaMax { get; set; } = 4.0;
+
+    /// <summary>σ_min~σ_max 사이 스케일 개수(등비).</summary>
+    public int RidgeScales { get; set; } = 3;
+
+    /// <summary>선 밝기 극성. 정반사로 밝게도, 그늘로 어둡게도 보이므로 기본 Both.</summary>
+    public WeldRidgePolarity RidgePolarity { get; set; } = WeldRidgePolarity.Both;
+
+    /// <summary>선 방향 허용각(진행축 대비 °). 이보다 기운 선(코로게이션 모서리 등)은 응답 0.</summary>
+    public double RidgeMaxAngleDeg { get; set; } = 25.0;
+
+    /// <summary>전역 잡음 하한 = 중앙값 + k·MAD(로버스트 표준편차). 크면 확실한 선만, 작으면 약한 선까지.</summary>
+    public double RidgeThresholdK { get; set; } = 3.0;
+
+    /// <summary>슬라이스(진행축 1px 단위) 최대 응답 대비 이 비율 이상만 후보(0~1). 작으면 슬라이스당 후보가 많아진다.</summary>
+    public double RidgeRelative { get; set; } = 0.5;
+
     // ── DL 검출(YOLOv8-seg) 전용 ─────────────────────────────────────────────
     // 아래 값들은 WeldDetectionMethod.Dl 에서만 사용된다(고전 CV 경로는 무시).
     /// <summary>DL 검출 confidence 임계값(이 값 미만 후보 제거).</summary>
@@ -89,8 +128,18 @@ public sealed class WeldDetectionParams
     /// <summary>DL 마스크 확률 임계값(proto 마스크 이진화 기준).</summary>
     public double DlMaskThreshold { get; set; } = 0.50;
 
-    /// <summary>사용할 .onnx 경로. null 이면 모달리티(Mode)로 <c>weld_seg_{ir|rgb}.onnx</c> 자동 해석.</summary>
+    /// <summary>사용할 YOLO .onnx 경로(필수). null/빈 문자열이면 비드 검출 실패(모델 없음).</summary>
     public string? DlModelPath { get; set; }
+
+    // ── U-Net 검출 전용 ──────────────────────────────────────────────────────
+    /// <summary>U-Net 비드 확률 임계값(0~1). 낮추면 약한 비드까지, 높이면 확실한 픽셀만.</summary>
+    public double UnetThreshold { get; set; } = 0.5;
+
+    /// <summary>사용할 U-Net .onnx 경로(필수). null/빈 문자열이면 비드 검출 실패(모델 없음).</summary>
+    public string? UnetModelPath { get; set; }
+
+    /// <summary>얕은 복사(모든 속성이 값/문자열). 비교평가가 운영 파라미터를 건드리지 않고 Mode 만 바꿔 쓸 때 사용.</summary>
+    public WeldDetectionParams Clone() => (WeldDetectionParams)MemberwiseClone();
 }
 
 /// <summary>한 점(이미지 픽셀 좌표).</summary>
@@ -148,6 +197,9 @@ public sealed class PeakInfo
     public int DepthValue { get; init; }        // mm
     public double Confidence { get; init; }
 
+    /// <summary>ROI 안에서 찾은 Peak(국소 마루) 수. 선호 위치로 골랐으면 그 후보 수, 전역 최소로 골랐으면 0.</summary>
+    public int PeakCount { get; init; }
+
     // Peak 슬라이스에서 depth-최소부(비드)의 cross 축 구간. 급격한 depth 점프/무효 픽셀에서 끊긴다.
     // 자홍 Peak 선을 이 구간만큼만 그리는 데 쓴다. ProgressPos 와 같은 프레임 좌표(IR=깊이, RGB=재투영).
     public bool HasCrossSpan { get; init; }
@@ -177,6 +229,9 @@ public sealed class PeakFindResult
     public int DepthMm { get; init; }
     public double Confidence { get; init; }
 
+    /// <summary>ROI 안 Peak 후보 수(<see cref="PeakInfo.PeakCount"/>). 2 이상이면 선호 위치에 가장 가까운 것을 골랐다.</summary>
+    public int PeakCount { get; init; }
+
     /// <summary>mm 환산 가능 여부(fx·깊이 확보). false 면 픽셀 값만 신뢰.</summary>
     public bool ScaleAvailable { get; init; }
 
@@ -195,6 +250,15 @@ public sealed class PeakMeasurement
 
     /// <summary>비드 중심점 위치의 깊이(mm, 0=무효). Depth 자동 스케일(mm/px=Z/fx) 환산용.</summary>
     public double DepthZ { get; init; }
+
+    /// <summary>
+    /// <see cref="DPixel"/> 이 IR(=Depth) 픽셀 기준이면 true, 컬러 픽셀 기준이면 false. mm 환산 시 해당 카메라의 fx 를 쓴다.
+    /// 시퀀스는 RGB 로 검출해도 IR 기준으로 환산해 저장하고, 화면 모드가 나중에 바뀌어도 환산이 섞이지 않게 한다.
+    /// </summary>
+    public bool IrGeometry { get; init; } = true;
+
+    /// <summary>사람이 그린 비드선으로 만든 측정이면 true(시퀀스 수동 비드 입력).</summary>
+    public bool Manual { get; init; }
 }
 
 /// <summary>스케일 모드. AutoDepth=깊이로 mm/px 자동, Fixed=고정 mm/px(2점 보정/수동).</summary>

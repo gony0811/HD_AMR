@@ -38,11 +38,68 @@ public class CameraService : BackgroundService
     public CameraFrame? LatestIr => _client.LatestIr;
     /// <summary>IR 스트림이 실제로 활성화되어 프레임을 받는 중인지.</summary>
     public bool IsIrActive => _client.IsIrActive;
+    /// <summary>이미터 ON/OFF 교번 중이면 true — LatestIr 는 도트 없는(이미터 OFF) 프레임.</summary>
+    public bool IsEmitterAlternating => _client.IsEmitterAlternating;
+
+    /// <summary>
+    /// 이미터 교번 상태 문구 — "동작 중" / "미지원"(설정은 켰지만 카메라가 지원 안 함) / "꺼짐(사유)".
+    /// 동작 중이면 LatestIr 는 이미터 OFF 프레임(도트 없음).
+    /// </summary>
+    public string EmitterAlternateStatus =>
+        !IsConnected ? "카메라 미연결"
+        : _client.IsEmitterAlternating ? "동작 중"
+        : _client.EmitterAlternateUnsupported ? "미지원"
+        : !_settings.EmitterAlternate ? "꺼짐 (설정 EmitterAlternate=false)"
+        : !_settings.EnableEmitter ? "꺼짐 (이미터 꺼짐)"
+        : !_client.IsIrActive ? "꺼짐 (IR 스트림 없음)"
+        : "꺼짐";
     public DateTime LastFrameAt => _client.LastFrameAt;
     public string? ConnectionType => _client.ConnectionType;
 
-    /// <summary>Depth↔Color 정합용 공장 캘리브레이션(있으면). RGB 모드 Peak 재투영에 사용.</summary>
-    public CameraD2CParams? GetD2CParams() => _client.TryGetCameraParam();
+    /// <summary>Depth↔Color 정합용 공장 캘리브레이션(있으면). RGB 모드 Peak 재투영에 사용.
+    /// 읽히면 마지막 값으로 보관한다(<see cref="GetLastKnownD2CParams"/>).</summary>
+    public CameraD2CParams? GetD2CParams()
+    {
+        var p = _client.TryGetCameraParam();
+        if (p is { IsValid: true }) RememberD2C(p);
+        return p;
+    }
+
+    private readonly object _lastD2CLock = new();
+    private CameraD2CParams? _lastD2C;
+    private bool _lastD2CLoaded;
+
+    /// <summary>마지막으로 연결됐던 카메라의 캘리브레이션 보관 파일 — 카메라 없이 옛 촬영본을 열 때 쓴다.</summary>
+    public static string LastD2CPath => Path.Combine(AppContext.BaseDirectory, "camera_d2c_last.json");
+
+    /// <summary>연결된 카메라 값, 없으면 마지막으로 보관한 값(파일). 둘 다 없으면 null.</summary>
+    public CameraD2CParams? GetLastKnownD2CParams()
+    {
+        if (GetD2CParams() is { IsValid: true } live) return live;
+        lock (_lastD2CLock)
+        {
+            if (!_lastD2CLoaded)
+            {
+                _lastD2C ??= CameraD2CFile.TryLoad(LastD2CPath);
+                _lastD2CLoaded = true;
+            }
+            return _lastD2C;
+        }
+    }
+
+    private void RememberD2C(CameraD2CParams p)
+    {
+        lock (_lastD2CLock)
+        {
+            if (_lastD2C is not null && _lastD2C.Rot.SequenceEqual(p.Rot) && _lastD2C.Trans.SequenceEqual(p.Trans)
+                && _lastD2C with { Rot = p.Rot, Trans = p.Trans } == p)
+                return;
+            _lastD2C = p;
+            _lastD2CLoaded = true;
+            try { CameraD2CFile.Save(LastD2CPath, p); }
+            catch (Exception ex) { _logger.LogWarning(ex, "카메라 캘리브레이션 보관 파일 저장 실패: {Path}", LastD2CPath); }
+        }
+    }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -415,9 +472,22 @@ public class CameraService : BackgroundService
             throw new ArgumentException("저장 폴더 경로를 입력하세요.", nameof(dir));
 
         // 호출 시점의 최신 프레임을 스냅샷(인코딩 중 교체돼도 일관성 유지).
-        var color = _client.LatestColor;
-        var ir = _client.LatestIr;
-        var depth = _client.LatestDepth;
+        return SaveFramesAsync(dir, _client.LatestColor, _client.LatestIr, _client.LatestDepth, tag: null, ct: ct);
+    }
+
+    /// <summary>
+    /// 지정 프레임(스냅샷)을 <see cref="SaveCaptureAsync"/> 와 같은 규약으로 저장한다. 시퀀스 수동 비드 입력처럼
+    /// "사람이 본 바로 그 프레임"을 학습 데이터로 남길 때 쓴다. <paramref name="tag"/> 가 있으면
+    /// stem 을 "NNN_{tag}_yyyyMMdd_HHmmss" 로 만든다(촬영 경로 식별용, 예: seqP1).
+    /// </summary>
+    /// <param name="d2c">프레임과 함께 저장할 Depth↔Color 캘리브레이션 — null 이면 연결된 카메라 값. 컬러가 있으면
+    /// <c>{stem}_calib.json</c> 으로 남겨 나중에(카메라 없이도) RGB 안내선·IR↔RGB 라벨 변환에 쓴다.</param>
+    public Task<CaptureResult> SaveFramesAsync(string dir, CameraFrame? color, CameraFrame? ir, CameraFrame? depth,
+        string? tag = null, CameraD2CParams? d2c = null, CancellationToken ct = default)
+    {
+        if (color is not null) d2c ??= GetD2CParams();
+        if (string.IsNullOrWhiteSpace(dir))
+            throw new ArgumentException("저장 폴더 경로를 입력하세요.", nameof(dir));
         if (color is null && ir is null && depth is null)
             throw new InvalidOperationException("저장할 프레임이 없습니다 — 스트림을 먼저 시작하세요.");
 
@@ -430,8 +500,9 @@ public class CameraService : BackgroundService
             string prefix = CaptureNaming.Prefix(CaptureNaming.NextSeq(dir));
             // 초 단위 타임스탬프. 같은 초에 두 번 캡처하면 _2, _3… 를 붙여 덮어쓰기를 막는다.
             string ts = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-            string stem = $"{prefix}{ts}";
-            for (int k = 2; Directory.GetFiles(dir, stem + "_*").Length > 0; k++) stem = $"{prefix}{ts}_{k}";
+            string head = string.IsNullOrWhiteSpace(tag) ? prefix : $"{prefix}{tag}_";
+            string stem = $"{head}{ts}";
+            for (int k = 2; Directory.GetFiles(dir, stem + "_*").Length > 0; k++) stem = $"{head}{ts}_{k}";
             var files = new List<string>();
 
             if (color is not null)
@@ -451,21 +522,34 @@ public class CameraService : BackgroundService
                 string vis = Path.Combine(dir, $"{stem}_depth_vis.png");
                 SaveDepthVisPng(depth, minMm, maxMm, vis); files.Add(vis);
             }
+            if (color is not null && d2c is { IsValid: true })
+            {
+                string p = CameraD2CFile.PathFor(dir, stem);
+                CameraD2CFile.Save(p, d2c); files.Add(p);
+            }
             return new CaptureResult(dir, stem, files);
         }, ct);
     }
 
     /// <summary>RGB 프레임 → 무손실 PNG. mjpg 는 디코드 후, rgb24 는 픽셀 직접 래핑.</summary>
-    private static void SaveColorPng(CameraFrame f, string path)
+    private static void SaveColorPng(CameraFrame f, string path) => File.WriteAllBytes(path, EncodeColorPng(f));
+
+    /// <summary>RGB 프레임 → PNG 바이트(<see cref="SaveCaptureAsync"/> 저장본과 동일 픽셀).</summary>
+    public static byte[] EncodeColorPng(CameraFrame f)
     {
         using Image<Rgb24> img = f.PixelFormat == "mjpg"
             ? Image.Load<Rgb24>(f.Pixels)
             : Image.LoadPixelData<Rgb24>(f.Pixels, f.Width, f.Height);
-        img.Save(path, new PngEncoder());
+        using var ms = new MemoryStream();
+        img.Save(ms, new PngEncoder());
+        return ms.ToArray();
     }
 
     /// <summary>IR 프레임 → 8bit 그레이스케일 PNG(스트림 표시와 동일한 오토게인).</summary>
-    private static void SaveIrPng(CameraFrame f, string path)
+    private static void SaveIrPng(CameraFrame f, string path) => File.WriteAllBytes(path, EncodeIrPng(f));
+
+    /// <summary>IR 프레임 → 8bit PNG 바이트(<see cref="SaveCaptureAsync"/> 저장본과 동일 픽셀).</summary>
+    public static byte[] EncodeIrPng(CameraFrame f)
     {
         int n = f.Width * f.Height;
         var gray = new byte[n];
@@ -482,7 +566,9 @@ public class CameraService : BackgroundService
             Array.Copy(f.Pixels, gray, Math.Min(n, f.Pixels.Length));
         }
         using var img = Image.LoadPixelData<L8>(gray, f.Width, f.Height);
-        img.Save(path, new PngEncoder());
+        using var ms = new MemoryStream();
+        img.Save(ms, new PngEncoder());
+        return ms.ToArray();
     }
 
     /// <summary>Depth 프레임 → 16bit 무손실 PNG(픽셀=mm 그대로). 라벨/학습에서 원본 깊이 복원 가능.</summary>

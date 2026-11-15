@@ -4,6 +4,7 @@
 @using System.Text
 @using Microsoft.AspNetCore.Components.Forms
 @using HD.AMR.App.Data.Entities
+@using HD.AMR.App.Models
 @using HD.AMR.App.Service
 @using HD.AMR.App.Service.Inspection
 @using HD.AMR.App.Communication.Vision
@@ -142,10 +143,11 @@
                             <td><input type="number" step="1" style="width:64px" value="@F(p.Theta)" @onchange="e => p.Theta = D(e.Value)" @onclick:stopPropagation="true" /></td>
                             <td><input type="number" step="1" style="width:64px" value="@F(p.Rz)" @onchange="e => p.Rz = D(e.Value)" @onclick:stopPropagation="true" /></td>
                             <td>
-                                <select class="form-select form-select-sm" value="@p.Surface" @onchange="e => p.Surface = (byte)IntOr(e.Value, 0)" @onclick:stopPropagation="true">
-                                    <option value="0">Flat</option>
-                                    <option value="1">Corner</option>
-                                    <option value="2">Corrugation</option>
+                                <select class="form-select form-select-sm" value="@p.Surface" @onchange="e => p.Surface = (byte)SurfaceTypes.OrFlat(IntOr(e.Value, 0))" @onclick:stopPropagation="true">
+                                    @foreach (var st in SurfaceTypes.All)
+                                    {
+                                        <option value="@((byte)st.Type)">@st.Label</option>
+                                    }
                                 </select>
                             </td>
                             <td @onclick:stopPropagation="true">
@@ -153,7 +155,11 @@
                                         disabled="@(_isRunning || !Cobot.IsConnected)">이동</button>
                                 <button class="btn btn-sm btn-outline-success" @onclick="() => InspectPointAsync(idx)"
                                         disabled="@(_isRunning || !Vision.Client.IsConnected)">검사</button>
-                                <button class="btn btn-sm btn-outline-danger" @onclick="() => RemovePoint(idx)" disabled="@_isRunning">－</button>
+                                <button class="btn btn-sm btn-outline-secondary" title="이 행 위에 새 행 삽입 (앞뒤 행의 중간값)"
+                                        @onclick="() => InsertPoint(idx, true)" disabled="@_isRunning">↑＋</button>
+                                <button class="btn btn-sm btn-outline-secondary" title="이 행 아래에 새 행 삽입 (앞뒤 행의 중간값)"
+                                        @onclick="() => InsertPoint(idx, false)" disabled="@_isRunning">↓＋</button>
+                                <button class="btn btn-sm btn-outline-danger" title="이 행 삭제" @onclick="() => RemovePoint(idx)" disabled="@_isRunning">－</button>
                             </td>
                         </tr>
                     }
@@ -189,8 +195,17 @@
             <input class="form-control form-control-sm" type="number" step="0.1" min="0" style="width:110px" @bind="_settleSec" /></div>
         <div class="col-auto"><label class="form-label mb-0" title="ACS 검사 실행 시 비전 촬영 요청(CAPTURE_REQ) 후 응답을 기다리는 최대 시간. 초과하면 그 점은 비전 실패로 집계. 드라이런에는 쓰이지 않음">비전 응답 대기(초)</label>
             <input class="form-control form-control-sm" type="number" step="0.5" min="0.5" style="width:120px" @bind="_visionTimeoutSec" /></div>
-        <div class="col-auto"><label class="form-label mb-0" title="CAPTURE_REQ Wall ID (1~10)">Wall ID</label>
-            <input class="form-control form-control-sm" type="number" min="1" max="10" style="width:80px" @bind="_wallId" /></div>
+        <div class="col-auto"><label class="form-label mb-0" title="CAPTURE_REQ Wall ID — Wall Code 정본 10면 중 선택">Wall ID</label>
+            <select class="form-select form-select-sm" style="width:190px" @bind="_wallId">
+                @if (WallCodes.FindBySurfaceId(_wallId) is null)
+                {
+                    <option value="@_wallId">@TeachingService.SurfaceLabel(_wallId) (정본 표에 없음)</option>
+                }
+                @foreach (var w in WallCodes.All)
+                {
+                    <option value="@w.SurfaceId">@TeachingService.SurfaceLabel(w.SurfaceId)</option>
+                }
+            </select></div>
         <div class="col-auto">
             <button class="btn btn-success" @onclick="RunPoints" disabled="@(_isRunning || _points.Count < 1 || !Cobot.IsConnected)">
                 @(_isRunning ? "실행 중..." : "실행")
@@ -241,7 +256,7 @@
     <p class="hint text-muted mb-1">
         현재 경유점 리스트를 <b>CSV(엑셀 호환)</b> 로 내보내거나, 빈 템플릿을 받아 자세를 채운 뒤 다시 불러올 수 있습니다.
         열: <code>X_mm, Y_mm, Z_mm(WD), Rx_deg, Ry_deg, Rz_deg, Surface</code> —
-        <b>좌표=mm, 각도=deg</b>, <b>Surface: 0=Flat(평면) · 1=Corner(코너) · 2=Corrugation(코로게이션)</b>.
+        <b>좌표=mm, 각도=deg</b>, <b>Surface: @SurfaceTypes.Legend(" · ")</b>.
         파일 상단 <code>#</code> 주석에도 단위·규약이 적혀 있으며 불러오기 시 무시됩니다.
         불러오기는 현재 목록을 <b>덮어씁니다</b>. (엑셀에서 저장 시 <b>CSV UTF-8</b> 형식 사용)
     </p>
@@ -309,7 +324,7 @@
     private bool _csvErr;
     private const long CsvMaxBytes = 5L * 1024 * 1024;   // 5 MB 상한
     private static readonly string[] CsvHeader =
-        { "X_mm", "Y_mm", "Z_mm(WD)", "Rx_deg", "Ry_deg", "Rz_deg", "Surface(0=Flat,1=Corner,2=Corrugation)" };
+        { "X_mm", "Y_mm", "Z_mm(WD)", "Rx_deg", "Ry_deg", "Rz_deg", "Surface(SurfaceType 0~9)" };
 
     // 뷰박스(캔버스) — RecomputeViewBox 로 갱신
     private double _vbMinX = -50, _vbMinY = -50, _vbW = 100, _vbH = 100;
@@ -338,6 +353,24 @@
             : new XyPoint { X = 0, Y = 0, Z = _defaultZ };
         _points.Add(p);
         _selected = _points.Count - 1;
+        RecomputeViewBox();
+    }
+
+    /// <summary>기준 행 위/아래에 새 행을 끼워 넣는다 — 앞뒤 행의 중간값으로 채운다.</summary>
+    private void InsertPoint(int i, bool above)
+    {
+        if (_isRunning) return;
+        var at = HD.AMR.App.Service.Inspection.InspectionPointInsert.InsertIndex(_points.Count, i, above);
+        var poses = _points.Select(x => new[] { x.X, x.Y, x.Z, x.Rx, x.Theta, x.Rz }).ToList();
+        var pose = HD.AMR.App.Service.Inspection.InspectionPointInsert.NewPose(poses, at)
+                   ?? new[] { 0.0, 0.0, _defaultZ, 0.0, 0.0, 0.0 };
+        var from = HD.AMR.App.Service.Inspection.InspectionPointInsert.InheritFrom(_points.Count, at);
+        _points.Insert(at, new XyPoint
+        {
+            X = pose[0], Y = pose[1], Z = pose[2], Rx = pose[3], Theta = pose[4], Rz = pose[5],
+            Surface = from >= 0 ? _points[from].Surface : (byte)0,
+        });
+        _selected = at;
         RecomputeViewBox();
     }
 
@@ -472,9 +505,10 @@
                 if (_settleSec > 0) await Task.Delay(TimeSpan.FromSeconds(_settleSec), ct);
 
                 var wallId = (ushort)Math.Clamp(_wallId, 1, 10);
-                var (u, v, h) = FaceLocalMapper.ToFaceLocal(wallId, p.X, p.Y, p.Z);
+                var (u, v, rawH) = FaceLocalMapper.ToFaceLocal(wallId, p.X, p.Y, p.Z);
+                var h = FaceLocalMapper.CaptureHeight(rawH);   // 비전은 음수 높이를 받지 않는다
                 captureSeq++;
-                var data = CaptureReqPayload.Build((SurfaceType)(p.Surface <= 2 ? p.Surface : (byte)0), wallId,
+                var data = CaptureReqPayload.Build(SurfaceTypes.OrFlat(p.Surface), wallId,
                     u, v, h, Guid.Empty, attempt: 1, captureSeq);
                 var outcome = await Vision.Client.RequestCaptureAsync(data, timeout, ct);
                 if (outcome.Success)
@@ -569,9 +603,10 @@
         {
             var p = _points[i];
             var wallId = (ushort)Math.Clamp(_wallId, 1, 10);
-            var (u, v, h) = FaceLocalMapper.ToFaceLocal(wallId, p.X, p.Y, p.Z);
+            var (u, v, rawH) = FaceLocalMapper.ToFaceLocal(wallId, p.X, p.Y, p.Z);
+            var h = FaceLocalMapper.CaptureHeight(rawH);   // 비전은 음수 높이를 받지 않는다
             _manualCaptureSeq++;
-            var data = CaptureReqPayload.Build((SurfaceType)(p.Surface <= 2 ? p.Surface : (byte)0), wallId,
+            var data = CaptureReqPayload.Build(SurfaceTypes.OrFlat(p.Surface), wallId,
                 u, v, h, Guid.Empty, attempt: 1, _manualCaptureSeq);
             var timeout = TimeSpan.FromSeconds(Math.Max(.5, _visionTimeoutSec));
             _runErr = false; _runMsg = $"#{i + 1} CAPTURE_REQ 전송...";
@@ -687,7 +722,8 @@
         sb.Append("# HD.AMR 검사 경유점 · 좌표=mm, 각도=deg\r\n");
         sb.Append("# X,Y = 검사평면 좌표(mm) | Z = Working Distance = 검사면 법선거리(mm, +선창 내부)\r\n");
         sb.Append("# Rx,Ry,Rz = 툴 자세 오일러각(deg) | Ry = 틸트(θ)\r\n");
-        sb.Append("# Surface: 0=Flat(평면), 1=Corner(코너), 2=Corrugation(코로게이션)\r\n");
+        sb.Append("# Surface: ").Append(SurfaceTypes.Legend()).Append("\r\n");
+        sb.Append(SurfaceTypes.CsvSchemaMarker).Append("   (이 행이 없는 구 CSV 는 1=Corner→0, 2=Corrugation→1 로 변환)\r\n");
         sb.Append("# '#' 주석행/헤더행은 무시됩니다. 데이터 행만 편집하세요.\r\n");
         sb.Append(string.Join(",", CsvHeader)).Append("\r\n");
         if (includeRows)
@@ -757,6 +793,7 @@
     {
         warn = "";
         var list = new List<XyPoint>();
+        var currentSchema = SurfaceTypes.IsCurrentSchemaCsv(text);
         var lines = text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
         int skipped = 0;
         foreach (var raw in lines)
@@ -777,7 +814,7 @@
                 Rx = D(cells[3]),
                 Theta = D(cells[4]),
                 Rz = D(cells[5]),
-                Surface = cells.Length > 6 && byte.TryParse(cells[6].Trim(), out var s) && s <= 2 ? s : (byte)0,
+                Surface = cells.Length > 6 ? SurfaceTypes.ParseCsvCell(cells[6], currentSchema) : (byte)0,
             });
         }
         if (list.Count == 0) { warn = "유효한 데이터 행이 없습니다(열: X,Y,Z,Rx,Ry,Rz[,Surface])."; return null; }

@@ -31,7 +31,7 @@ namespace HD.AMR.App.Service.Inspection;
 /// </summary>
 public static class SeamBaseTransform
 {
-    /// <summary>호출측이 면 이격을 주지 않을 때의 폴백 [mm]. 운영 경로는 ③ 카메라 목표거리를 넘긴다 —
+    /// <summary>호출측이 면 이격을 주지 않을 때의 폴백 [mm]. 운영 경로는 ② 거친 접근 거리(inspection.approachStandoffMm)를 넘긴다 —
     /// 이 상수는 그 값과 코드상 연결돼 있지 않으므로 기본값으로만 쓸 것.</summary>
     public const double DefaultStandoffMm = 400.0;
 
@@ -199,6 +199,16 @@ public static class SeamBaseTransform
             directionReason = reason;
         }
 
+        // ── ⑨ 용접선 방향(BASE 단위벡터) — 영상에서 용접선을 가로로 맞추는 광축 둘레 회전 계산용 ──
+        double[]? seamDirBase = null;
+        if (input.SeamEndW is { Length: 3 } endW)
+        {
+            var endMap = new[] { endW[0] * 1000.0, endW[1] * 1000.0, endW[2] * 1000.0 - input.ZDatumOffsetMm };
+            var endBase = MapCalibration.MapPointToBase(amrPose, mount, endMap);
+            var d = new[] { endBase[0] - seamBase[0], endBase[1] - seamBase[1], endBase[2] - seamBase[2] };
+            if (Norm(d) > 1e-6) seamDirBase = Normalize(d);
+        }
+
         return new SeamBaseTarget(
             SeamStartMapMm: seamMap,
             ApproachMapMm: approachMap,
@@ -216,7 +226,8 @@ public static class SeamBaseTransform
             DistanceMm: dist,
             Direction: direction,
             DirectionReason: directionReason,
-            Notes: notes);
+            Notes: notes,
+            SeamDirectionBase: seamDirBase);
     }
 
     // ── 면 기하 ──────────────────────────────────────────────────────
@@ -534,6 +545,7 @@ public enum ToolRollRef
 /// <param name="Direction">seamEnd 를 준 경우의 검사 방향 유도 결과(§4.4).</param>
 /// <param name="DirectionReason">방향 판정 근거 문자열.</param>
 /// <param name="Notes">해석 시 붙은 경고·주의 문구.</param>
+/// <param name="SeamDirectionBase">용접선 방향(seamStart→seamEnd)의 코봇 BASE 단위벡터 — seamEnd 가 없거나 퇴화하면 null.</param>
 public sealed record SeamBaseTarget(
     double[] SeamStartMapMm,
     double[] ApproachMapMm,
@@ -551,4 +563,5 @@ public sealed record SeamBaseTarget(
     double DistanceMm,
     InspectionMoveDirection? Direction,
     string? DirectionReason,
-    IReadOnlyList<string> Notes);
+    IReadOnlyList<string> Notes,
+    double[]? SeamDirectionBase = null);

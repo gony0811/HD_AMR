@@ -25,6 +25,10 @@
             <Border Classes="badge" Classes.on="{Binding IsStreaming}" Classes.off="{Binding !IsStreaming}">
                 <TextBlock Text="{Binding IsStreaming, Converter={x:Static vm:BoolTextConverters.Stream}, StringFormat='스트림 {0}'}" />
             </Border>
+            <Border Classes="badge" Classes.on="{Binding EmitterAlternateOn}" Classes.off="{Binding !EmitterAlternateOn}"
+                    ToolTip.Tip="동작 중: 이미터 ON 프레임=깊이, OFF 프레임=IR(도트 없음). 설정은 appsettings.json 의 EmitterAlternate (재시작 필요).">
+                <TextBlock Text="{Binding EmitterAlternateText}" />
+            </Border>
             <TextBlock Classes="axis" VerticalAlignment="Center" Text="{Binding SettingsSummary}" />
         </StackPanel>
 

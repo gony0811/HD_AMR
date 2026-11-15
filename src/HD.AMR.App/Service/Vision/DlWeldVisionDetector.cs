@@ -35,12 +35,13 @@ public sealed class DlWeldVisionDetector : IDlWeldVisionDetector
         double? peakProgressPos = null, string? peakLabel = null, RoiRect? peakRoi = null,
         double? peakCrossStart = null, double? peakCrossEnd = null)
     {
-        var modality = p.Mode == WeldImageMode.Ir ? "ir" : "rgb";
-        // 명시 경로가 있으면 그걸, 없으면(빈 문자열 포함) 모달리티로 자동 해석.
-        var modelPath = string.IsNullOrWhiteSpace(p.DlModelPath) ? ResolveModelPath(modality) : p.DlModelPath;
+        // 모델은 반드시 지정(Weld.Yolo.ModelPath, 파일명만이면 models 폴더 기준). 빈값 자동 선택은 하지 않는다 —
+        // 어떤 모델로 검출했는지 항상 명확하게.
+        if (string.IsNullOrWhiteSpace(p.DlModelPath))
+            return WeldDetectionResult.Fail("YOLO 모델 없음 — 용접 추적 화면에서 YOLO 모델을 선택하거나 파라미터 Weld.Yolo.ModelPath 를 지정하세요.");
+        var modelPath = ResolveExplicitPath(p.DlModelPath);
         if (modelPath is null || !File.Exists(modelPath))
-            return WeldDetectionResult.Fail(
-                $"DL 모델이 없습니다: weld_seg_{modality}.onnx — 비전 학습에서 ② 학습 → ③ 내보내기({modality})를 먼저 완료하세요.");
+            return WeldDetectionResult.Fail($"YOLO 모델 파일이 없습니다: {modelPath ?? p.DlModelPath} — 파라미터 Weld.Yolo.ModelPath 를 확인하세요.");
 
         Mat? bgr = null, gray = null;
         try
@@ -54,10 +55,12 @@ public sealed class DlWeldVisionDetector : IDlWeldVisionDetector
             if (roi is null)
                 return WeldDetectionResult.Fail("Weld ROI 가 프레임 범위를 벗어났습니다.");
 
+            // CLAHE 모델(이름에 _clahe)이면 학습 데이터셋과 같은 전처리를 전체 프레임에 걸어 추론(오버레이는 원본).
+            using var claheInput = WeldModelNames.HasClahe(modelPath) ? ImageClaheMat.Apply(bgr) : null;
             lock (_gate)
             {
                 var session = GetSession(modelPath);
-                var (mask, count, _) = YoloSeg.Decode(session, bgr, (float)p.DlConfidence, 0.5f, (float)p.DlMaskThreshold);
+                var (mask, count, _) = YoloSeg.Decode(session, claheInput ?? bgr, (float)p.DlConfidence, 0.5f, (float)p.DlMaskThreshold);
                 using (mask)
                 {
                     if (count == 0)
@@ -86,16 +89,15 @@ public sealed class DlWeldVisionDetector : IDlWeldVisionDetector
         }
     }
 
-    /// <summary>모달리티별 모델 경로. <c>weld_seg_{modality}.onnx</c> → 없으면 레거시 <c>weld_seg.onnx</c> 폴백.</summary>
-    private string? ResolveModelPath(string modality)
+    /// <summary>명시 경로 해석 — 절대경로면 그대로, 파일명/상대경로면 학습 models 폴더 기준. 앞뒤 공백·따옴표 제거.</summary>
+    private string? ResolveExplicitPath(string raw)
     {
+        var path = raw.Trim().Trim('"').Trim();
+        if (Path.IsPathFullyQualified(path)) return path;
         var paths = _train.GetPathsAsync().GetAwaiter().GetResult();
-        if (paths is null) return null;
-        var byModality = Path.Combine(paths.Models, $"weld_seg_{modality}.onnx");
-        if (File.Exists(byModality)) return byModality;
-        var legacy = Path.Combine(paths.Models, "weld_seg.onnx");
-        return File.Exists(legacy) ? legacy : byModality; // 없으면 기대 경로를 반환(호출부에서 존재검사)
+        return paths is null ? path : Path.Combine(paths.Models, path);
     }
+
 
     private InferenceSession GetSession(string modelPath)
     {

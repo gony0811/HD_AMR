@@ -62,6 +62,14 @@ public class RealSenseSettings
     public bool EnableEmitter { get; set; } = true;
 
     /// <summary>
+    /// 이미터 ON/OFF 프레임 교번(<c>Option.EmitterOnOff</c>). <see cref="EnableEmitter"/>=true 이고 IR 스트림이
+    /// 활성일 때만 동작한다. 켜면 이미터 ON 프레임은 깊이(Peak 검출)에, OFF 프레임은 IR(용접선 검출)에
+    /// 사용해 IR 영상에서 도트 패턴을 제거한다. 대가로 깊이·IR 각각의 유효 FPS 가 절반이 된다
+    /// (15fps → 7.5fps). 이미터 상태 판정은 프레임 메타데이터 우선, 없으면 도트 에너지 폴백.
+    /// </summary>
+    public bool EmitterAlternate { get; set; } = false;
+
+    /// <summary>
     /// D400 Visual Preset. ""/null 이면 펌웨어 기본 유지. 유효값: Custom/Default/Hand/
     /// HighAccuracy/HighDensity/MediumDensity. HighAccuracy 는 센서 ASIC 신뢰도 임계값을 올려
     /// 정반사 등으로 불확실한 픽셀을 쓰레기값 대신 0(무효)으로 출력한다 — 반사면 측정 권장.

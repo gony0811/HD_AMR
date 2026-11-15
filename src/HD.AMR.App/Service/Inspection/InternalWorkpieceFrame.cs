@@ -43,12 +43,85 @@ public static class InternalWorkpieceFrame
             new[] { 0.0, 0.0, -corrugationTopHeightMm, 0.0, 0.0, 0.0 }, topFrame);
     }
 
+    /// <summary>
+    /// 점1 툴 +Z 대비 점1→점2 가 기운 각 [도]. 두 점이 같은 WD(면 이격)에 있으면 이 각이 면을 따라 누운 기울기라
+    /// <see cref="Compute"/> 가 X에 직교시킨 Z에 반영된다(묶음 Z 보정).
+    /// </summary>
+    public static double SlopeAlongSeamDeg(double[] topPoseBase, double[] xDirectionPoseBase)
+    {
+        RequirePose(topPoseBase, nameof(topPoseBase));
+        RequirePose(xDirectionPoseBase, nameof(xDirectionPoseBase));
+        var zPoint = FrameMath.FromFrame(new[] { 0.0, 0.0, VirtualZPointOffsetMm, 0.0, 0.0, 0.0 }, topPoseBase);
+        var n = new[] { zPoint[0] - topPoseBase[0], zPoint[1] - topPoseBase[1], zPoint[2] - topPoseBase[2] };
+        var nLen = Math.Sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+        if (nLen < 1e-9) return 0;
+        var d = new[]
+        {
+            xDirectionPoseBase[0] - topPoseBase[0],
+            xDirectionPoseBase[1] - topPoseBase[1],
+            xDirectionPoseBase[2] - topPoseBase[2],
+        };
+        var along = (d[0] * n[0] + d[1] * n[1] + d[2] * n[2]) / nLen;
+        var tang = Math.Sqrt(Math.Max(0, d[0] * d[0] + d[1] * d[1] + d[2] * d[2] - along * along));
+        return Math.Atan2(along, tang) * 180.0 / Math.PI;
+    }
+
     /// <summary>내부 작업물 pose를 선택된 TCP의 BASE 목표 pose로 변환한다.</summary>
     public static double[] ToBasePose(double[] poseInWorkpiece, double[] frameBase)
     {
         RequirePose(poseInWorkpiece, nameof(poseInWorkpiece));
         RequirePose(frameBase, nameof(frameBase));
         return FrameMath.FromFrame(poseInWorkpiece, frameBase);
+    }
+
+    /// <summary>
+    /// anchor 공유 프레임을 다음 task 위치로 평행 이동한다 — 자세는 그대로, 원점만 두 task 의 ② 시작 접근점 차이
+    /// (<paramref name="fromStartBase"/>→<paramref name="toStartBase"/>)에서 <b>프레임 Z(면 법선) 성분을 뺀 만큼</b>
+    /// 옮긴다(면 거리 유지 — <see cref="Sequence.Steps.CobotSeamEndMoveStep.ParallelFromPoint1"/> 와 같은 식).
+    /// 이동하지 않으면 경유점이 첫 task 구간을 그대로 다시 돈다(2026-10-30 SU L4-R03C05 #2·#3 이 #1 끝점에서 종료).
+    /// </summary>
+    /// <returns>(이동한 프레임, 버린 법선 성분 mm)</returns>
+    public static (double[] Frame, double NormalMm) TranslateInPlane(
+        double[] frameBase, double[] fromStartBase, double[] toStartBase)
+    {
+        RequirePose(frameBase, nameof(frameBase));
+        var (pos, normalMm) = Sequence.Steps.CobotSeamEndMoveStep.ParallelFromPoint1(
+            frameBase, fromStartBase, toStartBase, ToolAxisDir.PlusZ);
+        return (new[] { pos[0], pos[1], pos[2], frameBase[3], frameBase[4], frameBase[5] }, normalMm);
+    }
+
+    /// <summary>
+    /// <see cref="TranslateAlongX"/> 가 버리는 옆(프레임 Y) 성분의 상한 [mm]. 이보다 크면 같은 그룹 task 가 실제로 옆으로
+    /// 떨어져 있는 것으로 보고 버리지 않는다(<see cref="TranslateInPlane"/> 로 폴백).
+    /// </summary>
+    public const double MaxDroppedLateralMm = 10.0;
+
+    /// <summary>
+    /// anchor 공유 프레임을 다음 task 위치로 옮기되 <b>프레임 X(비드 두 점으로 잰 용접선 방향) 성분만</b> 쓴다.
+    /// ACS 시작점 차이에는 맵 좌표·AMR 방향 오차로 옆(프레임 Y) 성분이 섞여, LINE 마다 그만큼 비드 옆으로 누적됐다
+    /// (실기 2026-11-09 L4-R08C08: ACS 이동 방향이 비드 방향과 0.09~0.27° 달라 LINE 당 0.55~1.7mm). 면 법선(Z) 성분도 버린다.
+    /// 옆 성분이 <see cref="MaxDroppedLateralMm"/> 를 넘으면 종전 면 평행 이동(<see cref="TranslateInPlane"/>)으로 폴백한다.
+    /// </summary>
+    /// <returns>(이동한 프레임, 프레임 Y 성분 mm, 프레임 Z 성분 mm, X 만 썼는지)</returns>
+    public static (double[] Frame, double LateralMm, double NormalMm, bool AlongXOnly) TranslateAlongX(
+        double[] frameBase, double[] fromStartBase, double[] toStartBase)
+    {
+        RequirePose(frameBase, nameof(frameBase));
+        var m = FrameMath.PoseToMatrix(frameBase);
+        var d = new[] { toStartBase[0] - fromStartBase[0], toStartBase[1] - fromStartBase[1], toStartBase[2] - fromStartBase[2] };
+        double Comp(int col) => d[0] * m[0, col] + d[1] * m[1, col] + d[2] * m[2, col];
+        var (along, lateral, normal) = (Comp(0), Comp(1), Comp(2));
+
+        if (Math.Abs(lateral) > MaxDroppedLateralMm)
+        {
+            var (moved, _) = TranslateInPlane(frameBase, fromStartBase, toStartBase);
+            return (moved, lateral, normal, false);
+        }
+        return (new[]
+        {
+            frameBase[0] + along * m[0, 0], frameBase[1] + along * m[1, 0], frameBase[2] + along * m[2, 0],
+            frameBase[3], frameBase[4], frameBase[5],
+        }, lateral, normal, true);
     }
 
     private static void RequirePose(double[] pose, string name)

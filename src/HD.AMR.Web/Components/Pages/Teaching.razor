@@ -5,6 +5,7 @@
 @using HD.AMR.App.Service
 @inject TeachingService Service
 @inject CobotService Cobot
+@inject TelescopicService Lift
 @inject ParameterService Param
 @inject ILogger<Teaching> Logger
 @implements IDisposable
@@ -336,9 +337,21 @@
         try
         {
             var scale = await TeachingMove.LoadJointVelocityScaleAsync(Param);
-            var rc = await TeachingMove.MoveToAsync(Cobot, p, _runTool, _vel, scale, _moveCts.Token);
-            _isErr = rc != 0;
-            _msg = rc == 0 ? $"'{p.Name}' 위치로 이동 완료." : $"이동 실패 (rc={rc}).";
+            var r = await TeachingMove.MoveAlongRouteAsync(Cobot, _positions ?? [p], p, _runTool, _vel, scale,
+                step =>
+                {
+                    _msg = $"'{step.Name}' 위치로 이동 중…";
+                    _isErr = false;
+                    _ = InvokeAsync(StateHasChanged);
+                }, _moveCts.Token, Logger, Lift,
+                () =>
+                {
+                    _msg = $"리프트 {TeachingMove.HomeLiftHeightMm}mm 하강 중…";
+                    _isErr = false;
+                    _ = InvokeAsync(StateHasChanged);
+                });
+            _isErr = !r.Ok;
+            _msg = TeachingMove.Describe(r, p);
         }
         catch (OperationCanceledException)
         {

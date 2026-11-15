@@ -5,6 +5,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HD.AMR.App.Communication.Vision;
 using HD.AMR.App.Data.Entities;
+using HD.AMR.App.Models;
 using HD.AMR.App.Service;
 using HD.AMR.App.Service.Inspection;
 using Microsoft.Extensions.DependencyInjection;
@@ -40,7 +41,25 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
     [ObservableProperty] private double _settleSec = 0.5;
     /// <summary>ACS 검사 시 비전 CAPTURE_REQ 응답 대기(초) — 프로필 DelaySec. 드라이런에는 쓰이지 않음.</summary>
     [ObservableProperty] private double _visionTimeoutSec = HD.AMR.App.Service.Sequence.Steps.InspectionRunStep.DefaultVisionTimeoutSec;
+    /// <summary>CAPTURE_REQ Wall ID(Surface ID). 선택 목록은 Wall Code 정본 표(<see cref="WallCodes"/>)에서 만든다.</summary>
     [ObservableProperty] private int _wallId = 1;
+
+    /// <summary>Wall ID 선택 목록 — "0x01 · B 바닥" 형태. 현재 값이 정본 표에 없으면 맨 앞에 그대로 표시한다.</summary>
+    public ObservableCollection<SurfaceOption> WallOptions { get; } = new();
+
+    partial void OnWallIdChanged(int value) => RebuildWallOptions();
+
+    private void RebuildWallOptions()
+    {
+        var wanted = WallCodes.All.Select(w => w.SurfaceId).ToList();
+        if (WallCodes.FindBySurfaceId(WallId) is null) wanted.Insert(0, WallId);
+        if (WallOptions.Select(o => o.SurfaceId).SequenceEqual(wanted)) return;
+        WallOptions.Clear();
+        foreach (var id in wanted)
+            WallOptions.Add(new SurfaceOption(id, WallCodes.FindBySurfaceId(id) is null
+                ? $"{TeachingService.SurfaceLabel(id)} (정본 표에 없음)"
+                : TeachingService.SurfaceLabel(id)));
+    }
     [ObservableProperty] private bool _isRunning;
     [ObservableProperty] private string? _runMsg;
     [ObservableProperty] private bool _runErr;
@@ -72,6 +91,7 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
         _scopeFactory = scopeFactory;
         _cobot = cobot;
         _vision = vision;
+        RebuildWallOptions();
     }
 
     public override async void OnActivated()
@@ -96,6 +116,33 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
         Points.Add(p);
         Selected = Points.Count - 1;
         AfterPointsChanged();
+    }
+
+    /// <summary>기준 행 위에 새 행을 끼워 넣는다 — 앞뒤 행의 중간값으로 채운다.</summary>
+    [RelayCommand]
+    private void InsertPointAbove(XyPointVm p) => InsertPoint(p, above: true);
+
+    /// <summary>기준 행 아래에 새 행을 끼워 넣는다.</summary>
+    [RelayCommand]
+    private void InsertPointBelow(XyPointVm p) => InsertPoint(p, above: false);
+
+    private void InsertPoint(XyPointVm p, bool above)
+    {
+        if (IsRunning) return;
+        var at = HD.AMR.App.Service.Inspection.InspectionPointInsert.InsertIndex(Points.Count, Points.IndexOf(p), above);
+        var poses = Points.Select(x => x.Pose()).ToList();
+        var pose = HD.AMR.App.Service.Inspection.InspectionPointInsert.NewPose(poses, at)
+                   ?? new[] { 0.0, 0.0, DefaultZ, 0.0, 0.0, 0.0 };
+        var from = HD.AMR.App.Service.Inspection.InspectionPointInsert.InheritFrom(Points.Count, at);
+        var added = new XyPointVm(this)
+        {
+            X = pose[0], Y = pose[1], Z = pose[2], Rx = pose[3], Theta = pose[4], Rz = pose[5],
+            Surface = from >= 0 ? Points[from].Surface : 0,
+        };
+        Points.Insert(at, added);
+        Selected = at;
+        AfterPointsChanged();
+        Notify($"#{at + 1} 자리에 행 삽입 ({Points.Count}점)", false);
     }
 
     [RelayCommand]
@@ -191,9 +238,10 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
         try
         {
             var wallId = (ushort)Math.Clamp(WallId, 1, 10);
-            var (u, v, h) = FaceLocalMapper.ToFaceLocal(wallId, p.X, p.Y, p.Z);
+            var (u, v, rawH) = FaceLocalMapper.ToFaceLocal(wallId, p.X, p.Y, p.Z);
+            var h = FaceLocalMapper.CaptureHeight(rawH);   // 비전은 음수 높이를 받지 않는다
             _manualCaptureSeq++;
-            var data = CaptureReqPayload.Build((SurfaceType)Math.Clamp(p.Surface, 0, 2), wallId,
+            var data = CaptureReqPayload.Build(SurfaceTypes.OrFlat(p.Surface), wallId,
                 u, v, h, Guid.Empty, attempt: 1, _manualCaptureSeq);
             var timeout = TimeSpan.FromSeconds(Math.Max(.5, VisionTimeoutSec));
             RunErr = false; RunMsg = $"#{Selected + 1} CAPTURE_REQ 전송...";
@@ -236,9 +284,10 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
 
                 var p = Points[i];
                 var wallId = (ushort)Math.Clamp(WallId, 1, 10);
-                var (u, v, h) = FaceLocalMapper.ToFaceLocal(wallId, p.X, p.Y, p.Z);
+                var (u, v, rawH) = FaceLocalMapper.ToFaceLocal(wallId, p.X, p.Y, p.Z);
+                var h = FaceLocalMapper.CaptureHeight(rawH);   // 비전은 음수 높이를 받지 않는다
                 captureSeq++;
-                var data = CaptureReqPayload.Build((SurfaceType)Math.Clamp(p.Surface, 0, 2), wallId,
+                var data = CaptureReqPayload.Build(SurfaceTypes.OrFlat(p.Surface), wallId,
                     u, v, h, Guid.Empty, attempt: 1, captureSeq);
                 var outcome = await _vision.Client.RequestCaptureAsync(data, timeout, ct);
                 if (outcome.Success)
@@ -379,7 +428,7 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
 
     // ── CSV (코드비하인드가 파일 I/O 담당) ──
     private static readonly string[] CsvHeaderCols =
-        { "X_mm", "Y_mm", "Z_mm(WD)", "Rx_deg", "Ry_deg", "Rz_deg", "Surface(0=Flat,1=Corner,2=Corrugation)" };
+        { "X_mm", "Y_mm", "Z_mm(WD)", "Rx_deg", "Ry_deg", "Rz_deg", "Surface(SurfaceType 0~9)" };
 
     public string BuildCsv(bool includeRows)
     {
@@ -387,7 +436,8 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
         sb.Append("# HD.AMR 검사 경유점 · 좌표=mm, 각도=deg\r\n");
         sb.Append("# X,Y = 검사평면 좌표(mm) | Z = Working Distance(mm, +선창 내부)\r\n");
         sb.Append("# Rx,Ry,Rz = 툴 자세 오일러각(deg) | Ry = 틸트(θ)\r\n");
-        sb.Append("# Surface: 0=Flat, 1=Corner, 2=Corrugation\r\n");
+        sb.Append("# Surface: ").Append(SurfaceTypes.Legend()).Append("\r\n");
+        sb.Append(SurfaceTypes.CsvSchemaMarker).Append("   (이 행이 없는 구 CSV 는 1=Corner→0, 2=Corrugation→1 로 변환)\r\n");
         sb.Append(string.Join(",", CsvHeaderCols)).Append("\r\n");
         if (includeRows)
             foreach (var p in Points)
@@ -422,6 +472,7 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
     {
         warn = "";
         var list = new List<XyPointVm>();
+        var currentSchema = SurfaceTypes.IsCurrentSchemaCsv(text);
         var lines = text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
         int skipped = 0;
         foreach (var raw in lines)
@@ -434,7 +485,7 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
             list.Add(new XyPointVm(this)
             {
                 X = x, Y = D(c[1]), Z = D(c[2]), Rx = D(c[3]), Theta = D(c[4]), Rz = D(c[5]),
-                Surface = c.Length > 6 && byte.TryParse(c[6].Trim(), out var s) && s <= 2 ? s : 0,
+                Surface = c.Length > 6 ? SurfaceTypes.ParseCsvCell(c[6], currentSchema) : 0,
             });
         }
         if (list.Count == 0) { warn = "유효한 데이터 행이 없습니다."; return null; }

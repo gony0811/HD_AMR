@@ -69,4 +69,29 @@ public static class SeamDirectionResolver
         reason = $"판정각 {angleDeg:0.#}° → {direction} (du={du * 1000:0.#}mm, dv={dv * 1000:0.#}mm, θ={nodeThetaRad:0.###}rad)";
         return direction;
     }
+
+    /// <summary>
+    /// 묶음용 판별. <see cref="Resolve"/> 가 폴백·모호로 끝내는 경우(10mm 미만, 45°±10°, 좌표 이상)는 false.
+    /// drawingPos 에는 방향 필드가 없고, 판별은 payload 의 seamStartW→seamEndW 와 노드 theta 로 한다.
+    /// </summary>
+    public static bool TryClassify(
+        double[]? seamStartW, double[]? seamEndW, double? nodeThetaRad,
+        out InspectionMoveDirection direction, out string reason)
+    {
+        direction = InspectionMoveDirection.Horizontal;
+        if (nodeThetaRad is not { } theta)
+        {
+            reason = "노드 theta 없음 — 수직/수평 판별 불가";
+            return false;
+        }
+        if (seamStartW is not { Length: 3 } || seamEndW is not { Length: 3 })
+        {
+            reason = "seam 좌표 없음 — 수직/수평 판별 불가";
+            return false;
+        }
+        direction = Resolve(seamStartW, seamEndW, theta, out reason);
+        var reliable = !reason.Contains("폴백", StringComparison.Ordinal) && !reason.Contains("모호", StringComparison.Ordinal);
+        if (!reliable) direction = InspectionMoveDirection.Horizontal;
+        return reliable;
+    }
 }

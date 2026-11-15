@@ -150,13 +150,24 @@ public class InspectionRunStep : ISequenceStep
             return StepResult.Fail(
                 $"티칭설정 '{profile.Name}' 경유점이 모두 th_max({profile.ThMax}°) 초과로 제외되었습니다.");
         // 절대 모드는 첫 경유점에서 툴을 광축 둘레로 0/180° 중 하나로 맞추는데, 그 회전은 J6 안전 범위
-        // (J6 −330°~−160°) 안에 머물러야 한다 — 밖으로 돌면 센서 헤드–링크암 간섭(실기). IK 로 미리 확인한다.
+        // (J6 −310°~−160°) 안에 머물러야 한다 — 밖으로 돌면 센서 헤드–링크암 간섭(실기). IK 로 미리 확인한다.
         if (profile.PoseAbsolute)
         {
             var twist = await SelectSafeTwistAsync(context, waypoints[firstIdx], frame, attitude, ct);
             if (twist.Error is { } err)
                 return StepResult.Fail(err);
             attitude = attitude with { TwistOverrideDeg = twist.TwistDeg };
+        }
+
+        // 움직이기 전에 경유점 전체를 순서대로 IK 로 풀어 손목 특이점·팔꿈치 가지 전환을 거른다 — 도중에 컨트롤러가
+        // 멈추면 팔이 특이 자세에 남아 다음 task 의 복귀 경로까지 막힌다(실기 2026-11-03 L2-R02C05 H04 #5: J5 0.48°, rc=185).
+        var chainError = await CheckWaypointChainAsync(
+            context, Enumerable.Range(0, waypoints.Count).Where(i => !IsSkipped(waypoints[i]))
+                .Select(i => (i, ToTargetBase(waypoints[i]))).ToList(), ct);
+        if (chainError is not null)
+        {
+            _logger.LogWarning("[검사 수행] 경유점 사전 검증 실패 — {Err}", chainError);
+            return StepResult.Fail($"{chainError} — 움직이지 않고 중단. 정차 위치를 이 용접선 쪽으로 옮기거나 티칭설정 '{profile.Name}' 의 자세를 확인하세요.");
         }
 
         _logger.LogInformation("[검사 수행] 첫 경유점 #{Idx} 로 스테이징 이동 (프레임 z={Z:0.0}mm)",
@@ -202,6 +213,10 @@ public class InspectionRunStep : ISequenceStep
         else
             _logger.LogInformation("[검사 수행] 검사 Run={RunId}, Task={TaskId}, attempt={Attempt}", runId, taskId, attempt);
 
+        // 검사 가속도: 순회 동안만 전역 가속도 배율 변경 → finally 에서 기본값 복원(성공·실패·취소 공통).
+        var accChanged = await ApplyInspectAccelerationAsync(context, ct);
+        try
+        {
         for (var i = 0; i < waypoints.Count; i++)
         {
             ct.ThrowIfCancellationRequested();
@@ -240,13 +255,18 @@ public class InspectionRunStep : ISequenceStep
             // surface type 우선순위: 경유점 수동 지정 > |θ| 자동 규칙(구 도면 솎기 프로필).
             // (레시피 SurfaceOverride 는 경유점 단위 지정으로 일원화되며 폐기 — 2026-09-18.)
             var surfaceType = w.SurfaceManual
-                ? (SurfaceType)w.Surface
+                ? SurfaceTypes.OrFlat(w.Surface)
                 : Math.Abs(w.Theta) >= profile.CorrugThresholdDeg
                     ? SurfaceType.Corrugation
                     : SurfaceType.Flat;
             // v3.2: 코봇 wobj pose → 면-로컬 (u,v,h). 축·부호는 wobj 티칭 규약(§5)에 흡수(FaceLocalMapper).
             var wallId = (ushort)context.InspectionSurfaceId;
-            var (u, v, h) = FaceLocalMapper.ToFaceLocal(wallId, w.X, w.Y, w.Z);
+            var (u, v, rawH) = FaceLocalMapper.ToFaceLocal(wallId, w.X, w.Y, w.Z, context.FacePlacement);
+            // 음수 높이는 비전이 거부한다 — 0 으로 올려 보낸다(코봇 위치는 그대로).
+            var h = FaceLocalMapper.CaptureHeight(rawH);
+            if (h != rawH)
+                _logger.LogInformation("[검사 수행] 경유점 #{Idx} 촬영 높이 {Raw}mm → {H}mm 로 올려 전송(비전은 음수 높이를 받지 않음)",
+                    i + 1, rawH, h);
             captureSeq++;
             var data = CaptureReqPayload.Build(surfaceType, wallId, u, v, h, taskId, attempt, captureSeq);
             var outcome = await _vision.Client.RequestCaptureAsync(data, visionTimeout, ct);
@@ -258,6 +278,11 @@ public class InspectionRunStep : ISequenceStep
                     outcome.Code is { } c ? ResultCodeNames.NameOf((ushort)c) : "—");
             }
         }
+        }
+        finally
+        {
+            if (accChanged) await RestoreAccelerationAsync();
+        }
 
         int moved = movedSet.Count, skipped = skippedSet.Count;
         int visOk = visByIndex.Values.Count(ok => ok), visFail = visByIndex.Count - visOk;
@@ -268,6 +293,12 @@ public class InspectionRunStep : ISequenceStep
             (_dryRun ? "" : $", 비전 OK {visOk}/{moved}" + (visFail > 0 ? $" (실패 {visFail})" : "")) +
             $" [내부 wobj #{wobjId}→BASE/user 0, tool {context.Tool}, WallID 0x{context.InspectionSurfaceId:X2}, Run {runId}].";
         _logger.LogInformation("[검사 수행] {Msg}", msg);
+
+        // 비전 OK 가 하나도 없으면 실패율 설정과 무관하게 실패 — 순회 중 비전 링크가 끊기면 촬영 요청이 즉시
+        // (false,false)로 끝나 코봇은 이동만 하고 "성공"으로 보고되며 anchor 프레임까지 캐시되던 문제(기본 상한 1.0 = 판정 없음).
+        if (!_dryRun && moved > 0 && visOk == 0)
+            return StepResult.Fail(
+                $"비전 OK 0/{moved} — 촬영 결과를 하나도 받지 못했습니다. 비전 S/W 링크·촬영 응답을 확인하세요. {msg}");
 
         // ACS 경로: 비전 실패율 상한 초과 시 스텝 실패로 승격(→ 액션 FAILED + inspectionFailed, §6.4 재시도 정책).
         // UI 단독 실행(VisionFailRatioMax=null)은 현행대로 집계만 하고 성공 반환. 드라이런은 비전이 없어 판정 생략.
@@ -282,6 +313,108 @@ public class InspectionRunStep : ISequenceStep
         return StepResult.Ok(msg);
     }
 
+    /// <summary>레시피 검사 가속도가 있으면 전역 가속도 배율을 그 값으로 바꾼다. 바꿨으면 true(복원 필요).
+    /// 실패해도 검사는 중단하지 않고 기본 가속도로 진행한다 — 가속도는 품질이 아니라 진동·사이클 조정용이다.</summary>
+    private async Task<bool> ApplyInspectAccelerationAsync(SequenceContext context, CancellationToken ct)
+    {
+        if (context.InspectAcceleration is not { } acc) return false;
+        try
+        {
+            var rc = await _cobot.Rpc.SetOaccScaleAsync(acc, ct);
+            if (rc == 0)
+            {
+                _logger.LogInformation("[검사 수행] 순회 가속도 배율 {Acc}% 적용 (종료 시 {Def}% 복원)", acc, FairinoRpcClient.DefaultOaccScalePct);
+                return true;
+            }
+            _logger.LogWarning("[검사 수행] 순회 가속도 배율 {Acc}% 설정 실패 (rc={Rc}){Desc} — 기본 가속도로 진행",
+                acc, rc, FairinoErrorCodes.Suffix(rc));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "[검사 수행] 순회 가속도 배율 {Acc}% 설정 실패 — 기본 가속도로 진행", acc);
+        }
+        // 설정 실패라도 일부 반영됐을 수 있으므로 복원은 시도한다.
+        return true;
+    }
+
+    /// <summary>전역 가속도 배율 복원. 취소된 뒤에도 반드시 보내야 하므로 호출자 토큰을 쓰지 않는다.</summary>
+    private async Task RestoreAccelerationAsync()
+    {
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var rc = await _cobot.Rpc.SetOaccScaleAsync(FairinoRpcClient.DefaultOaccScalePct, cts.Token);
+            if (rc == 0)
+                _logger.LogInformation("[검사 수행] 가속도 배율 {Def}% 복원", FairinoRpcClient.DefaultOaccScalePct);
+            else
+                _logger.LogError("[검사 수행] 가속도 배율 복원 실패 (rc={Rc}){Desc} — 이후 모션 가속도가 바뀐 채일 수 있습니다",
+                    rc, FairinoErrorCodes.Suffix(rc));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[검사 수행] 가속도 배율 복원 실패 — 이후 모션 가속도가 바뀐 채일 수 있습니다");
+        }
+    }
+
+    /// <summary>
+    /// 경유점 BASE 목표를 순서대로 IK(앞 점 해 기준 최소 변위)로 풀어 <see cref="WaypointChainBlocker"/> 로 판정한다.
+    /// 끝점만이 아니라 <b>현재 TCP → 첫 경유점(스테이징)</b>과 <b>경유점 사이 MoveL 경로</b>도 위치 100mm·자세 10° 간격으로
+    /// 샘플링해 이어 푼다(<see cref="CobotInspectionMoveStep.PathStepBlocker"/> — 관절 점프·팔꿈치·손목). 끝점이 멀쩡해도
+    /// 그 사이에서 J5 가 0 을 지나면 MoveL 이 도중에 rc=38/185 로 멈추기 때문이다(스테이징은 앞 단계가 끝난 자리에서 출발해 길 수 있다).
+    /// IK 는 계산만 하는 호출이라 코봇은 움직이지 않는다. 통과하면 null.
+    /// </summary>
+    private async Task<string?> CheckWaypointChainAsync(
+        SequenceContext context, IReadOnlyList<(int Index, double[] Target)> targets, CancellationToken ct)
+    {
+        var start = await _cobot.Rpc.GetActualJointPosAsync(ct: ct);
+        var prevPose = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
+        var chain = new List<(int Index, double[] Joints)>(targets.Count);
+        var seed = start;
+        var first = true;
+        foreach (var (idx, target) in targets)
+        {
+            var label = first ? $"첫 경유점 #{idx + 1} 스테이징 경로" : $"경유점 #{idx + 1} 앞 경로";
+            foreach (var pose in CobotInspectionMoveStep.SamplePoseSegment(
+                         prevPose, target, CobotInspectionMoveStep.PlanarSampleMm, CobotInspectionMoveStep.ChainSampleDeg))
+            {
+                double[] j;
+                try { j = await _cobot.Rpc.GetInverseKinNearestAsync(pose, seed, context.Tool, 0, ct); }
+                catch (InvalidOperationException ex) { return $"{label} [{Fmt(pose)}] 도달 불가({ex.Message})"; }
+                if (CobotInspectionMoveStep.PathStepBlocker(seed, j, start) is { } step)
+                    return $"{label} [{Fmt(pose)}] {step}";
+                if (Inspection.WObjAttitude.J6RangeBlocker(start[5], j[5]) is { } j6)
+                    return $"{label} [{Fmt(pose)}] {j6}";
+                seed = j;
+            }
+            chain.Add((idx, seed));   // 마지막 샘플 = 경유점 자신
+            prevPose = target;
+            first = false;
+        }
+        return WaypointChainBlocker(start, chain);
+
+        static string Fmt(double[] p) => string.Join(", ", p.Take(3).Select(v => v.ToString("0")));
+    }
+
+    /// <summary>
+    /// 경유점 관절 해 사슬에서 첫 문제점의 사유, 없으면 null. 손목 특이점(|J5| &lt; <see cref="CobotInspectionMoveStep.PlanarWristMarginDeg"/>
+    /// 또는 출발 자세와 J5 부호 반전 — 사이에서 0 을 지난다)과 팔꿈치 가지 전환, J6 안전 범위
+    /// (<see cref="Inspection.WObjAttitude.J6RangeBlocker"/>, 출발 J6 감김 기준)를 본다. J6 는 경유점마다 비틀림이 달라
+    /// 크게 바뀌는 것이 정상이라 변화량은 보지 않고 범위만 본다.
+    /// </summary>
+    internal static string? WaypointChainBlocker(double[] start, IReadOnlyList<(int Index, double[] Joints)> chain)
+    {
+        foreach (var (idx, j) in chain)
+        {
+            if (Math.Abs(j[4]) < CobotInspectionMoveStep.PlanarWristMarginDeg || Math.Sign(j[4]) != Math.Sign(start[4]))
+                return $"경유점 #{idx + 1} 손목 특이점(J5 {start[4]:0.0}° → {j[4]:0.0}°, 해 [{string.Join(", ", j.Select(v => v.ToString("0.0")))}]°)";
+            if (FairinoRpcClient.IsElbowFlip(start, j))
+                return $"경유점 #{idx + 1} 팔꿈치 가지 전환(J3 {start[2]:0.0}° → {j[2]:0.0}°)";
+            if (Inspection.WObjAttitude.J6RangeBlocker(start[5], j[5]) is { } j6)
+                return $"경유점 #{idx + 1} {j6}";
+        }
+        return null;
+    }
+
     private async Task<double> GetWObjIdAsync()
     {
         try { return await _param.GetDoubleAsync(WObjPointStep.WObjIdKey) ?? 1; }
@@ -289,7 +422,7 @@ public class InspectionRunStep : ISequenceStep
     }
 
     /// <summary>
-    /// 절대 모드 첫 경유점의 비틀림 후보(0/180°)를 IK 로 풀어 J6 안전 범위(−330°~−160°)를 벗어나지 않는 쪽을
+    /// 절대 모드 첫 경유점의 비틀림 후보(0/180°)를 IK 로 풀어 J6 안전 범위(−310°~−160°)를 벗어나지 않는 쪽을
     /// 고른다(<see cref="Inspection.WObjAttitude.SelectSafeTwist"/>). IK 는 현재 관절 기준 최소 변위 해라
     /// 손목을 뒤집지 않는 해 = MoveL 이 실제로 갈 J6 와 같다. 고를 수 없으면 Error 에 사유를 담는다.
     /// </summary>
@@ -325,7 +458,7 @@ public class InspectionRunStep : ISequenceStep
         if (pick is not { } p)
         {
             _logger.LogWarning("[검사 수행] 안전 회전 후보 없음 — 현재 J6 {J6:0.0}°, 후보 {Desc}", current[5], desc);
-            return (0, $"첫 경유점으로 가려면 J6 를 안전 범위(−330°~−160°) 밖으로 돌려야 합니다(센서 헤드 간섭 위험) — 이동하지 않고 중단. " +
+            return (0, $"첫 경유점으로 가려면 J6 를 안전 범위({Inspection.WObjAttitude.SafeJ6RangeText}, 현재 감김 기준) 밖으로 돌려야 합니다(센서 헤드 간섭 위험) — 이동하지 않고 중단. " +
                        $"현재 J6 {current[5]:0.0}°, 후보 {desc}. 'Cobot 검사위치 이동'의 검사 방향(수평/수직)을 확인하세요.");
         }
 

@@ -161,6 +161,26 @@
                 </StackPanel>
             </Border>
 
+            <!-- 수동 비드 입력(시퀀스 Bead 찾기 팝업) -->
+            <Border Classes="card stat">
+                <StackPanel Spacing="6">
+                    <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Grid.Column="0" Text="🖊  수동 비드 입력" FontWeight="SemiBold" />
+                        <Border Grid.Column="1" Classes="badge" Classes.on="{Binding BeadSequenceWaiting}" IsVisible="{Binding BeadSequenceWaiting}">
+                            <TextBlock Text="입력 대기 중" />
+                        </Border>
+                    </Grid>
+                    <TextBlock Classes="muted" FontSize="12" Text="Bead 찾기 팝업 조건" />
+                    <ComboBox ItemsSource="{Binding BeadTriggerOptions}" SelectedIndex="{Binding BeadTriggerIndex}"
+                              HorizontalAlignment="Stretch"
+                              ToolTip.Tip="선택하면 파라미터 Sequence.BeadManual.Trigger 에 바로 저장됩니다." />
+                    <Button Content="수동 팝업 열기 (테스트)" HorizontalAlignment="Stretch" Command="{Binding OpenBeadPopupCommand}"
+                            ToolTip.Tip="라이브 화면(또는 저장된 사진)으로 팝업을 열어 비드선 입력·d 계산을 시험합니다. 시퀀스에는 영향이 없습니다." />
+                    <TextBlock Classes="muted" FontSize="12" TextWrapping="Wrap" Text="{Binding BeadManualInfo}" />
+                    <TextBlock Classes="muted" FontSize="12" TextWrapping="Wrap" Text="{Binding BeadTriggerStatus}" />
+                </StackPanel>
+            </Border>
+
             <!-- ACS / 수동 층 전환 -->
             <Border Classes="card stat">
                 <StackPanel Spacing="6">

@@ -74,6 +74,10 @@ public sealed class FlatCenterAlignOptions
     /// <see cref="Candidates"/> 가 있을 때만 쓴다.</summary>
     public FlatReachOptions? Reach { get; init; }
 
+    /// <summary>레이저 3점 풋프린트 판정(<see cref="LaserFootprintEvaluator"/>). null = 셀 중심(종전).
+    /// <see cref="Candidates"/> 가 있을 때만 쓴다.</summary>
+    public FlatFootprintContext? Footprint { get; init; }
+
     /// <summary>true = 횡이동을 관절 이동(MoveJ)으로 — 직선 이동이 경로 중간 J5=0 을 지나 rc=38 나는 것을 피한다.</summary>
     public bool UseJointMove { get; init; }
 
@@ -124,6 +128,18 @@ public sealed class FlatReachOptions
     public int MaxChecks { get; init; } = 8;
 }
 
+/// <summary>
+/// 평탄 후보 선택에 쓰는 레이저 풋프린트 판정 입력 — 판정 옵션, 이미지→툴 축 매핑(스팟 위치를 이미지로 옮기는 데 필요),
+/// 이전 시도에서 Phase C 가 실패한 자리(정규화 좌표, 같은 시작 자세의 화면 기준).
+/// </summary>
+public sealed class FlatFootprintContext
+{
+    public required LaserFootprintOptions Options { get; init; }
+    public ToolAxisDir ImageXAxis { get; init; } = ToolAxisDir.PlusX;
+    public ToolAxisDir ImageYAxis { get; init; } = ToolAxisDir.PlusY;
+    public IReadOnlyList<(double U, double V)> Excluded { get; init; } = Array.Empty<(double, double)>();
+}
+
 /// <summary>후보 선택 결과. <see cref="Selected"/> 가 null 이면 쓸 수 있는 셀이 없다(<see cref="Note"/> 에 사유).
 /// <see cref="Analysis"/> 는 선택 셀이 Best 로 바뀐 분석(선택 실패 시 원본).</summary>
 public sealed record FlatSelection(
@@ -159,6 +175,24 @@ public sealed class DepthDistanceMoveOptions
 
     /// <summary>이동 후 진동/프레임 안정화 대기(ms).</summary>
     public int SettleMs { get; init; } = 500;
+
+    /// <summary>이동 전 측정 거리(카메라–면)의 기대값(mm, 예: ② 접근 거리 + 카메라–TCP 광축 거리). null 이면 검사하지 않는다.
+    /// 측정이 기대 ± <see cref="ExpectedToleranceMm"/> 밖이면 ROI 안 다른 구조물·무효 픽셀·멈춘 프레임으로 보고 움직이지 않는다.</summary>
+    public double? ExpectedDistanceMm { get; init; }
+
+    /// <summary><see cref="ExpectedDistanceMm"/> 허용폭(mm).</summary>
+    public double ExpectedToleranceMm { get; init; } = 200;
+
+    /// <summary>
+    /// 기대보다 <b>가깝게</b> 측정됐을 때 받아들이는 하한(mm) — 보통 목표 거리. null 이면 가까운 쪽도 기대 − 허용폭까지만(대칭).
+    /// 먼 쪽(기대 + 허용폭)은 이 값과 무관하게 그대로 막는다: 멀게 잘못 재면 그만큼 벽 쪽으로 더 전진하지만,
+    /// 가깝게 재면 덜 전진할 뿐이다. 벽이 모델보다 가까운 경우(캘리브레이션 오차 — 실기 2026-11-14 F: 측정 437~466 mm,
+    /// 기대 680)에도 정렬을 계속할 수 있게 한다.
+    /// </summary>
+    public double? ExpectedNearFloorMm { get; init; }
+
+    /// <summary>이 시간보다 오래된 depth 프레임이면 측정하지 않는다(ms) — 스트림 정체 시 같은 값으로 반복 이동 방지.</summary>
+    public int MaxFrameAgeMs { get; init; } = 1000;
 }
 
 /// <summary>깊이 거리 접근 이동 결과.</summary>
@@ -341,7 +375,7 @@ public class FlatSurfaceCenteringService
                 if (!refined && o.Candidates is not null)
                 {
                     var sel = await SelectReachableAsync(bestAnalysis, o.RoiX, o.RoiY, o.RoiW, o.RoiH,
-                        o.Candidates, o.Reach, progress, ct);
+                        o.Candidates, o.Reach, progress, ct, o.Footprint);
                     if (sel.Selected is null)
                     {
                         // 히트맵은 남긴다 — 왜 아무 셀도 못 썼는지 화면에서 확인하도록.
@@ -652,13 +686,19 @@ public class FlatSurfaceCenteringService
     /// 평탄 후보를 점수순(<see cref="FlatCandidateSelector.Rank"/>)으로 보며 <b>최종 위치</b>가 도달 가능한 첫 셀을 고른다.
     /// 시퀀스 ④(<see cref="RunAsync"/>)와 카메라 페이지 '평탄 검증'이 같이 쓴다 — 두 화면이 같은 셀을 고르도록.
     /// <paramref name="reach"/> 가 null 이거나 코봇 위치를 못 읽으면 도달성 없이 1순위 후보를 고른다(노트에 표시).
+    ///
+    /// <paramref name="footprint"/> 가 있으면 셀 중심 대신 <b>레이저 3점이 떨어질 자리</b>를 깊이로 평가한다
+    /// (<see cref="LaserFootprintEvaluator.Search"/>): 셀마다 주변을 탐색해 예측 틸트 오차가 가장 작은 자리로 옮기고,
+    /// 기준을 통과한 자리부터 도달성을 본다. 통과 자리가 하나도 도달 불가면 예측 오차가 작은 순으로 다시 본다(경고).
     /// 예외를 던지지 않는다(취소 제외).
     /// </summary>
     public async Task<FlatSelection> SelectReachableAsync(
         CameraService.DepthGridAnalysis analysis, double roiX, double roiY, double roiW, double roiH,
-        FlatCandidateOptions candidates, FlatReachOptions? reach, Action<string>? progress, CancellationToken ct)
+        FlatCandidateOptions candidates, FlatReachOptions? reach, Action<string>? progress, CancellationToken ct,
+        FlatFootprintContext? footprint = null)
     {
-        var rank = FlatCandidateSelector.Rank(analysis, roiX + roiW / 2.0, roiY + roiH / 2.0, candidates,
+        double centerU = roiX + roiW / 2.0, centerV = roiY + roiH / 2.0;
+        var rank = FlatCandidateSelector.Rank(analysis, centerU, centerV, candidates,
             _camera.PixelDeltaToMm, FallbackDepthMm);
         var minCell = analysis.Cells[analysis.BestIndex];
         var minLabel = $"({minCell.Gx + 1},{minCell.Gy + 1})";
@@ -673,6 +713,51 @@ public class FlatSurfaceCenteringService
             Report(progress, note);
             return new FlatSelection(analysis, null, false, note);
         }
+
+        // ── 레이저 풋프린트 판정 → 시도 순서 ──
+        // 통과 자리(점수순) → 미통과 자리(예측 오차순, 경고). 판정 불가(깊이 없음 등)면 종전 셀 중심 순서.
+        var order = new List<(int RankIndex, FlatCandidate C, FootprintEval? E)>();
+        int passCount = 0;
+        if (footprint is { Options.Enabled: true } fp)
+        {
+            var spots = LaserFootprintEvaluator.SpotOffsetsInImageMm(_laser.HeadOffsetsMm, fp.ImageXAxis, fp.ImageYAxis);
+            var frame = analysis.Frame;
+            (double X, double Y) MmPerPx(double z) => _camera.PixelDeltaToMm(1.0 / frame.Width, 1.0 / frame.Height, z);
+
+            var evals = new List<(int RankIndex, FlatCandidate C, FootprintEval? E)>();
+            for (var k = 0; k < rank.Candidates.Count; k++)
+            {
+                var c = rank.Candidates[k];
+                var e = LaserFootprintEvaluator.Search(frame, (c.Cell.U0 + c.Cell.U1) / 2, (c.Cell.V0 + c.Cell.V1) / 2,
+                    roiX, roiY, roiW, roiH, spots, fp.Options, MmPerPx, fp.Excluded);
+                if (e is null) continue;
+                double z = c.Cell.MeanMm > 0 ? c.Cell.MeanMm : FallbackDepthMm;
+                var (dx, dy) = _camera.PixelDeltaToMm(e.U - centerU, e.V - centerV, z);
+                evals.Add((k, c with { DxMm = dx, DyMm = dy, DistanceMm = Math.Sqrt(dx * dx + dy * dy) }, e));
+            }
+
+            if (evals.Count == 0)
+                Report(progress, "⚠ 레이저 풋프린트 판정 불가(깊이 유효 자리 없음" +
+                                 (fp.Excluded.Count > 0 ? "/실패 자리 제외" : "") + ") — 셀 중심으로 고릅니다.");
+            else
+            {
+                var pass = evals.Where(t => t.E!.Passes(fp.Options)).ToList();
+                passCount = pass.Count;
+                order.AddRange(pass);
+                order.AddRange(evals.Where(t => !t.E!.Passes(fp.Options)).OrderBy(t => t.E!.WorstTiltDeg));
+                Report(progress,
+                    $"레이저 풋프린트: 후보 {rank.Candidates.Count}개 중 {evals.Count}개 판정, " +
+                    $"{passCount}개 통과(예측 틸트 오차 ≤ {fp.Options.MaxPredictedTiltDeg:0.##}°, 여유 {fp.Options.MarginMm:0.#}mm)" +
+                    (fp.Excluded.Count > 0 ? $", 실패 자리 {fp.Excluded.Count}곳 제외" : ""));
+            }
+        }
+        if (order.Count == 0)
+            order.AddRange(rank.Candidates.Select((c, k) => (k, c, (FootprintEval?)null)));
+
+        string FpText(FootprintEval? e) => e is null ? "" : $" · {e.ShortText()}";
+        string FpWarn(int idx) => order[idx].E is { } e && footprint is { } f && !e.Passes(f.Options)
+            ? $" ⚠ 풋프린트 기준 미달 — 최소 예측 오차 자리로 진행({e.WorstTiltDeg:0.00}° > {f.Options.MaxPredictedTiltDeg:0.##}°)"
+            : "";
 
         // 도달성 판정 기준 — 현재 TCP·관절. 못 읽으면 판정 없이 진행(읽기 한 번 실패로 검사를 죽이지 않는다).
         double[]? anchor = null, joints0 = null;
@@ -694,11 +779,12 @@ public class FlatSurfaceCenteringService
 
         if (skipReach is not null)
         {
-            var first = rank.Candidates[0];
-            var note = $"후보 {first.Label} σ {first.Cell.SigmaMm:0.00}mm 선택 — 도달성 미확인({skipReach})";
+            var first = order[0].C;
+            var note = $"후보 {first.Label} σ {first.Cell.SigmaMm:0.00}mm 선택{FpText(order[0].E)} — 도달성 미확인({skipReach})" +
+                       FpWarn(0);
             _logger.LogWarning("평탄 후보 도달성 판정 생략: {Why}", skipReach);
             Report(progress, note);
-            return new FlatSelection(Select(analysis, rank, 0), first, false, note);
+            return new FlatSelection(Select(analysis, order, 0), first, false, note);
         }
 
         // 설정된 자세 한계가 현재 자세조차 포함하지 않으면(미설정 기본값 등) 모든 후보가 '출발 자세 위반'으로 떨어진다 —
@@ -711,36 +797,43 @@ public class FlatSurfaceCenteringService
                              "시험 화면 ③ 카드에서 허용 범위를 실제 값으로 맞추세요.");
 
         var tried = new List<string>();
-        int checks = Math.Min(rank.Candidates.Count, Math.Max(1, reach.MaxChecks));
+        int checks = Math.Min(order.Count, Math.Max(1, reach.MaxChecks));
+        // 통과 자리는 MaxChecks 안에서 모두 보고, 남은 예산으로 미통과 자리를 본다.
         for (var k = 0; k < checks; k++)
         {
             ct.ThrowIfCancellationRequested();
-            var c = rank.Candidates[k];
+            var (_, c, e) = order[k];
             var reason = await CheckReachAsync(c, anchor!, joints0!, reach, limits, usePosture, ct);
             var line = $"후보 {k + 1} {c.Label} σ {c.Cell.SigmaMm:0.00} · 잔차 {c.Cell.ResidualMm:0.00} · " +
-                       $"이동 {c.DistanceMm:0}mm · 점수 {c.Score:0.00} → {(reason is null ? "도달 가능" : $"불가: {reason}")}";
+                       $"이동 {c.DistanceMm:0}mm · 점수 {c.Score:0.00}{FpText(e)} → {(reason is null ? "도달 가능" : $"불가: {reason}")}";
             Report(progress, line);
             if (reason is null)
             {
-                var note = c.CellIndex == analysis.BestIndex
+                var note = (c.CellIndex == analysis.BestIndex
                     ? $"σ 최소 셀 {c.Label} 선택 (최종 위치 도달 확인)"
-                    : $"σ 최소 셀 {minLabel} 대신 후보 {k + 1} {c.Label} 선택 (σ {c.Cell.SigmaMm:0.00}mm, 최종 위치 도달 확인)";
-                return new FlatSelection(Select(analysis, rank, k), c, true, note);
+                    : $"σ 최소 셀 {minLabel} 대신 후보 {k + 1} {c.Label} 선택 (σ {c.Cell.SigmaMm:0.00}mm, 최종 위치 도달 확인)")
+                    + FpText(e) + FpWarn(k);
+                return new FlatSelection(Select(analysis, order, k), c, true, note);
             }
             tried.Add($"{c.Label} {reason}");
         }
 
-        var fail = $"도달 가능한 평탄 셀 없음 — 후보 {rank.Candidates.Count}개 중 {checks}개 판정 모두 불가: " +
+        var fail = $"도달 가능한 평탄 셀 없음 — 후보 {order.Count}개 중 {checks}개 판정 모두 불가: " +
                    string.Join(" / ", tried.Take(3)) +
                    " — AMR 정차 위치를 판재 안쪽으로 옮기거나 ROI 를 좁히세요.";
         Report(progress, fail);
         return new FlatSelection(analysis, null, true, fail);
     }
 
+    /// <summary>시도 순서의 k 번째를 선택 셀로 바꿔 끼운다. 풋프린트 판정이 있으면 Best 좌표를 셀 중심이 아니라
+    /// 판정한 자리로 바꾼다 — 이동량(Best − ROI 중심)이 그 자리를 레이저 아래로 가져오도록.</summary>
     private static CameraService.DepthGridAnalysis Select(
-        CameraService.DepthGridAnalysis a, FlatCandidateRanking rank, int k)
-        => FlatCandidateSelector.WithSelected(a, rank.Candidates[k].CellIndex,
-            k + 1 < rank.Candidates.Count ? rank.Candidates[k + 1].CellIndex : -1);
+        CameraService.DepthGridAnalysis a, IReadOnlyList<(int RankIndex, FlatCandidate C, FootprintEval? E)> order, int k)
+    {
+        var sel = FlatCandidateSelector.WithSelected(a, order[k].C.CellIndex,
+            k + 1 < order.Count ? order[k + 1].C.CellIndex : -1);
+        return order[k].E is { } e ? sel with { Best = sel.Best with { U = e.U, V = e.V } } : sel;
+    }
 
     /// <summary>후보 하나의 도달성 — 셀 이동 → 레이저 보정 → 틸트 여유(툴 Rx/Ry ±) 순으로 IK 를 이어 풀며
     /// 자세 한계를 본다. 가능하면 null, 불가면 사유.</summary>
@@ -877,6 +970,7 @@ public class FlatSurfaceCenteringService
     /// </summary>
     public async Task<double?> MeasureRoiDistanceAsync(DepthDistanceMoveOptions o, CancellationToken ct)
     {
+        if (DepthFrameAgeMs > o.MaxFrameAgeMs) return null;   // 멈춘 프레임 — 측정 불가로 본다
         var samples = new List<int>(o.Samples);
         for (var i = 0; i < o.Samples; i++)
         {
@@ -906,9 +1000,21 @@ public class FlatSurfaceCenteringService
         try
         {
             // ── 측정: ROI 최소 깊이 N회 샘플 평균 (시퀀스 ③ 기존 방식 유지) ──
+            if (DepthFrameAgeMs > o.MaxFrameAgeMs)
+                return DistFail($"depth 프레임이 {DepthFrameAgeMs:0}ms 동안 갱신되지 않았습니다(한계 {o.MaxFrameAgeMs}ms) — " +
+                                "카메라 스트림을 확인하세요. 움직이지 않습니다.");
             var measured = await MeasureRoiDistanceAsync(o, ct);
             if (measured is not { } d)
                 return DistFail("유효한 깊이 측정값이 없습니다.");
+            if (CheckExpectedDistance(d, o.ExpectedDistanceMm, o.ExpectedToleranceMm, o.ExpectedNearFloorMm) is { } expectedFail)
+                return DistFail(expectedFail, d);
+            if (CloserThanModelMm(d, o.ExpectedDistanceMm, o.ExpectedToleranceMm) is { } closerMm)
+            {
+                _logger.LogWarning(
+                    "거리 접근: 면이 모델보다 {Closer:0}mm 가깝습니다 (측정 {D:0}mm, 기대 {E:0}±{T:0}mm) — 측정값 기준으로 정렬을 계속합니다. " +
+                    "맵 캘리브레이션(도면↔맵)을 확인하세요.", closerMm, d, o.ExpectedDistanceMm, o.ExpectedToleranceMm);
+                Report(progress, $"면이 모델보다 {closerMm:0}mm 가까움 — 측정값 기준으로 정렬 (캘리브레이션 확인 필요)");
+            }
 
             double delta = d - o.TargetDistanceMm;
             Report(progress, $"거리 측정 {d:0.#}mm (목표 {o.TargetDistanceMm:0}mm, Δ={delta:+0.#;-0.#}mm)");
@@ -934,21 +1040,27 @@ public class FlatSurfaceCenteringService
             if (rc != 0)
                 return DistFail($"접근 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.", d);
 
+            var movedAt = DateTime.UtcNow;
             await Task.Delay(o.SettleMs, ct);
 
-            // 진단: 실측 BASE 변위·재측정 거리 — 광축 매핑이 맞는지 로그로 검증 가능하게.
-            double? d2 = null;
+            // 이동 후 새 프레임을 기다린다 — 이동 전 프레임으로 재측정하면 응답 검증이 무의미하다.
+            for (var waited = 0; _camera.LastFrameAt <= movedAt && waited < 1500; waited += 50)
+                await Task.Delay(50, ct);
+
+            // 재측정(N회 평균)·실측 BASE 변위 — 광축 매핑·프레임이 맞는지 응답으로 검증한다.
+            var d2 = _camera.LastFrameAt > movedAt ? await MeasureRoiDistanceAsync(o, ct) : null;
             try
             {
                 var after = await _cobot.Rpc.GetTcpPoseInBaseAsync(o.Tool, ct);
-                var stat = _camera.ComputeDepthRoiStats(o.RoiX, o.RoiY, o.RoiW, o.RoiH);
-                d2 = stat is { MinMm: > 0 } ? stat.MinMm : null;
                 Report(progress,
                     $"접근 실측: BASE Δ=[{after[0] - anchor[0]:+0.#;-0.#}, {after[1] - anchor[1]:+0.#;-0.#}, " +
                     $"{after[2] - anchor[2]:+0.#;-0.#}]mm, 거리 {d:0}→{(d2 is not null ? $"{d2:0}" : "?")}mm");
             }
             catch (OperationCanceledException) { throw; }
             catch { /* 진단 실패는 결과에 영향 없음 */ }
+
+            if (CheckDistanceResponse(d, d2, delta, o.TargetDistanceMm, o.ToleranceMm) is { } responseFail)
+                return DistFail(responseFail, d2 ?? d);
 
             return DistOk(d2 ?? d, delta,
                 $"거리 접근 완료: {d:0.#}→{(d2 is not null ? $"{d2:0.#}" : "?")}mm " +
@@ -963,6 +1075,57 @@ public class FlatSurfaceCenteringService
             _logger.LogError(ex, "거리 접근 이동 중 오류");
             return DistFail($"거리 접근 오류: {ex.Message}");
         }
+    }
+
+    private double DepthFrameAgeMs => (DateTime.UtcNow - _camera.LastFrameAt).TotalMilliseconds;
+
+    /// <summary>응답 검증을 생략하는 최소 이동량(mm) — 이보다 작으면 depth 잡음에 묻힌다.</summary>
+    internal const double ResponseCheckMinMoveMm = 10.0;
+
+    /// <summary>이동량 대비 실제 거리 변화가 이 비율보다 작으면 응답 없음으로 본다.</summary>
+    internal const double ResponseMinRatio = 0.3;
+
+    /// <summary>
+    /// 이동 전 측정이 허용 구간 밖이면 실패 사유. 구간 = [기대 − 허용폭, 기대 + 허용폭]이고,
+    /// <paramref name="nearFloorMm"/> 를 주면 가까운 쪽 하한만 그 값까지 넓힌다(비대칭 — 먼 쪽은 그대로).
+    /// </summary>
+    internal static string? CheckExpectedDistance(double measuredMm, double? expectedMm, double toleranceMm, double? nearFloorMm = null)
+    {
+        if (expectedMm is not { } e || toleranceMm <= 0) return null;
+        var lower = nearFloorMm is { } nf ? Math.Min(e - toleranceMm, nf) : e - toleranceMm;
+        var upper = e + toleranceMm;
+        if (measuredMm >= lower && measuredMm <= upper) return null;
+        var range = nearFloorMm is null ? $"기대 {e:0}±{toleranceMm:0}mm" : $"허용 {lower:0}~{upper:0}mm(기대 {e:0}mm)";
+        return $"측정 거리 {measuredMm:0}mm 가 {range}(검사위치 이동 접근 거리 + 카메라–툴 끝 거리) 밖입니다 — " +
+               "ROI 안 다른 구조물·무효 픽셀(최소 측정거리 미만)·멈춘 프레임일 수 있어 움직이지 않습니다. ROI·카메라를 확인하세요.";
+    }
+
+    /// <summary>측정이 기대 − 허용폭보다 가까우면 모델보다 가까운 양(기대 − 측정, mm). 아니면 null.</summary>
+    internal static double? CloserThanModelMm(double measuredMm, double? expectedMm, double toleranceMm)
+        => expectedMm is { } e && toleranceMm > 0 && measuredMm < e - toleranceMm ? e - measuredMm : null;
+
+    /// <summary>
+    /// 광축 방향 <paramref name="commandedMm"/> 이동 뒤 거리 변화가 지령과 같은 부호·충분한 크기인지 검사한다.
+    /// 지령 +면 거리가 줄어야 한다(전진). 반대로 변하거나 거의 안 변하면 광축 매핑 부호 오류·멈춘 프레임으로 본다.
+    /// 단, 변화가 작아도 <b>지령과 같은 방향으로 변했고 이동 후 거리가 목표 ± 허용 안</b>이면 통과시킨다 — 이동 후 측정은
+    /// 항상 새 프레임이라(호출부가 새 프레임을 기다린다) 멈춘 프레임이 아니고, 부호가 반대면 거리가 반대로 변해 여기 걸리지 않는다.
+    /// 작은 이동(10 mm 남짓)은 ROI 최소 깊이의 잡음·요철(주름 교차부)에 묻힌다(실기 2026-11-14 F L4-R01C04-2 CROSS4:
+    /// 10.3 mm 이동에 310.3→308 mm, 목표 300±10 안인데 실패). 통과시켜도 추가 이동은 하지 않는다.
+    /// </summary>
+    internal static string? CheckDistanceResponse(double beforeMm, double? afterMm, double commandedMm,
+        double? targetMm = null, double toleranceMm = 0)
+    {
+        if (Math.Abs(commandedMm) < ResponseCheckMinMoveMm) return null;
+        if (afterMm is not { } after)
+            return $"광축 {commandedMm:+0.#;-0.#}mm 이동 후 유효한 깊이 측정값이 없습니다(새 프레임 없음 또는 무효 픽셀) — " +
+                   "카메라 스트림·ROI 를 확인하세요. 추가 이동하지 않습니다.";
+        var change = beforeMm - after;   // 줄어든 거리
+        if (change * commandedMm > 0 && targetMm is { } target && toleranceMm > 0 && Math.Abs(after - target) <= toleranceMm)
+            return null;
+        if (change * commandedMm <= 0 || Math.Abs(change) < ResponseMinRatio * Math.Abs(commandedMm))
+            return $"광축 {commandedMm:+0.#;-0.#}mm 이동했는데 거리가 {beforeMm:0}→{after:0}mm 로 기대만큼 변하지 않았습니다 — " +
+                   $"광축 매핑('{Sequence.Steps.WeldSequenceSupport.DepthAxisKey}') 부호나 depth 프레임 정체를 확인하세요. 추가 이동하지 않습니다.";
+        return null;
     }
 
     private DepthDistanceMoveResult DistFail(string msg, double? measured = null)

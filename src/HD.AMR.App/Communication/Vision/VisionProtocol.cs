@@ -97,14 +97,16 @@ public static class CaptureResPayload
 }
 
 /// <summary>
-/// GUID ↔ 16바이트 바이너리 변환. RFC 4122 표준(빅엔디안) 바이트 순서를 사용해, 하이픈 문자열을
-/// 왼쪽부터 읽은 순서와 바이트 배열이 일치한다(수신 측 문자열 변환이 모호하지 않음).
-/// ※ GUID 바이트 순서는 연동 시험 시 비전 S/W 와 최종 확인 대상.
+/// GUID ↔ 16바이트 바이너리 변환. <b>리틀엔디안(.NET <c>Guid.ToByteArray</c> 배치)</b> — 앞 세 묶음(4·2·2바이트)은
+/// 바이트가 뒤집혀 나가고 뒤 8바이트는 문자열 순서 그대로다. 수신 측(비전·SAIGE)이 .NET 기본 방식
+/// (<c>new Guid(byte[])</c>)으로 읽으면 ACS 가 발급한 taskId 문자열과 같아진다.
+/// 2026-11-12 이전에는 RFC 4122(빅엔디안)로 보냈고, 그때 수신 측에 보인 taskId 는 ACS 값과 앞 세 묶음이 뒤집혀 있었다
+/// (같은 용접선이 다른 ID 로 저장됨 — VDA 사양서 N16).
 /// </summary>
 internal static class GuidBinary
 {
-    public static void Write(Span<byte> dst, Guid id) => id.TryWriteBytes(dst, bigEndian: true, out _);
-    public static Guid Read(ReadOnlySpan<byte> src)    => new(src[..16], bigEndian: true);
+    public static void Write(Span<byte> dst, Guid id) => id.TryWriteBytes(dst, bigEndian: false, out _);
+    public static Guid Read(ReadOnlySpan<byte> src)    => new(src[..16], bigEndian: false);
 }
 
 /// <summary>
@@ -136,11 +138,88 @@ public enum DeviceId : byte
     Vision     = 0x02,
 }
 
+/// <summary>
+/// CAPTURE_REQ [0] Surface Type — 비전 측 사양 표 기준 10종(0~1 자동용접부, 2~ 수동용접부).
+/// 비전 S/W 는 이 값으로 저장 폴더(Metadata1~10)를 고른다. 이름·라벨·폴더는 <see cref="SurfaceTypes"/> 표에서 관리.
+/// ※ 구 번호(0=Flat, 1=Corner, 2=Corrugation)로 저장된 값은 <see cref="SurfaceTypes.FromLegacy"/> 로 변환.
+/// ※ 사양 주석상 4번 이후 순서는 "예시" — 확정 시 번호만 이 enum 과 표에서 갱신.
+/// </summary>
 public enum SurfaceType : byte
 {
-    Flat        = 0x00,
-    Corner      = 0x01,
-    Corrugation = 0x02
+    Flat                         = 0x00, // 자동용접부 Flat
+    Corrugation                  = 0x01, // 자동용접부 Corrugation
+    Manual3Axis                  = 0x02, // 3 axis (수)
+    Manual4Axis                  = 0x03, // 4 axis (수)
+    Manual90Flat                 = 0x04, // 90도 Flat (수)
+    Manual90Corrugation          = 0x05, // 90도 Corrugation (수)
+    Manual135Flat                = 0x06, // 135도 Flat (수)
+    Manual135Corrugation         = 0x07, // 135도 Corrugation (수)
+    ManualEndMembraneFlat        = 0x08, // End Membrane Flat (수)
+    ManualEndMembraneCorrugation = 0x09, // End Membrane Corrugation (수)
+}
+
+/// <summary>Surface Type 표 행. Label=UI 표시, MetadataDir=비전 측 저장 폴더명, IsManual=수동용접부 여부.</summary>
+public sealed record SurfaceTypeInfo(SurfaceType Type, string Label, string MetadataDir, bool IsManual);
+
+/// <summary>Surface Type 정본 표 — UI 드롭다운·로그·CSV 주석·검증이 모두 이 표를 참조한다.</summary>
+public static class SurfaceTypes
+{
+    public static readonly IReadOnlyList<SurfaceTypeInfo> All =
+    [
+        new(SurfaceType.Flat,                         "자동 Flat",                     "Metadata1", false),
+        new(SurfaceType.Corrugation,                  "자동 Corrugation",              "Metadata2", false),
+        new(SurfaceType.Manual3Axis,                  "수동 3축",                      "Metadata3", true),
+        new(SurfaceType.Manual4Axis,                  "수동 4축",                      "Metadata4", true),
+        new(SurfaceType.Manual90Flat,                 "수동 90° Flat",                 "Metadata5", true),
+        new(SurfaceType.Manual90Corrugation,          "수동 90° Corrugation",          "Metadata6", true),
+        new(SurfaceType.Manual135Flat,                "수동 135° Flat",                "Metadata7", true),
+        new(SurfaceType.Manual135Corrugation,         "수동 135° Corrugation",         "Metadata8", true),
+        new(SurfaceType.ManualEndMembraneFlat,        "수동 End Membrane Flat",        "Metadata9", true),
+        new(SurfaceType.ManualEndMembraneCorrugation, "수동 End Membrane Corrugation", "Metadata10", true),
+    ];
+
+    public const byte MaxValue = (byte)SurfaceType.ManualEndMembraneCorrugation;
+
+    public static SurfaceTypeInfo? Find(byte value) => All.FirstOrDefault(t => (byte)t.Type == value);
+
+    public static bool IsDefined(int value) => value is >= 0 and <= 255 && Find((byte)value) is not null;
+
+    /// <summary>표시 라벨. 미정의 값은 0xNN.</summary>
+    public static string Label(byte value) => Find(value)?.Label ?? $"0x{value:X2}";
+
+    public static string Label(SurfaceType type) => Label((byte)type);
+
+    /// <summary>"N=라벨" 을 구분자로 이어 붙인 범례(CSV 주석·도움말용).</summary>
+    public static string Legend(string separator = ", ") =>
+        string.Join(separator, All.Select(t => $"{(byte)t.Type}={t.Label}"));
+
+    /// <summary>임의 정수를 SurfaceType 으로 — 미정의 값은 Flat.</summary>
+    public static SurfaceType OrFlat(int value) => IsDefined(value) ? (SurfaceType)value : SurfaceType.Flat;
+
+    public static bool IsManual(this SurfaceType type) => Find((byte)type)?.IsManual ?? false;
+
+    /// <summary>경유점 CSV 의 신 번호 체계 표식 주석행. 이 행이 없는 CSV 는 구 번호로 보고 <see cref="FromLegacy"/> 변환.</summary>
+    public const string CsvSchemaMarker = "# surface-type-schema: 2";
+
+    /// <summary>CSV 텍스트가 신 번호 체계(표식 행 포함)인지.</summary>
+    public static bool IsCurrentSchemaCsv(string text) =>
+        text.Contains(CsvSchemaMarker, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>CSV Surface 셀 해석 — 신 체계면 0~9 그대로(미정의는 Flat), 구 체계면 <see cref="FromLegacy"/>.</summary>
+    public static byte ParseCsvCell(string cell, bool currentSchema)
+    {
+        if (!byte.TryParse(cell.Trim(), out var s)) return (byte)SurfaceType.Flat;
+        if (!currentSchema) return FromLegacy(s);
+        return IsDefined(s) ? s : (byte)SurfaceType.Flat;
+    }
+
+    /// <summary>구 번호 체계(0=Flat, 1=Corner, 2=Corrugation) → 신 번호. Corner 는 사양에서 빠져 Flat 으로 흡수.</summary>
+    public static byte FromLegacy(byte legacy) => legacy switch
+    {
+        0x01 => (byte)SurfaceType.Flat,         // 구 Corner
+        0x02 => (byte)SurfaceType.Corrugation,  // 구 Corrugation
+        _    => (byte)SurfaceType.Flat,
+    };
 }
 
 public enum ResultCode : ushort

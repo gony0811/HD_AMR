@@ -5,6 +5,7 @@ using CommunityToolkit.Mvvm.Input;
 using HD.AMR.App.Communication.Weld;
 using HD.AMR.App.Models;
 using HD.AMR.App.Service;
+using HD.AMR.App.Service.Vision;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace HD.AMR.Desktop.ViewModels;
@@ -23,11 +24,15 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
     private readonly DispatcherTimer _timer;
     private bool _polling;
 
-    public WeldTrackingViewModel(WeldTrackingService svc, CameraService cam, IServiceScopeFactory scopeFactory)
+    private readonly WeldTrainingService _train;
+
+    public WeldTrackingViewModel(WeldTrackingService svc, CameraService cam, IServiceScopeFactory scopeFactory,
+        WeldTrainingService train)
     {
         _svc = svc;
         _cam = cam;
         _scopeFactory = scopeFactory;
+        _train = train;
         _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(120) };
         _timer.Tick += async (_, _) => await PollAsync();
     }
@@ -40,7 +45,12 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
     [ObservableProperty] private bool _busy;
     [ObservableProperty] private string? _message;
 
-    [ObservableProperty] private int _methodIndex;      // 0 DL, 1 Param
+    [ObservableProperty] private int _methodIndex;      // 화면 순서 = MethodOrder (0 YOLO, 1 U-Net, 2 Param, 3 Ridge)
+    /// <summary>검출 방식 드롭다운 순서(WeldTrackingView.axaml 의 항목 순서와 같아야 한다).</summary>
+    private static readonly WeldDetectionMethod[] MethodOrder =
+        [WeldDetectionMethod.Dl, WeldDetectionMethod.Unet, WeldDetectionMethod.Param, WeldDetectionMethod.Ridge];
+    private static int IndexOf(WeldDetectionMethod m) => Math.Max(0, Array.IndexOf(MethodOrder, m));
+    private static WeldDetectionMethod MethodAt(int i) => i >= 0 && i < MethodOrder.Length ? MethodOrder[i] : WeldDetectionMethod.Dl;
     [ObservableProperty] private int _drawKindIndex;    // 0 weld(=Bead ROI), 1 peak
 
     /// <summary>
@@ -58,6 +68,122 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
             OnPropertyChanged();
         }
     }
+    /// <summary>
+    /// 검출 입력 영상(0 IR, 1 RGB Grayscale, 2 RGB HSV(S)) — 진행축처럼 서비스 값을 직접 읽고 쓴다.
+    /// 바꾸면 파라미터(Weld.ImageMode)에 저장되어 재시작 후에도 유지된다. 모델을 고르면 파일명(ir/rgb)에 맞춰
+    /// 자동 지정되므로 보통은 손댈 필요가 없다(학습한 모델의 모달리티와 맞아야 한다).
+    /// </summary>
+    public int ImageModeIndex
+    {
+        get => _svc.Params.Mode switch { WeldImageMode.RgbGrayscale => 1, WeldImageMode.RgbHsv => 2, _ => 0 };
+        set
+        {
+            var mode = value switch { 1 => WeldImageMode.RgbGrayscale, 2 => WeldImageMode.RgbHsv, _ => WeldImageMode.Ir };
+            if (_svc.Params.Mode == mode) return;
+            _svc.Params.Mode = mode;
+            _svc.SaveMode();
+            EditorImage = null; // 다른 카메라 스트림(IR↔컬러)으로 전환 — 이전 영상 잔상 제거
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(IsRgbMode));
+            _ = LoadDlModelsAsync();   // 모델 목록 갱신
+            if (_svc.ModelModeMismatch() is { } warn) Message = warn;
+        }
+    }
+
+    /// <summary>RGB 계열 입력이면 true — RGB 시퀀스 동작(IR 기준)·ROI 지정 주의 안내 표시용.</summary>
+    public bool IsRgbMode => _svc.Params.Mode != WeldImageMode.Ir;
+
+    /// <summary>DL conf/mask 임계값 — 슬라이더 값은 라이브 검출에 바로 반영, DB 저장은 "파라미터에 저장" 때만.</summary>
+    public double DlConfidence
+    {
+        get => _svc.Params.DlConfidence;
+        set
+        {
+            _svc.SetDlThresholds(value, _svc.Params.DlMaskThreshold);
+            OnThresholdChanged();
+        }
+    }
+
+    public double DlMaskThreshold
+    {
+        get => _svc.Params.DlMaskThreshold;
+        set
+        {
+            _svc.SetDlThresholds(_svc.Params.DlConfidence, value);
+            OnThresholdChanged();
+        }
+    }
+
+    /// <summary>U-Net 비드 확률 임계값 — 라이브 검출에 바로 반영, 저장은 버튼으로(Weld.Unet.Threshold).</summary>
+    public double UnetThreshold
+    {
+        get => _svc.Params.UnetThreshold;
+        set
+        {
+            _svc.SetUnetThreshold(value);
+            OnThresholdChanged();
+        }
+    }
+
+    // ── 임계값 저장 상태 · 저장/되돌리기 ──
+    public bool DlDirty => _svc.DlThresholdsDirty;
+    public bool UnetDirty => _svc.UnetThresholdDirty;
+    public string DlSavedText => $"저장 안 됨 · 저장값 conf {_svc.SavedDlConfidence:0.00} / mask {_svc.SavedDlMaskThreshold:0.00}";
+    public string UnetSavedText => $"저장 안 됨 · 저장값 확률 {_svc.SavedUnetThreshold:0.00}";
+
+    private void NotifyThresholds()
+    {
+        OnPropertyChanged(nameof(DlConfidence)); OnPropertyChanged(nameof(DlMaskThreshold)); OnPropertyChanged(nameof(UnetThreshold));
+        OnPropertyChanged(nameof(DlConfidenceText)); OnPropertyChanged(nameof(DlMaskThresholdText)); OnPropertyChanged(nameof(UnetThresholdText));
+        OnPropertyChanged(nameof(DlDirty)); OnPropertyChanged(nameof(UnetDirty));
+        OnPropertyChanged(nameof(DlSavedText)); OnPropertyChanged(nameof(UnetSavedText));
+    }
+
+    // 슬라이더를 움직이면 멈춘 뒤 250ms 에 현재 프레임을 다시 검출해 오버레이로 보여 준다(스트리밍 중일 때만).
+    private CancellationTokenSource? _liveCts;
+    private async void OnThresholdChanged()
+    {
+        NotifyThresholds();
+        if (!_cam.IsStreaming || !_svc.DetectorAvailable) return;
+        _liveCts?.Cancel();
+        var cts = _liveCts = new CancellationTokenSource();
+        try { await Task.Delay(250, cts.Token); }
+        catch (TaskCanceledException) { return; }
+        if (cts.IsCancellationRequested) return;
+        await Run(() => _svc.DetectOnce());
+    }
+
+    [RelayCommand]
+    private async Task SaveDlThresholds()
+    {
+        if (await _svc.SaveDlThresholdsAsync())
+            Message = $"파라미터 저장: Weld.Yolo.Confidence = {_svc.SavedDlConfidence:0.00}, Weld.Yolo.MaskThreshold = {_svc.SavedDlMaskThreshold:0.00}";
+        else Message = _svc.Message;
+        NotifyThresholds();
+    }
+
+    [RelayCommand]
+    private async Task SaveUnetThreshold()
+    {
+        if (await _svc.SaveUnetThresholdAsync()) Message = $"파라미터 저장: Weld.Unet.Threshold = {_svc.SavedUnetThreshold:0.00}";
+        else Message = _svc.Message;
+        NotifyThresholds();
+    }
+
+    [RelayCommand] private void RevertDlThresholds() { _svc.RevertDlThresholds(); OnThresholdChanged(); }
+    [RelayCommand] private void RevertUnetThreshold() { _svc.RevertUnetThreshold(); OnThresholdChanged(); }
+
+    public string UnetThresholdText => $"확률 {_svc.Params.UnetThreshold:0.00}";
+    public double UnetThresholdMin => WeldTrackingService.UnetThresholdMin;
+    public double UnetThresholdMax => WeldTrackingService.UnetThresholdMax;
+
+    public string DlConfidenceText => $"conf {_svc.Params.DlConfidence:0.00}";
+    public string DlMaskThresholdText => $"mask {_svc.Params.DlMaskThreshold:0.00}";
+    public double DlConfidenceMin => WeldTrackingService.DlConfidenceMin;
+    public double DlConfidenceMax => WeldTrackingService.DlConfidenceMax;
+    public double DlMaskThresholdMin => WeldTrackingService.DlMaskThresholdMin;
+    public double DlMaskThresholdMax => WeldTrackingService.DlMaskThresholdMax;
+
     private string DrawKind => DrawKindIndex == 1 ? "peak" : "weld";
     [ObservableProperty] private int _mx, _my, _mw, _mh;
     [ObservableProperty] private string _loadName = "";
@@ -65,7 +191,13 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
 
     public bool IsStreaming => _cam.IsStreaming;
     public bool DetectorAvailable => _svc.DetectorAvailable;
-    public string MethodText => _svc.Method == WeldDetectionMethod.Dl ? "DL 모델" : "파라미터(CV)";
+    public string MethodText => _svc.Method switch
+    {
+        WeldDetectionMethod.Dl => "YOLO 세그멘테이션",
+        WeldDetectionMethod.Ridge => "Ridge 필터",
+        WeldDetectionMethod.Unet => "U-Net·히트맵",
+        _ => "파라미터(CV)",
+    };
     public string StateText => _svc.State.ToString();
     public string ProfileName { get => _svc.ProfileName; set { _svc.ProfileName = value; OnPropertyChanged(); } }
     public IReadOnlyList<string> Profiles => _svc.ListProfiles();
@@ -92,7 +224,9 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
     public override async void OnActivated()
     {
         Pitch = _svc.Pitch;
-        MethodIndex = _svc.Method == WeldDetectionMethod.Param ? 1 : 0;
+        MethodIndex = IndexOf(_svc.Method);
+        RefreshRidge();
+        await LoadDlModelsAsync();
         _timer.Start();
         RefreshStatus();
         RefreshOverlays();
@@ -109,6 +243,10 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
     public override void OnDeactivated()
     {
         _timer.Stop();
+        _liveCts?.Cancel();
+        // 시퀀스도 같은 Params 를 쓴다 — 저장 안 한 임계값은 화면을 떠날 때 저장값으로 되돌린다.
+        _svc.RevertDlThresholds();
+        _svc.RevertUnetThreshold();
         EditorImage = OverlayImage = Peak1Image = Peak2Image = null;
     }
 
@@ -119,6 +257,12 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
         OnPropertyChanged(nameof(MethodText));
         OnPropertyChanged(nameof(StateText));
         OnPropertyChanged(nameof(ProgressAxisIndex));
+        // 모델 지정(Parameter 화면·시퀀스)으로 서비스의 검출 방식이 바뀌었으면 화면 선택도 맞춘다.
+        var methodIndex = IndexOf(_svc.Method);
+        if (MethodIndex != methodIndex) MethodIndex = methodIndex;
+        OnPropertyChanged(nameof(ImageModeIndex));   // 시작 시 비동기로 복원되는 저장값 반영
+        OnPropertyChanged(nameof(IsRgbMode));
+        NotifyThresholds();
         OnPropertyChanged(nameof(WeldRoiText));
         OnPropertyChanged(nameof(PeakRoiText));
         OnPropertyChanged(nameof(WeldRoi));
@@ -166,8 +310,173 @@ public sealed partial class WeldTrackingViewModel : ViewModelBase
 
     partial void OnMethodIndexChanged(int value)
     {
-        _svc.Method = value == 1 ? WeldDetectionMethod.Param : WeldDetectionMethod.Dl;
+        var method = MethodAt(value);
+        OnPropertyChanged(nameof(IsRidge));
+        OnPropertyChanged(nameof(IsDl));
+        OnPropertyChanged(nameof(IsUnet));
+        OnPropertyChanged(nameof(IsModelMethod));
+        OnPropertyChanged(nameof(ModelLabel));
+        if (_svc.Method == method) { RefreshStatus(); _ = LoadDlModelsAsync(); return; }
+        _svc.Method = method;
+        _ = _svc.SaveDetectionSettingsAsync();
         RefreshStatus();
+        _ = LoadDlModelsAsync();   // 방식에 맞는 모델 목록(YOLO / U-Net)으로 교체
+    }
+
+    // ── 모델 선택 — 학습 models 폴더의 .onnx 중 현재 검출 방식에 맞는 것만 보여 준다 ──
+    // DL(YOLO): 이름에 weld_yolo/weld_seg → Weld.Yolo.ModelPath 저장.  U-Net·히트맵: 이름에 weld_unet/weld_heatmap → Weld.Unet.ModelPath 저장.
+    // 파일명에 날짜·특징을 붙여도(예: [4점제외]weld_yolo_ir_261106.onnx) 표식만 남아 있으면 목록에 나온다. 시퀀스·재시작 공유.
+    /// <summary>드롭다운 항목. Path 빈값 = 자동. Exists=false 는 저장값이 가리키는 파일이 없음.</summary>
+    public sealed record DlModelOption(string Path, string Label, bool Exists = true)
+    {
+        public override string ToString() => Label;
+    }
+
+    public bool IsDl => MethodAt(MethodIndex) == WeldDetectionMethod.Dl;
+    public bool IsUnet => MethodAt(MethodIndex) == WeldDetectionMethod.Unet;
+    /// <summary>모델 파일을 쓰는 검출 방식(DL·U-Net)이면 모델 드롭다운 표시.</summary>
+    public bool IsModelMethod => IsDl || IsUnet;
+    public string ModelLabel => IsUnet ? "U-Net·히트맵 모델" : "YOLO 모델";
+
+    public System.Collections.ObjectModel.ObservableCollection<DlModelOption> DlModels { get; } = new();
+    [ObservableProperty] private DlModelOption? _selectedDlModel;
+    private bool _loadingModels;
+
+    // 현재 방식의 저장 키·현재 값·자동 파일명.
+    private string ModelKey => IsUnet ? WeldDetectionSettingsStore.UnetModelPathKey : WeldDetectionSettingsStore.DlModelPathKey;
+    private string? CurrentModelPath
+    {
+        get => IsUnet ? _svc.Params.UnetModelPath : _svc.Params.DlModelPath;
+        set { if (IsUnet) _svc.Params.UnetModelPath = value; else _svc.Params.DlModelPath = value; }
+    }
+
+    /// <summary>모델 목록을 다시 읽고 현재 저장값을 선택한다. 저장값 파일이 없으면 '⚠ 파일 없음' 항목으로 보여준다.</summary>
+    [RelayCommand]
+    private async Task LoadDlModelsAsync()
+    {
+        List<ModelInfo> models;
+        try { models = await _train.ListModelsAsync(); }
+        catch { models = new(); }
+
+        bool empty = false;
+        _loadingModels = true;
+        try
+        {
+            bool unet = IsUnet;
+            // '자동' 항목은 두지 않는다 — 내보낸 뒤 이름을 바꿔 보관하므로 자동 파일명(weld_yolo_ir.onnx 등)은 보통 없다.
+            // 저장값이 비어 있으면 아무것도 선택하지 않고 '모델을 선택하세요' 로 보여 준다.
+            DlModels.Clear();
+            foreach (var m in models.Where(m => unet ? WeldModelNames.IsUnet(m.Path) : WeldModelNames.IsYolo(m.Path)))
+                DlModels.Add(new DlModelOption(m.Path, WeldModelNames.DisplayLabel(m.Path)));
+            empty = DlModels.Count == 0;
+
+            var current = CurrentModelPath?.Trim().Trim('"').Trim() ?? "";
+            DlModelOption? match = current.Length == 0
+                ? null
+                : DlModels.FirstOrDefault(o => o.Path.Length > 0 &&
+                    (string.Equals(o.Path, current, StringComparison.OrdinalIgnoreCase) ||
+                     (!System.IO.Path.IsPathFullyQualified(current) &&
+                      string.Equals(System.IO.Path.GetFileName(o.Path), current, StringComparison.OrdinalIgnoreCase))));
+            // 저장값이 비어 있으면 선택 없음 → '모델을 선택하세요'(시퀀스 비드 찾기는 '모델 없음'으로 멈춘다).
+            if (match is null && current.Length > 0)
+            {
+                match = new DlModelOption(current, $"⚠ 파일 없음: {System.IO.Path.GetFileName(current)}", Exists: false);
+                DlModels.Insert(0, match);
+            }
+            SelectedDlModel = match;
+        }
+        finally { _loadingModels = false; }
+
+        // 목록이 비면 드롭다운이 '모델을 선택하세요' 만 보여 고를 수 없는 것처럼 보인다 — 어디에 무엇을 넣어야 하는지 안내.
+        if (empty && IsModelMethod)
+        {
+            string? modelsDir = null;
+            try { modelsDir = (await _train.GetPathsAsync())?.Models; } catch { /* 경로 미설정 */ }
+            Message = WeldModelNames.EmptyListHint(IsUnet ? WeldDetectionMethod.Unet : WeldDetectionMethod.Dl, modelsDir);
+        }
+    }
+
+    partial void OnSelectedDlModelChanged(DlModelOption? value)
+    {
+        if (_loadingModels || value is null || !value.Exists) return;
+        if (string.Equals(CurrentModelPath ?? "", value.Path, StringComparison.OrdinalIgnoreCase)) return;
+        CurrentModelPath = value.Path;
+        _ = SaveDlModelAsync(value, ModelKey, ModelLabel);
+        // 파일명(ir/rgb)에 맞춰 입력 모드를 바로 맞춘다(목록이 방식별이라 종류는 이미 일치).
+        if (_svc.AlignToModel(value.Path, IsUnet ? WeldDetectionMethod.Unet : WeldDetectionMethod.Dl) is { } msg)
+        {
+            Message = msg;
+            EditorImage = null;   // IR↔컬러 스트림 전환
+            OnPropertyChanged(nameof(ImageModeIndex));
+            OnPropertyChanged(nameof(IsRgbMode));
+            _ = LoadDlModelsAsync();   // 목록 표시 갱신
+        }
+    }
+
+    private async Task SaveDlModelAsync(DlModelOption opt, string key, string label)
+    {
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            await scope.ServiceProvider.GetRequiredService<ParameterService>().SetAsync(
+                key, opt.Path, WeldDetectionSettingsStore.Describe(key));
+            Message = $"{label} 저장: {opt.Label}";
+        }
+        catch (Exception ex) { Message = $"{label} 저장 실패: {ex.Message}"; }
+        // 저장 실패로 남은 '파일 없음' 항목 정리 — 다음 목록 갱신 때 반영된다.
+        var stale = DlModels.Where(o => !o.Exists).ToList();
+        foreach (var s in stale) DlModels.Remove(s);
+    }
+
+    // ── Ridge 검출 파라미터 — 서비스 Params 를 직접 읽고 쓰며, 바꿀 때마다 DB 저장(재시작 후 복원·시퀀스 공유) ──
+    public bool IsRidge => MethodAt(MethodIndex) == WeldDetectionMethod.Ridge;
+
+    public double RidgeSigmaMin { get => _svc.Params.RidgeSigmaMin; set => SetRidge(() => _svc.Params.RidgeSigmaMin = Math.Clamp(value, 0.5, 20)); }
+    public double RidgeSigmaMax { get => _svc.Params.RidgeSigmaMax; set => SetRidge(() => _svc.Params.RidgeSigmaMax = Math.Clamp(value, 0.5, 20)); }
+    public int RidgeScales { get => _svc.Params.RidgeScales; set => SetRidge(() => _svc.Params.RidgeScales = Math.Clamp(value, 1, 6)); }
+    public int RidgePolarityIndex
+    {
+        get => (int)_svc.Params.RidgePolarity;
+        set => SetRidge(() => _svc.Params.RidgePolarity = Enum.IsDefined((WeldRidgePolarity)value) ? (WeldRidgePolarity)value : WeldRidgePolarity.Both);
+    }
+    public double RidgeMaxAngleDeg { get => _svc.Params.RidgeMaxAngleDeg; set => SetRidge(() => _svc.Params.RidgeMaxAngleDeg = Math.Clamp(value, 0, 90)); }
+    public double RidgeThresholdK { get => _svc.Params.RidgeThresholdK; set => SetRidge(() => _svc.Params.RidgeThresholdK = Math.Clamp(value, 0, 50)); }
+    public double RidgeRelative { get => _svc.Params.RidgeRelative; set => SetRidge(() => _svc.Params.RidgeRelative = Math.Clamp(value, 0, 1)); }
+
+    private void SetRidge(Action apply)
+    {
+        apply();
+        _ = _svc.SaveDetectionSettingsAsync();
+        RefreshRidge();
+    }
+
+    private void RefreshRidge()
+    {
+        OnPropertyChanged(nameof(RidgeSigmaMin));
+        OnPropertyChanged(nameof(RidgeSigmaMax));
+        OnPropertyChanged(nameof(RidgeScales));
+        OnPropertyChanged(nameof(RidgePolarityIndex));
+        OnPropertyChanged(nameof(RidgeMaxAngleDeg));
+        OnPropertyChanged(nameof(RidgeThresholdK));
+        OnPropertyChanged(nameof(RidgeRelative));
+    }
+
+    /// <summary>Ridge 파라미터를 코드 기본값으로 되돌리고 저장.</summary>
+    [RelayCommand]
+    private void ResetRidge()
+    {
+        var d = new WeldDetectionParams();
+        SetRidge(() =>
+        {
+            _svc.Params.RidgeSigmaMin = d.RidgeSigmaMin;
+            _svc.Params.RidgeSigmaMax = d.RidgeSigmaMax;
+            _svc.Params.RidgeScales = d.RidgeScales;
+            _svc.Params.RidgePolarity = d.RidgePolarity;
+            _svc.Params.RidgeMaxAngleDeg = d.RidgeMaxAngleDeg;
+            _svc.Params.RidgeThresholdK = d.RidgeThresholdK;
+            _svc.Params.RidgeRelative = d.RidgeRelative;
+        });
+        Message = "Ridge 파라미터 기본값 복원";
     }
 
     partial void OnPitchChanged(double value) => _svc.Pitch = value;

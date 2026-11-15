@@ -101,6 +101,44 @@ public class InspectionMoveMathTests
         Assert.Equal(181.0, r[5], 9);
     }
 
+    // 실기 2026-11-02 L4-R03C09 PU #2: 기준 J3 −155.8° 에 IK J3 135.1° 를 −224.9° 로 감아 rc=32 — J3 는 ±170 밖으로 감지 않는다.
+    [Fact]
+    public void IK_감기는_관절_하드웨어_범위를_넘지_않는다()
+    {
+        var r = FairinoRpcClient.UnwrapToward(
+            new[] { -12.0, -109.75, 135.08, -70.72, 83.36, -179.96 },
+            new[] { 0.18, 4.2, -155.82, 68.99, 90.05, -179.69 });
+
+        Assert.Equal(135.08, r[2], 9);
+        Assert.True(FairinoRpcClient.WithinHardLimits(r));
+    }
+
+    // J6 은 운용상 ±180 밖(−270°)도 쓰므로 범위로 묶지 않고 종전처럼 기준 쪽으로 감는다.
+    [Fact]
+    public void J6_는_범위_제한_없이_기준_쪽으로_감긴다()
+    {
+        var r = FairinoRpcClient.UnwrapToward(
+            new[] { 0.0, -90, 90, -90, 90, 90.0 }, new[] { 0.0, -90, 90, -90, 90, -230.0 });
+
+        Assert.Equal(-270.0, r[5], 9);
+    }
+
+    [Fact]
+    public void 하드웨어_범위_밖_해는_후보에서_빠진다()
+    {
+        Assert.False(FairinoRpcClient.WithinHardLimits(new[] { -12.0, -109.75, -224.92, -70.72, 83.36, -179.96 }));
+        Assert.True(FairinoRpcClient.WithinHardLimits(new[] { -12.0, -109.75, 135.08, -70.72, 83.36, -270.0 }));
+    }
+
+    [Fact]
+    public void 팔꿈치_가지가_바뀌면_검사이동을_막는다()
+    {
+        var reference = new[] { 0.18, 4.2, -155.82, 68.99, 90.05, -179.69 };
+
+        Assert.NotNull(CobotInspectionMoveStep.ElbowFlipBlocker(reference, new[] { -12.0, -109.75, 135.08, -70.72, 83.36, -179.96 }));
+        Assert.Null(CobotInspectionMoveStep.ElbowFlipBlocker(reference, new[] { 10.0, -54.0, -33.0, 155.0, 81.0, -180.0 }));
+    }
+
     [Fact]
     public void ComposeUvTarget_은_툴프레임_합성과_같다()
     {

@@ -12,6 +12,8 @@ namespace HD.AMR.App.Service.Sequence.Steps;
 ///   2) coverage &lt; 15% — WeldMaskAnalyzer 의 기존 게이트
 ///   3) 직선피팅 실패(LineFitOk=false) — 중앙값 폴백이라 교점이 Peak 위치와 무관해짐
 /// 재시도는 하지 않는다. 실패해도 오버레이 JPEG 는 생성되므로 Weld 페이지에서 원인을 볼 수 있다.
+/// 파라미터 <see cref="BeadManualSettings.TriggerKey"/> 조건에 해당하면 <see cref="BeadManualAssist"/> 가 팝업으로
+/// 사람에게 비드선을 받아 그 선으로 측정하고(학습 데이터로도 저장) 계속 진행한다.
 /// </summary>
 public class BeadFindStep : ISequenceStep
 {
@@ -20,6 +22,7 @@ public class BeadFindStep : ISequenceStep
     private readonly CameraService _camera;
     private readonly CobotService _cobot;
     private readonly ParameterService _param;
+    private readonly BeadManualAssist _manual;
     private readonly ILogger<BeadFindStep> _logger;
 
     /// <param name="peakId">1 또는 2. DI 에서 <c>ActivatorUtilities.CreateInstance</c> 로 주입되므로 첫 인자여야 한다.</param>
@@ -29,6 +32,7 @@ public class BeadFindStep : ISequenceStep
         CameraService camera,
         CobotService cobot,
         ParameterService param,
+        BeadManualAssist manual,
         ILogger<BeadFindStep> logger)
     {
         _peakId = peakId;
@@ -36,6 +40,7 @@ public class BeadFindStep : ISequenceStep
         _camera = camera;
         _cobot = cobot;
         _param = param;
+        _manual = manual;
         _logger = logger;
     }
 
@@ -55,7 +60,10 @@ public class BeadFindStep : ISequenceStep
         return StepValidation.Ok();
     }
 
-    public async Task<StepResult> ExecuteAsync(SequenceContext context, CancellationToken ct)
+    public Task<StepResult> ExecuteAsync(SequenceContext context, CancellationToken ct)
+        => BundleTeach.RunWithPoint2FallbackAsync(_peakId, context, _cobot, _param, _logger, ct, RunAsync);
+
+    private async Task<StepResult> RunAsync(SequenceContext context, CancellationToken ct)
     {
         // Peak ROI(코로게이션, Depth 뷰 저장)와 Bead ROI(비드, IR 뷰 저장)를 각각 사용한다.
         var (peakRoi, peakSrc) = await WeldSequenceSupport.GetPeakRoiAsync(_param, _camera);
@@ -65,27 +73,46 @@ public class BeadFindStep : ISequenceStep
         var roiSrc = $"Peak={peakSrc}, Bead={beadSrc}";
 
         // 측정 축을 ② 검사방향과 정합시킨다 — d 는 진행축과 수직(cross) 방향으로 측정된다.
-        var progressAxis = WeldSequenceSupport.ApplyProgressAxis(_weld, context);
+        var (progressAxis, _) = await WeldSequenceSupport.ApplyProgressAxisAsync(_weld, context, _cobot, _param, ct);
 
         // 저장된 DL 모델 선택 적용 — 카메라 페이지에서 고른 모델(예: 0722)을 재시작 후에도 사용.
         var modelName = await WeldSequenceSupport.ApplyDlModelAsync(_param, _weld);
-        context.Progress?.Invoke($"비드 검출 시작 — DL 모델: {modelName}");
+        if (WeldSequenceSupport.MissingModel(_weld) is { } noModel)
+            return StepResult.Fail($"Bead{_peakId} 찾기 중단 — {noModel}");
+        context.Progress?.Invoke($"비드 검출 시작 — {modelName}");
 
         var (m, detect) = await _weld.CapturePeakAsync(_peakId, peakRoi, beadRoi, ct);
 
-        if (detect is null)
-            return StepResult.Fail($"Bead{_peakId} 검출 결과가 없습니다.");
+        // 자동 판정(기존 게이트). 실패 사유는 수동 입력 팝업에도 그대로 보여준다.
+        string? autoFail =
+            detect is null ? $"Bead{_peakId} 검출 결과가 없습니다."
+            : !detect.Success ? $"Bead{_peakId} 검출 실패 — {detect.Message}"
+            : !detect.LineFitOk ? $"Bead{_peakId} 직선피팅 실패(중앙값 폴백) — 빨간 교점이 Peak 위치와 무관해져 " +
+                                  $"각도 산출 근거로 쓸 수 없습니다. coverage={detect.Confidence:P0}"
+            : m is null ? $"Bead{_peakId} 측정 슬롯 저장 실패."
+            : null;
 
-        if (!detect.Success)
-            return StepResult.Fail($"Bead{_peakId} 검출 실패 — {detect.Message}");
+        // 파라미터 조건에 해당하면 사람에게 비드선을 받는다(학습 데이터로도 저장).
+        context.Bag.Remove(WeldSequenceSupport.BeadPeakOffsetMmBagKey(_peakId));
+        var assist = await _manual.RunAsync(_peakId, DisplayName, m, detect, autoFail is null, autoFail,
+            peakRoi, beadRoi, context, ct);
+        if (assist.Kind == BeadAssistKind.Manual && assist.Measurement is { } mm)
+        {
+            var dManual = _weld.DMm(mm);
+            context.Bag[WeldSequenceSupport.BeadDMmBagKey(_peakId)] = dManual;
+            // 조그로 자리를 옮겼으면 ⑥ Peak 센터링이 맞춘 진행축 위치가 달라졌을 수 있다 — 센터링 단계가 함께 맞춘다.
+            if (assist is { Jogs: > 0, PeakOffsetMm: { } peakOff })
+                context.Bag[WeldSequenceSupport.BeadPeakOffsetMmBagKey(_peakId)] = peakOff;
+            _logger.LogInformation("[Bead{Id} 찾기] 수동 입력: d={DMm:0.0}mm ({DPx:0.0}px), ROI={Roi}",
+                _peakId, dManual, mm.DPixel, roiSrc);
+            return StepResult.Ok(
+                $"Bead{_peakId} 찾음(수동) — d={dManual:+0.0;-0.0}mm ({mm.DPixel:+0.0;-0.0}px){assist.Note}");
+        }
+        if (!assist.UseAutoPath)
+            return StepResult.Fail((autoFail ?? $"Bead{_peakId} 수동 입력 실패") + assist.Note);
 
-        if (!detect.LineFitOk)
-            return StepResult.Fail(
-                $"Bead{_peakId} 직선피팅 실패(중앙값 폴백) — 빨간 교점이 Peak 위치와 무관해져 " +
-                $"각도 산출 근거로 쓸 수 없습니다. coverage={detect.Confidence:P0}");
-
-        if (m is null)
-            return StepResult.Fail($"Bead{_peakId} 측정 슬롯 저장 실패.");
+        if (autoFail is not null || detect is null || m is null)
+            return StepResult.Fail(autoFail ?? $"Bead{_peakId} 검출 결과가 없습니다.");
 
         var dMm = _weld.DMm(m);
         var extrapPx = ComputeExtrapolation(detect, progressAxis == WeldProgressAxis.Horizontal);
@@ -93,14 +120,16 @@ public class BeadFindStep : ISequenceStep
         // 비드 센터링(⑦⁺/⑪⁺)이 cross 축 이동량으로 소비한다.
         context.Bag[WeldSequenceSupport.BeadDMmBagKey(_peakId)] = dMm;
 
+        // d(px)는 측정 슬롯 값(m.DPixel)을 쓴다 — RGB 입력이면 컬러로 검출한 d 를 IR 기준으로 환산한 값이다.
+        var input = _weld.Params.Mode == WeldImageMode.Ir ? "IR" : "RGB(IR 기준)";
         _logger.LogInformation(
-            "[Bead{Id} 찾기] 찾음: d={DMm:0.0}mm ({DPx:0.0}px), coverage={Cov:P0}, 외삽={Ex:0}px, ROI={Roi}",
-            _peakId, dMm, detect.DPixel, detect.Confidence, extrapPx, roiSrc);
+            "[Bead{Id} 찾기] 찾음: d={DMm:0.0}mm ({DPx:0.0}px), 입력={Input}, coverage={Cov:P0}, 외삽={Ex:0}px, ROI={Roi}",
+            _peakId, dMm, m.DPixel, input, detect.Confidence, extrapPx, roiSrc);
 
         var extrapNote = extrapPx > 0 ? $"외삽 {extrapPx:0}px" : "외삽 없음";
         return StepResult.Ok(
-            $"Bead{_peakId} 찾음 — d={dMm:+0.0;-0.0}mm ({detect.DPixel:+0.0;-0.0}px), " +
-            $"coverage={detect.Confidence:P0}, {extrapNote}, ROI={roiSrc}");
+            $"Bead{_peakId} 찾음 — d={dMm:+0.0;-0.0}mm ({m.DPixel:+0.0;-0.0}px), 입력 {input}, " +
+            $"coverage={detect.Confidence:P0}, {extrapNote}, ROI={roiSrc}{assist.Note}");
     }
 
     /// <summary>

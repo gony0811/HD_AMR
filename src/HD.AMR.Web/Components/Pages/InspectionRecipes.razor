@@ -82,6 +82,18 @@
                                     <option value="@p.Id">@p.Name (@(WaypointCount(p))점 · @p.UpdatedAt.ToLocalTime().ToString("MM-dd HH:mm"))</option>
                                 }
                             </select>
+                            @if (row.Id == RecipeIds.Line)
+                            {
+                                <select class="form-select form-select-sm mt-1 @(row.ChamferSlopeProfileId is null ? "border-warning" : "")"
+                                        style="font-size:.8rem" @bind="row.ChamferSlopeProfileId"
+                                        title="챔퍼 면(SL/PL/SU/PU) 수직(경사 방향, 피치 254.6mm) 용접선 전용. 미지정이면 챔퍼 수직 액션 FAILED.">
+                                    <option value="">— 챔퍼 수직 프로필 미지정 —</option>
+                                    @foreach (var p in ProfilesFor(row))
+                                    {
+                                        <option value="@p.Id">챔퍼 수직: @p.Name (@(WaypointCount(p))점)</option>
+                                    }
+                                </select>
+                            }
                         }
                     </td>
                     <td><input type="number" step="0.05" min="0" max="1"
@@ -120,6 +132,13 @@
                                            class="form-control form-control-sm" placeholder="(빈 값 = 이동 속도)"
                                            @bind="row.InspectVelPercent" />
                                     <div class="form-text">⑱ 경유점 순회(검사 스캔) 전용</div>
+                                </div>
+                                <div class="col-auto">
+                                    <label class="form-label mb-1 text-muted">검사 가속도 [%]</label>
+                                    <input type="number" step="5" min="1" max="100" style="width:150px"
+                                           class="form-control form-control-sm" placeholder="(빈 값 = 변경 안 함)"
+                                           @bind="row.InspectAccPercent" />
+                                    <div class="form-text">⑱ 순회 동안만 적용, 끝나면 100% 복원</div>
                                 </div>
                                 <div class="col-12 text-muted">
                                     seamType=<b>@row.SeamType</b>, 면자세=<b>@row.Orientation</b> ·

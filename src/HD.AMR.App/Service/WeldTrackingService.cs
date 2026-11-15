@@ -1,6 +1,8 @@
 using System.Runtime.InteropServices;
 using HD.AMR.App.Communication.Weld;
 using HD.AMR.App.Models;
+using HD.AMR.App.Service.Sequence;
+using HD.AMR.App.Service.Vision;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -26,6 +28,8 @@ public class WeldTrackingService
     private readonly CameraService _camera;
     private readonly IWeldVisionDetector _cvDetector;
     private readonly IDlWeldVisionDetector _dlDetector;
+    private readonly IRidgeWeldVisionDetector _ridgeDetector;
+    private readonly IUnetWeldVisionDetector _unetDetector;
     private readonly RoiProfileStore _store;
     private readonly WeldTrackingSettings _settings;
     private readonly IServiceScopeFactory _scopeFactory;
@@ -53,6 +57,8 @@ public class WeldTrackingService
         CameraService camera,
         IWeldVisionDetector detector,
         IDlWeldVisionDetector dlDetector,
+        IRidgeWeldVisionDetector ridgeDetector,
+        IUnetWeldVisionDetector unetDetector,
         RoiProfileStore store,
         IOptions<WeldTrackingSettings> options,
         IServiceScopeFactory scopeFactory,
@@ -61,6 +67,8 @@ public class WeldTrackingService
         _camera = camera;
         _cvDetector = detector;
         _dlDetector = dlDetector;
+        _ridgeDetector = ridgeDetector;
+        _unetDetector = unetDetector;
         _store = store;
         _settings = options.Value;
         _scopeFactory = scopeFactory;
@@ -76,14 +84,54 @@ public class WeldTrackingService
 
         ParameterService.Changed += OnParameterChanged;
         _ = ReloadRoiAsync();
+        (SavedDlConfidence, SavedDlMaskThreshold, SavedUnetThreshold) = (Params.DlConfidence, Params.DlMaskThreshold, Params.UnetThreshold);
+        _ = ReloadDlThresholdsAsync(seedMissing: true);
+        _ = ReloadModeThenDetectionAsync();
     }
 
+    // 모드를 먼저 복원하고 검출 설정(모델 경로 → 방식·모드 맞춤)을 그 뒤에 적용한다 — 순서가 뒤바뀌면
+    // 모델에 맞춰 바꾼 모드를 늦게 도착한 저장 모드가 덮어쓴다.
+    private async Task ReloadModeThenDetectionAsync()
+    {
+        await ReloadModeAsync();
+        await ReloadDetectionSettingsAsync(changedKey: null);
+    }
+
+    /// <summary>검출 입력 영상(IR/RGB) 파라미터. 없으면 <see cref="WeldDetectionParams.Mode"/> 기본값(IR).</summary>
+    public const string ImageModeKey = "Weld.ImageMode";
+
+    /// <summary>DL 검출 confidence 임계값 파라미터. 없으면 <see cref="WeldDetectionParams.DlConfidence"/> 기본값.</summary>
+    public const string DlConfidenceKey = "Weld.Yolo.Confidence";
+
+    /// <summary>DL 마스크 확률 임계값 파라미터. 없으면 <see cref="WeldDetectionParams.DlMaskThreshold"/> 기본값.</summary>
+    public const string DlMaskThresholdKey = "Weld.Yolo.MaskThreshold";
+
+    /// <summary>U-Net 비드 확률 임계값 파라미터. 없으면 <see cref="WeldDetectionParams.UnetThreshold"/> 기본값.</summary>
+    public const string UnetThresholdKey = "Weld.Unet.Threshold";
+
+    // 조정 범위 — 이 밖의 값은 검출이 사실상 전부/전무가 되므로 저장·로드 모두 이 범위로 자른다.
+    public const double DlConfidenceMin = 0.05, DlConfidenceMax = 0.90;
+    public const double DlMaskThresholdMin = 0.30, DlMaskThresholdMax = 0.70;
+    public const double UnetThresholdMin = 0.05, UnetThresholdMax = 0.95;
+
     // ── 상태(UI 가 읽음) ────────────────────────────────────────────
-    /// <summary>비드 검출 방식. 기본 DL(학습 모델). 파라미터(고전 CV)는 폴백/비교용으로 유지.</summary>
+    /// <summary>비드 검출 방식. 기본 DL(학습 모델). 파라미터(고전 CV)는 폴백/비교용으로 유지.
+    /// 화면에서 바꾸면 <see cref="SaveDetectionSettingsAsync"/> 로 DB(<see cref="WeldDetectionSettingsStore.MethodKey"/>)에
+    /// 저장되고 기동 시 복원된다.</summary>
     public WeldDetectionMethod Method { get; set; } = WeldDetectionMethod.Dl;
 
     /// <summary>현재 방식에 해당하는 검출기.</summary>
-    private IWeldVisionDetector Detector => Method == WeldDetectionMethod.Dl ? _dlDetector : _cvDetector;
+    private IWeldVisionDetector Detector => GetDetector(Method);
+
+    /// <summary>방식별 검출기. 비교평가(<c>WeldDetectionBenchmarkService</c>)가 같은 인스턴스를 공유한다.
+    /// 새 검출 방식을 추가하면 여기만 늘리면 운영·비교평가 양쪽에 반영된다.</summary>
+    public IWeldVisionDetector GetDetector(WeldDetectionMethod method) => method switch
+    {
+        WeldDetectionMethod.Dl => _dlDetector,
+        WeldDetectionMethod.Ridge => _ridgeDetector,
+        WeldDetectionMethod.Unet => _unetDetector,
+        _ => _cvDetector,
+    };
 
     public bool DetectorAvailable => Detector.IsAvailable;
 
@@ -109,7 +157,20 @@ public class WeldTrackingService
     public ScaleValidationResult? LastValidation { get; private set; }
 
     /// <summary>측정 d 를 현재 스케일(Depth 자동 ± 보정)로 mm 환산.</summary>
-    public double DMm(PeakMeasurement m) => m.DPixel * EffectiveMmPerPixel(m.DepthZ);
+    public double DMm(PeakMeasurement m) => m.DPixel * EffectiveMmPerPixel(m.DepthZ, m.IrGeometry);
+
+    /// <summary>
+    /// 시퀀스 호출 중(<see cref="FindPeakAsync"/>/<see cref="CapturePeakAsync"/>) 입력이 RGB 이면 true —
+    /// 비드 검출만 컬러로 하고 위치·거리 기준(Peak 오프셋, d, mm 환산)은 IR(=Depth) 좌표로 맞춘다.
+    /// 센터링 이동량이 IR 모드와 같아져 IR 기준으로 교시된 ROI·검사캠 오프셋을 그대로 쓸 수 있다.
+    /// </summary>
+    private volatile bool _seqIrGeometry;
+
+    /// <summary>Peak 선호 위치 — 진행축 FOV 센터 기준 IR 픽셀. 시퀀스 호출 중에만 0 이 아니다(<see cref="FindPeakAsync"/>).</summary>
+    private double _peakPreferOffsetPx;
+
+    /// <summary>위치·거리 계산 좌표계가 IR(=Depth)인지. IR 모드이거나 시퀀스 RGB 모드면 true.</summary>
+    private bool GeomIr => Params.Mode == WeldImageMode.Ir || _seqIrGeometry;
 
     public WeldTrackingState State { get; private set; } = WeldTrackingState.Idle;
     public string? Message { get; private set; }
@@ -133,8 +194,22 @@ public class WeldTrackingService
 
     // ── ROI 관리 ────────────────────────────────────────────────────
     // 설정 즉시 캐시에 반영하고(화면이 바로 읽음) 파라미터 저장은 백그라운드로 한다 — 시퀀스도 같은 값을 쓴다.
-    public void SetPeakRoi(RoiRect? r) => SetRois(ToNormalized(r), _roi.Bead);
-    public void SetWeldRoi(RoiRect? r) => SetRois(_roi.Peak, ToNormalized(r));
+    // 입력 r 은 현재 검출 프레임(IR 또는 컬러) 픽셀. 저장은 항상 IR 기준이라 RGB 화면에서 그린 ROI 는 IR 로 역투영한다.
+    public void SetPeakRoi(RoiRect? r)
+    {
+        if (TryToNormalized(r, out var n)) SetRois(n, _roi.Bead);
+        else Message = RoiConvertFailMessage("Peak");
+    }
+
+    public void SetWeldRoi(RoiRect? r)
+    {
+        if (TryToNormalized(r, out var n)) SetRois(_roi.Peak, n);
+        else Message = RoiConvertFailMessage("Bead");
+    }
+
+    private static string RoiConvertFailMessage(string label) =>
+        $"{label} ROI 저장 안 됨 — RGB 화면에서 그린 ROI 를 IR 기준으로 바꾸려면 Depth 스트림과 Depth↔컬러 캘리브레이션이 필요합니다. " +
+        "카메라 연결을 확인하거나 IR 모드에서 지정하세요.";
 
     /// <summary>Peak·Weld ROI 사용 해제 — 파라미터 Enabled=false(좌표 보존). 시퀀스는 다른 ROI 로 폴백한다.</summary>
     public void ResetRoi() { SetRois(null, null); Message = "ROI 초기화됨 (Peak/Bead ROI 사용 해제)"; }
@@ -177,6 +252,320 @@ public class WeldTrackingService
         if (Volatile.Read(ref _selfWrites) > 0) return;
         if (CameraRoiKeys.Peak.Contains(name) || CameraRoiKeys.Bead.Contains(name))
             _ = ReloadRoiAsync();
+        else if (WeldDetectionSettingsStore.IsKey(name))
+            _ = ReloadDetectionSettingsAsync(name);
+        else if (name is DlConfidenceKey or DlMaskThresholdKey or UnetThresholdKey)
+            _ = ReloadDlThresholdsAsync();
+        else if (name == ImageModeKey)
+            _ = ReloadModeAsync();
+    }
+
+    // ── 검출 입력 영상(모드) ────────────────────────────────────────
+    // UI 가 Params.Mode 를 바꾼 뒤 호출 — 재시작 후에도 같은 모드(IR/RGB)로 복원되도록 파라미터에 저장한다.
+    /// <summary>현재 <see cref="WeldDetectionParams.Mode"/> 를 파라미터로 저장(백그라운드).</summary>
+    public void SaveMode() => _ = PersistModeAsync(Params.Mode);
+
+    private async Task PersistModeAsync(WeldImageMode mode)
+    {
+        await _persistGate.WaitAsync();
+        Interlocked.Increment(ref _selfWrites);
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var param = scope.ServiceProvider.GetRequiredService<ParameterService>();
+            await param.SetAsync(ImageModeKey, mode.ToString(), "용접 추적 검출 입력 영상 (Ir / RgbGrayscale / RgbHsv)");
+            _logger.LogInformation("용접 추적 입력 모드 저장: {Mode}", mode);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "용접 추적 입력 모드 저장 실패");
+            Message = $"입력 모드 저장 실패: {ex.Message}";
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _selfWrites);
+            _persistGate.Release();
+        }
+    }
+
+    private async Task ReloadModeAsync()
+    {
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var param = scope.ServiceProvider.GetRequiredService<ParameterService>();
+            if (await param.GetAsync(ImageModeKey) is { } s
+                && Enum.TryParse<WeldImageMode>(s, ignoreCase: true, out var mode)
+                && Enum.IsDefined(mode))
+                Params.Mode = mode;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "용접 추적 입력 모드 파라미터 읽기 실패 — 이전 값 유지");
+        }
+    }
+
+    /// <summary>
+    /// 저장된 검출 방식·Ridge 파라미터·모델 경로를 읽어 적용한다. 키가 없거나 DB 미준비면 현재 값 유지.
+    /// 그 뒤 모델 파일명에 맞춰 방식·입력 모드를 맞춘다 — 모델 경로 키가 바뀐 거면 그 모델에, 아니면(기동·방식 변경)
+    /// 현재 방식의 모델에.
+    /// </summary>
+    private async Task ReloadDetectionSettingsAsync(string? changedKey = null)
+    {
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var param = scope.ServiceProvider.GetRequiredService<ParameterService>();
+            var values = new Dictionary<string, string?>();
+            foreach (var key in WeldDetectionSettingsStore.Keys)
+                values[key] = await param.GetAsync(key);
+            if (WeldDetectionSettingsStore.Apply(k => values.GetValueOrDefault(k), Params) is { } m)
+                Method = m;
+
+            var msg = changedKey switch
+            {
+                WeldDetectionSettingsStore.DlModelPathKey => AlignToModel(Params.DlModelPath, WeldDetectionMethod.Dl),
+                WeldDetectionSettingsStore.UnetModelPathKey => AlignToModel(Params.UnetModelPath, WeldDetectionMethod.Unet),
+                _ => AlignToActiveModel(),
+            };
+            if (msg is not null) Message = msg;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "용접 추적 검출 설정 읽기 실패 — 현재 값 유지");
+        }
+    }
+
+    // ── 모델 파일명 → 검출 방식·입력 모드 자동 맞춤 ─────────────────────
+    // 모델 파일명에 종류(weld_yolo/weld_seg=DL, weld_unet=U-Net)와 모달리티(ir/rgb)가 들어 있으므로, 모델을 고르면
+    // (용접 추적 드롭다운·Parameter 화면·시퀀스) 검출 방식과 입력 모드를 그 모델에 맞춰 바꾸고 저장한다.
+    // → 'IR 입력에 RGB 모델' 같은 불일치가 생기지 않는다. 모델이 '자동'(빈값)이면 아무것도 바꾸지 않는다.
+
+    /// <summary>현재 검출 방식(DL/U-Net)의 모델에 방식·모드를 맞춘다. 다른 방식이거나 '자동'이면 null.</summary>
+    public string? AlignToActiveModel() => Method switch
+    {
+        WeldDetectionMethod.Dl => AlignToModel(Params.DlModelPath, WeldDetectionMethod.Dl),
+        WeldDetectionMethod.Unet => AlignToModel(Params.UnetModelPath, WeldDetectionMethod.Unet),
+        _ => null,
+    };
+
+    /// <summary>
+    /// 모델 파일명에 맞춰 검출 방식·입력 모드를 바꾸고 저장한다. 바뀐 게 있으면 안내 문구, 없으면 null.
+    /// </summary>
+    /// <param name="implied">파일명에 종류 표식이 없을 때의 종류(그 모델이 들어 있던 파라미터 기준).</param>
+    public string? AlignToModel(string? modelPath, WeldDetectionMethod implied)
+    {
+        if (string.IsNullOrWhiteSpace(modelPath)) return null;
+        var path = modelPath.Trim().Trim('"').Trim();
+        var name = Path.GetFileName(path);
+        var kind = WeldModelNames.KindOf(path, implied);
+        var changes = new List<string>();
+
+        // 다른 종류 파라미터에 잘못 넣은 모델이면(예: DL 경로에 weld_unet) 맞는 쪽 경로로 옮겨 저장.
+        if (kind != implied)
+        {
+            if (kind == WeldDetectionMethod.Unet) Params.UnetModelPath = path; else Params.DlModelPath = path;
+            _ = PersistModelPathAsync(kind, path);
+        }
+        if (Method != kind)
+        {
+            Method = kind;
+            _ = SaveDetectionSettingsAsync();
+            changes.Add($"검출 방식 {(kind == WeldDetectionMethod.Unet ? "U-Net" : "DL")}");
+        }
+        if (WeldModelNames.ModalityOf(path) is { } mod)
+        {
+            var target = WeldModelNames.ModeFor(mod, Params.Mode);
+            if (Params.Mode != target)
+            {
+                Params.Mode = target;
+                SaveMode();
+                changes.Add($"입력 {(target == WeldImageMode.Ir ? "IR" : "RGB")}");
+            }
+        }
+        if (changes.Count == 0) return null;
+        _logger.LogInformation("모델 {Model} 에 맞춰 변경: {Changes}", name, string.Join(", ", changes));
+        return $"모델 {name} 에 맞춰 {string.Join(", ", changes)} 로 변경";
+    }
+
+    private async Task PersistModelPathAsync(WeldDetectionMethod kind, string path)
+    {
+        var key = kind == WeldDetectionMethod.Unet
+            ? WeldDetectionSettingsStore.UnetModelPathKey
+            : WeldDetectionSettingsStore.DlModelPathKey;
+        await _persistGate.WaitAsync();
+        Interlocked.Increment(ref _selfWrites);
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var param = scope.ServiceProvider.GetRequiredService<ParameterService>();
+            await param.SetAsync(key, path, WeldDetectionSettingsStore.Describe(key));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "모델 경로 저장 실패: {Key}", key);
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _selfWrites);
+            _persistGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// 지정된 모델(현재 방식)의 모달리티가 현재 입력 모드와 다르면 경고 문구, 같거나 '자동'이면 null.
+    /// 사용자가 입력 모드만 손으로 바꿨을 때 안내용(시퀀스는 비드 찾기 전에 모델 기준으로 다시 맞춘다).
+    /// </summary>
+    public string? ModelModeMismatch()
+    {
+        var path = Method switch
+        {
+            WeldDetectionMethod.Dl => Params.DlModelPath,
+            WeldDetectionMethod.Unet => Params.UnetModelPath,
+            _ => null,
+        };
+        if (string.IsNullOrWhiteSpace(path) || WeldModelNames.ModalityOf(path) is not { } mod) return null;
+        bool modelIr = mod == "ir", inputIr = Params.Mode == WeldImageMode.Ir;
+        return modelIr == inputIr ? null
+            : $"⚠ 선택된 모델({Path.GetFileName(path.Trim().Trim('"'))})은 {(modelIr ? "IR" : "RGB")}용인데 입력이 {(inputIr ? "IR" : "RGB")}입니다 — 모델을 바꾸거나 '자동'으로 두세요.";
+    }
+
+    /// <summary>현재 검출 방식·Ridge 파라미터를 DB 에 저장한다(재시작 후 복원, 다른 화면·시퀀스와 공유).</summary>
+    public async Task SaveDetectionSettingsAsync()
+    {
+        var values = WeldDetectionSettingsStore.ToValues(Method, Params);
+        await _persistGate.WaitAsync();
+        Interlocked.Increment(ref _selfWrites);
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var param = scope.ServiceProvider.GetRequiredService<ParameterService>();
+            foreach (var (key, value) in values)
+                if (await param.GetAsync(key) != value)
+                    await param.SetAsync(key, value, WeldDetectionSettingsStore.Describe(key));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "용접 추적 검출 설정 저장 실패");
+            Message = $"검출 설정 저장 실패: {ex.Message}";
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _selfWrites);
+            _persistGate.Release();
+        }
+    }
+
+    // ── DL / U-Net 임계값 ───────────────────────────────────────────
+    // 슬라이더 값은 즉시 Params 에 반영(라이브 검출·튜닝용)하고, DB 저장은 사용자가 "파라미터에 저장" 할 때만 한다.
+    // 저장값(Saved*)과 다르면 Dirty — 화면이 "저장 안 됨" 표시·되돌리기를 제공한다.
+    // 주의: 시퀀스도 같은 Params 를 쓰므로 저장 안 한 값은 화면을 떠날 때 되돌린다(WeldTrackingViewModel.OnDeactivated).
+
+    /// <summary>DB 에 저장된 YOLO conf / mask, U-Net 확률 임계값.</summary>
+    public double SavedDlConfidence { get; private set; }
+    public double SavedDlMaskThreshold { get; private set; }
+    public double SavedUnetThreshold { get; private set; }
+
+    public bool DlThresholdsDirty => Params.DlConfidence != SavedDlConfidence || Params.DlMaskThreshold != SavedDlMaskThreshold;
+    public bool UnetThresholdDirty => Params.UnetThreshold != SavedUnetThreshold;
+
+    /// <summary>DL conf/mask 임계값을 라이브 검출에 반영(저장하지 않음). 범위 밖 값은 잘라낸다.</summary>
+    public void SetDlThresholds(double confidence, double maskThreshold)
+    {
+        Params.DlConfidence = Math.Round(Math.Clamp(confidence, DlConfidenceMin, DlConfidenceMax), 2);
+        Params.DlMaskThreshold = Math.Round(Math.Clamp(maskThreshold, DlMaskThresholdMin, DlMaskThresholdMax), 2);
+    }
+
+    /// <summary>U-Net 확률 임계값을 라이브 검출에 반영(저장하지 않음). 범위 밖 값은 자른다.</summary>
+    public void SetUnetThreshold(double threshold)
+        => Params.UnetThreshold = Math.Round(Math.Clamp(threshold, UnetThresholdMin, UnetThresholdMax), 2);
+
+    /// <summary>현재 YOLO 임계값을 파라미터(Weld.Yolo.Confidence/MaskThreshold)로 저장. 성공 여부 반환.</summary>
+    public Task<bool> SaveDlThresholdsAsync() => PersistAsync(async param =>
+    {
+        double conf = Params.DlConfidence, mask = Params.DlMaskThreshold;
+        await param.SetDoubleAsync(DlConfidenceKey, conf, "YOLO 비드 검출 confidence 임계값");
+        await param.SetDoubleAsync(DlMaskThresholdKey, mask, "YOLO 비드 마스크 확률 임계값");
+        SavedDlConfidence = conf; SavedDlMaskThreshold = mask;
+        _logger.LogInformation("용접 추적 YOLO 임계값 저장: conf={Conf:0.00}, mask={Mask:0.00}", conf, mask);
+    }, "YOLO 임계값");
+
+    /// <summary>현재 U-Net 확률 임계값을 파라미터(Weld.Unet.Threshold)로 저장. 성공 여부 반환.</summary>
+    public Task<bool> SaveUnetThresholdAsync() => PersistAsync(async param =>
+    {
+        double thr = Params.UnetThreshold;
+        await param.SetDoubleAsync(UnetThresholdKey, thr, "U-Net 비드 확률 임계값");
+        SavedUnetThreshold = thr;
+        _logger.LogInformation("용접 추적 U-Net 임계값 저장: {Thr:0.00}", thr);
+    }, "U-Net 임계값");
+
+    /// <summary>화면이 <see cref="WeldDetectionParams.UnetThreshold"/> 를 직접 바꾼 뒤 호출 — 현재 값을 파라미터로 저장(Web).</summary>
+    public void SaveUnetThreshold() => _ = SaveUnetThresholdAsync();
+
+    /// <summary>저장 안 한 YOLO 임계값을 저장값으로 되돌린다.</summary>
+    public void RevertDlThresholds() { Params.DlConfidence = SavedDlConfidence; Params.DlMaskThreshold = SavedDlMaskThreshold; }
+
+    /// <summary>저장 안 한 U-Net 임계값을 저장값으로 되돌린다.</summary>
+    public void RevertUnetThreshold() => Params.UnetThreshold = SavedUnetThreshold;
+
+    private async Task<bool> PersistAsync(Func<ParameterService, Task> write, string label)
+    {
+        await _persistGate.WaitAsync();
+        Interlocked.Increment(ref _selfWrites);
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            await write(scope.ServiceProvider.GetRequiredService<ParameterService>());
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "용접 추적 {Label} 저장 실패", label);
+            Message = $"{label} 저장 실패: {ex.Message}";
+            return false;
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _selfWrites);
+            _persistGate.Release();
+        }
+    }
+
+    /// <param name="seedMissing">
+    /// true(기동 시)면 DB 에 없는 임계값 파라미터를 현재 기본값으로 만들어 둔다 — 화면에서 한 번도 바꾸지 않아도
+    /// Parameter 화면에서 보이고 고칠 수 있게.
+    /// </param>
+    private async Task ReloadDlThresholdsAsync(bool seedMissing = false)
+    {
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var param = scope.ServiceProvider.GetRequiredService<ParameterService>();
+            if (await param.GetDoubleAsync(DlConfidenceKey) is { } conf)
+                Params.DlConfidence = Math.Clamp(conf, DlConfidenceMin, DlConfidenceMax);
+            else if (seedMissing) await SeedAsync(DlConfidenceKey, Params.DlConfidence, "YOLO 비드 검출 confidence 임계값");
+            if (await param.GetDoubleAsync(DlMaskThresholdKey) is { } mask)
+                Params.DlMaskThreshold = Math.Clamp(mask, DlMaskThresholdMin, DlMaskThresholdMax);
+            else if (seedMissing) await SeedAsync(DlMaskThresholdKey, Params.DlMaskThreshold, "YOLO 비드 마스크 확률 임계값");
+            if (await param.GetDoubleAsync(UnetThresholdKey) is { } ut)
+                Params.UnetThreshold = Math.Clamp(ut, UnetThresholdMin, UnetThresholdMax);
+            else if (seedMissing) await SeedAsync(UnetThresholdKey, Params.UnetThreshold, "U-Net 비드 확률 임계값");
+            // DB 값(없으면 기본값) = 저장값 — 화면의 "저장 안 됨" 비교 기준.
+            SavedDlConfidence = Params.DlConfidence;
+            SavedDlMaskThreshold = Params.DlMaskThreshold;
+            SavedUnetThreshold = Params.UnetThreshold;
+
+            async Task SeedAsync(string key, double value, string desc)
+            {
+                Interlocked.Increment(ref _selfWrites);
+                try { await param.SetDoubleAsync(key, value, desc); }
+                finally { Interlocked.Decrement(ref _selfWrites); }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "용접 추적 DL 임계값 파라미터 읽기 실패 — 이전 값 유지");
+        }
     }
 
     private async Task ReloadRoiAsync()
@@ -195,29 +584,98 @@ public class WeldTrackingService
         }
     }
 
-    private RoiRect? ToPixel(NormalizedRoi? roi)
+    // ── ROI 좌표계 ──────────────────────────────────────────────────
+    // 저장(파라미터 Camera.Peak/Bead.Roi)은 입력 모드와 무관하게 항상 IR(=Depth) 화면 기준 정규화 좌표다 — 시퀀스가
+    // IR 기준으로 읽기 때문. RGB 화면에서는 그 ROI 를 ROI 위치의 깊이에서 컬러 좌표로 정확 투영해 보여 주고(표시·검출),
+    // RGB 화면에서 그린 ROI 는 IR 좌표로 역투영해 저장한다 → IR·RGB 어느 화면에서 그려도 시퀀스와 같은 위치가 된다.
+    // 두 센서가 떨어져 있어(시차) 컬러 표시 위치는 거리에 따라 조금 달라진다 — 그린 시점의 작업거리에서 정확.
+
+    /// <summary>IR 프레임 크기(=ROI 저장 기준). 스트림이 없으면 설정 해상도.</summary>
+    private (int w, int h) IrFrameSize() => _camera.LatestIr is { } ir
+        ? (ir.Width, ir.Height)
+        : (_camera.Settings.IrWidth, _camera.Settings.IrHeight);
+
+    /// <summary>저장된 정규화 ROI → IR 픽셀.</summary>
+    private RoiRect? IrPixel(NormalizedRoi? roi)
     {
         if (roi is not { } r) return null;
-        var (w, h) = DetectionFrameSize();
+        var (w, h) = IrFrameSize();
         return r.ToPixel(w, h);
     }
 
-    private NormalizedRoi? ToNormalized(RoiRect? r)
+    /// <summary>저장된 정규화 ROI(IR 기준) → 현재 검출 프레임 픽셀(IR 모드는 IR, RGB 모드는 컬러로 투영).</summary>
+    private RoiRect? ToPixel(NormalizedRoi? roi)
     {
-        if (r is null) return null;
-        var (w, h) = DetectionFrameSize();
-        var n = NormalizedRoi.FromPixel(r, w, h);
-        return n.IsValid ? n : null;
+        var ir = IrPixel(roi);
+        if (ir is null || Params.Mode == WeldImageMode.Ir) return ir;
+        if (TryIrRoiToColor(ir, out var color)) return color;   // 컬러 화각 밖이면 null(표시·검출 안 함)
+        // Depth/캘리브레이션이 없어 투영 불가 — 비율로 근사 표시(위치가 정확하지 않음).
+        var (cw, ch) = DetectionFrameSize();
+        return roi!.Value.ToPixel(cw, ch);
     }
 
+    /// <summary>현재 검출 프레임 픽셀 ROI → IR 기준 정규화. RGB 화면 ROI 를 IR 로 바꿀 수 없으면 false(저장하지 않음).</summary>
+    private bool TryToNormalized(RoiRect? r, out NormalizedRoi? n)
+    {
+        n = null;
+        if (r is null) return true;
+        RoiRect? ir = Params.Mode == WeldImageMode.Ir ? r : ColorRoiToIr(r);
+        if (ir is null) return false;
+        var (w, h) = IrFrameSize();
+        var nn = NormalizedRoi.FromPixel(ir, w, h);
+        n = nn.IsValid ? nn : null;
+        return true;
+    }
+
+    /// <summary>IR 픽셀 ROI → 컬러 픽셀 ROI(ROI 중앙 깊이에서 정확 투영). 투영 수단(Depth·컬러·캘리브레이션)이 없으면 false.</summary>
+    private bool TryIrRoiToColor(RoiRect ir, out RoiRect? color)
+    {
+        color = null;
+        var depth = _camera.LatestDepth;
+        var c = _camera.LatestColor;
+        if (depth is null || c is null || BuildMapper(depth) is not { } mapper) return false;
+        var (iw, ih) = IrFrameSize();
+        var d = ScaleRoi(ir, (double)depth.Width / iw, (double)depth.Height / ih, depth.Width, depth.Height);
+        if (d is null) return true;
+        double z = SampleDepthMm(depth, d.X + d.Width / 2.0, d.Y + d.Height / 2.0);
+        if (z <= 0) z = _settings.DefaultWorkDistanceMm;
+        color = mapper.MapDepthRoiToColor(d, z, c.Width, c.Height);
+        return true;
+    }
+
+    /// <summary>컬러 픽셀 ROI → IR 픽셀 ROI(ROI 중앙 깊이에서 정확 역투영). 투영 수단이 없거나 실패하면 null.</summary>
+    private RoiRect? ColorRoiToIr(RoiRect color)
+    {
+        var depth = _camera.LatestDepth;
+        if (depth is null || _camera.LatestColor is null || BuildMapper(depth) is not { } mapper) return null;
+
+        // ROI 중앙의 깊이: 근사 위치에서 샘플 → 그 깊이로 정확 역투영한 위치에서 한 번 더 샘플(시차 보정).
+        double cu = color.X + color.Width / 2.0, cv = color.Y + color.Height / 2.0;
+        var guess = mapper.ColorToDepthApprox(cu, cv);
+        double z = SampleDepthMm(depth, guess.u, guess.v);
+        if (z <= 0) z = _settings.DefaultWorkDistanceMm;
+        if (mapper.ColorToDepth(cu, cv, z) is { } exact && SampleDepthMm(depth, exact.u, exact.v) is var z2 && z2 > 0) z = z2;
+
+        if (mapper.MapColorRoiToDepthAt(color, z, depth.Width, depth.Height) is not { } d) return null;
+        var (iw, ih) = IrFrameSize();
+        return ScaleRoi(d, (double)iw / depth.Width, (double)ih / depth.Height, iw, ih);
+    }
+
+    private static RoiRect? ScaleRoi(RoiRect r, double sx, double sy, int w, int h)
+        => sx == 1 && sy == 1
+            ? r.ClampTo(w, h)
+            : new RoiRect((int)Math.Round(r.X * sx), (int)Math.Round(r.Y * sy),
+                (int)Math.Round(r.Width * sx), (int)Math.Round(r.Height * sy)).ClampTo(w, h);
+
+    // 프로파일 ROI 도 저장 기준과 같게 IR 픽셀로 보관한다(어느 모드에서 저장·로드해도 같은 위치).
     public void SaveProfile(string name)
     {
-        var (w, h) = DetectionFrameSize();
+        var (w, h) = IrFrameSize();
         _store.Save(new RoiProfile
         {
             Name = name,
-            PeakRoi = PeakRoi,
-            WeldRoi = WeldRoi,
+            PeakRoi = IrPixel(_roi.Peak),
+            WeldRoi = IrPixel(_roi.Bead),
             FrameWidth = w,
             FrameHeight = h,
             ScaleCorrection = ScaleCorrection,
@@ -243,11 +701,14 @@ public class WeldTrackingService
         ScaleCorrectionEnabled = p.ScaleCorrectionEnabled;
         if (!applyRoi) return;
 
-        var (w, h) = DetectionFrameSize();
+        // 프로파일 ROI 는 IR 픽셀(SaveProfile) — 화면 모드와 무관하게 IR 크기로 정규화한다.
+        var (w, h) = IrFrameSize();
         var peak = RoiProfileStore.ValidateAndClamp(p.PeakRoi, w, h, out var c1);
         var weld = RoiProfileStore.ValidateAndClamp(p.WeldRoi, w, h, out var c2);
         if (c1 || c2) Message = "Load 된 ROI 가 현재 해상도에 맞게 보정되었습니다.";
-        SetRois(ToNormalized(peak), ToNormalized(weld));
+        NormalizedRoi? Norm(RoiRect? r) => r is null ? null
+            : NormalizedRoi.FromPixel(r, w, h) is { IsValid: true } n ? n : null;
+        SetRois(Norm(peak), Norm(weld));
     }
 
     // ── 검출/측정 ───────────────────────────────────────────────────
@@ -258,9 +719,11 @@ public class WeldTrackingService
     /// </summary>
     public PeakFindResult FindPeak()
     {
-        var frame = Params.Mode == WeldImageMode.Ir ? _camera.LatestIr : _camera.LatestColor;
+        // Peak 는 Depth 로만 찾는다. 시퀀스 RGB 모드는 GeomIr=true 라 IR 좌표·IR fx 로 오프셋을 낸다(센터링 기준 IR).
+        bool geomIr = GeomIr;
+        var frame = geomIr ? _camera.LatestIr : _camera.LatestColor;
         if (frame is null)
-            return SetPeakFind(PeakFindResult.Fail(Params.Mode == WeldImageMode.Ir
+            return SetPeakFind(PeakFindResult.Fail(geomIr
                 ? "IR 프레임 없음 — 스트림/IR 활성 확인."
                 : "컬러 프레임 없음 — 스트림 시작/연결 확인."));
         if (PeakRoi is null)
@@ -271,7 +734,7 @@ public class WeldTrackingService
         OpenCvSharp.Mat? bgr = null, gray = null;
         try
         {
-            (bgr, gray) = WeldFrameDecoder.Decode(frame, Params.Mode);
+            (bgr, gray) = WeldFrameDecoder.Decode(frame, geomIr ? WeldImageMode.Ir : Params.Mode);
             gray?.Dispose();
             gray = null;
             if (bgr is null || bgr.Empty())
@@ -289,7 +752,7 @@ public class WeldTrackingService
             // 진행축 FOV 센터(= 회색 센터선)로부터의 부호 있는 거리.
             double fovCenter = (horiz ? bgr.Width : bgr.Height) / 2.0;
             double offsetPx = peak.ProgressPos - fovCenter;
-            double mmpp = EffectiveMmPerPixel(peak.DepthValue);
+            double mmpp = EffectiveMmPerPixel(peak.DepthValue, geomIr);
 
             _lastOverlay = WeldMaskAnalyzer.EncodePeakOverlay(
                 bgr, weldRoi, Params, peak.ProgressPos, "PEAK", PeakRoi,
@@ -304,6 +767,7 @@ public class WeldTrackingService
                 OffsetMm = offsetPx * mmpp,
                 DepthMm = peak.DepthValue,
                 Confidence = peak.Confidence,
+                PeakCount = peak.PeakCount,
                 ScaleAvailable = mmpp > 0,
             };
             LastPeakFind = r;
@@ -342,6 +806,8 @@ public class WeldTrackingService
     /// <summary>Peak #1 또는 #2 에서 한 장을 캡처해 d 와 Peak 정보를 측정 슬롯에 저장.</summary>
     public void CapturePeak(int id)
     {
+        if (_seqIrGeometry) { CapturePeakRgbIrGeometry(id); return; }
+
         // Peak(진행축 위치)를 먼저 구해, 오버레이에 자홍색 Peak 선/라벨로 그릴 수 있게 한다.
         // Peak 는 Depth 에서 찾으므로, 검출 프레임이 IR 이면 1:1, RGB 면 공장 캘리브레이션으로
         // Depth↔Color 좌표를 맞춰(방법 ②) ProgressPos 를 검출 프레임 좌표로 변환한다.
@@ -351,6 +817,14 @@ public class WeldTrackingService
             peak is { Found: true } ? peak.ProgressPos : null, $"P{id}",
             peak is { Found: true, HasCrossSpan: true } ? peak.CrossStart : null,
             peak is { Found: true, HasCrossSpan: true } ? peak.CrossEnd : null);
+        string refineNote = "";
+        if (r.Success && peak is { Found: true } && Params.Mode == WeldImageMode.Ir
+            && RefinePeakAlongBead(r, peak, 1.0, 1.0) is { } rp)
+        {
+            var r2 = RunDetect(rp.Peak.ProgressPos, $"P{id}",
+                rp.Peak.HasCrossSpan ? rp.Peak.CrossStart : null, rp.Peak.HasCrossSpan ? rp.Peak.CrossEnd : null);
+            if (r2.Success) { r = r2; peak = rp.Peak; refineNote = rp.Note; }
+        }
         LastDetect = r;
         _lastOverlay = r.OverlayJpeg;
         if (!r.Success)
@@ -372,14 +846,162 @@ public class WeldTrackingService
             At = DateTime.Now,
             OverlayJpeg = r.OverlayJpeg,
             DepthZ = depthZ,
+            IrGeometry = Params.Mode == WeldImageMode.Ir,
         };
+        StoreMeasurement(id, m, peak);
+        Message += refineNote;
+    }
+
+    /// <summary>⑦ 비드선 따라 Peak 재측정 탐색 반경 [mm] — 저장 데이터에서 화면 전체 Peak 가 비드선 위 꼭대기와 최대 ~40mm 어긋났다.</summary>
+    internal const double BeadLinePeakWindowMm = 40.0;
+
+    /// <summary>
+    /// 비드 검출 성공 후, 그 중심선(검출 프레임 좌표)을 따라 depth 를 읽어 Peak 를 비드선 위 마루 꼭대기로 옮긴다
+    /// (<see cref="DepthPeakAnalyzer.RefineAlongLine"/>). 화면 전체 cross 중앙값으로 잡은 Peak 는 근처 코로게이션 교차부 등에
+    /// 끌릴 수 있기 때문이다. 확신이 없거나(마루가 안 솟음·결측) 이동이 1px 미만이면 null — 원래 Peak 유지.
+    /// <paramref name="toDepthX"/>/<paramref name="toDepthY"/> = 검출 프레임 → depth 픽셀 배율(IR 이면 보통 1).
+    /// </summary>
+    private (PeakInfo Peak, string Note)? RefinePeakAlongBead(WeldDetectionResult r, PeakInfo peak, double toDepthX, double toDepthY,
+        Func<PixelPoint, PixelPoint?>? toDepth = null)
+    {
+        var depth = _camera.LatestDepth;
+        if (depth is null || !r.LineFitOk || r.Centerline.Count < 2) return null;
+        bool horiz = Params.ProgressAxis == WeldProgressAxis.Horizontal;
+        toDepth ??= p => new PixelPoint(p.X * toDepthX, p.Y * toDepthY);
+        if (toDepth(r.Centerline[0]) is not { } a || toDepth(r.Centerline[^1]) is not { } b) return null;
+        double mmpp = EffectiveMmPerPixel(peak.DepthValue, true);
+        if (mmpp <= 0) return null;
+        double scale = horiz ? toDepthX : toDepthY;
+        double start = peak.ProgressPos * scale;
+        var lp = DepthPeakAnalyzer.RefineAlongLine(depth, a, b, Params.ProgressAxis, start, BeadLinePeakWindowMm / mmpp);
+        if (lp is not { } v || Math.Abs(v.ProgressPos - start) < 1.0) return null;
+        double newPos = v.ProgressPos / scale;
+        double deltaPx = newPos - peak.ProgressPos;
+        var moved = new PeakInfo
+        {
+            Found = true, ProgressPos = newPos, DepthValue = (int)Math.Round(v.DepthMm), Confidence = peak.Confidence,
+            PeakCount = peak.PeakCount, HasCrossSpan = peak.HasCrossSpan, CrossStart = peak.CrossStart, CrossEnd = peak.CrossEnd,
+        };
+        _logger.LogInformation("Peak 비드선 보정: {From:0.0} → {To:0.0}px ({Delta:+0.0;-0.0}px ≈ {Mm:+0.0;-0.0}mm), 꼭대기 {Z:0}mm, 두드러짐 {Prom:0.0}mm",
+            peak.ProgressPos, newPos, deltaPx, deltaPx * mmpp / (scale > 0 ? scale : 1), v.DepthMm, v.ProminenceMm);
+        return (moved, $" [Peak 비드선 보정 {deltaPx:+0.0;-0.0}px]");
+    }
+
+    private void StoreMeasurement(int id, PeakMeasurement m, PeakInfo? peak)
+    {
         if (id == 1) { M1 = m; State = WeldTrackingState.Peak1Captured; }
         else { M2 = m; State = WeldTrackingState.Peak2Captured; }
-        Message = $"② 비드 찾기 #{id}: d={DMm(m):0.0}mm ({r.DPixel:0.0}px)"
+        Message = $"② 비드 찾기 #{id}: d={DMm(m):0.0}mm ({m.DPixel:0.0}px{(m.IrGeometry ? "" : ", 컬러")})"
             + (peak is { Found: true } ? $", peak@{peak.ProgressPos:0}px / {peak.DepthValue}mm" : "");
 
         // Pitch(mm)·두 측정이 있고 스케일이 사용 가능할 때만 자동 각도 산출.
         if (M1 is not null && M2 is not null && Pitch > 0 && ScaleAvailable) ComputeAngle();
+    }
+
+    /// <summary>
+    /// 시퀀스 RGB 모드 비드 찾기 — <b>검출은 컬러 영상</b>, <b>위치·거리 기준은 IR(=Depth) 좌표</b>.
+    /// Peak ROI·Bead ROI(<see cref="_override"/>)는 IR 픽셀이다. Peak 는 Depth 에서 직접 구하고, 그 깊이 Z 에서
+    /// Peak 선·IR 화면 중심선·ROI 를 공장 캘리브레이션(Depth→Color)으로 컬러에 정확히 투영해 검출한다.
+    /// d 의 기준선을 'IR 화면 중심선의 투영'으로 두므로, 컬러 d 를 IR 픽셀로 환산하면 IR 모드에서 잰 d 와 같은 값이 된다
+    /// → 센터링 이동량·각도가 IR 모드와 같은 기준이 되고, IR 기준으로 교시된 ROI·검사캠 오프셋을 그대로 쓴다.
+    /// </summary>
+    private void CapturePeakRgbIrGeometry(int id)
+    {
+        WeldDetectionResult Fail(string msg)
+        {
+            var f = WeldDetectionResult.Fail(msg);
+            LastDetect = f;
+            Message = $"② 비드 찾기 #{id} 실패: {msg}";
+            return f;
+        }
+
+        if (!Detector.IsAvailable) { Fail("검출기가 비활성 상태입니다(OpenCV 네이티브 없음 — Windows에서만 지원)."); return; }
+        var depth = _camera.LatestDepth;
+        var color = _camera.LatestColor;
+        if (depth is null) { Fail("Depth 프레임 없음 — 스트림 확인."); return; }
+        if (color is null) { Fail("컬러 프레임 없음 — RGB 모드는 컬러 스트림이 필요합니다."); return; }
+        if (PeakRoi is not { } peakRoiIr || WeldRoi is not { } weldRoiIr) { Fail("Peak/Bead ROI 없음."); return; }
+        if (BuildMapper(depth) is not { } mapper) { Fail("Depth↔컬러 캘리브레이션 없음 — IR 모드로 전환하거나 카메라 연결을 확인하세요."); return; }
+
+        bool horiz = Params.ProgressAxis == WeldProgressAxis.Horizontal;
+        var dp = DepthPeakAnalyzer.Analyze(depth, peakRoiIr, Params.ProgressAxis);
+
+        // 투영 깊이 Z: Peak 깊이 → Bead ROI 중앙 깊이 → 기본 작업거리.
+        double z = dp.Found ? dp.DepthValue : 0;
+        if (z <= 0) z = SampleDepthMm(depth, weldRoiIr.X + weldRoiIr.Width / 2.0, weldRoiIr.Y + weldRoiIr.Height / 2.0);
+        if (z <= 0) z = _settings.DefaultWorkDistanceMm;
+
+        // 측정 진행좌표(IR) = Peak 위치(없으면 Bead ROI 중앙), 기준 cross 좌표(IR) = IR 화면 중심선.
+        double progIr = dp.Found ? dp.ProgressPos
+            : horiz ? weldRoiIr.X + weldRoiIr.Width / 2.0 : weldRoiIr.Y + weldRoiIr.Height / 2.0;
+        double centerCrossIr = (horiz ? depth.Height : depth.Width) / 2.0;
+        if (mapper.DepthToColor(horiz ? progIr : centerCrossIr, horiz ? centerCrossIr : progIr, z) is not { } refC)
+        { Fail("IR 중심선을 컬러로 투영하지 못했습니다(캘리브레이션 확인)."); return; }
+        double progC = horiz ? refC.u : refC.v;
+        double refCrossC = horiz ? refC.v : refC.u;
+
+        if (mapper.MapDepthRoiToColor(weldRoiIr, z, color.Width, color.Height) is not { } weldRoiC)
+        { Fail("Bead ROI 를 컬러 영상으로 투영하지 못했습니다 — ROI 위치/거리를 확인하세요."); return; }
+        var peakRoiC = mapper.MapDepthRoiToColor(peakRoiIr, z, color.Width, color.Height);
+
+        // 오버레이용 Peak cross 구간도 컬러로 투영.
+        double? cStart = null, cEnd = null;
+        if (dp is { Found: true, HasCrossSpan: true }
+            && mapper.DepthToColor(horiz ? dp.ProgressPos : dp.CrossStart, horiz ? dp.CrossStart : dp.ProgressPos, z) is { } ca
+            && mapper.DepthToColor(horiz ? dp.ProgressPos : dp.CrossEnd, horiz ? dp.CrossEnd : dp.ProgressPos, z) is { } cb)
+        {
+            cStart = horiz ? ca.v : ca.u;
+            cEnd = horiz ? cb.v : cb.u;
+        }
+
+        // 기준선 = 투영된 IR 중심선(회색 선이 이 위치에 그려진다), 측정 위치 = 투영된 Peak 선.
+        var r = Detector.DetectWeld(color, weldRoiC, Params, WeldReferenceMode.PeakLine, refCrossC,
+            progC, $"P{id}", peakRoiC, cStart, cEnd);
+        // 비드선 따라 Peak 재측정: 컬러 중심선 → depth 좌표(투영 깊이 z)로 옮겨 depth 를 읽는다.
+        string refineNote = "";
+        if (r.Success && dp.Found
+            && RefinePeakAlongBead(r, dp, 1.0, 1.0,
+                   p => mapper.ColorToDepth(p.X, p.Y, z) is { } q ? new PixelPoint(q.u, q.v) : null) is { } rp
+            && mapper.DepthToColor(horiz ? rp.Peak.ProgressPos : centerCrossIr, horiz ? centerCrossIr : rp.Peak.ProgressPos, z) is { } refC2)
+        {
+            // dp 는 IR(=depth) 좌표이고 중심선만 컬러→depth 로 옮겼으므로, 돌려받은 진행 좌표가 곧 새 progIr 이다.
+            double? cs2 = null, ce2 = null;
+            if (dp.HasCrossSpan
+                && mapper.DepthToColor(horiz ? rp.Peak.ProgressPos : dp.CrossStart, horiz ? dp.CrossStart : rp.Peak.ProgressPos, z) is { } ca2
+                && mapper.DepthToColor(horiz ? rp.Peak.ProgressPos : dp.CrossEnd, horiz ? dp.CrossEnd : rp.Peak.ProgressPos, z) is { } cb2)
+            {
+                cs2 = horiz ? ca2.v : ca2.u;
+                ce2 = horiz ? cb2.v : cb2.u;
+            }
+            double progC2 = horiz ? refC2.u : refC2.v, refCross2 = horiz ? refC2.v : refC2.u;
+            var r2 = Detector.DetectWeld(color, weldRoiC, Params, WeldReferenceMode.PeakLine, refCross2,
+                progC2, $"P{id}", peakRoiC, cs2, ce2);
+            if (r2.Success) { r = r2; dp = rp.Peak; progIr = rp.Peak.ProgressPos; refineNote = rp.Note; }
+        }
+        LastDetect = r;
+        _lastOverlay = r.OverlayJpeg;
+        if (!r.Success) { Message = $"② 비드 찾기 #{id} 실패: {r.Message}"; return; }
+
+        // 컬러 d(px) → IR d(px). 같은 깊이에서 두 카메라 초점거리 비율(축 거의 평행).
+        double dIr = r.DPixel * mapper.CrossScaleColorToDepth(horiz);
+        double wu = horiz ? progIr : centerCrossIr + dIr;
+        double wv = horiz ? centerCrossIr + dIr : progIr;
+        double depthZ = SampleDepthMm(depth, wu, wv);
+        if (depthZ <= 0) depthZ = z;
+
+        var m = new PeakMeasurement
+        {
+            PeakId = id,
+            DPixel = dIr,
+            Confidence = r.Confidence,
+            Peak = dp.Found ? dp : null,
+            At = DateTime.Now,
+            OverlayJpeg = r.OverlayJpeg,
+            DepthZ = depthZ,
+            IrGeometry = true,
+        };
+        StoreMeasurement(id, m, m.Peak);
+        Message += $" [RGB 검출·IR 기준, 컬러 d={r.DPixel:0.0}px]" + refineNote;
     }
 
     /// <summary>
@@ -392,15 +1014,26 @@ public class WeldTrackingService
         var depth = _camera.LatestDepth;
         if (depth is null || PeakRoi is null) return null;
 
-        if (Params.Mode == WeldImageMode.Ir)
-            return DepthPeakAnalyzer.Analyze(depth, PeakRoi, Params.ProgressAxis);
+        // ROI 에 Peak 가 여럿이면 선호 위치(기본 FOV 센터, 센터링 재측정은 이동 후 예상 위치)에 가장 가까운 것을 고른다.
+        bool horizAxis = Params.ProgressAxis == WeldProgressAxis.Horizontal;
+        double preferDepth = (horizAxis ? depth.Width : depth.Height) / 2.0 + _peakPreferOffsetPx;
 
-        // RGB 모드: ROI(컬러)→Depth 매핑해 분석 → peak(Depth)→컬러 재투영.
+        // IR 모드·시퀀스 RGB 모드(IR 기준)는 Peak ROI 가 IR(=Depth) 픽셀이라 그대로 분석.
+        if (GeomIr)
+            return DepthPeakAnalyzer.Analyze(depth, PeakRoi, Params.ProgressAxis, preferPos: preferDepth);
+
+        // RGB 모드: Peak ROI(Depth 좌표)에서 분석 → peak(Depth)→컬러 재투영.
         var mapper = BuildMapper(depth);
         if (mapper is null) return null;
 
-        var depthRoi = mapper.MapColorRoiToDepth(PeakRoi, depth.Width, depth.Height);
-        var dp = DepthPeakAnalyzer.Analyze(depth, depthRoi, Params.ProgressAxis);
+        // 저장된 ROI 는 IR(=Depth) 기준이라 그대로 Depth 좌표로 쓴다(컬러 투영→역투영 왕복 오차 없음).
+        // 일시 적용 ROI(_override)만 있으면 컬러 좌표로 보고 근사 매핑한다.
+        var (iw, ih) = IrFrameSize();
+        var depthRoi = (_override is null && IrPixel(_roi.Peak) is { } irPeak
+                ? ScaleRoi(irPeak, (double)depth.Width / iw, (double)depth.Height / ih, depth.Width, depth.Height)
+                : null)
+            ?? mapper.MapColorRoiToDepth(PeakRoi, depth.Width, depth.Height);
+        var dp = DepthPeakAnalyzer.Analyze(depth, depthRoi, Params.ProgressAxis, preferPos: preferDepth);
         if (!dp.Found) return dp;
 
         bool horiz = Params.ProgressAxis == WeldProgressAxis.Horizontal;
@@ -425,7 +1058,7 @@ public class WeldTrackingService
         return new PeakInfo
         {
             Found = true, ProgressPos = colorProgress, DepthValue = dp.DepthValue, Confidence = dp.Confidence,
-            HasCrossSpan = hasSpan, CrossStart = cStart, CrossEnd = cEnd,
+            PeakCount = dp.PeakCount, HasCrossSpan = hasSpan, CrossStart = cStart, CrossEnd = cEnd,
         };
     }
 
@@ -455,8 +1088,8 @@ public class WeldTrackingService
         }
 
         // 측정마다 그 지점의 스케일로 d 를 mm 로 환산. 자동이면 Z/fx, 고정이면 mm/px.
-        double mmpp1 = EffectiveMmPerPixel(M1.DepthZ);
-        double mmpp2 = EffectiveMmPerPixel(M2.DepthZ);
+        double mmpp1 = EffectiveMmPerPixel(M1.DepthZ, M1.IrGeometry);
+        double mmpp2 = EffectiveMmPerPixel(M2.DepthZ, M2.IrGeometry);
         double d1 = M1.DPixel * mmpp1;   // mm
         double d2 = M2.DPixel * mmpp2;   // mm
 
@@ -494,16 +1127,23 @@ public class WeldTrackingService
     // (기존 동기 메서드 내부는 취소할 수 없다. 한 호출이 수 초 이내라 허용 범위로 본다.)
 
     /// <summary>시퀀스용 Peak 찾기. <paramref name="peakRoi"/> 를 일시 적용해 <see cref="FindPeak"/> 수행.</summary>
-    public async Task<PeakFindResult> FindPeakAsync(RoiRect peakRoi, CancellationToken ct = default)
+    /// <param name="preferOffsetPx">ROI 에 Peak 가 여럿일 때 고를 위치 — 진행축 FOV 센터 기준 IR 픽셀(0=센터).
+    /// 센터링 재측정은 이동 후 예상 이격을 넣어 옆 Peak 를 잡지 않게 한다.</param>
+    public async Task<PeakFindResult> FindPeakAsync(RoiRect peakRoi, CancellationToken ct = default, double preferOffsetPx = 0)
     {
         await _gate.WaitAsync(ct);
         try
         {
-            _override = new RoiOverride(peakRoi, WeldRoi);
+            // 시퀀스 ROI 는 IR 픽셀 — RGB 여도 IR 기준(오버레이도 IR 영상에 그리므로 Bead ROI 도 IR 픽셀로).
+            _override = new RoiOverride(peakRoi, IrPixel(_roi.Bead));
+            _seqIrGeometry = Params.Mode != WeldImageMode.Ir;
+            _peakPreferOffsetPx = preferOffsetPx;
             return await Task.Run(FindPeak, ct);
         }
         finally
         {
+            _peakPreferOffsetPx = 0;
+            _seqIrGeometry = false;
             _override = null;
             _gate.Release();
         }
@@ -520,13 +1160,331 @@ public class WeldTrackingService
         try
         {
             _override = new RoiOverride(peakRoi, weldRoi);
+            _seqIrGeometry = Params.Mode != WeldImageMode.Ir;   // RGB 면 컬러로 검출하되 d·mm 는 IR 기준
             await Task.Run(() => CapturePeak(id), ct);
-            return (id == 1 ? M1 : M2, LastDetect);
+            // 검출에 실패했으면 이전 슬롯 값을 돌려주지 않는다(낡은 측정이 이번 결과처럼 쓰이는 함정 제거).
+            return (LastDetect is { Success: true } ? (id == 1 ? M1 : M2) : null, LastDetect);
         }
         finally
         {
+            _seqIrGeometry = false;
             _override = null;
             _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// <see cref="CapturePeakAsync"/> 와 같은 검출이지만 측정 슬롯(<see cref="M1"/>/<see cref="M2"/>)·각도·상태를 바꾸지 않는다.
+    /// ⑪⁺ Bead2 센터링 후 작업물 좌표계 점2 잔차 보정용 재측정 — 슬롯을 덮으면 ⑫ 각도가 θ≈0 으로 오염된다.
+    /// 오버레이(<see cref="LastDetect"/>)는 이번 검출로 갱신된다.
+    /// </summary>
+    public async Task<(PeakMeasurement? Measurement, WeldDetectionResult? Detect)> MeasureWithoutStoringAsync(
+        int id, RoiRect peakRoi, RoiRect weldRoi, CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct);
+        var (m1, m2, angle, state, message) = (M1, M2, Angle, State, Message);
+        try
+        {
+            _override = new RoiOverride(peakRoi, weldRoi);
+            _seqIrGeometry = Params.Mode != WeldImageMode.Ir;
+            await Task.Run(() => CapturePeak(id), ct);
+            var measured = LastDetect is { Success: true } ? (id == 1 ? M1 : M2) : null;
+            return (ReferenceEquals(measured, id == 1 ? m1 : m2) ? null : measured, LastDetect);
+        }
+        finally
+        {
+            (M1, M2, Angle, State, Message) = (m1, m2, angle, state, message);
+            _seqIrGeometry = false;
+            _override = null;
+            _gate.Release();
+        }
+    }
+
+    // ── 시퀀스 수동 비드 입력 ───────────────────────────────────────
+    /// <summary>
+    /// 수동 비드 입력용 스냅샷 — 현재 IR·컬러·Depth 프레임을 고정하고, 각 영상 좌표의 가이드(Peak 선·기준선·ROI·
+    /// 자동 검출 선)를 계산한다. 사람이 이 스냅샷 위에 선을 그리고, 같은 프레임이 학습 데이터로 저장된다.
+    /// ROI 는 시퀀스 규약대로 IR 픽셀. IR 프레임이 없으면 null.
+    /// </summary>
+    /// <param name="auto">직전 자동 검출 결과(있으면 그 중심선을 초안으로 표시). 좌표는 현재 입력 모드 영상 기준.</param>
+    public async Task<ManualBeadSnapshot?> PrepareManualBeadAsync(
+        int id, RoiRect peakRoi, RoiRect beadRoi, WeldDetectionResult? auto, CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            var frames = LiveManualFrames();
+            if (frames is null) return null;
+            string autoMod = Params.Mode == WeldImageMode.Ir ? "ir" : "rgb";
+            // 판정(성공·직선피팅)과 무관하게 검출기가 찾은 선이 있으면 보여준다 — 틀렸으면 사람이 고쳐 학습 데이터로 남긴다.
+            IReadOnlyList<PixelPoint>? autoLine = auto is { Centerline.Count: >= 2 } ? auto.Centerline.ToList() : null;
+            return await Task.Run(() => BuildManualSnapshot(id, frames, peakRoi, beadRoi, Params.ProgressAxis, autoLine, autoMod), ct);
+        }
+        finally { _gate.Release(); }
+    }
+
+    /// <summary>현재 라이브 프레임 묶음. IR·Depth 가 없으면 null.</summary>
+    public ManualBeadFrames? LiveManualFrames()
+    {
+        var ir = _camera.LatestIr;
+        var depth = _camera.LatestDepth;
+        if (ir is null || depth is null) return null;
+        return new ManualBeadFrames(ir, depth, _camera.LatestColor, _camera.GetD2CParams(), "라이브", null);
+    }
+
+    /// <summary>
+    /// 지정 프레임(라이브 스냅샷 또는 저장된 촬영본)으로 수동 입력 스냅샷을 만든다 — 테스트·재라벨링용.
+    /// 측정 슬롯(M1/M2)은 건드리지 않는다.
+    /// </summary>
+    public Task<ManualBeadSnapshot> BuildManualSnapshotAsync(ManualBeadFrames frames, RoiRect peakRoi, RoiRect beadRoi,
+        WeldProgressAxis axis, CancellationToken ct = default)
+        => Task.Run(() => BuildManualSnapshot(0, frames, peakRoi, beadRoi, axis, null, "ir"), ct);
+
+    private ManualBeadSnapshot BuildManualSnapshot(int id, ManualBeadFrames f, RoiRect peakRoi, RoiRect beadRoi,
+        WeldProgressAxis axis, IReadOnlyList<PixelPoint>? autoLine, string autoMod)
+    {
+        var ir = f.Ir;
+        var depth = f.Depth;
+        bool horiz = axis == WeldProgressAxis.Horizontal;
+        PeakInfo dp = depth is null
+            ? new PeakInfo { Found = false }
+            : DepthPeakAnalyzer.Analyze(depth, peakRoi, axis, preferPos: (horiz ? depth.Width : depth.Height) / 2.0);
+
+        // 측정 진행좌표(IR) = Peak 위치(없으면 Bead ROI 중앙), 기준 cross(IR) = FOV 센터선 — 자동 검출과 같은 규약.
+        double progIr = dp.Found ? dp.ProgressPos
+            : horiz ? beadRoi.X + beadRoi.Width / 2.0 : beadRoi.Y + beadRoi.Height / 2.0;
+        double centerCrossIr = (horiz ? ir.Height : ir.Width) / 2.0;
+
+        var irGuide = new ManualBeadGuide("ir", ir.Width, ir.Height, horiz, progIr, centerCrossIr, dp.Found,
+            dp is { Found: true, HasCrossSpan: true } ? dp.CrossStart : null,
+            dp is { Found: true, HasCrossSpan: true } ? dp.CrossEnd : null,
+            beadRoi, peakRoi, autoMod == "ir" ? autoLine : null);
+
+        // 컬러 가이드: Depth→Color 투영(자동 RGB 검출과 같은 깊이 Z·같은 매핑). 캘리브레이션이 없으면 컬러 입력 불가.
+        double z = dp.Found ? dp.DepthValue : 0;
+        if (z <= 0 && depth is not null)
+            z = SampleDepthMm(depth, beadRoi.X + beadRoi.Width / 2.0, beadRoi.Y + beadRoi.Height / 2.0);
+        if (z <= 0) z = _settings.DefaultWorkDistanceMm;
+
+        ManualBeadGuide? colorGuide = null;
+        double crossScale = 0;
+        byte[]? colorPng = null;
+        var color = f.Color;
+        if (color is not null && f.D2C is { IsValid: true } d2c)
+        {
+            // Depth 해상도 = IR 해상도(촬영본에 depth 가 없으면 IR 크기로 매핑).
+            var mapper = new DepthColorMapper(d2c, depth?.Width ?? ir.Width, depth?.Height ?? ir.Height, color.Width, color.Height);
+            if (mapper.DepthToColor(horiz ? progIr : centerCrossIr, horiz ? centerCrossIr : progIr, z) is { } refC)
+            {
+                double? cs = null, ce = null;
+                if (dp is { Found: true, HasCrossSpan: true }
+                    && mapper.DepthToColor(horiz ? dp.ProgressPos : dp.CrossStart, horiz ? dp.CrossStart : dp.ProgressPos, z) is { } ca
+                    && mapper.DepthToColor(horiz ? dp.ProgressPos : dp.CrossEnd, horiz ? dp.CrossEnd : dp.ProgressPos, z) is { } cb)
+                {
+                    cs = horiz ? ca.v : ca.u;
+                    ce = horiz ? cb.v : cb.u;
+                }
+                try
+                {
+                    colorPng = CameraService.EncodeColorPng(color);
+                    colorGuide = new ManualBeadGuide("rgb", color.Width, color.Height, horiz,
+                        horiz ? refC.u : refC.v, horiz ? refC.v : refC.u, dp.Found, cs, ce,
+                        mapper.MapDepthRoiToColor(beadRoi, z, color.Width, color.Height),
+                        mapper.MapDepthRoiToColor(peakRoi, z, color.Width, color.Height),
+                        autoMod == "rgb" ? autoLine : null);
+                    crossScale = mapper.CrossScaleColorToDepth(horiz);
+                }
+                catch (Exception ex) { _logger.LogWarning(ex, "수동 비드 입력: 컬러 PNG 인코딩 실패 — IR 만 제공"); colorPng = null; }
+            }
+        }
+        if (colorGuide is null && color is not null)
+        {
+            // 캘리브레이션이 없거나 투영이 안 되면 IR 안내선을 컬러로 옮길 수 없다 — 컬러 영상만 보여주고 라벨 그리기·저장만 허용.
+            try
+            {
+                colorPng = CameraService.EncodeColorPng(color);
+                colorGuide = ManualBeadGuide.LabelOnly("rgb", color.Width, color.Height, horiz, autoMod == "rgb" ? autoLine : null);
+            }
+            catch (Exception ex) { _logger.LogWarning(ex, "수동 비드 입력: 컬러 PNG 인코딩 실패 — IR 만 제공"); colorPng = null; }
+        }
+
+        return new ManualBeadSnapshot
+        {
+            PeakId = id,
+            Horizontal = horiz,
+            Frames = f,
+            PeakRoi = peakRoi,
+            BeadRoi = beadRoi,
+            Ir = ir,
+            Depth = depth,
+            Color = colorGuide is null ? null : color,
+            IrPng = CameraService.EncodeIrPng(ir),
+            ColorPng = colorGuide is null ? null : colorPng,
+            Peak = dp.Found ? dp : null,
+            ProjectionZ = z,
+            CrossScaleColorToIr = crossScale,
+            IrGuide = irGuide,
+            ColorGuide = colorGuide,
+            AutoModality = autoMod,
+            CapturedAt = ir.CapturedAt,
+        };
+    }
+
+    /// <summary>
+    /// 사람이 그린 비드선(<paramref name="modality"/> 영상 픽셀)의 d 를 계산한다(저장 안 함).
+    /// d 는 자동 검출과 같은 규약 — Peak 진행위치에서 비드선 cross 좌표 − FOV 센터선, IR 픽셀 기준. 컬러에 그린 선은
+    /// 투영된 IR 중심선 기준으로 잰 뒤 초점거리 비율로 IR 픽셀로 환산한다(RGB 자동 검출과 동일).
+    /// 선이 진행축으로 펼쳐지지 않았으면 null.
+    /// </summary>
+    public ManualBeadEvaluation? EvaluateManualBead(ManualBeadSnapshot s, string modality, IReadOnlyList<PixelPoint> points)
+    {
+        bool rgb = modality == "rgb";
+        var guide = rgb ? s.ColorGuide : s.IrGuide;
+        if (guide is not { Calibrated: true }) return null;   // 캘리브레이션 없는 컬러 = 라벨 전용, d 없음
+        if (ManualBeadGeometry.CrossAt(points, s.Horizontal, guide.ProgressPos) is not { } cross) return null;
+
+        double dModality = cross - guide.RefCross;
+        double dIr = rgb ? dModality * s.CrossScaleColorToIr : dModality;
+        double progIr = s.IrGuide.ProgressPos, centerIr = s.IrGuide.RefCross;
+        double depthZ = s.Depth is null ? 0 : SampleDepthMm(s.Depth,
+            s.Horizontal ? progIr : centerIr + dIr,
+            s.Horizontal ? centerIr + dIr : progIr);
+        if (depthZ <= 0) depthZ = s.ProjectionZ;
+        double mmpp = EffectiveMmPerPixel(depthZ, ir: true);
+        return new ManualBeadEvaluation(modality, cross, dModality, dIr, mmpp > 0 ? dIr * mmpp : null, depthZ, s.Peak is not null);
+    }
+
+    /// <summary>진행축 FOV 센터로부터 Peak 까지의 부호 있는 거리 [mm] — ① Peak 찾기와 같은 규약(양수 = 진행축 + 방향).</summary>
+    internal static double PeakOffsetMm(double peakProgressPx, double fovCenterPx, double mmPerPx)
+        => (peakProgressPx - fovCenterPx) * mmPerPx;
+
+    /// <summary>
+    /// 수동 비드 입력 스냅샷에서 Peak(코로게이션 꼭대기)가 진행축 FOV 센터에서 얼마나 벗어나 있는지 [mm].
+    /// 팝업 조그로 자리를 옮기면 ⑥ Peak 센터링이 맞춰 둔 진행축 위치가 더는 맞지 않을 수 있다(실기 2026-11-14 15:19 A:
+    /// 옆으로 100 mm 조그한 뒤 Peak 가 센터에서 약 41 mm). Peak 는 그린 비드선 위에서 다시 잰다
+    /// (<see cref="DepthPeakAnalyzer.RefineAlongLine"/> — 화면 전체 Peak 는 옆 굴곡에 끌릴 수 있다). Peak·스케일이 없으면 null.
+    /// </summary>
+    public double? ManualPeakOffsetMm(ManualBeadSnapshot s, PeakMeasurement m)
+    {
+        if (!s.IrGuide.PeakFound) return null;
+        double mmpp = EffectiveMmPerPixel(m.DepthZ, ir: true);
+        if (mmpp <= 0) return null;
+        double pos = s.IrGuide.ProgressPos;
+        if (s.Depth is { } depth)
+        {
+            // 비드선은 진행축과 거의 나란하다(방향 검증 통과분) — Peak 근방에서는 cross = 기준선 + d 인 직선으로 본다.
+            double cross = s.IrGuide.RefCross + m.DPixel;
+            double far = s.Horizontal ? s.Ir.Width : s.Ir.Height;
+            var a = s.Horizontal ? new PixelPoint(0, cross) : new PixelPoint(cross, 0);
+            var b = s.Horizontal ? new PixelPoint(far, cross) : new PixelPoint(cross, far);
+            var axis = s.Horizontal ? WeldProgressAxis.Horizontal : WeldProgressAxis.Vertical;
+            if (DepthPeakAnalyzer.RefineAlongLine(depth, a, b, axis, pos, BeadLinePeakWindowMm / mmpp) is { } lp)
+                pos = lp.ProgressPos;
+        }
+        return PeakOffsetMm(pos, (s.Horizontal ? s.Ir.Width : s.Ir.Height) / 2.0, mmpp);
+    }
+
+    /// <summary>
+    /// 사람이 그린 비드선으로 측정을 만들어 <see cref="M1"/>/<see cref="M2"/> 에 저장한다(<see cref="EvaluateManualBead"/> 규약).
+    /// 선이 진행축으로 펼쳐지지 않았으면 null.
+    /// </summary>
+    public async Task<PeakMeasurement?> ApplyManualBeadAsync(
+        ManualBeadSnapshot s, string modality, IReadOnlyList<PixelPoint> points, CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            if (EvaluateManualBead(s, modality, points) is not { } ev) return null;
+            bool rgb = modality == "rgb";
+            var guide = rgb ? s.ColorGuide! : s.IrGuide;
+
+            var overlay = await Task.Run(() => ManualOverlayJpeg(rgb ? s.ColorPng : s.IrPng, guide, points, ev.CrossPx), ct);
+            var m = new PeakMeasurement
+            {
+                PeakId = s.PeakId,
+                DPixel = ev.DIrPx,
+                Confidence = 1.0,
+                Peak = s.Peak,
+                At = DateTime.Now,
+                OverlayJpeg = overlay,
+                DepthZ = ev.DepthZ,
+                IrGeometry = true,
+                Manual = true,
+            };
+            if (overlay is not null) _lastOverlay = overlay;
+            StoreMeasurement(s.PeakId, m, s.Peak);
+            Message += rgb ? $" [수동 입력·RGB, 컬러 d={ev.DModalityPx:0.0}px]" : " [수동 입력]";
+            return m;
+        }
+        finally { _gate.Release(); }
+    }
+
+    /// <summary>
+    /// 센터링 이동 후 재측정 대신, 기존 측정(주로 사람이 그은 비드선)을 cross 이동량만큼 영상에서 옮겨
+    /// 잔차 측정으로 교체한다 — 잔차 d(px) = d1(px) − 이동량(mm)/mm·px⁻¹. 이동은 면과 평행이라 깊이·스케일은 그대로다.
+    /// 측정이 없거나 스케일을 쓸 수 없으면 null(슬롯 변경 없음).
+    /// </summary>
+    public async Task<PeakMeasurement?> ShiftMeasurementByMoveAsync(int id, double moveMm, CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            var src = id == 1 ? M1 : M2;
+            if (src is null) return null;
+            var mmpp = EffectiveMmPerPixel(src.DepthZ, src.IrGeometry);
+            if (mmpp <= 0) return null;
+            var m = ShiftedMeasurement(src, moveMm / mmpp);
+            StoreMeasurement(id, m, src.Peak);
+            Message += " [센터링 이동량 반영 — 재측정 생략]";
+            return m;
+        }
+        finally { _gate.Release(); }
+    }
+
+    /// <summary><paramref name="src"/> 를 cross 방향으로 <paramref name="movePx"/> 만큼 옮긴 측정(나머지 값은 유지).</summary>
+    internal static PeakMeasurement ShiftedMeasurement(PeakMeasurement src, double movePx) => new()
+    {
+        PeakId = src.PeakId,
+        DPixel = src.DPixel - movePx,
+        Confidence = src.Confidence,
+        Peak = src.Peak,
+        At = DateTime.Now,
+        OverlayJpeg = src.OverlayJpeg,   // 이동 전 화면 — 재촬영하지 않으므로 그대로 둔다
+        DepthZ = src.DepthZ,
+        IrGeometry = src.IrGeometry,
+        Manual = src.Manual,
+    };
+
+    /// <summary>수동 측정 오버레이(Weld 페이지·모니터 표시용). OpenCV 네이티브가 없으면 null.</summary>
+    private byte[]? ManualOverlayJpeg(byte[]? png, ManualBeadGuide g, IReadOnlyList<PixelPoint> pts, double cross)
+    {
+        if (png is null) return null;
+        try
+        {
+            using var src = OpenCvSharp.Cv2.ImDecode(png, OpenCvSharp.ImreadModes.Color);
+            if (src.Empty()) return null;
+            OpenCvSharp.Point P(double x, double y) => new((int)Math.Round(x), (int)Math.Round(y));
+            OpenCvSharp.Point Pc(double prog, double c) => g.Horizontal ? P(prog, c) : P(c, prog);
+            int len = g.Horizontal ? g.Width : g.Height, crossLen = g.Horizontal ? g.Height : g.Width;
+
+            if (g.BeadRoi is { } br)
+                OpenCvSharp.Cv2.Rectangle(src, new OpenCvSharp.Rect(br.X, br.Y, br.Width, br.Height), new OpenCvSharp.Scalar(0, 200, 255), 1);
+            // 회색 기준선(FOV 센터), 자홍 Peak 선, 초록 수동 비드선, 빨간 교점.
+            OpenCvSharp.Cv2.Line(src, Pc(0, g.RefCross), Pc(len, g.RefCross), new OpenCvSharp.Scalar(160, 160, 160), 1);
+            double c0 = g.PeakCrossStart ?? 0, c1 = g.PeakCrossEnd ?? crossLen;
+            OpenCvSharp.Cv2.Line(src, Pc(g.ProgressPos, c0), Pc(g.ProgressPos, c1), new OpenCvSharp.Scalar(255, 0, 255), 2);
+            for (int i = 0; i + 1 < pts.Count; i++)
+                OpenCvSharp.Cv2.Line(src, P(pts[i].X, pts[i].Y), P(pts[i + 1].X, pts[i + 1].Y), new OpenCvSharp.Scalar(0, 255, 0), 2);
+            OpenCvSharp.Cv2.Circle(src, Pc(g.ProgressPos, cross), 5, new OpenCvSharp.Scalar(0, 0, 255), -1);
+            OpenCvSharp.Cv2.PutText(src, "MANUAL", new OpenCvSharp.Point(8, 22), OpenCvSharp.HersheyFonts.HersheySimplex, 0.7,
+                new OpenCvSharp.Scalar(0, 255, 255), 2);
+            OpenCvSharp.Cv2.ImEncode(".jpg", src, out var jpg);
+            return jpg;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "수동 비드 오버레이 생성 실패(OpenCV 없음?) — 오버레이 없이 진행");
+            return null;
         }
     }
 
@@ -622,19 +1580,22 @@ public class WeldTrackingService
 
     // ── 스케일(mm 환산) ─────────────────────────────────────────────
     /// <summary>Depth 자동 mm/px = Z/fx (기본). 2점 보정계수가 켜져 있으면 곱해 보강한다.</summary>
-    private double EffectiveMmPerPixel(double depthZ)
+    /// <param name="ir">픽셀 좌표계가 IR(=Depth)이면 true, 컬러면 false — 해당 카메라의 fx 를 쓴다.</param>
+    private double EffectiveMmPerPixel(double depthZ, bool ir)
     {
-        double fx = Fx();
+        double fx = Fx(ir);
         if (fx <= 0) return 0;
         double z = depthZ > 0 ? depthZ : _settings.DefaultWorkDistanceMm;
         double mmpp = z / fx;                                          // Depth 자동 기본
         return ScaleCorrectionEnabled ? mmpp * ScaleCorrection : mmpp; // 2점 보정 보강
     }
 
-    /// <summary>현재 검출 모드의 fx(px) = (영상폭/2)/tan(HFov/2). FOV·해상도 기반(간이 intrinsic).</summary>
-    private double Fx()
+    /// <summary>현재 검출 모드의 fx(px). 2점 보정·검증처럼 화면(검출 프레임) 좌표를 다루는 곳에서 쓴다.</summary>
+    private double Fx() => Fx(Params.Mode == WeldImageMode.Ir);
+
+    /// <summary>IR 또는 컬러 카메라의 fx(px) = (영상폭/2)/tan(HFov/2). FOV·해상도 기반(간이 intrinsic).</summary>
+    private double Fx(bool ir)
     {
-        bool ir = Params.Mode == WeldImageMode.Ir;
         var frame = ir ? _camera.LatestIr : _camera.LatestColor;
         int w = frame?.Width ?? (ir ? _camera.Settings.IrWidth : _camera.Settings.ColorWidth);
         double hfov = ir ? _settings.IrHFovDeg : _settings.ColorHFovDeg;
@@ -720,4 +1681,46 @@ public class WeldTrackingService
         double dx = a.X - b.X, dy = a.Y - b.Y;
         return Math.Sqrt(dx * dx + dy * dy);
     }
+}
+
+/// <summary>수동 비드 입력에 쓰는 프레임 묶음 — 라이브 또는 저장된 촬영본. Depth·컬러는 없을 수 있다.</summary>
+/// <param name="Source">표시용 출처(예: "라이브", "파일 012_20261107_101500").</param>
+/// <param name="SavedPath">저장된 촬영본이면 그 폴더 + stem(라벨을 같은 촬영본에 저장), 라이브면 null.</param>
+public sealed record ManualBeadFrames(CameraFrame Ir, CameraFrame? Depth, CameraFrame? Color, CameraD2CParams? D2C,
+    string Source, ManualBeadSavedRef? SavedPath);
+
+/// <summary>저장된 촬영본 위치(폴더 + stem).</summary>
+public sealed record ManualBeadSavedRef(string Dir, string Stem);
+
+/// <summary>수동 비드선 평가 결과. d 는 IR 픽셀 기준(<see cref="DIrPx"/>), mm 는 스케일을 만들 수 없으면 null.</summary>
+public sealed record ManualBeadEvaluation(string Modality, double CrossPx, double DModalityPx, double DIrPx,
+    double? DMm, double DepthZ, bool PeakFound);
+
+/// <summary>
+/// 수동 비드 입력 스냅샷(<see cref="WeldTrackingService.PrepareManualBeadAsync"/>). 사람이 본 프레임 그대로를
+/// 측정·학습 데이터 저장에 쓴다. <see cref="IrGuide"/>·<see cref="ColorGuide"/> 는 각 영상 픽셀 좌표.
+/// </summary>
+public sealed class ManualBeadSnapshot
+{
+    public int PeakId { get; init; }
+    public bool Horizontal { get; init; }
+    public ManualBeadFrames Frames { get; init; } = null!;
+    public RoiRect PeakRoi { get; init; } = null!;
+    public RoiRect BeadRoi { get; init; } = null!;
+    public CameraFrame Ir { get; init; } = null!;
+    public CameraFrame? Depth { get; init; }
+    /// <summary>컬러 프레임 — 캘리브레이션 투영이 가능할 때만(아니면 null, 컬러 입력 불가).</summary>
+    public CameraFrame? Color { get; init; }
+    public byte[] IrPng { get; init; } = [];
+    public byte[]? ColorPng { get; init; }
+    public PeakInfo? Peak { get; init; }
+    public double ProjectionZ { get; init; }
+    public double CrossScaleColorToIr { get; init; }
+    public ManualBeadGuide IrGuide { get; init; } = null!;
+    public ManualBeadGuide? ColorGuide { get; init; }
+    /// <summary>자동 검출 입력 모드("ir"/"rgb") — 자동 선 초안이 이 영상 좌표다.</summary>
+    public string AutoModality { get; init; } = "ir";
+    public DateTime CapturedAt { get; init; }
+
+    public ManualBeadGuide? GuideFor(string modality) => modality == "rgb" ? ColorGuide : IrGuide;
 }

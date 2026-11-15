@@ -144,7 +144,7 @@ public sealed partial class VisionPanelViewModel : ObservableObject
             byte[] data = cmd switch
             {
                 CommandCode.Heartbeat => BuildHeartbeat(),
-                CommandCode.CaptureReq => CaptureReqPayload.Build((SurfaceType)SurfaceType,
+                CommandCode.CaptureReq => CaptureReqPayload.Build(SurfaceTypes.OrFlat(SurfaceType),
                     Surfaces.Count > 0 ? Surfaces[Math.Clamp(SurfaceIndex, 0, Surfaces.Count - 1)].Id : (ushort)0,
                     PosX, PosY, PosZ, taskId, (byte)Math.Clamp(Attempt, 0, 255), (ushort)Math.Clamp(CaptureSeq, 0, ushort.MaxValue)),
                 _ => CaptureResPayload.Build((ResultCode)ResultCodes[Math.Clamp(ResultIndex, 0, ResultCodes.Length - 1)]),

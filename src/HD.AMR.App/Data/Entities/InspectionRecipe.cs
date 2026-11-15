@@ -43,6 +43,12 @@ public class InspectionRecipe
     /// CORNER3 는 실행 시퀀스가 제거되어 사용하지 않는다. 현장 지정값이라 '기본값' 재적용 시에도 보존된다.</summary>
     public int? InspectionProfileId { get; set; }
 
+    /// <summary>LINE 전용 — 챔퍼 면(SL/PL/SU/PU)에서 수직(경사 방향)으로 진행할 때 쓰는 티칭 프로필.
+    /// 경사 방향은 코로게이션 피치가 254.6mm 라 360mm 프로필의 경유점을 쓸 수 없다. 챔퍼 수평·일반 면은
+    /// <see cref="InspectionProfileId"/> 를 쓴다. null 이면 챔퍼 수직 LINE 액션은 FAILED + inspectionFailed
+    /// (기본 프로필로 대체하지 않음 — 엉뚱한 위치를 스캔하게 된다). 현장 지정값이라 '기본값' 재적용 시에도 보존된다.</summary>
+    public int? ChamferSlopeProfileId { get; set; }
+
     // (제거됨) ApproachTeachingKey — 레시피별 코봇 접근 자세 티칭 키. 런타임 미구현, 접근 자세는 Teaching 의 Wall ID
     //   로 결정된다. 코너부 등 위치별 접근은 고도화 단계에서 재설계(2026-09-18).
 
@@ -60,6 +66,10 @@ public class InspectionRecipe
 
     /// <summary>코봇 검사 속도 [%] — ⑱ 경유점 순회(검사 스캔) 전용. null = 이동 속도와 동일.</summary>
     public int? InspectVelPercent { get; set; }
+
+    /// <summary>코봇 검사 가속도 [%] — ⑱ 경유점 순회 동안만 전역 가속도 배율(SetOaccScale)을 이 값으로 바꾸고,
+    /// 순회가 끝나면(성공·실패·취소 모두) 100% 로 복원한다. null = 변경 안 함.</summary>
+    public int? InspectAccPercent { get; set; }
 
     // (제거됨) SurfaceOverride — 비전 Surface 강제값. X-Y 교시 경유점은 점별 Surface 를 수동 지정하고
     //   CORNER 스텝은 Corner 고정이라 무효화되어 폐기(2026-09-18). Surface 는 경유점 단위로 일원화.

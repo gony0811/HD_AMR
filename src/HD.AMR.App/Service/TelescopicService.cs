@@ -47,6 +47,19 @@ public class TelescopicService : BackgroundService
     public bool IsConnected => _client.IsOpen;
     public TelescopicSerialSettings Settings => _settings;
 
+    /// <summary>리프트를 쓰지 않는 운영인가(<c>Telescopic:Enabled = false</c>) — 높이 지령을 무시하고 고정 높이로 진행한다.</summary>
+    public bool IsDisabled => !_settings.Enabled;
+
+    /// <summary>
+    /// 계획에 쓸 리프트 높이 — 리프트가 꺼져 있으면 지령과 무관하게 고정 높이(<see cref="TelescopicSerialSettings.DisabledStrokeMm"/>),
+    /// 켜져 있으면 지령 그대로(없으면 null).
+    /// </summary>
+    public double? PlannedStrokeMm(double? requestedMm) => PlanStroke(_settings.Enabled, _settings.DisabledStrokeMm, requestedMm);
+
+    /// <summary><see cref="PlannedStrokeMm"/> 의 판정부(순수 함수 — 단위 테스트용).</summary>
+    public static double? PlanStroke(bool enabled, double disabledStrokeMm, double? requestedMm)
+        => enabled ? requestedMm : disabledStrokeMm;
+
     /// <summary>마지막 연결/통신 오류(정상 시 null).</summary>
     public string? LastError { get; private set; }
 
@@ -72,6 +85,52 @@ public class TelescopicService : BackgroundService
     public DateTime? LatestUtc
     {
         get { lock (_stateLock) return _latest is null ? null : _latestUtc; }
+    }
+
+    /// <summary>
+    /// 좌표 환산에 쓸 현재 스트로크 [mm, 완전 하강 = 0]. 상태를 못 읽었거나, 높이가 무효(−1)이거나,
+    /// 마지막 수신이 오래됐으면 null 과 사유를 돌려준다 — T_A_B 의 tz 가 스트로크만큼 변하므로(최대 1m)
+    /// 모르는 높이를 0 으로 가정하면 접근점이 그만큼 어긋난다. 호출측은 null 이면 환산을 멈춰야 한다.
+    /// </summary>
+    public double? TryGetStrokeMm(out string? reason)
+    {
+        // 리프트를 쓰지 않는 운영 — 읽을 상태가 없으므로 설정한 고정 높이를 현재 높이로 본다.
+        if (IsDisabled)
+        {
+            reason = null;
+            return _settings.DisabledStrokeMm;
+        }
+        TelescopicStatus? latest;
+        DateTime at;
+        lock (_stateLock) { latest = _latest; at = _latestUtc; }
+        return ResolveStrokeMm(latest, latest is null ? null : at, DateTime.UtcNow, StrokeMaxAge, out reason);
+    }
+
+    /// <summary>스트로크 값이 유효하다고 볼 최대 경과 시간 — 폴링 5회분, 최소 3초.</summary>
+    private TimeSpan StrokeMaxAge => TimeSpan.FromMilliseconds(Math.Max(3000, _settings.PollIntervalMs * 5));
+
+    /// <summary><see cref="TryGetStrokeMm"/> 의 판정부(순수 함수 — 단위 테스트용).</summary>
+    public static double? ResolveStrokeMm(TelescopicStatus? latest, DateTime? latestUtc, DateTime nowUtc,
+        TimeSpan maxAge, out string? reason)
+    {
+        if (latest is null || latestUtc is null)
+        {
+            reason = "텔레스코픽 상태를 아직 읽지 못했습니다";
+            return null;
+        }
+        if (latest.HeightMm < 0)
+        {
+            reason = "텔레스코픽 높이 응답이 무효입니다(파싱 실패)";
+            return null;
+        }
+        var age = nowUtc - latestUtc.Value;
+        if (age > maxAge)
+        {
+            reason = $"텔레스코픽 높이가 {age.TotalSeconds:0.0}초 전 값입니다(통신 끊김 의심)";
+            return null;
+        }
+        reason = null;
+        return latest.HeightMm;
     }
 
     /// <summary>이 환경에서 보이는 시리얼 포트 목록 — 화면의 포트 선택 도움용.</summary>
@@ -275,6 +334,53 @@ public class TelescopicService : BackgroundService
     private Task StopAsync_Internal(CancellationToken ct)
         => _client.IsOpen ? _client.SendAsync(TelescopicProtocol.Stop(), ct) : Task.FromResult<string?>(null);
 
+    /// <summary>지정 높이 도달 판정 기본 허용 오차 [mm] — 컨트롤러 1단위(≈2.41mm) 양자화 + 홀센서 정지 오차 감안.</summary>
+    public const int DefaultTargetToleranceMm = 5;
+
+    /// <summary>지정 높이 도달 후 동기화·진동 안정화 기본 대기 시간(1초).</summary>
+    public static readonly TimeSpan DefaultTargetSettleDelay = TimeSpan.FromSeconds(1.0);
+
+    private static readonly TimeSpan TargetPollInterval = TimeSpan.FromMilliseconds(200);
+    private static readonly TimeSpan TargetStartTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan TargetCompletionTimeout = TimeSpan.FromSeconds(90);
+
+    /// <summary>
+    /// 상태 스냅샷이 목표 높이(<paramref name="targetHeightMm"/> 또는 컨트롤러 양자화 높이 <paramref name="expectedHeightMm"/>)에
+    /// <paramref name="toleranceMm"/> 이내로 도달해 정지(<see cref="TelescopicProtocol.RunMode.Stopped"/>)했는지 판정한다(순수 함수).
+    /// </summary>
+    public static bool IsTargetReached(TelescopicStatus? status, int targetHeightMm, int expectedHeightMm,
+        int toleranceMm = DefaultTargetToleranceMm)
+        => status is { HeightMm: >= 0, IsHealthy: true, Mode: TelescopicProtocol.RunMode.Stopped }
+           && (Math.Abs(status.HeightMm - expectedHeightMm) <= toleranceMm
+               || Math.Abs(status.HeightMm - targetHeightMm) <= toleranceMm);
+
+    /// <summary>
+    /// 현재 유효 스트로크가 <paramref name="targetHeightMm"/>와 <paramref name="toleranceMm"/> 이내이고 정지 상태인지 확인한다.
+    /// 통신 두절·미연결·알람이면 false 와 함께 <paramref name="reason"/>에 사유를 돌려준다.
+    /// </summary>
+    public bool IsAtTargetHeight(int targetHeightMm, out int currentHeightMm, out string? reason,
+        int toleranceMm = DefaultTargetToleranceMm)
+    {
+        currentHeightMm = -1;
+        var stroke = TryGetStrokeMm(out reason);
+        if (stroke is null) return false;
+
+        var status = Latest;
+        if (status is null)
+        {
+            reason = "텔레스코픽 상태를 아직 읽지 못했습니다";
+            return false;
+        }
+        currentHeightMm = status.HeightMm;
+        if (!status.IsHealthy)
+        {
+            reason = $"텔레스코픽 알람 상태 — 에러 {status.ErrorCode} ({TelescopicProtocol.ErrorName(status.ErrorCode)})";
+            return false;
+        }
+        var expectedMm = _settings.ToMm(_settings.ToControllerUnits(targetHeightMm));
+        return IsTargetReached(status, targetHeightMm, expectedMm, toleranceMm);
+    }
+
     /// <summary>
     /// 지정 높이(실제 mm)로 이동. 반환 true=컨트롤러가 수락, false=거부(잠김·비활성·범위 등), null=응답 불명.
     /// 설정 범위(<see cref="TelescopicSerialSettings.MinHeightMm"/>~<c>MaxHeightMm</c>) 밖이면 예외.
@@ -294,6 +400,147 @@ public class TelescopicService : BackgroundService
         var response = await _client.SendAsync(
             TelescopicProtocol.Target(units, _settings.TargetDigits), ct).ConfigureAwait(false);
         return TelescopicProtocol.ParseTargetAck(response);
+    }
+
+    /// <summary>
+    /// 지정 높이(실제 mm)로 이동하고 도달 완료(<see cref="TelescopicProtocol.RunMode.Stopped"/> 및 허용 오차 이내)까지
+    /// 폴링 대기한 뒤, 상태 동기화 및 기구 흔들림 안정화를 위해 <paramref name="settleDelay"/>(기본 1초) 추가 대기 후
+    /// 최신 높이를 다시 읽어 반환한다. 이미 목표 높이에 정지해 있으면 이동·대기 없이 즉시 완료를 반환한다.
+    /// </summary>
+    public async Task<TelescopicMoveResult> MoveToHeightAndWaitAsync(
+        int heightMm, TimeSpan? settleDelay = null, int toleranceMm = DefaultTargetToleranceMm,
+        CancellationToken ct = default)
+    {
+        if (heightMm < _settings.MinHeightMm || heightMm > _settings.MaxHeightMm)
+            return TelescopicMoveResult.Fail(
+                $"지정 높이({heightMm}mm)가 운영 범위({_settings.MinHeightMm}~{_settings.MaxHeightMm}mm) 밖입니다.");
+        if (!IsConnected)
+            return TelescopicMoveResult.Fail("텔레스코픽 리프트 미연결 — 시리얼 포트 연결을 확인하세요.");
+        if (IsJogging)
+            return TelescopicMoveResult.Fail("텔레스코픽 리프트가 수동 조그 중입니다 — 조그 종료 후 다시 시도하세요.");
+
+        await RefreshAsync(ct).ConfigureAwait(false);
+        if (IsAtTargetHeight(heightMm, out var startHeightMm, out var statusError, toleranceMm))
+            return new TelescopicMoveResult(true, startHeightMm, Moved: false,
+                $"이미 목표 높이 유지 ({startHeightMm}mm, 지령 {heightMm}mm)");
+        if (statusError is not null)
+            return TelescopicMoveResult.Fail(statusError, startHeightMm);
+
+        var expectedMm = _settings.ToMm(_settings.ToControllerUnits(heightMm));
+        var settle = settleDelay ?? DefaultTargetSettleDelay;
+
+        try
+        {
+            var ack = await MoveToHeightAsync(heightMm, ct).ConfigureAwait(false);
+            if (ack == false)
+                return TelescopicMoveResult.Fail(
+                    $"텔레스코픽 컨트롤러가 지정 높이({heightMm}mm) 이동을 거부했습니다(Target:1 — 활성·잠금 해제 상태 확인).",
+                    startHeightMm);
+            if (ack is null)
+                return TelescopicMoveResult.Fail(
+                    $"텔레스코픽 지정 높이({heightMm}mm) 이동 명령 응답 불명 — 통신 상태를 확인하세요.",
+                    startHeightMm);
+
+            var startedUtc = DateTime.UtcNow;
+            var movingSeen = false;
+            var stoppedAtTargetCount = 0;
+            DateTime? stoppedOffTargetSinceUtc = null;
+
+            while (DateTime.UtcNow - startedUtc < TargetCompletionTimeout)
+            {
+                await Task.Delay(TargetPollInterval, ct).ConfigureAwait(false);
+                await PollAsync(ct).ConfigureAwait(false);
+
+                var status = Latest;
+                if (status is null || status.HeightMm < 0)
+                    continue;
+
+                if (!status.IsHealthy)
+                {
+                    await StopAsync_Internal(CancellationToken.None).ConfigureAwait(false);
+                    return TelescopicMoveResult.Fail(
+                        $"텔레스코픽 이동 중 알람 발생 — 에러 {status.ErrorCode} ({TelescopicProtocol.ErrorName(status.ErrorCode)}, 현재 {status.HeightMm}mm)",
+                        status.HeightMm);
+                }
+
+                if (status.Mode != TelescopicProtocol.RunMode.Stopped
+                    || Math.Abs(status.HeightMm - startHeightMm) > toleranceMm)
+                {
+                    movingSeen = true;
+                }
+
+                if (IsTargetReached(status, heightMm, expectedMm, toleranceMm))
+                {
+                    stoppedAtTargetCount++;
+                    stoppedOffTargetSinceUtc = null;
+                    if (stoppedAtTargetCount < 2)
+                        continue;
+
+                    _logger.LogInformation(
+                        "텔레스코픽 목표 높이 도달 확인 ({Start}mm → {Cur}mm, 지령 {Target}mm) — 안정화 대기 {Settle:0.0}s",
+                        startHeightMm, status.HeightMm, heightMm, settle.TotalSeconds);
+
+                    if (settle > TimeSpan.Zero)
+                        await Task.Delay(settle, ct).ConfigureAwait(false);
+
+                    await PollAsync(ct).ConfigureAwait(false);
+                    var finalStatus = Latest ?? status;
+                    if (!finalStatus.IsHealthy)
+                        return TelescopicMoveResult.Fail(
+                            $"텔레스코픽 안정화 대기 중 알람 발생 — 에러 {finalStatus.ErrorCode} ({TelescopicProtocol.ErrorName(finalStatus.ErrorCode)})",
+                            finalStatus.HeightMm);
+                    if (!IsTargetReached(finalStatus, heightMm, expectedMm, toleranceMm))
+                        return TelescopicMoveResult.Fail(
+                            $"텔레스코픽 안정화 후 높이 이탈 (목표 {heightMm}mm, 현재 {finalStatus.HeightMm}mm, 모드 {TelescopicProtocol.ModeName(finalStatus.Mode)})",
+                            finalStatus.HeightMm);
+
+                    var elapsedSec = (DateTime.UtcNow - startedUtc).TotalSeconds;
+                    _logger.LogInformation(
+                        "텔레스코픽 이동·안정화 완료 ({Start}mm → {Final}mm, 지령 {Target}mm, 총 {Elapsed:0.1}s)",
+                        startHeightMm, finalStatus.HeightMm, heightMm, elapsedSec);
+
+                    return new TelescopicMoveResult(
+                        true, finalStatus.HeightMm, Moved: true,
+                        $"리프트 이동 완료 ({startHeightMm}→{finalStatus.HeightMm}mm, 지령 {heightMm}mm, 소요 {elapsedSec:0.1}s, 안정화 {settle.TotalSeconds:0.1}s 포함)");
+                }
+
+                stoppedAtTargetCount = 0;
+                if (status.Mode == TelescopicProtocol.RunMode.Stopped)
+                {
+                    stoppedOffTargetSinceUtc ??= DateTime.UtcNow;
+                    var limit = movingSeen ? TimeSpan.FromSeconds(1.5) : TargetStartTimeout;
+                    if (DateTime.UtcNow - stoppedOffTargetSinceUtc.Value >= limit)
+                    {
+                        return TelescopicMoveResult.Fail(
+                            $"텔레스코픽 리프트가 목표 높이({heightMm}mm, 환산 {expectedMm}mm)에 도달하지 못하고 정지했습니다 (현재 {status.HeightMm}mm, 시작 {startHeightMm}mm).",
+                            status.HeightMm);
+                    }
+                }
+                else
+                {
+                    stoppedOffTargetSinceUtc = null;
+                }
+            }
+
+            await StopAsync_Internal(CancellationToken.None).ConfigureAwait(false);
+            var lastMm = Latest?.HeightMm ?? -1;
+            return TelescopicMoveResult.Fail(
+                $"텔레스코픽 리프트 이동 타임아웃 ({TargetCompletionTimeout.TotalSeconds:0}s) — 목표 {heightMm}mm, 현재 {(lastMm >= 0 ? $"{lastMm}mm" : "미상")}.",
+                lastMm);
+        }
+        catch (OperationCanceledException)
+        {
+            try { await StopAsync_Internal(CancellationToken.None).ConfigureAwait(false); }
+            catch (Exception ex) { _logger.LogWarning(ex, "텔레스코픽 이동 취소 중 정지 명령 실패"); }
+            throw;
+        }
+        catch (Exception)
+        {
+            // 폴링 중 통신 예외(시리얼 타임아웃·IO) — 지령은 이미 나갔으므로 정지시키지 않으면 무인 이동이 계속된다.
+            try { await StopAsync_Internal(CancellationToken.None).ConfigureAwait(false); }
+            catch (Exception stopEx) { _logger.LogWarning(stopEx, "텔레스코픽 이동 예외 발생 후 비상 정지 명령 실패"); }
+            throw;
+        }
     }
 
     /// <summary>메모리 슬롯(1~3)으로 이동 — 명령 50ms 유지 후 정지.</summary>
@@ -386,4 +633,15 @@ public class TelescopicService : BackgroundService
         _client.Dispose();
         base.Dispose();
     }
+}
+
+/// <summary>텔레스코픽 리프트 지정 높이 이동·도달 대기 결과.</summary>
+/// <param name="Ok">성공 여부.</param>
+/// <param name="FinalHeightMm">최종 확인 높이 [mm]. 미상 시 −1.</param>
+/// <param name="Moved">실제로 이동 명령이 수행되었는지(이미 목표 높이면 false).</param>
+/// <param name="Message">결과/오류 설명.</param>
+public sealed record TelescopicMoveResult(bool Ok, int FinalHeightMm, bool Moved, string Message)
+{
+    public static TelescopicMoveResult Fail(string message, int currentHeightMm = -1)
+        => new(false, currentHeightMm, false, message);
 }

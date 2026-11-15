@@ -5,6 +5,9 @@ using CommunityToolkit.Mvvm.Input;
 using HD.AMR.App.Communication;
 using HD.AMR.App.Enums;
 using HD.AMR.App.Service;
+using HD.AMR.App.Service.Sequence;
+using Microsoft.Extensions.DependencyInjection;
+using System.Globalization;
 
 namespace HD.AMR.Desktop.ViewModels;
 
@@ -20,6 +23,8 @@ public sealed partial class HomeViewModel : ViewModelBase
     private readonly IoModuleService _io;
     private readonly Vda5050AdapterService _vda;
     private readonly DispatcherTimer _timer;
+    private readonly IServiceScopeFactory _scopes;
+    private readonly BeadManualLabelHub _beadHub;
     public AmrMapViewModel Map { get; }
 
     public ObservableCollection<string> MapIdOptions { get; } = new();
@@ -27,8 +32,10 @@ public sealed partial class HomeViewModel : ViewModelBase
     [ObservableProperty] private string? _mapIdStatus;
 
     public HomeViewModel(AMRService amr, CobotService cobot, CameraService camera, IoModuleService io,
-        Vda5050AdapterService vda, AmrMapViewModel map)
+        Vda5050AdapterService vda, AmrMapViewModel map, IServiceScopeFactory scopes, BeadManualLabelHub beadHub)
     {
+        _scopes = scopes;
+        _beadHub = beadHub;
         _amr = amr;
         _cobot = cobot;
         _camera = camera;
@@ -46,6 +53,7 @@ public sealed partial class HomeViewModel : ViewModelBase
         _ = RefreshAsync();
         _timer.Start();
         _ = Map.EnsureActiveMapLoadedAsync();
+        _ = LoadBeadManualAsync();
     }
 
     public override void OnDeactivated() => _timer.Stop();
@@ -126,4 +134,59 @@ public sealed partial class HomeViewModel : ViewModelBase
         MapIdStatus = $"적용됨 {DateTime.Now:HH:mm:ss} — 현재 맵 {_vda.CurrentMapId} (state 즉시 발행)";
         OnPropertyChanged(string.Empty);
     }
+
+    // ── 수동 비드 입력(시퀀스 Bead 찾기 팝업) ─────────────────────────
+    /// <summary>드롭다운 항목 — <see cref="BeadManualTrigger"/> 순서와 같다.</summary>
+    public string[] BeadTriggerOptions { get; } = ["팝업 안 함", "실패 시", "실패·저신뢰 시", "매번"];
+
+    [ObservableProperty] private int _beadTriggerIndex = -1;
+    [ObservableProperty] private string _beadTriggerStatus = "";
+    [ObservableProperty] private string _beadManualInfo = "";
+    private bool _beadLoading;
+
+    /// <summary>테스트 팝업 열기 요청 — 뷰가 창을 띄운다.</summary>
+    public event Action? BeadPopupRequested;
+
+    /// <summary>시퀀스가 지금 수동 입력을 기다리는 중.</summary>
+    public bool BeadSequenceWaiting => _beadHub.Pending is not null;
+
+    private async Task LoadBeadManualAsync()
+    {
+        try
+        {
+            using var scope = _scopes.CreateScope();
+            var param = scope.ServiceProvider.GetRequiredService<ParameterService>();
+            var trigger = BeadManualSettings.ParseTrigger(await param.GetAsync(BeadManualSettings.TriggerKey))
+                          ?? BeadManualSettings.DefaultTrigger;
+            var minConf = await param.GetDoubleAsync(BeadManualSettings.MinConfidenceKey) ?? BeadManualSettings.DefaultMinConfidence;
+            var timeout = await param.GetIntAsync(BeadManualSettings.TimeoutSecKey) ?? BeadManualSettings.DefaultTimeoutSec;
+            _beadLoading = true;
+            BeadTriggerIndex = (int)trigger;
+            BeadManualInfo = $"저신뢰 기준 coverage < {minConf.ToString("P0", CultureInfo.InvariantCulture)} · 응답 대기 {timeout}s";
+        }
+        catch (Exception ex) { BeadTriggerStatus = $"파라미터 읽기 실패: {ex.Message}"; }
+        finally { _beadLoading = false; }
+    }
+
+    partial void OnBeadTriggerIndexChanged(int value)
+    {
+        if (_beadLoading || value < 0 || value > 3) return;
+        _ = SaveBeadTriggerAsync((BeadManualTrigger)value);
+    }
+
+    private async Task SaveBeadTriggerAsync(BeadManualTrigger trigger)
+    {
+        try
+        {
+            using var scope = _scopes.CreateScope();
+            var param = scope.ServiceProvider.GetRequiredService<ParameterService>();
+            var desc = BeadManualSettings.SeedDefaults().First(d => d.Name == BeadManualSettings.TriggerKey).Desc;
+            await param.SetAsync(BeadManualSettings.TriggerKey, BeadManualSettings.ToParam(trigger), desc);
+            BeadTriggerStatus = $"저장됨 {DateTime.Now:HH:mm:ss} — {BeadManualSettings.TriggerKey} = {BeadManualSettings.ToParam(trigger)}";
+        }
+        catch (Exception ex) { BeadTriggerStatus = $"저장 실패: {ex.Message}"; }
+    }
+
+    [RelayCommand]
+    private void OpenBeadPopup() => BeadPopupRequested?.Invoke();
 }

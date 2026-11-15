@@ -121,6 +121,21 @@
                     <StackPanel><TextBlock Classes="axis" Text="z (m)" /><NumericUpDown Value="{Binding SeamEndZ}" Increment="0.01" FormatString="0.000" IsEnabled="{Binding !Busy}" /></StackPanel>
                 </StackPanel>
                 <TextBlock Classes="hint" Text="wall_code 는 위 '검사 Wall (Surface)' 선택에서 정해집니다 (면 법선 자세 계산용)." />
+
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                    <CheckBox Content="비전 (u,v) 면 좌표로 전송" IsChecked="{Binding FaceUvEnabled}" IsEnabled="{Binding !Busy}" VerticalAlignment="Bottom"
+                              ToolTip.Tip="끄면 CAPTURE_REQ (u,v) 에 작업물 좌표(용접선 시작점 기준 X,Y)를 그대로 보냅니다. 켜면 아래 시작점 면 좌표와 용접선 방향으로 면-로컬 좌표를 계산합니다." />
+                    <StackPanel ToolTip.Tip="용접선 시작점의 면-로컬 u — ACS drawingPos.u 와 같은 값(m)"><TextBlock Classes="axis" Text="시작점 u (m)" /><NumericUpDown Value="{Binding FaceOriginU}" Increment="0.01" FormatString="0.000" IsEnabled="{Binding FaceUvEnabled}" /></StackPanel>
+                    <StackPanel ToolTip.Tip="용접선 시작점의 면-로컬 v — ACS drawingPos.v 와 같은 값(m)"><TextBlock Classes="axis" Text="시작점 v (m)" /><NumericUpDown Value="{Binding FaceOriginV}" Increment="0.01" FormatString="0.000" IsEnabled="{Binding FaceUvEnabled}" /></StackPanel>
+                    <StackPanel ToolTip.Tip="면 위에서 본 용접선 방향(시작점→끝점, 작업물 X+). 면별 U/V 축은 비전 사양 §5"><TextBlock Classes="axis" Text="용접선 방향(면)" />
+                        <ComboBox SelectedIndex="{Binding FaceSeamDirIndex}" IsEnabled="{Binding FaceUvEnabled}" MinWidth="90">
+                            <ComboBoxItem>+U</ComboBoxItem>
+                            <ComboBoxItem>−U</ComboBoxItem>
+                            <ComboBoxItem>+V</ComboBoxItem>
+                            <ComboBoxItem>−V</ComboBoxItem>
+                        </ComboBox></StackPanel>
+                </StackPanel>
+                <TextBlock Classes="hint" Text="u = u0 + X·ex.u + Y·ey.u, v = v0 + X·ex.v + Y·ey.v, h = Z (ex = 용접선 방향, ey = ex 를 +90° 회전, X/Y/Z = 경유점 작업물 좌표 mm). 수동 실행 전용 — ACS 실행에는 아직 적용되지 않습니다." />
             </StackPanel>
         </Border>
 

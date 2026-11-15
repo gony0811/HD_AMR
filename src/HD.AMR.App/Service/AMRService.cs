@@ -143,9 +143,9 @@ public class AMRService : BackgroundService
             WiFi = (WiFiState)r[AmrRegisterMap.Input.WiFi],
             WorkStatus = (WorkStatus)r[AmrRegisterMap.Input.WorkStatus],
             Pose = new RobotPose(
-                RegistersToFloat(r[AmrRegisterMap.Input.PoseX], r[AmrRegisterMap.Input.PoseX + 1]),
-                RegistersToFloat(r[AmrRegisterMap.Input.PoseY], r[AmrRegisterMap.Input.PoseY + 1]),
-                RegistersToFloat(r[AmrRegisterMap.Input.PoseAngle], r[AmrRegisterMap.Input.PoseAngle + 1])
+                HiLoToFloat(r[AmrRegisterMap.Input.PoseX], r[AmrRegisterMap.Input.PoseX + 1]),
+                HiLoToFloat(r[AmrRegisterMap.Input.PoseY], r[AmrRegisterMap.Input.PoseY + 1]),
+                HiLoToFloat(r[AmrRegisterMap.Input.PoseAngle], r[AmrRegisterMap.Input.PoseAngle + 1])
             ),
             MapStatusPercent = r[AmrRegisterMap.Input.MapStatus] / 10000f * 100f,
             DrivingMode = (DrivingMode)r[AmrRegisterMap.Input.DrivingMode],
@@ -219,14 +219,20 @@ public class AMRService : BackgroundService
 
     #endregion
 
-    /// <summary>2개의 UInt16 레지스터를 Float32로 변환 (Little-Endian word order: 첫 번째=Lo, 두 번째=Hi)</summary>
-    private static float RegistersToFloat(ushort first, ushort second)
+    /// <summary>
+    /// 입력 레지스터 2개(Hi 먼저)를 Float32로 변환 — TARS-M 포즈(X·Y·RZ) 레지스터 순서.
+    /// 실기 원시값으로 확인(<see cref="AmrRegisterMap.Input.PoseX"/> 주석).
+    /// </summary>
+    internal static float HiLoToFloat(ushort hi, ushort lo)
     {
-        var combined = ((uint)second << 16) | first;
+        var combined = ((uint)hi << 16) | lo;
         return BitConverter.Int32BitsToSingle((int)combined);
     }
 
-    /// <summary>Float32를 2개의 UInt16 레지스터로 변환 (Little-Endian word order: [0]=Lo, [1]=Hi)</summary>
+    /// <summary>
+    /// Float32를 2개의 UInt16 레지스터로 변환 (Little-Endian word order: [0]=Lo, [1]=Hi) — Holding 포즈 탐색 좌표 쓰기용.
+    /// ※ 입력 포즈 레지스터는 Hi 먼저로 실기 확인됨(<see cref="HiLoToFloat"/>). 이 쓰기 순서·주소는 실기 미확인 — 포즈 탐색 사용 전 대조 필요.
+    /// </summary>
     private static ushort[] FloatToRegisters(float value)
     {
         var bits = (uint)BitConverter.SingleToInt32Bits(value);

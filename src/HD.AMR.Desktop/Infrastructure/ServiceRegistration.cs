@@ -81,11 +81,15 @@ internal static class ServiceRegistration
         {
             services.AddSingleton<IWeldVisionDetector, WeldVisionDetector>();
             services.AddSingleton<IDlWeldVisionDetector, DlWeldVisionDetector>();
+            services.AddSingleton<IRidgeWeldVisionDetector, RidgeWeldVisionDetector>();
+            services.AddSingleton<IUnetWeldVisionDetector, UnetWeldVisionDetector>();
         }
         else
         {
             services.AddSingleton<IWeldVisionDetector, NoopWeldVisionDetector>();
             services.AddSingleton<IDlWeldVisionDetector, NoopWeldVisionDetector>();
+            services.AddSingleton<IRidgeWeldVisionDetector, NoopWeldVisionDetector>();
+            services.AddSingleton<IUnetWeldVisionDetector, NoopWeldVisionDetector>();
         }
         services.AddSingleton(sp =>
         {
@@ -96,6 +100,8 @@ internal static class ServiceRegistration
         // DL 학습 오케스트레이터(학습 프로세스가 페이지와 무관하게 살아야 함) + ONNX 추론(세션 캐시) — 싱글톤.
         services.AddSingleton<WeldTrainingService>();
         services.AddSingleton<OnnxBeadSegmentationService>();
+        // 검출 방식 일괄 비교평가(선 라벨 정답 대비) — 결과(LastReport)를 페이지 이동 후에도 유지.
+        services.AddSingleton<WeldDetectionBenchmarkService>();
 
         // 도면 저장/변환(DrawingService 의존성).
         var uploadDir = Path.Combine(AppDataDir(), "UploadedDrawings");
@@ -121,6 +127,8 @@ internal static class ServiceRegistration
             HD.AMR.App.Service.Inspection.WeldInspectionOrchestrator>();
         // VDA 5050 어댑터(ACS↔AMR) — connection/state 발행 + order 실행 + instantActions. Enabled=false 면 유휴.
         services.Configure<HD.AMR.App.Communication.Vda5050.Vda5050AdapterSettings>(config.GetSection("Vda5050"));
+        // 주행 중 코봇 반경 장애물 감시(파라미터 cobotGuard.enabled, 기본 끔) — 실행기·어댑터·IO 가 상태를 본다.
+        AddHostedSingleton<CobotObstacleGuard>(services);
         services.AddSingleton<Vda5050OrderExecutor>();
         AddHostedSingleton<Vda5050AdapterService>(services);
         // 통신 단절 Fail-Safe(docs/HD_AMR_통신단절_FailSafe_사양.md) — 일시정지 게이트 + 단절 감시(GRACE→PAUSE→HOLD).
@@ -129,6 +137,8 @@ internal static class ServiceRegistration
         // 장치 통신 HEAVY 알람(비전·Depth·레이저·IO·코봇·AMR) — 공유 상태 + 감시. 알람 중 order 거부, RESET 으로 해제.
         services.Configure<DeviceHealthSettings>(config.GetSection("DeviceHealth"));
         services.AddSingleton<DeviceAlarmState>();
+        // 코봇 도달·순회 경고 배너 — HEAVY 알람과 분리(order 를 잠그지 않음).
+        services.AddSingleton<OperatorAlarmState>();
         AddHostedSingleton<DeviceHealthMonitorService>(services);
         // AMR 장비 자체 상태 변화(모드·이동·조그·오류)를 운영 로그(출처 AMR)로 기록.
         services.AddHostedService<AmrActivityLogService>();
@@ -141,6 +151,9 @@ internal static class ServiceRegistration
         services.AddScoped<HD.AMR.App.Service.Motion.PostureLimitsService>();
         // 용접선 점(맵 좌표) → 코봇 BASE 접근점 환산 — ② 검사위치 이동과 드라이런 끝점 이동이 공유.
         services.AddScoped<HD.AMR.App.Service.Inspection.SeamApproachResolver>();
+        // 정차 거리·높이 격자를 컨트롤러 IK 로 훑는 리치 맵(코봇 이동 없음) — 용접 위치 시험 ⑤.
+        services.AddScoped<HD.AMR.App.Service.Motion.ReachMapService>();
+        services.AddScoped<HD.AMR.App.Service.Motion.CobotReachPrecheck>();
         services.AddScoped<ArucoHandEyeService>();
         services.AddScoped<HandEyeAutoRoutine>();   // 핸드아이 자동 캡처(코봇 자동 이동) — ArucoHandEyeService(Scoped) 의존.
         services.AddScoped<ArucoMountAutoRoutine>(); // AMR+코봇 자동 이동 ArUco 장착보정 표본 수집.
@@ -152,6 +165,11 @@ internal static class ServiceRegistration
         // ── 시퀀스(스텝 그래프 + 실행/모니터) ───────────────────────
         // SequenceMonitorService 는 별도 모니터 창과 공유하므로 싱글톤.
         services.AddSingleton<SequenceMonitorService>();
+        // 수동 비드 입력: 요청 허브는 메인 창과 공유(싱글톤), 실행 헬퍼는 스텝과 같은 스코프.
+        services.AddSingleton<BeadManualLabelHub>();
+        services.AddScoped<HD.AMR.App.Service.Sequence.Steps.BeadManualAssist>();
+        services.AddScoped<HD.AMR.App.Service.Sequence.Steps.BeadManualTestService>();
+        services.AddScoped<HD.AMR.App.Service.Sequence.Steps.BeadManualJogService>();
         AddSequenceSteps(services);
         // SequenceService 는 스텝/상태를 보유 — 페이지 수명 scope 에서 해석(뷰모델이 scope 개방).
         services.AddScoped<SequenceService>();
@@ -180,6 +198,7 @@ internal static class ServiceRegistration
         services.AddTransient<TeachingViewModel>();
         services.AddTransient<LabelEditorViewModel>();
         services.AddTransient<VisionTrainingViewModel>();
+        services.AddTransient<WeldBenchmarkViewModel>();
         services.AddTransient<LaserViewModel>();
         services.AddTransient<HandEyeViewModel>();
         services.AddTransient<ArucoCalibrationViewModel>();
@@ -199,8 +218,13 @@ internal static class ServiceRegistration
         services.AddScoped<ISequenceStep, CobotInspectionMoveStep>();
         services.AddScoped<ISequenceStep, CameraAlignStep>();
         services.AddScoped<ISequenceStep, CameraAlignRefineStep>();
-        services.AddScoped<ISequenceStep, FlatSurfaceAlignStep>();
-        services.AddScoped<ISequenceStep, LaserWorkingDistanceStep>();
+        services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<FlatSurfaceAlignStep>(sp, true));
+        services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<FlatSurfaceAlignStep>(sp, false));
+        services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<LaserWorkingDistanceStep>(
+            sp, "laserWorkingDistance", "레이저 WD 거리 조정", 450));
+        services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<LaserWorkingDistanceStep>(
+            sp, LaserWorkingDistanceStep.BundlePoint2Key, "묶음 점2 WD 조정", 820));
+        services.AddScoped<ISequenceStep, DepthCamCenterShiftStep>();
         services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<PeakFindStep>(sp, 1));
         services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<PeakCenteringStep>(sp, 1));
         services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<BeadFindStep>(sp, 1));
