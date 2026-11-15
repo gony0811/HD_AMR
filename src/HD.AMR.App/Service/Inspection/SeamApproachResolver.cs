@@ -192,8 +192,11 @@ public sealed class SeamApproachResolver
                     MountAtHome: mount, TelescopicStrokeMm: stroke, ZDatumOffsetMm: context.ZDatumOffsetMm,
                     StandoffMm: standoff, WallFacingThetaRad: context.WallFacingThetaRad, WallCode: context.WallCode,
                     OpticalAxis: opticalAxis)).NormalDistanceMm;
-                var extra = StationAdjustPlanner.NeededBackwardMm(new StationAdjustSeam(
-                    label, target.NormalDistanceMm, probe, reach.RequiredNormalDistanceMm)) ?? -1;
+                // 측면 정차는 후진이 벽과 나란해 거리를 못 고친다(사양 D2) — 후진 요구량 없음(−1).
+                var extra = context.StationMode.IsSide()
+                    ? -1
+                    : StationAdjustPlanner.NeededBackwardMm(new StationAdjustSeam(
+                        label, target.NormalDistanceMm, probe, reach.RequiredNormalDistanceMm)) ?? -1;
                 return new SeamApproachResult(null, null, useComputed, "",
                     $"정차 거리 부족 — 필요 ≥ {reach.RequiredNormalDistanceMm:0}mm, 현재 {target.NormalDistanceMm:0}mm " +
                     $"(후퇴 {standoff:0} + 공구 {toolLen:0} + 최소 뻗음 {limits.MinFlangeReachMm:0}). " +

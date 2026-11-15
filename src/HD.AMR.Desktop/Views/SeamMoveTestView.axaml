@@ -147,6 +147,9 @@
         <TextBlock Classes="cardHead" Text="⑤ 리치 맵 (정차 위치 최적화 근거)"/>
         <TextBlock Classes="hint" Text="AMR 이 벽을 정면으로 보고 섰다고 두고, 용접선 점을 차체 기준 (x 전방 · y 좌측 · z 바닥 위 높이)으로 격자로 놓아 역기구학(컨트롤러 또는 오프라인 모델)으로 닿는지 판정합니다. 코봇은 움직이지 않습니다. 수직벽에서 x 는 곧 벽 ↔ 로봇 기준점 정차 이격입니다. 바닥(B)은 z 를 0 으로 고정하고, 천장(T)은 z 를 천장 높이로 읽습니다. 셀마다 ② 거친 접근 · 정렬 준비(수평 맞춤 등 사전 작업) · 초점 검사(TCP 초점을 용접선 위에) 세 자세가 모두 풀려야 '도달' 입니다(J6 은 운영에서 따로 맞추므로 제외). 장착 보정·공구 길이·자세 허용 범위·광축은 저장값을 씁니다."/>
         <WrapPanel>
+          <StackPanel Margin="0,0,10,8"><TextBlock Classes="axis" Text="정차 방식"/>
+            <ComboBox Width="140" ItemsSource="{Binding ReachModes}" SelectedItem="{Binding ReachMode}"
+                      ToolTip.Tip="FRONT = 벽 정면(+X). SIDE_LEFT/RIGHT = 측면 정차 검사 — 벽이 차체 왼쪽(+Y)/오른쪽(−Y), 출발 자세는 '검사 준비 — 측면 좌/우'. 측면은 수직벽(PM/SM/F/A)만이고, |y| 가 벽까지 옆 거리, x 가 벽 따라 앞뒤 위치입니다."/></StackPanel>
           <StackPanel Margin="0,0,10,8"><TextBlock Classes="axis" Text="wall_code (쉼표)"/><TextBox Width="160" Text="{Binding ReachWallCodes}"/></StackPanel>
           <StackPanel Margin="0,0,10,8"><TextBlock Classes="axis" Text="스트로크 h (mm, 쉼표)"/><TextBox Width="160" Text="{Binding ReachStrokes}"/></StackPanel>
           <StackPanel Margin="0,0,10,8"><TextBlock Classes="axis" Text="② 거친 접근 (mm)"/><NumericUpDown Classes="num" Value="{Binding ReachApproachMm}" Increment="10" FormatString="0"/></StackPanel>
@@ -179,6 +182,12 @@
         <StackPanel Orientation="Horizontal" Spacing="8">
           <Button Classes="accent" Content="리치 맵 생성" Command="{Binding RunReachMapCommand}"/>
           <Button Content="취소" Command="{Binding CancelReachMapCommand}"/>
+        </StackPanel>
+        <StackPanel Orientation="Horizontal" Spacing="8">
+          <TextBlock Classes="axis" VerticalAlignment="Center" Text="ACS 전달 버전"/>
+          <NumericUpDown Classes="num" Value="{Binding ReachExportVersion}" Minimum="1" Increment="1" FormatString="0"/>
+          <Button Content="측면 리치 맵 JSON 내보내기" Command="{Binding ExportSideReachCommand}"
+                  ToolTip.Tip="reachmaps 폴더의 최신 측면 맵(SIDE_LEFT·SIDE_RIGHT, 지금 장비 조건과 같은 것)을 모아 ACS 전달용 JSON 을 만듭니다(측면 정차 검사 사양 §8.2). 재계산하면 버전을 올리세요."/>
         </StackPanel>
         <TextBlock Classes="mono" Text="{Binding ReachProgressText}" TextWrapping="Wrap"/>
         <TextBlock Classes="mono" Text="{Binding ReachSummaryText}" TextWrapping="Wrap"/>

@@ -2,6 +2,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HD.AMR.App.Models;
 using HD.AMR.App.Service;
+using HD.AMR.App.Service.Inspection;
 using HD.AMR.App.Service.Motion;
 using HD.AMR.App.Service.Sequence.Steps;
 using Microsoft.Extensions.DependencyInjection;
@@ -35,6 +36,54 @@ public sealed partial class SeamMoveTestViewModel
     [ObservableProperty] private bool _reachRunning;
     [ObservableProperty] private string _reachProgressText = "";
     [ObservableProperty] private string _reachSummaryText = "";
+
+    /// <summary>정차 방식 — FRONT(종전) 또는 측면(측면 정차 검사 사양 §8).</summary>
+    public IReadOnlyList<string> ReachModes { get; } = new[] { "FRONT", "SIDE_LEFT", "SIDE_RIGHT" };
+    [ObservableProperty] private string _reachMode = "FRONT";
+    [ObservableProperty] private decimal _reachExportVersion = 1;
+
+    partial void OnReachModeChanged(string value)
+    {
+        // 측면은 수직벽만 — 기본 면 목록이 다른 면을 품고 있으면 수직벽 4종으로 바꿔 준다.
+        if (value != "FRONT" && ReachWallCodes.Split(new[] { ',', ' ' }, StringSplitOptions.RemoveEmptyEntries)
+                .Any(w => !StationModes.IsSideWall(w.Trim().ToUpperInvariant())))
+            ReachWallCodes = string.Join(",", StationModes.SideWallCodes);
+        OnPropertyChanged(nameof(ReachSizeText));
+    }
+
+    [RelayCommand]
+    private void ExportSideReach()
+    {
+        try
+        {
+            var dir = ReachMapService.OutputDirectory;
+            if (!Directory.Exists(dir)) { Failure($"리치 맵 폴더가 없습니다: {dir}"); return; }
+            // 방식별 최신 측면 맵 한 장씩(같은 방식이면 최신이 이긴다).
+            var latest = new Dictionary<StationMode, (ReachMapFile File, string Path)>();
+            foreach (var path in Directory.EnumerateFiles(dir, "reachmap*.csv").OrderBy(File.GetLastWriteTimeUtc))
+            {
+                var file = ReachMapCsv.Parse(File.ReadAllText(path));
+                if (file is not null && file.Stamp.Mode.IsSide()) latest[file.Stamp.Mode] = (file, path);
+            }
+            if (latest.Count == 0) { Failure("측면 리치 맵(SIDE_LEFT/SIDE_RIGHT) CSV 가 없습니다 — 정차 방식을 측면으로 두고 먼저 생성하세요."); return; }
+            if (latest.Count == 2 && !ReachMapCsv.StampMatches(latest[StationMode.SideLeft].File.Stamp,
+                    latest[StationMode.SideRight].File.Stamp with { Mode = StationMode.SideLeft }))
+            {
+                Failure("좌/우 측면 맵의 장비 조건(장착·공구·이격 등)이 서로 다릅니다 — 같은 조건으로 다시 생성하세요.");
+                return;
+            }
+
+            var strokes = latest.Values.SelectMany(v => v.File.Cells.Select(c => c.StrokeMm)).ToList();
+            var version = (int)ReachExportVersion;
+            var json = SideReachExport.Build(latest.Values.Select(v => v.File), version, DateTimeOffset.Now,
+                (strokes.Min(), strokes.Max()));
+            var outPath = Path.Combine(dir, $"side_reachmap_v{version}_{DateTime.Now:yyyyMMdd_HHmmss}.json");
+            File.WriteAllText(outPath, json);
+            var missing = latest.Count == 2 ? "" : $" (주의: {(latest.ContainsKey(StationMode.SideLeft) ? "SIDE_RIGHT" : "SIDE_LEFT")} 맵 없음)";
+            Success($"측면 리치 맵 JSON 저장: {outPath} — 원본 {string.Join(", ", latest.Values.Select(v => Path.GetFileName(v.Path)))}{missing}");
+        }
+        catch (Exception ex) { Failure($"측면 리치 맵 내보내기 실패: {ex.Message}"); }
+    }
 
     /// <summary>입력 격자의 셀 수와 최대 IK 호출 수 — 시작 전에 규모를 보여 준다.</summary>
     public string ReachSizeText
@@ -74,6 +123,9 @@ public sealed partial class SeamMoveTestViewModel
         if (walls.Length == 0) { error = "wall_code 를 하나 이상 입력하세요."; return null; }
         var unknown = walls.Where(w => WallCodes.Find(w) is null).ToArray();
         if (unknown.Length > 0) { error = $"미정의 wall_code: {string.Join(", ", unknown)}"; return null; }
+        if (!StationModes.TryParse(ReachMode, out var mode, out var modeError)) { error = modeError; return null; }
+        if (mode.IsSide() && walls.FirstOrDefault(w => !StationModes.IsSideWall(w)) is { } notSide)
+        { error = $"측면 리치 맵은 수직벽(PM/SM/F/A)만 — {notSide}"; return null; }
 
         var strokes = new List<double>();
         foreach (var s in ReachStrokes.Split(new[] { ',', ' ' }, StringSplitOptions.RemoveEmptyEntries))
@@ -90,7 +142,8 @@ public sealed partial class SeamMoveTestViewModel
             ReachMapSpec.Range(ReachZFrom, ReachZTo, ReachZStep),
             ApproachStandoffMm: ReachApproachMm,
             AlignStandoffMm: ReachAlignMm,
-            FocusStandoffMm: ReachFocusMm);
+            FocusStandoffMm: ReachFocusMm,
+            Mode: mode);
     }
 
     private bool CanRunReachMap() => !ReachRunning && !Busy && (ReachOffline || CobotConnected);

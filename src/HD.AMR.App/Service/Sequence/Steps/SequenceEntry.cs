@@ -1,5 +1,6 @@
 using HD.AMR.App.Communication;
 using HD.AMR.App.Models;
+using HD.AMR.App.Service.Inspection;
 using Microsoft.Extensions.Logging;
 
 namespace HD.AMR.App.Service.Sequence.Steps;
@@ -74,10 +75,55 @@ internal static class SequenceEntry
                 : StepValidation.Fail(
                     $"홈 위치_2 미티칭 — 상부 면({context.WallCode})은 홈 위치_2 자세에서 진입합니다. Teaching에서 먼저 저장하세요.");
 
-        return context.Positions.TryGetValue("ready", out var ready) && ready.IsTaught
-            ? StepValidation.Ok()
-            : StepValidation.Fail("작업 준비 위치(ready) 미티칭 — Teaching에서 먼저 저장하세요.");
+        if (!(context.Positions.TryGetValue("ready", out var ready) && ready.IsTaught))
+            return StepValidation.Fail("작업 준비 위치(ready) 미티칭 — Teaching에서 먼저 저장하세요.");
+
+        // 측면 정차 검사는 ready 다음에 측면 검사 준비 자세를 거친다(측면 정차 검사 사양 §5.2).
+        if (TeachingService.SideReadyKey(context.StationMode) is { } sideKey && TaughtJoints(context, sideKey) is null)
+            return StepValidation.Fail(
+                $"{SideSlotName(context.StationMode)} 미티칭 — 측면 검사({context.StationMode.ToWire()})는 이 자세에서 진입합니다. " +
+                "Teaching에서 ready 자세의 J1 만 90° 돌려 저장하세요.");
+        return StepValidation.Ok();
     }
+
+    private static string SideSlotName(Inspection.StationMode mode)
+        => mode == Inspection.StationMode.SideLeft ? "검사 준비 — 측면 좌" : "검사 준비 — 측면 우";
+
+    private static int _lastSideMode = -1;   // −1 = 모름/정면
+
+    /// <summary>마지막으로 측면 검사 준비 자세로 진입한 방식 — 면 정보 없이 호출되는 복귀(주행 전 복귀 등)가 그 측면 슬롯을
+    /// 거슬러 가도록 기억한다(<see cref="LastUpperWall"/> 와 같은 이유). 홈에 돌아오면 지운다.</summary>
+    internal static Inspection.StationMode? LastSideMode
+        => Volatile.Read(ref _lastSideMode) is var m && m > 0 ? (Inspection.StationMode)m : null;
+
+    /// <summary>테스트용 — 측면 기억을 지운다.</summary>
+    internal static void ForgetSide() => Volatile.Write(ref _lastSideMode, -1);
+
+    /// <summary>
+    /// 홈 모드 복귀 때 경유할 측면 검사 준비 슬롯 — 진입 경로(ready → 측면 준비 → 접근점)를 거슬러 간다.
+    /// 방식은 context(측면이면), 없으면 마지막 측면 진입(<paramref name="lastSide"/>), 그것도 없으면(앱 재시작 직후)
+    /// 티칭된 두 측면 슬롯 중 가까운 쪽. 그 슬롯이 ready 보다 가까울 때만 경유한다 — 이미 ready 근처면 바로 ready 로.
+    /// </summary>
+    internal static string? SideViaSlot(double[] cur, SequenceContext ctx, Inspection.StationMode? lastSide)
+    {
+        if (TaughtJoints(ctx, "ready") is not { } ready) return null;
+        var mode = ctx.StationMode.IsSide() ? ctx.StationMode : lastSide;
+        IEnumerable<string> candidates = TeachingService.SideReadyKey(mode ?? Inspection.StationMode.Front) is { } k
+            ? new[] { k }
+            : new[] { TeachingService.SideReadyLeftKey, TeachingService.SideReadyRightKey };
+        string? best = null;
+        var bestD = JointDistance(cur, ready);
+        foreach (var key in candidates)
+        {
+            if (TaughtJoints(ctx, key) is not { } j) continue;
+            var d = JointDistance(cur, j);
+            if (d < bestD) { bestD = d; best = key; }
+        }
+        return best;
+    }
+
+    private static IEnumerable<string> SideSlotKeys()
+        => new[] { TeachingService.SideReadyLeftKey, TeachingService.SideReadyRightKey };
 
     /// <summary>현재 자세 모드 — 홈 위치_2 가 티칭돼 있고, 홈 위치_2 까지의 관절 거리가 ready(미티칭이면 홈)까지보다
     /// 짧으면 <see cref="PoseMode.Home2"/>. 검사 도중 멈춘 자세도 같은 규칙으로 가까운 쪽에 붙는다.</summary>
@@ -117,7 +163,8 @@ internal static class SequenceEntry
     {
         var atHome2 = TaughtJoints(ctx, Home2Key) is not null
                       && (IsAt(cur, ctx, Home2Key) || UpperSlotKeys().Any(k => IsAt(cur, ctx, k)));
-        var atHome = !atHome2 && (IsAt(cur, ctx, "home") || IsAt(cur, ctx, "ready"));
+        var atHome = !atHome2 && (IsAt(cur, ctx, "home") || IsAt(cur, ctx, "ready")
+                                  || SideSlotKeys().Any(k => IsAt(cur, ctx, k)));
         var mode = PickMode(atHome2, atHome, ModeOf(cur, ctx), RememberedMode);
         if (atHome2 || atHome) RememberMode(mode);
         return mode;
@@ -177,16 +224,36 @@ internal static class SequenceEntry
 
         // 이미 작업 준비(ready) 위치면 그대로 출발한다 — ready 는 홈에서 나와 도착하는 경유점이라
         // 검사 자세 잔류가 아니다. 앞 task 가 ready 에서 실패한 경우 후퇴·홈 왕복을 되풀이하지 않는다.
-        if (IsAt(cur, context, "ready"))
+        // 측면 정차 검사(사양 §5.2): 홈 → ready → 측면 검사 준비(J1 ±90°) → ②. 이미 그 측면 자세면 그대로 출발한다.
+        var sideKey = TeachingService.SideReadyKey(context.StationMode);
+        if (sideKey is not null)
+        {
+            Volatile.Write(ref _lastSideMode, (int)context.StationMode);
+            if (IsAt(cur, context, sideKey))
+            {
+                logger.LogInformation("진입 준비: 이미 {Slot} — 후퇴·홈 왕복 생략", SideSlotName(context.StationMode));
+                return (true, $" {frames}, (이미 {SideSlotName(context.StationMode)}).");
+            }
+        }
+        else if (IsAt(cur, context, "ready"))
         {
             logger.LogInformation("진입 준비: 이미 작업 준비 위치 — 후퇴·홈 왕복 생략");
             return (true, $" {frames}, (이미 작업 준비 위치).");
         }
 
         var parts = new List<string> { frames };
-        var back = await ReturnToBaseAsync(cobot, context, logger, ct);
-        parts.Add(back.Count == 0 ? "(이미 홈)" : string.Join(" → ", back));
-        if (await MoveToReadyAsync(cobot, context, logger, ct)) parts.Add("작업 준비 위치 경유(출발)");
+        // 측면 진입이면 ready 위가 아닌 한 홈까지 돌아간 뒤 ready → 측면 준비로 간다(반대쪽 측면 자세에 있던 경우 포함).
+        if (sideKey is null || !IsAt(cur, context, "ready"))
+        {
+            var back = await ReturnToBaseAsync(cobot, context, logger, ct);
+            parts.Add(back.Count == 0 ? "(이미 홈)" : string.Join(" → ", back));
+            if (await MoveToReadyAsync(cobot, context, logger, ct)) parts.Add("작업 준비 위치 경유(출발)");
+        }
+        if (sideKey is not null)
+        {
+            await MoveJToTaughtAsync(cobot, context, sideKey, SideSlotName(context.StationMode), ct);
+            parts.Add($"{SideSlotName(context.StationMode)} 경유(출발, J1 회전)");
+        }
         return (true, $" {string.Join(", ", parts)}.");
     }
 
@@ -212,7 +279,8 @@ internal static class SequenceEntry
         }
 
         var onWaypoint = IsAt(cur, ctx, "ready") || IsAt(cur, ctx, Home2Key)
-                         || UpperSlotKeys().Any(k => IsAt(cur, ctx, k));
+                         || UpperSlotKeys().Any(k => IsAt(cur, ctx, k))
+                         || SideSlotKeys().Any(k => IsAt(cur, ctx, k));
         if (!onWaypoint)
         {
             // ② 가 후퇴 평면을 따라 들어왔으면 같은 길로 나온다 — 300mm 후퇴 후 경유점으로 바로 MoveJ 하면, 면을 따라
@@ -243,9 +311,17 @@ internal static class SequenceEntry
             return done;
         }
 
+        // 측면 정차 검사에서 돌아올 때는 측면 검사 준비 자세를 거쳐 J1 을 되돌린 뒤 ready 로 간다(사양 §5.2).
+        if (SideViaSlot(cur, ctx, LastSideMode) is { } sideSlot)
+        {
+            var name = sideSlot == TeachingService.SideReadyLeftKey ? "검사 준비 — 측면 좌" : "검사 준비 — 측면 우";
+            await MoveJToTaughtAsync(cobot, ctx, sideSlot, name, ct);
+            done.Add($"{name} 경유");
+        }
         if (await ReturnViaReadyAsync(cobot, ctx, logger, ct)) done.Add("작업 준비 위치 경유");
         if (await EnsureCobotAtHomeAsync(cobot, ctx, ct)) done.Add("홈 복귀");
         ApproachPathMemory.Clear();
+        ForgetSide();
         return done;
     }
 

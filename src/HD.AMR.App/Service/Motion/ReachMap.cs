@@ -14,6 +14,10 @@ namespace HD.AMR.App.Service.Motion;
 /// ACS 의 '정차 이격'(벽 ↔ 로봇 기준점, VDA §4.4)과 같은 값이 된다 — 표를 그대로 정차 계획에 쓸 수 있다.
 /// T_A_B(장착 보정)와 텔레스코픽 스트로크는 실제 값을 쓴다.
 ///
+/// <b>측면 맵</b>(<see cref="ReachMapSpec.Mode"/> = SIDE_*, 측면 정차 검사 사양 §8): 차체 좌표는 그대로이고 벽만 옆으로 간다 —
+/// SIDE_LEFT 는 벽이 +Y(좌측), SIDE_RIGHT 는 −Y. 이때 |y| 가 벽까지 옆 거리, x 가 벽 따라 앞뒤 위치다.
+/// 출발 자세는 측면 검사 준비 슬롯이고, CSV 헤더에 <c>mode=</c> 가 붙어 정면 맵과 섞이지 않는다.
+///
 /// 셀마다 운영 시퀀스와 같은 세 자세를 본다:
 ///  · ② 거친 접근 — 면에서 <see cref="ReachMapSpec.ApproachStandoffMm"/>(기본 400) 물러난 TCP. 팔이 가장 접히는 지점.
 ///  · 정렬 준비 — 면에서 <see cref="ReachMapSpec.AlignStandoffMm"/>(기본 300, 레이저 WD) 물러난 TCP. 초점 위치로
@@ -78,6 +82,8 @@ public static class ReachMap
         var unknown = walls.Where(w => w.Wall is null).Select(w => w.Code).ToList();
         if (unknown.Count > 0)
             throw new ArgumentException($"미정의 wall_code: {string.Join(", ", unknown)}", nameof(spec));
+        if (spec.Mode.IsSide() && walls.FirstOrDefault(w => !StationModes.IsSideWall(w.Code)) is { Code: { } notSide })
+            throw new ArgumentException($"측면 리치 맵은 수직벽(PM/SM/F/A)만 — {notSide}", nameof(spec));
 
         var total = walls.Sum(w => spec.StrokesMm.Length * spec.Xs.Length * spec.Ys.Length * ZsFor(spec, w.Wall!).Length);
         var cells = new List<ReachCell>(total);
@@ -114,9 +120,9 @@ public static class ReachMap
     {
         double[]? start = robot.StartJointsByWall is { } starts && starts.TryGetValue(code, out var s) && s is { Length: 6 }
             ? s : null;
-        var approach = SeamBaseTransform.Resolve(Input(robot, code, h, x, y, z, spec.ApproachStandoffMm));
-        var align = SeamBaseTransform.Resolve(Input(robot, code, h, x, y, z, spec.AlignStandoffMm));
-        var focus = SeamBaseTransform.Resolve(Input(robot, code, h, x, y, z, spec.FocusStandoffMm));
+        var approach = SeamBaseTransform.Resolve(Input(robot, code, h, x, y, z, spec.ApproachStandoffMm, spec.Mode));
+        var align = SeamBaseTransform.Resolve(Input(robot, code, h, x, y, z, spec.AlignStandoffMm, spec.Mode));
+        var focus = SeamBaseTransform.Resolve(Input(robot, code, h, x, y, z, spec.FocusStandoffMm, spec.Mode));
         var reach = ApproachReach.Check(approach.NormalDistanceMm, spec.ApproachStandoffMm,
                                         robot.ToolLengthMm, limits.MinFlangeReachMm);
 
@@ -197,7 +203,9 @@ public static class ReachMap
             : (Cell(ReachStatus.Ok, "도달", margin, jA, jL, jF), calls);
     }
 
-    private static SeamBaseInput Input(ReachMapRobot robot, string code, double h, double x, double y, double z, double standoff)
+    /// <summary>셀 입력. 측면 맵은 벽이 차체 옆(SIDE_LEFT = +Y, SIDE_RIGHT = −Y)에 있다 — 벽 방향 = ±90°.</summary>
+    private static SeamBaseInput Input(ReachMapRobot robot, string code, double h, double x, double y, double z, double standoff,
+        StationMode mode)
         => new(
             SeamStartW: new[] { x / 1000.0, y / 1000.0, z / 1000.0 },
             SeamEndW: null,
@@ -206,7 +214,7 @@ public static class ReachMap
             TelescopicStrokeMm: h,
             ZDatumOffsetMm: 0,
             StandoffMm: standoff,
-            WallFacingThetaRad: 0,
+            WallFacingThetaRad: StationModes.WallFacing(0.0, mode),
             WallCode: code,
             OpticalAxis: robot.OpticalAxis,
             ToolSpinDeg: robot.ToolSpinDeg,
@@ -276,7 +284,8 @@ public sealed record ReachMapSpec(
     double AlignStandoffMm = 300,
     double FocusStandoffMm = 0,
     double GoodMarginDeg = 10,
-    double MaxBaseDistanceMm = 2500)
+    double MaxBaseDistanceMm = 2500,
+    StationMode Mode = StationMode.Front)
 {
     /// <summary>[from, to] 를 step 간격으로 — 끝값 포함. step ≤ 0 이면 from 하나.</summary>
     public static double[] Range(double from, double to, double step)
@@ -408,7 +417,8 @@ public sealed record ReachMapResult(
         sb.AppendLine($"# reach map  approachStandoff={Spec.ApproachStandoffMm.ToString(ci)}mm  " +
                       $"alignStandoff={Spec.AlignStandoffMm.ToString(ci)}mm  focusStandoff={Spec.FocusStandoffMm.ToString(ci)}mm  tool={Robot.ToolLengthMm.ToString("0.#", ci)}mm  " +
                       $"minFlange={Robot.Limits.MinFlangeReachMm.ToString(ci)}mm  wrist={Robot.Limits.WristMarginDeg.ToString(ci)}deg  " +
-                      $"mount=[{string.Join(" ", Robot.MountAtHome.Select(v => v.ToString("0.##", ci)))}]");
+                      $"mount=[{string.Join(" ", Robot.MountAtHome.Select(v => v.ToString("0.##", ci)))}]" +
+                      (Spec.Mode.IsSide() ? $"  mode={Spec.Mode.ToWire()}" : ""));
         sb.AppendLine("wall_code,stroke_mm,x_mm,y_mm,z_mm,status,usable,margin_deg,flange_reach_mm,normal_dist_mm," +
                       "a_j1,a_j2,a_j3,a_j4,a_j5,l_j1,l_j2,l_j3,l_j4,l_j5,f_j1,f_j2,f_j3,f_j4,f_j5,reason");
         foreach (var c in Cells)

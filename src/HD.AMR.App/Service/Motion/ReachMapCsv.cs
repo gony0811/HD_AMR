@@ -20,6 +20,9 @@ public static class ReachMapCsv
         @"tool=(?<t>-?[\d.]+)mm\s+minFlange=(?<m>-?[\d.]+)mm\s+wrist=(?<w>-?[\d.]+)deg\s+mount=\[(?<mount>[^\]]*)\]",
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
+    /// <summary>측면 맵 표시(<c>mode=SIDE_LEFT</c>). 없으면 정면 맵(구버전 파일 포함).</summary>
+    private static readonly Regex ModeRegex = new(@"\bmode=(?<mode>[A-Z_]+)", RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
     /// <summary>CSV 한 장의 파싱 결과. 헤더를 못 읽으면 null.</summary>
     public static ReachMapFile? Parse(string csv)
     {
@@ -85,6 +88,7 @@ public static class ReachMapCsv
     public static bool StampMatches(ReachMapStamp file, ReachMapStamp current)
     {
         if (file.Mount.Length != 6 || current.Mount.Length != 6) return false;
+        if (file.Mode != current.Mode) return false;   // 정면·측면(좌/우) 맵은 서로 다른 기하라 섞지 않는다
         if (Math.Abs(file.ApproachMm - current.ApproachMm) > 0.6) return false;
         if (Math.Abs(file.AlignMm - current.AlignMm) > 0.6) return false;
         if (Math.Abs(file.FocusMm - current.FocusMm) > 0.6) return false;
@@ -109,7 +113,11 @@ public static class ReachMapCsv
         for (var i = 0; i < 6; i++)
             if (!double.TryParse(parts[i], NumberStyles.Float, CultureInfo.InvariantCulture, out mount[i]))
                 return null;
-        return new ReachMapStamp(approach, align, focus, tool, flange, wrist, mount);
+        var mode = Inspection.StationMode.Front;
+        if (ModeRegex.Match(line) is { Success: true } mm
+            && !Inspection.StationModes.TryParse(mm.Groups["mode"].Value, out mode, out _))
+            return null;   // 모르는 방식의 맵은 쓰지 않는다
+        return new ReachMapStamp(approach, align, focus, tool, flange, wrist, mount, mode);
     }
 
     private static bool TryD(Match m, string name, out double value)
@@ -142,7 +150,8 @@ public static class ReachMapCsv
 public sealed record ReachMapStamp(
     double ApproachMm, double AlignMm, double FocusMm,
     double ToolMm, double MinFlangeMm, double WristDeg,
-    double[] Mount);
+    double[] Mount,
+    Inspection.StationMode Mode = Inspection.StationMode.Front);
 
 public sealed record ReachMapFile(ReachMapStamp Stamp, IReadOnlyList<StoredReachCell> Cells);
 

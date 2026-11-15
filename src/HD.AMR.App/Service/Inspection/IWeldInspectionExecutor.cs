@@ -35,8 +35,9 @@ public sealed record StationAdjustDecision(StationAdjustLimits? Limits, StationA
 public interface IWeldInspectionExecutor
 {
     /// <summary>액션 1건 실행 — 파싱→레시피 매핑→프로필 조회→시퀀스 실행→결과. 예외를 던지지 않는다.</summary>
-    /// <param name="nodeThetaRad">정차 노드 theta(벽 정면 방향, rad) — seam 벡터→검사 방향 자동 유도(§4.4)의
-    /// 기준. null(액션 없는 Order 등)이면 현행 기본(Horizontal)으로 폴백.</param>
+    /// <param name="nodeThetaRad">벽 방향(rad) — 정면 검사는 정차 노드 theta, 측면 검사는 theta ±90°
+    /// (<see cref="StationModes.WallFacing(double?, StationMode)"/>, 실행기가 환산해 넘긴다). seam 벡터→검사 방향 자동 유도(§4.4)와
+    /// 면 법선의 기준. null(액션 없는 Order 등)이면 현행 기본(Horizontal)으로 폴백.</param>
     /// <param name="isLastInspection">이 노드의 <b>마지막</b> startWeldInspection 액션인가. 코봇 홈 복귀
     /// 스텝은 이때만 실행한다 — task 사이마다 홈에 다녀오면 정렬 공유의 이점이 사라지고 시간만 든다.</param>
     Task<InspectionActionResult> ExecuteAsync(VdaAction action, string orderId, double? nodeThetaRad,

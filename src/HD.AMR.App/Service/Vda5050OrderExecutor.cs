@@ -182,7 +182,11 @@ public sealed class Vda5050OrderExecutor
         }
 
         // §4.5.2 검증 — 실패 시 폐기(부분 실행 금지) + orderValidationError. 기존 실행 중 임무는 유지.
-        var reject = Validate(order, currentMapId);
+        // 측면 정차 검사(사양 §3.2 V1~V5)도 여기서 거른다 — 실행 시작 전이라야 orderValidationError(=폐기)가 맞다(ACS 확인).
+        var reject = Validate(order, currentMapId)
+                     ?? (order.Nodes.Count == 1
+                         ? StationModes.ValidateNode(order.Nodes[0], await GetLrMinLateralMmAsync(), out _)
+                         : null);
         if (reject is not null)
         {
             _logger.LogWarning("VDA5050 order 거부: {OrderId} — {Reason}", order.OrderId, reject);
@@ -322,6 +326,24 @@ public sealed class Vda5050OrderExecutor
     }
 
     /// <summary>검증 실패 사유(통과 시 null). 개별 액션 파라미터 문제는 여기가 아니라 액션 FAILED 경로(§4.5.2).</summary>
+    /// <summary>좌/우 검증 최소 옆 거리 [mm] — 파라미터 <see cref="StationModes.LrMinLateralKey"/>, 없으면 기본 200.</summary>
+    private async Task<double> GetLrMinLateralMmAsync()
+    {
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var param = scope.ServiceProvider.GetRequiredService<ParameterService>();
+            return await param.GetDoubleAsync(StationModes.LrMinLateralKey) is { } v && v >= 0
+                ? v
+                : StationModes.DefaultLrMinLateralMm;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "{Key} 조회 실패 — 기본 {Default}mm 사용", StationModes.LrMinLateralKey, StationModes.DefaultLrMinLateralMm);
+            return StationModes.DefaultLrMinLateralMm;
+        }
+    }
+
     internal static string? Validate(Vda5050Order order, string currentMapId)
     {
         if (string.IsNullOrEmpty(order.OrderId)) return "orderId 누락";
@@ -344,14 +366,22 @@ public sealed class Vda5050OrderExecutor
     private async Task RunMissionAsync(string orderId, OrderNode node, CancellationToken ct)
     {
         var pos = node.NodePosition!;
+        // 정차 검사 방식(측면 정차 검사 사양 §2) — AMR 은 언제나 theta 로 서고, 면 법선·검사 방향은 벽 방향을 쓴다.
+        // 수신 검증(V1~V5)을 통과했으므로 노드 안 검사 액션의 방식은 하나다.
+        var mode = StationModeOf(node);
+        var wallTheta = StationModes.WallFacing(pos.Theta, mode);
+        if (mode.IsSide())
+            OpLog(OpCategory.Order, "측면 정차 검사", null,
+                $"stationMode={mode.ToWire()}, AMR θ={pos.Theta:0.###} rad, 벽 방향 θ={wallTheta:0.###} rad — 정차 보정 주행 없음(사양 D2)",
+                orderId);
         try
         {
             // 연속 TASK 묶음(같은 리프트·면·수직/수평). 도달 점검과 교시가 같은 계획을 쓴다.
-            _inspection.BeginBundles(TaskBundlePlanner.Assign(node.Actions, pos.Theta));
+            _inspection.BeginBundles(TaskBundlePlanner.Assign(node.Actions, wallTheta));
 
             // 코봇 도달·순회 — 홈 복귀·주행·리프트보다 먼저. 닿는 용접선이 하나도 없으면 아무것도 움직이지 않는다.
             // 일부만 닿지 않으면 그 용접선만 실패로 끝내고 나머지는 수행한다.
-            var reach = await PrecheckReachBeforeDriveAsync(orderId, node, ct);
+            var reach = await PrecheckReachBeforeDriveAsync(orderId, node, mode, ct);
             if (reach.Block is { } reachBlock)
             {
                 FailMission(reachBlock);
@@ -370,7 +400,7 @@ public sealed class Vda5050OrderExecutor
                 var runnable = node.Actions.Where(a => !skippedActions.Contains(a.ActionId)).ToList();
                 _inspection.BeginBundles(reach.DissolveBundles
                     ? Array.Empty<BundleAssignment>()
-                    : TaskBundlePlanner.Assign(runnable, pos.Theta));
+                    : TaskBundlePlanner.Assign(runnable, wallTheta));
                 if (skippedActions.Count > 0)
                 {
                     _logger.LogWarning("코봇 도달 사전 점검: 용접선 {Bad}/{All}건 불가 — 그 용접선만 실패 처리하고 나머지를 수행합니다",
@@ -453,8 +483,19 @@ public sealed class Vda5050OrderExecutor
             // 2.5) 정차 온보드 보정(사양 §4.4.2, N23 초안) — ACS 가 params.stationAdjust 로 허락한 범위 안에서
             //      리치(면 법선거리)가 모자라는 용접선이 있으면 벽에서 물러나 다시 선다. 코봇은 아직 홈이다
             //      (주행 전 홈 복귀 보장) — 첫 액션 전에 한 번만 옮겨 task 사이 왕복을 만들지 않는다.
-            var adjustToken = await TryAdjustStationAsync(orderId, node, pos, devXy, devTheta, ct);
-            if (adjustToken is { Failed: true }) return;
+            //      측면 정차는 후진이 벽과 나란한 방향이라 거리를 못 고친다 — 보정 주행 없이 팔로만 보정(사양 D2).
+            StationAdjustOutcome? adjustToken = null;
+            if (mode.IsSide())
+            {
+                if (node.Actions.Any(a => WeldInspectionActionParser.TryParseStationAdjust(a, out _) is not null))
+                    OpLog(OpCategory.Drive, "정차 보정 판단", null,
+                        $"측면 정차({mode.ToWire()}) — params.stationAdjust 무시, 정차 보정 주행 없음(사양 D2)", orderId);
+            }
+            else
+            {
+                adjustToken = await TryAdjustStationAsync(orderId, node, pos, devXy, devTheta, ct);
+                if (adjustToken is { Failed: true }) return;
+            }
 
             // 3) 액션 순차 실행 — 배열 순서 = 실행 순서(§4.2). 액션 없는 Order(actions:[])는
             //    노드 도달만으로 완결(§4.1). startWeldInspection 은 검사 실행기에 위임(§8.5.1 2차 연동).
@@ -549,10 +590,15 @@ public sealed class Vda5050OrderExecutor
                 {
                     // startWeldInspection = 본검사(§8.5.1), moveToSeamStart = 코봇 seam 시작점 reach 시험(§8.7 —
                     // ② 접근까지만, 촬영·홈 복귀 없음). 결과 보고·errors·equipmentDown 처리는 같다.
-                    var result = action.ActionType == "moveToSeamStart"
-                        ? await _inspection.ExecuteMoveToSeamStartAsync(action, orderId, pos.Theta, ct)
-                        : await _inspection.ExecuteAsync(
-                            action, orderId, pos.Theta, isLastInspection: ai == lastInspectionIndex, ct);
+                    // 측면 좌/우 재확인(사양 §4) — 실측 정차 pose 기준. 수신 검증이 정상 경로이고 이것은 방어 장치다.
+                    // 실행 중 판정이므로 orderValidationError(=폐기)가 아니라 그 액션만 inspectionFailed(ACS 확인).
+                    var lrFail = await RecheckLeftRightAsync(action, mode);
+                    var result = lrFail is not null
+                        ? InspectionActionResult.Fail("inspectionFailed", $"{StationModes.LrMismatchPrefix}: {lrFail}")
+                        : action.ActionType == "moveToSeamStart"
+                            ? await _inspection.ExecuteMoveToSeamStartAsync(action, orderId, wallTheta, ct)
+                            : await _inspection.ExecuteAsync(
+                                action, orderId, wallTheta, isLastInspection: ai == lastInspectionIndex, ct);
                     // 취소(cancelOrder·신규 order·비상정지)로 끝난 실행은 검사 실패가 아니다 — 시퀀스 엔진은 취소를
                     // 실패 결과로 돌려주므로, 여기서 inspectionFailed 로 보고·FAILED 처리하기 전에 취소 경로로 넘긴다
                     // (상위 임무 중단 처리가 액션 상태를 정리한다. errors 에 inspectionFailed 가 남지 않는다).
@@ -1146,6 +1192,28 @@ public sealed class Vda5050OrderExecutor
     }
 
     /// <summary>현재 AMR pose 문자열(운영 로그용). Modbus 미확보면 "pose 미확보".</summary>
+    /// <summary>노드 검사 액션의 정차 방식 — 수신 검증(V1·V2)을 통과했으므로 첫 검사 액션 값이 곧 노드 값이다.</summary>
+    private static StationMode StationModeOf(OrderNode node)
+    {
+        foreach (var a in node.Actions.Where(StationModes.IsInspectionAction))
+            if (WeldInspectionActionParser.TryParseStationMode(a, out var m, out _))
+                return m;
+        return StationMode.Front;
+    }
+
+    /// <summary>
+    /// 측면 좌/우 실행 중 재확인(사양 §4) — 실측 AMR pose 로 용접선이 stationMode 쪽에 있는지 본다.
+    /// 문제없거나 FRONT·pose 미확보·위치 해석 불가면 null(판정 불가는 막지 않는다 — 수신 검증이 이미 노드 기준으로 걸렀다).
+    /// </summary>
+    private async Task<string?> RecheckLeftRightAsync(VdaAction action, StationMode mode)
+    {
+        if (!mode.IsSide() || _amr.LatestStatus is not { } st) return null;
+        if (!WeldInspectionActionParser.TryReadSeam(action, out var start, out var end, out _)) return null;
+        var minLateral = await GetLrMinLateralMmAsync();
+        var why = StationModes.CheckLeftRight(mode, st.Pose.X, st.Pose.Y, st.Pose.Angle, start!, end, minLateral);
+        return why is null ? null : $"{why} (실측 정차 {DescribePose()} 기준 재확인)";
+    }
+
     private string DescribePose()
         => _amr.LatestStatus is { } st
             ? $"({st.Pose.X:0.###}, {st.Pose.Y:0.###}, θ={st.Pose.Angle:0.###})"
@@ -1201,13 +1269,16 @@ public sealed class Vda5050OrderExecutor
     /// 호출측이 그 용접선만 실패로 끝내고 나머지를 수행한다.
     /// 자동 시퀀스의 뻗음 부족만, ACS 가 허락한 최대 후진 자리에서 닿으면 통과(정차 보정이 고친다).
     /// </summary>
-    private async Task<ReachPrecheckOutcome> PrecheckReachBeforeDriveAsync(string orderId, OrderNode node, CancellationToken ct)
+    private async Task<ReachPrecheckOutcome> PrecheckReachBeforeDriveAsync(string orderId, OrderNode node, StationMode mode,
+        CancellationToken ct)
     {
         var pos = node.NodePosition;
         if (pos is null) return ReachPrecheckOutcome.Pass;
+        var wallTheta = StationModes.WallFacing(pos.Theta, mode);
 
         double? backward = null;
-        foreach (var action in node.Actions)
+        // 측면 정차는 정차 보정 주행이 없으므로(사양 D2) 후진 대안 자리로 도달을 인정하지 않는다.
+        foreach (var action in mode.IsSide() ? Enumerable.Empty<VdaAction>() : node.Actions)
         {
             if (action.ActionType != "startWeldInspection") continue;
             var limits = WeldInspectionActionParser.TryParseStationAdjust(action, out var limitError);
@@ -1226,7 +1297,7 @@ public sealed class Vda5050OrderExecutor
         var allowBackup = backward is > 0;
         var points = CobotReachPrecheck.FromActions(node.Actions, allowBackup).ToList();
         points.AddRange(TaskBundlePlanner.Point2ReachPoints(
-            TaskBundlePlanner.Assign(node.Actions, pos.Theta), allowBackup));
+            TaskBundlePlanner.Assign(node.Actions, wallTheta), allowBackup));
         if (points.Count == 0) return ReachPrecheckOutcome.Pass;
 
         using var scope = _scopeFactory.CreateScope();
@@ -1245,7 +1316,7 @@ public sealed class Vda5050OrderExecutor
                 : null;
             try
             {
-                gate = await pre.CheckAsync(points, pos.X, pos.Y, yaw, backup, ct);
+                gate = await pre.CheckAsync(points, pos.X, pos.Y, yaw, backup, ct, mode);
             }
             catch (OperationCanceledException) { throw; }
             catch (Exception ex)
@@ -1273,14 +1344,15 @@ public sealed class Vda5050OrderExecutor
                 {
                     var own = CobotReachPrecheck.FromActions(new[] { a }, allowBackup);
                     if (own.Count == 0) { good.Add(a); continue; }
-                    var g = await pre.CheckAsync(own, pos.X, pos.Y, y2, backup2, ct);
-                    if (g.Ok) good.Add(a); else bad.Add((a, g.Message));
+                    var g = await pre.CheckAsync(own, pos.X, pos.Y, y2, backup2, ct, mode);
+                    if (g.Ok) good.Add(a);
+                    else bad.Add((a, mode.IsSide() ? await SideReachMessageAsync(pre, own, pos.X, pos.Y, y2, mode, g.Message, ct) : g.Message));
                 }
                 if (ReachPartialPolicy.CanRunPartially(inspections.Count, bad.Count))
                 {
                     // 남은 용접선끼리 묶었을 때의 점2 도 닿아야 한다 — 안 닿으면 묶지 않고 하나씩 교시한다.
-                    var point2 = TaskBundlePlanner.Point2ReachPoints(TaskBundlePlanner.Assign(good, pos.Theta), allowBackup);
-                    var bundleOk = point2.Count == 0 || (await pre.CheckAsync(point2, pos.X, pos.Y, y2, backup2, ct)).Ok;
+                    var point2 = TaskBundlePlanner.Point2ReachPoints(TaskBundlePlanner.Assign(good, wallTheta), allowBackup);
+                    var bundleOk = point2.Count == 0 || (await pre.CheckAsync(point2, pos.X, pos.Y, y2, backup2, ct, mode)).Ok;
                     return new ReachPrecheckOutcome(null, bad, DissolveBundles: !bundleOk);
                 }
             }
@@ -1291,9 +1363,22 @@ public sealed class Vda5050OrderExecutor
             }
         }
 
+        if (mode.IsSide() && pos.Theta is { } y3)
+            gate = gate with { Message = await SideReachMessageAsync(pre, points, pos.X, pos.Y, y3, mode, gate.Message, ct) };
         pre.Raise(gate, OperationLogService.SourceAcs, orderId);
         ReportError(CobotReachPrecheck.BlockedErrorType, gate.Message);
         return new ReachPrecheckOutcome(gate.Message, Array.Empty<(VdaAction, string)>(), false);
+    }
+
+    /// <summary>측면 도달 실패 문구에 고정 앞머리(SIDE_REACH_NORMAL/ALONG, 사양 §7)를 붙인다. 분류 오류는 NORMAL 로 둔다.</summary>
+    private async Task<string> SideReachMessageAsync(CobotReachPrecheck pre, IReadOnlyList<ReachPoint> points,
+        double x, double y, double yaw, StationMode mode, string message, CancellationToken ct)
+    {
+        string prefix, basis;
+        try { (prefix, basis) = await pre.ClassifySideAsync(points, x, y, yaw, mode, ct); }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex) { (prefix, basis) = (StationModes.ReachNormalPrefix, $"분류 오류 — {ex.Message}"); }
+        return $"{prefix}: {message} | mode={mode.ToWire()} 분류근거={basis}";
     }
 
     /// <summary>주행 전 도달 점검 결과. Block 이 있으면 정차 전체를 실행하지 않는다.</summary>

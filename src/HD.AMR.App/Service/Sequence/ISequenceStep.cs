@@ -162,8 +162,12 @@ public class SequenceContext
     /// <summary>ACS `position.drawingPos.wall_code` — 면 법선의 앙각(면 자세) 결정 키.</summary>
     public string? WallCode { get; set; }
 
-    /// <summary>정차 노드 theta [rad] — 벽 정면 방향(면 법선의 방위각). null 이면 AMR yaw 사용.</summary>
+    /// <summary>벽 방향 [rad] — 면 법선의 방위각. 정면 검사는 정차 노드 theta, 측면 검사는 theta ±90°
+    /// (<see cref="Inspection.StationModes.WallFacing(double, Inspection.StationMode)"/>). null 이면 AMR yaw 사용.</summary>
     public double? WallFacingThetaRad { get; set; }
+
+    /// <summary>정차 검사 방식(측면 정차 검사 사양 §3.1). 측면이면 진입·복귀 경유점과 실패 사유 앞머리가 달라진다.</summary>
+    public Inspection.StationMode StationMode { get; set; } = Inspection.StationMode.Front;
 
     /// <summary>도면 전역 z → AMR 바닥 기준 보정 [mm] — 해당 층 바닥 높이(level_z). 사양 §10 N17.</summary>
     public double ZDatumOffsetMm { get; set; }

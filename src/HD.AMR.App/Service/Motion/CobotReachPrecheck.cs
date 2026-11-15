@@ -105,29 +105,32 @@ public sealed class CobotReachPrecheck
     }
 
     /// <summary>지금 AMR 측위 자리에서 판정한다. 측위가 없으면 막는다(리프트를 올리기 전의 재확인).</summary>
-    public async Task<ReachGateResult> CheckHereAsync(IReadOnlyList<ReachPoint> points, CancellationToken ct)
+    public async Task<ReachGateResult> CheckHereAsync(IReadOnlyList<ReachPoint> points, CancellationToken ct,
+        StationMode mode = StationMode.Front)
     {
         if (points.Count == 0) return ReachGateResult.Pass("");
         if (_amr.LatestStatus?.Pose is not { } pose)
             return ReachGateResult.Block(
                 "AMR 측위가 없습니다 — 코봇 도달을 확인할 수 없어 리프트를 올리지 않고 중단합니다.",
                 points.Any(p => p.TestMove));
-        return await CheckAsync(points, pose.X, pose.Y, pose.Angle, backup: null, ct).ConfigureAwait(false);
+        return await CheckAsync(points, pose.X, pose.Y, pose.Angle, backup: null, ct, mode).ConfigureAwait(false);
     }
 
     /// <summary>
     /// <paramref name="amrXm"/> 정차(맵 m, yaw rad)에서 점들을 판정한다.
     /// <paramref name="backup"/> 은 벽 반대 방향으로 물러난 자리(m). 뻗음 부족이고 그 점이 후진을 허용할 때만 본다.
+    /// <paramref name="mode"/> 가 측면이면 측면 리치 맵(벽이 차체 옆)으로 판정한다(측면 정차 검사 사양 §8).
     /// </summary>
     public async Task<ReachGateResult> CheckAsync(
         IReadOnlyList<ReachPoint> points,
         double amrXm, double amrYm, double amrYawRad,
         (double X, double Y)? backup,
-        CancellationToken ct)
+        CancellationToken ct,
+        StationMode mode = StationMode.Front)
     {
         if (points.Count == 0) return ReachGateResult.Pass("");
 
-        var (ctx, setupError) = await PrepareAsync(ct).ConfigureAwait(false);
+        var (ctx, setupError) = await PrepareAsync(mode, ct).ConfigureAwait(false);
         if (ctx is null)
             return ReachGateResult.Block(setupError!, points.Any(p => p.TestMove));
 
@@ -180,7 +183,7 @@ public sealed class CobotReachPrecheck
             _logger.LogWarning("코봇 도달 사전 점검 실패: {Msg}", blocked.Message);
     }
 
-    private async Task<(SimContext? Ctx, string? Error)> PrepareAsync(CancellationToken ct)
+    private async Task<(SimContext? Ctx, string? Error)> PrepareAsync(StationMode mode, CancellationToken ct)
     {
         var mount = await _calib.GetMountAsync().ConfigureAwait(false);
         if (mount.All(v => Math.Abs(v) < 1e-9))
@@ -224,7 +227,7 @@ public sealed class CobotReachPrecheck
             _logger.LogInformation("코봇 미연결 — 도달 사전 점검은 저장된 리치 맵을 찾고, 없으면 광축 +Z 일 때만 오프라인 모델로 계산합니다.");
         }
 
-        var stamp = new ReachMapStamp(approach, align, FocusMm: 0, toolLen, limits.MinFlangeReachMm, limits.WristMarginDeg, mount);
+        var stamp = new ReachMapStamp(approach, align, FocusMm: 0, toolLen, limits.MinFlangeReachMm, limits.WristMarginDeg, mount, mode);
         return (new SimContext(stamp, axis, useController, zDatum), null);
     }
 
@@ -275,7 +278,7 @@ public sealed class CobotReachPrecheck
         {
             var spec = new ReachMapSpec(
                 new[] { point.WallCode! }, new[] { h }, new[] { body[0] }, new[] { body[1] }, new[] { z },
-                stamp.ApproachMm, stamp.AlignMm, stamp.FocusMm);
+                stamp.ApproachMm, stamp.AlignMm, stamp.FocusMm, Mode: stamp.Mode);
             var result = ctx.UseController
                 ? await _maps.EvaluateAsync(spec, tool: 1, progress: null, announce: false, ct).ConfigureAwait(false)
                 : await _maps.EvaluateOfflineAsync(spec, progress: null, announce: false, ct).ConfigureAwait(false);
@@ -294,6 +297,77 @@ public sealed class CobotReachPrecheck
         ReachStatus status, bool usable, string reason, string via)
         => new(usable, status,
             $"{point.Label}: {ReachMapResult.Label(status)} ({reason}) — 차체 x={x:0} y={y:0} z={z:0} mm, 리프트 {stroke:0} mm [{via}]");
+
+    /// <summary>
+    /// 측면 도달 실패 사유 분류(측면 정차 검사 사양 §6.1·§7) — 용접선 점들을 정차 (x, y, yaw) 기준 차체 좌표로 놓고
+    /// 저장된 측면 리치 맵에서 판정한다. 그 상대 높이에서 이 옆 거리(|y|)로 닿는 셀이 벽 따라 어딘가에 있으면
+    /// 앞뒤 위치 문제(<see cref="StationModes.ReachAlongPrefix"/>), 없으면 벽 방향 거리 문제(<see cref="StationModes.ReachNormalPrefix"/>).
+    /// 점 하나라도 NORMAL 이면 NORMAL(앞뒤 보정으로 해결되지 않는다, D6). 맵이 없거나 판정 자료가 모자라면 NORMAL + 사유.
+    /// 반환: (앞머리, 판정 근거 한 줄).
+    /// </summary>
+    public async Task<(string Prefix, string Basis)> ClassifySideAsync(
+        IReadOnlyList<ReachPoint> points, double amrXm, double amrYm, double amrYawRad, StationMode mode, CancellationToken ct)
+    {
+        const string normal = StationModes.ReachNormalPrefix, along = StationModes.ReachAlongPrefix;
+        if (!mode.IsSide() || points.Count == 0) return (normal, "분류 대상 없음");
+        var (ctx, setupError) = await PrepareAsync(mode, ct).ConfigureAwait(false);
+        if (ctx is null) return (normal, $"분류 근거 없음 — {setupError}");
+
+        var notes = new List<string>();
+        var anyAlong = false;
+        foreach (var point in points)
+        {
+            if (point.SeamW is not { Length: 3 } || point.WallCode is null) continue;
+            var h = _lift.PlannedStrokeMm(point.StrokeMm) ?? _lift.TryGetStrokeMm(out _);
+            if (h is null) return (normal, "분류 근거 없음 — 리프트 높이 미상");
+            var body = ReachStationFrame.WorldToBodyMm(point.SeamW, amrXm, amrYm, amrYawRad, ctx.ZDatumMm);
+            var stamp = ctx.Stamp with
+            {
+                AlignMm = (await LaserWorkingDistanceSetting.ResolveAsync(_param, point.WallCode).ConfigureAwait(false)).Item1,
+            };
+            var map = LatestMap(stamp);
+            if (map is null) return (normal, $"측면 리치 맵({mode.ToWire()}) 없음 — 벽 방향 거리 부족으로 분류");
+
+            var row = map.Cells.Where(c => string.Equals(c.WallCode, point.WallCode, StringComparison.OrdinalIgnoreCase)
+                                          && Math.Abs(c.StrokeMm - h.Value) <= ReachMapCsv.StrokeToleranceMm
+                                          && Math.Abs(c.Zmm - body[2]) <= ReachMapCsv.CellToleranceMm
+                                          && Math.Abs(c.Ymm - body[1]) <= ReachMapCsv.CellToleranceMm).ToList();
+            if (row.Count == 0)
+                return (normal, $"{point.Label}: 측면 리치 맵에 옆 거리 {Math.Abs(body[1]):0}mm·높이 {body[2]:0}mm 셀 없음");
+            if (!row.Any(c => c.Usable))
+                return (normal, $"{point.Label}: 옆 거리 {Math.Abs(body[1]):0}mm 에서는 벽 따라 어디서도 닿지 않음(높이 {body[2]:0}mm)");
+            var hit = row.Where(c => c.Usable).MinBy(c => Math.Abs(c.Xmm - body[0]))!;
+            if (Math.Abs(hit.Xmm - body[0]) > ReachMapCsv.CellToleranceMm)
+            {
+                anyAlong = true;
+                notes.Add($"{point.Label}: 옆 거리 {Math.Abs(body[1]):0}mm 는 가능, 앞뒤 x={body[0]:0}mm → 가장 가까운 도달 x={hit.Xmm:0}mm");
+            }
+        }
+        return anyAlong ? (along, string.Join(" | ", notes)) : (normal, "측면 리치 맵상 도달 셀 — 실제 실패는 벽 방향 거리로 분류");
+    }
+
+    /// <summary>스탬프(장비 조건·정차 방식)가 맞는 최신 리치 맵 파일. 없으면 null.</summary>
+    private static ReachMapFile? LatestMap(ReachMapStamp stamp)
+    {
+        var dir = ReachMapService.OutputDirectory;
+        if (!Directory.Exists(dir)) return null;
+        foreach (var path in Directory.EnumerateFiles(dir, "reachmap*.csv").OrderByDescending(File.GetLastWriteTimeUtc))
+        {
+            ReachMapFile? file;
+            try { file = ReachMapCsv.Parse(File.ReadAllText(path)); }
+            catch (IOException) { continue; }
+            catch (UnauthorizedAccessException) { continue; }
+            if (file is not null && ReachMapCsv.StampMatches(file.Stamp, stamp)) return file;
+        }
+        return null;
+    }
+
+    /// <summary><see cref="ClassifySideAsync"/> — 지금 AMR 측위 자리 기준. 측위가 없으면 NORMAL + 사유.</summary>
+    public async Task<(string Prefix, string Basis)> ClassifySideHereAsync(
+        IReadOnlyList<ReachPoint> points, StationMode mode, CancellationToken ct)
+        => _amr.LatestStatus?.Pose is { } pose
+            ? await ClassifySideAsync(points, pose.X, pose.Y, pose.Angle, mode, ct).ConfigureAwait(false)
+            : (StationModes.ReachNormalPrefix, "분류 근거 없음 — AMR 측위 없음");
 
     private sealed record SimContext(ReachMapStamp Stamp, ToolAxisDir Axis, bool UseController, double ZDatumMm)
     {

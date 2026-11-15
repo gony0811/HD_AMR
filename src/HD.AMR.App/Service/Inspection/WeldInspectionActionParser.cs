@@ -120,6 +120,9 @@ public static class WeldInspectionActionParser
         if (!TryParseLiftStrokeMm(liftStrokeEl, pr, out var liftStrokeMm, ref error))
             return false;
 
+        if (!StationModes.TryParse(GetString(pr, StationModes.ParamKey), out var stationMode, out error))
+            return false;
+
         request = new WeldInspectionRequest(
             JobRef: jobRef!,
             SeamStartW: seamStart!,
@@ -134,7 +137,50 @@ public static class WeldInspectionActionParser
             SeqInGroup: seqInGroup.Value,
             TaskId: taskId,
             Attempt: attempt,
-            LiftStrokeMm: liftStrokeMm);
+            LiftStrokeMm: liftStrokeMm,
+            StationMode: stationMode);
+        return true;
+    }
+
+    /// <summary>
+    /// `params.stationMode`(측면 정차 검사 사양 §3.1)만 읽는다 — 수신 검증(order 단위)용. params 가 없거나
+    /// 값이 없으면 FRONT. 실려 왔는데 문자열이 아니거나 미정의 값이면 false + 사유.
+    /// </summary>
+    public static bool TryParseStationMode(VdaAction action, out StationMode mode, out string? error)
+    {
+        mode = StationMode.Front;
+        error = null;
+        var paramsEl = action.ActionParameters.FirstOrDefault(p => p.Key == "params") is { } p0 ? ToElement(p0.Value) : null;
+        if (paramsEl is not { ValueKind: JsonValueKind.Object } pr
+            || !pr.TryGetProperty(StationModes.ParamKey, out var el) || el.ValueKind == JsonValueKind.Null)
+            return true;
+        if (el.ValueKind != JsonValueKind.String)
+        {
+            error = $"stationMode 는 문자열이어야 합니다 (수신: {el.ValueKind}, actionId={action.ActionId})";
+            return false;
+        }
+        if (!StationModes.TryParse(el.GetString(), out mode, out error))
+        {
+            error += $" (actionId={action.ActionId})";
+            return false;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// `position` 의 용접선 두 끝점과 wall_code 만 읽는다 — 수신 검증(좌/우·면 검사)용. 형식이 틀리면 false
+    /// (그 계약 위반은 액션 실행 시 <see cref="TryParse"/>/<see cref="TryParseSeamStart"/> 가 종전대로 거부한다).
+    /// </summary>
+    public static bool TryReadSeam(VdaAction action, out double[]? seamStartW, out double[]? seamEndW, out string? wallCode)
+    {
+        seamStartW = seamEndW = null;
+        wallCode = null;
+        var positionEl = action.ActionParameters.FirstOrDefault(p => p.Key == "position") is { } p0 ? ToElement(p0.Value) : null;
+        if (positionEl is null) return false;
+        string? error = null;
+        if (!TryParsePosition(positionEl.Value, out seamStartW, out seamEndW, out var drawingPos, ref error))
+            return false;
+        wallCode = drawingPos!.WallCode;
         return true;
     }
 
@@ -184,7 +230,11 @@ public static class WeldInspectionActionParser
         if (!TryParseLiftStrokeMm(liftStrokeEl, prObj, out var liftStrokeMm, ref error))
             return false;
 
-        request = new MoveToSeamStartRequest(jobRef!, seamStart!, seamEnd!, drawingPos, liftStrokeMm);
+        var stationMode = StationMode.Front;
+        if (prObj is { } pm && !StationModes.TryParse(GetString(pm, StationModes.ParamKey), out stationMode, out error))
+            return false;
+
+        request = new MoveToSeamStartRequest(jobRef!, seamStart!, seamEnd!, drawingPos, liftStrokeMm, stationMode);
         return true;
     }
 

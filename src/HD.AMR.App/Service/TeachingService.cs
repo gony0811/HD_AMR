@@ -48,7 +48,38 @@ public class TeachingService
         // Wall Code 10면 검사 준비 위치 — 코드·Wall ID·이름은 정본 표(WallCodes)에서만 가져온다.
         foreach (var w in WallCodes.All)
             list.Add((WallSlotKey(w.Code), $"검사 준비 — {w.Label}", w.SurfaceId));
+        // 측면 정차 검사 준비 위치(측면 정차 검사 사양 §5.1, D5) — 정면 수직벽의 ready 에 해당하는 측면 출발 자세.
+        // ready 에서 J1 만 ±90° 돌린 자세를 권장한다. 수직벽 4종 공용이라 면별이 아니라 좌/우 2개. 맨 뒤에 두어 기존 순서를 지킨다.
+        list.Add((SideReadyLeftKey, "검사 준비 — 측면 좌", 0x00));
+        list.Add((SideReadyRightKey, "검사 준비 — 측면 우", 0x00));
         return list.ToArray();
+    }
+
+    /// <summary>측면 검사 준비(좌) 슬롯 키 — 벽이 AMR 왼쪽(SIDE_LEFT).</summary>
+    public const string SideReadyLeftKey = "readySideL";
+
+    /// <summary>측면 검사 준비(우) 슬롯 키 — 벽이 AMR 오른쪽(SIDE_RIGHT).</summary>
+    public const string SideReadyRightKey = "readySideR";
+
+    /// <summary>정차 방식의 측면 검사 준비 슬롯 키. FRONT 면 null.</summary>
+    public static string? SideReadyKey(Service.Inspection.StationMode mode) => mode switch
+    {
+        Service.Inspection.StationMode.SideLeft => SideReadyLeftKey,
+        Service.Inspection.StationMode.SideRight => SideReadyRightKey,
+        _ => null,
+    };
+
+    /// <summary>
+    /// 측면 검사 준비 자세가 ready 에서 J1 만 약 90° 돈 자세인지 점검(사양 §5.1). 맞으면 null, 아니면 경고 문구.
+    /// 저장은 막지 않는다(경고용) — J1 부호는 장착 방향에 따라 다르므로 크기만 본다.
+    /// </summary>
+    public static string? CheckSideReadyJ1(double[] sideJoints, double[]? readyJoints, double toleranceDeg = 10.0)
+    {
+        if (readyJoints is not { Length: 6 } || sideJoints is not { Length: 6 }) return null;
+        var dJ1 = Math.Abs(sideJoints[0] - readyJoints[0]);
+        if (Math.Abs(dJ1 - 90.0) <= toleranceDeg) return null;
+        return $"측면 검사 준비 자세의 J1 이 작업 준비 위치(ready)와 {dJ1:0.#}° 차이 납니다 — 권장은 90°±{toleranceDeg:0}° " +
+               "(ready 에서 J1 만 돌린 자세). 자세를 확인하세요.";
     }
 
     /// <summary>과거 사용자형 검사 위치 → Wall Code 슬롯 이관표(2026-09-18, 이름 기준 대응).

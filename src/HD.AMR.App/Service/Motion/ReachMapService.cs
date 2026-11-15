@@ -33,19 +33,24 @@ public class ReachMapService
     /// 상부 면(T/PU/SU)은 그 면 검사 준비 슬롯(미티칭이면 홈 위치_2), 그 외는 작업 준비 위치(ready).
     /// 티칭이 없는 면은 넣지 않는다(그 면은 종전처럼 출발 자세 없이 판정).
     /// </summary>
-    private async Task<Dictionary<string, double[]>> LoadStartJointsAsync(IEnumerable<string> wallCodes, CancellationToken ct)
+    private async Task<Dictionary<string, double[]>> LoadStartJointsAsync(IEnumerable<string> wallCodes,
+        Inspection.StationMode mode, CancellationToken ct)
     {
         var positions = (await _teaching.ListAsync(ct)).ToDictionary(p => p.Key, p => p);
         double[]? Joints(string key) => positions.TryGetValue(key, out var p) && p.IsTaught && p.J1.HasValue
             ? new[] { p.J1!.Value, p.J2!.Value, p.J3!.Value, p.J4!.Value, p.J5!.Value, p.J6!.Value }
             : null;
 
+        // 측면 맵은 측면 검사 준비 슬롯에서 출발한다(측면 정차 검사 사양 §5.2·§8.1) — 수직벽 4종 공용.
+        var sideKey = TeachingService.SideReadyKey(mode);
         var result = new Dictionary<string, double[]>();
         foreach (var code in wallCodes.Distinct())
         {
-            var start = SequenceEntry.IsUpperRoute(code)
-                ? Joints(TeachingService.WallSlotKey(code)) ?? Joints(SequenceEntry.Home2Key)
-                : Joints("ready");
+            var start = sideKey is not null
+                ? Joints(sideKey)
+                : SequenceEntry.IsUpperRoute(code)
+                    ? Joints(TeachingService.WallSlotKey(code)) ?? Joints(SequenceEntry.Home2Key)
+                    : Joints("ready");
             if (start is not null) result[code] = start;
             else _logger.LogWarning("리치 맵: {Wall} 면의 ② 출발 자세(검사 준비/홈 위치_2/ready) 미티칭 — 가지 전환 판정 없이 계산합니다.", code);
         }
@@ -89,7 +94,7 @@ public class ReachMapService
             _logger.LogWarning("리치 맵: 자세 허용 범위가 저장되지 않아 기본값(툴 없는 하드웨어 범위)으로 판정합니다.");
         var (axis, _) = await WeldSequenceSupport.GetDepthAxisAsync(_param);
 
-        var starts = await LoadStartJointsAsync(spec.WallCodes, ct);
+        var starts = await LoadStartJointsAsync(spec.WallCodes, spec.Mode, ct);
         var robot = new ReachMapRobot(mount, toolLen, limits, axis, Envelope: CobotEnvelope.Default,
             StartJointsByWall: starts, MaxEntryJointTravelDeg: CobotInspectionMoveStep.MaxEntryJointTravelDeg);
         if (announce)
@@ -133,7 +138,7 @@ public class ReachMapService
         var (savedAxis, fromParam) = await WeldSequenceSupport.GetDepthAxisAsync(_param);
         if (announce && fromParam && savedAxis != ToolAxisDir.PlusZ)
             _logger.LogWarning("오프라인 리치 맵: 저장된 광축 {Axis} 대신 설계 공구 광축 +Z 로 계산합니다 — 컨트롤러 공구 #1 회전을 확인하세요.", savedAxis);
-        var starts = await LoadStartJointsAsync(spec.WallCodes, ct);
+        var starts = await LoadStartJointsAsync(spec.WallCodes, spec.Mode, ct);
         var robot = new ReachMapRobot(mount, ApproachReach.ToolLengthMm(tool), limits, ToolAxisDir.PlusZ,
             Envelope: CobotEnvelope.Default, StartJointsByWall: starts,
             MaxEntryJointTravelDeg: CobotInspectionMoveStep.MaxEntryJointTravelDeg);

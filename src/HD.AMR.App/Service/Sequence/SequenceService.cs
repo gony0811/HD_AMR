@@ -413,7 +413,7 @@ public class SequenceService
         ReachGateResult gate;
         try
         {
-            gate = await _reach.CheckAsync(points, x, y, yaw, backup: null, ct);
+            gate = await _reach.CheckAsync(points, x, y, yaw, backup: null, ct, context.StationMode);
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)

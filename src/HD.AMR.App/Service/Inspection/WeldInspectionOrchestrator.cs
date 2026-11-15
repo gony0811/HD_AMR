@@ -159,13 +159,14 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             SeamEndW = req.SeamEndW,
             WallCode = req.DrawingPos.WallCode,
             WallFacingThetaRad = nodeThetaRad,
+            StationMode = req.StationMode,
             ZDatumOffsetMm = await param.GetDoubleAsync(WeldSequenceSupport.ZDatumOffsetKey) ?? 0.0,
         };
 
         _logger.LogInformation(
-            "moveToSeamStart 수리: jobRef={JobRef}, wall={Wall}, seamStartW=[{S}], 면 이격 {Approach}mm, nodeθ={Theta}",
+            "moveToSeamStart 수리: jobRef={JobRef}, wall={Wall}, seamStartW=[{S}], 면 이격 {Approach}mm, 벽 방향θ={Theta}, stationMode={Mode}",
             req.JobRef, req.DrawingPos.WallCode, string.Join(", ", req.SeamStartW.Select(v => v.ToString("0.###"))),
-            approachMm, nodeThetaRad?.ToString("0.###") ?? "(미상)");
+            approachMm, nodeThetaRad?.ToString("0.###") ?? "(미상)", req.StationMode.ToWire());
         _opLog.Log(OperationLogService.SourceAcs, OpCategory.Action, "seam 시작점 시험 구성", null,
             $"jobRef={req.JobRef}, wall={req.DrawingPos.WallCode}, seamStartW=[{string.Join(", ", req.SeamStartW.Select(v => v.ToString("0.###")))}], " +
             $"면 이격 {approachMm:0}mm(본검사 'Cobot 검사위치 이동'과 동일), 노드 θ={nodeThetaRad?.ToString("0.###") ?? "미상"}, " +
@@ -181,13 +182,14 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             runCts = _currentRunCts;
         }
 
+        IReadOnlyList<ReachPoint> testPoints = Array.Empty<ReachPoint>();
         SequenceRunResult runResult;
         try
         {
             await WaitForIdleGateAsync(req.JobRef, runCts.Token);
             // 리프트를 올리기 전에 시작점 도달을 본다. 시험이동은 끝점까지 가지 않으므로 시작점만.
-            var testPoints = CobotReachPrecheck.FromActions(new[] { action }, allowInspectionBackup: false);
-            if (await BlockIfUnreachableAsync(scope.ServiceProvider, testPoints, orderId, runCts.Token) is { } testBlock)
+            testPoints = CobotReachPrecheck.FromActions(new[] { action }, allowInspectionBackup: false);
+            if (await BlockIfUnreachableAsync(scope.ServiceProvider, testPoints, orderId, runCts.Token, req.StationMode) is { } testBlock)
                 return testBlock;
             if (await EnsureLiftStrokeAsync(
                     scope.ServiceProvider, req.LiftStrokeMm, req.DrawingPos.WallCode, req.JobRef, orderId, runCts.Token)
@@ -216,6 +218,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             case SequenceRunOutcome.Failed:
                 // 리치 부족이면 "정차 거리 부족 — 필요 ≥ N mm, 현재 M mm …", 이동 실패면 rc=… 가 그대로 실린다(N10 데이터).
                 return ShortfallResult(context, $"reach 불가 — {runResult.Message}")
+                       ?? await SideApproachFailAsync(scope.ServiceProvider, context, testPoints, runResult.FailedStepKey,
+                           $"reach 불가 — {runResult.Message}", ct)
                        ?? InspectionActionResult.Fail("inspectionFailed", $"reach 불가 — {runResult.Message}");
 
             case SequenceRunOutcome.Completed:
@@ -336,9 +340,30 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
     /// 다른 원인의 실패면 null(호출측이 inspectionFailed 로 보고).
     /// </summary>
     private static InspectionActionResult? ShortfallResult(SequenceContext context, string description)
-        => context.Bag.TryGetValue(CobotInspectionMoveStep.ReachShortfallBagKey, out var v) && v is ReachShortfall sf
-            ? new InspectionActionResult(false, description, StationReachShortfallErrorType, sf.Describe())
-            : null;
+    {
+        if (!context.Bag.TryGetValue(CobotInspectionMoveStep.ReachShortfallBagKey, out var v) || v is not ReachShortfall sf)
+            return null;
+        // 측면 정차는 AMR 정차 보정이 없으므로(사양 D2) stationReachShortfall(후진 요청)이 아니라 벽 방향 거리 부족으로
+        // 끝낸다 — 면 법선거리 부족이 곧 벽까지 옆 거리 부족이다(사양 §6.1·§7).
+        if (context.StationMode.IsSide())
+            return InspectionActionResult.Fail("inspectionFailed",
+                $"{StationModes.ReachNormalPrefix}: {description} | mode={context.StationMode.ToWire()} {sf.Describe()}");
+        return new InspectionActionResult(false, description, StationReachShortfallErrorType, sf.Describe());
+    }
+
+    /// <summary>
+    /// 측면 정차에서 ② 검사위치 이동(<c>cobotInspection</c>)이 실패했으면 도달 실패로 보고 고정 앞머리를 붙인다
+    /// (측면 정차 검사 사양 §6.1·§7). 정면이거나 다른 단계(촬영·측정 등) 실패면 null — 호출측이 종전대로 보고.
+    /// </summary>
+    private static async Task<InspectionActionResult?> SideApproachFailAsync(IServiceProvider sp, SequenceContext context,
+        IReadOnlyList<Motion.ReachPoint> points, string? failedStepKey, string description, CancellationToken ct)
+    {
+        if (!context.StationMode.IsSide() || failedStepKey != "cobotInspection") return null;
+        var pre = sp.GetRequiredService<Motion.CobotReachPrecheck>();
+        var (prefix, basis) = await SafeClassifySideAsync(pre, points, context.StationMode, ct);
+        return InspectionActionResult.Fail("inspectionFailed",
+            $"{prefix}: {description} | mode={context.StationMode.ToWire()} 분류근거={basis}");
+    }
 
     /// <summary>리치 부족 전용 errorType(사양 §6.4, N23 A안).</summary>
     public const string StationReachShortfallErrorType = "stationReachShortfall";
@@ -496,7 +521,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         }
 
         // 6) 검사 방향 자동 유도(§4.4·§8.1) — 프로필 선택(챔퍼 수직 전용)과 anchor 판정보다 먼저 결정한다.
-        //    seam 벡터를 노드 theta(벽 정면) 기준 벽면-로컬 투영.
+        //    seam 벡터를 벽 방향(정면 = 노드 theta, 측면 = theta ±90° — 실행기가 환산해 넘긴다) 기준 벽면-로컬 투영.
         //    theta 미상(방어적)이면 현행 기본 Horizontal 폴백. 판정 근거는 로그로 남긴다.
         var direction = InspectionMoveDirection.Horizontal;
         if (nodeThetaRad is { } theta)
@@ -536,6 +561,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             runCts = _currentRunCts;
         }
 
+        IReadOnlyList<ReachPoint> taskPoints = Array.Empty<ReachPoint>();
         SequenceRunResult runResult;
         bool anchorHit;
         string? cornerSide = null;
@@ -543,8 +569,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         {
             await WaitForIdleGateAsync(req.JobRef, runCts.Token);
             // 정차 보정까지 끝난 실제 자리에서 다시 본다. 여기서 막히면 리프트를 올리지 않는다.
-            var taskPoints = CobotReachPrecheck.FromActions(new[] { action }, allowInspectionBackup: false);
-            if (await BlockIfUnreachableAsync(scope.ServiceProvider, taskPoints, orderId, runCts.Token) is { } reachBlock)
+            taskPoints = CobotReachPrecheck.FromActions(new[] { action }, allowInspectionBackup: false);
+            if (await BlockIfUnreachableAsync(scope.ServiceProvider, taskPoints, orderId, runCts.Token, req.StationMode) is { } reachBlock)
                 return reachBlock;
             if (await EnsureLiftStrokeAsync(
                     scope.ServiceProvider, req.LiftStrokeMm, req.DrawingPos.WallCode, req.JobRef, orderId, runCts.Token)
@@ -751,6 +777,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                 SeamEndW = req.SeamEndW,
                 WallCode = req.DrawingPos.WallCode,
                 WallFacingThetaRad = nodeThetaRad,
+                StationMode = req.StationMode,
                 ZDatumOffsetMm = zDatumOffset,
                 VisionFailRatioMax = recipe.VisionFailRatioMax < 1.0 ? recipe.VisionFailRatioMax : null,
                 // 촬영 위치(CAPTURE_REQ u,v)를 면 좌표로 — ACS 시작·끝점 면 좌표에서 원점과 용접선 방향을 얻는다.
@@ -813,7 +840,9 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                     // 활성 작업물 좌표계 0·공구 복귀(best-effort)는 SequenceService.RunSequenceAsync 가 실패 종료
                     // 시(취소 제외) 수행한다 — UI 풀오토와 이 경로가 같은 반납을 공유한다.
                     var failDesc = $"recipe={recipeId} step={runResult.FailedStepKey ?? "?"} fail: {runResult.Message}";
-                    return ShortfallResult(context, failDesc) ?? InspectionActionResult.Fail("inspectionFailed", failDesc);
+                    return ShortfallResult(context, failDesc)
+                           ?? await SideApproachFailAsync(scope.ServiceProvider, context, taskPoints, runResult.FailedStepKey, failDesc, ct)
+                           ?? InspectionActionResult.Fail("inspectionFailed", failDesc);
 
                 case SequenceRunOutcome.Completed:
                 default:
@@ -888,14 +917,15 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
     /// 주행 전 점검이 정차 좌표로 통과해도, 도착 오차·정차 보정 뒤의 실제 자리는 다를 수 있다.
     /// </summary>
     private async Task<InspectionActionResult?> BlockIfUnreachableAsync(
-        IServiceProvider sp, IReadOnlyList<Motion.ReachPoint> points, string orderId, CancellationToken ct)
+        IServiceProvider sp, IReadOnlyList<Motion.ReachPoint> points, string orderId, CancellationToken ct,
+        StationMode mode = StationMode.Front)
     {
         if (points.Count == 0) return null;
         var pre = sp.GetRequiredService<Motion.CobotReachPrecheck>();
         Motion.ReachGateResult gate;
         try
         {
-            gate = await pre.CheckHereAsync(points, ct);
+            gate = await pre.CheckHereAsync(points, ct, mode);
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
@@ -906,7 +936,23 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         }
         if (gate.Ok) return null;
         pre.Raise(gate, OperationLogService.SourceAcs, orderId);
+        if (mode.IsSide())
+        {
+            // 측면 도달 실패는 고정 앞머리 + inspectionFailed(사양 §7, ACS 확인) — 실측 정차 자리 기준 분류.
+            var (prefix, basis) = await SafeClassifySideAsync(pre, points, mode, ct);
+            return InspectionActionResult.Fail("inspectionFailed",
+                $"{prefix}: {gate.Message} | mode={mode.ToWire()} 분류근거={basis}");
+        }
         return InspectionActionResult.Fail(Motion.CobotReachPrecheck.BlockedErrorType, gate.Message);
+    }
+
+    /// <summary>측면 실패 분류 — 오류는 NORMAL 로 둔다(사양 D6: 애매하면 NORMAL).</summary>
+    private static async Task<(string Prefix, string Basis)> SafeClassifySideAsync(
+        Motion.CobotReachPrecheck pre, IReadOnlyList<Motion.ReachPoint> points, StationMode mode, CancellationToken ct)
+    {
+        try { return await pre.ClassifySideHereAsync(points, mode, ct); }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex) { return (StationModes.ReachNormalPrefix, $"분류 오류 — {ex.Message}"); }
     }
 
     /// <summary>
