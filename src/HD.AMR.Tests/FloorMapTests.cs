@@ -8,6 +8,23 @@ namespace HD.AMR.Tests;
 /// <summary>층 맵 ID 규칙 — AMR 은 층 번호만 알고 선창 이름은 ACS 가 준 값을 되돌려 보고한다.</summary>
 public class FloorMapTests
 {
+    /// <summary>
+    /// 층의 화면 표기 — 맨 아래층을 L0 으로 부른다(L0~L3). 층 번호(1부터)와 맵 ID, ACS 와 주고받는 값은 그대로다.
+    /// </summary>
+    [Fact]
+    public void 화면_표기는_L0부터_맵_ID와_층_번호는_그대로()
+    {
+        Assert.Equal(0, FloorMap.LabelBase);
+        Assert.Equal(new[] { "L0", "L1", "L2", "L3" }, new[] { 1, 2, 3, 4 }.Select(FloorMap.Label));
+        Assert.Equal("L3 (맵 CT1-L4)", FloorMap.Display("CT1-L4"));
+        Assert.Equal("L0 (맵 L1)", FloorMap.Display("L1"));            // 선창 이름을 아직 모를 때
+        Assert.Equal("이상한값", FloorMap.Display("이상한값"));           // 층을 읽을 수 없으면 그대로
+        Assert.Equal("-", FloorMap.Display(null));
+        // 표기를 바꿔도 맵 ID·층 판정은 그대로
+        Assert.Equal("CT1-L4", FloorMap.Compose("CT1", 4));
+        Assert.Equal(4, FloorMap.LevelOf("CT1-L4"));
+    }
+
     [Theory]
     [InlineData("CT1-L4", 4)]
     [InlineData("HN8250-CT2-L12", 12)]

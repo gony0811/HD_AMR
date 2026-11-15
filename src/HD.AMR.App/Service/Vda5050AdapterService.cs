@@ -228,6 +228,7 @@ public sealed class Vda5050AdapterService : BackgroundService
         _power = power;
         // 층 = 설정 Level(없으면 옛 MapId 의 층, 그것도 없으면 1) · 선창 이름 = 저장해 둔 ACS 값(없으면 옛 MapId 의 선창 이름)
         _level = _s.Level >= 1 ? _s.Level : FloorMap.LevelOf(_s.MapId) ?? 1;
+        FloorMap.LabelBase = _s.LevelLabelBase;   // 층의 화면 표기(L0~L3 / L1~L4)
         _tank = _tankStore.Load() ?? FloorMap.TankOf(_s.MapId);
         _logger = loggerFactory.CreateLogger<Vda5050AdapterService>();
     }

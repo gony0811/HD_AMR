@@ -32,6 +32,22 @@ public static class FloorMap
     public static string Compose(string? tank, int level) =>
         string.IsNullOrWhiteSpace(tank) ? $"L{level}" : $"{tank.Trim()}-L{level}";
 
+    /// <summary>
+    /// 맨 아래층(층 번호 1)의 **화면 표기** 번호 — 0(기본) = L0·L1·L2·L3, 1 = L1·L2·L3·L4. 설정 <c>Vda5050:LevelLabelBase</c>.
+    /// 화면 표기만 바꾼다 — 층 번호(1부터)·맵 ID(`{선창}-L{n}`)·ACS 와 주고받는 값은 그대로다.
+    /// </summary>
+    public static int LabelBase { get; set; } = 0;
+
+    /// <summary>층 번호(1부터) → 화면 표기.</summary>
+    public static string Label(int level) => "L" + (level - 1 + LabelBase).ToString(CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// 맵 ID → 화면에 보일 글 — `L3 (맵 CT1-L4)`. 표기와 맵 ID 의 숫자가 다를 수 있어 둘 다 보인다(로그·ACS 와 대조).
+    /// 표기가 층 번호와 같거나(LabelBase = 1) 층을 읽을 수 없으면 맵 ID 그대로.
+    /// </summary>
+    public static string Display(string? mapId) =>
+        LevelOf(mapId) is int n && LabelBase != 1 ? $"{Label(n)} (맵 {mapId})" : mapId ?? "-";
+
     /// <summary>두 맵 ID 가 같은 층인가 — 선창 이름은 보지 않는다. 한쪽이라도 층을 읽을 수 없으면 false.</summary>
     public static bool SameLevel(string? a, string? b) =>
         LevelOf(a) is int la && LevelOf(b) is int lb && la == lb;

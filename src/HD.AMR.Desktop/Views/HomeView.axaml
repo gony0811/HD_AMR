@@ -193,7 +193,14 @@
                     <TextBlock Text="{Binding CurrentMapText}" FontSize="18" FontWeight="Bold" />
                     <Grid ColumnDefinitions="*,Auto">
                         <ComboBox Grid.Column="0" ItemsSource="{Binding MapIdOptions}" SelectedItem="{Binding SelectedMapId}"
-                                  HorizontalAlignment="Stretch" />
+                                  HorizontalAlignment="Stretch">
+                            <!-- 항목 글만 화면 표기로(L3 (맵 CT1-L4)) — 선택값은 맵 ID 그대로 -->
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate x:DataType="x:String">
+                                    <TextBlock Text="{Binding Converter={x:Static vm:FloorTextConverters.Display}}" />
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
                         <Button Grid.Column="1" Margin="6,0,0,0" Content="층 전환" Command="{Binding ApplyMapIdCommand}" />
                     </Grid>
                     <TextBlock Classes="muted" FontSize="12" TextWrapping="Wrap" Text="{Binding MapIdHint}" />
