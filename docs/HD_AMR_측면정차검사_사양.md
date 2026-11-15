@@ -41,6 +41,8 @@ HD_ACS와의 협의(ACS 사양서 VDA 1.19 개정 예정)와 HD_AMR 운영 결�
 
 * **AMR 자세(yaw)와 벽 방향을 분리한다.** 좌표 변환 사슬(T_W_A)에는 항상 AMR yaw(theta 또는 실측 pose)를 쓰고, 면 법선·검사 방향·후퇴 방향에는 wallFacing을 쓴다.
 * 측면일 때 theta는 **벽과 나란한 두 방향 중 하나**여야 한다. 어느 쪽인지는 ACS가 배차 시 정한다(진행 방향과 다를 수 있음).
+* ACS는 측면 theta를 **벽 접선 ±5° 이내로 보장**한다. 수동 station_theta가 5°를 넘게 어긋나면 운영자가 고른 방향 쪽 접선으로 맞춰 보낸다(ACS 확인 2026-11-15). HD_AMR은 이 어긋남을 따로 검사하지 않는다.
+* 리치 맵 JSON의 옆 거리(lateral)와 ACS 고정 이격은 같은 기준이다: 벽 ↔ nodePosition(= agvPosition 기준점, 차체 원점).
 
 ## 3. 계약 (ACS → HD_AMR)
 
