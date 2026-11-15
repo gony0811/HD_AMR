@@ -54,13 +54,13 @@ public static class AcsProfilePayload
 
     /// <summary>
     /// 이 AMR 이 쓰는 코봇 모델 값 — ACS 리치 시뮬레이터가 같은 값을 쓰는지 대조하라고 함께 보낸다(ACS 는 다르면 경고만 한다).
-    /// D6Mm = J5 → 플랜지 면, WristMarginDeg = 경로 손목 여유 |J5|, ToolLengthMm = 플랜지 면 → 검사 초점.
+    /// LinksMm = 링크 치수 [d1,a2,a3,d4,d5,d6], WristMarginDeg = 경로 손목 여유 |J5|, ToolLengthMm = 플랜지 면 → 검사 초점.
     /// </summary>
-    public sealed record RobotModel(double D6Mm, double WristMarginDeg, double ToolLengthMm);
+    public sealed record RobotModel(double[] LinksMm, double WristMarginDeg, double ToolLengthMm);
 
-    /// <summary>지금 값 — d6 는 파라미터(<see cref="Motion.Fr5Kinematics.D6Key"/>)가 적용된 값이다.</summary>
+    /// <summary>지금 값 — 링크 치수는 파라미터(<see cref="Motion.Fr5Kinematics.LinksKey"/>)가 적용된 값이다.</summary>
     public static RobotModel CurrentRobotModel() => new(
-        Motion.Fr5Kinematics.Fr5Wml.D6, Motion.PostureLimits.DefaultWristMarginDeg, Motion.Fr5Kinematics.InspectionTool[2]);
+        Motion.Fr5Kinematics.Fr5Wml.LinksMm, Motion.PostureLimits.DefaultWristMarginDeg, Motion.Fr5Kinematics.InspectionTool[2]);
 
     /// <summary>ACS 응답에서 코봇 모델 값 차이(robotModelMismatch)를 꺼낸다 — 없거나 구버전 ACS 면 빈 목록.</summary>
     public static IReadOnlyList<string> RobotModelMismatch(string responseJson)

@@ -135,13 +135,13 @@ public class AcsProfilePayloadTests
     public void 코봇_모델_값을_함께_보내고_ACS_가_알려_준_차이를_읽는다()
     {
         var robot = AcsProfilePayload.CurrentRobotModel();
-        Assert.Equal(HD.AMR.App.Service.Motion.Fr5Kinematics.Fr5Wml.D6, robot.D6Mm);
+        Assert.Equal(HD.AMR.App.Service.Motion.Fr5Kinematics.Fr5Wml.LinksMm, robot.LinksMm);
         Assert.Equal(HD.AMR.App.Service.Motion.PostureLimits.DefaultWristMarginDeg, robot.WristMarginDeg);
         Assert.Equal(375, robot.ToolLengthMm);
 
         var body = AcsProfilePayload.Build("AMR-01", new[] { Profile(18, "LINE-1", "[]") }, out _) with { Robot = robot };
         var json = System.Text.Json.JsonSerializer.Serialize(body, AcsProfilePayload.Json);
-        Assert.Contains("\"robot\":{\"d6Mm\":", json);
+        Assert.Contains("\"robot\":{\"linksMm\":[180,", json);
         Assert.Contains("\"wristMarginDeg\":10", json);
         Assert.Contains("\"toolLengthMm\":375", json);
 

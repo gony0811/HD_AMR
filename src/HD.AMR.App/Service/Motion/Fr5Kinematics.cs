@@ -5,10 +5,10 @@ namespace HD.AMR.App.Service.Motion;
 /// <summary>
 /// FAIRINO FR 계열(UR 형 6축) 표준 DH 기구학 — 컨트롤러 없이 순·역기구학을 계산한다(오프라인 리치 맵용).
 ///
-/// 관절 규약은 UR 과 같다고 <b>가정</b>한다: 전 관절 0 = 팔이 수평으로 펴진 자세, J3 = 0 팔꿈치 특이점,
-/// J5 = 0 손목 특이점(<see cref="PostureLimits"/> 와 같은 전제). 링크 치수는 STEP 실측으로 검증했지만
-/// 관절 0점·부호는 컨트롤러 규약이라 도면으로 확인할 수 없다 — 실물에서 <c>GetForwardKin</c> 한 번으로
-/// <see cref="Forward"/> 와 대조할 것.
+/// 관절 규약은 UR 과 같다: 전 관절 0 = 팔이 수평으로 펴진 자세, J3 = 0 팔꿈치 특이점,
+/// J5 = 0 손목 특이점(<see cref="PostureLimits"/> 와 같은 전제). 관절 0점·부호와 d6(J5 → 플랜지 면) 106 mm 는 2026-11-16
+/// 실물 컨트롤러 순기구학과 대조해 확인했다. 장비마다 다른 DH 보정값(약 1 mm)은 파라미터로 받는다 — <see cref="ApplyLinks"/>.
+/// 다시 대조할 때는 <see cref="Fr5FkCheck"/> 와 tools/fr5_fk_capture.py 를 쓴다.
 /// </summary>
 /// <param name="D1">BASE 장착면 → J2 축 높이 [mm].</param>
 /// <param name="A2">상완 길이(J2→J3, UR 부호로 음수) [mm].</param>
@@ -22,49 +22,93 @@ public sealed record Fr5Kinematics(double D1, double A2, double A3, double D4, d
     private const double Rad2Deg = 180.0 / Math.PI;
     private static readonly double[] Alpha = { Math.PI / 2, 0, 0, Math.PI / 2, -Math.PI / 2, 0 };
 
-    /// <summary>d6 후보 — 장비 STEP 축선에서 잰 값 [mm]. FAIRINO 공식 표에서는 FR10 의 값이다.</summary>
+    /// <summary>d6 후보 — 장비 STEP 축선에서 잰 값 [mm]. 실물 대조(2026-11-16)로 이 값이 맞다고 확인했다.</summary>
     public const double D6StepMm = 106;
-    /// <summary>d6 후보 — FAIRINO 공식 FR5 DH 표 값 [mm].</summary>
+    /// <summary>d6 후보 — FAIRINO 공식 FR5 DH 표 값 [mm]. 실물과 맞지 않는다(TCP 가 약 55 mm 어긋난다) — 대조 도구의 비교용으로만 남긴다.</summary>
     public const double D6DatasheetMm = 160;
-    /// <summary>
-    /// 지금 쓰는 d6 기본값 [mm] — <b>미확정</b>. 실물 대조(<see cref="Fr5FkCheck"/>, tools/fr5_fk_capture.py) 결과가 나오기 전까지
-    /// 종전 값(STEP 106)을 유지한다. 160 이면 플랜지 면이 54 mm 달라지고 관절각이 달라진다.
-    /// 실제로 쓰는 값은 파라미터 <see cref="D6Key"/> 가 정한다 — ACS 의 <c>Acs:Reach:D6Mm</c> 와 같게 둘 것.
-    /// </summary>
-    public const double DefaultD6Mm = D6StepMm;
-    /// <summary>파라미터로 받는 d6 허용 범위 [mm] — 밖이면 기본값을 쓴다.</summary>
-    public const double MinD6Mm = 50, MaxD6Mm = 250;
-    /// <summary>d6 파라미터 이름.</summary>
-    public const string D6Key = "cobot.kinematics.d6Mm";
 
     /// <summary>
-    /// FR5-WML — 장비 STEP(E26003-E-A000-000-0, 2026-10-28)의 관절 축선에서 실측했다.
-    /// d4 = 어깨 가로 185 − 팔꿈치 가로 140 + 손목 114. STEP 자세를 역으로 풀어 J2~J5 축을 0.02mm·0.01° 로 재현.
-    /// d6 만 파라미터(<see cref="D6Key"/>)로 바뀐다 — <see cref="ApplyD6"/>.
+    /// FR5-WML 공칭 치수 [d1, a2, a3, d4, d5, d6] mm — 장비 STEP(E26003-E-A000-000-0, 2026-10-28)의 관절 축선에서 실측했다.
+    /// d4 = 어깨 가로 185 − 팔꿈치 가로 140 + 손목 114. 2026-11-16 실물 컨트롤러(FR5-WML, v3.9.8) 순기구학과 자세 18개를 대조해
+    /// d6 106 과 관절 0점·부호가 맞음을 확인했다(위치 오차 최대 1.34 mm · RMS 0.94 mm, d6 160 이면 최대 55.3 mm).
     /// </summary>
-    public static Fr5Kinematics Fr5Wml { get; private set; } = new(180, -970, -816, 159, 114, DefaultD6Mm);
+    public static readonly double[] NominalLinksMm = { 180, -970, -816, 159, 114, D6StepMm };
 
-    /// <summary>d6 만 바꾼 기구학.</summary>
+    /// <summary>
+    /// 2026-11-16 실물(용접검사 AMR) 컨트롤러의 DH 보정값을 반영한 치수 — 이 값으로 풀면 컨트롤러 순기구학과 18개 자세 모두 0.000 mm 로 맞는다.
+    /// 장비마다 다른 값이다. d1 은 보정값을 받지 못해 공칭 그대로다.
+    /// </summary>
+    public static readonly double[] WeldAmrLinksMm = { 180, -970.317, -815.788, 159.250, 114.077, 105.0 };
+
+    /// <summary>파라미터로 받는 치수가 공칭에서 벗어날 수 있는 최대 [mm] — DH 보정은 1 mm 안팎이다. 넘으면 잘못된 값으로 보고 공칭을 쓴다.</summary>
+    public const double MaxLinkDeviationMm = 5;
+
+    /// <summary>링크 치수 파라미터 이름 — 값은 "d1,a2,a3,d4,d5,d6" [mm]. ACS 의 <c>Acs:Reach:LinksMm</c> 와 같게 둘 것.</summary>
+    public const string LinksKey = "cobot.kinematics.linksMm";
+
+    /// <summary>
+    /// 지금 쓰는 FR5-WML 기구학 — 기본은 공칭 치수이고, 파라미터(<see cref="LinksKey"/>)의 컨트롤러 DH 보정 치수가 있으면 그 값이다
+    /// (<see cref="ApplyLinks"/>). 오프라인 리치 맵·도달 사전 점검·자기 간섭이 쓴다.
+    /// </summary>
+    public static Fr5Kinematics Fr5Wml { get; private set; } = Of(NominalLinksMm);
+
+    private static Fr5Kinematics Of(double[] v) => new(v[0], v[1], v[2], v[3], v[4], v[5]);
+
+    /// <summary>이 기구학의 치수 [d1, a2, a3, d4, d5, d6] mm.</summary>
+    public double[] LinksMm => new[] { D1, A2, A3, D4, D5, D6 };
+
+    /// <summary>d6 만 바꾼 기구학(대조 도구용).</summary>
     public Fr5Kinematics WithD6(double d6Mm) => this with { D6 = d6Mm };
 
-    /// <summary>파라미터 값 → 쓸 d6. 없거나 범위(<see cref="MinD6Mm"/>~<see cref="MaxD6Mm"/>) 밖·무한대면 기본값(없을 때만 Ok).</summary>
-    public static (double D6Mm, bool Ok) ResolveD6(double? configured) =>
-        configured is { } v && double.IsFinite(v) && v >= MinD6Mm && v <= MaxD6Mm ? (v, true) : (DefaultD6Mm, configured is null);
+    /// <summary>
+    /// 설정 치수 [d1, a2, a3, d4, d5, d6] → 기구학. 없으면 공칭(Ok). 6개가 아니거나, 무한대이거나, 공칭에서
+    /// <see cref="MaxLinkDeviationMm"/> 넘게 벗어난 값이 있으면 공칭을 쓰고 Ok = false.
+    /// </summary>
+    public static (Fr5Kinematics Kinematics, bool Ok) FromLinks(IReadOnlyList<double>? linksMm)
+    {
+        var nominal = Of(NominalLinksMm);
+        if (linksMm is null) return (nominal, true);
+        if (linksMm.Count != 6) return (nominal, false);
+        for (var i = 0; i < 6; i++)
+            if (!double.IsFinite(linksMm[i]) || Math.Abs(linksMm[i] - NominalLinksMm[i]) > MaxLinkDeviationMm) return (nominal, false);
+        return (Of(linksMm.ToArray()), true);
+    }
+
+    /// <summary>파라미터 문자열 "d1,a2,a3,d4,d5,d6" → 숫자 목록. 비어 있으면 null, 숫자가 아닌 칸이 있으면 빈 목록(→ 공칭·Ok = false).</summary>
+    public static IReadOnlyList<double>? ParseLinks(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        var parts = text.Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries);
+        var list = new List<double>(parts.Length);
+        foreach (var p in parts)
+        {
+            if (!double.TryParse(p, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var v))
+                return Array.Empty<double>();
+            list.Add(v);
+        }
+        return list;
+    }
+
+    /// <summary>치수 → 파라미터 문자열.</summary>
+    public static string FormatLinks(IEnumerable<double> linksMm) =>
+        string.Join(",", linksMm.Select(v => v.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)));
 
     /// <summary>
-    /// 파라미터 d6 를 <see cref="Fr5Wml"/> 에 적용한다(기동·저장·삭제 때). 잘못된 값이면 기본값을 쓰고 false.
-    /// 값이 바뀌면 이미 만들어 둔 오프라인 리치 맵(reachmaps)은 옛 d6 로 계산된 것이다 — 다시 만들 것.
+    /// 파라미터 치수를 <see cref="Fr5Wml"/> 에 적용한다(기동·저장·삭제 때). 잘못된 값이면 공칭을 쓰고 false.
+    /// 값이 바뀌면 이미 만들어 둔 오프라인 리치 맵(reachmaps)은 옛 치수로 계산된 것이다(차이는 약 1 mm).
     /// </summary>
-    public static bool ApplyD6(double? configured)
+    public static bool ApplyLinks(string? text)
     {
-        var (d6, ok) = ResolveD6(configured);
-        Fr5Wml = Fr5Wml.WithD6(d6);
+        var (kin, ok) = FromLinks(ParseLinks(text));
+        Fr5Wml = kin;
         return ok;
     }
 
     /// <summary>
-    /// 검사 툴 TCP — 플랜지 기준 [x,y,z,rx,ry,rz]. 렌즈 광축이 J6 축과 동축(STEP 실측 편심 0)이고
-    /// z 375mm 는 플랜지 면 → 초점 거리(설계값, 도면으로 측정 불가).
+    /// 검사 툴 초점 — 플랜지 면 기준 [x,y,z,rx,ry,rz]. 렌즈 광축이 J6 축과 동축(STEP 실측 편심 0)이고
+    /// z 375mm 는 플랜지 면 → <b>카메라 초점</b> 거리(설계값)다. 컨트롤러에 등록된 공구 #1 은 z 365 mm(플랜지 면 → 팁, 초점 10 mm 제외,
+    /// 2026-11-16 실물 확인)라 이 값과 10 mm 다르다 — 컨트롤러 TCP 로 움직이는 경로에는 공구 #1 을, 초점 기준 오프라인 계산에만 이 값을 쓴다.
+    /// ACS 는 공구 365 + 초점 자세 이격 10 = 375 로 같은 초점을 본다.
     /// </summary>
     public static double[] InspectionTool { get; } = { 0, 0, 375, 0, 0, 0 };
 
