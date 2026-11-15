@@ -50,6 +50,13 @@ builder.Services.Configure<VisionInterfaceSettings>(
 builder.Services.AddSingleton<VisionInterfaceService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<VisionInterfaceService>());
 
+// 검사 센서 선택 + 헬륨 가스 디텍터(XL3000flex). Mode=GasDetector 일 때만 가스 디텍터가 통신하고 비전은 휴면.
+builder.Services.Configure<InspectionSensorSettings>(builder.Configuration.GetSection("InspectionSensor"));
+builder.Services.Configure<HD.AMR.App.Communication.GasDetector.GasDetectorSettings>(
+    builder.Configuration.GetSection("GasDetector"));
+builder.Services.AddSingleton<GasDetectorService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<GasDetectorService>());
+
 // 레이저 변위 센서(EtherNet/IP). AMR/Cobot/Camera 와 동일 패턴(싱글톤 + 호스티드) — 기동 시 상시 자동 접속, 실패 시 재시도.
 builder.Services.Configure<LaserDisplacementSensorSettings>(
     builder.Configuration.GetSection("LaserDisplacementSensor"));

@@ -23,6 +23,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly Vda5050OrderExecutor _executor;
     private readonly CameraService _camera;
     private readonly VisionInterfaceService _vision;
+    private readonly GasDetectorService _gas;
+    private readonly InspectionSensorSettings _sensor;
     private readonly LaserDisplacementSensorService _laser;
     private readonly DeviceAlarmState _deviceAlarms;
     private readonly OperatorAlarmState _operatorAlarm;
@@ -129,6 +131,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public string CobotStatusText => IsCobotConnected ? "연결" : "미연결";
     public string IoStatusText => IsIoConnected ? "연결" : "미연결";
     public string VisionStatusText => IsVisionConnected ? "연결" : "미연결";
+
+    /// <summary>상단 검사 센서 배지 이름 — 비전 AMR 은 "비전", 가스 검출 AMR 은 "가스".</summary>
+    public string SensorBadgeLabel => _sensor.UsesGasDetector ? "가스" : "비전";
     public string DepthStatusText => IsDepthConnected ? "연결" : "미연결";
     public string LaserStatusText => IsLaserConnected ? "연결" : "미연결";
     public string EmoButtonText => IsEmoActive ? "■ 비상정지 해제" : "■ 비상정지";
@@ -147,9 +152,13 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public MainWindowViewModel(INavigationService navigation, AMRService amr, CobotService cobot,
         IoModuleService io, Vda5050AdapterService vda, CommLossMonitorService commLoss,
         Vda5050OrderExecutor executor, OperationLogService opLog, CameraService camera,
-        VisionInterfaceService vision, LaserDisplacementSensorService laser, DeviceAlarmState deviceAlarms,
+        VisionInterfaceService vision, GasDetectorService gas,
+        Microsoft.Extensions.Options.IOptions<InspectionSensorSettings> sensor,
+        LaserDisplacementSensorService laser, DeviceAlarmState deviceAlarms,
         OperatorAlarmState operatorAlarm)
     {
+        _gas = gas;
+        _sensor = sensor.Value;
         _camera = camera;
         _vision = vision;
         _laser = laser;
@@ -187,7 +196,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 new("Camera",        "🎥", typeof(CameraViewModel)),
                 new("Laser Sensor",  "📏", typeof(LaserViewModel)),
                 new("IO Module",     "🔌", typeof(IoModuleViewModel)),
-                new("Vision Interface", "🖧", typeof(VisionInterfaceViewModel)),
+                // 검사 센서 모드(InspectionSensor:Mode)에 맞는 통신 화면 하나만 보인다.
+                _sensor.UsesGasDetector
+                    ? new NavItem("Gas Detector",     "🧪", typeof(GasDetectorViewModel))
+                    : new NavItem("Vision Interface", "🖧", typeof(VisionInterfaceViewModel)),
                 new("용접 추적",     "📈", typeof(WeldTrackingViewModel)),
                 new("비드 라벨링",   "🏷", typeof(LabelEditorViewModel)),
                 new("비전 학습",     "🧠", typeof(VisionTrainingViewModel)),
@@ -220,7 +232,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         IsAmrConnected = _amr.IsConnected;
         IsCobotConnected = _cobot.IsConnected;
         IsIoConnected = _io.IsConnected;
-        IsVisionConnected = _vision.Client.IsConnected;
+        IsVisionConnected = _sensor.UsesGasDetector ? _gas.IsConnected : _vision.Client.IsConnected;
         IsDepthConnected = _camera.IsConnected && _camera.IsStreaming;
         IsLaserConnected = _laser.IsConnected;
         OnPropertyChanged(nameof(VisionStatusText));

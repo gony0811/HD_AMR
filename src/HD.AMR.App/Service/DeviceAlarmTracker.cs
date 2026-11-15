@@ -9,6 +9,7 @@ public enum DeviceKind
     IoModule,
     Cobot,
     Amr,
+    GasDetector,
 }
 
 /// <summary>장치 알람 단계 — Normal → Active(끊김) → Latched(복구됨, RESET 대기) → Normal.</summary>
@@ -141,6 +142,7 @@ public sealed class DeviceAlarmTracker
         DeviceKind.IoModule => "I/O 모듈",
         DeviceKind.Cobot => "코봇",
         DeviceKind.Amr => "AMR",
+        DeviceKind.GasDetector => "가스 디텍터",
         _ => kind.ToString(),
     };
 
@@ -153,6 +155,7 @@ public sealed class DeviceAlarmTracker
         DeviceKind.IoModule => "ioModuleLinkLost",
         DeviceKind.Cobot => "cobotLinkLost",
         DeviceKind.Amr => "amrLinkLost",
+        DeviceKind.GasDetector => "gasDetectorLinkLost",
         _ => "deviceLinkLost",
     };
 
@@ -165,6 +168,7 @@ public sealed class DeviceAlarmTracker
         DeviceKind.IoModule => "ioModule",
         DeviceKind.Cobot => "cobot",
         DeviceKind.Amr => "amr",
+        DeviceKind.GasDetector => "gasDetector",
         _ => kind.ToString(),
     };
 }

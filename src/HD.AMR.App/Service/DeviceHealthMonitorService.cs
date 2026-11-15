@@ -22,6 +22,7 @@ public sealed class DeviceHealthMonitorService : BackgroundService
     private readonly CameraService _camera;
     private readonly IoModuleService _io;
     private readonly VisionInterfaceService _vision;
+    private readonly GasDetectorService _gas;
     private readonly LaserDisplacementSensorService _laser;
     private readonly Vda5050OrderExecutor _executor;
     private readonly OperationLogService _opLog;
@@ -32,7 +33,8 @@ public sealed class DeviceHealthMonitorService : BackgroundService
 
     public DeviceHealthMonitorService(IOptions<DeviceHealthSettings> options, DeviceAlarmState state,
         AMRService amr, CobotService cobot, CameraService camera, IoModuleService io,
-        VisionInterfaceService vision, LaserDisplacementSensorService laser,
+        VisionInterfaceService vision, GasDetectorService gas, IOptions<InspectionSensorSettings> sensor,
+        LaserDisplacementSensorService laser,
         Vda5050OrderExecutor executor, OperationLogService opLog, ILogger<DeviceHealthMonitorService> logger)
     {
         _s = options.Value;
@@ -42,13 +44,14 @@ public sealed class DeviceHealthMonitorService : BackgroundService
         _camera = camera;
         _io = io;
         _vision = vision;
+        _gas = gas;
         _laser = laser;
         _executor = executor;
         _opLog = opLog;
         _logger = logger;
         _tracker = new DeviceAlarmTracker(
             TimeSpan.FromSeconds(_s.LostAfterSec), TimeSpan.FromSeconds(_s.StartupGraceSec),
-            DateTime.UtcNow, _s.Devices.EnabledKinds());
+            DateTime.UtcNow, _s.Devices.EnabledKinds(sensor.Value.Mode));
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -165,6 +168,10 @@ public sealed class DeviceHealthMonitorService : BackgroundService
         var vc = _vision.Client;
         r[DeviceKind.Vision] = !vc.IsConnected ? new(false, "TCP 미연결")
             : _s.VisionRxStaleSec > 0 && !Fresh(vc.LastRxUtc, _s.VisionRxStaleSec) ? new(false, "HEARTBEAT 무응답")
+            : new(true, "");
+
+        r[DeviceKind.GasDetector] = !_gas.IsPortOpen ? new(false, _gas.Settings.Transport == HD.AMR.App.Communication.GasDetector.GasDetectorTransportKind.Tcp ? "TCP 미연결" : "시리얼 포트 미연결")
+            : !Fresh(_gas.LastOkUtc, _s.GasDetectorStaleSec) ? new(false, "응답 없음")
             : new(true, "");
 
         r[DeviceKind.Laser] = !_laser.IsConnected ? new(false, "EtherNet/IP 미연결")

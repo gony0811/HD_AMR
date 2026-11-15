@@ -7,6 +7,7 @@ using HD.AMR.App.Service.Sequence.Steps;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using HD.AMR.App.Models;
 using HD.AMR.App.Service.Motion;
 
@@ -31,6 +32,9 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
     private readonly CobotService _cobot;
     private readonly TelescopicService _lift;
     private readonly VisionInterfaceService _vision;
+    private readonly GasDetectorService _gas;
+    private readonly InspectionSensorSettings _sensor;
+    private readonly Vda5050AdapterSettings _vdaSettings;
     private readonly ILogger<WeldInspectionOrchestrator> _logger;
 
     private readonly object _sync = new();
@@ -91,16 +95,22 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         CobotService cobot,
         TelescopicService lift,
         VisionInterfaceService vision,
+        GasDetectorService gas,
+        IOptions<InspectionSensorSettings> sensor,
+        IOptions<Vda5050AdapterSettings> vdaSettings,
         OperationLogService opLog,
         SequenceRunGate runGate,
         ILogger<WeldInspectionOrchestrator> logger)
     {
+        _vdaSettings = vdaSettings.Value;
         _opLog = opLog;
         _runGate = runGate;
         _scopeFactory = scopeFactory;
         _cobot = cobot;
         _lift = lift;
         _vision = vision;
+        _gas = gas;
+        _sensor = sensor.Value;
         _logger = logger;
     }
 
@@ -487,12 +497,15 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                 "CORNER3 검사 시퀀스가 제거되어 실행할 수 없습니다.");
 
         // 비전 링크 — 드라이런 스텝 집합은 촬영(CAPTURE_REQ)을 하지 않으므로 링크 다운이어도 진행한다.
-        if (!_vision.Client.IsConnected)
+        // 가스 검출 AMR 은 비전 대신 가스 디텍터 링크를 본다(InspectionSensor:Mode).
+        var sensorUp = _sensor.UsesGasDetector ? _gas.IsConnected : _vision.Client.IsConnected;
+        var sensorName = _sensor.UsesGasDetector ? "가스 디텍터" : "비전 S/W";
+        if (!sensorUp)
         {
             if (!recipe.DryRun)
-                return InspectionActionResult.Fail("equipmentError", "비전 S/W 링크 다운 — 검사 실행 불가");
-            _logger.LogInformation("비전 링크 확인 생략(드라이런) — 비전 S/W 링크 다운 상태로 진행 (recipe={Recipe})",
-                recipeId);
+                return InspectionActionResult.Fail("equipmentError", $"{sensorName} 링크 다운 — 검사 실행 불가");
+            _logger.LogInformation("{Sensor} 링크 확인 생략(드라이런) — 링크 다운 상태로 진행 (recipe={Recipe})",
+                sensorName, recipeId);
         }
 
         // 6) 검사 방향 자동 유도(§4.4·§8.1) — 프로필 선택(챔퍼 수직 전용)과 anchor 판정보다 먼저 결정한다.
@@ -866,6 +879,20 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                         }
                         if (dissolved)
                             _logger.LogWarning("묶음 {Id} 점2 교시 실패 — 공통 좌표계를 공유하지 않습니다.", bundle?.BundleId);
+                    }
+                    // 가스 모드: actionState.resultDescription = SAIGE 결과 본문(JSON, SAIGE 규격 §2) — ACS 가 SAIGE 로 올린다.
+                    if (context.Bag.TryGetValue(Communication.GasDetector.GasTaskResult.BagKey, out var gasValue)
+                        && gasValue is Communication.GasDetector.GasTaskResult gasTask)
+                    {
+                        var report = Communication.GasDetector.SaigeGasResultReport.Build(
+                            gasTask, req.DrawingPos.Tank, req.TaskId, req.Round, _vdaSettings.SerialNumber);
+                        var json = report.ToJson();
+                        _logger.LogInformation("[가스 결과] task={Task} round={Round} 판정 {Result} ({N}포인트) — ACS 보고",
+                            req.TaskId?.ToString() ?? "—", req.Round?.ToString() ?? "—", report.Result, report.Points.Count);
+                        _opLog.Log(OperationLogService.SourceAcs, OpCategory.Action, "가스 측정 결과", report.Result == "OK",
+                            $"jobRef={req.JobRef}, tank={report.TankId}, task={report.TaskId}, round={report.Round?.ToString() ?? "—"}, " +
+                            $"판정 {report.Result}, 임계 {report.Threshold.Value:0.###} {report.Threshold.Unit}, {report.Points.Count}포인트", orderId);
+                        return InspectionActionResult.Ok(json);
                     }
                     return InspectionActionResult.Ok(
                         $"recipe={recipeId} profile='{profile?.Name ?? $"corner3.{cornerSide}"}' anchor={req.AnchorGroupId}#{req.SeqInGroup}" +
