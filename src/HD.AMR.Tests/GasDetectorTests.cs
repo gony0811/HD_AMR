@@ -206,6 +206,29 @@ public class GasInspectionReportTests
         Assert.All(scans.EnumerateArray(), x => Assert.Equal("NG", x.GetProperty("result").GetString()));
     }
 
+    /// <summary>
+    /// 측정 실패(FAIL) 포인트가 하나라도 있으면 그 Task 는 검사 실패 — 결과 본문을 보고하지 않고 액션을 FAILED 로 끝낸다
+    /// (SAIGE 는 OK·NG 판정과 포인트마다 측정 1건 이상만 받는다). NG 가 함께 있어도 같다.
+    /// </summary>
+    [Fact]
+    public void MeasurementFailure_Fails_The_Task_When_Any_Point_Has_No_Valid_Scan()
+    {
+        var th = new GasThreshold(5.0, "ppm", GasThresholdSource.Acs, T0);
+        var ok = new GasPointResult(1, 1200, 340, new[] { Scan(0, 0.8) });
+        var ng = new GasPointResult(2, 1202, 340, new[] { Scan(0, 7.4), Scan(1, 6.9), Scan(2, 7.1) });
+        var recovered = new GasPointResult(3, 1204, 340, new[] { Scan(0, null), Scan(1, 0.9) });   // 재측정에서 값이 나옴 → 유효
+        var failed = new GasPointResult(4, 1206, 340, new[] { Scan(0, null), Scan(1, null), Scan(2, null) });
+
+        Assert.Null(new GasTaskResult(T0, T0, th, new[] { ok, ng, recovered }).MeasurementFailure());   // OK·NG 만 → 정상 보고
+        Assert.Contains("포인트 4 FAIL", new GasTaskResult(T0, T0, th, new[] { ok, failed }).MeasurementFailure());
+        var withNg = new GasTaskResult(T0, T0, th, new[] { ok, ng, failed }).MeasurementFailure();
+        Assert.Contains("3포인트 중 1개", withNg);
+        Assert.Contains("NG 1포인트", withNg);                                                        // NG 가 있어도 실패
+        Assert.Contains("측정한 포인트가 없습니다", new GasTaskResult(T0, T0, th, Array.Empty<GasPointResult>()).MeasurementFailure());
+        Assert.Equal(new[] { "OK", "NG", "FAIL" },
+            new[] { GasJudgement.Ok, GasJudgement.Ng, GasJudgement.Error }.Select(SaigeGasResultReport.ResultText));
+    }
+
     [Fact]
     public void Saige_Report_Omits_Scans_Without_Value_And_Null_Round()
     {
@@ -216,7 +239,8 @@ public class GasInspectionReportTests
         Assert.DoesNotContain("\"robotId\"", json);
         using var doc = JsonDocument.Parse(json);
         Assert.Equal(0, doc.RootElement.GetProperty("points")[0].GetProperty("scans").GetArrayLength());
-        Assert.Equal("ERROR", doc.RootElement.GetProperty("result").GetString());
+        Assert.Equal("FAIL", doc.RootElement.GetProperty("result").GetString());   // 판정 문구는 OK · NG · FAIL
+        Assert.Equal("FAIL", doc.RootElement.GetProperty("points")[0].GetProperty("result").GetString());
     }
 
     [Fact]

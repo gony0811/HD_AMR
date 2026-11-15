@@ -58,6 +58,21 @@ public sealed record GasTaskResult(
     public GasJudgement Result => Points.Any(p => p.Result == GasJudgement.Ng) ? GasJudgement.Ng
         : Points.Count == 0 || Points.Any(p => p.Result == GasJudgement.Error) ? GasJudgement.Error
         : GasJudgement.Ok;
+
+    /// <summary>
+    /// 측정 실패(FAIL) 사유 — 측정한 포인트가 없거나, 유효 측정값이 하나도 없는 포인트가 있으면 그 Task 는 **검사 실패**다(없으면 null).
+    /// SAIGE 규격(초안 v0.1 §2)은 판정을 OK·NG 만 받고 포인트마다 측정 1건 이상을 요구하므로, 그런 결과는 보고하지 않고
+    /// 액션을 FAILED 로 끝낸다 — ACS 가 실패로 기록하고 재검사 대상이 된다. NG 가 함께 있어도 같다(빠진 포인트가 있는 결과는 보내지 않는다).
+    /// </summary>
+    public string? MeasurementFailure()
+    {
+        if (Points.Count == 0) return "측정한 포인트가 없습니다";
+        var failed = Points.Where(p => p.Result == GasJudgement.Error).Select(p => p.PointSeq).OrderBy(n => n).ToList();
+        if (failed.Count == 0) return null;
+        int ng = Points.Count(p => p.Result == GasJudgement.Ng);
+        return $"포인트 {string.Join(", ", failed.Take(10))}{(failed.Count > 10 ? " …" : "")} FAIL(유효 측정값 없음) — " +
+               $"{Points.Count}포인트 중 {failed.Count}개" + (ng > 0 ? $", NG {ng}포인트는 재검사에서 다시 측정" : "");
+    }
 }
 
 /// <summary>
@@ -109,7 +124,7 @@ public sealed class SaigeGasResultReport
     {
         GasJudgement.Ok => "OK",
         GasJudgement.Ng => "NG",
-        _ => "ERROR",
+        _ => "FAIL",   // 측정 실패(유효 측정값 없음) — 판정은 OK · NG · FAIL 세 가지
     };
 
     private static long EpochMs(DateTime utc)
@@ -117,7 +132,8 @@ public sealed class SaigeGasResultReport
 
     /// <summary>
     /// Task 결과 → SAIGE 본문. 유효 측정값이 없는 scan(통신 실패)은 <c>value</c> 가 필수라 싣지 않는다 —
-    /// 그런 포인트만 남으면 포인트·Task 판정이 <c>ERROR</c> 가 된다(SAIGE 규격에 없는 값, 협의 대상).
+    /// 그런 포인트만 남으면 포인트·Task 판정이 <c>FAIL</c> 이다. FAIL 이 낀 Task 는 이 본문을 ACS 로 보고하지 않고
+    /// 검사 액션을 FAILED 로 끝낸다(<see cref="GasTaskResult.MeasurementFailure"/>) — SAIGE 규격은 OK·NG 만 받는다.
     /// </summary>
     public static SaigeGasResultReport Build(GasTaskResult task, string tankId, Guid? taskId, int? round, string? robotId)
         => new()
