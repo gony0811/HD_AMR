@@ -46,7 +46,7 @@ public class Vda5050AdapterSettings
 
     // ── 상태 매핑 파라미터 ──
     /// <summary>
-    /// 시작할 때의 층 번호(1~). AMR 은 층만 정의한다 — 선창 이름은 ACS 가 지령에 실어 보낸 값을 되돌려 보고한다(<see cref="FloorMap"/>).
+    /// 시작할 때의 층 번호(1~). AMR 은 층만 정의하고 선창 ID 는 갖지 않는다 — state 에는 `L{층}` 으로 보고한다(<see cref="FloorMap"/>).
     /// 0 이면 옛 설정 <see cref="MapId"/> 에서 층 번호를 뽑는다(그것도 없으면 1).
     /// </summary>
     public int Level { get; set; }
@@ -57,13 +57,11 @@ public class Vda5050AdapterSettings
     /// <summary>맨 아래층의 화면 표기 번호 — 0(기본) = L0·L1·L2·L3, 1 = L1·L2·L3·L4. 화면 표기만 바꾼다(맵 ID·ACS 보고는 그대로).</summary>
     public int LevelLabelBase { get; set; } = 0;
 
-    /// <summary>
-    /// (옛 설정 — 호환) 현재 층 mapId(`{tank}-L{level}`). 층 번호와, ACS 에서 선창 이름을 받기 전에 쓸 초기 선창 이름을 여기서 뽑는다.
-    /// </summary>
-    public string MapId { get; set; } = "CT1-L1";
+    /// <summary>(옛 설정 — 호환) 현재 층 mapId. 층 번호만 뽑아 쓴다(선창 이름 부분은 무시).</summary>
+    public string MapId { get; set; } = "";
 
     /// <summary>(옛 설정 — 호환) 수동 층 전환 선택지. 층 번호만 쓴다.</summary>
-    public string[] AvailableMapIds { get; set; } = ["CT1-L1", "CT1-L2", "CT1-L3", "CT1-L4"];
+    public string[] AvailableMapIds { get; set; } = [];
 
     /// <summary>측위 완료 판정 임계(맵 일치율 %). 이상이면 positionInitialized=true.</summary>
     public double LocalizedThresholdPercent { get; set; } = 80.0;
