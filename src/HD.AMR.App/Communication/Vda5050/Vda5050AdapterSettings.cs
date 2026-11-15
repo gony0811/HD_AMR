@@ -45,10 +45,21 @@ public class Vda5050AdapterSettings
     public int AcsActiveWindowSec { get; set; } = 60;
 
     // ── 상태 매핑 파라미터 ──
-    /// <summary>현재 층 mapId(`{tank}-L{level}`). AMR이 맵ID를 미노출하므로 어댑터가 보유(수동/설정). </summary>
+    /// <summary>
+    /// 시작할 때의 층 번호(1~). AMR 은 층만 정의한다 — 선창 이름은 ACS 가 지령에 실어 보낸 값을 되돌려 보고한다(<see cref="FloorMap"/>).
+    /// 0 이면 옛 설정 <see cref="MapId"/> 에서 층 번호를 뽑는다(그것도 없으면 1).
+    /// </summary>
+    public int Level { get; set; }
+
+    /// <summary>수동 층 전환 UI 의 층 목록. 비우면 옛 설정 <see cref="AvailableMapIds"/> 에서 뽑고, 그것도 없으면 1~4.</summary>
+    public int[] Levels { get; set; } = [];
+
+    /// <summary>
+    /// (옛 설정 — 호환) 현재 층 mapId(`{tank}-L{level}`). 층 번호와, ACS 에서 선창 이름을 받기 전에 쓸 초기 선창 이름을 여기서 뽑는다.
+    /// </summary>
     public string MapId { get; set; } = "CT1-L1";
 
-    /// <summary>수동 층 전환 UI(대시보드)의 선택지 목록. 비우면 현재 MapId 단일 항목만 표시.</summary>
+    /// <summary>(옛 설정 — 호환) 수동 층 전환 선택지. 층 번호만 쓴다.</summary>
     public string[] AvailableMapIds { get; set; } = ["CT1-L1", "CT1-L2", "CT1-L3", "CT1-L4"];
 
     /// <summary>측위 완료 판정 임계(맵 일치율 %). 이상이면 positionInitialized=true.</summary>

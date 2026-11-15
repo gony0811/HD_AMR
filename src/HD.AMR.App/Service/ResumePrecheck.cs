@@ -24,7 +24,8 @@ public static class ResumePrecheck
         if (i.EmergencyStopActive) reasons.Add("비상정지 활성 — 해제 후 재개");
         if (i.PowerMode != PowerMode.Normal) reasons.Add($"배터리 PowerMode={i.PowerMode} (NORMAL 아님)");
         if (!i.PositionInitialized) reasons.Add("위치 추정 비정상");
-        if (!string.Equals(i.CurrentMapId, i.OrderMapId, StringComparison.Ordinal))
+        // 층 번호만 본다 — 선창 이름은 ACS 가 정한다(일시정지 사이에 선창 ID 가 바뀌어도 같은 층이면 재개 가능)
+        if (!Communication.Vda5050.FloorMap.SameLevel(i.CurrentMapId, i.OrderMapId))
             reasons.Add($"mapId 불일치 (현재={i.CurrentMapId}, order={i.OrderMapId})");
         if (i.OperatingMode != "AUTOMATIC") reasons.Add($"operatingMode={i.OperatingMode} (AUTOMATIC 아님)");
         return reasons.Count == 0 ? null : string.Join("; ", reasons);

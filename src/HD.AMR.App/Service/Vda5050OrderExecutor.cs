@@ -322,7 +322,7 @@ public sealed class Vda5050OrderExecutor
     }
 
     /// <summary>검증 실패 사유(통과 시 null). 개별 액션 파라미터 문제는 여기가 아니라 액션 FAILED 경로(§4.5.2).</summary>
-    private static string? Validate(Vda5050Order order, string currentMapId)
+    internal static string? Validate(Vda5050Order order, string currentMapId)
     {
         if (string.IsNullOrEmpty(order.OrderId)) return "orderId 누락";
         if (order.Nodes.Count == 0) return "nodes 비어 있음";
@@ -330,7 +330,10 @@ public sealed class Vda5050OrderExecutor
         var node = order.Nodes[0];
         if (node.NodePosition is null) return "nodePosition 누락";
         if (string.IsNullOrEmpty(node.NodePosition.MapId)) return "nodePosition.mapId 누락";
-        if (!string.Equals(node.NodePosition.MapId, currentMapId, StringComparison.Ordinal))
+        // 층 번호만 비교한다 — 선창 이름은 ACS 가 정하고 AMR 은 받은 값을 되돌려 보고할 뿐이다(FloorMap).
+        if (Communication.Vda5050.FloorMap.LevelOf(node.NodePosition.MapId) is null)
+            return $"nodePosition.mapId 형식 오류 — 층 번호를 읽을 수 없음 ({node.NodePosition.MapId}, 기대 '{{선창}}-L{{층}}')";
+        if (!Communication.Vda5050.FloorMap.SameLevel(node.NodePosition.MapId, currentMapId))
             return $"현재 층 불일치 (order={node.NodePosition.MapId}, 현재={currentMapId})";
         if (string.IsNullOrEmpty(node.NodeId)) return "nodeId 누락";
         return null;
