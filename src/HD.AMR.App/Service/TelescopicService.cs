@@ -342,7 +342,20 @@ public class TelescopicService : BackgroundService
 
     private static readonly TimeSpan TargetPollInterval = TimeSpan.FromMilliseconds(200);
     private static readonly TimeSpan TargetStartTimeout = TimeSpan.FromSeconds(5);
-    private static readonly TimeSpan TargetCompletionTimeout = TimeSpan.FromSeconds(90);
+
+    /// <summary>지정 높이 이동 완료 대기 — 기본 시간 + 이동 거리 ÷ 최저 기대 속도. 고정 90s 는 0→999mm(실측 약 7~8mm/s,
+    /// ≈135s)를 다 못 올라 762mm 에서 타임아웃 났다(2026-11-16 17:22 L3-R03C15).</summary>
+    internal static readonly TimeSpan TargetCompletionBase = TimeSpan.FromSeconds(30);
+
+    /// <summary>타임아웃 계산용 최저 기대 속도 [mm/s] — 실측(7~8mm/s)보다 느리게 잡아 여유를 둔다.</summary>
+    internal const double TargetCompletionMinSpeedMmPerSec = 5.0;
+
+    /// <summary>이동 거리 <paramref name="travelMm"/> 에 대한 완료 대기 한도. 최소 90s(종전 값).</summary>
+    internal static TimeSpan CompletionTimeoutFor(double travelMm)
+    {
+        var sec = TargetCompletionBase.TotalSeconds + Math.Abs(travelMm) / TargetCompletionMinSpeedMmPerSec;
+        return TimeSpan.FromSeconds(Math.Max(90, sec));
+    }
 
     /// <summary>
     /// 상태 스냅샷이 목표 높이(<paramref name="targetHeightMm"/> 또는 컨트롤러 양자화 높이 <paramref name="expectedHeightMm"/>)에
@@ -442,11 +455,12 @@ public class TelescopicService : BackgroundService
                     startHeightMm);
 
             var startedUtc = DateTime.UtcNow;
+            var completionTimeout = CompletionTimeoutFor(heightMm - Math.Max(0, startHeightMm));
             var movingSeen = false;
             var stoppedAtTargetCount = 0;
             DateTime? stoppedOffTargetSinceUtc = null;
 
-            while (DateTime.UtcNow - startedUtc < TargetCompletionTimeout)
+            while (DateTime.UtcNow - startedUtc < completionTimeout)
             {
                 await Task.Delay(TargetPollInterval, ct).ConfigureAwait(false);
                 await PollAsync(ct).ConfigureAwait(false);
@@ -525,7 +539,7 @@ public class TelescopicService : BackgroundService
             await StopAsync_Internal(CancellationToken.None).ConfigureAwait(false);
             var lastMm = Latest?.HeightMm ?? -1;
             return TelescopicMoveResult.Fail(
-                $"텔레스코픽 리프트 이동 타임아웃 ({TargetCompletionTimeout.TotalSeconds:0}s) — 목표 {heightMm}mm, 현재 {(lastMm >= 0 ? $"{lastMm}mm" : "미상")}.",
+                $"텔레스코픽 리프트 이동 타임아웃 ({completionTimeout.TotalSeconds:0}s) — 목표 {heightMm}mm, 현재 {(lastMm >= 0 ? $"{lastMm}mm" : "미상")}.",
                 lastMm);
         }
         catch (OperationCanceledException)
