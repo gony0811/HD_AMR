@@ -5,9 +5,26 @@ using Xunit;
 
 namespace HD.AMR.Tests;
 
-/// <summary>층 맵 ID 규칙 — AMR 은 층 번호만 알고 선창 이름은 ACS 가 준 값을 되돌려 보고한다.</summary>
+/// <summary>층 맵 ID 규칙 — AMR 은 층 번호만 알고 선창 ID 는 갖지 않는다(보고는 `L{층}`).</summary>
 public class FloorMapTests
 {
+    /// <summary>
+    /// 층의 화면 표기 — 맨 아래층을 L0 으로 부른다(L0~L3). 층 번호(1부터)와 맵 ID, ACS 와 주고받는 값은 그대로다.
+    /// </summary>
+    [Fact]
+    public void 화면_표기는_L0부터_맵_ID와_층_번호는_그대로()
+    {
+        Assert.Equal(0, FloorMap.LabelBase);
+        Assert.Equal(new[] { "L0", "L1", "L2", "L3" }, new[] { 1, 2, 3, 4 }.Select(FloorMap.Label));
+        Assert.Equal("L3 (맵 CT1-L4)", FloorMap.Display("CT1-L4"));
+        Assert.Equal("L0 (맵 L1)", FloorMap.Display("L1"));            // AMR 은 층만 보고한다(맵 ID = L{n})
+        Assert.Equal("이상한값", FloorMap.Display("이상한값"));           // 층을 읽을 수 없으면 그대로
+        Assert.Equal("-", FloorMap.Display(null));
+        // 표기를 바꿔도 맵 ID·층 판정은 그대로
+        Assert.Equal("L4", FloorMap.Compose(4));
+        Assert.Equal(4, FloorMap.LevelOf("CT1-L4"));
+    }
+
     [Theory]
     [InlineData("CT1-L4", 4)]
     [InlineData("HN8250-CT2-L12", 12)]
@@ -23,23 +40,12 @@ public class FloorMapTests
     public void LevelOf_ReadsTheFloorNumber(string? mapId, int? expected) =>
         Assert.Equal(expected, FloorMap.LevelOf(mapId));
 
-    [Theory]
-    [InlineData("CT1-L4", "CT1")]
-    [InlineData("HN8250-CT2-L1", "HN8250-CT2")]
-    [InlineData("L3", null)]
-    [InlineData("4", null)]
-    [InlineData("CT1", null)]
-    public void TankOf_IsThePartBeforeTheFloor(string mapId, string? expected) =>
-        Assert.Equal(expected, FloorMap.TankOf(mapId));
-
     [Fact]
-    public void Compose_UsesTheTankNameFromAcs_OrFloorOnlyWhenUnknown()
+    public void Compose_ReportsTheFloorOnly_WithoutTankId()
     {
-        Assert.Equal("HN8250-CT2-L3", FloorMap.Compose("HN8250-CT2", 3));
-        Assert.Equal("L3", FloorMap.Compose(null, 3));
-        Assert.Equal("L3", FloorMap.Compose(" ", 3));
-        // 받은 맵 ID 를 쪼갰다 다시 붙이면 같은 값
-        Assert.Equal("CT1-L2", FloorMap.Compose(FloorMap.TankOf("CT1-L2"), FloorMap.LevelOf("CT1-L2")!.Value));
+        Assert.Equal("L3", FloorMap.Compose(3));
+        // ACS 가 보낸 `{선창}-L{층}` 에서 층만 읽어 보고하면 선창 ID 는 빠진다
+        Assert.Equal("L2", FloorMap.Compose(FloorMap.LevelOf("HN8250-CT2-L2")!.Value));
     }
 
     [Fact]
@@ -58,20 +64,6 @@ public class FloorMapTests
         Assert.Equal(new[] { 1, 3 }, FloorMap.Levels(new[] { 3, 1, 3, 0 }, new[] { "CT1-L2" }));
         Assert.Equal(new[] { 1, 2, 3, 4 }, FloorMap.Levels(null, new[] { "CT1-L1", "CT1-L2", "CT1-L3", "CT1-L4" }));
         Assert.Equal(new[] { 1, 2, 3, 4 }, FloorMap.Levels(Array.Empty<int>(), Array.Empty<string>()));
-    }
-
-    [Fact]
-    public void TankNameStore_KeepsTheLastNameAcrossRestarts()
-    {
-        var path = Path.Combine(Path.GetTempPath(), "hdamr-tank-" + Guid.NewGuid().ToString("N"), "acs-tank.txt");
-        try
-        {
-            var store = new TankNameStore(path);
-            Assert.Null(store.Load());                       // 받은 적 없음 → 설정의 옛 MapId 에서 뽑은 이름을 쓴다
-            Assert.True(store.Save("HN8250-CT2"));
-            Assert.Equal("HN8250-CT2", new TankNameStore(path).Load());
-        }
-        finally { try { Directory.Delete(Path.GetDirectoryName(path)!, true); } catch { } }
     }
 
     [Fact]
@@ -97,7 +89,7 @@ public class FloorMapTests
 
         Assert.Null(Vda5050OrderExecutor.Validate(Order("CT1-L4"), "CT1-L4"));
         Assert.Null(Vda5050OrderExecutor.Validate(Order("HN8250-CT2-L4"), "CT1-L4"));   // ACS 가 선창 ID 를 바꿨다 — 같은 층이면 수행
-        Assert.Null(Vda5050OrderExecutor.Validate(Order("HN8250-CT2-L4"), "L4"));       // 선창 이름을 아직 받지 못한 AMR
+        Assert.Null(Vda5050OrderExecutor.Validate(Order("HN8250-CT2-L4"), "L4"));       // AMR 은 층만 보유(`L{층}`)
         Assert.Contains("현재 층 불일치", Vda5050OrderExecutor.Validate(Order("HN8250-CT2-L3"), "CT1-L4"));
         Assert.Contains("현재 층 불일치", Vda5050OrderExecutor.Validate(Order("CT1-L1"), "CT1-L4"));
         Assert.Contains("층 번호를 읽을 수 없음", Vda5050OrderExecutor.Validate(Order("CT1"), "CT1-L4"));

@@ -86,29 +86,26 @@ public sealed class Vda5050AdapterService : BackgroundService
         }
     }
 
-    // 현재 층 — 로봇이 맵ID 미노출이라 어댑터가 보유(§4.3). AMR 은 <b>층 번호만</b> 정의하고,
-    // 선창 이름은 ACS 가 지령(nodePosition.mapId)에 실어 보낸 값을 되돌려 보고한다(FloorMap) —
-    // ACS 에서 선창 ID 를 바꿔도 AMR 설정을 고치지 않는다. 층의 초기값은 설정,
+    // 현재 층 — 로봇이 맵ID 미노출이라 어댑터가 보유(§4.3). AMR 은 <b>층 번호만</b> 갖고, 선창 ID 는 갖지 않는다 —
+    // 선창 ID 는 ACS 가 지령에 실어 보내고 관리하므로 state 에는 층만(`L{n}`) 보고한다(FloorMap). 층의 초기값은 설정,
     // initPosition 이행(D-10 유보) 확정 후 재측위 검증 통과 시에만 갱신한다.
     // D-10 유보 기간에는 대시보드의 수동 층 전환(SetMapId)이 유일한 갱신 경로.
     private volatile int _level;
-    private volatile string? _tank;
-    private readonly TankNameStore _tankStore;
 
-    /// <summary>현재 층 mapId — state.agvPosition.mapId 로 발행되는 값(ACS 에서 받은 선창 이름 + 자기 층).</summary>
-    public string CurrentMapId => FloorMap.Compose(_tank, _level);
+    /// <summary>현재 층 mapId — state.agvPosition.mapId 로 발행되는 값(층만, `L{n}`).</summary>
+    public string CurrentMapId => FloorMap.Compose(_level);
 
     /// <summary>현재 층 번호.</summary>
     public int CurrentLevel => _level;
 
-    /// <summary>수동 층 전환 UI 선택지 — 층 목록을 지금 선창 이름으로 적은 것.</summary>
+    /// <summary>수동 층 전환 UI 선택지 — 층 목록(`L{n}`).</summary>
     public IReadOnlyList<string> AvailableMapIds =>
-        FloorMap.Levels(_s.Levels, _s.AvailableMapIds).Select(n => FloorMap.Compose(_tank, n)).ToArray();
+        FloorMap.Levels(_s.Levels, _s.AvailableMapIds).Select(FloorMap.Compose).ToArray();
 
     /// <summary>
     /// 수동 층 전환(운영자 UI). 재측위 검증 없이 층만 바꾸는 임시 운영 경로 —
     /// initPosition 이행(D-10) 구현 전까지 사용. 변경 즉시 state 를 발행해 ACS에 회신한다(§6.1).
-    /// 받은 값에서 <b>층 번호만</b> 쓴다(선창 이름 부분은 무시 — 선창 이름은 ACS 지령에서만 받는다).
+    /// 받은 값에서 <b>층 번호만</b> 쓴다.
     /// </summary>
     public void SetMapId(string mapId)
     {
@@ -119,23 +116,6 @@ public sealed class Vda5050AdapterService : BackgroundService
         _logger.LogWarning("수동 층 전환: {Prev} → {New} — 재측위 검증 없이 변경(D-10 유보 기간 임시 운영). " +
                            "실제 층·맵 일치 여부는 운영자 책임.", prev, CurrentMapId);
         NudgeState();
-    }
-
-    /// <summary>
-    /// ACS 지령의 맵 ID 에서 선창 이름을 받아 둔다 — 층이 같을 때만(층이 다른 지령은 실행기가 거부한다).
-    /// 이름이 바뀌면 저장하고(재시작 뒤에도 사용) 다음 state 부터 새 이름으로 보고한다.
-    /// </summary>
-    internal void AdoptTankFrom(string? orderMapId)
-    {
-        if (FloorMap.LevelOf(orderMapId) != _level) return;
-        if (FloorMap.TankOf(orderMapId) is not { } tank || string.Equals(tank, _tank, StringComparison.Ordinal)) return;
-
-        var prev = _tank;
-        _tank = tank;
-        var saved = _tankStore.Save(tank);
-        _logger.LogWarning("ACS 선창 이름 변경: {Prev} → {New} — 이후 state 는 {Map} 로 보고{Saved}.",
-            prev ?? "(없음)", tank, CurrentMapId, saved ? "" : " (파일 저장 실패 — 재시작하면 옛 이름으로 보고)");
-        _opLog.Log(OperationLogService.SourceAcs, OpCategory.Order, "선창 이름 수신", true, $"{prev ?? "(없음)"} → {tank}");
     }
 
     /// <summary>
@@ -212,9 +192,8 @@ public sealed class Vda5050AdapterService : BackgroundService
         Vda5050OrderExecutor executor, Inspection.IWeldInspectionExecutor inspection,
         CobotService cobot, PowerModeService power, DeviceAlarmState deviceAlarms, OperationLogService opLog,
         ILoggerFactory loggerFactory, Sequence.BeadManualLabelHub? beadHub = null,
-        CobotObstacleGuard? obstacleGuard = null, TankNameStore? tankStore = null)
+        CobotObstacleGuard? obstacleGuard = null)
     {
-        _tankStore = tankStore ?? new TankNameStore();
         _beadHub = beadHub;
         _obstacleGuard = obstacleGuard;
         if (_obstacleGuard is not null) _obstacleGuard.Changed += NudgeState;
@@ -226,9 +205,9 @@ public sealed class Vda5050AdapterService : BackgroundService
         _inspection = inspection;
         _cobot = cobot;
         _power = power;
-        // 층 = 설정 Level(없으면 옛 MapId 의 층, 그것도 없으면 1) · 선창 이름 = 저장해 둔 ACS 값(없으면 옛 MapId 의 선창 이름)
+        // 층 = 설정 Level(없으면 옛 MapId 의 층, 그것도 없으면 1)
         _level = _s.Level >= 1 ? _s.Level : FloorMap.LevelOf(_s.MapId) ?? 1;
-        _tank = _tankStore.Load() ?? FloorMap.TankOf(_s.MapId);
+        FloorMap.LabelBase = _s.LevelLabelBase;   // 층의 화면 표기(L0~L3 / L1~L4)
         _logger = loggerFactory.CreateLogger<Vda5050AdapterService>();
     }
 
@@ -393,9 +372,7 @@ public sealed class Vda5050AdapterService : BackgroundService
                 return;
             }
             // 층 검증(§4.5.2 현재 층 불일치 포함)은 실행기 검증부가 수행 — 어댑터 보유 mapId 를 전달.
-            var orderMapId = order.Nodes.Count > 0 ? order.Nodes[0].NodePosition?.MapId : null;
             await _executor.HandleOrderAsync(order, CurrentMapId);
-            AdoptTankFrom(orderMapId);   // 층이 맞는 지령이면 그 선창 이름을 받아 둔다(다음 state 부터 그 이름으로 보고)
             NudgeState();   // order 수신 직후 즉시 발행(§6.1)
         }
         catch (Exception ex)

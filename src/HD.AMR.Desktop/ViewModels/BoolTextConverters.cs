@@ -6,6 +6,13 @@ namespace HD.AMR.Desktop.ViewModels;
 /// 일시 전부 OFF 가 보일 수 있어 None 포함. 경광등 그림은 색별 bool 로 따로 그린다.</summary>
 public enum TowerLampColor { None, Red, Yellow, Green }
 
+/// <summary>층 맵 ID → 화면 표기(`L3 (맵 CT1-L4)`) — 층 선택 목록의 항목 글. 선택값(맵 ID)은 그대로다.</summary>
+public static class FloorTextConverters
+{
+    public static readonly IValueConverter Display =
+        new FuncValueConverter<string?, string>(HD.AMR.App.Communication.Vda5050.FloorMap.Display);
+}
+
 /// <summary>불리언 → 표시 텍스트 컨버터 모음(XAML 에서 x:Static 으로 사용).</summary>
 public static class BoolTextConverters
 {

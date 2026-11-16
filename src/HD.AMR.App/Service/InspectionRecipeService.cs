@@ -90,6 +90,9 @@ public class InspectionRecipeService
         }
     }
 
+    /// <summary>레시피가 저장·초기화됨 — ACS 전송 서비스(<see cref="AcsProfileSyncService"/>)가 듣고 프로필 지정표를 다시 보낸다.</summary>
+    public static event Action? RecipesChanged;
+
     public async Task SaveAsync(InspectionRecipe recipe, CancellationToken ct = default)
     {
         var existing = await _db.InspectionRecipes.FirstOrDefaultAsync(r => r.Id == recipe.Id, ct);
@@ -106,6 +109,7 @@ public class InspectionRecipeService
             existing.UpdatedAt = DateTime.UtcNow;
         }
         await _db.SaveChangesAsync(ct);
+        RecipesChanged?.Invoke();
     }
 
     /// <summary>레시피 1건을 코드 기본값(<see cref="BuildDefaults"/>)으로 재적용 — 기존 행이 있어도 덮어쓴다.
