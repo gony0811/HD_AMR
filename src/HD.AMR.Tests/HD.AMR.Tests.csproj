@@ -30,6 +30,8 @@
     <!-- UnetSegmenterTests: 입력 밝기>0.5 면 양성 logit 을 내는 168B 그래프(H/W 동적). -->
     <None Include="TestData\threshold_unet.onnx" CopyToOutputDirectory="PreserveNewest" />
     <None Include="TestData\threshold_heatmap.onnx" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Fr5FkCheckTests: 실물 GetForwardKin 대조 표본(tools/fr5_fk_capture.py 가 만든다). -->
+    <None Update="Data\**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>
