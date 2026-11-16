@@ -78,6 +78,9 @@ builder.Services.AddSingleton<AmrDriveService>();
 // AMRService(Modbus 상태)를 참조해 state를 매핑. Enabled=false 면 유휴. AMR/Cobot 과 동일 패턴.
 builder.Services.Configure<HD.AMR.App.Communication.Vda5050.Vda5050AdapterSettings>(
     builder.Configuration.GetSection("Vda5050"));
+// 데스크톱 화면에서 바꾼 브로커 주소(%LOCALAPPDATA%\HD.AMR\acs-broker.json)가 있으면 appsettings 값보다 우선한다.
+builder.Services.PostConfigure<HD.AMR.App.Communication.Vda5050.Vda5050AdapterSettings>(
+    HD.AMR.App.Communication.Vda5050.AcsBrokerStore.ApplyTo);
 builder.Services.AddSingleton<CobotObstacleGuard>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<CobotObstacleGuard>());
 builder.Services.AddSingleton<Vda5050OrderExecutor>();

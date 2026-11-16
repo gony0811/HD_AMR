@@ -1,0 +1,68 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:HD.AMR.Desktop.ViewModels"
+        x:Class="HD.AMR.Desktop.Views.AcsBrokerWindow"
+        x:DataType="vm:AcsBrokerViewModel"
+        Width="460" SizeToContent="Height" CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        Title="ACS 연결 설정"
+        Background="{DynamicResource AppWindowBrush}">
+    <Window.Styles>
+        <Style Selector="TextBlock.msgError">
+            <Setter Property="Foreground" Value="{DynamicResource AppErrorBrush}" />
+        </Style>
+    </Window.Styles>
+    <Window.KeyBindings>
+        <KeyBinding Gesture="Enter" Command="{Binding ConnectCommand}" />
+    </Window.KeyBindings>
+    <StackPanel Margin="20" Spacing="12">
+        <StackPanel Spacing="2">
+            <TextBlock Classes="page-title" Text="ACS 연결 설정" />
+            <TextBlock Classes="muted" FontSize="12" TextWrapping="Wrap"
+                       Text="ACS 와 통신하는 MQTT 브로커(VDA 5050)의 IP 주소와 포트를 설정하고 연결합니다." />
+        </StackPanel>
+
+        <!-- 현재 상태 -->
+        <Border Classes="card">
+            <StackPanel Spacing="8">
+                <TextBlock Text="{Binding CurrentText}" FontWeight="SemiBold" />
+                <StackPanel Orientation="Horizontal" Spacing="14">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <TextBlock Text="브로커" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" />
+                        <Border Classes="badge" Classes.on="{Binding BrokerOn}">
+                            <TextBlock Text="{Binding BrokerStatusText}" />
+                        </Border>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <TextBlock Text="ACS" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" />
+                        <Border Classes="badge" Classes.on="{Binding AcsOn}">
+                            <TextBlock Text="{Binding AcsStatusText}" />
+                        </Border>
+                    </StackPanel>
+                </StackPanel>
+                <TextBlock Classes="muted" FontSize="12" TextWrapping="Wrap" Text="{Binding DetailText}" />
+            </StackPanel>
+        </Border>
+
+        <!-- 주소 입력 -->
+        <Grid ColumnDefinitions="*,12,120" RowDefinitions="Auto,Auto">
+            <TextBlock Grid.Row="0" Grid.Column="0" Text="브로커 IP 주소" FontSize="12" Margin="0,0,0,4" />
+            <TextBlock Grid.Row="0" Grid.Column="2" Text="포트" FontSize="12" Margin="0,0,0,4" />
+            <TextBox Grid.Row="1" Grid.Column="0" Name="HostBox" Text="{Binding Host}" Watermark="예 192.168.100.98" />
+            <TextBox Grid.Row="1" Grid.Column="2" Text="{Binding PortText}" Watermark="1883" MaxLength="5" />
+        </Grid>
+
+        <TextBlock Text="{Binding Message}" TextWrapping="Wrap" FontSize="12"
+                   IsVisible="{Binding Message, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                   Classes.msgError="{Binding MessageIsError}" />
+
+        <TextBlock Classes="muted" FontSize="11" TextWrapping="Wrap" Text="{Binding StoreHint}" />
+
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+            <Button Content="닫기" Click="OnCloseClick" MinWidth="80" HorizontalContentAlignment="Center" />
+            <Button Classes="accent" Content="저장 후 연결" Command="{Binding ConnectCommand}" MinWidth="120"
+                    HorizontalContentAlignment="Center" />
+        </StackPanel>
+    </StackPanel>
+
+</Window>

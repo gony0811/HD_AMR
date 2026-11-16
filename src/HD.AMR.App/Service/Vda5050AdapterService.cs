@@ -56,6 +56,64 @@ public sealed class Vda5050AdapterService : BackgroundService
     /// <summary>MQTT 브로커 접속 여부. ACS 자체 생존은 별개 — <see cref="AcsRecentlyActive"/> 참고.</summary>
     public bool IsBrokerConnected => _brokerConnected;
 
+    /// <summary>어댑터 사용 여부(설정 <c>Vda5050:Enabled</c>). false 면 브로커에 접속하지 않는다.</summary>
+    public bool IsEnabled => _s.Enabled;
+
+    /// <summary>지금 쓰는 ACS MQTT 브로커 호스트.</summary>
+    public string BrokerHost => _s.BrokerHost;
+
+    /// <summary>지금 쓰는 ACS MQTT 브로커 포트.</summary>
+    public int BrokerPort => _s.BrokerPort;
+
+    /// <summary>마지막 접속 시도의 실패 사유. 접속에 성공하면 null.</summary>
+    public string? LastConnectError => _lastConnectError;
+    private volatile string? _lastConnectError;
+
+    // 현재 접속 시도(접속·state 발행 루프·재시도 대기)의 취소 토큰 — 브로커 주소를 바꾸면 취소해 즉시 새 주소로 다시 붙는다.
+    private readonly object _linkGate = new();
+    private CancellationTokenSource? _linkCts;
+
+    /// <summary>
+    /// ACS MQTT 브로커 주소를 바꾸고(보관 파일에 저장) 즉시 다시 접속한다. 같은 주소를 주면 재접속만 한다.
+    /// 옛 브로커에는 OFFLINE 을 남기고 끊는다. 수행 중인 임무가 있으면 바꾸지 않는다 —
+    /// 브로커가 끊기면 통신 단절 Fail-Safe 가 걸리고 ACS 가 진행 상황을 놓친다.
+    /// </summary>
+    /// <returns>
+    /// Applied = 주소를 적용했는지(false 면 아무것도 바꾸지 않았다), Message = 거부 사유 또는 적용했지만 알릴 것(없으면 null).
+    /// 접속 결과는 <see cref="IsBrokerConnected"/>·<see cref="LastConnectError"/> 로 본다.
+    /// </returns>
+    public (bool Applied, string? Message) SetBroker(string host, int port, string source = OperationLogService.SourceUi)
+    {
+        if (AcsBrokerStore.Validate(host, port) is { } invalid) return (false, invalid);
+        if (_executor.HasActiveMission)
+            return (false, "수행 중인 임무가 있어 브로커를 바꿀 수 없습니다. 임무가 끝난 뒤 다시 시도하세요.");
+        host = host.Trim();
+
+        var changed = !string.Equals(host, _s.BrokerHost, StringComparison.OrdinalIgnoreCase) || port != _s.BrokerPort;
+        string? saveError = null;
+        try { AcsBrokerStore.Save(host, port); }
+        catch (Exception ex)
+        {
+            saveError = $"주소 저장 실패({ex.Message}) — 이번 실행에만 적용됩니다.";
+            _logger.LogWarning(ex, "ACS 브로커 주소 저장 실패: {Path}", AcsBrokerStore.FilePath);
+        }
+
+        var prev = $"{_s.BrokerHost}:{_s.BrokerPort}";
+        _s.BrokerHost = host;
+        _s.BrokerPort = port;
+        _lastConnectError = null;
+        _logger.LogWarning("ACS 브로커 {What}: {Prev} → {Host}:{Port}", changed ? "주소 변경" : "재접속 요청", prev, host, port);
+        _opLog.Log(source, OpCategory.Link, changed ? "브로커 주소 변경" : "브로커 재접속 요청", null,
+            changed ? $"{prev} → {host}:{port}" : $"{host}:{port}");
+
+        lock (_linkGate)
+        {
+            try { _linkCts?.Cancel(); } catch (ObjectDisposedException) { /* 다음 시도가 새 주소를 읽는다 */ }
+        }
+        return (true, saveError ?? (_s.Enabled ? null
+            : "주소는 저장했지만 VDA5050 어댑터가 꺼져 있어(Vda5050:Enabled=false) 접속하지 않습니다."));
+    }
+
     /// <summary>ACS 발신 메시지(order/instantActions) 마지막 수신 시각(UTC). 수신 이력 없으면 null.</summary>
     public DateTime? LastAcsMessageUtc
     {
@@ -229,18 +287,33 @@ public sealed class Vda5050AdapterService : BackgroundService
         {
             while (!stoppingToken.IsCancellationRequested)
             {
+                // 이번 시도의 취소 토큰 — 앱 종료 또는 브로커 주소 변경(SetBroker)으로 취소된다.
+                var link = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                lock (_linkGate) _linkCts = link;
                 try
                 {
-                    await ConnectAndRunAsync(stoppingToken);
-                }
-                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning("VDA5050 어댑터 연결 실패 — {Delay}ms 후 재시도: {Err}", _s.ReconnectDelayMs, ex.Message);
-                }
+                    try
+                    {
+                        await ConnectAndRunAsync(link.Token);
+                    }
+                    catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
+                    catch (OperationCanceledException) { continue; }   // 주소 변경 — 대기 없이 새 주소로
+                    catch (Exception ex)
+                    {
+                        _lastConnectError = ex.Message;
+                        _logger.LogWarning("VDA5050 어댑터 연결 실패({Host}:{Port}) — {Delay}ms 후 재시도: {Err}",
+                            _s.BrokerHost, _s.BrokerPort, _s.ReconnectDelayMs, ex.Message);
+                    }
 
-                try { await Task.Delay(_s.ReconnectDelayMs, stoppingToken); }
-                catch (OperationCanceledException) { break; }
+                    try { await Task.Delay(_s.ReconnectDelayMs, link.Token); }
+                    catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
+                    catch (OperationCanceledException) { /* 주소 변경 — 바로 다시 시도 */ }
+                }
+                finally
+                {
+                    lock (_linkGate) _linkCts = null;
+                    link.Dispose();
+                }
             }
         }
         finally
@@ -282,6 +355,8 @@ public sealed class Vda5050AdapterService : BackgroundService
             .WithTcpServer(_s.BrokerHost, _s.BrokerPort)
             .WithClientId($"hdamr-{_s.Manufacturer}-{_s.SerialNumber}")
             .WithCleanSession()
+            // 닿지 않는 주소에서 오래 매달리지 않게 — 실패하면 ReconnectDelayMs 뒤 다시 시도한다.
+            .WithTimeout(TimeSpan.FromSeconds(5))
             // 통신 단절 사양 §2.2 — keep-alive 를 명시해 단절 감지 지연을 1.5 × keep-alive 로 묶는다(5 s → 최대 7.5 s).
             .WithKeepAlivePeriod(TimeSpan.FromSeconds(Math.Max(1, _s.KeepAliveSec)))
             .WithWillTopic(Vda5050Topics.Connection(_s))
@@ -291,8 +366,15 @@ public sealed class Vda5050AdapterService : BackgroundService
         if (!string.IsNullOrEmpty(_s.Username))
             optionsBuilder = optionsBuilder.WithCredentials(_s.Username, _s.Password);
 
-        await _client.ConnectAsync(optionsBuilder.Build(), ct);
+        try { await _client.ConnectAsync(optionsBuilder.Build(), ct); }
+        catch
+        {
+            _client.Dispose();
+            _client = null;
+            throw;
+        }
         _brokerConnected = true;
+        _lastConnectError = null;
         _logger.LogInformation("VDA5050 브로커 접속 완료.");
         _opLog.Log(OperationLogService.SourceAcs, OpCategory.Link, "브로커 접속", true, $"{_s.BrokerHost}:{_s.BrokerPort}");
 
