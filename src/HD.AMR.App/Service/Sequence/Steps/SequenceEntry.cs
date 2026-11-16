@@ -63,6 +63,12 @@ internal static class SequenceEntry
     /// <b>실측 전 잠정값</b> — 차체 상면 높이를 재서 맞춘다.</summary>
     internal const double RetractMinDescendEndZMm = 200.0;
 
+    /// <summary>최저 높이 판정을 적용하는 최소 하강량 [mm]. 후퇴가 이만큼 넘게 내려갈 때만 끝점 높이를 본다.
+    /// 옆벽처럼 광축이 거의 수평이면 300mm 후퇴에 몇 mm 만 내려가 팔이 접히지 않는데, 낮은 용접선(시작 z 가
+    /// 이미 최저 높이 아래)에서는 1mm 만 내려가도 막혀 홈 복귀가 안 됐다(2026-11-16 L3-R01C15: z −209→−220mm,
+    /// 2026-11-15 z −544→−546mm).</summary>
+    internal const double RetractMinBlockingDescentMm = 30.0;
+
     /// <summary>홈 티칭 여부 — 진입 준비를 하는 스텝의 Validate 에서 부른다.</summary>
     public static StepValidation ValidateHome(SequenceContext context)
         => context.Positions.TryGetValue("home", out var home) && home.IsTaught
@@ -747,7 +753,7 @@ internal static class SequenceEntry
     ///   BASE 수평면에 투영한 방향으로 물러난다 — 높이는 유지하고 벽에서만 떨어진다. 툴 Z+ 그대로면 그만큼
     ///   AMR 쪽으로 내려가 팔이 접힌다(2026-10-30 SU: z 229→17mm).
     /// · 그 외(옆벽처럼 광축이 수평, 천장처럼 거의 연직)는 종전대로 툴 Z+.
-    /// · 끝점이 내려가면서 <see cref="RetractMinDescendEndZMm"/> 아래로 가면 Blocker.
+    /// · <see cref="RetractMinBlockingDescentMm"/> 넘게 내려가면서 끝점이 <see cref="RetractMinDescendEndZMm"/> 아래로 가면 Blocker.
     /// </summary>
     internal static RetractPlan PlanRetract(double[] tcpPose, double distanceMm = RetractDistanceMm,
         double minDescendEndZMm = RetractMinDescendEndZMm, ToolAxisDir opticalAxis = ToolAxisDir.MinusZ)
@@ -765,7 +771,7 @@ internal static class SequenceEntry
         var end = new[] { tcpPose[0] + offset[0], tcpPose[1] + offset[1], tcpPose[2] + offset[2] };
 
         string? blocker = null;
-        if (offset[2] < -1.0 && end[2] < minDescendEndZMm)
+        if (offset[2] < -RetractMinBlockingDescentMm && end[2] < minDescendEndZMm)
             blocker = $"벽면 후퇴 끝점이 너무 낮음 — z {tcpPose[2]:0}→{end[2]:0}mm (최저 {minDescendEndZMm:0}mm). " +
                       "후퇴 방향이 AMR 쪽으로 내려가 팔이 접힙니다. 움직이지 않고 정지 — 펜던트/조그로 벽에서 떼어 낸 뒤 재시도하세요.";
         var toolOffset = new double[6];
