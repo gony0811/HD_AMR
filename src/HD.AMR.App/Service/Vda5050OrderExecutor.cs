@@ -346,6 +346,9 @@ public sealed class Vda5050OrderExecutor
         var pos = node.NodePosition!;
         try
         {
+            // 현장 정차 오프셋(맵 X·Y, mm) — 주행·도착 판정·도달 사전 점검·정차 보정이 모두 이 좌표를 쓰도록 맨 먼저 반영.
+            await ApplyStationOffsetAsync(orderId, pos);
+
             // 연속 TASK 묶음(같은 리프트·면·수직/수평). 도달 점검과 교시가 같은 계획을 쓴다.
             _inspection.BeginBundles(TaskBundlePlanner.Assign(node.Actions, pos.Theta));
 
@@ -702,6 +705,40 @@ public sealed class Vda5050OrderExecutor
         OpLog(OpCategory.Drive, "정차 보정 도착", true, $"{token} {arrived.Reason}", orderId);
         _logger.LogInformation("VDA5050 정차 보정: node={NodeId}, 후진 {Back}mm", node.NodeId, plan.BackwardMm);
         return new StationAdjustOutcome(token, false, plan.BackwardMm);
+    }
+
+    /// <summary>파라미터 <see cref="StationOffset.XKey"/>·<see cref="StationOffset.YKey"/>(mm)를 노드 좌표에 더한다(제자리 수정).
+    /// 조회 실패·범위 밖은 0 — 오프셋 없이 ACS 좌표 그대로 간다.</summary>
+    private async Task ApplyStationOffsetAsync(string orderId, NodePosition pos)
+    {
+        double? rawX = null, rawY = null;
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var param = scope.ServiceProvider.GetRequiredService<ParameterService>();
+            rawX = await param.GetDoubleAsync(StationOffset.XKey);
+            rawY = await param.GetDoubleAsync(StationOffset.YKey);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "정차 오프셋 파라미터 조회 실패 — 오프셋 없이 진행");
+            return;
+        }
+
+        var offX = StationOffset.Sanitize(rawX);
+        var offY = StationOffset.Sanitize(rawY);
+        if (rawX is { } rx && offX != rx || rawY is { } ry && offY != ry)
+            _logger.LogWarning("정차 오프셋 범위 밖(±{Max}mm) — 그 축은 0 으로 적용: X={RawX}, Y={RawY}",
+                StationOffset.MaxAbsMm, rawX, rawY);
+        if (offX == 0 && offY == 0) return;
+
+        var (ox, oy) = (pos.X, pos.Y);
+        (pos.X, pos.Y) = StationOffset.Apply(ox, oy, offX, offY);
+        _logger.LogInformation(
+            "정차 오프셋 적용: ACS 목표 ({X0:0.###}, {Y0:0.###}) + (X {OffX:+0;-0}mm, Y {OffY:+0;-0}mm) → ({X:0.###}, {Y:0.###})",
+            ox, oy, offX, offY, pos.X, pos.Y);
+        OpLog(OpCategory.Drive, "정차 오프셋", null,
+            $"ACS 목표 ({ox:0.###}, {oy:0.###}) + X {offX:+0;-0}mm·Y {offY:+0;-0}mm → ({pos.X:0.###}, {pos.Y:0.###})", orderId);
     }
 
     /// <summary>도착 판정 허용 오차 결정 — ① Order → ② ParameterService(DB) → ③ AmrRestSettings.
