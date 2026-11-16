@@ -244,4 +244,12 @@ public class WObjAttitudeCcwTwistTests
     [InlineData(double.NaN, -140.0, -320.0, -140.0, false)]
     public void 안전_범위_파라미터_검증(double? min, double? max, double lo, double hi, bool ok)
         => Assert.Equal((lo, hi, ok), WObjAttitude.ResolveSafeJ6Range(min, max));
+
+    [Theory]
+    [InlineData(-140.0, 40.0, 0.0, -140.0, 40.0, true)]         // 가스검사 AMR — 홈 J6 0°, 범위를 +180° 옮김
+    [InlineData(-140.0, 40.0, null, -320.0, -140.0, false)]     // 대기 자세 미지정(−180°) → 미포함
+    [InlineData(-320.0, -140.0, 0.0, -320.0, -140.0, false)]    // 홈 0° 인데 범위가 −180° 쪽
+    [InlineData(-140.0, 40.0, double.NaN, -320.0, -140.0, false)]
+    public void 안전_범위는_대기_자세_J6를_포함해야(double? min, double? max, double? standby, double lo, double hi, bool ok)
+        => Assert.Equal((lo, hi, ok), WObjAttitude.ResolveSafeJ6Range(min, max, standby));
 }

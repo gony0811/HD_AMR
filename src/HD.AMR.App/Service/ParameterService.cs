@@ -95,14 +95,16 @@ public class ParameterService
         => Motion.Fr5Kinematics.ApplyLinks(await GetAsync(Motion.Fr5Kinematics.LinksKey));
 
     private static bool IsSafeJ6Key(string name)
-        => name is Inspection.WObjAttitude.SafeJ6MinKey or Inspection.WObjAttitude.SafeJ6MaxKey;
+        => name is Inspection.WObjAttitude.SafeJ6MinKey or Inspection.WObjAttitude.SafeJ6MaxKey
+            or Inspection.WObjAttitude.SafeJ6StandbyKey;
 
     /// <summary>J6 안전 범위 파라미터를 읽어 <see cref="Inspection.WObjAttitude"/> 에 적용한다(기동·저장·삭제 때).
-    /// 잘못된 값(하한 ≥ 상한, 대기 자세 −180° 미포함, 폭 360° 이상)이면 기본값을 쓰고 false.</summary>
+    /// 잘못된 값(하한 ≥ 상한, 대기 자세 J6(기본 −180°) 미포함, 폭 360° 이상)이면 기본값을 쓰고 false.</summary>
     public async Task<bool> ApplySafeJ6RangeAsync()
         => Inspection.WObjAttitude.ApplySafeJ6Range(
             await GetDoubleAsync(Inspection.WObjAttitude.SafeJ6MinKey),
-            await GetDoubleAsync(Inspection.WObjAttitude.SafeJ6MaxKey));
+            await GetDoubleAsync(Inspection.WObjAttitude.SafeJ6MaxKey),
+            await GetDoubleAsync(Inspection.WObjAttitude.SafeJ6StandbyKey));
 
     public Task SetDoubleAsync(string name, double value, string? description = null)
         => SetAsync(name, value.ToString(CultureInfo.InvariantCulture), description);
@@ -151,11 +153,15 @@ public class ParameterService
                 Inspection.WObjAttitude.DefaultSafeJ6MinDeg.ToString(CultureInfo.InvariantCulture),
                 "J6 안전 범위 하한(도, 실제 관절값 — 대기 자세 −180° 쪽 감김 기준). 이보다 더 감기는 J6 로는 움직이지 않는다 " +
                 "(센서 헤드–링크암 간섭·케이블 감김 방지). 진입·용접선 가로 정렬·연속 이동·검사 순회 공통. 저장하면 바로 적용. " +
-                "−180 이하여야 하고 상한보다 작아야 한다 — 잘못된 값이면 기본값(−320~−140)을 쓴다. ACS 의 Acs:Reach:SafeJ6MinDeg 와 같게 둘 것."),
+                "대기 자세 J6(inspection.safeJ6StandbyDeg, 기본 −180) 이하여야 하고 상한보다 작아야 한다 — 잘못된 값이면 기본값(−320~−140)을 쓴다. ACS 의 Acs:Reach:SafeJ6MinDeg 와 같게 둘 것."),
             (Inspection.WObjAttitude.SafeJ6MaxKey,
                 Inspection.WObjAttitude.DefaultSafeJ6MaxDeg.ToString(CultureInfo.InvariantCulture),
-                "J6 안전 범위 상한(도, 실제 관절값). −180 이상이어야 하고 하한보다 커야 한다. 저장하면 바로 적용. " +
+                "J6 안전 범위 상한(도, 실제 관절값). 대기 자세 J6(inspection.safeJ6StandbyDeg, 기본 −180) 이상이어야 하고 하한보다 커야 한다. 저장하면 바로 적용. " +
                 "ACS 의 Acs:Reach:SafeJ6MaxDeg 와 같게 둘 것."),
+            (Inspection.WObjAttitude.SafeJ6StandbyKey,
+                Inspection.WObjAttitude.DefaultSafeJ6StandbyDeg.ToString(CultureInfo.InvariantCulture),
+                "대기(홈) 자세의 J6(도, 실제 관절값) — J6 안전 범위(하한~상한)가 반드시 포함해야 하는 각. 용접검사 AMR 은 −180. " +
+                "툴을 플랜지에 180° 돌려 단 장비(가스검사 AMR, 홈 J6 0°)는 0 으로 두고 하한·상한도 같이 옮긴다(예: −140~40). 저장하면 바로 적용."),
             (Sequence.Steps.WeldSequenceSupport.ProgressAxisAlwaysHorizontalKey, "true",
                 "Peak·Bead 찾기와 센터링의 진행축을 항상 영상 가로로 둔다(true). ② 가 툴을 돌려 용접선을 늘 영상 가로선으로 맞추기 때문이다. " +
                 "false 면 종전 규칙(가로 정렬 표시·용접선 기록이 없으면 검사방향으로 결정 — 수평 용접선은 영상 세로)."),

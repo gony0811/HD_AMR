@@ -371,19 +371,34 @@ public class CobotInspectionMoveStep : ISequenceStep
         c.InspectionOffsetU, c.InspectionOffsetV, 0.0, 0.0, 0.0, 0.0,
     };
 
-    /// <summary>수평 용접라인 검사 J6 절대각 [도].</summary>
-    internal const double HorizontalJ6Deg = 90.0;
+    /// <summary>수평 용접라인 검사 J6 절대각 [도] — 대기 자세에서 −90°. 용접검사 AMR(대기 −180°)은 90°,
+    /// 툴을 180° 돌려 단 가스검사 AMR(대기 0°)은 −90°.</summary>
+    internal static double HorizontalJ6Deg => WrapDeg180(VerticalJ6Deg - 90.0);
 
-    /// <summary>수직 용접라인 검사 J6 절대각 [도] — 검사 대기 자세(J6=180°)와 같다.</summary>
-    internal const double VerticalJ6Deg = 180.0;
+    /// <summary>수직 용접라인 검사 J6 절대각 [도] — 검사 대기 자세의 J6(<see cref="WObjAttitude.SafeJ6StandbyDeg"/>)와 같다.
+    /// 용접검사 AMR 은 180°(= −180°), 가스검사 AMR 은 0°.</summary>
+    internal static double VerticalJ6Deg => WrapDeg180(WObjAttitude.SafeJ6StandbyDeg);
+
+    /// <summary>각도를 (−180, 180] 로 정규화 — 표시·목표용(실제 지령은 <see cref="NearestWinding"/> 이 현재 감김으로 푼다).</summary>
+    internal static double WrapDeg180(double deg)
+    {
+        var d = deg % 360.0;
+        if (d > 180.0) d -= 360.0;
+        else if (d <= -180.0) d += 360.0;
+        return d;
+    }
 
     /// <summary>
     /// 검사 방향별 J6 절대각. 센서 헤드(레이저·Depth 카메라)가 플랜지 한쪽으로 길게 나와 있어,
-    /// J6 를 이 두 값(180°/90°) 밖으로 돌리면 J3–J4 링크암과 간섭한다. 그래서 벽면·이동 방향과 무관하게
-    /// 수직 = 180°, 수평 = 90° 로 고정하고, 대기 자세(180°)에서 최대 −90° 만 돌게 한다.
+    /// J6 를 이 두 값 밖으로 돌리면 J3–J4 링크암과 간섭한다. 그래서 벽면·이동 방향과 무관하게
+    /// 수직 = 대기 자세 J6, 수평 = 대기 자세 − 90° 로 고정하고, 대기 자세에서 최대 −90° 만 돌게 한다
+    /// (용접검사 AMR: 180°/90°, 가스검사 AMR: 0°/−90°).
     /// </summary>
-    public static double TargetJ6Deg(SequenceContext c)
-        => c.InspectionDirection == InspectionMoveDirection.Vertical ? VerticalJ6Deg : HorizontalJ6Deg;
+    public static double TargetJ6Deg(SequenceContext c) => TargetJ6Deg(c.InspectionDirection);
+
+    /// <inheritdoc cref="TargetJ6Deg(SequenceContext)"/>
+    public static double TargetJ6Deg(InspectionMoveDirection direction)
+        => direction == InspectionMoveDirection.Vertical ? VerticalJ6Deg : HorizontalJ6Deg;
 
     /// <summary>J6 목표 허용 오차 [도].</summary>
     private const double J6ToleranceDeg = 0.5;

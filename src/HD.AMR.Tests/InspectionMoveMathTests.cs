@@ -92,6 +92,14 @@ public class InspectionMoveMathTests
         Assert.Equal(expected, CobotInspectionMoveStep.TargetJ6Deg(Ctx(dir: dir)), 9);
     }
 
+    [Theory]
+    [InlineData(-180.0, 180.0)]   // 용접검사 AMR 대기 자세 → 수직 180°(수평 90°)
+    [InlineData(0.0, 0.0)]        // 가스검사 AMR(툴 180° 돌려 장착) → 수직 0°(수평 −90°)
+    [InlineData(360.0, 0.0)]
+    [InlineData(-270.0, 90.0)]
+    public void J6_표시각은_마이너스180_초과_180_이하로_정규화(double deg, double expected)
+        => Assert.Equal(expected, CobotInspectionMoveStep.WrapDeg180(deg), 9);
+
     [Fact]
     public void IK_해는_기준_관절_쪽으로_감긴다()
     {
