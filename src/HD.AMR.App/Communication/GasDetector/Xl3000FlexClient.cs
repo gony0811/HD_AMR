@@ -109,8 +109,20 @@ public sealed record GasMeasurementResult(
     string Unit,
     double Threshold,
     GasJudgement Judgement,
-    string? Error)
+    string? Error,
+    DateTime? PeakUtc = null)
 {
+    /// <summary>
+    /// 연속 측정에서 최대값이 이동 구간의 어디쯤이었는지(0 = 출발점, 1 = 도착점). 최대 샘플 시각(<see cref="PeakUtc"/>)에서
+    /// 스니퍼 응답 지연을 빼 이동 시간에 대한 비율로 본다 — 가감속을 무시한 추정값이다. 알 수 없으면 null.
+    /// </summary>
+    public double? PeakFraction(DateTime moveStartUtc, DateTime moveEndUtc, TimeSpan responseDelay)
+    {
+        if (PeakUtc is not { } peak || moveEndUtc <= moveStartUtc) return null;
+        var f = (peak - responseDelay - moveStartUtc).TotalMilliseconds / (moveEndUtc - moveStartUtc).TotalMilliseconds;
+        return Math.Clamp(f, 0, 1);
+    }
+
     /// <summary>측정 시각(SAIGE <c>measuredAt</c>) — 마지막 샘플을 읽은 시각.</summary>
     public DateTime MeasuredUtc => FinishedUtc;
 

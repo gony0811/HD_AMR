@@ -15,7 +15,8 @@ namespace HD.AMR.App.Service;
 /// · 통신 경로는 시리얼(RS485)/이더넷(TCP) 중 선택 — <see cref="ApplySettingsAsync"/> 로 실행 중 바꾸면
 ///   DB 파라미터(<c>GasDetector.*</c>)에 저장하고 즉시 다시 연결한다.
 /// · 리크레이트·상태를 주기 폴링해 <see cref="Latest"/> 로 캐싱한다(화면 실시간 표시).
-/// · 검사 시퀀스는 경유점마다 <see cref="MeasurePointAsync"/> 로 측정·판정(임계값 초과 NG, NG 면 최대 2회 재측정)하고
+/// · 검사 시퀀스는 경유점마다 <see cref="MeasurePointAsync"/> 로(연속 모드는 구간마다 <see cref="MeasureDuringAsync"/> 로)
+///   측정·판정(임계값 초과 NG, NG 면 최대 2회 재측정)하고
 ///   측정 1건(scan)씩 <see cref="Results"/> 에 쌓인다. 임계값은 SAIGE → ACS 로 받는다(<see cref="SetThresholdFromAcsAsync"/>).
 /// </summary>
 public sealed class GasDetectorService : BackgroundService
@@ -144,7 +145,9 @@ public sealed class GasDetectorService : BackgroundService
                 continue;
             }
 
-            await PollAsync(stoppingToken);
+            // 이동 중 연속 측정이 도는 동안은 폴링을 쉰다 — 문답 4건이 끼면 샘플 간격이 벌어진다.
+            if (Volatile.Read(ref _scanDepth) == 0)
+                await PollAsync(stoppingToken);
             await DelayAsync(Math.Max(Xl3000AsciiProtocol.MinSampleIntervalMs, Settings.PollIntervalMs), stoppingToken);
         }
 
@@ -152,6 +155,7 @@ public sealed class GasDetectorService : BackgroundService
     }
 
     private int _pollCount;
+    private int _scanDepth;   // 진행 중인 연속 측정 수(MeasureDuringAsync)
 
     private async Task PollAsync(CancellationToken ct)
     {
@@ -332,13 +336,107 @@ public sealed class GasDetectorService : BackgroundService
             }
         }
 
+        return Record(label, retry, started, samples, th, error, null);
+    }
+
+    /// <summary>
+    /// 이동 중 연속 측정 1건(scan) — <paramref name="motion"/>(코봇 이동)이 도는 동안
+    /// <see cref="GasDetectorSettings.MeasureSampleIntervalMs"/> 간격으로 <c>*READ?</c> 를 계속 읽고, 이동이 끝난 뒤에도
+    /// <see cref="GasDetectorSettings.MeasureDwellMs"/> 동안 더 읽는다(스니퍼 응답 지연 — 구간 끝부분에서 빨아들인 가스가
+    /// 센서에 닿을 때까지). 전체 샘플의 최대값을 임계값과 비교한다. 측정 중에는 주기 폴링을 쉬어 통신선을 샘플링에만 쓴다.
+    /// 미연결·단위 불일치여도 이동은 수행하고 <see cref="GasJudgement.Error"/> 결과를 돌려준다.
+    /// </summary>
+    /// <param name="motion">이동 수행. false 를 돌려주면(이동 실패) 측정을 버리고 null 을 돌려준다.</param>
+    public async Task<GasMeasurementResult?> MeasureDuringAsync(string label, Func<CancellationToken, Task<bool>> motion,
+        GasThreshold? threshold = null, int retry = 0, CancellationToken ct = default)
+    {
+        var s = Settings;
+        var th = threshold ?? CurrentThreshold;
+        var started = DateTime.UtcNow;
+        var samples = new List<(DateTime At, double Value)>();
+        string? error = null;
+
+        var client = _client is { IsOpen: true } c ? c : null;
+        if (client is null)
+        {
+            error = $"가스 디텍터 미연결 ({s.EndpointText})";
+        }
+        else if (await CheckUnitAsync(client, th, ct) is { } unitError)
+        {
+            error = unitError;
+            client = null;
+        }
+
+        var interval = Math.Max(Xl3000AsciiProtocol.MinSampleIntervalMs, s.MeasureSampleIntervalMs);
+        using var stop = new CancellationTokenSource();
+
+        // 읽는 도중에는 끊지 않는다(문답식 프로토콜 — 응답을 버리면 다음 문답이 어긋난다). 정지는 읽기 사이에서만 본다.
+        async Task SampleLoopAsync(Xl3000FlexClient cl)
+        {
+            while (!stop.IsCancellationRequested)
+            {
+                try
+                {
+                    var v = await cl.ReadLeakRateAsync(ct);
+                    var now = DateTime.UtcNow;
+                    samples.Add((now, v));
+                    lock (_lock)
+                    {
+                        _lastOkUtc = now;
+                        // 폴링을 쉬는 동안에도 화면 실시간 값은 갱신한다(mbar·l/s 참고값은 읽지 않으므로 비운다).
+                        if (_latest is { } prev)
+                            _latest = prev with { LeakRate = v, LeakRateMbarLs = null, ReadAtUtc = now };
+                    }
+                }
+                catch (OperationCanceledException) { return; }
+                catch (Exception ex) when (ex is TimeoutException or GasDetectorException or IOException
+                                               or InvalidOperationException or ObjectDisposedException)
+                {
+                    error = ex.Message;
+                }
+                try { await Task.Delay(interval, stop.Token); }
+                catch (OperationCanceledException) { return; }
+            }
+        }
+
+        bool completed;
+        Interlocked.Increment(ref _scanDepth);
+        try
+        {
+            var sampler = client is null ? Task.CompletedTask : SampleLoopAsync(client);
+            try
+            {
+                completed = await motion(ct);
+                if (completed && client is not null && s.MeasureDwellMs > 0)
+                    await Task.Delay(s.MeasureDwellMs, ct);
+            }
+            finally
+            {
+                stop.Cancel();
+                await sampler;
+            }
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _scanDepth);
+        }
+        if (!completed) return null;
+
+        DateTime? peakUtc = samples.Count > 0 ? samples.MaxBy(x => x.Value).At : null;
+        return Record(label, retry, started, samples.Select(x => x.Value).ToList(), th, error, peakUtc);
+    }
+
+    /// <summary>샘플 묶음을 판정해 측정 1건으로 기록하고(<see cref="Results"/>, 로그, <see cref="ResultAdded"/>) 돌려준다.</summary>
+    private GasMeasurementResult Record(string label, int retry, DateTime started, IReadOnlyCollection<double> samples,
+        GasThreshold th, string? error, DateTime? peakUtc)
+    {
         var judgement = GasMeasurementResult.Judge(samples, th.Value);
         GasMeasurementResult result;
         lock (_lock)
         {
             result = new GasMeasurementResult(++_resultSeq, label, retry, started, DateTime.UtcNow, samples.Count,
                 samples.Count > 0 ? samples.Max() : null, samples.Count > 0 ? samples.Average() : null,
-                th.Unit, th.Value, judgement, judgement == GasJudgement.Error ? error ?? "유효 샘플 없음" : null);
+                th.Unit, th.Value, judgement, judgement == GasJudgement.Error ? error ?? "유효 샘플 없음" : null, peakUtc);
             _results.Add(result);
             if (_results.Count > MaxResults)
                 _results.RemoveRange(0, _results.Count - MaxResults);
@@ -492,6 +590,7 @@ public sealed class GasDetectorService : BackgroundService
             if (await p.GetIntAsync(KeyPrefix + "MeasureDwellMs") is { } dwell) s.MeasureDwellMs = dwell;
             if (await p.GetIntAsync(KeyPrefix + "MeasureSampleCount") is { } n) s.MeasureSampleCount = n;
             if (await p.GetIntAsync(KeyPrefix + "MeasureSampleIntervalMs") is { } iv) s.MeasureSampleIntervalMs = iv;
+            if (Enum.TryParse<GasMeasureMode>(await p.GetAsync(KeyPrefix + "MeasureMode"), out var mode)) s.MeasureMode = mode;
             lock (_lock)
             {
                 _settings = s;
@@ -522,6 +621,7 @@ public sealed class GasDetectorService : BackgroundService
             await p.SetAsync(KeyPrefix + "MeasureDwellMs", s.MeasureDwellMs.ToString(inv), "경유점 측정 전 대기 [ms]");
             await p.SetAsync(KeyPrefix + "MeasureSampleCount", s.MeasureSampleCount.ToString(inv), "경유점 측정 샘플 수");
             await p.SetAsync(KeyPrefix + "MeasureSampleIntervalMs", s.MeasureSampleIntervalMs.ToString(inv), "경유점 측정 샘플 간격 [ms]");
+            await p.SetAsync(KeyPrefix + "MeasureMode", s.MeasureMode.ToString(), "가스 측정 방식 (Point=경유점 정지 / Continuous=이동 중 연속)");
         }
         catch (Exception ex)
         {

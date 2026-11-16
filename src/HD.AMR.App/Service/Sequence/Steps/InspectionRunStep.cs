@@ -33,6 +33,8 @@ namespace HD.AMR.App.Service.Sequence.Steps;
 /// 검사 센서(<see cref="InspectionSensorSettings.Mode"/>)가 <c>GasDetector</c> 면 CAPTURE_REQ 대신 경유점마다
 /// <see cref="GasDetectorService.MeasureAsync"/> 로 헬륨 리크레이트를 측정해 OK/NG 판정한다. NG(리크 검출)는 정상적인
 /// 검사 결과라 집계만 하고, 측정 실패(통신)만 비전 실패와 같이 실패율 판정에 넣는다.
+/// 측정 방식이 <see cref="GasMeasureMode.Continuous"/> 면 경유점에 멈춰 재지 않고 경유점 사이를 이동하는 동안
+/// <see cref="GasDetectorService.MeasureDuringAsync"/> 로 계속 샘플링해 구간 최대값으로 판정한다(결과는 도착 경유점의 포인트).
 /// (MoveL 실패는 즉시 중단.)
 ///
 /// 일시정지(통신 단절 사양 §3·§4.3, <see cref="MissionPauseGate"/>): 진행 중 경유점 MoveL 은 끝까지 수행하고
@@ -216,10 +218,73 @@ public class InspectionRunStep : ISequenceStep
         // 임계값은 Task 시작 시 한 번 잡는다 — 도중에 SAIGE 가 바꾸면 다음 Task 부터 적용(SAIGE §3).
         var gasThreshold = _useGas && !_dryRun ? _gas.CurrentThreshold : null;
         var gasStarted = DateTime.UtcNow;
+        // 연속 측정: 경유점에 멈춰 재는 대신 경유점 사이를 이동하는 동안 계속 샘플링한다. Task 시작 시 한 번 정한다.
+        var gasSettings = _gas.Settings;
+        var continuous = gasThreshold is not null && gasSettings.MeasureMode == GasMeasureMode.Continuous;
         if (gasThreshold is not null)
-            _logger.LogInformation("[검사 수행] 가스 판정 임계값 {Th} (초과 NG, NG 시 재측정 최대 {Retry}회)",
-                gasThreshold.Describe(), Math.Clamp(_gas.Settings.MaxRetries, 0, 2));
+            _logger.LogInformation("[검사 수행] 가스 판정 임계값 {Th} (초과 NG, NG 시 재측정 최대 {Retry}회), 측정 방식 {Mode}",
+                gasThreshold.Describe(), Math.Clamp(gasSettings.MaxRetries, 0, 2),
+                continuous ? $"이동 중 연속(샘플 간격 {Math.Max(Xl3000AsciiProtocol.MinSampleIntervalMs, gasSettings.MeasureSampleIntervalMs)} ms)" : "경유점 정지");
         var lastMoved = -1;
+        var prevIdx = -1;   // 직전에 도착한 경유점 — 연속 측정 구간의 출발점
+
+        // 연속 측정 1구간: from → to 를 검사 속도로 이동하면서 샘플링해 구간 최대값으로 판정한다. 결과는 도착 경유점(to)의
+        // 포인트로 남긴다. OK 가 아니면(NG·실패) 출발점으로 되돌아가 같은 구간을 다시 훑는다(재측정 — 정지 측정의 "같은 자리").
+        async Task<(GasPointResult? Point, string? MoveError)> ScanSegmentAsync(int from, int to)
+        {
+            var a = waypoints[from];
+            var b = waypoints[to];
+            var lengthMm = Math.Sqrt(Math.Pow(b.X - a.X, 2) + Math.Pow(b.Y - a.Y, 2) + Math.Pow(b.Z - a.Z, 2));
+            var label = $"WALL 0x{context.InspectionSurfaceId:X2} #{from + 1}→#{to + 1}";
+            var maxRetries = Math.Clamp(gasSettings.MaxRetries, 0, 2);
+            var responseDelay = TimeSpan.FromMilliseconds(Math.Max(0, gasSettings.MeasureDwellMs));
+            var scans = new List<GasMeasurementResult>();
+            double? peakMm = null;
+            while (true)
+            {
+                var rc = 0;
+                DateTime moveStart = default, moveEnd = default;
+                var scan = await _gas.MeasureDuringAsync(label, async c =>
+                {
+                    moveStart = DateTime.UtcNow;
+                    rc = await _cobot.Rpc.MoveLAsync(ToTargetBase(b), tool: context.Tool, user: 0,
+                        vel: context.InspectVelocity ?? context.Velocity, acc: MoveAcc, ovl: MoveOvl, blendR: -1, ct: c);
+                    moveEnd = DateTime.UtcNow;
+                    return rc == 0;
+                }, gasThreshold, scans.Count, ct);
+                if (scan is null)
+                    return (null, $"경유점 #{to + 1} 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}");
+                scans.Add(scan);
+                peakMm = scan.PeakFraction(moveStart, moveEnd, responseDelay) is { } f ? f * lengthMm : null;
+                if (!GasPointResult.NeedsRetry(scan.Judgement, scans.Count - 1, maxRetries))
+                    break;
+
+                // 재측정 — 일시정지 중이면 풀릴 때까지 기다렸다가, 측정 없이 이동 속도로 출발점에 되돌아간다.
+                await _pauseGate.WaitWhilePausedAsync(ct);
+                _logger.LogInformation("[검사 수행] 구간 #{From}→#{To} {Judge} — 출발점으로 되돌아가 재측정 {Retry}",
+                    from + 1, to + 1, scan.Judgement, scans.Count);
+                var backRc = await _cobot.Rpc.MoveLAsync(ToTargetBase(a), tool: context.Tool, user: 0,
+                    vel: context.Velocity, acc: MoveAcc, ovl: MoveOvl, blendR: -1, ct: ct);
+                if (backRc != 0)
+                    return (null, $"구간 #{from + 1}→#{to + 1} 재측정 복귀 이동 실패 (rc={backRc}){FairinoErrorCodes.Suffix(backRc)}");
+            }
+
+            var (gu, gv, _) = FaceLocalMapper.ToFaceLocal((ushort)context.InspectionSurfaceId, b.X, b.Y, b.Z);
+            var point = new GasPointResult(to + 1, gu, gv, scans);
+            var last = scans[^1];
+            var retryNote = scans.Count > 1 ? $" (재측정 {scans.Count - 1}회)" : "";
+            var peakNote = peakMm is { } mm ? $", 최대값 추정 위치 #{from + 1} 에서 약 {mm:0} mm" : "";
+            if (point.Result == GasJudgement.Ng)
+                _logger.LogInformation("[검사 수행] 구간 #{From}→#{To}({Len:0} mm) NG — 최대 {Max:0.###} {Unit}{Peak}",
+                    from + 1, to + 1, lengthMm, last.Value, last.Unit, peakNote);
+            context.Progress?.Invoke(point.Result switch
+            {
+                GasJudgement.Ok => $"구간 #{from + 1}→#{to + 1} 가스 OK 최대 {last.Value:0.###} {last.Unit} ({last.SampleCount}샘플){retryNote}",
+                GasJudgement.Ng => $"구간 #{from + 1}→#{to + 1} 가스 NG — 최대 {last.Value:0.###} > 임계 {last.Threshold:0.###} {last.Unit}{peakNote}{retryNote}",
+                _ => $"구간 #{from + 1}→#{to + 1} 가스 측정 실패: {last.Error}{retryNote}",
+            });
+            return (point, null);
+        }
 
         // v3: 검사 세션 1회 = Run ID 1개(GUID). 각 경유점 캡처 = Task ID 1개.
         // ACS 연동 실행이면 jobRef 는 작업지시(VDA5050 action jobRef) 기반으로 발급하고,
@@ -248,7 +313,8 @@ public class InspectionRunStep : ISequenceStep
             ct.ThrowIfCancellationRequested();
 
             // 일시정지 체크포인트 ① — 다음 경유점으로 이동하기 전. 재개되면 정지 직전 경유점으로 되돌아가 재촬영(§4.3).
-            if (await _pauseGate.WaitWhilePausedAsync(ct) && lastMoved >= 0 && !_dryRun && lastMoved < i)
+            // 연속 측정은 구간 측정이 이동과 함께 끝나 있으므로 되돌아가지 않고 다음 구간부터 이어 간다.
+            if (await _pauseGate.WaitWhilePausedAsync(ct) && lastMoved >= 0 && !_dryRun && !continuous && lastMoved < i)
             {
                 _logger.LogInformation("[검사 수행] 일시정지 해제 — 정지 직전 경유점 #{Idx} 부터 재촬영", lastMoved + 1);
                 context.Progress?.Invoke($"일시정지 해제 — 경유점 #{lastMoved + 1} 부터 재촬영");
@@ -258,6 +324,21 @@ public class InspectionRunStep : ISequenceStep
             var w = waypoints[i];
             if (IsSkipped(w)) { skippedSet.Add(i); continue; }
 
+            // 연속 측정: 앞 경유점 → 이 경유점 구간을 이동하면서 잰다. 첫 경유점은 앞 구간이 없어 아래 정지 측정으로 잰다.
+            if (continuous && prevIdx >= 0)
+            {
+                var (segPoint, moveError) = await ScanSegmentAsync(prevIdx, i);
+                if (segPoint is null)
+                    return StepResult.Fail($"{moveError} — {movedSet.Count}점 이동 후 중단.");
+                movedSet.Add(i);
+                lastMoved = i;
+                prevIdx = i;
+                gasPoints[i] = segPoint;
+                visByIndex[i] = segPoint.Result != GasJudgement.Error;
+                ngByIndex[i] = segPoint.Result == GasJudgement.Ng;
+                continue;
+            }
+
             // 경유점 순회(검사 스캔)만 검사 속도 적용 — 스테이징 등 접근성 모션은 이동 속도(Velocity).
             var rc = await _cobot.Rpc.MoveLAsync(ToTargetBase(w), tool: context.Tool, user: 0,
                 vel: context.InspectVelocity ?? context.Velocity, acc: MoveAcc, ovl: MoveOvl, blendR: -1, ct: ct);
@@ -266,6 +347,7 @@ public class InspectionRunStep : ISequenceStep
                     $"경유점 #{i + 1} 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)} — {movedSet.Count}점 이동 후 중단.");
             movedSet.Add(i);
             lastMoved = i;
+            prevIdx = i;
 
             if (settle > TimeSpan.Zero)
                 await Task.Delay(settle, ct);

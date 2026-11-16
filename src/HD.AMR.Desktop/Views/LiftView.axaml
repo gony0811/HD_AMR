@@ -157,7 +157,7 @@
                 <TextBlock Text="추진기 리셋" FontWeight="SemiBold" />
                 <Button Classes="danger" Content="리셋 (완료 상태 확인)" Command="{Binding ResetCommand}" HorizontalAlignment="Left" />
                 <TextBlock Classes="hint"
-                           Text="리셋은 추진기를 기계적 원점까지 내립니다. 운행 모드가 '리셋 중'으로 진입하고 다시 '정지'가 될 때까지 명령을 유지합니다. 완료 전에는 알람이 해제되지 않으며 최대 2분 동안 완료를 기다립니다." />
+                           Text="리셋은 추진기를 기계적 원점까지 내립니다. 운행 모드가 '리셋 중'으로 진입하고 다시 '정지'가 될 때까지 명령을 유지합니다(보통 10초 이상). 전원을 켠 뒤 리셋이 끝나기 전에는 상승·하강·지정 높이 이동이 동작하지 않습니다. 완료 전에는 알람이 해제되지 않으며 최대 2분 동안 완료를 기다립니다." />
             </StackPanel>
         </Border>
 
