@@ -36,6 +36,8 @@ public class ArucoPreviewTests
     [WindowsFact]
     public void DetectAndRender_FindsTargetMarker()
     {
+        if (!OperatingSystem.IsWindows()) return; // OpenCV 네이티브 없음 — 스킵
+
         var result = ArucoPoseEstimator.DetectAndRender(MakeMarkerFrame(), MarkerId);
         Assert.NotNull(result);
         Assert.True(result.TargetFound);
@@ -46,6 +48,8 @@ public class ArucoPreviewTests
     [WindowsFact]
     public void DetectAndRender_ReportsTargetMissingButListsDetected()
     {
+        if (!OperatingSystem.IsWindows()) return; // OpenCV 네이티브 없음 — 스킵
+
         var result = ArucoPoseEstimator.DetectAndRender(MakeMarkerFrame(), targetId: 3);
         Assert.NotNull(result);
         Assert.False(result.TargetFound);
@@ -55,6 +59,8 @@ public class ArucoPreviewTests
     [WindowsFact]
     public void DetectAndRender_BlankFrameStillReturnsImage()
     {
+        if (!OperatingSystem.IsWindows()) return; // OpenCV 네이티브 없음 — 스킵
+
         using var gray = new Mat(480, 640, MatType.CV_8UC3, new Scalar(128, 128, 128));
         var result = ArucoPoseEstimator.DetectAndRender(ToFrame(gray), MarkerId);
         Assert.NotNull(result);
@@ -66,6 +72,8 @@ public class ArucoPreviewTests
     [WindowsFact]
     public void DetectMarkerInfos_ReturnsIdAndArea()
     {
+        if (!OperatingSystem.IsWindows()) return; // OpenCV 네이티브 없음 — 스킵
+
         var infos = ArucoPoseEstimator.DetectMarkerInfos(MakeMarkerFrame(markerPx: 200));
         var info = Assert.Single(infos);
         Assert.Equal(MarkerId, info.Id);
@@ -76,6 +84,8 @@ public class ArucoPreviewTests
     [WindowsFact]
     public void DetectMarkerInfos_EmptyOnBlankFrame()
     {
+        if (!OperatingSystem.IsWindows()) return; // OpenCV 네이티브 없음 — 스킵
+
         using var gray = new Mat(480, 640, MatType.CV_8UC3, new Scalar(128, 128, 128));
         Assert.Empty(ArucoPoseEstimator.DetectMarkerInfos(ToFrame(gray)));
     }

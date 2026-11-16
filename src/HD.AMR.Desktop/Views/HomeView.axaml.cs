@@ -19,6 +19,9 @@ public partial class HomeView : UserControl
         };
     }
 
+    // ACS 카드의 [브로커 설정] — MQTT 브로커 주소 설정·연결 창.
+    private void OnAcsBrokerClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e) => AcsBrokerWindow.Open();
+
     // 수동 비드 입력 테스트 팝업 — 이미 열려 있으면 앞으로. 메인 창을 owner 로 연다(종료 시 함께 닫힘).
     private void OpenBeadTest()
     {
