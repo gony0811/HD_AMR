@@ -104,6 +104,25 @@ public class InspectionRunStep : ISequenceStep
             return StepResult.Fail(
                 $"티칭설정 '{profile.Name}' 경유점이 부족합니다({waypoints.Count}개, 2개 이상 필요).");
 
+        // 우현 면은 좌현의 거울상이다 — 좌현에서 교시한 프로필을 작업물 Y 로 거울 반전해 실행한다(ProfileMirror).
+        // 이후 사전 검증·이동·촬영 위치 보고는 모두 반전된 경유점을 쓴다.
+        var mirrorEnabled = await GetMirrorEnabledAsync();
+        if (ProfileMirror.ShouldMirror(context.InspectionSurfaceId, context.FacePlacement, mirrorEnabled))
+        {
+            waypoints = ProfileMirror.Mirror(waypoints);
+            _logger.LogInformation(
+                "[검사 수행] 우현 면(WallID 0x{Sid:X2}) — 티칭설정 '{Prof}' 경유점을 거울 반전(Y·Rz·Rx 부호)해 실행",
+                context.InspectionSurfaceId, profile.Name);
+            context.Progress?.Invoke("우현 면 — 티칭 경유점을 거울 반전해 실행");
+        }
+        else if (mirrorEnabled && ProfileMirror.ShouldMirror(context.InspectionSurfaceId, null)
+                 && waypoints.Any(w => w.Y != 0 || w.RzDeg != 0 || w.RxDeg != 0))
+        {
+            _logger.LogWarning(
+                "[검사 수행] 우현 면(WallID 0x{Sid:X2})인데 용접선이 면 축의 − 방향 — 거울 반전하지 않고 교시값 그대로 실행(세로 방향 위치가 어긋날 수 있음)",
+                context.InspectionSurfaceId);
+        }
+
         // ── 애플리케이션 내부 작업물 좌표계 확인 ─────────────────────────
         if (!context.Bag.TryGetValue(InternalWorkpieceFrame.BagKey, out var frameValue)
             || frameValue is not double[] { Length: 6 } frame)
@@ -413,6 +432,12 @@ public class InspectionRunStep : ISequenceStep
                 return $"경유점 #{idx + 1} {j6}";
         }
         return null;
+    }
+
+    private async Task<bool> GetMirrorEnabledAsync()
+    {
+        try { return await _param.GetBoolAsync(ProfileMirror.EnabledKey) ?? true; }
+        catch { return true; }
     }
 
     private async Task<double> GetWObjIdAsync()
