@@ -36,6 +36,7 @@ public sealed partial class GasDetectorViewModel : ViewModelBase
     [ObservableProperty] private string _dwellMs = "";
     [ObservableProperty] private string _sampleCount = "";
     [ObservableProperty] private string _sampleIntervalMs = "";
+    [ObservableProperty] private bool _isContinuous;
 
     [ObservableProperty] private bool _busy;
     [ObservableProperty] private string? _message;
@@ -222,6 +223,7 @@ public sealed partial class GasDetectorViewModel : ViewModelBase
         DwellMs = s.MeasureDwellMs.ToString(inv);
         SampleCount = s.MeasureSampleCount.ToString(inv);
         SampleIntervalMs = s.MeasureSampleIntervalMs.ToString(inv);
+        IsContinuous = s.MeasureMode == GasMeasureMode.Continuous;
     }
 
     [RelayCommand]
@@ -267,6 +269,7 @@ public sealed partial class GasDetectorViewModel : ViewModelBase
             s.MeasureDwellMs = ParseInt(DwellMs, "측정 전 대기", 0, 60_000);
             s.MeasureSampleCount = ParseInt(SampleCount, "샘플 수", 1, 100);
             s.MeasureSampleIntervalMs = ParseInt(SampleIntervalMs, "샘플 간격", Xl3000AsciiProtocol.MinSampleIntervalMs, 10_000);
+            s.MeasureMode = IsContinuous ? GasMeasureMode.Continuous : GasMeasureMode.Point;
         }
         catch (FormatException ex)
         {
