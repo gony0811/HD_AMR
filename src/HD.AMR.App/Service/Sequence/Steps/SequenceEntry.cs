@@ -1,5 +1,6 @@
 using HD.AMR.App.Communication;
 using HD.AMR.App.Models;
+using HD.AMR.App.Service.Motion;
 using Microsoft.Extensions.Logging;
 
 namespace HD.AMR.App.Service.Sequence.Steps;
@@ -29,6 +30,20 @@ internal static class SequenceEntry
 {
     /// <summary>홈 도달 판정 관절 허용오차 [도].</summary>
     private const double HomeToleranceDeg = 0.5;
+
+    /// <summary>
+    /// 경유점 사이 이동 경로(관절 공간 직선) 위로 보는 관절 허용 편차 [도]. 홈 ↔ 작업 준비 위치처럼 MoveJ 로 오가는 구간에서
+    /// 정지·취소로 도중에 멈춘 팔은 벽 앞이 아니다 — 여기서 벽면 후퇴를 하면 팔을 차체 쪽으로 접어 넣는다
+    /// (실기 2026-11-16 10:29: 홈 18mm 앞에서 멈춘 팔을 300mm 후퇴시켜 전완이 리프트 기둥에 충돌).
+    /// </summary>
+    internal const double RouteToleranceDeg = 3.0;
+
+    /// <summary>이동 후 도착으로 보는 관절 허용 편차 [도] — 이보다 멀리 멈췄으면 그 이동은 끝나지 않은 것이다.</summary>
+    internal const double ArrivalToleranceDeg = 1.0;
+
+    /// <summary>벽면 후퇴 경로의 자기 간섭 여유 [mm] — 경로 위 자세가 차체·리프트 기둥·신호탑에 이보다 가까워지면서
+    /// 출발 자세보다 여유가 줄면 후퇴하지 않는다. 닿는 자세(여유 음수)는 항상 막는다.</summary>
+    internal const double RetractSelfMarginMm = 30.0;
 
     /// <summary>ready 미티칭 시 홈에서 툴 Z 방향 자동 후퇴 거리 [mm].</summary>
     private const double ReadyToolZOffsetMm = -300.0;
@@ -213,6 +228,12 @@ internal static class SequenceEntry
 
         var onWaypoint = IsAt(cur, ctx, "ready") || IsAt(cur, ctx, Home2Key)
                          || UpperSlotKeys().Any(k => IsAt(cur, ctx, k));
+        if (!onWaypoint && RouteSegmentOf(cur, ctx, mode) is { } route)
+        {
+            // 경유점 사이를 오가다 멈춘 자세 — 벽 앞이 아니므로 후퇴하지 않고 그 경로를 따라 경유점으로 돌아간다.
+            logger.LogInformation("기준 자세 복귀: {Route} 이동 경로 위에서 멈춘 자세 — 벽면 후퇴 없이 경유점으로 복귀", route);
+            onWaypoint = true;
+        }
         if (!onWaypoint)
         {
             // ② 가 후퇴 평면을 따라 들어왔으면 같은 길로 나온다 — 300mm 후퇴 후 경유점으로 바로 MoveJ 하면, 면을 따라
@@ -396,6 +417,97 @@ internal static class SequenceEntry
         return JointDistance(cur, j) < JointDistance(cur, home2) ? (key, code) : null;
     }
 
+    /// <summary>
+    /// 관절 공간에서 a → b 직선(MoveJ 경로)까지의 편차 — 직선 위 가장 가까운 점과의 축별 차이 최댓값 [도].
+    /// 차이는 a 기준으로 ±360° 감아 잰다. a 와 b 가 같으면 a 까지의 거리.
+    /// </summary>
+    internal static double JointSegmentDeviation(double[] cur, double[] a, double[] b)
+    {
+        static double Wrap(double d)
+        {
+            d %= 360.0;
+            return d > 180.0 ? d - 360.0 : d < -180.0 ? d + 360.0 : d;
+        }
+        var ab = new double[6];
+        var ac = new double[6];
+        double dot = 0, len2 = 0;
+        for (var i = 0; i < 6; i++)
+        {
+            ab[i] = Wrap(b[i] - a[i]);
+            ac[i] = Wrap(cur[i] - a[i]);
+            dot += ab[i] * ac[i];
+            len2 += ab[i] * ab[i];
+        }
+        var t = len2 < 1e-9 ? 0.0 : Math.Clamp(dot / len2, 0.0, 1.0);
+        var max = 0.0;
+        for (var i = 0; i < 6; i++) max = Math.Max(max, Math.Abs(ac[i] - ab[i] * t));
+        return max;
+    }
+
+    /// <summary>
+    /// 현재 관절이 자세 모드의 경유점 사이 이동 경로 위(<see cref="RouteToleranceDeg"/> 이내)면 그 구간 이름, 아니면 null.
+    /// 홈 모드 = 홈 ↔ 작업 준비 위치, 홈 2 모드 = 홈 위치_2 ↔ 상부 면 검사 준비(티칭된 것).
+    /// </summary>
+    internal static string? RouteSegmentOf(double[] cur, SequenceContext ctx, PoseMode mode)
+    {
+        if (mode == PoseMode.Home)
+            return TaughtJoints(ctx, "home") is { } home && TaughtJoints(ctx, "ready") is { } ready
+                   && JointSegmentDeviation(cur, home, ready) <= RouteToleranceDeg
+                ? "홈 ↔ 작업 준비 위치"
+                : null;
+
+        if (TaughtJoints(ctx, Home2Key) is not { } home2) return null;
+        foreach (var key in UpperSlotKeys())
+            if (TaughtJoints(ctx, key) is { } slot && JointSegmentDeviation(cur, home2, slot) <= RouteToleranceDeg)
+                return "홈 위치_2 ↔ 상부 면 검사 준비";
+        return null;
+    }
+
+    /// <summary>
+    /// 이동이 목표에 닿지 못하고 멈췄으면 사유, 닿았으면 null. MoveJ 는 정지·취소로 멈춰도 성공(rc=0)으로 돌아오므로
+    /// 실제 관절로 다시 확인한다 — 안 그러면 도중에 멈춘 자세를 "이동 완료"로 기록한다(실기 2026-11-16 10:27:49).
+    /// </summary>
+    internal static string? ArrivalShortfall(double[] now, double[] target, string name)
+    {
+        var d = JointDistance(now, target);
+        return d <= ArrivalToleranceDeg
+            ? null
+            : $"{name} 이동이 도중에 멈췄습니다 — 목표까지 관절 최대 {d:0.0}° 남음(정지·취소·결함). 팔이 경유점 사이에 있습니다.";
+    }
+
+    /// <summary>
+    /// 벽면 후퇴 경로 위 자세 <paramref name="joints"/> 가 팔·검사 툴을 차체·리프트 기둥·신호탑에 닿게 하거나,
+    /// <see cref="RetractSelfMarginMm"/> 안으로 출발 자세보다 더 붙게 하면 사유, 아니면 null(<see cref="CobotEnvelope"/>).
+    /// 리프트 높이는 모르므로 완전 하강(0mm)으로 본다 — 차체·신호탑까지는 가장 가까운 경우다.
+    /// </summary>
+    internal static string? RetractSelfBlocker(double[] startJoints, double[] joints)
+    {
+        var env = CobotEnvelope.Default;
+        var kin = Fr5Kinematics.Fr5Wml;
+        var at = env.Evaluate(kin, joints, 0, CobotObstacleZone.FallbackMountYawDeg);
+        if (at.Collides) return $"자기 간섭 — {at}";
+        if (at.ClearanceMm >= RetractSelfMarginMm) return null;
+        var start = env.Evaluate(kin, startJoints, 0, CobotObstacleZone.FallbackMountYawDeg);
+        return at.ClearanceMm < start.ClearanceMm - 1.0
+            ? $"자기 간섭 여유 부족 — {at} (출발 자세 {start.ClearanceMm:0}mm 에서 더 붙음, 최소 {RetractSelfMarginMm:0}mm)"
+            : null;
+    }
+
+    /// <summary>MoveJ 뒤 실제 관절이 목표에 닿았는지 확인한다(잠시 기다리며 다시 읽는다). 취소됐으면 취소로, 못 닿았으면 예외.</summary>
+    private static async Task ConfirmArrivedAsync(CobotService cobot, double[] target, string name, CancellationToken ct)
+    {
+        string? shortfall = null;
+        for (var attempt = 0; attempt < 6; attempt++)
+        {
+            ct.ThrowIfCancellationRequested();
+            var now = await cobot.Rpc.GetActualJointPosAsync(ct: ct);
+            shortfall = ArrivalShortfall(now, target, name);
+            if (shortfall is null) return;
+            await Task.Delay(250, ct);
+        }
+        throw new InvalidOperationException(shortfall);
+    }
+
     /// <summary>관절 거리 — 축별 차이(±360° 감기 정규화)의 최댓값 [도].</summary>
     internal static double JointDistance(double[] a, double[] b)
     {
@@ -442,6 +554,7 @@ internal static class SequenceEntry
             tool: ctx.Tool, user: 0, vel: ctx.Velocity, ct: ct);
         if (rc != 0)
             throw new InvalidOperationException($"{name} 이동(MoveJ) 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.");
+        await ConfirmArrivedAsync(cobot, joints, name, ct);
     }
 
     private static async Task NormalizeActiveFramesAsync(
@@ -487,6 +600,7 @@ internal static class SequenceEntry
             tool: ctx.Tool, user: 0, vel: ctx.Velocity, ct: ct);
         if (rc != 0)
             throw new InvalidOperationException($"홈 이동(MoveJ) 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.");
+        await ConfirmArrivedAsync(cobot, homeJoints, "홈 위치", ct);
 
         return true;
     }
@@ -504,21 +618,24 @@ internal static class SequenceEntry
             return false;
 
         int rc;
+        double[] readyTarget;
         if (readyJoints is not null)
         {
+            readyTarget = readyJoints;
             rc = await cobot.Rpc.MoveJAsync(FairinoRpcClient.UnwrapToward(readyJoints, cur), readyPose,
                 tool: ctx.Tool, user: 0, vel: ctx.Velocity, ct: ct);
         }
         else
         {
-            var joints = await ComputedReadyJointsAsync(cobot, ctx, readyPose, cur, ct);
-            rc = await cobot.Rpc.MoveJAsync(joints, readyPose,
+            readyTarget = await ComputedReadyJointsAsync(cobot, ctx, readyPose, cur, ct);
+            rc = await cobot.Rpc.MoveJAsync(readyTarget, readyPose,
                 tool: ctx.Tool, user: 0, vel: ctx.Velocity, ct: ct);
         }
 
         if (rc != 0)
             throw new InvalidOperationException(
                 $"작업 준비 위치 이동(MoveJ) 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.");
+        await ConfirmArrivedAsync(cobot, readyTarget, "작업 준비 위치", ct);
 
         logger.LogInformation("작업 준비 위치로 이동 완료 ({Src})", src);
         return true;
@@ -546,21 +663,24 @@ internal static class SequenceEntry
             return false;
 
         int rc;
+        double[] readyTarget;
         if (readyJoints is not null)
         {
+            readyTarget = readyJoints;
             rc = await cobot.Rpc.MoveJAsync(FairinoRpcClient.UnwrapToward(readyJoints, cur), readyPose,
                 tool: ctx.Tool, user: 0, vel: ctx.Velocity, ct: ct);
         }
         else
         {
-            var joints = await ComputedReadyJointsAsync(cobot, ctx, readyPose, cur, ct);
-            rc = await cobot.Rpc.MoveJAsync(joints, readyPose,
+            readyTarget = await ComputedReadyJointsAsync(cobot, ctx, readyPose, cur, ct);
+            rc = await cobot.Rpc.MoveJAsync(readyTarget, readyPose,
                 tool: ctx.Tool, user: 0, vel: ctx.Velocity, ct: ct);
         }
 
         if (rc != 0)
             throw new InvalidOperationException(
                 $"작업 준비 위치 경유 이동(MoveJ) 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.");
+        await ConfirmArrivedAsync(cobot, readyTarget, "작업 준비 위치", ct);
 
         logger.LogInformation("홈 복귀 전 작업 준비 위치 경유 완료 ({Src})", src);
         return true;
@@ -737,7 +857,7 @@ internal static class SequenceEntry
     /// <summary>
     /// 벽면 후퇴 직선(현재 TCP → <paramref name="endTcp"/>, 자세 유지)을 <see cref="CobotInspectionMoveStep.PlanarSampleMm"/>
     /// 간격으로 현재 관절에서 이어 풀어, 점마다 <see cref="CobotInspectionMoveStep.PathStepBlocker"/>(관절 한계 근접·점프·
-    /// 팔꿈치·손목 특이점)를 본다. 걸리면 "[점] 사유", 통과하면 null. 관절·IK 조회 실패도 사유로 돌려준다(움직이지 않는다).
+    /// 팔꿈치·손목 특이점)와 <see cref="RetractSelfBlocker"/>(차체·리프트 기둥·신호탑 간섭)를 본다. 걸리면 "[점] 사유", 통과하면 null. 관절·IK 조회 실패도 사유로 돌려준다(움직이지 않는다).
     /// </summary>
     private static async Task<string?> RetractPathBlockerAsync(
         CobotService cobot, SequenceContext ctx, double[] currentPose, double[] endTcp, CancellationToken ct)
@@ -765,6 +885,8 @@ internal static class SequenceEntry
             }
             if (CobotInspectionMoveStep.PathStepBlocker(seed, j, curJoints) is { } why)
                 return $"[{at}] {why}";
+            if (RetractSelfBlocker(curJoints, j) is { } self)
+                return $"[{at}] {self} — 여기는 벽 앞이 아니라 차체 쪽일 수 있습니다";
             seed = j;
         }
         return null;
