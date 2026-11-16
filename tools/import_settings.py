@@ -297,7 +297,7 @@ def run_import(db: Path, data_path: Path, also: set[str], apply: bool, do_params
             for name, _, value, _ in add:
                 print(f"  + {name} = {short(value)}")
             for name, old, value, _ in change:
-                print(f"  ~ {name}: {short(old, 30)} → {short(value, 30)}")
+                print(f"  ~ {name}: {short(old, 60)} → {short(value, 60)}")
             by_group: dict[str, list[str]] = {}
             for name, group in skip:
                 by_group.setdefault(group, []).append(name)
