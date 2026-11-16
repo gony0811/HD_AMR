@@ -22,7 +22,11 @@
   tool         검사 툴 치수 (Sequence.InspectCam.Offset*, Sequence.FlatSurface.CameraToLaserShiftYmm,
                Sequence.Laser.WorkingDistanceMm*, Sequence.Camera.TargetDistance, Sequence.WObj.Id)
   internal     Migration.*  (앱 내부 표시)
+  ttc          T_T_C 보정 결과 (Calib.HandEye.Pose·Tool — 툴에서 본 카메라 위치)
+  tab          T_A_B 보정 결과 (Calib.Mount.Pose — AMR 에서 본 코봇 BASE 위치)
 이 중 일부를 함께 옮기려면 --also 로 묶음 이름을 준다(예: --also tool,camera).
+ttc·tab 은 장비마다 측정한 값이다. 툴·카메라 장착과 코봇 장착이 원본 장비와 같을 때만 옮기고,
+미리보기에 나오는 '지금 값 → 새 값'을 먼저 비교한다. 측정 표본·산출 기록은 옮기지 않는다(결과값만).
 calibration·j6·path·internal 은 --also 로도 옮기지 않고 설정 파일에도 싣지 않는다 — 필요하면 파라미터 화면에서 직접 넣는다.
 
 레시피는 Id(LINE, CROSS4 …)로 덮어쓴다. 레시피가 가리키는 티칭 프로필은 이름으로 찾아
@@ -44,6 +48,8 @@ DEFAULT_DATA = Path(__file__).resolve().parent / "settings" / "weld_amr_20261117
 # 묶음 이름 → 파라미터 이름 패턴. 위에서부터 처음 맞는 묶음에 속한다.
 GROUPS: list[tuple[str, list[str]]] = [
     ("internal", ["Migration.*"]),
+    ("ttc", ["Calib.HandEye.Pose", "Calib.HandEye.Tool"]),   # T_T_C — 툴 → 카메라 (핸드아이 결과값)
+    ("tab", ["Calib.Mount.Pose"]),                            # T_A_B — AMR → 코봇 BASE (장착 보정 결과값)
     ("calibration", ["Calib.*", "Laser.Head*", "Laser.TiltRef.*", "Laser.TouchTcp.*", "Motion.PostureLimits.Json"]),
     ("j6", ["inspection.safeJ6*"]),
     ("path", ["Camera.Capture.Dir", "Vision.Python.Exe", "Weld.*.ModelPath"]),
@@ -291,7 +297,7 @@ def run_import(db: Path, data_path: Path, also: set[str], apply: bool, do_params
             for name, _, value, _ in add:
                 print(f"  + {name} = {short(value)}")
             for name, old, value, _ in change:
-                print(f"  ~ {name}: {short(old, 30)} → {short(value, 30)}")
+                print(f"  ~ {name}: {short(old, 60)} → {short(value, 60)}")
             by_group: dict[str, list[str]] = {}
             for name, group in skip:
                 by_group.setdefault(group, []).append(name)
