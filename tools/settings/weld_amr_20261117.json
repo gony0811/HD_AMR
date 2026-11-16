@@ -1,8 +1,20 @@
 {
  "format": 1,
  "source": "용접검사 AMR hd_amr.db (2026-11-17)",
- "exportedAt": "2026-11-16T15:54:13",
+ "exportedAt": "2026-11-16T16:14:33",
  "parameters": [
+  {
+   "name": "Calib.HandEye.Pose",
+   "value": "[-225,1.56,33.56,-0.8,-2.9,-88.865]",
+   "description": "핸드아이 오프셋 T_T_C [x,y,z,rx,ry,rz] (mm/도, 코봇 툴 TCP→컬러카메라 광학 프레임)",
+   "group": "ttc"
+  },
+  {
+   "name": "Calib.Mount.Pose",
+   "value": "[0,0,1635,0,0,180]",
+   "description": "코봇 장착 오프셋 T_A_B [x,y,z,rx,ry,rz] (mm/도, AMR 차체→코봇 BASE)",
+   "group": "tab"
+  },
   {
    "name": "Camera.Align.DepthAxis",
    "value": "5",
