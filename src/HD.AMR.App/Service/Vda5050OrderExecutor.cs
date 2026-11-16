@@ -346,8 +346,9 @@ public sealed class Vda5050OrderExecutor
         var pos = node.NodePosition!;
         try
         {
-            // 현장 정차 오프셋(맵 X·Y, mm) — 주행·도착 판정·도달 사전 점검·정차 보정이 모두 이 좌표를 쓰도록 맨 먼저 반영.
-            await ApplyStationOffsetAsync(orderId, pos);
+            // 현장 좌표 오프셋(맵 X·Y, mm) — 정차 위치와 용접선 좌표를 같이 옮긴다. 주행·도착 판정·도달 사전 점검·
+            // 정차 보정·검사가 모두 이 좌표를 쓰도록 맨 먼저 반영.
+            await ApplyStationOffsetAsync(orderId, node);
 
             // 연속 TASK 묶음(같은 리프트·면·수직/수평). 도달 점검과 교시가 같은 계획을 쓴다.
             _inspection.BeginBundles(TaskBundlePlanner.Assign(node.Actions, pos.Theta));
@@ -707,10 +708,12 @@ public sealed class Vda5050OrderExecutor
         return new StationAdjustOutcome(token, false, plan.BackwardMm);
     }
 
-    /// <summary>파라미터 <see cref="StationOffset.XKey"/>·<see cref="StationOffset.YKey"/>(mm)를 노드 좌표에 더한다(제자리 수정).
+    /// <summary>파라미터 <see cref="StationOffset.XKey"/>·<see cref="StationOffset.YKey"/>(mm)를 노드 좌표와 각 액션의
+    /// 용접선 좌표(<c>position.seamStartW/seamEndW</c>)에 더한다(제자리 수정) — AMR 과 TCP 가 함께 옮겨 간다.
     /// 조회 실패·범위 밖은 0 — 오프셋 없이 ACS 좌표 그대로 간다.</summary>
-    private async Task ApplyStationOffsetAsync(string orderId, NodePosition pos)
+    private async Task ApplyStationOffsetAsync(string orderId, OrderNode node)
     {
+        var pos = node.NodePosition!;
         double? rawX = null, rawY = null;
         try
         {
@@ -734,11 +737,14 @@ public sealed class Vda5050OrderExecutor
 
         var (ox, oy) = (pos.X, pos.Y);
         (pos.X, pos.Y) = StationOffset.Apply(ox, oy, offX, offY);
+        var seams = node.Actions.Count(a => StationOffset.ShiftSeamPosition(a, offX, offY));
         _logger.LogInformation(
-            "정차 오프셋 적용: ACS 목표 ({X0:0.###}, {Y0:0.###}) + (X {OffX:+0;-0}mm, Y {OffY:+0;-0}mm) → ({X:0.###}, {Y:0.###})",
-            ox, oy, offX, offY, pos.X, pos.Y);
-        OpLog(OpCategory.Drive, "정차 오프셋", null,
-            $"ACS 목표 ({ox:0.###}, {oy:0.###}) + X {offX:+0;-0}mm·Y {offY:+0;-0}mm → ({pos.X:0.###}, {pos.Y:0.###})", orderId);
+            "좌표 오프셋 적용: ACS 목표 ({X0:0.###}, {Y0:0.###}) + (X {OffX:+0;-0}mm, Y {OffY:+0;-0}mm) → ({X:0.###}, {Y:0.###}), " +
+            "용접선 좌표 {Seams}/{Actions}건도 같이 이동(TCP 도 같은 만큼)",
+            ox, oy, offX, offY, pos.X, pos.Y, seams, node.Actions.Count);
+        OpLog(OpCategory.Drive, "좌표 오프셋", null,
+            $"ACS 목표 ({ox:0.###}, {oy:0.###}) + X {offX:+0;-0}mm·Y {offY:+0;-0}mm → ({pos.X:0.###}, {pos.Y:0.###}), " +
+            $"용접선 {seams}건도 같이 이동", orderId);
     }
 
     /// <summary>도착 판정 허용 오차 결정 — ① Order → ② ParameterService(DB) → ③ AmrRestSettings.
