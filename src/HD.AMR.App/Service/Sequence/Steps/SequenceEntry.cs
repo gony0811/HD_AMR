@@ -20,8 +20,9 @@ namespace HD.AMR.App.Service.Sequence.Steps;
 ///  ③ <b>작업 준비 위치 경유</b> — 홈에서 검사 위치로 MoveJ 시 900mm 이하 영역에서 툴이 차체와 충돌할 수
 ///     있다. 홈 복귀 후 "ready" 티칭 위치(홈에서 툴 Z −300mm)로 먼저 이동해 충돌 영역을 벗어난다.
 ///     미티칭이면 홈에서 툴 Z −300mm 오프셋을 자동 계산해 사용한다.
-///  ④ <b>자세 모드</b> — 상부 면(T/PU/SU)은 "홈 위치_2" 자세 모드에서만, 그 외 면은 홈 모드에서만 진입한다.
-///     두 모드 전환은 운영자 수동 전용이라 모드가 맞지 않으면 움직이지 않고 실패한다(<see cref="ModeMismatch"/>).
+///  ④ <b>자세 모드</b> — 상부 면(T/PU/SU)은 "홈 위치_2", 바닥·하부 챔퍼(B/PL/SL)는 "홈 위치_3"(티칭돼 있을 때),
+///     그 외 면은 홈 모드에서만 진입한다. 모드 전환은 운영자 수동 전용이라 모드가 맞지 않으면 움직이지 않고
+///     실패한다(<see cref="ModeMismatch"/>).
 ///
 /// 부르는 곳은 ② <see cref="CobotInspectionMoveStep"/>(LINE/CROSS)이다. 같은 anchor 그룹의 연속 task 는
 /// 직전 종료 자세가 그대로면 ②가 이 진입 준비를 건너뛰고 면을 따라 다음 시작점으로 바로 간다(액션 사이 복귀 금지).
@@ -79,14 +80,56 @@ internal static class SequenceEntry
     /// 자동 운전에서는 하지 않고 운영자가 Teaching 에서 수동으로만 한다(2026-10-29 운영안).</summary>
     internal const string Home2Key = "home2";
 
+    /// <summary>바닥·하부 챔퍼(B/PL/SL) 자세 모드의 기준 자세 키(2026-11-17 리프트 탈거 후 운영안). 홈 위치_2 처럼
+    /// 자동 운전은 이 모드로 바꾸지 않고, 운영자가 Teaching 에서 '이동'으로 옮겨 둔다.</summary>
+    internal const string Home3Key = "home3";
+
     /// <summary>자세 모드 — 로봇이 지금 어느 기준 자세 쪽에 있는지. 자동 운전은 모드를 바꾸지 않는다.</summary>
-    internal enum PoseMode { Home, Home2 }
+    internal enum PoseMode { Home, Home2, Home3 }
+
+    private static readonly PoseMode[] SideModes = { PoseMode.Home2, PoseMode.Home3 };
 
     /// <summary>홈 위치_2 모드가 필요한 면 — 천장(T)·상부 챔퍼(PU/SU). 홈 위치 쪽에서는 벽 충돌·역기구학 오류로 도달 불가.</summary>
     internal static bool IsUpperRoute(string? wallCode)
         => WallCodes.Find(wallCode)?.Orientation is SurfaceOrientation.Ceiling or SurfaceOrientation.ChamferUpper;
 
-    /// <summary>진입 경유점 티칭 여부 — 상부 면은 홈 위치_2, 그 외는 ready.</summary>
+    /// <summary>홈 위치_3 모드 면 — 바닥(B)·하부 챔퍼(PL/SL).</summary>
+    internal static bool IsLowerRoute(string? wallCode)
+        => WallCodes.Find(wallCode)?.Orientation is SurfaceOrientation.Floor or SurfaceOrientation.ChamferLower;
+
+    /// <summary>면이 요구하는 자세 모드. 하부 면은 홈 위치_3 이 티칭돼 있을 때만 홈 위치_3 모드(미티칭이면 종전 홈 모드).</summary>
+    internal static PoseMode RequiredMode(string? wallCode, bool home3Taught)
+        => IsUpperRoute(wallCode) ? PoseMode.Home2
+         : IsLowerRoute(wallCode) && home3Taught ? PoseMode.Home3
+         : PoseMode.Home;
+
+    /// <summary>모드의 기준 자세 키.</summary>
+    internal static string BaseKeyOf(PoseMode mode) => mode switch
+    {
+        PoseMode.Home2 => Home2Key,
+        PoseMode.Home3 => Home3Key,
+        _ => "home",
+    };
+
+    /// <summary>모드의 기준 자세 이름.</summary>
+    internal static string BaseNameOf(PoseMode mode) => mode switch
+    {
+        PoseMode.Home2 => "홈 위치_2",
+        PoseMode.Home3 => "홈 위치_3",
+        _ => "홈 위치",
+    };
+
+    /// <summary>면이 이 모드(홈 위치_2·_3)의 면인지 — 그 면의 검사 준비 슬롯을 모드 경유점으로 쓴다.</summary>
+    private static bool BelongsTo(PoseMode mode, string? wallCode) => mode switch
+    {
+        PoseMode.Home2 => IsUpperRoute(wallCode),
+        PoseMode.Home3 => IsLowerRoute(wallCode),
+        _ => false,
+    };
+
+    private static bool Home3Taught(SequenceContext ctx) => TaughtJoints(ctx, Home3Key) is not null;
+
+    /// <summary>진입 경유점 티칭 여부 — 상부 면은 홈 위치_2, 하부 면은 홈 위치_3(있으면), 그 외는 ready.</summary>
     public static StepValidation ValidateRoute(SequenceContext context)
     {
         if (IsUpperRoute(context.WallCode))
@@ -94,6 +137,8 @@ internal static class SequenceEntry
                 ? StepValidation.Ok()
                 : StepValidation.Fail(
                     $"홈 위치_2 미티칭 — 상부 면({context.WallCode})은 홈 위치_2 자세에서 진입합니다. Teaching에서 먼저 저장하세요.");
+        if (IsLowerRoute(context.WallCode) && Home3Taught(context))
+            return StepValidation.Ok();
 
         return context.Positions.TryGetValue("ready", out var ready) && ready.IsTaught
             ? StepValidation.Ok()
@@ -101,14 +146,20 @@ internal static class SequenceEntry
     }
 
     /// <summary>현재 자세 모드 — 홈 위치_2 가 티칭돼 있고, 홈 위치_2 까지의 관절 거리가 ready(미티칭이면 홈)까지보다
-    /// 짧으면 <see cref="PoseMode.Home2"/>. 검사 도중 멈춘 자세도 같은 규칙으로 가까운 쪽에 붙는다.</summary>
+    /// 짧으면 <see cref="PoseMode.Home2"/>. 홈 위치_3 도 같은 규칙으로 비교한다(가장 가까운 기준 자세, 같으면 홈 모드).
+    /// 검사 도중 멈춘 자세도 같은 규칙으로 가까운 쪽에 붙는다.</summary>
     internal static PoseMode ModeOf(double[] cur, SequenceContext ctx)
     {
-        if (TaughtJoints(ctx, Home2Key) is not { } home2) return PoseMode.Home;
         var normal = TaughtJoints(ctx, "ready") ?? TaughtJoints(ctx, "home");
-        return normal is null || JointDistance(cur, home2) < JointDistance(cur, normal)
-            ? PoseMode.Home2
-            : PoseMode.Home;
+        var mode = PoseMode.Home;
+        var best = normal is null ? double.PositiveInfinity : JointDistance(cur, normal);
+        foreach (var m in SideModes)
+        {
+            if (TaughtJoints(ctx, BaseKeyOf(m)) is not { } j) continue;
+            var d = JointDistance(cur, j);
+            if (d < best) { best = d; mode = m; }
+        }
+        return mode;
     }
 
     private static int _rememberedMode = -1;   // −1 = 모름
@@ -129,33 +180,39 @@ internal static class SequenceEntry
     /// 기억이 없으면(앱 재시작 직후) 종전처럼 가까운 쪽.
     /// </summary>
     internal static PoseMode PickMode(bool atHome2Side, bool atHomeSide, PoseMode nearest, PoseMode? remembered)
-        => atHome2Side ? PoseMode.Home2
-         : atHomeSide ? PoseMode.Home
-         : remembered ?? nearest;
+        => PickMode(atHome2Side ? PoseMode.Home2 : atHomeSide ? PoseMode.Home : null, nearest, remembered);
 
-    /// <summary>현재 관절각에서 따를 자세 모드(<see cref="PickMode"/>). 기준 자세·경유점 위면 그 모드를 기억해 둔다.</summary>
+    /// <summary><paramref name="atSide"/> = 기준 자세·경유점 위에 있으면 그 모드(아니면 null).</summary>
+    internal static PoseMode PickMode(PoseMode? atSide, PoseMode nearest, PoseMode? remembered)
+        => atSide ?? remembered ?? nearest;
+
+    /// <summary>현재 관절각에서 따를 자세 모드. 기준 자세·경유점 위면 그 모드를 기억해 둔다.</summary>
     internal static PoseMode ResolveMode(double[] cur, SequenceContext ctx)
     {
-        var atHome2 = TaughtJoints(ctx, Home2Key) is not null
-                      && (IsAt(cur, ctx, Home2Key) || UpperSlotKeys().Any(k => IsAt(cur, ctx, k)));
-        var atHome = !atHome2 && (IsAt(cur, ctx, "home") || IsAt(cur, ctx, "ready"));
-        var mode = PickMode(atHome2, atHome, ModeOf(cur, ctx), RememberedMode);
-        if (atHome2 || atHome) RememberMode(mode);
+        PoseMode? atSide = null;
+        foreach (var m in SideModes)
+        {
+            if (TaughtJoints(ctx, BaseKeyOf(m)) is null) continue;
+            if (IsAt(cur, ctx, BaseKeyOf(m)) || SlotKeysOf(m).Any(k => IsAt(cur, ctx, k))) { atSide = m; break; }
+        }
+        if (atSide is null && (IsAt(cur, ctx, "home") || IsAt(cur, ctx, "ready"))) atSide = PoseMode.Home;
+        var mode = PickMode(atSide, ModeOf(cur, ctx), RememberedMode);
+        if (atSide is not null) RememberMode(mode);
         return mode;
     }
 
     /// <summary>작업 면과 자세 모드가 맞지 않을 때의 실패 사유. 맞으면 null.
     /// 자동 운전은 모드를 바꾸지 않으므로(홈 1.5·1.6 경유 금지) 운영자 수동 전환이 필요하다.</summary>
-    internal static string? ModeMismatch(PoseMode mode, string? wallCode)
+    /// <param name="home3Taught">홈 위치_3 티칭 여부 — 미티칭이면 하부 면도 홈 모드로 본다.</param>
+    internal static string? ModeMismatch(PoseMode mode, string? wallCode, bool home3Taught = false)
     {
-        var upper = IsUpperRoute(wallCode);
-        if (upper && mode == PoseMode.Home)
-            return $"수동 자세 전환 필요 — 상부 면({wallCode})은 홈 위치_2 자세에서만 검사합니다. 현재 홈 위치 자세입니다. " +
-                   "Teaching에서 홈 위치_2 '이동'(작업 준비·홈 위치_1.5·1.6 자동 경유)으로 전환한 뒤 재시도하세요.";
-        if (!upper && mode == PoseMode.Home2)
-            return $"수동 자세 전환 필요 — {wallCode ?? "일반"} 면은 홈 위치 자세에서만 검사합니다. 현재 홈 위치_2 자세입니다. " +
-                   "Teaching에서 홈 위치 '이동'(홈 위치_1.6·1.5·작업 준비 자동 경유)으로 전환한 뒤 재시도하세요.";
-        return null;
+        var need = RequiredMode(wallCode, home3Taught);
+        if (need == mode) return null;
+        var via = need == PoseMode.Home2 && mode == PoseMode.Home ? "(작업 준비·홈 위치_1.5·1.6 자동 경유)"
+            : need == PoseMode.Home && mode == PoseMode.Home2 ? "(홈 위치_1.6·1.5·작업 준비 자동 경유)"
+            : "";
+        return $"수동 자세 전환 필요 — {wallCode ?? "일반"} 면은 {BaseNameOf(need)} 자세에서만 검사합니다. " +
+               $"현재 {BaseNameOf(mode)} 자세입니다. Teaching에서 {BaseNameOf(need)} '이동'{via}으로 전환한 뒤 재시도하세요.";
     }
 
     /// <summary>활성 좌표계 정규화 + 자세 모드 확인 + 진입 경유점 이동. 모드가 작업 면과 맞지 않으면 움직이지 않고
@@ -170,23 +227,25 @@ internal static class SequenceEntry
 
         var cur = await cobot.Rpc.GetActualJointPosAsync(ct: ct);
         var mode = ResolveMode(cur, context);
-        if (ModeMismatch(mode, context.WallCode) is { } mismatch)
+        if (ModeMismatch(mode, context.WallCode, Home3Taught(context)) is { } mismatch)
         {
             logger.LogWarning("진입 준비 중단: {Msg}", mismatch);
             return (false, mismatch);
         }
         RememberMode(mode);   // 이 모드로 검사를 시작한다 — 도중에 멈춰도 복귀는 이 모드의 기준 자세로
 
-        if (mode == PoseMode.Home2)
+        if (mode != PoseMode.Home)
         {
-            Volatile.Write(ref _lastUpperWall, context.WallCode);   // 이후 면 정보 없는 복귀가 이 면 슬롯만 거슬러 가도록
+            Volatile.Write(ref _lastModeWall, context.WallCode);   // 이후 면 정보 없는 복귀가 이 면 슬롯만 거슬러 가도록
+            var baseKey = BaseKeyOf(mode);
+            var baseName = BaseNameOf(mode);
             var slotKey = TeachingService.WallSlotKey(context.WallCode!);
-            if (IsAt(cur, context, slotKey) || IsAt(cur, context, Home2Key) && TaughtJoints(context, slotKey) is null)
+            if (IsAt(cur, context, slotKey) || IsAt(cur, context, baseKey) && TaughtJoints(context, slotKey) is null)
             {
-                logger.LogInformation("진입 준비: 이미 홈 위치_2 모드 경유점 — 복귀 왕복 생략");
-                return (true, $" {frames}, (홈 위치_2 모드, 이미 경유점).");
+                logger.LogInformation("진입 준비: 이미 {Base} 모드 경유점 — 복귀 왕복 생략", baseName);
+                return (true, $" {frames}, ({baseName} 모드, 이미 경유점).");
             }
-            var parts2 = new List<string> { frames, "홈 위치_2 모드" };
+            var parts2 = new List<string> { frames, $"{baseName} 모드" };
             parts2.AddRange(await ReturnToBaseAsync(cobot, context, logger, ct));
             if (TaughtJoints(context, slotKey) is not null)
             {
@@ -225,15 +284,15 @@ internal static class SequenceEntry
         var done = new List<string>();
         var cur = await cobot.Rpc.GetActualJointPosAsync(ct: ct);
         var mode = ResolveMode(cur, ctx);
-        var baseKey = mode == PoseMode.Home2 ? Home2Key : "home";
+        var baseKey = BaseKeyOf(mode);
         if (IsAt(cur, ctx, baseKey))
         {
             ApproachPathMemory.Clear();
             return done;
         }
 
-        var onWaypoint = IsAt(cur, ctx, "ready") || IsAt(cur, ctx, Home2Key)
-                         || UpperSlotKeys().Any(k => IsAt(cur, ctx, k));
+        var onWaypoint = IsAt(cur, ctx, "ready")
+                         || SideModes.Any(m => IsAt(cur, ctx, BaseKeyOf(m)) || SlotKeysOf(m).Any(k => IsAt(cur, ctx, k)));
         if (!onWaypoint && RouteSegmentOf(cur, ctx, mode) is { } route)
         {
             // 경유점 사이를 오가다 멈춘 자세 — 벽 앞이 아니므로 후퇴하지 않고 그 경로를 따라 경유점으로 돌아간다.
@@ -256,17 +315,17 @@ internal static class SequenceEntry
             }
         }
 
-        if (mode == PoseMode.Home2)
+        if (mode != PoseMode.Home)
         {
-            if (UpperViaSlot(cur, ctx, LastUpperWall) is { } slot)
+            if (ModeViaSlot(cur, ctx, mode, LastModeWall) is { } slot)
             {
                 await MoveJToTaughtAsync(cobot, ctx, slot.Key, $"검사 준비({slot.Code})", ct);
                 done.Add($"검사 준비({slot.Code}) 경유");
             }
-            await MoveJToTaughtAsync(cobot, ctx, Home2Key, "홈 위치_2", ct);
-            done.Add("홈 위치_2 복귀");
+            await MoveJToTaughtAsync(cobot, ctx, baseKey, BaseNameOf(mode), ct);
+            done.Add($"{BaseNameOf(mode)} 복귀");
             ApproachPathMemory.Clear();
-            logger.LogInformation("기준 자세 복귀(홈 위치_2 모드): {Route}", string.Join(" → ", done));
+            logger.LogInformation("기준 자세 복귀({Base} 모드): {Route}", BaseNameOf(mode), string.Join(" → ", done));
             return done;
         }
 
@@ -396,14 +455,15 @@ internal static class SequenceEntry
             : $"법선 후퇴 → 후퇴 평면 {plan.InPlaneMm:0}mm 역주행(진입점)";
     }
 
-    private static IEnumerable<string> UpperSlotKeys()
-        => WallCodes.All.Where(w => IsUpperRoute(w.Code)).Select(w => TeachingService.WallSlotKey(w.Code));
+    /// <summary>모드(홈 위치_2·_3)에 속한 면들의 검사 준비 슬롯 키. 홈 모드는 없다(ready 를 쓴다).</summary>
+    private static IEnumerable<string> SlotKeysOf(PoseMode mode)
+        => WallCodes.All.Where(w => BelongsTo(mode, w.Code)).Select(w => TeachingService.WallSlotKey(w.Code));
 
-    private static string? _lastUpperWall;
+    private static string? _lastModeWall;
 
-    /// <summary>마지막으로 홈 위치_2 모드로 진입한 상부 면(T/PU/SU) — 면 정보 없이 호출되는 복귀(주행 전 복귀 등)가
+    /// <summary>마지막으로 홈 위치_2·_3 모드로 진입한 면 — 면 정보 없이 호출되는 복귀(주행 전 복귀 등)가
     /// 그 면의 검사 준비 슬롯을 거슬러 가도록 기억한다. 다른 면의 슬롯을 빌려 쓰지 않기 위함.</summary>
-    internal static string? LastUpperWall => Volatile.Read(ref _lastUpperWall);
+    internal static string? LastModeWall => Volatile.Read(ref _lastModeWall);
 
     /// <summary>홈 2 모드 복귀 때 경유할 상부 면 검사 준비 슬롯 — 진입 경로(홈 2 → 검사 준비 → 접근점)를 거슬러 간다.
     /// 면은 context 의 wall_code(상부 면일 때), 없으면(주행 전 복귀) 마지막으로 진입한 상부 면(<paramref name="lastUpperWall"/>).
@@ -411,16 +471,20 @@ internal static class SequenceEntry
     /// (2026-11-06 현장: PU 시험 뒤 주행 전 복귀가 가장 가까운 검사 준비 T 를 경유). 면을 모르면 경유 없이 홈 2.
     /// 그 슬롯이 홈 2 보다 가까울 때만 경유한다 — 이미 홈 2 근처면 바로 홈 2 로 간다.</summary>
     internal static (string Key, string Code)? UpperViaSlot(double[] cur, SequenceContext ctx, string? lastUpperWall = null)
+        => ModeViaSlot(cur, ctx, PoseMode.Home2, lastUpperWall);
+
+    /// <summary><see cref="UpperViaSlot"/> 의 일반형 — 홈 위치_2(상부 면)·홈 위치_3(하부 면) 모드 복귀 때 경유할 검사 준비 슬롯.</summary>
+    internal static (string Key, string Code)? ModeViaSlot(double[] cur, SequenceContext ctx, PoseMode mode, string? lastWall = null)
     {
-        if (TaughtJoints(ctx, Home2Key) is not { } home2) return null;
-        var code = IsUpperRoute(ctx.WallCode) ? ctx.WallCode!
-            : IsUpperRoute(lastUpperWall) ? lastUpperWall!
+        if (mode == PoseMode.Home || TaughtJoints(ctx, BaseKeyOf(mode)) is not { } baseJ) return null;
+        var code = BelongsTo(mode, ctx.WallCode) ? ctx.WallCode!
+            : BelongsTo(mode, lastWall) ? lastWall!
             : null;
         if (code is null) return null;
 
         var key = TeachingService.WallSlotKey(code);
         if (TaughtJoints(ctx, key) is not { } j) return null;
-        return JointDistance(cur, j) < JointDistance(cur, home2) ? (key, code) : null;
+        return JointDistance(cur, j) < JointDistance(cur, baseJ) ? (key, code) : null;
     }
 
     /// <summary>
@@ -462,10 +526,10 @@ internal static class SequenceEntry
                 ? "홈 ↔ 작업 준비 위치"
                 : null;
 
-        if (TaughtJoints(ctx, Home2Key) is not { } home2) return null;
-        foreach (var key in UpperSlotKeys())
-            if (TaughtJoints(ctx, key) is { } slot && JointSegmentDeviation(cur, home2, slot) <= RouteToleranceDeg)
-                return "홈 위치_2 ↔ 상부 면 검사 준비";
+        if (TaughtJoints(ctx, BaseKeyOf(mode)) is not { } baseJ) return null;
+        foreach (var key in SlotKeysOf(mode))
+            if (TaughtJoints(ctx, key) is { } slot && JointSegmentDeviation(cur, baseJ, slot) <= RouteToleranceDeg)
+                return $"{BaseNameOf(mode)} ↔ {(mode == PoseMode.Home2 ? "상부" : "하부")} 면 검사 준비";
         return null;
     }
 
@@ -540,8 +604,8 @@ internal static class SequenceEntry
     internal static bool IsAtBaseHome(double[] cur, SequenceContext ctx, out string baseKey, out string baseName)
     {
         var mode = ResolveMode(cur, ctx);
-        baseKey = mode == PoseMode.Home2 ? Home2Key : "home";
-        baseName = mode == PoseMode.Home2 ? "홈 위치_2" : "홈 위치";
+        baseKey = BaseKeyOf(mode);
+        baseName = BaseNameOf(mode);
         return IsAt(cur, ctx, baseKey);
     }
 
