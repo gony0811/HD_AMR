@@ -45,8 +45,9 @@ public class ReachMapService
         {
             var start = SequenceEntry.IsUpperRoute(code)
                 ? Joints(TeachingService.WallSlotKey(code)) ?? Joints(SequenceEntry.Home2Key)
-                : SequenceEntry.IsLowerRoute(code) && Joints(SequenceEntry.Home3Key) is { } home3
-                    ? Joints(TeachingService.WallSlotKey(code)) ?? home3
+                : SequenceEntry.IsLowerRoute(code)
+                  && ((code == "B" ? Joints(SequenceEntry.Home4Key) : null) ?? Joints(SequenceEntry.Home3Key)) is { } lowHome
+                    ? Joints(TeachingService.WallSlotKey(code)) ?? lowHome
                     : Joints("ready");
             if (start is not null) result[code] = start;
             else _logger.LogWarning("리치 맵: {Wall} 면의 ② 출발 자세(검사 준비/홈 위치_2/ready) 미티칭 — 가지 전환 판정 없이 계산합니다.", code);

@@ -8,8 +8,10 @@ public class TeachingHomeSlotTests
     [Fact]
     public void HomeSlots_FollowHomeInOrder()
     {
-        var keys = TeachingService.Slots.Select(s => s.Key).Take(6).ToArray();
-        Assert.Equal(new[] { "home", "home15", "home16", "home2", "home3", "ready" }, keys);
+        var keys = TeachingService.Slots.Select(s => s.Key).Take(7).ToArray();
+        Assert.Equal(new[] { "home", "home15", "home16", "home2", "home3", "home4", "ready" }, keys);
+        Assert.Equal("홈 위치_4", TeachingService.Slots[5].Name);
+        Assert.True(TeachingService.IsSeedSlot("home4"));
         Assert.Equal("홈 위치_3", TeachingService.Slots[4].Name);
         Assert.True(TeachingService.IsSeedSlot("home3"));
         Assert.Equal("홈 위치_1.5", TeachingService.Slots[1].Name);
@@ -29,7 +31,8 @@ public class TeachingHomeSlotTests
     [InlineData(" 홈 위치_2 ", "home2")]
     [InlineData("홈위치_3", "home3")]
     [InlineData("홈 위치_L0", "home3")]   // 2026-11-17 현장에서 먼저 만든 이름
-    [InlineData("홈위치_4", null)]
+    [InlineData("홈위치_4", "home4")]
+    [InlineData("홈위치_5", null)]
     [InlineData("홈 위치", null)]
     public void UserHomeSlotKey_MatchesByName(string name, string? expected)
         => Assert.Equal(expected, TeachingService.UserHomeSlotKey(name));

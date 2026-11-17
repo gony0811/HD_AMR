@@ -26,6 +26,7 @@ public class Home3PoseModeTests
     private static readonly TeachingPosition Ready = Taught("ready", 0, -80, 100, -20, 90, 0);
     private static readonly TeachingPosition Home2 = Taught("home2", 60, -100, -40, 30, 90, 0);
     private static readonly TeachingPosition Home3 = Taught("home3", -3, -21, 102, -81, 88, -180);
+    private static readonly TeachingPosition Home4 = Taught("home4", 20, -30, 110, -70, 88, -180);
     private static readonly TeachingPosition SlotB = Taught(TeachingService.WallSlotKey("B"), -10, -30, 110, -80, 88, -180);
 
     [Theory]
@@ -99,5 +100,47 @@ public class Home3PoseModeTests
         Assert.Equal("B", ModeViaSlot(nearB, Ctx("B", Home, Home3, SlotB), PoseMode.Home3)?.Code);
         Assert.Null(ModeViaSlot(nearB, Ctx("SL", Home, Home3, SlotB), PoseMode.Home3));   // 다른 면 슬롯은 빌리지 않는다
         Assert.Null(ModeViaSlot(nearB, Ctx("B", Home, Home3), PoseMode.Home3));           // 슬롯 미티칭 → 바로 홈 3
+    }
+
+    // 2026-11-17 — 홈 위치_4 가 티칭되면 바닥(B)만 홈 위치_4, 하부 챔퍼(PL/SL)는 홈 위치_3.
+    [Theory]
+    [InlineData("B", true, true, "Home4")]
+    [InlineData("PL", true, true, "Home3")]
+    [InlineData("SL", true, true, "Home3")]
+    [InlineData("B", true, false, "Home3")]    // 홈 위치_4 미티칭 → 종전 홈 위치_3
+    [InlineData("B", false, true, "Home4")]
+    [InlineData("PL", false, true, "Home")]
+    [InlineData("F", true, true, "Home")]
+    [InlineData("T", true, true, "Home2")]
+    public void RequiredMode_홈4(string wall, bool h3, bool h4, string expected)
+        => Assert.Equal(Enum.Parse<PoseMode>(expected), RequiredMode(wall, h3, h4));
+
+    [Fact]
+    public void 바닥은_홈4_자세에서만_하부챔퍼는_홈3에서만()
+    {
+        Assert.Null(ModeMismatch(PoseMode.Home4, "B", home3Taught: true, home4Taught: true));
+        Assert.Contains("홈 위치_4", ModeMismatch(PoseMode.Home3, "B", home3Taught: true, home4Taught: true));
+        Assert.Contains("홈 위치_3", ModeMismatch(PoseMode.Home4, "PL", home3Taught: true, home4Taught: true));
+        Assert.Null(ModeMismatch(PoseMode.Home3, "SL", home3Taught: true, home4Taught: true));
+    }
+
+    [Fact]
+    public void 홈4_자세면_Home4_모드와_기준_자세()
+    {
+        var ctx = Ctx("B", Home, Ready, Home3, Home4);
+        var at4 = new double[] { 20, -30, 110, -70, 88, -180 };
+        Assert.Equal(PoseMode.Home4, ModeOf(at4, ctx));
+        Assert.True(IsAtBaseHome(at4, ctx, out var key, out var name));
+        Assert.Equal("home4", key);
+        Assert.Equal("홈 위치_4", name);
+        Assert.True(ValidateRoute(Ctx("B", Home, Home4)).IsValid);
+    }
+
+    [Fact]
+    public void 홈4가_있으면_바닥_슬롯은_홈4_경유점()
+    {
+        var nearB = new double[] { -9, -29, 109, -80, 88, -180 };
+        Assert.Equal("B", ModeViaSlot(nearB, Ctx("B", Home, Home3, Home4, SlotB), PoseMode.Home4)?.Code);
+        Assert.Null(ModeViaSlot(nearB, Ctx("B", Home, Home3, Home4, SlotB), PoseMode.Home3));
     }
 }

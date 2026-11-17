@@ -99,7 +99,7 @@ public static class TeachingMove
     public const int HomeLiftHeightMm = 0;
 
     /// <summary>도착 후 리프트를 <see cref="HomeLiftHeightMm"/> 로 내리는 위치(홈 위치·홈 위치_2).</summary>
-    public static bool LowersLiftOnArrival(TeachingPosition target) => target.Key is "home" or "home2" or "home3";
+    public static bool LowersLiftOnArrival(TeachingPosition target) => target.Key is "home" or "home2" or "home3" or "home4";
 
     /// <summary>경로 이동 결과. Rc≠0 이면 <see cref="FailedAt"/> 에서 실패, <see cref="Error"/> 가 있으면 움직이지 않았다.
     /// <see cref="Lift"/> 는 홈/홈 2 도착 후 리프트 하강 결과(대상 아니거나 코봇 이동 실패면 null).</summary>
