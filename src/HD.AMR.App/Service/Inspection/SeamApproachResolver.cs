@@ -179,7 +179,7 @@ public sealed class SeamApproachResolver
             var flangeRule = ApproachReach.AppliesTo(context.WallCode);
             reachNote = flangeRule
                 ? $" · 플랜지 뻗음 {reach.FlangeReachMm:0}mm(최소 {limits.MinFlangeReachMm:0}, 면까지 {target.NormalDistanceMm:0}mm)"
-                : $" · 플랜지 뻗음 {reach.FlangeReachMm:0}mm(천장 — 최소 뻗음 규칙 제외, 면까지 {target.NormalDistanceMm:0}mm)";
+                : $" · 플랜지 뻗음 {reach.FlangeReachMm:0}mm({context.WallCode} — 최소 뻗음 규칙 제외, 면까지 {target.NormalDistanceMm:0}mm)";
             if (!reach.Ok && flangeRule)
             {
                 // 더 물러나야 할 거리 — 현재 정차에서 벽 정면 반대로 시험 후진한 자리의 법선거리로 기울기를 잰다
@@ -256,7 +256,7 @@ public sealed class SeamApproachResolver
 
         var list = seams.Select(s => new StationAdjustSeam(
             s.Label, NormalAt(nodeXm, nodeYm, s), NormalAt(probeX, probeY, s),
-            ApproachReach.AppliesTo(s.WallCode) ? required : 0)).ToList();   // 천장은 최소 뻗음 규칙 제외 — 후진할 이유 없음
+            ApproachReach.AppliesTo(s.WallCode) ? required : 0)).ToList();   // 천장·바닥은 최소 뻗음 규칙 제외 — 후진할 이유 없음
         return (list, null);
 
         static async Task<double> paramGetDoubleOrZeroAsync(ParameterService p, string key)
