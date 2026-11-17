@@ -415,7 +415,7 @@ public class InspectionRunStep : ISequenceStep
             if (h != rawH)
                 _logger.LogInformation("[검사 수행] 경유점 #{Idx} 촬영 높이 {Raw}mm → {H}mm 로 올려 전송(비전은 음수 높이를 받지 않음)",
                     i + 1, rawH, h);
-            captureSeq++;
+            captureSeq = context.CaptureSeqSource?.Invoke() is { } nextSeq ? nextSeq : (ushort)(captureSeq + 1);
             var data = CaptureReqPayload.Build(surfaceType, wallId, u, v, h, taskId, attempt, captureSeq);
             var outcome = await _vision.Client.RequestCaptureAsync(data, visionTimeout, ct);
             visByIndex[i] = outcome.Success;

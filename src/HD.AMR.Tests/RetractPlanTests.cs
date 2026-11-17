@@ -57,6 +57,19 @@ public class RetractPlanTests
         Assert.NotNull(plan.Blocker);
     }
 
+    [Theory]
+    [InlineData(-1680.5, -167.9, -209.5, -165.4, 87.8, -168.1)]   // 2026-11-16 15:30 L3-R01C15#6 — z −209→−220mm 로 막혔던 자세
+    [InlineData(-1108.3, -146.2, -544.4, -118.8, 89.6, -119.2)]   // 2026-11-15 12:06 — z −544→−546mm 로 막혔던 자세
+    public void 낮은_옆벽에서_거의_수평으로_물러나면_막지_않는다(double x, double y, double z, double rx, double ry, double rz)
+    {
+        var plan = SequenceEntry.PlanRetract(new[] { x, y, z, rx, ry, rz });
+
+        Assert.False(plan.Horizontal);
+        Assert.True(plan.EndTcp[2] < SequenceEntry.RetractMinDescendEndZMm);           // 끝점은 최저 높이 아래지만
+        Assert.True(z - plan.EndTcp[2] < SequenceEntry.RetractMinBlockingDescentMm);   // 하강이 작아 팔이 접히지 않는다
+        Assert.Null(plan.Blocker);
+    }
+
     [Fact]
     public void 연직으로_내려가도_끝점이_충분히_높으면_허용()
     {

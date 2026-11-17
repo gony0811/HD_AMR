@@ -38,6 +38,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
     private readonly ILogger<WeldInspectionOrchestrator> _logger;
 
     private readonly object _sync = new();
+    /// <summary>코봇 이동 시험으로 도달한 용접선의 taskId·attempt — 수동 촬영 화면이 비전에 싣는다(없으면 보관하지 않음).</summary>
+    private readonly AcsTestCaptureTarget? _testTarget;
     private (string OrderId, string AnchorGroupId, InspectionMoveDirection Direction, string? WallCode)? _lastAnchor;   // wall_code 포함 — 꺾인 용접선(벽→챔퍼)이 같은 그룹·방향이어도 다른 면 프레임을 재사용하지 않는다
     private double[]? _lastInternalWorkpieceFrame;                 // 같은 anchor에서 재사용할 BASE 기준 내부 프레임
     private (double[] Start, double[] End)? _lastAnchorSeamW;     // 그 프레임을 쓴 task 의 용접선(맵) — 꺾인 용접선이 같은 프레임을 물려받지 않게
@@ -100,9 +102,11 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         IOptions<Vda5050AdapterSettings> vdaSettings,
         OperationLogService opLog,
         SequenceRunGate runGate,
-        ILogger<WeldInspectionOrchestrator> logger)
+        ILogger<WeldInspectionOrchestrator> logger,
+        AcsTestCaptureTarget? testTarget = null)
     {
         _vdaSettings = vdaSettings.Value;
+        _testTarget = testTarget;
         _opLog = opLog;
         _runGate = runGate;
         _scopeFactory = scopeFactory;
@@ -140,6 +144,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
     private async Task<InspectionActionResult> ExecuteMoveToSeamStartCoreAsync(VdaAction action, string orderId,
         double? nodeThetaRad, CancellationToken ct)
     {
+        // 새 시험 — 이전 시험 용접선의 taskId 로 수동 촬영되지 않게 먼저 비운다(도달하면 다시 채운다)
+        _testTarget?.Clear();
         if (!WeldInspectionActionParser.TryParseSeamStart(action, out var request, out var parseError))
             return InspectionActionResult.Fail("orderValidationError", $"파라미터 해석 실패: {parseError}");
         var req = request!;
@@ -258,7 +264,16 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                         $"측정 오류: {ex.Message}", orderId);
                     aruco = $"태그 측정 오류({ex.Message})";
                 }
-                return InspectionActionResult.Ok($"reached — {stepMsg}{j5} · {aruco}");
+                // 수동 촬영용 taskId·attempt 보관 — ACS 가 둘 다 실어 보낸 경우만(구버전 ACS 면 종전처럼 빈 taskId 로 수동 촬영)
+                var capture = "";
+                if (_testTarget is not null && req.TaskId is { } tid && req.Attempt is { } att)
+                {
+                    _testTarget.Set(tid, att, req.JobRef, req.DrawingPos.WallCode);
+                    capture = $" · 수동 촬영 task={tid} attempt={att}";
+                    _opLog.Log(OperationLogService.SourceAcs, OpCategory.Action, "시험 용접선 수동 촬영 준비", true,
+                        $"jobRef={req.JobRef}, wall={req.DrawingPos.WallCode}, taskId={tid}, attempt={att} — 검사 프로필·시퀀스 화면 수동 촬영에 싣는다", orderId);
+                }
+                return InspectionActionResult.Ok($"reached — {stepMsg}{j5} · {aruco}{capture}");
         }
     }
 
@@ -448,6 +463,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
     private async Task<InspectionActionResult> ExecuteCoreAsync(VdaAction action, string orderId, double? nodeThetaRad,
                                                                 bool isLastInspection, CancellationToken ct)
     {
+        // 본검사가 시작되면 코봇이 다른 자세로 옮겨 가므로 시험 용접선 보관을 해제한다
+        _testTarget?.Clear();
         // 1) 파싱 — 실패는 계약 위반(orderValidationError).
         if (!WeldInspectionActionParser.TryParse(action, out var request, out var parseError))
             return InspectionActionResult.Fail("orderValidationError", $"파라미터 해석 실패: {parseError}");
@@ -483,6 +500,17 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         var db = scope.ServiceProvider.GetRequiredService<HdAmrDbContext>();
         var sequence = scope.ServiceProvider.GetRequiredService<SequenceService>();
         var param = scope.ServiceProvider.GetRequiredService<ParameterService>();
+
+        // 좌/우를 밝히지 않은 십자("CROSS4")는 레시피에 설정한 면별 기본값(L 또는 R)으로 고른다.
+        if (req.SeamType == SeamTypeKind.Cross)
+        {
+            var rightWalls = InspectionRecipeResolver.ParseWallList(
+                (await recipeService.GetAsync(RecipeIds.Cross4R, ct))?.UnspecifiedSideWalls);
+            recipeId = InspectionRecipeResolver.ResolveRecipeId(req.SeamType, req.DrawingPos.WallCode, rightWalls);
+            _logger.LogInformation(
+                "seamType CROSS4(좌/우 미지정) — wall={Wall} 면별 기본값으로 recipe={Recipe} 선택 (jobRef={JobRef})",
+                req.DrawingPos.WallCode, recipeId, req.JobRef);
+        }
 
         // 5) 레시피 로드 + Enabled 게이트 — 매핑은 됐지만 실행 미구현이면 inspectionFailed(실행 불가, §8.5.1 (4)).
         var recipe = await recipeService.GetAsync(recipeId!, ct);
@@ -615,6 +643,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             }
 
             BundleAssignment? bundle = null;
+            var bundleEndWd = false;   // 묶음 마지막 팔로워 — 공통 좌표계를 연장해 쓰므로 끝점 WD 로 기울기를 다시 잡는다
             lock (_sync) _bundleByAction.TryGetValue(action.ActionId, out bundle);
             if (bundle?.Role == BundleRole.Follower)
             {
@@ -670,7 +699,10 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                     cachedInternalFrame = (double[])shared.Frame.Clone();
                     cachedAnchorStartBase = shared.Start?.ToArray();
                     cachedAnchorEndTcp = shared.EndTcp?.ToArray();
-                    _logger.LogInformation("묶음 {Id} 공통 좌표계 — {Job} 교시 생략", bundle.BundleId, req.JobRef);
+                    lock (_sync)
+                        bundleEndWd = _bundleOrder.LastOrDefault(a => a.BundleId == bundle.BundleId)?.ActionId == action.ActionId;
+                    _logger.LogInformation("묶음 {Id} 공통 좌표계 — {Job} 교시 생략{Last}", bundle.BundleId, req.JobRef,
+                        bundleEndWd ? " (묶음 마지막 — 끝점 WD 확인)" : "");
                 }
             }
 
@@ -689,6 +721,9 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
 
             var stepKeys = SelectStepKeys(recipe.DryRun, recipeKeys,
                 sequence.Steps.Select(st => st.Key), anchorHit, isLastInspection);
+            if (bundleEndWd && !recipe.DryRun && stepKeys.Contains("inspectionRun")
+                && sequence.Steps.Any(st => st.Key == Sequence.Steps.BundleEndWdStep.StepKey))
+                stepKeys = stepKeys.Append(Sequence.Steps.BundleEndWdStep.StepKey).ToArray();
 
             if (stepKeys.Length == 0)
                 return InspectionActionResult.Fail("inspectionFailed",
@@ -781,6 +816,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                     req.JobRef);
             if (cachedInternalFrame is not null)
                 context.Bag[InternalWorkpieceFrame.BagKey] = cachedInternalFrame;
+            if (bundleEndWd)
+                context.Bag[Sequence.Steps.BundleEndWdStep.RequestBagKey] = true;
             // ②가 캐시 프레임을 이번 시작점으로 평행 이동하고(없으면 실패), 직전 종료 자세 그대로면 복귀 없이 연속 이동한다.
             if (cachedAnchorStartBase is not null)
                 context.Bag[CobotInspectionMoveStep.AnchorStartBaseBagKey] = cachedAnchorStartBase;
@@ -1126,6 +1163,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         return baseSteps
             // ① AMR 위치 이동은 페이지 테스트 전용 — ACS 경로의 주행은 order 실행기가 이미 마쳤다.
             .Where(k => k != Sequence.Steps.AmrMoveStep.StepKey)
+            // 묶음 마지막 끝 WD 확인은 오케스트레이터가 해당 TASK 에만 붙인다.
+            .Where(k => k != Sequence.Steps.BundleEndWdStep.StepKey)
             .Where(k => !(anchorHit && AlignmentStepKeys.Contains(k)))
             .Where(k => isLastInspection || k != HomeStepKey)
             .ToArray();

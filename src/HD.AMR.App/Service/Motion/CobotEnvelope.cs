@@ -15,8 +15,8 @@ namespace HD.AMR.App.Service.Motion;
 /// </summary>
 public sealed record CobotEnvelope
 {
-    /// <summary>차체 바닥 → 코봇 BASE 면 높이(스트로크 0) [mm].</summary>
-    public double BaseHeightMm { get; init; } = 1635;
+    /// <summary>차체 바닥 → 코봇 BASE 면 높이(스트로크 0) [mm]. 현장 값은 파라미터 <see cref="BaseHeightKey"/>.</summary>
+    public double BaseHeightMm { get; init; } = DefaultBaseHeightMm;
 
     public double AmrFrontMm { get; init; } = 395;
     public double AmrRearMm { get; init; } = 365;
@@ -53,7 +53,29 @@ public sealed record CobotEnvelope
         ("검사 툴(몸체)", 0.0, 293.0, 169.0),
     };
 
-    public static CobotEnvelope Default { get; } = new();
+    /// <summary>지금 쓰는 외곽 — 기본 치수에 파라미터 <see cref="BaseHeightKey"/> 를 반영한 값(<see cref="ApplyBaseHeight"/>).</summary>
+    public static CobotEnvelope Default { get; private set; } = new();
+
+    /// <summary>차체 바닥(바퀴 닿는 면) → 코봇 BASE 장착면 높이 [mm] 파라미터 키. 리프트를 떼고 받침에 직접 올리면 바뀐다
+    /// (2026-11-17 리프트 탈거: 927mm). 비거나 범위 밖이면 기본 <see cref="DefaultBaseHeightMm"/>.</summary>
+    public const string BaseHeightKey = "cobot.baseHeightMm";
+
+    /// <summary>리프트(CTD-LF144) 장착 시 STEP 실측 높이 [mm].</summary>
+    public const double DefaultBaseHeightMm = 1635;
+
+    /// <summary>허용 범위 [mm] — 차체 윗면(<see cref="AmrHeightMm"/>) 아래이거나 지나치게 높으면 설정 실수로 본다.</summary>
+    public const double MinBaseHeightMm = 800, MaxBaseHeightMm = 2500;
+
+    /// <summary>파라미터 문자열을 읽어 <see cref="Default"/> 의 BASE 높이를 바꾼다(기동·저장·삭제 때).
+    /// 비거나 숫자가 아니거나 범위 밖이면 기본값을 쓰고 false.</summary>
+    public static bool ApplyBaseHeight(string? raw)
+    {
+        var ok = double.TryParse(raw, System.Globalization.NumberStyles.Float,
+                     System.Globalization.CultureInfo.InvariantCulture, out var v)
+                 && double.IsFinite(v) && v is >= MinBaseHeightMm and <= MaxBaseHeightMm;
+        Default = new CobotEnvelope { BaseHeightMm = ok ? v : DefaultBaseHeightMm };
+        return ok || string.IsNullOrWhiteSpace(raw);
+    }
 
     /// <summary>
     /// 관절각 한 벌의 자기 간섭 여유 — 팔 부품마다 차체·신호탑·기둥까지 최단거리 − 반경의 최소 [mm].

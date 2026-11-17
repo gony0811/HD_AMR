@@ -213,12 +213,16 @@ public class DrawingService
     {
         var profile = await _db.InspectionProfiles.FirstOrDefaultAsync(p => p.Id == id, ct);
         if (profile == null) return new();
-        var recipes = await _db.InspectionRecipes
-            .Where(r => r.InspectionProfileId == id || r.ChamferSlopeProfileId == id).ToListAsync(ct);
+        // 면별 프로필 지정(WallProfilesJson)은 JSON 이라 SQL 로 거르지 않고 읽어서 본다(레시피는 9행뿐).
+        var recipes = (await _db.InspectionRecipes.ToListAsync(ct)).Where(r => UsesProfile(r, id)).ToList();
         foreach (var r in recipes)
         {
             if (r.InspectionProfileId == id) r.InspectionProfileId = null;
             if (r.ChamferSlopeProfileId == id) r.ChamferSlopeProfileId = null;
+            var wallProfiles = Inspection.InspectionRecipeResolver.ParseWallProfiles(r.WallProfilesJson);
+            if (wallProfiles.ContainsValue(id))
+                r.WallProfilesJson = Inspection.InspectionRecipeResolver.SerializeWallProfiles(
+                    wallProfiles.Where(kv => kv.Value != id).ToDictionary(kv => kv.Key, kv => kv.Value));
             r.UpdatedAt = DateTime.UtcNow;
         }
         _db.InspectionProfiles.Remove(profile);
@@ -228,9 +232,12 @@ public class DrawingService
     }
 
     /// <summary>이 프로필을 실행 프로필로 지정한 검사 레시피 id 목록.</summary>
-    public Task<List<string>> ListRecipesUsingProfileAsync(int id, CancellationToken ct = default) =>
-        _db.InspectionRecipes.AsNoTracking().Where(r => r.InspectionProfileId == id || r.ChamferSlopeProfileId == id)
-            .OrderBy(r => r.Id).Select(r => r.Id).ToListAsync(ct);
+    public async Task<List<string>> ListRecipesUsingProfileAsync(int id, CancellationToken ct = default) =>
+        (await _db.InspectionRecipes.AsNoTracking().OrderBy(r => r.Id).ToListAsync(ct))
+            .Where(r => UsesProfile(r, id)).Select(r => r.Id).ToList();
+
+    private static bool UsesProfile(InspectionRecipe r, int profileId) =>
+        Inspection.InspectionRecipeResolver.UsesProfile(r, profileId);
 
     public List<LineSegment> GetLines(Drawing drawing)
     {

@@ -86,13 +86,38 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
     private CancellationTokenSource? _runCts;
 
     public InspectionPointsViewModel(IServiceScopeFactory scopeFactory, CobotService cobot,
-        VisionInterfaceService vision)
+        VisionInterfaceService vision, AcsTestCaptureTarget? testTarget = null)
     {
         _scopeFactory = scopeFactory;
         _cobot = cobot;
         _vision = vision;
+        _testTarget = testTarget;
         RebuildWallOptions();
+        if (_testTarget is not null)
+        {
+            _testTarget.Changed += t => Avalonia.Threading.Dispatcher.UIThread.Post(() => ShowTestTarget(t));
+            ShowTestTarget(_testTarget.Current);
+        }
     }
+
+    private readonly AcsTestCaptureTarget? _testTarget;
+
+    /// <summary>ACS 코봇 이동 시험으로 도달한 용접선의 taskId·attempt 를 수동 촬영(CAPTURE_REQ)에 싣는다 — 시험 도달 때 자동으로 켜진다.</summary>
+    [ObservableProperty] private bool _useAcsTestTask;
+    /// <summary>보관 중인 시험 용접선 표기(없으면 null — 체크 숨김).</summary>
+    [ObservableProperty] private string? _acsTestTaskText;
+    public bool HasAcsTestTask => AcsTestTaskText is not null;
+    partial void OnAcsTestTaskTextChanged(string? value) => OnPropertyChanged(nameof(HasAcsTestTask));
+
+    private void ShowTestTarget(AcsTestCaptureTarget.Target? t)
+    {
+        AcsTestTaskText = t?.Describe();
+        UseAcsTestTask = t is not null;
+    }
+
+    /// <summary>수동 촬영 식별자 — 시험 용접선을 쓰면 그 taskId·attempt·이어지는 captureSeq, 아니면 (빈 taskId, 1, 화면 발번).</summary>
+    private (Guid TaskId, byte Attempt, ushort Seq) CaptureIds(Func<ushort> fallbackSeq) =>
+        _testTarget?.IdsForManualCapture(UseAcsTestTask, fallbackSeq) ?? (Guid.Empty, (byte)1, fallbackSeq());
 
     public override async void OnActivated()
     {
@@ -240,9 +265,9 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
             var wallId = (ushort)Math.Clamp(WallId, 1, 10);
             var (u, v, rawH) = FaceLocalMapper.ToFaceLocal(wallId, p.X, p.Y, p.Z);
             var h = FaceLocalMapper.CaptureHeight(rawH);   // 비전은 음수 높이를 받지 않는다
-            _manualCaptureSeq++;
+            var (tid, att, seq) = CaptureIds(() => ++_manualCaptureSeq);
             var data = CaptureReqPayload.Build(SurfaceTypes.OrFlat(p.Surface), wallId,
-                u, v, h, Guid.Empty, attempt: 1, _manualCaptureSeq);
+                u, v, h, tid, att, seq);
             var timeout = TimeSpan.FromSeconds(Math.Max(.5, VisionTimeoutSec));
             RunErr = false; RunMsg = $"#{Selected + 1} CAPTURE_REQ 전송...";
             var outcome = await _vision.Client.RequestCaptureAsync(data, timeout);
@@ -286,9 +311,9 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
                 var wallId = (ushort)Math.Clamp(WallId, 1, 10);
                 var (u, v, rawH) = FaceLocalMapper.ToFaceLocal(wallId, p.X, p.Y, p.Z);
                 var h = FaceLocalMapper.CaptureHeight(rawH);   // 비전은 음수 높이를 받지 않는다
-                captureSeq++;
+                var (tid, att, seq) = CaptureIds(() => ++captureSeq);
                 var data = CaptureReqPayload.Build(SurfaceTypes.OrFlat(p.Surface), wallId,
-                    u, v, h, Guid.Empty, attempt: 1, captureSeq);
+                    u, v, h, tid, att, seq);
                 var outcome = await _vision.Client.RequestCaptureAsync(data, timeout, ct);
                 if (outcome.Success)
                 {

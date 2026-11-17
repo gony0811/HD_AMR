@@ -59,7 +59,9 @@
                 <th>CROSS3 90°</th>
                 <th>CROSS3 180°</th>
                 <th>CROSS3 270°</th>
-                <th>CROSS4</th>
+                <th>CROSS4 좌</th>
+                <th>CROSS4 우</th>
+                <th title="ACS 가 좌/우 없이 CROSS4 만 보낸 십자에 쓰는 면별 기본값">CROSS4 미지정</th>
                 <th>CORNER2</th>
                 <th>CORNER3</th>
             </tr>
@@ -75,6 +77,8 @@
                     <td>@RecipeCell(SeamTypeKind.Cross3R90, w.Code)</td>
                     <td>@RecipeCell(SeamTypeKind.Cross3R180, w.Code)</td>
                     <td>@RecipeCell(SeamTypeKind.Cross3R270, w.Code)</td>
+                    <td>@RecipeCell(SeamTypeKind.Cross4L, w.Code)</td>
+                    <td>@RecipeCell(SeamTypeKind.Cross4R, w.Code)</td>
                     <td>@RecipeCell(SeamTypeKind.Cross, w.Code)</td>
                     <td>@RecipeCell(SeamTypeKind.Corner2, w.Code)</td>
                     <td>@RecipeCell(SeamTypeKind.Corner, w.Code)</td>
@@ -243,14 +247,18 @@
 
     /// <summary>이 프로필을 지정한 레시피 id 목록.</summary>
     private List<string> UsedBy(int profileId) =>
-        _recipes.Where(r => r.InspectionProfileId == profileId).Select(r => r.Id).ToList();
+        _recipes.Where(r => InspectionRecipeResolver.UsesProfile(r, profileId)).Select(r => r.Id).ToList();
 
     /// <summary>매핑 레퍼런스 셀 — 레시피 id + Enabled 배지. CORNER 는 거울 side 접미사 표기.</summary>
     private RenderFragment RecipeCell(SeamTypeKind seam, string wallCode) => builder =>
     {
-        var recipeId = InspectionRecipeResolver.ResolveRecipeId(seam, wallCode);
+        var recipeId = InspectionRecipeResolver.ResolveRecipeId(seam, wallCode, InspectionRecipeResolver.Cross4RightWalls(_recipes));
         var enabled = recipeId is not null && _enabledById.TryGetValue(recipeId, out var e) && e;
         var label = recipeId ?? "—";
+        // 십자 레시피에 이 면의 프로필이 따로 지정돼 있으면 #번호로 표시
+        if (_recipes.FirstOrDefault(r => r.Id == recipeId) is { } recipe
+            && InspectionRecipeResolver.ParseWallProfiles(recipe.WallProfilesJson).TryGetValue(wallCode, out var wallProfile))
+            label += $" · #{wallProfile}";
         if (seam is SeamTypeKind.Corner or SeamTypeKind.Corner2 && recipeId is not null)
             label += $" ({InspectionRecipeResolver.ResolveCornerSide(wallCode, out _)})";
 

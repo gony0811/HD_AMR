@@ -130,6 +130,8 @@ internal static class ServiceRegistration
         // AMR 좌표 주행(REST /robot/go + 정차 대기). 자동 보정 루틴이 AMR 을 스스로 옮길 때 쓴다.
         services.AddSingleton<AmrDriveService>();
         // startWeldInspection 실행 총괄 — 싱글톤, 액션마다 scope 생성해 시퀀스 실행.
+        // 코봇 이동 시험으로 도달한 용접선의 ACS taskId·attempt — 검사 프로필·시퀀스 화면 수동 촬영이 비전에 싣는다
+        services.AddSingleton<HD.AMR.App.Service.Inspection.AcsTestCaptureTarget>();
         services.AddSingleton<HD.AMR.App.Service.Inspection.IWeldInspectionExecutor,
             HD.AMR.App.Service.Inspection.WeldInspectionOrchestrator>();
         // VDA 5050 어댑터(ACS↔AMR) — connection/state 발행 + order 실행 + instantActions. Enabled=false 면 유휴.
@@ -256,6 +258,7 @@ internal static class ServiceRegistration
         // ⑱ 검사 수행 — 일반(비전 캡처)과 드라이런(이동만) 두 변형. dryRun 이 첫 생성자 인자.
         services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<InspectionRunStep>(sp, false));
         services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<InspectionRunStep>(sp, true));
+        services.AddScoped<ISequenceStep, BundleEndWdStep>();   // 1190: 묶음 마지막 용접선 끝 WD 확인
         services.AddScoped<ISequenceStep, WObjResetStep>();
         services.AddScoped<ISequenceStep, CobotHomeReturnStep>();
         services.AddScoped<ISequenceStep, MonitorCloseStep>();

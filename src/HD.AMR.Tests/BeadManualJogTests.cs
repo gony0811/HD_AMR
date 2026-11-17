@@ -39,7 +39,8 @@ public class BeadManualJogTests
         Assert.Equal(1, BeadManualSettings.ClampJogVelPct(0));
         Assert.Equal(100, BeadManualSettings.ClampJogVelPct(250));
         Assert.Equal(0.5, BeadManualSettings.ClampJogStepMm(0));
-        Assert.Equal(100, BeadManualSettings.ClampJogStepMm(500));
+        Assert.Equal(500, BeadManualSettings.ClampJogStepMm(500));
+        Assert.Equal(500, BeadManualSettings.ClampJogStepMm(800));
     }
 
     [Fact]

@@ -107,6 +107,7 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<DeviceHealthMonito
 // AMR 장비 자체 상태 변화(모드·이동·조그·오류)를 운영 로그(출처 AMR)로 기록.
 builder.Services.AddHostedService<AmrActivityLogService>();
 // startWeldInspection 실행 총괄(2차 검사 연동) — singleton, 액션마다 scope 생성해 시퀀스 실행.
+builder.Services.AddSingleton<HD.AMR.App.Service.Inspection.AcsTestCaptureTarget>();   // 시험 용접선 taskId·attempt(수동 촬영용)
 builder.Services.AddSingleton<HD.AMR.App.Service.Inspection.IWeldInspectionExecutor,
     HD.AMR.App.Service.Inspection.WeldInspectionOrchestrator>();
 
@@ -211,6 +212,7 @@ builder.Services.AddScoped<ISequenceStep, CobotSeamEndMoveStep>();
 // ⑱ 검사 수행 — 일반(비전 캡처)과 드라이런(이동만) 두 변형. dryRun 이 첫 생성자 인자.
 builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<InspectionRunStep>(sp, false));   // 1200: inspectionRun
 builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<InspectionRunStep>(sp, true));    // 1210: inspectionRunDry
+builder.Services.AddScoped<ISequenceStep, BundleEndWdStep>();   // 1190: 묶음 마지막 용접선 끝 WD 확인
 builder.Services.AddScoped<ISequenceStep, WObjResetStep>();   // 1300: 활성 작업물 좌표계 0 복귀
 builder.Services.AddScoped<ISequenceStep, CobotHomeReturnStep>();   // 1350: 코봇 홈 복귀 (MoveJ)
 builder.Services.AddScoped<ISequenceStep, MonitorCloseStep>();   // 1400: 모니터링 창 닫기 (최종)

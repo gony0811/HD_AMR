@@ -65,4 +65,35 @@ public class MoveToSeamStartParserTests
         Assert.False(WeldInspectionActionParser.TryParseSeamStart(Parse(json), out _, out var err));
         Assert.Contains("wall_code", err);
     }
+
+    // VDA 1.21 — ACS 가 시험에도 본검사와 같은 taskId·attempt 를 params 에 싣는다(수동 촬영 때 비전에 싣는 값).
+    private static string WithParams(string prm) =>
+        Golden.Replace("]}\n", "]}").Replace("\"drawingPos\":{\"tank\":\"CT1\",\"level\":2,\"wall_code\":\"SM\",\"u\":3.120,\"v\":1.420,\"x\":3.120,\"y\":0.0,\"z\":1.420}}}]}",
+            "\"drawingPos\":{\"tank\":\"CT1\",\"level\":2,\"wall_code\":\"SM\",\"u\":3.120,\"v\":1.420,\"x\":3.120,\"y\":0.0,\"z\":1.420}}},{\"key\":\"params\",\"value\":" + prm + "}]}");
+
+    [Fact]
+    public void TaskIdAndAttempt_Parsed()
+    {
+        var json = WithParams("""{"liftStrokeMm":0,"taskId":"8e9b34ae-0625-5779-9c1d-2f0a6b3e4d51","attempt":3}""");
+        Assert.True(WeldInspectionActionParser.TryParseSeamStart(Parse(json), out var req, out var err), err);
+        Assert.Equal(Guid.Parse("8e9b34ae-0625-5779-9c1d-2f0a6b3e4d51"), req!.TaskId);
+        Assert.Equal((byte)3, req.Attempt);
+        Assert.Equal(0.0, req.LiftStrokeMm);
+
+        // 없으면 null(구버전 ACS — 종전처럼 빈 taskId 로 수동 촬영)
+        Assert.True(WeldInspectionActionParser.TryParseSeamStart(Parse(Golden), out var old, out _));
+        Assert.Null(old!.TaskId);
+        Assert.Null(old.Attempt);
+    }
+
+    [Theory]
+    [InlineData("""{"taskId":"not-a-guid"}""", "taskId")]
+    [InlineData("""{"taskId":"00000000-0000-0000-0000-000000000000"}""", "taskId")]
+    [InlineData("""{"attempt":0}""", "attempt")]
+    [InlineData("""{"attempt":256}""", "attempt")]
+    public void BadTaskIdOrAttempt_Rejected(string prm, string field)
+    {
+        Assert.False(WeldInspectionActionParser.TryParseSeamStart(Parse(WithParams(prm)), out _, out var err));
+        Assert.Contains(field, err);
+    }
 }

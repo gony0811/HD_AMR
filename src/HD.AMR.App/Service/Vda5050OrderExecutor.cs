@@ -346,6 +346,10 @@ public sealed class Vda5050OrderExecutor
         var pos = node.NodePosition!;
         try
         {
+            // 현장 좌표 오프셋(맵 X·Y, mm) — 정차 위치와 용접선 좌표를 같이 옮긴다. 주행·도착 판정·도달 사전 점검·
+            // 정차 보정·검사가 모두 이 좌표를 쓰도록 맨 먼저 반영.
+            await ApplyStationOffsetAsync(orderId, node);
+
             // 연속 TASK 묶음(같은 리프트·면·수직/수평). 도달 점검과 교시가 같은 계획을 쓴다.
             _inspection.BeginBundles(TaskBundlePlanner.Assign(node.Actions, pos.Theta));
 
@@ -406,6 +410,15 @@ public sealed class Vda5050OrderExecutor
             }
             else
             {
+                // 리프트를 올린 채 주행하지 않는다 — 앞 정차의 리프트 이동이 실패·중단되면 올라간 채 남는다
+                // (2026-11-16 17:22 R03C15 리프트 타임아웃 뒤 952mm 로 두 번 주행). 내리지 못하면 주행하지 않는다.
+                if (await EnsureLiftDownBeforeDriveAsync(orderId, ct) is { } liftFail)
+                {
+                    FailMission($"주행 전 리프트 하강 실패 — {liftFail} (리프트를 올린 채 주행하지 않도록 임무 중단, " +
+                                "리프트 상태 확인 후 수동으로 내리세요)");
+                    return;
+                }
+
                 // 1) 이동 명령 — 검사 정차는 항상 stopFlag=true (부록 D-2: false 면 각도 미보정).
                 //    주행 발생 = 정렬(anchor) 캐시 무효(사양 §8.1 — 정차점이 바뀌면 정렬 재수행).
                 _inspection.InvalidateAnchor();
@@ -702,6 +715,83 @@ public sealed class Vda5050OrderExecutor
         OpLog(OpCategory.Drive, "정차 보정 도착", true, $"{token} {arrived.Reason}", orderId);
         _logger.LogInformation("VDA5050 정차 보정: node={NodeId}, 후진 {Back}mm", node.NodeId, plan.BackwardMm);
         return new StationAdjustOutcome(token, false, plan.BackwardMm);
+    }
+
+    /// <summary>주행 전 리프트 하강 판정 허용 높이 [mm] — 이 이하면 내려간 것으로 본다.</summary>
+    internal const int LiftDownToleranceMm = 20;
+
+    /// <summary>
+    /// 주행 전 리프트를 바닥(0mm)으로 내린다. 통과하면 null, 내리지 못하면 사유.
+    /// 리프트를 쓰지 않는 운영(<see cref="TelescopicService.IsDisabled"/>)이면 건너뛴다. 미연결이면 높이를 알 수 없어 실패.
+    /// 코봇 홈 복귀(<see cref="EnsureCobotHomeBeforeDriveAsync"/>) 뒤에 부른다.
+    /// </summary>
+    private async Task<string?> EnsureLiftDownBeforeDriveAsync(string orderId, CancellationToken ct)
+    {
+        TelescopicService lift;
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            lift = scope.ServiceProvider.GetRequiredService<TelescopicService>();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "주행 전 리프트 확인 — 텔레스코픽 서비스 없음, 건너뜀");
+            return null;
+        }
+        if (lift.IsDisabled) return null;
+        if (!lift.IsConnected)
+            return "텔레스코픽 리프트 미연결 — 높이를 확인할 수 없어 주행하지 않습니다";
+
+        await lift.RefreshAsync(ct);
+        if (lift.IsAtTargetHeight(0, out var curMm, out var statusError, LiftDownToleranceMm))
+            return null;
+        if (statusError is not null)
+            return statusError;
+
+        _logger.LogInformation("주행 전 리프트 하강: 현재 {Cur}mm → 0mm", curMm);
+        OpLog(OpCategory.Drive, "주행 전 리프트 하강", null, $"현재 {curMm}mm → 0mm", orderId);
+        var r = await lift.MoveToHeightAndWaitAsync(0, ct: ct);
+        OpLog(OpCategory.Drive, "주행 전 리프트 하강", r.Ok, r.Message, orderId);
+        return r.Ok ? null : r.Message;
+    }
+
+    /// <summary>파라미터 <see cref="StationOffset.XKey"/>·<see cref="StationOffset.YKey"/>(mm)를 노드 좌표와 각 액션의
+    /// 용접선 좌표(<c>position.seamStartW/seamEndW</c>)에 더한다(제자리 수정) — AMR 과 TCP 가 함께 옮겨 간다.
+    /// 조회 실패·범위 밖은 0 — 오프셋 없이 ACS 좌표 그대로 간다.</summary>
+    private async Task ApplyStationOffsetAsync(string orderId, OrderNode node)
+    {
+        var pos = node.NodePosition!;
+        double? rawX = null, rawY = null;
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var param = scope.ServiceProvider.GetRequiredService<ParameterService>();
+            rawX = await param.GetDoubleAsync(StationOffset.XKey);
+            rawY = await param.GetDoubleAsync(StationOffset.YKey);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "정차 오프셋 파라미터 조회 실패 — 오프셋 없이 진행");
+            return;
+        }
+
+        var offX = StationOffset.Sanitize(rawX);
+        var offY = StationOffset.Sanitize(rawY);
+        if (rawX is { } rx && offX != rx || rawY is { } ry && offY != ry)
+            _logger.LogWarning("정차 오프셋 범위 밖(±{Max}mm) — 그 축은 0 으로 적용: X={RawX}, Y={RawY}",
+                StationOffset.MaxAbsMm, rawX, rawY);
+        if (offX == 0 && offY == 0) return;
+
+        var (ox, oy) = (pos.X, pos.Y);
+        (pos.X, pos.Y) = StationOffset.Apply(ox, oy, offX, offY);
+        var seams = node.Actions.Count(a => StationOffset.ShiftSeamPosition(a, offX, offY));
+        _logger.LogInformation(
+            "좌표 오프셋 적용: ACS 목표 ({X0:0.###}, {Y0:0.###}) + (X {OffX:+0;-0}mm, Y {OffY:+0;-0}mm) → ({X:0.###}, {Y:0.###}), " +
+            "용접선 좌표 {Seams}/{Actions}건도 같이 이동(TCP 도 같은 만큼)",
+            ox, oy, offX, offY, pos.X, pos.Y, seams, node.Actions.Count);
+        OpLog(OpCategory.Drive, "좌표 오프셋", null,
+            $"ACS 목표 ({ox:0.###}, {oy:0.###}) + X {offX:+0;-0}mm·Y {offY:+0;-0}mm → ({pos.X:0.###}, {pos.Y:0.###}), " +
+            $"용접선 {seams}건도 같이 이동", orderId);
     }
 
     /// <summary>도착 판정 허용 오차 결정 — ① Order → ② ParameterService(DB) → ③ AmrRestSettings.
