@@ -171,6 +171,9 @@ public class ParameterService
                 "작업물 좌표계 — 점1 을 기록한 TCP 높이가 티칭 프로필 Z=0(평탄부 초점 높이)에서 떨어진 거리(mm). " +
                 "33.8 = 점1 을 주름 꼭대기 초점 높이에서 기록(종전). 0 = 점1 을 평탄부 초점 높이(레이저 WD 로 맞춘 높이)에서 기록 — " +
                 "33.8 인 채로 WD 높이에서 점1 을 기록하면 순회 전체가 면 쪽으로 33.8mm 들어간다. 뒤에 .T/.PU 등 면 코드를 붙인 키로 면별 지정 가능. 0~100."),
+            (Inspection.ProfileMirror.EnabledKey, "true",
+                "검사 수행 — 우현 면(SM·SL·SU)에서 티칭 프로필 경유점을 거울 반전(Y·Rz·Rx 부호)해 실행(true). 프로필은 좌현에서 " +
+                "선미→선수로 교시하고 우현은 그 거울상이라, 반전하지 않으면 CROSS 세로 팔이 위아래로 어긋난다. false = 교시값 그대로."),
             .. Sequence.BeadManualSettings.SeedDefaults(),
             .. Motion.CobotObstacleZone.SeedDefaults(),
             (FlatReachOptions.TiltMarginKey,

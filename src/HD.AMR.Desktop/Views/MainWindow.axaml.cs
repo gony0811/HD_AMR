@@ -23,6 +23,9 @@ public partial class MainWindow : Window
         }
     }
 
+    // 상단 상태바의 ACS 칩 — MQTT 브로커 주소 설정·연결 창.
+    private void OnAcsChipClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e) => AcsBrokerWindow.Open();
+
     private void OnBeadRequestChanged() => Dispatcher.UIThread.Post(() =>
     {
         if (_beadHub?.Pending is not { } req) return;

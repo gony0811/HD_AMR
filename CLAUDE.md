@@ -11,6 +11,7 @@ All commands run from the solution folder (`/Users/sean/Documents/GitHub/HD_AMR/
 - **Restore**: `dotnet restore HD.AMR.sln`
 - **Clean**: `dotnet clean HD.AMR.sln`
 - **Watch (hot reload)**: `dotnet watch --project HD.AMR.Web`
+- **Run the desktop app on macOS (Apple Silicon)**: from `src/`, `dotnet run --project HD.AMR.Desktop`. The `win-x64` RID / `x64` platform target are applied only on Windows hosts; on macOS the app builds for the host RID, and RealSense/OpenCV vision is disabled by the existing `OperatingSystem.IsWindows()` guards (no-op detectors, camera shows "미연결"). Data lives in `~/Library/Application Support/HD.AMR`.
 
 Tests live in `HD.AMR.Tests` (xUnit). Run them with `dotnet test HD.AMR.sln`; a single test runs with `dotnet test --filter "FullyQualifiedName~MyTest"`.
 
