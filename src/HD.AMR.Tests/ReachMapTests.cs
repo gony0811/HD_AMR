@@ -86,6 +86,45 @@ public class ReachMapTests
         Assert.False(r.Cells[0].Usable);
     }
 
+    // 기본 비틀림에서 손목 반전으로만 닿아도 비틀림을 180° 바꿔 같은 가지로 닿으면 도달이다 — 운영 ② 는 J6 180° 쪽
+    // 비틀림으로 진입한다(실기 2026-11-17 18:47 R03C13 -7·-8 거짓 거부).
+    [Fact]
+    public async Task 비틀림_180도_반대로_같은_가지면_도달()
+    {
+        var robot = Robot() with
+        {
+            StartJointsByWall = new Dictionary<string, double[]> { ["SM"] = new[] { 0.0, -60, 90, -120, 40, 0 } },
+        };
+        var poses = new List<double[]>();
+        var r = await ReachMap.BuildAsync(Spec("SM", new[] { 1300.0 }), robot, (pose, _) =>
+        {
+            poses.Add(pose);
+            var j5 = poses.Count <= 3 ? -40.0 : 40.0;   // 기본 비틀림(②·정렬·초점) = 손목 반전, 반대 비틀림 = 같은 가지
+            return Task.FromResult<double[]?>(new[] { 0.0, -60, 90, -120, j5, 0 });
+        });
+
+        Assert.Equal(ReachStatus.Ok, r.Cells[0].Status);
+        Assert.Contains("비틀림 180°", r.Cells[0].Reason);
+        Assert.Equal(6, poses.Count);
+        Assert.Equal(6, r.IkCalls);
+        Assert.Equal(poses[0][0], poses[3][0], 6);   // 같은 위치, 자세만 다르다
+        var d = Math.Abs(((poses[3][5] - poses[0][5]) % 360 + 540) % 360 - 180);
+        Assert.True(d > 1 || Math.Abs(poses[3][3] - poses[0][3]) > 1);
+    }
+
+    [Fact]
+    public async Task 반대_비틀림도_손목_반전이면_가지전환_그대로()
+    {
+        var robot = Robot() with
+        {
+            StartJointsByWall = new Dictionary<string, double[]> { ["SM"] = new[] { 0.0, -60, 90, -120, -40, 0 } },
+        };
+        var r = await ReachMap.BuildAsync(Spec("SM", new[] { 1300.0 }), robot, SphereIk());
+
+        Assert.Equal(ReachStatus.BranchChange, r.Cells[0].Status);
+        Assert.DoesNotContain("비틀림 180°", r.Cells[0].Reason);
+    }
+
     [Fact]
     public async Task 출발_자세와_같은_가지면_종전대로_도달()
     {

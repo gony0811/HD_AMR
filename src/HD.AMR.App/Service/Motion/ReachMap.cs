@@ -106,17 +106,41 @@ public static class ReachMap
     public static double[] ZsFor(ReachMapSpec spec, WallCodeInfo wall)
         => wall.Orientation == SurfaceOrientation.Floor ? new[] { 0.0 } : spec.Zs;
 
+    /// <summary>
+    /// 셀 하나를 평가한다. 출발 자세에서 가지 전환으로 걸리면 툴 비틀림(광축 둘레)을 180° 바꿔 한 번 더 본다 —
+    /// 운영 ② 는 비틀림을 J6 180° 쪽으로 맞춰 진입한 뒤 제자리에서 용접선 방향으로 돌리므로(J6 만 움직임), 어느 한 비틀림으로
+    /// 손목을 뒤집지 않고 닿으면 실제로 닿는다. 비틀림 하나만 보면 nearest IK 가 J6 를 한 바퀴 감는 대신 손목 반전 해를
+    /// 골라 거짓 거부한다(실기 2026-11-17 18:47 B L1-R03C13 -7·-8: J5 88.6° → -90.0°, 반대 비틀림은 J6 -179° 로 같은 가지).
+    /// </summary>
     private static async Task<(ReachCell Cell, int IkCalls)> EvaluateAsync(
         ReachMapSpec spec, ReachMapRobot robot, PostureLimits limits,
         string code, double h, double x, double y, double z,
         Func<double[], double, double[]?, CancellationToken, Task<double[]?>> inverseKin,
         Func<double[], double[], double, string?>? explainBranch, CancellationToken ct)
     {
+        var (cell, calls) = await EvaluateSpinAsync(spec, robot, limits, code, h, x, y, z, robot.ToolSpinDeg,
+            inverseKin, explainBranch, ct).ConfigureAwait(false);
+        if (cell.Status != ReachStatus.BranchChange) return (cell, calls);
+
+        var (alt, altCalls) = await EvaluateSpinAsync(spec, robot, limits, code, h, x, y, z, robot.ToolSpinDeg + 180.0,
+            inverseKin, explainBranch, ct).ConfigureAwait(false);
+        calls += altCalls;
+        return alt.Status is ReachStatus.Ok or ReachStatus.Tight or ReachStatus.FlangeShort
+            ? (alt with { Reason = alt.Reason + " — 비틀림 180° 반대로(기본 비틀림은 " + cell.Reason + ")" }, calls)
+            : (cell, calls);
+    }
+
+    private static async Task<(ReachCell Cell, int IkCalls)> EvaluateSpinAsync(
+        ReachMapSpec spec, ReachMapRobot robot, PostureLimits limits,
+        string code, double h, double x, double y, double z, double spinDeg,
+        Func<double[], double, double[]?, CancellationToken, Task<double[]?>> inverseKin,
+        Func<double[], double[], double, string?>? explainBranch, CancellationToken ct)
+    {
         double[]? start = robot.StartJointsByWall is { } starts && starts.TryGetValue(code, out var s) && s is { Length: 6 }
             ? s : null;
-        var approach = SeamBaseTransform.Resolve(Input(robot, code, h, x, y, z, spec.ApproachStandoffMm));
-        var align = SeamBaseTransform.Resolve(Input(robot, code, h, x, y, z, spec.AlignStandoffMm));
-        var focus = SeamBaseTransform.Resolve(Input(robot, code, h, x, y, z, spec.FocusStandoffMm));
+        var approach = SeamBaseTransform.Resolve(Input(robot, code, h, x, y, z, spec.ApproachStandoffMm, spinDeg));
+        var align = SeamBaseTransform.Resolve(Input(robot, code, h, x, y, z, spec.AlignStandoffMm, spinDeg));
+        var focus = SeamBaseTransform.Resolve(Input(robot, code, h, x, y, z, spec.FocusStandoffMm, spinDeg));
         var reach = ApproachReach.Check(approach.NormalDistanceMm, spec.ApproachStandoffMm,
                                         robot.ToolLengthMm, limits.MinFlangeReachMm);
 
@@ -197,7 +221,8 @@ public static class ReachMap
             : (Cell(ReachStatus.Ok, "도달", margin, jA, jL, jF), calls);
     }
 
-    private static SeamBaseInput Input(ReachMapRobot robot, string code, double h, double x, double y, double z, double standoff)
+    private static SeamBaseInput Input(ReachMapRobot robot, string code, double h, double x, double y, double z, double standoff,
+        double spinDeg)
         => new(
             SeamStartW: new[] { x / 1000.0, y / 1000.0, z / 1000.0 },
             SeamEndW: null,
@@ -209,7 +234,7 @@ public static class ReachMap
             WallFacingThetaRad: 0,
             WallCode: code,
             OpticalAxis: robot.OpticalAxis,
-            ToolSpinDeg: robot.ToolSpinDeg,
+            ToolSpinDeg: spinDeg,
             RollRef: ToolRollRef.WallHorizontal);
 
     /// <summary>
