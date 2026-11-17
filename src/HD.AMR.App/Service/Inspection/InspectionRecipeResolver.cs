@@ -1,3 +1,4 @@
+using System.Text.Json;
 using HD.AMR.App.Data.Entities;
 using HD.AMR.App.Models;
 using HD.AMR.App.Service.Sequence;
@@ -6,11 +7,11 @@ namespace HD.AMR.App.Service.Inspection;
 
 /// <summary>
 /// 검사 레시피 매핑(사양 §8.5.1, INSPECTION_TYPES.md §5) — 순수 함수 2단:
-/// ① `wall_code` → 면 자세(유효성 확인용), ② `seamType` → 레시피 id 8종.
+/// ① `wall_code` → 면 자세(유효성 확인용), ② `seamType` → 레시피 id 9종.
 ///
 /// 정본 10코드(B/T/SM/PM/F/A/SL/PL/SU/PU, ACS 확정 2026-09-15) 외 wall_code 는 계약 위반으로
 /// 실패를 반환한다 — 호출측이 액션 FAILED + orderValidationError 로 보고.
-/// <b>면 자세는 레시피 선택에 쓰지 않는다</b> — LINE/CROSS4/CROSS3(회전4)/CORNER 모두 면 자세-독립 단일(또는 회전별)
+/// <b>면 자세는 레시피 선택에 쓰지 않는다</b> — LINE/CROSS4(좌·우)/CROSS3(회전4)/CORNER 모두 면 자세-독립 단일(또는 회전별)
 /// 레시피다(INSPECTION_TYPES.md §9-8). 접근 자세·법선·방향은 런타임이 `wall_code`로 직접 계산하고
 /// (<see cref="SeamBaseTransform"/>), 면별 경유점 차이는 레시피에 바인딩된 티칭 프로파일이 흡수한다.
 /// CORNER2/CORNER3 은 삼면 코너 각도 전부 135°·90°·90° 균일(INSPECTION_TYPES.md §7). 거울 L/R 분리(§9-4)는 N13 확정 시 wall_code 판별 추가.
@@ -21,9 +22,10 @@ public static class InspectionRecipeResolver
     public static SurfaceOrientation? ResolveOrientation(string wallCode) => WallCodes.Find(wallCode)?.Orientation;
 
     /// <summary>레시피 id 유도. 실패 시 error 에 사유(계약 위반 — orderValidationError 계열).</summary>
-    public static bool TryResolve(WeldInspectionRequest request, out string? recipeId, out string? error)
+    public static bool TryResolve(WeldInspectionRequest request, out string? recipeId, out string? error,
+        IReadOnlySet<string>? cross4RightWalls = null)
     {
-        recipeId = ResolveRecipeId(request.SeamType, request.DrawingPos.WallCode);
+        recipeId = ResolveRecipeId(request.SeamType, request.DrawingPos.WallCode, cross4RightWalls);
         error = recipeId is null
             ? $"미정의 wall_code '{request.DrawingPos.WallCode}' — 정본 10코드(B/T/SM/PM/F/A/SL/PL/SU/PU)만 수용 (§8.5.1)"
             : null;
@@ -32,8 +34,10 @@ public static class InspectionRecipeResolver
 
     /// <summary>seamType → 레시피 id (§8.5.1 매핑표). wall_code 는 유효성(정본 10코드) 확인에만 쓰고
     /// 레시피 선택에는 관여하지 않는다 — 미정의 wall_code 는 null(계약 위반).
-    /// UI 매핑 레퍼런스 등 request 없이 조회할 때 쓰는 경량 경로 — <see cref="TryResolve"/> 가 위임한다.</summary>
-    public static string? ResolveRecipeId(SeamTypeKind seamType, string wallCode)
+    /// UI 매핑 레퍼런스 등 request 없이 조회할 때 쓰는 경량 경로 — <see cref="TryResolve"/> 가 위임한다.
+    /// <paramref name="cross4RightWalls"/> = 좌/우를 밝히지 않은 구 "CROSS4" 를 우측으로 실행할 면
+    /// (<see cref="Cross4RightWalls"/>). 주지 않으면 전부 좌측.</summary>
+    public static string? ResolveRecipeId(SeamTypeKind seamType, string wallCode, IReadOnlySet<string>? cross4RightWalls = null)
     {
         // 면 자세는 레시피 선택에 쓰지 않는다 — 모든 seamType 이 면 자세-독립 단일(또는 회전별) 레시피다.
         // wall_code 는 여전히 정의 코드여야 한다(접근 자세·방향은 런타임이 wall_code 로 직접 계산).
@@ -41,7 +45,11 @@ public static class InspectionRecipeResolver
         return seamType switch
         {
             SeamTypeKind.Line => RecipeIds.Line,
-            SeamTypeKind.Cross => RecipeIds.Cross4,
+            SeamTypeKind.Cross4L => RecipeIds.Cross4L,
+            SeamTypeKind.Cross4R => RecipeIds.Cross4R,
+            // "CROSS4"(좌/우 미구분) — ACS 가 그 십자의 좌/우를 밝히지 않았으면 레시피에 설정한 면별 기본값을 쓴다.
+            // 설정이 없는 면은 좌측(구 CROSS4 레시피의 설정을 양쪽에 그대로 옮겨 두었으므로 종전과 같은 동작).
+            SeamTypeKind.Cross => cross4RightWalls?.Contains(wallCode) == true ? RecipeIds.Cross4R : RecipeIds.Cross4L,
             SeamTypeKind.Cross3R0 => RecipeIds.Cross3R0,
             SeamTypeKind.Cross3R90 => RecipeIds.Cross3R90,
             SeamTypeKind.Cross3R180 => RecipeIds.Cross3R180,
@@ -53,7 +61,7 @@ public static class InspectionRecipeResolver
     }
 
     /// <summary>레시피 id → 티칭 프로필 SeamType 문자열(LINE/CROSS/CROSS3/CORNER2/CORNER3).
-    /// 교시 화면이 레시피 선택으로부터 프로필 타입을 유도할 때 쓴다(CROSS4 는 저장값 "CROSS"). 미정의 id 는 null.</summary>
+    /// 교시 화면이 레시피 선택으로부터 프로필 타입을 유도할 때 쓴다(CROSS4_L·CROSS4_R 는 둘 다 저장값 "CROSS"). 미정의 id 는 null.</summary>
     public static string? ProfileSeamTypeOf(string? recipeId)
     {
         if (recipeId is null || !RecipeIds.All.Contains(recipeId)) return null;
@@ -64,7 +72,7 @@ public static class InspectionRecipeResolver
         if (recipeId == RecipeIds.Cross3R180) return "CROSS3_R180";
         if (recipeId == RecipeIds.Cross3R270) return "CROSS3_R270";
         if (recipeId == RecipeIds.Line) return "LINE";
-        return "CROSS";   // CROSS4
+        return "CROSS";   // CROSS4_L · CROSS4_R
     }
 
     /// <summary>챔퍼 면(SL/PL/SU/PU)에서 수직(경사 방향)으로 진행하는지 — Peak pitch 254.6mm 판정
@@ -73,14 +81,70 @@ public static class InspectionRecipeResolver
         => direction == InspectionMoveDirection.Vertical
            && WallCodes.Find(wallCode)?.Orientation is SurfaceOrientation.ChamferLower or SurfaceOrientation.ChamferUpper;
 
+    /// <summary>면 목록(wall_code 쉼표 구분) → 정본 10코드만 남긴 집합. null/빈 값은 빈 집합.</summary>
+    public static HashSet<string> ParseWallList(string? csv) =>
+        (csv ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(c => WallCodes.Find(c) is not null).ToHashSet(StringComparer.Ordinal);
+
+    /// <summary>면 집합 → 저장값(정본 표 순, 쉼표 구분). 비면 null.</summary>
+    public static string? SerializeWallList(IEnumerable<string> walls)
+    {
+        var set = walls.ToHashSet(StringComparer.Ordinal);
+        var ordered = WallCodes.All.Where(w => set.Contains(w.Code)).Select(w => w.Code).ToList();
+        return ordered.Count == 0 ? null : string.Join(",", ordered);
+    }
+
+    /// <summary>좌/우를 밝히지 않은 구 "CROSS4" 를 우측으로 실행할 면 — CROSS4_R 레시피의
+    /// <see cref="InspectionRecipe.UnspecifiedSideWalls"/>. 레시피가 없거나 비었으면 빈 집합(전부 좌측).</summary>
+    public static IReadOnlySet<string> Cross4RightWalls(IEnumerable<InspectionRecipe> recipes) =>
+        ParseWallList(recipes.FirstOrDefault(r => r.Id == RecipeIds.Cross4R)?.UnspecifiedSideWalls);
+
+    /// <summary>레시피 id 가 십자 4갈래(좌/우)인지 — 면별 프로필 지정(<see cref="InspectionRecipe.WallProfilesJson"/>) 대상.</summary>
+    public static bool IsCross4(string? recipeId) => recipeId is RecipeIds.Cross4L or RecipeIds.Cross4R;
+
+    /// <summary>면별 프로필 지정(JSON object, 예 {"SM":12,"PM":13}) → 면 코드별 프로필 id. 정본 10코드가 아닌 키와
+    /// 숫자가 아닌 값은 버린다. null/빈/깨진 값은 빈 표(= 전부 기본 프로필).</summary>
+    public static Dictionary<string, int> ParseWallProfiles(string? json)
+    {
+        var map = new Dictionary<string, int>(StringComparer.Ordinal);
+        if (string.IsNullOrWhiteSpace(json)) return map;
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return map;
+            foreach (var p in doc.RootElement.EnumerateObject())
+                if (WallCodes.Find(p.Name) is not null && p.Value.ValueKind == JsonValueKind.Number && p.Value.TryGetInt32(out var id))
+                    map[p.Name] = id;
+        }
+        catch (JsonException) { }
+        return map;
+    }
+
+    /// <summary>면별 프로필 지정 → 저장값. 지정이 하나도 없으면 null. 면 순서는 정본 표(<see cref="WallCodes.All"/>) 순.</summary>
+    public static string? SerializeWallProfiles(IReadOnlyDictionary<string, int> map)
+    {
+        var ordered = WallCodes.All.Where(w => map.ContainsKey(w.Code)).ToDictionary(w => w.Code, w => map[w.Code]);
+        return ordered.Count == 0 ? null : JsonSerializer.Serialize(ordered);
+    }
+
+    /// <summary>레시피가 이 프로필을 기본·챔퍼 수직용·면별 지정 중 어느 하나로든 쓰는지.</summary>
+    public static bool UsesProfile(InspectionRecipe recipe, int profileId) =>
+        recipe.InspectionProfileId == profileId || recipe.ChamferSlopeProfileId == profileId
+        || ParseWallProfiles(recipe.WallProfilesJson).ContainsValue(profileId);
+
     /// <summary>이 task 가 쓸 티칭 프로필 id. LINE 레시피의 챔퍼 수직 진행이면 <see cref="InspectionRecipe.ChamferSlopeProfileId"/>
-    /// (경사 방향 254.6mm 경유점), 그 외는 <see cref="InspectionRecipe.InspectionProfileId"/>.
+    /// (경사 방향 254.6mm 경유점), 십자(CROSS4_L/R) 레시피에 이 면의 프로필이 따로 지정돼 있으면
+    /// (<see cref="InspectionRecipe.WallProfilesJson"/>) 그것, 그 외는 <see cref="InspectionRecipe.InspectionProfileId"/>.
     /// 챔퍼 수직인데 미지정이면 null 을 돌려준다 — 기본 프로필로 대체하지 않는다(360mm 경유점은 경사면에서 엉뚱한 위치).</summary>
     public static (int? ProfileId, bool ChamferSlope) SelectProfileId(
         InspectionRecipe recipe, string? wallCode, InspectionMoveDirection direction)
     {
         var chamferSlope = recipe.Id == RecipeIds.Line && IsChamferSlope(wallCode, direction);
-        return (chamferSlope ? recipe.ChamferSlopeProfileId : recipe.InspectionProfileId, chamferSlope);
+        if (chamferSlope) return (recipe.ChamferSlopeProfileId, true);
+        if (IsCross4(recipe.Id) && wallCode is not null
+            && ParseWallProfiles(recipe.WallProfilesJson).TryGetValue(wallCode, out var wallProfileId))
+            return (wallProfileId, false);
+        return (recipe.InspectionProfileId, false);
     }
 
     /// <summary>CORNER3 좌/우 거울 side 판별 — 코너 스텝의 티칭 슬롯 접두사(corner3.L/R) 선택 키.
@@ -103,8 +167,8 @@ public static class InspectionRecipeResolver
     }
 }
 
-/// <summary>레시피 id 상수 — INSPECTION_TYPES.md §5 카탈로그 8종과 동일 문자열
-/// (LINE + CROSS3 회전 4 + CROSS4 + CORNER2 + CORNER3). 면 자세별 변종은 통합되었다(§9-8).</summary>
+/// <summary>레시피 id 상수 — INSPECTION_TYPES.md §5 카탈로그 9종과 동일 문자열
+/// (LINE + CROSS3 회전 4 + CROSS4 좌·우 2 + CORNER2 + CORNER3). 면 자세별 변종은 통합되었다(§9-8).</summary>
 public static class RecipeIds
 {
     public const string Line = "LINE";                   // 직선 1갈래 — 면 자세-독립 단일
@@ -113,7 +177,10 @@ public static class RecipeIds
     public const string Cross3R90 = "CROSS3-R90";
     public const string Cross3R180 = "CROSS3-R180";
     public const string Cross3R270 = "CROSS3-R270";
-    public const string Cross4 = "CROSS4";               // 십자 4갈래 — 면 자세-독립 단일
+    // 십자 4갈래 — 수직 용접선이 좌측/우측에 있는 두 타입(면을 정면으로 바라본 기준, ACS seamType CROSS4_L/CROSS4_R).
+    // 면별 프로필 지정 가능. ACS 가 좌/우 없이 CROSS4 만 보내면 CROSS4_R 의 면별 기본값 설정으로 고른다.
+    public const string Cross4L = "CROSS4_L";
+    public const string Cross4R = "CROSS4_R";
     public const string Corner2 = "CORNER2";
     public const string Corner3 = "CORNER3";
 
@@ -121,7 +188,7 @@ public static class RecipeIds
     {
         Line,
         Cross3R0, Cross3R90, Cross3R180, Cross3R270,
-        Cross4,
+        Cross4L, Cross4R,
         Corner2, Corner3,
     };
 }

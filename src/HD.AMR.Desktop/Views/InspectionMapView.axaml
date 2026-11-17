@@ -30,7 +30,7 @@
         <Border Classes="card">
             <StackPanel Spacing="4">
                 <TextBlock Text="① wall_code × seamType → 레시피 (§8.5.1)" FontWeight="SemiBold" />
-                <Grid ColumnDefinitions="70,150,*,*,*,*,*,*,*,*">
+                <Grid ColumnDefinitions="70,150,*,*,*,*,*,*,*,*,*,*">
                     <TextBlock Grid.Column="0" Text="wall_code" Classes="axis" />
                     <TextBlock Grid.Column="1" Text="면" Classes="axis" />
                     <TextBlock Grid.Column="2" Text="LINE" Classes="axis" />
@@ -38,14 +38,16 @@
                     <TextBlock Grid.Column="4" Text="CROSS3 90°" Classes="axis" />
                     <TextBlock Grid.Column="5" Text="CROSS3 180°" Classes="axis" />
                     <TextBlock Grid.Column="6" Text="CROSS3 270°" Classes="axis" />
-                    <TextBlock Grid.Column="7" Text="CROSS4" Classes="axis" />
-                    <TextBlock Grid.Column="8" Text="CORNER2" Classes="axis" />
-                    <TextBlock Grid.Column="9" Text="CORNER3" Classes="axis" />
+                    <TextBlock Grid.Column="7" Text="CROSS4 좌" Classes="axis" />
+                    <TextBlock Grid.Column="8" Text="CROSS4 우" Classes="axis" />
+                    <TextBlock Grid.Column="9" Text="CROSS4 미지정" Classes="axis" />
+                    <TextBlock Grid.Column="10" Text="CORNER2" Classes="axis" />
+                    <TextBlock Grid.Column="11" Text="CORNER3" Classes="axis" />
                 </Grid>
                 <ItemsControl ItemsSource="{Binding MapRows}">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="vm:WallMapRow">
-                            <Grid ColumnDefinitions="70,150,*,*,*,*,*,*,*,*">
+                            <Grid ColumnDefinitions="70,150,*,*,*,*,*,*,*,*,*,*">
                                 <TextBlock Grid.Column="0" Classes="cell" FontFamily="monospace" Text="{Binding Code}" />
                                 <TextBlock Grid.Column="1" Classes="cell" Text="{Binding Label}" />
                                 <ContentControl Grid.Column="2" Content="{Binding Line}" ContentTemplate="{StaticResource MapCellTpl}" />
@@ -53,14 +55,16 @@
                                 <ContentControl Grid.Column="4" Content="{Binding Cross3R90}" ContentTemplate="{StaticResource MapCellTpl}" />
                                 <ContentControl Grid.Column="5" Content="{Binding Cross3R180}" ContentTemplate="{StaticResource MapCellTpl}" />
                                 <ContentControl Grid.Column="6" Content="{Binding Cross3R270}" ContentTemplate="{StaticResource MapCellTpl}" />
-                                <ContentControl Grid.Column="7" Content="{Binding Cross4}" ContentTemplate="{StaticResource MapCellTpl}" />
-                                <ContentControl Grid.Column="8" Content="{Binding Corner2}" ContentTemplate="{StaticResource MapCellTpl}" />
-                                <ContentControl Grid.Column="9" Content="{Binding Corner3}" ContentTemplate="{StaticResource MapCellTpl}" />
+                                <ContentControl Grid.Column="7" Content="{Binding Cross4L}" ContentTemplate="{StaticResource MapCellTpl}" />
+                                <ContentControl Grid.Column="8" Content="{Binding Cross4R}" ContentTemplate="{StaticResource MapCellTpl}" />
+                                <ContentControl Grid.Column="9" Content="{Binding Cross4Unspecified}" ContentTemplate="{StaticResource MapCellTpl}" />
+                                <ContentControl Grid.Column="10" Content="{Binding Corner2}" ContentTemplate="{StaticResource MapCellTpl}" />
+                                <ContentControl Grid.Column="11" Content="{Binding Corner3}" ContentTemplate="{StaticResource MapCellTpl}" />
                             </Grid>
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
-                <TextBlock Classes="axis" TextWrapping="Wrap" Text="초록 = 실행 활성(Enabled) · 회색 = 매핑되나 Disabled(→ FAILED+inspectionFailed) · CORNER 의 L/R 은 옆면(P*=좌현/S*=우현) 기준 거울 판별." />
+                <TextBlock Classes="axis" TextWrapping="Wrap" Text="초록 = 실행 활성(Enabled) · 회색 = 매핑되나 Disabled(→ FAILED+inspectionFailed) · CORNER 의 L/R 은 옆면(P*=좌현/S*=우현) 기준 거울 판별 · CROSS4 좌/우(면을 정면으로 본 기준)는 ACS seamType(CROSS4_L/CROSS4_R), 'CROSS4 미지정' = ACS 가 좌/우 없이 보낸 십자에 쓰는 면별 기본값, #번호 = 그 면에 따로 지정한 프로필." />
             </StackPanel>
         </Border>
 
