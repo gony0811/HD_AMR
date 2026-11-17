@@ -76,11 +76,11 @@
 |---|---|---|
 | LINE (직선) | 단일 1종 | 무관(런타임 wall_code) |
 | CROSS3 (T자 3갈래) | 회전 4종(0°/90°/180°/270°) | 무관 |
-| CROSS4 (십자 4갈래) | 단일 1종 | 무관(런타임 wall_code) |
+| CROSS4 (십자 4갈래) | 수직 용접선 좌측/우측 2종(`CROSS4_L`/`CROSS4_R`, 2026-11-17) | 무관 — 면별 프로필 지정 가능 |
 | CORNER2 (2면 코너) | 1종(±거울) | 무관 |
 | CORNER3 (3면 코너) | 1종(±거울) | 무관 |
 
-**= 1(LINE) + 4(CROSS3 회전) + 1(CROSS4) + 1(CORNER2) + 1(CORNER3) = 8종** (코너 거울 L/R 분리 시 최대 10).
+**= 1(LINE) + 4(CROSS3 회전) + 2(CROSS4 좌·우) + 1(CORNER2) + 1(CORNER3) = 9종** (코너 거울 L/R 분리 시 최대 11).
 
 > **면 자세별 변종을 통합한 근거(2026-10-07, §9-9)**: 면 자세는 레시피의 실행 파라미터를 바꾸지 않는다 — 접근 자세·법선·방향은 런타임이 `wall_code`+정차 theta 로 계산하고(`SeamBaseTransform`), 스캔 경유점은 작업물 프레임 상대라 면 자세와 무관하다. 면별 차이는 **레시피에 바인딩된 티칭 프로필(경유점)뿐**이며, 같은 형상이면 프로필 하나가 모든 면에 쓰인다. 따라서 LINE/CROSS4 를 면별 5종으로 둘 기능적 이유가 없어 각 1종으로 통합했다(CROSS3 회전·CORNER 가 이미 면 자세-독립인 것과 동일). ACS 는 `seamType` 과 `wall_code` 를 그대로 보내고, AMR 이 `seamType` 으로 레시피를, `wall_code` 로 접근 기하를 각각 결정한다.
 
@@ -101,11 +101,12 @@
 | `CROSS3-R90` | CROSS3 (T자 90°) | 면 무관(정본 wall_code) | 캡처 교시 | 회전 90° |
 | `CROSS3-R180` | CROSS3 (T자 180°) | 면 무관(정본 wall_code) | 캡처 교시 | 회전 180° |
 | `CROSS3-R270` | CROSS3 (T자 270°) | 면 무관(정본 wall_code) | 캡처 교시 | 회전 270° |
-| `CROSS4` | CROSS4 (4갈래) | 면 무관(정본 wall_code) | 캡처 교시 | 면 자세-독립 단일(2026-10-07 통합) |
+| `CROSS4_L` | CROSS4 (4갈래, 수직 용접선 좌측) | 면 무관(정본 wall_code) | 캡처 교시 | ACS `seamType` `CROSS4_L` · 면별 프로필 지정 가능 |
+| `CROSS4_R` | CROSS4 (4갈래, 수직 용접선 우측) | 면 무관(정본 wall_code) | 캡처 교시 | ACS `seamType` `CROSS4_R` · 면별 프로필 지정 가능 |
 | `CORNER2` | CORNER2 (2면) | 코너(옆면 2) | **캡처 교시 전용** | 브릿지 플레이트 · 거울 시 `CORNER2-L`/`CORNER2-R` |
 | `CORNER3` | CORNER3 (3면) | 코너(마구리+옆면 2) | **캡처 교시 전용** | 브릿지 플레이트 · 거울 시 `CORNER3-L`/`CORNER3-R` |
 
-→ **8개 profileId** (코너 거울 분리 시 최대 10).
+→ **9개 profileId** (코너 거울 분리 시 최대 11).
 
 > **교시/실행 열**: *도면 솎기* = 면 DXF 단면(X-Z) 솎기(LINE 현행). *캡처 교시* = X-Y 6-DOF 조그+캡처
 > 교시(`/inspection-points`) — CROSS3·CROSS4·CORNER2·CORNER3 공통(패턴 수식 생성은 폐기). CORNER3 온보드
@@ -194,5 +195,11 @@
    - 회전은 `wall_code`(면 자세)와 **독립** — 레시피 선택은 회전으로만, 면/theta/방향은 여전히 `wall_code` 로 계산.
    - **ACS 사인오프 필요**: 4개 문자열·R0 기준(줄기=+u)·회전 부호(법선 둘레 CCW) 확정. AMR 측(파서·resolver·시드·UI·테스트)은 반영 완료.
 9. **LINE·CROSS4 면 자세별 변종 통합** ✅ **완료(2026-10-07)** — LINE/CROSS4 를 면 자세별 5종(`LINE-FLOOR/CEIL/WALL/CHMR-LO/CHMR-UP` 등)에서 **면 자세-독립 단일 레시피**(`LINE`/`CROSS4`)로 통합. 근거: 면 자세는 레시피 실행 파라미터를 바꾸지 않는다 — 접근 자세·법선·방향은 런타임이 `wall_code`+정차 theta 로 계산하고(`SeamBaseTransform`), 스캔 경유점은 작업물 프레임 상대라 면 무관하며, 면별 차이는 레시피에 바인딩된 티칭 프로필뿐이다(CROSS3 회전·CORNER 가 이미 면 무관인 것과 동일 판단). **계약 무변경** — ACS 는 `seamType`(LINE/CROSS4) + `wall_code` 를 그대로 보내고, AMR 이 `seamType` 으로 레시피를, `wall_code` 로 접근 기하를 결정한다. AMR 반영: resolver short-circuit + 시드 1종화 + 구 `LINE-*`/`CROSS4-*` 5행 기동 마이그레이션(프로필 바인딩 보존 후 제거) + 테스트. 카탈로그 16→8종.
+10. **CROSS4 좌/우 분리** ✅ **AMR 반영(2026-11-17), ACS 전환 필요** `[협의 N13 연장]` — 십자 교시는 수평선 높음/낮음 × 수직선 좌측/우측으로 갈리는데, 수평선은 ACS 가 시작점·끝점을 주므로 나눌 필요가 없고 **수직 용접선이 좌측/우측에 있는지만** 타입으로 나눈다: `CROSS4_L`/`CROSS4_R`.
+   - **판정 주체 = ACS** — `seamType` 으로 `CROSS4_L`/`CROSS4_R` 를 보내면 AMR 은 그대로 그 레시피를 쓴다. AMR 은 좌/우를 계산하지 않는다.
+   - **면별 프로필** — 십자 레시피는 면(`wall_code`)마다 다른 티칭 프로필을 지정할 수 있다(`InspectionRecipe.WallProfilesJson`, 지정 없는 면은 기본 프로필). 티칭 프로필 타입은 좌/우 모두 종전 `CROSS` 그대로다.
+   - **기존 데이터** — 구 `CROSS4` 레시피 행의 설정(프로필 지정·Enabled·스텝·속도)은 기동 마이그레이션이 `CROSS4_L`/`CROSS4_R` 양쪽에 복사하고 구 행을 지운다. 분리 직후에는 좌/우가 같은 프로필이라 종전과 같은 동작이고, 우측용 프로필을 교시해 `CROSS4_R` 에 바꿔 지정한다.
+   - **전환 유예** — 구 `seamType` `CROSS4`·`CROSS` 는 `CROSS4_L` 레시피로 실행하고, ACS 로 올리는 프로필 지정표에도 구 이름 `CROSS4` 를 좌측과 같은 프로필로 함께 싣는다.
+   - **미결** — "좌/우"의 기준(면을 정면으로 바라본 기준인지, 검사 진행 방향 기준인지; 천장·바닥은 별도 약속 필요)을 ACS 입력자와 교시자가 같게 써야 한다. 우현 면(SM/SL/SU)은 프로필을 작업물 Y 로 거울 반전해 실행하므로(`ProfileMirror`) 기준을 정할 때 함께 확인한다.
 
 > 결정이 내려지면 본 문서와 `startWeldInspection` `param_schema`, 관련 코드/DB를 함께 갱신한다.

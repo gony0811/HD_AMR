@@ -79,10 +79,10 @@ public class AcsProfilePayloadTests
     [Fact]
     public void 지정표는_실행_때와_같은_규칙으로_유형_면_방향마다_프로필을_싣는다()
     {
-        // 현장 지정 그대로: LINE 18(경사면 세로만 17) · CROSS4 9 · CROSS3-R0 13 · 코너는 프로필 없음
+        // 현장 지정 그대로: LINE 18(경사면 세로만 17) · CROSS4_L 9 · CROSS3-R0 13 · 코너는 프로필 없음
         var table = AcsProfilePayload.BuildAssignments(new[]
         {
-            Recipe(RecipeIds.Line, 18, 17), Recipe(RecipeIds.Cross4, 9), Recipe(RecipeIds.Cross3R0, 13),
+            Recipe(RecipeIds.Line, 18, 17), Recipe(RecipeIds.Cross4L, 9), Recipe(RecipeIds.Cross3R0, 13),
             Recipe(RecipeIds.Cross3R90, null), Recipe(RecipeIds.Corner3, null),
         });
         int? Of(string type, string wall, string dir) =>
@@ -94,11 +94,13 @@ public class AcsProfilePayloadTests
         Assert.Equal(17, Of("LINE", "PU", "V"));    // 경사면을 따라 오르내리는 용접선은 전용 프로필
         Assert.Equal(17, Of("LINE", "SL", "V"));
         Assert.Equal(18, Of("LINE", "F", "V"));     // 수직벽은 기본 프로필
-        Assert.Equal(9, Of("CROSS4", "F", "H"));
+        Assert.Equal(9, Of("CROSS4_L", "F", "H"));
+        Assert.Equal(9, Of("CROSS4", "F", "H"));    // 구 이름(좌/우 미구분)은 좌측과 같은 프로필
+        Assert.Null(Of("CROSS4_R", "F", "H"));      // 우측 레시피는 아직 프로필 없음
         Assert.Equal(13, Of("CROSS3_R0", "SM", "V"));
         Assert.Null(Of("CROSS3_R90", "SM", "H"));   // 프로필을 지정하지 않은 레시피
         Assert.DoesNotContain(table, a => a.SeamType.StartsWith("CORNER"));
-        Assert.Equal(20 + 20 + 20, table.Count);    // 3유형 × 10면 × 2방향
+        Assert.Equal(20 + 20 + 20 + 20, table.Count);    // LINE·CROSS4_L·CROSS4(구 이름)·CROSS3_R0 × 10면 × 2방향
     }
 
     [Fact]

@@ -41,7 +41,7 @@ public static class AcsProfilePayload
         IReadOnlyList<Waypoint> Waypoints);
 
     /// <summary>
-    /// 지정표 한 줄 — 이 유형(ACS 계약 이름: LINE · CROSS4 · CROSS3_R0 …)·면·진행 방향(H 가로 / V 세로)의 용접선은 이 프로필로 순회한다.
+    /// 지정표 한 줄 — 이 유형(ACS 계약 이름: LINE · CROSS4_L · CROSS4_R · CROSS3_R0 …)·면·진행 방향(H 가로 / V 세로)의 용접선은 이 프로필로 순회한다.
     /// </summary>
     public sealed record Assignment(string SeamType, string WallCode, string Direction, int ProfileId);
 
@@ -76,10 +76,13 @@ public static class AcsProfilePayload
         catch (JsonException) { return Array.Empty<string>(); }
     }
 
-    /// <summary>ACS 계약의 용접선 유형 이름 ↔ AMR 유형. 코너는 티칭 프로필로 순회하지 않아 지정표에 없다.</summary>
+    /// <summary>ACS 계약의 용접선 유형 이름 ↔ AMR 유형. 코너는 티칭 프로필로 순회하지 않아 지정표에 없다.
+    /// 구 이름 "CROSS4"(좌/우 미구분)도 함께 싣는다 — ACS 가 CROSS4_L/CROSS4_R 로 바꾸기 전까지 그 이름으로 찾기 때문이고,
+    /// AMR 이 구 "CROSS4" 지령을 실행할 때와 같은 프로필(좌측)이 실린다.</summary>
     private static readonly (string Name, SeamTypeKind Kind)[] SeamTypes =
     {
-        ("LINE", SeamTypeKind.Line), ("CROSS4", SeamTypeKind.Cross),
+        ("LINE", SeamTypeKind.Line),
+        ("CROSS4_L", SeamTypeKind.Cross4L), ("CROSS4_R", SeamTypeKind.Cross4R), ("CROSS4", SeamTypeKind.Cross),
         ("CROSS3_R0", SeamTypeKind.Cross3R0), ("CROSS3_R90", SeamTypeKind.Cross3R90),
         ("CROSS3_R180", SeamTypeKind.Cross3R180), ("CROSS3_R270", SeamTypeKind.Cross3R270),
     };
