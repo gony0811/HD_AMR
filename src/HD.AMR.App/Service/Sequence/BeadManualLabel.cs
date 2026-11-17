@@ -36,7 +36,7 @@ public static class BeadManualSettings
     public const double DefaultJogVelPct = 20, MinJogVelPct = 1, MaxJogVelPct = 100;
 
     /// <summary>팝업 조그 1회 이동량 [mm] 기본값과 허용 범위.</summary>
-    public const double DefaultJogStepMm = 20, MinJogStepMm = 0.5, MaxJogStepMm = 100;
+    public const double DefaultJogStepMm = 20, MinJogStepMm = 0.5, MaxJogStepMm = 500;
 
     public static double ClampJogVelPct(double v) => Math.Clamp(v, MinJogVelPct, MaxJogVelPct);
     public static double ClampJogStepMm(double v) => Math.Clamp(v, MinJogStepMm, MaxJogStepMm);
@@ -87,7 +87,7 @@ public static class BeadManualSettings
         (JogVelPctKey, DefaultJogVelPct.ToString(CultureInfo.InvariantCulture),
             "수동 비드 입력 팝업 조그 속도(%) — 툴 좌표계 평면 이동. 1~100. 팝업에서 바꾸면 이 값도 바뀐다."),
         (JogStepMmKey, DefaultJogStepMm.ToString(CultureInfo.InvariantCulture),
-            "수동 비드 입력 팝업 조그 1회 이동량(mm) — 좌/우/상/하 버튼 한 번에 움직이는 거리. 0.5~100. 팝업에서 바꾸면 이 값도 바뀐다."),
+            "수동 비드 입력 팝업 조그 1회 이동량(mm) — 좌/우/상/하 버튼 한 번에 움직이는 거리. 0.5~500. 팝업에서 바꾸면 이 값도 바뀐다."),
     ];
 }
 

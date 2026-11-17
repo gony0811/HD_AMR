@@ -10,10 +10,12 @@ namespace HD.AMR.App.Service.Sequence.Steps;
 /// <see cref="WorkingDistanceKey"/> 값과 일치하도록 광축(<see cref="WeldSequenceSupport.DepthAxisKey"/>,
 /// 기본 툴 +Z)으로 접근/후퇴한다. ④는 틸트만 보정하고 거리는 조정하지 않으므로 여기서 채운다.
 ///
-/// ⑥ Peak 센터링과 동일한 <b>개루프 1회 이동 + 재측정 검증 1회</b> 정책 — 반복 수렴 루프는 두지 않는다.
-/// 이동이 측정에 반영되지 않는 상황(광축 매핑 수직, 센서 미갱신, 부호 반대)에서 잔차만큼 반복 이동하면
-/// 효과 없는 방향으로 누적 이동하는 위험이 있으므로, 잔차가 허용 밖이면 실측 응답(이동 전후 z 변화)을
-/// 진단해 원인별 안내와 함께 즉시 실패시킨다.
+/// 기본은 <b>개루프 1회 이동 + 재측정 검증</b>. 이동이 측정에 반영되지 않는 상황(광축 매핑 수직, 센서 미갱신,
+/// 부호 반대)에서 잔차만큼 반복 이동하면 효과 없는 방향으로 누적 이동하는 위험이 있으므로, 그런 응답이면
+/// 원인별 안내와 함께 즉시 실패시킨다. 측정이 기대 방향으로 정상 반응했고 남은 잔차가
+/// <see cref="MaxCorrectionMm"/> 이내일 때만 잔차만큼 <see cref="MaxCorrections"/> 회까지 보정 이동한다 —
+/// 이동 전 측정이 기구물 흔들림으로 조금 어긋나 1~2mm 모자라던 오실패(2026-11-16 L3-R02C15 H04:
+/// 이동 26.38mm, 측정변화 25.06mm, 잔차 +1.31mm)를 막는다.
 /// 1회 이동이 <see cref="MaxTravelMm"/> 를 넘으면 측정/설정 이상으로 보고 이동하지 않고 실패(클램프 아님).
 ///
 /// 측정은 고정 딜레이가 아니라 <b>안정화 대기</b>(<see cref="SampleStableZAsync"/>)로 수행한다 —
@@ -47,6 +49,15 @@ public class LaserWorkingDistanceStep : ISequenceStep
 
     /// <summary>이동 전후 측정 변화가 이 값 미만이면 "측정 불변"으로 진단한다(mm).</summary>
     private const double NoResponseMm = 0.5;
+
+    /// <summary>보정 이동을 허용하는 최대 잔차(mm). 이보다 크면 보정하지 않고 실패.</summary>
+    internal const double MaxCorrectionMm = 5.0;
+
+    /// <summary>첫 이동 뒤 보정 이동 최대 횟수.</summary>
+    internal const int MaxCorrections = 2;
+
+    /// <summary>보정 이동을 허용하는 측정 응답 비율 범위(|측정변화| / |이동량|). 정상 반응일 때만 보정한다.</summary>
+    private const double MinResponseRatio = 0.5, MaxResponseRatio = 1.5;
 
     /// <summary>안정화 폴링 간격(ms).</summary>
     private const int PollMs = 150;
@@ -158,37 +169,58 @@ public class LaserWorkingDistanceStep : ISequenceStep
                 $"이동량 {delta:+0.#;-0.#}mm 가 한계 ±{MaxTravelMm:0}mm 초과 — " +
                 $"측정값(z={z1.Value:0.#}mm) 또는 '{wdSource}' 설정을 확인하세요.");
 
-        // ── 개루프 1회 이동 ─────────────────────────────────────────────
+        // ── 개루프 이동 + 재측정 검증. 정상 반응·작은 잔차면 보정 이동(최대 MaxCorrections 회) ──
         // delta>0 = 대상이 목표보다 멀다 = 전방(광축) 접근. ③ MoveToDistanceAsync 와 동일 부호 규약.
-        var anchor = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
-        var offset = new double[6];
-        FlatSurfaceCenteringService.ApplyAxis(offset, depthAxis, delta);
+        var move = delta;            // 이번 이동량
+        var totalMove = 0.0;
+        var zBefore = z1.Value;
+        double residual, change;
+        double z2Value;
+        for (int attempt = 0; ; attempt++)
+        {
+            var anchor = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
+            var offset = new double[6];
+            FlatSurfaceCenteringService.ApplyAxis(offset, depthAxis, move);
 
-        _logger.LogInformation(
-            "[레이저 WD 거리 조정] WD 접근: 툴{Axis} {Delta:+0.##;-0.##}mm",
-            FlatSurfaceCenteringService.AxisName(depthAxis), delta);
+            _logger.LogInformation(
+                "[레이저 WD 거리 조정] WD {Kind}: 툴{Axis} {Delta:+0.##;-0.##}mm",
+                attempt == 0 ? "접근" : $"보정 {attempt}회차",
+                FlatSurfaceCenteringService.AxisName(depthAxis), move);
 
-        var rc = await _cobot.Rpc.MoveByToolOffsetAsync(anchor, user: 0, offset,
-            tool: context.Tool, vel: context.Velocity, ct: ct);
-        if (rc == 112)
-            return StepResult.Fail(
-                $"WD 접근 이동 실패 (rc=112: 목표 자세 도달 불가) — " +
-                $"광축 매핑(툴{FlatSurfaceCenteringService.AxisName(depthAxis)})/방향을 확인하세요.");
-        if (rc != 0)
-            return StepResult.Fail($"WD 접근 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.");
+            var rc = await _cobot.Rpc.MoveByToolOffsetAsync(anchor, user: 0, offset,
+                tool: context.Tool, vel: context.Velocity, ct: ct);
+            if (rc == 112)
+                return StepResult.Fail(
+                    $"WD 접근 이동 실패 (rc=112: 목표 자세 도달 불가) — " +
+                    $"광축 매핑(툴{FlatSurfaceCenteringService.AxisName(depthAxis)})/방향을 확인하세요.");
+            if (rc != 0)
+                return StepResult.Fail($"WD 접근 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.");
+            totalMove += move;
 
-        // ── 재측정 검증(모션 없음) — 안정화 대기 후 실측 응답으로 원인 진단 ──
-        // 고정 딜레이 대신 안정화 폴링이 모션 잔여/센서 필터 수렴 대기를 겸한다.
-        var (z2, note2) = await SampleStableZAsync(ct);
-        if (z2 is null)
-            return StepResult.Fail($"이동 후 레이저 재측정 실패: {note2}");
+            // ── 재측정 검증(모션 없음) — 안정화 대기 후 실측 응답으로 원인 진단 ──
+            // 고정 딜레이 대신 안정화 폴링이 모션 잔여/센서 필터 수렴 대기를 겸한다.
+            var (z2, note2) = await SampleStableZAsync(ct);
+            if (z2 is null)
+                return StepResult.Fail($"이동 후 레이저 재측정 실패: {note2}");
 
-        var residual = z2.Value - wd;
-        var change = z2.Value - z1.Value;   // 정상이면 ≈ −delta (이동한 만큼 거리가 줄거나 늘어남)
-        _logger.LogInformation(
-            "[레이저 WD 거리 조정] WD 검증: z={Z:0.##}mm, 잔차={Res:+0.##;-0.##}mm, 측정변화={Chg:+0.##;-0.##}mm (기대 {Exp:+0.##;-0.##}mm)",
-            z2.Value, residual, change, -delta);
-        await LogDiagnosticsAsync("이동 후", context, wall, wd, wdSource, depthAxis, ct);
+            z2Value = z2.Value;
+            residual = z2Value - wd;
+            change = z2Value - zBefore;   // 정상이면 ≈ −move (이동한 만큼 거리가 줄거나 늘어남)
+            _logger.LogInformation(
+                "[레이저 WD 거리 조정] WD 검증: z={Z:0.##}mm, 잔차={Res:+0.##;-0.##}mm, 측정변화={Chg:+0.##;-0.##}mm (기대 {Exp:+0.##;-0.##}mm)",
+                z2Value, residual, change, -move);
+            await LogDiagnosticsAsync(attempt == 0 ? "이동 후" : $"보정 {attempt}회차 후", context, wall, wd, wdSource, depthAxis, ct);
+
+            if (Math.Abs(residual) <= ToleranceMm || attempt >= MaxCorrections
+                || !ShouldCorrect(move, change, residual))
+                break;
+
+            _logger.LogInformation(
+                "[레이저 WD 거리 조정] 잔차 {Res:+0.##;-0.##}mm — 정상 반응(측정변화 {Chg:+0.##;-0.##}mm / 이동 {Move:+0.##;-0.##}mm)이라 잔차만큼 보정 이동",
+                residual, change, move);
+            move = residual;
+            zBefore = z2Value;
+        }
 
         if (Math.Abs(residual) <= ToleranceMm)
         {
@@ -196,27 +228,47 @@ public class LaserWorkingDistanceStep : ISequenceStep
             if (retOk) await LogDiagnosticsAsync("완료(횡복귀 후)", context, wall, wd, wdSource, depthAxis, ct);
             return retOk
                 ? StepResult.Ok(
-                    $"WD 도달 — z={z2.Value:0.##}mm (목표 {wd:0.#}mm, 이동 {delta:+0.##;-0.##}mm, " +
+                    $"WD 도달 — z={z2Value:0.##}mm (목표 {wd:0.#}mm, 이동 {totalMove:+0.##;-0.##}mm, " +
                     $"잔차 {residual:+0.##;-0.##}mm).{retNote}")
                 : StepResult.Fail(retNote);
         }
 
         var axisName = FlatSurfaceCenteringService.AxisName(depthAxis);
         var head = $"WD 미도달 — 잔차 {residual:+0.##;-0.##}mm > 허용 {ToleranceMm}mm " +
-                   $"(이동 {delta:+0.##;-0.##}mm, 측정변화 {change:+0.##;-0.##}mm). ";
+                   $"(이동 {move:+0.##;-0.##}mm, 측정변화 {change:+0.##;-0.##}mm). ";
 
         if (Math.Abs(change) < NoResponseMm)
             return StepResult.Fail(head +
                 $"이동해도 측정 거리가 변하지 않음 — 광축 매핑(툴{axisName})이 측정 방향과 수직이거나 " +
                 "센서 값이 갱신되지 않고 있습니다.");
 
-        if (change * delta > 0)
+        if (change * move > 0)
             return StepResult.Fail(head +
                 $"측정 거리가 기대와 반대로 변함 — '{WeldSequenceSupport.DepthAxisKey}' 를 " +
                 $"현재 툴{axisName} 의 반대 부호 축으로 설정하세요.");
 
-        return StepResult.Fail(head + "측정이 부분적으로만 반응 — 센서 노이즈/스케일 설정을 확인하세요.");
+        if (Math.Abs(residual) <= MaxCorrectionMm && IsNormalResponse(move, change))
+            return StepResult.Fail(head +
+                $"보정 이동 {MaxCorrections}회 뒤에도 남음 — 측정값이 계속 흔들립니다(기구물 진동·리프트 정착·면 굴곡). " +
+                "잠시 뒤 재시도하세요.");
+
+        return StepResult.Fail(head + "측정이 이동량과 크게 다르게 반응 — 센서 노이즈/스케일 설정을 확인하세요.");
     }
+
+    /// <summary>측정 응답이 정상(기대 방향, 이동량의 <see cref="MinResponseRatio"/>~<see cref="MaxResponseRatio"/>배)인지.</summary>
+    internal static bool IsNormalResponse(double move, double change)
+    {
+        if (Math.Abs(move) < 1e-9 || change * move >= 0)   // 무이동·무반응·반대 방향
+            return false;
+        var ratio = Math.Abs(change) / Math.Abs(move);
+        return ratio is >= MinResponseRatio and <= MaxResponseRatio;
+    }
+
+    /// <summary>잔차만큼 보정 이동해도 되는지 — 허용 밖이고, <see cref="MaxCorrectionMm"/> 이내이며, 직전 이동에 측정이 정상 반응했을 때만.</summary>
+    internal static bool ShouldCorrect(double move, double change, double residual)
+        => Math.Abs(residual) > ToleranceMm
+           && Math.Abs(residual) <= MaxCorrectionMm
+           && IsNormalResponse(move, change);
 
     /// <summary>
     /// 면별 WD 차이의 원인 조사용 진단 로그(<see cref="LaserWorkingDistanceSetting.Diagnostics"/>).
