@@ -203,6 +203,13 @@ public sealed partial class RecipeRow : ObservableObject
     /// <summary>십자 전용 — 면(wall_code)마다 따로 쓸 프로필. '기본 프로필 사용'이면 위 티칭 프로필을 쓴다.</summary>
     public List<WallProfilePick> WallProfiles { get; } = new();
 
+    /// <summary>좌/우 미지정 지령의 면별 기본값은 CROSS4_R 레시피에 둔다.</summary>
+    public bool IsCross4R => _entity.Id == RecipeIds.Cross4R;
+    public bool IsCross4L => _entity.Id == RecipeIds.Cross4L;
+
+    /// <summary>CROSS4_R 전용 — ACS 가 좌/우 없이 CROSS4 만 보냈을 때 우측으로 실행할 면(체크). 나머지는 좌측.</summary>
+    public List<WallCheck> UnspecifiedSideWalls { get; } = new();
+
     /// <summary>생성(로드) 이후 편집되었고 아직 저장하지 않음 — 목록에 ● 표시.</summary>
     [ObservableProperty] private bool _isDirty;
 
@@ -330,6 +337,13 @@ public sealed partial class RecipeRow : ObservableObject
         _selectedProfile = ProfileOptions.FirstOrDefault(o => o.Id == e.InspectionProfileId) ?? ProfileOption.None;
         _selectedChamferSlopeProfile = ProfileOptions.FirstOrDefault(o => o.Id == e.ChamferSlopeProfileId) ?? ProfileOption.None;
 
+        if (IsCross4R)
+        {
+            var right = InspectionRecipeResolver.ParseWallList(e.UnspecifiedSideWalls);
+            foreach (var w in WallCodes.All)
+                UnspecifiedSideWalls.Add(new WallCheck(w.Code, w.DisplayName, right.Contains(w.Code), () => IsDirty = true));
+        }
+
         if (IsCross4)
         {
             // 면별 선택지 — [0] = 기본 프로필 사용, 이후는 위와 같은 프로필 목록. 삭제된 프로필 지정은 선택지로 남겨 보이게 한다.
@@ -381,6 +395,9 @@ public sealed partial class RecipeRow : ObservableObject
         _entity.InspectAccPercent = InspectAccPercent is { } ia ? Math.Clamp((int)Math.Round(ia), 1, 100) : null;
         _entity.InspectionProfileId = IsCorner3 ? null : SelectedProfile?.Id;
         _entity.ChamferSlopeProfileId = IsLine ? SelectedChamferSlopeProfile?.Id : null;
+        _entity.UnspecifiedSideWalls = IsCross4R
+            ? InspectionRecipeResolver.SerializeWallList(UnspecifiedSideWalls.Where(w => w.Checked).Select(w => w.Code))
+            : null;
         _entity.WallProfilesJson = IsCross4
             ? InspectionRecipeResolver.SerializeWallProfiles(WallProfiles
                 .Where(w => w.Selected?.Id is not null).ToDictionary(w => w.Code, w => w.Selected!.Id!.Value))
@@ -402,6 +419,28 @@ public sealed record StepPick(string Key, string DisplayName, int DefaultOrder, 
     public string OrderText => Known ? DefaultOrder.ToString() : "?";
 
     public string Label => Known ? DisplayName : $"{Key} — 등록되지 않은 스텝";
+}
+
+/// <summary>면 하나의 체크 — CROSS4_R 의 '좌/우 미지정 지령을 우측으로 실행할 면'.</summary>
+public sealed partial class WallCheck : ObservableObject
+{
+    private readonly Action _changed;
+
+    public string Code { get; }
+    public string Label { get; }
+    public string Text => $"{Code} {Label}";
+
+    [ObservableProperty] private bool _checked;
+
+    public WallCheck(string code, string label, bool isChecked, Action changed)
+    {
+        Code = code;
+        Label = label;
+        _checked = isChecked;
+        _changed = changed;
+    }
+
+    partial void OnCheckedChanged(bool value) => _changed();
 }
 
 /// <summary>십자 레시피의 면 한 줄 — 이 면에서 쓸 프로필 선택. Id=null(<see cref="UseDefault"/>)이면 레시피의 기본 프로필.</summary>

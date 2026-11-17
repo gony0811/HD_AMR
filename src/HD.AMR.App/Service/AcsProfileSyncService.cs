@@ -77,8 +77,8 @@ public static class AcsProfilePayload
     }
 
     /// <summary>ACS 계약의 용접선 유형 이름 ↔ AMR 유형. 코너는 티칭 프로필로 순회하지 않아 지정표에 없다.
-    /// 구 이름 "CROSS4"(좌/우 미구분)도 함께 싣는다 — ACS 가 CROSS4_L/CROSS4_R 로 바꾸기 전까지 그 이름으로 찾기 때문이고,
-    /// AMR 이 구 "CROSS4" 지령을 실행할 때와 같은 프로필(좌측)이 실린다.</summary>
+    /// 이름 "CROSS4"(좌/우 미구분)도 함께 싣는다 — ACS 가 좌/우를 밝히지 않고 보내는 십자는 그 이름으로 찾기 때문이고,
+    /// AMR 이 "CROSS4" 지령을 실행할 때와 같은 프로필(레시피에 설정한 면별 기본값 L 또는 R)이 실린다.</summary>
     private static readonly (string Name, SeamTypeKind Kind)[] SeamTypes =
     {
         ("LINE", SeamTypeKind.Line),
@@ -95,11 +95,12 @@ public static class AcsProfilePayload
     public static List<Assignment> BuildAssignments(IEnumerable<InspectionRecipe> recipes)
     {
         var byId = recipes.ToDictionary(r => r.Id, StringComparer.Ordinal);
+        var cross4RightWalls = InspectionRecipeResolver.Cross4RightWalls(byId.Values);
         var list = new List<Assignment>();
         foreach (var (name, kind) in SeamTypes)
             foreach (var wall in WallCodes.All)
             {
-                if (InspectionRecipeResolver.ResolveRecipeId(kind, wall.Code) is not { } recipeId
+                if (InspectionRecipeResolver.ResolveRecipeId(kind, wall.Code, cross4RightWalls) is not { } recipeId
                     || !byId.TryGetValue(recipeId, out var recipe)) continue;
                 foreach (var (dirName, dir) in new[] { ("H", InspectionMoveDirection.Horizontal), ("V", InspectionMoveDirection.Vertical) })
                     if (InspectionRecipeResolver.SelectProfileId(recipe, wall.Code, dir).ProfileId is { } profileId)

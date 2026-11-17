@@ -55,6 +55,12 @@ public class InspectionRecipe
     /// 현장 지정값이라 '기본값' 재적용 시에도 보존된다.</summary>
     public string? WallProfilesJson { get; set; }
 
+    /// <summary>CROSS4_R 전용 — ACS 가 좌/우를 밝히지 않은 구 seamType("CROSS4"·"CROSS")을 보냈을 때 <b>우측</b>으로 실행할 면
+    /// (wall_code 쉼표 구분, 예 "SM,SL"). 여기 없는 면은 좌측(CROSS4_L)으로 실행한다. null = 전부 좌측.
+    /// 좌/우는 면을 정면으로 바라본 기준이다. ACS 가 CROSS4_L/CROSS4_R 를 보내면 이 값은 쓰지 않는다.
+    /// 현장 지정값이라 '기본값' 재적용 시에도 보존된다.</summary>
+    public string? UnspecifiedSideWalls { get; set; }
+
     // (제거됨) ApproachTeachingKey — 레시피별 코봇 접근 자세 티칭 키. 런타임 미구현, 접근 자세는 Teaching 의 Wall ID
     //   로 결정된다. 코너부 등 위치별 접근은 고도화 단계에서 재설계(2026-09-18).
 

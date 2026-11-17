@@ -38,6 +38,7 @@ public sealed partial class InspectionMapViewModel : ViewModelBase
             var svc = scope.ServiceProvider.GetRequiredService<InspectionRecipeService>();
             var recipes = await svc.ListAsync();
             var byId = recipes.ToDictionary(r => r.Id);
+            var rightWalls = InspectionRecipeResolver.Cross4RightWalls(recipes);
             var teaching = await svc.ListTeachingSummaryAsync();
 
             MapRows.Clear();
@@ -47,6 +48,7 @@ public sealed partial class InspectionMapViewModel : ViewModelBase
                     Cell(SeamTypeKind.Cross3R0, w.Code, byId), Cell(SeamTypeKind.Cross3R90, w.Code, byId),
                     Cell(SeamTypeKind.Cross3R180, w.Code, byId), Cell(SeamTypeKind.Cross3R270, w.Code, byId),
                     Cell(SeamTypeKind.Cross4L, w.Code, byId), Cell(SeamTypeKind.Cross4R, w.Code, byId),
+                    Cell(SeamTypeKind.Cross, w.Code, byId, rightWalls),
                     Cell(SeamTypeKind.Corner2, w.Code, byId), Cell(SeamTypeKind.Corner, w.Code, byId)));
 
             Recipes.Clear();
@@ -83,9 +85,10 @@ public sealed partial class InspectionMapViewModel : ViewModelBase
     }
 
     // 매핑 셀 — 레시피 id(+CORNER 거울 side, 십자 면별 프로필) 와 Enabled 여부.
-    private static MapCell Cell(SeamTypeKind seam, string wallCode, Dictionary<string, HD.AMR.App.Data.Entities.InspectionRecipe> byId)
+    private static MapCell Cell(SeamTypeKind seam, string wallCode, Dictionary<string, HD.AMR.App.Data.Entities.InspectionRecipe> byId,
+        IReadOnlySet<string>? cross4RightWalls = null)
     {
-        var id = InspectionRecipeResolver.ResolveRecipeId(seam, wallCode);
+        var id = InspectionRecipeResolver.ResolveRecipeId(seam, wallCode, cross4RightWalls);
         var recipe = id is not null && byId.TryGetValue(id, out var r) ? r : null;
         var on = recipe?.Enabled == true;
         var label = id ?? "—";
@@ -100,7 +103,7 @@ public sealed partial class InspectionMapViewModel : ViewModelBase
 public sealed record MapCell(string Label, bool Enabled);
 public sealed record WallMapRow(string Code, string Label, MapCell Line,
     MapCell Cross3R0, MapCell Cross3R90, MapCell Cross3R180, MapCell Cross3R270,
-    MapCell Cross4L, MapCell Cross4R, MapCell Corner2, MapCell Corner3);
+    MapCell Cross4L, MapCell Cross4R, MapCell Cross4Unspecified, MapCell Corner2, MapCell Corner3);
 public sealed record RecipeStatusRow(string Id, string SeamType, string Orientation, bool Enabled, string Source, string AssignedProfile);
 public sealed record TeachingRow(string DrawingName, string FileName, string ProfileName, string SeamType, string UsedBy,
     int WaypointCount, string TaughtAt, string Status, bool Runnable);

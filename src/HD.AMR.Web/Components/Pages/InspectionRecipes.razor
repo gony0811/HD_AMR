@@ -20,7 +20,8 @@
     저장한 프로필을 레시피마다 지정합니다(같은 타입 프로필만 표시). 미지정이면 LINE/CROSS 액션은 FAILED 입니다 —
     <a href="inspection-map">검사 매핑 요약</a> 에서 연결 상태를 확인하세요.
     행의 <b>고급</b> 을 펼치면 카메라 목표거리를 편집할 수 있습니다. 십자(<code>CROSS4_L</code>/<code>CROSS4_R</code>)는
-    고급에서 <b>면별 프로필</b>을 따로 지정할 수 있습니다 — 좌/우는 ACS 가 <code>seamType</code> 으로 알려 줍니다.
+    고급에서 <b>면별 프로필</b>을 따로 지정할 수 있습니다 — 좌/우(면을 정면으로 바라본 기준)는 ACS 가 <code>seamType</code> 으로 알려 주고,
+    좌/우 없이 <code>CROSS4</code> 만 오면 <code>CROSS4_R</code> 고급의 <b>면별 기본값</b>으로 고릅니다.
 </p>
 
 @if (!string.IsNullOrEmpty(_msg))
@@ -166,6 +167,24 @@
                                         </div>
                                     </div>
                                 }
+                                @if (row.Id == RecipeIds.Cross4R)
+                                {
+                                    <div class="col-12">
+                                        <label class="form-label mb-1 text-muted">ACS 가 좌/우 없이 CROSS4 만 보낼 때 — 우측으로 실행할 면 (체크하지 않은 면은 CROSS4_L)</label>
+                                        <div class="d-flex flex-wrap gap-3">
+                                            @foreach (var w in WallCodes.All)
+                                            {
+                                                var wall = w.Code;
+                                                <label class="form-check-label">
+                                                    <input type="checkbox" class="form-check-input"
+                                                           checked="@InspectionRecipeResolver.ParseWallList(row.UnspecifiedSideWalls).Contains(wall)"
+                                                           @onchange="e => SetUnspecifiedSide(row, wall, e.Value is true)" />
+                                                    <code>@wall</code> @w.DisplayName
+                                                </label>
+                                            }
+                                        </div>
+                                    </div>
+                                }
                                 <div class="col-12 text-muted">
                                     seamType=<b>@row.SeamType</b>, 면자세=<b>@row.Orientation</b> ·
                                     세부값 편집 후 위 행의 <b>저장</b> 을 누르세요(같은 레시피).
@@ -253,6 +272,13 @@
         if (int.TryParse(value, out var id)) map[wallCode] = id;
         else map.Remove(wallCode);
         row.WallProfilesJson = InspectionRecipeResolver.SerializeWallProfiles(map);
+    }
+
+    private static void SetUnspecifiedSide(InspectionRecipe row, string wallCode, bool right)
+    {
+        var walls = InspectionRecipeResolver.ParseWallList(row.UnspecifiedSideWalls);
+        if (right) walls.Add(wallCode); else walls.Remove(wallCode);
+        row.UnspecifiedSideWalls = InspectionRecipeResolver.SerializeWallList(walls);
     }
 
     private static int WaypointCount(InspectionProfile p)

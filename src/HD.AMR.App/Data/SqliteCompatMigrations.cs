@@ -213,6 +213,7 @@ CREATE TABLE IF NOT EXISTS InspectionRecipes (
     InspectionProfileId INTEGER NULL,
     ChamferSlopeProfileId INTEGER NULL,
     WallProfilesJson TEXT NULL,
+    UnspecifiedSideWalls TEXT NULL,
     VisionFailRatioMax REAL NOT NULL DEFAULT 1.0,
     CreatedAt TEXT NOT NULL,
     UpdatedAt TEXT NOT NULL
@@ -250,12 +251,16 @@ CREATE TABLE IF NOT EXISTS InspectionRecipes (
         if (!hasChamferSlopeProfileId)
             db.Database.ExecuteSqlRaw("ALTER TABLE InspectionRecipes ADD COLUMN ChamferSlopeProfileId INTEGER NULL;");
 
-        // WallProfilesJson 컬럼(십자 CROSS4_L/R — 면별 티칭 프로필 지정)도 후방호환 추가. 기존 행은 NULL(= 전부 기본 프로필).
-        var hasWallProfiles = db.Database
-            .SqlQueryRaw<long>("SELECT COUNT(*) AS Value FROM pragma_table_info('InspectionRecipes') WHERE name = 'WallProfilesJson'")
-            .AsEnumerable().First() > 0;
-        if (!hasWallProfiles)
-            db.Database.ExecuteSqlRaw("ALTER TABLE InspectionRecipes ADD COLUMN WallProfilesJson TEXT NULL;");
+        // 십자 CROSS4_L/R 컬럼도 후방호환 추가 — WallProfilesJson(면별 티칭 프로필 지정, NULL = 전부 기본 프로필),
+        // UnspecifiedSideWalls(CROSS4_R — 좌/우 없는 구 CROSS4 지령을 우측으로 실행할 면, NULL = 전부 좌측).
+        foreach (var cross4Col in new[] { "WallProfilesJson", "UnspecifiedSideWalls" })
+        {
+            var hasCol = db.Database
+                .SqlQueryRaw<long>($"SELECT COUNT(*) AS Value FROM pragma_table_info('InspectionRecipes') WHERE name = '{cross4Col}'")
+                .AsEnumerable().First() > 0;
+            if (!hasCol)
+                db.Database.ExecuteSqlRaw($"ALTER TABLE InspectionRecipes ADD COLUMN {cross4Col} TEXT NULL;");
+        }
 
         // DryRun 컬럼(레시피 드라이런 모드 토글)도 후방호환 추가. 기존 행은 DEFAULT 0(false=일반 검사).
         // SQLite 는 NOT NULL ADD COLUMN 에 DEFAULT 가 필수 — 기존 행이 그 값으로 백필된다.

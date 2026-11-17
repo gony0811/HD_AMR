@@ -120,11 +120,12 @@ public class InspectionRecipeService
         var seed = BuildDefaults().FirstOrDefault(r => r.Id == id);
         if (seed is null) return false;
         var assigned = await _db.InspectionRecipes.AsNoTracking()
-            .Where(r => r.Id == id).Select(r => new { r.InspectionProfileId, r.ChamferSlopeProfileId, r.WallProfilesJson })
+            .Where(r => r.Id == id).Select(r => new { r.InspectionProfileId, r.ChamferSlopeProfileId, r.WallProfilesJson, r.UnspecifiedSideWalls })
             .FirstOrDefaultAsync(ct);
         seed.InspectionProfileId = assigned?.InspectionProfileId;
         seed.ChamferSlopeProfileId = assigned?.ChamferSlopeProfileId;
         seed.WallProfilesJson = assigned?.WallProfilesJson;
+        seed.UnspecifiedSideWalls = assigned?.UnspecifiedSideWalls;
         await SaveAsync(seed, ct);
         _logger.LogInformation("검사 레시피 {Id} 기본값 재적용", id);
         return true;
@@ -139,6 +140,8 @@ public class InspectionRecipeService
         if (recipe.ChamferSlopeProfileId is not null && recipe.Id != RecipeIds.Line)
             return $"챔퍼 수직용 프로필은 LINE 레시피에만 지정할 수 있습니다(현재 {recipe.Id}).";
 
+        if (!string.IsNullOrWhiteSpace(recipe.UnspecifiedSideWalls) && recipe.Id != RecipeIds.Cross4R)
+            return $"좌/우 미지정 지령의 면별 기본값은 CROSS4_R 레시피에만 설정할 수 있습니다(현재 {recipe.Id}).";
         if (!string.IsNullOrWhiteSpace(recipe.WallProfilesJson) && !InspectionRecipeResolver.IsCross4(recipe.Id))
             return $"면별 프로필은 CROSS4_L/CROSS4_R 레시피에만 지정할 수 있습니다(현재 {recipe.Id}).";
 

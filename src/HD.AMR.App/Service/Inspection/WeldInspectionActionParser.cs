@@ -68,7 +68,7 @@ public static class WeldInspectionActionParser
             case "LINE": seamType = SeamTypeKind.Line; break;
             case "CROSS4_L": seamType = SeamTypeKind.Cross4L; break;            // 십자 — 수직선 좌측
             case "CROSS4_R": seamType = SeamTypeKind.Cross4R; break;            // 십자 — 수직선 우측
-            case "CROSS4": case "CROSS": seamType = SeamTypeKind.Cross; break;   // legacy(좌/우 미구분) — CROSS4_L 레시피로 실행
+            case "CROSS4": case "CROSS": seamType = SeamTypeKind.Cross; break;   // 좌/우 미구분 — 레시피에 설정한 면별 기본값(L 또는 R)으로 실행
             case "CROSS3_R0": case "CROSS3": seamType = SeamTypeKind.Cross3R0; break;   // T자 0° (legacy bare "CROSS3" → 0°)
             case "CROSS3_R90": seamType = SeamTypeKind.Cross3R90; break;          // T자 90°
             case "CROSS3_R180": seamType = SeamTypeKind.Cross3R180; break;        // T자 180°
