@@ -34,6 +34,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
     private readonly ILogger<WeldInspectionOrchestrator> _logger;
 
     private readonly object _sync = new();
+    /// <summary>코봇 이동 시험으로 도달한 용접선의 taskId·attempt — 수동 촬영 화면이 비전에 싣는다(없으면 보관하지 않음).</summary>
+    private readonly AcsTestCaptureTarget? _testTarget;
     private (string OrderId, string AnchorGroupId, InspectionMoveDirection Direction, string? WallCode)? _lastAnchor;   // wall_code 포함 — 꺾인 용접선(벽→챔퍼)이 같은 그룹·방향이어도 다른 면 프레임을 재사용하지 않는다
     private double[]? _lastInternalWorkpieceFrame;                 // 같은 anchor에서 재사용할 BASE 기준 내부 프레임
     private (double[] Start, double[] End)? _lastAnchorSeamW;     // 그 프레임을 쓴 task 의 용접선(맵) — 꺾인 용접선이 같은 프레임을 물려받지 않게
@@ -93,8 +95,10 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         VisionInterfaceService vision,
         OperationLogService opLog,
         SequenceRunGate runGate,
-        ILogger<WeldInspectionOrchestrator> logger)
+        ILogger<WeldInspectionOrchestrator> logger,
+        AcsTestCaptureTarget? testTarget = null)
     {
+        _testTarget = testTarget;
         _opLog = opLog;
         _runGate = runGate;
         _scopeFactory = scopeFactory;
@@ -130,6 +134,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
     private async Task<InspectionActionResult> ExecuteMoveToSeamStartCoreAsync(VdaAction action, string orderId,
         double? nodeThetaRad, CancellationToken ct)
     {
+        // 새 시험 — 이전 시험 용접선의 taskId 로 수동 촬영되지 않게 먼저 비운다(도달하면 다시 채운다)
+        _testTarget?.Clear();
         if (!WeldInspectionActionParser.TryParseSeamStart(action, out var request, out var parseError))
             return InspectionActionResult.Fail("orderValidationError", $"파라미터 해석 실패: {parseError}");
         var req = request!;
@@ -248,7 +254,16 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                         $"측정 오류: {ex.Message}", orderId);
                     aruco = $"태그 측정 오류({ex.Message})";
                 }
-                return InspectionActionResult.Ok($"reached — {stepMsg}{j5} · {aruco}");
+                // 수동 촬영용 taskId·attempt 보관 — ACS 가 둘 다 실어 보낸 경우만(구버전 ACS 면 종전처럼 빈 taskId 로 수동 촬영)
+                var capture = "";
+                if (_testTarget is not null && req.TaskId is { } tid && req.Attempt is { } att)
+                {
+                    _testTarget.Set(tid, att, req.JobRef, req.DrawingPos.WallCode);
+                    capture = $" · 수동 촬영 task={tid} attempt={att}";
+                    _opLog.Log(OperationLogService.SourceAcs, OpCategory.Action, "시험 용접선 수동 촬영 준비", true,
+                        $"jobRef={req.JobRef}, wall={req.DrawingPos.WallCode}, taskId={tid}, attempt={att} — 검사 프로필·시퀀스 화면 수동 촬영에 싣는다", orderId);
+                }
+                return InspectionActionResult.Ok($"reached — {stepMsg}{j5} · {aruco}{capture}");
         }
     }
 
@@ -438,6 +453,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
     private async Task<InspectionActionResult> ExecuteCoreAsync(VdaAction action, string orderId, double? nodeThetaRad,
                                                                 bool isLastInspection, CancellationToken ct)
     {
+        // 본검사가 시작되면 코봇이 다른 자세로 옮겨 가므로 시험 용접선 보관을 해제한다
+        _testTarget?.Clear();
         // 1) 파싱 — 실패는 계약 위반(orderValidationError).
         if (!WeldInspectionActionParser.TryParse(action, out var request, out var parseError))
             return InspectionActionResult.Fail("orderValidationError", $"파라미터 해석 실패: {parseError}");

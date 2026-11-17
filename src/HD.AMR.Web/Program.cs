@@ -100,6 +100,7 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<DeviceHealthMonito
 // AMR 장비 자체 상태 변화(모드·이동·조그·오류)를 운영 로그(출처 AMR)로 기록.
 builder.Services.AddHostedService<AmrActivityLogService>();
 // startWeldInspection 실행 총괄(2차 검사 연동) — singleton, 액션마다 scope 생성해 시퀀스 실행.
+builder.Services.AddSingleton<HD.AMR.App.Service.Inspection.AcsTestCaptureTarget>();   // 시험 용접선 taskId·attempt(수동 촬영용)
 builder.Services.AddSingleton<HD.AMR.App.Service.Inspection.IWeldInspectionExecutor,
     HD.AMR.App.Service.Inspection.WeldInspectionOrchestrator>();
 

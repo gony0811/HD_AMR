@@ -119,11 +119,18 @@ public sealed partial class SequenceViewModel : ViewModelBase
     [ObservableProperty] private double _faceOriginV;
     [ObservableProperty] private int _faceSeamDirIndex;      // FaceSeamDirection: 0 +U, 1 −U, 2 +V, 3 −V
 
-    public SequenceViewModel(IServiceScopeFactory scopeFactory, CobotService cobot, AMRService amr)
+    public SequenceViewModel(IServiceScopeFactory scopeFactory, CobotService cobot, AMRService amr,
+        AcsTestCaptureTarget? testTarget = null)
     {
         _scopeFactory = scopeFactory;
         _cobot = cobot;
         _amr = amr;
+        _testTarget = testTarget;
+        if (_testTarget is not null)
+        {
+            _testTarget.Changed += t => Avalonia.Threading.Dispatcher.UIThread.Post(() => ShowTestTarget(t));
+            ShowTestTarget(_testTarget.Current);
+        }
         _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _timer.Tick += (_, _) => RefreshConnection();
     }
@@ -234,9 +241,36 @@ public sealed partial class SequenceViewModel : ViewModelBase
             InspectionProfileId = 0;
     }
 
+    private readonly AcsTestCaptureTarget? _testTarget;
+
+    /// <summary>ACS 코봇 이동 시험으로 도달한 용접선의 taskId·attempt 를 도면 순회 촬영(CAPTURE_REQ)에 싣는다 — 시험 도달 때 자동으로 켜진다.</summary>
+    [ObservableProperty] private bool _useAcsTestTask;
+    /// <summary>보관 중인 시험 용접선 표기(없으면 null — 체크 숨김).</summary>
+    [ObservableProperty] private string? _acsTestTaskText;
+    public bool HasAcsTestTask => AcsTestTaskText is not null;
+    partial void OnAcsTestTaskTextChanged(string? value) => OnPropertyChanged(nameof(HasAcsTestTask));
+    partial void OnUseAcsTestTaskChanged(bool value) => ApplyTestTask();
+
+    private void ShowTestTarget(AcsTestCaptureTarget.Target? t)
+    {
+        AcsTestTaskText = t?.Describe();
+        UseAcsTestTask = t is not null;
+        ApplyTestTask();
+    }
+
+    /// <summary>시험 용접선 taskId·attempt 를 context 에 — 끄거나 없으면 종전(빈 taskId·attempt 1·실행마다 captureSeq 1부터).</summary>
+    private void ApplyTestTask()
+    {
+        var t = UseAcsTestTask ? _testTarget?.Current : null;
+        _context.AcsTaskId = t?.TaskId;
+        _context.AcsAttempt = t?.Attempt;
+        _context.CaptureSeqSource = t is null ? null : _testTarget!.NextCaptureSeq;
+    }
+
     // 뷰모델 → context 반영(실행에 사용).
     private void ApplyContext()
     {
+        ApplyTestTask();
         _context.Tool = Tool;
         _context.Velocity = Velocity;
         _context.InspectionSurfaceId = InspectionSurfaceId;

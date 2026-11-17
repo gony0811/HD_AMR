@@ -137,6 +137,13 @@ public class SequenceContext
     /// null=미연동 → CAPTURE_REQ 에 1(첫 시도)로 전송.</summary>
     public byte? AcsAttempt { get; set; }
 
+    /// <summary>
+    /// captureSeq 발번기 — 주면 촬영마다 이 값을 쓴다(수동 실행에서 ACS 시험 용접선의 taskId·attempt 를 실을 때,
+    /// 여러 번 실행·검사 프로필 화면 촬영과 (taskId, attempt, captureSeq) 가 겹치지 않게 <see cref="Inspection.AcsTestCaptureTarget"/> 가 이어서 센다).
+    /// null 이면 실행마다 1부터(종전).
+    /// </summary>
+    public Func<ushort?>? CaptureSeqSource { get; set; }
+
     /// <summary>정렬(anchor) 공유 그룹 id (params.anchorGroupId).</summary>
     public string? AnchorGroupId { get; set; }
 

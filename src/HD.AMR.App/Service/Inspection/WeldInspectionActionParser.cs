@@ -97,25 +97,8 @@ public static class WeldInspectionActionParser
         // ── taskId / attempt (사양 §8.1/§8.1.1, N14) ──────────────────
         // 선택 필드: 없거나 null 이면 폴백(실행 스텝이 Guid.Empty/1). 실려 왔는데 형식이 틀리면 거부.
         // 계약상 키 위치는 params 안이며, 전환기 방어로 최상위 actionParameters key 도 같은 규칙으로 받는다.
-        var taskIdValue = taskIdEl ?? (pr.TryGetProperty("taskId", out var tEl) ? tEl : (JsonElement?)null);
-        Guid? taskId = null;
-        if (taskIdValue is { ValueKind: not JsonValueKind.Null } tv)
-        {
-            if (tv.ValueKind != JsonValueKind.String
-                || !Guid.TryParse(tv.GetString(), out var parsedTaskId) || parsedTaskId == Guid.Empty)
-            { error = "params.taskId 부적합 (GUID 문자열 아님)"; return false; }
-            taskId = parsedTaskId;
-        }
-
-        var attemptValue = attemptEl ?? (pr.TryGetProperty("attempt", out var aEl) ? aEl : (JsonElement?)null);
-        byte? attempt = null;
-        if (attemptValue is { ValueKind: not JsonValueKind.Null } av)
-        {
-            if (av.ValueKind != JsonValueKind.Number
-                || !av.TryGetInt32(out var parsedAttempt) || parsedAttempt is < 1 or > 255)
-            { error = "params.attempt 부적합 (1~255 정수)"; return false; }
-            attempt = (byte)parsedAttempt;
-        }
+        if (!TryParseTaskIdAttempt(taskIdEl, attemptEl, pr, out var taskId, out var attempt, ref error))
+            return false;
 
         if (!TryParseLiftStrokeMm(liftStrokeEl, pr, out var liftStrokeMm, ref error))
             return false;
@@ -140,7 +123,8 @@ public static class WeldInspectionActionParser
 
     /// <summary>
     /// `moveToSeamStart` 액션(사양 §8.7 — 코봇 seam 시작점 reach 시험) 해석. actionParameters 는
-    /// jobRef/position <b>2쌍</b>이고 params 는 없다(검사가 아니므로 seamType·taskId 등 미전송).
+    /// jobRef/position 이 필수이고 params 는 선택이다(liftStrokeMm·taskId·attempt — 검사가 아니므로 seamType 등은 없다).
+    /// taskId·attempt 는 본검사와 같은 규칙으로 해석해, 도달 후 수동 촬영 때 비전에 싣는다(<see cref="AcsTestCaptureTarget"/>).
     /// position 은 startWeldInspection 과 같은 구조라 같은 해석기를 쓴다. 면 법선 자세를 wall_code 로
     /// 정하므로 정본 10코드 밖이면 거부한다.
     /// </summary>
@@ -149,7 +133,7 @@ public static class WeldInspectionActionParser
         request = null;
         error = null;
 
-        JsonElement? jobRefEl = null, positionEl = null, paramsEl = null, liftStrokeEl = null;
+        JsonElement? jobRefEl = null, positionEl = null, paramsEl = null, liftStrokeEl = null, taskIdEl = null, attemptEl = null;
         foreach (var p in action.ActionParameters)
         {
             switch (p.Key)
@@ -158,6 +142,8 @@ public static class WeldInspectionActionParser
                 case "position": positionEl = ToElement(p.Value); break;
                 case "params": paramsEl = ToElement(p.Value); break;
                 case "liftStrokeMm": liftStrokeEl = ToElement(p.Value); break;
+                case "taskId": taskIdEl = ToElement(p.Value); break;
+                case "attempt": attemptEl = ToElement(p.Value); break;
             }
         }
 
@@ -183,8 +169,39 @@ public static class WeldInspectionActionParser
         var prObj = paramsEl is { ValueKind: JsonValueKind.Object } po ? po : (JsonElement?)null;
         if (!TryParseLiftStrokeMm(liftStrokeEl, prObj, out var liftStrokeMm, ref error))
             return false;
+        if (!TryParseTaskIdAttempt(taskIdEl, attemptEl, prObj, out var taskId, out var attempt, ref error))
+            return false;
 
-        request = new MoveToSeamStartRequest(jobRef!, seamStart!, seamEnd!, drawingPos, liftStrokeMm);
+        request = new MoveToSeamStartRequest(jobRef!, seamStart!, seamEnd!, drawingPos, liftStrokeMm, taskId, attempt);
+        return true;
+    }
+
+    /// <summary>
+    /// `params.taskId`(GUID 문자열, Empty 불가)·`params.attempt`(1~255 정수) 해석 — startWeldInspection·moveToSeamStart 공용.
+    /// 선택 필드: 없거나 null 이면 null(성공). 실려 왔는데 형식이 틀리면 거부. 최상위 key(전환기 방어)가 params 안보다 우선.
+    /// </summary>
+    private static bool TryParseTaskIdAttempt(JsonElement? taskIdEl, JsonElement? attemptEl, JsonElement? pr,
+        out Guid? taskId, out byte? attempt, ref string? error)
+    {
+        taskId = null;
+        attempt = null;
+        var taskIdValue = taskIdEl ?? (pr is { ValueKind: JsonValueKind.Object } p1 && p1.TryGetProperty("taskId", out var tEl) ? tEl : (JsonElement?)null);
+        if (taskIdValue is { ValueKind: not JsonValueKind.Null } tv)
+        {
+            if (tv.ValueKind != JsonValueKind.String
+                || !Guid.TryParse(tv.GetString(), out var parsedTaskId) || parsedTaskId == Guid.Empty)
+            { error = "params.taskId 부적합 (GUID 문자열 아님)"; return false; }
+            taskId = parsedTaskId;
+        }
+
+        var attemptValue = attemptEl ?? (pr is { ValueKind: JsonValueKind.Object } p2 && p2.TryGetProperty("attempt", out var aEl) ? aEl : (JsonElement?)null);
+        if (attemptValue is { ValueKind: not JsonValueKind.Null } av)
+        {
+            if (av.ValueKind != JsonValueKind.Number
+                || !av.TryGetInt32(out var parsedAttempt) || parsedAttempt is < 1 or > 255)
+            { error = "params.attempt 부적합 (1~255 정수)"; return false; }
+            attempt = (byte)parsedAttempt;
+        }
         return true;
     }
 
