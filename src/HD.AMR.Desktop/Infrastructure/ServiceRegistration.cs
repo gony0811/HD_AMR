@@ -250,6 +250,7 @@ internal static class ServiceRegistration
         // ⑱ 검사 수행 — 일반(비전 캡처)과 드라이런(이동만) 두 변형. dryRun 이 첫 생성자 인자.
         services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<InspectionRunStep>(sp, false));
         services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<InspectionRunStep>(sp, true));
+        services.AddScoped<ISequenceStep, BundleEndWdStep>();   // 1190: 묶음 마지막 용접선 끝 WD 확인
         services.AddScoped<ISequenceStep, WObjResetStep>();
         services.AddScoped<ISequenceStep, CobotHomeReturnStep>();
         services.AddScoped<ISequenceStep, MonitorCloseStep>();

@@ -619,6 +619,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             }
 
             BundleAssignment? bundle = null;
+            var bundleEndWd = false;   // 묶음 마지막 팔로워 — 공통 좌표계를 연장해 쓰므로 끝점 WD 로 기울기를 다시 잡는다
             lock (_sync) _bundleByAction.TryGetValue(action.ActionId, out bundle);
             if (bundle?.Role == BundleRole.Follower)
             {
@@ -674,7 +675,10 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                     cachedInternalFrame = (double[])shared.Frame.Clone();
                     cachedAnchorStartBase = shared.Start?.ToArray();
                     cachedAnchorEndTcp = shared.EndTcp?.ToArray();
-                    _logger.LogInformation("묶음 {Id} 공통 좌표계 — {Job} 교시 생략", bundle.BundleId, req.JobRef);
+                    lock (_sync)
+                        bundleEndWd = _bundleOrder.LastOrDefault(a => a.BundleId == bundle.BundleId)?.ActionId == action.ActionId;
+                    _logger.LogInformation("묶음 {Id} 공통 좌표계 — {Job} 교시 생략{Last}", bundle.BundleId, req.JobRef,
+                        bundleEndWd ? " (묶음 마지막 — 끝점 WD 확인)" : "");
                 }
             }
 
@@ -693,6 +697,9 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
 
             var stepKeys = SelectStepKeys(recipe.DryRun, recipeKeys,
                 sequence.Steps.Select(st => st.Key), anchorHit, isLastInspection);
+            if (bundleEndWd && !recipe.DryRun && stepKeys.Contains("inspectionRun")
+                && sequence.Steps.Any(st => st.Key == Sequence.Steps.BundleEndWdStep.StepKey))
+                stepKeys = stepKeys.Append(Sequence.Steps.BundleEndWdStep.StepKey).ToArray();
 
             if (stepKeys.Length == 0)
                 return InspectionActionResult.Fail("inspectionFailed",
@@ -785,6 +792,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                     req.JobRef);
             if (cachedInternalFrame is not null)
                 context.Bag[InternalWorkpieceFrame.BagKey] = cachedInternalFrame;
+            if (bundleEndWd)
+                context.Bag[Sequence.Steps.BundleEndWdStep.RequestBagKey] = true;
             // ②가 캐시 프레임을 이번 시작점으로 평행 이동하고(없으면 실패), 직전 종료 자세 그대로면 복귀 없이 연속 이동한다.
             if (cachedAnchorStartBase is not null)
                 context.Bag[CobotInspectionMoveStep.AnchorStartBaseBagKey] = cachedAnchorStartBase;
@@ -1106,6 +1115,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         return baseSteps
             // ① AMR 위치 이동은 페이지 테스트 전용 — ACS 경로의 주행은 order 실행기가 이미 마쳤다.
             .Where(k => k != Sequence.Steps.AmrMoveStep.StepKey)
+            // 묶음 마지막 끝 WD 확인은 오케스트레이터가 해당 TASK 에만 붙인다.
+            .Where(k => k != Sequence.Steps.BundleEndWdStep.StepKey)
             .Where(k => !(anchorHit && AlignmentStepKeys.Contains(k)))
             .Where(k => isLastInspection || k != HomeStepKey)
             .ToArray();
