@@ -31,16 +31,16 @@ public class InspectionRecipeResolverTests
     [InlineData(SeamTypeKind.Line, "PL", "LINE")]
     [InlineData(SeamTypeKind.Line, "SU", "LINE")]
     [InlineData(SeamTypeKind.Line, "PU", "LINE")]
-    [InlineData(SeamTypeKind.Cross, "B", "CROSS4")]
-    [InlineData(SeamTypeKind.Cross, "T", "CROSS4")]
-    [InlineData(SeamTypeKind.Cross, "SM", "CROSS4")]
-    [InlineData(SeamTypeKind.Cross, "PM", "CROSS4")]
-    [InlineData(SeamTypeKind.Cross, "F", "CROSS4")]
-    [InlineData(SeamTypeKind.Cross, "A", "CROSS4")]
-    [InlineData(SeamTypeKind.Cross, "SL", "CROSS4")]
-    [InlineData(SeamTypeKind.Cross, "PL", "CROSS4")]
-    [InlineData(SeamTypeKind.Cross, "SU", "CROSS4")]
-    [InlineData(SeamTypeKind.Cross, "PU", "CROSS4")]
+    [InlineData(SeamTypeKind.Cross4L, "B", "CROSS4_L")]
+    [InlineData(SeamTypeKind.Cross4L, "T", "CROSS4_L")]
+    [InlineData(SeamTypeKind.Cross4L, "SM", "CROSS4_L")]
+    [InlineData(SeamTypeKind.Cross4L, "PM", "CROSS4_L")]
+    [InlineData(SeamTypeKind.Cross4L, "F", "CROSS4_L")]
+    [InlineData(SeamTypeKind.Cross4L, "A", "CROSS4_L")]
+    [InlineData(SeamTypeKind.Cross4L, "SL", "CROSS4_L")]
+    [InlineData(SeamTypeKind.Cross4L, "PL", "CROSS4_L")]
+    [InlineData(SeamTypeKind.Cross4L, "SU", "CROSS4_L")]
+    [InlineData(SeamTypeKind.Cross4L, "PU", "CROSS4_L")]
     public void Resolve_LineAndCross_AreSurfaceIndependent(SeamTypeKind seamType, string wallCode, string expected)
     {
         var ok = InspectionRecipeResolver.TryResolve(MakeRequest(seamType, wallCode), out var recipeId, out var error);
@@ -53,7 +53,7 @@ public class InspectionRecipeResolverTests
     [Theory]
     [InlineData(SeamTypeKind.Line, "B", "LINE")]
     [InlineData(SeamTypeKind.Line, "F", "LINE")]           // 마구리도 동일 단일 레시피
-    [InlineData(SeamTypeKind.Cross, "T", "CROSS4")]
+    [InlineData(SeamTypeKind.Cross4L, "T", "CROSS4_L")]
     [InlineData(SeamTypeKind.Cross3R90, "SM", "CROSS3-R90")]
     [InlineData(SeamTypeKind.Corner, "PM", "CORNER3")]
     [InlineData(SeamTypeKind.Corner2, "PM", "CORNER2")]
@@ -150,10 +150,10 @@ public class InspectionRecipeResolverTests
     }
 
     [Fact]
-    public void RecipeIds_CatalogHasEightEntries()
+    public void RecipeIds_CatalogHasNineEntries()
     {
-        // LINE 1 + CROSS3 회전 4 + CROSS4 1 + CORNER2 1 + CORNER3 1 = 8 (면 자세-독립 통합, §9-8).
-        Assert.Equal(8, RecipeIds.All.Count);
+        // LINE 1 + CROSS3 회전 4 + CROSS4 좌·우 2 + CORNER2 1 + CORNER3 1 = 9 (면 자세-독립, §9-8).
+        Assert.Equal(9, RecipeIds.All.Count);
         Assert.Equal(RecipeIds.All.Count, RecipeIds.All.Distinct().Count());
     }
 
@@ -164,7 +164,8 @@ public class InspectionRecipeResolverTests
     [InlineData("CROSS3-R90", "CROSS3_R90")]
     [InlineData("CROSS3-R180", "CROSS3_R180")]
     [InlineData("CROSS3-R270", "CROSS3_R270")]
-    [InlineData("CROSS4", "CROSS")]
+    [InlineData("CROSS4_L", "CROSS")]
+    [InlineData("CROSS4_R", "CROSS")]
     [InlineData("CORNER2", "CORNER2")]
     [InlineData("CORNER3", "CORNER3")]
     public void ProfileSeamTypeOf_MapsRecipeToProfileSeam(string recipeId, string expected)
@@ -177,6 +178,7 @@ public class InspectionRecipeResolverTests
     [InlineData("")]
     [InlineData("LINE-WALL")]    // 통합으로 폐기된 구 변종 id — 더 이상 카탈로그에 없음
     [InlineData("CROSS4-XYZ")]
+    [InlineData("CROSS4")]       // 좌/우 분리로 폐기된 구 id
     public void ProfileSeamTypeOf_UnknownRecipe_ReturnsNull(string? recipeId)
     {
         Assert.Null(InspectionRecipeResolver.ProfileSeamTypeOf(recipeId));
@@ -236,7 +238,7 @@ public class InspectionRecipeResolverTests
     [Fact]
     public void SelectProfileId_NonLineRecipe_IgnoresChamferSlopeProfile()
     {
-        var recipe = new InspectionRecipe { Id = RecipeIds.Cross4, InspectionProfileId = 9, ChamferSlopeProfileId = 20 };
+        var recipe = new InspectionRecipe { Id = RecipeIds.Cross4L, InspectionProfileId = 9, ChamferSlopeProfileId = 20 };
         var (id, slope) = InspectionRecipeResolver.SelectProfileId(recipe, "SU", InspectionMoveDirection.Vertical);
         Assert.False(slope);
         Assert.Equal(9, id);

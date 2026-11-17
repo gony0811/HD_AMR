@@ -171,7 +171,9 @@ public class WeldInspectionActionParserTests
     // + legacy CROSS→Cross·CORNER→Corner·bare CROSS3→Cross3R0 수용.
     [Theory]
     [InlineData("LINE", SeamTypeKind.Line)]
-    [InlineData("CROSS4", SeamTypeKind.Cross)]
+    [InlineData("CROSS4_L", SeamTypeKind.Cross4L)]
+    [InlineData("CROSS4_R", SeamTypeKind.Cross4R)]
+    [InlineData("CROSS4", SeamTypeKind.Cross)]     // 좌/우 미지정 → 면별 기본값(L 또는 R)으로 실행
     [InlineData("CROSS", SeamTypeKind.Cross)]      // legacy
     [InlineData("CROSS3_R0", SeamTypeKind.Cross3R0)]
     [InlineData("CROSS3_R90", SeamTypeKind.Cross3R90)]

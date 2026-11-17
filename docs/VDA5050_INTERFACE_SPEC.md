@@ -7,6 +7,7 @@
 | 대상 | HD_AMR 통합 운영 S/W 개발팀 (로봇 온보드) |
 | 기준 표준 | **VDA 5050 v2.0** (Interface for the communication between AGV and master control) |
 | 상태 | **확정** — N10(정차 이격)만 잠정값 유지. N12(ACS 생존 신호)는 2026-09-03 승인. N13(검사 타입 카탈로그)은 2026-09-14 제안(계약 무변경). N14(`taskId`·`attempt`)는 2026-09-21 계약 추가·양측 구현 완료(실기 관통 확인 잔여). N17(seam z 기준면)은 2026-09-23 신규 제기. N10(정차 이격)은 2026-09-28 1차 회신(잠정 1.2 m), N18(거리 파라미터 2종 정리)은 2026-09-28 신규 제기 |
+| 개정 1.13 | 2026-11-17 — **CROSS4 좌/우 분리** `[N13 연장]`: 십자 4갈래를 수직 용접선이 좌측/우측에 있는 두 타입으로 나눈다 — `seamType` enum 에 **`CROSS4_L`·`CROSS4_R` 추가**, 레시피도 `CROSS4_L`/`CROSS4_R` 2종(카탈로그 8→9종). 수평선의 높음/낮음은 ACS 가 주는 시작점·끝점에 이미 담겨 있어 타입으로 나누지 않는다. **둘 다 받는다**: ACS 가 `CROSS4_L`/`CROSS4_R` 를 보내면 그대로 따르고, 지금처럼 `CROSS4`(·legacy `CROSS`)만 보내면 AMR 레시피에 설정한 **면별 기본값(L 또는 R, 설정 없으면 L)** 으로 실행한다 — 당장은 ACS 수정 없이 면별 설정으로 시작하고, 한 면에 좌/우가 섞이면 ACS 가 그 십자만 지정한다. ACS 가 좌/우를 지정하려면 ① `seamType` 을 `CROSS4_L`/`CROSS4_R` 로 발행, ② 프로필 지정표(`PUT /api/inspection-profiles/sync` 의 `assignments`)에서 유형 이름 `CROSS4_L`/`CROSS4_R` 로 조회(이름 `CROSS4` 줄은 면별 기본값의 프로필로 계속 실린다). 십자 레시피는 면(`wall_code`)별로 다른 프로필을 지정할 수 있다(지정표에 면별로 반영). **좌/우 = 면을 정면으로 바라본 기준**(천장 T·바닥 B 는 약속 미정) — §8.5 |
 | 개정 1.11 | 2026-10-31 — **§4.4.2 정차 온보드 보정 신설 `[N23]`**(ACS 개정 1.12 초안 `params.stationAdjust` 수용). AMR 1단계 구현 — 도착 후 첫 액션 전에 정차의 용접선별 면 법선거리를 원래 정차점·100 mm 후진점 2표본으로 계산해 허락된 **후진** 범위 안에서 한 번 옮겨 선다. 보고 토큰 `stationAdjusted` 구현. 전진·횡·각은 받기만 함. 필드 없으면 종전 동작 — **계약 하위 호환** |
 | 개정 1.10 | 2026-10-23 — **§10 `[N17]` AMR 입장 확정**: seam z 는 **ACS 가 층 바닥 기준(`z − level_z`)으로 변환해 발행**(부록 B 갱신). 실기 IK 실패(접근점 z ≈ 9.7 m) 근거. AMR 은 좌표 기준 오류(접근점 BASE 거리 > 3 m)를 IK 전에 차단·보고 |
 | 개정 1.9 | 2026-10-07 — **LINE·CROSS4 면 자세별 변종 통합** `[N13 연장]`: LINE/CROSS4 를 면 자세별 5종에서 **면 자세-독립 단일 레시피**(`LINE`/`CROSS4`)로 통합(CROSS3 회전·CORNER 과 동일하게 면 무관). 접근 자세·법선·방향은 런타임이 `wall_code` 로 계산하고, 면별 차이는 티칭 프로필이 흡수하므로 면 자세는 레시피 선택에 쓰지 않는다. 카탈로그 16→8종. **계약 무변경**(ACS 는 `seamType`+`wall_code` 그대로 발행). AMR resolver·시드·구 행 마이그레이션(바인딩 보존)·테스트·§8.5 표 반영 완료 — §8.5·INSPECTION_TYPES.md §9-9 |
@@ -666,7 +667,7 @@ HD_AMR ──(CAPTURE_REQ 34B: taskId[15-30] · attempt[31] · captureSeq[32-33]
       "type": "object",
       "required": ["seamType", "sectionDxfId", "inspectionProfileId", "standoffMm", "anchorGroupId", "seqInGroup"],
       "properties": {
-        "seamType": { "enum": ["LINE", "CROSS3_R0", "CROSS3_R90", "CROSS3_R180", "CROSS3_R270", "CROSS4", "CORNER2", "CORNER3"] },
+        "seamType": { "enum": ["LINE", "CROSS3_R0", "CROSS3_R90", "CROSS3_R180", "CROSS3_R270", "CROSS4_L", "CROSS4_R", "CORNER2", "CORNER3"] },
         "_seamType_note": "CROSS3 회전 4종 확장(2026-10-07, N13 연장 · INSPECTION_TYPES §9-8): CROSS3 는 회전별 CROSS3_R0/R90/R180/R270 로 발행(면 자세 무관). AMR 파서는 하위호환으로 legacy CROSS(→CROSS4)·CORNER(→CORNER3)·bare CROSS3(→CROSS3_R0)도 수용 — ACS 는 canonical 값 발행 전환 필요. 0° 기준·회전 부호(CW/CCW)는 ACS 합의 대기",
         "points": { "type": "array" },
         "sectionDxfId": { "type": "string" },
@@ -737,13 +738,13 @@ HD_AMR ──(CAPTURE_REQ 34B: taskId[15-30] · attempt[31] · captureSeq[32-33]
 **검사 타입 카탈로그** — 정본은 [INSPECTION_TYPES](INSPECTION_TYPES.md). **정본화(2026-09-15): 독립 5종 형상**
 (`LINE`·`CROSS3` 3갈래·`CROSS4` 4갈래·`CORNER2` 2면·`CORNER3` 3면). **모든 형상이 면 자세-독립 단일(또는 회전별) 레시피**
 (2026-10-07 통합, §9-9): LINE/CROSS4 각 1종, CROSS3 회전 4종(0°/90°/180°/270°), 코너(CORNER2/CORNER3) 각 1종(±거울)
-= **8종**(거울 분리 시 최대 10). 접근 자세·법선·방향은 런타임이 `wall_code` 로 계산하므로 면 자세는 레시피 선택에 쓰지 않는다.
+= 8종이었고, **2026-11-17 CROSS4 를 수직 용접선 좌/우 2종(`CROSS4_L`/`CROSS4_R`)으로 나눠 9종**(거울 분리 시 최대 11). 접근 자세·법선·방향은 런타임이 `wall_code` 로 계산하므로 면 자세는 레시피 선택에 쓰지 않는다.
 
 | 형상 | 레시피 id | 면 자세 |
 |---|---|---|
 | LINE (직선 1갈래) | `LINE` | 무관(런타임 `wall_code`) |
 | CROSS3 (T자 3갈래) | `CROSS3-R0`/`-R90`/`-R180`/`-R270` (회전 4종) | 무관 |
-| CROSS4 (십자 4갈래) | `CROSS4` | 무관(런타임 `wall_code`) |
+| CROSS4 (십자 4갈래) | `CROSS4_L`/`CROSS4_R` (수직 용접선 좌측/우측 2종) | 무관 — 면별 프로필 지정 가능 |
 | CORNER2 (2면 코너) | `CORNER2` (±거울) | 무관 |
 | CORNER3 (3면 코너) | `CORNER3` (±거울) | 무관 |
 
@@ -751,8 +752,8 @@ HD_AMR ──(CAPTURE_REQ 34B: taskId[15-30] · attempt[31] · captureSeq[32-33]
 > 코너 각도 균일성(전부 135°·90°·90°)은 각도상 1종 근거이나 브릿지 플레이트 실형상은 위치별 캡처 프로필로 관리.
 >
 > **계약(`seamType` enum) 확장 (N13 반영, 2026-09-15; CROSS3 회전 4종 2026-10-07)**: enum =
-> **`LINE`/`CROSS3_R0`·`CROSS3_R90`·`CROSS3_R180`·`CROSS3_R270`/`CROSS4`/`CORNER2`/`CORNER3`**.
-> AMR 파서·resolver·시드 구현 완료(§8.5.1 (5)); legacy `CROSS`(→CROSS4)·`CORNER`(→CORNER3)·bare `CROSS3`(→`CROSS3_R0`)도 수용(전환 유예).
+> **`LINE`/`CROSS3_R0`·`CROSS3_R90`·`CROSS3_R180`·`CROSS3_R270`/`CROSS4_L`·`CROSS4_R`/`CORNER2`/`CORNER3`** (CROSS4 좌/우 2026-11-17).
+> AMR 파서·resolver·시드 구현 완료(§8.5.1 (5)); 좌/우 미지정 `CROSS4`·legacy `CROSS`(→ 면별 기본값 `CROSS4_L` 또는 `CROSS4_R`)·`CORNER`(→CORNER3)·bare `CROSS3`(→`CROSS3_R0`)도 수용(전환 유예).
 > CROSS3 회전은 면 자세와 독립(회전으로만 키잉) — 0° 기준·회전 부호는 ACS 합의 대기(INSPECTION_TYPES.md §9 항목 8).
 > **ACS 는 canonical 5값으로 발행 전환 필요** — 값 합의·전환 시점은 §10 N13. 실행은 `LINE`만 활성(면 자세-독립 통합, §9-9).
 
@@ -802,7 +803,9 @@ HD_AMR ──(CAPTURE_REQ 34B: taskId[15-30] · attempt[31] · captureSeq[32-33]
 | `seamType` | 레시피 id | 면 자세 |
 |---|---|---|
 | `LINE` | `LINE` | 무관(런타임 `wall_code`) |
-| `CROSS`(=CROSS4) | `CROSS4` | 무관(런타임 `wall_code`) |
+| `CROSS4_L` | `CROSS4_L` (수직 용접선 좌측) | 무관 — 면별 프로필 지정 가능 |
+| `CROSS4_R` | `CROSS4_R` (수직 용접선 우측) | 무관 — 면별 프로필 지정 가능 |
+| `CROSS4`·`CROSS` (좌/우 미지정) | 면별 기본값 — `CROSS4_R` 레시피에 고른 면은 `CROSS4_R`, 나머지는 `CROSS4_L` | 계속 수용 |
 
 - `CROSS3_R0`/`CROSS3_R90`/`CROSS3_R180`/`CROSS3_R270`: T자 3갈래의 회전 4종 → **면 자세 무관 단일 레시피** `CROSS3-R0`/`CROSS3-R90`/`CROSS3-R180`/`CROSS3-R270`(회전으로만 키잉, CORNER 과 동일한 short-circuit). `wall_code` 는 여전히 정본 코드여야 하며 면/theta/방향 계산에 쓰인다(2026-10-07, §8.5 계약 각주·INSPECTION_TYPES §9 항목 8).
   - **회전 기준 확정안(2026-10-07, HD_AMR 발송·ACS 사인오프 대기)** — 전개도가 아니라 **면-로컬 (u,v) 프레임**(u = 노드 theta 좌회전 90° = (−sinθ,cosθ), v = n×u, n = 면 외향 법선) 기준. **R0 = 줄기(stem)가 +u 를 가리키는 자세**(통과선이 아니라 줄기로 정의 — 통과선은 180° 대칭). **회전 부호 = 면 외향 법선 둘레 CCW(+)**, AMR 작업물 좌표(카메라 시점) 기준(전개도 기준 아님 — 거울 반전으로 손잡이 뒤집힘). 상세·근거는 INSPECTION_TYPES §9 항목 8.

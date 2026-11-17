@@ -37,17 +37,19 @@ public sealed partial class InspectionMapViewModel : ViewModelBase
             using var scope = _scopeFactory.CreateScope();
             var svc = scope.ServiceProvider.GetRequiredService<InspectionRecipeService>();
             var recipes = await svc.ListAsync();
-            var enabled = recipes.ToDictionary(r => r.Id, r => r.Enabled);
+            var byId = recipes.ToDictionary(r => r.Id);
+            var rightWalls = InspectionRecipeResolver.Cross4RightWalls(recipes);
             var teaching = await svc.ListTeachingSummaryAsync();
 
             MapRows.Clear();
             foreach (var w in WallCodes.All)   // 정본 10코드 — App WallCodes 단일 정의
                 MapRows.Add(new WallMapRow(w.Code, w.DisplayName,
-                    Cell(SeamTypeKind.Line, w.Code, enabled),
-                    Cell(SeamTypeKind.Cross3R0, w.Code, enabled), Cell(SeamTypeKind.Cross3R90, w.Code, enabled),
-                    Cell(SeamTypeKind.Cross3R180, w.Code, enabled), Cell(SeamTypeKind.Cross3R270, w.Code, enabled),
-                    Cell(SeamTypeKind.Cross, w.Code, enabled), Cell(SeamTypeKind.Corner2, w.Code, enabled),
-                    Cell(SeamTypeKind.Corner, w.Code, enabled)));
+                    Cell(SeamTypeKind.Line, w.Code, byId),
+                    Cell(SeamTypeKind.Cross3R0, w.Code, byId), Cell(SeamTypeKind.Cross3R90, w.Code, byId),
+                    Cell(SeamTypeKind.Cross3R180, w.Code, byId), Cell(SeamTypeKind.Cross3R270, w.Code, byId),
+                    Cell(SeamTypeKind.Cross4L, w.Code, byId), Cell(SeamTypeKind.Cross4R, w.Code, byId),
+                    Cell(SeamTypeKind.Cross, w.Code, byId, rightWalls),
+                    Cell(SeamTypeKind.Corner2, w.Code, byId), Cell(SeamTypeKind.Corner, w.Code, byId)));
 
             Recipes.Clear();
             foreach (var r in recipes)
@@ -59,15 +61,17 @@ public sealed partial class InspectionMapViewModel : ViewModelBase
                         _ => "레시피 지정 X-Y 티칭 프로필 (검사 레시피에서 지정)",
                     },
                     r.SeamType == SeamTypeKind.Corner ? "—"
-                    : r.InspectionProfileId is null ? "미지정"
-                    : teaching.FirstOrDefault(t => t.ProfileId == r.InspectionProfileId) is { } t
-                        ? $"{t.ProfileName} ({t.WaypointCount}점)"
-                        : $"프로필 없음(id={r.InspectionProfileId})"));
+                    : (r.InspectionProfileId is null ? "미지정"
+                        : teaching.FirstOrDefault(t => t.ProfileId == r.InspectionProfileId) is { } t
+                            ? $"{t.ProfileName} ({t.WaypointCount}점)"
+                            : $"프로필 없음(id={r.InspectionProfileId})")
+                      + (InspectionRecipeResolver.ParseWallProfiles(r.WallProfilesJson) is { Count: > 0 } wp
+                          ? $" · 면별 {string.Join(", ", wp.Select(kv => $"{kv.Key}=#{kv.Value}"))}" : "")));
 
             Teaching.Clear();
             foreach (var d in teaching)
             {
-                var usedBy = recipes.Where(r => r.InspectionProfileId == d.ProfileId).Select(r => r.Id).ToList();
+                var usedBy = recipes.Where(r => InspectionRecipeResolver.UsesProfile(r, d.ProfileId)).Select(r => r.Id).ToList();
                 Teaching.Add(new TeachingRow(d.DrawingName, d.FileName, d.ProfileName ?? "—",
                     string.IsNullOrWhiteSpace(d.SeamType) ? "LINE" : d.SeamType!,
                     usedBy.Count > 0 ? string.Join(", ", usedBy) : "—",
@@ -80,12 +84,16 @@ public sealed partial class InspectionMapViewModel : ViewModelBase
         finally { Busy = false; }
     }
 
-    // 매핑 셀 — 레시피 id(+CORNER 거울 side) 와 Enabled 여부.
-    private static MapCell Cell(SeamTypeKind seam, string wallCode, Dictionary<string, bool> enabled)
+    // 매핑 셀 — 레시피 id(+CORNER 거울 side, 십자 면별 프로필) 와 Enabled 여부.
+    private static MapCell Cell(SeamTypeKind seam, string wallCode, Dictionary<string, HD.AMR.App.Data.Entities.InspectionRecipe> byId,
+        IReadOnlySet<string>? cross4RightWalls = null)
     {
-        var id = InspectionRecipeResolver.ResolveRecipeId(seam, wallCode);
-        var on = id is not null && enabled.TryGetValue(id, out var e) && e;
+        var id = InspectionRecipeResolver.ResolveRecipeId(seam, wallCode, cross4RightWalls);
+        var recipe = id is not null && byId.TryGetValue(id, out var r) ? r : null;
+        var on = recipe?.Enabled == true;
         var label = id ?? "—";
+        if (recipe is not null && InspectionRecipeResolver.ParseWallProfiles(recipe.WallProfilesJson).TryGetValue(wallCode, out var wallProfile))
+            label += $" · #{wallProfile}";
         if (seam is SeamTypeKind.Corner or SeamTypeKind.Corner2 && id is not null)
             label += $" ({InspectionRecipeResolver.ResolveCornerSide(wallCode, out _)})";
         return new MapCell(label, on);
@@ -95,7 +103,7 @@ public sealed partial class InspectionMapViewModel : ViewModelBase
 public sealed record MapCell(string Label, bool Enabled);
 public sealed record WallMapRow(string Code, string Label, MapCell Line,
     MapCell Cross3R0, MapCell Cross3R90, MapCell Cross3R180, MapCell Cross3R270,
-    MapCell Cross4, MapCell Corner2, MapCell Corner3);
+    MapCell Cross4L, MapCell Cross4R, MapCell Cross4Unspecified, MapCell Corner2, MapCell Corner3);
 public sealed record RecipeStatusRow(string Id, string SeamType, string Orientation, bool Enabled, string Source, string AssignedProfile);
 public sealed record TeachingRow(string DrawingName, string FileName, string ProfileName, string SeamType, string UsedBy,
     int WaypointCount, string TaughtAt, string Status, bool Runnable);
