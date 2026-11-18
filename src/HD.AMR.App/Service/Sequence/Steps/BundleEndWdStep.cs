@@ -20,6 +20,13 @@ public class BundleEndWdStep : ISequenceStep
 {
     public const string StepKey = "bundleEndWd";
 
+    /// <summary>
+    /// 묶음 마지막 용접선 끝 WD 확인 사용 여부 — 2026-11-18 끔. 시작·끝이 코루게이션 꼭대기라 레이저 3점이 능선 양쪽 경사에
+    /// 걸려 값이 흔들리고, 실기 10회 모두 끝 쪽이 +1~+8.8mm 멀게 나와 좌표계를 늘 같은 방향(−0.16~−1.97°)으로 기울였다
+    /// (이미지 품질이 오히려 나빠짐). 끄면 종전처럼 점1·점2 만으로 묶음 좌표계를 쓴다. 다시 쓰려면 평탄한 골에서 재도록 바꾼 뒤 켠다.
+    /// </summary>
+    public const bool Enabled = false;
+
     /// <summary>이 스텝을 실제로 수행하라는 표시(bool true) — 묶음 마지막 팔로워에서 오케스트레이터가 켠다.</summary>
     public const string RequestBagKey = "bundle.endWdCheck";
 
