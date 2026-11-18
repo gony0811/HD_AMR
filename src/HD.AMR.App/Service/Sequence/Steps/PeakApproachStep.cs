@@ -41,11 +41,11 @@ public class PeakApproachStep : ISequenceStep
         if (BundleTeach.IsActive(context)
             && context.Bag.TryGetValue(BundleTeach.FirstStartKey, out var fs) && fs is double[] { Length: 3 } firstStart
             && context.Bag.TryGetValue(BundleTeach.FirstEndKey, out var fe) && fe is double[] { Length: 3 } firstEnd
-            && context.Bag.TryGetValue(BundleTeach.LastStartKey, out var ls) && ls is double[] { Length: 3 } lastStart)
+            && context.Bag.TryGetValue(BundleTeach.Point2Key, out var p2) && p2 is double[] { Length: 3 } point2)
         {
             var pitchMm = await WeldSequenceSupport.GetPitchMmAsync(_param, context);
             var configured = await WeldSequenceSupport.GetSignAsync(_param, WeldSequenceSupport.PitchDirKey);
-            var (count, geom) = TaskBundlePlanner.PitchPlan(firstStart, firstEnd, lastStart, pitchMm);
+            var (count, geom) = TaskBundlePlanner.PitchPlan(firstStart, firstEnd, point2, pitchMm);
             var sign = configured * geom;
             _logger.LogInformation(
                 "[Peak2 이동] 묶음 점2 추정 — 피치 {Pitch:0.#}mm × {N}회, 부호 {Sign:+0;-0} (기하 {Geom:+0;-0})",
