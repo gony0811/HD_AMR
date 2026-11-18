@@ -14,7 +14,7 @@ public static class BundleTeach
     public const string BundleIdKey = "bundle.id";
     public const string FirstStartKey = "bundle.firstStartW";
     public const string FirstEndKey = "bundle.firstEndW";
-    public const string LastStartKey = "bundle.lastStartW";
+    public const string Point2Key = "bundle.point2W";
     public const string Point2WdKey = "bundle.point2Wd";
 
     /// <summary>
@@ -43,7 +43,7 @@ public static class BundleTeach
         context.Bag[BundleIdKey] = assignment.BundleId ?? "";
         context.Bag[FirstStartKey] = assignment.FirstStartW!;
         context.Bag[FirstEndKey] = assignment.FirstEndW!;
-        context.Bag[LastStartKey] = assignment.LastStartW!;
+        context.Bag[Point2Key] = assignment.Point2W!;
         context.Bag.Remove(Point2WdKey);
         context.Bag.Remove(Point2ReturnPoseKey);
     }

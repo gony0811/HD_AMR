@@ -11,7 +11,7 @@ public class TaskBundlePlannerTests
         => new(id, id, wall, lift, dir, new[] { startX, 0, 1.0 }, new[] { startX + endX, 0, 1.0 });
 
     [Fact]
-    public void 리프트_면_방향이_같으면_첫_시작과_마지막_시작으로_묶는다()
+    public void 리프트_면_방향이_같으면_첫_시작과_마지막_끝으로_묶는다()
     {
         var tasks = new[]
         {
@@ -25,7 +25,7 @@ public class TaskBundlePlannerTests
         Assert.Equal(BundleRole.Follower, plan[2].Role);
         Assert.Equal(plan[0].BundleId, plan[2].BundleId);
         Assert.Equal(0, plan[0].FirstStartW![0]);
-        Assert.Equal(0.72, plan[0].LastStartW![0]);
+        Assert.Equal(1.72, plan[0].Point2W![0]);   // 점2 = 마지막 TASK(c) 끝점
     }
 
     // 실기 2026-11-12 03:56 천장 L4-R03C17: AMR 이 용접선에 45° 로 서서 가로·세로 선이 모두 Horizontal 로 분류됐고,
@@ -43,7 +43,7 @@ public class TaskBundlePlannerTests
         Assert.Equal(BundleRole.Leader, plan[0].Role);
         Assert.Equal(BundleRole.Follower, plan[1].Role);
         Assert.Equal(BundleRole.None, plan[2].Role);
-        Assert.Equal(0.36, plan[0].LastStartW![0]);   // 점2 는 꺾인 선이 아니라 h2 시작점
+        Assert.Equal(0.72, plan[0].Point2W![0]);   // 점2 는 꺾인 선이 아니라 h2 끝점
     }
 
     [Theory]
@@ -170,7 +170,7 @@ public class TaskBundlePlannerTests
         var extra = TaskBundlePlanner.Point2ReachPoints(plan, allowBackup: false);
         var point = Assert.Single(extra);
         Assert.Equal("a 묶음 점2", point.Label);
-        Assert.Equal(0.72, point.SeamW[0]);
+        Assert.Equal(1.72, point.SeamW[0]);   // 마지막 TASK(b) 끝점
         Assert.Equal(400, point.StrokeMm);
     }
 

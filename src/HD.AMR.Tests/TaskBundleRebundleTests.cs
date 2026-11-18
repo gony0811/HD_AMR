@@ -30,11 +30,11 @@ public class TaskBundleRebundleTests
         Assert.All(re, a => Assert.Equal("b", a.BundleId));              // 새 묶음 id = 새 리더
         Assert.All(re, a => Assert.Equal(0.36, a.FirstStartW![0]));      // 점1 = 새 리더 시작점
         Assert.All(re, a => Assert.Equal(0.72, a.FirstEndW![0]));
-        Assert.All(re, a => Assert.Equal(1.08, a.LastStartW![0]));       // 점2 = 묶음의 마지막 TASK 시작점 그대로
+        Assert.All(re, a => Assert.Equal(1.44, a.Point2W![0]));       // 점2 = 묶음의 마지막 TASK 끝점 그대로
 
-        // 새 리더 시작 → 마지막 시작 = 2피치.
-        var (count, sign) = TaskBundlePlanner.PitchPlan(re[0].FirstStartW!, re[0].FirstEndW!, re[0].LastStartW!, 360);
-        Assert.Equal((2, 1), (count, sign));
+        // 새 리더 시작 → 마지막 끝 = 3피치.
+        var (count, sign) = TaskBundlePlanner.PitchPlan(re[0].FirstStartW!, re[0].FirstEndW!, re[0].Point2W!, 360);
+        Assert.Equal((3, 1), (count, sign));
     }
 
     [Fact]
@@ -119,6 +119,6 @@ public class TaskBundleRebundleTests
         var re = TaskBundlePlanner.Rebundle(plan, plan[3].BundleId!, "e", new[] { 1.44, 0, 1.0 }, new[] { 1.80, 0, 1.0 });
 
         Assert.Equal(new[] { "e", "f" }, re!.Select(a => a.ActionId));
-        Assert.Equal(1.80, re[0].LastStartW![0]);
+        Assert.Equal(2.16, re[0].Point2W![0]);
     }
 }

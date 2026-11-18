@@ -27,7 +27,8 @@ public sealed record BundleAssignment(
     InspectionMoveDirection? Direction,
     double[]? FirstStartW,
     double[]? FirstEndW,
-    double[]? LastStartW);
+    /// <summary>점2 — 묶음 마지막 TASK 의 <b>끝점</b>(2026-11-18 변경, 종전 시작점). 점1→점2 를 실측으로 이어 마지막 용접선을 외삽 없이 순회한다.</summary>
+    double[]? Point2W);
 
 /// <summary>
 /// 연속 TASK 묶음. 리프트 높이·wall_code·수직/수평이 모두 같고, 방향 판별이 확실한 액션만
@@ -64,7 +65,7 @@ public static class TaskBundlePlanner
         {
             var j = i + 1;
             while (j < tasks.Count && CanJoin(tasks[i], tasks[j])) j++;
-            if (j - i >= 2 && tasks[i].SeamStartW is { Length: 3 } && tasks[j - 1].SeamStartW is { Length: 3 })
+            if (j - i >= 2 && tasks[i].SeamStartW is { Length: 3 } && tasks[j - 1].SeamEndW is { Length: 3 })
             {
                 var id = tasks[i].ActionId;
                 var first = tasks[i];
@@ -75,7 +76,7 @@ public static class TaskBundlePlanner
                         tasks[k].ActionId, tasks[k].JobRef,
                         k == i ? BundleRole.Leader : BundleRole.Follower,
                         id, first.WallCode, first.LiftStrokeMm, first.Direction,
-                        Clone3(first.SeamStartW), Clone3(first.SeamEndW), Clone3(last.SeamStartW));
+                        Clone3(first.SeamStartW), Clone3(first.SeamEndW), Clone3(last.SeamEndW));
                 }
             }
             else
@@ -92,19 +93,19 @@ public static class TaskBundlePlanner
         => Assign(Read(actions, nodeThetaRad));
 
     /// <summary>
-    /// 첫 TASK 시작→끝을 진행 방향으로, 마지막 TASK 시작점까지 몇 피치인지. 최소 1.
+    /// 첫 TASK 시작→끝을 진행 방향으로, 점2(마지막 TASK 끝점)까지 몇 피치인지. 최소 1.
     /// 부호는 진행 방향과 같으면 +1, 반대면 −1 (호출측이 티칭된 pitch 부호에 곱한다).
     /// </summary>
     public static (int Count, int GeomSign) PitchPlan(
-        double[] firstStartW, double[] firstEndW, double[] lastStartW, double pitchMm)
+        double[] firstStartW, double[] firstEndW, double[] point2W, double pitchMm)
     {
         var dx = firstEndW[0] - firstStartW[0];
         var dy = firstEndW[1] - firstStartW[1];
         var dz = firstEndW[2] - firstStartW[2];
         var len = Math.Sqrt(dx * dx + dy * dy + dz * dz);
-        var vx = lastStartW[0] - firstStartW[0];
-        var vy = lastStartW[1] - firstStartW[1];
-        var vz = lastStartW[2] - firstStartW[2];
+        var vx = point2W[0] - firstStartW[0];
+        var vy = point2W[1] - firstStartW[1];
+        var vz = point2W[2] - firstStartW[2];
         if (len < 1e-9 || pitchMm <= 1)
             return (1, 1);
         var alongM = (vx * dx + vy * dy + vz * dz) / len;
@@ -116,7 +117,7 @@ public static class TaskBundlePlanner
     /// <summary>
     /// 리더가 실패해 공통 좌표계를 남기지 못한 묶음을, 실패한 TASK 를 빼고 <b>남은 TASK 끼리 다시 묶는다</b>.
     /// <paramref name="newLeaderActionId"/>(지금 시작하려는 팔로워)가 새 리더가 되어 자기 시작점(점1)과 묶음의
-    /// 마지막 TASK 시작점(점2)으로 다시 교시하고, 그 뒤 TASK 는 새 묶음의 팔로워가 된다.
+    /// 마지막 TASK 끝점(점2)으로 다시 교시하고, 그 뒤 TASK 는 새 묶음의 팔로워가 된다.
     /// 남은 TASK 가 새 리더 하나뿐이면 묶을 것이 없으므로 null(단독 교시).
     /// </summary>
     /// <param name="ordered">노드 액션 순서의 배정 목록(<see cref="Assign(IReadOnlyList{BundleTaskInput})"/> 결과).</param>
@@ -131,7 +132,7 @@ public static class TaskBundlePlanner
         var idx = members.FindIndex(a => a.ActionId == newLeaderActionId);
         if (idx < 0 || idx == members.Count - 1) return null;          // 묶음 밖이거나 마지막 하나만 남음
         var last = members[^1];
-        if (last.LastStartW is not { Length: 3 }) return null;
+        if (last.Point2W is not { Length: 3 }) return null;
 
         var result = new List<BundleAssignment>(members.Count - idx);
         for (var k = idx; k < members.Count; k++)
@@ -141,16 +142,16 @@ public static class TaskBundlePlanner
                 BundleId = newLeaderActionId,
                 FirstStartW = Clone3(leaderStartW),
                 FirstEndW = Clone3(leaderEndW),
-                LastStartW = Clone3(last.LastStartW),
+                Point2W = Clone3(last.Point2W),
             });
         return result;
     }
 
-    /// <summary>묶음 리더의 점2(마지막 TASK 시작점)를 도달 점검에 한 점 더 넣는다.</summary>
+    /// <summary>묶음 리더의 점2(마지막 TASK 끝점)를 도달 점검에 한 점 더 넣는다.</summary>
     public static IReadOnlyList<ReachPoint> Point2ReachPoints(IReadOnlyList<BundleAssignment> assignments, bool allowBackup)
-        => assignments.Where(a => a.Role == BundleRole.Leader && a.LastStartW is { Length: 3 })
+        => assignments.Where(a => a.Role == BundleRole.Leader && a.Point2W is { Length: 3 })
             .Select(a => new ReachPoint(
-                $"{a.JobRef} 묶음 점2", a.WallCode, a.LiftStrokeMm, a.LastStartW!,
+                $"{a.JobRef} 묶음 점2", a.WallCode, a.LiftStrokeMm, a.Point2W!,
                 TestMove: false, AllowBackup: allowBackup))
             .ToList();
 
