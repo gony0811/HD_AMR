@@ -76,7 +76,8 @@ public class FlatSurfaceAlignStep : ISequenceStep
     private const string AlignImageXAxisKey = "Camera.Align.ImageXAxis";
     private const string AlignImageYAxisKey = "Camera.Align.ImageYAxis";
 
-    /// <param name="levelSurface">true(④)면 탐색 뒤 틸트 수평 얼라인. false(묶음 점2)면 자리만 맞춘다.</param>
+    /// <param name="levelSurface">true 면 ④ 평탄면 센터링, false 면 묶음 점2 평탄면 센터링(묶음일 때만 실행, 실패 시 묶음 해제).
+    /// 두 경우 모두 탐색 뒤 레이저 3점 틸트 수평 얼라인을 한다(점2 는 2026-11-18 부터).</param>
     public FlatSurfaceAlignStep(
         bool levelSurface,
         CobotService cobot, CameraService camera, FlatSurfaceCenteringService centering,
@@ -98,7 +99,7 @@ public class FlatSurfaceAlignStep : ISequenceStep
     public const string BundlePoint2Key = "flatSurfaceSearchBundlePoint2";
 
     public string Key => _levelSurface ? "flatSurfaceAlign" : BundlePoint2Key;
-    public string DisplayName => _levelSurface ? "평탄면 센터링 (레이저 정렬)" : "묶음 점2 평탄면 탐색";
+    public string DisplayName => _levelSurface ? "평탄면 센터링 (레이저 정렬)" : "묶음 점2 평탄면 센터링 (레이저 정렬)";
     public int DefaultOrder => _levelSurface ? 400 : 810;
 
     public StepValidation Validate(SequenceContext context)
@@ -214,7 +215,7 @@ public class FlatSurfaceAlignStep : ISequenceStep
                     Limits = postureLimits,
                     ImageXAxis = axisX, ImageYAxis = axisY,
                     CameraToLaserShiftYmm = shiftY,
-                    TiltMarginDeg = _levelSurface ? tiltMargin : 0,
+                    TiltMarginDeg = tiltMargin,
                     Tool = context.Tool,
                 },
                 Footprint = new FlatFootprintContext
@@ -252,12 +253,9 @@ public class FlatSurfaceAlignStep : ISequenceStep
                 return FailStage($"레이저 중심 보정 이동 실패 {shift.Describe()}.");
             await Task.Delay(300, ct);
 
-            if (!_levelSurface)
-            {
-                _monitor.UpdateStage(FlatDetectionStage.Done, "수평 얼라인 생략");
-                return StepResult.Ok(
-                    $"평탄면 탐색 완료 — 수평 얼라인 생략 (σ={align.SigmaMm:0.##}mm).");
-            }
+            // 묶음 점2 도 점1 과 같이 레이저 3점 평행 보정을 한다(2026-11-18). 종전엔 점1 자세 그대로 기운 채(현장 최대 2.6°)
+            // WD 를 재고 ~100mm 횡복귀해 점2 높이가 수 mm 틀어졌다 — V5→V7 로 갈수록 첫 점 레이저 거리가 ~5mm 씩 멀어짐.
+            // 좌표계 방향은 점1 자세로 정하고 점2 는 위치만 쓰므로(InternalWorkpieceFrame) 점2 자세가 바뀌어도 방향은 그대로다.
 
             // ── Phase C: 레이저 3점 측정 → 헤드 틸트(회전) 보정 ────────────
             _logger.LogInformation("[평탄면 센터링 (레이저 정렬)] Phase C: 레이저 3점 평면 측정 시작");

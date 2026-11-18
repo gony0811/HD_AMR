@@ -18,7 +18,7 @@ public static class BundleTeach
     public const string Point2WdKey = "bundle.point2Wd";
 
     /// <summary>
-    /// 묶음 점2 평탄면 탐색을 시작한 자리의 TCP 포즈(double[6], BASE) — 점2 WD 조정 뒤 돌아갈 자리.
+    /// 묶음 점2 평탄면 센터링을 시작한 자리의 TCP 포즈(double[6], BASE) — 점2 WD 조정 뒤 돌아갈 자리.
     /// 점2 WD 가 ④⁺ 와 같은 기준(② 용접선 시작점 S)으로 복귀하면 점1 쪽으로 수백 mm 를 되돌아가려다 한계(±300mm)에
     /// 걸려 묶음이 항상 풀린다(실기 2026-11-12 T L4-R10C09: 횡복귀량 X+793mm).
     /// </summary>
