@@ -54,4 +54,45 @@ public class InspectionScanVelocityTests
         Assert.Equal(1, InspectionRunStep.ResolveScanVelocity(0, 0, null).Percent);
         Assert.Equal(100, InspectionRunStep.ResolveScanVelocity(null, 300, null).Percent);
     }
+
+    // ── NG 구간 재측정 직행 이동 계획 ──
+
+    [Fact]
+    public void DirectTravel_FlatPath_GoesStraight()
+    {
+        var plan = InspectionRunStep.PlanDirectTravel(0, 0, new double[] { 0, 0.3, 0 });
+
+        Assert.False(plan.Rise);
+        Assert.False(plan.Descend);
+    }
+
+    [Fact]
+    public void DirectTravel_IntermediateLowerThanBothEnds_GoesStraight()
+    {
+        // 사이 경유점이 면 쪽으로 더 들어가 있다(골) — 직선은 그보다 면에서 멀다.
+        var plan = InspectionRunStep.PlanDirectTravel(33.8, 20, new double[] { 0, 5, 10 });
+
+        Assert.False(plan.Rise);
+        Assert.Equal(33.8, plan.SafeZ);
+    }
+
+    [Fact]
+    public void DirectTravel_HigherPointBetween_LiftsOverWithClearance()
+    {
+        // 사이에 코로게이션 마루(33.8)가 있다 — 그 위 여유 높이로 올라가 건너간다.
+        var plan = InspectionRunStep.PlanDirectTravel(0, 0, new double[] { 10, 33.8, 10 });
+
+        Assert.True(plan.Rise);
+        Assert.True(plan.Descend);
+        Assert.Equal(33.8 + InspectionRunStep.DirectTravelClearanceMm, plan.SafeZ, 6);
+    }
+
+    [Fact]
+    public void DirectTravel_AdjacentPoints_GoStraight()
+    {
+        var plan = InspectionRunStep.PlanDirectTravel(0, 33.8, Array.Empty<double>());
+
+        Assert.False(plan.Rise);
+        Assert.False(plan.Descend);
+    }
 }

@@ -75,6 +75,25 @@ public class InspectionRunStep : ISequenceStep
             : (DefaultInspectVelPercent, "기본 검사 속도");
     }
 
+    /// <summary>직행 이동이 사이 경유점보다 높이 떠서 건너갈 때 두는 여유 [mm].</summary>
+    public const double DirectTravelClearanceMm = 5.0;
+
+    /// <summary>
+    /// 떨어진 두 경유점 사이 직행 계획(작업물 좌표 Z — 면에서 멀어지는 쪽이 +). 사이 경유점이 모두 양 끝 중 낮은 쪽보다
+    /// 높지 않으면 직선 한 번으로 간다(직선은 양 끝 높이 사이에 있으므로 교시 경로보다 면에 가까워지지 않는다).
+    /// 더 높은 경유점(면이 솟은 곳)이 있으면 전체 최고 높이 + <see cref="DirectTravelClearanceMm"/> 로 올라가 건너간 뒤 내려온다.
+    /// </summary>
+    public static (double SafeZ, bool Rise, bool Descend) PlanDirectTravel(double fromZ, double toZ, IEnumerable<double> betweenZ)
+    {
+        const double tol = 0.5;
+        var between = betweenZ.ToList();
+        var low = Math.Min(fromZ, toZ);
+        if (between.Count == 0 || between.Max() <= low + tol)
+            return (Math.Max(fromZ, toZ), false, false);
+        var safeZ = Math.Max(Math.Max(fromZ, toZ), between.Max()) + DirectTravelClearanceMm;
+        return (safeZ, true, true);
+    }
+
     /// <summary>MoveL 가속/오버라이드 — /inspection 페이지 RunWaypoints 와 동일값.</summary>
     private const double MoveAcc = 100.0;
     private const double MoveOvl = 100.0;
@@ -335,8 +354,8 @@ public class InspectionRunStep : ISequenceStep
         }
 
         // 무정지 연속 측정: from(지금 서 있는 경유점)에서 rest 의 경유점들을 멈추지 않고(블렌딩) 한 번에 지나가며 잰다.
-        // 샘플은 시간 비율로 구간에 나눠 구간마다 도착 경유점의 포인트로 남긴다. OK 가 아닌 구간은 통과 뒤에 경로를 따라
-        // 그 구간 출발점으로 되돌아가 종전 구간 방식(ScanSegmentAsync)으로 재측정하고, 끝나면 마지막 경유점으로 돌아간다.
+        // 샘플은 시간 비율로 구간에 나눠 구간마다 도착 경유점의 포인트로 남긴다. OK 가 아닌 구간은 통과 뒤에
+        // 그 구간 출발점으로 직행해(TravelAsync) 종전 구간 방식(ScanSegmentAsync)으로 재측정하고, 끝나면 마지막 경유점으로 돌아간다.
         // 일시정지는 통과 도중에는 걸리지 않는다(통과를 마친 뒤 재측정 앞에서 멈춘다).
         async Task<string?> RunNonStopPassAsync(int from, List<int> rest)
         {
@@ -361,10 +380,49 @@ public class InspectionRunStep : ISequenceStep
             if (passScans is null)
                 return $"무정지 연속 이동 실패 — {passMoveError}";
 
-            // 경로를 따라(경유점을 차례로 밟아) 이동한다 — 떨어진 경유점 사이를 직선으로 가로지르면 작업물에 닿을 수 있다.
+            // 떨어진 경유점으로 가는 이동(재측정 출발점·마지막 경유점 복귀)은 직행한다 — 사이 경유점이 양 끝보다 높지 않으면
+            // 직선 한 번, 높은 곳(코로게이션 마루 등)이 있으면 그 위 안전 높이로 올라가 건너간 뒤 내려온다(PlanDirectTravel).
+            // 직행 경로는 교시 경로가 아니라 사전 검증(IK 사슬)이 안 돼 있으므로 먼저 풀어 보고, 막히면 종전처럼 경유점을 차례로 밟는다.
             var passPos = idxs.Count - 1;
+            async Task<(bool Done, string? Error)> TryDirectTravelAsync(int target)
+            {
+                var fromWp = waypoints[idxs[passPos]];
+                var toWp = waypoints[idxs[target]];
+                int lo = Math.Min(passPos, target), hi = Math.Max(passPos, target);
+                var plan = PlanDirectTravel(fromWp.Z, toWp.Z,
+                    Enumerable.Range(lo + 1, hi - lo - 1).Select(k => waypoints[idxs[k]].Z));
+                var legs = new List<double[]>();
+                if (plan.Rise) legs.Add(ToTargetBase(fromWp with { Z = plan.SafeZ }));
+                if (plan.Descend) legs.Add(ToTargetBase(toWp with { Z = plan.SafeZ }));
+                legs.Add(passPoses[target]);
+
+                if (await CheckWaypointChainAsync(context, legs.Select(p => (idxs[target], p)).ToList(), ct) is { } blocker)
+                {
+                    _logger.LogInformation("[검사 수행] 경유점 #{From}→#{To} 직행 불가({Why}) — 경유점을 차례로 밟아 이동",
+                        idxs[passPos] + 1, idxs[target] + 1, blocker);
+                    return (false, null);
+                }
+                _logger.LogInformation("[검사 수행] 경유점 #{From}→#{To} 직행{How}",
+                    idxs[passPos] + 1, idxs[target] + 1,
+                    legs.Count > 1 ? $" — 안전 높이 z={plan.SafeZ:0.#}mm 경유({legs.Count}회 이동)" : "");
+                foreach (var leg in legs)
+                {
+                    var legRc = await _cobot.Rpc.MoveLAsync(leg, tool: context.Tool, user: 0,
+                        vel: context.Velocity, acc: MoveAcc, ovl: MoveOvl, blendR: -1, ct: ct);
+                    if (legRc != 0)
+                        return (false, $"경유점 #{idxs[target] + 1} 직행 이동 실패 (rc={legRc}){FairinoErrorCodes.Suffix(legRc)}");
+                }
+                return (true, null);
+            }
+
             async Task<string?> TravelAsync(int target)
             {
+                if (Math.Abs(target - passPos) > 1)
+                {
+                    var (done, directError) = await TryDirectTravelAsync(target);
+                    if (directError is not null) return directError;
+                    if (done) { passPos = target; return null; }
+                }
                 while (passPos != target)
                 {
                     var next = passPos + Math.Sign(target - passPos);
@@ -387,7 +445,7 @@ public class InspectionRunStep : ISequenceStep
                 if (GasPointResult.NeedsRetry(first.Judgement, 0, passMaxRetries))
                 {
                     await _pauseGate.WaitWhilePausedAsync(ct);
-                    _logger.LogInformation("[검사 수행] 구간 #{From}→#{To} {Judge} — 경로를 따라 구간 출발점으로 되돌아가 재측정",
+                    _logger.LogInformation("[검사 수행] 구간 #{From}→#{To} {Judge} — 구간 출발점으로 되돌아가 재측정",
                         segFrom + 1, segTo + 1, first.Judgement);
                     if (await TravelAsync(n) is { } travelError) return travelError;
                     var (retried, retryError) = await ScanSegmentAsync(segFrom, segTo, new List<GasMeasurementResult> { first });
