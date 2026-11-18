@@ -20,7 +20,8 @@ public sealed record ReachPoint(
     double? StrokeMm,
     double[] SeamW,
     bool TestMove,
-    bool AllowBackup);
+    bool AllowBackup,
+    double[]? TowardW = null);
 
 /// <summary>사전 점검 결과. <see cref="Ok"/> 가 false 면 호출측은 AMR·리프트를 움직이지 않는다.</summary>
 /// <param name="AsError">true 면 시험이동 불가(오류 로그·적색 배너). false 면 자동 시퀀스 경고.</param>
@@ -95,10 +96,11 @@ public sealed class CobotReachPrecheck
                      && WeldInspectionActionParser.TryParse(action, out var req, out _)
                      && req is not null)
             {
+                // 각 끝점은 다른 끝 쪽(용접선 안쪽)으로 코루게이션 기울임까지 본다 — 순회가 경사에서 툴을 45° 기울인다.
                 list.Add(new ReachPoint($"{req.JobRef} 시작", req.DrawingPos.WallCode, req.LiftStrokeMm,
-                    req.SeamStartW, TestMove: false, AllowBackup: allowInspectionBackup));
+                    req.SeamStartW, TestMove: false, AllowBackup: allowInspectionBackup, TowardW: req.SeamEndW));
                 list.Add(new ReachPoint($"{req.JobRef} 끝", req.DrawingPos.WallCode, req.LiftStrokeMm,
-                    req.SeamEndW, TestMove: false, AllowBackup: allowInspectionBackup));
+                    req.SeamEndW, TestMove: false, AllowBackup: allowInspectionBackup, TowardW: req.SeamStartW));
             }
         }
         return list;
@@ -254,7 +256,17 @@ public sealed class CobotReachPrecheck
         }
         var stamp = ctx.Stamp with { AlignMm = alignMm };
 
-        var stored = ReachMapCsv.FindLatest(ReachMapService.OutputDirectory, stamp, point.WallCode!, h, body[0], body[1], z);
+        // 코루게이션 기울임(순회 경사 구간)까지 볼 점 — 저장 맵에는 그 판정이 없으므로 새로 계산한다.
+        double[]? tiltToward = null;
+        if (!point.TestMove && point.TowardW is { Length: 3 } towardW)
+        {
+            var tb = ReachStationFrame.WorldToBodyMm(towardW, xm, ym, yaw, ctx.ZDatumMm);
+            tiltToward = new[] { tb[0], tb[1], ReachStationFrame.CellZMm(point.WallCode, tb[2]) };
+        }
+
+        var stored = tiltToward is null
+            ? ReachMapCsv.FindLatest(ReachMapService.OutputDirectory, stamp, point.WallCode!, h, body[0], body[1], z)
+            : null;
         if (stored is not null)
         {
             // 규칙 변경 전에 만든 맵의 천장·바닥 '뻗음부족' 칸 — 리치 맵은 IK·자세·경로를 모두 통과한 뒤에만 이 상태를
@@ -275,7 +287,8 @@ public sealed class CobotReachPrecheck
         {
             var spec = new ReachMapSpec(
                 new[] { point.WallCode! }, new[] { h }, new[] { body[0] }, new[] { body[1] }, new[] { z },
-                stamp.ApproachMm, stamp.AlignMm, stamp.FocusMm);
+                stamp.ApproachMm, stamp.AlignMm, stamp.FocusMm,
+                TiltTowardMm: tiltToward, TiltDeg: tiltToward is null ? 0 : ReachMap.CorrugationTiltDeg);
             var result = ctx.UseController
                 ? await _maps.EvaluateAsync(spec, tool: 1, progress: null, announce: false, ct).ConfigureAwait(false)
                 : await _maps.EvaluateOfflineAsync(spec, progress: null, announce: false, ct).ConfigureAwait(false);

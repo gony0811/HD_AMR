@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using HD.AMR.App.Communication;
 using HD.AMR.App.Models;
 using HD.AMR.App.Service.Inspection;
 
@@ -183,6 +184,7 @@ public static class ReachMap
                 WithoutJ6(limits.NormalizeJoints(jF))), calls);
         }
 
+        var rawF = jF;
         jA = WithoutJ6(limits.NormalizeJoints(jA));
         jL = WithoutJ6(limits.NormalizeJoints(jL));
         jF = WithoutJ6(limits.NormalizeJoints(jF));
@@ -210,6 +212,40 @@ public static class ReachMap
         if (!path.Ok) return (Cell(ReachStatus.PathUnsafe, $"②→정렬 준비 {path.Reason}", margin, jA, jL, jF), calls);
         path = limits.CheckJointPath(jL, jF);
         if (!path.Ok) return (Cell(ReachStatus.PathUnsafe, $"정렬 준비→초점 {path.Reason}", margin, jA, jL, jF), calls);
+
+        // 코루게이션 경사 — 순회는 경사를 넘을 때 툴을 최대 45° 기울인다. 팔을 거의 다 뻗은 끝 쪽에서는 같은 가지 해가 없어
+        // 순회 사전 검증이 움직이기 전에 막는다(실기 2026-11-18 09:41 PL L1-R01C12 V9 #6·V10 #4: 관절 183·191° 튐).
+        if (spec.TiltDeg > 0 && spec.TiltTowardMm is { Length: 3 } toward && focus.TargetPoseBase is { } focusPose)
+        {
+            var towardTarget = SeamBaseTransform.Resolve(
+                Input(robot, code, h, toward[0], toward[1], toward[2], spec.FocusStandoffMm, spinDeg));
+            if (towardTarget.TargetPoseBase is { } towardPose
+                && TiltedPose(focusPose, towardPose, robot.OpticalAxis, spec.TiltDeg) is { } tilted)
+            {
+                double[]? jT;
+                string? tErr = null;
+                try { jT = await inverseKin(tilted, h, rawF, ct).ConfigureAwait(false); }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex) { jT = null; tErr = $" — {FirstLine(ex.Message)}"; }
+                calls++;
+                var tiltLabel = $"코루게이션 기울임 {spec.TiltDeg:0}°";
+                if (jT is not { Length: 6 })
+                    return (Cell(ReachStatus.PathUnsafe, $"{tiltLabel} IK 실패{tErr}", margin, jA, jL, jF), calls);
+                var jTn = limits.NormalizeJoints(jT);
+                if (TiltBranchReason(limits.NormalizeJoints(rawF), jTn) is { } tb)
+                    return (Cell(ReachStatus.PathUnsafe, $"{tiltLabel} — {tb}", margin, jA, jL, jF), calls);
+                var mT = limits.Evaluate(WithoutJ6(jTn), focus.PlanarDistanceMm);
+                if (!mT.Feasible)
+                    return (Cell(ReachStatus.PathUnsafe, $"{tiltLabel} — {mT.Limiting}", margin, jA, jL, jF), calls);
+                if (robot.Envelope is { } envT)
+                {
+                    var yawT = robot.MountAtHome is { Length: 6 } m6t ? m6t[5] : 0;
+                    var selfT = envT.Evaluate(Fr5Kinematics.Fr5Wml, WithoutJ6(jTn), h, yawT);
+                    if (selfT.Collides)
+                        return (Cell(ReachStatus.PathUnsafe, $"{tiltLabel} — 자기 간섭 {selfT}", margin, jA, jL, jF), calls);
+                }
+            }
+        }
 
         // IK 는 풀렸어도 운영 ② 의 리치 사전 점검이 막는다 — 잠정 최소 뻗음 검증용으로 관절 결과는 남긴다.
         if (!reach.Ok && ApproachReach.AppliesTo(code))
@@ -269,6 +305,65 @@ public static class ReachMap
         catch (Exception ex) { return (null, $" — {FirstLine(ex.Message)}"); }
     }
 
+    /// <summary>기울인 자세에서 관절이 이 이상 바뀌면(J1~J5) 가지가 바뀐 것으로 본다 [도] — 45° 기울임은 손목 위주로 45° 안팎이다.</summary>
+    internal const double MaxTiltJointChangeDeg = 90.0;
+
+    /// <summary>순회가 코루게이션 경사에서 쓰는 최대 기울임 [도] — 티칭설정 경유점 Theta ±45.</summary>
+    public const double CorrugationTiltDeg = 45.0;
+
+    /// <summary>초점 해 → 기울인 해가 팔꿈치·손목 반전이거나 관절이 크게 튀면 그 사유, 아니면 null(J6 제외).</summary>
+    internal static string? TiltBranchReason(double[] focus, double[] tilted)
+    {
+        var parts = new List<string>();
+        if (Math.Sign(focus[2]) != 0 && Math.Sign(focus[2]) != Math.Sign(tilted[2]))
+            parts.Add($"팔꿈치 반전(J3 {focus[2]:0.0}° → {tilted[2]:0.0}°)");
+        if (Math.Sign(focus[4]) != 0 && Math.Sign(focus[4]) != Math.Sign(tilted[4]))
+            parts.Add($"손목 반전(J5 {focus[4]:0.0}° → {tilted[4]:0.0}°)");
+        var (joint, change) = Enumerable.Range(0, 5).Select(i => (i, Math.Abs(tilted[i] - focus[i]))).MaxBy(t => t.Item2);
+        if (change > MaxTiltJointChangeDeg)
+            parts.Add($"J{joint + 1} {change:0}° 튐 > {MaxTiltJointChangeDeg:0}°");
+        return parts.Count == 0 ? null : "같은 팔 자세로 닿지 않음: " + string.Join(", ", parts);
+    }
+
+    /// <summary>
+    /// 초점 자세 <paramref name="focusPose"/>(BASE)를 TCP 는 그대로 두고, 면 바깥 법선이 <paramref name="towardPose"/> 쪽
+    /// (용접선 안쪽)으로 <paramref name="tiltDeg"/> 기울도록 돌린 자세. 순회 경사 구간에서 면 법선이 용접선 안쪽으로 기우는 것과 같다
+    /// (시작 쪽 경사는 +X 로 내려가 법선이 +X, 끝 쪽은 −X). 방향을 정할 수 없으면 null.
+    /// </summary>
+    internal static double[]? TiltedPose(double[] focusPose, double[] towardPose, ToolAxisDir opticalAxis, double tiltDeg)
+    {
+        var r = FrameMath.PoseToMatrix(focusPose);
+        var col = (int)opticalAxis / 2;
+        var sgn = (int)opticalAxis % 2 == 0 ? 1.0 : -1.0;
+        double[] n = { -sgn * r[0, col], -sgn * r[1, col], -sgn * r[2, col] };   // 면 바깥 법선 = 광축 반대
+        double[] t = { towardPose[0] - focusPose[0], towardPose[1] - focusPose[1], towardPose[2] - focusPose[2] };
+        var tn = t[0] * n[0] + t[1] * n[1] + t[2] * n[2];
+        for (var i = 0; i < 3; i++) t[i] -= tn * n[i];
+        var tl = Math.Sqrt(t[0] * t[0] + t[1] * t[1] + t[2] * t[2]);
+        if (tl < 1e-6) return null;
+        for (var i = 0; i < 3; i++) t[i] /= tl;
+        double[] a = { n[1] * t[2] - n[2] * t[1], n[2] * t[0] - n[0] * t[2], n[0] * t[1] - n[1] * t[0] };   // n × t (단위)
+        var th = tiltDeg * Math.PI / 180.0;
+        double c = Math.Cos(th), s = Math.Sin(th), v = 1 - c;
+        var rot = new double[3, 3]
+        {
+            { c + a[0] * a[0] * v, a[0] * a[1] * v - a[2] * s, a[0] * a[2] * v + a[1] * s },
+            { a[1] * a[0] * v + a[2] * s, c + a[1] * a[1] * v, a[1] * a[2] * v - a[0] * s },
+            { a[2] * a[0] * v - a[1] * s, a[2] * a[1] * v + a[0] * s, c + a[2] * a[2] * v },
+        };
+        var m = new double[4, 4];
+        for (var i = 0; i < 3; i++)
+        {
+            for (var j = 0; j < 3; j++)
+                m[i, j] = rot[i, 0] * r[0, j] + rot[i, 1] * r[1, j] + rot[i, 2] * r[2, j];
+            m[i, 3] = r[i, 3];
+        }
+        m[3, 3] = 1;
+        var pose = FrameMath.MatrixToPose(m);
+        pose[0] = focusPose[0]; pose[1] = focusPose[1]; pose[2] = focusPose[2];
+        return pose;
+    }
+
     private static double[] WithoutJ6(double[] j) => new[] { j[0], j[1], j[2], j[3], j[4], 0.0 };
 
     private static string FirstLine(string s)
@@ -291,6 +386,9 @@ public static class ReachMap
 /// <param name="GoodMarginDeg">이 여유 미만이면 '빠듯' 으로 분류 [도].</param>
 /// <param name="MaxBaseDistanceMm">BASE→TCP 거리가 이보다 멀면 IK 없이 범위 밖으로 친다.
 /// FR5-WML: 어깨 180 + 리치 1900 + 툴 ≈ 2.45 m.</param>
+/// <param name="TiltTowardMm">코루게이션 기울임 판정 — 같은 용접선의 다른 끝 점(차체 mm, 셀과 같은 z 규약). 초점 자세를 면 법선이
+/// 이쪽(용접선 안쪽)으로 <paramref name="TiltDeg"/> 기울게 돌려 같은 팔 자세로 닿는지 본다. null 이면 보지 않는다(격자 리치 맵).</param>
+/// <param name="TiltDeg">코루게이션 기울임 각 [도] — 0 이면 보지 않는다.</param>
 public sealed record ReachMapSpec(
     string[] WallCodes,
     double[] StrokesMm,
@@ -301,7 +399,9 @@ public sealed record ReachMapSpec(
     double AlignStandoffMm = 300,
     double FocusStandoffMm = 0,
     double GoodMarginDeg = 10,
-    double MaxBaseDistanceMm = 2500)
+    double MaxBaseDistanceMm = 2500,
+    double[]? TiltTowardMm = null,
+    double TiltDeg = 0)
 {
     /// <summary>[from, to] 를 step 간격으로 — 끝값 포함. step ≤ 0 이면 from 하나.</summary>
     public static double[] Range(double from, double to, double step)
