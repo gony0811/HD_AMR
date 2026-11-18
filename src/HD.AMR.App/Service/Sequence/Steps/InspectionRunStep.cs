@@ -41,6 +41,7 @@ public class InspectionRunStep : ISequenceStep
     private readonly DrawingService _drawing;
     private readonly ParameterService _param;
     private readonly MissionPauseGate _pauseGate;
+    private readonly LaserDisplacementSensorService _laser;
     private readonly ILogger<InspectionRunStep> _logger;
 
     /// <summary>비전 CAPTURE_REQ 응답 대기 기본값(초) — 프로필 DelaySec 미설정(0 이하) 시. 검사 프로파일 화면 기본값과 동일.</summary>
@@ -54,8 +55,10 @@ public class InspectionRunStep : ISequenceStep
     /// DI 에서 <c>ActivatorUtilities.CreateInstance</c> 로 주입되므로 첫 인자여야 한다.</param>
     public InspectionRunStep(
         bool dryRun, CobotService cobot, VisionInterfaceService vision, DrawingService drawing,
-        ParameterService param, MissionPauseGate pauseGate, ILogger<InspectionRunStep> logger)
+        ParameterService param, MissionPauseGate pauseGate, LaserDisplacementSensorService laser,
+        ILogger<InspectionRunStep> logger)
     {
+        _laser = laser;
         _dryRun = dryRun;
         _pauseGate = pauseGate;
         _cobot = cobot;
@@ -212,6 +215,7 @@ public class InspectionRunStep : ISequenceStep
         var movedSet = new HashSet<int>();
         var skippedSet = new HashSet<int>();
         var visByIndex = new Dictionary<int, bool>();
+        var wdByIndex = new Dictionary<int, double?>();   // 경유점별 레이저 거리(촬영 직후, 캐시 값만 읽음 — 시간 추가 없음)
         var lastMoved = -1;
 
         // v3: 검사 세션 1회 = Run ID 1개(GUID). 각 경유점 캡처 = Task ID 1개.
@@ -269,7 +273,10 @@ public class InspectionRunStep : ISequenceStep
 
             // 드라이런: 경유점 이동만 하고 비전 CAPTURE_REQ 는 보내지 않는다(좌표·경로 검증용).
             if (_dryRun)
+            {
+                wdByIndex[i] = ReadLaserWd();
                 continue;
+            }
 
             // surface type 우선순위: 경유점 수동 지정 > |θ| 자동 규칙(구 도면 솎기 프로필).
             // (레시피 SurfaceOverride 는 경유점 단위 지정으로 일원화되며 폐기 — 2026-09-18.)
@@ -290,6 +297,7 @@ public class InspectionRunStep : ISequenceStep
             var data = CaptureReqPayload.Build(surfaceType, wallId, u, v, h, taskId, attempt, captureSeq);
             var outcome = await _vision.Client.RequestCaptureAsync(data, visionTimeout, ct);
             visByIndex[i] = outcome.Success;
+            wdByIndex[i] = ReadLaserWd();
             if (!outcome.Success)
             {
                 _logger.LogWarning("[검사 수행] 경유점 #{Idx} 비전 실패: task={Task}, seq={Seq}, sent={Sent}, responded={Resp}, code={Code}",
@@ -312,6 +320,8 @@ public class InspectionRunStep : ISequenceStep
             (_dryRun ? "" : $", 비전 OK {visOk}/{moved}" + (visFail > 0 ? $" (실패 {visFail})" : "")) +
             $" [내부 wobj #{wobjId}→BASE/user 0, tool {context.Tool}, WallID 0x{context.InspectionSurfaceId:X2}, Run {runId}].";
         _logger.LogInformation("[검사 수행] {Msg}", msg);
+        if (FormatWdLog(waypoints, wdByIndex) is { } wdLog)
+            _logger.LogInformation("[검사 수행] 경유점별 레이저 WD — {WdLog}", wdLog);
 
         // 비전 OK 가 하나도 없으면 실패율 설정과 무관하게 실패 — 순회 중 비전 링크가 끊기면 촬영 요청이 즉시
         // (false,false)로 끝나 코봇은 이동만 하고 "성공"으로 보고되며 anchor 프레임까지 캐시되던 문제(기본 상한 1.0 = 판정 없음).
@@ -330,6 +340,42 @@ public class InspectionRunStep : ISequenceStep
         }
 
         return StepResult.Ok(msg);
+    }
+
+    private double? ReadLaserWd()
+    {
+        if (!_laser.IsConnected) return null;
+        var p = _laser.GetPlanePose();
+        return p.Valid ? p.Z : null;
+    }
+
+    /// <summary>
+    /// 경유점별 레이저 거리 요약 — 기준은 첫 θ≈0 유효값. 경유점 Z 가 면 높이를 따르므로 초점이 맞으면 모든 점이 기준과 같아야 한다
+    /// (기울인 점도 툴이 면 법선이면 같다). 차이 = 초점 어긋남 추정(+ 면이 멀다). 레이저가 하나도 없으면 null.
+    /// 형식: "기준 343.1mm (#1) · 평면 Δ -0.3~+2.1 · 경사 Δ -4.0~+1.0 | #1 θ0 Z33.8 +0.0, #2 θ10 Z33.4 +0.6, ..."
+    /// </summary>
+    internal static string? FormatWdLog(IReadOnlyList<InspectionWaypoint> waypoints, IReadOnlyDictionary<int, double?> wd)
+    {
+        var valid = wd.Where(kv => kv.Value is not null).OrderBy(kv => kv.Key).ToList();
+        if (valid.Count == 0) return null;
+        var refKv = valid.FirstOrDefault(kv => Math.Abs(waypoints[kv.Key].Theta) < 1.0);
+        if (refKv.Value is null) refKv = valid[0];
+        var refWd = refKv.Value!.Value;
+
+        string Range(IEnumerable<double> ds)
+        {
+            var l = ds.ToList();
+            return l.Count == 0 ? "—" : $"{l.Min():+0.0;-0.0;0.0}~{l.Max():+0.0;-0.0;0.0}";
+        }
+        var flat = valid.Where(kv => Math.Abs(waypoints[kv.Key].Theta) < 1.0).Select(kv => kv.Value!.Value - refWd);
+        var tilt = valid.Where(kv => Math.Abs(waypoints[kv.Key].Theta) >= 1.0).Select(kv => kv.Value!.Value - refWd);
+        var points = wd.OrderBy(kv => kv.Key).Select(kv =>
+        {
+            var w = waypoints[kv.Key];
+            var d = kv.Value is { } v ? (v - refWd).ToString("+0.0;-0.0;0.0") : "없음";
+            return $"#{kv.Key + 1} θ{w.Theta:0} Z{w.Z:0.#} {d}";
+        });
+        return $"기준 {refWd:0.0}mm (#{refKv.Key + 1}) · 평면 Δ {Range(flat)} · 경사 Δ {Range(tilt)} | {string.Join(", ", points)}";
     }
 
     /// <summary>레시피 검사 가속도가 있으면 전역 가속도 배율을 그 값으로 바꾼다. 바꿨으면 true(복원 필요).
