@@ -68,6 +68,13 @@ public class LaserWorkingDistanceStep : ISequenceStep
     /// <summary>안정 판정 폭(mm) — 윈도우 내 최대−최소가 이 값 미만이면 안정.</summary>
     private const double StableBandMm = 0.3;
 
+    /// <summary>이동 도착 판정 — TCP 가 앵커에서 이동량만큼(±<see cref="ArriveToleranceMm"/>) 옮겨졌고, 연속 두 폴링 사이
+    /// 위치 변화가 <see cref="ArriveStillMm"/> 미만이면 도착으로 본다.</summary>
+    internal const double ArriveToleranceMm = 0.3, ArriveStillMm = 0.05;
+
+    /// <summary>도착 확인 폴링 간격·한도(ms). 한도를 넘으면 경고만 남기고 측정으로 넘어간다(종전 동작).</summary>
+    private const int ArrivePollMs = 50, ArriveTimeoutMs = 5000;
+
     /// <summary>안정화 대기 한도(ms). 초과 시 측정 실패 처리.</summary>
     private const int StabilizeTimeoutMs = 8000;
 
@@ -196,6 +203,11 @@ public class LaserWorkingDistanceStep : ISequenceStep
             if (rc != 0)
                 return StepResult.Fail($"WD 접근 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.");
             totalMove += move;
+
+            // ── 코봇이 실제로 도착할 때까지 기다린다 ── MoveL 은 rc=0 을 모션 완료 전에 돌려줄 수 있고, 1mm 안팎의 작은
+            // 보정 이동은 레이저 값이 안정 폭(0.3mm) 안에서만 변해 아래 안정화 대기가 '움직이기 전 값' 을 바로 확정한다
+            // (실기 2026-11-18 11:37 PL R01C13 묶음 점2: +1.03mm 보정에 측정변화 +0.08mm, 309ms 만에 확정 → 묶음 해제).
+            await WaitArrivedAsync(anchor, Math.Abs(move), context.Tool, ct);
 
             // ── 재측정 검증(모션 없음) — 안정화 대기 후 실측 응답으로 원인 진단 ──
             // 고정 딜레이 대신 안정화 폴링이 모션 잔여/센서 필터 수렴 대기를 겸한다.
@@ -349,6 +361,40 @@ public class LaserWorkingDistanceStep : ISequenceStep
 
         return (true, $" {refSource} 정면 횡복귀(툴 X{dx:+0.0;-0.0}/Y{dy:+0.0;-0.0}/Z{dz:+0.0;-0.0}mm).");
     }
+
+    /// <summary>
+    /// 이동 명령 뒤 TCP 가 <paramref name="anchor"/> 에서 <paramref name="expectedMm"/> 만큼 옮겨지고 멈출 때까지 기다린다.
+    /// 한도 안에 도착하지 않으면 경고만 남긴다(측정·진단은 그대로 이어서 한다).
+    /// </summary>
+    private async Task WaitArrivedAsync(double[] anchor, double expectedMm, int tool, CancellationToken ct)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        double[]? prev = null;
+        var lastMoved = double.NaN;
+        while (sw.ElapsedMilliseconds < ArriveTimeoutMs)
+        {
+            ct.ThrowIfCancellationRequested();
+            var cur = await _cobot.Rpc.GetTcpPoseInBaseAsync(tool, ct);
+            lastMoved = Dist3(cur, anchor);
+            if (IsArrived(lastMoved, expectedMm, prev is null ? double.PositiveInfinity : Dist3(cur, prev)))
+            {
+                _logger.LogInformation("[레이저 WD 거리 조정] 이동 도착 확인: {Moved:0.##}mm (지령 {Exp:0.##}mm, {Ms}ms)",
+                    lastMoved, expectedMm, sw.ElapsedMilliseconds);
+                return;
+            }
+            prev = cur;
+            await Task.Delay(ArrivePollMs, ct);
+        }
+        _logger.LogWarning("[레이저 WD 거리 조정] 이동 도착 확인 시간 초과({Ms}ms) — 이동 {Moved:0.##}mm / 지령 {Exp:0.##}mm. 그대로 측정합니다.",
+            ArriveTimeoutMs, lastMoved, expectedMm);
+    }
+
+    /// <summary>도착 판정 — 옮겨진 거리가 지령과 ±<see cref="ArriveToleranceMm"/> 안이고, 직전 폴링 대비 거의 멈췄으면 true.</summary>
+    internal static bool IsArrived(double movedMm, double expectedMm, double stepMm)
+        => Math.Abs(movedMm - expectedMm) <= ArriveToleranceMm && stepMm < ArriveStillMm;
+
+    private static double Dist3(double[] a, double[] b)
+        => Math.Sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2]));
 
     /// <summary>
     /// 레이저 3점 평면 pose 의 Z 가 <b>안정될 때까지</b> 폴링해 안정 윈도우 평균(mm)을 반환한다.

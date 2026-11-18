@@ -35,3 +35,15 @@ public class LaserWorkingDistanceCorrectionTests
         // 목표보다 가까워 후퇴(이동 −), 거리는 늘어남(측정변화 +).
         => Assert.True(LaserWorkingDistanceStep.ShouldCorrect(move: -20.0, change: +18.5, residual: -1.5));
 }
+
+/// <summary>WD 이동 도착 판정 — 실기 2026-11-18 11:37 묶음 점2 +1.03mm 보정이 움직이기 전 값으로 확정된 문제.</summary>
+public class LaserWorkingDistanceArriveTests
+{
+    [Theory]
+    [InlineData(1.03, 1.03, 0.01, true)]    // 지령만큼 옮겨졌고 멈춤
+    [InlineData(0.05, 1.03, 0.01, false)]   // 아직 출발 전(멈춰 있지만 거리 부족) — 종전엔 이 값으로 확정됐다
+    [InlineData(0.80, 1.03, 0.20, false)]   // 이동 중
+    [InlineData(20.9, 20.98, 0.02, true)]
+    public void 도착은_거리와_정지를_함께_본다(double moved, double expected, double step, bool arrived)
+        => Assert.Equal(arrived, HD.AMR.App.Service.Sequence.Steps.LaserWorkingDistanceStep.IsArrived(moved, expected, step));
+}
