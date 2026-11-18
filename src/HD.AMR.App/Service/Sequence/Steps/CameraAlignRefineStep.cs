@@ -16,6 +16,15 @@ public class CameraAlignRefineStep : ISequenceStep
     /// <summary>목표 거리 허용 오차(mm) — 이 안이면 이동 생략·성공. ④ 평탄 셀 판정이 300mm 기준이라 ±10mm 로 묶는다.</summary>
     internal const double AcceptToleranceMm = 10;
 
+    /// <summary>
+    /// 최대 접근 후에도 ±<see cref="AcceptToleranceMm"/> 에 못 들었을 때 그래도 넘기는 범위 [mm] — 목표보다 가까운 쪽
+    /// <see cref="NearSlackMm"/>, 먼 쪽 <see cref="FarSlackMm"/>. 더 다가가지 않고 그 자리에서 다음 단계로 넘기며, 거리는 뒤의
+    /// 레이저 WD 단계가 면을 직접 재서 다시 맞춘다. 깊이 거리는 ROI 최소 깊이(가장 가까운 물체)라 이 값보다 가까운 물체는 없다.
+    /// 챔퍼 맨 아래(바닥과 만나는 구석)처럼 ROI 가 바닥·모서리를 잡아 이동만큼 거리가 줄지 않는 자리용
+    /// (실기 2026-11-18 09:38 PL L1-R01C12 V7: 199·113·48·31mm 접근에 거리 499→413→348→320→285mm).
+    /// </summary>
+    internal const double NearSlackMm = 20, FarSlackMm = 30;
+
     /// <summary>추가 접근 최대 횟수.</summary>
     internal const int MaxMoves = 3;
 
@@ -120,6 +129,11 @@ public class CameraAlignRefineStep : ISequenceStep
             return (false, $"재정렬 {MaxMoves}회 접근 후 거리 측정 실패 — 유효한 깊이 값이 없습니다.");
         if (Math.Abs(d.Value - targetMm) <= AcceptToleranceMm)
             return (true, $"재정렬 완료 — {first:0.#}→{d:0.#}mm (목표 {targetMm:0}±{AcceptToleranceMm:0}mm, 추가 접근 {MaxMoves}회)");
+        if (d.Value >= targetMm - NearSlackMm && d.Value <= targetMm + FarSlackMm)
+            return (true,
+                $"재정렬 근접 허용 — {MaxMoves}회 접근 후 {first:0.#}→{d:0.#}mm (목표 {targetMm:0}±{AcceptToleranceMm:0}mm 밖이지만 " +
+                $"-{NearSlackMm:0}/+{FarSlackMm:0}mm 안 — 더 다가가지 않고 레이저 WD 단계에서 다시 맞춤). " +
+                "ROI 가 면이 아닌 바닥·모서리를 잡았을 수 있습니다.");
         return (false,
             $"목표 거리 미도달 — {MaxMoves}회 접근 후 {d:0.#}mm (목표 {targetMm:0}±{AcceptToleranceMm:0}mm). " +
             "ROI 안 구조물이 계속 가장 가깝게 잡혀 접근이 제한됐을 수 있습니다 — ROI 를 확인하세요.");

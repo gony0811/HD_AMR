@@ -44,6 +44,31 @@ public class CameraAlignRefineTests
         Assert.Contains("460", msg);
     }
 
+    // 11-18 PL R01C12 V7 — 바닥·구석을 잡아 3회 접근 후 285mm(목표 300±10 밖) → 근접 허용으로 넘김.
+    [Fact]
+    public async Task 근접_범위면_더_다가가지_않고_통과()
+    {
+        var (ok, msg) = await CameraAlignRefineStep.RefineAsync(
+            Moves(Moved(413, 113), Moved(348, 48), Moved(331, 31)), () => Task.FromResult<double?>(285), 300);
+        Assert.True(ok);
+        Assert.Contains("근접 허용", msg);
+
+        (ok, _) = await CameraAlignRefineStep.RefineAsync(
+            Moves(Moved(413, 113), Moved(348, 48), Moved(331, 31)), () => Task.FromResult<double?>(329), 300);
+        Assert.True(ok);
+    }
+
+    [Theory]
+    [InlineData(279)]   // 목표보다 20mm 넘게 가까움
+    [InlineData(331)]   // 30mm 넘게 멂
+    public async Task 근접_범위_밖이면_종전처럼_실패(double final)
+    {
+        var (ok, msg) = await CameraAlignRefineStep.RefineAsync(
+            Moves(Moved(413, 113), Moved(348, 48), Moved(331, 31)), () => Task.FromResult<double?>(final), 300);
+        Assert.False(ok);
+        Assert.Contains("미도달", msg);
+    }
+
     [Fact]
     public async Task MoveFailure_PropagatesAsNg()
     {
