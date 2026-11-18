@@ -92,6 +92,14 @@ public class GasDetectorSettings
     /// </summary>
     public GasMeasureMode MeasureMode { get; set; } = GasMeasureMode.Point;
 
+    /// <summary>
+    /// 연속 측정의 경유점 블렌딩 반경 [mm]. 0 = 경유점마다 정지(구간 단위 이동 — 종전 방식).
+    /// 0 보다 크면 <b>무정지</b>: 첫 경유점 이후 경유점들을 이 반경으로 둥글려 한 번에 지나가며 계속 샘플링한다
+    /// (경유점을 정확히 찍지 않고 최대 이 거리만큼 안쪽으로 돌아간다 — 인접 구간이 짧으면 자동으로 줄인다).
+    /// <see cref="MeasureMode"/> 가 <see cref="GasMeasureMode.Continuous"/> 일 때만 쓰인다.
+    /// </summary>
+    public double NonStopBlendRadiusMm { get; set; }
+
     public GasDetectorSettings Clone() => (GasDetectorSettings)MemberwiseClone();
 
     /// <summary>화면·로그용 연결 대상 요약.</summary>

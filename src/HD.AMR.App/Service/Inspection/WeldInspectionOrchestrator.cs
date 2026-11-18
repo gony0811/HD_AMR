@@ -769,9 +769,10 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             {
                 InspectionDirection = direction,
                 Tool = profile is { RunTool: > 0 } ? profile.RunTool : 1,
-                // 이동 속도: 레시피 MoveVelPercent 우선, 없으면 종전대로 프로필 RunVel(미지정 20).
-                // 검사(스캔) 속도: 레시피 InspectVelPercent — null 이면 ⑱이 이동 속도로 폴백.
-                Velocity = recipe.MoveVelPercent ?? profile?.RunVel ?? 20,
+                // 이동 속도: 레시피 MoveVelPercent, 없으면 기본 20%. 프로필 RunVel 은 검사(스캔) 속도라 이동 속도로 쓰지 않는다
+                // (프로필을 2% 로 저장하면 접근·복귀까지 2% 로 느려지던 것을 분리).
+                // 검사(스캔) 속도: 레시피 InspectVelPercent — null 이면 ⑱이 프로필 검사 속도 → 기본 검사 속도 파라미터로 정한다.
+                Velocity = recipe.MoveVelPercent ?? InspectionRecipe.DefaultMoveVelPercent,
                 InspectVelocity = recipe.InspectVelPercent,
                 InspectAcceleration = recipe.InspectAccPercent,
                 InspectionDrawingId = profile?.DrawingId ?? 0,

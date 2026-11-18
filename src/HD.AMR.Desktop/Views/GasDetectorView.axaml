@@ -178,7 +178,13 @@
                     <TextBlock Grid.Column="4" Text="간격 [ms]" VerticalAlignment="Center" Margin="16,0,8,0" />
                     <TextBox Grid.Column="5" Text="{Binding SampleIntervalMs}" />
                 </Grid>
-                <CheckBox Content="이동 중 연속 측정" IsChecked="{Binding IsContinuous}" />
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <CheckBox Content="이동 중 연속 측정" IsChecked="{Binding IsContinuous}" />
+                    <TextBlock Text="무정지 블렌딩 반경 [mm]" VerticalAlignment="Center" Margin="16,0,0,0" />
+                    <TextBox Width="80" Text="{Binding BlendRadiusMm}" IsEnabled="{Binding IsContinuous}" />
+                </StackPanel>
+                <TextBlock Classes="hint"
+                           Text="블렌딩 반경이 0 이면 연속 측정도 경유점마다 잠깐 멈춥니다(구간 단위 이동). 0 보다 크면 무정지 — 첫 경유점 이후를 멈추지 않고 한 번에 지나가며 계속 읽고, 샘플을 시간 비율로 구간에 나눠 판정합니다. 경유점을 정확히 찍지 않고 최대 이 반경만큼 안쪽으로 둥글게 돌아가므로 작업물과의 간격을 보고 작은 값부터 올리세요(인접 구간이 짧으면 자동으로 줄임). NG·측정 실패 구간은 통과 뒤 그 구간만 되돌아가 다시 훑습니다." />
                 <TextBlock Classes="hint"
                            Text="이동 중 연속 측정을 켜면 경유점에 멈춰 재지 않고, 경유점 사이를 검사 속도로 이동하는 동안 위 간격으로 계속 읽어 구간 최대값으로 판정합니다(샘플 수는 쓰지 않음). 도착 후 '측정 전 대기' 시간만큼 더 읽어 스니퍼 응답 지연을 흡수하고, NG 나 측정 실패면 구간 출발점으로 되돌아가 다시 훑습니다. 다음 검사부터 적용됩니다." />
                 <TextBlock Classes="hint"

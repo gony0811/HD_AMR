@@ -195,6 +195,10 @@ public class ParameterService
             (FlatReachOptions.TiltMarginKey,
                 FlatReachOptions.DefaultTiltMarginDeg.ToString(CultureInfo.InvariantCulture),
                 "④ 평탄 후보 도달성 판정의 틸트 보정 여유(°) — 레이저 위치에서 툴 Rx/Ry 를 ± 이만큼 돌려도 자세 한계 안이어야 후보로 인정. 0 = 생략."),
+            (Sequence.Steps.InspectionRunStep.DefaultInspectVelKey,
+                Sequence.Steps.InspectionRunStep.DefaultInspectVelPercent.ToString(CultureInfo.InvariantCulture),
+                "⑱ 검사 수행 기본 검사 속도(%) — 경유점 순회(검사 스캔) 속도. 레시피 검사 속도(또는 시퀀스 화면 검사 속도)가 비어 있고 " +
+                "검사 프로파일에도 속도가 없을 때 쓴다. 기본 2, 1~100 (밖이면 2). 다음 검사부터 적용."),
             (Sequence.Steps.FlatSurfaceAlignStep.TiltThresholdKey,
                 Sequence.Steps.FlatSurfaceAlignStep.DefaultTiltThresholdDeg.ToString(CultureInfo.InvariantCulture),
                 "④ 평탄면 레이저 정렬 완료 기준(°) — 레이저 3점 틸트 |rx|, |ry| 가 모두 이 값 미만이면 정렬 완료. 기본 1, 0 초과~5 (밖이면 1). 다음 정렬부터 적용."),

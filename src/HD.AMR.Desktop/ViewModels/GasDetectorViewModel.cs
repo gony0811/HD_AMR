@@ -37,6 +37,8 @@ public sealed partial class GasDetectorViewModel : ViewModelBase
     [ObservableProperty] private string _sampleCount = "";
     [ObservableProperty] private string _sampleIntervalMs = "";
     [ObservableProperty] private bool _isContinuous;
+    /// <summary>연속 측정 경유점 블렌딩 반경 [mm] — 0 = 경유점마다 정지, 0 초과 = 무정지.</summary>
+    [ObservableProperty] private string _blendRadiusMm = "0";
 
     [ObservableProperty] private bool _busy;
     [ObservableProperty] private string? _message;
@@ -224,6 +226,7 @@ public sealed partial class GasDetectorViewModel : ViewModelBase
         SampleCount = s.MeasureSampleCount.ToString(inv);
         SampleIntervalMs = s.MeasureSampleIntervalMs.ToString(inv);
         IsContinuous = s.MeasureMode == GasMeasureMode.Continuous;
+        BlendRadiusMm = s.NonStopBlendRadiusMm.ToString("0.###", inv);
     }
 
     [RelayCommand]
@@ -270,6 +273,9 @@ public sealed partial class GasDetectorViewModel : ViewModelBase
             s.MeasureSampleCount = ParseInt(SampleCount, "샘플 수", 1, 100);
             s.MeasureSampleIntervalMs = ParseInt(SampleIntervalMs, "샘플 간격", Xl3000AsciiProtocol.MinSampleIntervalMs, 10_000);
             s.MeasureMode = IsContinuous ? GasMeasureMode.Continuous : GasMeasureMode.Point;
+            if (!double.TryParse(BlendRadiusMm.Trim(), NumberStyles.Float, inv, out var blend) || blend < 0 || blend > 50)
+                throw new FormatException("블렌딩 반경은 0~50 mm 여야 합니다 (0 = 경유점마다 정지).");
+            s.NonStopBlendRadiusMm = blend;
         }
         catch (FormatException ex)
         {

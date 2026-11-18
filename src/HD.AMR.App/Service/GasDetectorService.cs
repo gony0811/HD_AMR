@@ -350,8 +350,19 @@ public sealed class GasDetectorService : BackgroundService
     public async Task<GasMeasurementResult?> MeasureDuringAsync(string label, Func<CancellationToken, Task<bool>> motion,
         GasThreshold? threshold = null, int retry = 0, CancellationToken ct = default)
     {
-        var s = Settings;
         var th = threshold ?? CurrentThreshold;
+        var (completed, started, samples, error) = await SampleDuringAsync(motion, th, ct);
+        if (!completed) return null;
+
+        DateTime? peakUtc = samples.Count > 0 ? samples.MaxBy(x => x.Value).At : null;
+        return Record(label, retry, started, samples.Select(x => x.Value).ToList(), th, error, peakUtc);
+    }
+
+    /// <summary><paramref name="motion"/> 이 도는 동안(+ 끝난 뒤 응답 지연만큼) 샘플링한다 — 연속 측정 공통부.</summary>
+    private async Task<(bool Completed, DateTime Started, List<(DateTime At, double Value)> Samples, string? Error)> SampleDuringAsync(
+        Func<CancellationToken, Task<bool>> motion, GasThreshold th, CancellationToken ct)
+    {
+        var s = Settings;
         var started = DateTime.UtcNow;
         var samples = new List<(DateTime At, double Value)>();
         string? error = null;
@@ -420,10 +431,91 @@ public sealed class GasDetectorService : BackgroundService
         {
             Interlocked.Decrement(ref _scanDepth);
         }
-        if (!completed) return null;
+        return (completed, started, samples, error);
+    }
 
-        DateTime? peakUtc = samples.Count > 0 ? samples.MaxBy(x => x.Value).At : null;
-        return Record(label, retry, started, samples.Select(x => x.Value).ToList(), th, error, peakUtc);
+    /// <summary>끝점 도달 확인 허용 오차 [mm] — 무정지 이동 뒤 실제 TCP 가 마지막 경유점에 있는지.</summary>
+    public const double NonStopArrivalToleranceMm = 3.0;
+
+    /// <summary>연속 측정의 경유점 블렌딩 반경 [mm] (0 = 경유점마다 정지).</summary>
+    public double NonStopBlendRadiusMm => Math.Max(0, Settings.NonStopBlendRadiusMm);
+
+    /// <summary>연속 측정이 무정지(경유점 블렌딩)로 도는지 — 연속 모드이고 블렌딩 반경이 0 보다 클 때.</summary>
+    public bool IsNonStopMode => IsContinuousMode && NonStopBlendRadiusMm > 0;
+
+    /// <summary>
+    /// 무정지 연속 측정 1회 — <paramref name="poses"/>[0](지금 서 있는 출발점)에서 나머지 경유점을 멈추지 않고 차례로
+    /// 지나가는 동안 계속 샘플링하고, 샘플을 구간별로 나눠(<see cref="GasPassSplitter.Split"/>) 구간마다 측정 1건으로 기록한다.
+    /// 중간 경유점은 블렌딩 반경(논블로킹 이동)으로, 마지막 경유점은 블로킹 이동으로 보낸다 — 이동 명령은
+    /// <paramref name="moveTo"/>(pose 인덱스, blendR, 토큰 → rc)가 낸다. 끝나면 <paramref name="readPose"/> 로 실제 TCP 가
+    /// 마지막 경유점에 있는지 확인한다. 이동 실패·끝점 미도달·취소 시 <paramref name="stopMotion"/> 으로 남은 이동 큐를 멈춘다.
+    /// </summary>
+    /// <param name="labels">구간 라벨 — labels[k] 는 poses[k]→poses[k+1].</param>
+    /// <returns>구간별 측정(순서대로). 이동이 실패하면 Scans = null 과 사유.</returns>
+    public async Task<(IReadOnlyList<GasMeasurementResult>? Scans, string? MoveError)> MeasureNonStopPassAsync(
+        IReadOnlyList<string> labels, IReadOnlyList<double[]> poses,
+        Func<int, double, CancellationToken, Task<int>> moveTo,
+        Func<CancellationToken, Task<double[]>>? readPose, Func<Task> stopMotion,
+        GasThreshold? threshold = null, CancellationToken ct = default)
+    {
+        var th = threshold ?? CurrentThreshold;
+        var lengths = Enumerable.Range(0, poses.Count - 1)
+            .Select(k => GasPassSplitter.Distance(poses[k], poses[k + 1])).ToList();
+        var radii = GasPassSplitter.BlendRadii(lengths, NonStopBlendRadiusMm);
+        string? moveError = null;
+        DateTime moveStart = default, moveEnd = default;
+
+        async Task StopQuietlyAsync()
+        {
+            try { await stopMotion(); }
+            catch (Exception ex) { _logger.LogError(ex, "[가스 측정] 무정지 이동 정지 명령 실패"); }
+        }
+
+        // 블로킹 이동은 취소 토큰을 보지 않는다 — 취소되면 큐에 쌓인 나머지 경유점까지 가 버리므로 바로 멈춘다.
+        using var stopOnCancel = ct.Register(() => _ = StopQuietlyAsync());
+        var (completed, started, samples, error) = await SampleDuringAsync(async c =>
+        {
+            moveStart = DateTime.UtcNow;
+            for (var k = 1; k < poses.Count; k++)
+            {
+                var rc = await moveTo(k, k == poses.Count - 1 ? -1 : radii[k - 1], c);
+                if (rc != 0)
+                {
+                    moveError = $"{labels[k - 1]} 이동 명령 실패 (rc={rc}){HD.AMR.App.Communication.FairinoErrorCodes.Suffix(rc)}";
+                    return false;
+                }
+            }
+            moveEnd = DateTime.UtcNow;
+            if (readPose is not null)
+            {
+                var remain = GasPassSplitter.Distance(await readPose(c), poses[^1]);
+                if (remain > NonStopArrivalToleranceMm)
+                {
+                    moveError = $"끝점 미도달 — 마지막 경유점까지 {remain:0.0} mm 남음(이동이 도중에 멈췄거나 아직 끝나지 않음)";
+                    return false;
+                }
+            }
+            return true;
+        }, th, ct);
+
+        if (!completed)
+        {
+            await StopQuietlyAsync();
+            ct.ThrowIfCancellationRequested();
+            return (null, moveError ?? "이동 실패");
+        }
+
+        var delay = TimeSpan.FromMilliseconds(Math.Max(0, Settings.MeasureDwellMs));
+        var parts = GasPassSplitter.Split(samples, moveStart, moveEnd, delay, lengths);
+        _logger.LogInformation("[가스 측정] 무정지 연속 측정 — {N}구간 {Len:0} mm 를 {Sec:0.0} 초에 통과, {Samples}샘플 (블렌딩 최대 {R:0.#} mm)",
+            lengths.Count, lengths.Sum(), (moveEnd - moveStart).TotalSeconds, samples.Count, radii.DefaultIfEmpty(0).Max());
+        var scans = new List<GasMeasurementResult>(parts.Count);
+        for (var k = 0; k < parts.Count; k++)
+        {
+            DateTime? peakUtc = parts[k].Count > 0 ? parts[k].MaxBy(x => x.Value).At : null;
+            scans.Add(Record(labels[k], 0, started, parts[k].Select(x => x.Value).ToList(), th, error, peakUtc));
+        }
+        return (scans, null);
     }
 
     /// <summary>샘플 묶음을 판정해 측정 1건으로 기록하고(<see cref="Results"/>, 로그, <see cref="ResultAdded"/>) 돌려준다.</summary>
@@ -465,6 +557,57 @@ public sealed class GasDetectorService : BackgroundService
         while (GasPointResult.NeedsRetry(scans[^1].Judgement, scans.Count - 1, maxRetries))
             scans.Add(await MeasureAsync(label, threshold, scans.Count, ct));
         return scans;
+    }
+
+    /// <summary>
+    /// 화면 수동 실행용 — 현재 임계값으로 경유점 1곳을 측정(<see cref="MeasurePointAsync"/>)하고 최종 판정과 표시 문구를 돌려준다.
+    /// </summary>
+    public async Task<(GasJudgement Judgement, string Text)> MeasurePointForDisplayAsync(string label,
+        CancellationToken ct = default)
+    {
+        var scans = await MeasurePointAsync(label, CurrentThreshold, ct);
+        var last = scans[^1];
+        var retryNote = scans.Count > 1 ? $" (재측정 {scans.Count - 1}회)" : "";
+        return (last.Judgement, last.Judgement switch
+        {
+            GasJudgement.Ok => $"가스 OK {last.Value:0.###} {last.Unit}{retryNote}",
+            GasJudgement.Ng => $"가스 NG — {last.Value:0.###} > 임계 {last.Threshold:0.###} {last.Unit}{retryNote}",
+            _ => $"가스 측정 실패: {last.Error}{retryNote}",
+        });
+    }
+
+    /// <summary>수동 실행이 이동 중 연속 측정(<see cref="GasMeasureMode.Continuous"/>)으로 돌아야 하는지.</summary>
+    public bool IsContinuousMode => Settings.MeasureMode == GasMeasureMode.Continuous;
+
+    /// <summary>
+    /// 화면 수동 실행용 연속 측정 1구간 — <paramref name="moveForward"/>(구간 이동)가 도는 동안 샘플링해 구간 최대값을
+    /// 현재 임계값으로 판정한다. OK 가 아니면 <paramref name="moveBack"/> 으로 출발점에 되돌아가 같은 구간을 다시 훑는다
+    /// (<see cref="GasDetectorSettings.MaxRetries"/> 회까지 — 검사 시퀀스의 구간 재측정과 같은 규칙).
+    /// 이동이 실패하면 null.
+    /// </summary>
+    public async Task<(GasJudgement Judgement, string Text)?> MeasureSegmentForDisplayAsync(string label,
+        Func<CancellationToken, Task<bool>> moveForward, Func<CancellationToken, Task<bool>> moveBack,
+        CancellationToken ct = default)
+    {
+        var th = CurrentThreshold;
+        var maxRetries = Math.Clamp(Settings.MaxRetries, 0, 2);
+        var scans = new List<GasMeasurementResult>();
+        while (true)
+        {
+            var scan = await MeasureDuringAsync(label, moveForward, th, scans.Count, ct);
+            if (scan is null) return null;
+            scans.Add(scan);
+            if (!GasPointResult.NeedsRetry(scan.Judgement, scans.Count - 1, maxRetries)) break;
+            if (!await moveBack(ct)) return null;
+        }
+        var last = scans[^1];
+        var retryNote = scans.Count > 1 ? $" (재측정 {scans.Count - 1}회)" : "";
+        return (last.Judgement, last.Judgement switch
+        {
+            GasJudgement.Ok => $"가스 OK 최대 {last.Value:0.###} {last.Unit} ({last.SampleCount}샘플){retryNote}",
+            GasJudgement.Ng => $"가스 NG — 최대 {last.Value:0.###} > 임계 {last.Threshold:0.###} {last.Unit}{retryNote}",
+            _ => $"가스 측정 실패: {last.Error}{retryNote}",
+        });
     }
 
     /// <summary>
@@ -591,6 +734,7 @@ public sealed class GasDetectorService : BackgroundService
             if (await p.GetIntAsync(KeyPrefix + "MeasureSampleCount") is { } n) s.MeasureSampleCount = n;
             if (await p.GetIntAsync(KeyPrefix + "MeasureSampleIntervalMs") is { } iv) s.MeasureSampleIntervalMs = iv;
             if (Enum.TryParse<GasMeasureMode>(await p.GetAsync(KeyPrefix + "MeasureMode"), out var mode)) s.MeasureMode = mode;
+            if (await p.GetDoubleAsync(KeyPrefix + "NonStopBlendRadiusMm") is { } blend) s.NonStopBlendRadiusMm = blend;
             lock (_lock)
             {
                 _settings = s;
@@ -622,6 +766,7 @@ public sealed class GasDetectorService : BackgroundService
             await p.SetAsync(KeyPrefix + "MeasureSampleCount", s.MeasureSampleCount.ToString(inv), "경유점 측정 샘플 수");
             await p.SetAsync(KeyPrefix + "MeasureSampleIntervalMs", s.MeasureSampleIntervalMs.ToString(inv), "경유점 측정 샘플 간격 [ms]");
             await p.SetAsync(KeyPrefix + "MeasureMode", s.MeasureMode.ToString(), "가스 측정 방식 (Point=경유점 정지 / Continuous=이동 중 연속)");
+            await p.SetDoubleAsync(KeyPrefix + "NonStopBlendRadiusMm", s.NonStopBlendRadiusMm, "연속 측정 경유점 블렌딩 반경 [mm] (0=경유점마다 정지, >0=무정지)");
         }
         catch (Exception ex)
         {
