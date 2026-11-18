@@ -687,8 +687,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                     cachedAnchorStartBase = shared.Start?.ToArray();
                     cachedAnchorEndTcp = shared.EndTcp?.ToArray();
                     lock (_sync)
-                        bundleEndWd = Sequence.Steps.BundleEndWdStep.Enabled
-                                      && _bundleOrder.LastOrDefault(a => a.BundleId == bundle.BundleId)?.ActionId == action.ActionId;
+                        bundleEndWd = _bundleOrder.LastOrDefault(a => a.BundleId == bundle.BundleId)?.ActionId == action.ActionId;
                     _logger.LogInformation("묶음 {Id} 공통 좌표계 — {Job} 교시 생략{Last}", bundle.BundleId, req.JobRef,
                         bundleEndWd ? " (묶음 마지막 — 끝점 WD 확인)" : "");
                 }
