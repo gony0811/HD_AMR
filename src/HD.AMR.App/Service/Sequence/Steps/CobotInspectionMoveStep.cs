@@ -1132,8 +1132,31 @@ public class CobotInspectionMoveStep : ISequenceStep
     /// (실기 2026-11-02 13:23 L4-R03C09 H1: 투영 진입점 해가 J4 를 +69°→약 −150° 로, 벽 반대쪽으로 ~220° 돌렸다).
     /// 120° → 140° 완화(ACS 분석, 2026-11-02): 당일 300° 이상 거부는 전부 PU 준비 자세 J4 69° 가 한계 +85° 에 붙어
     /// 생긴 J4 먼 길 회전이었고(준비 자세 문제), 정상 진입은 16~82° 였다. 완화로 통과할 수 있는 손목 뒤집기 해
-    /// (14:05 후보: J1 117°·J5 +90→−50°, 144°)는 <see cref="IsWristFlip"/> 로 따로 막는다.</summary>
-    internal const double MaxEntryJointTravelDeg = 140.0;
+    /// (14:05 후보: J1 117°·J5 +90→−50°, 144°)는 <see cref="IsWristFlip"/> 로 따로 막는다.
+    /// 140° → 160°(2026-11-19 사용자 지시 — 천장 출발 자세 가지 전환 J2 154° 거부), 파라미터 <see cref="MaxEntryJointTravelKey"/> 로
+    /// 현장에서 바꾼다(기동·저장·삭제 때 <see cref="ApplyMaxEntryJointTravel"/>). 리치 맵·도달 사전 점검도 같은 값을 쓴다.</summary>
+    internal static double MaxEntryJointTravelDeg { get; private set; } = DefaultMaxEntryJointTravelDeg;
+
+    /// <summary><see cref="MaxEntryJointTravelDeg"/> 기본값 [도].</summary>
+    internal const double DefaultMaxEntryJointTravelDeg = 160.0;
+
+    /// <summary>진입 관절 이동 한계 파라미터 키 — ACS 의 <c>Acs:Reach:MaxEntryJointTravelDeg</c> 와 같은 값으로 둘 것.</summary>
+    public const string MaxEntryJointTravelKey = "inspection.maxEntryJointTravelDeg";
+
+    /// <summary>허용 범위 [도] — 밖이면 설정 실수로 보고 기본값을 쓴다.</summary>
+    internal const double MinEntryJointTravelDeg = 30.0, MaxEntryJointTravelLimitDeg = 360.0;
+
+    /// <summary>파라미터 값 → 쓸 한계 [도]. 비거나 범위 밖이면 기본값.</summary>
+    internal static double ResolveMaxEntryJointTravel(double? value)
+        => value is { } v && double.IsFinite(v) && v >= MinEntryJointTravelDeg && v <= MaxEntryJointTravelLimitDeg
+            ? v : DefaultMaxEntryJointTravelDeg;
+
+    /// <summary>파라미터 값을 적용한다. 값이 범위 안이거나 비어 있으면 true, 범위 밖이라 기본값을 쓰면 false.</summary>
+    internal static bool ApplyMaxEntryJointTravel(double? value)
+    {
+        MaxEntryJointTravelDeg = ResolveMaxEntryJointTravel(value);
+        return value is null || MaxEntryJointTravelDeg == value;
+    }
 
     /// <summary>
     /// 진입 MoveJ 해 <paramref name="joints"/> 를 쓸 수 없는 사유, 쓸 수 있으면 null — 관절 이동량(<see cref="MaxEntryJointTravelDeg"/>),

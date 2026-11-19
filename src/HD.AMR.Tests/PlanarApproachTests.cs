@@ -112,9 +112,14 @@ public class PlanarApproachTests
     }
 
     [Fact]
-    public void 진입_한계는_140도()
+    public void 진입_한계_기본값은_160도이고_파라미터로_바꾼다()
     {
-        Assert.Equal(140.0, CobotInspectionMoveStep.MaxEntryJointTravelDeg);
+        Assert.Equal(160.0, CobotInspectionMoveStep.DefaultMaxEntryJointTravelDeg);
+        Assert.Equal(160.0, CobotInspectionMoveStep.ResolveMaxEntryJointTravel(null));     // 비면 기본값
+        Assert.Equal(140.0, CobotInspectionMoveStep.ResolveMaxEntryJointTravel(140));      // 범위 안 = 그 값
+        Assert.Equal(160.0, CobotInspectionMoveStep.ResolveMaxEntryJointTravel(10));       // 범위 밖 = 기본값
+        Assert.Equal(160.0, CobotInspectionMoveStep.ResolveMaxEntryJointTravel(double.NaN));
+        Assert.True(154.0 <= CobotInspectionMoveStep.DefaultMaxEntryJointTravelDeg);         // 11-19 천장 J2 154° 는 이제 통과
         // #3 직접 진입(82°)·정상 진입(16~29°)은 통과, J4 먼 길 회전(300°대)은 거부.
         Assert.True(82.0 <= CobotInspectionMoveStep.MaxEntryJointTravelDeg);
         Assert.True(308.0 > CobotInspectionMoveStep.MaxEntryJointTravelDeg);
