@@ -241,4 +241,55 @@ public class AnchorChainTests
         Assert.Equal(0.0, normal, 9);
         for (var i = 0; i < 6; i++) Assert.Equal(BeadFrame[i], moved[i], 9);
     }
+
+    // 실기 2026-11-19 13:17~13:22 PU L4-R03C25 묶음(-2 리더, -3·-4 팔로워). 도면상 한 줄(u=26820)인 수직 용접선인데
+    // BASE 로 바꾼 ACS 시작점은 task 마다 AMR 위치 오차를 따로 먹어, 프레임 옆 성분이 -3 28.8mm·-4 33.9mm 로 나왔다.
+    // 종전에는 이를 "옆으로 떨어진 task" 로 보고 그대로 옮겨 카메라가 비드 옆 30mm 를 찍었다(비전 0/21).
+    private static readonly double[] FieldP1 = { -1954.5, 116.4, 1088.1 };
+    private static readonly double[] FieldP2 = { -1404.0, 89.3, 1605.5 };
+    private static readonly double[] FieldFrame = { -1954.5, 116.4, 1088.1, -177.99, -43.19, -2.81 };
+    private static readonly double[] LeaderStartBase = { -1659.4, 50.9, 754.7 };
+    private static readonly double[] F4StartBase = { -1297.9, 66.6, 1114.8 };
+    private static readonly double[] LeaderStartW = { 5.034, 2.691, 1.965 }, LeaderEndW = { 5.033, 2.871, 2.145 };
+    private static readonly double[] F4StartW = { 5.031, 3.051, 2.325 };
+
+    private static double DistanceToFieldLine(double[] q)
+    {
+        var u = new[] { FieldP2[0] - FieldP1[0], FieldP2[1] - FieldP1[1], FieldP2[2] - FieldP1[2] };
+        var len = Math.Sqrt(u.Sum(v => v * v));
+        var d = new[] { q[0] - FieldP1[0], q[1] - FieldP1[1], q[2] - FieldP1[2] };
+        var t = (d[0] * u[0] + d[1] * u[1] + d[2] * u[2]) / len;
+        return Math.Sqrt(Enumerable.Range(0, 3).Sum(i => Math.Pow(d[i] - u[i] / len * t, 2)));
+    }
+
+    [Fact]
+    public void 도면상_같은_줄이면_맵_옆_거리는_작다()
+    {
+        var m = InternalWorkpieceFrame.MapSeamOffsetMm(LeaderStartW, LeaderEndW, F4StartW)!.Value;
+        Assert.InRange(m.LateralMm, 0, 3);                  // 맵 좌표 반올림(1mm) 수준
+        Assert.InRange(m.AlongMm, 505, 515);                // 피치 254.6 × 2
+        // 옆으로 50mm 떨어진 용접선은 그대로 드러난다
+        var side = InternalWorkpieceFrame.MapSeamOffsetMm(LeaderStartW, LeaderEndW, new[] { 5.031 + 0.05, 3.051, 2.325 })!.Value;
+        Assert.InRange(side.LateralMm, 48, 52);
+        Assert.Null(InternalWorkpieceFrame.MapSeamOffsetMm(LeaderStartW, LeaderStartW, F4StartW));
+        Assert.Null(InternalWorkpieceFrame.MapSeamOffsetMm(null, LeaderEndW, F4StartW));
+    }
+
+    [Fact]
+    public void 실기_묶음_팔로워는_맵상_같은_줄이면_실측_비드선_위로_옮긴다()
+    {
+        // 종전: BASE 옆 성분 34mm 를 그대로 따라가 비드선에서 34mm 벗어남
+        var old = InternalWorkpieceFrame.TranslateAlongX(FieldFrame, LeaderStartBase, F4StartBase);
+        Assert.False(old.AlongXOnly);
+        Assert.InRange(Math.Abs(old.LateralMm), 30, 38);
+        Assert.True(DistanceToFieldLine(old.Frame) > 25, $"{DistanceToFieldLine(old.Frame):0.0}");
+
+        // 수정: 맵으로 같은 줄을 확인하면 비드 방향으로만 — 원점이 점1→점2 실측선 위
+        var fixedMove = InternalWorkpieceFrame.TranslateAlongX(FieldFrame, LeaderStartBase, F4StartBase, forceAlongX: true);
+        Assert.True(fixedMove.AlongXOnly);
+        Assert.True(DistanceToFieldLine(fixedMove.Frame) < 3, $"{DistanceToFieldLine(fixedMove.Frame):0.0}");
+        var along = Math.Sqrt(Enumerable.Range(0, 3).Sum(i => Math.Pow(fixedMove.Frame[i] - FieldP1[i], 2)));
+        Assert.InRange(along, 500, 520);                     // 진행 거리는 유지
+        Assert.Equal(FieldFrame[3..], fixedMove.Frame[3..]);
+    }
 }

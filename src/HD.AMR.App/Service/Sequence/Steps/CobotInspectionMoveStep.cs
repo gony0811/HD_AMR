@@ -71,6 +71,10 @@ public class CobotInspectionMoveStep : ISequenceStep
     /// <summary>anchor 적중 시 캐시 프레임을 쓴 직전 task 의 ② 시작 접근점 — 프레임 평행 이동 기준.</summary>
     public const string AnchorStartBaseBagKey = "anchor.startApproachBase";
 
+    /// <summary>Bag 키 — <see cref="AnchorStartBaseBagKey"/> 와 짝인 기준 용접선의 맵 좌표 [시작 x,y,z, 끝 x,y,z] (m).
+    /// 이번 용접선이 도면상 같은 줄인지 보는 데 쓴다(<see cref="InternalWorkpieceFrame.MapSeamOffsetMm"/>).</summary>
+    public const string AnchorSeamWBagKey = "anchor.seamW";
+
     /// <summary>anchor 적중 시 직전 task 종료 TCP(BASE pose) — 그대로면 복귀 없이 연속 이동.</summary>
     public const string PreviousEndTcpBagKey = "anchor.previousEndTcp";
 
@@ -1370,16 +1374,29 @@ public class CobotInspectionMoveStep : ISequenceStep
                    "직전 구간을 다시 검사하게 되므로 중단합니다. 같은 그룹을 처음부터(정렬 포함) 다시 실행하세요.";
 
         // 비드 방향(프레임 X)으로만 옮긴다 — ACS 시작점 차이의 옆 성분(맵·AMR 방향 오차)이 LINE 마다 누적되지 않게.
-        var (moved, lateralMm, normalMm, alongX) = InternalWorkpieceFrame.TranslateAlongX(frame, anchorStart, startBase);
+        // 옆으로 떨어졌는지는 맵(도면) 좌표로 판단한다 — BASE 로 바꾼 ACS 시작점은 task 마다 AMR 위치·방향 오차를 따로 먹어
+        // 같은 줄인데도 옆 성분이 수십 mm 나온다(실기 2026-11-19 PU L4-R03C25 -3·-4: 28.8·33.9mm → 비드 옆을 찍음).
+        var map = context.Bag.TryGetValue(AnchorSeamWBagKey, out var sw) && sw is double[] { Length: 6 } seamW
+            ? InternalWorkpieceFrame.MapSeamOffsetMm(seamW[..3], seamW[3..], context.SeamStartW)
+            : null;
+        var sameLine = map is { } mo && mo.LateralMm <= InternalWorkpieceFrame.MaxDroppedLateralMm;
+        var (moved, lateralMm, normalMm, alongX) = InternalWorkpieceFrame.TranslateAlongX(frame, anchorStart, startBase, forceAlongX: sameLine);
         context.Bag[InternalWorkpieceFrame.BagKey] = moved;
-        if (alongX)
+        if (alongX && sameLine && Math.Abs(lateralMm) > InternalWorkpieceFrame.MaxDroppedLateralMm)
+            _logger.LogWarning(
+                "[Cobot 검사위치 이동] anchor 프레임 평행 이동(비드 방향만) — 도면상 같은 용접선 줄(옆 {MapL:0.0}mm)인데 BASE 환산 ACS 옆 성분이 {L:+0.0;-0.0}mm " +
+                "(AMR 위치·방향 또는 장착 보정 오차 의심) → 실측 비드 방향으로만 Δ=[{Dx:0.0}, {Dy:0.0}, {Dz:0.0}]mm (도면 진행 {MapA:0}mm) — 원점 [{X:0.0}, {Y:0.0}, {Z:0.0}]",
+                map!.Value.LateralMm, lateralMm, moved[0] - frame[0], moved[1] - frame[1], moved[2] - frame[2], map.Value.AlongMm,
+                moved[0], moved[1], moved[2]);
+        else if (alongX)
             _logger.LogInformation(
                 "[Cobot 검사위치 이동] anchor 프레임 평행 이동(비드 방향만) Δ=[{Dx:0.0}, {Dy:0.0}, {Dz:0.0}]mm (ACS 옆 성분 {L:+0.0;-0.0}mm·법선 성분 {N:+0.0;-0.0}mm 제외) — 원점 [{X:0.0}, {Y:0.0}, {Z:0.0}]",
                 moved[0] - frame[0], moved[1] - frame[1], moved[2] - frame[2], lateralMm, normalMm, moved[0], moved[1], moved[2]);
         else
             _logger.LogWarning(
-                "[Cobot 검사위치 이동] anchor 프레임 평행 이동 — ACS 옆 성분 {L:+0.0;-0.0}mm 가 {Max:0}mm 초과(같은 그룹 task 가 옆으로 떨어져 있음) → 면 평행 이동 Δ=[{Dx:0.0}, {Dy:0.0}, {Dz:0.0}]mm (법선 성분 {N:+0.0;-0.0}mm 제외) — 원점 [{X:0.0}, {Y:0.0}, {Z:0.0}]",
+                "[Cobot 검사위치 이동] anchor 프레임 평행 이동 — ACS 옆 성분 {L:+0.0;-0.0}mm 가 {Max:0}mm 초과(같은 그룹 task 가 옆으로 떨어져 있음{Map}) → 면 평행 이동 Δ=[{Dx:0.0}, {Dy:0.0}, {Dz:0.0}]mm (법선 성분 {N:+0.0;-0.0}mm 제외) — 원점 [{X:0.0}, {Y:0.0}, {Z:0.0}]",
                 lateralMm, InternalWorkpieceFrame.MaxDroppedLateralMm,
+                map is { } m2 ? $", 도면상 옆 {m2.LateralMm:0.0}mm" : ", 도면 좌표 없음",
                 moved[0] - frame[0], moved[1] - frame[1], moved[2] - frame[2], normalMm, moved[0], moved[1], moved[2]);
         return null;
     }
