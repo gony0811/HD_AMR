@@ -152,4 +152,66 @@ public class AcsProfilePayloadTests
         Assert.Empty(AcsProfilePayload.RobotModelMismatch("{\"added\":0}"));   // 구버전 ACS
         Assert.Empty(AcsProfilePayload.RobotModelMismatch("not json"));
     }
+
+    private static TeachingPosition Pos(string key, params double[] j) => new()
+    {
+        Key = key, X = 0, J1 = j[0], J2 = j[1], J3 = j[2], J4 = j[3], J5 = j[4], J6 = j[5],
+    };
+
+    private static readonly double[] Home2 = { -0.414, -11.992, 121.972, -110.169, 89.975, 180.392 };   // 2026-11-19 재교시
+    private static readonly double[] Ready = { -0.391, -9.414, 119.984, -110.76, 90.001, 180.392 };
+
+    [Fact]
+    public void 교시_위치와_면별_출발_자세를_싣는다()
+    {
+        var teaching = new[]
+        {
+            Pos("home", 0, 0, 90, -90, 90, 180), Pos("home2", Home2), Pos("ready", Ready),
+            new TeachingPosition { Key = "home3" },   // 미티칭 — 싣지 않음
+        };
+        var (positions, starts) = AcsProfilePayload.BuildTeaching(teaching);
+
+        Assert.Equal(new[] { "home", "home2", "ready" }, positions.Select(p => p.Key).OrderBy(k => k));
+        // 상부 면 = 홈 위치_2, 그 외(홈 위치_3·_4 미티칭) = 작업 준비 위치 — 실행(SequenceEntry)과 같은 규칙
+        foreach (var w in new[] { "T", "SU", "PU" }) Assert.Equal(Home2, starts[w]);
+        foreach (var w in new[] { "B", "SL", "PL", "SM", "PM", "F", "A" }) Assert.Equal(Ready, starts[w]);
+
+        var body = AcsProfilePayload.Build("AMR-01", Array.Empty<InspectionProfile>(), out _)
+            with { TeachingPositions = positions, StartJointsByWall = starts };
+        var json = JsonSerializer.Serialize(body, AcsProfilePayload.Json);
+        Assert.Contains("\"teachingPositions\":[{\"key\":\"home\",\"joints\":[0,0,90,-90,90,180]}", json);
+        Assert.Contains("\"startJointsByWall\":{", json);
+        Assert.Contains("\"T\":[-0.414,-11.992,121.972,-110.169,89.975,180.392]", json);
+    }
+
+    [Fact]
+    public void 면_검사_준비_슬롯과_하부_홈이_있으면_그것을_출발_자세로()
+    {
+        var wallT = new[] { 1.0, 2, 3, 4, 5, 6 };
+        var home3 = new[] { 7.0, 8, 9, 10, 11, 12 };
+        var (_, starts) = AcsProfilePayload.BuildTeaching(new[]
+            { Pos("home2", Home2), Pos("ready", Ready), Pos("wall.T", wallT), Pos("home3", home3) });
+
+        Assert.Equal(wallT, starts["T"]);     // 그 면 검사 준비 슬롯 우선
+        Assert.Equal(Home2, starts["PU"]);
+        Assert.Equal(home3, starts["PL"]);    // 하부 챔퍼 = 홈 위치_3
+        Assert.Equal(home3, starts["B"]);     // 홈 위치_4 미티칭이면 바닥도 홈 위치_3
+        Assert.Equal(Ready, starts["F"]);
+    }
+
+    [Fact]
+    public void 출발_자세가_없으면_그_면은_싣지_않는다()
+    {
+        var (positions, starts) = AcsProfilePayload.BuildTeaching(new[] { Pos("ready", Ready) });
+        Assert.Single(positions);
+        Assert.False(starts.ContainsKey("T"));   // 홈 위치_2 미티칭
+        Assert.Equal(Ready, starts["F"]);
+    }
+
+    [Fact]
+    public void ACS_응답에서_출발_자세_적용_면을_읽는다()
+    {
+        Assert.Equal(new[] { "T 다름" }, AcsProfilePayload.StartJointsOverride("{\"startJointsOverride\":[\"T 다름\"]}"));
+        Assert.Empty(AcsProfilePayload.StartJointsOverride("{\"added\":0}"));
+    }
 }
