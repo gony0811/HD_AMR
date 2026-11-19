@@ -169,6 +169,17 @@ public sealed class LaserTiltCorrector
             if (rc != 0)
                 return TiltLevelResult.Fail($"틸트 보정 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.", iter, pose, jac) with { MotionFailure = true };
 
+            // 재확인 측정 전 — 회전 뒤 스팟이 평탄면을 벗어났을 수 있어 호출측이 자리를 다시 맞춘다(시퀀스 ④: depth 재탐색).
+            // 강체 평면 위 평행 이동은 틸트를 바꾸지 않으므로 아래 예측·실측 비교는 그대로 성립한다.
+            if (o.BeforeRecheck is { } recheck)
+            {
+                var (err, motion) = await recheck(iter + 1, ct);
+                if (err is not null)
+                    return TiltLevelResult.Fail($"보정 {iter + 1} 후 재확인 전 평탄 자리 재탐색 실패: {err}", iter + 1, pose, jac)
+                        with { MotionFailure = motion };
+                await WaitSettledAsync(o, Report, ct);
+            }
+
             predicted = (pose.Rx + jac[0, 0] * applyRx + jac[0, 1] * applyRy,
                          pose.Ry + jac[1, 0] * applyRx + jac[1, 1] * applyRy);
             lastAppliedMag = Math.Sqrt(applyRx * applyRx + applyRy * applyRy);
@@ -441,6 +452,12 @@ public sealed class TiltLevelOptions
     /// <summary>판정 측정 샘플 수 — 이 샘플의 채널별 중앙값으로 틸트를 계산하고 같은 샘플로 노이즈 통계를 낸다
     /// (기본 20 × 50ms ≈ 1s/측정). 0 = 종전 방식(3샘플 평균 판정, |Δ| 기준 안정화, 노이즈 통계 없음).</summary>
     public int NoiseSamples { get; init; } = 20;
+
+    /// <summary>
+    /// 보정 회전 뒤 재확인 측정 직전에 호출(인자 = 적용한 보정 회차, 1부터). 레이저 스팟을 다시 평탄한 자리로 옮기는 데 쓴다.
+    /// 반환 (오류, 코봇 이동 실패 여부) — 오류가 null 이 아니면 보정을 중단한다. null 이면 호출하지 않는다(종전).
+    /// </summary>
+    public Func<int, CancellationToken, Task<(string? Error, bool MotionFailure)>>? BeforeRecheck { get; init; }
 
     /// <summary>판정 측정·정착 판정 샘플 간격(ms).</summary>
     public int NoiseIntervalMs { get; init; } = 50;

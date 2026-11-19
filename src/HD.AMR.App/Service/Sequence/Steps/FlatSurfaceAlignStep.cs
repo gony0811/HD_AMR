@@ -17,6 +17,8 @@ namespace HD.AMR.App.Service.Sequence.Steps;
 ///      최외곽 라인에서 σ 최소 셀이 팔 밖에 있어 도달 불가 알람이 나던 문제(2026-10-26 현장).
 ///      이동은 두 단계 그대로(카메라 페이지 '카메라 이동 → 레이저 이동'과 대응), 관절 이동(MoveJ)으로 한다.
 ///   C) 레이저 변위센서 3점 측정으로 평면 틸트(rx, ry) 검증. 임계값 초과 시 툴 헤드를 회전 보정(위치 고정) 후 재검증.
+///      재검증 전에는 카메라 위치로 되돌아가 depth 로 평탄 자리를 다시 찾고 레이저 위치로 옮긴 뒤 잰다
+///      (<see cref="RecenterBeforeRecheckKey"/>, 기본 켜짐) — 회전 뒤 스팟이 이미 비평탄 자리를 보던 문제(2026-11-19 현장).
 ///      보정량은 고정 부호 규약이 아니라 <b>실측 응답</b>으로 정한다 — 툴 Rx/Ry 를 각각 소량 회전시켜
 ///      측정 틸트가 어떻게 변하는지(2×2 응답 행렬 J)를 잰 뒤 u = −J⁻¹·tilt 를 적용한다.
 ///      (2026-10-07/08 현장 로그: 종전 [+Rx, −Ry] 규약에서 툴 Rx +a → 측정 rx ≈ +a 로 오차가 매회 누적,
@@ -47,6 +49,9 @@ public class FlatSurfaceAlignStep : ISequenceStep
     /// <summary>평탄 판정 틸트 임계값(도) 파라미터 키 — 비었거나 0 이하·5° 초과면 기본값.</summary>
     public const string TiltThresholdKey = "Sequence.FlatSurface.TiltThresholdDeg";
     public const double DefaultTiltThresholdDeg = 1.0;
+
+    /// <summary>틸트 보정 회전 뒤 재확인 측정 전에 depth 로 평탄 자리를 다시 맞출지 파라미터 키 — 비었으면 켜짐.</summary>
+    public const string RecenterBeforeRecheckKey = "Sequence.FlatSurface.RecenterBeforeRecheck";
     private const double MaxTiltThresholdDeg = 5.0;
 
     /// <summary>카메라→레이저 중심 보정 이동량 절대 상한(mm). 파라미터 오입력 가드.
@@ -196,7 +201,7 @@ public class FlatSurfaceAlignStep : ISequenceStep
                 await Task.Delay(800, ct);   // 진동·깊이 프레임 갱신 대기
             }
 
-            var align = await _centering.RunAsync(new FlatCenterAlignOptions
+            FlatCenterAlignOptions SearchOptions(string source) => new()
             {
                 RoiX = roiX, RoiY = roiY, RoiW = roiW, RoiH = roiH,
                 GridSize = GridSize,
@@ -209,7 +214,7 @@ public class FlatSurfaceAlignStep : ISequenceStep
                 MaxLateralMoveMm = MaxLateralMoveMm,
                 ImageXAxis = axisX, ImageYAxis = axisY,
                 Tool = context.Tool, Velocity = context.Velocity,
-                Source = attempt == 0 ? "시퀀스" : $"시퀀스 재시도 {attempt}",
+                Source = source,
                 Candidates = candidates,
                 Reach = new FlatReachOptions
                 {
@@ -227,7 +232,9 @@ public class FlatSurfaceAlignStep : ISequenceStep
                 },
                 UseJointMove = true,
                 JointVelocityScale = jointVelScale,
-            }, progress: context.Progress, ct);
+            };
+            var align = await _centering.RunAsync(
+                SearchOptions(attempt == 0 ? "시퀀스" : $"시퀀스 재시도 {attempt}"), progress: context.Progress, ct);
 
             // 공용 루틴은 취소를 삼키고 실패 결과로 반환 — 스텝은 기존처럼 취소 예외로 전파한다.
             ct.ThrowIfCancellationRequested();
@@ -268,6 +275,36 @@ public class FlatSurfaceAlignStep : ISequenceStep
             // 보정량은 실측 응답(J)으로 푼다 — LaserTiltCorrector(/laser '보정 적용'과 공용).
             var thrParam = await _param.GetDoubleAsync(TiltThresholdKey);
             var tiltThresholdDeg = thrParam is double thr && thr > 0 && thr <= MaxTiltThresholdDeg ? thr : DefaultTiltThresholdDeg;
+            var recenter = await _param.GetBoolAsync(RecenterBeforeRecheckKey) ?? true;
+
+            // 보정 회전 뒤 재확인 전: 카메라 위치(레이저 보정 이동 되돌림) → depth 평탄 자리 재탐색·이동 → 레이저 위치.
+            async Task<(string? Error, bool MotionFailure)> RecenterAsync(int correction, CancellationToken token)
+            {
+                _logger.LogInformation("[평탄면 센터링 (레이저 정렬)] 보정 {N} 후 재확인 전 평탄 자리 재탐색: 카메라 위치 복귀(툴 Y {Back:+0.#;-0.#}mm)",
+                    correction, -shiftY);
+                context.Progress?.Invoke($"보정 {correction} 후 재확인 전: depth 로 평탄 자리 재탐색");
+                _monitor.UpdateStage(FlatDetectionStage.LaserMeasuring, $"보정 {correction}회 후 평탄 자리 재탐색");
+
+                var here = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, token);
+                var back = await _centering.MoveToolOffsetAsync(here, new[] { 0.0, -shiftY, 0.0, 0.0, 0.0, 0.0 },
+                    context.Tool, context.Velocity, joint: true, token, jointVelScale);
+                if (!back.Ok) return ($"카메라 위치 복귀 실패 {back.Describe()}", true);
+                await Task.Delay(800, token);   // 진동·깊이 프레임 갱신 대기
+
+                var again = await _centering.RunAsync(SearchOptions($"시퀀스 보정 {correction} 후 재확인"), context.Progress, token);
+                token.ThrowIfCancellationRequested();
+                if (!again.Success) return (again.Message, false);
+                _monitor.SetCenteredFrame(_camera.LatestDepth);
+
+                var anchor = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, token);
+                var toLaser = await _centering.MoveToolOffsetAsync(anchor, new[] { 0.0, shiftY, 0.0, 0.0, 0.0, 0.0 },
+                    context.Tool, context.Velocity, joint: true, token, jointVelScale);
+                if (!toLaser.Ok) return ($"레이저 중심 보정 이동 실패 {toLaser.Describe()}", true);
+                _logger.LogInformation("[평탄면 센터링 (레이저 정렬)] 보정 {N} 후 평탄 자리 재탐색 완료 (σ={Sigma:0.##}mm) → 레이저 위치 복귀, 재확인 측정",
+                    correction, again.SigmaMm);
+                return (null, false);
+            }
+
             var level = await _tilt.LevelAsync(new TiltLevelOptions
             {
                 Tool = context.Tool,
@@ -275,6 +312,7 @@ public class FlatSurfaceAlignStep : ISequenceStep
                 ThresholdDeg = tiltThresholdDeg,
                 MaxCorrections = MaxTiltCorrections,
                 MaxCorrectionDeg = MaxTiltCorrectionDeg,
+                BeforeRecheck = recenter ? RecenterAsync : null,
             },
             context.Progress,
             (iter, pose) =>
