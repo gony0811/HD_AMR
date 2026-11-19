@@ -128,7 +128,7 @@ public static partial class Xl3000AsciiProtocol
     public static bool[]? ParseTriggers(string response)
     {
         var states = response
-            .Split([',', ' ', ';'], StringSplitOptions.RemoveEmptyEntries)
+            .Split(new[] { ',', ' ', ';' }, StringSplitOptions.RemoveEmptyEntries)
             .Select(t => t.Trim().ToUpperInvariant())
             .Where(t => t is "ON" or "OFF" or "1" or "0")
             .Select(t => t is "ON" or "1")
