@@ -101,6 +101,13 @@ public static class WeldSequenceSupport
     /// ⑦⁺/⑪⁺ 비드 센터링이 cross 이동과 함께 진행축으로도 맞춘다. 조그가 없었으면 넣지 않는다.</summary>
     public static string BeadPeakOffsetMmBagKey(int id) => $"bead{id}.peakOffsetMm";
 
+    /// <summary>⑦/⑪ 이 사람이 그은 비드선(수동 입력)으로 측정했으면 true(bool). 자동이면 넣지 않는다.
+    /// ⑪ 이 점1 수동 입력을 점2 자동 결과와 대조할 때 쓴다(<see cref="ManualPoint1Check"/>).</summary>
+    public static string BeadManualBagKey(int id) => $"bead{id}.manual";
+
+    /// <summary>⑦/⑪ 수동 입력 안내(영상 종류·조그 횟수·학습 데이터 이름, string). 대조 실패 사유에 싣는다.</summary>
+    public static string BeadManualNoteBagKey(int id) => $"bead{id}.manualNote";
+
     /// <summary>⑦⁺⑪⁺가 검사캠 오프셋 시프트를 적용한 상태임을 알리는 Bag 키(bool).
     /// ⑧이 이 플래그가 있을 때만 시프트 역보정을 합성하고 플래그를 지운다 — 세미오토 순서 이탈 가드.</summary>
     public const string InspectShiftedBagKey = "inspectCam.shifted";

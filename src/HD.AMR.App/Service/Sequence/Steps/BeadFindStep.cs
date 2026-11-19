@@ -60,11 +60,64 @@ public class BeadFindStep : ISequenceStep
         return StepValidation.Ok();
     }
 
-    public Task<StepResult> ExecuteAsync(SequenceContext context, CancellationToken ct)
-        => BundleTeach.RunWithPoint2FallbackAsync(_peakId, context, _cobot, _param, _logger, ct, RunAsync);
+    public async Task<StepResult> ExecuteAsync(SequenceContext context, CancellationToken ct)
+    {
+        var result = await BundleTeach.RunWithPoint2FallbackAsync(_peakId, context, _cobot, _param, _logger, ct, RunAsync);
+        // 대조는 묶음 → 단독 되돌림 뒤에 한 번만 한다(점1 이 틀렸으면 단독 점2 에서도 어긋나므로 되돌림으로 풀리지 않는다).
+        if (_peakId != 2 || !result.Success) return result;
+        return await CheckManualPoint1Async(context, result, ct);
+    }
+
+    /// <summary>점1 을 수동 입력으로 잡았으면 점2 자동 결과와 대조한다(<see cref="ManualPoint1Check"/>).</summary>
+    private async Task<StepResult> CheckManualPoint1Async(SequenceContext context, StepResult result, CancellationToken ct)
+    {
+        if (!(context.Bag.TryGetValue(WeldSequenceSupport.BeadManualBagKey(1), out var m1) && m1 is true))
+            return result;
+        if (context.Bag.TryGetValue(WeldSequenceSupport.BeadManualBagKey(2), out var m2) && m2 is true)
+            return result;   // 두 점 모두 사람이 그었으면 대조할 근거가 없다
+        if (!(context.Bag.TryGetValue(WeldSequenceSupport.BeadDMmBagKey(2), out var dv) && dv is double d2)
+            || !(context.Bag.TryGetValue(WeldSequenceSupport.Bead1CenteredPoseBagKey, out var pv) && pv is double[] { Length: 6 } p1))
+            return result;
+
+        bool enabled;
+        double minMm, angleDeg;
+        try
+        {
+            enabled = await _param.GetBoolAsync(ManualPoint1Check.EnabledKey) ?? true;
+            minMm = await _param.GetDoubleAsync(ManualPoint1Check.MinMmKey) ?? ManualPoint1Check.DefaultMinMm;
+            angleDeg = await _param.GetDoubleAsync(ManualPoint1Check.AngleDegKey) ?? ManualPoint1Check.DefaultAngleDeg;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            (enabled, minMm, angleDeg) = (true, ManualPoint1Check.DefaultMinMm, ManualPoint1Check.DefaultAngleDeg);
+        }
+        if (!enabled) return result;
+        if (!double.IsFinite(minMm) || minMm <= 0) minMm = ManualPoint1Check.DefaultMinMm;
+        if (!double.IsFinite(angleDeg) || angleDeg < 0 || angleDeg >= 45) angleDeg = ManualPoint1Check.DefaultAngleDeg;
+
+        var now = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
+        var span = Math.Sqrt(Math.Pow(now[0] - p1[0], 2) + Math.Pow(now[1] - p1[1], 2) + Math.Pow(now[2] - p1[2], 2));
+        var note = context.Bag.TryGetValue(WeldSequenceSupport.BeadManualNoteBagKey(1), out var nv) ? nv as string : null;
+
+        var problem = ManualPoint1Check.Problem(d2, span, minMm, angleDeg, note);
+        var allowed = ManualPoint1Check.AllowedMm(span, minMm, angleDeg);
+        if (problem is not null)
+        {
+            _logger.LogWarning("[Bead2 찾기] {Problem}", problem);
+            return StepResult.Fail(problem);
+        }
+
+        _logger.LogInformation(
+            "[Bead2 찾기] 점1 수동 입력 대조 통과: 점2 비드 이격 {D2:+0.0;-0.0}mm ≤ 허용 {Allowed:0.0}mm (간격 {Span:0}mm)",
+            d2, allowed, span);
+        return StepResult.Ok($"{result.Message} 점1 수동 입력 대조 통과(이격 {Math.Abs(d2):0.0}mm ≤ {allowed:0.0}mm).");
+    }
 
     private async Task<StepResult> RunAsync(SequenceContext context, CancellationToken ct)
     {
+        context.Bag.Remove(WeldSequenceSupport.BeadManualBagKey(_peakId));
+        context.Bag.Remove(WeldSequenceSupport.BeadManualNoteBagKey(_peakId));
+
         // Peak ROI(코로게이션, Depth 뷰 저장)와 Bead ROI(비드, IR 뷰 저장)를 각각 사용한다.
         var (peakRoi, peakSrc) = await WeldSequenceSupport.GetPeakRoiAsync(_param, _camera);
         var (beadRoi, beadSrc) = await WeldSequenceSupport.GetBeadRoiAsync(_param, _camera);
@@ -100,6 +153,8 @@ public class BeadFindStep : ISequenceStep
         {
             var dManual = _weld.DMm(mm);
             context.Bag[WeldSequenceSupport.BeadDMmBagKey(_peakId)] = dManual;
+            context.Bag[WeldSequenceSupport.BeadManualBagKey(_peakId)] = true;
+            context.Bag[WeldSequenceSupport.BeadManualNoteBagKey(_peakId)] = assist.Note;
             // 조그로 자리를 옮겼으면 ⑥ Peak 센터링이 맞춘 진행축 위치가 달라졌을 수 있다 — 센터링 단계가 함께 맞춘다.
             if (assist is { Jogs: > 0, PeakOffsetMm: { } peakOff })
                 context.Bag[WeldSequenceSupport.BeadPeakOffsetMmBagKey(_peakId)] = peakOff;

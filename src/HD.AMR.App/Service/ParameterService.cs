@@ -185,6 +185,7 @@ public class ParameterService
                 "검사 수행 — 우현 면(SM·SL·SU)에서 티칭 프로필 경유점을 거울 반전(Y·Rz·Rx 부호)해 실행(true). 프로필은 좌현에서 " +
                 "선미→선수로 교시하고 우현은 그 거울상이라, 반전하지 않으면 CROSS 세로 팔이 위아래로 어긋난다. false = 교시값 그대로."),
             .. Sequence.BeadManualSettings.SeedDefaults(),
+            .. Sequence.Steps.ManualPoint1Check.SeedDefaults(),
             .. Motion.CobotObstacleZone.SeedDefaults(),
             (FlatReachOptions.TiltMarginKey,
                 FlatReachOptions.DefaultTiltMarginDeg.ToString(CultureInfo.InvariantCulture),
