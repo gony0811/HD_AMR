@@ -142,7 +142,8 @@ public static class TeachingMove
         }
         logger?.LogInformation("[Teaching] '{Target}' 이동 완료", target.Name);
 
-        if (lift is null || !LowersLiftOnArrival(target))
+        // 리프트를 쓰지 않는 운영(Telescopic:Enabled = false)이면 하강 지령 자체를 건너뛴다.
+        if (lift is null || lift.IsDisabled || !LowersLiftOnArrival(target))
             return new(0, plan);
 
         // 홈/홈 2 = 코봇이 접힌 기준 자세 — 도착을 확인한 뒤에만 리프트를 내린다(이동 실패 시 위에서 이미 반환).
