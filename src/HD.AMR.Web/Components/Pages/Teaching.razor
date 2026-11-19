@@ -2,6 +2,7 @@
 @rendermode InteractiveServer
 @using HD.AMR.App.Communication
 @using HD.AMR.App.Data.Entities
+@using HD.AMR.App.Models
 @using HD.AMR.App.Service
 @inject TeachingService Service
 @inject CobotService Cobot
@@ -14,8 +15,29 @@
 
 <h1 class="page-title">Teaching</h1>
 
+@* 리프트 모드별 티칭 세트 — 탭을 누르면 그 모드가 운영(시퀀스·홈 복귀 등)에도 바로 적용된다. *@
+<ul class="nav nav-tabs lift-tabs">
+    @foreach (var mode in TeachingLiftMode.All)
+    {
+        var m = mode;
+        <li class="nav-item">
+            <button type="button" class="nav-link @(m == _liftMode ? "active fw-bold" : "")"
+                    @onclick="() => SwitchLiftModeAsync(m)"
+                    disabled="@(_isBusy || _editId >= 0)"
+                    title="@(m == _liftMode ? $"리프트 {m} 티칭 세트 — 현재 운영 적용 중" : $"리프트 {m} 티칭 세트로 전환(운영에도 바로 적용)")">
+                리프트 @m
+                @if (m == _liftMode)
+                {
+                    <span class="badge bg-success ms-1">적용 중</span>
+                }
+            </button>
+        </li>
+    }
+</ul>
+
 <section class="capture-panel">
-    <strong>티칭 위치 (BASE 좌표계 기준)</strong>
+    <strong>티칭 위치 — 리프트 @_liftMode (BASE 좌표계 기준)</strong>
+    <div class="text-muted small mt-1">선택한 탭의 티칭 세트가 시퀀스·홈 복귀 등 운영에도 적용됩니다. 모드마다 좌표를 따로 저장합니다.</div>
     @if (!Cobot.IsConnected)
     {
         <div class="hint">⚠ 코봇 RPC 미연결 — 현재 위치 저장/이동 불가.</div>
@@ -224,6 +246,7 @@
 
 @code {
     private List<TeachingPosition>? _positions;
+    private string _liftMode = TeachingLiftMode.Short;
     private int _runTool = 1;
     private int _capUser;   // 캡처 시 작업물 좌표계 번호(0=베이스). N>0이면 그 프레임 기준 상대 pose로 저장.
     private int _vel = 20;
@@ -236,7 +259,8 @@
 
     protected override async Task OnInitializedAsync()
     {
-        _positions = await Service.ListAsync();
+        _liftMode = await Service.GetActiveLiftModeAsync();
+        _positions = await Service.ListAsync(_liftMode);
         _ = PollLoop(_pollCts.Token);
     }
 
@@ -283,7 +307,27 @@
 
     private static string Fmt(double? v) => v.HasValue ? v.Value.ToString("0.###") : "-";
 
-    private async Task ReloadAsync() => _positions = await Service.ListAsync();
+    private async Task ReloadAsync() => _positions = await Service.ListAsync(_liftMode);
+
+    private async Task SwitchLiftModeAsync(string mode)
+    {
+        if (_isBusy || _editId >= 0 || mode == _liftMode) return;
+        try
+        {
+            await Service.SetActiveLiftModeAsync(mode);
+            _liftMode = TeachingLiftMode.Normalize(mode);
+            await ReloadAsync();
+            _isErr = false;
+            _msg = $"리프트 {_liftMode} 티칭 세트로 전환했습니다 — 운영에도 적용됩니다.";
+            Logger.LogInformation("[Teaching] 리프트 모드 전환 → {Mode}", _liftMode);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Teaching lift mode switch failed ({Mode})", mode);
+            _isErr = true;
+            _msg = $"리프트 모드 전환 실패: {ex.Message}";
+        }
+    }
 
     private async Task CaptureAsync(int id)
     {
@@ -419,7 +463,7 @@
         if (_isBusy) return;
         try
         {
-            var row = await Service.AddAsync(_newName, _newSurfaceId);
+            var row = await Service.AddAsync(_newName, _newSurfaceId, _liftMode);
             _newName = "";
             _newSurfaceId = 0;
             await ReloadAsync();

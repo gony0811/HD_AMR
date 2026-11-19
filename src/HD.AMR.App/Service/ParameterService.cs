@@ -208,6 +208,8 @@ public class ParameterService
             (TeachingMove.JointVelocityScaleKey,
                 TeachingMove.DefaultJointVelocityScale.ToString(CultureInfo.InvariantCulture),
                 "Teaching '이동'(저장 관절값 MoveJ) 속도 비율 — 화면 속도에 곱한다(0~1). MoveJ 는 같은 % 에서 MoveL 보다 약 2배 빨라 0.45 로 종전 체감 속도에 맞춤."),
+            (Models.TeachingLiftMode.ActiveKey, Models.TeachingLiftMode.Short,
+                "운영에 쓰는 티칭 세트(리프트 모드) — SHORT / LONG. Teaching 페이지 탭으로 전환. 알 수 없는 값은 SHORT."),
         ];
 
         var existing = await _db.Parameters.Select(p => p.Name).ToListAsync();

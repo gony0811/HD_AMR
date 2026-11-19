@@ -7,16 +7,28 @@ namespace HD.AMR.App.Service;
 
 /// <summary>
 /// Teaching 위치(고정 슬롯) 저장/조회 서비스. DB(SQLite)에 BASE 자세 + 관절각을 보관한다.
-/// 슬롯은 <see cref="Slots"/> 정의에 따라 자동 시드되며, 좌표는 "현재 위치 저장"으로 채워진다.
+/// 슬롯은 <see cref="Slots"/> 정의에 따라 리프트 모드(<see cref="TeachingLiftMode"/>)마다 자동 시드되며,
+/// 좌표는 "현재 위치 저장"으로 채워진다. 모드를 지정하지 않은 조회는 운영 활성 모드(<see cref="TeachingLiftMode.ActiveKey"/>)를 쓴다.
 /// </summary>
 public class TeachingService
 {
     private readonly HdAmrDbContext _db;
+    private readonly ParameterService _param;
 
-    public TeachingService(HdAmrDbContext db)
+    public TeachingService(HdAmrDbContext db, ParameterService param)
     {
         _db = db;
+        _param = param;
     }
+
+    /// <summary>운영에 적용 중인 리프트 모드(파라미터 없으면 SHORT).</summary>
+    public async Task<string> GetActiveLiftModeAsync()
+        => TeachingLiftMode.Normalize(await _param.GetAsync(TeachingLiftMode.ActiveKey));
+
+    /// <summary>운영 리프트 모드 전환 — 이후 시퀀스·홈 복귀 등이 이 모드의 티칭 세트를 쓴다.</summary>
+    public Task SetActiveLiftModeAsync(string mode)
+        => _param.SetAsync(TeachingLiftMode.ActiveKey, TeachingLiftMode.Normalize(mode),
+            "운영에 쓰는 티칭 세트(리프트 모드) — SHORT / LONG. Teaching 페이지 탭으로 전환.");
 
     /// <summary>Wall Code 고정 슬롯 키.</summary>
     public static string WallSlotKey(string code) => $"wall.{code}";
@@ -88,7 +100,16 @@ public class TeachingService
     /// ③ 사용자 항목 표시 순서를 고정 슬롯 뒤로 정렬.</summary>
     public async Task EnsureSeededAsync(CancellationToken ct = default)
     {
-        var rows = await _db.TeachingPositions.ToListAsync(ct);
+        var all = await _db.TeachingPositions.ToListAsync(ct);
+        var changed = false;
+        foreach (var mode in TeachingLiftMode.All)
+            changed |= SeedMode(mode, all.Where(p => p.LiftMode == mode).ToList());
+        if (changed) await _db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>한 리프트 모드의 시드·이관·정렬(변경 추적만, 저장은 호출자). 변경이 있으면 true.</summary>
+    private bool SeedMode(string mode, List<TeachingPosition> rows)
+    {
         var byKey = rows.ToDictionary(p => p.Key, p => p);
 
         var now = DateTime.UtcNow;
@@ -111,6 +132,7 @@ public class TeachingService
             row = new TeachingPosition
             {
                 Key = key,
+                LiftMode = mode,
                 Name = name,
                 SurfaceId = surfaceId,
                 SortOrder = i,
@@ -159,7 +181,7 @@ public class TeachingService
             order++;
         }
 
-        if (changed) await _db.SaveChangesAsync(ct);
+        return changed;
     }
 
     private static void CopyCoordinates(TeachingPosition from, TeachingPosition to, DateTime now)
@@ -176,11 +198,17 @@ public class TeachingService
         to.UpdatedAt = now;
     }
 
-    /// <summary>시드 보장 후 전체 슬롯을 표시 순서대로 반환.</summary>
+    /// <summary>시드 보장 후 운영 활성 리프트 모드의 전체 슬롯을 표시 순서대로 반환.</summary>
     public async Task<List<TeachingPosition>> ListAsync(CancellationToken ct = default)
+        => await ListAsync(await GetActiveLiftModeAsync(), ct);
+
+    /// <summary>시드 보장 후 지정 리프트 모드의 전체 슬롯을 표시 순서대로 반환.</summary>
+    public async Task<List<TeachingPosition>> ListAsync(string liftMode, CancellationToken ct = default)
     {
+        var mode = TeachingLiftMode.Normalize(liftMode);
         await EnsureSeededAsync(ct);
         return await _db.TeachingPositions.AsNoTracking()
+            .Where(p => p.LiftMode == mode)
             .OrderBy(p => p.SortOrder)
             .ThenBy(p => p.Id)
             .ToListAsync(ct);
@@ -200,15 +228,18 @@ public class TeachingService
     public static bool IsSeedSlot(string key) => Slots.Any(s => s.Key == key);
 
     /// <summary>사용자 정의 위치 행 추가. Key 는 자동 생성, 좌표는 비운 채(미티칭) 생성된다.
-    /// Wall ID 0x01~0x0A 는 Wall Code 고정 슬롯 전용이라 거부한다.</summary>
-    public async Task<TeachingPosition> AddAsync(string name, int surfaceId, CancellationToken ct = default)
+    /// Wall ID 0x01~0x0A 는 Wall Code 고정 슬롯 전용이라 거부한다. <paramref name="liftMode"/> 가 null 이면 운영 활성 모드.</summary>
+    public async Task<TeachingPosition> AddAsync(string name, int surfaceId, string? liftMode = null, CancellationToken ct = default)
     {
         EnsureUserSurfaceId(surfaceId);
+        var mode = liftMode is null ? await GetActiveLiftModeAsync() : TeachingLiftMode.Normalize(liftMode);
         var now = DateTime.UtcNow;
-        var maxOrder = await _db.TeachingPositions.MaxAsync(p => (int?)p.SortOrder, ct) ?? -1;
+        var maxOrder = await _db.TeachingPositions.Where(p => p.LiftMode == mode)
+            .MaxAsync(p => (int?)p.SortOrder, ct) ?? -1;
         var row = new TeachingPosition
         {
             Key = $"user-{Guid.NewGuid():N}",
+            LiftMode = mode,
             Name = string.IsNullOrWhiteSpace(name) ? "새 위치" : name.Trim(),
             SurfaceId = Math.Clamp(surfaceId, 0x00, 0xFF),
             SortOrder = maxOrder + 1,
