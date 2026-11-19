@@ -87,12 +87,19 @@ public class ParameterService
         if (IsSafeJ6Key(name)) await ApplySafeJ6RangeAsync();
         if (name == Motion.Fr5Kinematics.LinksKey) await ApplyKinematicsLinksAsync();
         if (name == Motion.CobotEnvelope.BaseHeightKey) await ApplyCobotBaseHeightAsync();
+        if (name == Sequence.Steps.CobotInspectionMoveStep.MaxEntryJointTravelKey) await ApplyMaxEntryJointTravelAsync();
         Changed?.Invoke(name);
     }
 
     /// <summary>코봇 BASE 높이 파라미터를 읽어 <see cref="Motion.CobotEnvelope.Default"/> 에 적용한다(기동·저장·삭제 때).</summary>
     public async Task<bool> ApplyCobotBaseHeightAsync()
         => Motion.CobotEnvelope.ApplyBaseHeight(await GetAsync(Motion.CobotEnvelope.BaseHeightKey));
+
+    /// <summary>진입 관절 이동 한계 파라미터를 읽어 <see cref="Sequence.Steps.CobotInspectionMoveStep"/> 에 적용한다(기동·저장·삭제 때).
+    /// 30~360° 밖이면 기본값(160°)을 쓰고 false.</summary>
+    public async Task<bool> ApplyMaxEntryJointTravelAsync()
+        => Sequence.Steps.CobotInspectionMoveStep.ApplyMaxEntryJointTravel(
+            await GetDoubleAsync(Sequence.Steps.CobotInspectionMoveStep.MaxEntryJointTravelKey));
 
     /// <summary>링크 치수 파라미터를 읽어 <see cref="Motion.Fr5Kinematics.Fr5Wml"/> 에 적용한다(기동·저장·삭제 때).
     /// 6개가 아니거나 공칭에서 5 mm 넘게 벗어나면 공칭을 쓰고 false.</summary>
@@ -158,6 +165,11 @@ public class ParameterService
                 "AMR 차체 바닥(바퀴 닿는 면) → 코봇 BASE 장착면 높이 [mm] — 자기 간섭(팔 ↔ 차체·신호탑) 점검과 도달 사전 점검이 쓴다. " +
                 "리프트 장착 시 1635(스트로크 0 기준), 리프트를 떼고 받침에 직접 올리면 실측값(2026-11-17: 927). 저장하면 바로 적용. " +
                 "800~2500 밖이거나 비면 1635. 좌표 환산은 장착 보정(Calib.Mount.Pose)이 따로 하므로 둘 다 맞춰야 한다."),
+            (Sequence.Steps.CobotInspectionMoveStep.MaxEntryJointTravelKey,
+                Sequence.Steps.CobotInspectionMoveStep.DefaultMaxEntryJointTravelDeg.ToString(CultureInfo.InvariantCulture),
+                "진입 관절 이동 한계(도) — 출발 자세 → 진입 해의 관절별(J1~J5) 최대 이동. 넘으면 가지 전환으로 보고 그 진입점·용접선을 쓰지 않는다 " +
+                "(진입 경로·도달 사전 점검·리치 맵 공통). 클수록 팔을 크게 돌리는 진입을 허용한다. 저장하면 바로 적용. " +
+                "30~360 밖이거나 비면 160. ACS 의 Acs:Reach:MaxEntryJointTravelDeg 와 같게 둘 것."),
             (Inspection.WObjAttitude.SafeJ6MinKey,
                 Inspection.WObjAttitude.DefaultSafeJ6MinDeg.ToString(CultureInfo.InvariantCulture),
                 "J6 안전 범위 하한(도, 실제 관절값 — 대기 자세 −180° 쪽 감김 기준). 이보다 더 감기는 J6 로는 움직이지 않는다 " +
@@ -214,6 +226,7 @@ public class ParameterService
         await ApplySafeJ6RangeAsync();   // 기동 시 저장된 J6 안전 범위 적용
         await ApplyKinematicsLinksAsync();  // 기동 시 저장된 링크 치수(DH 보정) 적용
         await ApplyCobotBaseHeightAsync();  // 기동 시 저장된 코봇 BASE 높이 적용
+        await ApplyMaxEntryJointTravelAsync();  // 기동 시 저장된 진입 관절 이동 한계 적용
     }
 
     /// <summary>id 로 파라미터 1건 삭제. 없으면 무시.</summary>
@@ -227,6 +240,7 @@ public class ParameterService
             if (IsSafeJ6Key(p.Name)) await ApplySafeJ6RangeAsync();
             if (p.Name == Motion.Fr5Kinematics.LinksKey) await ApplyKinematicsLinksAsync();
             if (p.Name == Motion.CobotEnvelope.BaseHeightKey) await ApplyCobotBaseHeightAsync();
+            if (p.Name == Sequence.Steps.CobotInspectionMoveStep.MaxEntryJointTravelKey) await ApplyMaxEntryJointTravelAsync();
             Changed?.Invoke(p.Name);
         }
     }

@@ -179,6 +179,9 @@ public class TeachingService
         to.UpdatedAt = now;
     }
 
+    /// <summary>교시 위치 관절값이 바뀌었다(캡처·지움·삭제) — <see cref="AcsProfileSyncService"/> 가 듣고 ACS 로 바로 보낸다.</summary>
+    public static event Action? PositionsChanged;
+
     /// <summary>시드 보장 후 전체 슬롯을 표시 순서대로 반환.</summary>
     public async Task<List<TeachingPosition>> ListAsync(CancellationToken ct = default)
     {
@@ -231,6 +234,7 @@ public class TeachingService
         if (row is null || IsSeedSlot(row.Key)) return false;
         _db.TeachingPositions.Remove(row);
         await _db.SaveChangesAsync(ct);
+        PositionsChanged?.Invoke();   // ACS 프로필 전송이 교시 위치·출발 자세를 바로 다시 보낸다
         return true;
     }
 
@@ -278,6 +282,7 @@ public class TeachingService
         p.CapturedAt = now;
         p.UpdatedAt = now;
         await _db.SaveChangesAsync(ct);
+        PositionsChanged?.Invoke();   // ACS 프로필 전송이 교시 위치·출발 자세를 바로 다시 보낸다
     }
 
     /// <summary>슬롯의 좌표/관절각을 비운다(슬롯 자체는 삭제하지 않음).</summary>
@@ -293,5 +298,6 @@ public class TeachingService
         p.CapturedAt = null;
         p.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
+        PositionsChanged?.Invoke();   // ACS 프로필 전송이 교시 위치·출발 자세를 바로 다시 보낸다
     }
 }

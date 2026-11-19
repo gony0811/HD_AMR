@@ -109,6 +109,19 @@ internal static class SequenceEntry
          : IsLowerRoute(wallCode) && home3Taught ? PoseMode.Home3
          : PoseMode.Home;
 
+    /// <summary>
+    /// 면별 운영 ② 출발 관절각 — <see cref="PrepareAsync"/> 가 ② 직전에 세우는 자세: 상부 면(T/PU/SU)은 그 면 검사 준비 슬롯
+    /// (미티칭이면 홈 위치_2), 하부 면(B/PL/SL)은 홈 위치_4·_3 이 티칭돼 있으면 그 면 검사 준비 슬롯(미티칭이면 그 홈), 그 외는
+    /// 작업 준비 위치(ready). <paramref name="joints"/> = 키 → 티칭된 관절값(미티칭 null). 리치 맵·ACS 프로필 전송이 같은 규칙을 쓴다.
+    /// </summary>
+    internal static double[]? StartJointsFor(string wallCode, Func<string, double[]?> joints)
+        => IsUpperRoute(wallCode)
+            ? joints(TeachingService.WallSlotKey(wallCode)) ?? joints(Home2Key)
+            : IsLowerRoute(wallCode)
+              && ((wallCode == "B" ? joints(Home4Key) : null) ?? joints(Home3Key)) is { } lowHome
+                ? joints(TeachingService.WallSlotKey(wallCode)) ?? lowHome
+                : joints("ready");
+
     private static bool IsFloor(string? wallCode) => WallCodes.Find(wallCode)?.Orientation is SurfaceOrientation.Floor;
 
     /// <summary>이 컨텍스트(티칭 상태)에서 면이 요구하는 자세 모드.</summary>

@@ -5,6 +5,7 @@ using HD.AMR.App.Data.Entities;
 using HD.AMR.App.Models;
 using HD.AMR.App.Service.Inspection;
 using HD.AMR.App.Service.Sequence;
+using HD.AMR.App.Service.Sequence.Steps;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -50,7 +51,41 @@ public static class AcsProfilePayload
     /// Assignments = 유형·면·방향별 프로필 지정표 전체(ACS 는 통째로 바꾼다).
     /// </summary>
     public sealed record Body(string Source, bool Full, IReadOnlyList<Profile> Profiles, IReadOnlyList<Assignment> Assignments,
-        RobotModel? Robot = null);
+        RobotModel? Robot = null, IReadOnlyList<TeachingJoints>? TeachingPositions = null,
+        IReadOnlyDictionary<string, double[]>? StartJointsByWall = null);
+
+    /// <summary>교시 위치 한 개 — Teaching 슬롯 키(home·home2·ready·wall.T …)와 캡처 관절값 J1~J6 [도].</summary>
+    public sealed record TeachingJoints(string Key, double[] Joints);
+
+    /// <summary>
+    /// 교시 위치(관절값이 있는 것만)와 면별 운영 ② 출발 관절각 — ACS 리치 시뮬레이터가 이 AMR 의 출발 자세로 진입 경로를 판정하게 한다.
+    /// 출발 자세는 실행 때와 같은 규칙(<see cref="SequenceEntry.StartJointsFor"/>)으로 구하고, 티칭이 없는 면은 싣지 않는다.
+    /// </summary>
+    public static (List<TeachingJoints> Positions, Dictionary<string, double[]> StartJointsByWall) BuildTeaching(
+        IEnumerable<TeachingPosition> positions)
+    {
+        var list = positions
+            .Where(p => !string.IsNullOrWhiteSpace(p.Key) && p.IsTaught && JointsOf(p) is not null)
+            .OrderBy(p => p.SortOrder).ThenBy(p => p.Key, StringComparer.Ordinal)
+            .Select(p => new TeachingJoints(p.Key.Trim(), JointsOf(p)!))
+            .ToList();
+        var byKey = list.GroupBy(p => p.Key, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.First().Joints, StringComparer.Ordinal);
+        var starts = new Dictionary<string, double[]>(StringComparer.Ordinal);
+        foreach (var wall in WallCodes.All)
+            if (SequenceEntry.StartJointsFor(wall.Code, k => byKey.TryGetValue(k, out var j) ? j : null) is { } start)
+                starts[wall.Code] = start;
+        return (list, starts);
+    }
+
+    private static double[]? JointsOf(TeachingPosition p)
+    {
+        if (p is not { J1: { } j1, J2: { } j2, J3: { } j3, J4: { } j4, J5: { } j5, J6: { } j6 }) return null;
+        var j = new[] { j1, j2, j3, j4, j5, j6 };
+        return j.All(double.IsFinite) ? j : null;
+    }
+
+    /// <summary>ACS 응답에서 출발 자세 차이(startJointsOverride — ACS 설정 대신 이 AMR 값을 쓰는 면)를 꺼낸다. 없거나 구버전 ACS 면 빈 목록.</summary>
+    public static IReadOnlyList<string> StartJointsOverride(string responseJson) => StringArray(responseJson, "startJointsOverride");
 
     /// <summary>
     /// 이 AMR 이 쓰는 코봇 모델 값 — ACS 리치 시뮬레이터가 같은 값을 쓰는지 대조하라고 함께 보낸다(ACS 는 다르면 경고만 한다).
@@ -63,13 +98,15 @@ public static class AcsProfilePayload
         Motion.Fr5Kinematics.Fr5Wml.LinksMm, Motion.PostureLimits.DefaultWristMarginDeg, Motion.Fr5Kinematics.InspectionTool[2]);
 
     /// <summary>ACS 응답에서 코봇 모델 값 차이(robotModelMismatch)를 꺼낸다 — 없거나 구버전 ACS 면 빈 목록.</summary>
-    public static IReadOnlyList<string> RobotModelMismatch(string responseJson)
+    public static IReadOnlyList<string> RobotModelMismatch(string responseJson) => StringArray(responseJson, "robotModelMismatch");
+
+    private static IReadOnlyList<string> StringArray(string responseJson, string name)
     {
         try
         {
             using var doc = JsonDocument.Parse(responseJson);
             return doc.RootElement.ValueKind == JsonValueKind.Object
-                   && doc.RootElement.TryGetProperty("robotModelMismatch", out var m) && m.ValueKind == JsonValueKind.Array
+                   && doc.RootElement.TryGetProperty(name, out var m) && m.ValueKind == JsonValueKind.Array
                 ? m.EnumerateArray().Select(e => e.GetString() ?? "").Where(s => s.Length > 0).ToList()
                 : Array.Empty<string>();
         }
@@ -159,6 +196,7 @@ public sealed class AcsProfileSyncService : BackgroundService
     private readonly HttpClient _http = new();
     private bool? _lastOk;
     private string? _lastMismatch;
+    private string? _lastOverride;
 
     public AcsProfileSyncService(IOptions<AcsProfileSyncSettings> settings, IOptions<Vda5050AdapterSettings> vda,
         IServiceScopeFactory scopes, ILogger<AcsProfileSyncService> logger)
@@ -187,6 +225,7 @@ public sealed class AcsProfileSyncService : BackgroundService
         _http.Timeout = TimeSpan.FromSeconds(Math.Max(2, _s.TimeoutSec));
         DrawingService.ProfilesChanged += OnProfilesChanged;
         InspectionRecipeService.RecipesChanged += OnProfilesChanged;   // 레시피의 프로필 지정이 바뀌어도 바로 보낸다
+        TeachingService.PositionsChanged += OnProfilesChanged;          // 재교시(홈 위치_2 등)도 바로 보낸다
         try
         {
             await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);   // DB 준비·시드가 끝난 뒤
@@ -201,6 +240,7 @@ public sealed class AcsProfileSyncService : BackgroundService
         {
             DrawingService.ProfilesChanged -= OnProfilesChanged;
             InspectionRecipeService.RecipesChanged -= OnProfilesChanged;
+            TeachingService.PositionsChanged -= OnProfilesChanged;
         }
     }
 
@@ -216,13 +256,17 @@ public sealed class AcsProfileSyncService : BackgroundService
         {
             List<InspectionProfile> profiles;
             List<InspectionRecipe> recipes;
+            List<TeachingPosition> teaching;
             using (var scope = _scopes.CreateScope())
             {
                 profiles = await scope.ServiceProvider.GetRequiredService<DrawingService>().ListProfilesAsync(ct);
                 recipes = await scope.ServiceProvider.GetRequiredService<InspectionRecipeService>().ListAsync(ct);
+                teaching = await scope.ServiceProvider.GetRequiredService<TeachingService>().ListAsync(ct);
             }
+            // 교시 위치·면별 출발 자세 — ACS 리치 시뮬레이터가 설정값 대신 이 값으로 진입 경로를 판정한다(재교시가 자동 반영)
+            var (positions, starts) = AcsProfilePayload.BuildTeaching(teaching);
             var body = AcsProfilePayload.Build(_vda.SerialNumber, profiles, out var skipped, recipes)
-                with { Robot = AcsProfilePayload.CurrentRobotModel() };
+                with { Robot = AcsProfilePayload.CurrentRobotModel(), TeachingPositions = positions, StartJointsByWall = starts };
             if (skipped.Count > 0)
                 _logger.LogWarning("검사 프로필 ACS 전송 — 경유점을 읽지 못해 뺀 프로필: {Names}", string.Join(", ", skipped));
 
@@ -244,9 +288,15 @@ public sealed class AcsProfileSyncService : BackgroundService
                 if (mismatch.Length > 0) _logger.LogWarning("코봇 모델 값이 ACS 와 다릅니다 — {Mismatch}", mismatch);
                 else _logger.LogInformation("코봇 모델 값이 ACS 와 같습니다.");
             }
+            var overrides = string.Join(" / ", AcsProfilePayload.StartJointsOverride(text));
+            if (overrides != _lastOverride)
+            {
+                _lastOverride = overrides;
+                if (overrides.Length > 0) _logger.LogInformation("ACS 가 설정 대신 이 AMR 의 출발 자세를 씁니다 — {Overrides}", overrides);
+            }
             var changed = text.Contains("\"added\":0") && text.Contains("\"changed\":0") && text.Contains("\"removed\":0")
-                          && !text.Contains("\"assignmentsChanged\":true") ? "" : $" — {Trim(text)}";
-            Report(true, $"프로필 {body.Profiles.Count}개·지정 {body.Assignments.Count}줄 전송{changed}", logAlways: changed.Length > 0);
+                          && !text.Contains("\"assignmentsChanged\":true") && !text.Contains("\"teachingChanged\":true") ? "" : $" — {Trim(text)}";
+            Report(true, $"프로필 {body.Profiles.Count}개·지정 {body.Assignments.Count}줄·교시 위치 {positions.Count}개 전송{changed}", logAlways: changed.Length > 0);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)

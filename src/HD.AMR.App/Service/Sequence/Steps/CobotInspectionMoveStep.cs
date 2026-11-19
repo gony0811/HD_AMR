@@ -71,6 +71,10 @@ public class CobotInspectionMoveStep : ISequenceStep
     /// <summary>anchor 적중 시 캐시 프레임을 쓴 직전 task 의 ② 시작 접근점 — 프레임 평행 이동 기준.</summary>
     public const string AnchorStartBaseBagKey = "anchor.startApproachBase";
 
+    /// <summary>Bag 키 — <see cref="AnchorStartBaseBagKey"/> 와 짝인 기준 용접선의 맵 좌표 [시작 x,y,z, 끝 x,y,z] (m).
+    /// 이번 용접선이 도면상 같은 줄인지 보는 데 쓴다(<see cref="InternalWorkpieceFrame.MapSeamOffsetMm"/>).</summary>
+    public const string AnchorSeamWBagKey = "anchor.seamW";
+
     /// <summary>anchor 적중 시 직전 task 종료 TCP(BASE pose) — 그대로면 복귀 없이 연속 이동.</summary>
     public const string PreviousEndTcpBagKey = "anchor.previousEndTcp";
 
@@ -1128,8 +1132,31 @@ public class CobotInspectionMoveStep : ISequenceStep
     /// (실기 2026-11-02 13:23 L4-R03C09 H1: 투영 진입점 해가 J4 를 +69°→약 −150° 로, 벽 반대쪽으로 ~220° 돌렸다).
     /// 120° → 140° 완화(ACS 분석, 2026-11-02): 당일 300° 이상 거부는 전부 PU 준비 자세 J4 69° 가 한계 +85° 에 붙어
     /// 생긴 J4 먼 길 회전이었고(준비 자세 문제), 정상 진입은 16~82° 였다. 완화로 통과할 수 있는 손목 뒤집기 해
-    /// (14:05 후보: J1 117°·J5 +90→−50°, 144°)는 <see cref="IsWristFlip"/> 로 따로 막는다.</summary>
-    internal const double MaxEntryJointTravelDeg = 140.0;
+    /// (14:05 후보: J1 117°·J5 +90→−50°, 144°)는 <see cref="IsWristFlip"/> 로 따로 막는다.
+    /// 140° → 160°(2026-11-19 사용자 지시 — 천장 출발 자세 가지 전환 J2 154° 거부), 파라미터 <see cref="MaxEntryJointTravelKey"/> 로
+    /// 현장에서 바꾼다(기동·저장·삭제 때 <see cref="ApplyMaxEntryJointTravel"/>). 리치 맵·도달 사전 점검도 같은 값을 쓴다.</summary>
+    internal static double MaxEntryJointTravelDeg { get; private set; } = DefaultMaxEntryJointTravelDeg;
+
+    /// <summary><see cref="MaxEntryJointTravelDeg"/> 기본값 [도].</summary>
+    internal const double DefaultMaxEntryJointTravelDeg = 160.0;
+
+    /// <summary>진입 관절 이동 한계 파라미터 키 — ACS 의 <c>Acs:Reach:MaxEntryJointTravelDeg</c> 와 같은 값으로 둘 것.</summary>
+    public const string MaxEntryJointTravelKey = "inspection.maxEntryJointTravelDeg";
+
+    /// <summary>허용 범위 [도] — 밖이면 설정 실수로 보고 기본값을 쓴다.</summary>
+    internal const double MinEntryJointTravelDeg = 30.0, MaxEntryJointTravelLimitDeg = 360.0;
+
+    /// <summary>파라미터 값 → 쓸 한계 [도]. 비거나 범위 밖이면 기본값.</summary>
+    internal static double ResolveMaxEntryJointTravel(double? value)
+        => value is { } v && double.IsFinite(v) && v >= MinEntryJointTravelDeg && v <= MaxEntryJointTravelLimitDeg
+            ? v : DefaultMaxEntryJointTravelDeg;
+
+    /// <summary>파라미터 값을 적용한다. 값이 범위 안이거나 비어 있으면 true, 범위 밖이라 기본값을 쓰면 false.</summary>
+    internal static bool ApplyMaxEntryJointTravel(double? value)
+    {
+        MaxEntryJointTravelDeg = ResolveMaxEntryJointTravel(value);
+        return value is null || MaxEntryJointTravelDeg == value;
+    }
 
     /// <summary>
     /// 진입 MoveJ 해 <paramref name="joints"/> 를 쓸 수 없는 사유, 쓸 수 있으면 null — 관절 이동량(<see cref="MaxEntryJointTravelDeg"/>),
@@ -1370,16 +1397,29 @@ public class CobotInspectionMoveStep : ISequenceStep
                    "직전 구간을 다시 검사하게 되므로 중단합니다. 같은 그룹을 처음부터(정렬 포함) 다시 실행하세요.";
 
         // 비드 방향(프레임 X)으로만 옮긴다 — ACS 시작점 차이의 옆 성분(맵·AMR 방향 오차)이 LINE 마다 누적되지 않게.
-        var (moved, lateralMm, normalMm, alongX) = InternalWorkpieceFrame.TranslateAlongX(frame, anchorStart, startBase);
+        // 옆으로 떨어졌는지는 맵(도면) 좌표로 판단한다 — BASE 로 바꾼 ACS 시작점은 task 마다 AMR 위치·방향 오차를 따로 먹어
+        // 같은 줄인데도 옆 성분이 수십 mm 나온다(실기 2026-11-19 PU L4-R03C25 -3·-4: 28.8·33.9mm → 비드 옆을 찍음).
+        var map = context.Bag.TryGetValue(AnchorSeamWBagKey, out var sw) && sw is double[] { Length: 6 } seamW
+            ? InternalWorkpieceFrame.MapSeamOffsetMm(seamW[..3], seamW[3..], context.SeamStartW)
+            : null;
+        var sameLine = map is { } mo && mo.LateralMm <= InternalWorkpieceFrame.MaxDroppedLateralMm;
+        var (moved, lateralMm, normalMm, alongX) = InternalWorkpieceFrame.TranslateAlongX(frame, anchorStart, startBase, forceAlongX: sameLine);
         context.Bag[InternalWorkpieceFrame.BagKey] = moved;
-        if (alongX)
+        if (alongX && sameLine && Math.Abs(lateralMm) > InternalWorkpieceFrame.MaxDroppedLateralMm)
+            _logger.LogWarning(
+                "[Cobot 검사위치 이동] anchor 프레임 평행 이동(비드 방향만) — 도면상 같은 용접선 줄(옆 {MapL:0.0}mm)인데 BASE 환산 ACS 옆 성분이 {L:+0.0;-0.0}mm " +
+                "(AMR 위치·방향 또는 장착 보정 오차 의심) → 실측 비드 방향으로만 Δ=[{Dx:0.0}, {Dy:0.0}, {Dz:0.0}]mm (도면 진행 {MapA:0}mm) — 원점 [{X:0.0}, {Y:0.0}, {Z:0.0}]",
+                map!.Value.LateralMm, lateralMm, moved[0] - frame[0], moved[1] - frame[1], moved[2] - frame[2], map.Value.AlongMm,
+                moved[0], moved[1], moved[2]);
+        else if (alongX)
             _logger.LogInformation(
                 "[Cobot 검사위치 이동] anchor 프레임 평행 이동(비드 방향만) Δ=[{Dx:0.0}, {Dy:0.0}, {Dz:0.0}]mm (ACS 옆 성분 {L:+0.0;-0.0}mm·법선 성분 {N:+0.0;-0.0}mm 제외) — 원점 [{X:0.0}, {Y:0.0}, {Z:0.0}]",
                 moved[0] - frame[0], moved[1] - frame[1], moved[2] - frame[2], lateralMm, normalMm, moved[0], moved[1], moved[2]);
         else
             _logger.LogWarning(
-                "[Cobot 검사위치 이동] anchor 프레임 평행 이동 — ACS 옆 성분 {L:+0.0;-0.0}mm 가 {Max:0}mm 초과(같은 그룹 task 가 옆으로 떨어져 있음) → 면 평행 이동 Δ=[{Dx:0.0}, {Dy:0.0}, {Dz:0.0}]mm (법선 성분 {N:+0.0;-0.0}mm 제외) — 원점 [{X:0.0}, {Y:0.0}, {Z:0.0}]",
+                "[Cobot 검사위치 이동] anchor 프레임 평행 이동 — ACS 옆 성분 {L:+0.0;-0.0}mm 가 {Max:0}mm 초과(같은 그룹 task 가 옆으로 떨어져 있음{Map}) → 면 평행 이동 Δ=[{Dx:0.0}, {Dy:0.0}, {Dz:0.0}]mm (법선 성분 {N:+0.0;-0.0}mm 제외) — 원점 [{X:0.0}, {Y:0.0}, {Z:0.0}]",
                 lateralMm, InternalWorkpieceFrame.MaxDroppedLateralMm,
+                map is { } m2 ? $", 도면상 옆 {m2.LateralMm:0.0}mm" : ", 도면 좌표 없음",
                 moved[0] - frame[0], moved[1] - frame[1], moved[2] - frame[2], normalMm, moved[0], moved[1], moved[2]);
         return null;
     }
