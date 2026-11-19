@@ -328,7 +328,7 @@ public enum ReachStatus
     /// <summary>닿는 해는 있지만 운영 ② 출발 자세(검사 준비·ready)와 가지가 달라 팔꿈치·손목을 뒤집거나 관절을 크게
     /// 돌려야 한다 — 운영 ② 는 이런 이동을 하지 않으므로 실제로는 닿지 않는다.</summary>
     BranchChange,
-    /// <summary>팔·검사 툴이 AMR 차체·리프트 기둥·신호탑에 닿는다(<see cref="CobotEnvelope"/>).</summary>
+    /// <summary>팔·검사 툴이 AMR 차체·받침 기둥·신호탑에 닿는다(<see cref="CobotEnvelope"/>).</summary>
     SelfCollision,
     /// <summary>IK 해가 관절 한계·특이점 여유를 벗어난다.</summary>
     PostureLimit,

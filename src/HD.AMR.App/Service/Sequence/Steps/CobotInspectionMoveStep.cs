@@ -241,7 +241,7 @@ public class CobotInspectionMoveStep : ISequenceStep
     public const string SelfCollisionGuardKey = "inspection.selfCollisionGuard";
 
     /// <summary>
-    /// ② 관절 해가 팔·검사 툴을 차체·리프트 기둥·신호탑에 닿게 하는지(<see cref="CobotEnvelope"/>). 닿으면 사유, 아니면 null.
+    /// ② 관절 해가 팔·검사 툴을 차체·받침 기둥·신호탑에 닿게 하는지(<see cref="CobotEnvelope"/>). 닿으면 사유, 아니면 null.
     /// 스트로크·장착 yaw 를 모르면(티칭 폴백) 판정하지 않는다.
     /// </summary>
     internal static string? SelfCollisionBlocker(double[] joints, SeamApproachResult seam)

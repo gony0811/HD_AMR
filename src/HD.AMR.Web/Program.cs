@@ -119,6 +119,12 @@ builder.Services.Configure<TelescopicSerialSettings>(
 builder.Services.AddSingleton<TelescopicService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<TelescopicService>());
 
+// 코봇 자기 간섭 모델 설치 치수(차체·받침 기둥·신호탑·검사 툴) — 값이 잘못되면 여기서 기동을 멈춘다.
+builder.Services.Configure<HD.AMR.App.Service.Motion.CobotEnvelopeSettings>(
+    builder.Configuration.GetSection("CobotEnvelope"));
+HD.AMR.App.Service.Motion.CobotEnvelope.Configure(
+    builder.Configuration.GetSection("CobotEnvelope").Get<HD.AMR.App.Service.Motion.CobotEnvelopeSettings>());
+
 // 용접라인 추적(명세서 v2). 검출은 OpenCvSharp(Windows) — 그 외 플랫폼은 no-op 폴백.
 // ROI 프로파일은 JSON 파일로 저장. 싱글톤(운영자 1인, 상태 유지).
 builder.Services.Configure<WeldTrackingSettings>(
