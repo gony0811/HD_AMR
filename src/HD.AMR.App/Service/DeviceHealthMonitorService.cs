@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -30,13 +31,24 @@ public sealed class DeviceHealthMonitorService : BackgroundService
 
     private readonly object _lock = new();
     private readonly DeviceAlarmTracker _tracker;
+    private readonly IServiceScopeFactory _scopeFactory;
+
+    /// <summary>드라이런 레시피 확인 주기(초).</summary>
+    private const double DryRunRefreshSec = 2;
+    private DateTime _dryRunCheckedUtc = DateTime.MinValue;
+    /// <summary>사용 중(Enabled) 레시피 중 하나라도 DryRun 이면 true — 가스 디텍터 HEAVY 감시를 생략한다.
+    /// 드라이런 검사 순회는 디텍터 없이 이동만 하므로 디텍터 미연결로 order 거부·임무 중단이 나면 안 된다.
+    /// 일반(비드라이런) 레시피는 오케스트레이터·검사 수행 스텝이 여전히 디텍터 링크를 확인해 막는다.</summary>
+    private volatile bool _gasDryRunBypass;
 
     public DeviceHealthMonitorService(IOptions<DeviceHealthSettings> options, DeviceAlarmState state,
         AMRService amr, CobotService cobot, CameraService camera, IoModuleService io,
         VisionInterfaceService vision, GasDetectorService gas, IOptions<InspectionSensorSettings> sensor,
         LaserDisplacementSensorService laser,
-        Vda5050OrderExecutor executor, OperationLogService opLog, ILogger<DeviceHealthMonitorService> logger)
+        Vda5050OrderExecutor executor, OperationLogService opLog, IServiceScopeFactory scopeFactory,
+        ILogger<DeviceHealthMonitorService> logger)
     {
+        _scopeFactory = scopeFactory;
         _s = options.Value;
         _state = state;
         _amr = amr;
@@ -85,6 +97,7 @@ public sealed class DeviceHealthMonitorService : BackgroundService
     private async Task TickAsync()
     {
         var now = DateTime.UtcNow;
+        await RefreshDryRunBypassAsync(now);
         var samples = Sample(now);
 
         IReadOnlyList<DeviceAlarmEvent> events;
@@ -170,7 +183,8 @@ public sealed class DeviceHealthMonitorService : BackgroundService
             : _s.VisionRxStaleSec > 0 && !Fresh(vc.LastRxUtc, _s.VisionRxStaleSec) ? new(false, "HEARTBEAT 무응답")
             : new(true, "");
 
-        r[DeviceKind.GasDetector] = !_gas.IsPortOpen ? new(false, _gas.Settings.Transport == HD.AMR.App.Communication.GasDetector.GasDetectorTransportKind.Tcp ? "TCP 미연결" : "시리얼 포트 미연결")
+        r[DeviceKind.GasDetector] = _gasDryRunBypass ? new(true, "")
+            : !_gas.IsPortOpen ? new(false, _gas.Settings.Transport == HD.AMR.App.Communication.GasDetector.GasDetectorTransportKind.Tcp ? "TCP 미연결" : "시리얼 포트 미연결")
             : !Fresh(_gas.LastOkUtc, _s.GasDetectorStaleSec) ? new(false, "응답 없음")
             : new(true, "");
 
@@ -179,5 +193,29 @@ public sealed class DeviceHealthMonitorService : BackgroundService
             : new(true, "");
 
         return r;
+    }
+
+    /// <summary>레시피 DryRun 상태를 주기적으로 읽어 가스 디텍터 감시 생략 여부를 갱신한다.</summary>
+    private async Task RefreshDryRunBypassAsync(DateTime now)
+    {
+        if (!_tracker.Enabled.Contains(DeviceKind.GasDetector)) return;   // 디텍터 감시 대상이 아니면(비전 AMR 등) DB 조회 불필요
+        if ((now - _dryRunCheckedUtc).TotalSeconds < DryRunRefreshSec) return;
+        _dryRunCheckedUtc = now;
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var recipes = await scope.ServiceProvider.GetRequiredService<InspectionRecipeService>().ListAsync();
+            var bypass = recipes.Any(r => r.Enabled && r.DryRun);
+            if (bypass == _gasDryRunBypass) return;
+            _gasDryRunBypass = bypass;
+            if (bypass)
+                _logger.LogWarning("드라이런 레시피 활성 — 가스 디텍터 HEAVY 감시 생략(디텍터 없이 검사 순회 허용). 이미 뜬 알람은 RESET 으로 해제");
+            else
+                _logger.LogInformation("드라이런 레시피 없음 — 가스 디텍터 HEAVY 감시 재개");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "드라이런 레시피 확인 실패 — 가스 디텍터 감시 상태 유지({Bypass})", _gasDryRunBypass);
+        }
     }
 }

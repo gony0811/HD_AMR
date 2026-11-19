@@ -33,6 +33,8 @@ namespace HD.AMR.App.Service.Sequence.Steps;
 /// 검사 센서(<see cref="InspectionSensorSettings.Mode"/>)가 <c>GasDetector</c> 면 CAPTURE_REQ 대신 경유점마다
 /// <see cref="GasDetectorService.MeasureAsync"/> 로 헬륨 리크레이트를 측정해 OK/NG 판정한다. NG(리크 검출)는 정상적인
 /// 검사 결과라 집계만 하고, 측정 실패(통신)만 비전 실패와 같이 실패율 판정에 넣는다.
+/// 측정 방식이 <see cref="GasMeasureMode.Continuous"/> 면 경유점에 멈춰 재지 않고 경유점 사이를 이동하는 동안
+/// <see cref="GasDetectorService.MeasureDuringAsync"/> 로 계속 샘플링해 구간 최대값으로 판정한다(결과는 도착 경유점의 포인트).
 /// (MoveL 실패는 즉시 중단.)
 ///
 /// 일시정지(통신 단절 사양 §3·§4.3, <see cref="MissionPauseGate"/>): 진행 중 경유점 MoveL 은 끝까지 수행하고
@@ -53,6 +55,44 @@ public class InspectionRunStep : ISequenceStep
 
     /// <summary>비전 CAPTURE_REQ 응답 대기 기본값(초) — 프로필 DelaySec 미설정(0 이하) 시. 검사 프로파일 화면 기본값과 동일.</summary>
     public const double DefaultVisionTimeoutSec = 10.0;
+
+    /// <summary>기본 검사 속도 [%] 파라미터 — 검사 프로파일에 속도가 없을 때(0 이하) 경유점 순회에 쓴다.</summary>
+    public const string DefaultInspectVelKey = "Inspection.DefaultInspectVelPercent";
+    /// <summary>기본 검사 속도 파라미터의 기본값 [%].</summary>
+    public const int DefaultInspectVelPercent = 2;
+
+    /// <summary>
+    /// 경유점 순회(검사 스캔) 속도 [%] 결정 — ① 지정값(레시피 검사 속도·시퀀스 화면 입력) ② 검사 프로파일에 저장된 속도
+    /// ③ 기본 검사 속도 파라미터(<see cref="DefaultInspectVelKey"/>, 1~100 밖이면 <see cref="DefaultInspectVelPercent"/>).
+    /// 이동 속도(접근·복귀)로는 떨어지지 않는다 — 검사 속도를 따로 주지 않았다고 빠른 이동 속도로 훑으면 안 된다.
+    /// </summary>
+    public static (int Percent, string Source) ResolveScanVelocity(int? explicitPercent, int profileRunVel, double? defaultParam)
+    {
+        if (explicitPercent is { } e) return (Math.Clamp(e, 1, 100), "지정값");
+        if (profileRunVel > 0) return (Math.Min(profileRunVel, 100), "검사 프로파일 속도");
+        return defaultParam is double d && d >= 1 && d <= 100
+            ? ((int)Math.Round(d), "기본 검사 속도 파라미터")
+            : (DefaultInspectVelPercent, "기본 검사 속도");
+    }
+
+    /// <summary>직행 이동이 사이 경유점보다 높이 떠서 건너갈 때 두는 여유 [mm].</summary>
+    public const double DirectTravelClearanceMm = 5.0;
+
+    /// <summary>
+    /// 떨어진 두 경유점 사이 직행 계획(작업물 좌표 Z — 면에서 멀어지는 쪽이 +). 사이 경유점이 모두 양 끝 중 낮은 쪽보다
+    /// 높지 않으면 직선 한 번으로 간다(직선은 양 끝 높이 사이에 있으므로 교시 경로보다 면에 가까워지지 않는다).
+    /// 더 높은 경유점(면이 솟은 곳)이 있으면 전체 최고 높이 + <see cref="DirectTravelClearanceMm"/> 로 올라가 건너간 뒤 내려온다.
+    /// </summary>
+    public static (double SafeZ, bool Rise, bool Descend) PlanDirectTravel(double fromZ, double toZ, IEnumerable<double> betweenZ)
+    {
+        const double tol = 0.5;
+        var between = betweenZ.ToList();
+        var low = Math.Min(fromZ, toZ);
+        if (between.Count == 0 || between.Max() <= low + tol)
+            return (Math.Max(fromZ, toZ), false, false);
+        var safeZ = Math.Max(Math.Max(fromZ, toZ), between.Max()) + DirectTravelClearanceMm;
+        return (safeZ, true, true);
+    }
 
     /// <summary>MoveL 가속/오버라이드 — /inspection 페이지 RunWaypoints 와 동일값.</summary>
     private const double MoveAcc = 100.0;
@@ -122,6 +162,25 @@ public class InspectionRunStep : ISequenceStep
             return StepResult.Fail(
                 $"티칭설정 '{profile.Name}' 경유점이 부족합니다({waypoints.Count}개, 2개 이상 필요).");
 
+        // 우현 면은 좌현의 거울상이다 — 좌현에서 교시한 프로필을 작업물 Y 로 거울 반전해 실행한다(ProfileMirror).
+        // 이후 사전 검증·이동·촬영 위치 보고는 모두 반전된 경유점을 쓴다.
+        var mirrorEnabled = await GetMirrorEnabledAsync();
+        if (ProfileMirror.ShouldMirror(context.InspectionSurfaceId, context.FacePlacement, mirrorEnabled))
+        {
+            waypoints = ProfileMirror.Mirror(waypoints);
+            _logger.LogInformation(
+                "[검사 수행] 우현 면(WallID 0x{Sid:X2}) — 티칭설정 '{Prof}' 경유점을 거울 반전(Y·Rz·Rx 부호)해 실행",
+                context.InspectionSurfaceId, profile.Name);
+            context.Progress?.Invoke("우현 면 — 티칭 경유점을 거울 반전해 실행");
+        }
+        else if (mirrorEnabled && ProfileMirror.ShouldMirror(context.InspectionSurfaceId, null)
+                 && waypoints.Any(w => w.Y != 0 || w.RzDeg != 0 || w.RxDeg != 0))
+        {
+            _logger.LogWarning(
+                "[검사 수행] 우현 면(WallID 0x{Sid:X2})인데 용접선이 면 축의 − 방향 — 거울 반전하지 않고 교시값 그대로 실행(세로 방향 위치가 어긋날 수 있음)",
+                context.InspectionSurfaceId);
+        }
+
         // ── 애플리케이션 내부 작업물 좌표계 확인 ─────────────────────────
         if (!context.Bag.TryGetValue(InternalWorkpieceFrame.BagKey, out var frameValue)
             || frameValue is not double[] { Length: 6 } frame)
@@ -135,11 +194,17 @@ public class InspectionRunStep : ISequenceStep
         var rz0 = attitude.Rz0;
         var tiltSign = attitude.TiltSign;
 
+        // 순회(검사 스캔) 속도: 지정값 → 검사 프로파일 속도 → 기본 검사 속도 파라미터(ResolveScanVelocity).
+        var (scanVel, scanVelFrom) = ResolveScanVelocity(context.InspectVelocity, profile.RunVel, await GetDefaultInspectVelAsync());
+        var scanVelSource = $"({scanVelFrom})";
+
         _logger.LogInformation(
             "[검사 수행] 시작: 도면 {Draw}, 티칭설정 '{Prof}'({N}점), 내부 wobj #{Id} 원점 [{X:0.0},{Y:0.0},{Z:0.0}], " +
-            "tool={Tool}, vel={Vel}%, SurfaceID 0x{Sid:X2}, RZ 유지={Rz0:0.0}° (틸트부호 {Sign:+0;-0})",
+            "tool={Tool}, 이동 vel={Vel}%, 검사 vel={InspVel}%{InspSrc}, SurfaceID 0x{Sid:X2}, RZ 유지={Rz0:0.0}° (틸트부호 {Sign:+0;-0})",
             profile.DrawingId, profile.Name, waypoints.Count, wobjId,
-            frame[0], frame[1], frame[2], context.Tool, context.Velocity, context.InspectionSurfaceId,
+            frame[0], frame[1], frame[2], context.Tool, context.Velocity,
+            scanVel, scanVelSource,
+            context.InspectionSurfaceId,
             rz0, tiltSign);
 
         // th_max 초과 점은 /inspection 과 동일하게 제외 (절대 6-DOF 모드는 θ=절대 Ry 라 필터 미적용).
@@ -216,10 +281,199 @@ public class InspectionRunStep : ISequenceStep
         // 임계값은 Task 시작 시 한 번 잡는다 — 도중에 SAIGE 가 바꾸면 다음 Task 부터 적용(SAIGE §3).
         var gasThreshold = _useGas && !_dryRun ? _gas.CurrentThreshold : null;
         var gasStarted = DateTime.UtcNow;
+        // 연속 측정: 경유점에 멈춰 재는 대신 경유점 사이를 이동하는 동안 계속 샘플링한다. Task 시작 시 한 번 정한다.
+        var gasSettings = _gas.Settings;
+        var continuous = gasThreshold is not null && gasSettings.MeasureMode == GasMeasureMode.Continuous;
+        // 무정지: 연속 측정이면서 블렌딩 반경 > 0 — 첫 경유점 이후를 멈추지 않고 한 번에 지나간다(RunNonStopPassAsync).
+        var nonStop = continuous && gasSettings.NonStopBlendRadiusMm > 0;
         if (gasThreshold is not null)
-            _logger.LogInformation("[검사 수행] 가스 판정 임계값 {Th} (초과 NG, NG 시 재측정 최대 {Retry}회)",
-                gasThreshold.Describe(), Math.Clamp(_gas.Settings.MaxRetries, 0, 2));
+            _logger.LogInformation("[검사 수행] 가스 판정 임계값 {Th} (초과 NG, NG 시 재측정 최대 {Retry}회), 측정 방식 {Mode}",
+                gasThreshold.Describe(), Math.Clamp(gasSettings.MaxRetries, 0, 2),
+                continuous ? $"이동 중 연속(샘플 간격 {Math.Max(Xl3000AsciiProtocol.MinSampleIntervalMs, gasSettings.MeasureSampleIntervalMs)} ms)" : "경유점 정지");
         var lastMoved = -1;
+        var prevIdx = -1;   // 직전에 도착한 경유점 — 연속 측정 구간의 출발점
+
+        // 연속 측정 1구간: from → to 를 검사 속도로 이동하면서 샘플링해 구간 최대값으로 판정한다. 결과는 도착 경유점(to)의
+        // 포인트로 남긴다. OK 가 아니면(NG·실패) 출발점으로 되돌아가 같은 구간을 다시 훑는다(재측정 — 정지 측정의 "같은 자리").
+        // prior 가 있으면(무정지 통과에서 이미 잰 1건) 그 뒤 재측정으로 이어 간다 — 이때 코봇은 출발점(from)에 있어야 한다.
+        async Task<(GasPointResult? Point, string? MoveError)> ScanSegmentAsync(int from, int to,
+            List<GasMeasurementResult>? prior = null)
+        {
+            var a = waypoints[from];
+            var b = waypoints[to];
+            var lengthMm = Math.Sqrt(Math.Pow(b.X - a.X, 2) + Math.Pow(b.Y - a.Y, 2) + Math.Pow(b.Z - a.Z, 2));
+            var label = $"WALL 0x{context.InspectionSurfaceId:X2} #{from + 1}→#{to + 1}";
+            var maxRetries = Math.Clamp(gasSettings.MaxRetries, 0, 2);
+            var responseDelay = TimeSpan.FromMilliseconds(Math.Max(0, gasSettings.MeasureDwellMs));
+            var scans = prior ?? new List<GasMeasurementResult>();
+            double? peakMm = null;
+            while (true)
+            {
+                var rc = 0;
+                DateTime moveStart = default, moveEnd = default;
+                var scan = await _gas.MeasureDuringAsync(label, async c =>
+                {
+                    moveStart = DateTime.UtcNow;
+                    rc = await _cobot.Rpc.MoveLAsync(ToTargetBase(b), tool: context.Tool, user: 0,
+                        vel: scanVel, acc: MoveAcc, ovl: MoveOvl, blendR: -1, ct: c);
+                    moveEnd = DateTime.UtcNow;
+                    return rc == 0;
+                }, gasThreshold, scans.Count, ct);
+                if (scan is null)
+                    return (null, $"경유점 #{to + 1} 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}");
+                scans.Add(scan);
+                peakMm = scan.PeakFraction(moveStart, moveEnd, responseDelay) is { } f ? f * lengthMm : null;
+                if (!GasPointResult.NeedsRetry(scan.Judgement, scans.Count - 1, maxRetries))
+                    break;
+
+                // 재측정 — 일시정지 중이면 풀릴 때까지 기다렸다가, 측정 없이 이동 속도로 출발점에 되돌아간다.
+                await _pauseGate.WaitWhilePausedAsync(ct);
+                _logger.LogInformation("[검사 수행] 구간 #{From}→#{To} {Judge} — 출발점으로 되돌아가 재측정 {Retry}",
+                    from + 1, to + 1, scan.Judgement, scans.Count);
+                var backRc = await _cobot.Rpc.MoveLAsync(ToTargetBase(a), tool: context.Tool, user: 0,
+                    vel: context.Velocity, acc: MoveAcc, ovl: MoveOvl, blendR: -1, ct: ct);
+                if (backRc != 0)
+                    return (null, $"구간 #{from + 1}→#{to + 1} 재측정 복귀 이동 실패 (rc={backRc}){FairinoErrorCodes.Suffix(backRc)}");
+            }
+
+            var (gu, gv, _) = FaceLocalMapper.ToFaceLocal((ushort)context.InspectionSurfaceId, b.X, b.Y, b.Z, context.FacePlacement);
+            var point = new GasPointResult(to + 1, gu, gv, scans);
+            var last = scans[^1];
+            var retryNote = scans.Count > 1 ? $" (재측정 {scans.Count - 1}회)" : "";
+            var peakNote = peakMm is { } mm ? $", 최대값 추정 위치 #{from + 1} 에서 약 {mm:0} mm" : "";
+            if (point.Result == GasJudgement.Ng)
+                _logger.LogInformation("[검사 수행] 구간 #{From}→#{To}({Len:0} mm) NG — 최대 {Max:0.###} {Unit}{Peak}",
+                    from + 1, to + 1, lengthMm, last.Value, last.Unit, peakNote);
+            context.Progress?.Invoke(point.Result switch
+            {
+                GasJudgement.Ok => $"구간 #{from + 1}→#{to + 1} 가스 OK 최대 {last.Value:0.###} {last.Unit} ({last.SampleCount}샘플){retryNote}",
+                GasJudgement.Ng => $"구간 #{from + 1}→#{to + 1} 가스 NG — 최대 {last.Value:0.###} > 임계 {last.Threshold:0.###} {last.Unit}{peakNote}{retryNote}",
+                _ => $"구간 #{from + 1}→#{to + 1} 가스 측정 실패: {last.Error}{retryNote}",
+            });
+            return (point, null);
+        }
+
+        // 무정지 연속 측정: from(지금 서 있는 경유점)에서 rest 의 경유점들을 멈추지 않고(블렌딩) 한 번에 지나가며 잰다.
+        // 샘플은 시간 비율로 구간에 나눠 구간마다 도착 경유점의 포인트로 남긴다. OK 가 아닌 구간은 통과 뒤에
+        // 그 구간 출발점으로 직행해(TravelAsync) 종전 구간 방식(ScanSegmentAsync)으로 재측정하고, 끝나면 마지막 경유점으로 돌아간다.
+        // 일시정지는 통과 도중에는 걸리지 않는다(통과를 마친 뒤 재측정 앞에서 멈춘다).
+        async Task<string?> RunNonStopPassAsync(int from, List<int> rest)
+        {
+            var idxs = new List<int> { from };
+            idxs.AddRange(rest);
+            var passPoses = idxs.Select(k => ToTargetBase(waypoints[k])).ToList();
+            var passLabels = Enumerable.Range(0, rest.Count)
+                .Select(n => $"WALL 0x{context.InspectionSurfaceId:X2} #{idxs[n] + 1}→#{idxs[n + 1] + 1}").ToList();
+            IReadOnlyList<double[]> passJoints;
+            try { passJoints = await _cobot.Rpc.ResolveChainJointsAsync(passPoses.Skip(1).ToList(), context.Tool, 0, ct); }
+            catch (InvalidOperationException ex) { return $"무정지 경로 IK 실패({ex.Message})"; }
+
+            _logger.LogInformation("[검사 수행] 무정지 연속 측정 — 경유점 #{From}→#{To} ({N}구간, 블렌딩 반경 {R:0.#} mm)",
+                from + 1, rest[^1] + 1, rest.Count, _gas.NonStopBlendRadiusMm);
+            context.Progress?.Invoke($"무정지 연속 측정 — 경유점 #{from + 1}→#{rest[^1] + 1} ({rest.Count}구간)");
+            var inspectVel = scanVel;
+            var (passScans, passMoveError) = await _gas.MeasureNonStopPassAsync(passLabels, passPoses,
+                (k, blendR, c) => _cobot.Rpc.MoveLAsync(passPoses[k], jointPos: passJoints[k - 1], tool: context.Tool, user: 0,
+                    vel: inspectVel, acc: MoveAcc, ovl: MoveOvl, blendR: blendR, ct: c),
+                c => _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, c),
+                () => _cobot.StopMotionImmediateAsync(), gasThreshold, ct);
+            if (passScans is null)
+                return $"무정지 연속 이동 실패 — {passMoveError}";
+
+            // 떨어진 경유점으로 가는 이동(재측정 출발점·마지막 경유점 복귀)은 직행한다 — 사이 경유점이 양 끝보다 높지 않으면
+            // 직선 한 번, 높은 곳(코로게이션 마루 등)이 있으면 그 위 안전 높이로 올라가 건너간 뒤 내려온다(PlanDirectTravel).
+            // 직행 경로는 교시 경로가 아니라 사전 검증(IK 사슬)이 안 돼 있으므로 먼저 풀어 보고, 막히면 종전처럼 경유점을 차례로 밟는다.
+            var passPos = idxs.Count - 1;
+            async Task<(bool Done, string? Error)> TryDirectTravelAsync(int target)
+            {
+                var fromWp = waypoints[idxs[passPos]];
+                var toWp = waypoints[idxs[target]];
+                int lo = Math.Min(passPos, target), hi = Math.Max(passPos, target);
+                var plan = PlanDirectTravel(fromWp.Z, toWp.Z,
+                    Enumerable.Range(lo + 1, hi - lo - 1).Select(k => waypoints[idxs[k]].Z));
+                var legs = new List<double[]>();
+                if (plan.Rise) legs.Add(ToTargetBase(fromWp with { Z = plan.SafeZ }));
+                if (plan.Descend) legs.Add(ToTargetBase(toWp with { Z = plan.SafeZ }));
+                legs.Add(passPoses[target]);
+
+                if (await CheckWaypointChainAsync(context, legs.Select(p => (idxs[target], p)).ToList(), ct) is { } blocker)
+                {
+                    _logger.LogInformation("[검사 수행] 경유점 #{From}→#{To} 직행 불가({Why}) — 경유점을 차례로 밟아 이동",
+                        idxs[passPos] + 1, idxs[target] + 1, blocker);
+                    return (false, null);
+                }
+                _logger.LogInformation("[검사 수행] 경유점 #{From}→#{To} 직행{How}",
+                    idxs[passPos] + 1, idxs[target] + 1,
+                    legs.Count > 1 ? $" — 안전 높이 z={plan.SafeZ:0.#}mm 경유({legs.Count}회 이동)" : "");
+                foreach (var leg in legs)
+                {
+                    var legRc = await _cobot.Rpc.MoveLAsync(leg, tool: context.Tool, user: 0,
+                        vel: context.Velocity, acc: MoveAcc, ovl: MoveOvl, blendR: -1, ct: ct);
+                    if (legRc != 0)
+                        return (false, $"경유점 #{idxs[target] + 1} 직행 이동 실패 (rc={legRc}){FairinoErrorCodes.Suffix(legRc)}");
+                }
+                return (true, null);
+            }
+
+            async Task<string?> TravelAsync(int target)
+            {
+                if (Math.Abs(target - passPos) > 1)
+                {
+                    var (done, directError) = await TryDirectTravelAsync(target);
+                    if (directError is not null) return directError;
+                    if (done) { passPos = target; return null; }
+                }
+                while (passPos != target)
+                {
+                    var next = passPos + Math.Sign(target - passPos);
+                    var travelRc = await _cobot.Rpc.MoveLAsync(passPoses[next], tool: context.Tool, user: 0,
+                        vel: context.Velocity, acc: MoveAcc, ovl: MoveOvl, blendR: -1, ct: ct);
+                    if (travelRc != 0)
+                        return $"경유점 #{idxs[next] + 1} 재측정 이동 실패 (rc={travelRc}){FairinoErrorCodes.Suffix(travelRc)}";
+                    passPos = next;
+                }
+                return null;
+            }
+
+            var passMaxRetries = Math.Clamp(gasSettings.MaxRetries, 0, 2);
+            for (var n = 0; n < rest.Count; n++)
+            {
+                int segFrom = idxs[n], segTo = idxs[n + 1];
+                var first = passScans[n];
+                movedSet.Add(segTo);
+                GasPointResult passPoint;
+                if (GasPointResult.NeedsRetry(first.Judgement, 0, passMaxRetries))
+                {
+                    await _pauseGate.WaitWhilePausedAsync(ct);
+                    _logger.LogInformation("[검사 수행] 구간 #{From}→#{To} {Judge} — 구간 출발점으로 되돌아가 재측정",
+                        segFrom + 1, segTo + 1, first.Judgement);
+                    if (await TravelAsync(n) is { } travelError) return travelError;
+                    var (retried, retryError) = await ScanSegmentAsync(segFrom, segTo, new List<GasMeasurementResult> { first });
+                    if (retried is null) return retryError;
+                    passPos = n + 1;
+                    passPoint = retried;
+                }
+                else
+                {
+                    var wp = waypoints[segTo];
+                    var (pu, pv, _) = FaceLocalMapper.ToFaceLocal((ushort)context.InspectionSurfaceId, wp.X, wp.Y, wp.Z, context.FacePlacement);
+                    passPoint = new GasPointResult(segTo + 1, pu, pv, new[] { first });
+                    context.Progress?.Invoke(passPoint.Result switch
+                    {
+                        GasJudgement.Ok => $"구간 #{segFrom + 1}→#{segTo + 1} 가스 OK 최대 {first.Value:0.###} {first.Unit} ({first.SampleCount}샘플)",
+                        GasJudgement.Ng => $"구간 #{segFrom + 1}→#{segTo + 1} 가스 NG — 최대 {first.Value:0.###} > 임계 {first.Threshold:0.###} {first.Unit}",
+                        _ => $"구간 #{segFrom + 1}→#{segTo + 1} 가스 측정 실패: {first.Error}",
+                    });
+                }
+                gasPoints[segTo] = passPoint;
+                visByIndex[segTo] = passPoint.Result != GasJudgement.Error;
+                ngByIndex[segTo] = passPoint.Result == GasJudgement.Ng;
+            }
+            if (await TravelAsync(idxs.Count - 1) is { } returnError) return returnError;
+            lastMoved = idxs[^1];
+            prevIdx = idxs[^1];
+            return null;
+        }
 
         // v3: 검사 세션 1회 = Run ID 1개(GUID). 각 경유점 캡처 = Task ID 1개.
         // ACS 연동 실행이면 jobRef 는 작업지시(VDA5050 action jobRef) 기반으로 발급하고,
@@ -248,7 +502,8 @@ public class InspectionRunStep : ISequenceStep
             ct.ThrowIfCancellationRequested();
 
             // 일시정지 체크포인트 ① — 다음 경유점으로 이동하기 전. 재개되면 정지 직전 경유점으로 되돌아가 재촬영(§4.3).
-            if (await _pauseGate.WaitWhilePausedAsync(ct) && lastMoved >= 0 && !_dryRun && lastMoved < i)
+            // 연속 측정은 구간 측정이 이동과 함께 끝나 있으므로 되돌아가지 않고 다음 구간부터 이어 간다.
+            if (await _pauseGate.WaitWhilePausedAsync(ct) && lastMoved >= 0 && !_dryRun && !continuous && lastMoved < i)
             {
                 _logger.LogInformation("[검사 수행] 일시정지 해제 — 정지 직전 경유점 #{Idx} 부터 재촬영", lastMoved + 1);
                 context.Progress?.Invoke($"일시정지 해제 — 경유점 #{lastMoved + 1} 부터 재촬영");
@@ -258,14 +513,40 @@ public class InspectionRunStep : ISequenceStep
             var w = waypoints[i];
             if (IsSkipped(w)) { skippedSet.Add(i); continue; }
 
+            // 연속 측정: 앞 경유점 → 이 경유점 구간을 이동하면서 잰다. 첫 경유점은 앞 구간이 없어 아래 정지 측정으로 잰다.
+            // 무정지: 남은 경유점 전체를 한 번에 지나가며 재고 순회를 끝낸다.
+            if (nonStop && prevIdx >= 0)
+            {
+                var remaining = Enumerable.Range(i, waypoints.Count - i).ToList();
+                foreach (var skippedIdx in remaining.Where(k => IsSkipped(waypoints[k])))
+                    skippedSet.Add(skippedIdx);
+                if (await RunNonStopPassAsync(prevIdx, remaining.Where(k => !IsSkipped(waypoints[k])).ToList()) is { } passError)
+                    return StepResult.Fail($"{passError} — {movedSet.Count}점 이동 후 중단.");
+                break;
+            }
+            if (continuous && prevIdx >= 0)
+            {
+                var (segPoint, moveError) = await ScanSegmentAsync(prevIdx, i);
+                if (segPoint is null)
+                    return StepResult.Fail($"{moveError} — {movedSet.Count}점 이동 후 중단.");
+                movedSet.Add(i);
+                lastMoved = i;
+                prevIdx = i;
+                gasPoints[i] = segPoint;
+                visByIndex[i] = segPoint.Result != GasJudgement.Error;
+                ngByIndex[i] = segPoint.Result == GasJudgement.Ng;
+                continue;
+            }
+
             // 경유점 순회(검사 스캔)만 검사 속도 적용 — 스테이징 등 접근성 모션은 이동 속도(Velocity).
             var rc = await _cobot.Rpc.MoveLAsync(ToTargetBase(w), tool: context.Tool, user: 0,
-                vel: context.InspectVelocity ?? context.Velocity, acc: MoveAcc, ovl: MoveOvl, blendR: -1, ct: ct);
+                vel: scanVel, acc: MoveAcc, ovl: MoveOvl, blendR: -1, ct: ct);
             if (rc != 0)
                 return StepResult.Fail(
                     $"경유점 #{i + 1} 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)} — {movedSet.Count}점 이동 후 중단.");
             movedSet.Add(i);
             lastMoved = i;
+            prevIdx = i;
 
             if (settle > TimeSpan.Zero)
                 await Task.Delay(settle, ct);
@@ -282,7 +563,7 @@ public class InspectionRunStep : ISequenceStep
             // 일시정지 재개로 같은 점을 다시 재면 그 점의 결과를 새 측정으로 덮어쓴다.
             if (_useGas)
             {
-                var (gu, gv, _) = FaceLocalMapper.ToFaceLocal((ushort)context.InspectionSurfaceId, w.X, w.Y, w.Z);
+                var (gu, gv, _) = FaceLocalMapper.ToFaceLocal((ushort)context.InspectionSurfaceId, w.X, w.Y, w.Z, context.FacePlacement);
                 var scans = await _gas.MeasurePointAsync($"WALL 0x{context.InspectionSurfaceId:X2} #{i + 1}", gasThreshold!, ct);
                 var point = new GasPointResult(i + 1, gu, gv, scans);
                 gasPoints[i] = point;
@@ -314,7 +595,7 @@ public class InspectionRunStep : ISequenceStep
             if (h != rawH)
                 _logger.LogInformation("[검사 수행] 경유점 #{Idx} 촬영 높이 {Raw}mm → {H}mm 로 올려 전송(비전은 음수 높이를 받지 않음)",
                     i + 1, rawH, h);
-            captureSeq++;
+            captureSeq = context.CaptureSeqSource?.Invoke() is { } nextSeq ? nextSeq : (ushort)(captureSeq + 1);
             var data = CaptureReqPayload.Build(surfaceType, wallId, u, v, h, taskId, attempt, captureSeq);
             var outcome = await _vision.Client.RequestCaptureAsync(data, visionTimeout, ct);
             visByIndex[i] = outcome.Success;
@@ -469,6 +750,18 @@ public class InspectionRunStep : ISequenceStep
                 return $"경유점 #{idx + 1} {j6}";
         }
         return null;
+    }
+
+    private async Task<bool> GetMirrorEnabledAsync()
+    {
+        try { return await _param.GetBoolAsync(ProfileMirror.EnabledKey) ?? true; }
+        catch { return true; }
+    }
+
+    private async Task<double?> GetDefaultInspectVelAsync()
+    {
+        try { return await _param.GetDoubleAsync(DefaultInspectVelKey); }
+        catch { return null; }
     }
 
     private async Task<double> GetWObjIdAsync()

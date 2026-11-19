@@ -274,7 +274,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 : "브로커만");
         AcsDetailText =
             (pauseText is not null ? $"임무 일시정지({pauseText}) — 관제 재개(stopPause) 또는 START 버튼으로 재개 · " : "") +
-            $"브로커: {(_vda.IsBrokerConnected ? "접속" : "미접속")} · ACS 생존: {_vda.AcsConnectionLiveness}" +
+            $"브로커 {_vda.BrokerHost}:{_vda.BrokerPort} {(_vda.IsBrokerConnected ? "접속" : "미접속")} · ACS 생존: {_vda.AcsConnectionLiveness}" +
             (_vda.LastAcsMessageUtc is { } t
                 ? $" · 마지막 ACS 메시지: {t.ToLocalTime():HH:mm:ss}"
                 : " · ACS 메시지 수신 이력 없음");

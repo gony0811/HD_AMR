@@ -44,8 +44,10 @@ public class FlatSurfaceAlignStep : ISequenceStep
     private readonly bool _levelSurface;
 
     // ── 설정 상수 ──────────────────────────────────────────────────────
-    /// <summary>평탄 판정 틸트 임계값(도). |rx|, |ry| 모두 이 값 이내이면 정렬 완료.</summary>
-    private const double TiltThresholdDeg = 1.0;
+    /// <summary>평탄 판정 틸트 임계값(도) 파라미터 키 — 비었거나 0 이하·5° 초과면 기본값.</summary>
+    public const string TiltThresholdKey = "Sequence.FlatSurface.TiltThresholdDeg";
+    public const double DefaultTiltThresholdDeg = 1.0;
+    private const double MaxTiltThresholdDeg = 5.0;
 
     /// <summary>카메라→레이저 중심 보정 이동량 절대 상한(mm). 파라미터 오입력 가드.
     /// 실제 이동량은 시퀀스 페이지 파라미터(<see cref="SequenceContext.CameraToLaserShiftYmm"/>, 기본 −75mm)로 설정 —
@@ -264,11 +266,13 @@ public class FlatSurfaceAlignStep : ISequenceStep
             _monitor.UpdateStage(FlatDetectionStage.LaserMeasuring, "레이저 3점 측정");
 
             // 보정량은 실측 응답(J)으로 푼다 — LaserTiltCorrector(/laser '보정 적용'과 공용).
+            var thrParam = await _param.GetDoubleAsync(TiltThresholdKey);
+            var tiltThresholdDeg = thrParam is double thr && thr > 0 && thr <= MaxTiltThresholdDeg ? thr : DefaultTiltThresholdDeg;
             var level = await _tilt.LevelAsync(new TiltLevelOptions
             {
                 Tool = context.Tool,
                 Velocity = Math.Min(context.Velocity, 10),
-                ThresholdDeg = TiltThresholdDeg,
+                ThresholdDeg = tiltThresholdDeg,
                 MaxCorrections = MaxTiltCorrections,
                 MaxCorrectionDeg = MaxTiltCorrectionDeg,
             },

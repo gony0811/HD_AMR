@@ -76,6 +76,9 @@ public sealed partial class SequenceViewModel : ViewModelBase
 
     [ObservableProperty] private int _tool = 1;
     [ObservableProperty] private int _velocity = 20;
+    /// <summary>⑱ 경유점 순회(검사 스캔) 전용 속도 [%]. 비우면 선택한 검사 프로파일에 저장된 속도로 순회한다.
+    /// ACS 실행은 레시피 '검사 속도'를 쓰지만 이 화면의 수동 실행은 레시피를 거치지 않으므로 여기서 따로 정한다.</summary>
+    [ObservableProperty] private decimal? _inspectVelocity;
     [ObservableProperty] private bool _busy;
     [ObservableProperty] private bool _cobotConnected;
     [ObservableProperty] private string? _faultText;
@@ -119,11 +122,18 @@ public sealed partial class SequenceViewModel : ViewModelBase
     [ObservableProperty] private double _faceOriginV;
     [ObservableProperty] private int _faceSeamDirIndex;      // FaceSeamDirection: 0 +U, 1 −U, 2 +V, 3 −V
 
-    public SequenceViewModel(IServiceScopeFactory scopeFactory, CobotService cobot, AMRService amr)
+    public SequenceViewModel(IServiceScopeFactory scopeFactory, CobotService cobot, AMRService amr,
+        AcsTestCaptureTarget? testTarget = null)
     {
         _scopeFactory = scopeFactory;
         _cobot = cobot;
         _amr = amr;
+        _testTarget = testTarget;
+        if (_testTarget is not null)
+        {
+            _testTarget.Changed += t => Avalonia.Threading.Dispatcher.UIThread.Post(() => ShowTestTarget(t));
+            ShowTestTarget(_testTarget.Current);
+        }
         _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _timer.Tick += (_, _) => RefreshConnection();
     }
@@ -234,11 +244,39 @@ public sealed partial class SequenceViewModel : ViewModelBase
             InspectionProfileId = 0;
     }
 
+    private readonly AcsTestCaptureTarget? _testTarget;
+
+    /// <summary>ACS 코봇 이동 시험으로 도달한 용접선의 taskId·attempt 를 도면 순회 촬영(CAPTURE_REQ)에 싣는다 — 시험 도달 때 자동으로 켜진다.</summary>
+    [ObservableProperty] private bool _useAcsTestTask;
+    /// <summary>보관 중인 시험 용접선 표기(없으면 null — 체크 숨김).</summary>
+    [ObservableProperty] private string? _acsTestTaskText;
+    public bool HasAcsTestTask => AcsTestTaskText is not null;
+    partial void OnAcsTestTaskTextChanged(string? value) => OnPropertyChanged(nameof(HasAcsTestTask));
+    partial void OnUseAcsTestTaskChanged(bool value) => ApplyTestTask();
+
+    private void ShowTestTarget(AcsTestCaptureTarget.Target? t)
+    {
+        AcsTestTaskText = t?.Describe();
+        UseAcsTestTask = t is not null;
+        ApplyTestTask();
+    }
+
+    /// <summary>시험 용접선 taskId·attempt 를 context 에 — 끄거나 없으면 종전(빈 taskId·attempt 1·실행마다 captureSeq 1부터).</summary>
+    private void ApplyTestTask()
+    {
+        var t = UseAcsTestTask ? _testTarget?.Current : null;
+        _context.AcsTaskId = t?.TaskId;
+        _context.AcsAttempt = t?.Attempt;
+        _context.CaptureSeqSource = t is null ? null : _testTarget!.NextCaptureSeq;
+    }
+
     // 뷰모델 → context 반영(실행에 사용).
     private void ApplyContext()
     {
+        ApplyTestTask();
         _context.Tool = Tool;
         _context.Velocity = Velocity;
+        _context.InspectVelocity = ToInspectVelocity(InspectVelocity);
         _context.InspectionSurfaceId = InspectionSurfaceId;
         _context.InspectionOffsetU = OffsetU;
         _context.InspectionOffsetV = OffsetV;
@@ -288,6 +326,9 @@ public sealed partial class SequenceViewModel : ViewModelBase
     // ── 파라미터 저장(변경 시) ──
     partial void OnToolChanged(int value) => _context.Tool = value;
     partial void OnVelocityChanged(int value) => _context.Velocity = value;
+    partial void OnInspectVelocityChanged(decimal? value) => _context.InspectVelocity = ToInspectVelocity(value);
+    private static int? ToInspectVelocity(decimal? value)
+        => value is { } v ? Math.Clamp((int)Math.Round(v), 1, 100) : null;
     partial void OnOffsetUChanged(double value) => SaveOffsets();
     partial void OnOffsetVChanged(double value) => SaveOffsets();
     partial void OnDirectionIndexChanged(int value) => SaveOffsets();

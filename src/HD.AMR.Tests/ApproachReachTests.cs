@@ -28,9 +28,11 @@ public class ApproachReachTests
     [InlineData("SM", true)]
     [InlineData("PU", true)]
     [InlineData("SL", true)]
-    [InlineData("B", true)]
+    [InlineData("B", false)]   // 2026-11-17 리프트 탈거 후 바닥 용접선 전부 거부
+    [InlineData("b", false)]
+    [InlineData("PL", true)]
     [InlineData(null, true)]
-    public void 최소_뻗음_규칙은_천장만_뺀다(string? wallCode, bool applies)
+    public void 최소_뻗음_규칙은_천장과_바닥만_뺀다(string? wallCode, bool applies)
     {
         // 근거 실측(230mm)은 수직벽 — 천장은 접힌 팔에서도 손목 특이점이 나지 않는다(ACS 리치 시뮬레이터 2026-11-13).
         Assert.Equal(applies, ApproachReach.AppliesTo(wallCode));

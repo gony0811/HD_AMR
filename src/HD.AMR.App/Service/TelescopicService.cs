@@ -37,6 +37,10 @@ public class TelescopicService : BackgroundService
     private DateTime _jogKeepAliveUtc;
     private bool _retryWarned;
 
+    // 진단 로그 — 상태가 바뀔 때만 남긴다(폴링 0.5초마다 찍지 않게).
+    private (bool Active, TelescopicProtocol.RunMode Mode, bool Unlocked, int ErrorCode)? _loggedStatusKey;
+    private bool _parseFailWarned;
+
     public TelescopicService(IOptions<TelescopicSerialSettings> options, ILoggerFactory loggerFactory)
     {
         _settings = options.Value;
@@ -208,9 +212,15 @@ public class TelescopicService : BackgroundService
         {
             // 조그 중에는 유지 명령의 응답과 겹칠 수 있어 한 번 놓치는 것은 정상이다.
             if (!IsJogging && response is not null)
-                _logger.LogDebug("텔레스코픽 상태 파싱 실패 — RX={Rx}", response);
+            {
+                // 연속 실패의 첫 건만 경고로 남기고 이후는 디버그로 — 폴링 주기마다 로그가 쌓이지 않게.
+                if (!_parseFailWarned) _logger.LogWarning("텔레스코픽 상태 파싱 실패 — RX={Rx}", response);
+                else _logger.LogDebug("텔레스코픽 상태 파싱 실패 — RX={Rx}", response);
+                _parseFailWarned = true;
+            }
             return;
         }
+        _parseFailWarned = false;
 
         lock (_stateLock)
         {
@@ -218,6 +228,28 @@ public class TelescopicService : BackgroundService
             _latestUtc = DateTime.UtcNow;
         }
         LastError = null;
+        LogStatusChange(status);
+    }
+
+    /// <summary>상태 한 줄 요약 — 진단 로그용(순수 함수).</summary>
+    public static string DescribeStatus(TelescopicStatus s)
+        => $"모드 {TelescopicProtocol.ModeName(s.Mode)}, 활성 {(s.Active ? "예" : "아니오")}, " +
+           $"{(s.Unlocked ? "잠금 해제" : "잠김")}, 에러 {s.ErrorCode:D2}({s.ErrorText}), 높이 {s.HeightMm}mm, RX={s.Raw}";
+
+    /// <summary>
+    /// 활성·모드·잠금·에러 중 하나라도 바뀌면 한 줄 남긴다(높이만 바뀌는 것은 남기지 않는다).
+    /// 비활성·잠김·에러는 경고 — 이 상태면 컨트롤러가 이동 명령을 듣지 않는다.
+    /// </summary>
+    private void LogStatusChange(TelescopicStatus s)
+    {
+        var key = (s.Active, s.Mode, s.Unlocked, s.ErrorCode);
+        if (_loggedStatusKey == key) return;
+        _loggedStatusKey = key;
+
+        if (!s.Active || !s.Unlocked || !s.IsHealthy)
+            _logger.LogWarning("텔레스코픽 상태 변경 — {Status}", DescribeStatus(s));
+        else
+            _logger.LogInformation("텔레스코픽 상태 변경 — {Status}", DescribeStatus(s));
     }
 
     /// <summary>컨트롤러 높이 값을 실제 mm 로 환산한 상태(<see cref="TelescopicSerialSettings.MmPerUnit"/>).
@@ -236,6 +268,7 @@ public class TelescopicService : BackgroundService
             _latestUtc = DateTime.UtcNow;
         }
         LastError = null;
+        LogStatusChange(status);
     }
 
     // ── 조그(상승/하강) ─────────────────────────────────────────────
@@ -261,6 +294,10 @@ public class TelescopicService : BackgroundService
             _jogKeepAliveUtc = DateTime.UtcNow;
             _ = JogLoopAsync(bits, _jogCts.Token);
         }
+        var latest = Latest;
+        _logger.LogInformation("텔레스코픽 조그 시작: {Dir} ({Cmd}, 포트 {Port}) — 직전 상태: {Status}",
+            up ? "상승" : "하강", TelescopicProtocol.Handle(bits), IsConnected ? "열림" : "닫힘",
+            latest is null ? "미수신" : DescribeStatus(latest));
         return Task.CompletedTask;
     }
 
@@ -282,6 +319,12 @@ public class TelescopicService : BackgroundService
         }
         cts?.Cancel();
         cts?.Dispose();
+        if (cts is not null)
+        {
+            var latest = Latest;
+            _logger.LogInformation("텔레스코픽 조그 종료 — 현재 상태: {Status}",
+                latest is null ? "미수신" : DescribeStatus(latest));
+        }
         await StopAsync_Internal(ct).ConfigureAwait(false);
     }
 
@@ -342,7 +385,20 @@ public class TelescopicService : BackgroundService
 
     private static readonly TimeSpan TargetPollInterval = TimeSpan.FromMilliseconds(200);
     private static readonly TimeSpan TargetStartTimeout = TimeSpan.FromSeconds(5);
-    private static readonly TimeSpan TargetCompletionTimeout = TimeSpan.FromSeconds(90);
+
+    /// <summary>지정 높이 이동 완료 대기 — 기본 시간 + 이동 거리 ÷ 최저 기대 속도. 고정 90s 는 0→999mm(실측 약 7~8mm/s,
+    /// ≈135s)를 다 못 올라 762mm 에서 타임아웃 났다(2026-11-16 17:22 L3-R03C15).</summary>
+    internal static readonly TimeSpan TargetCompletionBase = TimeSpan.FromSeconds(30);
+
+    /// <summary>타임아웃 계산용 최저 기대 속도 [mm/s] — 실측(7~8mm/s)보다 느리게 잡아 여유를 둔다.</summary>
+    internal const double TargetCompletionMinSpeedMmPerSec = 5.0;
+
+    /// <summary>이동 거리 <paramref name="travelMm"/> 에 대한 완료 대기 한도. 최소 90s(종전 값).</summary>
+    internal static TimeSpan CompletionTimeoutFor(double travelMm)
+    {
+        var sec = TargetCompletionBase.TotalSeconds + Math.Abs(travelMm) / TargetCompletionMinSpeedMmPerSec;
+        return TimeSpan.FromSeconds(Math.Max(90, sec));
+    }
 
     /// <summary>
     /// 상태 스냅샷이 목표 높이(<paramref name="targetHeightMm"/> 또는 컨트롤러 양자화 높이 <paramref name="expectedHeightMm"/>)에
@@ -397,9 +453,18 @@ public class TelescopicService : BackgroundService
             heightMm, units, _settings.MmPerUnit, _settings.HeightOffsetMm);
 
         await EndJogAsync(ct).ConfigureAwait(false);   // 조그와 절대 이동을 섞지 않는다.
-        var response = await _client.SendAsync(
-            TelescopicProtocol.Target(units, _settings.TargetDigits), ct).ConfigureAwait(false);
-        return TelescopicProtocol.ParseTargetAck(response);
+        var command = TelescopicProtocol.Target(units, _settings.TargetDigits);
+        var response = await _client.SendAsync(command, ct).ConfigureAwait(false);
+        var ack = TelescopicProtocol.ParseTargetAck(response);
+
+        var latest = Latest;
+        var state = latest is null ? "미수신" : DescribeStatus(latest);
+        if (ack == true)
+            _logger.LogInformation("텔레스코픽 지정 높이 수락: TX={Tx} RX={Rx} — 상태: {Status}", command, response, state);
+        else
+            _logger.LogWarning("텔레스코픽 지정 높이 {Result}: TX={Tx} RX={Rx} — 상태: {Status}",
+                ack == false ? "거부(Target:1)" : "응답 불명", command, response ?? "(없음)", state);
+        return ack;
     }
 
     /// <summary>
@@ -442,11 +507,12 @@ public class TelescopicService : BackgroundService
                     startHeightMm);
 
             var startedUtc = DateTime.UtcNow;
+            var completionTimeout = CompletionTimeoutFor(heightMm - Math.Max(0, startHeightMm));
             var movingSeen = false;
             var stoppedAtTargetCount = 0;
             DateTime? stoppedOffTargetSinceUtc = null;
 
-            while (DateTime.UtcNow - startedUtc < TargetCompletionTimeout)
+            while (DateTime.UtcNow - startedUtc < completionTimeout)
             {
                 await Task.Delay(TargetPollInterval, ct).ConfigureAwait(false);
                 await PollAsync(ct).ConfigureAwait(false);
@@ -525,7 +591,7 @@ public class TelescopicService : BackgroundService
             await StopAsync_Internal(CancellationToken.None).ConfigureAwait(false);
             var lastMm = Latest?.HeightMm ?? -1;
             return TelescopicMoveResult.Fail(
-                $"텔레스코픽 리프트 이동 타임아웃 ({TargetCompletionTimeout.TotalSeconds:0}s) — 목표 {heightMm}mm, 현재 {(lastMm >= 0 ? $"{lastMm}mm" : "미상")}.",
+                $"텔레스코픽 리프트 이동 타임아웃 ({completionTimeout.TotalSeconds:0}s) — 목표 {heightMm}mm, 현재 {(lastMm >= 0 ? $"{lastMm}mm" : "미상")}.",
                 lastMm);
         }
         catch (OperationCanceledException)
@@ -561,50 +627,52 @@ public class TelescopicService : BackgroundService
 
     private static readonly TimeSpan ResetMinimumHold =
         TimeSpan.FromMilliseconds(TelescopicProtocol.ResetHoldMs + 200);
-    private static readonly TimeSpan ResetStartTimeout = TimeSpan.FromSeconds(8);
+    private static readonly TimeSpan ResetStartTimeout = TimeSpan.FromSeconds(20);
     private static readonly TimeSpan ResetCompletionTimeout = TimeSpan.FromMinutes(2);
+    private static readonly TimeSpan ResetResendInterval = TimeSpan.FromMilliseconds(200);
 
     /// <summary>
-    /// 추진기 리셋 — <c>Handle:032</c> 을 2초 초과 유지하고 운행 모드 3(리셋 중) 진입을 확인한 뒤,
-    /// 모드 0(정지)으로 완료되어야 <c>Handle:000</c> 을 보낸다. 완료 전 정지는 리셋과 알람 해제를
-    /// 중단한다는 사양서 FAQ 5·7을 따른다.
+    /// 추진기 리셋 — <c>Handle:032</c> 을 <b>주기적으로 재전송해</b> 유지하고, <c>Read</c> 로 운행 모드 3(리셋 중)이
+    /// 실제로 지속되다가 모드 0(정지)으로 끝나는 것을 확인한 뒤에만 <c>Handle:000</c> 을 보낸다.
+    /// 완료 전 정지는 리셋과 알람 해제를 중단한다는 사양서 FAQ 5·7을 따른다.
+    ///
+    /// 실기 확인(2026-11-16): 컨트롤러는 명령이 계속 들어와야 "유지"로 본다 — <c>Handle:032</c> 을 한 번만
+    /// 보내면 즉시 응답에만 모드 3이 찍히고 리셋은 실행되지 않는다. 200ms 재전송 시 약 5초 뒤 모드 3 에
+    /// 진입해 5.6초 지속 후 정지했다. 리셋이 끝나지 않은 컨트롤러는 <c>Target</c> 을 수락(0)하고도 움직이지 않는다.
     /// </summary>
     public async Task ResetAsync(CancellationToken ct = default)
     {
         await EndJogAsync(ct).ConfigureAwait(false);
 
         var startedUtc = DateTime.UtcNow;
-        var resetSeen = false;
+        var tracker = new TelescopicResetTracker();
+        var resetCommand = TelescopicProtocol.Reset();
         try
         {
-            // Handle 명령의 Length 응답도 상태 프레임이므로 버리지 않고 캐시에 반영한다.
-            var resetResponse = await _client.SendAsync(TelescopicProtocol.Reset(), ct).ConfigureAwait(false);
-            var initialStatus = TelescopicProtocol.ParseStatus(resetResponse);
-            UpdateStatus(resetResponse);
-            resetSeen = initialStatus?.Mode == TelescopicProtocol.RunMode.Resetting;
-
             while (DateTime.UtcNow - startedUtc < ResetCompletionTimeout)
             {
-                await Task.Delay(TimeSpan.FromMilliseconds(200), ct).ConfigureAwait(false);
-                await PollAsync(ct).ConfigureAwait(false);
+                // 유지 = 재전송. Handle 의 즉시 응답은 명령 비트를 되비출 뿐이라 판정에 쓰지 않는다
+                // (리셋이 돌지 않아도 모드 3 으로 온다) — 판정은 아래 Read 응답으로만 한다.
+                await _client.SendAsync(resetCommand, ct).ConfigureAwait(false);
 
-                var status = Latest;
-                if (status?.Mode == TelescopicProtocol.RunMode.Resetting)
-                    resetSeen = true;
+                var response = await _client.SendAsync(TelescopicProtocol.Read(), ct).ConfigureAwait(false);
+                UpdateStatus(response);
+                var status = TelescopicProtocol.ParseStatus(response);
 
                 var elapsed = DateTime.UtcNow - startedUtc;
-                if (!resetSeen && elapsed >= ResetStartTimeout)
-                    throw new InvalidOperationException(
-                        "리셋 명령 후 운행 모드가 '리셋 중(3)'으로 진입하지 않았습니다. " +
-                        "컨트롤러 활성·잠금 상태와 TX/RX 결선을 확인하세요.");
-
-                if (resetSeen && elapsed >= ResetMinimumHold &&
-                    status?.Mode == TelescopicProtocol.RunMode.Stopped)
+                if (status is not null && tracker.Observe(status.Mode, elapsed) && elapsed >= ResetMinimumHold)
                 {
                     _logger.LogInformation("텔레스코픽 리셋 완료 ({Elapsed:F1}s, 높이={Height})",
-                        elapsed.TotalSeconds, status.HeightMm);
+                        elapsed.TotalSeconds, Latest?.HeightMm ?? status.HeightMm);
                     return;
                 }
+
+                if (!tracker.ResetSeen && elapsed >= ResetStartTimeout)
+                    throw new InvalidOperationException(
+                        $"리셋 명령을 {ResetStartTimeout.TotalSeconds:0}초 유지했지만 운행 모드가 '리셋 중(3)'으로 " +
+                        "진입하지 않았습니다. 컨트롤러 전원·알람 상태와 TX/RX 결선을 확인하세요.");
+
+                await Task.Delay(ResetResendInterval, ct).ConfigureAwait(false);
             }
 
             throw new TimeoutException("추진기 리셋이 2분 안에 완료되지 않았습니다.");
@@ -632,6 +700,46 @@ public class TelescopicService : BackgroundService
     {
         _client.Dispose();
         base.Dispose();
+    }
+}
+
+/// <summary>
+/// 리셋 진행 판정(순수 상태기 — 단위 테스트용). <c>Read</c> 로 읽은 운행 모드를 시간과 함께 넣는다.
+/// 모드 3(리셋 중)이 <see cref="ResettingSustain"/> 이상 <b>연속</b>으로 보여야 "리셋 진입"으로 인정하고,
+/// 그 뒤 모드 0(정지)이 <see cref="StoppedSustain"/> 이상 연속이어야 완료다 — 한두 번 스치는 모드 3
+/// (명령 되비침, 리셋이 안 끝난 컨트롤러의 깜빡임)을 리셋으로 오판하지 않기 위해서다.
+/// </summary>
+public sealed class TelescopicResetTracker
+{
+    public static readonly TimeSpan ResettingSustain = TimeSpan.FromSeconds(1.0);
+    public static readonly TimeSpan StoppedSustain = TimeSpan.FromSeconds(0.6);
+
+    private TimeSpan? _resettingSince;
+    private TimeSpan? _stoppedSince;
+
+    /// <summary>모드 3 이 충분히 지속되어 리셋이 실제로 돌았다고 본다.</summary>
+    public bool ResetSeen { get; private set; }
+
+    /// <summary>관측 1건 반영. 반환 true = 리셋 완료(진입 확인 후 정지 유지).</summary>
+    public bool Observe(TelescopicProtocol.RunMode mode, TimeSpan elapsed)
+    {
+        if (mode == TelescopicProtocol.RunMode.Resetting)
+        {
+            _stoppedSince = null;
+            _resettingSince ??= elapsed;
+            if (elapsed - _resettingSince.Value >= ResettingSustain) ResetSeen = true;
+            return false;
+        }
+
+        _resettingSince = null;
+        if (mode != TelescopicProtocol.RunMode.Stopped)
+        {
+            _stoppedSince = null;
+            return false;
+        }
+
+        _stoppedSince ??= elapsed;
+        return ResetSeen && elapsed - _stoppedSince.Value >= StoppedSustain;
     }
 }
 

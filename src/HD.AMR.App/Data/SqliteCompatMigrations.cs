@@ -212,6 +212,8 @@ CREATE TABLE IF NOT EXISTS InspectionRecipes (
     InspectAccPercent INTEGER NULL,
     InspectionProfileId INTEGER NULL,
     ChamferSlopeProfileId INTEGER NULL,
+    WallProfilesJson TEXT NULL,
+    UnspecifiedSideWalls TEXT NULL,
     VisionFailRatioMax REAL NOT NULL DEFAULT 1.0,
     CreatedAt TEXT NOT NULL,
     UpdatedAt TEXT NOT NULL
@@ -248,6 +250,17 @@ CREATE TABLE IF NOT EXISTS InspectionRecipes (
             .AsEnumerable().First() > 0;
         if (!hasChamferSlopeProfileId)
             db.Database.ExecuteSqlRaw("ALTER TABLE InspectionRecipes ADD COLUMN ChamferSlopeProfileId INTEGER NULL;");
+
+        // 십자 CROSS4_L/R 컬럼도 후방호환 추가 — WallProfilesJson(면별 티칭 프로필 지정, NULL = 전부 기본 프로필),
+        // UnspecifiedSideWalls(CROSS4_R — 좌/우 없는 구 CROSS4 지령을 우측으로 실행할 면, NULL = 전부 좌측).
+        foreach (var cross4Col in new[] { "WallProfilesJson", "UnspecifiedSideWalls" })
+        {
+            var hasCol = db.Database
+                .SqlQueryRaw<long>($"SELECT COUNT(*) AS Value FROM pragma_table_info('InspectionRecipes') WHERE name = '{cross4Col}'")
+                .AsEnumerable().First() > 0;
+            if (!hasCol)
+                db.Database.ExecuteSqlRaw($"ALTER TABLE InspectionRecipes ADD COLUMN {cross4Col} TEXT NULL;");
+        }
 
         // DryRun 컬럼(레시피 드라이런 모드 토글)도 후방호환 추가. 기존 행은 DEFAULT 0(false=일반 검사).
         // SQLite 는 NOT NULL ADD COLUMN 에 DEFAULT 가 필수 — 기존 행이 그 값으로 백필된다.
@@ -291,6 +304,23 @@ CREATE TABLE IF NOT EXISTS InspectionRecipes (
                 "ORDER BY (InspectionProfileId IS NULL), Id LIMIT 1;");
             db.Database.ExecuteSqlRaw($"DELETE FROM InspectionRecipes WHERE Id LIKE '{newId}-%';");
         }
+
+        // 십자 CROSS4 를 수직 용접선 좌/우 두 타입(CROSS4_L/CROSS4_R)으로 분리. 구 'CROSS4' 행의 현장 설정(프로필 지정·
+        // Enabled·스텝·속도 등)을 양쪽에 그대로 복사한 뒤 구 행을 지운다 — 분리 직후에는 좌/우가 같은 프로필을 쓰므로
+        // 종전과 같은 동작이고, 현장에서 우측용 프로필을 교시해 CROSS4_R 에 바꿔 지정한다.
+        // 멱등: 새 id 가 이미 있으면 INSERT 는 no-op 이고, 구 행이 없으면 둘 다 no-op. 위 통합 블록보다 뒤에 있어야 한다
+        // (구 면 자세별 CROSS4-* → CROSS4 → CROSS4_L/R 순). LIKE 'CROSS4-%' 는 '_' 가 든 새 id 에 걸리지 않는다.
+        foreach (var (newId, name, seam) in new[] { ("CROSS4_L", "4점 십자 — 수직선 좌측", "Cross4L"), ("CROSS4_R", "4점 십자 — 수직선 우측", "Cross4R") })
+        {
+            db.Database.ExecuteSqlRaw(
+                "INSERT INTO InspectionRecipes (Id, DisplayName, SeamType, Orientation, Enabled, DryRun, StepKeysJson, " +
+                "CameraTargetDistanceMm, MoveVelPercent, InspectVelPercent, InspectAccPercent, InspectionProfileId, VisionFailRatioMax, CreatedAt, UpdatedAt) " +
+                $"SELECT '{newId}', '{name}', '{seam}', Orientation, Enabled, DryRun, StepKeysJson, " +
+                "CameraTargetDistanceMm, MoveVelPercent, InspectVelPercent, InspectAccPercent, InspectionProfileId, VisionFailRatioMax, CreatedAt, UpdatedAt " +
+                "FROM InspectionRecipes WHERE Id = 'CROSS4' " +
+                $"AND NOT EXISTS (SELECT 1 FROM InspectionRecipes WHERE Id = '{newId}');");
+        }
+        db.Database.ExecuteSqlRaw("DELETE FROM InspectionRecipes WHERE Id = 'CROSS4';");
 
         // 운영 로그(수동/ACS 동작 이력 + 실패 원인) — UI 로그 페이지 데이터 원본.
         db.Database.ExecuteSqlRaw(@"

@@ -69,7 +69,7 @@
                 <NumericUpDown Name="JogVelBox" Width="110" Minimum="1" Maximum="100" Increment="5" FormatString="0"
                                ToolTip.Tip="파라미터 Sequence.BeadManual.JogVelPct 와 연결 (기본 20%)" />
                 <TextBlock Classes="cap" Text="1회 이동 mm" />
-                <NumericUpDown Name="JogStepBox" Width="110" Minimum="0.5" Maximum="100" Increment="5" FormatString="0.#"
+                <NumericUpDown Name="JogStepBox" Width="110" Minimum="0.5" Maximum="500" Increment="5" FormatString="0.#"
                                ToolTip.Tip="파라미터 Sequence.BeadManual.JogStepMm 와 연결 (기본 20mm)" />
                 <TextBlock Name="JogStatusText" Classes="cap" TextWrapping="Wrap" />
             </WrapPanel>

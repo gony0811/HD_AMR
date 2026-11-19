@@ -107,6 +107,59 @@ public class TelescopicProtocolTests
     }
 
     [Fact]
+    public void DescribeStatus_LogsLockErrorAndRaw()
+    {
+        // 잠김(C=0)·에러 15 — 이동 명령이 먹지 않는 원인을 로그 한 줄로 알 수 있어야 한다.
+        var s = TelescopicProtocol.ParseStatus("Length:10001000150100")!;
+
+        var text = HD.AMR.App.Service.TelescopicService.DescribeStatus(s);
+
+        Assert.Contains("활성 예", text);
+        Assert.Contains("잠김", text);
+        Assert.Contains("에러 15(컨트롤러 미등록)", text);
+        Assert.Contains("높이 100mm", text);
+        Assert.Contains("RX=Length:10001000150100", text);
+    }
+
+    private static bool Feed(HD.AMR.App.Service.TelescopicResetTracker tracker,
+        TelescopicProtocol.RunMode mode, double fromSec, double toSec)
+    {
+        var done = false;
+        for (var t = fromSec; t <= toSec + 1e-9; t += 0.2)
+            done = tracker.Observe(mode, TimeSpan.FromSeconds(t));
+        return done;
+    }
+
+    [Fact]
+    public void ResetTracker_BriefResettingFlicker_IsNotAReset()
+    {
+        // 실기(2026-11-16): 리셋이 돌지 않아도 모드 3 이 0.5초쯤 스쳤다가 정지로 돌아온다 —
+        // 예전 판정은 이것을 "리셋 완료(2.3s)"로 오판했다.
+        var tracker = new HD.AMR.App.Service.TelescopicResetTracker();
+
+        Feed(tracker, TelescopicProtocol.RunMode.Resetting, 0.0, 0.4);
+        var done = Feed(tracker, TelescopicProtocol.RunMode.Stopped, 0.6, 10.0);
+
+        Assert.False(tracker.ResetSeen);
+        Assert.False(done);
+    }
+
+    [Fact]
+    public void ResetTracker_SustainedResettingThenStopped_Completes()
+    {
+        // 실기 궤적: 명령 유지 약 5초 뒤 모드 3 진입 → 5.6초 지속 → 정지.
+        var tracker = new HD.AMR.App.Service.TelescopicResetTracker();
+
+        Assert.False(Feed(tracker, TelescopicProtocol.RunMode.Stopped, 0.0, 5.0));
+        Assert.False(Feed(tracker, TelescopicProtocol.RunMode.Resetting, 5.2, 10.8));
+        Assert.True(tracker.ResetSeen);
+
+        // 정지가 한 번 보인 것으로는 끝내지 않는다 — 유지 시간을 채워야 완료.
+        Assert.False(tracker.Observe(TelescopicProtocol.RunMode.Stopped, TimeSpan.FromSeconds(11.0)));
+        Assert.True(Feed(tracker, TelescopicProtocol.RunMode.Stopped, 11.2, 11.8));
+    }
+
+    [Fact]
     public void ParseStatus_HealthyStoppedController()
     {
         var s = TelescopicProtocol.ParseStatus("Length:10110000000000");

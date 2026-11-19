@@ -371,19 +371,34 @@ public class CobotInspectionMoveStep : ISequenceStep
         c.InspectionOffsetU, c.InspectionOffsetV, 0.0, 0.0, 0.0, 0.0,
     };
 
-    /// <summary>수평 용접라인 검사 J6 절대각 [도].</summary>
-    internal const double HorizontalJ6Deg = 90.0;
+    /// <summary>수평 용접라인 검사 J6 절대각 [도] — 대기 자세에서 −90°. 용접검사 AMR(대기 −180°)은 90°,
+    /// 툴을 180° 돌려 단 가스검사 AMR(대기 0°)은 −90°.</summary>
+    internal static double HorizontalJ6Deg => WrapDeg180(VerticalJ6Deg - 90.0);
 
-    /// <summary>수직 용접라인 검사 J6 절대각 [도] — 검사 대기 자세(J6=180°)와 같다.</summary>
-    internal const double VerticalJ6Deg = 180.0;
+    /// <summary>수직 용접라인 검사 J6 절대각 [도] — 검사 대기 자세의 J6(<see cref="WObjAttitude.SafeJ6StandbyDeg"/>)와 같다.
+    /// 용접검사 AMR 은 180°(= −180°), 가스검사 AMR 은 0°.</summary>
+    internal static double VerticalJ6Deg => WrapDeg180(WObjAttitude.SafeJ6StandbyDeg);
+
+    /// <summary>각도를 (−180, 180] 로 정규화 — 표시·목표용(실제 지령은 <see cref="NearestWinding"/> 이 현재 감김으로 푼다).</summary>
+    internal static double WrapDeg180(double deg)
+    {
+        var d = deg % 360.0;
+        if (d > 180.0) d -= 360.0;
+        else if (d <= -180.0) d += 360.0;
+        return d;
+    }
 
     /// <summary>
     /// 검사 방향별 J6 절대각. 센서 헤드(레이저·Depth 카메라)가 플랜지 한쪽으로 길게 나와 있어,
-    /// J6 를 이 두 값(180°/90°) 밖으로 돌리면 J3–J4 링크암과 간섭한다. 그래서 벽면·이동 방향과 무관하게
-    /// 수직 = 180°, 수평 = 90° 로 고정하고, 대기 자세(180°)에서 최대 −90° 만 돌게 한다.
+    /// J6 를 이 두 값 밖으로 돌리면 J3–J4 링크암과 간섭한다. 그래서 벽면·이동 방향과 무관하게
+    /// 수직 = 대기 자세 J6, 수평 = 대기 자세 − 90° 로 고정하고, 대기 자세에서 최대 −90° 만 돌게 한다
+    /// (용접검사 AMR: 180°/90°, 가스검사 AMR: 0°/−90°).
     /// </summary>
-    public static double TargetJ6Deg(SequenceContext c)
-        => c.InspectionDirection == InspectionMoveDirection.Vertical ? VerticalJ6Deg : HorizontalJ6Deg;
+    public static double TargetJ6Deg(SequenceContext c) => TargetJ6Deg(c.InspectionDirection);
+
+    /// <inheritdoc cref="TargetJ6Deg(SequenceContext)"/>
+    public static double TargetJ6Deg(InspectionMoveDirection direction)
+        => direction == InspectionMoveDirection.Vertical ? VerticalJ6Deg : HorizontalJ6Deg;
 
     /// <summary>J6 목표 허용 오차 [도].</summary>
     private const double J6ToleranceDeg = 0.5;
@@ -462,12 +477,47 @@ public class CobotInspectionMoveStep : ISequenceStep
     /// </summary>
     internal static double[] AlignOpticalAxisKeepTwist(double[] current, double[] computed, ToolAxisDir axis)
     {
-        var mc = FrameMath.PoseToMatrix(current);
         var mt = FrameMath.PoseToMatrix(computed);
         var col = (int)axis / 2;
         var sgn = (int)axis % 2 == 0 ? 1.0 : -1.0;
+        return AlignOpticalAxisToDirection(current, new[] { sgn * mt[0, col], sgn * mt[1, col], sgn * mt[2, col] }, axis);
+    }
+
+    /// <summary>실측 면 법선을 모델 법선 대신 쓰는 최대 각 [도] — 이보다 크게 다르면 좌표계가 잘못 잡힌 것으로 보고 모델을 쓴다.</summary>
+    internal const double MaxMeasuredNormalDeviationDeg = 15.0;
+
+    /// <summary>
+    /// 실측 작업물 좌표계(BASE [x,y,z,rx,ry,rz])의 Z 축을 면 바깥 법선으로 — 부호는 모델 법선(<paramref name="modelWallOut"/>)
+    /// 쪽으로 맞춘다. 모델과 <see cref="MaxMeasuredNormalDeviationDeg"/> 넘게 다르면 null(모델 법선을 쓴다).
+    /// </summary>
+    internal static double[]? MeasuredWallOut(double[] framePose, double[] modelWallOut)
+    {
+        var m = FrameMath.PoseToMatrix(framePose);
+        double[] z = { m[0, 2], m[1, 2], m[2, 2] };
+        if (z[0] * modelWallOut[0] + z[1] * modelWallOut[1] + z[2] * modelWallOut[2] < 0)
+            z = new[] { -z[0], -z[1], -z[2] };
+        return AngleDeg(z, modelWallOut) <= MaxMeasuredNormalDeviationDeg ? z : null;
+    }
+
+    internal static double AngleDeg(double[] a, double[] b)
+    {
+        var dot = (a[0] * b[0] + a[1] * b[1] + a[2] * b[2])
+                  / (Math.Sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]) * Math.Sqrt(b[0] * b[0] + b[1] * b[1] + b[2] * b[2]));
+        return Math.Acos(Math.Clamp(dot, -1.0, 1.0)) * 180.0 / Math.PI;
+    }
+
+    /// <summary>
+    /// <paramref name="current"/> 자세의 광축(툴 <paramref name="axis"/>)을 BASE 방향 <paramref name="targetAxisBase"/>(단위 벡터)로
+    /// 맞추는 최소 회전을 적용한 자세. 광축 둘레 비틀림은 current 를 유지한다. 위치는 current 값.
+    /// </summary>
+    internal static double[] AlignOpticalAxisToDirection(double[] current, double[] targetAxisBase, ToolAxisDir axis)
+    {
+        var mc = FrameMath.PoseToMatrix(current);
+        var col = (int)axis / 2;
+        var sgn = (int)axis % 2 == 0 ? 1.0 : -1.0;
         double[] a = { sgn * mc[0, col], sgn * mc[1, col], sgn * mc[2, col] };   // 현재 광축(베이스)
-        double[] b = { sgn * mt[0, col], sgn * mt[1, col], sgn * mt[2, col] };   // 목표 광축(베이스)
+        var bn = Math.Sqrt(targetAxisBase.Sum(v => v * v));
+        double[] b = { targetAxisBase[0] / bn, targetAxisBase[1] / bn, targetAxisBase[2] / bn };   // 목표 광축(베이스)
 
         double[] k = { a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0] };
         var sin = Math.Sqrt(k[0] * k[0] + k[1] * k[1] + k[2] * k[2]);
@@ -1379,13 +1429,24 @@ public class CobotInspectionMoveStep : ISequenceStep
 
         // 비틀림은 직전 종료 자세 그대로 — 같은 그룹은 검사 방향·프레임 자세가 같아 ⑱이 고를 비틀림과 거의 같다.
         // 진입 경로처럼 J6 180° 로 맞추면 ⑱이 곧바로 되돌린다(2026-10-30 #3: −284.7°→−180°→−284.8°).
-        var orientation = AlignOpticalAxisKeepTwist(cur, computed, seam.OpticalAxis);
         var wallOut = WallOutNormal(computed, seam.OpticalAxis);
+        var orientation = AlignOpticalAxisKeepTwist(cur, computed, seam.OpticalAxis);
         var chainStandoffMm = await GetChainStandoffMmAsync(approachStandoffMm);
         var chainBase = ChainTargetBase(startBase, wallOut, approachStandoffMm, chainStandoffMm);
         // 실측 작업물 좌표계가 있으면(anchor 적중 — ShiftAnchorFrame 이 이번 시작점으로 옮겨 둠) 목표를 거기서 잡는다.
         // 모델 좌표(startBase)는 첫 접근에만 쓴다 — 면이 모델과 다르면 모델 기준 목표가 면 안쪽·옆으로 어긋난다.
-        var measured = context.Bag.TryGetValue(InternalWorkpieceFrame.BagKey, out var mf) && mf is double[] { Length: 6 } frame
+        // 자세도 실측 면 법선을 따른다 — 모델 법선으로 맞추면 직전 검사(실측 기울기)에서 툴이 수평으로 돌았다가 ⑱ 첫 점에서
+        // 다시 기울어진다(실기 2026-11-17 16:31 B L1-R04C13 #3→#4: Rx/Ry −1.3/+1.7° → 0/0 → −1.3/+1.7°).
+        var hasFrame = context.Bag.TryGetValue(InternalWorkpieceFrame.BagKey, out var mf) && mf is double[] { Length: 6 };
+        var frame = hasFrame ? (double[])mf! : null;
+        var frameNoteDeg = (double?)null;
+        if (frame is not null && MeasuredWallOut(frame, wallOut) is { } mOut)
+        {
+            frameNoteDeg = AngleDeg(mOut, wallOut);
+            wallOut = mOut;
+            orientation = AlignOpticalAxisToDirection(cur, new[] { -mOut[0], -mOut[1], -mOut[2] }, seam.OpticalAxis);
+        }
+        var measured = frame is not null
             ? ChainTargetFromMeasuredFrame(cur, frame, wallOut, chainStandoffMm)
             : ((double[] Target, double HeightMm, bool KeptHeight)?)null;
         // 이어지는 용접선(앞 끝 = 다음 시작) — 띄우지 않고 지금 높이에서 시작점 정면으로만 맞춘다. ⑱이 곧바로 첫 경유점으로 간다.
@@ -1404,6 +1465,7 @@ public class CobotInspectionMoveStep : ISequenceStep
             chainBase = mt.Target;
             heightMm = mt.HeightMm;
             measuredNote = mt.KeptHeight ? ", 실측 좌표계 기준·현재 높이 유지" : ", 실측 좌표계 기준";
+            if (frameNoteDeg is { } fd) measuredNote += $", 자세=실측 면 법선(모델과 {fd:0.0}°)";
         }
         else if (continuing is not null)
         {
@@ -1500,7 +1562,7 @@ public class CobotInspectionMoveStep : ISequenceStep
         return StepResult.Ok(
             $"연속 이동(복귀 생략) — 직전 종료 자세에서 용접선 시작점 정면({(measured is null ? "면 이격" : "실측 좌표계 위")} {heightMm:0}mm, 첫 진입 {approachStandoffMm:0}mm 대신) " +
             $"직선 이동(MoveL) {dist:0}mm{liftNote}{contNote} " +
-            $"[자세=면 법선, 비틀림 직전 종료 유지, J6={joints[5]:0.0}°].");
+            $"[자세={(frameNoteDeg is null ? "면 법선" : "실측 면 법선")}, 비틀림 직전 종료 유지, J6={joints[5]:0.0}°].");
     }
 
     /// <summary>면 바깥(벽에서 멀어지는) 단위 법선 — 계산 자세의 광축(면을 향함)의 반대.</summary>

@@ -431,6 +431,97 @@ public class GasDetectorServiceTests
     }
 
     [Fact]
+    public async Task MeasureDuring_Catches_Peak_That_Appears_Only_While_Moving()
+    {
+        var (svc, dev, stop) = await StartAsync();
+        try
+        {
+            dev.Value = "0.8";
+            DateTime moveStart = default, moveEnd = default;
+            var scan = await svc.MeasureDuringAsync("#1→#2", async ct =>
+            {
+                moveStart = DateTime.UtcNow;
+                await Task.Delay(300, ct);
+                dev.Value = "7.4";          // 이동 도중에만 잠깐 나타나는 리크
+                await Task.Delay(400, ct);
+                dev.Value = "0.8";
+                await Task.Delay(300, ct);
+                moveEnd = DateTime.UtcNow;
+                return true;
+            }, svc.CurrentThreshold);
+
+            Assert.NotNull(scan);
+            Assert.Equal(GasJudgement.Ng, scan.Judgement);
+            Assert.Equal(7.4, scan.Value);
+            Assert.True(scan.SampleCount >= 4, $"샘플 {scan.SampleCount}개");
+            Assert.True(scan.Avg < 7.4);
+            // 최대값은 이동 구간의 가운데쯤(0.3~0.7)에서 나왔다.
+            var f = scan.PeakFraction(moveStart, moveEnd, TimeSpan.Zero);
+            Assert.NotNull(f);
+            Assert.InRange(f.Value, 0.2, 0.85);
+            Assert.Same(scan, svc.Results[^1]);
+
+            // 측정이 끝나면 주기 폴링이 다시 돈다(mbar·l/s 참고값이 돌아온다).
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            while (svc.Latest?.LeakRateMbarLs is null && DateTime.UtcNow < deadline)
+                await Task.Delay(50);
+            Assert.NotNull(svc.Latest?.LeakRateMbarLs);
+        }
+        finally { await stop(); }
+    }
+
+    [Fact]
+    public async Task MeasureDuring_Motion_Failure_Discards_Scan()
+    {
+        var (svc, _, stop) = await StartAsync();
+        try
+        {
+            var before = svc.Results.Count;
+            var scan = await svc.MeasureDuringAsync("#1→#2", async ct =>
+            {
+                await Task.Delay(150, ct);
+                return false;
+            }, svc.CurrentThreshold);
+            Assert.Null(scan);
+            Assert.Equal(before, svc.Results.Count);
+        }
+        finally { await stop(); }
+    }
+
+    [Fact]
+    public async Task MeasureDuring_Unit_Mismatch_Still_Moves_And_Reports_Error()
+    {
+        var (svc, dev, stop) = await StartAsync();
+        try
+        {
+            dev.Unit = "MBAR*L/S";
+            var moved = false;
+            var scan = await svc.MeasureDuringAsync("#1→#2", _ => { moved = true; return Task.FromResult(true); },
+                svc.CurrentThreshold);
+            Assert.True(moved);
+            Assert.NotNull(scan);
+            Assert.Equal(GasJudgement.Error, scan.Judgement);
+            Assert.Contains("단위 불일치", scan.Error);
+        }
+        finally { await stop(); }
+    }
+
+    [Fact]
+    public void PeakFraction_Subtracts_Response_Delay_And_Clamps()
+    {
+        var t0 = new DateTime(2026, 11, 16, 0, 0, 0, DateTimeKind.Utc);
+        GasMeasurementResult Scan(DateTime? peak) => new(1, "s", 0, t0, t0.AddSeconds(12), 100, 7.4, 1.0, "ppm", 5.0,
+            GasJudgement.Ng, null, peak);
+
+        // 10초 이동, 응답 지연 2초 — 6초에 읽힌 최대값은 4초 지점(40%)의 것이다.
+        Assert.Equal(0.4, Scan(t0.AddSeconds(6)).PeakFraction(t0, t0.AddSeconds(10), TimeSpan.FromSeconds(2))!.Value, 6);
+        Assert.Equal(0.0, Scan(t0.AddSeconds(1)).PeakFraction(t0, t0.AddSeconds(10), TimeSpan.FromSeconds(2)));
+        Assert.Equal(1.0, Scan(t0.AddSeconds(12)).PeakFraction(t0, t0.AddSeconds(10), TimeSpan.Zero));
+        Assert.Null(Scan(null).PeakFraction(t0, t0.AddSeconds(10), TimeSpan.Zero));
+        Assert.Null(Scan(t0).PeakFraction(t0, t0, TimeSpan.Zero));
+    }
+
+    [Fact]
     public async Task Measure_Unit_Mismatch_Is_Error_And_Threshold_From_Acs_Rejected()
     {
         var (svc, dev, stop) = await StartAsync();

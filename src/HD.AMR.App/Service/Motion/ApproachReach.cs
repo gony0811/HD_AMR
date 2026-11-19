@@ -35,17 +35,21 @@ public static class ApproachReach
     }
 
     /// <summary>
-    /// 이 면에 최소 플랜지 뻗음 규칙을 적용하는가 — 천장(T)만 뺀다(2026-11-13).
+    /// 이 면에 최소 플랜지 뻗음 규칙을 적용하는가 — 천장(T)(2026-11-13)·바닥(B)(2026-11-17)을 뺀다.
     ///
     /// 근거가 된 실측(230mm 손목 특이점 3회, 2026-09-28)은 <b>수직벽</b>이었다. 천장은 툴이 위를 향해 ② 자세의
     /// J5 가 90° 근처에 머물러 접힌 팔에서도 손목 특이점이 생기지 않는다(ACS 리치 시뮬레이터 — 리프트를 올려
     /// 뻗음 143mm 까지 |J5| 90°·자세 여유 유지, 그보다 가까우면 상완–리프트 기둥 간섭·가지 전환이 따로 막는다).
     /// 이 규칙이 천장에서는 리프트를 올린 정차만 막아(2026-11-11 리프트 100·200 정차 52건 거부) 먼 용접선의
-    /// 팔 뻗음 실패를 풀 수단을 없앴다. 경사면·바닥은 유지(경사면은 단독으로 막는 경우 없음, 바닥은 걸리지 않음).
+    /// 팔 뻗음 실패를 풀 수단을 없앴다. 경사면은 유지(단독으로 막는 경우 없음).
+    ///
+    /// 바닥은 리프트가 있을 때(BASE 1635mm) 걸리지 않아 남겨 뒀으나, 리프트를 떼고 받침에 직접 올린 뒤(BASE 927mm,
+    /// 2026-11-17) 바닥 용접선 전부가 뻗음 162mm 로 거부됐다(IK·자세는 통과). 바닥 용접선은 차체 옆으로 1m 넘게
+    /// 수평으로 뻗은 자세라 팔이 접힌 것이 아니고, 법선축 스칼라가 접힘을 대신하지 못한다 — IK·자세·자기 간섭 판정은 그대로 한다.
     /// ACS <c>ReachSimulator.FlangeRuleApplies</c> 와 같은 규칙 — 바꾸면 함께 맞출 것.
     /// </summary>
     public static bool AppliesTo(string? wallCode)
-        => !string.Equals(wallCode?.Trim(), "T", StringComparison.OrdinalIgnoreCase);
+        => wallCode?.Trim().ToUpperInvariant() is not ("T" or "B");
 
     /// <summary>플랜지→TCP 오프셋의 병진 길이 [mm]. 공구 #0(플랜지)·미설정이면 0.</summary>
     public static double ToolLengthMm(double[]? toolCoord)

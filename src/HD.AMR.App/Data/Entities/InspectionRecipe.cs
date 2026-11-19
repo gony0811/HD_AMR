@@ -4,7 +4,7 @@ using HD.AMR.App.Models;
 namespace HD.AMR.App.Data.Entities;
 
 /// <summary>
-/// 검사 타입(8종, 사양 §8.5.1·INSPECTION_TYPES.md §5)별 <b>실행 방법</b> 한 세트.
+/// 검사 타입(9종, 사양 §8.5.1·INSPECTION_TYPES.md §5)별 <b>실행 방법</b> 한 세트.
 /// ACS `startWeldInspection` 액션의 `seamType` 으로 선택된다(wall_code 는 유효성 확인만 — 면 자세-독립, §9-8).
 ///
 /// 경유점은 담지 않는다 — 경유점·코봇 튜닝값은 티칭 <see cref="InspectionProfile"/> 소관이며,
@@ -13,7 +13,7 @@ namespace HD.AMR.App.Data.Entities;
 /// </summary>
 public class InspectionRecipe
 {
-    /// <summary>레시피 id — "LINE"/"CROSS4"/"CROSS3-R0".. 등 8종 문자열 그대로 (사양 §8.5.1, FK 없음).</summary>
+    /// <summary>레시피 id — "LINE"/"CROSS4_L"/"CROSS3-R0".. 등 9종 문자열 그대로 (사양 §8.5.1, FK 없음).</summary>
     public string Id { get; set; } = "";
 
     public string DisplayName { get; set; } = "";
@@ -24,7 +24,7 @@ public class InspectionRecipe
     /// 런타임 실행 분기에 쓰지 않는다(§9-8 — 접근 자세·법선은 wall_code 로 계산).</summary>
     public SurfaceOrientation Orientation { get; set; }
 
-    /// <summary>실행 가능 게이트 — 미구현 타입(CROSS4/CROSS3-R*/CORNER2/CORNER3)은 false 시드.
+    /// <summary>실행 가능 게이트 — 미구현 타입(CROSS4_L·R/CROSS3-R*/CORNER2/CORNER3)은 false 시드.
     /// false 인 레시피로 매핑된 액션은 FAILED + inspectionFailed(실행 불가) 보고.</summary>
     public bool Enabled { get; set; }
 
@@ -49,6 +49,18 @@ public class InspectionRecipe
     /// (기본 프로필로 대체하지 않음 — 엉뚱한 위치를 스캔하게 된다). 현장 지정값이라 '기본값' 재적용 시에도 보존된다.</summary>
     public int? ChamferSlopeProfileId { get; set; }
 
+    /// <summary>십자(CROSS4_L/CROSS4_R) 전용 — 면(wall_code)별로 따로 쓸 티칭 프로필 지정. JSON object
+    /// (예 {"SM":12,"PM":13}, 값 = <see cref="InspectionProfile.Id"/>). 여기 없는 면은 <see cref="InspectionProfileId"/> 를 쓴다.
+    /// null = 모든 면이 기본 프로필. 해석은 <see cref="InspectionRecipeResolver.ParseWallProfiles"/>.
+    /// 현장 지정값이라 '기본값' 재적용 시에도 보존된다.</summary>
+    public string? WallProfilesJson { get; set; }
+
+    /// <summary>CROSS4_R 전용 — ACS 가 좌/우를 밝히지 않은 구 seamType("CROSS4"·"CROSS")을 보냈을 때 <b>우측</b>으로 실행할 면
+    /// (wall_code 쉼표 구분, 예 "SM,SL"). 여기 없는 면은 좌측(CROSS4_L)으로 실행한다. null = 전부 좌측.
+    /// 좌/우는 면을 정면으로 바라본 기준이다. ACS 가 CROSS4_L/CROSS4_R 를 보내면 이 값은 쓰지 않는다.
+    /// 현장 지정값이라 '기본값' 재적용 시에도 보존된다.</summary>
+    public string? UnspecifiedSideWalls { get; set; }
+
     // (제거됨) ApproachTeachingKey — 레시피별 코봇 접근 자세 티칭 키. 런타임 미구현, 접근 자세는 Teaching 의 Wall ID
     //   로 결정된다. 코너부 등 위치별 접근은 고도화 단계에서 재설계(2026-09-18).
 
@@ -61,10 +73,14 @@ public class InspectionRecipe
     public double? CameraTargetDistanceMm { get; set; }
 
     /// <summary>코봇 이동 속도 [%] — 접근/복귀성 모션(② 검사위치 이동·진입 준비·끝점 이동·홈 복귀·정렬·
-    /// ⑱ 첫 경유점 스테이징) 공통. null = 티칭 프로필 RunVel(미지정 시 20) 폴백.</summary>
+    /// ⑱ 첫 경유점 스테이징) 공통. null = <see cref="DefaultMoveVelPercent"/>(20). 프로필 RunVel 은 검사 속도라 쓰지 않는다.</summary>
     public int? MoveVelPercent { get; set; }
 
-    /// <summary>코봇 검사 속도 [%] — ⑱ 경유점 순회(검사 스캔) 전용. null = 이동 속도와 동일.</summary>
+    /// <summary>이동 속도 미지정 시 기본값 [%].</summary>
+    public const int DefaultMoveVelPercent = 20;
+
+    /// <summary>코봇 검사 속도 [%] — ⑱ 경유점 순회(검사 스캔) 전용. null = 지정된 검사 프로파일에 저장된 속도
+    /// (그것도 없으면 기본 검사 속도 파라미터 <c>Inspection.DefaultInspectVelPercent</c>).</summary>
     public int? InspectVelPercent { get; set; }
 
     /// <summary>코봇 검사 가속도 [%] — ⑱ 경유점 순회 동안만 전역 가속도 배율(SetOaccScale)을 이 값으로 바꾸고,

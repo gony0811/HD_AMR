@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using HD.AMR.App.Communication.GasDetector;
 using HD.AMR.App.Communication.Vision;
 using HD.AMR.App.Data.Entities;
 using HD.AMR.App.Models;
@@ -22,6 +23,9 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly CobotService _cobot;
     private readonly VisionInterfaceService _vision;
+    private readonly GasDetectorService _gas;
+    /// <summary>가스 검사 AMR(InspectionSensor:Mode=GasDetector) — 비전이 없으므로 수동 실행은 CAPTURE_REQ 대신 경유점마다 가스를 측정한다.</summary>
+    private readonly bool _useGas;
 
     public ObservableCollection<XyPointVm> Points { get; } = new();
     public ObservableCollection<InspectionProfile> Profiles { get; } = new();
@@ -37,7 +41,8 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
 
     [ObservableProperty] private int _runTool = 1;
     [ObservableProperty] private int _runUser;
-    [ObservableProperty] private int _runVel = 5;
+    /// <summary>검사 속도 [%] — 이 화면의 실행과, 프로파일에 저장되어 ⑱ 검사 수행의 경유점 순회 속도로 쓰인다. 새 프로파일 기본 2.</summary>
+    [ObservableProperty] private int _runVel = HD.AMR.App.Service.Sequence.Steps.InspectionRunStep.DefaultInspectVelPercent;
     [ObservableProperty] private double _settleSec = 0.5;
     /// <summary>ACS 검사 시 비전 CAPTURE_REQ 응답 대기(초) — 프로필 DelaySec. 드라이런에는 쓰이지 않음.</summary>
     [ObservableProperty] private double _visionTimeoutSec = HD.AMR.App.Service.Sequence.Steps.InspectionRunStep.DefaultVisionTimeoutSec;
@@ -78,6 +83,13 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
     public bool IsCross => SeamType is "CROSS" || SeamType.StartsWith("CROSS3");
     public bool CobotConnected => _cobot.IsConnected;
     public bool VisionConnected => _vision.Client.IsConnected;
+    /// <summary>비전 촬영(CAPTURE_REQ)을 쓰는 AMR 인가 — 가스 검사 AMR 이면 false(촬영 관련 UI 숨김).</summary>
+    public bool UsesVision => !_useGas;
+    public bool ShowVisionWarning => UsesVision && !VisionConnected;
+    public bool ShowGasWarning => _useGas && !_gas.IsConnected;
+    public string RunHint => _useGas
+        ? "가스 디텍터로 측정해 현재 임계값으로 판정합니다(초과 NG, NG 시 재측정) — 측정 실패·NG 는 표시하고 계속 실행합니다. 측정 방식(가스 디텍터 화면)이 '이동 중 연속'이면 첫 점만 멈춰 재고 이후는 경유점 사이를 이동하는 동안 연속 측정하며, 아니면 각 포인트에 멈춰 잽니다. 블렌딩 반경(가스 디텍터 설정)이 0 보다 크면 연속 측정 때 경유점에 멈추지 않고 끝까지 한 번에 지나갑니다(무정지 — 수동 실행은 NG 구간 재측정 없음)."
+        : "각 포인트 이동·정착 후 비전 인터페이스로 CAPTURE_REQ를 전송하고 CAPTURE_RES를 기다립니다. 비전 실패는 표시하고 다음 포인트를 계속 실행합니다.";
     public int PointCount => Points.Count;
 
     // 십자 패턴 파라미터(간이)
@@ -86,13 +98,42 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
     private CancellationTokenSource? _runCts;
 
     public InspectionPointsViewModel(IServiceScopeFactory scopeFactory, CobotService cobot,
-        VisionInterfaceService vision)
+        VisionInterfaceService vision, GasDetectorService gas,
+        Microsoft.Extensions.Options.IOptions<InspectionSensorSettings> sensor,
+        AcsTestCaptureTarget? testTarget = null)
     {
+        _gas = gas;
+        _useGas = sensor.Value.UsesGasDetector;
         _scopeFactory = scopeFactory;
         _cobot = cobot;
         _vision = vision;
+        _testTarget = testTarget;
         RebuildWallOptions();
+        if (_testTarget is not null)
+        {
+            _testTarget.Changed += t => Avalonia.Threading.Dispatcher.UIThread.Post(() => ShowTestTarget(t));
+            ShowTestTarget(_testTarget.Current);
+        }
     }
+
+    private readonly AcsTestCaptureTarget? _testTarget;
+
+    /// <summary>ACS 코봇 이동 시험으로 도달한 용접선의 taskId·attempt 를 수동 촬영(CAPTURE_REQ)에 싣는다 — 시험 도달 때 자동으로 켜진다.</summary>
+    [ObservableProperty] private bool _useAcsTestTask;
+    /// <summary>보관 중인 시험 용접선 표기(없으면 null — 체크 숨김).</summary>
+    [ObservableProperty] private string? _acsTestTaskText;
+    public bool HasAcsTestTask => AcsTestTaskText is not null && UsesVision;
+    partial void OnAcsTestTaskTextChanged(string? value) => OnPropertyChanged(nameof(HasAcsTestTask));
+
+    private void ShowTestTarget(AcsTestCaptureTarget.Target? t)
+    {
+        AcsTestTaskText = t?.Describe();
+        UseAcsTestTask = t is not null;
+    }
+
+    /// <summary>수동 촬영 식별자 — 시험 용접선을 쓰면 그 taskId·attempt·이어지는 captureSeq, 아니면 (빈 taskId, 1, 화면 발번).</summary>
+    private (Guid TaskId, byte Attempt, ushort Seq) CaptureIds(Func<ushort> fallbackSeq) =>
+        _testTarget?.IdsForManualCapture(UseAcsTestTask, fallbackSeq) ?? (Guid.Empty, (byte)1, fallbackSeq());
 
     public override async void OnActivated()
     {
@@ -223,11 +264,25 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
 
     private ushort _manualCaptureSeq;
 
-    /// <summary>이동 없이 해당 포인트의 좌표·Surface 로 CAPTURE_REQ 를 1회 전송한다.</summary>
+    /// <summary>이동 없이 해당 포인트의 좌표·Surface 로 CAPTURE_REQ 를 1회 전송한다. 가스 검사 AMR 은 현재 위치에서 가스를 1회 측정한다.</summary>
     [RelayCommand]
     private async Task InspectPoint(XyPointVm p)
     {
         if (IsRunning) return;
+        if (_useGas)
+        {
+            if (!_gas.IsConnected) { RunErr = true; RunMsg = "가스 디텍터 미연결 — 측정할 수 없습니다."; return; }
+            Selected = Points.IndexOf(p);
+            try
+            {
+                RunErr = false; RunMsg = $"#{Selected + 1} 가스 측정 중...";
+                var (judgement, text) = await _gas.MeasurePointForDisplayAsync($"수동 #{Selected + 1}");
+                RunErr = judgement != GasJudgement.Ok;
+                RunMsg = $"#{Selected + 1} {text}";
+            }
+            catch (Exception ex) { RunErr = true; RunMsg = $"가스 측정 실패: {ex.Message}"; }
+            return;
+        }
         if (!_vision.Client.IsConnected)
         {
             RunErr = true;
@@ -240,9 +295,9 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
             var wallId = (ushort)Math.Clamp(WallId, 1, 10);
             var (u, v, rawH) = FaceLocalMapper.ToFaceLocal(wallId, p.X, p.Y, p.Z);
             var h = FaceLocalMapper.CaptureHeight(rawH);   // 비전은 음수 높이를 받지 않는다
-            _manualCaptureSeq++;
+            var (tid, att, seq) = CaptureIds(() => ++_manualCaptureSeq);
             var data = CaptureReqPayload.Build(SurfaceTypes.OrFlat(p.Surface), wallId,
-                u, v, h, Guid.Empty, attempt: 1, _manualCaptureSeq);
+                u, v, h, tid, att, seq);
             var timeout = TimeSpan.FromSeconds(Math.Max(.5, VisionTimeoutSec));
             RunErr = false; RunMsg = $"#{Selected + 1} CAPTURE_REQ 전송...";
             var outcome = await _vision.Client.RequestCaptureAsync(data, timeout);
@@ -258,7 +313,13 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
     private async Task RunPoints()
     {
         if (IsRunning || !_cobot.IsConnected || Points.Count < 1) return;
-        if (!_vision.Client.IsConnected)
+        if (_useGas && !_gas.IsConnected)
+        {
+            RunErr = true;
+            RunMsg = "가스 디텍터 미연결 — 측정을 실행할 수 없습니다.";
+            return;
+        }
+        if (!_useGas && !_vision.Client.IsConnected)
         {
             RunErr = true;
             RunMsg = "비전 인터페이스 미연결 — CAPTURE_REQ를 실행할 수 없습니다.";
@@ -270,25 +331,85 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
         try
         {
             int visionOk = 0, visionFail = 0;
+            int gasOk = 0, gasNg = 0, gasFail = 0;
             ushort captureSeq = 0;
             var timeout = TimeSpan.FromSeconds(Math.Max(.5, VisionTimeoutSec));
+            // 이동 중 연속 측정 여부는 실행 시작 시 한 번 정한다(가스 디텍터 화면 설정).
+            var gasContinuous = _useGas && _gas.IsContinuousMode;
+            var gasNonStop = gasContinuous && _gas.IsNonStopMode;   // 블렌딩 반경 > 0 — 경유점 무정지
+            var gasNote = "";
             for (int i = 0; i < Points.Count; i++)
             {
                 ct.ThrowIfCancellationRequested();
                 Selected = i;
+                // 연속 측정: 앞 포인트 → 이 포인트 구간을 이동하면서 잰다(멈춰서 재지 않음). 첫 포인트는 앞 구간이 없어 아래 정지 측정.
+                // 무정지: 남은 포인트 전체를 멈추지 않고 한 번에 지나가며 재고 끝낸다.
+                if (gasNonStop && i > 0)
+                {
+                    var passPoses = Points.Skip(i - 1).Select(x => x.Pose()).ToList();   // [0] = 지금 서 있는 포인트
+                    var passLabels = Enumerable.Range(i, Points.Count - i).Select(k => $"수동 #{k}→#{k + 1}").ToList();
+                    RunMsg = $"#{i}→#{Points.Count} 무정지 이동·가스 연속 측정 중...";
+                    IReadOnlyList<double[]> chain;
+                    try { chain = await _cobot.Rpc.ResolveChainJointsAsync(passPoses.Skip(1).ToList(), RunTool, RunUser, ct); }
+                    catch (InvalidOperationException ex) { RunErr = true; RunMsg = $"무정지 경로 IK 실패: {ex.Message} — 중단"; return; }
+                    var (passScans, passError) = await _gas.MeasureNonStopPassAsync(passLabels, passPoses,
+                        (k, blendR, c) => _cobot.Rpc.MoveLAsync(passPoses[k], jointPos: chain[k - 1], tool: RunTool, user: RunUser,
+                            vel: RunVel, acc: 100, ovl: 100, blendR: blendR, ct: c),
+                        c => _cobot.Rpc.GetTcpPoseAsync(ct: c), () => _cobot.StopMotionImmediateAsync(), ct: ct);
+                    if (passScans is null) { RunErr = true; RunMsg = $"무정지 이동 실패 — {passError} — 중단"; return; }
+                    gasOk += passScans.Count(x => x.Judgement == GasJudgement.Ok);
+                    gasNg += passScans.Count(x => x.Judgement == GasJudgement.Ng);
+                    gasFail += passScans.Count(x => x.Judgement == GasJudgement.Error);
+                    var bad = passScans.Where(x => x.Judgement != GasJudgement.Ok)
+                        .Select(x => x.Label.Replace("수동 ", "") + (x.Judgement == GasJudgement.Ng ? $" NG {x.Value:0.###}" : " 실패")).ToList();
+                    if (bad.Count > 0) gasNote = " — " + string.Join(", ", bad);
+                    Selected = Points.Count - 1;
+                    break;
+                }
+                if (gasContinuous && i > 0)
+                {
+                    var segRc = 0;
+                    var to = Points[i].Pose();
+                    var from = Points[i - 1].Pose();
+                    RunMsg = $"구간 #{i}→#{i + 1} 이동·가스 연속 측정 중...";
+                    var seg = await _gas.MeasureSegmentForDisplayAsync($"수동 #{i}→#{i + 1}",
+                        async c => (segRc = await _cobot.Rpc.MoveLAsync(to, tool: RunTool, user: RunUser, vel: RunVel,
+                            acc: 100, ovl: 100, blendR: -1, ct: c)) == 0,
+                        async c => (segRc = await _cobot.Rpc.MoveLAsync(from, tool: RunTool, user: RunUser, vel: RunVel,
+                            acc: 100, ovl: 100, blendR: -1, ct: c)) == 0,
+                        ct);
+                    if (seg is not { } s) { RunErr = true; RunMsg = $"구간 #{i}→#{i + 1} 이동 실패 (rc={segRc}) — 중단"; return; }
+                    if (s.Judgement == GasJudgement.Ok) gasOk++;
+                    else if (s.Judgement == GasJudgement.Ng) gasNg++;
+                    else gasFail++;
+                    RunErr = s.Judgement != GasJudgement.Ok;
+                    RunMsg = $"구간 #{i}→#{i + 1} {s.Text}" + (s.Judgement == GasJudgement.Ok ? "" : " (다음 구간 계속)");
+                    continue;
+                }
                 var rc = await _cobot.Rpc.MoveLAsync(Points[i].Pose(), tool: RunTool, user: RunUser, vel: RunVel,
                     acc: 100, ovl: 100, blendR: -1, ct: ct);
                 RunMsg = $"#{i + 1} 이동 (rc={rc})";
                 if (rc != 0) { RunErr = true; RunMsg = $"#{i + 1} 이동 실패 (rc={rc}) — 중단"; return; }
                 if (SettleSec > 0) await Task.Delay(TimeSpan.FromSeconds(SettleSec), ct);
+                if (_useGas)   // 가스 검사 AMR — 비전 촬영 요청 대신 경유점 가스 측정
+                {
+                    RunMsg = $"#{i + 1} 가스 측정 중...";
+                    var (judgement, text) = await _gas.MeasurePointForDisplayAsync($"수동 #{i + 1}", ct);
+                    if (judgement == GasJudgement.Ok) gasOk++;
+                    else if (judgement == GasJudgement.Ng) gasNg++;
+                    else gasFail++;
+                    RunErr = judgement != GasJudgement.Ok;
+                    RunMsg = $"#{i + 1} {text}" + (judgement == GasJudgement.Ok ? "" : " (다음 점 계속)");
+                    continue;
+                }
 
                 var p = Points[i];
                 var wallId = (ushort)Math.Clamp(WallId, 1, 10);
                 var (u, v, rawH) = FaceLocalMapper.ToFaceLocal(wallId, p.X, p.Y, p.Z);
                 var h = FaceLocalMapper.CaptureHeight(rawH);   // 비전은 음수 높이를 받지 않는다
-                captureSeq++;
+                var (tid, att, seq) = CaptureIds(() => ++captureSeq);
                 var data = CaptureReqPayload.Build(SurfaceTypes.OrFlat(p.Surface), wallId,
-                    u, v, h, Guid.Empty, attempt: 1, captureSeq);
+                    u, v, h, tid, att, seq);
                 var outcome = await _vision.Client.RequestCaptureAsync(data, timeout, ct);
                 if (outcome.Success)
                 {
@@ -302,9 +423,12 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
                     RunMsg = $"#{i + 1} 비전 실패 — {CaptureFailure(outcome)} (다음 점 계속)";
                 }
             }
-            RunErr = visionFail > 0;
-            RunMsg = $"완료 — {Points.Count}점 이동, 비전 OK {visionOk}/{Points.Count}" +
-                     (visionFail > 0 ? $" (실패 {visionFail})" : "");
+            RunErr = _useGas ? gasNg + gasFail > 0 : visionFail > 0;
+            RunMsg = _useGas
+                ? $"완료 — {Points.Count}점 이동{(gasNonStop ? "(무정지 연속 측정)" : gasContinuous ? "(연속 측정)" : "")}, 가스 OK {gasOk}/{Points.Count}" +
+                  (gasNg + gasFail > 0 ? $" (NG {gasNg}, 실패 {gasFail})" : "") + gasNote
+                : $"완료 — {Points.Count}점 이동, 비전 OK {visionOk}/{Points.Count}" +
+                  (visionFail > 0 ? $" (실패 {visionFail})" : "");
         }
         catch (OperationCanceledException) { RunMsg = "정지됨"; }
         catch (Exception ex) { RunErr = true; RunMsg = $"실행 실패: {ex.Message}"; }

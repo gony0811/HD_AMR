@@ -71,19 +71,45 @@ public sealed record CobotEnvelope
         ("검사 툴(몸체)", 0.0, 293.0, 169.0),
     };
 
-    private static volatile CobotEnvelope _default = new();
+    private static volatile CobotEnvelope _configured = new();
+    private static volatile CobotEnvelope _default = _configured;
 
     /// <summary>
-    /// 앱 전체가 쓰는 외곽. 기동 시 <see cref="Configure"/> 로 appsettings 값을 넣는다(넣지 않으면 코드 기본값 = 현 장비).
+    /// 앱 전체가 쓰는 외곽 — appsettings 치수(<see cref="Configured"/>)에 파라미터 <see cref="BaseHeightKey"/> 가 있으면
+    /// BASE 높이만 덮어쓴 값(<see cref="ApplyBaseHeight"/>).
     /// </summary>
     public static CobotEnvelope Default => _default;
 
-    /// <summary>appsettings 값으로 <see cref="Default"/> 를 바꾼다. 값이 맞지 않으면 예외 — 기동을 멈춰 잘못된 모델로 돌지 않게 한다.</summary>
+    /// <summary>appsettings <c>"CobotEnvelope"</c> 로 정한 외곽(파라미터 반영 전). 설정하지 않았으면 코드 기본값 = 현 장비.</summary>
+    public static CobotEnvelope Configured => _configured;
+
+    /// <summary>appsettings 값으로 외곽을 정한다(기동 때). 값이 맞지 않으면 예외 — 기동을 멈춰 잘못된 모델로 돌지 않게 한다.</summary>
     public static CobotEnvelope Configure(CobotEnvelopeSettings? settings)
     {
         var env = FromSettings(settings ?? new CobotEnvelopeSettings());
+        _configured = env;
         _default = env;
         return env;
+    }
+
+    /// <summary>코봇 BASE 높이 덮어쓰기 파라미터 키 [mm, 차체 바닥 → BASE 장착면]. 비어 있으면 appsettings 값을 쓴다.</summary>
+    public const string BaseHeightKey = "cobot.baseHeightMm";
+
+    /// <summary>파라미터 허용 범위 [mm] — 차체 윗면 아래이거나 지나치게 높으면 설정 실수로 본다.</summary>
+    public const double MinBaseHeightMm = 800, MaxBaseHeightMm = 2500;
+
+    /// <summary>
+    /// 파라미터 문자열로 <see cref="Default"/> 의 BASE 높이를 덮어쓴다(기동·저장·삭제 때). 다른 치수는 <see cref="Configured"/> 그대로.
+    /// 비어 있으면 appsettings 값으로 되돌리고 true, 숫자가 아니거나 범위(차체 윗면 이상, 800~2500) 밖이면 appsettings 값을 쓰고 false.
+    /// </summary>
+    public static bool ApplyBaseHeight(string? raw)
+    {
+        var cfg = _configured;
+        var ok = double.TryParse(raw, System.Globalization.NumberStyles.Float,
+                     System.Globalization.CultureInfo.InvariantCulture, out var v)
+                 && double.IsFinite(v) && v is >= MinBaseHeightMm and <= MaxBaseHeightMm && v >= cfg.AmrHeightMm;
+        _default = ok ? cfg with { BaseHeightMm = v } : cfg;
+        return ok || string.IsNullOrWhiteSpace(raw);
     }
 
     /// <summary>설정 → 외곽. 팔 링크 치수(어깨·상완 오프셋/반경)는 로봇 고유값이라 코드 기본값을 그대로 쓴다.</summary>

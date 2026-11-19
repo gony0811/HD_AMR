@@ -11,6 +11,15 @@ public enum GasDetectorTransportKind
     Tcp,
 }
 
+/// <summary>검사 시퀀스의 가스 측정 방식.</summary>
+public enum GasMeasureMode
+{
+    /// <summary>경유점마다 멈춰서 대기 → 샘플 N회(기본).</summary>
+    Point,
+    /// <summary>경유점 사이를 이동하는 동안 계속 샘플링 — 구간 최대값으로 판정.</summary>
+    Continuous,
+}
+
 /// <summary>
 /// 헬륨 가스 디텍터(INFICON XL3000flex) 설정. <c>appsettings.json</c> 의 <c>GasDetector</c> 섹션에 바인딩한다.
 /// 통신 경로·포트·판정 기준은 화면(SETTINGS > Gas Detector)에서 바꿀 수 있고, 바꾼 값은 DB 파라미터
@@ -74,8 +83,22 @@ public class GasDetectorSettings
     /// <summary>경유점 1곳에서 읽는 샘플 수.</summary>
     public int MeasureSampleCount { get; set; } = 5;
 
-    /// <summary>샘플 간격(ms).</summary>
+    /// <summary>샘플 간격(ms). 연속 측정에서도 이 간격으로 읽는다(사양 최소 100).</summary>
     public int MeasureSampleIntervalMs { get; set; } = 200;
+
+    /// <summary>
+    /// 측정 방식. <see cref="GasMeasureMode.Continuous"/> 면 경유점 사이 이동 중에 계속 샘플링하고, 도착 후
+    /// <see cref="MeasureDwellMs"/> 동안 더 읽어(스니퍼 응답 지연 — 구간 끝부분의 가스가 센서에 닿는 시간) 구간 최대값으로 판정한다.
+    /// </summary>
+    public GasMeasureMode MeasureMode { get; set; } = GasMeasureMode.Point;
+
+    /// <summary>
+    /// 연속 측정의 경유점 블렌딩 반경 [mm]. 0 = 경유점마다 정지(구간 단위 이동 — 종전 방식).
+    /// 0 보다 크면 <b>무정지</b>: 첫 경유점 이후 경유점들을 이 반경으로 둥글려 한 번에 지나가며 계속 샘플링한다
+    /// (경유점을 정확히 찍지 않고 최대 이 거리만큼 안쪽으로 돌아간다 — 인접 구간이 짧으면 자동으로 줄인다).
+    /// <see cref="MeasureMode"/> 가 <see cref="GasMeasureMode.Continuous"/> 일 때만 쓰인다.
+    /// </summary>
+    public double NonStopBlendRadiusMm { get; set; }
 
     public GasDetectorSettings Clone() => (GasDetectorSettings)MemberwiseClone();
 
