@@ -29,6 +29,12 @@ public class Vda5050AdapterSettings
     /// <summary>state 주기 발행 간격(ms). 사양 2초. (변화 시 즉시 발행은 후속.)</summary>
     public int StatePeriodMs { get; set; } = 2000;
 
+    /// <summary>
+    /// factsheet(§7.3) 변경 확인 간격(초) — 티칭·리프트·장착 보정·코봇 값을 다시 읽어 지문이 바뀌었으면 다시 발행한다.
+    /// 0 이하면 확인하지 않는다(연결·요청 때만 발행).
+    /// </summary>
+    public int FactsheetCheckSec { get; set; } = 5;
+
     /// <summary>재접속 재시도 간격(ms).</summary>
     public int ReconnectDelayMs { get; set; } = 5000;
 

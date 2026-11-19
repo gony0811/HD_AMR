@@ -11,6 +11,9 @@ public static class Vda5050Topics
         => $"{s.TopicPrefix}/{s.TopicVersion}/{s.Manufacturer}/{s.SerialNumber}/state";
     public static string Connection(Vda5050AdapterSettings s)
         => $"{s.TopicPrefix}/{s.TopicVersion}/{s.Manufacturer}/{s.SerialNumber}/connection";
+    /// <summary>factsheet(§7.3) — 티칭·리프트·장착 보정·코봇 값. retained, 연결·요청·변경 때 발행.</summary>
+    public static string Factsheet(Vda5050AdapterSettings s)
+        => $"{s.TopicPrefix}/{s.TopicVersion}/{s.Manufacturer}/{s.SerialNumber}/factsheet";
 
     /// <summary>ACS 생존 신호 토픽(§7.2 N12) — ACS 전용 identity, 모든 AMR이 공유 구독.</summary>
     public static string AcsConnection(Vda5050AdapterSettings s)
