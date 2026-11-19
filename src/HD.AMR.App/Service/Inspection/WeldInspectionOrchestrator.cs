@@ -50,6 +50,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
     private readonly Dictionary<string, BundleAssignment> _bundleByAction = new();
     private readonly List<BundleAssignment> _bundleOrder = new();   // 노드 액션 순서 — 리더 실패 시 남은 TASK 재묶음용
     private readonly Dictionary<string, (double[] Frame, double[]? Start, double[]? EndTcp)> _bundleFrames = new();
+    private readonly Dictionary<string, double[]> _bundleSeamW = new();   // 묶음 공통 좌표계를 잡은 리더 용접선의 맵 좌표 [시작, 끝](m) — 팔로워가 같은 줄인지 판단
     private readonly HashSet<string> _dissolvedBundles = new(StringComparer.Ordinal);
 
     /// <summary>
@@ -319,6 +320,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             _bundleByAction.Clear();
             _bundleOrder.Clear();
             _bundleFrames.Clear();
+            _bundleSeamW.Clear();
             _dissolvedBundles.Clear();
             foreach (var a in assignments)
             {
@@ -599,6 +601,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             //    CORNER 는 정렬 스텝이 없어 캐시 비적용(항상 레시피 스텝 전체 실행, 캐시 갱신도 안 함).
             double[]? cachedInternalFrame;
             double[]? cachedAnchorStartBase;
+            double[]? cachedAnchorSeamW = null;   // cachedAnchorStartBase 와 짝인 용접선 맵 좌표 [시작, 끝](m)
             double[]? cachedAnchorEndTcp;
             var currentStrokeMm = _lift.TryGetStrokeMm(out _);
             lock (_sync)
@@ -639,6 +642,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                 }
                 cachedInternalFrame = anchorHit ? (double[])_lastInternalWorkpieceFrame!.Clone() : null;
                 cachedAnchorStartBase = anchorHit ? _lastAnchorStartBase?.ToArray() : null;
+                cachedAnchorSeamW = anchorHit && _lastAnchorSeamW is { } lastSeam ? lastSeam.Start.Concat(lastSeam.End).ToArray() : null;
                 cachedAnchorEndTcp = anchorHit ? _lastAnchorEndTcp?.ToArray() : null;
             }
 
@@ -660,6 +664,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                     anchorHit = false;
                     cachedInternalFrame = null;
                     cachedAnchorStartBase = null;
+                    cachedAnchorSeamW = null;
                     cachedAnchorEndTcp = null;
 
                     // 리더가 실패해 공통 좌표계가 없으면(점2 교시 실패로 푼 묶음은 제외) 실패한 TASK 만 빼고
@@ -699,6 +704,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                     cachedInternalFrame = (double[])shared.Frame.Clone();
                     cachedAnchorStartBase = shared.Start?.ToArray();
                     cachedAnchorEndTcp = shared.EndTcp?.ToArray();
+                    lock (_sync)
+                        cachedAnchorSeamW = _bundleSeamW.TryGetValue(bundle.BundleId!, out var bsw) ? bsw.ToArray() : null;
                     lock (_sync)
                         bundleEndWd = _bundleOrder.LastOrDefault(a => a.BundleId == bundle.BundleId)?.ActionId == action.ActionId;
                     _logger.LogInformation("묶음 {Id} 공통 좌표계 — {Job} 교시 생략{Last}", bundle.BundleId, req.JobRef,
@@ -822,6 +829,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             // ②가 캐시 프레임을 이번 시작점으로 평행 이동하고(없으면 실패), 직전 종료 자세 그대로면 복귀 없이 연속 이동한다.
             if (cachedAnchorStartBase is not null)
                 context.Bag[CobotInspectionMoveStep.AnchorStartBaseBagKey] = cachedAnchorStartBase;
+            if (cachedAnchorStartBase is not null && cachedAnchorSeamW is { Length: 6 })
+                context.Bag[CobotInspectionMoveStep.AnchorSeamWBagKey] = cachedAnchorSeamW;
             if (cachedAnchorEndTcp is not null)
                 context.Bag[CobotInspectionMoveStep.PreviousEndTcpBagKey] = cachedAnchorEndTcp;
             if (bundle?.Role == BundleRole.Leader)
@@ -912,7 +921,11 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                                     && NextBundleFrame(bundle.Role,
                                         _bundleFrames.TryGetValue(bid, out var shared0) ? shared0 : null,
                                         internalFrame, startBase, endTcp) is { } next)
+                                {
                                     _bundleFrames[bid] = next;
+                                    if (bundle.Role == BundleRole.Leader)
+                                        _bundleSeamW[bid] = req.SeamStartW.Concat(req.SeamEndW).ToArray();
+                                }
                             }
                         }
                         if (dissolved)

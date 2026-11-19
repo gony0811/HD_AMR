@@ -102,9 +102,12 @@ public static class InternalWorkpieceFrame
     /// (실기 2026-11-09 L4-R08C08: ACS 이동 방향이 비드 방향과 0.09~0.27° 달라 LINE 당 0.55~1.7mm). 면 법선(Z) 성분도 버린다.
     /// 옆 성분이 <see cref="MaxDroppedLateralMm"/> 를 넘으면 종전 면 평행 이동(<see cref="TranslateInPlane"/>)으로 폴백한다.
     /// </summary>
+    /// <param name="forceAlongX">true 면 옆 성분이 커도 폴백하지 않는다 — 맵(도면) 좌표로 같은 용접선 줄임을 확인했을 때
+    /// (<see cref="MapSeamOffsetMm"/>). BASE 로 바꾼 ACS 시작점은 AMR 위치·방향 오차를 그때그때 따로 먹어 옆 성분이
+    /// 수십 mm 생길 수 있다(실기 2026-11-19 PU L4-R03C25 -3·-4: 도면상 한 줄인데 28.8·33.9mm → 카메라가 비드 옆을 찍음).</param>
     /// <returns>(이동한 프레임, 프레임 Y 성분 mm, 프레임 Z 성분 mm, X 만 썼는지)</returns>
     public static (double[] Frame, double LateralMm, double NormalMm, bool AlongXOnly) TranslateAlongX(
-        double[] frameBase, double[] fromStartBase, double[] toStartBase)
+        double[] frameBase, double[] fromStartBase, double[] toStartBase, bool forceAlongX = false)
     {
         RequirePose(frameBase, nameof(frameBase));
         var m = FrameMath.PoseToMatrix(frameBase);
@@ -112,7 +115,7 @@ public static class InternalWorkpieceFrame
         double Comp(int col) => d[0] * m[0, col] + d[1] * m[1, col] + d[2] * m[2, col];
         var (along, lateral, normal) = (Comp(0), Comp(1), Comp(2));
 
-        if (Math.Abs(lateral) > MaxDroppedLateralMm)
+        if (!forceAlongX && Math.Abs(lateral) > MaxDroppedLateralMm)
         {
             var (moved, _) = TranslateInPlane(frameBase, fromStartBase, toStartBase);
             return (moved, lateral, normal, false);
@@ -122,6 +125,23 @@ public static class InternalWorkpieceFrame
             frameBase[0] + along * m[0, 0], frameBase[1] + along * m[1, 0], frameBase[2] + along * m[2, 0],
             frameBase[3], frameBase[4], frameBase[5],
         }, lateral, normal, true);
+    }
+
+    /// <summary>
+    /// 맵(ACS 도면) 좌표로 본 이번 용접선 시작점의 위치 — 기준 용접선(시작→끝) 직선을 따라 간 거리와 직선에서 벗어난 거리 [mm].
+    /// 맵 좌표는 AMR 위치 오차가 섞이지 않아 같은 줄인지 판단하는 데 쓴다. 입력은 m 단위 [x,y,z], 기준 용접선이 1mm 미만이면 null.
+    /// </summary>
+    public static (double AlongMm, double LateralMm)? MapSeamOffsetMm(double[]? anchorStartW, double[]? anchorEndW, double[]? startW)
+    {
+        if (anchorStartW is not { Length: 3 } a || anchorEndW is not { Length: 3 } b || startW is not { Length: 3 } p) return null;
+        var dir = new[] { b[0] - a[0], b[1] - a[1], b[2] - a[2] };
+        var len = Math.Sqrt(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]);
+        if (!(len > 1e-3)) return null;
+        var d = new[] { p[0] - a[0], p[1] - a[1], p[2] - a[2] };
+        var along = (d[0] * dir[0] + d[1] * dir[1] + d[2] * dir[2]) / len;
+        var off = new[] { d[0] - dir[0] / len * along, d[1] - dir[1] / len * along, d[2] - dir[2] / len * along };
+        var lateral = Math.Sqrt(off[0] * off[0] + off[1] * off[1] + off[2] * off[2]);
+        return double.IsFinite(along) && double.IsFinite(lateral) ? (along * 1000, lateral * 1000) : null;
     }
 
     private static void RequirePose(double[] pose, string name)
