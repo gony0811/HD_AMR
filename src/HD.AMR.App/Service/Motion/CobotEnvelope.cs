@@ -71,7 +71,6 @@ public sealed record CobotEnvelope
         ("검사 툴(몸체)", 0.0, 293.0, 169.0),
     };
 
-<<<<<<< HEAD
     private static volatile CobotEnvelope _configured = new();
     private static volatile CobotEnvelope _default = _configured;
 
@@ -89,24 +88,10 @@ public sealed record CobotEnvelope
     {
         var env = FromSettings(settings ?? new CobotEnvelopeSettings());
         _configured = env;
-=======
-    private static volatile CobotEnvelope _default = new();
-
-    /// <summary>
-    /// 앱 전체가 쓰는 외곽. 기동 시 <see cref="Configure"/> 로 appsettings 값을 넣는다(넣지 않으면 코드 기본값 = 현 장비).
-    /// </summary>
-    public static CobotEnvelope Default => _default;
-
-    /// <summary>appsettings 값으로 <see cref="Default"/> 를 바꾼다. 값이 맞지 않으면 예외 — 기동을 멈춰 잘못된 모델로 돌지 않게 한다.</summary>
-    public static CobotEnvelope Configure(CobotEnvelopeSettings? settings)
-    {
-        var env = FromSettings(settings ?? new CobotEnvelopeSettings());
->>>>>>> 57a1ba1 (feat(cobot): 충돌 모델을 리프트 제거·고정 기둥 구조로 — 설치 치수를 appsettings(CobotEnvelope)로)
         _default = env;
         return env;
     }
 
-<<<<<<< HEAD
     /// <summary>코봇 BASE 높이 덮어쓰기 파라미터 키 [mm, 차체 바닥 → BASE 장착면]. 비어 있으면 appsettings 값을 쓴다.</summary>
     public const string BaseHeightKey = "cobot.baseHeightMm";
 
@@ -127,8 +112,6 @@ public sealed record CobotEnvelope
         return ok || string.IsNullOrWhiteSpace(raw);
     }
 
-=======
->>>>>>> 57a1ba1 (feat(cobot): 충돌 모델을 리프트 제거·고정 기둥 구조로 — 설치 치수를 appsettings(CobotEnvelope)로)
     /// <summary>설정 → 외곽. 팔 링크 치수(어깨·상완 오프셋/반경)는 로봇 고유값이라 코드 기본값을 그대로 쓴다.</summary>
     public static CobotEnvelope FromSettings(CobotEnvelopeSettings s)
     {

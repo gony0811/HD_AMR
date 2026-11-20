@@ -10,8 +10,7 @@ namespace HD.AMR.App.Service.Sequence.Steps;
 /// <item>둘 다 없으면 <see cref="LaserWorkingDistanceStep.DefaultWorkingDistanceMm"/></item>
 /// </list>
 /// 면마다 캡처 화면이 맞는 거리가 달라(원인 조사 중) 면별로 따로 맞출 수 있게 둔 것이다. 면별 행을 지우면 공통 값으로 돌아간다.
-/// ④⁺ WD 조정(<see cref="LaserWorkingDistanceStep"/>)과 도달 사전 점검(<c>CobotReachPrecheck</c>)이 같은 함수를 써야
-/// 점검한 정렬 준비 거리와 실제로 맞추는 거리가 같다.
+/// 도달 사전 점검(<c>CobotReachPrecheck</c>)의 정렬 준비 거리는 이 값이 아니라 고정 300mm(<c>ReachMapSpec.DefaultAlignStandoffMm</c>)다.
 /// </summary>
 public static class LaserWorkingDistanceSetting
 {

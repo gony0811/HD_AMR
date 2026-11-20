@@ -32,7 +32,7 @@ public sealed record ReachGateResult(bool Ok, string Message, bool AsError)
 
 /// <summary>
 /// 다가올 작업의 코봇 도달·순회를, AMR 과 리프트를 움직이기 전에 판정한다.
-/// 순회는 리치 맵과 같다 — ② 접근, 정렬 준비(레이저 WD), 초점(면 위)을 한 가지로 이어 풀고
+/// 순회는 리치 맵과 같다 — ② 접근, 정렬 준비(고정 300), 초점(면 위)을 한 가지로 이어 풀고
 /// 자세 한계·자기 간섭·손목 경로까지 본다. 시작점만 보면 시험이동, 시작·끝 둘 다 보면 자동 시퀀스다.
 ///
 /// 판정 출처는 둘 중 하나다. 실행 폴더 <c>reachmaps</c> 의 최신 CSV 에 같은 장비 조건의 셀이 있으면 그 결과를 쓰고,
@@ -196,10 +196,8 @@ public sealed class CobotReachPrecheck
             _logger.LogWarning("도달 사전 점검: 자세 허용 범위가 저장되지 않아 기본값으로 판정합니다.");
 
         var approach = await CobotInspectionMoveStep.GetApproachStandoffMmAsync(_param, _logger).ConfigureAwait(false);
-        // 공통 레이저 WD — 면별 값(…WorkingDistanceMm.{wall_code})은 점마다 JudgeAsync 에서 다시 찾는다.
-        var (align, alignSource) = await LaserWorkingDistanceSetting.ResolveAsync(_param, wallCode: null).ConfigureAwait(false);
-        if (alignSource.StartsWith("기본값(", StringComparison.Ordinal))
-            _logger.LogWarning("도달 사전 점검: 레이저 WD 를 읽지 못해 {Mm}mm 로 판정합니다 — {Source}", align, alignSource);
+        // 정렬 준비 거리는 고정값 — 레이저 WD(면별 실측 거리)가 아니다.
+        const double align = ReachMapSpec.DefaultAlignStandoffMm;
         var zDatum = await _param.GetDoubleAsync(WeldSequenceSupport.ZDatumOffsetKey).ConfigureAwait(false) ?? 0;
 
         double toolLen;
@@ -246,13 +244,7 @@ public sealed class CobotReachPrecheck
         var body = ReachStationFrame.WorldToBodyMm(point.SeamW, xm, ym, yaw, ctx.ZDatumMm);
         var z = ReachStationFrame.CellZMm(point.WallCode, body[2]);
 
-        // 정렬 준비 거리 = 이 면의 레이저 WD(면별 값이 있으면 그것) — ④⁺ 가 실제로 맞추는 거리와 같아야 한다.
-        if (!ctx.AlignByWall.TryGetValue(point.WallCode!, out var alignMm))
-        {
-            (alignMm, _) = await LaserWorkingDistanceSetting.ResolveAsync(_param, point.WallCode).ConfigureAwait(false);
-            ctx.AlignByWall[point.WallCode!] = alignMm;
-        }
-        var stamp = ctx.Stamp with { AlignMm = alignMm };
+        var stamp = ctx.Stamp;
 
         var stored = ReachMapCsv.FindLatest(ReachMapService.OutputDirectory, stamp, point.WallCode!, h, body[0], body[1], z);
         if (stored is not null)
@@ -295,11 +287,7 @@ public sealed class CobotReachPrecheck
         => new(usable, status,
             $"{point.Label}: {ReachMapResult.Label(status)} ({reason}) — 차체 x={x:0} y={y:0} z={z:0} mm, 리프트 {stroke:0} mm [{via}]");
 
-    private sealed record SimContext(ReachMapStamp Stamp, ToolAxisDir Axis, bool UseController, double ZDatumMm)
-    {
-        /// <summary>면별 정렬 준비 거리(레이저 WD) — 한 번의 점검 안에서 면마다 한 번만 읽는다.</summary>
-        public Dictionary<string, double> AlignByWall { get; } = new(StringComparer.OrdinalIgnoreCase);
-    }
+    private sealed record SimContext(ReachMapStamp Stamp, ToolAxisDir Axis, bool UseController, double ZDatumMm);
 
     private sealed record PointVerdict(bool Usable, ReachStatus Status, string Reason)
     {

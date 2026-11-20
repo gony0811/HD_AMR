@@ -22,8 +22,9 @@ public class ReachMapTests
             MinFlangeReachMm: minFlange),
         OpticalAxis: ToolAxisDir.MinusZ);
 
+    // 세 자세가 서로 다른 자리여야 차례 풀이를 볼 수 있다 — 운영 기본값(②=정렬 준비=300) 대신 ② 400 으로 고정한다.
     private static ReachMapSpec Spec(string wall, double[] xs, double[]? ys = null, double[]? zs = null, double[]? hs = null)
-        => new(new[] { wall }, hs ?? new[] { 0.0 }, xs, ys ?? new[] { 0.0 }, zs ?? new[] { 1830.0 });
+        => new(new[] { wall }, hs ?? new[] { 0.0 }, xs, ys ?? new[] { 0.0 }, zs ?? new[] { 1830.0 }, ApproachStandoffMm: 400);
 
     /// <summary>TCP 가 어깨에서 <paramref name="reach"/> 안이면 고정 관절각을 돌려준다. J6 은 일부러 한계 밖.</summary>
     private static Func<double[], CancellationToken, Task<double[]?>> SphereIk(double reach = 2000, List<double[]>? queried = null)

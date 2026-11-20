@@ -133,7 +133,7 @@ public class ParameterService
             (Sequence.Steps.CobotInspectionMoveStep.ApproachStandoffKey,
                 Sequence.Steps.CobotInspectionMoveStep.DefaultApproachStandoffMm.ToString(CultureInfo.InvariantCulture),
                 "② Cobot 검사위치 이동 — 용접선 시작점에서 벽면 법선 방향으로 TCP 를 물리는 거리(mm). 정차 이격·이동 경로 시험용. " +
-                "모든 벽 동일 적용, 용접선 끝점 이동·ACS 시험 접근도 같은 값. 200~1000 밖이거나 비면 400."),
+                "모든 벽 동일 적용, 용접선 끝점 이동·ACS 시험 접근도 같은 값. 200~1000 밖이거나 비면 300."),
             (Sequence.Steps.CobotInspectionMoveStep.ChainStandoffKey,
                 Sequence.Steps.CobotInspectionMoveStep.DefaultChainStandoffMm.ToString(CultureInfo.InvariantCulture),
                 "같은 anchor 그룹 연속 LINE — 직전 검사 종료 자세에서 다음 시작점으로 옮길 때 면에서 TCP 를 띄우는 거리(mm). " +

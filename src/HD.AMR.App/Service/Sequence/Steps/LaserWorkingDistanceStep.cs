@@ -38,7 +38,7 @@ public class LaserWorkingDistanceStep : ISequenceStep
     /// 면별 값은 뒤에 <c>.{wall_code}</c> 를 붙인 키로 따로 둘 수 있다(<see cref="LaserWorkingDistanceSetting"/>).</summary>
     public const string WorkingDistanceKey = "Sequence.Laser.WorkingDistanceMm";
 
-    /// <summary>파라미터 미설정 시 레이저 WD [mm]. 리치 맵 정렬 준비 거리의 기본값과 같다.</summary>
+    /// <summary>파라미터 미설정 시 레이저 WD [mm]. 리치 맵 정렬 준비 거리(고정 300)와는 별개 값이다.</summary>
     public const double DefaultWorkingDistanceMm = 300.0;
 
     /// <summary>수렴 판정 허용오차(mm).</summary>
