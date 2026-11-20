@@ -124,4 +124,39 @@ public class RetractPlanTests
         Assert.Equal(plan.EndTcp[1], pts[^1][1], 6);
         Assert.Equal(plan.EndTcp[2], pts[^1][2], 6);
     }
+
+    // 실기 2026-11-20 22:01 hd-amr-m2 — SM 면 300mm 이격 접근점에서 주행 전 복귀. 고정 300mm 후퇴가 TCP 를
+    // x −1136 → −836 으로 당겨 작업 준비 위치(x −955)보다 120mm 차체 쪽으로 접혀 들어갔다(EMO).
+    private static readonly double[] M2SidePose = { -1135.6, -105.9, -652.5, 90.0, 89.7, 90.0 };
+    private static readonly double[] M2Ready = { -955.4, -92.0, -397.0 };
+
+    [Fact]
+    public void 덜_뻗은_자세는_작업_준비_위치_평면까지만_후퇴()
+    {
+        var d = SequenceEntry.LimitedRetractDistanceMm(M2SidePose, M2Ready, HD.AMR.App.Service.ToolAxisDir.MinusZ);
+
+        Assert.InRange(d, 175.0, 185.0);
+        var plan = SequenceEntry.PlanRetract(M2SidePose, d, opticalAxis: HD.AMR.App.Service.ToolAxisDir.MinusZ);
+        Assert.InRange(plan.EndTcp[0], -960.0, -950.0);   // 경유점보다 차체 쪽(−836)으로 들어가지 않는다
+    }
+
+    [Fact]
+    public void 멀리_뻗은_자세는_종전대로_300mm()
+    {
+        var far = new[] { -1558.1, -105.9, -652.5, 90.0, 89.7, 90.0 };
+        Assert.Equal(SequenceEntry.RetractDistanceMm,
+            SequenceEntry.LimitedRetractDistanceMm(far, M2Ready, HD.AMR.App.Service.ToolAxisDir.MinusZ), 6);
+    }
+
+    [Fact]
+    public void 이미_경유점_안쪽이면_후퇴_거리_0()
+    {
+        var inside = new[] { -864.3, -101.8, -608.4, 90.0, 89.7, 90.0 };
+        Assert.Equal(0.0, SequenceEntry.LimitedRetractDistanceMm(inside, M2Ready, HD.AMR.App.Service.ToolAxisDir.MinusZ), 6);
+    }
+
+    [Fact]
+    public void 경유점을_모르면_종전대로_300mm()
+        => Assert.Equal(SequenceEntry.RetractDistanceMm,
+            SequenceEntry.LimitedRetractDistanceMm(M2SidePose, null, HD.AMR.App.Service.ToolAxisDir.MinusZ), 6);
 }

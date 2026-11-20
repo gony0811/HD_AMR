@@ -46,11 +46,41 @@ internal static class SequenceEntry
     /// 출발 자세보다 여유가 줄면 후퇴하지 않는다. 닿는 자세(여유 음수)는 항상 막는다.</summary>
     internal const double RetractSelfMarginMm = 30.0;
 
+    /// <summary>
+    /// 벽면 후퇴가 차체 쪽 자기 간섭으로 막혔을 때, 첫 경유점(작업 준비 위치·검사 준비·홈 위치_2)까지 관절 최대 차이가 이 이하면
+    /// 벽 앞이 아니라 경유점 근처로 보고 관절 이동으로 바로 돌아간다 [도]. 더 멀면 종전대로 정지한다.
+    /// 실기 2026-11-20 21:22 hd-amr-m2: 작업 준비 위치에서 J3·J4 약 15° 벗어난 팔을 "벽 앞"으로 보고 300mm 후퇴를 계획 →
+    /// 전완 ↔ 받침 기둥 16mm 로 막혀 홈 복귀 실패(티칭 화면 홈 이동은 정상).
+    /// </summary>
+    internal const double NearWaypointMaxJointDeg = 20.0;
+
+    /// <summary>벽면 후퇴 경로가 차체·기둥·신호탑 쪽 자기 간섭으로 막힘 — 팔이 벽 앞이 아니라 차체 쪽에 있다는 신호.</summary>
+    internal sealed class RetractSelfInterferenceException(string message) : InvalidOperationException(message);
+
+    /// <summary>
+    /// 현재 관절 <paramref name="cur"/> 에서 경유점 <paramref name="target"/> 으로 바로 관절 이동(MoveJ)해도 되는지 — 막히면 사유, 되면 null.
+    /// 조건: 관절 최대 차이 ≤ <see cref="NearWaypointMaxJointDeg"/>, 관절 보간 경로(<see cref="CobotInspectionMoveStep.JointPathBlocker"/>,
+    /// 5° 간격)와 도착 자세가 <see cref="RetractSelfBlocker"/>(차체·기둥·신호탑, 여유 30mm)에 걸리지 않을 것.
+    /// </summary>
+    internal static string? DirectReturnBlocker(double[] cur, double[] target, CobotEnvelope? envelope = null)
+    {
+        var t = FairinoRpcClient.UnwrapToward(target, cur);
+        var d = JointDistance(cur, t);
+        if (d > NearWaypointMaxJointDeg)
+            return $"경유점까지 관절 최대 {d:0.0}° > {NearWaypointMaxJointDeg:0}° — 벽 앞 자세일 수 있음";
+        if (RetractSelfBlocker(cur, t, envelope) is { } end) return $"도착 자세 {end}";
+        return CobotInspectionMoveStep.JointPathBlocker(cur, t, j => RetractSelfBlocker(cur, j, envelope), null);
+    }
+
     /// <summary>ready 미티칭 시 홈에서 툴 Z 방향 자동 후퇴 거리 [mm].</summary>
     private const double ReadyToolZOffsetMm = -300.0;
 
-    /// <summary>벽면에서 직선 후퇴 거리 [mm]. 툴 Z+ 방향(벽에서 멀어지는 방향).</summary>
+    /// <summary>벽면에서 직선 후퇴 거리 [mm]. 툴 Z+ 방향(벽에서 멀어지는 방향). 첫 경유점이 더 가까우면
+    /// 그 평면까지만 물러난다(<see cref="LimitedRetractDistanceMm"/>).</summary>
     internal const double RetractDistanceMm = 300.0;
+
+    /// <summary>제한된 후퇴 거리가 이보다 짧으면 후퇴를 생략한다 [mm] — 이미 첫 경유점 평면 근처·안쪽이다.</summary>
+    internal const double RetractMinUsefulMm = 10.0;
 
     /// <summary>툴 Z+ 의 BASE 연직 성분이 이보다 작으면(아래로 향하면) 후퇴가 내려가는 것으로 본다.</summary>
     private const double RetractDescendDirZ = -0.05;
@@ -308,10 +338,40 @@ internal static class SequenceEntry
                 done.Add(retraced);
                 cur = await cobot.Rpc.GetActualJointPosAsync(ct: ct);
             }
-            else if (await RetractFromWallAsync(cobot, ctx, logger, ct))
+            else
             {
-                done.Add("벽면 후퇴");
-                cur = await cobot.Rpc.GetActualJointPosAsync(ct: ct);
+                try
+                {
+                    // 후퇴는 첫 경유점 평면까지만 — 팔이 덜 뻗은 상태에서 300mm 를 다 당기면 경유점보다 차체 쪽으로
+                    // 접혀 들어간다(실기 2026-11-20 22:01 hd-amr-m2: TCP x −1136 → −836, 작업 준비 위치 −955 보다 120mm 안쪽, EMO).
+                    var waypoint = mode == PoseMode.Home
+                        ? (await ResolveReadyAsync(cobot, ctx, logger, ct)).Pose
+                        : TaughtXyz(ctx, ModeViaSlot(cur, ctx, mode, LastModeWall)?.Key ?? baseKey);
+                    if (await RetractFromWallAsync(cobot, ctx, logger, ct, waypoint))
+                    {
+                        done.Add("벽면 후퇴");
+                        cur = await cobot.Rpc.GetActualJointPosAsync(ct: ct);
+                    }
+                }
+                catch (RetractSelfInterferenceException ex)
+                {
+                    // 후퇴가 차체 쪽으로 막힘 = 벽 앞이 아니다. 첫 경유점 근처이고 관절 경로가 비어 있으면 아래 MoveJ 로 바로 돌아간다.
+                    var (key, name) = mode == PoseMode.Home
+                        ? ("ready", "작업 준비 위치")
+                        : ModeViaSlot(cur, ctx, mode, LastModeWall) is { } sl ? (sl.Key, $"검사 준비({sl.Code})") : (baseKey, BaseNameOf(mode));
+                    var why = TaughtJoints(ctx, key) is { } target
+                        ? DirectReturnBlocker(cur, target)
+                        : $"{name} 미티칭";
+                    if (why is not null)
+                    {
+                        logger.LogWarning("관절 이동 복귀도 불가 — {Why}", why);
+                        throw new InvalidOperationException($"{ex.Message} (관절 이동 복귀도 불가: {why})", ex);
+                    }
+                    logger.LogInformation(
+                        "벽면 후퇴가 차체 쪽 간섭으로 막힘 — {Name} 근처(관절 최대 {Deg:0.0}°)이고 관절 경로 간섭 없음 → 후퇴 없이 관절 이동으로 복귀",
+                        name, JointDistance(cur, FairinoRpcClient.UnwrapToward(TaughtJoints(ctx, key)!, cur)));
+                    done.Add($"{name} 근처 — 후퇴 생략");
+                }
             }
         }
 
@@ -807,6 +867,27 @@ internal static class SequenceEntry
         return (computed, null, $"자동(홈+툴Z {ReadyToolZOffsetMm:0}mm)");
     }
 
+    /// <summary>
+    /// 벽면 후퇴 거리 [mm] — 후퇴 방향으로 첫 경유점(<paramref name="waypointTcp"/>, BASE [x,y,z…]) 평면까지 남은 거리,
+    /// 0~<see cref="RetractDistanceMm"/> 로 자른다. 경유점을 모르면 <see cref="RetractDistanceMm"/>.
+    /// 팔을 멀리 뻗은 자세는 종전대로 300mm, 덜 뻗은 자세는 경유점 평면에서 멈춰 차체 쪽으로 접혀 들어가지 않는다.
+    /// </summary>
+    internal static double LimitedRetractDistanceMm(double[] tcpPose, double[]? waypointTcp, ToolAxisDir opticalAxis = ToolAxisDir.MinusZ)
+    {
+        if (waypointTcp is not { Length: >= 3 }) return RetractDistanceMm;
+        var full = PlanRetract(tcpPose, RetractDistanceMm, opticalAxis: opticalAxis);
+        var room = 0.0;
+        for (var i = 0; i < 3; i++)
+            room += (waypointTcp[i] - tcpPose[i]) * full.OffsetBase[i] / RetractDistanceMm;
+        return Math.Clamp(room, 0.0, RetractDistanceMm);
+    }
+
+    /// <summary>티칭 슬롯의 TCP 위치 [x,y,z] — 미티칭이면 null.</summary>
+    private static double[]? TaughtXyz(SequenceContext ctx, string key)
+        => ctx.Positions.TryGetValue(key, out var p) && p.IsTaught
+            ? new[] { p.X!.Value, p.Y!.Value, p.Z!.Value }
+            : null;
+
     /// <summary>벽면 후퇴 계획. <paramref name="Horizontal"/> 이면 BASE 오프셋(<paramref name="OffsetBase"/>)으로,
     /// 아니면 툴 오프셋(<paramref name="ToolOffset"/> — 광축 반대 방향)으로 움직인다. <paramref name="Blocker"/> 가 null 이 아니면 움직이면 안 된다.</summary>
     internal sealed record RetractPlan(bool Horizontal, double[] OffsetBase, double[] EndTcp, string? Blocker, double[] ToolOffset);
@@ -848,7 +929,7 @@ internal static class SequenceEntry
     /// 끝점이 위험하거나 후퇴 이동이 실패(rc≠0·예외·현재 포즈 조회 실패)하면 <b>더 움직이지 않고 예외</b> —
     /// false 를 돌려주면 호출측이 벽 앞 자세 그대로 경유점으로 MoveJ 해 팔이 벽 쪽으로 휘둘린다(실기 EMO 와 같은 동작).</summary>
     public static async Task<bool> RetractFromWallAsync(
-        CobotService cobot, SequenceContext ctx, ILogger logger, CancellationToken ct)
+        CobotService cobot, SequenceContext ctx, ILogger logger, CancellationToken ct, double[]? waypointTcp = null)
     {
         double[] currentPose;
         try
@@ -868,8 +949,20 @@ internal static class SequenceEntry
                 $"벽면 후퇴 불가 — '{WeldSequenceSupport.DepthAxisKey}' 광축 파라미터가 저장돼 있지 않아 벽에서 멀어지는 방향을 " +
                 "알 수 없습니다. 움직이지 않고 정지합니다. 카메라 페이지에서 광축을 설정·저장하거나 펜던트로 벽에서 떼어 내세요.");
 
-        var plan = PlanRetract(currentPose, opticalAxis: opticalAxis);
+        var distanceMm = LimitedRetractDistanceMm(currentPose, waypointTcp, opticalAxis);
         var poseText = string.Join(", ", currentPose.Select(v => v.ToString("0.#")));
+        if (distanceMm < RetractMinUsefulMm)
+        {
+            logger.LogInformation(
+                "벽면 후퇴 생략: 현재=[{Pose}] 가 이미 첫 경유점 평면 안쪽({Dist:0}mm) — 더 당기면 차체 쪽으로 접힌다",
+                poseText, distanceMm);
+            return false;
+        }
+        if (distanceMm < RetractDistanceMm - 0.5)
+            logger.LogInformation("벽면 후퇴 거리 {Dist:0}mm 로 제한 — 첫 경유점 평면까지만(기본 {Full:0}mm)",
+                distanceMm, RetractDistanceMm);
+
+        var plan = PlanRetract(currentPose, distanceMm, opticalAxis: opticalAxis);
         var endText = string.Join(", ", plan.EndTcp.Select(v => v.ToString("0.#")));
         if (plan.Blocker is not null)
         {
@@ -879,12 +972,13 @@ internal static class SequenceEntry
 
         // 경로 검증(모션 없음) — 직선 후퇴는 툴 자세를 유지하므로 팔이 접히며 손목이 한계까지 돌 수 있다
         // (실기 2026-11-09 09:20: 수평 후퇴 중 J4 75.8°→85° 한계 정지). 움직이기 전에 경로를 이어 풀어 본다.
-        var pathBlocker = await RetractPathBlockerAsync(cobot, ctx, currentPose, plan.EndTcp, ct);
+        var (pathBlocker, selfBlocked) = await RetractPathBlockerAsync(cobot, ctx, currentPose, plan.EndTcp, ct);
         if (pathBlocker is not null)
         {
             logger.LogWarning("벽면 후퇴 중단(경로 검증): 현재=[{Pose}] → 끝점=[{End}] — {Msg}", poseText, endText, pathBlocker);
-            throw new InvalidOperationException(
-                $"벽면 후퇴 경로 {pathBlocker} — 움직이지 않고 정지합니다. 펜던트/조그로 손목 여유를 확보하며 벽에서 떼어 낸 뒤 재시도하세요.");
+            var msg = $"벽면 후퇴 경로 {pathBlocker} — 움직이지 않고 정지합니다. 펜던트/조그로 손목 여유를 확보하며 벽에서 떼어 낸 뒤 재시도하세요.";
+            if (selfBlocked) throw new RetractSelfInterferenceException(msg);
+            throw new InvalidOperationException(msg);
         }
 
         try
@@ -893,14 +987,14 @@ internal static class SequenceEntry
             if (plan.Horizontal)
             {
                 logger.LogInformation("벽면 직선 후퇴 시작: 현재=[{Pose}], 수평 {Dist}mm(툴Z+ 가 아래를 향함 — 높이 유지) → 끝점=[{End}]",
-                    poseText, RetractDistanceMm, endText);
+                    poseText, distanceMm.ToString("0"), endText);
                 rc = await cobot.Rpc.MoveByOffsetAsync(
                     currentPose, user: 0, plan.OffsetBase, tool: ctx.Tool, vel: ctx.Velocity, ct: ct);
             }
             else
             {
                 logger.LogInformation("벽면 직선 후퇴 시작: 현재=[{Pose}], 광축({Axis}) 반대로 {Dist}mm → 끝점=[{End}]",
-                    poseText, opticalAxis, RetractDistanceMm, endText);
+                    poseText, opticalAxis, distanceMm.ToString("0"), endText);
                 rc = await cobot.Rpc.MoveByToolOffsetAsync(
                     currentPose, user: 0, plan.ToolOffset, tool: ctx.Tool, vel: ctx.Velocity, ct: ct);
             }
@@ -912,7 +1006,7 @@ internal static class SequenceEntry
                 throw new InvalidOperationException(RetractFailedMessage($"rc={rc}{FairinoErrorCodes.Suffix(rc)}"));
             }
 
-            logger.LogInformation("벽면 후퇴 완료 ({Dist}mm{Mode})", RetractDistanceMm, plan.Horizontal ? ", 수평" : "");
+            logger.LogInformation("벽면 후퇴 완료 ({Dist}mm{Mode})", distanceMm.ToString("0"), plan.Horizontal ? ", 수평" : "");
             return true;
         }
         catch (OperationCanceledException) { throw; }
@@ -929,14 +1023,14 @@ internal static class SequenceEntry
     /// 간격으로 현재 관절에서 이어 풀어, 점마다 <see cref="CobotInspectionMoveStep.PathStepBlocker"/>(관절 한계 근접·점프·
     /// 팔꿈치·손목 특이점)와 <see cref="RetractSelfBlocker"/>(차체·받침 기둥·신호탑 간섭)를 본다. 걸리면 "[점] 사유", 통과하면 null. 관절·IK 조회 실패도 사유로 돌려준다(움직이지 않는다).
     /// </summary>
-    private static async Task<string?> RetractPathBlockerAsync(
+    private static async Task<(string? Why, bool SelfInterference)> RetractPathBlockerAsync(
         CobotService cobot, SequenceContext ctx, double[] currentPose, double[] endTcp, CancellationToken ct)
     {
         double[] curJoints;
         try { curJoints = await cobot.Rpc.GetActualJointPosAsync(ct: ct); }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            return $"검증 불가 — 현재 관절을 읽지 못했습니다({ex.Message})";
+            return ($"검증 불가 — 현재 관절을 읽지 못했습니다({ex.Message})", false);
         }
 
         var seed = curJoints;
@@ -951,15 +1045,15 @@ internal static class SequenceEntry
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                return $"[{at}] 도달 불가({ex.Message})";
+                return ($"[{at}] 도달 불가({ex.Message})", false);
             }
             if (CobotInspectionMoveStep.PathStepBlocker(seed, j, curJoints) is { } why)
-                return $"[{at}] {why}";
+                return ($"[{at}] {why}", false);
             if (RetractSelfBlocker(curJoints, j) is { } self)
-                return $"[{at}] {self} — 여기는 벽 앞이 아니라 차체 쪽일 수 있습니다";
+                return ($"[{at}] {self} — 여기는 벽 앞이 아니라 차체 쪽일 수 있습니다", true);
             seed = j;
         }
-        return null;
+        return (null, false);
     }
 
     /// <summary>벽면 후퇴 경로 검증 점 — 출발점 제외, 끝점 포함(<see cref="CobotInspectionMoveStep.SampleSegment"/>).</summary>

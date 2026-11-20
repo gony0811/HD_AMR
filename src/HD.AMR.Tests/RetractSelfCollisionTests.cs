@@ -111,4 +111,27 @@ public class RetractSelfCollisionTests
         Assert.NotNull(why);
         Assert.Contains("도중에 멈췄습니다", why);
     }
+
+    /// <summary>
+    /// 실기 2026-11-20 21:22 hd-amr-m2 — 작업 준비 위치에서 J3·J4 약 15° 벗어난 팔. 300mm 벽면 후퇴는 전완 ↔ 받침 기둥 16mm 로 막혔지만
+    /// 작업 준비 위치로 바로 관절 이동하는 길은 비어 있다(티칭 화면 홈 이동은 정상) — 관절 이동 복귀를 허용한다.
+    /// </summary>
+    [Fact]
+    public void 작업_준비_위치_근처에서_후퇴가_막히면_관절_이동_복귀를_허용한다()
+    {
+        double[] m2Ready = { -0.3905, -9.4139, 119.9842, -110.76, 90.0011, 180.0122 };
+        double[] stopped = { -5.4, -9.2, 135.1, -126.6, 85.7, 180.0 };
+        Assert.Null(RouteSegmentOf(stopped, Ctx(), PoseMode.Home));                 // 종전 판정 — 경로 위가 아니라 "벽 앞"
+        Assert.True(JointDistance(stopped, m2Ready) <= NearWaypointMaxJointDeg);
+        Assert.Null(DirectReturnBlocker(stopped, m2Ready));                          // 현 장비(받침 기둥) 모델로 길이 비어 있음
+    }
+
+    [Fact]
+    public void 벽_앞이거나_닿은_자세에서는_관절_이동_복귀를_막는다()
+    {
+        Assert.Contains("관절 최대", DirectReturnBlocker(WallFrontJ, ReadyJ, LiftEra)); // 경유점에서 멀다 — 벽 앞일 수 있음
+        var why = DirectReturnBlocker(FaultJ, HomeJ, LiftEra);                       // 11-16 충돌 자세 — 홈까지 20° 안이지만 이미 닿아 있음
+        Assert.NotNull(why);
+        Assert.Contains("간섭", why);
+    }
 }
