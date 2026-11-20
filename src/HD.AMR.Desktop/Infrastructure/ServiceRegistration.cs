@@ -247,7 +247,7 @@ internal static class ServiceRegistration
         services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<LaserWorkingDistanceStep>(
             sp, "laserWorkingDistance", "레이저 WD 거리 조정", 450));
         services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<LaserWorkingDistanceStep>(
-            sp, LaserWorkingDistanceStep.BundlePoint2Key, "묶음 점2 WD 조정", 820));
+            sp, LaserWorkingDistanceStep.BundlePoint2Key, "점2 WD 조정", 820));
         services.AddScoped<ISequenceStep, DepthCamCenterShiftStep>();
         services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<PeakFindStep>(sp, 1));
         services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<PeakCenteringStep>(sp, 1));

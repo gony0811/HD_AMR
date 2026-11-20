@@ -105,7 +105,7 @@ public class FlatSurfaceAlignStep : ISequenceStep
     public const string BundlePoint2Key = "flatSurfaceSearchBundlePoint2";
 
     public string Key => _levelSurface ? "flatSurfaceAlign" : BundlePoint2Key;
-    public string DisplayName => _levelSurface ? "평탄면 센터링 (레이저 정렬)" : "묶음 점2 평탄면 탐색";
+    public string DisplayName => _levelSurface ? "평탄면 센터링 (레이저 정렬)" : "점2 평탄면 탐색";
     public int DefaultOrder => _levelSurface ? 400 : 810;
 
     public StepValidation Validate(SequenceContext context)
@@ -122,8 +122,8 @@ public class FlatSurfaceAlignStep : ISequenceStep
 
     public async Task<StepResult> ExecuteAsync(SequenceContext context, CancellationToken ct)
     {
-        if (!_levelSurface && !BundleTeach.IsActive(context))
-            return StepResult.Ok("묶음 점2가 아님 — 평탄면 재탐색 생략.");
+        if (!_levelSurface && !await BundleTeach.RunPoint2FlatWdAsync(_param, context))
+            return StepResult.Ok($"묶음 점2가 아님 — 평탄면 재탐색 생략('{BundleTeach.SoloPoint2FlatWdKey}'=false).");
 
         var startedAt = DateTime.Now;
         try
@@ -156,7 +156,7 @@ public class FlatSurfaceAlignStep : ISequenceStep
             InspectionAlignmentAnchor.CaptureIfMissing(context,
                 await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct));
 
-        // 묶음 점2: 탐색을 시작한 자리(피치 이동으로 온 점2 근처)를 남긴다 — 점2 WD 조정 뒤 여기로 돌아온다.
+        // 점2(묶음·단독): 탐색을 시작한 자리(피치 이동으로 온 점2 근처)를 남긴다 — 점2 WD 조정 뒤 여기로 돌아온다.
         if (!_levelSurface)
             context.Bag[BundleTeach.Point2ReturnPoseKey] = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
 

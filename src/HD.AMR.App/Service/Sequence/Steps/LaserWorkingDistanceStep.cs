@@ -113,8 +113,8 @@ public class LaserWorkingDistanceStep : ISequenceStep
 
     public async Task<StepResult> ExecuteAsync(SequenceContext context, CancellationToken ct)
     {
-        if (_key == BundlePoint2Key && !BundleTeach.IsActive(context))
-            return StepResult.Ok("묶음 점2가 아님 — WD 재조정 생략.");
+        if (_key == BundlePoint2Key && !await BundleTeach.RunPoint2FlatWdAsync(_param, context))
+            return StepResult.Ok($"묶음 점2가 아님 — WD 재조정 생략('{BundleTeach.SoloPoint2FlatWdKey}'=false).");
 
         var result = await AdjustAsync(context, ct);
         if (_key != BundlePoint2Key || result.Success || !BundleTeach.TryMarkDissolved(context))
@@ -318,7 +318,7 @@ public class LaserWorkingDistanceStep : ISequenceStep
             // 평탄면 탐색을 하지 않았으면(자리 기록 없음) 툴은 아직 점2 자리에 있으므로 옆으로 움직일 것이 없다.
             if (!context.Bag.TryGetValue(BundleTeach.Point2ReturnPoseKey, out var p2) || p2 is not double[] { Length: 6 } point2)
                 return (true, "");
-            (reference, refSource) = (point2, "묶음 점2 위치");
+            (reference, refSource) = (point2, "점2 위치");
         }
         else
             (reference, refSource) = InspectionAlignmentAnchor.GetReturnReference(context);
@@ -356,8 +356,16 @@ public class LaserWorkingDistanceStep : ISequenceStep
     /// 무효 샘플이 나오면 윈도우를 리셋하고 계속 폴링, <see cref="StabilizeTimeoutMs"/> 초과 시 null.
     /// 모션 잔여(rc=0 이후에도 이동 중)와 센서 내부 평균화 필터의 수렴 지연을 모두 흡수한다.
     /// </summary>
-    private async Task<(double? Z, string? Note)> SampleStableZAsync(CancellationToken ct)
+    private Task<(double? Z, string? Note)> SampleStableZAsync(CancellationToken ct)
+        => SampleStableZAsync(_laser, _logger, ct);
+
+    /// <summary>레이저 3점 평균 거리(Z, mm)를 안정화될 때까지 폴링해 돌려준다 — 실패 시 (null, 사유).
+    /// ⑧ 피치 이동(들어올림 보정)도 같은 판정으로 잰다.</summary>
+    internal static async Task<(double? Z, string? Note)> SampleStableZAsync(
+        LaserDisplacementSensorService laser, ILogger logger, CancellationToken ct)
     {
+        var _laser = laser;
+        var _logger = logger;
         var window = new Queue<double>(StableWindow);
         string? lastNote = null;
         double? lastZ = null;

@@ -20,13 +20,22 @@ public class PeakApproachStep : ISequenceStep
     private readonly CobotService _cobot;
     private readonly ParameterService _param;
     private readonly ILogger<PeakApproachStep> _logger;
+    private readonly LaserDisplacementSensorService _laser;
 
-    public PeakApproachStep(CobotService cobot, ParameterService param, ILogger<PeakApproachStep> logger)
+    public PeakApproachStep(CobotService cobot, ParameterService param, ILogger<PeakApproachStep> logger,
+        LaserDisplacementSensorService laser)
     {
         _cobot = cobot;
         _param = param;
         _logger = logger;
+        _laser = laser;
     }
+
+    /// <summary>들어올린 피치 이동의 레이저 측정 — 미연결이면 측정 없음(들어올린 만큼 그대로 내린다).</summary>
+    private Task<(double? Z, string? Note)> MeasureLaserAsync(CancellationToken ct)
+        => _laser.IsConnected
+            ? LaserWorkingDistanceStep.SampleStableZAsync(_laser, _logger, ct)
+            : Task.FromResult<(double?, string?)>((null, "레이저 미연결"));
 
     public string Key => "peak2Approach";
     public string DisplayName => "Peak2 이동 (pitch)";
@@ -56,7 +65,7 @@ public class PeakApproachStep : ISequenceStep
             for (var i = 0; i < count; i++)
             {
                 var step = await BundleTeach.MoveOnePitchAsync(
-                    _cobot, _param, _logger, context, sign, fromBead1: i == 0, ct);
+                    _cobot, _param, _logger, context, sign, fromBead1: i == 0, ct, MeasureLaserAsync);
                 if (!step.Success) { failed = step; break; }
             }
             if (failed is null)
@@ -72,8 +81,9 @@ public class PeakApproachStep : ISequenceStep
                 : StepResult.Fail($"{failed.Message} / {back.Message}");
         }
 
+        BundleTeach.ResetSoloPoint2(context);
         var pitchDir = await WeldSequenceSupport.GetSignAsync(_param, WeldSequenceSupport.PitchDirKey);
-        var one = await BundleTeach.MoveOnePitchAsync(_cobot, _param, _logger, context, pitchDir, fromBead1: true, ct);
+        var one = await BundleTeach.MoveOnePitchAsync(_cobot, _param, _logger, context, pitchDir, fromBead1: true, ct, MeasureLaserAsync);
         return one.Success
             ? StepResult.Ok("Peak2 위치로 " + one.Message)
             : one;

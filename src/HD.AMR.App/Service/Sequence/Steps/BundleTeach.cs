@@ -17,6 +17,52 @@ public static class BundleTeach
     public const string LastStartKey = "bundle.lastStartW";
     public const string Point2WdKey = "bundle.point2Wd";
 
+    /// <summary>단독 교시에서도 점2 평탄면 탐색·WD 조정(⑧⁺)을 할지 파라미터 키(bool, 기본 true). false = 묶음 점2 에서만.
+    /// 피치 이동이 모델 면 법선 기준이라 점2 면 거리·틸트가 점1 과 달라질 수 있어(실기 2026-11-21 M2 ±10mm) 점2 에서 다시 맞춘다.</summary>
+    public const string SoloPoint2FlatWdKey = "Sequence.Point2.SoloFlatWd";
+
+    /// <summary>점2 평탄면 탐색·WD 조정을 이번 실행에서 할지 — 묶음 점2 이거나, 단독이면 <see cref="SoloPoint2FlatWdKey"/>(기본 true).</summary>
+    public static async Task<bool> RunPoint2FlatWdAsync(ParameterService param, SequenceContext context)
+    {
+        if (IsActive(context)) return true;
+        try { return await param.GetBoolAsync(SoloPoint2FlatWdKey) ?? true; }
+        catch { return true; }
+    }
+
+    /// <summary>단독 피치 이동 시작 — 이전 실행의 점2 자리·WD 표식을 지운다(시퀀스 화면은 컨텍스트를 재사용한다).</summary>
+    public static void ResetSoloPoint2(SequenceContext context)
+    {
+        if (IsActive(context)) return;
+        context.Bag.Remove(Point2WdKey);
+        context.Bag.Remove(Point2ReturnPoseKey);
+    }
+
+    /// <summary>⑧ 피치 이동 들어올림 거리 [mm] 파라미터 키 — 면 바깥(모델 면 법선)으로 이만큼 띄운 채 피치를 이동하고,
+    /// 도착 뒤 레이저로 점1 과 같은 면 거리까지 내린다. 0 = 종전(면 평행 직선 이동).</summary>
+    public const string PitchLiftKey = "Sequence.Pitch.LiftMm";
+    /// <summary>들어올림 기본값 [mm] — 실기 면 거리 변화 ±10mm(모델 면과 실제 면 1.6° 차, 2026-11-21 M2)의 3배 여유.</summary>
+    public const double DefaultPitchLiftMm = 30.0;
+    /// <summary>들어올린 채 잰 점1→점2 레이저 거리 변화가 이 값을 넘으면 측정 이상으로 보고 내리지 않고 정지 [mm].</summary>
+    public const double MaxPitchDriftMm = 40.0;
+
+    /// <summary>
+    /// 들어올린 피치 이동 뒤 내릴 거리 [mm] — 점1·점2 에서 들어올린 채 잰 레이저 거리(z1·z2)로 점1 과 같은 면 거리를 만든다:
+    /// 내림 = lift + (z2 − z1). 레이저 값이 없으면 lift 그대로. 변화가 <see cref="MaxPitchDriftMm"/> 를 넘거나
+    /// 내림이 음수(점2 가 들어올린 높이보다도 가깝다)면 null + 사유 — 움직이지 않는다.
+    /// </summary>
+    internal static (double? Down, string Note) PlanPitchLower(double liftMm, double? z1, double? z2)
+    {
+        if (z1 is not { } a || z2 is not { } b)
+            return (liftMm, "레이저 측정 없음 — 들어올린 만큼 그대로 내림");
+        var drift = b - a;
+        if (Math.Abs(drift) > MaxPitchDriftMm)
+            return (null, $"점1→점2 레이저 거리 변화 {drift:+0.0;-0.0}mm 가 한계 ±{MaxPitchDriftMm:0}mm 초과 — 측정 이상");
+        var down = liftMm + drift;
+        if (down < 0)
+            return (null, $"점2 가 들어올린 높이보다 {-down:0.0}mm 더 가깝다(변화 {drift:+0.0;-0.0}mm) — 들어올림 여유 부족");
+        return (down, $"레이저 거리 변화 {drift:+0.0;-0.0}mm 반영 — {down:0.0}mm 내림");
+    }
+
     /// <summary>
     /// 묶음 점2 평탄면 탐색을 시작한 자리의 TCP 포즈(double[6], BASE) — 점2 WD 조정 뒤 돌아갈 자리.
     /// 점2 WD 가 ④⁺ 와 같은 기준(② 용접선 시작점 S)으로 복귀하면 점1 쪽으로 수백 mm 를 되돌아가려다 한계(±300mm)에
@@ -88,7 +134,8 @@ public static class BundleTeach
     /// </summary>
     public static async Task<StepResult> MoveOnePitchAsync(
         CobotService cobot, ParameterService param, ILogger logger, SequenceContext context,
-        int pitchDir, bool fromBead1, CancellationToken ct)
+        int pitchDir, bool fromBead1, CancellationToken ct,
+        Func<CancellationToken, Task<(double? Z, string? Note)>>? measureLaser = null)
     {
         var pitchMm = await WeldSequenceSupport.GetPitchMmAsync(param, context);
         if (pitchMm <= 0)
@@ -155,10 +202,23 @@ public static class BundleTeach
             logger.LogInformation(
                 "피치 이동: 면 평행 BASE 오프셋 [{Dx:+0.0;-0.0}, {Dy:+0.0;-0.0}, {Dz:+0.0;-0.0}]mm",
                 baseMove[0], baseMove[1], baseMove[2]);
-            rc = await cobot.Rpc.MoveByOffsetAsync(anchor, user: 0,
-                new[] { baseMove[0], baseMove[1], baseMove[2], 0.0, 0.0, 0.0 },
-                tool: context.Tool, vel: context.Velocity, ct: ct);
-            wallNote = ", 면 거리 유지";
+            var liftMm = await GetPitchLiftMmAsync(param);
+            if (liftMm > 0)
+            {
+                // 모델 면 법선은 AMR 정차 자세에서 계산한 값이라 실제 면과 1~2° 어긋날 수 있다 — 360mm 를 면 평행으로
+                // 가면 ±10mm 가까워져 검사 팁이 코로게이션에 닿았다(실기 2026-11-21 M2). 띄운 채 이동하고 레이저로 내린다.
+                var lifted = await MoveLiftedPitchAsync(cobot, logger, context, anchor, baseMove, wallOut, liftMm, measureLaser, ct);
+                if (lifted.Error is not null) return StepResult.Fail(lifted.Error);
+                rc = 0;
+                wallNote = $", {liftMm:0}mm 들어올려 이동 — {lifted.Note}";
+            }
+            else
+            {
+                rc = await cobot.Rpc.MoveByOffsetAsync(anchor, user: 0,
+                    new[] { baseMove[0], baseMove[1], baseMove[2], 0.0, 0.0, 0.0 },
+                    tool: context.Tool, vel: context.Velocity, ct: ct);
+                wallNote = ", 면 거리 유지";
+            }
         }
         else
         {
@@ -173,6 +233,60 @@ public static class BundleTeach
         return StepResult.Ok(
             $"피치 이동 툴{FlatSurfaceCenteringService.AxisName(toolAxis)} {moveMm:+0.0;-0.0}mm " +
             $"(pitch={pitchMm:0.#}mm, dir={pitchDir:+0;-0}, 진행축={progressAxis}{unshiftNote}{wallNote}{seamNote}).");
+    }
+
+    /// <summary>
+    /// 들어올린 피치 이동 — ① 점1 앵커에서 면 바깥으로 <paramref name="liftMm"/> 상승(레이저 z1) ② 같은 높이로 피치 이동(레이저 z2)
+    /// ③ <see cref="PlanPitchLower"/> 만큼 면 쪽으로 내림. 모두 BASE 오프셋 직선 이동, 자세 유지.
+    /// </summary>
+    private static async Task<(string? Error, string Note)> MoveLiftedPitchAsync(
+        CobotService cobot, ILogger logger, SequenceContext context, double[] anchor, double[] baseMove, double[] wallOut,
+        double liftMm, Func<CancellationToken, Task<(double? Z, string? Note)>>? measureLaser, CancellationToken ct)
+    {
+        var nLen = Math.Sqrt(wallOut[0] * wallOut[0] + wallOut[1] * wallOut[1] + wallOut[2] * wallOut[2]);
+        var n = new[] { wallOut[0] / nLen, wallOut[1] / nLen, wallOut[2] / nLen };
+        double[] Off(double along, double outMm) => new[]
+        {
+            along * baseMove[0] + outMm * n[0], along * baseMove[1] + outMm * n[1], along * baseMove[2] + outMm * n[2], 0.0, 0.0, 0.0,
+        };
+        Task<int> Go(double[] off) => cobot.Rpc.MoveByOffsetAsync(anchor, user: 0, off, tool: context.Tool, vel: context.Velocity, ct: ct);
+
+        async Task<double?> Measure(string at)
+        {
+            if (measureLaser is null) return null;
+            await Task.Delay(300, ct);
+            var (z, note) = await measureLaser(ct);
+            if (z is null) logger.LogWarning("피치 이동: {At} 레이저 측정 실패 — {Note}", at, note);
+            return z;
+        }
+
+        var rc = await Go(Off(0, liftMm));
+        if (rc != 0) return ($"피치 이동 들어올림 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.", "");
+        var z1 = await Measure("점1(들어올림)");
+
+        rc = await Go(Off(1, liftMm));
+        if (rc != 0) return ($"피치 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.", "");
+        var z2 = await Measure("점2(들어올림)");
+
+        var (down, note) = PlanPitchLower(liftMm, z1, z2);
+        logger.LogInformation("피치 이동: 들어올림 {Lift:0}mm, 레이저 점1 {Z1} → 점2 {Z2} — {Note}",
+            liftMm, z1?.ToString("0.0") ?? "-", z2?.ToString("0.0") ?? "-", note);
+        if (down is not { } d)
+            return ($"피치 이동 후 내림 중단 — {note}. 들어올린 위치에서 정지합니다.", note);
+
+        rc = await Go(Off(1, liftMm - d));
+        if (rc != 0) return ($"피치 이동 후 내림 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.", "");
+        return (null, note);
+    }
+
+    private static async Task<double> GetPitchLiftMmAsync(ParameterService param)
+    {
+        try
+        {
+            var v = await param.GetDoubleAsync(PitchLiftKey);
+            return v is { } x && double.IsFinite(x) ? Math.Clamp(x, 0, 100) : DefaultPitchLiftMm;
+        }
+        catch { return DefaultPitchLiftMm; }
     }
 
     /// <summary>진행축 성분만 담은 툴 이동량(x,y,z) — 방향 판정에 검사캠 시프트 역보정이 섞이지 않게 한다.</summary>

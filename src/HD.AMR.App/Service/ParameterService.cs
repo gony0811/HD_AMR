@@ -199,6 +199,13 @@ public class ParameterService
                 Sequence.Steps.InspectionRunStep.DefaultInspectVelPercent.ToString(CultureInfo.InvariantCulture),
                 "⑱ 검사 수행 기본 검사 속도(%) — 경유점 순회(검사 스캔) 속도. 레시피 검사 속도(또는 시퀀스 화면 검사 속도)가 비어 있고 " +
                 "검사 프로파일에도 속도가 없을 때 쓴다. 기본 2, 1~100 (밖이면 2). 다음 검사부터 적용."),
+            (Sequence.Steps.BundleTeach.SoloPoint2FlatWdKey, "true",
+                "⑧⁺ 단독 교시에서도 점2 에서 평탄면 탐색·레이저 WD 조정을 한 뒤 점2 자리로 돌아온다(true). false = 묶음 점2 에서만. " +
+                "피치 이동 뒤 점2 의 면 거리·틸트를 점1 과 같은 기준으로 다시 맞춘다."),
+            (Sequence.Steps.BundleTeach.PitchLiftKey,
+                Sequence.Steps.BundleTeach.DefaultPitchLiftMm.ToString(CultureInfo.InvariantCulture),
+                "⑧ Peak2 피치 이동 들어올림(mm) — 점1 에서 면 바깥으로 이만큼 띄운 채 피치를 이동하고, 도착 뒤 레이저로 점1 과 같은 " +
+                "면 거리까지 내린다(모델 면과 실제 면 각도 차로 이동 중 팁이 코로게이션에 닿는 것 방지). 0 = 종전 면 평행 직선 이동. 기본 30, 0~100."),
             (Sequence.Steps.InspectionRunStep.LinearSpeedAt100PctKey,
                 Sequence.Steps.InspectionRunStep.DefaultLinearSpeedAt100Pct.ToString(CultureInfo.InvariantCulture),
                 "⑱ 검사 수행 — 검사 속도를 mm/s 로 지정했을 때(레시피·시퀀스 화면 '검사 속도(mm/s)') % 로 환산하는 기준: 검사 속도 100% 일 때의 " +
