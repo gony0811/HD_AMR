@@ -52,6 +52,7 @@ public sealed partial class TeachingViewModel : ViewModelBase
     {
         _scopeFactory = scopeFactory;
         _cobot = cobot;
+        _vel = cobot.DefaultMoveVelPercent;   // 화면 초기 속도 = 설정 Cobot:DefaultVelPct
         _lift = lift;
         _logger = logger;
         _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };

@@ -259,6 +259,7 @@
 
     protected override async Task OnInitializedAsync()
     {
+        _vel = Cobot.DefaultMoveVelPercent;   // 화면 초기 속도 = 설정 Cobot:DefaultVelPct
         _liftMode = await Service.GetActiveLiftModeAsync();
         _positions = await Service.ListAsync(_liftMode);
         _ = PollLoop(_pollCts.Token);
