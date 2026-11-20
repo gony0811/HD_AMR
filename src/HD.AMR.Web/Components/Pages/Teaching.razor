@@ -349,6 +349,12 @@
                     _msg = $"리프트 {TeachingMove.HomeLiftHeightMm}mm 하강 중…";
                     _isErr = false;
                     _ = InvokeAsync(StateHasChanged);
+                }, Param,
+                () =>
+                {
+                    _msg = "벽면 후퇴 후 기준 자세로 복귀 중…";
+                    _isErr = false;
+                    _ = InvokeAsync(StateHasChanged);
                 });
             _isErr = !r.Ok;
             _msg = TeachingMove.Describe(r, p);
