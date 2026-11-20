@@ -29,6 +29,26 @@ public class TelescopicScaleTests
     public void 실제_mm를_컨트롤러_지령값으로_환산한다(int mm, int units)
         => Assert.Equal(units, S.ToControllerUnits(mm));
 
+    [Theory]
+    [InlineData(0.292, 3, 0, 291)]    // M2 현장 설정 — 999 × 0.292 = 291.7 → 내림 291
+    [InlineData(0.292, 4, 0, 2919)]
+    [InlineData(2.41, 3, 0, 2407)]
+    [InlineData(2.5, 3, 30, 2527)]
+    public void 지령_가능_최대_높이는_자릿수와_환산값으로_정해진다(double scale, int digits, int offset, int expectedMm)
+    {
+        var s = new TelescopicSerialSettings { MmPerUnit = scale, TargetDigits = digits, HeightOffsetMm = offset };
+        Assert.Equal(expectedMm, s.MaxReachableHeightMm);
+        Assert.True(s.ToControllerUnits(s.MaxReachableHeightMm) <= s.MaxTargetUnits);
+    }
+
+    [Fact]
+    public void 지령_가능_최대_높이를_넘으면_자릿수_한계를_넘는다()
+    {
+        var s = new TelescopicSerialSettings { MmPerUnit = 0.292, TargetDigits = 3 };
+        Assert.Equal(1370, s.ToControllerUnits(400));
+        Assert.True(s.ToControllerUnits(400) > s.MaxTargetUnits);
+    }
+
     [Fact]
     public void 오프셋을_반영해_왕복한다()
     {

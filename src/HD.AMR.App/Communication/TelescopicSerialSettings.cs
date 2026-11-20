@@ -78,6 +78,15 @@ public class TelescopicSerialSettings
 
     private double EffectiveMmPerUnit => MmPerUnit > 0 ? MmPerUnit : 1.0;
 
+    /// <summary><c>Target:</c> 로 보낼 수 있는 최대 컨트롤러 값 — <see cref="TargetDigits"/> 자리 최댓값(3자리 → 999).</summary>
+    public int MaxTargetUnits => (int)Math.Pow(10, Math.Clamp(TargetDigits, 1, 6)) - 1;
+
+    /// <summary>
+    /// 지령 가능한 최대 실제 높이(mm) — <see cref="MaxTargetUnits"/> × <see cref="MmPerUnit"/> + 오프셋을 내림한 값.
+    /// 내림이라 이 높이를 <see cref="ToControllerUnits"/> 로 환산해도 <see cref="MaxTargetUnits"/> 를 넘지 않는다.
+    /// </summary>
+    public int MaxReachableHeightMm => (int)Math.Floor(MaxTargetUnits * EffectiveMmPerUnit + HeightOffsetMm);
+
     /// <summary>
     /// 조그(상승/하강) 유지 명령 재전송 주기(ms). 사양서 FAQ 1 에 상승 명령 반복 전송은 무해하다고 명시.
     /// </summary>

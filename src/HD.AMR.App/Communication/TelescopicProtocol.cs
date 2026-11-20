@@ -108,7 +108,7 @@ public static class TelescopicProtocol
         int max = (int)Math.Pow(10, digits) - 1;
         if (heightMm < 0 || heightMm > max)
             throw new ArgumentOutOfRangeException(nameof(heightMm), heightMm,
-                $"지정 높이는 0~{max} mm 여야 합니다(사양서 높이 데이터 {digits}바이트).");
+                $"Target 지령값은 0~{max} (컨트롤러 단위, {digits}자리) 여야 합니다 — mm 가 아니라 MmPerUnit 으로 환산된 값입니다.");
         return "Target:" + heightMm.ToString(new string('0', digits));
     }
 

@@ -150,6 +150,12 @@ public class TelescopicService : BackgroundService
         }
 
         _logger.LogInformation("TelescopicService 시작 ({Port} @ {Baud})", _settings.PortName, _settings.BaudRate);
+        if (_settings.MaxHeightMm > _settings.MaxReachableHeightMm)
+            _logger.LogWarning(
+                "텔레스코픽 MaxHeightMm({Max}mm) 가 지령 가능 최대 높이({Reach}mm)보다 큽니다 — Target {Digits}자리(최대 {Units}) × MmPerUnit {Scale} + 오프셋 {Offset}mm. " +
+                "{Reach}mm 초과 지정 높이 이동은 거부됩니다. TargetDigits 를 늘리거나 MaxHeightMm 을 낮추세요.",
+                _settings.MaxHeightMm, _settings.MaxReachableHeightMm, _settings.TargetDigits, _settings.MaxTargetUnits,
+                _settings.MmPerUnit, _settings.HeightOffsetMm);
 
         // host.Start() 는 첫 await 까지 동기 실행한다 — 아래 _client.Open()(SerialPort.Open 은 동기 블로킹)이
         // 기동 메인 스레드를 붙잡지 않도록 먼저 스레드풀로 양보한다.
@@ -449,6 +455,11 @@ public class TelescopicService : BackgroundService
                 $"운영 범위는 {_settings.MinHeightMm}~{_settings.MaxHeightMm} mm 입니다.");
 
         var units = _settings.ToControllerUnits(heightMm);
+        if (units < 0 || units > _settings.MaxTargetUnits)
+            throw new ArgumentOutOfRangeException(nameof(heightMm), heightMm,
+                $"{heightMm}mm 는 컨트롤러 지령값 {units} 로 환산되어 Target {_settings.TargetDigits}자리 한계(0~{_settings.MaxTargetUnits})를 넘습니다 " +
+                $"— 현재 설정(MmPerUnit {_settings.MmPerUnit}, 오프셋 {_settings.HeightOffsetMm}mm)으로 지령 가능한 최대 높이는 {_settings.MaxReachableHeightMm}mm 입니다. " +
+                "더 높이 올리려면 Telescopic:TargetDigits 를 4 로 올리세요(컨트롤러 4자리 지령 수용 여부 확인 필요).");
         _logger.LogInformation("텔레스코픽 지정 높이 이동: {Mm}mm → 컨트롤러 {Units} (×{Scale}mm/단위, 오프셋 {Offset}mm)",
             heightMm, units, _settings.MmPerUnit, _settings.HeightOffsetMm);
 
