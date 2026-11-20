@@ -167,8 +167,19 @@ public static class TaskBundlePlanner
             return false;
         return origin.SeamStartW is { Length: 3 } && next.SeamStartW is { Length: 3 }
                && origin.SeamEndW is { Length: 3 }
-               && SameSeamLine(origin.SeamStartW, origin.SeamEndW, next.SeamStartW, next.SeamEndW);
+               && SameSeamLine(origin.SeamStartW, origin.SeamEndW, next.SeamStartW, next.SeamEndW)
+               && OnSameLine(origin.SeamStartW, origin.SeamEndW, next.SeamStartW);
     }
+
+    /// <summary>
+    /// 이번 용접선 시작점이 묶음 첫 용접선의 직선 위(도면상 옆 거리 ≤ <see cref="InternalWorkpieceFrame.MaxDroppedLateralMm"/>)인지.
+    /// 평행만 보고 묶으면 옆 줄(예: 720mm 옆) 용접선도 한 묶음이 되어, 팔로워가 좌표계를 BASE 환산 ACS 옆 성분만큼
+    /// 옆으로 옮겨 쓰는데 그 값에 AMR 위치·방향 오차가 그대로 섞인다(실기 2026-11-20 PM L2-R01C14 V6~V8:
+    /// 도면 720mm 인데 769.9mm 이동 → 촬영 품질 저하). 옆 줄은 자기 묶음을 새로 만들어 직접 교시한다.
+    /// </summary>
+    internal static bool OnSameLine(double[] firstStartW, double[] firstEndW, double[] nextStartW)
+        => InternalWorkpieceFrame.MapSeamOffsetMm(firstStartW, firstEndW, nextStartW) is { } o
+           && o.LateralMm <= InternalWorkpieceFrame.MaxDroppedLateralMm;
 
     /// <summary>두 용접선을 같은 줄로 보는 방향 차 한계 [도].</summary>
     public const double SeamParallelTolDeg = 20.0;
