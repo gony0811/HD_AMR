@@ -118,6 +118,13 @@
                     <Button Content="◉ 현재 자세 캡처" Command="{Binding CaptureCurrentPoseCommand}" IsEnabled="{Binding CobotConnected}" />
                     <Button Content="선택점 갱신" Command="{Binding CaptureIntoSelectedCommand}" IsEnabled="{Binding CobotConnected}" />
                     <Button Content="십자 채우기" Command="{Binding FillCrossPatternCommand}" IsVisible="{Binding IsCross}" IsEnabled="{Binding !IsRunning}" />
+                    <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding IsLine}">
+                        <TextBlock Classes="axis" VerticalAlignment="Center" Text="간격(mm)" />
+                        <NumericUpDown Value="{Binding CorrugSpacingMm}" Minimum="0.5" Increment="0.5" FormatString="0.0" Width="110" />
+                        <TextBlock Classes="axis" VerticalAlignment="Center" Text="이격(mm)" />
+                        <NumericUpDown Value="{Binding CorrugStandoffMm}" Minimum="0" Increment="1" FormatString="0.0" Width="110" />
+                        <Button Content="코로게이션 1피치 채우기" Command="{Binding FillCorrugationPitchCommand}" IsEnabled="{Binding !IsRunning}" />
+                    </StackPanel>
                     <TextBlock Classes="axis" VerticalAlignment="Center" Text="{Binding PointCount, StringFormat='{}{0} 점'}" />
                 </StackPanel>
 

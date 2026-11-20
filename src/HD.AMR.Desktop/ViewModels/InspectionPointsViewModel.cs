@@ -81,6 +81,7 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
 
     public string SeamType => SeamTypes[Math.Clamp(SeamTypeIndex, 0, SeamTypes.Length - 1)];
     public bool IsCross => SeamType is "CROSS" || SeamType.StartsWith("CROSS3");
+    public bool IsLine => SeamType == "LINE";
     public bool CobotConnected => _cobot.IsConnected;
     public bool VisionConnected => _vision.Client.IsConnected;
     /// <summary>비전 촬영(CAPTURE_REQ)을 쓰는 AMR 인가 — 가스 검사 AMR 이면 false(촬영 관련 UI 숨김).</summary>
@@ -94,6 +95,11 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
 
     // 십자 패턴 파라미터(간이)
     private double _crossArmMm = 180, _crossSpacingMm = 30, _crossPerpRzDeg = -90;
+
+    /// <summary>코로게이션 1피치(Top→Top) 채우기 — 단면을 따라 잰 측정 간격 [mm].</summary>
+    [ObservableProperty] private double _corrugSpacingMm = 2.0;
+    /// <summary>코로게이션 채우기 — 팁 이격 [mm](작업물 Z+ 로 띄움). 0 = TCP 가 표면 위.</summary>
+    [ObservableProperty] private double _corrugStandoffMm;
 
     private CancellationTokenSource? _runCts;
 
@@ -145,7 +151,11 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
         RecomputeViewBox();
     }
 
-    partial void OnSeamTypeIndexChanged(int value) => OnPropertyChanged(nameof(IsCross));
+    partial void OnSeamTypeIndexChanged(int value)
+    {
+        OnPropertyChanged(nameof(IsCross));
+        OnPropertyChanged(nameof(IsLine));
+    }
     partial void OnFovMmChanged(double value) => RecomputeViewBox();
 
     [RelayCommand]
@@ -245,6 +255,28 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
         Selected = -1;
         AfterPointsChanged();
         Notify($"십자 {Points.Count}점 채움", false);
+    }
+
+    /// <summary>
+    /// 코로게이션 1피치(점1 Top X=0 → 점2 Top X=pitch) 가스 검사 경로로 포인트를 채운다(MEMBRANE-A 도면 형상).
+    /// 손목은 평면 수직 고정(Rx=θ=Rz=0) — 팁 위치만 곡선을 따라간다. 저장하면 절대 6-DOF LINE 프로필이 된다.
+    /// </summary>
+    [RelayCommand]
+    private void FillCorrugationPitch()
+    {
+        var opts = new CorrugationSamplingOptions(CorrugSpacingMm, CorrugStandoffMm);
+        if (!CorrugationProfileGenerator.TryGenerate(CorrugationProfileShape.MembraneA, opts, out var wps, out var err))
+        {
+            Notify($"코로게이션 생성 실패: {err}", true);
+            return;
+        }
+        Points.Clear();
+        foreach (var w in wps)
+            Points.Add(new XyPointVm(this) { X = w.X, Y = w.Y, Z = w.Z, Rx = 0, Theta = 0, Rz = 0, Surface = w.Surface });
+        Selected = -1;
+        AfterPointsChanged();
+        var spacing = CorrugationProfileGenerator.Length(CorrugationProfileShape.MembraneA) / (wps.Count - 1);
+        Notify($"코로게이션 1피치 {Points.Count}점 채움 (곡선 간격 {spacing:0.000}mm, 이격 {CorrugStandoffMm:0.#}mm, 손목 평면 수직 고정)", false);
     }
 
     [RelayCommand]
