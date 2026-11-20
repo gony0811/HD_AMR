@@ -263,10 +263,11 @@ internal static class SequenceEntry
             return (false, mismatch);
         }
         RememberMode(mode);   // 이 모드로 검사를 시작한다 — 도중에 멈춰도 복귀는 이 모드의 기준 자세로
+        // 이후 면 정보 없는 복귀(주행 전 복귀 등)가 이 면의 검사 준비 슬롯만 거슬러 가도록 — 모든 모드 공통.
+        Volatile.Write(ref _lastModeWall, context.WallCode);
 
         if (mode != PoseMode.Home)
         {
-            Volatile.Write(ref _lastModeWall, context.WallCode);   // 이후 면 정보 없는 복귀가 이 면 슬롯만 거슬러 가도록
             var baseKey = BaseKeyOf(mode);
             var baseName = BaseNameOf(mode);
             var slotKey = TeachingService.WallSlotKey(context.WallCode!);
@@ -329,6 +330,9 @@ internal static class SequenceEntry
             logger.LogInformation("기준 자세 복귀: {Route} 이동 경로 위에서 멈춘 자세 — 벽면 후퇴 없이 경유점으로 복귀", route);
             onWaypoint = true;
         }
+        // 홈 모드(옆벽 등)에서 그 면의 검사 준비가 티칭돼 있으면 벽 앞 → 검사 준비를 MoveL 로 잇는다(WallReadyViaSlot).
+        var homeSlot = mode == PoseMode.Home ? HomeViaSlot(ctx, LastModeWall) : null;
+        var fromWall = false;
         if (!onWaypoint)
         {
             // ② 가 후퇴 평면을 따라 들어왔으면 같은 길로 나온다 — 300mm 후퇴 후 경유점으로 바로 MoveJ 하면, 면을 따라
@@ -345,13 +349,14 @@ internal static class SequenceEntry
                     // 후퇴는 첫 경유점 평면까지만 — 팔이 덜 뻗은 상태에서 300mm 를 다 당기면 경유점보다 차체 쪽으로
                     // 접혀 들어간다(실기 2026-11-20 22:01 hd-amr-m2: TCP x −1136 → −836, 작업 준비 위치 −955 보다 120mm 안쪽, EMO).
                     var waypoint = mode == PoseMode.Home
-                        ? (await ResolveReadyAsync(cobot, ctx, logger, ct)).Pose
+                        ? homeSlot is { } hs ? TaughtXyz(ctx, hs.Key) : (await ResolveReadyAsync(cobot, ctx, logger, ct)).Pose
                         : TaughtXyz(ctx, ModeViaSlot(cur, ctx, mode, LastModeWall)?.Key ?? baseKey);
                     if (await RetractFromWallAsync(cobot, ctx, logger, ct, waypoint))
                     {
                         done.Add("벽면 후퇴");
                         cur = await cobot.Rpc.GetActualJointPosAsync(ct: ct);
                     }
+                    fromWall = true;
                 }
                 catch (RetractSelfInterferenceException ex)
                 {
@@ -389,6 +394,14 @@ internal static class SequenceEntry
             return done;
         }
 
+        // 벽 앞에서 작업 준비 위치로 바로 MoveJ 하면 관절 보간 호가 벽 쪽으로 휜다(실기 2026-11-21 04:34 M2 SM: 292mm 후퇴 뒤
+        // MoveJ 중 EMO). 그 면의 검사 준비가 티칭돼 있으면 거기까지 MoveL(직선 — 두 끝점이 벽 앞이면 벽면을 넘지 않는다)로 가고,
+        // 검사 준비 → 작업 준비 위치 → 홈은 티칭된 자세 사이 MoveJ 로 간다.
+        if (fromWall && homeSlot is { } slotHome && !IsAt(cur, ctx, slotHome.Key))
+        {
+            await MoveLToTaughtAsync(cobot, ctx, slotHome.Key, $"검사 준비({slotHome.Code})", logger, ct);
+            done.Add($"검사 준비({slotHome.Code}) 직선 경유");
+        }
         if (await ReturnViaReadyAsync(cobot, ctx, logger, ct)) done.Add("작업 준비 위치 경유");
         if (await EnsureCobotAtHomeAsync(cobot, ctx, ct)) done.Add("홈 복귀");
         ApproachPathMemory.Clear();
@@ -545,6 +558,73 @@ internal static class SequenceEntry
         var key = TeachingService.WallSlotKey(code);
         if (TaughtJoints(ctx, key) is not { } j) return null;
         return JointDistance(cur, j) < JointDistance(cur, baseJ) ? (key, code) : null;
+    }
+
+    /// <summary>
+    /// 홈 모드 복귀 때 벽 앞에서 직선(MoveL)으로 거쳐 갈 검사 준비 슬롯 — 홈 모드 면(옆벽 등)의 슬롯이 티칭돼 있을 때만.
+    /// 면은 context 의 wall_code, 없으면(주행 전 복귀) 마지막으로 진입한 면(<paramref name="lastWall"/>). 다른 면의 슬롯은 쓰지 않는다.
+    /// </summary>
+    internal static (string Key, string Code)? HomeViaSlot(SequenceContext ctx, string? lastWall = null)
+    {
+        var code = ctx.WallCode ?? lastWall;
+        if (code is null || RequiredMode(code, Home3Taught(ctx)) != PoseMode.Home) return null;
+        var key = TeachingService.WallSlotKey(code);
+        return TaughtJoints(ctx, key) is null ? null : (key, code);
+    }
+
+    /// <summary>MoveL 경유 도착 해가 티칭 관절과 이보다 크게 다르면(다른 팔 모양) 멈춘다 [도].</summary>
+    internal const double SlotArrivalBranchMaxDeg = 5.0;
+
+    /// <summary>
+    /// 티칭 슬롯으로 MoveL — 자세는 티칭 자세(공구가 같으면 저장 TCP, 다르면 티칭 관절의 정기구학). 움직이기 전에 직선 경로를
+    /// 위치 100mm·자세 10° 간격으로 이어 풀어 관절 점프·팔꿈치·손목 특이점(<see cref="CobotInspectionMoveStep.PathStepBlocker"/>)과
+    /// 차체·기둥 간섭(<see cref="RetractSelfBlocker"/>)을 보고, 도착 해가 티칭 관절과 같은 가지인지 확인한다. 걸리면 <b>움직이지 않고 예외</b> —
+    /// 대신 MoveJ 하면 바로 그 벽 쪽으로 휘는 동작이 된다.
+    /// </summary>
+    private static async Task MoveLToTaughtAsync(
+        CobotService cobot, SequenceContext ctx, string key, string name, ILogger logger, CancellationToken ct)
+    {
+        var p = ctx.Positions[key];
+        var taught = TaughtJoints(ctx, key) ?? throw new InvalidOperationException($"{name} 미티칭.");
+        var curJoints = await cobot.Rpc.GetActualJointPosAsync(ct: ct);
+        var taughtNear = FairinoRpcClient.UnwrapToward(taught, curJoints);
+        var target = p.Tool == ctx.Tool && p.X.HasValue
+            ? new[] { p.X!.Value, p.Y!.Value, p.Z!.Value, p.Rx!.Value, p.Ry!.Value, p.Rz!.Value }
+            : await cobot.Rpc.GetForwardKinAsync(taughtNear, ct);
+        var curPose = await cobot.Rpc.GetTcpPoseInBaseAsync(ctx.Tool, ct);
+        string Fmt(double[] v) => string.Join(", ", v.Take(3).Select(x => x.ToString("0")));
+
+        var seed = curJoints;
+        var samples = CobotInspectionMoveStep.SamplePoseSegment(curPose, target,
+            CobotInspectionMoveStep.PlanarSampleMm, CobotInspectionMoveStep.ChainSampleDeg);
+        foreach (var pose in samples)
+        {
+            double[] j;
+            try { j = await cobot.Rpc.GetInverseKinNearestAsync(pose, seed, ctx.Tool, 0, ct); }
+            catch (InvalidOperationException ex)
+            {
+                throw new InvalidOperationException(
+                    $"{name} 직선 경유 경로 [{Fmt(pose)}] 도달 불가({ex.Message}) — 움직이지 않고 정지합니다. 조그로 벽에서 떼어 낸 뒤 재시도하거나 {name} 자세를 다시 티칭하세요.");
+            }
+            if (CobotInspectionMoveStep.PathStepBlocker(seed, j, curJoints) is { } why)
+                throw new InvalidOperationException(
+                    $"{name} 직선 경유 경로 [{Fmt(pose)}] {why} — 움직이지 않고 정지합니다. 조그로 벽에서 떼어 낸 뒤 재시도하거나 {name} 자세를 다시 티칭하세요.");
+            if (RetractSelfBlocker(curJoints, j) is { } self)
+                throw new InvalidOperationException(
+                    $"{name} 직선 경유 경로 [{Fmt(pose)}] {self} — 움직이지 않고 정지합니다.");
+            seed = j;
+        }
+        if (JointDistance(seed, taughtNear) > SlotArrivalBranchMaxDeg)
+            throw new InvalidOperationException(
+                $"{name} 직선 경유 도착 자세가 티칭 관절과 다른 팔 모양입니다(관절 최대 {JointDistance(seed, taughtNear):0.0}°) — 움직이지 않고 정지합니다. " +
+                $"조그로 벽에서 떼어 낸 뒤 재시도하거나 {name} 자세를 다시 티칭하세요.");
+
+        logger.LogInformation("기준 자세 복귀: {Name} 로 직선 이동(MoveL) — [{From}] → [{To}] (경로 검증 {N}점 통과)",
+            name, Fmt(curPose), Fmt(target), samples.Count);
+        var rc = await cobot.Rpc.MoveLAsync(target, jointPos: seed, tool: ctx.Tool, user: 0, vel: ctx.Velocity, ct: ct);
+        if (rc != 0)
+            throw new InvalidOperationException($"{name} 직선 이동(MoveL) 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)} — 정지합니다.");
+        await ConfirmArrivedAsync(cobot, seed, name, ct);
     }
 
     /// <summary>
