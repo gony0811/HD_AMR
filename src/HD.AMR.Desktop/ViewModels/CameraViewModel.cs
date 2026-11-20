@@ -487,8 +487,8 @@ public sealed partial class CameraViewModel : ViewModelBase
         await _centering.MoveLaserOntoFlatAsync(snap, o, progress: null, _cts.Token));
 
     /// <summary>
-    /// ③ 평탄면 보정 — Laser Sensor 페이지 '보정 적용'과 같은 틸트 보정(<see cref="LaserTiltCorrector"/>, 기본 옵션 =
-    /// 시퀀스 ④ Phase C 와 같은 기준 1°·최대 3회·회당 10°)을 현재 자리에서 실행한다.
+    /// ③ 평탄면 보정 — Laser Sensor 페이지 '보정 적용'과 같은 틸트 보정(<see cref="LaserTiltCorrector"/>, 시퀀스 ④ Phase C 와
+    /// 같은 기준 <see cref="FlatSurfaceAlignStep.TiltThresholdKey"/>·최대 3회·회당 10°)을 현재 자리에서 실행한다.
     /// </summary>
     [RelayCommand]
     private async Task FlatCorrect()
@@ -505,7 +505,11 @@ public sealed partial class CameraViewModel : ViewModelBase
             var tool = FlatSnapshot?.Tool ?? await GetAlignToolAsync();
             NotifyLaser("평탄면 보정 중…", false);
             _flatMonitor.UpdateStage(FlatDetectionStage.LaserMeasuring, "평탄면 보정 중");
-            var r = await _tilt.LevelAsync(new TiltLevelOptions { Tool = tool, Velocity = LaserMoveVelocity },
+            double threshold;
+            using (var scope = _scopeFactory.CreateScope())
+                threshold = await FlatSurfaceAlignStep.LoadTiltThresholdAsync(
+                    scope.ServiceProvider.GetRequiredService<ParameterService>());
+            var r = await _tilt.LevelAsync(new TiltLevelOptions { Tool = tool, Velocity = LaserMoveVelocity, ThresholdDeg = threshold },
                 msg => Dispatcher.UIThread.Post(() => NotifyLaser(msg, false)),
                 (_, pose) => _flatMonitor.SetLaser(pose.Rx, pose.Ry, pose.Z),
                 _cts.Token);
