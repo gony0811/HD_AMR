@@ -752,6 +752,11 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             if (bundleEndWd && !recipe.DryRun && stepKeys.Contains("inspectionRun")
                 && sequence.Steps.Any(st => st.Key == Sequence.Steps.BundleEndWdStep.StepKey))
                 stepKeys = stepKeys.Append(Sequence.Steps.BundleEndWdStep.StepKey).ToArray();
+            // 검사 팁 진입은 도면 순회가 있으면 늘 붙인다 — 레시피 StepKeysJson 에 없어도. 비전 모드·진입 거리 0 이면 스텝이 스스로 생략한다.
+            if ((stepKeys.Contains("inspectionRun") || stepKeys.Contains("inspectionRunDry"))
+                && !stepKeys.Contains(Sequence.Steps.GasTipApproachStep.StepKey)
+                && sequence.Steps.Any(st => st.Key == Sequence.Steps.GasTipApproachStep.StepKey))
+                stepKeys = stepKeys.Append(Sequence.Steps.GasTipApproachStep.StepKey).ToArray();
 
             if (stepKeys.Length == 0)
                 return InspectionActionResult.Fail("inspectionFailed",

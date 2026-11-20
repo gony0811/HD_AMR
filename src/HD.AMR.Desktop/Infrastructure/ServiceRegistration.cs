@@ -267,6 +267,7 @@ internal static class ServiceRegistration
         services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<InspectionRunStep>(sp, false));
         services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<InspectionRunStep>(sp, true));
         services.AddScoped<ISequenceStep, BundleEndWdStep>();   // 1190: 묶음 마지막 용접선 끝 WD 확인
+        services.AddScoped<ISequenceStep, GasTipApproachStep>();   // 1195: 가스 검사 팁 진입(벽면 근접)
         services.AddScoped<ISequenceStep, WObjResetStep>();
         services.AddScoped<ISequenceStep, CobotHomeReturnStep>();
         services.AddScoped<ISequenceStep, MonitorCloseStep>();

@@ -259,8 +259,14 @@ public class InspectionRunStep : ISequenceStep
         //  · false(상대 틸트): θ/RzDeg 를 프레임 유지값 rz0 에 합성. Rx=0 (LINE 도면 솎기·CROSS 패턴).
         //  · true(절대 6-DOF): 캡처한 X/Y/Z/Rx/Ry(θ)/Rz 를 작업물 좌표계 기준 그대로 명령
         //    (/inspection-points 조그+캡처 — 코로게이션 법선 추종). rz0/tiltSign 합성 금지.
+        // 검사 팁 진입(GasTipApproachStep)이 벽면 쪽으로 옮긴 깊이 — 모든 경유점을 작업물 Z 로 같은 만큼 당겨 순회하고 끝나면 물러난다.
+        var tipDz = context.Bag.TryGetValue(GasTipApproachStep.FrameDzBagKey, out var tipValue) && tipValue is double tv ? tv : 0.0;
+        if (tipDz != 0)
+            _logger.LogInformation("[검사 수행] 검사 팁 진입 깊이 적용 — 경유점 작업물 Z {Dz:+0.#;-0.#}mm", tipDz);
+
         double[] ToTargetBase(InspectionWaypoint w)
         {
+            if (tipDz != 0) w = w with { Z = w.Z + tipDz };
             var pose = profile.PoseAbsolute
                 ? new[] { w.X, w.Y, w.Z, w.RxDeg, w.Theta, w.RzDeg }
                 : attitude.Pose(w.X, w.Y, w.Z, w.Theta, w.RzDeg);
@@ -301,9 +307,13 @@ public class InspectionRunStep : ISequenceStep
         _logger.LogInformation("[검사 수행] 첫 경유점 #{Idx} 로 스테이징 이동 (프레임 z={Z:0.0}mm)",
             firstIdx + 1, waypoints[firstIdx].Z);
         await _pauseGate.WaitWhilePausedAsync(ct);
+        // 검사 팁이 벽면 가까이 들어와 있으면 스테이징도 진입 속도 이하로 간다.
+        var stageVel = tipDz != 0
+            ? Math.Min(context.Velocity, Math.Clamp(_gas.Settings.TipApproachVelPercent, 1, 100))
+            : context.Velocity;
         var stageRc = await _cobot.Rpc.MoveLAsync(
             ToTargetBase(waypoints[firstIdx]), tool: context.Tool, user: 0,
-            vel: context.Velocity, acc: MoveAcc, ovl: MoveOvl, blendR: -1, ct: ct);
+            vel: stageVel, acc: MoveAcc, ovl: MoveOvl, blendR: -1, ct: ct);
         if (stageRc != 0)
             return StepResult.Fail(
                 $"첫 경유점 #{firstIdx + 1} 스테이징 이동 실패 (rc={stageRc}){FairinoErrorCodes.Suffix(stageRc)}.");
@@ -651,6 +661,19 @@ public class InspectionRunStep : ISequenceStep
         finally
         {
             if (accChanged) await RestoreAccelerationAsync();
+        }
+
+        // 검사 팁 이탈 — 진입한 깊이만큼 벽면에서 물러나 다음 단계(복귀·연속 이동)가 종전 깊이에서 출발하게 한다.
+        if (tipDz != 0)
+        {
+            context.Bag.Remove(GasTipApproachStep.FrameDzBagKey);
+            var here = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
+            var back = GasTipApproachStep.ShiftAlongFrameZ(here, frame, -tipDz);
+            _logger.LogInformation("[검사 수행] 검사 팁 이탈 — 벽면에서 {D:0.#}mm 물러남", Math.Abs(tipDz));
+            var backRc = await _cobot.Rpc.MoveLAsync(back, tool: context.Tool, user: 0,
+                vel: Math.Clamp(_gas.Settings.TipApproachVelPercent, 1, 100), acc: MoveAcc, ovl: MoveOvl, blendR: -1, ct: ct);
+            if (backRc != 0)
+                return StepResult.Fail($"검사 팁 이탈 이동 실패 (rc={backRc}){FairinoErrorCodes.Suffix(backRc)} — 툴이 벽면 가까이에 있습니다.");
         }
 
         // 가스 Task 결과 — 오케스트레이터가 SAIGE 결과 본문으로 만들어 ACS actionState 에 싣는다.

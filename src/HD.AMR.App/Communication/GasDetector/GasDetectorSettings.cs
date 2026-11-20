@@ -100,6 +100,15 @@ public class GasDetectorSettings
     /// </summary>
     public double NonStopBlendRadiusMm { get; set; }
 
+    /// <summary>
+    /// 검사 팁 진입 거리 [mm] — 도면 순회 직전 '검사 팁 진입' 단계가 TCP 를 벽면 쪽(작업물 좌표계 법선)으로 이만큼 옮기고,
+    /// 도면 순회는 모든 경유점을 같은 깊이만큼 벽면 쪽으로 당겨 지나간 뒤 끝나면 이만큼 다시 물러난다. 0 = 진입하지 않음.
+    /// </summary>
+    public double TipApproachMm { get; set; }
+
+    /// <summary>검사 팁 진입·이탈 이동 속도 [%] (1~100).</summary>
+    public int TipApproachVelPercent { get; set; } = 5;
+
     public GasDetectorSettings Clone() => (GasDetectorSettings)MemberwiseClone();
 
     /// <summary>화면·로그용 연결 대상 요약.</summary>

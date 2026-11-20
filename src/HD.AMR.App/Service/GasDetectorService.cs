@@ -736,6 +736,8 @@ public sealed class GasDetectorService : BackgroundService
             if (await p.GetIntAsync(KeyPrefix + "MeasureSampleIntervalMs") is { } iv) s.MeasureSampleIntervalMs = iv;
             if (Enum.TryParse<GasMeasureMode>(await p.GetAsync(KeyPrefix + "MeasureMode"), out var mode)) s.MeasureMode = mode;
             if (await p.GetDoubleAsync(KeyPrefix + "NonStopBlendRadiusMm") is { } blend) s.NonStopBlendRadiusMm = blend;
+            if (await p.GetDoubleAsync(KeyPrefix + "TipApproachMm") is { } tip) s.TipApproachMm = tip;
+            if (await p.GetIntAsync(KeyPrefix + "TipApproachVelPercent") is { } tipVel) s.TipApproachVelPercent = tipVel;
             lock (_lock)
             {
                 _settings = s;
@@ -768,6 +770,8 @@ public sealed class GasDetectorService : BackgroundService
             await p.SetAsync(KeyPrefix + "MeasureSampleIntervalMs", s.MeasureSampleIntervalMs.ToString(inv), "경유점 측정 샘플 간격 [ms]");
             await p.SetAsync(KeyPrefix + "MeasureMode", s.MeasureMode.ToString(), "가스 측정 방식 (Point=경유점 정지 / Continuous=이동 중 연속)");
             await p.SetDoubleAsync(KeyPrefix + "NonStopBlendRadiusMm", s.NonStopBlendRadiusMm, "연속 측정 경유점 블렌딩 반경 [mm] (0=경유점마다 정지, >0=무정지)");
+            await p.SetDoubleAsync(KeyPrefix + "TipApproachMm", s.TipApproachMm, "검사 팁 진입 거리 [mm] — 도면 순회 직전 벽면 쪽으로 근접 (0=진입 안 함)");
+            await p.SetAsync(KeyPrefix + "TipApproachVelPercent", s.TipApproachVelPercent.ToString(inv), "검사 팁 진입·이탈 속도 [%]");
         }
         catch (Exception ex)
         {

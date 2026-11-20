@@ -222,6 +222,7 @@ builder.Services.AddScoped<ISequenceStep, CobotSeamEndMoveStep>();
 builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<InspectionRunStep>(sp, false));   // 1200: inspectionRun
 builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<InspectionRunStep>(sp, true));    // 1210: inspectionRunDry
 builder.Services.AddScoped<ISequenceStep, BundleEndWdStep>();   // 1190: 묶음 마지막 용접선 끝 WD 확인
+builder.Services.AddScoped<ISequenceStep, GasTipApproachStep>();   // 1195: 가스 검사 팁 진입(벽면 근접)
 builder.Services.AddScoped<ISequenceStep, WObjResetStep>();   // 1300: 활성 작업물 좌표계 0 복귀
 builder.Services.AddScoped<ISequenceStep, CobotHomeReturnStep>();   // 1350: 코봇 홈 복귀 (MoveJ)
 builder.Services.AddScoped<ISequenceStep, MonitorCloseStep>();   // 1400: 모니터링 창 닫기 (최종)
