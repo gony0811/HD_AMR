@@ -875,7 +875,9 @@ public sealed class Vda5050OrderExecutor
             {
                 Positions = positions.ToDictionary(p => p.Key, p => p),
                 Tool = 1,
-                Velocity = 20,
+                // 시퀀스 이동과 같은 기준(설정 Cobot:DefaultVelPct) — 고정 20% 면 검사 실패 후·주행 전 복귀가
+                // 시퀀스(통상 5%)의 4배 속도로 벽면 후퇴·MoveJ 를 해 현장에서 EMO 로 멈췄다(2026-11-21 04:07 hd-amr-m2).
+                Velocity = cobot.DefaultMoveVelPercent,
             };
             await Sequence.Steps.WeldSequenceSupport.LoadOpticalAxisAsync(
                 scope.ServiceProvider.GetRequiredService<ParameterService>(), ctx);
