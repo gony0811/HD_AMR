@@ -30,11 +30,13 @@ public static class AcsFactsheet
     /// <summary>
     /// factsheet 를 만드는 데 필요한 값. TaughtJoints = 티칭된 슬롯 키 → 관절각 6개(미티칭 슬롯은 넣지 않는다, 운영 리프트 모드 세트).
     /// MountPose = 저장된 T_A_B [x,y,z,rx,ry,rz](모두 0 이면 미보정 → null).
+    /// SafeJ6* = 적용 중인 J6 안전 범위·대기(홈) 각도(<see cref="Inspection.WObjAttitude"/>) — 티칭 출발 자세 J6 와 짝이라 teaching 묶음에 싣는다.
     /// </summary>
     public sealed record Inputs(
         string TeachingLiftMode, IReadOnlyDictionary<string, double[]> TaughtJoints,
         bool LiftEnabled, double DisabledStrokeMm, int MinHeightMm, int MaxHeightMm, double MmPerUnit, int HeightOffsetMm,
-        double[]? MountPose, double[] LinksMm, double MaxEntryJointTravelDeg);
+        double[]? MountPose, double[] LinksMm, double MaxEntryJointTravelDeg,
+        double? SafeJ6MinDeg = null, double? SafeJ6MaxDeg = null, double? SafeJ6StandbyDeg = null);
 
     /// <summary>
     /// 면별 운영 ② 출발 관절각 — <see cref="SequenceEntry.PrepareAsync"/> 가 실제로 ② 직전에 세우는 자세와 같다:
@@ -79,14 +81,23 @@ public static class AcsFactsheet
             if (i.TaughtJoints.TryGetValue(key, out var j) && j is { Length: 6 }) poses[key] = Arr(j);
         var (mode, fixedMm) = LiftMode(i.LiftEnabled, i.DisabledStrokeMm);
         var mount = i.MountPose is { Length: 6 } m && m.Any(v => Math.Abs(v) > 1e-9) ? Arr(m) : null;
+        var teaching = new JsonObject
+        {
+            ["liftMode"] = TeachingLiftMode.Normalize(i.TeachingLiftMode),
+            ["startJointsByWall"] = starts,
+            ["poses"] = poses,
+        };
+        // J6 안전 범위·대기 자세 — 바뀌면 teaching 지문이 바뀌어 다시 보고된다(파라미터 화면에서 저장하면 5초 안에)
+        if (i.SafeJ6MinDeg is { } lo && i.SafeJ6MaxDeg is { } hi && i.SafeJ6StandbyDeg is { } sb)
+            teaching["safeJ6"] = new JsonObject
+            {
+                ["minDeg"] = Math.Round(lo, 4),
+                ["maxDeg"] = Math.Round(hi, 4),
+                ["standbyDeg"] = Math.Round(sb, 4),
+            };
         return new Dictionary<string, JsonObject>
         {
-            ["teaching"] = new()
-            {
-                ["liftMode"] = TeachingLiftMode.Normalize(i.TeachingLiftMode),
-                ["startJointsByWall"] = starts,
-                ["poses"] = poses,
-            },
+            ["teaching"] = teaching,
             ["lift"] = new()
             {
                 ["enabled"] = i.LiftEnabled,
@@ -205,7 +216,8 @@ public sealed class AcsFactsheetService
                 .ToDictionary(p => p.Key, p => new[] { p.J1!.Value, p.J2!.Value, p.J3!.Value, p.J4!.Value, p.J5!.Value, p.J6!.Value });
             var inputs = new AcsFactsheet.Inputs(
                 mode, taught, _lift.Enabled, _lift.DisabledStrokeMm, _lift.MinHeightMm, _lift.MaxHeightMm, _lift.MmPerUnit, _lift.HeightOffsetMm,
-                await calib.GetMountAsync(), Motion.Fr5Kinematics.Fr5Wml.LinksMm, CobotInspectionMoveStep.MaxEntryJointTravelDeg);
+                await calib.GetMountAsync(), Motion.Fr5Kinematics.Fr5Wml.LinksMm, CobotInspectionMoveStep.MaxEntryJointTravelDeg,
+                Inspection.WObjAttitude.SafeJ6MinDeg, Inspection.WObjAttitude.SafeJ6MaxDeg, Inspection.WObjAttitude.SafeJ6StandbyDeg);
 
             var now = AcsFactsheet.Fingerprints(AcsFactsheet.BuildSections(inputs));
             var prevVersion = int.TryParse(await param.GetAsync(VersionKey), out var v) ? v : 0;

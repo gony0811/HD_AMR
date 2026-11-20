@@ -91,4 +91,26 @@ public class AcsFactsheetTests
             taught: new() { ["home"] = Home, ["home2"] = WallT, ["ready"] = Ready }, mount: new double[] { 0, 0, 930, 0, 0, 180 })));
         Assert.Equal(new[] { "teaching", "mount" }, AcsFactsheet.Advance(5, a, teach).Changed);
     }
+
+    [Fact]
+    public void J6_안전_범위를_티칭_묶음에_싣고_바뀌면_다시_보고한다()
+    {
+        static AcsFactsheet.Inputs WithJ6(double lo, double hi, double sb) =>
+            Inputs() with { SafeJ6MinDeg = lo, SafeJ6MaxDeg = hi, SafeJ6StandbyDeg = sb };
+        var weld = AcsFactsheet.BuildSections(WithJ6(-320, -140, -180));
+        var j6 = weld["teaching"]["safeJ6"]!;
+        Assert.Equal(-320, j6["minDeg"]!.GetValue<double>());
+        Assert.Equal(-140, j6["maxDeg"]!.GetValue<double>());
+        Assert.Equal(-180, j6["standbyDeg"]!.GetValue<double>());
+        Assert.False(AcsFactsheet.BuildSections(Inputs())["teaching"].ContainsKey("safeJ6"));   // 값 없으면 싣지 않는다
+
+        // 대기 자세를 0° 로 바꾸면 teaching 묶음만 바뀐다 → 버전 +1
+        var a = AcsFactsheet.Fingerprints(weld);
+        var gas = AcsFactsheet.Fingerprints(AcsFactsheet.BuildSections(WithJ6(-140, 40, 0)));
+        Assert.Equal(new[] { "teaching" }, AcsFactsheet.Advance(3, a, gas).Changed);
+
+        // 실제 본문의 hdAmr.teaching.safeJ6 경로
+        var body = AcsFactsheet.Build(WithJ6(-140, 40, 0), 4, DateTimeOffset.UnixEpoch, new[] { "teaching" });
+        Assert.Equal(0, body["hdAmr"]!["teaching"]!["safeJ6"]!["standbyDeg"]!.GetValue<double>());
+    }
 }
