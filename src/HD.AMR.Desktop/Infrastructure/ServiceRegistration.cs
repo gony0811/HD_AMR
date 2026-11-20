@@ -155,6 +155,8 @@ internal static class ServiceRegistration
         // 장치 통신 HEAVY 알람(비전·Depth·레이저·IO·코봇·AMR) — 공유 상태 + 감시. 알람 중 order 거부, RESET 으로 해제.
         services.Configure<DeviceHealthSettings>(config.GetSection("DeviceHealth"));
         services.AddSingleton<DeviceAlarmState>();
+        // 미해제 알람 영속(재시작해도 RESET 전까지 유지 — 이벤트 기록과 ACS state.errors 일치).
+        services.AddSingleton(_ => new DeviceAlarmStore());
         // 코봇 도달·순회 경고 배너 — HEAVY 알람과 분리(order 를 잠그지 않음).
         services.AddSingleton<OperatorAlarmState>();
         AddHostedSingleton<DeviceHealthMonitorService>(services);

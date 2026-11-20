@@ -116,6 +116,17 @@ public sealed class Vda5050OrderExecutor
 
         // 배터리 CRITICAL 로 전이하면 진행 중 임무를 그 자리 안전정지(사양 §9.5).
         _power.Changed += OnPowerModeChanged;
+        // 장치 알람이 RESET 으로 모두 풀리면 "장치 알람으로 order 거부" 도 해소 — 이벤트 기록은 "order 수신 가능"인데
+        // state.errors 에 거부 사유가 다음 order 까지 남지 않게.
+        _deviceAlarms.Changed += OnDeviceAlarmsChanged;
+    }
+
+    private void OnDeviceAlarmsChanged()
+    {
+        if (_deviceAlarms.HasHeavyAlarm) return;
+        bool had;
+        lock (_gate) had = _errors.Remove(DeviceFaultRejectErrorType);
+        if (had) StateChanged?.Invoke();
     }
 
     private void OnPowerModeChanged()
@@ -298,6 +309,7 @@ public sealed class Vda5050OrderExecutor
             _errors.Remove(CobotReachPrecheck.BlockedErrorType);
             _errors.Remove("equipmentError");
             _errors.Remove(DeviceFaultRejectErrorType);
+            _errors.Remove("orderRejectedBatteryLow");   // 누락 시 저전력 거부 1회 후 앱 재시작 전까지 상주
 
             _missionCts = new CancellationTokenSource();
             ct = _missionCts.Token;

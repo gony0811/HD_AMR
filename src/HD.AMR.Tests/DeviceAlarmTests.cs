@@ -236,3 +236,113 @@ public class DeviceAlarmIoTests
         Assert.Equal(1, count);
     }
 }
+
+/// <summary>
+/// 재시작 시 알람 소실 회귀 — 현장(HD-AMR-M2, 2026-11-20)에서 RESET 안 된 알람(예: 16:43:46 코봇 "상태 패킷 중단")이
+/// 16:49:50 재시작으로 메모리에서 사라져, 운영 로그(DB)에는 "발생"만 남고 ACS state.errors 에는 없었다.
+/// </summary>
+public class DeviceAlarmPersistenceTests : IDisposable
+{
+    private static readonly DateTime T0 = new(2026, 11, 20, 7, 43, 0, DateTimeKind.Utc);
+    private static DateTime At(double sec) => T0.AddSeconds(sec);
+    private static readonly DeviceKind[] All = Enum.GetValues<DeviceKind>();
+
+    private readonly string _dir = Path.Combine(Path.GetTempPath(), "hdamr-alarm-" + Guid.NewGuid().ToString("N"));
+    private DeviceAlarmStore Store() => new(Path.Combine(_dir, "device-alarms.json"));
+
+    public void Dispose()
+    {
+        try { Directory.Delete(_dir, true); } catch (IOException) { }
+    }
+
+    private static Dictionary<DeviceKind, DeviceHealthSample> Samples(params DeviceKind[] down)
+        => All.ToDictionary(k => k, k => new DeviceHealthSample(!down.Contains(k), down.Contains(k) ? "끊김" : ""));
+
+    /// <summary>코봇 Active, AMR Latched 상태의 "재시작 전" 상태기.</summary>
+    private static DeviceAlarmTracker BeforeRestart()
+    {
+        var t = new DeviceAlarmTracker(TimeSpan.FromSeconds(3), TimeSpan.Zero, T0, All);
+        t.Evaluate(At(0), Samples(DeviceKind.Cobot, DeviceKind.Amr));
+        t.Evaluate(At(3), Samples(DeviceKind.Cobot, DeviceKind.Amr));   // 둘 다 Raised
+        t.Evaluate(At(4), Samples(DeviceKind.Cobot));                    // AMR Recovered → Latched
+        return t;
+    }
+
+    [Fact]
+    public void 재시작해도_미해제_알람이_기동_유예_중에도_유지된다()
+    {
+        var before = BeforeRestart();
+        var store = Store();
+        store.Save(before.Snapshot());
+
+        // 재시작 — 기동 유예 30 s. 예전에는 여기서 알람 0건(ACS state.errors 에서 사라짐).
+        var after = new DeviceAlarmTracker(TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(30), At(100), All);
+        var (restored, dropped) = after.Restore(store.Load());
+
+        Assert.Equal(2, restored.Count);
+        Assert.Empty(dropped);
+        Assert.True(after.HasHeavyAlarm);
+        Assert.Equal(before.Snapshot().OrderBy(e => e.Kind), after.Snapshot().OrderBy(e => e.Kind));
+
+        // 유예 중 장치가 아직 안 붙었어도(관측 없음) 중복 "발생" 이벤트 없이 그대로 유지.
+        Assert.Empty(after.Evaluate(At(101), new Dictionary<DeviceKind, DeviceHealthSample>()));
+        Assert.Equal(2, after.Snapshot().Count);
+    }
+
+    [Fact]
+    public void 복원된_Active_는_복구되면_Latched_이고_RESET_으로만_해제()
+    {
+        var store = Store();
+        store.Save(BeforeRestart().Snapshot());
+        var after = new DeviceAlarmTracker(TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(30), At(100), All);
+        after.Restore(store.Load());
+
+        var ev = Assert.Single(after.Evaluate(At(101), Samples()));
+        Assert.Equal((DeviceKind.Cobot, DeviceAlarmEventKind.Recovered), (ev.Kind, ev.Event));
+        Assert.All(after.Snapshot(), e => Assert.Equal(DeviceAlarmStage.Latched, e.Stage));
+
+        Assert.Equal(new[] { DeviceKind.Cobot, DeviceKind.Amr }.OrderBy(k => k), after.Reset().OrderBy(k => k));
+        Assert.False(after.HasHeavyAlarm);
+
+        store.Save(after.Snapshot());
+        Assert.Empty(store.Load());   // RESET 후 재시작하면 복원할 것 없음
+    }
+
+    [Fact]
+    public void 감시_대상이_아닌_장치_알람은_복원하지_않고_Dropped()
+    {
+        var store = Store();
+        store.Save(BeforeRestart().Snapshot());
+        var after = new DeviceAlarmTracker(TimeSpan.FromSeconds(3), TimeSpan.Zero, At(100),
+            new[] { DeviceKind.Amr, DeviceKind.Vision });
+        var (restored, dropped) = after.Restore(store.Load());
+
+        Assert.Equal(DeviceKind.Amr, Assert.Single(restored).Kind);
+        Assert.Equal(DeviceKind.Cobot, Assert.Single(dropped).Kind);
+        Assert.Equal(DeviceKind.Amr, Assert.Single(after.Snapshot()).Kind);
+    }
+
+    [Fact]
+    public void 저장_파일이_없거나_깨졌으면_빈_목록()
+    {
+        var store = Store();
+        Assert.Empty(store.Load());
+        Directory.CreateDirectory(_dir);
+        File.WriteAllText(store.FilePath, "{ not json");
+        Assert.Empty(store.Load());
+    }
+
+    [Fact]
+    public void 저장_복원은_단계_시각_사유를_보존()
+    {
+        var snap = BeforeRestart().Snapshot();
+        var store = Store();
+        store.Save(snap);
+        var loaded = store.Load();
+        Assert.Equal(snap.OrderBy(e => e.Kind), loaded.OrderBy(e => e.Kind));
+        var amr = loaded.Single(e => e.Kind == DeviceKind.Amr);
+        Assert.Equal(DeviceAlarmStage.Latched, amr.Stage);
+        Assert.Equal(At(4), amr.RecoveredUtc);
+        Assert.Equal(DateTimeKind.Utc, amr.SinceUtc.Kind);
+    }
+}

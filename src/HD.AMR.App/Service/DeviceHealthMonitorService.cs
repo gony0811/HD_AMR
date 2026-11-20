@@ -32,6 +32,9 @@ public sealed class DeviceHealthMonitorService : BackgroundService
     private readonly object _lock = new();
     private readonly DeviceAlarmTracker _tracker;
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly DeviceAlarmStore _store;
+    /// <summary>마지막으로 파일에 저장한 알람 목록(_lock 안에서만 접근) — 바뀔 때만 쓴다.</summary>
+    private IReadOnlyList<DeviceAlarmEntry>? _persisted;
 
     /// <summary>드라이런 레시피 확인 주기(초).</summary>
     private const double DryRunRefreshSec = 2;
@@ -46,8 +49,9 @@ public sealed class DeviceHealthMonitorService : BackgroundService
         VisionInterfaceService vision, GasDetectorService gas, IOptions<InspectionSensorSettings> sensor,
         LaserDisplacementSensorService laser,
         Vda5050OrderExecutor executor, OperationLogService opLog, IServiceScopeFactory scopeFactory,
-        ILogger<DeviceHealthMonitorService> logger)
+        DeviceAlarmStore store, ILogger<DeviceHealthMonitorService> logger)
     {
+        _store = store;
         _scopeFactory = scopeFactory;
         _s = options.Value;
         _state = state;
@@ -76,6 +80,7 @@ public sealed class DeviceHealthMonitorService : BackgroundService
         _logger.LogInformation("장치 HEAVY 알람 감시 시작 — 대상 [{Devices}], 판정 {Lost}s, 기동 유예 {Grace}s",
             string.Join(", ", _tracker.Enabled.Select(DeviceAlarmTracker.DisplayName)), _s.LostAfterSec, _s.StartupGraceSec);
 
+        RestorePersisted();
         _state.ResetRequested += OnResetRequested;
         try
         {
@@ -106,6 +111,7 @@ public sealed class DeviceHealthMonitorService : BackgroundService
         {
             events = _tracker.Evaluate(now, samples);
             snapshot = _tracker.Snapshot();
+            PersistLocked(snapshot);
         }
 
         foreach (var ev in events)
@@ -139,6 +145,7 @@ public sealed class DeviceHealthMonitorService : BackgroundService
         {
             cleared = _tracker.Reset();
             remaining = _tracker.Snapshot();
+            PersistLocked(remaining);
         }
         _state.Update(remaining);
 
@@ -148,6 +155,54 @@ public sealed class DeviceHealthMonitorService : BackgroundService
         _logger.LogInformation("장치 알람 RESET({Source}) — {Detail}", source, detail);
         _opLog.Log(OperationLogService.SourceDevice, OpCategory.Alarm, "알람 RESET", remaining.Count == 0,
             $"{source}: {detail}");
+    }
+
+    /// <summary>
+    /// 재시작 전 RESET 안 된 알람 복원 — 기동 유예와 무관하게 첫 state 부터 state.errors 에 싣는다.
+    /// 복원도 운영 로그에 남겨 이벤트 기록상 "발생 → (재시작) → 유지" 가 이어지게 한다. 감시 대상에서 빠진 장치의
+    /// 알람은 복원하지 않고 해제로 기록한다(기록에 "발생"만 남고 현재 상태에서 조용히 사라지지 않게).
+    /// </summary>
+    private void RestorePersisted()
+    {
+        var saved = _store.Load();
+        IReadOnlyList<DeviceAlarmEntry> restored, dropped, snapshot;
+        lock (_lock)
+        {
+            (restored, dropped) = _tracker.Restore(saved);
+            snapshot = _tracker.Snapshot();
+            PersistLocked(snapshot);
+        }
+        _state.Update(snapshot);
+
+        if (restored.Count > 0)
+        {
+            var detail = DeviceAlarmState.Describe(restored);
+            _logger.LogWarning("장치 HEAVY 알람 복원(재시작 전 미해제) — {Detail}", detail);
+            _opLog.Log(OperationLogService.SourceDevice, OpCategory.Alarm, "HEAVY 알람 복원", false,
+                $"재시작 전 미해제 알람 유지: {detail} — ACS order 수신 불가, 복구 후 RESET 필요");
+        }
+        if (dropped.Count > 0)
+        {
+            var names = string.Join(", ", dropped.Select(e => DeviceAlarmTracker.DisplayName(e.Kind)));
+            _logger.LogInformation("장치 알람 해제(감시 대상 아님) — {Devices}", names);
+            _opLog.Log(OperationLogService.SourceDevice, OpCategory.Alarm, "알람 해제(감시 대상 아님)", true,
+                $"재시작 후 감시 대상에서 빠진 장치: {names}");
+        }
+    }
+
+    /// <summary>알람 목록이 바뀌었으면 파일에 저장(_lock 안에서 호출 — 저장 순서가 상태 변경 순서와 같게).</summary>
+    private void PersistLocked(IReadOnlyList<DeviceAlarmEntry> snapshot)
+    {
+        if (_persisted is not null && _persisted.SequenceEqual(snapshot)) return;
+        try
+        {
+            _store.Save(snapshot);
+            _persisted = snapshot;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("장치 알람 저장 실패({Path}) — 재시작 시 복원 안 될 수 있음: {Err}", _store.FilePath, ex.Message);
+        }
     }
 
     /// <summary>장치별 관측 — 사유 문자열은 값이 바뀌지 않게(경과 시간 등 미포함) 둬 상태 변경 이벤트가 매 주기 나지 않게 한다.</summary>

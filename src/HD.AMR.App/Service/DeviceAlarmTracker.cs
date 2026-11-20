@@ -126,6 +126,35 @@ public sealed class DeviceAlarmTracker
         return cleared;
     }
 
+    /// <summary>
+    /// 재시작 전 알람 복원 — 앱이 다시 떠도 RESET 안 된 알람은 그대로 남아야 한다(운영 로그(DB)는 재시작을 넘어
+    /// 남는데 알람이 메모리에서만 사라지면 ACS state.errors 와 이벤트 기록이 어긋난다). Active 는 Active 로 복원해
+    /// 장치가 정상이면 다음 <see cref="Evaluate"/> 에서 Recovered → Latched, Latched 는 RESET 대기 그대로.
+    /// 감시 대상이 아닌 장치(설정 변경)는 복원하지 않고 반환값의 Dropped 로 돌려준다.
+    /// </summary>
+    public (IReadOnlyList<DeviceAlarmEntry> Restored, IReadOnlyList<DeviceAlarmEntry> Dropped) Restore(
+        IEnumerable<DeviceAlarmEntry> entries)
+    {
+        var restored = new List<DeviceAlarmEntry>();
+        var dropped = new List<DeviceAlarmEntry>();
+        foreach (var e in entries.GroupBy(e => e.Kind).Select(g => g.Last()))
+        {
+            if (e.Stage == DeviceAlarmStage.Normal) continue;
+            if (!_slots.TryGetValue(e.Kind, out var slot))
+            {
+                dropped.Add(e);
+                continue;
+            }
+            slot.Stage = e.Stage;
+            slot.AlarmSince = e.SinceUtc;
+            slot.RecoveredAt = e.Stage == DeviceAlarmStage.Latched ? e.RecoveredUtc : null;
+            slot.UnhealthySince = null;
+            slot.Detail = e.Detail;
+            restored.Add(e);
+        }
+        return (restored, dropped);
+    }
+
     /// <summary>알람 중인 장치(Active·Latched)만.</summary>
     public IReadOnlyList<DeviceAlarmEntry> Snapshot()
         => _slots
