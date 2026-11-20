@@ -64,8 +64,9 @@ public class TaskBundlePlannerTests
                      plan.Select(p => p.Role).ToArray());
         Assert.Equal("v3", plan[2].BundleId);
         Assert.Equal("v6", plan[5].BundleId);
-        Assert.Equal(1.08, plan[0].Point2W![2], 6);   // 점2 = 같은 줄 마지막(v5) 끝점
-        Assert.Equal(12.0, plan[0].Point2W![0], 6);
+        // gas/dev 는 묶음 점2 를 마지막 용접선 시작점(LastStartW)으로 잡는다(main 8c200ea 의 Point2W=끝점 미반영).
+        Assert.Equal(0.72, plan[0].LastStartW![2], 6);   // 같은 줄 마지막(v5) 시작점 — 옆 줄 v6~v8 이 아니다
+        Assert.Equal(12.0, plan[0].LastStartW![0], 6);
     }
 
     [Theory]
