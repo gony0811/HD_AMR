@@ -507,8 +507,9 @@ public sealed class GasDetectorService : BackgroundService
 
         var delay = TimeSpan.FromMilliseconds(Math.Max(0, Settings.MeasureDwellMs));
         var parts = GasPassSplitter.Split(samples, moveStart, moveEnd, delay, lengths);
-        _logger.LogInformation("[가스 측정] 무정지 연속 측정 — {N}구간 {Len:0} mm 를 {Sec:0.0} 초에 통과, {Samples}샘플 (블렌딩 최대 {R:0.#} mm)",
-            lengths.Count, lengths.Sum(), (moveEnd - moveStart).TotalSeconds, samples.Count, radii.DefaultIfEmpty(0).Max());
+        var passSec = (moveEnd - moveStart).TotalSeconds;
+        _logger.LogInformation("[가스 측정] 무정지 연속 측정 — {N}구간 {Len:0} mm 를 {Sec:0.0} 초에 통과(평균 {Speed:0.0} mm/s), {Samples}샘플 (블렌딩 최대 {R:0.#} mm)",
+            lengths.Count, lengths.Sum(), passSec, passSec > 0 ? lengths.Sum() / passSec : 0, samples.Count, radii.DefaultIfEmpty(0).Max());
         var scans = new List<GasMeasurementResult>(parts.Count);
         for (var k = 0; k < parts.Count; k++)
         {

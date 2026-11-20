@@ -5,13 +5,14 @@ namespace HD.AMR.Tests;
 public class ScanSpeedResolveTests
 {
     [Fact]
-    public void MmPerSec_TakesPriority_AndUsesPhysicalMode()
+    public void MmPerSec_TakesPriority_AndConvertsToPercent()
     {
+        // 20mm/s ÷ 120mm/s(100% 기준) = 16.67%
         var s = InspectionRunStep.ResolveScanSpeed(20, explicitPercent: 5, profileRunVel: 2, defaultPercentParam: 2,
-            accMmPerS2Param: 150, percentAcc: 100);
-        Assert.True(s.Physical);
-        Assert.Equal(20, s.Vel);
-        Assert.Equal(150, s.Acc);
+            linearSpeedAt100PctParam: 120, percentAcc: 100);
+        Assert.Equal(16.67, s.Vel, 2);
+        Assert.Equal(100, s.Acc);
+        Assert.Equal(20, s.TargetMmPerSec);
     }
 
     [Theory]
@@ -22,26 +23,26 @@ public class ScanSpeedResolveTests
     public void NoMmPerSec_FallsBackToPercent(double? mm)
     {
         var s = InspectionRunStep.ResolveScanSpeed(mm, explicitPercent: 7, profileRunVel: 2, defaultPercentParam: 2,
-            accMmPerS2Param: 150, percentAcc: 100);
-        Assert.False(s.Physical);
+            linearSpeedAt100PctParam: 120, percentAcc: 100);
+        Assert.Null(s.TargetMmPerSec);
         Assert.Equal(7, s.Vel);
-        Assert.Equal(100, s.Acc);
     }
 
     [Theory]
     [InlineData(null)]
     [InlineData(0.0)]
     [InlineData(-1.0)]
-    public void MissingAccParam_UsesDefaultAcceleration(double? acc)
+    public void MissingBasis_UsesDefaultBasis(double? basis)
     {
-        var s = InspectionRunStep.ResolveScanSpeed(20, null, 0, null, acc, 100);
-        Assert.Equal(InspectionRunStep.DefaultScanAccMmPerS2, s.Acc);
+        var s = InspectionRunStep.ResolveScanSpeed(12, null, 0, null, basis, 100);
+        Assert.Equal(12 / InspectionRunStep.DefaultLinearSpeedAt100Pct * 100, s.Vel, 2);
     }
 
     [Fact]
-    public void MmPerSec_IsCappedAtMax()
+    public void Percent_IsClampedToValidRange()
     {
-        var s = InspectionRunStep.ResolveScanSpeed(1000, null, 0, null, null, 100);
-        Assert.Equal(InspectionRunStep.MaxScanSpeedMmPerSec, s.Vel);
+        Assert.Equal(100, InspectionRunStep.ResolveScanSpeed(200, null, 0, null, 120, 100).Vel);
+        Assert.Equal(InspectionRunStep.MinScanPercent, InspectionRunStep.ResolveScanSpeed(0.01, null, 0, null, 120, 100).Vel);
+        Assert.Equal(InspectionRunStep.MaxScanSpeedMmPerSec, InspectionRunStep.ResolveScanSpeed(1000, null, 0, null, 10_000, 100).TargetMmPerSec);
     }
 }

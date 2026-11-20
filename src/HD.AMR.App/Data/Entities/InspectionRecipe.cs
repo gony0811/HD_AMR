@@ -83,7 +83,7 @@ public class InspectionRecipe
     /// (그것도 없으면 기본 검사 속도 파라미터 <c>Inspection.DefaultInspectVelPercent</c>).</summary>
     public int? InspectVelPercent { get; set; }
 
-    /// <summary>코봇 검사 속도 [mm/s] — ⑱ 경유점 순회(검사 스캔) TCP 속도를 물리량으로 지정(MoveL velAccParamMode=1).
+    /// <summary>코봇 검사 속도 [mm/s] — ⑱ 경유점 순회(검사 스캔) TCP 속도. 파라미터 Inspection.LinearSpeedMmPerSecAt100Pct 로 % 환산해 지령.
     /// 값이 있으면 <see cref="InspectVelPercent"/>·프로파일 속도(%)보다 우선한다. null = % 속도 사용.</summary>
     public double? InspectSpeedMmPerSec { get; set; }
 

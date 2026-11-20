@@ -199,10 +199,10 @@ public class ParameterService
                 Sequence.Steps.InspectionRunStep.DefaultInspectVelPercent.ToString(CultureInfo.InvariantCulture),
                 "⑱ 검사 수행 기본 검사 속도(%) — 경유점 순회(검사 스캔) 속도. 레시피 검사 속도(또는 시퀀스 화면 검사 속도)가 비어 있고 " +
                 "검사 프로파일에도 속도가 없을 때 쓴다. 기본 2, 1~100 (밖이면 2). 다음 검사부터 적용."),
-            (Sequence.Steps.InspectionRunStep.ScanAccMmPerS2Key,
-                Sequence.Steps.InspectionRunStep.DefaultScanAccMmPerS2.ToString(CultureInfo.InvariantCulture),
-                "⑱ 검사 수행 — 검사 속도를 mm/s 로 지정했을 때(레시피·시퀀스 화면 '검사 속도(mm/s)') 순회 가속도(mm/s²). " +
-                "기본 100, 0 이하면 100. % 속도로 순회할 때는 쓰지 않는다. 다음 검사부터 적용."),
+            (Sequence.Steps.InspectionRunStep.LinearSpeedAt100PctKey,
+                Sequence.Steps.InspectionRunStep.DefaultLinearSpeedAt100Pct.ToString(CultureInfo.InvariantCulture),
+                "⑱ 검사 수행 — 검사 속도를 mm/s 로 지정했을 때(레시피·시퀀스 화면 '검사 속도(mm/s)') % 로 환산하는 기준: 검사 속도 100% 일 때의 " +
+                "TCP 직선 속도(mm/s). 지령 % = mm/s ÷ 이 값 × 100. 기본 120(M2 실측 ≈1.2mm/s per %). 실측 평균 속도는 무정지 측정 로그에 나온다. 다음 검사부터 적용."),
             (Sequence.Steps.FlatSurfaceAlignStep.TiltThresholdKey,
                 Sequence.Steps.FlatSurfaceAlignStep.DefaultTiltThresholdDeg.ToString(CultureInfo.InvariantCulture),
                 "④ 평탄면 레이저 정렬 완료 기준(°) — 레이저 3점 틸트 |rx|, |ry| 가 모두 이 값 미만이면 정렬 완료. 기본 1, 0 초과~5 (밖이면 1). 다음 정렬부터 적용."),

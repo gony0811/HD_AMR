@@ -260,7 +260,7 @@
                                             <TextBlock Classes="section" Text="검사 속도 [mm/s]" />
                                             <NumericUpDown Width="170" HorizontalAlignment="Left" Value="{Binding InspectSpeedMmPerSec}"
                                                            Increment="1" Minimum="0.1" Maximum="250" FormatString="0.#" />
-                                            <TextBlock Classes="hint" Text="⑱ 순회 TCP 속도를 mm/s 로 지정(값이 있으면 검사 속도 % 무시). 가속도는 파라미터 Inspection.ScanAccMmPerS2(기본 100mm/s²). 빈 값 = % 사용" />
+                                            <TextBlock Classes="hint" Text="⑱ 순회 TCP 속도를 mm/s 로 지정(값이 있으면 검사 속도 % 무시). 파라미터 Inspection.LinearSpeedMmPerSecAt100Pct(기본 120)로 % 환산. 짧은 구간(2mm)은 가감속 때문에 실제 평균이 더 낮다. 빈 값 = % 사용" />
                                         </StackPanel>
                                         <StackPanel Width="300" Margin="24,0,0,0">
                                             <TextBlock Classes="section" Text="검사 가속도 [%]" />

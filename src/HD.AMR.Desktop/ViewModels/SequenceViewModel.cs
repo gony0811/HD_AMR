@@ -79,7 +79,7 @@ public sealed partial class SequenceViewModel : ViewModelBase
     /// <summary>⑱ 경유점 순회(검사 스캔) 전용 속도 [%]. 비우면 선택한 검사 프로파일에 저장된 속도로 순회한다.
     /// ACS 실행은 레시피 '검사 속도'를 쓰지만 이 화면의 수동 실행은 레시피를 거치지 않으므로 여기서 따로 정한다.</summary>
     [ObservableProperty] private decimal? _inspectVelocity;
-    /// <summary>⑱ 순회 TCP 속도 [mm/s] — 값이 있으면 검사 속도(%)보다 우선(MoveL 물리량 모드). 비우면 % 사용.</summary>
+    /// <summary>⑱ 순회 TCP 속도 [mm/s] — 값이 있으면 검사 속도(%)보다 우선(% 환산 지령). 비우면 % 사용.</summary>
     [ObservableProperty] private decimal? _inspectSpeedMmPerSec;
     [ObservableProperty] private bool _busy;
     [ObservableProperty] private bool _cobotConnected;
