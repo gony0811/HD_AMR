@@ -153,4 +153,25 @@ public class PowerModeServiceTests
         else
             Assert.Equal(PowerMode.Low, s.CurrentMode);
     }
+
+    [Fact]
+    public void 보호_해제_중에는_SoC_0_이어도_정상_모드로_운용하고_판정은_유지한다()
+    {
+        var s = new PowerModeService(bypass: true);
+        Assert.True(s.Bypassed);
+        s.Observe(0);
+        s.Observe(0);
+        Assert.Equal(PowerMode.Critical, s.RawMode);          // 판정은 계속한다(경고 문구용)
+        Assert.Equal(PowerMode.Normal, s.CurrentMode);        // 운영은 정상 — Order 거부·안전정지·잔여 중단 없음
+        Assert.False(s.BatteryLow);
+        Assert.False(s.BatteryCritical);
+        Assert.Equal(OrderAdmissionGate.Decision.Accept,
+            OrderAdmissionGate.Evaluate(s.CurrentMode, "MANUAL", new HD.AMR.App.Communication.Vda5050.Vda5050Order()));
+
+        var normal = Fresh();                                  // 해제 안 하면 종전대로
+        normal.Observe(0);
+        normal.Observe(0);
+        Assert.False(normal.Bypassed);
+        Assert.Equal(PowerMode.Critical, normal.CurrentMode);
+    }
 }
