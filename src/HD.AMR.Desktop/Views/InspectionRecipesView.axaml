@@ -257,6 +257,12 @@
                                             <TextBlock Classes="hint" Text="⑱ 경유점 순회(검사 스캔) 전용. 빈 값 = 지정한 검사 프로파일의 검사 속도(없으면 기본 검사 속도 파라미터)" />
                                         </StackPanel>
                                         <StackPanel Width="300" Margin="24,0,0,0">
+                                            <TextBlock Classes="section" Text="검사 속도 [mm/s]" />
+                                            <NumericUpDown Width="170" HorizontalAlignment="Left" Value="{Binding InspectSpeedMmPerSec}"
+                                                           Increment="1" Minimum="0.1" Maximum="250" FormatString="0.#" />
+                                            <TextBlock Classes="hint" Text="⑱ 순회 TCP 속도를 mm/s 로 지정(값이 있으면 검사 속도 % 무시). 가속도는 파라미터 Inspection.ScanAccMmPerS2(기본 100mm/s²). 빈 값 = % 사용" />
+                                        </StackPanel>
+                                        <StackPanel Width="300" Margin="24,0,0,0">
                                             <TextBlock Classes="section" Text="검사 가속도 [%]" />
                                             <NumericUpDown Width="170" HorizontalAlignment="Left" Value="{Binding InspectAccPercent}"
                                                            Increment="5" Minimum="1" Maximum="100" FormatString="0" />

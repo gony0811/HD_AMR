@@ -781,6 +781,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                 // 검사(스캔) 속도: 레시피 InspectVelPercent — null 이면 ⑱이 프로필 검사 속도 → 기본 검사 속도 파라미터로 정한다.
                 Velocity = recipe.MoveVelPercent ?? InspectionRecipe.DefaultMoveVelPercent,
                 InspectVelocity = recipe.InspectVelPercent,
+                InspectSpeedMmPerSec = recipe.InspectSpeedMmPerSec,
                 InspectAcceleration = recipe.InspectAccPercent,
                 InspectionDrawingId = profile?.DrawingId ?? 0,
                 InspectionProfileId = profile?.Id ?? 0,

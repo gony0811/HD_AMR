@@ -75,6 +75,39 @@ public class InspectionRunStep : ISequenceStep
             : (DefaultInspectVelPercent, "기본 검사 속도");
     }
 
+    /// <summary>검사 속도 mm/s 모드의 가속도 [mm/s²] 파라미터 키.</summary>
+    public const string ScanAccMmPerS2Key = "Inspection.ScanAccMmPerS2";
+    /// <summary>검사 속도 mm/s 모드 가속도 기본값 [mm/s²] — 20mm/s 까지 0.2s·2mm 에 도달.</summary>
+    public const double DefaultScanAccMmPerS2 = 100.0;
+    /// <summary>검사 속도 mm/s 지정 상한 [mm/s] — 오입력(예: % 값을 mm/s 칸에) 방지.</summary>
+    public const double MaxScanSpeedMmPerSec = 250.0;
+
+    /// <summary>경유점 순회(검사 스캔) MoveL 속도. <see cref="Physical"/> 이면 Vel=mm/s·Acc=mm/s²(velAccParamMode=1), 아니면 Vel=%·Acc=%.</summary>
+    public readonly record struct ScanSpeed(double Vel, double Acc, bool Physical, string Source)
+    {
+        public override string ToString() => Physical
+            ? $"{Vel:0.##}mm/s (가속 {Acc:0.#}mm/s², {Source})"
+            : $"{Vel:0}% ({Source})";
+    }
+
+    /// <summary>
+    /// 순회 속도 결정 — mm/s 지정값(레시피·시퀀스 화면)이 0 보다 크면 물리량 모드(상한 <see cref="MaxScanSpeedMmPerSec"/>,
+    /// 가속도 = 파라미터 <see cref="ScanAccMmPerS2Key"/>, 0 이하·비정상이면 <see cref="DefaultScanAccMmPerS2"/>).
+    /// 아니면 종전 % 결정(<see cref="ResolveScanVelocity"/>), 가속도 %는 <paramref name="percentAcc"/>.
+    /// </summary>
+    public static ScanSpeed ResolveScanSpeed(double? speedMmPerSec, int? explicitPercent, int profileRunVel,
+        double? defaultPercentParam, double? accMmPerS2Param, double percentAcc)
+    {
+        if (speedMmPerSec is { } mm && double.IsFinite(mm) && mm > 0)
+        {
+            var acc = accMmPerS2Param is { } a && double.IsFinite(a) && a > 0 ? a : DefaultScanAccMmPerS2;
+            return new ScanSpeed(Math.Min(mm, MaxScanSpeedMmPerSec), acc, true,
+                mm > MaxScanSpeedMmPerSec ? $"지정값 {mm:0.#}mm/s → 상한" : "지정값");
+        }
+        var (pct, src) = ResolveScanVelocity(explicitPercent, profileRunVel, defaultPercentParam);
+        return new ScanSpeed(pct, percentAcc, false, src);
+    }
+
     /// <summary>직행 이동이 사이 경유점보다 높이 떠서 건너갈 때 두는 여유 [mm].</summary>
     public const double DirectTravelClearanceMm = 5.0;
 
@@ -194,16 +227,19 @@ public class InspectionRunStep : ISequenceStep
         var rz0 = attitude.Rz0;
         var tiltSign = attitude.TiltSign;
 
-        // 순회(검사 스캔) 속도: 지정값 → 검사 프로파일 속도 → 기본 검사 속도 파라미터(ResolveScanVelocity).
-        var (scanVel, scanVelFrom) = ResolveScanVelocity(context.InspectVelocity, profile.RunVel, await GetDefaultInspectVelAsync());
-        var scanVelSource = $"({scanVelFrom})";
+        // 순회(검사 스캔) 속도: mm/s 지정값 → % 지정값 → 검사 프로파일 속도 → 기본 검사 속도 파라미터(ResolveScanSpeed).
+        var scan = ResolveScanSpeed(context.InspectSpeedMmPerSec, context.InspectVelocity, profile.RunVel,
+            await GetDefaultInspectVelAsync(), await GetScanAccMmPerS2Async(), MoveAcc);
+        Task<int> ScanMoveLAsync(double[] pose, double[]? joints, double blendR, CancellationToken c)
+            => _cobot.Rpc.MoveLAsync(pose, jointPos: joints, tool: context.Tool, user: 0,
+                vel: scan.Vel, acc: scan.Acc, ovl: MoveOvl, blendR: blendR, ct: c, physicalVelAcc: scan.Physical);
 
         _logger.LogInformation(
             "[검사 수행] 시작: 도면 {Draw}, 티칭설정 '{Prof}'({N}점), 내부 wobj #{Id} 원점 [{X:0.0},{Y:0.0},{Z:0.0}], " +
-            "tool={Tool}, 이동 vel={Vel}%, 검사 vel={InspVel}%{InspSrc}, SurfaceID 0x{Sid:X2}, RZ 유지={Rz0:0.0}° (틸트부호 {Sign:+0;-0})",
+            "tool={Tool}, 이동 vel={Vel}%, 검사 속도 {InspVel}, SurfaceID 0x{Sid:X2}, RZ 유지={Rz0:0.0}° (틸트부호 {Sign:+0;-0})",
             profile.DrawingId, profile.Name, waypoints.Count, wobjId,
             frame[0], frame[1], frame[2], context.Tool, context.Velocity,
-            scanVel, scanVelSource,
+            scan,
             context.InspectionSurfaceId,
             rz0, tiltSign);
 
@@ -314,8 +350,7 @@ public class InspectionRunStep : ISequenceStep
                 var scan = await _gas.MeasureDuringAsync(label, async c =>
                 {
                     moveStart = DateTime.UtcNow;
-                    rc = await _cobot.Rpc.MoveLAsync(ToTargetBase(b), tool: context.Tool, user: 0,
-                        vel: scanVel, acc: MoveAcc, ovl: MoveOvl, blendR: -1, ct: c);
+                    rc = await ScanMoveLAsync(ToTargetBase(b), null, -1, c);
                     moveEnd = DateTime.UtcNow;
                     return rc == 0;
                 }, gasThreshold, scans.Count, ct);
@@ -371,10 +406,8 @@ public class InspectionRunStep : ISequenceStep
             _logger.LogInformation("[검사 수행] 무정지 연속 측정 — 경유점 #{From}→#{To} ({N}구간, 블렌딩 반경 {R:0.#} mm)",
                 from + 1, rest[^1] + 1, rest.Count, _gas.NonStopBlendRadiusMm);
             context.Progress?.Invoke($"무정지 연속 측정 — 경유점 #{from + 1}→#{rest[^1] + 1} ({rest.Count}구간)");
-            var inspectVel = scanVel;
             var (passScans, passMoveError) = await _gas.MeasureNonStopPassAsync(passLabels, passPoses,
-                (k, blendR, c) => _cobot.Rpc.MoveLAsync(passPoses[k], jointPos: passJoints[k - 1], tool: context.Tool, user: 0,
-                    vel: inspectVel, acc: MoveAcc, ovl: MoveOvl, blendR: blendR, ct: c),
+                (k, blendR, c) => ScanMoveLAsync(passPoses[k], passJoints[k - 1], blendR, c),
                 c => _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, c),
                 () => _cobot.StopMotionImmediateAsync(), gasThreshold, ct);
             if (passScans is null)
@@ -539,8 +572,7 @@ public class InspectionRunStep : ISequenceStep
             }
 
             // 경유점 순회(검사 스캔)만 검사 속도 적용 — 스테이징 등 접근성 모션은 이동 속도(Velocity).
-            var rc = await _cobot.Rpc.MoveLAsync(ToTargetBase(w), tool: context.Tool, user: 0,
-                vel: scanVel, acc: MoveAcc, ovl: MoveOvl, blendR: -1, ct: ct);
+            var rc = await ScanMoveLAsync(ToTargetBase(w), null, -1, ct);
             if (rc != 0)
                 return StepResult.Fail(
                     $"경유점 #{i + 1} 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)} — {movedSet.Count}점 이동 후 중단.");
@@ -761,6 +793,12 @@ public class InspectionRunStep : ISequenceStep
     private async Task<double?> GetDefaultInspectVelAsync()
     {
         try { return await _param.GetDoubleAsync(DefaultInspectVelKey); }
+        catch { return null; }
+    }
+
+    private async Task<double?> GetScanAccMmPerS2Async()
+    {
+        try { return await _param.GetDoubleAsync(ScanAccMmPerS2Key); }
         catch { return null; }
     }
 

@@ -222,6 +222,7 @@ CREATE TABLE IF NOT EXISTS InspectionRecipes (
     MoveVelPercent INTEGER NULL,
     InspectVelPercent INTEGER NULL,
     InspectAccPercent INTEGER NULL,
+    InspectSpeedMmPerSec REAL NULL,
     InspectionProfileId INTEGER NULL,
     ChamferSlopeProfileId INTEGER NULL,
     WallProfilesJson TEXT NULL,
@@ -291,6 +292,13 @@ CREATE TABLE IF NOT EXISTS InspectionRecipes (
             if (!hasVel)
                 db.Database.ExecuteSqlRaw($"ALTER TABLE InspectionRecipes ADD COLUMN {velCol} INTEGER NULL;");
         }
+
+        // 검사 속도 물리량(mm/s, null = % 속도 사용)도 후방호환 추가.
+        var hasSpeedMm = db.Database
+            .SqlQueryRaw<long>("SELECT COUNT(*) AS Value FROM pragma_table_info('InspectionRecipes') WHERE name = 'InspectSpeedMmPerSec'")
+            .AsEnumerable().First() > 0;
+        if (!hasSpeedMm)
+            db.Database.ExecuteSqlRaw("ALTER TABLE InspectionRecipes ADD COLUMN InspectSpeedMmPerSec REAL NULL;");
 
         // CROSS3 를 면 자세별 5종(CROSS3-FLOOR/CEIL/WALL/CHMR-LO/CHMR-UP)에서 회전 4종(CROSS3-R0/R90/R180/R270)으로
         // 전환(면 자세 무관, 회전으로만 키잉). 구 5행은 시드가 upsert-if-missing 이라 저절로 사라지지 않으므로 1회성 제거 —

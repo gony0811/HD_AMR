@@ -79,6 +79,8 @@ public sealed partial class SequenceViewModel : ViewModelBase
     /// <summary>⑱ 경유점 순회(검사 스캔) 전용 속도 [%]. 비우면 선택한 검사 프로파일에 저장된 속도로 순회한다.
     /// ACS 실행은 레시피 '검사 속도'를 쓰지만 이 화면의 수동 실행은 레시피를 거치지 않으므로 여기서 따로 정한다.</summary>
     [ObservableProperty] private decimal? _inspectVelocity;
+    /// <summary>⑱ 순회 TCP 속도 [mm/s] — 값이 있으면 검사 속도(%)보다 우선(MoveL 물리량 모드). 비우면 % 사용.</summary>
+    [ObservableProperty] private decimal? _inspectSpeedMmPerSec;
     [ObservableProperty] private bool _busy;
     [ObservableProperty] private bool _cobotConnected;
     [ObservableProperty] private string? _faultText;
@@ -277,6 +279,7 @@ public sealed partial class SequenceViewModel : ViewModelBase
         _context.Tool = Tool;
         _context.Velocity = Velocity;
         _context.InspectVelocity = ToInspectVelocity(InspectVelocity);
+        _context.InspectSpeedMmPerSec = ToInspectSpeedMm(InspectSpeedMmPerSec);
         _context.InspectionSurfaceId = InspectionSurfaceId;
         _context.InspectionOffsetU = OffsetU;
         _context.InspectionOffsetV = OffsetV;
@@ -329,6 +332,9 @@ public sealed partial class SequenceViewModel : ViewModelBase
     partial void OnInspectVelocityChanged(decimal? value) => _context.InspectVelocity = ToInspectVelocity(value);
     private static int? ToInspectVelocity(decimal? value)
         => value is { } v ? Math.Clamp((int)Math.Round(v), 1, 100) : null;
+    partial void OnInspectSpeedMmPerSecChanged(decimal? value) => _context.InspectSpeedMmPerSec = ToInspectSpeedMm(value);
+    private static double? ToInspectSpeedMm(decimal? value)
+        => value is { } v && v > 0 ? Math.Min((double)v, HD.AMR.App.Service.Sequence.Steps.InspectionRunStep.MaxScanSpeedMmPerSec) : null;
     partial void OnOffsetUChanged(double value) => SaveOffsets();
     partial void OnOffsetVChanged(double value) => SaveOffsets();
     partial void OnDirectionIndexChanged(int value) => SaveOffsets();

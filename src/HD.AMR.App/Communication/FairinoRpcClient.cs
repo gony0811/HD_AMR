@@ -392,11 +392,13 @@ public class FairinoRpcClient : IDisposable
     /// 직교 직선 이동(MoveL). descPose = [x,y,z,rx,ry,rz]. jointPos 미지정 시 역기구학으로 계산한다
     /// (FAIRINO MoveL은 관절각이 필요 — <see cref="ResolveMoveJointsAsync"/> 로 현재 관절과 연속인 해를 쓴다).
     /// 모든 인자를 33요소 단일 배열로 전송한다.
+    /// <paramref name="physicalVelAcc"/>=true 면 velAccParamMode=1 — <paramref name="vel"/> 을 TCP 속도 [mm/s],
+    /// <paramref name="acc"/> 를 가속도 [mm/s²] 로 지령한다(기본 false = 백분율 [%]).
     /// </summary>
     public async Task<int> MoveLAsync(double[] descPose, double[]? jointPos = null, int? tool = null, int? user = null,
                                       double? vel = null, double acc = 0.0, double ovl = 100.0, double blendR = -1.0,
                                       int offsetFlag = 0, double[]? offsetPos = null,
-                                      CancellationToken ct = default)
+                                      CancellationToken ct = default, bool physicalVelAcc = false)
     {
         int t = tool ?? _settings.DefaultToolId;
         int u = user ?? _settings.DefaultUserId;
@@ -415,12 +417,12 @@ public class FairinoRpcClient : IDisposable
             0, offsetFlag,                      // search, offset_flag
             off[0], off[1], off[2], off[3], off[4], off[5], // offset_pos[6]
             100.0,                              // oacc
-            0,                                  // velAccParamMode
+            physicalVelAcc ? 1 : 0,             // velAccParamMode: 0=백분율, 1=물리량(mm/s, mm/s²)
         };
         var rc = await InvokeAsync("MoveL", p => ToErr(p.MoveL(args)), ct, faultRecovery: false);
         if (rc != 0)
-            _logger.LogWarning("{Name} MoveL rc={Rc}{Desc} (tool={T}, user={U}, pose=[{P}], joints=[{J}], offsetFlag={F}, offset=[{O}])",
-                _settings.Name, rc, FairinoErrorCodes.Suffix(rc), t, u,
+            _logger.LogWarning("{Name} MoveL rc={Rc}{Desc} (tool={T}, user={U}, vel={V}{VUnit}, pose=[{P}], joints=[{J}], offsetFlag={F}, offset=[{O}])",
+                _settings.Name, rc, FairinoErrorCodes.Suffix(rc), t, u, v, physicalVelAcc ? "mm/s" : "%",
                 string.Join(",", descPose.Select(x => x.ToString("0.##"))),
                 string.Join(",", j.Select(x => x.ToString("0.##"))),
                 offsetFlag, string.Join(",", off.Select(x => x.ToString("0.##"))));

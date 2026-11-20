@@ -62,6 +62,11 @@ public class SequenceContext
     /// ACS 경로에서 레시피 InspectVelPercent 로, 시퀀스 화면에서 '검사 속도' 입력으로 주입된다.</summary>
     public int? InspectVelocity { get; set; }
 
+    /// <summary>⑱ 경유점 순회(검사 스캔) TCP 속도 [mm/s] 지정값 — 있으면 <see cref="InspectVelocity"/>(%)보다 우선하고
+    /// MoveL 을 물리량 모드(velAccParamMode=1)로 보낸다. null = % 속도. ACS 경로에서 레시피 InspectSpeedMmPerSec 로,
+    /// 시퀀스 화면에서 '검사 속도(mm/s)' 입력으로 주입된다.</summary>
+    public double? InspectSpeedMmPerSec { get; set; }
+
     /// <summary>⑱ 경유점 순회 동안만 적용할 전역 가속도 배율 [%]. null = 변경 안 함.
     /// ACS 경로에서 레시피 InspectAccPercent 로 주입된다 — 순회 후 100% 로 복원.</summary>
     public int? InspectAcceleration { get; set; }

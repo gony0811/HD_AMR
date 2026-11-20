@@ -199,6 +199,10 @@ public class ParameterService
                 Sequence.Steps.InspectionRunStep.DefaultInspectVelPercent.ToString(CultureInfo.InvariantCulture),
                 "⑱ 검사 수행 기본 검사 속도(%) — 경유점 순회(검사 스캔) 속도. 레시피 검사 속도(또는 시퀀스 화면 검사 속도)가 비어 있고 " +
                 "검사 프로파일에도 속도가 없을 때 쓴다. 기본 2, 1~100 (밖이면 2). 다음 검사부터 적용."),
+            (Sequence.Steps.InspectionRunStep.ScanAccMmPerS2Key,
+                Sequence.Steps.InspectionRunStep.DefaultScanAccMmPerS2.ToString(CultureInfo.InvariantCulture),
+                "⑱ 검사 수행 — 검사 속도를 mm/s 로 지정했을 때(레시피·시퀀스 화면 '검사 속도(mm/s)') 순회 가속도(mm/s²). " +
+                "기본 100, 0 이하면 100. % 속도로 순회할 때는 쓰지 않는다. 다음 검사부터 적용."),
             (Sequence.Steps.FlatSurfaceAlignStep.TiltThresholdKey,
                 Sequence.Steps.FlatSurfaceAlignStep.DefaultTiltThresholdDeg.ToString(CultureInfo.InvariantCulture),
                 "④ 평탄면 레이저 정렬 완료 기준(°) — 레이저 3점 틸트 |rx|, |ry| 가 모두 이 값 미만이면 정렬 완료. 기본 1, 0 초과~5 (밖이면 1). 다음 정렬부터 적용."),
