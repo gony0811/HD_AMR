@@ -632,6 +632,16 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                         "anchor 용접선 방향 변경(직전 용접선과 {Tol:0}° 넘게 꺾임) — 작업물 좌표계 재교시 (anchorGroup={Group}, jobRef={JobRef})",
                         TaskBundlePlanner.SeamParallelTolDeg, req.AnchorGroupId, req.JobRef);
                 }
+                // 평행해도 옆 줄이면 물려받지 않는다 — 옆으로 옮기는 거리는 BASE 환산 ACS 값이라 AMR 위치·방향 오차가 그대로
+                // 섞인다(실기 2026-11-20 PM L2-R01C14: V3 좌표계를 720mm 옆 V6 가 그대로 받아 교시 없이 순회). 묶음 기준과 같다.
+                if (anchorHit && _lastAnchorSeamW is { } prevLine
+                    && !TaskBundlePlanner.OnSameLine(prevLine.Start, prevLine.End, req.SeamStartW))
+                {
+                    anchorHit = false;
+                    _logger.LogInformation(
+                        "anchor 용접선 줄 변경(직전 용접선과 도면상 옆 {Tol:0}mm 초과) — 작업물 좌표계 재교시 (anchorGroup={Group}, jobRef={JobRef})",
+                        InternalWorkpieceFrame.MaxDroppedLateralMm, req.AnchorGroupId, req.JobRef);
+                }
                 if (!anchorHit && _lastAnchor is { } prev
                     && prev.OrderId == orderId && prev.AnchorGroupId == req.AnchorGroupId
                     && (prev.Direction != direction || prev.WallCode != req.DrawingPos.WallCode))
@@ -649,6 +659,17 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             BundleAssignment? bundle = null;
             var bundleEndWd = false;   // 묶음 마지막 팔로워 — 공통 좌표계를 연장해 쓰므로 끝점 WD 로 기울기를 다시 잡는다
             lock (_sync) _bundleByAction.TryGetValue(action.ActionId, out bundle);
+            if (bundle?.Role == BundleRole.Leader && anchorHit)
+            {
+                // 묶음 리더는 자기 묶음(점1 = 이 용접선 시작, 점2 = 묶음 마지막 끝)으로 좌표계를 새로 잡는다 — 앞 묶음 좌표계를
+                // 영역 캐시로 물려받으면 이 묶음 팔로워까지 교시 없이 앞 묶음 좌표계를 쓰게 된다.
+                anchorHit = false;
+                cachedInternalFrame = null;
+                cachedAnchorStartBase = null;
+                cachedAnchorSeamW = null;
+                cachedAnchorEndTcp = null;
+                _logger.LogInformation("묶음 {Id} 리더 {Job} — 영역 캐시 대신 묶음 좌표계를 새로 교시합니다.", bundle.BundleId, req.JobRef);
+            }
             if (bundle?.Role == BundleRole.Follower)
             {
                 var dissolved = false;
