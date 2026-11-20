@@ -6,6 +6,7 @@ using CommunityToolkit.Mvvm.Input;
 using HD.AMR.App.Communication;
 using HD.AMR.App.Models;
 using HD.AMR.App.Service;
+using HD.AMR.App.Service.Sequence.Steps;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace HD.AMR.Desktop.ViewModels;
@@ -184,10 +185,13 @@ public sealed partial class LaserViewModel : ViewModelBase
         {
             using var scope = _scopeFactory.CreateScope();
             var corrector = scope.ServiceProvider.GetRequiredService<LaserTiltCorrector>();
+            var threshold = await FlatSurfaceAlignStep.LoadTiltThresholdAsync(
+                scope.ServiceProvider.GetRequiredService<ParameterService>());
             var r = await corrector.LevelAsync(new TiltLevelOptions
             {
                 Tool = 1,
                 Velocity = Math.Clamp(VelPct, 1, 30),
+                ThresholdDeg = threshold,
             }, msg => Dispatcher.UIThread.Post(() => ApplyLog.Add(msg)), null, _applyCts.Token);
             CobotMsgOk = r.Success;
             CobotMsg = r.Success ? $"보정 적용 완료 — {r.Message}" : $"보정 실패: {r.Message}";

@@ -54,6 +54,14 @@ public class FlatSurfaceAlignStep : ISequenceStep
     public const string RecenterBeforeRecheckKey = "Sequence.FlatSurface.RecenterBeforeRecheck";
     private const double MaxTiltThresholdDeg = 5.0;
 
+    /// <summary>평탄 판정 틸트 임계값(°)을 DB 에서 읽는다 — 비었거나 0 이하·5° 초과면 기본값.
+    /// 시퀀스 ④와 카메라 '평탄면 보정'·레이저 '보정 적용' 버튼이 같은 기준을 쓰도록 공용으로 둔다.</summary>
+    public static async Task<double> LoadTiltThresholdAsync(ParameterService param)
+    {
+        var v = await param.GetDoubleAsync(TiltThresholdKey);
+        return v is double thr && thr > 0 && thr <= MaxTiltThresholdDeg ? thr : DefaultTiltThresholdDeg;
+    }
+
     /// <summary>카메라→레이저 중심 보정 이동량 절대 상한(mm). 파라미터 오입력 가드.
     /// 실제 이동량은 시퀀스 페이지 파라미터(<see cref="SequenceContext.CameraToLaserShiftYmm"/>, 기본 −75mm)로 설정 —
     /// 레이저 중심이 카메라 대비 얼마나 좌측(툴 +Y)에 장착됐는지에 따른 장착 오프셋이라 DB로 외부화한다.</summary>
@@ -273,8 +281,8 @@ public class FlatSurfaceAlignStep : ISequenceStep
             _monitor.UpdateStage(FlatDetectionStage.LaserMeasuring, "레이저 3점 측정");
 
             // 보정량은 실측 응답(J)으로 푼다 — LaserTiltCorrector(/laser '보정 적용'과 공용).
-            var thrParam = await _param.GetDoubleAsync(TiltThresholdKey);
-            var tiltThresholdDeg = thrParam is double thr && thr > 0 && thr <= MaxTiltThresholdDeg ? thr : DefaultTiltThresholdDeg;
+            var tiltThresholdDeg = await LoadTiltThresholdAsync(_param);
+            _logger.LogInformation("[평탄면 센터링 (레이저 정렬)] 틸트 완료 기준 {Thr}° ({Key})", tiltThresholdDeg, TiltThresholdKey);
             var recenter = await _param.GetBoolAsync(RecenterBeforeRecheckKey) ?? true;
 
             // 보정 회전 뒤 재확인 전: 카메라 위치(레이저 보정 이동 되돌림) → depth 평탄 자리 재탐색·이동 → 레이저 위치.
