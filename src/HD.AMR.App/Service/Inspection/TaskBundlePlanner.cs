@@ -32,6 +32,7 @@ public sealed record BundleAssignment(
 /// <summary>
 /// 연속 TASK 묶음. 리프트 높이·wall_code·수직/수평이 모두 같고, 방향 판별이 확실한 액션만
 /// 노드 순서대로 인접할 때 묶는다. 하나라도 다르거나 판별이 안 되면 그 자리는 묶음을 끊는다.
+/// 같은 줄이라도 앞 용접선과 빈 구간(CROSS 등)을 사이에 두면 끊는다(<see cref="Contiguous"/>).
 /// </summary>
 public static class TaskBundlePlanner
 {
@@ -63,7 +64,7 @@ public static class TaskBundlePlanner
         while (i < tasks.Count)
         {
             var j = i + 1;
-            while (j < tasks.Count && CanJoin(tasks[i], tasks[j])) j++;
+            while (j < tasks.Count && CanJoin(tasks[i], tasks[j]) && Contiguous(tasks[j - 1], tasks[j])) j++;
             if (j - i >= 2 && tasks[i].SeamStartW is { Length: 3 } && tasks[j - 1].SeamStartW is { Length: 3 })
             {
                 var id = tasks[i].ActionId;
@@ -179,6 +180,27 @@ public static class TaskBundlePlanner
     internal static bool OnSameLine(double[] firstStartW, double[] firstEndW, double[] nextStartW)
         => InternalWorkpieceFrame.MapSeamOffsetMm(firstStartW, firstEndW, nextStartW) is { } o
            && o.LateralMm <= InternalWorkpieceFrame.MaxDroppedLateralMm;
+
+    /// <summary>앞 용접선 길이를 넘어 다음 시작점까지 허용하는 빈 구간 [mm].</summary>
+    public const double ContiguousGapTolMm = 50.0;
+
+    /// <summary>
+    /// 노드 순서상 바로 앞 TASK 와 이번 TASK 가 같은 줄에서 <b>빈 구간 없이 이어지는지</b>. 시작점 간 진행 방향 거리가
+    /// 앞 용접선 길이 + <see cref="ContiguousGapTolMm"/> 를 넘으면 사이에 검사하지 않는 구간(가로 용접선 CROSS 등)이
+    /// 있는 것 — 그 너머는 다른 판일 수 있으므로 묶음을 끊는다. ACS 가 그 CROSS TASK 를 오더에 넣지 않아도 걸린다
+    /// (실기 2026-11-21 M2 SM L3-S018: 10 시작 v=4184, 11 시작 v=4904 — 720mm, 2번 용접선 CROSS 를 건너 7~11 이 한 묶음).
+    /// </summary>
+    internal static bool Contiguous(BundleTaskInput prev, BundleTaskInput next)
+    {
+        if (prev.SeamStartW is not { Length: 3 } ps || prev.SeamEndW is not { Length: 3 } pe
+            || next.SeamStartW is not { Length: 3 } ns)
+            return false;
+        double dx = pe[0] - ps[0], dy = pe[1] - ps[1], dz = pe[2] - ps[2];
+        var len = Math.Sqrt(dx * dx + dy * dy + dz * dz);
+        if (len < 1e-6) return false;
+        var along = ((ns[0] - ps[0]) * dx + (ns[1] - ps[1]) * dy + (ns[2] - ps[2]) * dz) / len;
+        return Math.Abs(along) * 1000.0 <= len * 1000.0 + ContiguousGapTolMm;
+    }
 
     /// <summary>두 용접선을 같은 줄로 보는 방향 차 한계 [도].</summary>
     public const double SeamParallelTolDeg = 20.0;

@@ -138,6 +138,24 @@ public class TaskBundlePlannerTests
         Assert.All(plan, p => Assert.Equal(BundleRole.None, p.Role));
     }
 
+    // 실기 2026-11-21 M2 SM L3-S018: 10(v=4184) 과 11(v=4904) 사이 720mm 에 2번 용접선 CROSS 가 있는데
+    // ACS 가 CROSS TASK 를 보내지 않아 7~11 이 한 묶음이 됐다. 빈 구간이 있으면 묶음을 끊는다.
+    [Fact]
+    public void 같은_줄이라도_빈_구간을_건너면_묶음을_끊는다()
+    {
+        var v = InspectionMoveDirection.Vertical;
+        BundleTaskInput Seam(string id, double z0)
+            => new(id, id, "SM", 0, v, new[] { 26.82, 1.0, z0 }, new[] { 26.82, 1.0, z0 + 0.36 });
+        var plan = TaskBundlePlanner.Assign(new[]
+        {
+            Seam("7", 3.104), Seam("8", 3.464), Seam("9", 3.824), Seam("10", 4.184), Seam("11", 4.904),
+        });
+        Assert.Equal(BundleRole.Leader, plan[0].Role);
+        Assert.All(plan.Skip(1).Take(3), a => Assert.Equal(BundleRole.Follower, a.Role));
+        Assert.Equal(4.184, plan[0].LastStartW![2], 6);   // 점2 는 CROSS 앞 마지막 TASK(10)
+        Assert.Equal(BundleRole.None, plan[4].Role);        // 11 은 단독 교시
+    }
+
     [Fact]
     public void 가운데가_다르면_양옆은_한_묶음이_아니다()
     {
