@@ -28,11 +28,11 @@ public static class AcsFactsheet
     public static readonly string[] PoseKeys = { "home", "home15", "home16", "home2", "home3", "home4", "ready" };
 
     /// <summary>
-    /// factsheet 를 만드는 데 필요한 값. TeachingLiftMode = 운영 티칭 세트(SHORT/LONG — 세트 구분이 없는 빌드는 null). TaughtJoints = 티칭된 슬롯 키 → 관절각 6개(미티칭 슬롯은 넣지 않는다, 운영 리프트 모드 세트).
+    /// factsheet 를 만드는 데 필요한 값. TeachingLiftMode = 운영 티칭 세트(SHORT/LONG). TaughtJoints = 티칭된 슬롯 키 → 관절각 6개(미티칭 슬롯은 넣지 않는다, 운영 리프트 모드 세트).
     /// MountPose = 저장된 T_A_B [x,y,z,rx,ry,rz](모두 0 이면 미보정 → null).
     /// </summary>
     public sealed record Inputs(
-        string? TeachingLiftMode, IReadOnlyDictionary<string, double[]> TaughtJoints,
+        string TeachingLiftMode, IReadOnlyDictionary<string, double[]> TaughtJoints,
         bool LiftEnabled, double DisabledStrokeMm, int MinHeightMm, int MaxHeightMm, double MmPerUnit, int HeightOffsetMm,
         double[]? MountPose, double[] LinksMm, double MaxEntryJointTravelDeg);
 
@@ -84,7 +84,7 @@ public static class AcsFactsheet
         {
             ["teaching"] = new()
             {
-                ["liftMode"] = i.TeachingLiftMode,   // 리프트 모드별 티칭 세트가 없는 빌드는 null
+                ["liftMode"] = TeachingLiftMode.Normalize(i.TeachingLiftMode),
                 ["startJointsByWall"] = starts,
                 ["poses"] = poses,
             },
@@ -200,8 +200,8 @@ public sealed class AcsFactsheetService
             var param = sp.GetRequiredService<ParameterService>();
             var calib = sp.GetRequiredService<CalibrationService>();
 
-            string? mode = null;   // 이 빌드는 리프트 모드별 티칭 세트가 없다
-            var taught = (await teaching.ListAsync(ct))
+            var mode = await teaching.GetActiveLiftModeAsync();
+            var taught = (await teaching.ListAsync(mode, ct))
                 .Where(p => p.IsTaught && p.J1.HasValue && p.J2.HasValue && p.J3.HasValue && p.J4.HasValue && p.J5.HasValue && p.J6.HasValue)
                 .ToDictionary(p => p.Key, p => new[] { p.J1!.Value, p.J2!.Value, p.J3!.Value, p.J4!.Value, p.J5!.Value, p.J6!.Value });
             var inputs = new AcsFactsheet.Inputs(

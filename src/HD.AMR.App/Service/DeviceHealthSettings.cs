@@ -35,6 +35,9 @@ public class DeviceHealthSettings
 
     /// <summary>레이저 생존 확인 성공이 이 시간(초)보다 오래되면 비정상.</summary>
     public double LaserStaleSec { get; set; } = 6;
+
+    /// <summary>가스 디텍터 정상 응답이 이 시간(초)보다 오래되면 비정상.</summary>
+    public double GasDetectorStaleSec { get; set; } = 5;
 }
 
 public class DeviceHealthTargets
@@ -45,6 +48,17 @@ public class DeviceHealthTargets
     public bool IoModule { get; set; } = true;
     public bool Cobot { get; set; } = true;
     public bool Amr { get; set; } = true;
+    /// <summary>가스 디텍터 — <see cref="InspectionSensorSettings.Mode"/> 가 GasDetector 일 때만 감시한다.</summary>
+    public bool GasDetector { get; set; } = true;
+
+    /// <summary>감시 대상 — 검사 센서 모드에 맞춰 비전/가스 디텍터 중 실제 탑재된 쪽만 남긴다.</summary>
+    public IEnumerable<DeviceKind> EnabledKinds(InspectionSensorMode mode)
+        => EnabledKinds().Where(k => k switch
+        {
+            DeviceKind.Vision => mode == InspectionSensorMode.Vision,
+            DeviceKind.GasDetector => mode == InspectionSensorMode.GasDetector,
+            _ => true,
+        });
 
     public IEnumerable<DeviceKind> EnabledKinds()
     {
@@ -54,5 +68,6 @@ public class DeviceHealthTargets
         if (IoModule) yield return DeviceKind.IoModule;
         if (Cobot) yield return DeviceKind.Cobot;
         if (Amr) yield return DeviceKind.Amr;
+        if (GasDetector) yield return DeviceKind.GasDetector;
     }
 }

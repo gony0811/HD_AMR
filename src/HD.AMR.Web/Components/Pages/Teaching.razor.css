@@ -81,3 +81,13 @@
     justify-content: center;
     vertical-align: middle;
 }
+
+.lift-tabs {
+    max-width: 1100px;
+    margin-top: 0.5rem;
+}
+
+.lift-tabs + .capture-panel {
+    margin-top: 0;
+    border-top-left-radius: 0;
+}

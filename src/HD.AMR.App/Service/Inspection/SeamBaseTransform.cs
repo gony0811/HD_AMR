@@ -33,7 +33,7 @@ public static class SeamBaseTransform
 {
     /// <summary>호출측이 면 이격을 주지 않을 때의 폴백 [mm]. 운영 경로는 ② 거친 접근 거리(inspection.approachStandoffMm)를 넘긴다 —
     /// 이 상수는 그 값과 코드상 연결돼 있지 않으므로 기본값으로만 쓸 것.</summary>
-    public const double DefaultStandoffMm = 400.0;
+    public const double DefaultStandoffMm = 300.0;
 
     /// <summary>이 값 미만의 standoff 는 면 간섭 위험으로 경고한다 [mm].</summary>
     public const double MinSafeStandoffMm = 100.0;

@@ -50,6 +50,13 @@ builder.Services.Configure<VisionInterfaceSettings>(
 builder.Services.AddSingleton<VisionInterfaceService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<VisionInterfaceService>());
 
+// 검사 센서 선택 + 헬륨 가스 디텍터(XL3000flex). Mode=GasDetector 일 때만 가스 디텍터가 통신하고 비전은 휴면.
+builder.Services.Configure<InspectionSensorSettings>(builder.Configuration.GetSection("InspectionSensor"));
+builder.Services.Configure<HD.AMR.App.Communication.GasDetector.GasDetectorSettings>(
+    builder.Configuration.GetSection("GasDetector"));
+builder.Services.AddSingleton<GasDetectorService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<GasDetectorService>());
+
 // 레이저 변위 센서(EtherNet/IP). AMR/Cobot/Camera 와 동일 패턴(싱글톤 + 호스티드) — 기동 시 상시 자동 접속, 실패 시 재시도.
 builder.Services.Configure<LaserDisplacementSensorSettings>(
     builder.Configuration.GetSection("LaserDisplacementSensor"));
@@ -116,6 +123,12 @@ builder.Services.Configure<TelescopicSerialSettings>(
     builder.Configuration.GetSection("Telescopic"));
 builder.Services.AddSingleton<TelescopicService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<TelescopicService>());
+
+// 코봇 자기 간섭 모델 설치 치수(차체·받침 기둥·신호탑·검사 툴) — 값이 잘못되면 여기서 기동을 멈춘다.
+builder.Services.Configure<HD.AMR.App.Service.Motion.CobotEnvelopeSettings>(
+    builder.Configuration.GetSection("CobotEnvelope"));
+HD.AMR.App.Service.Motion.CobotEnvelope.Configure(
+    builder.Configuration.GetSection("CobotEnvelope").Get<HD.AMR.App.Service.Motion.CobotEnvelopeSettings>());
 
 // 용접라인 추적(명세서 v2). 검출은 OpenCvSharp(Windows) — 그 외 플랫폼은 no-op 폴백.
 // ROI 프로파일은 JSON 파일로 저장. 싱글톤(운영자 1인, 상태 유지).

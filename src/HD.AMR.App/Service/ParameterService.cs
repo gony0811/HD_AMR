@@ -107,14 +107,16 @@ public class ParameterService
         => Motion.Fr5Kinematics.ApplyLinks(await GetAsync(Motion.Fr5Kinematics.LinksKey));
 
     private static bool IsSafeJ6Key(string name)
-        => name is Inspection.WObjAttitude.SafeJ6MinKey or Inspection.WObjAttitude.SafeJ6MaxKey;
+        => name is Inspection.WObjAttitude.SafeJ6MinKey or Inspection.WObjAttitude.SafeJ6MaxKey
+            or Inspection.WObjAttitude.SafeJ6StandbyKey;
 
     /// <summary>J6 안전 범위 파라미터를 읽어 <see cref="Inspection.WObjAttitude"/> 에 적용한다(기동·저장·삭제 때).
-    /// 잘못된 값(하한 ≥ 상한, 대기 자세 −180° 미포함, 폭 360° 이상)이면 기본값을 쓰고 false.</summary>
+    /// 잘못된 값(하한 ≥ 상한, 대기 자세 J6(기본 −180°) 미포함, 폭 360° 이상)이면 기본값을 쓰고 false.</summary>
     public async Task<bool> ApplySafeJ6RangeAsync()
         => Inspection.WObjAttitude.ApplySafeJ6Range(
             await GetDoubleAsync(Inspection.WObjAttitude.SafeJ6MinKey),
-            await GetDoubleAsync(Inspection.WObjAttitude.SafeJ6MaxKey));
+            await GetDoubleAsync(Inspection.WObjAttitude.SafeJ6MaxKey),
+            await GetDoubleAsync(Inspection.WObjAttitude.SafeJ6StandbyKey));
 
     public Task SetDoubleAsync(string name, double value, string? description = null)
         => SetAsync(name, value.ToString(CultureInfo.InvariantCulture), description);
@@ -138,7 +140,7 @@ public class ParameterService
             (Sequence.Steps.CobotInspectionMoveStep.ApproachStandoffKey,
                 Sequence.Steps.CobotInspectionMoveStep.DefaultApproachStandoffMm.ToString(CultureInfo.InvariantCulture),
                 "② Cobot 검사위치 이동 — 용접선 시작점에서 벽면 법선 방향으로 TCP 를 물리는 거리(mm). 정차 이격·이동 경로 시험용. " +
-                "모든 벽 동일 적용, 용접선 끝점 이동·ACS 시험 접근도 같은 값. 200~1000 밖이거나 비면 400."),
+                "모든 벽 동일 적용, 용접선 끝점 이동·ACS 시험 접근도 같은 값. 200~1000 밖이거나 비면 300."),
             (Sequence.Steps.CobotInspectionMoveStep.ChainStandoffKey,
                 Sequence.Steps.CobotInspectionMoveStep.DefaultChainStandoffMm.ToString(CultureInfo.InvariantCulture),
                 "같은 anchor 그룹 연속 LINE — 직전 검사 종료 자세에서 다음 시작점으로 옮길 때 면에서 TCP 를 띄우는 거리(mm). " +
@@ -161,10 +163,10 @@ public class ParameterService
                 "컨트롤러의 DH 보정값을 반영한 값이며 장비마다 다르다(기본값 = 2026-11-16 용접검사 AMR 실측, 공칭은 180,-970,-816,159,114,106). " +
                 "6개가 아니거나 공칭에서 5 mm 넘게 벗어나면 공칭을 쓴다. ACS 의 Acs:Reach:LinksMm 와 같게 둘 것(다르면 프로필 전송 때 경고)."),
             (Motion.CobotEnvelope.BaseHeightKey,
-                Motion.CobotEnvelope.DefaultBaseHeightMm.ToString(CultureInfo.InvariantCulture),
-                "AMR 차체 바닥(바퀴 닿는 면) → 코봇 BASE 장착면 높이 [mm] — 자기 간섭(팔 ↔ 차체·신호탑) 점검과 도달 사전 점검이 쓴다. " +
-                "리프트 장착 시 1635(스트로크 0 기준), 리프트를 떼고 받침에 직접 올리면 실측값(2026-11-17: 927). 저장하면 바로 적용. " +
-                "800~2500 밖이거나 비면 1635. 좌표 환산은 장착 보정(Calib.Mount.Pose)이 따로 하므로 둘 다 맞춰야 한다."),
+                "",
+                "AMR 차체 바닥(바퀴 닿는 면) → 코봇 BASE 장착면 높이 [mm] 덮어쓰기 — 자기 간섭(팔 ↔ 차체·기둥·신호탑) 점검과 도달 사전 점검이 쓴다. " +
+                "비워 두면 appsettings \"CobotEnvelope\"(차체 BodyHeightMm + 기둥 ColumnHeightMm, 현 장비 767+160=927)를 쓴다. 저장하면 바로 적용. " +
+                "차체 윗면 아래이거나 800~2500 밖이면 무시. 좌표 환산은 장착 보정(Calib.Mount.Pose)이 따로 하므로 둘 다 맞춰야 한다."),
             (Sequence.Steps.CobotInspectionMoveStep.MaxEntryJointTravelKey,
                 Sequence.Steps.CobotInspectionMoveStep.DefaultMaxEntryJointTravelDeg.ToString(CultureInfo.InvariantCulture),
                 "진입 관절 이동 한계(도) — 출발 자세 → 진입 해의 관절별(J1~J5) 최대 이동. 넘으면 가지 전환으로 보고 그 진입점·용접선을 쓰지 않는다 " +
@@ -174,11 +176,15 @@ public class ParameterService
                 Inspection.WObjAttitude.DefaultSafeJ6MinDeg.ToString(CultureInfo.InvariantCulture),
                 "J6 안전 범위 하한(도, 실제 관절값 — 대기 자세 −180° 쪽 감김 기준). 이보다 더 감기는 J6 로는 움직이지 않는다 " +
                 "(센서 헤드–링크암 간섭·케이블 감김 방지). 진입·용접선 가로 정렬·연속 이동·검사 순회 공통. 저장하면 바로 적용. " +
-                "−180 이하여야 하고 상한보다 작아야 한다 — 잘못된 값이면 기본값(−320~−140)을 쓴다. ACS 의 Acs:Reach:SafeJ6MinDeg 와 같게 둘 것."),
+                "대기 자세 J6(inspection.safeJ6StandbyDeg, 기본 −180) 이하여야 하고 상한보다 작아야 한다 — 잘못된 값이면 기본값(−320~−140)을 쓴다. ACS 의 Acs:Reach:SafeJ6MinDeg 와 같게 둘 것."),
             (Inspection.WObjAttitude.SafeJ6MaxKey,
                 Inspection.WObjAttitude.DefaultSafeJ6MaxDeg.ToString(CultureInfo.InvariantCulture),
-                "J6 안전 범위 상한(도, 실제 관절값). −180 이상이어야 하고 하한보다 커야 한다. 저장하면 바로 적용. " +
+                "J6 안전 범위 상한(도, 실제 관절값). 대기 자세 J6(inspection.safeJ6StandbyDeg, 기본 −180) 이상이어야 하고 하한보다 커야 한다. 저장하면 바로 적용. " +
                 "ACS 의 Acs:Reach:SafeJ6MaxDeg 와 같게 둘 것."),
+            (Inspection.WObjAttitude.SafeJ6StandbyKey,
+                Inspection.WObjAttitude.DefaultSafeJ6StandbyDeg.ToString(CultureInfo.InvariantCulture),
+                "대기(홈) 자세의 J6(도, 실제 관절값) — J6 안전 범위(하한~상한)가 반드시 포함해야 하는 각. 용접검사 AMR 은 −180. " +
+                "툴을 플랜지에 180° 돌려 단 장비(가스검사 AMR, 홈 J6 0°)는 0 으로 두고 하한·상한도 같이 옮긴다(예: −140~40). 저장하면 바로 적용."),
             (Sequence.Steps.WeldSequenceSupport.ProgressAxisAlwaysHorizontalKey, "true",
                 "Peak·Bead 찾기와 센터링의 진행축을 항상 영상 가로로 둔다(true). ② 가 툴을 돌려 용접선을 늘 영상 가로선으로 맞추기 때문이다. " +
                 "false 면 종전 규칙(가로 정렬 표시·용접선 기록이 없으면 검사방향으로 결정 — 수평 용접선은 영상 세로)."),
@@ -202,12 +208,21 @@ public class ParameterService
             (FlatReachOptions.TiltMarginKey,
                 FlatReachOptions.DefaultTiltMarginDeg.ToString(CultureInfo.InvariantCulture),
                 "④ 평탄 후보 도달성 판정의 틸트 보정 여유(°) — 레이저 위치에서 툴 Rx/Ry 를 ± 이만큼 돌려도 자세 한계 안이어야 후보로 인정. 0 = 생략."),
+            (Sequence.Steps.InspectionRunStep.DefaultInspectVelKey,
+                Sequence.Steps.InspectionRunStep.DefaultInspectVelPercent.ToString(CultureInfo.InvariantCulture),
+                "⑱ 검사 수행 기본 검사 속도(%) — 경유점 순회(검사 스캔) 속도. 레시피 검사 속도(또는 시퀀스 화면 검사 속도)가 비어 있고 " +
+                "검사 프로파일에도 속도가 없을 때 쓴다. 기본 2, 1~100 (밖이면 2). 다음 검사부터 적용."),
+            (Sequence.Steps.FlatSurfaceAlignStep.TiltThresholdKey,
+                Sequence.Steps.FlatSurfaceAlignStep.DefaultTiltThresholdDeg.ToString(CultureInfo.InvariantCulture),
+                "④ 평탄면 레이저 정렬 완료 기준(°) — 레이저 3점 틸트 |rx|, |ry| 가 모두 이 값 미만이면 정렬 완료. 기본 1, 0 초과~5 (밖이면 1). 다음 정렬부터 적용."),
             (FlatMoveSettings.JointVelocityScaleKey,
                 FlatMoveSettings.DefaultJointVelocityScale.ToString(CultureInfo.InvariantCulture),
                 "④ 평탄면 센터링 관절 이동(MoveJ) 속도 비율 — 시퀀스/카메라 페이지 속도에 곱한다(0~1). MoveJ 는 같은 % 에서 MoveL 보다 약 2배 빨라 0.45 로 종전 체감 속도에 맞춤."),
             (TeachingMove.JointVelocityScaleKey,
                 TeachingMove.DefaultJointVelocityScale.ToString(CultureInfo.InvariantCulture),
                 "Teaching '이동'(저장 관절값 MoveJ) 속도 비율 — 화면 속도에 곱한다(0~1). MoveJ 는 같은 % 에서 MoveL 보다 약 2배 빨라 0.45 로 종전 체감 속도에 맞춤."),
+            (Models.TeachingLiftMode.ActiveKey, Models.TeachingLiftMode.Short,
+                "운영에 쓰는 티칭 세트(리프트 모드) — SHORT / LONG. Teaching 페이지 탭으로 전환. 알 수 없는 값은 SHORT."),
         ];
 
         var existing = await _db.Parameters.Select(p => p.Name).ToListAsync();

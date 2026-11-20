@@ -640,7 +640,7 @@ public sealed partial class SeamMoveTestViewModel : ViewModelBase
     }
 
     private string TargetJ6Text =>
-        SelectedInspectionDirection == InspectionMoveDirection.Vertical ? "180°" : "90°";
+        $"{CobotInspectionMoveStep.TargetJ6Deg(SelectedInspectionDirection):0}°";
 
     private InspectionMoveDirection SelectedInspectionDirection =>
         InspectionDirectionIndex == 1 ? InspectionMoveDirection.Vertical : InspectionMoveDirection.Horizontal;

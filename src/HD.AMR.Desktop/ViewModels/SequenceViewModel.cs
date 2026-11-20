@@ -76,6 +76,9 @@ public sealed partial class SequenceViewModel : ViewModelBase
 
     [ObservableProperty] private int _tool = 1;
     [ObservableProperty] private int _velocity = 20;
+    /// <summary>⑱ 경유점 순회(검사 스캔) 전용 속도 [%]. 비우면 선택한 검사 프로파일에 저장된 속도로 순회한다.
+    /// ACS 실행은 레시피 '검사 속도'를 쓰지만 이 화면의 수동 실행은 레시피를 거치지 않으므로 여기서 따로 정한다.</summary>
+    [ObservableProperty] private decimal? _inspectVelocity;
     [ObservableProperty] private bool _busy;
     [ObservableProperty] private bool _cobotConnected;
     [ObservableProperty] private string? _faultText;
@@ -273,6 +276,7 @@ public sealed partial class SequenceViewModel : ViewModelBase
         ApplyTestTask();
         _context.Tool = Tool;
         _context.Velocity = Velocity;
+        _context.InspectVelocity = ToInspectVelocity(InspectVelocity);
         _context.InspectionSurfaceId = InspectionSurfaceId;
         _context.InspectionOffsetU = OffsetU;
         _context.InspectionOffsetV = OffsetV;
@@ -322,6 +326,9 @@ public sealed partial class SequenceViewModel : ViewModelBase
     // ── 파라미터 저장(변경 시) ──
     partial void OnToolChanged(int value) => _context.Tool = value;
     partial void OnVelocityChanged(int value) => _context.Velocity = value;
+    partial void OnInspectVelocityChanged(decimal? value) => _context.InspectVelocity = ToInspectVelocity(value);
+    private static int? ToInspectVelocity(decimal? value)
+        => value is { } v ? Math.Clamp((int)Math.Round(v), 1, 100) : null;
     partial void OnOffsetUChanged(double value) => SaveOffsets();
     partial void OnOffsetVChanged(double value) => SaveOffsets();
     partial void OnDirectionIndexChanged(int value) => SaveOffsets();

@@ -568,9 +568,9 @@ internal static class SequenceEntry
     /// <see cref="RetractSelfMarginMm"/> 안으로 출발 자세보다 더 붙게 하면 사유, 아니면 null(<see cref="CobotEnvelope"/>).
     /// 리프트 높이는 모르므로 완전 하강(0mm)으로 본다 — 차체·신호탑까지는 가장 가까운 경우다.
     /// </summary>
-    internal static string? RetractSelfBlocker(double[] startJoints, double[] joints)
+    internal static string? RetractSelfBlocker(double[] startJoints, double[] joints, CobotEnvelope? envelope = null)
     {
-        var env = CobotEnvelope.Default;
+        var env = envelope ?? CobotEnvelope.Default;
         var kin = Fr5Kinematics.Fr5Wml;
         var at = env.Evaluate(kin, joints, 0, CobotObstacleZone.FallbackMountYawDeg);
         if (at.Collides) return $"자기 간섭 — {at}";
@@ -945,7 +945,7 @@ internal static class SequenceEntry
     /// <summary>
     /// 벽면 후퇴 직선(현재 TCP → <paramref name="endTcp"/>, 자세 유지)을 <see cref="CobotInspectionMoveStep.PlanarSampleMm"/>
     /// 간격으로 현재 관절에서 이어 풀어, 점마다 <see cref="CobotInspectionMoveStep.PathStepBlocker"/>(관절 한계 근접·점프·
-    /// 팔꿈치·손목 특이점)와 <see cref="RetractSelfBlocker"/>(차체·리프트 기둥·신호탑 간섭)를 본다. 걸리면 "[점] 사유", 통과하면 null. 관절·IK 조회 실패도 사유로 돌려준다(움직이지 않는다).
+    /// 팔꿈치·손목 특이점)와 <see cref="RetractSelfBlocker"/>(차체·받침 기둥·신호탑 간섭)를 본다. 걸리면 "[점] 사유", 통과하면 null. 관절·IK 조회 실패도 사유로 돌려준다(움직이지 않는다).
     /// </summary>
     private static async Task<string?> RetractPathBlockerAsync(
         CobotService cobot, SequenceContext ctx, double[] currentPose, double[] endTcp, CancellationToken ct)

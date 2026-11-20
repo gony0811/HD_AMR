@@ -42,6 +42,11 @@
                    @bind="_context.Velocity" disabled="@Seq.IsBusy" />
         </div>
         <div class="col-auto">
+            <label class="form-label" title="⑱ 검사 수행의 경유점 순회(스캔) 전용 속도. 비우면 선택한 검사 프로파일에 저장된 속도(검사 프로파일 화면의 속도)로 순회합니다. ACS 실행에서는 레시피의 검사 속도를 씁니다.">검사 속도(%)</label>
+            <input class="form-control" type="number" min="1" max="100" style="width:130px" placeholder="프로파일 속도"
+                   @bind="_context.InspectVelocity" disabled="@Seq.IsBusy" />
+        </div>
+        <div class="col-auto">
             <button class="btn btn-primary" @onclick="RunAllAsync"
                     disabled="@(!Cobot.IsConnected || Seq.IsBusy)">
                 ▶▶ 풀오토
