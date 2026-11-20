@@ -72,6 +72,67 @@ public static class GasPassSplitter
         return radii;
     }
 
+    /// <summary>직선 병합 위치 허용 편차 [mm] — 사이 경유점이 합친 직선에서 이보다 멀면 끊는다.</summary>
+    public const double MergeTolMm = 0.3;
+
+    /// <summary>직선 병합 자세 허용 차 [도] — 사이 경유점의 툴 자세가 합친 구간 시작 자세와 이보다 다르면 끊는다.</summary>
+    public const double MergeTolDeg = 0.5;
+
+    /// <summary>
+    /// 무정지 이동에 실제로 보낼 경유점 인덱스 — 거의 일직선·같은 자세로 이어지는 경유점들을 MoveL 하나로 합친다(처음·끝은 항상 포함).
+    /// 5mm 간격 경유점마다 MoveL 을 보내면 짧은 구간마다 가감속해 지령 속도에 닿지 못하고 끊긴다
+    /// (실기 2026-11-21 M2: 79구간 394mm 를 60초 — 평균 6.5mm/s, 지령 20mm/s). 측정 결과 분할은 원래 경유점 단위 그대로다.
+    /// 사이 경유점이 합친 직선에서 <paramref name="tolMm"/> 이내이고 자세가 시작 자세와 <paramref name="tolDeg"/> 이내일 때만 합친다.
+    /// </summary>
+    public static List<int> MergeCollinear(IReadOnlyList<double[]> poses, double tolMm = MergeTolMm, double tolDeg = MergeTolDeg)
+    {
+        var keep = new List<int>();
+        if (poses.Count == 0) return keep;
+        keep.Add(0);
+        var a = 0;
+        for (var e = 2; e < poses.Count; e++)
+        {
+            if (Fits(poses, a, e, tolMm, tolDeg)) continue;
+            a = e - 1;
+            keep.Add(a);
+        }
+        if (poses.Count > 1) keep.Add(poses.Count - 1);
+        return keep;
+    }
+
+    private static bool Fits(IReadOnlyList<double[]> poses, int a, int e, double tolMm, double tolDeg)
+    {
+        var pa = poses[a];
+        var pe = poses[e];
+        if (OrientationDeltaDeg(pa, pe) > tolDeg) return false;
+        double dx = pe[0] - pa[0], dy = pe[1] - pa[1], dz = pe[2] - pa[2];
+        var len2 = dx * dx + dy * dy + dz * dz;
+        for (var k = a + 1; k < e; k++)
+        {
+            var p = poses[k];
+            if (OrientationDeltaDeg(pa, p) > tolDeg) return false;
+            double vx = p[0] - pa[0], vy = p[1] - pa[1], vz = p[2] - pa[2];
+            var t = len2 > 1e-12 ? (vx * dx + vy * dy + vz * dz) / len2 : 0;
+            if (t < 0 || t > 1) return false;   // 되돌아가는 점은 직선이 아니다
+            double ox = vx - t * dx, oy = vy - t * dy, oz = vz - t * dz;
+            if (Math.Sqrt(ox * ox + oy * oy + oz * oz) > tolMm) return false;
+        }
+        return true;
+    }
+
+    /// <summary>두 pose 의 툴 자세 차 [도] — 상대 회전각.</summary>
+    internal static double OrientationDeltaDeg(double[] a, double[] b)
+    {
+        if (a.Length < 6 || b.Length < 6) return 0;
+        var ra = HD.AMR.App.Communication.FrameMath.PoseToMatrix(a);
+        var rb = HD.AMR.App.Communication.FrameMath.PoseToMatrix(b);
+        var trace = 0.0;
+        for (var i = 0; i < 3; i++)
+            for (var k = 0; k < 3; k++)
+                trace += ra[k, i] * rb[k, i];
+        return Math.Acos(Math.Clamp((trace - 1) / 2, -1, 1)) * 180.0 / Math.PI;
+    }
+
     /// <summary>두 pose([x,y,z,…]) 사이 위치 거리 [mm].</summary>
     public static double Distance(double[] a, double[] b)
         => Math.Sqrt(Math.Pow(b[0] - a[0], 2) + Math.Pow(b[1] - a[1], 2) + Math.Pow(b[2] - a[2], 2));

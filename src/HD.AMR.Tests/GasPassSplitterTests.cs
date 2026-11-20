@@ -95,4 +95,43 @@ public class GasPassSplitterTests
         Assert.Equal(new double[] { 5 }, GasPassSplitter.BlendRadii(new double[] { 100, 100 }, 5));
         Assert.Empty(GasPassSplitter.BlendRadii(new double[] { 100 }, 5));
     }
+
+    private static double[] P(double x, double y, double z, double ry = 0) => new[] { x, y, z, 180.0, ry, 0.0 };
+
+    [Fact]
+    public void 직선_위_5mm_경유점은_하나로_합친다()
+    {
+        var poses = Enumerable.Range(0, 21).Select(i => P(i * 5.0, 0, 0)).ToList();   // 100mm 직선
+        Assert.Equal(new[] { 0, 20 }, GasPassSplitter.MergeCollinear(poses));
+    }
+
+    [Fact]
+    public void 꺾이는_곳에서_끊는다()
+    {
+        // 50mm 직진 → 45° 사면 50mm (코로게이션 마루 모양)
+        var poses = Enumerable.Range(0, 11).Select(i => P(i * 5.0, 0, 0))
+            .Concat(Enumerable.Range(1, 10).Select(i => P(50 + i * 3.5355, 0, i * 3.5355))).ToList();
+        Assert.Equal(new[] { 0, 10, 20 }, GasPassSplitter.MergeCollinear(poses));
+    }
+
+    [Fact]
+    public void 자세가_바뀌면_끊는다()
+    {
+        var poses = Enumerable.Range(0, 11).Select(i => P(i * 5.0, 0, 0, ry: i < 6 ? 0 : 10)).ToList();
+        Assert.Equal(new[] { 0, 5, 6, 10 }, GasPassSplitter.MergeCollinear(poses));
+    }
+
+    [Fact]
+    public void 허용_편차_안의_흔들림은_합친다()
+    {
+        var poses = Enumerable.Range(0, 11).Select(i => P(i * 5.0, i % 2 == 0 ? 0 : 0.1, 0)).ToList();
+        Assert.Equal(new[] { 0, 10 }, GasPassSplitter.MergeCollinear(poses));
+    }
+
+    [Fact]
+    public void 점이_적으면_그대로()
+    {
+        Assert.Equal(new[] { 0, 1 }, GasPassSplitter.MergeCollinear(new[] { P(0, 0, 0), P(5, 0, 0) }));
+        Assert.Equal(new[] { 0 }, GasPassSplitter.MergeCollinear(new[] { P(0, 0, 0) }));
+    }
 }

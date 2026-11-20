@@ -461,7 +461,11 @@ public sealed class GasDetectorService : BackgroundService
         var th = threshold ?? CurrentThreshold;
         var lengths = Enumerable.Range(0, poses.Count - 1)
             .Select(k => GasPassSplitter.Distance(poses[k], poses[k + 1])).ToList();
-        var radii = GasPassSplitter.BlendRadii(lengths, NonStopBlendRadiusMm);
+        // 이동은 직선으로 이어지는 경유점을 합친 것만 보낸다(MergeCollinear) — 측정 분할(lengths)은 원래 경유점 단위 그대로.
+        var motion = GasPassSplitter.MergeCollinear(poses);
+        var motionLengths = Enumerable.Range(0, motion.Count - 1)
+            .Select(m => GasPassSplitter.Distance(poses[motion[m]], poses[motion[m + 1]])).ToList();
+        var radii = GasPassSplitter.BlendRadii(motionLengths, NonStopBlendRadiusMm);
         string? moveError = null;
         DateTime moveStart = default, moveEnd = default;
 
@@ -476,9 +480,10 @@ public sealed class GasDetectorService : BackgroundService
         var (completed, started, samples, error) = await SampleDuringAsync(async c =>
         {
             moveStart = DateTime.UtcNow;
-            for (var k = 1; k < poses.Count; k++)
+            for (var m = 1; m < motion.Count; m++)
             {
-                var rc = await moveTo(k, k == poses.Count - 1 ? -1 : radii[k - 1], c);
+                var k = motion[m];
+                var rc = await moveTo(k, m == motion.Count - 1 ? -1 : radii[m - 1], c);
                 if (rc != 0)
                 {
                     moveError = $"{labels[k - 1]} 이동 명령 실패 (rc={rc}){HD.AMR.App.Communication.FairinoErrorCodes.Suffix(rc)}";
@@ -508,8 +513,8 @@ public sealed class GasDetectorService : BackgroundService
         var delay = TimeSpan.FromMilliseconds(Math.Max(0, Settings.MeasureDwellMs));
         var parts = GasPassSplitter.Split(samples, moveStart, moveEnd, delay, lengths);
         var passSec = (moveEnd - moveStart).TotalSeconds;
-        _logger.LogInformation("[가스 측정] 무정지 연속 측정 — {N}구간 {Len:0} mm 를 {Sec:0.0} 초에 통과(평균 {Speed:0.0} mm/s), {Samples}샘플 (블렌딩 최대 {R:0.#} mm)",
-            lengths.Count, lengths.Sum(), passSec, passSec > 0 ? lengths.Sum() / passSec : 0, samples.Count, radii.DefaultIfEmpty(0).Max());
+        _logger.LogInformation("[가스 측정] 무정지 연속 측정 — {N}구간 {Len:0} mm 를 {Sec:0.0} 초에 통과(평균 {Speed:0.0} mm/s), {Samples}샘플 (이동 명령 {Moves}개 — 직선 병합, 블렌딩 최대 {R:0.#} mm)",
+            lengths.Count, lengths.Sum(), passSec, passSec > 0 ? lengths.Sum() / passSec : 0, samples.Count, motion.Count - 1, radii.DefaultIfEmpty(0).Max());
         var scans = new List<GasMeasurementResult>(parts.Count);
         for (var k = 0; k < parts.Count; k++)
         {
