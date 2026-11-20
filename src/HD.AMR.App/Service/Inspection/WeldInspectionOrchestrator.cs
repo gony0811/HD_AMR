@@ -165,7 +165,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         var context = new SequenceContext
         {
             Tool = 1,
-            Velocity = 20,
+            Velocity = _cobot.DefaultMoveVelPercent,
             InspectionSurfaceId = WallCodeToSurfaceId(req.DrawingPos.WallCode),
             InspectionOffsetU = await param.GetDoubleAsync(WeldSequenceSupport.InspectionOffsetUKey) ?? 0.0,
             InspectionOffsetV = await param.GetDoubleAsync(WeldSequenceSupport.InspectionOffsetVKey) ?? 0.0,
@@ -797,10 +797,10 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             {
                 InspectionDirection = direction,
                 Tool = profile is { RunTool: > 0 } ? profile.RunTool : 1,
-                // 이동 속도: 레시피 MoveVelPercent, 없으면 기본 20%. 프로필 RunVel 은 검사(스캔) 속도라 이동 속도로 쓰지 않는다
+                // 이동 속도: 레시피 MoveVelPercent, 없으면 설정 Cobot:DefaultVelPct. 프로필 RunVel 은 검사(스캔) 속도라 이동 속도로 쓰지 않는다
                 // (프로필을 2% 로 저장하면 접근·복귀까지 2% 로 느려지던 것을 분리).
                 // 검사(스캔) 속도: 레시피 InspectVelPercent — null 이면 ⑱이 프로필 검사 속도 → 기본 검사 속도 파라미터로 정한다.
-                Velocity = recipe.MoveVelPercent ?? InspectionRecipe.DefaultMoveVelPercent,
+                Velocity = recipe.MoveVelPercent ?? _cobot.DefaultMoveVelPercent,
                 InspectVelocity = recipe.InspectVelPercent,
                 InspectSpeedMmPerSec = recipe.InspectSpeedMmPerSec,
                 InspectAcceleration = recipe.InspectAccPercent,
@@ -1094,7 +1094,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             {
                 Positions = positions.ToDictionary(p => p.Key, p => p),
                 Tool = 1,
-                Velocity = 20,
+                Velocity = _cobot.DefaultMoveVelPercent,
                 WallCode = wallCode,
             };
             await WeldSequenceSupport.LoadOpticalAxisAsync(sp.GetRequiredService<ParameterService>(), homeCtx);

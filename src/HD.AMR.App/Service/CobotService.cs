@@ -28,6 +28,10 @@ public class CobotService : BackgroundService
     /// <summary>RPC 명령 클라이언트.</summary>
     public FairinoRpcClient Rpc => _rpc;
 
+    /// <summary>시퀀스 이동 속도 기본값 [%] — 설정 <c>Cobot:DefaultVelPct</c> 를 1~100 정수로 맞춘 값.
+    /// 레시피 이동 속도가 비었을 때나 시퀀스 화면 초기값으로 쓴다(이동 명령이 속도를 명시하므로 RPC 기본값만으론 안 먹는다).</summary>
+    public int DefaultMoveVelPercent => (int)Math.Clamp(Math.Round(_settings.DefaultVelPct), 1, 100);
+
     /// <summary>긴급 정지: 진행 중인 블로킹 이동을 가로채 즉시 StopMotion 전송(세마포어 우회).</summary>
     public Task<int> StopMotionImmediateAsync(CancellationToken ct = default)
         => _rpc.StopMotionImmediateAsync(ct);

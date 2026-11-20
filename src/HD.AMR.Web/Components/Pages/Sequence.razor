@@ -365,6 +365,7 @@
     protected override async Task OnInitializedAsync()
     {
         Seq.StateChanged += OnSequenceStateChanged;
+        _context.Velocity = Cobot.DefaultMoveVelPercent;   // 화면 초기 속도 = 설정 Cobot:DefaultVelPct
         await LoadPositionsAsync();
         _context.InspectionOffsetU = await Param.GetDoubleAsync(OffsetUKey) ?? 0;
         _context.InspectionOffsetV = await Param.GetDoubleAsync(OffsetVKey) ?? 0;

@@ -129,6 +129,7 @@ public sealed partial class SequenceViewModel : ViewModelBase
     {
         _scopeFactory = scopeFactory;
         _cobot = cobot;
+        _velocity = cobot.DefaultMoveVelPercent;   // 화면 초기 속도 = 설정 Cobot:DefaultVelPct
         _amr = amr;
         _testTarget = testTarget;
         if (_testTarget is not null)

@@ -73,10 +73,10 @@ public class InspectionRecipe
     public double? CameraTargetDistanceMm { get; set; }
 
     /// <summary>코봇 이동 속도 [%] — 접근/복귀성 모션(② 검사위치 이동·진입 준비·끝점 이동·홈 복귀·정렬·
-    /// ⑱ 첫 경유점 스테이징) 공통. null = <see cref="DefaultMoveVelPercent"/>(20). 프로필 RunVel 은 검사 속도라 쓰지 않는다.</summary>
+    /// ⑱ 첫 경유점 스테이징) 공통. null = 설정 <c>Cobot:DefaultVelPct</c>(CobotService.DefaultMoveVelPercent). 프로필 RunVel 은 검사 속도라 쓰지 않는다.</summary>
     public int? MoveVelPercent { get; set; }
 
-    /// <summary>이동 속도 미지정 시 기본값 [%].</summary>
+    /// <summary>이동 속도 미지정 시 기본값 [%] — 설정을 읽을 수 없는 곳의 폴백. 실행 경로는 CobotService.DefaultMoveVelPercent 를 쓴다.</summary>
     public const int DefaultMoveVelPercent = 20;
 
     /// <summary>코봇 검사 속도 [%] — ⑱ 경유점 순회(검사 스캔) 전용. null = 지정된 검사 프로파일에 저장된 속도
