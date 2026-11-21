@@ -171,7 +171,90 @@ public class FairinoStateClient
         };
         LogFaultTransition(_latest, state);
         LogSpeedScale(state, dataLen);
+        if (dataLen < Offsets.SpeedScaleAuto + 8)
+            DiagnoseSpeedCandidates(payload);
         _latest = state;
+    }
+
+    // ── 전역 속도 위치 진단 — SDK 위치가 없는(짧은) 펌웨어 패킷에서 전역 속도 후보 자리를 찾는다 ──
+    // 처음 한 번 1~100 사이 정수값(double·float·int32)인 자리를 모두 남기고, 이후 그 자리 값이 다른 1~100 정수로
+    // 바뀌면 남긴다 — 펜던트 전역 속도를 바꿔(예: 40→41) 같이 바뀌는 자리가 전역 속도다.
+    private Dictionary<string, double>? _speedCandidates;
+    private int _speedCandidateChangeLogs;
+    private const int MaxSpeedCandidateChangeLogs = 40;
+
+    /// <summary>1~100 정수값 자리(형식@위치 → 값) — double·float·int32.</summary>
+    internal static Dictionary<string, double> SpeedCandidates(ReadOnlySpan<byte> p)
+    {
+        static bool Ok(double v) => double.IsFinite(v) && v >= 1 && v <= 100 && Math.Abs(v - Math.Round(v)) < 1e-6;
+        var map = new Dictionary<string, double>();
+        for (int o = 0; o + 8 <= p.Length; o++)
+        {
+            var d = BinaryPrimitives.ReadDoubleLittleEndian(p.Slice(o, 8));
+            if (Ok(d)) map[$"d@{o}"] = d;
+        }
+        for (int o = 0; o + 4 <= p.Length; o++)
+        {
+            var f = BinaryPrimitives.ReadSingleLittleEndian(p.Slice(o, 4));
+            if (Ok(f) && f != 1f) map[$"f@{o}"] = f;      // float 1.0 은 흔해서 뺀다
+            var n = BinaryPrimitives.ReadInt32LittleEndian(p.Slice(o, 4));
+            if (n >= 2 && n <= 100) map[$"i@{o}"] = n;     // int 1 도 흔해서 뺀다
+        }
+        return map;
+    }
+
+    // 처음 30초는 학습 — 그 사이 값이 바뀐 자리(관절·시각·카운터 등 계속 변하는 값)는 후보에서 뺀다.
+    private DateTime _speedCandidateStartUtc;
+    private readonly HashSet<string> _speedCandidateNoisy = new();
+    private const double SpeedCandidateLearnSec = 30;
+
+    private void DiagnoseSpeedCandidates(ReadOnlySpan<byte> payload)
+    {
+        if (_speedCandidateChangeLogs >= MaxSpeedCandidateChangeLogs) return;
+        var now = SpeedCandidates(payload);
+        if (_speedCandidates is not null && (DateTime.UtcNow - _speedCandidateStartUtc).TotalSeconds < SpeedCandidateLearnSec)
+        {
+            foreach (var (key, v) in now)
+                if (!_speedCandidates.TryGetValue(key, out var o) || Math.Abs(o - v) >= 0.5) _speedCandidateNoisy.Add(key);
+            foreach (var key in _speedCandidates.Keys)
+                if (!now.ContainsKey(key)) _speedCandidateNoisy.Add(key);
+            _speedCandidates = now;
+            return;
+        }
+        if (_speedCandidates is not null && _speedCandidateStartUtc != DateTime.MinValue)
+        {
+            var stable = _speedCandidates.Where(kv => !_speedCandidateNoisy.Contains(kv.Key))
+                .GroupBy(kv => kv.Value).OrderBy(g => g.Key)
+                .Select(g => $"{g.Key:0}: {string.Join(" ", g.Select(kv => kv.Key).Take(12))}{(g.Count() > 12 ? " …" : "")}");
+            _logger.LogInformation("{Name} [전역 속도 진단] 30초 동안 바뀌지 않은 후보 — {List}. 이제 펜던트 전역 속도를 바꾸면 같이 바뀌는 자리를 남깁니다",
+                _settings.Name, string.Join(" | ", stable));
+            _speedCandidateStartUtc = DateTime.MinValue;   // 한 번만
+        }
+        if (_speedCandidates is null)
+        {
+            _speedCandidateStartUtc = DateTime.UtcNow;
+            _speedCandidates = now;
+            // 관절·위치값과 섞여 많으니 값별로 묶어 남긴다.
+            var byValue = now.GroupBy(kv => kv.Value).OrderBy(g => g.Key)
+                .Select(g => $"{g.Key:0}: {string.Join(" ", g.Select(kv => kv.Key).Take(12))}{(g.Count() > 12 ? " …" : "")}");
+            _logger.LogInformation("{Name} [전역 속도 진단] 상태 패킷 {Len}바이트의 1~100 정수값 자리 {N}곳 — {List}",
+                _settings.Name, payload.Length, now.Count, string.Join(" | ", byValue));
+            return;
+        }
+        foreach (var (key, v) in now)
+        {
+            if (_speedCandidateNoisy.Contains(key)) continue;
+            if (_speedCandidates.TryGetValue(key, out var old) && Math.Abs(old - v) >= 0.5)
+            {
+                _logger.LogInformation("{Name} [전역 속도 진단] {Key} 값 변화 {Old:0} → {New:0}", _settings.Name, key, old, v);
+                if (++_speedCandidateChangeLogs >= MaxSpeedCandidateChangeLogs)
+                {
+                    _logger.LogInformation("{Name} [전역 속도 진단] 변화 로그 {Max}건 — 더 남기지 않습니다", _settings.Name, MaxSpeedCandidateChangeLogs);
+                    break;
+                }
+            }
+        }
+        _speedCandidates = now;
     }
 
     private void LogSpeedScale(FairinoState s, int dataLen)
