@@ -524,6 +524,56 @@ public sealed class GasDetectorService : BackgroundService
         return (scans, null);
     }
 
+    /// <summary>
+    /// 무정지 통과 — 측정 없이 이동만(가스 측정 없는 드라이런). <see cref="MeasureNonStopPassAsync"/> 와 같은 이동
+    /// (직선 병합·블렌딩·마지막 블로킹·끝점 도달 확인)을 하되 디텍터를 읽지 않는다. 성공이면 null, 실패면 사유.
+    /// </summary>
+    public async Task<string?> MoveNonStopPassAsync(
+        IReadOnlyList<double[]> poses,
+        Func<int, double, CancellationToken, Task<int>> moveTo,
+        Func<CancellationToken, Task<double[]>>? readPose, Func<Task> stopMotion, CancellationToken ct = default)
+    {
+        var lengths = Enumerable.Range(0, poses.Count - 1)
+            .Select(k => GasPassSplitter.Distance(poses[k], poses[k + 1])).ToList();
+        var motion = GasPassSplitter.MergeCollinear(poses);
+        var motionLengths = Enumerable.Range(0, motion.Count - 1)
+            .Select(m => GasPassSplitter.Distance(poses[motion[m]], poses[motion[m + 1]])).ToList();
+        var radii = GasPassSplitter.BlendRadii(motionLengths, NonStopBlendRadiusMm);
+
+        async Task StopQuietlyAsync()
+        {
+            try { await stopMotion(); }
+            catch (Exception ex) { _logger.LogError(ex, "[무정지 이동] 정지 명령 실패"); }
+        }
+
+        using var stopOnCancel = ct.Register(() => _ = StopQuietlyAsync());
+        var started = DateTime.UtcNow;
+        for (var m = 1; m < motion.Count; m++)
+        {
+            var k = motion[m];
+            var rc = await moveTo(k, m == motion.Count - 1 ? -1 : radii[m - 1], ct);
+            if (rc != 0)
+            {
+                await StopQuietlyAsync();
+                ct.ThrowIfCancellationRequested();
+                return $"경유점 이동 명령 실패 (rc={rc}){HD.AMR.App.Communication.FairinoErrorCodes.Suffix(rc)}";
+            }
+        }
+        if (readPose is not null)
+        {
+            var remain = GasPassSplitter.Distance(await readPose(ct), poses[^1]);
+            if (remain > NonStopArrivalToleranceMm)
+            {
+                await StopQuietlyAsync();
+                return $"끝점 미도달 — 마지막 경유점까지 {remain:0.0} mm 남음";
+            }
+        }
+        var sec = (DateTime.UtcNow - started).TotalSeconds;
+        _logger.LogInformation("[무정지 이동] 측정 없이 {N}구간 {Len:0} mm 를 {Sec:0.0} 초에 통과(평균 {Speed:0.0} mm/s, 이동 명령 {Moves}개)",
+            lengths.Count, lengths.Sum(), sec, sec > 0 ? lengths.Sum() / sec : 0, motion.Count - 1);
+        return null;
+    }
+
     /// <summary>샘플 묶음을 판정해 측정 1건으로 기록하고(<see cref="Results"/>, 로그, <see cref="ResultAdded"/>) 돌려준다.</summary>
     private GasMeasurementResult Record(string label, int retry, DateTime started, IReadOnlyCollection<double> samples,
         GasThreshold th, string? error, DateTime? peakUtc)

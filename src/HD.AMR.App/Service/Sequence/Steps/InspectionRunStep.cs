@@ -332,7 +332,8 @@ public class InspectionRunStep : ISequenceStep
         // 가스 무정지: 경유점(약 5mm 간격)을 전부 IK 로 풀지 않고 위치 50mm·자세 5° 마다 솎아 검증한다 — 사이 경로는
         // CheckWaypointChainAsync 가 100mm·10° 간격으로 이어 샘플링하므로 안전 기준(특이점·가지 전환)은 그대로다.
         // 무정지 통과가 필요한 나머지 관절 해는 이동 명령을 보낼 때 그 점만 푼다(RunNonStopPassAsync).
-        var gasNonStopPlanned = _useGas && !dry
+        // 드라이런도 같은 무정지 이동을 하므로(측정만 생략) 같이 솎는다.
+        var gasNonStopPlanned = _useGas
             && _gas.Settings.MeasureMode == GasMeasureMode.Continuous && _gas.Settings.NonStopBlendRadiusMm > 0;
         if (gasNonStopPlanned)
         {
@@ -399,6 +400,10 @@ public class InspectionRunStep : ISequenceStep
         var continuous = gasThreshold is not null && gasSettings.MeasureMode == GasMeasureMode.Continuous;
         // 무정지: 연속 측정이면서 블렌딩 반경 > 0 — 첫 경유점 이후를 멈추지 않고 한 번에 지나간다(RunNonStopPassAsync).
         var nonStop = continuous && gasSettings.NonStopBlendRadiusMm > 0;
+        // 가스 드라이런: 측정은 없지만 실제 검사와 같은 무정지 이동으로 지나간다 — 경유점마다 멈추면(정착 대기 포함)
+        // 구역 순회가 16초 → 2분 40초로 늘어 시험 의미가 없다(실기 2026-11-21 20:34).
+        var dryNonStop = dry && _useGas
+            && gasSettings.MeasureMode == GasMeasureMode.Continuous && gasSettings.NonStopBlendRadiusMm > 0;
         if (gasThreshold is not null)
             _logger.LogInformation("[검사 수행] 가스 판정 임계값 {Th} (초과 NG, NG 시 재측정 최대 {Retry}회), 측정 방식 {Mode}",
                 gasThreshold.Describe(), Math.Clamp(gasSettings.MaxRetries, 0, 2),
@@ -471,6 +476,46 @@ public class InspectionRunStep : ISequenceStep
         // 샘플은 시간 비율로 구간에 나눠 구간마다 도착 경유점의 포인트로 남긴다. OK 가 아닌 구간은 통과 뒤에
         // 그 구간 출발점으로 직행해(TravelAsync) 종전 구간 방식(ScanSegmentAsync)으로 재측정하고, 끝나면 마지막 경유점으로 돌아간다.
         // 일시정지는 통과 도중에는 걸리지 않는다(통과를 마친 뒤 재측정 앞에서 멈춘다).
+        // 가스 드라이런 무정지 통과 — 측정 없이 실제 검사와 같은 이동(직선 병합·블렌딩)만 한다. 관절 해는 무정지 측정과 같이
+        // 사전 검증 사슬에서 쓰고, 없으면 그 점만 푼다(풀리지 않으면 관절 지정 없이).
+        async Task<string?> RunDryNonStopPassAsync(int from, List<int> rest)
+        {
+            if (rest.Count == 0) return null;
+            var idxs = new List<int> { from };
+            idxs.AddRange(rest);
+            var passPoses = idxs.Select(k => ToTargetBase(waypoints[k])).ToList();
+            var cache = new Dictionary<int, double[]>(checkedJoints);
+            double[]? startJoints = null;
+            async Task<double[]?> JointsAsync(int k, CancellationToken c)
+            {
+                if (cache.TryGetValue(idxs[k], out var known)) return known;
+                double[]? seed = null;
+                for (var m = k - 1; m >= 0 && seed is null; m--)
+                    if (cache.TryGetValue(idxs[m], out var s)) seed = s;
+                seed ??= startJoints ??= await _cobot.Rpc.GetActualJointPosAsync(ct: c);
+                try
+                {
+                    var j = await _cobot.Rpc.GetInverseKinNearestAsync(passPoses[k], seed, context.Tool, 0, c);
+                    cache[idxs[k]] = j;
+                    return j;
+                }
+                catch (InvalidOperationException) { return null; }
+            }
+
+            _logger.LogInformation("[검사 수행] 드라이런 무정지 이동 — 경유점 #{From}→#{To} ({N}구간, 측정 없음)",
+                from + 1, rest[^1] + 1, rest.Count);
+            context.Progress?.Invoke($"드라이런 무정지 이동 — 경유점 #{from + 1}→#{rest[^1] + 1}");
+            var error = await _gas.MoveNonStopPassAsync(passPoses,
+                async (k, blendR, c) => await ScanMoveLAsync(passPoses[k], await JointsAsync(k, c), blendR, c),
+                c => _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, c),
+                () => _cobot.StopMotionImmediateAsync(), ct);
+            if (error is not null) return $"드라이런 무정지 이동 실패 — {error}";
+            foreach (var k in rest) movedSet.Add(k);
+            lastMoved = rest[^1];
+            prevIdx = rest[^1];
+            return null;
+        }
+
         async Task<string?> RunNonStopPassAsync(int from, List<int> rest)
         {
             var idxs = new List<int> { from };
@@ -657,6 +702,15 @@ public class InspectionRunStep : ISequenceStep
 
             // 연속 측정: 앞 경유점 → 이 경유점 구간을 이동하면서 잰다. 첫 경유점은 앞 구간이 없어 아래 정지 측정으로 잰다.
             // 무정지: 남은 경유점 전체를 한 번에 지나가며 재고 순회를 끝낸다.
+            if (dryNonStop && prevIdx >= 0)
+            {
+                var remainingDry = Enumerable.Range(i, waypoints.Count - i).ToList();
+                foreach (var skippedIdx in remainingDry.Where(k => IsSkipped(waypoints[k])))
+                    skippedSet.Add(skippedIdx);
+                if (await RunDryNonStopPassAsync(prevIdx, remainingDry.Where(k => !IsSkipped(waypoints[k])).ToList()) is { } dryError)
+                    return StepResult.Fail($"{dryError} — {movedSet.Count}점 이동 후 중단.");
+                break;
+            }
             if (nonStop && prevIdx >= 0)
             {
                 var remaining = Enumerable.Range(i, waypoints.Count - i).ToList();
@@ -690,7 +744,8 @@ public class InspectionRunStep : ISequenceStep
             prevIdx = i;
 
             // 무정지 첫 경유점은 멈춰 재지 않으므로(아래 정지 측정 생략) 정착 대기도 하지 않는다 — 구역마다 1초 절약.
-            var skipSettle = _useGas && !dry && nonStop && deferredFirstIdx < 0 && gasPoints.Count == 0
+            var skipSettle = _useGas
+                && ((!dry && nonStop && deferredFirstIdx < 0 && gasPoints.Count == 0) || dryNonStop)
                 && Enumerable.Range(i + 1, waypoints.Count - i - 1).Any(k => !IsSkipped(waypoints[k]));
             if (settle > TimeSpan.Zero && !skipSettle)
                 await Task.Delay(settle, ct);
