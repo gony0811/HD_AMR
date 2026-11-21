@@ -41,6 +41,9 @@ public class TcpSpeedProbeTests
         Assert.InRange(r.Commands[0].AvgMmPerSec, 4.5, 5.5);
         Assert.InRange(r.Commands[2].AvgMmPerSec, 4.5, 5.5);
         Assert.InRange(r.PeakMmPerSec, 48, 52);
+        var prof = r.Commands[1].Profile!;
+        Assert.InRange(prof.Count, 3, 5);                       // 2초 / 0.5초
+        Assert.All(prof.Skip(1).SkipLast(1), v => Assert.InRange(v, 45, 55));
     }
 
     [Fact]

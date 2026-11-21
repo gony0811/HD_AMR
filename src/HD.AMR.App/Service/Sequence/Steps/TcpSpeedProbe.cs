@@ -24,7 +24,11 @@ public sealed class TcpSpeedProbe : IAsyncDisposable
 
     public readonly record struct Sample(double TSec, double X, double Y, double Z);
 
-    public readonly record struct CommandSpeed(int Index, double PlannedMm, double MovedMm, double Sec, double AvgMmPerSec, double PeakMmPerSec);
+    public readonly record struct CommandSpeed(int Index, double PlannedMm, double MovedMm, double Sec, double AvgMmPerSec, double PeakMmPerSec,
+        IReadOnlyList<double>? Profile = null);
+
+    /// <summary>속도 곡선 구간 폭 [s] — 긴 명령의 속도를 이 간격 평균으로 나열한다(가속·정속·감속 모양 확인용).</summary>
+    internal const double ProfileBinSec = 0.5;
 
     public sealed record Report(double TotalMm, double PlannedMm, double Sec, double PeakMmPerSec, IReadOnlyList<CommandSpeed> Commands);
 
@@ -121,6 +125,23 @@ public sealed class TcpSpeedProbe : IAsyncDisposable
             return best;
         }
 
+        // [a,b] 구간을 ProfileBinSec 간격으로 잘라 구간 평균 속도
+        List<double> Bins(int a, int b)
+        {
+            var list = new List<double>();
+            var i = a;
+            while (i < b)
+            {
+                var j = i;
+                while (j < b && samples[j].TSec - samples[i].TSec < ProfileBinSec) j++;
+                var dt = samples[j].TSec - samples[i].TSec;
+                if (dt > 0) list.Add((cum[j] - cum[i]) / dt);
+                if (j == i) break;
+                i = j;
+            }
+            return list;
+        }
+
         // 거리 d 에 도달한 시각의 샘플 인덱스
         int IndexAt(double d)
         {
@@ -140,7 +161,8 @@ public sealed class TcpSpeedProbe : IAsyncDisposable
             var endIdx = m == plannedMm.Count - 1 ? lastIdx : IndexAt(cum[first] + acc * scale);
             var mm = cum[endIdx] - cum[startIdx];
             var dt = samples[endIdx].TSec - samples[startIdx].TSec;
-            cmds.Add(new CommandSpeed(m + 1, plannedMm[m], mm, dt, dt > 0 ? mm / dt : 0, endIdx > startIdx ? Peak(startIdx, endIdx) : 0));
+            cmds.Add(new CommandSpeed(m + 1, plannedMm[m], mm, dt, dt > 0 ? mm / dt : 0, endIdx > startIdx ? Peak(startIdx, endIdx) : 0,
+                Bins(startIdx, endIdx)));
             startIdx = endIdx;
         }
         return new Report(moved, planned, sec, Peak(first, lastIdx), cmds);
@@ -154,8 +176,10 @@ public sealed class TcpSpeedProbe : IAsyncDisposable
             where, r.TotalMm, r.PlannedMm, r.Sec, r.Sec > 0 ? r.TotalMm / r.Sec : 0, r.PeakMmPerSec,
             targetMmPerSec is { } t ? $", 목표 {t:0.#}" : "", r.Commands.Count);
         foreach (var c in r.Commands.Where(c => c.PlannedMm >= longMm))
-            logger.LogInformation("[{Where}]   명령 {I}: {Plan:0.0} mm(실측 {Mm:0.0}) {Sec:0.00} 초 — 평균 {Avg:0.0} mm/s, 최고 {Peak:0.0} mm/s",
-                where, c.Index, c.PlannedMm, c.MovedMm, c.Sec, c.AvgMmPerSec, c.PeakMmPerSec);
+            logger.LogInformation("[{Where}]   명령 {I}: {Plan:0.0} mm(실측 {Mm:0.0}) {Sec:0.00} 초 — 평균 {Avg:0.0} mm/s, 최고 {Peak:0.0} mm/s, " +
+                                  "{Bin}s 간격 속도 [{Profile}]",
+                where, c.Index, c.PlannedMm, c.MovedMm, c.Sec, c.AvgMmPerSec, c.PeakMmPerSec, ProfileBinSec,
+                string.Join(" ", (c.Profile ?? Array.Empty<double>()).Select(v => v.ToString("0"))));
         var shortCmds = r.Commands.Where(c => c.PlannedMm < longMm).ToList();
         if (shortCmds.Count > 0)
         {
