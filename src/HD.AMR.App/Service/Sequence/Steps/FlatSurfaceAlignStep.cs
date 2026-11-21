@@ -44,6 +44,7 @@ public class FlatSurfaceAlignStep : ISequenceStep
     private readonly FlatDetectionMonitor _monitor;
     private readonly ILogger<FlatSurfaceAlignStep> _logger;
     private readonly bool _levelSurface;
+    private readonly bool _useGas;
 
     // ── 설정 상수 ──────────────────────────────────────────────────────
     /// <summary>평탄 판정 틸트 임계값(도) 파라미터 키 — 비었거나 0 이하·5° 초과면 기본값.</summary>
@@ -91,13 +92,49 @@ public class FlatSurfaceAlignStep : ISequenceStep
     private const string AlignImageXAxisKey = "Camera.Align.ImageXAxis";
     private const string AlignImageYAxisKey = "Camera.Align.ImageYAxis";
 
+    /// <summary>
+    /// 점2 평탄면 레이저 재확인 허용차 [mm] 파라미터 키 — 0 이면 끔. 비거나 범위 밖이면 센서 모드 기본(가스 12, 비전 끔).
+    /// 점2 에서 레이저가 점1 과 다른 높이(주름 꼭대기·경사·비드)를 재면 점2 가 면 법선 방향으로 잘못 찍혀 묶음 좌표계가
+    /// 기운다. 그래서 평탄 자리를 한 곳 더 찾아 레이저로 다시 재 두 값이 맞는지 본다 — 깊이 카메라가 아니라 변위센서 기준.
+    /// </summary>
+    public const string Point2LaserRecheckKey = "Sequence.Bundle.Point2LaserRecheckMm";
+    internal const double DefaultPoint2LaserRecheckMm = 12.0;
+    internal const double MaxPoint2LaserRecheckMm = 100.0;
+
+    /// <summary>재확인에 쓰는 자리 수 상한 — 첫 자리 + 다른 자리 2곳.</summary>
+    internal const int MaxPoint2RecheckSpots = 3;
+
+    /// <summary>파라미터 → 허용차 [mm]. 0 = 끔. 비거나 범위 밖이면 가스 기본값, 비전 0(종전 동작 — 용접검사기 분리).</summary>
+    internal static double ResolvePoint2LaserRecheckMm(double? value, bool usesGas)
+        => value is { } v && double.IsFinite(v) && v >= 0 && v <= MaxPoint2LaserRecheckMm ? v
+         : usesGas ? DefaultPoint2LaserRecheckMm : 0;
+
+    /// <summary>
+    /// 레이저 값들 중 허용차 안에서 서로 맞는 짝 — 마지막(지금 서 있는) 자리가 들어간 짝을 먼저 고른다(돌아가지 않게).
+    /// 맞는 짝이 없으면 null. 돌려주는 값은 쓸 자리의 인덱스.
+    /// </summary>
+    internal static int? PickAgreeingSpot(IReadOnlyList<double> z, double tolMm)
+    {
+        if (z.Count < 2) return null;
+        var last = z.Count - 1;
+        for (var i = 0; i < last; i++)
+            if (Math.Abs(z[i] - z[last]) <= tolMm) return last;
+        for (var i = 0; i < last; i++)
+            for (var j = i + 1; j < last; j++)
+                if (Math.Abs(z[i] - z[j]) <= tolMm) return j;
+        return null;
+    }
+
     /// <param name="levelSurface">true(④)면 탐색 뒤 틸트 수평 얼라인. false(묶음 점2)면 자리만 맞춘다.</param>
     public FlatSurfaceAlignStep(
         bool levelSurface,
         CobotService cobot, CameraService camera, FlatSurfaceCenteringService centering,
         LaserDisplacementSensorService laser, LaserTiltCorrector tilt, ParameterService param,
-        PostureLimitsService limits, FlatDetectionMonitor monitor, ILogger<FlatSurfaceAlignStep> logger)
+        PostureLimitsService limits, FlatDetectionMonitor monitor,
+        Microsoft.Extensions.Options.IOptions<InspectionSensorSettings> sensor,
+        ILogger<FlatSurfaceAlignStep> logger)
     {
+        _useGas = sensor.Value.UsesGasDetector;
         _levelSurface = levelSurface;
         _tilt = tilt;
         _limits = limits;
@@ -271,9 +308,93 @@ public class FlatSurfaceAlignStep : ISequenceStep
 
             if (!_levelSurface)
             {
-                _monitor.UpdateStage(FlatDetectionStage.Done, "수평 얼라인 생략");
+                // ── 점2 레이저 재확인 — 평탄 자리를 한 곳 더 찾아 변위센서로 다시 재고, 서로 맞는 자리를 쓴다 ──
+                var tol = ResolvePoint2LaserRecheckMm(await _param.GetDoubleAsync(Point2LaserRecheckKey), _useGas);
+                if (tol <= 0)
+                {
+                    _monitor.UpdateStage(FlatDetectionStage.Done, "수평 얼라인 생략");
+                    return StepResult.Ok($"평탄면 탐색 완료 — 수평 얼라인 생략 (σ={align.SigmaMm:0.##}mm).");
+                }
+
+                var spotZ = new List<double>();
+                var spotPose = new List<double[]>();
+                var spotUv = new List<(double U, double V)?>();
+                var z0 = await MeasureLaserZAsync(ct);
+                if (z0 is null)
+                {
+                    _logger.LogWarning("[점2 레이저 재확인] 첫 자리 레이저 측정 실패 — 재확인 없이 진행");
+                    _monitor.UpdateStage(FlatDetectionStage.Done, "수평 얼라인 생략");
+                    return StepResult.Ok($"평탄면 탐색 완료 — 레이저 재확인 생략(측정 실패) (σ={align.SigmaMm:0.##}mm).");
+                }
+                spotZ.Add(z0.Value);
+                spotPose.Add(await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct));
+                spotUv.Add(align.FlatU is { } u0 && align.FlatV is { } v0 ? (u0, v0) : null);
+                _logger.LogInformation("[점2 레이저 재확인] 자리 1 레이저 z={Z:0.##}mm — 평탄 자리를 한 곳 더 찾아 다시 잽니다 (허용차 {Tol}mm)",
+                    z0.Value, tol);
+
+                int? use = null;
+                while (spotZ.Count < MaxPoint2RecheckSpots && (use = PickAgreeingSpot(spotZ, tol)) is null)
+                {
+                    foreach (var uv in spotUv)
+                        if (uv is { } e && !excluded.Contains(e)) excluded.Add(e);
+                    context.Progress?.Invoke($"점2 레이저 재확인 — 평탄 자리 {spotZ.Count + 1} 탐색");
+                    var here = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
+                    var toCam = await _centering.MoveToolOffsetAsync(here, new[] { 0.0, -shiftY, 0.0, 0.0, 0.0, 0.0 },
+                        context.Tool, context.Velocity, joint: true, ct, jointVelScale);
+                    if (!toCam.Ok) return FailStage($"점2 레이저 재확인 — 카메라 위치 복귀 실패 {toCam.Describe()}.");
+                    await Task.Delay(800, ct);   // 진동·깊이 프레임 갱신 대기
+                    var next = await _centering.RunAsync(SearchOptions($"점2 레이저 재확인 {spotZ.Count + 1}"), context.Progress, ct);
+                    ct.ThrowIfCancellationRequested();
+                    if (!next.Success)
+                    {
+                        _logger.LogWarning("[점2 레이저 재확인] 평탄 자리 {N} 탐색 실패: {Msg}", spotZ.Count + 1, next.Message);
+                        break;
+                    }
+                    var anchor = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
+                    var toLaser = await _centering.MoveToolOffsetAsync(anchor, new[] { 0.0, shiftY, 0.0, 0.0, 0.0, 0.0 },
+                        context.Tool, context.Velocity, joint: true, ct, jointVelScale);
+                    if (!toLaser.Ok) return FailStage($"점2 레이저 재확인 — 레이저 위치 이동 실패 {toLaser.Describe()}.");
+                    await Task.Delay(300, ct);
+                    var zn = await MeasureLaserZAsync(ct);
+                    if (zn is null)
+                    {
+                        _logger.LogWarning("[점2 레이저 재확인] 자리 {N} 레이저 측정 실패", spotZ.Count + 1);
+                        break;
+                    }
+                    spotZ.Add(zn.Value);
+                    spotPose.Add(await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct));
+                    spotUv.Add(next.FlatU is { } un && next.FlatV is { } vn ? (un, vn) : null);
+                    _logger.LogInformation("[점2 레이저 재확인] 자리 {N} 레이저 z={Z:0.##}mm (자리 1 대비 {D:+0.##;-0.##}mm)",
+                        spotZ.Count, zn.Value, zn.Value - spotZ[0]);
+                }
+                use ??= PickAgreeingSpot(spotZ, tol);
+
+                var zList = string.Join(", ", spotZ.Select((z, k) => $"자리{k + 1} {z:0.#}"));
+                if (use is not { } pick)
+                {
+                    if (spotZ.Count < 2)
+                    {
+                        // 다른 자리를 못 찾아 비교할 수 없음 — 종전처럼 첫 자리로 진행한다.
+                        _logger.LogWarning("[점2 레이저 재확인] 비교할 자리를 찾지 못함 — 자리 1 로 진행 ({List}mm)", zList);
+                        _monitor.UpdateStage(FlatDetectionStage.Done, "레이저 재확인 생략");
+                        return StepResult.Ok($"평탄면 탐색 완료 — 레이저 재확인 생략(다른 자리 없음) (σ={align.SigmaMm:0.##}mm).");
+                    }
+                    return FailStage(
+                        $"점2 레이저 재확인 불일치 — 평탄 자리 {spotZ.Count}곳 레이저 값({zList}mm)이 허용차 {tol:0.#}mm 안에서 맞는 짝이 없습니다 " +
+                        $"(주름 꼭대기·경사·비드를 잰 것으로 보임, '{Point2LaserRecheckKey}').");
+                }
+
+                if (pick != spotZ.Count - 1)
+                {
+                    var back = await _centering.MoveToolOffsetAsync(spotPose[pick], new double[6], context.Tool, context.Velocity,
+                        joint: true, ct, jointVelScale);
+                    if (!back.Ok) return FailStage($"점2 레이저 재확인 — 자리 {pick + 1} 로 복귀 실패 {back.Describe()}.");
+                    await Task.Delay(300, ct);
+                }
+                _logger.LogInformation("[점2 레이저 재확인] 일치 — 자리 {Pick} 사용 ({List}mm, 허용차 {Tol}mm)", pick + 1, zList, tol);
+                _monitor.UpdateStage(FlatDetectionStage.Done, $"레이저 재확인 일치(자리 {pick + 1})");
                 return StepResult.Ok(
-                    $"평탄면 탐색 완료 — 수평 얼라인 생략 (σ={align.SigmaMm:0.##}mm).");
+                    $"평탄면 탐색 완료 — 레이저 재확인 일치, 자리 {pick + 1} 사용 ({zList}mm) (σ={align.SigmaMm:0.##}mm).");
             }
 
             // ── Phase C: 레이저 3점 측정 → 헤드 틸트(회전) 보정 ────────────
@@ -356,6 +477,30 @@ public class FlatSurfaceAlignStep : ISequenceStep
     }
 
     // ── 헬퍼 ────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// 레이저 3점 평면 거리(z, mm)를 안정될 때까지 잰다 — 연속 3샘플 폭 0.3mm 미만이면 평균. 6초 안에 안정되지 않으면 null.
+    /// (<see cref="LaserWorkingDistanceStep"/> 의 안정 판정과 같은 기준.)
+    /// </summary>
+    private async Task<double?> MeasureLaserZAsync(CancellationToken ct)
+    {
+        var window = new Queue<double>();
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < 6000)
+        {
+            ct.ThrowIfCancellationRequested();
+            var p = _laser.GetPlanePose();
+            if (p.Valid)
+            {
+                window.Enqueue(p.Z);
+                if (window.Count > 3) window.Dequeue();
+                if (window.Count == 3 && window.Max() - window.Min() < 0.3) return window.Average();
+            }
+            else window.Clear();
+            await Task.Delay(150, ct);
+        }
+        return null;
+    }
 
     /// <summary>평탄 셀 검출 이후 단계의 실패 — 카메라 페이지 검출 스냅샷에도 실패로 표시한다.</summary>
     private StepResult FailStage(string message)
