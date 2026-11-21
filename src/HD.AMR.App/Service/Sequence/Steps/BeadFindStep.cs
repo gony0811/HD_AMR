@@ -162,6 +162,7 @@ public class BeadFindStep : ISequenceStep
 
         // 못 찾았으면 뒤로 물러나 FOV 를 넓혀 한 번 더 찍는다(파라미터). 결과와 상관없이 원래 자리로 돌아온다.
         var retreatNote = "";
+        var foundByRetreat = false;
         if (autoFail is not null)
         {
             _returnFailed = null;
@@ -173,13 +174,14 @@ public class BeadFindStep : ISequenceStep
             {
                 (m, detect) = found;
                 autoFail = null;
+                foundByRetreat = true;
             }
         }
 
         // 파라미터 조건에 해당하면 사람에게 비드선을 받는다(학습 데이터로도 저장).
         context.Bag.Remove(WeldSequenceSupport.BeadPeakOffsetMmBagKey(_peakId));
         var assist = await _manual.RunAsync(_peakId, DisplayName, m, detect, autoFail is null, autoFail,
-            peakRoi, beadRoi, context, ct);
+            peakRoi, beadRoi, context, ct, foundAfterRetreat: foundByRetreat);
         if (assist.Kind == BeadAssistKind.Manual && assist.Measurement is { } mm)
         {
             var dManual = _weld.DMm(mm);
