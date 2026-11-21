@@ -167,19 +167,39 @@ public class InspectionRunStep : ISequenceStep
     private string SensorName => _useGas ? "가스" : "비전";
     public int DefaultOrder => _dryRun ? 1210 : 1200;
 
+    /// <summary>
+    /// 가스 측정 없는 드라이런 파라미터(on/off) — 켜면 ACS 검사 미션은 정렬·교시·순회를 평소대로 하되 가스를 재지 않는다
+    /// (디텍터가 꺼져 있어도 미션 수행). 레시피 드라이런(비전 정렬 없이 ACS 좌표로 2점 교시)과 다르다. 비우면 끔. 가스 모드에서만 쓴다.
+    /// </summary>
+    public const string GasDryRunKey = "Inspection.GasDryRun";
+
+    /// <summary>Bag 키(bool true) — 오케스트레이터가 <see cref="GasDryRunKey"/> 가 켜졌을 때 넣는다.</summary>
+    public const string GasDryRunBagKey = "inspection.gasDryRun";
+
+    /// <summary><see cref="GasDryRunKey"/> 값 해석 — on/1/true/yes 만 켬.</summary>
+    public static bool ResolveGasDryRun(string? raw)
+        => raw?.Trim().ToLowerInvariant() is "1" or "true" or "on" or "yes";
+
+    private static bool GasDryRunOf(SequenceContext context)
+        => context.Bag.TryGetValue(GasDryRunBagKey, out var v) && v is true;
+
     public StepValidation Validate(SequenceContext context)
     {
         if (!_cobot.IsConnected)
             return StepValidation.Fail("코봇 RPC 미연결");
         if (context.InspectionProfileId <= 0)
             return StepValidation.Fail("티칭설정 미선택 — 파라미터 칸에서 도면·티칭설정을 선택하세요.");
-        if (_useGas && !_dryRun && !_gas.IsConnected)
+        if (_useGas && !_dryRun && !GasDryRunOf(context) && !_gas.IsConnected)
             return StepValidation.Fail($"가스 디텍터 미연결 ({_gas.Settings.EndpointText}) — SETTINGS > Gas Detector 에서 통신을 확인하세요.");
         return StepValidation.Ok();
     }
 
     public async Task<StepResult> ExecuteAsync(SequenceContext context, CancellationToken ct)
     {
+        // 드라이런 = 드라이런 스텝(inspectionRunDry) 또는 가스 측정 없는 드라이런(파라미터) — 경유점 이동만 하고 측정하지 않는다.
+        var dry = _dryRun || (_useGas && GasDryRunOf(context));
+        if (dry && !_dryRun)
+            _logger.LogWarning("[검사 수행] 가스 측정 없는 드라이런('{Key}') — 경유점 이동만 하고 가스는 재지 않습니다", GasDryRunKey);
         // ── 작업물 좌표계 번호 (⑩/⑯/⑯⁺ 등록과 동일 파라미터) ──────────
         var wobjId = (int)(await GetWObjIdAsync());
         if (wobjId is < 0 or > 14)
@@ -312,7 +332,7 @@ public class InspectionRunStep : ISequenceStep
         // 가스 무정지: 경유점(약 5mm 간격)을 전부 IK 로 풀지 않고 위치 50mm·자세 5° 마다 솎아 검증한다 — 사이 경로는
         // CheckWaypointChainAsync 가 100mm·10° 간격으로 이어 샘플링하므로 안전 기준(특이점·가지 전환)은 그대로다.
         // 무정지 통과가 필요한 나머지 관절 해는 이동 명령을 보낼 때 그 점만 푼다(RunNonStopPassAsync).
-        var gasNonStopPlanned = _useGas && !_dryRun
+        var gasNonStopPlanned = _useGas && !dry
             && _gas.Settings.MeasureMode == GasMeasureMode.Continuous && _gas.Settings.NonStopBlendRadiusMm > 0;
         if (gasNonStopPlanned)
         {
@@ -372,7 +392,7 @@ public class InspectionRunStep : ISequenceStep
         var ngByIndex = new Dictionary<int, bool>();   // 가스 모드: 리크 검출(NG) 점
         var gasPoints = new SortedDictionary<int, GasPointResult>();   // 가스 모드: 경유점별 scan 기록(SAIGE points[])
         // 임계값은 Task 시작 시 한 번 잡는다 — 도중에 SAIGE 가 바꾸면 다음 Task 부터 적용(SAIGE §3).
-        var gasThreshold = _useGas && !_dryRun ? _gas.CurrentThreshold : null;
+        var gasThreshold = _useGas && !dry ? _gas.CurrentThreshold : null;
         var gasStarted = DateTime.UtcNow;
         // 연속 측정: 경유점에 멈춰 재는 대신 경유점 사이를 이동하는 동안 계속 샘플링한다. Task 시작 시 한 번 정한다.
         var gasSettings = _gas.Settings;
@@ -625,7 +645,7 @@ public class InspectionRunStep : ISequenceStep
 
             // 일시정지 체크포인트 ① — 다음 경유점으로 이동하기 전. 재개되면 정지 직전 경유점으로 되돌아가 재촬영(§4.3).
             // 연속 측정은 구간 측정이 이동과 함께 끝나 있으므로 되돌아가지 않고 다음 구간부터 이어 간다.
-            if (await _pauseGate.WaitWhilePausedAsync(ct) && lastMoved >= 0 && !_dryRun && !continuous && lastMoved < i)
+            if (await _pauseGate.WaitWhilePausedAsync(ct) && lastMoved >= 0 && !dry && !continuous && lastMoved < i)
             {
                 _logger.LogInformation("[검사 수행] 일시정지 해제 — 정지 직전 경유점 #{Idx} 부터 재촬영", lastMoved + 1);
                 context.Progress?.Invoke($"일시정지 해제 — 경유점 #{lastMoved + 1} 부터 재촬영");
@@ -670,7 +690,7 @@ public class InspectionRunStep : ISequenceStep
             prevIdx = i;
 
             // 무정지 첫 경유점은 멈춰 재지 않으므로(아래 정지 측정 생략) 정착 대기도 하지 않는다 — 구역마다 1초 절약.
-            var skipSettle = _useGas && !_dryRun && nonStop && deferredFirstIdx < 0 && gasPoints.Count == 0
+            var skipSettle = _useGas && !dry && nonStop && deferredFirstIdx < 0 && gasPoints.Count == 0
                 && Enumerable.Range(i + 1, waypoints.Count - i - 1).Any(k => !IsSkipped(waypoints[k]));
             if (settle > TimeSpan.Zero && !skipSettle)
                 await Task.Delay(settle, ct);
@@ -680,7 +700,7 @@ public class InspectionRunStep : ISequenceStep
                 _logger.LogInformation("[검사 수행] 일시정지 해제 — 경유점 #{Idx} 촬영부터 재개", i + 1);
 
             // 드라이런: 경유점 이동만 하고 비전 CAPTURE_REQ 는 보내지 않는다(좌표·경로 검증용).
-            if (_dryRun)
+            if (dry)
                 continue;
 
             // 가스 디텍터: 도착 후 대기·샘플링해 임계값 판정(초과 NG), NG 면 같은 자리에서 최대 2회 재측정(SAIGE §2).
@@ -782,22 +802,22 @@ public class InspectionRunStep : ISequenceStep
             ? $", 가스 측정 {visOk}/{moved} (NG {gasNg}" + (visFail > 0 ? $", 실패 {visFail})" : ")")
             : $", 비전 OK {visOk}/{moved}" + (visFail > 0 ? $" (실패 {visFail})" : "");
         var msg =
-            (_dryRun ? $"검사 수행 완료(드라이런·{SensorName} 없음) — " : "검사 수행 완료 — ") +
+            (dry ? $"검사 수행 완료(드라이런·{SensorName} 없음) — " : "검사 수행 완료 — ") +
             $"티칭설정 '{profile.Name}', 이동 {moved}점" +
             (skipped > 0 ? $"(θ 초과 {skipped}점 제외)" : "") +
-            (_dryRun ? "" : sensorSummary) +
+            (dry ? "" : sensorSummary) +
             $" [내부 wobj #{wobjId}→BASE/user 0, tool {context.Tool}, WallID 0x{context.InspectionSurfaceId:X2}, Run {runId}].";
         _logger.LogInformation("[검사 수행] {Msg}", msg);
 
         // 비전 OK 가 하나도 없으면 실패율 설정과 무관하게 실패 — 순회 중 비전 링크가 끊기면 촬영 요청이 즉시
         // (false,false)로 끝나 코봇은 이동만 하고 "성공"으로 보고되며 anchor 프레임까지 캐시되던 문제(기본 상한 1.0 = 판정 없음).
-        if (!_dryRun && moved > 0 && visOk == 0)
+        if (!dry && moved > 0 && visOk == 0)
             return StepResult.Fail(
                 $"비전 OK 0/{moved} — 촬영 결과를 하나도 받지 못했습니다. 비전 S/W 링크·촬영 응답을 확인하세요. {msg}");
 
         // ACS 경로: 비전 실패율 상한 초과 시 스텝 실패로 승격(→ 액션 FAILED + inspectionFailed, §6.4 재시도 정책).
         // UI 단독 실행(VisionFailRatioMax=null)은 현행대로 집계만 하고 성공 반환. 드라이런은 비전이 없어 판정 생략.
-        if (!_dryRun && context.VisionFailRatioMax is { } maxRatio && moved > 0)
+        if (!dry && context.VisionFailRatioMax is { } maxRatio && moved > 0)
         {
             var failRatio = (double)visFail / moved;
             if (failRatio > maxRatio)

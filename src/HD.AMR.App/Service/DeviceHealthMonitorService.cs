@@ -260,13 +260,17 @@ public sealed class DeviceHealthMonitorService : BackgroundService
         {
             using var scope = _scopeFactory.CreateScope();
             var recipes = await scope.ServiceProvider.GetRequiredService<InspectionRecipeService>().ListAsync();
-            var bypass = recipes.Any(r => r.Enabled && r.DryRun);
+            // 가스 측정 없는 드라이런 파라미터가 켜져 있어도 디텍터 없이 미션을 돌리므로 감시를 생략한다.
+            var gasDryRun = Sequence.Steps.InspectionRunStep.ResolveGasDryRun(
+                await scope.ServiceProvider.GetRequiredService<ParameterService>().GetAsync(Sequence.Steps.InspectionRunStep.GasDryRunKey));
+            var bypass = gasDryRun || recipes.Any(r => r.Enabled && r.DryRun);
             if (bypass == _gasDryRunBypass) return;
             _gasDryRunBypass = bypass;
             if (bypass)
-                _logger.LogWarning("드라이런 레시피 활성 — 가스 디텍터 HEAVY 감시 생략(디텍터 없이 검사 순회 허용). 이미 뜬 알람은 RESET 으로 해제");
+                _logger.LogWarning("드라이런({Why}) 활성 — 가스 디텍터 HEAVY 감시 생략(디텍터 없이 검사 순회 허용). 이미 뜬 알람은 RESET 으로 해제",
+                    gasDryRun ? $"'{Sequence.Steps.InspectionRunStep.GasDryRunKey}' 파라미터" : "레시피");
             else
-                _logger.LogInformation("드라이런 레시피 없음 — 가스 디텍터 HEAVY 감시 재개");
+                _logger.LogInformation("드라이런 없음 — 가스 디텍터 HEAVY 감시 재개");
         }
         catch (Exception ex)
         {

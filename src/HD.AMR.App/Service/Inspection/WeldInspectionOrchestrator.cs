@@ -531,9 +531,22 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         // 가스 검출 AMR 은 비전 대신 가스 디텍터 링크를 본다(InspectionSensor:Mode).
         var sensorUp = _sensor.UsesGasDetector ? _gas.IsConnected : _vision.Client.IsConnected;
         var sensorName = _sensor.UsesGasDetector ? "가스 디텍터" : "비전 S/W";
+        // 가스 측정 없는 드라이런(파라미터) — 정렬·순회는 평소대로, 가스만 재지 않는다. 가스 모드에서만.
+        var gasDryRun = false;
+        if (_sensor.UsesGasDetector)
+        {
+            try { gasDryRun = Sequence.Steps.InspectionRunStep.ResolveGasDryRun(await param.GetAsync(Sequence.Steps.InspectionRunStep.GasDryRunKey)); }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning("'{Key}' 읽기 실패 — 가스 측정을 합니다: {Msg}", Sequence.Steps.InspectionRunStep.GasDryRunKey, ex.Message);
+            }
+            if (gasDryRun)
+                _logger.LogWarning("가스 측정 없는 드라이런('{Key}' 켜짐) — 정렬·순회만 하고 가스는 재지 않습니다 (jobRef={JobRef}, 디텍터 {State})",
+                    Sequence.Steps.InspectionRunStep.GasDryRunKey, req.JobRef, sensorUp ? "연결" : "미연결");
+        }
         if (!sensorUp)
         {
-            if (!recipe.DryRun)
+            if (!recipe.DryRun && !gasDryRun)
                 return InspectionActionResult.Fail("equipmentError", $"{sensorName} 링크 다운 — 검사 실행 불가");
             _logger.LogInformation("{Sensor} 링크 확인 생략(드라이런) — 링크 다운 상태로 진행 (recipe={Recipe})",
                 sensorName, recipeId);
@@ -850,6 +863,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                 _logger.LogWarning(
                     "촬영 위치를 면 좌표로 환산하지 못함 — 용접선 시작점 기준 좌표로 보냄 (drawingPos u/v/uEnd/vEnd 없음 또는 사선, jobRef={JobRef})",
                     req.JobRef);
+            if (gasDryRun)
+                context.Bag[Sequence.Steps.InspectionRunStep.GasDryRunBagKey] = true;
             if (cachedInternalFrame is not null)
                 context.Bag[InternalWorkpieceFrame.BagKey] = cachedInternalFrame;
             if (bundleEndWd)
