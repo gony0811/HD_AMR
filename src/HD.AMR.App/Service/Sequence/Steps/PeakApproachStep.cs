@@ -45,7 +45,7 @@ public class PeakApproachStep : ISequenceStep
         }
         catch { /* DB 미준비 — 기본값 */ }
         await CobotStillness.WaitAsync(_cobot, CobotStillness.ResolveWindowMs(rawStill, _useGas), _logger, "피치 이동", ct);
-        return await LaserWorkingDistanceStep.SampleStableZAsync(_laser, _logger, ct,
+        return await LaserWorkingDistanceStep.SamplePitchZAsync(_laser, _logger, ct,
             LaserWorkingDistanceStep.ResolveOutlierMm(raw, _useGas));
     }
 

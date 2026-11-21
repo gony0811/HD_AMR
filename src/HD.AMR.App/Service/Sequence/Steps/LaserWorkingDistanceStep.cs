@@ -637,21 +637,47 @@ public class LaserWorkingDistanceStep : ISequenceStep
         return (p.Valid, p.Z, p.Note, null);
     }
 
-    /// <summary>레이저 3점 평균 거리(Z, mm)를 안정화될 때까지 폴링해 돌려준다 — 실패 시 (null, 사유).
-    /// ⑧ 피치 이동(들어올림 보정)도 같은 판정으로 잰다.</summary>
-    internal static async Task<(double? Z, string? Note)> SampleStableZAsync(
+    /// <summary>⑧ 피치 이동(들어올림 보정) 측정 대기 한도 [ms] — 30mm 들어올림 안의 ±10mm 차이만 보면 되므로 WD 정밀 측정(8s)보다 짧게.
+    /// 실기 2026-11-22 M2: 피치마다 8s 대기가 두 번(점1·점2) 거의 매번 시간 초과 — 피치 1회 약 26s 중 16s 가 대기였다.</summary>
+    internal const int PitchStabilizeTimeoutMs = 2000;
+    /// <summary>⑧ 피치 이동 측정 안정 폭 [mm].</summary>
+    internal const double PitchStableBandMm = 1.0;
+    /// <summary>시간 안에 안정되지 않았을 때 중앙값을 쓰는 최근 유효 샘플 수·허용 폭 [mm].</summary>
+    internal const int FallbackSamples = 5;
+    internal const double FallbackMaxSpreadMm = 5.0;
+
+    /// <summary>
+    /// 안정 판정에 실패했을 때 쓸 값 — 최근 유효 샘플(최대 <see cref="FallbackSamples"/>개)이 3개 이상이고 폭이
+    /// <see cref="FallbackMaxSpreadMm"/> 이하면 그 중앙값, 아니면 null.
+    /// </summary>
+    internal static double? FallbackMedian(IReadOnlyList<double> recentValid)
+    {
+        var s = recentValid.Skip(Math.Max(0, recentValid.Count - FallbackSamples)).OrderBy(v => v).ToList();
+        if (s.Count < 3 || s[^1] - s[0] > FallbackMaxSpreadMm) return null;
+        return s.Count % 2 == 1 ? s[s.Count / 2] : (s[s.Count / 2 - 1] + s[s.Count / 2]) / 2.0;
+    }
+
+    /// <summary>⑧ 피치 이동용 측정 — 짧은 대기·넓은 폭, 안정되지 않아도 최근 유효 샘플이 고르면 중앙값을 쓴다.</summary>
+    internal static Task<(double? Z, string? Note)> SamplePitchZAsync(
         LaserDisplacementSensorService laser, ILogger logger, CancellationToken ct, double outlierMm = 0)
+        => SampleStableZAsync(laser, logger, ct, outlierMm, PitchStabilizeTimeoutMs, PitchStableBandMm, medianFallback: true);
+
+    /// <summary>레이저 3점 평균 거리(Z, mm)를 안정화될 때까지 폴링해 돌려준다 — 실패 시 (null, 사유).</summary>
+    internal static async Task<(double? Z, string? Note)> SampleStableZAsync(
+        LaserDisplacementSensorService laser, ILogger logger, CancellationToken ct, double outlierMm = 0,
+        int timeoutMs = StabilizeTimeoutMs, double bandMm = StableBandMm, bool medianFallback = false)
     {
         var _laser = laser;
         var _logger = logger;
         var window = new Queue<double>(StableWindow);
+        var recent = new List<double>();
         string? lastNote = null;
         string? excludeNote = null;
         double? lastZ = null;
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var samples = 0;
 
-        while (sw.ElapsedMilliseconds < StabilizeTimeoutMs)
+        while (sw.ElapsedMilliseconds < timeoutMs)
         {
             ct.ThrowIfCancellationRequested();
 
@@ -661,10 +687,11 @@ public class LaserWorkingDistanceStep : ISequenceStep
             {
                 if (excluded is not null) excludeNote = excluded;
                 lastZ = zNow;
+                recent.Add(zNow);
                 window.Enqueue(zNow);
                 if (window.Count > StableWindow) window.Dequeue();
 
-                if (window.Count == StableWindow && window.Max() - window.Min() < StableBandMm)
+                if (window.Count == StableWindow && window.Max() - window.Min() < bandMm)
                 {
                     var z = window.Average();
                     _logger.LogInformation(
@@ -678,14 +705,23 @@ public class LaserWorkingDistanceStep : ISequenceStep
             {
                 lastNote = note;
                 window.Clear();   // 무효 구간을 사이에 둔 샘플끼리 안정 판정하지 않는다.
+                recent.Clear();
             }
 
             await Task.Delay(PollMs, ct);
         }
 
+        if (medianFallback && FallbackMedian(recent) is { } med)
+        {
+            _logger.LogInformation(
+                "[레이저 WD 거리 조정] {Sec:0.#}s 내 안정되지 않아 최근 유효 샘플 중앙값 사용: z={Z:0.##}mm (샘플 {N}개)",
+                timeoutMs / 1000.0, med, Math.Min(recent.Count, FallbackSamples));
+            return (med, null);
+        }
+
         return (null, lastZ is null
             ? $"유효 측정 없음 ({lastNote ?? "원인 미상"})"
-            : $"{StabilizeTimeoutMs / 1000.0:0.#}s 내 안정화되지 않음 (마지막 z={lastZ:0.##}mm) — " +
+            : $"{timeoutMs / 1000.0:0.#}s 내 안정화되지 않음 (마지막 z={lastZ:0.##}mm) — " +
               "로봇이 계속 움직이거나 센서 평균화 설정이 과도한지 확인하세요.");
     }
 }
