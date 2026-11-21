@@ -210,6 +210,24 @@ public class CobotInspectionMoveStep : ISequenceStep
     }
 
     /// <summary>
+    /// 앞 구역이 검사 팁 진입 깊이 <paramref name="keptDepthMm"/> 를 유지한 채 끝났을 때의 연속 이동 목표 — 현재 높이 그대로
+    /// 시작점(<paramref name="frameOrigin"/>) 정면으로 옆으로만 옮긴다. 조건: 높이가 진입 깊이만큼 낮춘 하한
+    /// (<see cref="MinContinueHeightMm"/> − 깊이) 이상이고, 면을 따라 잰 옆 거리가 <paramref name="tolMm"/> 이하(이어지는 용접선).
+    /// 아니면 null — 종전대로 띄운다.
+    /// </summary>
+    internal static (double[] Target, double HeightMm)? KeepHeightForKeptTipDepth(
+        double[] cur, double[] frameOrigin, double[] wallOut, double keptDepthMm, double tolMm)
+    {
+        if (keptDepthMm <= 0 || tolMm <= 0) return null;
+        double dx = cur[0] - frameOrigin[0], dy = cur[1] - frameOrigin[1], dz = cur[2] - frameOrigin[2];
+        var h = dx * wallOut[0] + dy * wallOut[1] + dz * wallOut[2];
+        if (h < MinContinueHeightMm - keptDepthMm) return null;           // 진입 깊이보다 더 붙어 있음 — 이상
+        double lx = dx - h * wallOut[0], ly = dy - h * wallOut[1], lz = dz - h * wallOut[2];
+        if (Math.Sqrt(lx * lx + ly * ly + lz * lz) > tolMm) return null;  // 이어지지 않는 용접선 — 붙은 채 옆으로 멀리 가지 않음
+        return (new[] { frameOrigin[0] + h * wallOut[0], frameOrigin[1] + h * wallOut[1], frameOrigin[2] + h * wallOut[2] }, h);
+    }
+
+    /// <summary>
     /// 연속 이동이 면 쪽으로 가지 않게 한 목표 — 현재 TCP 가 연속 이동 평면(<paramref name="chainBase"/>)보다 바깥(면에서 먼 쪽)에
     /// 있으면 그 높이를 그대로 둔 채 옆으로만 옮긴 BASE 점 [x,y,z] 와 평면 위 높이(mm). 평면 이하면 null(종전 경로 — 들어 올림).
     /// 연속 이동 평면은 <b>모델(ACS 도면) 면</b> 기준이라, 실제 면이 모델보다 가까우면 평면이 실제 면 안쪽에 놓인다 —
@@ -1466,6 +1484,18 @@ public class CobotInspectionMoveStep : ISequenceStep
         var measured = frame is not null
             ? ChainTargetFromMeasuredFrame(cur, frame, wallOut, chainStandoffMm)
             : ((double[] Target, double HeightMm, bool KeptHeight)?)null;
+        // 앞 구역이 검사 팁 진입 깊이를 유지한 채 끝났으면(묶음 연속) 그 깊이만큼 면에 붙어 있는 것이 정상이다 —
+        // 하한(MinContinueHeightMm)을 진입 깊이만큼 낮춰, 이어지는 용접선이면 띄우지 않고 그 높이로 옆으로만 옮긴다.
+        // (종전: 깊이 50mm 면 높이 −16mm 로 보여 100mm 까지 들어 올렸다가 ⑱ 이 다시 내려와 진입 — 실기 2026-11-21 18:26.)
+        if (measured is { KeptHeight: false } m0 && frame is not null
+            && context.Bag.TryGetValue(GasTipApproachStep.PreviousKeptDepthBagKey, out var kd) && kd is double keptDepth && keptDepth > 0
+            && KeepHeightForKeptTipDepth(cur, frame, wallOut, keptDepth, await GetChainContinueTolMmAsync()) is { } keepTarget)
+        {
+            _logger.LogInformation(
+                "[Cobot 검사위치 이동] 앞 구역 검사 팁 진입 깊이 {D:0.#}mm 유지 중 — 들어 올리지 않고 현재 높이({H:0.#}mm)로 시작점 정면에 맞춤",
+                keptDepth, keepTarget.HeightMm);
+            measured = (keepTarget.Target, keepTarget.HeightMm, true);
+        }
         // 이어지는 용접선(앞 끝 = 다음 시작) — 띄우지 않고 지금 높이에서 시작점 정면으로만 맞춘다. ⑱이 곧바로 첫 경유점으로 간다.
         var continuing = measured is null
             ? ContinuingSeamTargetBase(cur, chainBase, wallOut, chainStandoffMm, await GetChainContinueTolMmAsync())

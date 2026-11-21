@@ -723,6 +723,7 @@ public class InspectionRunStep : ISequenceStep
         if (keepTipDepth)
         {
             context.Bag.Remove(GasTipApproachStep.FrameDzBagKey);
+            context.Bag[GasTipApproachStep.KeptDepthMmBagKey] = Math.Abs(tipDz);
             _logger.LogInformation("[검사 수행] 다음 구역이 이어져 검사 팁 진입 깊이 {D:0.#}mm 유지 — 물러나지 않음", Math.Abs(tipDz));
         }
         else if (tipDz != 0)

@@ -45,6 +45,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
     private (double[] Start, double[] End)? _lastAnchorSeamW;     // 그 프레임을 쓴 task 의 용접선(맵) — 꺾인 용접선이 같은 프레임을 물려받지 않게
     private double[]? _lastAnchorStartBase;                       // 그 프레임을 쓴 task 의 ② 시작 접근점(BASE) — 다음 task 프레임 평행 이동 기준
     private double[]? _lastAnchorEndTcp;                           // 그 task 종료 시 TCP(BASE) — 다음 task 연속 이동 판정
+    private double _lastTipKeptDepthMm;                            // 직전 task 가 물러나지 않고 유지한 검사 팁 진입 깊이(mm) — 다음 task 연속 이동이 띄우지 않게
     private double? _lastAnchorStrokeMm;                           // 그 프레임을 쓴 task 의 텔레스코픽 스트로크(mm) — 높이 변경 시 캐시 무효화
     private CancellationTokenSource? _currentRunCts;
     private readonly Dictionary<string, BundleAssignment> _bundleByAction = new();
@@ -870,6 +871,11 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                 context.Bag[CobotInspectionMoveStep.AnchorSeamWBagKey] = cachedAnchorSeamW;
             if (cachedAnchorEndTcp is not null)
                 context.Bag[CobotInspectionMoveStep.PreviousEndTcpBagKey] = cachedAnchorEndTcp;
+            // 직전 task 가 유지한 검사 팁 진입 깊이 — 한 번만 넘긴다(그 사이 다른 task·실패가 끼면 0 으로 돌아가 종전대로 띄운다).
+            double prevTipKept;
+            lock (_sync) { prevTipKept = _lastTipKeptDepthMm; _lastTipKeptDepthMm = 0; }
+            if (cachedAnchorEndTcp is not null && prevTipKept > 0)
+                context.Bag[Sequence.Steps.GasTipApproachStep.PreviousKeptDepthBagKey] = prevTipKept;
             if (bundle?.Role == BundleRole.Leader)
                 BundleTeach.Activate(context, bundle);
 
@@ -954,6 +960,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                                 _lastAnchorStartBase = startBase;
                                 _lastAnchorEndTcp = endTcp;
                                 _lastAnchorStrokeMm = strokeAtEnd;
+                                _lastTipKeptDepthMm = context.Bag.TryGetValue(Sequence.Steps.GasTipApproachStep.KeptDepthMmBagKey, out var kept)
+                                                      && kept is double keptMm ? keptMm : 0;
                                 if (bundle?.BundleId is { } bid
                                     && NextBundleFrame(bundle.Role,
                                         _bundleFrames.TryGetValue(bid, out var shared0) ? shared0 : null,

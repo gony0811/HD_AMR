@@ -29,6 +29,12 @@ public class GasTipApproachStep : ISequenceStep
     /// </summary>
     public const string KeepDepthBagKey = "gas.tipKeepDepth";
 
+    /// <summary>Bag 키(double, mm) — 이번 순회가 물러나지 않고 유지한 진입 깊이. 오케스트레이터가 다음 구역에 넘긴다.</summary>
+    public const string KeptDepthMmBagKey = "gas.tipKeptDepthMm";
+
+    /// <summary>Bag 키(double, mm) — 앞 구역이 유지한 진입 깊이. 연속 이동(②)이 그만큼 면에 붙어 있는 것을 정상으로 보고 띄우지 않는다.</summary>
+    public const string PreviousKeptDepthBagKey = "gas.previousTipKeptDepthMm";
+
     /// <summary>
     /// 지금 TCP 가 진입 깊이의 첫 경유점에서 이 거리 [mm] 안이고 티칭 높이 쪽보다 가까우면 "이미 진입한 상태"로 보고
     /// 빠졌다 들어오지 않고 그 깊이로 바로 첫 경유점에 선다.
