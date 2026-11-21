@@ -27,7 +27,17 @@ public sealed class GasResultChart : Control
         set => SetValue(PointsProperty, value);
     }
 
-    static GasResultChart() => AffectsRender<GasResultChart>(PointsProperty);
+    /// <summary>점이 없을 때 가운데에 띄울 문구(줄바꿈 가능).</summary>
+    public static readonly StyledProperty<string?> EmptyTextProperty =
+        AvaloniaProperty.Register<GasResultChart, string?>(nameof(EmptyText));
+
+    public string? EmptyText
+    {
+        get => GetValue(EmptyTextProperty);
+        set => SetValue(EmptyTextProperty, value);
+    }
+
+    static GasResultChart() => AffectsRender<GasResultChart>(PointsProperty, EmptyTextProperty);
 
     private static readonly IBrush Bg = new SolidColorBrush(Color.FromRgb(0x11, 0x13, 0x18));
     private static readonly IBrush Grid = new SolidColorBrush(Color.FromRgb(0x2A, 0x2E, 0x36));
@@ -92,8 +102,10 @@ public sealed class GasResultChart : Control
         if (size.Width < PadL + PadR + 20 || size.Height < PadT + PadB + 20) return;
         if (pts.Count == 0)
         {
-            var t = Text("측정 결과 없음", Muted, 13);
-            ctx.DrawText(t, new Point((size.Width - t.Width) / 2, (size.Height - t.Height) / 2));
+            var t = Text(string.IsNullOrWhiteSpace(EmptyText) ? "측정 결과 없음" : EmptyText, Muted, 13);
+            t.TextAlignment = TextAlignment.Center;
+            t.MaxTextWidth = size.Width - 32;
+            ctx.DrawText(t, new Point(16, (size.Height - t.Height) / 2));
             return;
         }
 

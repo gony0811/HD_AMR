@@ -213,7 +213,7 @@
                                Text="{Binding ResultSummary, StringFormat='측정 결과 — {0}'}" />
                     <Button Grid.Column="1" Content="목록 지우기" Command="{Binding ClearResultsCommand}" />
                 </Grid>
-                <local:GasResultChart Height="340" Points="{Binding ChartPoints}" />
+                <local:GasResultChart Height="340" Points="{Binding ChartPoints}" EmptyText="{Binding ChartEmptyText}" />
                 <TextBlock Classes="hint"
                            Text="가로축 = 측정 순서(왼쪽이 오래된 것, 최근 200점), 세로축 = 구간 최대 측정값. 빨간 점선 = 임계값. ● 초록 OK · ● 빨강 NG · ○ 재측정 · × 측정 실패. 값 범위가 50배 넘게 벌어지면 세로축이 로그로 바뀝니다. 점 위에 마우스를 올리면 위치·시각·값이 보입니다." />
             </StackPanel>

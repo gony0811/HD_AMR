@@ -5,6 +5,8 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HD.AMR.App.Communication.GasDetector;
 using HD.AMR.App.Service;
+using HD.AMR.App.Service.Sequence.Steps;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace HD.AMR.Desktop.ViewModels;
 
@@ -16,6 +18,7 @@ namespace HD.AMR.Desktop.ViewModels;
 public sealed partial class GasDetectorViewModel : ViewModelBase
 {
     private readonly GasDetectorService _svc;
+    private readonly IServiceScopeFactory _scopes;
     private readonly DispatcherTimer _timer;
     private readonly CancellationTokenSource _cts = new();
     private int _shownResultCount = -1;
@@ -49,14 +52,47 @@ public sealed partial class GasDetectorViewModel : ViewModelBase
     [ObservableProperty] private IReadOnlyList<Views.GasResultChart.ChartPoint> _chartPoints =
         Array.Empty<Views.GasResultChart.ChartPoint>();
 
-    public GasDetectorViewModel(GasDetectorService svc)
+    /// <summary>'Inspection.GasDryRun' 이 켜져 있는지 — 켜져 있으면 검사가 가스를 재지 않아 그래프에 점이 쌓이지 않는다.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ChartEmptyText))]
+    private bool _isGasDryRun;
+
+    /// <summary>측정 결과가 없을 때 그래프 가운데에 띄울 문구.</summary>
+    public string ChartEmptyText => IsGasDryRun
+        ? $"측정 결과 없음\n가스 측정 없는 드라이런('{InspectionRunStep.GasDryRunKey}')이 켜져 있어 검사 중 가스를 재지 않습니다.\nParameters 에서 끄거나 '현재 위치에서 1회 측정'으로 확인하세요."
+        : "측정 결과 없음";
+
+    public GasDetectorViewModel(GasDetectorService svc, IServiceScopeFactory scopes)
     {
         _svc = svc;
+        _scopes = scopes;
         LoadFromService();
         RefreshPorts();
         _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
         _timer.Tick += (_, _) => RefreshLive();
         _svc.ThresholdChanged += OnThresholdChanged;
+        ParameterService.Changed += OnParameterChanged;
+    }
+
+    private void OnParameterChanged(string name)
+    {
+        if (name == InspectionRunStep.GasDryRunKey) _ = LoadGasDryRunAsync();
+    }
+
+    private async Task LoadGasDryRunAsync()
+    {
+        try
+        {
+            bool on;
+            using (var scope = _scopes.CreateScope())
+                on = InspectionRunStep.ResolveGasDryRun(
+                    await scope.ServiceProvider.GetRequiredService<ParameterService>().GetAsync(InspectionRunStep.GasDryRunKey));
+            Dispatcher.UIThread.Post(() => IsGasDryRun = on);
+        }
+        catch (Exception)
+        {
+            // 읽기 실패면 문구만 기본값으로 둔다(표시용).
+        }
     }
 
     /// <summary>SAIGE(ACS)에서 임계값이 바뀌면 편집 칸도 새 값으로 맞춘다.</summary>
@@ -72,6 +108,7 @@ public sealed partial class GasDetectorViewModel : ViewModelBase
     public override void OnActivated()
     {
         RefreshLive();
+        _ = LoadGasDryRunAsync();
         _timer.Start();
     }
 
@@ -81,6 +118,7 @@ public sealed partial class GasDetectorViewModel : ViewModelBase
     {
         base.Dispose();
         _svc.ThresholdChanged -= OnThresholdChanged;
+        ParameterService.Changed -= OnParameterChanged;
         _cts.Cancel();
         _cts.Dispose();
     }
