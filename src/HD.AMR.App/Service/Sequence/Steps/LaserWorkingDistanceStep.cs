@@ -211,6 +211,11 @@ public class LaserWorkingDistanceStep : ISequenceStep
         if (!axisFromParam)
             return StepResult.Fail(WeldSequenceSupport.OpticalAxisMissingMessage(DisplayName));
 
+        double? rawOutlier = null;
+        try { rawOutlier = await _param.GetDoubleAsync(OutlierKey); }
+        catch { /* DB 미준비 — 기본값 */ }
+        _outlierMm = ResolveOutlierMm(rawOutlier, _useGas);
+
         // ── 이동 전 측정 (④ 마지막 모션 직후 진입 — 안정화 대기 필수) ──
         var (z1, note1) = await SampleStableZAsync(ct);
         var searchNote = "";
@@ -434,7 +439,7 @@ public class LaserWorkingDistanceStep : ISequenceStep
         while (sw.ElapsedMilliseconds < LostSearchProbeMs)
         {
             ct.ThrowIfCancellationRequested();
-            run = _laser.GetPlanePose().Valid ? run + 1 : 0;
+            run = SampleZ(_laser, _outlierMm).Valid ? run + 1 : 0;
             if (run >= 2) return true;
             await Task.Delay(PollMs, ct);
         }
@@ -547,17 +552,91 @@ public class LaserWorkingDistanceStep : ISequenceStep
     /// 모션 잔여(rc=0 이후에도 이동 중)와 센서 내부 평균화 필터의 수렴 지연을 모두 흡수한다.
     /// </summary>
     private Task<(double? Z, string? Note)> SampleStableZAsync(CancellationToken ct)
-        => SampleStableZAsync(_laser, _logger, ct);
+        => SampleStableZAsync(_laser, _logger, ct, _outlierMm);
+
+    /// <summary>이번 실행의 튀는 채널 한계 [mm] — <see cref="AdjustAsync"/> 시작 때 읽는다.</summary>
+    private double _outlierMm;
+
+    /// <summary>
+    /// 튀는 채널 제외 한계 파라미터 키 [mm]. 3채널 중 둘이 서로 <see cref="ChannelAgreeMm"/> 안에서 맞고 나머지 하나가 그 평균에서
+    /// 이 값 넘게 벗어나거나 범위 밖이면, 맞는 두 채널 평균을 거리로 쓴다. 0 = 끔(3채널 평균만). 비우면 가스 <see cref="DefaultOutlierMm"/> / 비전 끔.
+    /// (2026-11-21 M2 22:39 S013-2 점2: CH1 400.44·CH2 400.54 인데 CH3 만 291.0(돌출부) → 평균 364 로 WD 실패.)
+    /// </summary>
+    public const string OutlierKey = "Sequence.Laser.OutlierChannelMm";
+    internal const double DefaultOutlierMm = 10.0;
+    internal const double MaxOutlierMm = 100.0;
+
+    /// <summary>"맞는 두 채널" 로 볼 최대 차 [mm].</summary>
+    internal const double ChannelAgreeMm = 3.0;
+
+    /// <summary>파라미터 값 → 튀는 채널 한계 [mm]. 비거나 범위 밖이면 센서 모드 기본값(가스 10 / 비전 0).</summary>
+    internal static double ResolveOutlierMm(double? value, bool usesGas)
+        => value is { } v && double.IsFinite(v) && v >= 0 && v <= MaxOutlierMm ? v
+         : usesGas ? DefaultOutlierMm : 0;
+
+    /// <summary>
+    /// 채널 값(범위 밖은 null) → 튀는 채널 하나를 뺀 두 채널 평균과 뺀 채널 번호(1-based).
+    /// 3채널이 모두 한계 안에서 맞으면(또는 끔) null — 평소 3채널 평면을 쓴다. 맞는 짝이 없어도 null.
+    /// </summary>
+    internal static (double Z, int Excluded)? AgreeingPairZ(IReadOnlyList<double?> ch, double outlierMm)
+    {
+        if (!(outlierMm > 0) || ch.Count < 3) return null;
+        var valid = Enumerable.Range(0, 3).Where(i => ch[i] is not null).ToArray();
+        if (valid.Length == 3)
+        {
+            var vals = valid.Select(i => ch[i]!.Value).ToArray();
+            if (vals.Max() - vals.Min() <= outlierMm) return null;
+        }
+        else if (valid.Length < 2) return null;
+
+        (double Z, int Excluded)? best = null;
+        var bestDiff = double.MaxValue;
+        for (var a = 0; a < 3; a++)
+        for (var b = a + 1; b < 3; b++)
+        {
+            if (ch[a] is not { } va || ch[b] is not { } vb) continue;
+            var diff = Math.Abs(va - vb);
+            if (diff > ChannelAgreeMm || diff >= bestDiff) continue;
+            var other = 3 - a - b;
+            var mean = (va + vb) / 2;
+            if (ch[other] is { } vo && Math.Abs(vo - mean) <= outlierMm) continue;   // 셋째도 맞음 — 튀는 채널 아님
+            (best, bestDiff) = ((mean, other + 1), diff);
+        }
+        return best;
+    }
+
+    /// <summary>한 번 판독 — 평소엔 3채널 평면 z, 튀는 채널이 하나면 맞는 두 채널 평균.</summary>
+    private static (bool Valid, double Z, string? Note, string? Excluded) SampleZ(
+        LaserDisplacementSensorService laser, double outlierMm)
+    {
+        if (outlierMm > 0)
+        {
+            var r = laser.GetReadings();
+            if (r.Count >= 3)
+            {
+                var ch = new double?[] { r[0].Enabled ? r[0].Value : null, r[1].Enabled ? r[1].Value : null, r[2].Enabled ? r[2].Value : null };
+                if (AgreeingPairZ(ch, outlierMm) is { } pair)
+                {
+                    var o = ch[pair.Excluded - 1];
+                    return (true, pair.Z, null,
+                        $"CH{pair.Excluded} {(o is { } ov ? $"{ov:0.#}mm" : "범위 밖")} 제외, 나머지 두 채널 평균");
+                }
+            }
+        }
+        var p = laser.GetPlanePose();
+        return (p.Valid, p.Z, p.Note, null);
+    }
 
     /// <summary>레이저 3점 평균 거리(Z, mm)를 안정화될 때까지 폴링해 돌려준다 — 실패 시 (null, 사유).
     /// ⑧ 피치 이동(들어올림 보정)도 같은 판정으로 잰다.</summary>
     internal static async Task<(double? Z, string? Note)> SampleStableZAsync(
-        LaserDisplacementSensorService laser, ILogger logger, CancellationToken ct)
+        LaserDisplacementSensorService laser, ILogger logger, CancellationToken ct, double outlierMm = 0)
     {
         var _laser = laser;
         var _logger = logger;
         var window = new Queue<double>(StableWindow);
         string? lastNote = null;
+        string? excludeNote = null;
         double? lastZ = null;
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var samples = 0;
@@ -566,26 +645,28 @@ public class LaserWorkingDistanceStep : ISequenceStep
         {
             ct.ThrowIfCancellationRequested();
 
-            var p = _laser.GetPlanePose();
+            var (valid, zNow, note, excluded) = SampleZ(_laser, outlierMm);
             samples++;
-            if (p.Valid)
+            if (valid)
             {
-                lastZ = p.Z;
-                window.Enqueue(p.Z);
+                if (excluded is not null) excludeNote = excluded;
+                lastZ = zNow;
+                window.Enqueue(zNow);
                 if (window.Count > StableWindow) window.Dequeue();
 
                 if (window.Count == StableWindow && window.Max() - window.Min() < StableBandMm)
                 {
                     var z = window.Average();
                     _logger.LogInformation(
-                        "[레이저 WD 거리 조정] 측정 안정화 완료: z={Z:0.##}mm (폭 {Band:0.###}mm, {Elapsed}ms, 샘플 {N}개)",
-                        z, window.Max() - window.Min(), sw.ElapsedMilliseconds, samples);
+                        "[레이저 WD 거리 조정] 측정 안정화 완료: z={Z:0.##}mm (폭 {Band:0.###}mm, {Elapsed}ms, 샘플 {N}개){Excl}",
+                        z, window.Max() - window.Min(), sw.ElapsedMilliseconds, samples,
+                        excludeNote is null ? "" : $" — {excludeNote}");
                     return (z, null);
                 }
             }
             else
             {
-                lastNote = p.Note;
+                lastNote = note;
                 window.Clear();   // 무효 구간을 사이에 둔 샘플끼리 안정 판정하지 않는다.
             }
 

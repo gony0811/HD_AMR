@@ -34,10 +34,15 @@ public class PeakApproachStep : ISequenceStep
     }
 
     /// <summary>들어올린 피치 이동의 레이저 측정 — 미연결이면 측정 없음(들어올린 만큼 그대로 내린다).</summary>
-    private Task<(double? Z, string? Note)> MeasureLaserAsync(CancellationToken ct)
-        => _laser.IsConnected
-            ? LaserWorkingDistanceStep.SampleStableZAsync(_laser, _logger, ct)
-            : Task.FromResult<(double?, string?)>((null, "레이저 미연결"));
+    private async Task<(double? Z, string? Note)> MeasureLaserAsync(CancellationToken ct)
+    {
+        if (!_laser.IsConnected) return (null, "레이저 미연결");
+        double? raw = null;
+        try { raw = await _param.GetDoubleAsync(LaserWorkingDistanceStep.OutlierKey); }
+        catch { /* DB 미준비 — 기본값 */ }
+        return await LaserWorkingDistanceStep.SampleStableZAsync(_laser, _logger, ct,
+            LaserWorkingDistanceStep.ResolveOutlierMm(raw, _useGas));
+    }
 
     public string Key => "peak2Approach";
     public string DisplayName => "Peak2 이동 (pitch)";
