@@ -164,6 +164,10 @@ public class ParameterService
                 Sequence.Steps.LaserWorkingDistanceStep.DefaultMaxReturnMm.ToString(CultureInfo.InvariantCulture),
                 "④⁺ 레이저 WD 뒤 용접선 쪽 횡복귀 한계(mm, 툴 X·Y·Z 성분별) — 평탄면 센터링이 이보다 멀리 옮겨 갔으면 돌아가지 않고 실패한다 " +
                 "(앵커·자세 이상 가드). 실행할 때마다 읽는다. 50~1000 밖이거나 비면 400."),
+            (Sequence.Steps.LaserWorkingDistanceStep.LostSearchKey, "",
+                "④⁺ 레이저 분실 재탐색 최대 거리(mm) — WD 조정 첫 측정에서 레이저 3채널이 범위 밖(유효 측정 없음)이면 " +
+                "벽 쪽(광축)으로 10mm 씩 이 거리까지 다가가며 다시 잰다. 끝까지 안 잡히면 다가간 만큼 되돌아가 실패. " +
+                "0 = 끔. 비우면 검사 센서 모드로 정한다 — 가스 검사기 60, 비전(용접검사기) 끔. 0~150. 실행할 때마다 읽는다."),
             (Sequence.Steps.FlatSurfaceAlignStep.Point2LaserRecheckKey, "",
                 "⑧⁺ 점2 평탄면 레이저 재확인 허용차(mm) — 점2 에서 평탄면을 한 곳 더 찾아 레이저(변위센서)로 다시 재고, " +
                 "두 자리 값이 이 안이면 그대로 쓴다. 다르면 세 번째 자리를 재서 서로 맞는 두 자리를 쓰고, 맞는 짝이 없으면 " +

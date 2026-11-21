@@ -88,18 +88,51 @@ public class LaserWorkingDistanceStep : ISequenceStep
     /// <summary>이 값 미만의 횡복귀 성분은 무시한다(mm).</summary>
     private const double SkipReturnMm = 0.5;
 
+    /// <summary>
+    /// 레이저 분실 재탐색 최대 거리 파라미터 키 [mm] — 첫 측정에서 3채널이 범위 밖이면 광축 방향(벽 쪽)으로
+    /// <see cref="LostSearchStepMm"/> 씩 다가가며 다시 잰다. 0 = 끔. 비우면 가스 <see cref="DefaultLostSearchMm"/> / 비전 끔.
+    /// (2026-11-21 M2 S013-1~4: 점2 로 옆 360mm 피치 뒤 벽이 측정 범위(~450mm) 밖이라 점2 WD 가 계속 실패.)
+    /// </summary>
+    public const string LostSearchKey = "Sequence.Laser.LostSearchMm";
+    internal const double DefaultLostSearchMm = 60.0;
+    internal const double MaxLostSearchMm = 150.0;
+
+    /// <summary>재탐색 한 번에 다가가는 거리 [mm].</summary>
+    internal const double LostSearchStepMm = 10.0;
+
+    /// <summary>재탐색 이동 뒤 유효 측정을 기다리는 시간 [ms] — 안정화가 아니라 "잡히는지"만 본다.</summary>
+    private const int LostSearchProbeMs = 1500;
+
+    /// <summary>파라미터 값 → 재탐색 최대 거리 [mm]. 비거나 범위 밖이면 센서 모드 기본값(가스 60 / 비전 0).</summary>
+    internal static double ResolveLostSearchMm(double? value, bool usesGas)
+        => value is { } v && double.IsFinite(v) && v >= 0 && v <= MaxLostSearchMm ? v
+         : usesGas ? DefaultLostSearchMm : 0;
+
+    /// <summary>최대 거리 → 다가갈 단계별 누적 거리 [mm] (마지막 단계는 최대 거리에 맞춘다).</summary>
+    internal static IReadOnlyList<double> LostSearchSteps(double maxMm)
+    {
+        var steps = new List<double>();
+        if (!(maxMm > 0)) return steps;
+        for (var d = LostSearchStepMm; d < maxMm - 1e-6; d += LostSearchStepMm) steps.Add(d);
+        steps.Add(maxMm);
+        return steps;
+    }
+
     private readonly string _key;
     private readonly string _displayName;
     private readonly int _order;
+    private readonly bool _useGas;
 
     public LaserWorkingDistanceStep(
         string key, string displayName, int order,
         CobotService cobot, LaserDisplacementSensorService laser,
-        ParameterService param, ILogger<LaserWorkingDistanceStep> logger)
+        ParameterService param, Microsoft.Extensions.Options.IOptions<InspectionSensorSettings> sensor,
+        ILogger<LaserWorkingDistanceStep> logger)
     {
         _cobot = cobot;
         _laser = laser;
         _param = param;
+        _useGas = sensor.Value.UsesGasDetector;
         _logger = logger;
         _key = key;
         _displayName = displayName;
@@ -156,6 +189,14 @@ public class LaserWorkingDistanceStep : ISequenceStep
 
         // ── 이동 전 측정 (④ 마지막 모션 직후 진입 — 안정화 대기 필수) ──
         var (z1, note1) = await SampleStableZAsync(ct);
+        var searchNote = "";
+        if (z1 is null && note1?.StartsWith("유효 측정 없음") == true)
+        {
+            var (zs, approached, sNote) = await SearchLostLaserAsync(context, depthAxis, ct);
+            if (zs is null)
+                return StepResult.Fail($"레이저 3점 거리 측정 실패: {note1}{sNote}");
+            (z1, searchNote) = (zs, $" 레이저 분실 → 벽 쪽 {approached:0.#}mm 다가가 재탐색.");
+        }
         if (z1 is null)
             return StepResult.Fail($"레이저 3점 거리 측정 실패: {note1}");
 
@@ -171,7 +212,7 @@ public class LaserWorkingDistanceStep : ISequenceStep
             if (retOk0) await LogDiagnosticsAsync("완료(이동 생략)", context, wall, wd, wdSource, depthAxis, ct);
             return retOk0
                 ? StepResult.Ok(
-                    $"이미 WD 근방 — z={z1.Value:0.##}mm (목표 {wd:0.#}mm, 잔차 {delta:+0.##;-0.##}mm), 이동 생략.{retNote0}")
+                    $"이미 WD 근방 — z={z1.Value:0.##}mm (목표 {wd:0.#}mm, 잔차 {delta:+0.##;-0.##}mm), 이동 생략.{searchNote}{retNote0}")
                 : StepResult.Fail(retNote0);
         }
 
@@ -240,7 +281,7 @@ public class LaserWorkingDistanceStep : ISequenceStep
             return retOk
                 ? StepResult.Ok(
                     $"WD 도달 — z={z2Value:0.##}mm (목표 {wd:0.#}mm, 이동 {totalMove:+0.##;-0.##}mm, " +
-                    $"잔차 {residual:+0.##;-0.##}mm).{retNote}")
+                    $"잔차 {residual:+0.##;-0.##}mm).{searchNote}{retNote}")
                 : StepResult.Fail(retNote);
         }
 
@@ -264,6 +305,95 @@ public class LaserWorkingDistanceStep : ISequenceStep
                 "잠시 뒤 재시도하세요.");
 
         return StepResult.Fail(head + "측정이 이동량과 크게 다르게 반응 — 센서 노이즈/스케일 설정을 확인하세요.");
+    }
+
+    /// <summary>
+    /// 첫 측정에서 3채널이 범위 밖일 때 광축(벽 쪽, +이동 = 접근)으로 <see cref="LostSearchStepMm"/> 씩 다가가며
+    /// 유효 측정이 잡히는지 본다. 잡히면 안정화 측정값을 돌려주고, 끝까지 안 잡히면 다가간 만큼 되돌아간다.
+    /// 최대 거리는 <see cref="LostSearchKey"/>(가스 60mm / 비전 끔). 이동은 레이저 WD(~400mm) 앞 범위라 벽과 닿지 않는다.
+    /// </summary>
+    private async Task<(double? Z, double Approached, string Note)> SearchLostLaserAsync(
+        SequenceContext context, ToolAxisDir depthAxis, CancellationToken ct)
+    {
+        double? raw = null;
+        try { raw = await _param.GetDoubleAsync(LostSearchKey); }
+        catch { /* DB 미준비 — 기본값 */ }
+        var maxMm = ResolveLostSearchMm(raw, _useGas);
+        var steps = LostSearchSteps(maxMm);
+        if (steps.Count == 0)
+            return (null, 0, $" (레이저 분실 재탐색 꺼짐 — '{LostSearchKey}')");
+
+        var axisName = FlatSurfaceCenteringService.AxisName(depthAxis);
+        _logger.LogWarning(
+            "[레이저 WD 거리 조정] 레이저 분실 — 벽 쪽(툴{Axis})으로 {Step:0}mm 씩 최대 {Max:0}mm 다가가며 재탐색",
+            axisName, LostSearchStepMm, maxMm);
+        context.Progress?.Invoke($"레이저 분실 — 벽 쪽으로 최대 {maxMm:0}mm 다가가며 재탐색");
+
+        var approached = 0.0;
+        foreach (var target in steps)
+        {
+            var move = target - approached;
+            var anchor = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
+            var offset = new double[6];
+            FlatSurfaceCenteringService.ApplyAxis(offset, depthAxis, move);
+            var rc = await _cobot.Rpc.MoveByToolOffsetAsync(anchor, user: 0, offset,
+                tool: context.Tool, vel: context.Velocity, ct: ct);
+            if (rc != 0)
+                return (null, approached, await BackOffAsync(approached,
+                    $" / 재탐색 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}"));
+            approached = target;
+
+            if (!await ProbeValidAsync(ct))
+            {
+                _logger.LogInformation("[레이저 WD 거리 조정] 재탐색 {Mm:0.#}mm 다가감 — 아직 측정 없음", approached);
+                continue;
+            }
+
+            var (z, note) = await SampleStableZAsync(ct);
+            if (z is { } zv)
+            {
+                _logger.LogInformation(
+                    "[레이저 WD 거리 조정] 재탐색 성공 — {Mm:0.#}mm 다가가 z={Z:0.##}mm", approached, zv);
+                return (zv, approached, "");
+            }
+            _logger.LogInformation("[레이저 WD 거리 조정] 재탐색 {Mm:0.#}mm — 잡혔지만 안정되지 않음: {Note}", approached, note);
+        }
+
+        return (null, approached, await BackOffAsync(approached,
+            $" / 벽 쪽으로 {approached:0.#}mm 다가가도 측정 없음 — 레이저가 벽 끝·개구부를 보고 있는지 확인하세요"));
+
+        async Task<string> BackOffAsync(double mm, string note)
+        {
+            if (mm <= 0) return note;
+            try
+            {
+                var cur = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
+                var back = new double[6];
+                FlatSurfaceCenteringService.ApplyAxis(back, depthAxis, -mm);
+                var rcBack = await _cobot.Rpc.MoveByToolOffsetAsync(cur, user: 0, back,
+                    tool: context.Tool, vel: context.Velocity, ct: ct);
+                return rcBack == 0 ? $"{note} (다가간 {mm:0.#}mm 되돌림)" : $"{note} (되돌림 실패 rc={rcBack})";
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                return $"{note} (되돌림 실패: {ex.Message})";
+            }
+        }
+    }
+
+    /// <summary>유효 측정이 <see cref="LostSearchProbeMs"/> 안에 연속 2번 나오는지 — 잡히는지만 본다.</summary>
+    private async Task<bool> ProbeValidAsync(CancellationToken ct)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var run = 0;
+        while (sw.ElapsedMilliseconds < LostSearchProbeMs)
+        {
+            ct.ThrowIfCancellationRequested();
+            run = _laser.GetPlanePose().Valid ? run + 1 : 0;
+            if (run >= 2) return true;
+            await Task.Delay(PollMs, ct);
+        }
+        return false;
     }
 
     /// <summary>측정 응답이 정상(기대 방향, 이동량의 <see cref="MinResponseRatio"/>~<see cref="MaxResponseRatio"/>배)인지.</summary>
