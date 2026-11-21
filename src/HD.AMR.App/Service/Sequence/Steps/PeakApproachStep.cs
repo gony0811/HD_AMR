@@ -37,9 +37,14 @@ public class PeakApproachStep : ISequenceStep
     private async Task<(double? Z, string? Note)> MeasureLaserAsync(CancellationToken ct)
     {
         if (!_laser.IsConnected) return (null, "레이저 미연결");
-        double? raw = null;
-        try { raw = await _param.GetDoubleAsync(LaserWorkingDistanceStep.OutlierKey); }
+        double? raw = null, rawStill = null;
+        try
+        {
+            raw = await _param.GetDoubleAsync(LaserWorkingDistanceStep.OutlierKey);
+            rawStill = await _param.GetDoubleAsync(CobotStillness.WindowKey);
+        }
         catch { /* DB 미준비 — 기본값 */ }
+        await CobotStillness.WaitAsync(_cobot, CobotStillness.ResolveWindowMs(rawStill, _useGas), _logger, "피치 이동", ct);
         return await LaserWorkingDistanceStep.SampleStableZAsync(_laser, _logger, ct,
             LaserWorkingDistanceStep.ResolveOutlierMm(raw, _useGas));
     }

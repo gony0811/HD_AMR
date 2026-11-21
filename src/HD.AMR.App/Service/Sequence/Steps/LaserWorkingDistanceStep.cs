@@ -215,6 +215,10 @@ public class LaserWorkingDistanceStep : ISequenceStep
         try { rawOutlier = await _param.GetDoubleAsync(OutlierKey); }
         catch { /* DB 미준비 — 기본값 */ }
         _outlierMm = ResolveOutlierMm(rawOutlier, _useGas);
+        double? rawStill = null;
+        try { rawStill = await _param.GetDoubleAsync(CobotStillness.WindowKey); }
+        catch { /* DB 미준비 — 기본값 */ }
+        _stillMs = CobotStillness.ResolveWindowMs(rawStill, _useGas);
 
         // ── 이동 전 측정 (④ 마지막 모션 직후 진입 — 안정화 대기 필수) ──
         var (z1, note1) = await SampleStableZAsync(ct);
@@ -551,8 +555,14 @@ public class LaserWorkingDistanceStep : ISequenceStep
     /// 무효 샘플이 나오면 윈도우를 리셋하고 계속 폴링, <see cref="StabilizeTimeoutMs"/> 초과 시 null.
     /// 모션 잔여(rc=0 이후에도 이동 중)와 센서 내부 평균화 필터의 수렴 지연을 모두 흡수한다.
     /// </summary>
-    private Task<(double? Z, string? Note)> SampleStableZAsync(CancellationToken ct)
-        => SampleStableZAsync(_laser, _logger, ct, _outlierMm);
+    private async Task<(double? Z, string? Note)> SampleStableZAsync(CancellationToken ct)
+    {
+        await CobotStillness.WaitAsync(_cobot, _stillMs, _logger, "레이저 WD 거리 조정", ct);
+        return await SampleStableZAsync(_laser, _logger, ct, _outlierMm);
+    }
+
+    /// <summary>이번 실행의 코봇 정지 판정 창 [ms] — <see cref="AdjustAsync"/> 시작 때 읽는다.</summary>
+    private int _stillMs;
 
     /// <summary>이번 실행의 튀는 채널 한계 [mm] — <see cref="AdjustAsync"/> 시작 때 읽는다.</summary>
     private double _outlierMm;
