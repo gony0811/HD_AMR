@@ -309,6 +309,18 @@ public class InspectionRunStep : ISequenceStep
         // 검사 팁 진입이 있으면 스테이징은 티칭 높이의 첫 경유점까지 가고, 거기서 벽면 쪽으로 진입한다 — 그 경로도 함께 검증.
         if (tipDz != 0 && !tipAlreadyIn)
             chainTargets.Insert(0, (firstIdx, ToTargetBaseAt(waypoints[firstIdx], 0)));
+        // 가스 무정지: 경유점(약 5mm 간격)을 전부 IK 로 풀지 않고 위치 50mm·자세 5° 마다 솎아 검증한다 — 사이 경로는
+        // CheckWaypointChainAsync 가 100mm·10° 간격으로 이어 샘플링하므로 안전 기준(특이점·가지 전환)은 그대로다.
+        // 무정지 통과가 필요한 나머지 관절 해는 이동 명령을 보낼 때 그 점만 푼다(RunNonStopPassAsync).
+        var gasNonStopPlanned = _useGas && !_dryRun
+            && _gas.Settings.MeasureMode == GasMeasureMode.Continuous && _gas.Settings.NonStopBlendRadiusMm > 0;
+        if (gasNonStopPlanned)
+        {
+            var before = chainTargets.Count;
+            chainTargets = SubsampleChain(chainTargets, NonStopCheckStepMm, NonStopCheckStepDeg);
+            _logger.LogInformation("[검사 수행] 무정지 사전 검증 — 경유점 {N}점 중 {M}점 IK (위치 {Mm:0}mm·자세 {Deg:0}° 간격)",
+                before, chainTargets.Count, NonStopCheckStepMm, NonStopCheckStepDeg);
+        }
         var chainError = await CheckWaypointChainAsync(context, chainTargets, checkedJoints, ct);
         if (chainError is not null)
         {
@@ -446,20 +458,37 @@ public class InspectionRunStep : ISequenceStep
             var passPoses = idxs.Select(k => ToTargetBase(waypoints[k])).ToList();
             var passLabels = Enumerable.Range(0, rest.Count)
                 .Select(n => $"WALL 0x{context.InspectionSurfaceId:X2} #{idxs[n] + 1}→#{idxs[n + 1] + 1}").ToList();
-            IReadOnlyList<double[]> passJoints;
-            if (rest.All(checkedJoints.ContainsKey))
-                passJoints = rest.Select(k => checkedJoints[k]).ToList();   // 사전 검증 사슬 재사용
-            else
+            // 관절 해는 실제로 보낼 이동 명령(직선 병합 뒤 남는 점)에만 필요하다 — 사전 검증 사슬에 있으면 그대로 쓰고,
+            // 없으면(검증을 솎아 건너뛴 점) 그 명령을 보낼 때 앞쪽의 가장 가까운 해를 기준으로 그 점 하나만 푼다.
+            // (종전: 79점 전부 다시 풀어 구역마다 약 2.7초 정지 — 실기 2026-11-21 14:57.)
+            var passJointCache = new Dictionary<int, double[]>(checkedJoints);
+            double[]? startJoints = null;
+            async Task<double[]?> PassJointsAsync(int k, CancellationToken c)
             {
-                try { passJoints = await _cobot.Rpc.ResolveChainJointsAsync(passPoses.Skip(1).ToList(), context.Tool, 0, ct); }
-                catch (InvalidOperationException ex) { return $"무정지 경로 IK 실패({ex.Message})"; }
+                if (passJointCache.TryGetValue(idxs[k], out var known)) return known;
+                double[]? seed = null;
+                for (var m = k - 1; m >= 0 && seed is null; m--)
+                    if (passJointCache.TryGetValue(idxs[m], out var s)) seed = s;
+                seed ??= startJoints ??= await _cobot.Rpc.GetActualJointPosAsync(ct: c);
+                try
+                {
+                    var j = await _cobot.Rpc.GetInverseKinNearestAsync(passPoses[k], seed, context.Tool, 0, c);
+                    passJointCache[idxs[k]] = j;
+                    return j;
+                }
+                catch (InvalidOperationException ex)
+                {
+                    // 해가 없으면 관절 지정 없이 보낸다(컨트롤러 IK) — 사전 검증이 같은 경로를 이미 통과시켰다.
+                    _logger.LogWarning("[검사 수행] 무정지 경유점 #{Idx} 관절 해 계산 실패 — 관절 지정 없이 이동: {Msg}", idxs[k] + 1, ex.Message);
+                    return null;
+                }
             }
 
             _logger.LogInformation("[검사 수행] 무정지 연속 측정 — 경유점 #{From}→#{To} ({N}구간, 블렌딩 반경 {R:0.#} mm)",
                 from + 1, rest[^1] + 1, rest.Count, _gas.NonStopBlendRadiusMm);
             context.Progress?.Invoke($"무정지 연속 측정 — 경유점 #{from + 1}→#{rest[^1] + 1} ({rest.Count}구간)");
             var (passScans, passMoveError) = await _gas.MeasureNonStopPassAsync(passLabels, passPoses,
-                (k, blendR, c) => ScanMoveLAsync(passPoses[k], passJoints[k - 1], blendR, c),
+                async (k, blendR, c) => await ScanMoveLAsync(passPoses[k], await PassJointsAsync(k, c), blendR, c),
                 c => _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, c),
                 () => _cobot.StopMotionImmediateAsync(), gasThreshold, ct);
             if (passScans is null)
@@ -640,7 +669,10 @@ public class InspectionRunStep : ISequenceStep
             lastMoved = i;
             prevIdx = i;
 
-            if (settle > TimeSpan.Zero)
+            // 무정지 첫 경유점은 멈춰 재지 않으므로(아래 정지 측정 생략) 정착 대기도 하지 않는다 — 구역마다 1초 절약.
+            var skipSettle = _useGas && !_dryRun && nonStop && deferredFirstIdx < 0 && gasPoints.Count == 0
+                && Enumerable.Range(i + 1, waypoints.Count - i - 1).Any(k => !IsSkipped(waypoints[k]));
+            if (settle > TimeSpan.Zero && !skipSettle)
                 await Task.Delay(settle, ct);
 
             // 일시정지 체크포인트 ② — 이동은 마쳤고 촬영 전. 재개되면 이 자리(정지 직전 경유점)에서 촬영한다.
@@ -817,6 +849,44 @@ public class InspectionRunStep : ISequenceStep
         {
             _logger.LogError(ex, "[검사 수행] 가속도 배율 복원 실패 — 이후 모션 가속도가 바뀐 채일 수 있습니다");
         }
+    }
+
+    /// <summary>무정지 사전 검증 솎음 간격 — 위치 [mm].</summary>
+    internal const double NonStopCheckStepMm = 50.0;
+
+    /// <summary>무정지 사전 검증 솎음 간격 — 자세(Rx·Ry·Rz 중 최대 변화) [도].</summary>
+    internal const double NonStopCheckStepDeg = 5.0;
+
+    /// <summary>
+    /// 경유점 목표 목록을 솎는다 — 처음·끝은 늘 남기고, 마지막으로 남긴 점에서 위치가 <paramref name="stepMm"/> 이상
+    /// 또는 자세(Rx·Ry·Rz 각각, ±180° 감김 고려)가 <paramref name="stepDeg"/> 이상 바뀐 점을 남긴다. 순서는 유지.
+    /// </summary>
+    internal static List<(int Index, double[] Target)> SubsampleChain(
+        IReadOnlyList<(int Index, double[] Target)> targets, double stepMm, double stepDeg)
+    {
+        if (targets.Count <= 2) return targets.ToList();
+        static double AngDiff(double a, double b)
+        {
+            var d = (a - b) % 360.0;
+            if (d > 180) d -= 360;
+            if (d < -180) d += 360;
+            return Math.Abs(d);
+        }
+        var kept = new List<(int, double[])> { targets[0] };
+        var last = targets[0].Target;
+        for (var i = 1; i < targets.Count - 1; i++)
+        {
+            var t = targets[i].Target;
+            var dist = Math.Sqrt(Math.Pow(t[0] - last[0], 2) + Math.Pow(t[1] - last[1], 2) + Math.Pow(t[2] - last[2], 2));
+            var ang = Math.Max(AngDiff(t[3], last[3]), Math.Max(AngDiff(t[4], last[4]), AngDiff(t[5], last[5])));
+            if (dist >= stepMm || ang >= stepDeg)
+            {
+                kept.Add(targets[i]);
+                last = t;
+            }
+        }
+        kept.Add(targets[^1]);
+        return kept;
     }
 
     /// <summary>
