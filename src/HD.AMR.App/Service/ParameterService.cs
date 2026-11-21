@@ -160,6 +160,10 @@ public class ParameterService
                 "AMR 차체 바닥(바퀴 닿는 면) → 코봇 BASE 장착면 높이 [mm] 덮어쓰기 — 자기 간섭(팔 ↔ 차체·기둥·신호탑) 점검과 도달 사전 점검이 쓴다. " +
                 "비워 두면 appsettings \"CobotEnvelope\"(차체 BodyHeightMm + 기둥 ColumnHeightMm, 현 장비 767+160=927)를 쓴다. 저장하면 바로 적용. " +
                 "차체 윗면 아래이거나 800~2500 밖이면 무시. 좌표 환산은 장착 보정(Calib.Mount.Pose)이 따로 하므로 둘 다 맞춰야 한다."),
+            (Sequence.Steps.LaserWorkingDistanceStep.MaxReturnKey,
+                Sequence.Steps.LaserWorkingDistanceStep.DefaultMaxReturnMm.ToString(CultureInfo.InvariantCulture),
+                "④⁺ 레이저 WD 뒤 용접선 쪽 횡복귀 한계(mm, 툴 X·Y·Z 성분별) — 평탄면 센터링이 이보다 멀리 옮겨 갔으면 돌아가지 않고 실패한다 " +
+                "(앵커·자세 이상 가드). 실행할 때마다 읽는다. 50~1000 밖이거나 비면 400."),
             (Inspection.WObjAttitude.SafeJ6MinKey,
                 Inspection.WObjAttitude.DefaultSafeJ6MinDeg.ToString(CultureInfo.InvariantCulture),
                 "J6 안전 범위 하한(도, 실제 관절값 — 대기 자세 −180° 쪽 감김 기준). 이보다 더 감기는 J6 로는 움직이지 않는다 " +
