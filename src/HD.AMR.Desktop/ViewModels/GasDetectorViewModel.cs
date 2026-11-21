@@ -8,10 +8,6 @@ using HD.AMR.App.Service;
 
 namespace HD.AMR.Desktop.ViewModels;
 
-/// <summary>측정 결과 표 한 행(표시용 문자열).</summary>
-public sealed record GasResultRow(string Seq, string Time, string Label, string Retry, string Value, string Avg, string Limit,
-    string Judgement, bool IsOk, bool IsNg, string Detail);
-
 /// <summary>
 /// 헬륨 가스 디텍터(INFICON XL3000flex) 화면 — 기존 Vision Interface 페이지를 대신한다.
 /// 통신 경로(RS485 시리얼 / 이더넷 TCP) 선택·적용, 실시간 리크레이트·상태 표시, 수동 측정·ZERO, 측정 결과 목록.
@@ -49,7 +45,9 @@ public sealed partial class GasDetectorViewModel : ViewModelBase
     [ObservableProperty] private bool _isError;
 
     public ObservableCollection<string> Ports { get; } = new();
-    public ObservableCollection<GasResultRow> Results { get; } = new();
+    /// <summary>측정 결과 그래프 점(오래된 것부터, 최근 200점).</summary>
+    [ObservableProperty] private IReadOnlyList<Views.GasResultChart.ChartPoint> _chartPoints =
+        Array.Empty<Views.GasResultChart.ChartPoint>();
 
     public GasDetectorViewModel(GasDetectorService svc)
     {
@@ -195,22 +193,20 @@ public sealed partial class GasDetectorViewModel : ViewModelBase
         if (rs.Count != _shownResultCount)
         {
             _shownResultCount = rs.Count;
-            Results.Clear();
-            foreach (var r in rs.AsEnumerable().Reverse().Take(200))
-                Results.Add(ToRow(r));
+            ChartPoints = rs.Skip(Math.Max(0, rs.Count - 200)).Select(ToPoint).ToList();
             OnPropertyChanged(nameof(ResultSummary));
         }
     }
 
-    private static GasResultRow ToRow(GasMeasurementResult r)
-    {
-        static string N(double? v) => v is { } x ? x.ToString("G6", CultureInfo.InvariantCulture) : "—";
-        var judge = r.Judgement switch { GasJudgement.Ok => "OK", GasJudgement.Ng => "NG", _ => "실패" };
-        return new GasResultRow(r.Seq.ToString(CultureInfo.InvariantCulture), r.FinishedUtc.ToLocalTime().ToString("HH:mm:ss"),
-            r.Label, r.Retry == 0 ? "최초" : $"재측정 {r.Retry}", N(r.Value), N(r.Avg), $"{N(r.Threshold)} {r.Unit}", judge,
-            r.Judgement == GasJudgement.Ok, r.Judgement == GasJudgement.Ng,
-            r.Error ?? $"{r.SampleCount}샘플 · {r.Unit}");
-    }
+    private static Views.GasResultChart.ChartPoint ToPoint(GasMeasurementResult r)
+        => new(r.Seq, r.Label, r.FinishedUtc.ToLocalTime().ToString("HH:mm:ss"), r.Retry, r.Value, r.Threshold, r.Unit,
+            r.Judgement switch
+            {
+                GasJudgement.Ok => Views.GasResultChart.Judge.Ok,
+                GasJudgement.Ng => Views.GasResultChart.Judge.Ng,
+                _ => Views.GasResultChart.Judge.Error,
+            },
+            r.Error);
 
     // ── 설정 ───────────────────────────────────────────────────
     private void LoadFromService()
