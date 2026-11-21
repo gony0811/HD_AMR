@@ -33,6 +33,22 @@ public class FairinoStateClient
         public const int TcpPose = 59;        // double[6]
         public const int Tool = 427;          // int32 (LE) — 활성 공구 좌표계 번호
         public const int User = 431;          // int32 (LE) — 활성 작업물 좌표계 번호
+        // 전역 속도 % — 공식 C# SDK(FAIR-INNOVATION/fairino-csharp-sdk RobotTypes.cs ROBOT_STATE_PKG, Pack=1)의 필드 크기를
+        // 차례로 더한 위치. 같은 계산이 tool/user(427/431)와 맞아떨어진다. 펌웨어 패킷이 이보다 짧으면 필드가 없는 것.
+        public const int SpeedScaleManual = 1571;   // double
+        public const int SpeedScaleAuto = 1579;     // double
+    }
+
+    // 전역 속도 확인 로그 — 첫 패킷과 값이 바뀔 때만 남긴다.
+    private bool _speedLogged;
+    private double? _lastSpeedAuto, _lastSpeedManual;
+
+    /// <summary>전역 속도 % 판독 — 패킷 안이고 0 초과 100 이하일 때만 값, 아니면 null.</summary>
+    internal static double? ReadSpeedScale(ReadOnlySpan<byte> payload, int offset)
+    {
+        if (offset < 0 || offset + 8 > payload.Length) return null;
+        var v = BinaryPrimitives.ReadDoubleLittleEndian(payload.Slice(offset, 8));
+        return double.IsFinite(v) && v > 0 && v <= 100 ? v : null;
     }
 
     private readonly FairinoRpcSettings _settings;
@@ -149,10 +165,28 @@ public class FairinoStateClient
             TcpPose = ReadDoubles(payload, Offsets.TcpPose, 6),
             Tool = ReadI32(payload, Offsets.Tool),
             User = ReadI32(payload, Offsets.User),
+            SpeedScaleManual = ReadSpeedScale(payload, Offsets.SpeedScaleManual),
+            SpeedScaleAuto = ReadSpeedScale(payload, Offsets.SpeedScaleAuto),
             UpdatedAt = DateTime.UtcNow,
         };
         LogFaultTransition(_latest, state);
+        LogSpeedScale(state, dataLen);
         _latest = state;
+    }
+
+    private void LogSpeedScale(FairinoState s, int dataLen)
+    {
+        static double? R(double? v) => v is { } x ? Math.Round(x, 1) : null;
+        if (_speedLogged && R(s.SpeedScaleAuto) == R(_lastSpeedAuto) && R(s.SpeedScaleManual) == R(_lastSpeedManual)) return;
+        _speedLogged = true;
+        _lastSpeedAuto = s.SpeedScaleAuto;
+        _lastSpeedManual = s.SpeedScaleManual;
+        if (dataLen < Offsets.SpeedScaleAuto + 8)
+            _logger.LogWarning("{Name} 상태 패킷 {Len}바이트 — 전역 속도 필드(위치 {Off})가 없는 펌웨어입니다", _settings.Name, dataLen, Offsets.SpeedScaleAuto);
+        else
+            _logger.LogInformation("{Name} 전역 속도: 자동 {Auto}% / 수동 {Manual}% (모드 {Mode}, 상태 패킷 {Len}바이트)",
+                _settings.Name, s.SpeedScaleAuto?.ToString("0.#") ?? "판독 불가", s.SpeedScaleManual?.ToString("0.#") ?? "판독 불가",
+                s.RobotMode == 1 ? "수동" : "자동", dataLen);
     }
 
     /// <summary>결함 코드(main/sub)가 바뀔 때만 남긴다 — 타워램프 적색은 이 값을 따르는데, 순간 결함은

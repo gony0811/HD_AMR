@@ -257,8 +257,28 @@ public class InspectionRunStep : ISequenceStep
         var tiltSign = attitude.TiltSign;
 
         // 순회(검사 스캔) 속도: mm/s 지정값 → % 지정값 → 검사 프로파일 속도 → 기본 검사 속도 파라미터(ResolveScanSpeed).
+        // mm/s → % 환산 기준: 자동 반영이 켜져 있고 코봇 전역 속도를 읽었으면 '전역 100% 기준 속도 × 전역%'로 매번 정한다
+        // (펜던트에서 전역 속도를 바꿔도 레시피 mm/s 가 유지된다). 못 읽으면 고정 환산값(LinearSpeedAt100PctKey).
+        var basis = await GetLinearSpeedAt100PctAsync();
+        if (await GetAutoScanSpeedAsync())
+        {
+            if (_cobot.State?.GlobalSpeedPercent is { } globalPct)
+            {
+                var full = ResolveFullGlobalBasis(await GetParamDoubleAsync(LinearSpeedAtFullGlobalKey));
+                basis = AutoBasisMmPerSec(full, globalPct);
+                _logger.LogInformation(
+                    "[검사 수행] 검사 속도 자동 환산 — 코봇 전역 속도 {G:0.#}% × 전역 100% 기준 {Full:0.#}mm/s = 지령 100% 기준 {B:0.#}mm/s ('{Key}')",
+                    globalPct, full, basis, AutoScanSpeedKey);
+            }
+            else
+                _logger.LogWarning("[검사 수행] 검사 속도 자동 환산 켜짐 — 코봇 전역 속도를 읽지 못해 고정 환산값({B}mm/s)을 씁니다",
+                    basis?.ToString("0.#") ?? DefaultLinearSpeedAt100Pct.ToString("0.#"));
+        }
         var scan = ResolveScanSpeed(context.InspectSpeedMmPerSec, context.InspectVelocity, profile.RunVel,
-            await GetDefaultInspectVelAsync(), await GetLinearSpeedAt100PctAsync(), MoveAcc);
+            await GetDefaultInspectVelAsync(), basis, MoveAcc);
+        if (scan.TargetMmPerSec is { } wantMm && scan.Vel >= 100.0 && basis is { } b100 && wantMm > b100 + 0.05)
+            _logger.LogWarning("[검사 수행] 목표 검사 속도 {Want:0.#}mm/s 를 낼 수 없어 최대 지령 100%(약 {Max:0.#}mm/s)로 순회합니다 — 코봇 전역 속도를 올려야 목표에 닿습니다",
+                wantMm, b100);
         Task<int> ScanMoveLAsync(double[] pose, double[]? joints, double blendR, CancellationToken c)
             => _cobot.Rpc.MoveLAsync(pose, jointPos: joints, tool: context.Tool, user: 0,
                 vel: scan.Vel, acc: scan.Acc, ovl: MoveOvl, blendR: blendR, ct: c);
@@ -1044,6 +1064,42 @@ public class InspectionRunStep : ISequenceStep
         try { return await _param.GetDoubleAsync(LinearSpeedAt100PctKey); }
         catch { return null; }
     }
+
+    private async Task<double?> GetParamDoubleAsync(string key)
+    {
+        try { return await _param.GetDoubleAsync(key); }
+        catch { return null; }
+    }
+
+    private async Task<bool> GetAutoScanSpeedAsync()
+    {
+        try { return ResolveAutoScanSpeed(await _param.GetAsync(AutoScanSpeedKey)); }
+        catch { return false; }
+    }
+
+    /// <summary>
+    /// 검사 속도 자동 환산 파라미터(on/off) — 켜면 코봇 상태 패킷의 전역 속도 %(펜던트 속도)를 읽어 mm/s → % 환산 기준을
+    /// 검사마다 다시 정한다. 비우면 끔(고정 환산값 <see cref="LinearSpeedAt100PctKey"/> 사용).
+    /// </summary>
+    public const string AutoScanSpeedKey = "Inspection.AutoScanSpeedFromGlobal";
+
+    /// <summary>전역 속도 100%·지령 100% 일 때의 TCP 직선 속도 [mm/s] 파라미터 — 자동 환산의 기준.</summary>
+    public const string LinearSpeedAtFullGlobalKey = "Inspection.LinearSpeedMmPerSecAtFullGlobal";
+
+    /// <summary>기본 150 mm/s — M2 실측: 전역 80% 에서 120, 전역 40% 에서 60 (둘 다 100% 환산 150).</summary>
+    public const double DefaultLinearSpeedAtFullGlobal = 150.0;
+
+    /// <summary><see cref="AutoScanSpeedKey"/> 해석 — on/1/true/yes 만 켬.</summary>
+    public static bool ResolveAutoScanSpeed(string? raw)
+        => raw?.Trim().ToLowerInvariant() is "1" or "true" or "on" or "yes";
+
+    /// <summary>전역 100% 기준값 — 0 이하·비정상이면 기본값.</summary>
+    public static double ResolveFullGlobalBasis(double? raw)
+        => raw is { } v && double.IsFinite(v) && v > 0 ? v : DefaultLinearSpeedAtFullGlobal;
+
+    /// <summary>지령 100% 일 때의 실제 속도 = 전역 100% 기준 × 전역%/100.</summary>
+    public static double AutoBasisMmPerSec(double fullGlobalBasis, double globalPercent)
+        => fullGlobalBasis * Math.Clamp(globalPercent, 0.1, 100.0) / 100.0;
 
     private async Task<double> GetWObjIdAsync()
     {

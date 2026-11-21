@@ -15,6 +15,15 @@ public record FairinoState
     /// <summary>로봇 모드(0=자동,1=수동 등).</summary>
     public int RobotMode { get; init; }
 
+    /// <summary>자동 모드 전역 속도 % (펜던트 속도) — 상태 패킷에 그 필드가 없거나 값이 0~100 밖이면 null.</summary>
+    public double? SpeedScaleAuto { get; init; }
+
+    /// <summary>수동 모드 전역 속도 % — 없거나 범위 밖이면 null.</summary>
+    public double? SpeedScaleManual { get; init; }
+
+    /// <summary>지금 모드의 전역 속도 % — 자동 모드면 <see cref="SpeedScaleAuto"/>, 수동이면 <see cref="SpeedScaleManual"/>.</summary>
+    public double? GlobalSpeedPercent => RobotMode == 1 ? SpeedScaleManual : SpeedScaleAuto;
+
     /// <summary>로봇 모션 상태(robot_state).</summary>
     public int RobotState { get; init; }
 

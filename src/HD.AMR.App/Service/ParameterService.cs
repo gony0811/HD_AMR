@@ -226,7 +226,15 @@ public class ParameterService
             (Sequence.Steps.InspectionRunStep.LinearSpeedAt100PctKey,
                 Sequence.Steps.InspectionRunStep.DefaultLinearSpeedAt100Pct.ToString(CultureInfo.InvariantCulture),
                 "⑱ 검사 수행 — 검사 속도를 mm/s 로 지정했을 때(레시피·시퀀스 화면 '검사 속도(mm/s)') % 로 환산하는 기준: 검사 속도 100% 일 때의 " +
-                "TCP 직선 속도(mm/s). 지령 % = mm/s ÷ 이 값 × 100. 기본 120(M2 실측 ≈1.2mm/s per %). 실측 평균 속도는 무정지 측정 로그에 나온다. 다음 검사부터 적용."),
+                "TCP 직선 속도(mm/s). 지령 % = mm/s ÷ 이 값 × 100. 기본 120(M2 실측 ≈1.2mm/s per %). 실측 평균 속도는 무정지 측정 로그에 나온다. 다음 검사부터 적용. " +
+                "'Inspection.AutoScanSpeedFromGlobal' 이 켜져 있고 코봇 전역 속도를 읽으면 이 값 대신 자동 환산을 쓴다."),
+            (Sequence.Steps.InspectionRunStep.AutoScanSpeedKey, "",
+                "⑱ 검사 속도 자동 환산(on/off) — 켜면 코봇 상태 패킷에서 펜던트 전역 속도 %를 읽어, 레시피 검사 속도(mm/s)에 맞는 지령 % 를 " +
+                "검사마다 다시 계산한다(지령 % = mm/s ÷ (전역 100% 기준 × 전역%/100) × 100). 100% 를 넘으면 100%(낼 수 있는 최대 속도)로 순회하고 경고를 남긴다. " +
+                "전역 속도를 못 읽으면 고정 환산값('Inspection.LinearSpeedMmPerSecAt100Pct')을 쓴다. 비우면 끔."),
+            (Sequence.Steps.InspectionRunStep.LinearSpeedAtFullGlobalKey,
+                Sequence.Steps.InspectionRunStep.DefaultLinearSpeedAtFullGlobal.ToString(CultureInfo.InvariantCulture),
+                "⑱ 검사 속도 자동 환산 기준 — 코봇 전역 속도 100%·지령 100% 일 때의 TCP 직선 속도(mm/s). 기본 150(M2 실측: 전역 80% 에서 120, 전역 40% 에서 60)."),
             (Sequence.Steps.FlatSurfaceAlignStep.TiltThresholdKey,
                 Sequence.Steps.FlatSurfaceAlignStep.DefaultTiltThresholdDeg.ToString(CultureInfo.InvariantCulture),
                 "④ 평탄면 레이저 정렬 완료 기준(°) — 레이저 3점 틸트 |rx|, |ry| 가 모두 이 값 미만이면 정렬 완료. 기본 1, 0 초과~5 (밖이면 1). 다음 정렬부터 적용."),
