@@ -118,6 +118,30 @@ public class LaserWorkingDistanceStep : ISequenceStep
         return steps;
     }
 
+    /// <summary>
+    /// 작은 이동 노이즈 한계 파라미터 키 [mm]. 이동량이 이보다 작으면 측정변화가 센서 노이즈(~1mm)에 묻혀
+    /// "측정 불변/반대로 변함" 판정이 맞지 않으므로 방향 판정 없이 잔차만큼 보정하고, 남은 잔차가 이 안이면 그대로 진행한다.
+    /// 0 = 끔(종전 판정). 비우면 가스 <see cref="DefaultSmallMoveMm"/> / 비전 끔.
+    /// (2026-11-21 M2 19:29 이동 +1.18mm·변화 0 → "불변", 21:21 이동 +1.33mm·변화 +1.13mm → "반대" 로 점2 묶음 해제.)
+    /// </summary>
+    public const string SmallMoveKey = "Sequence.Laser.SmallMoveNoiseMm";
+    internal const double DefaultSmallMoveMm = 3.0;
+    internal const double MaxSmallMoveMm = MaxCorrectionMm;
+
+    /// <summary>파라미터 값 → 작은 이동 한계 [mm]. 비거나 범위 밖이면 센서 모드 기본값(가스 3 / 비전 0).</summary>
+    internal static double ResolveSmallMoveMm(double? value, bool usesGas)
+        => value is { } v && double.IsFinite(v) && v >= 0 && v <= MaxSmallMoveMm ? v
+         : usesGas ? DefaultSmallMoveMm : 0;
+
+    /// <summary>작은 이동이라 측정 응답과 무관하게 잔차만큼 보정해도 되는지.</summary>
+    internal static bool ShouldCorrectSmall(double move, double residual, double smallMm)
+        => smallMm > 0 && Math.Abs(move) < smallMm
+           && Math.Abs(residual) > ToleranceMm && Math.Abs(residual) <= MaxCorrectionMm;
+
+    /// <summary>작은 이동 뒤 남은 잔차가 노이즈 허용 안이라 그대로 진행해도 되는지.</summary>
+    internal static bool AcceptSmallResidual(double move, double residual, double smallMm)
+        => smallMm > 0 && Math.Abs(move) < smallMm && Math.Abs(residual) <= smallMm;
+
     private readonly string _key;
     private readonly string _displayName;
     private readonly int _order;
@@ -223,6 +247,11 @@ public class LaserWorkingDistanceStep : ISequenceStep
 
         // ── 개루프 이동 + 재측정 검증. 정상 반응·작은 잔차면 보정 이동(최대 MaxCorrections 회) ──
         // delta>0 = 대상이 목표보다 멀다 = 전방(광축) 접근. ③ MoveToDistanceAsync 와 동일 부호 규약.
+        double? rawSmall = null;
+        try { rawSmall = await _param.GetDoubleAsync(SmallMoveKey); }
+        catch { /* DB 미준비 — 기본값 */ }
+        var smallMm = ResolveSmallMoveMm(rawSmall, _useGas);
+
         var move = delta;            // 이번 이동량
         var totalMove = 0.0;
         var zBefore = z1.Value;
@@ -263,25 +292,41 @@ public class LaserWorkingDistanceStep : ISequenceStep
                 z2Value, residual, change, -move);
             await LogDiagnosticsAsync(attempt == 0 ? "이동 후" : $"보정 {attempt}회차 후", context, wall, wd, wdSource, depthAxis, ct);
 
+            var small = ShouldCorrectSmall(move, residual, smallMm);
             if (Math.Abs(residual) <= ToleranceMm || attempt >= MaxCorrections
-                || !ShouldCorrect(move, change, residual))
+                || !(ShouldCorrect(move, change, residual) || small))
                 break;
 
-            _logger.LogInformation(
-                "[레이저 WD 거리 조정] 잔차 {Res:+0.##;-0.##}mm — 정상 반응(측정변화 {Chg:+0.##;-0.##}mm / 이동 {Move:+0.##;-0.##}mm)이라 잔차만큼 보정 이동",
-                residual, change, move);
+            if (small && !ShouldCorrect(move, change, residual))
+                _logger.LogInformation(
+                    "[레이저 WD 거리 조정] 잔차 {Res:+0.##;-0.##}mm — 작은 이동({Move:+0.##;-0.##}mm < {Small:0.#}mm)이라 " +
+                    "측정변화 {Chg:+0.##;-0.##}mm 는 센서 노이즈로 보고 방향 판정 없이 잔차만큼 보정 이동",
+                    residual, move, smallMm, change);
+            else
+                _logger.LogInformation(
+                    "[레이저 WD 거리 조정] 잔차 {Res:+0.##;-0.##}mm — 정상 반응(측정변화 {Chg:+0.##;-0.##}mm / 이동 {Move:+0.##;-0.##}mm)이라 잔차만큼 보정 이동",
+                    residual, change, move);
             move = residual;
             zBefore = z2Value;
         }
 
-        if (Math.Abs(residual) <= ToleranceMm)
+        var smallNote = "";
+        if (Math.Abs(residual) > ToleranceMm && AcceptSmallResidual(move, residual, smallMm))
+        {
+            _logger.LogWarning(
+                "[레이저 WD 거리 조정] 작은 이동 뒤 잔차 {Res:+0.##;-0.##}mm 가 노이즈 허용 {Small:0.#}mm 안 — 그대로 진행 ('{Key}')",
+                residual, smallMm, SmallMoveKey);
+            smallNote = $" 작은 이동 뒤 잔차 {residual:+0.##;-0.##}mm 는 센서 노이즈 범위(±{smallMm:0.#}mm)라 그대로 진행.";
+        }
+
+        if (Math.Abs(residual) <= ToleranceMm || smallNote.Length > 0)
         {
             var (retOk, retNote) = await ReturnLateralAsync(context, depthAxis, ct);
             if (retOk) await LogDiagnosticsAsync("완료(횡복귀 후)", context, wall, wd, wdSource, depthAxis, ct);
             return retOk
                 ? StepResult.Ok(
                     $"WD 도달 — z={z2Value:0.##}mm (목표 {wd:0.#}mm, 이동 {totalMove:+0.##;-0.##}mm, " +
-                    $"잔차 {residual:+0.##;-0.##}mm).{searchNote}{retNote}")
+                    $"잔차 {residual:+0.##;-0.##}mm).{searchNote}{smallNote}{retNote}")
                 : StepResult.Fail(retNote);
         }
 
