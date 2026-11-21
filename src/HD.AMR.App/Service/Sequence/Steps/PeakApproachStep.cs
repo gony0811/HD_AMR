@@ -21,14 +21,16 @@ public class PeakApproachStep : ISequenceStep
     private readonly ParameterService _param;
     private readonly ILogger<PeakApproachStep> _logger;
     private readonly LaserDisplacementSensorService _laser;
+    private readonly bool _useGas;
 
     public PeakApproachStep(CobotService cobot, ParameterService param, ILogger<PeakApproachStep> logger,
-        LaserDisplacementSensorService laser)
+        LaserDisplacementSensorService laser, Microsoft.Extensions.Options.IOptions<InspectionSensorSettings> sensor)
     {
         _cobot = cobot;
         _param = param;
         _logger = logger;
         _laser = laser;
+        _useGas = sensor.Value.UsesGasDetector;
     }
 
     /// <summary>들어올린 피치 이동의 레이저 측정 — 미연결이면 측정 없음(들어올린 만큼 그대로 내린다).</summary>
@@ -46,6 +48,13 @@ public class PeakApproachStep : ISequenceStep
         => _cobot.IsConnected ? StepValidation.Ok() : StepValidation.Fail("코봇 RPC 미연결");
 
     public async Task<StepResult> ExecuteAsync(SequenceContext context, CancellationToken ct)
+    {
+        var normalNote = await BundleTeach.PrepareMeasuredWallNormalAsync(_param, _logger, context, _useGas);
+        var r = await RunAsync(context, ct);
+        return normalNote.Length > 0 && r.Success ? StepResult.Ok(r.Message.TrimEnd('.') + normalNote + ".") : r;
+    }
+
+    private async Task<StepResult> RunAsync(SequenceContext context, CancellationToken ct)
     {
         if (BundleTeach.IsActive(context)
             && context.Bag.TryGetValue(BundleTeach.FirstStartKey, out var fs) && fs is double[] { Length: 3 } firstStart

@@ -37,6 +37,66 @@ public static class BundleTeach
         context.Bag.Remove(Point2ReturnPoseKey);
     }
 
+    /// <summary>
+    /// 피치 이동을 실측 면 기준으로 할지 파라미터 키(on/off). 켜면 ⑧ 시작 때 점1 레이저 평탄면 정렬 자세(비드1 센터링 앵커)의
+    /// 광축으로 면 법선을 잡아, 모델 면 법선(AMR 정차 자세·지도로 계산) 대신 그 면에 평행하게 피치를 이동한다.
+    /// 비우면 검사 센서 모드로 정한다 — 가스 켬, 비전(용접검사기) 끔(종전 모델 법선).
+    /// (2026-11-21 M2 S013-1~4: AMR 이 벽과 ~9° 돌아 서 있어 모델 법선으로 가로 360mm 갈 때마다 벽에서 57mm 멀어졌고,
+    /// 묶음 점2(피치 3회)에서 ~170mm 멀어져 레이저가 범위 밖. 세로 피치는 AMR 요 오차의 영향이 없어 멀쩡했다.)
+    /// </summary>
+    public const string PitchMeasuredNormalKey = "Sequence.Pitch.UseMeasuredWallNormal";
+
+    /// <summary>실측 면 바깥 법선(BASE 단위벡터) 보관 키 — ⑧ 이 정하고 이어지는 피치·단독 복귀 피치가 쓴다.</summary>
+    public const string MeasuredWallOutBagKey = "pitch.measuredWallOut";
+
+    /// <summary>파라미터 값 → 실측 법선 사용 여부. "on"/"true"/"1" 켬, "off"/"false"/"0" 끔, 비면 가스 켬·비전 끔.</summary>
+    internal static bool ResolveUseMeasuredNormal(string? raw, bool usesGas)
+        => raw?.Trim().ToLowerInvariant() switch
+        {
+            "on" or "true" or "1" or "yes" => true,
+            "off" or "false" or "0" or "no" => false,
+            _ => usesGas,
+        };
+
+    /// <summary>두 법선 사이 각 [도].</summary>
+    internal static double AngleBetweenDeg(double[] a, double[] b)
+    {
+        var la = Math.Sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
+        var lb = Math.Sqrt(b[0] * b[0] + b[1] * b[1] + b[2] * b[2]);
+        if (la < 1e-9 || lb < 1e-9) return 0;
+        var c = Math.Clamp((a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) / (la * lb), -1, 1);
+        return Math.Acos(c) * 180.0 / Math.PI;
+    }
+
+    /// <summary>
+    /// ⑧ 시작 — 실측 면 법선을 정해 Bag 에 둔다(끄거나 앵커가 없으면 지운다 → 모델 법선). 로그용 메모를 돌려준다.
+    /// </summary>
+    public static async Task<string> PrepareMeasuredWallNormalAsync(
+        ParameterService param, ILogger logger, SequenceContext context, bool usesGas)
+    {
+        context.Bag.Remove(MeasuredWallOutBagKey);
+        string? raw = null;
+        try { raw = await param.GetAsync(PitchMeasuredNormalKey); }
+        catch { /* DB 미준비 — 기본값 */ }
+        if (!ResolveUseMeasuredNormal(raw, usesGas)) return "";
+
+        if (!context.Bag.TryGetValue(WeldSequenceSupport.Bead1CenteredPoseBagKey, out var ap) || ap is not double[] { Length: 6 } anchor)
+        {
+            logger.LogWarning("피치 이동: 비드1 앵커 없음 — 실측 면 법선 대신 모델 법선 사용");
+            return "";
+        }
+        var (depthAxis, _) = await WeldSequenceSupport.GetDepthAxisAsync(param);
+        var measured = CobotInspectionMoveStep.WallOutNormal(anchor, depthAxis);
+        context.Bag[MeasuredWallOutBagKey] = measured;
+
+        var diff = context.Bag.TryGetValue(WeldSequenceSupport.WallOutNormalBagKey, out var mv) && mv is double[] { Length: 3 } model
+            ? AngleBetweenDeg(model, measured) : double.NaN;
+        logger.LogInformation(
+            "피치 이동: 실측 면 법선 사용 [{X:+0.000;-0.000}, {Y:+0.000;-0.000}, {Z:+0.000;-0.000}] — 모델 법선과 {Diff:0.0}° 차 ('{Key}')",
+            measured[0], measured[1], measured[2], diff, PitchMeasuredNormalKey);
+        return double.IsFinite(diff) ? $", 실측 면 기준(모델과 {diff:0.0}° 차)" : ", 실측 면 기준";
+    }
+
     /// <summary>⑧ 피치 이동 들어올림 거리 [mm] 파라미터 키 — 면 바깥(모델 면 법선)으로 이만큼 띄운 채 피치를 이동하고,
     /// 도착 뒤 레이저로 점1 과 같은 면 거리까지 내린다. 0 = 종전(면 평행 직선 이동).</summary>
     public const string PitchLiftKey = "Sequence.Pitch.LiftMm";
@@ -196,7 +256,11 @@ public static class BundleTeach
 
         int rc;
         var wallNote = "";
-        if (context.Bag.TryGetValue(WeldSequenceSupport.WallOutNormalBagKey, out var nv) && nv is double[] { Length: 3 } wallOut
+        // 실측 면 법선(⑧ 시작 때 점1 레이저 정렬 자세로 구함)이 있으면 그것, 없으면 모델 면 법선.
+        object? nv = null;
+        var hasNormal = context.Bag.TryGetValue(MeasuredWallOutBagKey, out nv) && nv is double[] { Length: 3 }
+                        || context.Bag.TryGetValue(WeldSequenceSupport.WallOutNormalBagKey, out nv);
+        if (hasNormal && nv is double[] { Length: 3 } wallOut
             && WeldSequenceSupport.ToolOffsetParallelToWall(anchor, offset, wallOut) is { } baseMove)
         {
             logger.LogInformation(
