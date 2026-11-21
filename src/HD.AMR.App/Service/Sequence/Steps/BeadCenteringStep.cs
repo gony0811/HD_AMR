@@ -1,4 +1,4 @@
-using HD.AMR.App.Communication;
+﻿using HD.AMR.App.Communication;
 using HD.AMR.App.Models;
 using Microsoft.Extensions.Logging;
 
@@ -32,8 +32,26 @@ public class BeadCenteringStep : ISequenceStep
     private readonly BeadManualAssist _manual;
     private readonly ILogger<BeadCenteringStep> _logger;
 
-    /// <summary>1회 이동 클램프(mm). 매핑 오설정·측정 폭주 가드 — ⑥과 동일 관례.</summary>
-    private const double MaxCenteringMoveMm = 100.0;
+    /// <summary>1회 이동 클램프 기본값(mm). 매핑 오설정·측정 폭주 가드 — ⑥과 동일 관례.</summary>
+    internal const double DefaultMaxMoveMm = 100.0;
+
+    /// <summary>
+    /// 1회 이동 한계 파라미터 키 [mm]. 비드가 이보다 멀면 이 값까지만 움직이고 나머지는 잔차로 남는다.
+    /// 비우면 검사 센서 모드로 정한다 — 가스 <see cref="GasDefaultMaxMoveMm"/>, 비전(용접검사기) <see cref="DefaultMaxMoveMm"/>(종전).
+    /// (2026-11-22 M2 S013-1 점1: 후퇴 재검출로 찾은 비드 d=+115.4mm 를 100mm 로 잘라 잔차 +22.5mm.)
+    /// </summary>
+    public const string MaxMoveKey = "Sequence.Bead.CenterMaxMoveMm";
+    internal const double GasDefaultMaxMoveMm = 200.0;
+    internal const double MinMaxMoveMm = 10.0, MaxMaxMoveMm = 300.0;
+
+    /// <summary>파라미터 값 → 1회 이동 한계 [mm]. 비거나 10~300 밖이면 센서 모드 기본값(가스 200 / 비전 100).</summary>
+    internal static double ResolveMaxMoveMm(double? value, bool usesGas)
+        => value is { } v && double.IsFinite(v) && v >= MinMaxMoveMm && v <= MaxMaxMoveMm ? v
+         : usesGas ? GasDefaultMaxMoveMm : DefaultMaxMoveMm;
+
+    /// <summary>이번 실행의 1회 이동 한계 [mm] — 실행 시작 때 읽는다.</summary>
+    private double MaxCenteringMoveMm = DefaultMaxMoveMm;
+    private readonly bool _useGas;
 
     /// <summary>이 값 미만이면 이동을 생략한다(mm).</summary>
     private const double SkipMoveMm = 0.5;
@@ -58,16 +76,16 @@ public class BeadCenteringStep : ISequenceStep
         => !double.IsFinite(residualMm) || Math.Abs(residualMm) > WObjPointStep.MaxResidualCorrectionMm;
 
     /// <summary>1회 이동 한계로 자른 뒤 남을 잔차 [mm](부호 유지).</summary>
-    internal static double ResidualAfterClamp(double dMm)
-        => dMm - Math.Clamp(dMm, -MaxCenteringMoveMm, MaxCenteringMoveMm);
+    internal static double ResidualAfterClamp(double dMm, double maxMm = DefaultMaxMoveMm)
+        => dMm - Math.Clamp(dMm, -maxMm, maxMm);
 
     /// <summary>
     /// 수동 입력을 팝업 조그 뒤에 한 경우의 진행축 보정 이동량 [mm] — Peak 가 센터에서 <paramref name="toleranceMm"/>
     /// (⑥ Peak 센터링 허용 잔차)보다 더 벗어나 있으면 그만큼(1회 이동 한계로 자름), 아니면 0.
     /// </summary>
-    internal static double ProgressCorrectionMm(double? peakOffsetMm, double toleranceMm)
+    internal static double ProgressCorrectionMm(double? peakOffsetMm, double toleranceMm, double maxMm = DefaultMaxMoveMm)
         => peakOffsetMm is { } o && double.IsFinite(o) && Math.Abs(o) > Math.Max(0, toleranceMm)
-            ? Math.Clamp(o, -MaxCenteringMoveMm, MaxCenteringMoveMm)
+            ? Math.Clamp(o, -maxMm, maxMm)
             : 0.0;
 
     private string LargeResidualFail(double dMm, double residualMm) =>
@@ -83,6 +101,7 @@ public class BeadCenteringStep : ISequenceStep
         CobotService cobot,
         ParameterService param,
         BeadManualAssist manual,
+        Microsoft.Extensions.Options.IOptions<InspectionSensorSettings> sensor,
         ILogger<BeadCenteringStep> logger)
     {
         _peakId = peakId;
@@ -91,6 +110,7 @@ public class BeadCenteringStep : ISequenceStep
         _cobot = cobot;
         _param = param;
         _manual = manual;
+        _useGas = sensor.Value.UsesGasDetector;
         _logger = logger;
     }
 
@@ -129,6 +149,11 @@ public class BeadCenteringStep : ISequenceStep
         // 이전 실행의 잔차 보정이 이번 점 기록에 섞이지 않게 먼저 지운다.
         context.Bag.Remove(WObjPointStep.PointCrossCorrectionBagKey(_peakId));
 
+        double? rawMax = null;
+        try { rawMax = await _param.GetDoubleAsync(MaxMoveKey); }
+        catch { /* DB 미준비 — 기본값 */ }
+        MaxCenteringMoveMm = ResolveMaxMoveMm(rawMax, _useGas);
+
         var (progressAxis, _) = await WeldSequenceSupport.ApplyProgressAxisAsync(_weld, context, _cobot, _param, ct);
         var axisKey = WeldSequenceSupport.CrossToolAxisKey(progressAxis);
         var (toolAxis, axisFromParam) = await WeldSequenceSupport.GetCrossToolAxisAsync(_param, progressAxis);
@@ -142,7 +167,8 @@ public class BeadCenteringStep : ISequenceStep
         var peakOffsetMm = context.Bag.TryGetValue(peakOffKey, out var pov) && pov is double pod ? pod : (double?)null;
         context.Bag.Remove(peakOffKey);   // 다시 실행해도 이중으로 움직이지 않게
         var progressMm = ProgressCorrectionMm(peakOffsetMm,
-            await _param.GetDoubleAsync(PeakCenteringStep.ResidualMaxKey) ?? PeakCenteringStep.DefaultResidualMaxMm);
+            await _param.GetDoubleAsync(PeakCenteringStep.ResidualMaxKey) ?? PeakCenteringStep.DefaultResidualMaxMm,
+            MaxCenteringMoveMm);
         var progressNote = "";
         if (progressMm != 0)
         {
@@ -164,8 +190,8 @@ public class BeadCenteringStep : ISequenceStep
 
         var residualMax = await _param.GetDoubleAsync(ResidualMaxKey) ?? DefaultResidualMaxMm;
         var failOnLarge = await _param.GetBoolAsync(FailOnLargeResidualKey) ?? true;
-        if (failOnLarge && IsUncorrectableResidual(ResidualAfterClamp(moveMm)))
-            return StepResult.Fail(LargeResidualFail(initialDMm, ResidualAfterClamp(moveMm)));
+        if (failOnLarge && IsUncorrectableResidual(ResidualAfterClamp(moveMm, MaxCenteringMoveMm)))
+            return StepResult.Fail(LargeResidualFail(initialDMm, ResidualAfterClamp(moveMm, MaxCenteringMoveMm)));
         string? residualWarn = null;
         if (residualMax > 0 && Math.Abs(moveMm) - MaxCenteringMoveMm > residualMax)
             residualWarn = $"이격 {initialDMm:+0.0;-0.0}mm 가 1회 이동 한계 ±{MaxCenteringMoveMm:0}mm 를 넘어 " +
