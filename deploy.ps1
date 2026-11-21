@@ -17,14 +17,18 @@
 param(
     [switch]$SkipBuild,   # publish 생략, 기존 publish 결과물만 전송
     [switch]$DryRun,      # 전송 대상만 표시, 실제 전송 안 함
-    [switch]$NoRestart    # 전송 후 앱을 다시 시작하지 않음
+    [switch]$NoRestart,   # 전송 후 앱을 다시 시작하지 않음
+    # 대상 PC. 미지정 시 환경변수 HDAMR_DEPLOY_HOST / HDAMR_DEPLOY_USER, 그것도 없으면 기본값.
+    #   예) .\deploy.ps1 -RemoteHost 192.168.1.104 -RemoteUser user
+    [string]$RemoteHost = $(if ($env:HDAMR_DEPLOY_HOST) { $env:HDAMR_DEPLOY_HOST } else { '100.116.213.68' }),
+    [string]$RemoteUser = $(if ($env:HDAMR_DEPLOY_USER) { $env:HDAMR_DEPLOY_USER } else { 'eggplant' })
 )
 
 $ErrorActionPreference = 'Stop'
+# 원격 출력의 한글이 깨지지 않도록 UTF-8 로 주고받는다.
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
 
 # ── 설정 ──────────────────────────────────────────────────────
-$RemoteHost = '100.116.213.68'
-$RemoteUser = 'eggplant'
 $RemoteDir  = 'C:\Deploy\HD_AMR'
 $RemoteExe  = 'HD.AMR.Desktop.exe'
 $Project    = 'HD.AMR.Desktop'
@@ -36,7 +40,7 @@ $SshOpts    = @('-o', 'ConnectTimeout=5', '-o', 'BatchMode=yes')
 # 원격 PowerShell 스크립트를 실행하고 출력 문자열을 돌려준다.
 function Invoke-Remote([string]$Script) {
     # 진행률 레코드가 CLIXML 로 stderr 에 섞여 나오지 않게 끈다.
-    $Script = "`$ProgressPreference='SilentlyContinue'`n" + $Script
+    $Script = "`$ProgressPreference='SilentlyContinue'`n[Console]::OutputEncoding=[Text.Encoding]::UTF8`n" + $Script
     $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($Script))
     $out = & ssh @SshOpts $Target "powershell -NoProfile -NonInteractive -EncodedCommand $enc"
     if ($LASTEXITCODE -ne 0) { throw "원격 명령 실패 (exit $LASTEXITCODE)" }
@@ -93,16 +97,21 @@ if (-not $NoRestart) {
     Write-Host '▶ 원격 앱 시작 중…'
     # ssh 세션에서 띄운 프로세스는 ssh 종료 시 함께 죽으므로, 로그인된 데스크톱 세션에서 실행되도록
     # 예약 작업(Interactive)으로 시작한다(작업은 매번 덮어써 등록).
+    # 로그온 트리거도 함께 등록해, 원격 PC 재부팅 → 자동 로그인 시 앱이 자동으로 뜨게 한다.
+    # 실행 시간 제한 없음(기본 72시간 후 강제 종료 방지), 배터리 상태와 무관하게 실행.
     $status = Invoke-Remote @"
 `$a = New-ScheduledTaskAction -Execute '$RemoteDir\$RemoteExe' -WorkingDirectory '$RemoteDir'
 `$pr = New-ScheduledTaskPrincipal -UserId '$RemoteUser' -LogonType Interactive
-Register-ScheduledTask -TaskName HDAMR_Start -Action `$a -Principal `$pr -Force | Out-Null
+`$tr = New-ScheduledTaskTrigger -AtLogOn -User '$RemoteUser'
+`$tr.Delay = 'PT10S'
+`$st = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew
+Register-ScheduledTask -TaskName HDAMR_Start -Action `$a -Principal `$pr -Trigger `$tr -Settings `$st -Force | Out-Null
 Start-ScheduledTask -TaskName HDAMR_Start
 Start-Sleep -Seconds 8
 `$p = Get-Process $exeName -ErrorAction SilentlyContinue
 if (`$p) { "running pid=`$(`$p.Id) session=`$(`$p.SessionId) responding=`$(`$p.Responding)" } else { 'NOT RUNNING' }
 "@
-    if ($status -match 'NOT RUNNING') { throw '원격 앱이 시작되지 않았다 (원격 PC 에 eggplant 로 로그인돼 있는지 확인)' }
+    if ($status -match 'NOT RUNNING') { throw "원격 앱이 시작되지 않았다 (원격 PC 에 $RemoteUser 로 로그인돼 있는지 확인)" }
     Write-Host "  ✔ $status"
 }
 
