@@ -1,6 +1,7 @@
 using HD.AMR.App.Communication;
 using HD.AMR.App.Service.Inspection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace HD.AMR.App.Service.Sequence.Steps;
 
@@ -34,16 +35,36 @@ public class BundleEndWdStep : ISequenceStep
     private const int StabilizeTimeoutMs = 4000;
     private const int PollMs = 100;
 
+    /// <summary>
+    /// 끝 WD 확인 사용 여부 파라미터 — on/off(1/0, true/false). 비우면 검사 센서 모드로 정한다:
+    /// 가스 검사기는 끄고(구역을 끊김 없이 이어서 순회 — 재측정 왕복이 사이클을 늘린다), 비전은 켠다.
+    /// </summary>
+    public const string EnabledKey = "Sequence.Bundle.EndWdCheck";
+
     private readonly CobotService _cobot;
     private readonly LaserDisplacementSensorService _laser;
+    private readonly ParameterService _param;
+    private readonly bool _useGas;
     private readonly ILogger<BundleEndWdStep> _logger;
 
-    public BundleEndWdStep(CobotService cobot, LaserDisplacementSensorService laser, ILogger<BundleEndWdStep> logger)
+    public BundleEndWdStep(CobotService cobot, LaserDisplacementSensorService laser, ParameterService param,
+        IOptions<InspectionSensorSettings> sensor, ILogger<BundleEndWdStep> logger)
     {
         _cobot = cobot;
         _laser = laser;
+        _param = param;
+        _useGas = sensor.Value.UsesGasDetector;
         _logger = logger;
     }
+
+    /// <summary><see cref="EnabledKey"/> 값 해석 — 알 수 없는 값·빈 값이면 센서 모드 기본(가스=끔, 비전=켬).</summary>
+    internal static bool ResolveEnabled(string? raw, bool usesGas)
+        => raw?.Trim().ToLowerInvariant() switch
+        {
+            "1" or "true" or "on" or "yes" => true,
+            "0" or "false" or "off" or "no" => false,
+            _ => !usesGas,
+        };
 
     public string Key => StepKey;
     public string DisplayName => "묶음 마지막 용접선 끝 WD 확인";
@@ -55,6 +76,18 @@ public class BundleEndWdStep : ISequenceStep
     {
         if (!context.Bag.TryGetValue(RequestBagKey, out var req) || req is not true)
             return StepResult.Ok("묶음 마지막 용접선 아님 — 생략.");
+        string? raw = null;
+        try { raw = await _param.GetAsync(EnabledKey); }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning("[끝 WD 확인] '{Key}' 읽기 실패 — 센서 모드 기본값을 씁니다: {Msg}", EnabledKey, ex.Message);
+        }
+        if (!ResolveEnabled(raw, _useGas))
+        {
+            _logger.LogInformation("[끝 WD 확인] 사용 안 함('{Key}'={Raw}, {Mode}) — 리더 좌표계를 그대로 연장해 순회합니다.",
+                EnabledKey, string.IsNullOrWhiteSpace(raw) ? "빈 값" : raw.Trim(), _useGas ? "가스 기본 끔" : "설정값");
+            return StepResult.Ok($"끝 WD 확인 사용 안 함('{EnabledKey}') — 좌표계 그대로.");
+        }
         if (!context.Bag.TryGetValue(InternalWorkpieceFrame.BagKey, out var fv) || fv is not double[] { Length: 6 } frame)
             return StepResult.Ok("작업물 좌표계 없음 — 생략.");
         if (context.SeamStartW is not { Length: >= 3 } s || context.SeamEndW is not { Length: >= 3 } e)

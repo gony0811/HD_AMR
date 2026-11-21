@@ -164,6 +164,10 @@ public class ParameterService
                 Sequence.Steps.LaserWorkingDistanceStep.DefaultMaxReturnMm.ToString(CultureInfo.InvariantCulture),
                 "④⁺ 레이저 WD 뒤 용접선 쪽 횡복귀 한계(mm, 툴 X·Y·Z 성분별) — 평탄면 센터링이 이보다 멀리 옮겨 갔으면 돌아가지 않고 실패한다 " +
                 "(앵커·자세 이상 가드). 실행할 때마다 읽는다. 50~1000 밖이거나 비면 400."),
+            (Sequence.Steps.BundleEndWdStep.EnabledKey, "",
+                "⑰⁺ 묶음 마지막 용접선 끝 WD 확인 사용(on/off) — 켜면 마지막 구역 순회 전에 용접선 끝까지 갔다 와서 레이저 거리 차로 " +
+                "좌표계 기울기를 다시 잡는다(구역마다 약 20초 추가). 끄면 리더가 잡은 좌표계를 그대로 연장해 끊김 없이 순회한다. " +
+                "비우면 검사 센서 모드로 정한다 — 가스 검사기 끔, 비전 켬. 실행할 때마다 읽는다."),
             (Inspection.WObjAttitude.SafeJ6MinKey,
                 Inspection.WObjAttitude.DefaultSafeJ6MinDeg.ToString(CultureInfo.InvariantCulture),
                 "J6 안전 범위 하한(도, 실제 관절값 — 대기 자세 −180° 쪽 감김 기준). 이보다 더 감기는 J6 로는 움직이지 않는다 " +
