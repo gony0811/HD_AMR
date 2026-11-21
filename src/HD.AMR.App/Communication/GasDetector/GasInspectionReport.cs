@@ -25,7 +25,7 @@ public sealed record GasThreshold(
     string? RequestedBy = null,
     long? RequestedAtMs = null)
 {
-    public string Describe() => $"{Value:0.###} {Unit}" +
+    public string Describe() => $"{Value:G6} {Unit}" +
         (Source == GasThresholdSource.Acs ? $" (SAIGE{(RequestedBy is { } by ? $" {by}" : "")}{(TankId is { } t ? $", {t}" : "")})" : " (로컬 설정)");
 }
 

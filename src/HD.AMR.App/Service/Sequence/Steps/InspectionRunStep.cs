@@ -295,9 +295,11 @@ public class InspectionRunStep : ISequenceStep
 
         // 움직이기 전에 경유점 전체를 순서대로 IK 로 풀어 손목 특이점·팔꿈치 가지 전환을 거른다 — 도중에 컨트롤러가
         // 멈추면 팔이 특이 자세에 남아 다음 task 의 복귀 경로까지 막힌다(실기 2026-11-03 L2-R02C05 H04 #5: J5 0.48°, rc=185).
+        // 통과한 관절 해 사슬은 무정지 통과가 그대로 쓴다 — 같은 IK 를 다시 풀면 구역마다 약 3초 더 멈춘다(실기 2026-11-21 14:57).
+        var checkedJoints = new Dictionary<int, double[]>();
         var chainError = await CheckWaypointChainAsync(
             context, Enumerable.Range(0, waypoints.Count).Where(i => !IsSkipped(waypoints[i]))
-                .Select(i => (i, ToTargetBase(waypoints[i]))).ToList(), ct);
+                .Select(i => (i, ToTargetBase(waypoints[i]))).ToList(), checkedJoints, ct);
         if (chainError is not null)
         {
             _logger.LogWarning("[검사 수행] 경유점 사전 검증 실패 — {Err}", chainError);
@@ -347,6 +349,8 @@ public class InspectionRunStep : ISequenceStep
                 continuous ? $"이동 중 연속(샘플 간격 {Math.Max(Xl3000AsciiProtocol.MinSampleIntervalMs, gasSettings.MeasureSampleIntervalMs)} ms)" : "경유점 정지");
         var lastMoved = -1;
         var prevIdx = -1;   // 직전에 도착한 경유점 — 연속 측정 구간의 출발점
+        var deferredFirstIdx = -1;   // 무정지: 정지 측정을 건너뛴 첫 경유점 — 첫 구간 결과로 채운다
+        (int? U, int? V) deferredFirstUv = default;
 
         // 연속 측정 1구간: from → to 를 검사 속도로 이동하면서 샘플링해 구간 최대값으로 판정한다. 결과는 도착 경유점(to)의
         // 포인트로 남긴다. OK 가 아니면(NG·실패) 출발점으로 되돌아가 같은 구간을 다시 훑는다(재측정 — 정지 측정의 "같은 자리").
@@ -419,8 +423,13 @@ public class InspectionRunStep : ISequenceStep
             var passLabels = Enumerable.Range(0, rest.Count)
                 .Select(n => $"WALL 0x{context.InspectionSurfaceId:X2} #{idxs[n] + 1}→#{idxs[n + 1] + 1}").ToList();
             IReadOnlyList<double[]> passJoints;
-            try { passJoints = await _cobot.Rpc.ResolveChainJointsAsync(passPoses.Skip(1).ToList(), context.Tool, 0, ct); }
-            catch (InvalidOperationException ex) { return $"무정지 경로 IK 실패({ex.Message})"; }
+            if (rest.All(checkedJoints.ContainsKey))
+                passJoints = rest.Select(k => checkedJoints[k]).ToList();   // 사전 검증 사슬 재사용
+            else
+            {
+                try { passJoints = await _cobot.Rpc.ResolveChainJointsAsync(passPoses.Skip(1).ToList(), context.Tool, 0, ct); }
+                catch (InvalidOperationException ex) { return $"무정지 경로 IK 실패({ex.Message})"; }
+            }
 
             _logger.LogInformation("[검사 수행] 무정지 연속 측정 — 경유점 #{From}→#{To} ({N}구간, 블렌딩 반경 {R:0.#} mm)",
                 from + 1, rest[^1] + 1, rest.Count, _gas.NonStopBlendRadiusMm);
@@ -448,7 +457,8 @@ public class InspectionRunStep : ISequenceStep
                 if (plan.Descend) legs.Add(ToTargetBase(toWp with { Z = plan.SafeZ }));
                 legs.Add(passPoses[target]);
 
-                if (await CheckWaypointChainAsync(context, legs.Select(p => (idxs[target], p)).ToList(), ct) is { } blocker)
+                if (await CheckWaypointChainAsync(context, legs.Select(p => (idxs[target], p)).ToList(),
+                        new Dictionary<int, double[]>(), ct) is { } blocker)
                 {
                     _logger.LogInformation("[검사 수행] 경유점 #{From}→#{To} 직행 불가({Why}) — 경유점을 차례로 밟아 이동",
                         idxs[passPos] + 1, idxs[target] + 1, blocker);
@@ -520,6 +530,13 @@ public class InspectionRunStep : ISequenceStep
                 gasPoints[segTo] = passPoint;
                 visByIndex[segTo] = passPoint.Result != GasJudgement.Error;
                 ngByIndex[segTo] = passPoint.Result == GasJudgement.Ng;
+            }
+            if (deferredFirstIdx == from && rest.Count > 0 && gasPoints.TryGetValue(idxs[1], out var firstSeg))
+            {
+                var firstPoint = new GasPointResult(from + 1, deferredFirstUv.U, deferredFirstUv.V, firstSeg.Scans);
+                gasPoints[from] = firstPoint;
+                visByIndex[from] = firstPoint.Result != GasJudgement.Error;
+                ngByIndex[from] = firstPoint.Result == GasJudgement.Ng;
             }
             if (await TravelAsync(idxs.Count - 1) is { } returnError) return returnError;
             lastMoved = idxs[^1];
@@ -615,6 +632,16 @@ public class InspectionRunStep : ISequenceStep
             if (_useGas)
             {
                 var (gu, gv, _) = FaceLocalMapper.ToFaceLocal((ushort)context.InspectionSurfaceId, w.X, w.Y, w.Z, context.FacePlacement);
+                // 무정지: 첫 경유점에서 멈춰 재지 않는다 — 통과가 이 점에서 출발하며 바로 읽기 시작하므로 첫 구간(#1→#2)
+                // 결과를 이 점의 결과로 함께 쓴다(RunNonStopPassAsync 끝). 뒤에 지나갈 경유점이 없으면 종전대로 정지 측정.
+                if (nonStop && deferredFirstIdx < 0 && gasPoints.Count == 0
+                    && Enumerable.Range(i + 1, waypoints.Count - i - 1).Any(k => !IsSkipped(waypoints[k])))
+                {
+                    deferredFirstIdx = i;
+                    deferredFirstUv = (gu, gv);
+                    _logger.LogInformation("[검사 수행] 무정지 — 경유점 #{Idx} 정지 측정 생략(첫 구간 결과를 함께 씀)", i + 1);
+                    continue;
+                }
                 var scans = await _gas.MeasurePointAsync($"WALL 0x{context.InspectionSurfaceId:X2} #{i + 1}", gasThreshold!, ct);
                 var point = new GasPointResult(i + 1, gu, gv, scans);
                 gasPoints[i] = point;
@@ -765,7 +792,8 @@ public class InspectionRunStep : ISequenceStep
     /// IK 는 계산만 하는 호출이라 코봇은 움직이지 않는다. 통과하면 null.
     /// </summary>
     private async Task<string?> CheckWaypointChainAsync(
-        SequenceContext context, IReadOnlyList<(int Index, double[] Target)> targets, CancellationToken ct)
+        SequenceContext context, IReadOnlyList<(int Index, double[] Target)> targets,
+        IDictionary<int, double[]> jointsOut, CancellationToken ct)
     {
         var start = await _cobot.Rpc.GetActualJointPosAsync(ct: ct);
         var prevPose = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
@@ -791,7 +819,10 @@ public class InspectionRunStep : ISequenceStep
             prevPose = target;
             first = false;
         }
-        return WaypointChainBlocker(start, chain);
+        var blocker = WaypointChainBlocker(start, chain);
+        if (blocker is null)
+            foreach (var (idx, j) in chain) jointsOut[idx] = j;
+        return blocker;
 
         static string Fmt(double[] p) => string.Join(", ", p.Take(3).Select(v => v.ToString("0")));
     }
