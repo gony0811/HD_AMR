@@ -88,7 +88,7 @@ public class InspectionRecipe
     public double? InspectSpeedMmPerSec { get; set; }
 
     /// <summary>코봇 검사 가속도 [%] — ⑱ 경유점 순회 동안만 전역 가속도 배율(SetOaccScale)을 이 값으로 바꾸고,
-    /// 순회가 끝나면(성공·실패·취소 모두) 100% 로 복원한다. null = 변경 안 함.</summary>
+    /// 순회가 끝나면(성공·실패·취소 모두) 평소 값(파라미터 cobot.accScalePercent, 비면 100%)으로 복원한다. null = 변경 안 함.</summary>
     public int? InspectAccPercent { get; set; }
 
     // (제거됨) SurfaceOverride — 비전 Surface 강제값. X-Y 교시 경유점은 점별 Surface 를 수동 지정하고

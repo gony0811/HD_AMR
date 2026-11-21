@@ -184,7 +184,7 @@ public sealed partial class RecipeRow : ObservableObject
     /// <summary>검사 속도 [mm/s] — ⑱ 순회 TCP 속도 물리량 지정(% 환산 지령). 값이 있으면 검사 속도[%]보다 우선. 비움=% 사용.</summary>
     [ObservableProperty] private double? _inspectSpeedMmPerSec;
 
-    /// <summary>검사 가속도 [%] — ⑱ 순회 동안만 전역 가속도 배율 변경, 끝나면 100% 복원. 비움=변경 안 함.</summary>
+    /// <summary>검사 가속도 [%] — ⑱ 순회 동안만 전역 가속도 배율 변경, 끝나면 평소 값(cobot.accScalePercent) 복원. 비움=변경 안 함.</summary>
     [ObservableProperty] private double? _inspectAccPercent;
 
     /// <summary>티칭 프로필 선택지 — [0]=미지정, 이후 레시피 타입과 같은 SeamType 프로필(최신 저장순).</summary>

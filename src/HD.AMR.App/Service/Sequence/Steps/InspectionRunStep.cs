@@ -913,7 +913,7 @@ public class InspectionRunStep : ISequenceStep
             var rc = await _cobot.Rpc.SetOaccScaleAsync(acc, ct);
             if (rc == 0)
             {
-                _logger.LogInformation("[검사 수행] 순회 가속도 배율 {Acc}% 적용 (종료 시 {Def}% 복원)", acc, FairinoRpcClient.DefaultOaccScalePct);
+                _logger.LogInformation("[검사 수행] 순회 가속도 배율 {Acc}% 적용 (종료 시 {Def}% 복원)", acc, FairinoRpcClient.BaseOaccScalePct);
                 return true;
             }
             _logger.LogWarning("[검사 수행] 순회 가속도 배율 {Acc}% 설정 실패 (rc={Rc}){Desc} — 기본 가속도로 진행",
@@ -933,9 +933,10 @@ public class InspectionRunStep : ISequenceStep
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            var rc = await _cobot.Rpc.SetOaccScaleAsync(FairinoRpcClient.DefaultOaccScalePct, cts.Token);
+            var def = FairinoRpcClient.BaseOaccScalePct;   // 평소 값(파라미터 cobot.accScalePercent, 비면 100)
+            var rc = await _cobot.Rpc.SetOaccScaleAsync(def, cts.Token);
             if (rc == 0)
-                _logger.LogInformation("[검사 수행] 가속도 배율 {Def}% 복원", FairinoRpcClient.DefaultOaccScalePct);
+                _logger.LogInformation("[검사 수행] 가속도 배율 {Def}% 복원", def);
             else
                 _logger.LogError("[검사 수행] 가속도 배율 복원 실패 (rc={Rc}){Desc} — 이후 모션 가속도가 바뀐 채일 수 있습니다",
                     rc, FairinoErrorCodes.Suffix(rc));
