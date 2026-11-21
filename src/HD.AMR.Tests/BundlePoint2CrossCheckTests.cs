@@ -27,11 +27,13 @@ public class BundlePoint2CrossCheckTests
         => Assert.Null(LaserWorkingDistanceStep.CheckPoint2(400, 343, 340, 345, 0).Error);
 
     [Theory]
-    [InlineData(null, 15)]
-    [InlineData(0.0, 0)]
-    [InlineData(25.0, 25)]
-    [InlineData(-1.0, 15)]
-    [InlineData(500.0, 15)]
-    public void 허용차_파라미터를_해석한다(double? raw, double expected)
-        => Assert.Equal(expected, LaserWorkingDistanceStep.ResolvePoint2CrossCheckMm(raw));
+    [InlineData(null, true, 15)]      // 빈 값 → 가스 기본 15
+    [InlineData(null, false, 0)]      // 빈 값 → 비전(용접검사기) 끔 — 종전 동작
+    [InlineData(0.0, true, 0)]
+    [InlineData(25.0, true, 25)]
+    [InlineData(25.0, false, 25)]     // 비전도 명시값이면 켠다
+    [InlineData(-1.0, true, 15)]
+    [InlineData(500.0, false, 0)]
+    public void 허용차_파라미터를_해석한다(double? raw, bool usesGas, double expected)
+        => Assert.Equal(expected, LaserWorkingDistanceStep.ResolvePoint2CrossCheckMm(raw, usesGas));
 }

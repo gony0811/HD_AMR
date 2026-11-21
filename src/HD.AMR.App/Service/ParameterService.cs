@@ -164,10 +164,10 @@ public class ParameterService
                 Sequence.Steps.LaserWorkingDistanceStep.DefaultMaxReturnMm.ToString(CultureInfo.InvariantCulture),
                 "④⁺ 레이저 WD 뒤 용접선 쪽 횡복귀 한계(mm, 툴 X·Y·Z 성분별) — 평탄면 센터링이 이보다 멀리 옮겨 갔으면 돌아가지 않고 실패한다 " +
                 "(앵커·자세 이상 가드). 실행할 때마다 읽는다. 50~1000 밖이거나 비면 400."),
-            (Sequence.Steps.LaserWorkingDistanceStep.Point2CrossCheckKey,
-                Sequence.Steps.LaserWorkingDistanceStep.DefaultPoint2CrossCheckMm.ToString(CultureInfo.InvariantCulture),
+            (Sequence.Steps.LaserWorkingDistanceStep.Point2CrossCheckKey, "",
                 "⑧⁺ 묶음 점2 레이저·depth 교차 검증 허용차(mm) — 점1 WD 자리 대비 면 거리 변화를 레이저와 depth 카메라로 따로 재서 " +
-                "이보다 다르면 레이저가 다른 높이(주름 꼭대기·경사·비드)를 잰 것으로 보고 묶음을 풀어 단독 교시한다. 0 = 끔, 0~200 밖이거나 비면 15. 실행할 때마다 읽는다."),
+                "이보다 다르면 레이저가 다른 높이(주름 꼭대기·경사·비드)를 잰 것으로 보고 묶음을 풀어 단독 교시한다. 0 = 끔. " +
+                "비우면 검사 센서 모드로 정한다 — 가스 검사기 15, 비전(용접검사기) 끔. 실행할 때마다 읽는다."),
             (Sequence.Steps.BundleEndWdStep.EnabledKey, "",
                 "⑰⁺ 묶음 마지막 용접선 끝 WD 확인 사용(on/off) — 켜면 마지막 구역 순회 전에 용접선 끝까지 갔다 와서 레이저 거리 차로 " +
                 "좌표계 기울기를 다시 잡는다(구역마다 약 20초 추가). 끄면 리더가 잡은 좌표계를 그대로 연장해 끊김 없이 순회한다. " +

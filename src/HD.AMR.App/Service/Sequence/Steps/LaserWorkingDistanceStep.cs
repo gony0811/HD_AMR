@@ -1,6 +1,8 @@
 using HD.AMR.App.Communication;
 using HD.AMR.App.Models;
+using HD.AMR.App.Service.Inspection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace HD.AMR.App.Service.Sequence.Steps;
 
@@ -33,6 +35,7 @@ public class LaserWorkingDistanceStep : ISequenceStep
     private readonly LaserDisplacementSensorService _laser;
     private readonly ParameterService _param;
     private readonly CameraService _camera;
+    private readonly bool _useGas;
     private readonly ILogger<LaserWorkingDistanceStep> _logger;
 
     /// <summary>
@@ -49,9 +52,13 @@ public class LaserWorkingDistanceStep : ISequenceStep
     /// <summary>점1 WD 를 맞춘 순간의 (레이저 z, depth 중앙) — 점2 교차 검증 기준. Bag 값 double[2].</summary>
     public const string Point1WdProbeBagKey = "bundle.point1WdProbe";
 
-    /// <summary>파라미터 → 허용차 [mm]. 0 = 끔, 비거나 범위 밖이면 기본값.</summary>
-    internal static double ResolvePoint2CrossCheckMm(double? value)
-        => value is { } v && double.IsFinite(v) && v >= 0 && v <= MaxPoint2CrossCheckMm ? v : DefaultPoint2CrossCheckMm;
+    /// <summary>
+    /// 파라미터 → 허용차 [mm]. 0 = 끔. 비거나 범위 밖이면 검사 센서 모드 기본값 — 가스 검사기 <see cref="DefaultPoint2CrossCheckMm"/>,
+    /// 비전(용접검사기)은 0(끔, 종전 동작). 용접검사기 동작을 바꾸지 않기 위해 비전은 명시값이 있을 때만 켠다.
+    /// </summary>
+    internal static double ResolvePoint2CrossCheckMm(double? value, bool usesGas)
+        => value is { } v && double.IsFinite(v) && v >= 0 && v <= MaxPoint2CrossCheckMm ? v
+         : usesGas ? DefaultPoint2CrossCheckMm : 0;
 
     /// <summary>
     /// 점2 교차 검증 — 점1 WD 자리 대비 면 거리 변화를 레이저와 depth 로 비교. 허용차 안이거나 판정할 값이 없으면 null,
@@ -132,12 +139,14 @@ public class LaserWorkingDistanceStep : ISequenceStep
     public LaserWorkingDistanceStep(
         string key, string displayName, int order,
         CobotService cobot, LaserDisplacementSensorService laser,
-        ParameterService param, CameraService camera, ILogger<LaserWorkingDistanceStep> logger)
+        ParameterService param, CameraService camera, IOptions<InspectionSensorSettings> sensor,
+        ILogger<LaserWorkingDistanceStep> logger)
     {
         _cobot = cobot;
         _laser = laser;
         _param = param;
         _camera = camera;
+        _useGas = sensor.Value.UsesGasDetector;
         _logger = logger;
         _key = key;
         _displayName = displayName;
@@ -210,7 +219,7 @@ public class LaserWorkingDistanceStep : ISequenceStep
             double? rawTol = null;
             try { rawTol = await _param.GetDoubleAsync(Point2CrossCheckKey); }
             catch (Exception ex) when (ex is not OperationCanceledException) { /* 기본값 */ }
-            var tol = ResolvePoint2CrossCheckMm(rawTol);
+            var tol = ResolvePoint2CrossCheckMm(rawTol, _useGas);
             var depthP2 = WObjPointProbe.CenterDepthMm(_camera.LatestDepth);
             var (crossError, laserDev, depthDev) = CheckPoint2(
                 p1Probe[0], double.IsNaN(p1Probe[1]) ? null : p1Probe[1], z1.Value, depthP2, tol);
