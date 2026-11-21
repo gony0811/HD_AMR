@@ -65,6 +65,14 @@ public class FlatSurfaceAlignStep : ISequenceStep
     /// <summary>1회 회전 보정 클램프(°/축). 폭주 방지.</summary>
     private const double MaxTiltCorrectionDeg = 10.0;
 
+    /// <summary>보정 전 틸트가 이 값(°) 미만이면 재확인 전 평탄 자리 재탐색을 건너뛰고 같은 자리에서 재측정한다
+    /// (실기 2026-11-21 14:00 S203 H1: 1~3° 에서 재탐색마다 다른 자리를 재 오르내리다 '발산').</summary>
+    internal const double RecenterMinTiltDeg = 3.0;
+
+    /// <summary>첫 측정 틸트가 이 값(°)을 넘으면 회전하지 않고 그 자리를 버린다 — 1회 클램프와 같은 값
+    /// (같은 오더 자리3: 첫 rx −32°, 코루게이션에 걸린 채 클램프 회전·재탐색으로 마지막 자리를 낭비).</summary>
+    internal const double MaxFirstTiltDeg = MaxTiltCorrectionDeg;
+
     /// <summary>그리드 분할 수 (gridSize × gridSize 셀).</summary>
     private const int GridSize = 5;
 
@@ -311,6 +319,8 @@ public class FlatSurfaceAlignStep : ISequenceStep
                 MaxCorrections = MaxTiltCorrections,
                 MaxCorrectionDeg = MaxTiltCorrectionDeg,
                 BeforeRecheck = recenter ? RecenterAsync : null,
+                RecenterMinTiltDeg = RecenterMinTiltDeg,
+                MaxFirstTiltDeg = MaxFirstTiltDeg,
             },
             context.Progress,
             (iter, pose) =>
