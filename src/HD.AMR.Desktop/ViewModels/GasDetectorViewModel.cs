@@ -64,7 +64,7 @@ public sealed partial class GasDetectorViewModel : ViewModelBase
     /// <summary>SAIGE(ACS)에서 임계값이 바뀌면 편집 칸도 새 값으로 맞춘다.</summary>
     private void OnThresholdChanged(GasThreshold th) => Dispatcher.UIThread.Post(() =>
     {
-        ThresholdText = th.Value.ToString("0.###", CultureInfo.InvariantCulture);
+        ThresholdText = th.Value.ToString("G6", CultureInfo.InvariantCulture);
         ThresholdUnitText = th.Unit;
         if (th.Source == GasThresholdSource.Acs)
             Notify($"SAIGE 임계값 수신 — {th.Describe()}. 다음 Task 부터 적용됩니다.", false);
@@ -130,7 +130,7 @@ public sealed partial class GasDetectorViewModel : ViewModelBase
     public string LiveJudgeText => R?.LeakRate is null ? "—"
         : IsUnitMismatch ? "단위 불일치"
         : IsLiveNg ? "NG (임계 초과)" : "OK";
-    public string LimitDisplay => $"임계값 {Th.Value.ToString("0.###", CultureInfo.InvariantCulture)} {Th.Unit} (초과 NG)";
+    public string LimitDisplay => $"임계값 {Th.Value.ToString("G6", CultureInfo.InvariantCulture)} {Th.Unit} (초과 NG)";
     public string ThresholdSourceText => Th.Source == GasThresholdSource.Acs
         ? $"출처: SAIGE{(Th.RequestedBy is { } by ? $" · {by}" : "")}{(Th.TankId is { } t ? $" · {t}" : "")} · {Th.AppliedUtc.ToLocalTime():HH:mm:ss} 수신"
         : "출처: 로컬 설정 (SAIGE 수신 전)";
@@ -204,7 +204,7 @@ public sealed partial class GasDetectorViewModel : ViewModelBase
 
     private static GasResultRow ToRow(GasMeasurementResult r)
     {
-        static string N(double? v) => v is { } x ? x.ToString("0.###", CultureInfo.InvariantCulture) : "—";
+        static string N(double? v) => v is { } x ? x.ToString("G6", CultureInfo.InvariantCulture) : "—";
         var judge = r.Judgement switch { GasJudgement.Ok => "OK", GasJudgement.Ng => "NG", _ => "실패" };
         return new GasResultRow(r.Seq.ToString(CultureInfo.InvariantCulture), r.FinishedUtc.ToLocalTime().ToString("HH:mm:ss"),
             r.Label, r.Retry == 0 ? "최초" : $"재측정 {r.Retry}", N(r.Value), N(r.Avg), $"{N(r.Threshold)} {r.Unit}", judge,
@@ -223,7 +223,7 @@ public sealed partial class GasDetectorViewModel : ViewModelBase
         Host = s.Host;
         TcpPort = s.TcpPort.ToString(inv);
         var th = _svc.CurrentThreshold;
-        ThresholdText = th.Value.ToString("0.###", inv);
+        ThresholdText = th.Value.ToString("G6", inv);
         ThresholdUnitText = th.Unit;
         MaxRetriesText = s.MaxRetries.ToString(inv);
         DwellMs = s.MeasureDwellMs.ToString(inv);
@@ -360,8 +360,8 @@ public sealed partial class GasDetectorViewModel : ViewModelBase
             var r = await _svc.MeasureAsync("수동 측정", ct: _cts.Token);
             Notify(r.Judgement switch
             {
-                GasJudgement.Ok => $"OK — 최대 {r.Value:0.###} {r.Unit} (임계 {r.Threshold:0.###})",
-                GasJudgement.Ng => $"NG — 최대 {r.Value:0.###} > 임계 {r.Threshold:0.###} {r.Unit}",
+                GasJudgement.Ok => $"OK — 최대 {r.Value:G6} {r.Unit} (임계 {r.Threshold:G6})",
+                GasJudgement.Ng => $"NG — 최대 {r.Value:G6} > 임계 {r.Threshold:G6} {r.Unit}",
                 _ => $"측정 실패: {r.Error}",
             }, r.Judgement != GasJudgement.Ok);
         }

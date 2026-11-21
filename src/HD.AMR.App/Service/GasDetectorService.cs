@@ -544,7 +544,7 @@ public sealed class GasDetectorService : BackgroundService
         if (judgement == GasJudgement.Error)
             _logger.LogWarning("[가스 측정] {Label}{Tag} 측정 실패: {Err}", label, tag, result.Error);
         else
-            _logger.LogInformation("[가스 측정] {Label}{Tag} {Judge} — max {Max:0.###} / avg {Avg:0.###} {Unit} (임계 {Limit:0.###}, {N}샘플)",
+            _logger.LogInformation("[가스 측정] {Label}{Tag} {Judge} — max {Max:G6} / avg {Avg:G6} {Unit} (임계 {Limit:G6}, {N}샘플)",
                 label, tag, judgement, result.Value, result.Avg, th.Unit, th.Value, samples.Count);
 
         ResultAdded?.Invoke(result);
@@ -577,7 +577,7 @@ public sealed class GasDetectorService : BackgroundService
         return (last.Judgement, last.Judgement switch
         {
             GasJudgement.Ok => $"가스 OK {last.Value:0.###} {last.Unit}{retryNote}",
-            GasJudgement.Ng => $"가스 NG — {last.Value:0.###} > 임계 {last.Threshold:0.###} {last.Unit}{retryNote}",
+            GasJudgement.Ng => $"가스 NG — {last.Value:G6} > 임계 {last.Threshold:G6} {last.Unit}{retryNote}",
             _ => $"가스 측정 실패: {last.Error}{retryNote}",
         });
     }
@@ -611,7 +611,7 @@ public sealed class GasDetectorService : BackgroundService
         return (last.Judgement, last.Judgement switch
         {
             GasJudgement.Ok => $"가스 OK 최대 {last.Value:0.###} {last.Unit} ({last.SampleCount}샘플){retryNote}",
-            GasJudgement.Ng => $"가스 NG — 최대 {last.Value:0.###} > 임계 {last.Threshold:0.###} {last.Unit}{retryNote}",
+            GasJudgement.Ng => $"가스 NG — 최대 {last.Value:G6} > 임계 {last.Threshold:G6} {last.Unit}{retryNote}",
             _ => $"가스 측정 실패: {last.Error}{retryNote}",
         });
     }
@@ -671,7 +671,7 @@ public sealed class GasDetectorService : BackgroundService
                 _threshold = LocalThreshold(_settings);
         }
         await SavePersistedAsync(next);
-        _logger.LogInformation("가스 디텍터 설정 변경 ({Endpoint}, 임계 {Limit:0.###} {Unit}{Src}){Re}",
+        _logger.LogInformation("가스 디텍터 설정 변경 ({Endpoint}, 임계 {Limit:G6} {Unit}{Src}){Re}",
             next.EndpointText, next.ThresholdValue, next.ThresholdUnit, thresholdChanged ? " — 화면 설정으로 변경" : "",
             reconnect ? " — 재연결" : "");
         if (thresholdChanged)

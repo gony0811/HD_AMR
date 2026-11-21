@@ -979,7 +979,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                             req.TaskId?.ToString() ?? "—", req.Round?.ToString() ?? "—", report.Result, report.Points.Count);
                         _opLog.Log(OperationLogService.SourceAcs, OpCategory.Action, "가스 측정 결과", report.Result == "OK",
                             $"jobRef={req.JobRef}, tank={report.TankId}, task={report.TaskId}, round={report.Round?.ToString() ?? "—"}, " +
-                            $"판정 {report.Result}, 임계 {report.Threshold.Value:0.###} {report.Threshold.Unit}, {report.Points.Count}포인트", orderId);
+                            $"판정 {report.Result}, 임계 {report.Threshold.Value:G6} {report.Threshold.Unit}, {report.Points.Count}포인트", orderId);
                         return InspectionActionResult.Ok(json);
                     }
                     return InspectionActionResult.Ok(

@@ -401,7 +401,7 @@ public class InspectionRunStep : ISequenceStep
             context.Progress?.Invoke(point.Result switch
             {
                 GasJudgement.Ok => $"구간 #{from + 1}→#{to + 1} 가스 OK 최대 {last.Value:0.###} {last.Unit} ({last.SampleCount}샘플){retryNote}",
-                GasJudgement.Ng => $"구간 #{from + 1}→#{to + 1} 가스 NG — 최대 {last.Value:0.###} > 임계 {last.Threshold:0.###} {last.Unit}{peakNote}{retryNote}",
+                GasJudgement.Ng => $"구간 #{from + 1}→#{to + 1} 가스 NG — 최대 {last.Value:G6} > 임계 {last.Threshold:G6} {last.Unit}{peakNote}{retryNote}",
                 _ => $"구간 #{from + 1}→#{to + 1} 가스 측정 실패: {last.Error}{retryNote}",
             });
             return (point, null);
@@ -513,7 +513,7 @@ public class InspectionRunStep : ISequenceStep
                     context.Progress?.Invoke(passPoint.Result switch
                     {
                         GasJudgement.Ok => $"구간 #{segFrom + 1}→#{segTo + 1} 가스 OK 최대 {first.Value:0.###} {first.Unit} ({first.SampleCount}샘플)",
-                        GasJudgement.Ng => $"구간 #{segFrom + 1}→#{segTo + 1} 가스 NG — 최대 {first.Value:0.###} > 임계 {first.Threshold:0.###} {first.Unit}",
+                        GasJudgement.Ng => $"구간 #{segFrom + 1}→#{segTo + 1} 가스 NG — 최대 {first.Value:G6} > 임계 {first.Threshold:G6} {first.Unit}",
                         _ => $"구간 #{segFrom + 1}→#{segTo + 1} 가스 측정 실패: {first.Error}",
                     });
                 }
@@ -625,7 +625,7 @@ public class InspectionRunStep : ISequenceStep
                 context.Progress?.Invoke(point.Result switch
                 {
                     GasJudgement.Ok => $"경유점 #{i + 1} 가스 OK {last.Value:0.###} {last.Unit}{retryNote}",
-                    GasJudgement.Ng => $"경유점 #{i + 1} 가스 NG — {last.Value:0.###} > 임계 {last.Threshold:0.###} {last.Unit}{retryNote}",
+                    GasJudgement.Ng => $"경유점 #{i + 1} 가스 NG — {last.Value:G6} > 임계 {last.Threshold:G6} {last.Unit}{retryNote}",
                     _ => $"경유점 #{i + 1} 가스 측정 실패: {last.Error}{retryNote}",
                 });
                 continue;
