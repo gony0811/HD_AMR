@@ -32,7 +32,44 @@ public class LaserWorkingDistanceStep : ISequenceStep
     private readonly CobotService _cobot;
     private readonly LaserDisplacementSensorService _laser;
     private readonly ParameterService _param;
+    private readonly CameraService _camera;
     private readonly ILogger<LaserWorkingDistanceStep> _logger;
+
+    /// <summary>
+    /// 묶음 점2 레이저·깊이 교차 검증 허용차 파라미터 키 [mm] — 0 이면 끔. 비거나 범위 밖이면 <see cref="DefaultPoint2CrossCheckMm"/>.
+    /// 점1 WD 를 맞춘 자리 → 점2 (면 위 평행 이동) 사이의 면 거리 변화를 레이저와 depth 카메라가 따로 재서, 둘이 이보다 다르면
+    /// 레이저가 점1 과 다른 높이(주름 꼭대기·경사·비드)를 잰 것으로 보고 점2 WD 를 실패시킨다 → 묶음 해제·단독 교시.
+    /// (실기 2026-11-21 18:58 S013-6: 점2 레이저 −26.5mm 로 물러남, 기록 시 레이저 +29.5 vs depth +5mm — 위 구역일수록 벽에서 멀어짐.)
+    /// </summary>
+    public const string Point2CrossCheckKey = "Sequence.Bundle.Point2CrossCheckMm";
+
+    internal const double DefaultPoint2CrossCheckMm = 15.0;
+    internal const double MaxPoint2CrossCheckMm = 200.0;
+
+    /// <summary>점1 WD 를 맞춘 순간의 (레이저 z, depth 중앙) — 점2 교차 검증 기준. Bag 값 double[2].</summary>
+    public const string Point1WdProbeBagKey = "bundle.point1WdProbe";
+
+    /// <summary>파라미터 → 허용차 [mm]. 0 = 끔, 비거나 범위 밖이면 기본값.</summary>
+    internal static double ResolvePoint2CrossCheckMm(double? value)
+        => value is { } v && double.IsFinite(v) && v >= 0 && v <= MaxPoint2CrossCheckMm ? v : DefaultPoint2CrossCheckMm;
+
+    /// <summary>
+    /// 점2 교차 검증 — 점1 WD 자리 대비 면 거리 변화를 레이저와 depth 로 비교. 허용차 안이거나 판정할 값이 없으면 null,
+    /// 넘으면 사유. (레이저 변화, depth 변화)도 함께 돌려준다.
+    /// </summary>
+    internal static (string? Error, double? LaserDev, double? DepthDev) CheckPoint2(
+        double laserP1, double? depthP1, double laserP2, double? depthP2, double tolMm)
+    {
+        var laserDev = laserP2 - laserP1;
+        double? depthDev = depthP1 is { } a && depthP2 is { } b ? b - a : null;
+        if (tolMm <= 0 || depthDev is not { } dd) return (null, laserDev, depthDev);
+        var diff = laserDev - dd;
+        return Math.Abs(diff) > tolMm
+            ? ($"점2 레이저·depth 불일치 — 점1 대비 면 거리 변화 레이저 {laserDev:+0.#;-0.#}mm vs depth {dd:+0.#;-0.#}mm " +
+               $"(차 {diff:+0.#;-0.#}mm > 허용 {tolMm:0.#}mm). 레이저가 점1 과 다른 높이(주름 꼭대기·경사·비드)를 잰 것으로 보고 " +
+               $"점2 WD 를 쓰지 않습니다('{Point2CrossCheckKey}').", laserDev, dd)
+            : (null, laserDev, dd);
+    }
 
     /// <summary>목표 Working Distance(mm) 공통 파라미터 키. 없으면 <see cref="DefaultWorkingDistanceMm"/>.
     /// 면별 값은 뒤에 <c>.{wall_code}</c> 를 붙인 키로 따로 둘 수 있다(<see cref="LaserWorkingDistanceSetting"/>).</summary>
@@ -95,11 +132,12 @@ public class LaserWorkingDistanceStep : ISequenceStep
     public LaserWorkingDistanceStep(
         string key, string displayName, int order,
         CobotService cobot, LaserDisplacementSensorService laser,
-        ParameterService param, ILogger<LaserWorkingDistanceStep> logger)
+        ParameterService param, CameraService camera, ILogger<LaserWorkingDistanceStep> logger)
     {
         _cobot = cobot;
         _laser = laser;
         _param = param;
+        _camera = camera;
         _logger = logger;
         _key = key;
         _displayName = displayName;
@@ -165,8 +203,27 @@ public class LaserWorkingDistanceStep : ISequenceStep
             wall ?? "-", z1.Value, wd, wdSource, delta);
         await LogDiagnosticsAsync("이동 전", context, wall, wd, wdSource, depthAxis, ct);
 
+        // 묶음 점2 — 움직이기 전에 레이저가 점1 과 같은 높이의 면을 재는지 depth 로 교차 검증한다.
+        if (_key == BundlePoint2Key
+            && context.Bag.TryGetValue(Point1WdProbeBagKey, out var p1v) && p1v is double[] { Length: 2 } p1Probe)
+        {
+            double? rawTol = null;
+            try { rawTol = await _param.GetDoubleAsync(Point2CrossCheckKey); }
+            catch (Exception ex) when (ex is not OperationCanceledException) { /* 기본값 */ }
+            var tol = ResolvePoint2CrossCheckMm(rawTol);
+            var depthP2 = WObjPointProbe.CenterDepthMm(_camera.LatestDepth);
+            var (crossError, laserDev, depthDev) = CheckPoint2(
+                p1Probe[0], double.IsNaN(p1Probe[1]) ? null : p1Probe[1], z1.Value, depthP2, tol);
+            _logger.LogInformation(
+                "[점2 교차 검증] 점1 WD 자리 대비 면 거리 변화 — 레이저 {L:+0.#;-0.#}mm, depth {D}mm (허용차 {Tol}mm{Off})",
+                laserDev, depthDev is { } dv ? dv.ToString("+0.#;-0.#") : "-", tol, tol <= 0 ? ", 끔" : "");
+            if (crossError is not null)
+                return StepResult.Fail(crossError);
+        }
+
         if (Math.Abs(delta) <= ToleranceMm)
         {
+            RecordPoint1Probe(context, z1.Value);
             var (retOk0, retNote0) = await ReturnLateralAsync(context, depthAxis, ct);
             if (retOk0) await LogDiagnosticsAsync("완료(이동 생략)", context, wall, wd, wdSource, depthAxis, ct);
             return retOk0
@@ -235,6 +292,7 @@ public class LaserWorkingDistanceStep : ISequenceStep
 
         if (Math.Abs(residual) <= ToleranceMm)
         {
+            RecordPoint1Probe(context, z2Value);
             var (retOk, retNote) = await ReturnLateralAsync(context, depthAxis, ct);
             if (retOk) await LogDiagnosticsAsync("완료(횡복귀 후)", context, wall, wd, wdSource, depthAxis, ct);
             return retOk
@@ -264,6 +322,14 @@ public class LaserWorkingDistanceStep : ISequenceStep
                 "잠시 뒤 재시도하세요.");
 
         return StepResult.Fail(head + "측정이 이동량과 크게 다르게 반응 — 센서 노이즈/스케일 설정을 확인하세요.");
+    }
+
+    /// <summary>점1(묶음 점2 가 아닌 WD) — WD 를 맞춘 순간의 레이저 z 와 depth 중앙값을 남긴다(횡복귀 전, 레이저가 평탄 자리에 있을 때).</summary>
+    private void RecordPoint1Probe(SequenceContext context, double laserZ)
+    {
+        if (_key == BundlePoint2Key) return;
+        var depth = WObjPointProbe.CenterDepthMm(_camera.LatestDepth);
+        context.Bag[Point1WdProbeBagKey] = new[] { laserZ, depth ?? double.NaN };
     }
 
     /// <summary>측정 응답이 정상(기대 방향, 이동량의 <see cref="MinResponseRatio"/>~<see cref="MaxResponseRatio"/>배)인지.</summary>
