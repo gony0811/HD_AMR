@@ -279,6 +279,27 @@ public class InspectionRunStep : ISequenceStep
         if (scan.TargetMmPerSec is { } wantMm && scan.Vel >= 100.0 && basis is { } b100 && wantMm > b100 + 0.05)
             _logger.LogWarning("[검사 수행] 목표 검사 속도 {Want:0.#}mm/s 를 낼 수 없어 최대 지령 100%(약 {Max:0.#}mm/s)로 순회합니다 — 코봇 전역 속도를 올려야 목표에 닿습니다",
                 wantMm, b100);
+        // 무정지 통과 실측 TCP 속도 로그(진단용) — 비우면 가스 켬·비전 끔.
+        var logTcpSpeed = TcpSpeedProbe.ResolveEnabled(await GetParamStringAsync(TcpSpeedProbe.EnableKey), _useGas);
+        TcpSpeedProbe? StartTcpProbe() => logTcpSpeed ? TcpSpeedProbe.TryStart(_cobot) : null;
+        async Task LogTcpProbeAsync(TcpSpeedProbe? probe, IReadOnlyList<double[]> passPoses, string where)
+        {
+            if (probe is null) return;
+            try
+            {
+                var samples = await probe.StopAsync();
+                var motion = GasPassSplitter.MergeCollinear(passPoses);
+                var planned = Enumerable.Range(0, motion.Count - 1)
+                    .Select(m => GasPassSplitter.Distance(passPoses[motion[m]], passPoses[motion[m + 1]])).ToList();
+                if (TcpSpeedProbe.Analyze(samples, planned) is { } report)
+                    TcpSpeedProbe.Log(_logger, where, report, scan.TargetMmPerSec);
+                else
+                    _logger.LogInformation("[{Where}] 실측 TCP 속도 — 샘플 부족({N}개) 또는 이동 없음", where, samples.Count);
+            }
+            catch (Exception ex) { _logger.LogWarning(ex, "[{Where}] 실측 TCP 속도 계산 실패", where); }
+            finally { await probe.DisposeAsync(); }
+        }
+
         Task<int> ScanMoveLAsync(double[] pose, double[]? joints, double blendR, CancellationToken c)
             => _cobot.Rpc.MoveLAsync(pose, jointPos: joints, tool: context.Tool, user: 0,
                 vel: scan.Vel, acc: scan.Acc, ovl: MoveOvl, blendR: blendR, ct: c);
@@ -525,10 +546,12 @@ public class InspectionRunStep : ISequenceStep
             _logger.LogInformation("[검사 수행] 드라이런 무정지 이동 — 경유점 #{From}→#{To} ({N}구간, 측정 없음)",
                 from + 1, rest[^1] + 1, rest.Count);
             context.Progress?.Invoke($"드라이런 무정지 이동 — 경유점 #{from + 1}→#{rest[^1] + 1}");
+            var probe = StartTcpProbe();
             var error = await _gas.MoveNonStopPassAsync(passPoses,
                 async (k, blendR, c) => await ScanMoveLAsync(passPoses[k], await JointsAsync(k, c), blendR, c),
                 c => _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, c),
                 () => _cobot.StopMotionImmediateAsync(), ct);
+            await LogTcpProbeAsync(probe, passPoses, "무정지 이동");
             if (error is not null) return $"드라이런 무정지 이동 실패 — {error}";
             foreach (var k in rest) movedSet.Add(k);
             lastMoved = rest[^1];
@@ -572,10 +595,12 @@ public class InspectionRunStep : ISequenceStep
             _logger.LogInformation("[검사 수행] 무정지 연속 측정 — 경유점 #{From}→#{To} ({N}구간, 블렌딩 반경 {R:0.#} mm)",
                 from + 1, rest[^1] + 1, rest.Count, _gas.NonStopBlendRadiusMm);
             context.Progress?.Invoke($"무정지 연속 측정 — 경유점 #{from + 1}→#{rest[^1] + 1} ({rest.Count}구간)");
+            var probe = StartTcpProbe();
             var (passScans, passMoveError) = await _gas.MeasureNonStopPassAsync(passLabels, passPoses,
                 async (k, blendR, c) => await ScanMoveLAsync(passPoses[k], await PassJointsAsync(k, c), blendR, c),
                 c => _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, c),
                 () => _cobot.StopMotionImmediateAsync(), gasThreshold, ct);
+            await LogTcpProbeAsync(probe, passPoses, "무정지 연속 측정");
             if (passScans is null)
                 return $"무정지 연속 이동 실패 — {passMoveError}";
 
@@ -1069,6 +1094,12 @@ public class InspectionRunStep : ISequenceStep
     private async Task<double?> GetParamDoubleAsync(string key)
     {
         try { return await _param.GetDoubleAsync(key); }
+        catch { return null; }
+    }
+
+    private async Task<string?> GetParamStringAsync(string key)
+    {
+        try { return await _param.GetAsync(key); }
         catch { return null; }
     }
 
