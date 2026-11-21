@@ -176,6 +176,10 @@ public class ParameterService
                 "진입 관절 이동 한계(도) — 출발 자세 → 진입 해의 관절별(J1~J5) 최대 이동. 넘으면 가지 전환으로 보고 그 진입점·용접선을 쓰지 않는다 " +
                 "(진입 경로·도달 사전 점검·리치 맵 공통). 클수록 팔을 크게 돌리는 진입을 허용한다. 저장하면 바로 적용. " +
                 "30~360 밖이거나 비면 160. ACS 의 Acs:Reach:MaxEntryJointTravelDeg 와 같게 둘 것."),
+            (Sequence.Steps.BeadFindStep.RetreatKey, "",
+                "⑦/⑪ 용접선(비드) 못 찾을 때 후퇴 재검출 거리(mm) — 자동 검출이 실패하면 수동 입력 팝업 전에 벽에서 이만큼 물러나 " +
+                "FOV 를 넓혀 다시 찍고, 결과와 상관없이 원래 자리로 돌아온다(찾으면 그 d 로 진행). 0 = 끔. " +
+                "비우면 검사 센서 모드로 정한다 — 가스 검사기 100, 비전(용접검사기) 끔. 0~300. 실행할 때마다 읽는다."),
             (Inspection.WObjAttitude.SafeJ6MinKey,
                 Inspection.WObjAttitude.DefaultSafeJ6MinDeg.ToString(CultureInfo.InvariantCulture),
                 "J6 안전 범위 하한(도, 실제 관절값 — 대기 자세 −180° 쪽 감김 기준). 이보다 더 감기는 J6 로는 움직이지 않는다 " +

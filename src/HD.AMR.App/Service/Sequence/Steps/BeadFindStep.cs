@@ -1,3 +1,4 @@
+using HD.AMR.App.Communication;
 using HD.AMR.App.Models;
 using Microsoft.Extensions.Logging;
 
@@ -24,6 +25,24 @@ public class BeadFindStep : ISequenceStep
     private readonly ParameterService _param;
     private readonly BeadManualAssist _manual;
     private readonly ILogger<BeadFindStep> _logger;
+    private readonly bool _useGas;
+
+    /// <summary>
+    /// 용접선(비드) 자동 검출 실패 시 후퇴 재검출 거리 파라미터 키 [mm]. 0 보다 크면 수동 입력 팝업 전에 광축 반대(벽에서 멀어지는)
+    /// 방향으로 이만큼 물러나 FOV 를 넓혀 다시 찍고, 결과와 상관없이 원래 자리로 돌아온다. 0 = 끔.
+    /// 비우면 검사 센서 모드로 정한다 — 가스 <see cref="DefaultRetreatMm"/>, 비전(용접검사기) 끔.
+    /// </summary>
+    public const string RetreatKey = "Sequence.Bead.RetreatOnFailMm";
+    internal const double DefaultRetreatMm = 100.0;
+    internal const double MaxRetreatMm = 300.0;
+
+    /// <summary>후퇴·복귀 뒤 프레임을 찍기 전 대기 [ms] — 이동 직후 흔들림·카메라 지연.</summary>
+    private const int RetreatSettleMs = 700;
+
+    /// <summary>파라미터 값 → 후퇴 거리 [mm]. 비거나 범위 밖이면 센서 모드 기본값(가스 100 / 비전 0).</summary>
+    internal static double ResolveRetreatMm(double? value, bool usesGas)
+        => value is { } v && double.IsFinite(v) && v >= 0 && v <= MaxRetreatMm ? v
+         : usesGas ? DefaultRetreatMm : 0;
 
     /// <param name="peakId">1 또는 2. DI 에서 <c>ActivatorUtilities.CreateInstance</c> 로 주입되므로 첫 인자여야 한다.</param>
     public BeadFindStep(
@@ -33,6 +52,7 @@ public class BeadFindStep : ISequenceStep
         CobotService cobot,
         ParameterService param,
         BeadManualAssist manual,
+        Microsoft.Extensions.Options.IOptions<InspectionSensorSettings> sensor,
         ILogger<BeadFindStep> logger)
     {
         _peakId = peakId;
@@ -41,6 +61,7 @@ public class BeadFindStep : ISequenceStep
         _cobot = cobot;
         _param = param;
         _manual = manual;
+        _useGas = sensor.Value.UsesGasDetector;
         _logger = logger;
     }
 
@@ -137,13 +158,23 @@ public class BeadFindStep : ISequenceStep
         var (m, detect) = await _weld.CapturePeakAsync(_peakId, peakRoi, beadRoi, ct);
 
         // 자동 판정(기존 게이트). 실패 사유는 수동 입력 팝업에도 그대로 보여준다.
-        string? autoFail =
-            detect is null ? $"Bead{_peakId} 검출 결과가 없습니다."
-            : !detect.Success ? $"Bead{_peakId} 검출 실패 — {detect.Message}"
-            : !detect.LineFitOk ? $"Bead{_peakId} 직선피팅 실패(중앙값 폴백) — 빨간 교점이 Peak 위치와 무관해져 " +
-                                  $"각도 산출 근거로 쓸 수 없습니다. coverage={detect.Confidence:P0}"
-            : m is null ? $"Bead{_peakId} 측정 슬롯 저장 실패."
-            : null;
+        string? autoFail = AutoFailOf(m, detect);
+
+        // 못 찾았으면 뒤로 물러나 FOV 를 넓혀 한 번 더 찍는다(파라미터). 결과와 상관없이 원래 자리로 돌아온다.
+        var retreatNote = "";
+        if (autoFail is not null)
+        {
+            _returnFailed = null;
+            var r = await RetreatAndRetryAsync(peakRoi, beadRoi, context, ct);
+            if (_returnFailed is not null)
+                return StepResult.Fail($"Bead{_peakId} 후퇴 재검출 — {_returnFailed}. 코봇 위치를 확인하세요.");
+            retreatNote = r.Note;
+            if (r.Found is { } found)
+            {
+                (m, detect) = found;
+                autoFail = null;
+            }
+        }
 
         // 파라미터 조건에 해당하면 사람에게 비드선을 받는다(학습 데이터로도 저장).
         context.Bag.Remove(WeldSequenceSupport.BeadPeakOffsetMmBagKey(_peakId));
@@ -161,13 +192,13 @@ public class BeadFindStep : ISequenceStep
             _logger.LogInformation("[Bead{Id} 찾기] 수동 입력: d={DMm:0.0}mm ({DPx:0.0}px), ROI={Roi}",
                 _peakId, dManual, mm.DPixel, roiSrc);
             return StepResult.Ok(
-                $"Bead{_peakId} 찾음(수동) — d={dManual:+0.0;-0.0}mm ({mm.DPixel:+0.0;-0.0}px){assist.Note}");
+                $"Bead{_peakId} 찾음(수동) — d={dManual:+0.0;-0.0}mm ({mm.DPixel:+0.0;-0.0}px){assist.Note}{retreatNote}");
         }
         if (!assist.UseAutoPath)
-            return StepResult.Fail((autoFail ?? $"Bead{_peakId} 수동 입력 실패") + assist.Note);
+            return StepResult.Fail((autoFail ?? $"Bead{_peakId} 수동 입력 실패") + assist.Note + retreatNote);
 
         if (autoFail is not null || detect is null || m is null)
-            return StepResult.Fail(autoFail ?? $"Bead{_peakId} 검출 결과가 없습니다.");
+            return StepResult.Fail((autoFail ?? $"Bead{_peakId} 검출 결과가 없습니다.") + retreatNote);
 
         var dMm = _weld.DMm(m);
         var extrapPx = ComputeExtrapolation(detect, progressAxis == WeldProgressAxis.Horizontal);
@@ -184,8 +215,94 @@ public class BeadFindStep : ISequenceStep
         var extrapNote = extrapPx > 0 ? $"외삽 {extrapPx:0}px" : "외삽 없음";
         return StepResult.Ok(
             $"Bead{_peakId} 찾음 — d={dMm:+0.0;-0.0}mm ({m.DPixel:+0.0;-0.0}px), 입력 {input}, " +
-            $"coverage={detect.Confidence:P0}, {extrapNote}, ROI={roiSrc}{assist.Note}");
+            $"coverage={detect.Confidence:P0}, {extrapNote}, ROI={roiSrc}{assist.Note}{retreatNote}");
     }
+
+    /// <summary>자동 검출 결과 판정(기존 게이트) — 쓸 수 있으면 null, 아니면 사유.</summary>
+    private string? AutoFailOf(PeakMeasurement? m, WeldDetectionResult? detect)
+        => detect is null ? $"Bead{_peakId} 검출 결과가 없습니다."
+         : !detect.Success ? $"Bead{_peakId} 검출 실패 — {detect.Message}"
+         : !detect.LineFitOk ? $"Bead{_peakId} 직선피팅 실패(중앙값 폴백) — 빨간 교점이 Peak 위치와 무관해져 " +
+                               $"각도 산출 근거로 쓸 수 없습니다. coverage={detect.Confidence:P0}"
+         : m is null ? $"Bead{_peakId} 측정 슬롯 저장 실패."
+         : null;
+
+    /// <summary>
+    /// 자동 검출 실패 시 광축 반대(벽에서 멀어지는) 방향으로 <see cref="RetreatKey"/> 만큼 물러나 FOV 를 넓혀 다시 찍는다.
+    /// 찾았든 못 찾았든 원래 자리(같은 자세)로 돌아온다 — 이후 센터링·교시는 처음 WD 높이 그대로 진행한다.
+    /// d 는 깊이로 환산한 mm 라 거리가 달라도 그대로 쓸 수 있다(센터링이 원래 자리에서 다시 잰다).
+    /// </summary>
+    private async Task<((PeakMeasurement? M, WeldDetectionResult? Detect)? Found, string Note)> RetreatAndRetryAsync(
+        RoiRect peakRoi, RoiRect beadRoi, SequenceContext context, CancellationToken ct)
+    {
+        double? raw = null;
+        try { raw = await _param.GetDoubleAsync(RetreatKey); }
+        catch { /* DB 미준비 — 기본값 */ }
+        var retreatMm = ResolveRetreatMm(raw, _useGas);
+        if (retreatMm <= 0) return (null, "");
+
+        var (depthAxis, _) = await WeldSequenceSupport.GetDepthAxisAsync(_param);
+        var home = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
+        var offset = new double[6];
+        FlatSurfaceCenteringService.ApplyAxis(offset, depthAxis, -retreatMm);   // + = 면 쪽 접근, − = 후퇴
+
+        _logger.LogInformation("[Bead{Id} 찾기] 용접선 못 찾음 — {Mm:0}mm 후퇴해 FOV 를 넓혀 다시 검출 ('{Key}')",
+            _peakId, retreatMm, RetreatKey);
+        context.Progress?.Invoke($"Bead{_peakId}: 용접선 못 찾음 — {retreatMm:0}mm 후퇴해 다시 검출");
+
+        var rc = await _cobot.Rpc.MoveByToolOffsetAsync(home, user: 0, offset, tool: context.Tool, vel: context.Velocity, ct: ct);
+        if (rc != 0)
+        {
+            _logger.LogWarning("[Bead{Id} 찾기] 후퇴 이동 실패 (rc={Rc}){Desc} — 후퇴 재검출 생략",
+                _peakId, rc, FairinoErrorCodes.Suffix(rc));
+            await ReturnAsync(home, context, ct);
+            return (null, $" (후퇴 재검출 생략 — 이동 실패 rc={rc})");
+        }
+
+        (PeakMeasurement? M, WeldDetectionResult? Detect)? found = null;
+        string? fail;
+        try
+        {
+            await Task.Delay(RetreatSettleMs, ct);
+            var (m2, d2) = await _weld.CapturePeakAsync(_peakId, peakRoi, beadRoi, ct);
+            fail = AutoFailOf(m2, d2);
+            if (fail is null) found = (m2, d2);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            fail = $"후퇴 자리 검출 오류: {ex.Message}";
+        }
+        finally
+        {
+            await ReturnAsync(home, context, CancellationToken.None);   // 취소돼도 원래 자리로
+        }
+
+        if (found is { } f)
+        {
+            _logger.LogInformation("[Bead{Id} 찾기] {Mm:0}mm 후퇴 자리에서 찾음 — d={D:+0.0;-0.0}mm, coverage={Cov:P0} → 원래 자리 복귀",
+                _peakId, retreatMm, _weld.DMm(f.M!), f.Detect!.Confidence);
+            return (found, $" ({retreatMm:0}mm 후퇴해 FOV 확대 후 찾음, 원래 자리 복귀)");
+        }
+        _logger.LogInformation("[Bead{Id} 찾기] {Mm:0}mm 후퇴해도 못 찾음 — {Why} → 원래 자리 복귀", _peakId, retreatMm, fail);
+        return (null, $" ({retreatMm:0}mm 후퇴 재검출도 실패)");
+    }
+
+    /// <summary>후퇴 전 자세로 직선 복귀. 실패하면 <see cref="_returnFailed"/> 를 남긴다(처음 높이가 아니므로 단계를 실패시킨다).</summary>
+    private async Task ReturnAsync(double[] home, SequenceContext context, CancellationToken moveCt)
+    {
+        var rc = await _cobot.Rpc.MoveLAsync(home, tool: context.Tool, user: 0,
+            vel: context.Velocity, acc: 100, ovl: 100, blendR: -1, ct: moveCt);
+        if (rc != 0)
+        {
+            _returnFailed = $"후퇴 뒤 원래 자리 복귀 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}";
+            _logger.LogWarning("[Bead{Id} 찾기] {Msg}", _peakId, _returnFailed);
+            return;
+        }
+        await Task.Delay(RetreatSettleMs, moveCt);
+    }
+
+    private string? _returnFailed;
 
     /// <summary>
     /// 빨간 교점이 비드가 실제로 검출된 구간 밖이면 그 초과 거리(px)를 반환한다. 구간 안이면 0.
