@@ -187,16 +187,21 @@ public class FairinoStateClient
     internal static Dictionary<string, double> SpeedCandidates(ReadOnlySpan<byte> p)
     {
         static bool Ok(double v) => double.IsFinite(v) && v >= 1 && v <= 100 && Math.Abs(v - Math.Round(v)) < 1e-6;
+        // 비율 형태(0.41 = 41%) — 0.01~0.99 이고 소수 둘째 자리까지인 값. 기록은 % 로(×100) 한다.
+        static bool Ratio(double v, double eps) => double.IsFinite(v) && v >= 0.01 && v < 1
+            && Math.Abs(v * 100 - Math.Round(v * 100)) < eps;
         var map = new Dictionary<string, double>();
         for (int o = 0; o + 8 <= p.Length; o++)
         {
             var d = BinaryPrimitives.ReadDoubleLittleEndian(p.Slice(o, 8));
             if (Ok(d)) map[$"d@{o}"] = d;
+            else if (Ratio(d, 1e-6)) map[$"dr@{o}"] = Math.Round(d * 100);
         }
         for (int o = 0; o + 4 <= p.Length; o++)
         {
             var f = BinaryPrimitives.ReadSingleLittleEndian(p.Slice(o, 4));
             if (Ok(f) && f != 1f) map[$"f@{o}"] = f;      // float 1.0 은 흔해서 뺀다
+            else if (Ratio(f, 1e-3)) map[$"fr@{o}"] = Math.Round(f * 100);
             var n = BinaryPrimitives.ReadInt32LittleEndian(p.Slice(o, 4));
             if (n >= 2 && n <= 100) map[$"i@{o}"] = n;     // int 1 도 흔해서 뺀다
         }
