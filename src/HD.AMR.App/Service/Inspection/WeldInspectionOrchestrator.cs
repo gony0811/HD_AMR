@@ -853,6 +853,16 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                 context.Bag[InternalWorkpieceFrame.BagKey] = cachedInternalFrame;
             if (bundleEndWd)
                 context.Bag[Sequence.Steps.BundleEndWdStep.RequestBagKey] = true;
+            // 묶음에서 이 구역 뒤에 같은 묶음 구역이 이어지면 검사 팁 진입 깊이를 유지한 채 넘어간다(빠졌다 다시 들어오지 않음).
+            if (bundle?.BundleId is { } keepBid)
+            {
+                bool hasNext;
+                lock (_sync)
+                    hasNext = _bundleOrder.LastOrDefault(a => a.BundleId == keepBid)?.ActionId is { } lastId
+                              && lastId != action.ActionId;
+                if (hasNext)
+                    context.Bag[Sequence.Steps.GasTipApproachStep.KeepDepthBagKey] = true;
+            }
             // ②가 캐시 프레임을 이번 시작점으로 평행 이동하고(없으면 실패), 직전 종료 자세 그대로면 복귀 없이 연속 이동한다.
             if (cachedAnchorStartBase is not null)
                 context.Bag[CobotInspectionMoveStep.AnchorStartBaseBagKey] = cachedAnchorStartBase;

@@ -264,9 +264,12 @@ public class InspectionRunStep : ISequenceStep
         if (tipDz != 0)
             _logger.LogInformation("[검사 수행] 검사 팁 진입 깊이 적용 — 경유점 작업물 Z {Dz:+0.#;-0.#}mm", tipDz);
 
-        double[] ToTargetBase(InspectionWaypoint w)
+        double[] ToTargetBase(InspectionWaypoint w) => ToTargetBaseAt(w, tipDz);
+
+        // dz = 경유점 작업물 Z 에 더할 깊이 — 0 이면 티칭 높이 그대로(검사 팁 진입 전 스테이징용).
+        double[] ToTargetBaseAt(InspectionWaypoint w, double dz)
         {
-            if (tipDz != 0) w = w with { Z = w.Z + tipDz };
+            if (dz != 0) w = w with { Z = w.Z + dz };
             var pose = profile.PoseAbsolute
                 ? new[] { w.X, w.Y, w.Z, w.RxDeg, w.Theta, w.RzDeg }
                 : attitude.Pose(w.X, w.Y, w.Z, w.Theta, w.RzDeg);
@@ -297,9 +300,16 @@ public class InspectionRunStep : ISequenceStep
         // 멈추면 팔이 특이 자세에 남아 다음 task 의 복귀 경로까지 막힌다(실기 2026-11-03 L2-R02C05 H04 #5: J5 0.48°, rc=185).
         // 통과한 관절 해 사슬은 무정지 통과가 그대로 쓴다 — 같은 IK 를 다시 풀면 구역마다 약 3초 더 멈춘다(실기 2026-11-21 14:57).
         var checkedJoints = new Dictionary<int, double[]>();
-        var chainError = await CheckWaypointChainAsync(
-            context, Enumerable.Range(0, waypoints.Count).Where(i => !IsSkipped(waypoints[i]))
-                .Select(i => (i, ToTargetBase(waypoints[i]))).ToList(), checkedJoints, ct);
+        var chainTargets = Enumerable.Range(0, waypoints.Count).Where(i => !IsSkipped(waypoints[i]))
+            .Select(i => (i, ToTargetBase(waypoints[i]))).ToList();
+        // 앞 구역이 진입 깊이를 유지한 채 넘어왔으면(묶음 연속) 빠졌다 들어오지 않고 그 깊이로 바로 첫 경유점에 선다.
+        var tipAlreadyIn = tipDz != 0 && GasTipApproachStep.IsAlreadyIn(
+            await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct),
+            ToTargetBase(waypoints[firstIdx]), ToTargetBaseAt(waypoints[firstIdx], 0));
+        // 검사 팁 진입이 있으면 스테이징은 티칭 높이의 첫 경유점까지 가고, 거기서 벽면 쪽으로 진입한다 — 그 경로도 함께 검증.
+        if (tipDz != 0 && !tipAlreadyIn)
+            chainTargets.Insert(0, (firstIdx, ToTargetBaseAt(waypoints[firstIdx], 0)));
+        var chainError = await CheckWaypointChainAsync(context, chainTargets, checkedJoints, ct);
         if (chainError is not null)
         {
             _logger.LogWarning("[검사 수행] 경유점 사전 검증 실패 — {Err}", chainError);
@@ -309,16 +319,30 @@ public class InspectionRunStep : ISequenceStep
         _logger.LogInformation("[검사 수행] 첫 경유점 #{Idx} 로 스테이징 이동 (프레임 z={Z:0.0}mm)",
             firstIdx + 1, waypoints[firstIdx].Z);
         await _pauseGate.WaitWhilePausedAsync(ct);
-        // 검사 팁이 벽면 가까이 들어와 있으면 스테이징도 진입 속도 이하로 간다.
-        var stageVel = tipDz != 0
-            ? Math.Min(context.Velocity, Math.Clamp(_gas.Settings.TipApproachVelPercent, 1, 100))
-            : context.Velocity;
+        // 스테이징은 티칭 높이(진입 전 깊이)로 — 첫 경유점(코로게이션 시작점) 위에 선 뒤에야 벽면 쪽으로 진입한다.
+        // (종전: 점2 자리에서 먼저 진입한 채 첫 경유점까지 면을 따라 이동 — 실기 2026-11-21 15:10, 360mm 를 10mm 더 붙어 이동.)
+        var tipVel = Math.Min(context.Velocity, Math.Clamp(_gas.Settings.TipApproachVelPercent, 1, 100));
+        if (tipAlreadyIn)
+            _logger.LogInformation("[검사 팁 진입] 앞 구역에서 진입 깊이 유지 — 빠지지 않고 그 깊이로 첫 경유점 #{Idx} 에 섬 (속도 {Vel}%)",
+                firstIdx + 1, tipVel);
         var stageRc = await _cobot.Rpc.MoveLAsync(
-            ToTargetBase(waypoints[firstIdx]), tool: context.Tool, user: 0,
-            vel: stageVel, acc: MoveAcc, ovl: MoveOvl, blendR: -1, ct: ct);
+            tipAlreadyIn ? ToTargetBase(waypoints[firstIdx]) : ToTargetBaseAt(waypoints[firstIdx], 0), tool: context.Tool, user: 0,
+            vel: tipAlreadyIn ? tipVel : context.Velocity, acc: MoveAcc, ovl: MoveOvl, blendR: -1, ct: ct);
         if (stageRc != 0)
             return StepResult.Fail(
                 $"첫 경유점 #{firstIdx + 1} 스테이징 이동 실패 (rc={stageRc}){FairinoErrorCodes.Suffix(stageRc)}.");
+        if (tipDz != 0 && !tipAlreadyIn)
+        {
+            _logger.LogInformation("[검사 팁 진입] 첫 경유점 #{Idx} 에서 벽면 쪽으로 {D:0.#}mm 근접 (속도 {Vel}%)",
+                firstIdx + 1, Math.Abs(tipDz), tipVel);
+            context.Progress?.Invoke($"검사 팁 진입 — 첫 경유점에서 벽면 쪽으로 {Math.Abs(tipDz):0.#}mm");
+            var tipRc = await _cobot.Rpc.MoveLAsync(
+                ToTargetBase(waypoints[firstIdx]), tool: context.Tool, user: 0,
+                vel: tipVel, acc: MoveAcc, ovl: MoveOvl, blendR: -1, ct: ct);
+            if (tipRc != 0)
+                return StepResult.Fail(
+                    $"첫 경유점 #{firstIdx + 1} 검사 팁 진입 실패 (rc={tipRc}){FairinoErrorCodes.Suffix(tipRc)}.");
+        }
 
         // ── 경유점 순회 + 비전 캡처 ────────────────────────────────────
         // DelaySec = CAPTURE_REQ 응답 대기 제한(초). 0 이하(검사 프로파일 화면에 입력 칸이 없던 구버전 저장분)면
@@ -691,7 +715,17 @@ public class InspectionRunStep : ISequenceStep
         }
 
         // 검사 팁 이탈 — 진입한 깊이만큼 벽면에서 물러나 다음 단계(복귀·연속 이동)가 종전 깊이에서 출발하게 한다.
-        if (tipDz != 0)
+        // 묶음에서 다음 구역이 곧바로 이어지면 물러나지 않고 진입 깊이를 유지한다(다음 구역 ⑱ 이 그 깊이로 바로 이어 간다).
+        // 묶음이 풀렸으면(점2 교시 실패) 다음 구역은 새로 교시하므로 종전대로 물러난다.
+        var keepTipDepth = tipDz != 0
+            && context.Bag.TryGetValue(GasTipApproachStep.KeepDepthBagKey, out var keepFlag) && keepFlag is true
+            && !(context.Bag.TryGetValue(BundleTeach.DissolvedKey, out var dissolvedFlag) && dissolvedFlag is true);
+        if (keepTipDepth)
+        {
+            context.Bag.Remove(GasTipApproachStep.FrameDzBagKey);
+            _logger.LogInformation("[검사 수행] 다음 구역이 이어져 검사 팁 진입 깊이 {D:0.#}mm 유지 — 물러나지 않음", Math.Abs(tipDz));
+        }
+        else if (tipDz != 0)
         {
             context.Bag.Remove(GasTipApproachStep.FrameDzBagKey);
             var here = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);

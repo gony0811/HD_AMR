@@ -6,12 +6,13 @@ using Microsoft.Extensions.Options;
 namespace HD.AMR.App.Service.Sequence.Steps;
 
 /// <summary>
-/// ⑰⁺⁺ 검사 팁 진입 — 가스 검사기(스니퍼) 전용. 도면 순회(⑱) 바로 전에 TCP 를 벽면 쪽으로
-/// <see cref="Communication.GasDetector.GasDetectorSettings.TipApproachMm"/> 만큼 천천히 근접시킨다.
+/// ⑰⁺⁺ 검사 팁 진입 — 가스 검사기(스니퍼) 전용. 도면 순회(⑱)가 TCP 를 벽면 쪽으로
+/// <see cref="Communication.GasDetector.GasDetectorSettings.TipApproachMm"/> 만큼 들여 순회하도록 진입 깊이를 정한다.
 ///
 /// 방향: 내부 작업물 좌표계의 Z(면 법선) 중 광축과 같은 쪽(면을 향하는 쪽) — <see cref="BundleEndWdStep"/> 의 면 바깥 법선 판정과 같다.
-/// 자세는 그대로, 위치만 옮긴다(MoveL, user 0). 옮긴 깊이는 <see cref="FrameDzBagKey"/> 로 남겨 ⑱ 이 모든 경유점을 같은 깊이만큼
-/// 당겨 순회하고, 순회를 마치면 이만큼 다시 물러난다 — 작업물 좌표계 자체는 바꾸지 않으므로 anchor·묶음 캐시에 진입 깊이가 쌓이지 않는다.
+/// 이 스텝은 움직이지 않는다. 깊이는 <see cref="FrameDzBagKey"/> 로 남기고, ⑱ 이 첫 경유점(코로게이션 시작점)에 티칭 높이로
+/// 스테이징한 뒤 그 자리에서 진입 속도로 들어가, 모든 경유점을 같은 깊이만큼 당겨 순회하고 끝나면 이만큼 물러난다
+/// — 작업물 좌표계 자체는 바꾸지 않으므로 anchor·묶음 캐시에 진입 깊이가 쌓이지 않는다.
 ///
 /// 비전 모드이거나 진입 거리가 0 이면 아무것도 하지 않는다.
 /// </summary>
@@ -21,6 +22,27 @@ public class GasTipApproachStep : ISequenceStep
 
     /// <summary>Bag 키 — 진입한 깊이를 작업물 좌표계 Z 성분으로(부호 포함, mm). ⑱ 이 경유점 Z 에 더하고 순회 뒤 되돌린다.</summary>
     public const string FrameDzBagKey = "gas.tipApproachFrameDz";
+
+    /// <summary>
+    /// Bag 키(bool true) — 순회를 마친 뒤 물러나지 않고 진입 깊이를 유지한다. 오케스트레이터가 묶음에서 다음 구역이 곧바로
+    /// 이어질 때(묶음 마지막이 아님) 켠다. 다음 구역의 ⑱ 은 이미 진입 깊이에 있으면 다시 빠졌다 들어오지 않는다.
+    /// </summary>
+    public const string KeepDepthBagKey = "gas.tipKeepDepth";
+
+    /// <summary>
+    /// 지금 TCP 가 진입 깊이의 첫 경유점에서 이 거리 [mm] 안이고 티칭 높이 쪽보다 가까우면 "이미 진입한 상태"로 보고
+    /// 빠졌다 들어오지 않고 그 깊이로 바로 첫 경유점에 선다.
+    /// </summary>
+    public const double AlreadyInTolMm = 15.0;
+
+    /// <summary>현재 TCP 가 이미 진입 깊이에 있는지 — <see cref="AlreadyInTolMm"/> 참조.</summary>
+    internal static bool IsAlreadyIn(double[] currentPose, double[] tipTarget, double[] rawTarget)
+    {
+        static double Dist(double[] a, double[] b)
+            => Math.Sqrt(Enumerable.Range(0, 3).Sum(i => (a[i] - b[i]) * (a[i] - b[i])));
+        var toTip = Dist(currentPose, tipTarget);
+        return toTip <= AlreadyInTolMm && toTip < Dist(currentPose, rawTarget);
+    }
 
     /// <summary>진입 거리 상한 [mm] — 오입력으로 벽에 박지 않도록.</summary>
     public const double MaxApproachMm = 100.0;
@@ -64,22 +86,18 @@ public class GasTipApproachStep : ISequenceStep
             return StepResult.Fail(
                 "내부 작업물 좌표계가 없습니다 — 점1·점2 기록과 '내부 작업물 좌표계 계산' 단계를 먼저 실행하세요.");
 
-        var start = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
+        // 여기서는 진입 깊이(방향 포함)만 정하고 움직이지 않는다 — 실제 진입은 ⑱ 이 첫 경유점(코로게이션 시작점)에
+        // 티칭 높이로 선 뒤에 한다. 지금 자리(점2 등)에서 먼저 들어가면 첫 경유점까지 면을 따라 더 붙은 채 이동한다
+        // (실기 2026-11-21 15:10: 점2 자리에서 진입 후 360mm 이동).
+        var here = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
         var axis = context.OpticalAxis ?? ToolAxisDir.MinusZ;
-        var dz = WallwardFrameDz(frame, start, axis, d);
-        var target = ShiftAlongFrameZ(start, frame, dz);
+        var dz = WallwardFrameDz(frame, here, axis, d);
 
         _logger.LogInformation(
-            "[검사 팁 진입] 벽면 쪽으로 {D:0.#}mm 근접 (작업물 Z {Dz:+0.#;-0.#}mm, 속도 {Vel}%) — [{X:0.0},{Y:0.0},{Z:0.0}] → [{TX:0.0},{TY:0.0},{TZ:0.0}]",
-            d, dz, ApproachVel, start[0], start[1], start[2], target[0], target[1], target[2]);
-        context.Progress?.Invoke($"검사 팁 진입 — 벽면 쪽으로 {d:0.#}mm");
-        var rc = await _cobot.Rpc.MoveLAsync(target, tool: context.Tool, user: 0,
-            vel: ApproachVel, acc: 100, ovl: 100, blendR: -1, ct: ct);
-        if (rc != 0)
-            return StepResult.Fail($"검사 팁 진입 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.");
-
+            "[검사 팁 진입] 진입 깊이 {D:0.#}mm (작업물 Z {Dz:+0.#;-0.#}mm, 속도 {Vel}%) — 첫 경유점 도착 후 진입",
+            d, dz, ApproachVel);
         context.Bag[FrameDzBagKey] = dz;
-        return StepResult.Ok($"검사 팁 진입 — 벽면 쪽으로 {d:0.#}mm 근접 (도면 순회도 이 깊이로 진행, 끝나면 이탈).");
+        return StepResult.Ok($"검사 팁 진입 {d:0.#}mm 준비 — 첫 경유점에 선 뒤 벽면 쪽으로 진입(순회 끝나면 이탈).");
     }
 
     /// <summary>
