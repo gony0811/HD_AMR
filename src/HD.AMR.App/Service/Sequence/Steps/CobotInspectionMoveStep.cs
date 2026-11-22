@@ -1435,6 +1435,22 @@ public class CobotInspectionMoveStep : ISequenceStep
             if (other is null)
                 return $"[Cobot 검사위치 이동] 다른 줄 좌표계 재사용 — 이번 용접선 방향이 직전 좌표계 축에서 {axisErrDeg:+0.0;-0.0}° 벗어나 " +
                        $"(허용 ±{InternalWorkpieceFrame.CrossLineAxisTolDeg:0}°) 물려받을 수 없습니다. 재교시하려면 '{InternalWorkpieceFrame.ReuseAcrossLinesKey}' 를 끄세요.";
+            // 수직 방향 정적 기울기 — 직전 좌표계가 맞는 자리(그 원점)를 지나는 수평축으로 면을 기울인다. 이미 들어 있는 만큼은 빼고 준다.
+            var tiltTarget = context.Bag.TryGetValue(InternalWorkpieceFrame.VerticalTiltTargetBagKey, out var tt) && tt is double ttd ? ttd : 0.0;
+            var tiltApplied = context.Bag.TryGetValue(InternalWorkpieceFrame.VerticalTiltAppliedBagKey, out var ta) && ta is double tad ? tad : 0.0;
+            if (Math.Abs(tiltTarget - tiltApplied) > 1e-9)
+            {
+                var before = other;
+                other = InternalWorkpieceFrame.TiltAboutHorizontal(other, new[] { frame[0], frame[1], frame[2] }, tiltTarget - tiltApplied);
+                context.Bag[InternalWorkpieceFrame.VerticalTiltAppliedBagKey] = tiltTarget;
+                var (_, shiftMm) = InternalWorkpieceFrame.AlongAndHeight(before, other);
+                _logger.LogInformation(
+                    "[Cobot 검사위치 이동] 수직 방향 정적 기울기 {Deg:+0.00;-0.00}° 적용('{Key}'{Had}) — 직전 좌표계 원점 높이 기준, 이 줄 시작점은 {Dz:+0;-0}mm 위라 " +
+                    "좌표계 원점을 면 법선으로 {Shift:+0.0;-0.0}mm 옮김 [{X0:0.0}, {Y0:0.0}, {Z0:0.0}] → [{X:0.0}, {Y:0.0}, {Z:0.0}]",
+                    tiltTarget - tiltApplied, InternalWorkpieceFrame.VerticalTiltKey,
+                    Math.Abs(tiltApplied) > 1e-9 ? $", 이미 {tiltApplied:+0.00;-0.00}° 반영됨" : "",
+                    before[2] - frame[2], shiftMm, before[0], before[1], before[2], other[0], other[1], other[2]);
+            }
             context.Bag[InternalWorkpieceFrame.BagKey] = other;
             _logger.LogWarning(
                 "[Cobot 검사위치 이동] 다른 줄 좌표계 재사용(재교시 생략, '{Key}') — 면 평행 이동 Δ=[{Dx:0.0}, {Dy:0.0}, {Dz:0.0}]mm(법선 성분 {N:+0.0;-0.0}mm 제외), " +

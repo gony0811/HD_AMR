@@ -179,6 +179,65 @@ public static class InternalWorkpieceFrame
         return (new[] { moved[0], moved[1], moved[2], rotated[3], rotated[4], rotated[5] }, snapped, err, normalMm);
     }
 
+    /// <summary>
+    /// 다른 줄 좌표계 재사용에서 미리 주는 <b>수직 방향 정적 기울기</b> [도] 파라미터 키. 수평 줄 교시는 수직 방향 기울기를 재지 않아
+    /// 좌표계를 위아래로 멀리 옮기면 그만큼 벽에서 벗어난다(2026-11-23 M2: 1.6m 아래에서 37~44mm, 평균 1.3~1.6°).
+    /// + = 위(BASE +Z)로 갈수록 벽이 로봇 쪽으로 다가온다(= 로봇이 벽 쪽으로 기울었다). 0 또는 빈 값 = 끔. ±<see cref="MaxVerticalTiltDeg"/> 밖이면 끔.
+    /// </summary>
+    public const string VerticalTiltKey = "inspection.reuseFrameVerticalTiltDeg";
+    public const double MaxVerticalTiltDeg = 5.0;
+
+    /// <summary>Bag 키(double, 도) — 이번에 맞출 수직 방향 정적 기울기(<see cref="VerticalTiltKey"/>). 오케스트레이터가 넣는다.</summary>
+    public const string VerticalTiltTargetBagKey = "wobj.verticalTiltTargetDeg";
+
+    /// <summary>Bag 키(double, 도) — Bag 의 좌표계에 이미 들어 있는 수직 방향 정적 기울기. 물려받을 때 두 번 주지 않게 좌표계와 함께 넘긴다.</summary>
+    public const string VerticalTiltAppliedBagKey = "wobj.verticalTiltAppliedDeg";
+
+    /// <summary>파라미터 값 → 쓸 기울기 [도]. 비었거나 숫자가 아니거나 한계 밖이면 0(끔).</summary>
+    public static double ResolveVerticalTiltDeg(double? value)
+        => value is { } v && double.IsFinite(v) && Math.Abs(v) <= MaxVerticalTiltDeg ? v : 0.0;
+
+    /// <summary>
+    /// 좌표계 면을 <paramref name="pivotBase"/> 를 지나는 <b>수평축</b>(면 안에 놓인 수평 방향) 둘레로 <paramref name="deg"/> 만큼 기울인다.
+    /// + 는 위(BASE +Z)로 갈수록 면이 프레임 +Z(벽 바깥, 로봇 쪽)로 나오는 방향 — 피벗보다 아래에서는 그만큼 벽 쪽으로 들어간다.
+    /// 좌표계 전체(원점·세 축)를 같이 돌리므로 면 위의 거리·각도는 그대로다. 면이 수평(바닥·천장)이면 수직 방향이 없어 그대로 돌려준다.
+    /// </summary>
+    public static double[] TiltAboutHorizontal(double[] frameBase, double[] pivotBase, double deg)
+    {
+        RequirePose(frameBase, nameof(frameBase));
+        var m = FrameMath.PoseToMatrix(frameBase);
+        double[] n = { m[0, 2], m[1, 2], m[2, 2] };
+        // h = up × n — 면 안의 수평 방향. 이 축 둘레 +회전은 면 안의 위쪽(u = n × h)을 n 쪽으로 보낸다.
+        double[] h = { -n[1], n[0], 0.0 };
+        var hl = Math.Sqrt(h[0] * h[0] + h[1] * h[1]);
+        if (hl < 1e-6 || Math.Abs(deg) < 1e-12) return (double[])frameBase.Clone();
+        h[0] /= hl; h[1] /= hl;
+
+        var a = deg * Math.PI / 180.0;
+        var (c, s) = (Math.Cos(a), Math.Sin(a));
+        double[] Rot(double[] v)   // 로드리게스 회전(축 h, 각 a)
+        {
+            var dot = h[0] * v[0] + h[1] * v[1] + h[2] * v[2];
+            double[] cr = { h[1] * v[2] - h[2] * v[1], h[2] * v[0] - h[0] * v[2], h[0] * v[1] - h[1] * v[0] };
+            return new[]
+            {
+                v[0] * c + cr[0] * s + h[0] * dot * (1 - c),
+                v[1] * c + cr[1] * s + h[1] * dot * (1 - c),
+                v[2] * c + cr[2] * s + h[2] * dot * (1 - c),
+            };
+        }
+
+        var r = (double[,])m.Clone();
+        for (var col = 0; col < 3; col++)
+        {
+            var v = Rot(new[] { m[0, col], m[1, col], m[2, col] });
+            for (var i = 0; i < 3; i++) r[i, col] = v[i];
+        }
+        var o = Rot(new[] { frameBase[0] - pivotBase[0], frameBase[1] - pivotBase[1], frameBase[2] - pivotBase[2] });
+        for (var i = 0; i < 3; i++) r[i, 3] = pivotBase[i] + o[i];
+        return FrameMath.MatrixToPose(r);
+    }
+
     /// <summary>점의 프레임 좌표(X 방향 거리, Z 방향 높이) [mm].</summary>
     public static (double Along, double Height) AlongAndHeight(double[] frameBase, double[] pointBase)
     {

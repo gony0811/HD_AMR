@@ -61,6 +61,13 @@ public class LineSurfaceHeightStep : ISequenceStep
     /// <summary>WD 목표로 쓸 수 있는 범위 [mm] — 밖이면 설정 이상으로 보고 교시 줄 기준으로 돌아간다.</summary>
     internal const double MinWdTargetMm = 50.0, MaxWdTargetMm = 1000.0;
 
+    /// <summary>
+    /// 줄 면 높이 측정 실행 파라미터 키(true/false) — 비우면 켬. 끄면 이 단계는 움직이지 않고 좌표계를 그대로 둔다
+    /// (기준 높이 기록·시작/끝 측정·보정 모두 생략). 정적 기울기(<see cref="InternalWorkpieceFrame.VerticalTiltKey"/>)만으로
+    /// 같은 결과가 나오는지 비교할 때 쓴다.
+    /// </summary>
+    public const string MeasureKey = "Sequence.Line.SurfaceMeasure";
+
     /// <summary>평탄면 탐색 사용 파라미터 키(true/false) — 비우면 켬. 끄면 정해진 옆 자리만 잰다(종전).</summary>
     public const string FlatSearchKey = "Sequence.Line.SurfaceFlatSearch";
 
@@ -138,6 +145,17 @@ public class LineSurfaceHeightStep : ISequenceStep
             return StepResult.Ok("다른 줄 좌표계 재사용 아님 — 생략.");
         if (!context.Bag.TryGetValue(InternalWorkpieceFrame.BagKey, out var fv) || fv is not double[] { Length: 6 } frame)
             return StepResult.Ok("작업물 좌표계 없음 — 생략.");
+        var measure = true;
+        try { measure = await _param.GetBoolAsync(MeasureKey) ?? true; }
+        catch (Exception ex) when (ex is not OperationCanceledException) { /* DB 미준비 — 기본(켬) */ }
+        if (!measure)
+        {
+            var tilt = context.Bag.TryGetValue(InternalWorkpieceFrame.VerticalTiltAppliedBagKey, out var tv) && tv is double td ? td : 0.0;
+            _logger.LogInformation(
+                "[줄 면 높이] 측정 끔('{Key}'=false) — 이동·레이저 측정 없이 좌표계를 그대로 씁니다 (모드 {Mode}, 수직 방향 정적 기울기 {Tilt:+0.00;-0.00}° 반영됨, 원점 [{X:0.0}, {Y:0.0}, {Z:0.0}])",
+                MeasureKey, mode, tilt, frame[0], frame[1], frame[2]);
+            return StepResult.Ok($"줄 면 높이 측정 끔('{MeasureKey}') — 좌표계 그대로(정적 기울기 {tilt:+0.00;-0.00}°).");
+        }
         if (!_laser.IsConnected)
         {
             _logger.LogWarning("[줄 면 높이] 레이저 미연결 — 좌표계를 그대로 씁니다.");

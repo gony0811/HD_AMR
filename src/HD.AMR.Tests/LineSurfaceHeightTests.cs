@@ -235,4 +235,47 @@ public class LineSurfaceHeightTests
         var inverse = LineSurfaceHeightStep.OutwardNormal(Frame, Frame, ToolAxisDir.PlusZ);
         Assert.Equal(-reference, LineSurfaceHeightStep.WdReferenceHeightMm(Frame, inverse, 400), 9);
     }
+
+    [Fact]
+    public void 수직_방향_정적_기울기는_아래로_내려간_만큼_벽_쪽으로_들어간다()
+    {
+        // 수직벽 좌표계: Z = 벽 바깥(BASE +X), X = 수평(BASE −Y). 교시 원점은 BASE Z 725.
+        var m = new double[4, 4];
+        (m[0, 0], m[1, 0], m[2, 0]) = (0, -1, 0);    // X
+        (m[0, 1], m[1, 1], m[2, 1]) = (0, 0, -1);    // Y
+        (m[0, 2], m[1, 2], m[2, 2]) = (1, 0, 0);     // Z(바깥)
+        (m[0, 3], m[1, 3], m[2, 3], m[3, 3]) = (-1390, 520, 725, 1);
+        var taught = FrameMath.MatrixToPose(m);
+        var pivot = new[] { taught[0], taught[1], taught[2] };
+
+        // 1615mm 아래 줄로 옮긴 좌표계(면 평행 이동) — 1.4° 면 벽 쪽(BASE −X)으로 1615·sin1.4° ≈ 39.5mm.
+        var moved = new[] { taught[0], taught[1], taught[2] - 1615, taught[3], taught[4], taught[5] };
+        var tilted = InternalWorkpieceFrame.TiltAboutHorizontal(moved, pivot, 1.4);
+        var expect = 1615 * Math.Sin(1.4 * Math.PI / 180);
+        Assert.Equal(-1390 - expect, tilted[0], 3);
+        Assert.Equal(520, tilted[1], 6);
+
+        // 좌표계 Z(바깥)는 아래로 1.4° 숙는다 — 위로 갈수록 면이 바깥으로 나온다. 수평축(X)은 그대로.
+        var r = FrameMath.PoseToMatrix(tilted);
+        Assert.Equal(Math.Cos(1.4 * Math.PI / 180), r[0, 2], 9);
+        Assert.Equal(-Math.Sin(1.4 * Math.PI / 180), r[2, 2], 9);
+        Assert.Equal(-1, r[1, 0], 9);
+        // 면 위에서 위로 1000mm 간 점은 바깥으로 1000·sin1.4° 나온다.
+        var up = FrameMath.FromFrame(new[] { 0.0, -1000.0, 0.0, 0.0, 0.0, 0.0 }, tilted);
+        Assert.Equal(1000 * Math.Sin(1.4 * Math.PI / 180), up[0] - tilted[0], 6);
+        Assert.True(up[2] > tilted[2]);
+
+        // 피벗(교시 원점)에 있는 좌표계는 자리가 바뀌지 않고, 0° 는 그대로, 수평면은 수직 방향이 없어 그대로.
+        var atPivot = InternalWorkpieceFrame.TiltAboutHorizontal(taught, pivot, 1.4);
+        for (var i = 0; i < 3; i++) Assert.Equal(taught[i], atPivot[i], 9);
+        var same = InternalWorkpieceFrame.TiltAboutHorizontal(moved, pivot, 0);
+        for (var i = 0; i < 6; i++) Assert.Equal(moved[i], same[i], 9);
+        var floor = new[] { 0.0, 0.0, 0.0, 0.0, 0.0, 30.0 };
+        var floorTilted = InternalWorkpieceFrame.TiltAboutHorizontal(floor, new[] { 100.0, 0.0, 0.0 }, 1.4);
+        for (var i = 0; i < 6; i++) Assert.Equal(floor[i], floorTilted[i], 9);
+
+        Assert.Equal(1.4, InternalWorkpieceFrame.ResolveVerticalTiltDeg(1.4));
+        Assert.Equal(0, InternalWorkpieceFrame.ResolveVerticalTiltDeg(null));
+        Assert.Equal(0, InternalWorkpieceFrame.ResolveVerticalTiltDeg(9));
+    }
 }
