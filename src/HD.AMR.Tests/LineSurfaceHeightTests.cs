@@ -184,4 +184,22 @@ public class LineSurfaceHeightTests
         Assert.False(WeldInspectionOrchestrator.ShouldKeepAnchorOnFailure(true, "cobotInspection", true));   // 다른 단계 실패
         Assert.False(WeldInspectionOrchestrator.ShouldKeepAnchorOnFailure(true, null, true));
     }
+
+    [Fact]
+    public void 측정_높이로_옮기면_좌표계_면에서_그_높이에_선다()
+    {
+        // 좌표계 면 위 34mm(순회 대기 높이)에 서 있다가 측정 높이 0mm(교시 높이)로 간다 — 종전처럼 30mm 더 띄우면 레이저가 범위를 넘는다.
+        var outward = LineSurfaceHeightStep.OutwardNormal(Frame, Frame, ToolAxisDir.MinusZ);
+        var p = At(Frame, 120, -15, 0);
+        var start = new[] { p[0] + 34 * outward[0], p[1] + 34 * outward[1], p[2] + 34 * outward[2], Frame[3], Frame[4], Frame[5] };
+        Assert.Equal(34, LineSurfaceHeightStep.HeightOutMm(Frame, start, outward), 6);
+
+        var travel = LineSurfaceHeightStep.DefaultMeasureHeightMm - LineSurfaceHeightStep.HeightOutMm(Frame, start, outward);
+        var at = LineSurfaceHeightStep.Offset(start, outward, travel);
+        Assert.Equal(0, LineSurfaceHeightStep.HeightOutMm(Frame, at, outward), 6);
+        // 면을 따라서는 움직이지 않는다.
+        var (along, _) = InternalWorkpieceFrame.AlongAndHeight(Frame, at);
+        Assert.Equal(120, along, 6);
+        for (var i = 3; i < 6; i++) Assert.Equal(start[i], at[i], 9);
+    }
 }

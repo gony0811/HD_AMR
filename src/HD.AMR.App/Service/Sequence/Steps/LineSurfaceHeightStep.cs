@@ -1,6 +1,7 @@
 using HD.AMR.App.Communication;
 using HD.AMR.App.Models;
 using HD.AMR.App.Service.Inspection;
+using HD.AMR.App.Service.Motion;
 using Microsoft.Extensions.Logging;
 
 namespace HD.AMR.App.Service.Sequence.Steps;
@@ -16,10 +17,14 @@ namespace HD.AMR.App.Service.Sequence.Steps;
 ///     재서 ① 기울기(시작→끝 높이 차)와 ② 높이(시작점이 교시 줄의 기준 높이와 같게)를 좌표계에 반영한다
 ///     (<see cref="InternalWorkpieceFrame.CorrectBySurfaceHeights"/>).
 ///
-/// 측정은 좌표계 면 바깥 법선으로 <see cref="LiftKey"/>(기본 30mm) 띄운 채 한다 — 검사 팁이 들어가 있거나 면이 기울어도 옮겨 가며
-/// 닿지 않게. 측정점은 레이저 평면 중심(툴 좌표 X·Y·Z)을 BASE 로 바꾼 실제 면 위 점이라 툴 자세·장착 오프셋이 높이에 섞이지 않는다
-/// (같은 방법으로 잰 기준과 비교하므로 일정한 오프셋은 상쇄된다). 레이저 점이 코로게이션 경사에 걸리면(평면 법선이 좌표계 Z 와
-/// <see cref="MaxPlaneTiltDeg"/> 넘게 기움) 그 자리는 버리고 옆 자리(<see cref="ProbeOffsetsMm"/>)를 차례로 잰다.
+/// 측정 자리는 교시(점2)와 같은 방법으로 잡는다 — ① 좌표계 면에서 <see cref="MeasureHeightKey"/>(기본 0mm = 교시 높이, 레이저가
+/// WD 근처를 읽는 높이)로 옮기고, ② depth 로 평탄면을 찾아 카메라를 그 위에 놓은 뒤(<see cref="FlatSurfaceCenteringService.RunAsync"/>),
+/// ③ 레이저 중심 보정(툴 Y)만큼 옮겨 레이저 3점 거리를 잰다. 종전에는 서 있던 높이에서 30mm 더 띄워 정해진 자리(±40mm)만 쟀는데,
+/// 레이저가 측정 범위(약 450mm)를 넘거나 코로게이션 경사에 걸려 한 번도 재지 못했다(2026-11-22 M2).
+/// 측정점은 레이저 평면 중심(툴 좌표 X·Y·Z)을 BASE 로 바꾼 실제 면 위 점이라 툴 자세·장착 오프셋·평탄 자리까지의 옆 이동이
+/// 높이에 섞이지 않는다(같은 방법으로 잰 기준과 비교하므로 일정한 오프셋은 상쇄된다). 레이저 평면 법선이 좌표계 Z 와
+/// <see cref="MaxPlaneTiltDeg"/> 넘게 기울면 그 자리는 버리고 다른 평탄 자리로 다시 잰다. 평탄면 탐색을 쓸 수 없거나
+/// (<see cref="FlatSearchKey"/>=false·카메라 미연결) 실패하면 종전처럼 옆 자리(<see cref="ProbeOffsetsMm"/>)를 차례로 잰다.
 /// 다 실패하면 좌표계를 그대로 두고 진행한다(경고). 보정량이 한계(<see cref="MaxOffsetMm"/>·<see cref="MaxRiseMm"/>)를 넘으면
 /// 좌표계가 크게 틀렸거나 다른 면을 본 것으로 보고 멈춘다 — 오케스트레이터가 좌표계를 버려 다음 줄은 다시 교시한다.
 /// 끝나면 측정 전 자리로 정확히 돌아온다.
@@ -36,10 +41,23 @@ public class LineSurfaceHeightStep : ISequenceStep
     /// <summary>기준 면 높이 Bag 키(double, mm, 좌표계 Z 기준) — 교시 줄에서 이 스텝이 남기고, 물려받은 줄에서 오케스트레이터가 넣는다.</summary>
     public const string ReferenceHeightBagKey = "line.surfaceReferenceMm";
 
-    /// <summary>측정 들어올림 [mm] 파라미터 키. 비우면 <see cref="DefaultLiftMm"/>.</summary>
-    public const string LiftKey = "Sequence.Line.SurfaceLiftMm";
-    public const double DefaultLiftMm = 30.0;
-    internal const double MaxLiftMm = 100.0;
+    /// <summary>
+    /// 측정 높이 [mm] 파라미터 키 — 좌표계 면(교시 때 TCP 가 있던 평면) 바깥으로 이만큼 떨어진 높이에서 잰다.
+    /// 0 이면 교시 높이(레이저가 WD 목표 근처를 읽는다). 비우면 <see cref="DefaultMeasureHeightMm"/>.
+    /// </summary>
+    public const string MeasureHeightKey = "Sequence.Line.SurfaceMeasureHeightMm";
+    public const double DefaultMeasureHeightMm = 0.0;
+    internal const double MinMeasureHeightMm = -20.0;
+    internal const double MaxMeasureHeightMm = 40.0;
+
+    /// <summary>평탄면 탐색 사용 파라미터 키(true/false) — 비우면 켬. 끄면 정해진 옆 자리만 잰다(종전).</summary>
+    public const string FlatSearchKey = "Sequence.Line.SurfaceFlatSearch";
+
+    /// <summary>측정 높이로 가는 이동 한계 [mm] — 넘으면 좌표계가 현재 자리와 맞지 않는 것으로 보고 재지 않는다.</summary>
+    internal const double MaxHeightTravelMm = 150.0;
+
+    /// <summary>한 측정점에서 평탄 자리를 바꿔 다시 재는 횟수 상한(첫 자리 포함).</summary>
+    internal const int MaxFlatSites = 3;
 
     /// <summary>시작점 높이 보정 한계 [mm].</summary>
     internal const double MaxOffsetMm = 30.0;
@@ -59,16 +77,23 @@ public class LineSurfaceHeightStep : ISequenceStep
     private const int PollMs = 100;
 
     private readonly CobotService _cobot;
+    private readonly CameraService _camera;
+    private readonly FlatSurfaceCenteringService _centering;
     private readonly LaserDisplacementSensorService _laser;
     private readonly ParameterService _param;
+    private readonly PostureLimitsService _limits;
     private readonly ILogger<LineSurfaceHeightStep> _logger;
 
-    public LineSurfaceHeightStep(CobotService cobot, LaserDisplacementSensorService laser, ParameterService param,
+    public LineSurfaceHeightStep(CobotService cobot, CameraService camera, FlatSurfaceCenteringService centering,
+        LaserDisplacementSensorService laser, ParameterService param, PostureLimitsService limits,
         ILogger<LineSurfaceHeightStep> logger)
     {
         _cobot = cobot;
+        _camera = camera;
+        _centering = centering;
         _laser = laser;
         _param = param;
+        _limits = limits;
         _logger = logger;
     }
 
@@ -91,24 +116,37 @@ public class LineSurfaceHeightStep : ISequenceStep
             return StepResult.Ok("레이저 미연결 — 좌표계 그대로.");
         }
 
-        var liftMm = await GetLiftMmAsync();
+        var measureHeightMm = await GetMeasureHeightMmAsync();
         var start = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
         var outward = OutwardNormal(frame, start, context.OpticalAxis ?? ToolAxisDir.MinusZ);
-        var lifted = Offset(start, outward, liftMm);
+        var heightNowMm = HeightOutMm(frame, start, outward);
+        var travelMm = measureHeightMm - heightNowMm;
+        if (Math.Abs(travelMm) > MaxHeightTravelMm)
+        {
+            _logger.LogWarning(
+                "[줄 면 높이] 현재 높이 {Now:+0.0;-0.0}mm → 측정 높이 {H:+0.0;-0.0}mm 이동량 {T:+0.0;-0.0}mm 가 한계 ±{Max:0}mm 초과 — 좌표계를 그대로 씁니다.",
+                heightNowMm, measureHeightMm, travelMm, MaxHeightTravelMm);
+            return StepResult.Ok($"측정 높이 이동량 {travelMm:+0;-0}mm 한계 초과 — 좌표계 그대로.");
+        }
+        var lifted = Offset(start, outward, travelMm);   // 측정 높이의 시작 자리
+        var flat = await LoadFlatSetupAsync(context);
+        _logger.LogInformation(
+            "[줄 면 높이] 측정 높이 {H:+0.0;-0.0}mm(좌표계 면 기준, '{Key}') — 현재 {Now:+0.0;-0.0}mm 에서 {T:+0.0;-0.0}mm 이동, 평탄면 탐색 {Flat}",
+            measureHeightMm, MeasureHeightKey, heightNowMm, travelMm, flat is null ? "안 씀(정해진 옆 자리)" : "사용");
         var rc = await _cobot.Rpc.MoveLAsync(lifted, tool: context.Tool, user: 0, vel: context.Velocity, ct: ct);
         if (rc != 0)
         {
-            _logger.LogWarning("[줄 면 높이] {Lift:0}mm 들어올림 실패 (rc={Rc}){Desc} — 좌표계를 그대로 씁니다.",
-                liftMm, rc, FairinoErrorCodes.Suffix(rc));
+            _logger.LogWarning("[줄 면 높이] 측정 높이로 {T:+0.0;-0.0}mm 이동 실패 (rc={Rc}){Desc} — 좌표계를 그대로 씁니다.",
+                travelMm, rc, FairinoErrorCodes.Suffix(rc));
             await ReturnAsync(start, context, ct);
-            return StepResult.Ok($"측정 들어올림 실패(rc={rc}) — 좌표계 그대로.");
+            return StepResult.Ok($"측정 높이 이동 실패(rc={rc}) — 좌표계 그대로.");
         }
 
         try
         {
             if (mode == ModeReference)
             {
-                var p = await ProbeAsync(context, frame, lifted, 0, +1, "기준", ct);
+                var p = await MeasureAsync(context, frame, lifted, 0, +1, "기준", flat, ct);
                 if (p is null)
                 {
                     context.Bag.Remove(ReferenceHeightBagKey);
@@ -123,7 +161,7 @@ public class LineSurfaceHeightStep : ISequenceStep
 
             // 물려받은 줄 — 시작·끝 측정 후 보정.
             var lengthMm = SeamLengthMm(context);
-            var startPoint = await ProbeAsync(context, frame, lifted, 0, +1, "시작", ct);
+            var startPoint = await MeasureAsync(context, frame, lifted, 0, +1, "시작", flat, ct);
             if (startPoint is null)
             {
                 _logger.LogWarning("[줄 면 높이] 시작점 유효 측정 없음 — 물려받은 좌표계를 그대로 씁니다(높이·기울기 미보정).");
@@ -131,7 +169,7 @@ public class LineSurfaceHeightStep : ISequenceStep
             }
             double[]? endPoint = null;
             if (lengthMm >= MinSpanMm)
-                endPoint = await ProbeAsync(context, frame, lifted, lengthMm, -1, "끝", ct);
+                endPoint = await MeasureAsync(context, frame, lifted, lengthMm, -1, "끝", flat, ct);
             if (endPoint is null)
                 _logger.LogWarning("[줄 면 높이] 끝점 측정 {Why} — 높이만 보정합니다.",
                     lengthMm < MinSpanMm ? $"생략(용접선 {lengthMm:0}mm)" : "실패");
@@ -172,8 +210,139 @@ public class LineSurfaceHeightStep : ISequenceStep
         return null;
     }
 
+    /// <summary>평탄면 탐색에 쓰는 설정 묶음 — 시퀀스 ④·점2 평탄면 탐색과 같은 파라미터.</summary>
+    private sealed record FlatSetup(
+        double RoiX, double RoiY, double RoiW, double RoiH, ToolAxisDir AxisX, ToolAxisDir AxisY, double JointVelScale,
+        FlatCandidateOptions Candidates, LaserFootprintOptions Footprint, PostureLimits Limits, double ShiftYmm);
+
+    /// <summary>평탄면 탐색 설정을 읽는다. 끔·카메라 미연결·깊이 프레임 없음·설정 이상이면 null(정해진 옆 자리만 잰다).</summary>
+    private async Task<FlatSetup?> LoadFlatSetupAsync(SequenceContext context)
+    {
+        try
+        {
+            if (await _param.GetBoolAsync(FlatSearchKey) == false)
+                return null;
+            if (!_camera.IsConnected || _camera.LatestDepth is null)
+            {
+                _logger.LogWarning("[줄 면 높이] 카메라 미연결/깊이 프레임 없음 — 평탄면 탐색 없이 정해진 옆 자리만 잽니다.");
+                return null;
+            }
+            var shiftY = context.CameraToLaserShiftYmm;
+            if (Math.Abs(shiftY) > 200)
+            {
+                _logger.LogWarning("[줄 면 높이] 카메라→레이저 보정량 {S:0.#}mm 가 한계 ±200mm 초과 — 평탄면 탐색 없이 잽니다.", shiftY);
+                return null;
+            }
+            var (rx, ry, rw, rh, _) = await CameraAlignStep.GetDepthRoiAsync(_param);
+            var (ax, _) = await WeldSequenceSupport.GetImageXAxisAsync(_param);
+            var (ay, _) = await WeldSequenceSupport.GetImageYAxisAsync(_param);
+            return new FlatSetup(rx, ry, rw, rh, ax, ay,
+                await FlatMoveSettings.LoadJointVelocityScaleAsync(_param),
+                await FlatCandidateOptions.LoadAsync(_param),
+                await LaserFootprintOptions.LoadAsync(_param),
+                await _limits.GetAsync(), shiftY);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning("[줄 면 높이] 평탄면 탐색 설정 읽기 실패 — 정해진 옆 자리만 잽니다: {Msg}", ex.Message);
+            return null;
+        }
+    }
+
     /// <summary>
-    /// 들어올린 자리에서 좌표계 X 로 <paramref name="alongMm"/> 간 곳 주변을 후보 순서대로 재서 첫 유효 면 점(BASE mm)을 돌려준다.
+    /// 측정 높이의 시작 자리(<paramref name="lifted"/>)에서 좌표계 X 로 <paramref name="alongMm"/> 간 곳의 면 점(BASE mm).
+    /// 평탄면 탐색 → 레이저 측정을 먼저 하고, 쓸 수 없거나 실패하면 정해진 옆 자리(<see cref="ProbeOffsetsMm"/>)를 잰다.
+    /// </summary>
+    private async Task<double[]?> MeasureAsync(SequenceContext context, double[] frame, double[] lifted,
+        double alongMm, int inwardSign, string label, FlatSetup? flat, CancellationToken ct)
+    {
+        if (flat is not null)
+        {
+            var p = await FlatProbeAsync(context, frame, ProbePose(lifted, frame, alongMm, 0), label, flat, ct);
+            if (p is not null) return p;
+            _logger.LogWarning("[줄 면 높이] {Label} 평탄면 탐색 측정 실패 — 정해진 옆 자리로 다시 잽니다.", label);
+        }
+        return await ProbeAsync(context, frame, lifted, alongMm, inwardSign, label, ct);
+    }
+
+    /// <summary>
+    /// 교시(점2)와 같은 순서로 잰다 — <paramref name="site"/> 에서 depth 평탄 자리 탐색·카메라 이동 → 레이저 중심 보정(툴 Y) →
+    /// 레이저 3점 측정. 측정이 무효거나 평면이 기울면 그 자리를 빼고 <see cref="MaxFlatSites"/> 곳까지 다시 고른다.
+    /// </summary>
+    private async Task<double[]?> FlatProbeAsync(SequenceContext context, double[] frame, double[] site, string label,
+        FlatSetup f, CancellationToken ct)
+    {
+        var excluded = new List<(double U, double V)>();
+        var sites = Math.Clamp(1 + (f.Footprint.Enabled ? f.Footprint.MaxSiteRetries : 0), 1, MaxFlatSites);
+        for (var attempt = 0; attempt < sites; attempt++)
+        {
+            // 탐색은 늘 같은 자리(화면)에서 시작한다 — 제외 자리 좌표가 그 화면 기준이다.
+            var rc = await _cobot.Rpc.MoveLAsync(site, tool: context.Tool, user: 0, vel: context.Velocity, ct: ct);
+            if (rc != 0)
+            {
+                _logger.LogWarning("[줄 면 높이] {Label} 측정 자리 이동 실패 (rc={Rc}){Desc}", label, rc, FairinoErrorCodes.Suffix(rc));
+                return null;
+            }
+            await Task.Delay(800, ct);   // 진동·깊이 프레임 갱신 대기
+
+            context.Progress?.Invoke($"줄 면 높이 {label}: 평탄면 탐색{(attempt > 0 ? $" (다른 자리 {attempt + 1}/{sites})" : "")}");
+            var align = await _centering.RunAsync(new FlatCenterAlignOptions
+            {
+                RoiX = f.RoiX, RoiY = f.RoiY, RoiW = f.RoiW, RoiH = f.RoiH,
+                GridSize = 5,
+                SamplesPerDetect = 10,
+                DeadbandUv = f.Footprint.Enabled ? 0.0 : 0.02,
+                ToleranceMm = f.Footprint.Enabled ? 1.5 : 0.0,
+                MaxIterations = 1, VerifyAfterMove = false,
+                MaxLateralMoveMm = 0.0,
+                ImageXAxis = f.AxisX, ImageYAxis = f.AxisY,
+                Tool = context.Tool, Velocity = context.Velocity,
+                Source = $"줄 면 높이 {label}{(attempt > 0 ? $" 재시도 {attempt}" : "")}",
+                Candidates = f.Candidates,
+                Reach = new FlatReachOptions
+                {
+                    Limits = f.Limits,
+                    ImageXAxis = f.AxisX, ImageYAxis = f.AxisY,
+                    CameraToLaserShiftYmm = f.ShiftYmm,
+                    TiltMarginDeg = 0,
+                    Tool = context.Tool,
+                },
+                Footprint = new FlatFootprintContext
+                {
+                    Options = f.Footprint,
+                    ImageXAxis = f.AxisX, ImageYAxis = f.AxisY,
+                    Excluded = excluded.ToArray(),
+                },
+                UseJointMove = true,
+                JointVelocityScale = f.JointVelScale,
+            }, context.Progress, ct);
+            ct.ThrowIfCancellationRequested();   // 공용 루틴은 취소를 실패 결과로 돌려준다
+            if (!align.Success)
+            {
+                _logger.LogWarning("[줄 면 높이] {Label} 평탄면 탐색 실패: {Msg}", label, align.Message);
+                return null;
+            }
+
+            var anchor = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
+            var shift = await _centering.MoveToolOffsetAsync(anchor, new[] { 0.0, f.ShiftYmm, 0.0, 0.0, 0.0, 0.0 },
+                context.Tool, context.Velocity, joint: true, ct, f.JointVelScale);
+            if (!shift.Ok)
+            {
+                _logger.LogWarning("[줄 면 높이] {Label} 레이저 중심 보정 이동 실패 {Why}", label, shift.Describe());
+                return null;
+            }
+
+            var where = $"평탄 자리 {attempt + 1}(σ={align.SigmaMm:0.##}mm)";
+            var point = await MeasureHereAsync(context, frame, label, where, ct);
+            if (point is not null) return point;
+            if (align.FlatU is not { } u || align.FlatV is not { } v) return null;
+            excluded.Add((u, v));
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// 측정 높이의 시작 자리에서 좌표계 X 로 <paramref name="alongMm"/> 간 곳 주변을 후보 순서대로 재서 첫 유효 면 점(BASE mm)을 돌려준다.
     /// <paramref name="inwardSign"/> 는 X 오프셋 부호 — 끝점은 −1(용접선 안쪽부터).
     /// </summary>
     private async Task<double[]?> ProbeAsync(SequenceContext context, double[] frame, double[] lifted,
@@ -189,29 +358,46 @@ public class LineSurfaceHeightStep : ISequenceStep
                     label, inwardSign * ox, oy, rc, FairinoErrorCodes.Suffix(rc));
                 continue;
             }
-            var plane = await SampleStablePlaneAsync(ct);
-            if (plane is null)
-            {
-                _logger.LogInformation("[줄 면 높이] {Label} (X{X:+0;-0}, Y{Y:+0;-0})mm — 레이저 유효값 없음, 다음 자리", label, inwardSign * ox, oy);
-                continue;
-            }
-            var tcp = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
-            var tilt = PlaneTiltToFrameDeg(plane, tcp, frame);
-            if (tilt > MaxPlaneTiltDeg)
-            {
-                _logger.LogInformation(
-                    "[줄 면 높이] {Label} (X{X:+0;-0}, Y{Y:+0;-0})mm — 레이저 평면이 좌표계 면과 {T:0.0}° 기움(한계 {Max:0}°, 코로게이션 경사 의심), 다음 자리",
-                    label, inwardSign * ox, oy, tilt, MaxPlaneTiltDeg);
-                continue;
-            }
-            var point = SurfacePointBase(plane, tcp);
-            var (a, h) = InternalWorkpieceFrame.AlongAndHeight(frame, point);
-            _logger.LogInformation(
-                "[줄 면 높이] {Label} (X{X:+0;-0}, Y{Y:+0;-0})mm — 면 점 좌표계 X {A:0.0}mm, 높이 {H:+0.00;-0.00}mm (평면 기울기 {T:0.0}°)",
-                label, inwardSign * ox, oy, a, h, tilt);
-            return point;
+            var point = await MeasureHereAsync(context, frame, label, $"(X{inwardSign * ox:+0;-0}, Y{oy:+0;-0})mm", ct);
+            if (point is not null) return point;
         }
         return null;
+    }
+
+    /// <summary>지금 자리에서 레이저 평면을 재서 면 점(BASE mm)을 돌려준다. 무효·경사면이면 사유를 남기고 null.</summary>
+    private async Task<double[]?> MeasureHereAsync(SequenceContext context, double[] frame, string label, string where,
+        CancellationToken ct)
+    {
+        var plane = await SampleStablePlaneAsync(ct);
+        if (plane is null)
+        {
+            _logger.LogInformation("[줄 면 높이] {Label} {Where} — 레이저 유효값 없음 ({Ch}), 다음 자리", label, where, ChannelText());
+            return null;
+        }
+        var tcp = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
+        var tilt = PlaneTiltToFrameDeg(plane, tcp, frame);
+        if (tilt > MaxPlaneTiltDeg)
+        {
+            _logger.LogInformation(
+                "[줄 면 높이] {Label} {Where} — 레이저 평면이 좌표계 면과 {T:0.0}° 기움(한계 {Max:0}°, 코로게이션 경사 의심, {Ch}), 다음 자리",
+                label, where, tilt, MaxPlaneTiltDeg, ChannelText());
+            return null;
+        }
+        var point = SurfacePointBase(plane, tcp);
+        var (a, h) = InternalWorkpieceFrame.AlongAndHeight(frame, point);
+        _logger.LogInformation(
+            "[줄 면 높이] {Label} {Where} — 면 점 좌표계 X {A:0.0}mm, 높이 {H:+0.00;-0.00}mm (레이저 z={Z:0.00}mm, 평면 기울기 {T:0.0}°)",
+            label, where, a, h, plane.Z, tilt);
+        return point;
+    }
+
+    /// <summary>채널별 레이저 값 — 유효값이 없을 때 범위 밖인지 흔들린 것인지 가려 보게 남긴다.</summary>
+    private string ChannelText()
+    {
+        var r = _laser.GetReadings();
+        return r.Count == 0
+            ? "채널 값 없음"
+            : string.Join(" ", r.Select((c, i) => $"CH{i + 1}={c.Value:0.00}{(c.Enabled ? "" : "(범위 밖)")}"));
     }
 
     private async Task ReturnAsync(double[] start, SequenceContext context, CancellationToken ct)
@@ -222,21 +408,26 @@ public class LineSurfaceHeightStep : ISequenceStep
                 $"줄 면 높이 측정 후 원위치 복귀 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.");
     }
 
-    private async Task<double> GetLiftMmAsync()
+    private async Task<double> GetMeasureHeightMmAsync()
     {
         try
         {
-            var v = await _param.GetDoubleAsync(LiftKey);
-            if (v is { } x && double.IsFinite(x) && x >= 0 && x <= MaxLiftMm) return x;
+            var v = await _param.GetDoubleAsync(MeasureHeightKey);
+            if (v is { } x && double.IsFinite(x) && x >= MinMeasureHeightMm && x <= MaxMeasureHeightMm) return x;
             if (v is not null)
-                _logger.LogWarning("[줄 면 높이] '{Key}'={V} 범위 밖(0~{Max:0}) — {Def:0}mm 사용", LiftKey, v, MaxLiftMm, DefaultLiftMm);
+                _logger.LogWarning("[줄 면 높이] '{Key}'={V} 범위 밖({Min:0}~{Max:0}) — {Def:0}mm 사용",
+                    MeasureHeightKey, v, MinMeasureHeightMm, MaxMeasureHeightMm, DefaultMeasureHeightMm);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _logger.LogWarning("[줄 면 높이] '{Key}' 읽기 실패 — {Def:0}mm 사용: {Msg}", LiftKey, DefaultLiftMm, ex.Message);
+            _logger.LogWarning("[줄 면 높이] '{Key}' 읽기 실패 — {Def:0}mm 사용: {Msg}", MeasureHeightKey, DefaultMeasureHeightMm, ex.Message);
         }
-        return DefaultLiftMm;
+        return DefaultMeasureHeightMm;
     }
+
+    /// <summary>자세의 위치가 좌표계 면에서 바깥(<paramref name="outward"/>)으로 떨어진 거리 [mm].</summary>
+    internal static double HeightOutMm(double[] framePose, double[] pose, double[] outward)
+        => (pose[0] - framePose[0]) * outward[0] + (pose[1] - framePose[1]) * outward[1] + (pose[2] - framePose[2]) * outward[2];
 
     /// <summary>ACS 시작·끝점(m) 사이 길이 [mm]. 끝점이 없으면 0.</summary>
     internal static double SeamLengthMm(SequenceContext context)
@@ -259,7 +450,7 @@ public class LineSurfaceHeightStep : ISequenceStep
     internal static double[] Offset(double[] pose, double[] dir, double mm)
         => new[] { pose[0] + mm * dir[0], pose[1] + mm * dir[1], pose[2] + mm * dir[2], pose[3], pose[4], pose[5] };
 
-    /// <summary>들어올린 자세 그대로 좌표계 X·Y 방향으로 옮긴 자세(BASE).</summary>
+    /// <summary>측정 높이 자세 그대로 좌표계 X·Y 방향으로 옮긴 자세(BASE).</summary>
     internal static double[] ProbePose(double[] lifted, double[] framePose, double xMm, double yMm)
     {
         var m = FrameMath.PoseToMatrix(framePose);
