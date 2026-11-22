@@ -92,6 +92,39 @@ public class WObjPoint3Tests
         Assert.All(line, x => Assert.False(x.HasCross4));
     }
 
+    [Fact]
+    public void 점3_자리는_묶음의_첫_CROSS4_가운데()
+    {
+        // 2026-11-22 13:00 오더: -1(LINE) u=4320, -2(CROSS4_L) u=4680, -3·-4(LINE), 점2 = u=5760 → CROSS4 가운데 u=4860 = 점1 +540mm.
+        var h = InspectionMoveDirection.Horizontal;
+        BundleTaskInput T(string id, double u, bool cross)
+            => new(id, id, "F", 0, h, new[] { u, 10.98, 0 }, new[] { u + 0.36, 10.98, 0 }, cross);
+        var a = TaskBundlePlanner.Assign(new[] { T("1", 4.32, false), T("2", 4.68, true), T("3", 5.04, false), T("4", 5.40, true) });
+        Assert.All(a, x => Assert.Equal(540, x.Cross4AlongMm!.Value, 6));
+
+        var none = TaskBundlePlanner.Assign(new[] { T("1", 4.32, false), T("2", 4.68, false) });
+        Assert.All(none, x => Assert.Null(x.Cross4AlongMm));
+    }
+
+    [Fact]
+    public void 점2_에서_CROSS4_가운데로_되짚는다()
+    {
+        var p2 = new double[] { 1440, 0, 0, 0, 0, 0 };
+        var m = WObjPoint3Step.AlongShiftBase(P1, p2, 540)!;
+        Assert.Equal(-900, m[0], 6);
+        Assert.Equal(0, m[1], 6);
+        // 범위 밖은 점1·점2 사이로 자른다.
+        Assert.Equal(-1440, WObjPoint3Step.AlongShiftBase(P1, p2, -50)![0], 6);
+        Assert.Equal(0, WObjPoint3Step.AlongShiftBase(P1, p2, 2000)![0], 6);
+    }
+
+    [Fact]
+    public void 자리가_없으면_점1_점2_가운데()
+    {
+        Assert.Equal(180, WObjPoint3Step.ResolveAlongMm(null, P1, P2), 6);
+        Assert.Equal(540.0, WObjPoint3Step.ResolveAlongMm(540.0, P1, P2), 6);
+    }
+
     [Theory]
     [InlineData(SeamTypeKind.Cross4L, true)]
     [InlineData(SeamTypeKind.Cross4R, true)]

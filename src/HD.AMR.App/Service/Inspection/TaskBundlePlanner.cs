@@ -31,7 +31,10 @@ public sealed record BundleAssignment(
     /// <summary>점2 — 묶음 마지막 TASK 의 <b>끝점</b>(2026-11-18 변경, 종전 시작점). 점1→점2 를 실측으로 이어 마지막 용접선을 외삽 없이 순회한다.</summary>
     double[]? Point2W,
     /// <summary>묶음(단독이면 자기 자신)에 십자 CROSS4 용접선이 있는가 — 있으면 리더가 좌표계를 잡을 때 점3 으로 면 기울기를 잰다.</summary>
-    bool HasCross4 = false);
+    bool HasCross4 = false,
+    /// <summary>점1(첫 TASK 시작)에서 점2 쪽으로 첫 CROSS4 TASK 가운데까지 [mm] — 점3 을 그 자리에서 잰다.
+    /// 세로 용접선이 CROSS4 좌/우 어느 쪽이든 한 피치 안이라 가운데로 둔다. 묶음이 아니거나 CROSS4 가 없으면 null.</summary>
+    double? Cross4AlongMm = null);
 
 /// <summary>
 /// 연속 TASK 묶음. 리프트 높이·wall_code·수직/수평이 모두 같고, 방향 판별이 확실한 액션만
@@ -74,14 +77,20 @@ public static class TaskBundlePlanner
                 var first = tasks[i];
                 var last = tasks[j - 1];
                 var hasCross4 = false;
-                for (var k = i; k < j; k++) hasCross4 |= tasks[k].IsCross4;
+                double? cross4AlongMm = null;
+                for (var k = i; k < j; k++)
+                {
+                    if (!tasks[k].IsCross4) continue;
+                    hasCross4 = true;
+                    cross4AlongMm ??= AlongMm(first.SeamStartW!, last.SeamEndW!, tasks[k].SeamStartW, tasks[k].SeamEndW);
+                }
                 for (var k = i; k < j; k++)
                 {
                     result[k] = new BundleAssignment(
                         tasks[k].ActionId, tasks[k].JobRef,
                         k == i ? BundleRole.Leader : BundleRole.Follower,
                         id, first.WallCode, first.LiftStrokeMm, first.Direction,
-                        Clone3(first.SeamStartW), Clone3(first.SeamEndW), Clone3(last.SeamEndW), hasCross4);
+                        Clone3(first.SeamStartW), Clone3(first.SeamEndW), Clone3(last.SeamEndW), hasCross4, cross4AlongMm);
                 }
             }
             else
@@ -214,6 +223,17 @@ public static class TaskBundlePlanner
     /// <summary>십자 4갈래(좌/우 구분 없는 구 계약 포함)인가.</summary>
     public static bool IsCross4(SeamTypeKind kind)
         => kind is SeamTypeKind.Cross or SeamTypeKind.Cross4L or SeamTypeKind.Cross4R;
+
+    /// <summary>점1→점2 선 위로 본, 점1 에서 용접선 가운데까지 거리 [mm](도면 좌표는 m). 계산할 수 없으면 null.</summary>
+    internal static double? AlongMm(double[] point1W, double[] point2W, double[]? startW, double[]? endW)
+    {
+        if (startW is not { Length: 3 } || endW is not { Length: 3 }) return null;
+        double dx = point2W[0] - point1W[0], dy = point2W[1] - point1W[1], dz = point2W[2] - point1W[2];
+        var len = Math.Sqrt(dx * dx + dy * dy + dz * dz);
+        if (len < 1e-9) return null;
+        double mx = (startW[0] + endW[0]) / 2 - point1W[0], my = (startW[1] + endW[1]) / 2 - point1W[1], mz = (startW[2] + endW[2]) / 2 - point1W[2];
+        return (mx * dx + my * dy + mz * dz) / len * 1000.0;
+    }
 
     private static double[]? Clone3(double[]? v) => v is { Length: 3 } a ? (double[])a.Clone() : null;
 }

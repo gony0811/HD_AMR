@@ -874,7 +874,11 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             if (bundle?.Role == BundleRole.Leader)
                 BundleTeach.Activate(context, bundle);
             if (needPoint3)
+            {
                 context.Bag[Sequence.Steps.WObjPoint3Step.RequiredBagKey] = true;
+                if (bundle?.Role == BundleRole.Leader && bundle.Cross4AlongMm is { } alongMm)
+                    context.Bag[Sequence.Steps.WObjPoint3Step.AlongBagKey] = alongMm;   // 없으면(단독) 점1·점2 가운데
+            }
 
             // CROSS3/CROSS4 는 LINE 과 동일하게 티칭 프로필 경유점을 실행한다 — 코로게이션 격자 교차부는
             // 평탄하지 않아 수식 생성으로 법선·깊이를 담을 수 없으므로 6-DOF 캡처 교시(/inspection-points)로
