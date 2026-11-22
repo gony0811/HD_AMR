@@ -63,9 +63,31 @@ public class WObjPointStep : ISequenceStep
     private readonly LaserDisplacementSensorService _laser;
     private readonly CameraService _camera;
 
-    public WObjPointStep(int pointNum, CobotService cobot, ParameterService param,
-        LaserDisplacementSensorService laser, CameraService camera, ILogger<WObjPointStep> logger)
+    private readonly bool _useGas;
+
+    /// <summary>
+    /// 점2 면 거리 보정 파라미터 키(true/false) — 점2 기록을 광축 방향으로 옮겨 점1 과 면 거리를 맞춘다
+    /// (<see cref="WObjPointProbe.Point2DistanceCorrection"/>). 로봇은 움직이지 않고 기록 포즈만 바꾼다.
+    /// 비우면 검사 센서 모드로 정한다 — 가스 켬, 비전(용접검사기) 끔.
+    /// </summary>
+    public const string Point2DistanceCorrectionKey = "Sequence.WObj.Point2DistanceCorrection";
+
+    /// <summary>파라미터 값 → 점2 면 거리 보정 사용 여부. 비면 센서 모드 기본값(가스 켬 / 비전 끔).</summary>
+    internal static bool ResolvePoint2DistanceCorrection(bool? value, bool usesGas) => value ?? usesGas;
+
+    /// <summary>면 거리 보정량(양수 = 점2 가 더 멀다)을 툴 프레임 오프셋으로 — 광축 + 방향이 면 쪽 접근이다.</summary>
+    internal static double[] DistanceCorrectionOffset(ToolAxisDir depthAxis, double mm)
     {
+        var offset = new double[6];
+        FlatSurfaceCenteringService.ApplyAxis(offset, depthAxis, mm);
+        return offset;
+    }
+
+    public WObjPointStep(int pointNum, CobotService cobot, ParameterService param,
+        LaserDisplacementSensorService laser, CameraService camera,
+        Microsoft.Extensions.Options.IOptions<InspectionSensorSettings> sensor, ILogger<WObjPointStep> logger)
+    {
+        _useGas = sensor.Value.UsesGasDetector;
         _pointNum = pointNum;
         _cobot = cobot;
         _param = param;
@@ -137,6 +159,7 @@ public class WObjPointStep : ISequenceStep
             else
                 correctionNote = " (비드 잔차 보정 꺼짐 — 센터링 위치 그대로 기록)";
         }
+        correctionNote += await CorrectPoint2DistanceAsync(context, pose);
         context.Bag[PointPoseBagKey(_pointNum)] = (double[])pose.Clone();
 
         _logger.LogInformation(
@@ -147,6 +170,47 @@ public class WObjPointStep : ISequenceStep
         return StepResult.Ok(
             $"내부 작업물 좌표계 {PointName} 기록 — BASE TCP [{pose[0]:0.0}, {pose[1]:0.0}, {pose[2]:0.0}] " +
             $"(tool {context.Tool}, 내부 id {wobjId}. 다음: {remaining}).{correctionNote}");
+    }
+
+    /// <summary>
+    /// 점2 기록을 광축 방향으로 옮겨 점1 과 면 거리를 맞춘다(<paramref name="pose"/> 를 제자리에서 고친다). 점1 은 그대로라
+    /// 순회 전체의 면 거리(점1 기준)는 바뀌지 않고 작업물 X축의 면 쪽 기울기만 바로잡힌다. 메모를 돌려준다.
+    /// </summary>
+    private async Task<string> CorrectPoint2DistanceAsync(SequenceContext context, double[] pose)
+    {
+        if (_pointNum != 2) return "";
+        try
+        {
+            if (!ResolvePoint2DistanceCorrection(await _param.GetBoolAsync(Point2DistanceCorrectionKey), _useGas)) return "";
+            if (!context.Bag.TryGetValue(WObjPointProbe.BagKey(1), out var v1) || v1 is not WObjPointProbe p1
+                || !context.Bag.TryGetValue(WObjPointProbe.BagKey(2), out var v2) || v2 is not WObjPointProbe p2)
+            {
+                _logger.LogWarning("내부 작업물 좌표계 점2 면 거리 보정 생략 — 점1·점2 거리 스냅샷 없음");
+                return " (점2 면 거리 보정 생략 — 거리 스냅샷 없음)";
+            }
+
+            var (mm, note) = WObjPointProbe.Point2DistanceCorrection(p1, p2);
+            if (mm is not { } d)
+            {
+                _logger.LogInformation("내부 작업물 좌표계 점2 면 거리 보정 안 함 — {Note} ('{Key}')", note, Point2DistanceCorrectionKey);
+                return $" (점2 면 거리 보정 안 함 — {note})";
+            }
+
+            var (depthAxis, _) = await WeldSequenceSupport.GetDepthAxisAsync(_param);
+            var corrected = ApplyCorrection(pose, DistanceCorrectionOffset(depthAxis, d));
+            _logger.LogInformation(
+                "내부 작업물 좌표계 점2 면 거리 보정: 점2 가 점1 보다 {D:+0.0;-0.0}mm {Dir} ({Note}) → 광축 방향으로 그만큼 옮겨 기록 — " +
+                "TCP [{X0:0.0}, {Y0:0.0}, {Z0:0.0}] → [{X:0.0}, {Y:0.0}, {Z:0.0}] ('{Key}')",
+                d, d > 0 ? "멀다" : "가깝다", note, pose[0], pose[1], pose[2], corrected[0], corrected[1], corrected[2],
+                Point2DistanceCorrectionKey);
+            Array.Copy(corrected, pose, 6);
+            return $" 점2 면 거리 보정 {d:+0.0;-0.0}mm({note}) 반영.";
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning("내부 작업물 좌표계 점2 면 거리 보정 실패 — 보정 없이 기록: {Msg}", ex.Message);
+            return " (점2 면 거리 보정 실패 — 보정 없이 기록)";
+        }
     }
 
     private async Task<bool> IsCorrectionEnabledAsync()

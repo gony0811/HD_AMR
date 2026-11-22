@@ -61,6 +61,57 @@ public sealed record WObjPointProbe(double[] TcpBase, double[] LaserMm, double? 
                $"TCP(BASE)=[{string.Join(", ", TcpBase.Take(6).Select(v => v.ToString("0.0", Ci)))}]";
     }
 
+    /// <summary>점2 면 거리 보정에서 레이저 채널별 차이가 이 안으로 맞아야 쓴다 [mm] — 주름·비드를 본 채널을 거른다.</summary>
+    public const double Point2AgreeTolMm = 5.0;
+
+    /// <summary>점2 면 거리 보정 상한 [mm] — 이보다 크면 측정을 믿지 않고 보정하지 않는다.</summary>
+    public const double MaxPoint2CorrectionMm = 60.0;
+
+    /// <summary>이보다 작은 차이는 보정하지 않는다 [mm] — 센서 노이즈.</summary>
+    public const double MinPoint2CorrectionMm = 1.0;
+
+    /// <summary>
+    /// 점2 기록에 더할 면 거리 보정량 [mm] — 점2 가 점1 보다 면에서 얼마나 더 먼지(양수 = 더 멀다 → 그만큼 면 쪽으로 옮긴다).
+    /// 두 점은 각각 떨어진 평탄부에서 WD 를 맞춘 뒤 툴 평면을 따라 용접선으로 돌아오는데, 툴이 면에 기울어 있으면 돌아오는
+    /// 동안 면 거리가 달라져 두 점의 면 거리가 어긋난다(실기 2026-11-22 21:45 M2 수직 묶음: 점2 가 22~27mm 더 가까운데
+    /// 좌표계 기울기는 0.22° — 실제 약 2°). 기록 자리에서 잰 <b>레이저 값의 차이</b>로 그 어긋남을 되돌린다.
+    /// depth 카메라 값은 정확하지 않아 쓰지 않는다(로그 참고용).
+    /// <list type="bullet">
+    /// <item>같은 채널끼리의 차이(점2 − 점1)를 구한다 — 유효 채널 2개 이상.</item>
+    /// <item>차이가 서로 가장 가까운 두 채널이 <see cref="Point2AgreeTolMm"/> 안으로 맞아야 한다. 맞지 않으면 null(보정 안 함).</item>
+    /// <item>그 두 채널 평균에서 <see cref="Point2AgreeTolMm"/> 안인 채널들의 평균을 쓴다 — 한 채널이 주름에 걸려 튀면 그 채널만 뺀다.</item>
+    /// </list>
+    /// </summary>
+    /// <returns>보정량(없으면 null)과 로그용 사유.</returns>
+    public static (double? Mm, string Note) Point2DistanceCorrection(WObjPointProbe p1, WObjPointProbe p2)
+    {
+        string F(double v) => v.ToString("+0.0;-0.0", Ci);
+
+        var diffs = new List<double>();
+        for (int i = 0; i < 3; i++)
+            if (double.IsFinite(p1.LaserMm[i]) && double.IsFinite(p2.LaserMm[i]))
+                diffs.Add(p2.LaserMm[i] - p1.LaserMm[i]);
+        if (diffs.Count < 2) return (null, $"레이저 유효 채널 {diffs.Count}개(2개 이상 필요)");
+        diffs.Sort();
+        var all = string.Join("/", diffs.Select(F));
+
+        // 가장 가까운 두 채널(정렬했으므로 이웃끼리만 보면 된다).
+        var at = 0;
+        for (int i = 1; i < diffs.Count - 1; i++)
+            if (diffs[i + 1] - diffs[i] < diffs[at + 1] - diffs[at]) at = i;
+        if (diffs[at + 1] - diffs[at] > Point2AgreeTolMm)
+            return (null, $"레이저 채널별 차이 {all}mm 가 서로 {Point2AgreeTolMm:0}mm 넘게 다름");
+
+        var center = (diffs[at] + diffs[at + 1]) / 2;
+        var used = diffs.Where(d => Math.Abs(d - center) <= Point2AgreeTolMm).ToList();
+        var mm = used.Average();
+        if (Math.Abs(mm) > MaxPoint2CorrectionMm)
+            return (null, $"차이 {F(mm)}mm 가 상한 ±{MaxPoint2CorrectionMm:0}mm 초과");
+        if (Math.Abs(mm) < MinPoint2CorrectionMm)
+            return (null, $"차이 {F(mm)}mm — 보정 불필요");
+        return (mm, $"레이저 채널별 {all}mm 중 {used.Count}채널 평균");
+    }
+
     /// <summary>
     /// 점1 → 점2 비교 한 줄.
     /// <list type="bullet">

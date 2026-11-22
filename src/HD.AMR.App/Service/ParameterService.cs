@@ -259,6 +259,11 @@ public class ParameterService
             (Sequence.Steps.WObjPointStep.ResidualCorrectionKey, "true",
                 "⑦⁺/⑪⁺ 비드 센터링 후 남은 cross 잔차를 작업물 좌표계 점1/점2 기록에 보정(true). 잔차가 X축을 돌려 연속 LINE 이 " +
                 "V01 에서 멀수록 옆으로 벗어나는 것을 줄인다. 점2 는 각도(⑫)를 건드리지 않는 별도 재측정으로 잔차를 잰다."),
+            (Sequence.Steps.WObjPointStep.Point2DistanceCorrectionKey, "",
+                "작업물 좌표계 점2 면 거리 보정(true/false) — 점1·점2 기록 자리에서 잰 레이저 3채널의 채널별 차이로 " +
+                "점2 가 점1 보다 면에서 얼마나 멀고 가까운지 구해, 점2 기록을 광축 방향으로 그만큼 옮긴다(로봇은 움직이지 않음). " +
+                "평탄부에서 WD 를 맞춘 뒤 용접선으로 돌아오는 동안 툴 기울기 때문에 면 거리가 달라져 좌표계가 면 쪽으로 기우는 것을 바로잡는다. " +
+                "채널별 차이가 2채널 이상 5mm 안으로 맞고(튀는 채널은 뺌) 60mm 이하일 때만 쓴다. depth 카메라 값은 쓰지 않는다. 비우면 가스 검사기 켬, 비전(용접검사기) 끔. 교시할 때마다 읽는다."),
             (Sequence.Steps.WObjRegisterStep.Point1HeightKey,
                 Inspection.InternalWorkpieceFrame.DefaultCorrugationTopHeightMm.ToString(CultureInfo.InvariantCulture),
                 "작업물 좌표계 — 점1 을 기록한 TCP 높이가 티칭 프로필 Z=0(평탄부 초점 높이)에서 떨어진 거리(mm). " +
