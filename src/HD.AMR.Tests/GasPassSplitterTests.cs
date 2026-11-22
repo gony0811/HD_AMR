@@ -134,4 +134,36 @@ public class GasPassSplitterTests
         Assert.Equal(new[] { 0, 1 }, GasPassSplitter.MergeCollinear(new[] { P(0, 0, 0), P(5, 0, 0) }));
         Assert.Equal(new[] { 0 }, GasPassSplitter.MergeCollinear(new[] { P(0, 0, 0) }));
     }
+
+    [Theory]
+    [InlineData(0.0, 0.3)]
+    [InlineData(-1.0, 0.3)]
+    [InlineData(double.NaN, 0.3)]
+    [InlineData(0.3, 0.3)]
+    [InlineData(1.0, 1.0)]
+    [InlineData(99.0, 5.0)]
+    public void ResolveMergeTol_비정상은_기본값_상한은_5(double setting, double expected)
+        => Assert.Equal(expected, GasPassSplitter.ResolveMergeTol(setting), 9);
+
+    [Fact]
+    public void MergeCollinear_허용오차를_키우면_곡선_명령이_줄고_벗어남은_오차_이내()
+    {
+        // 반경 28.26 원호를 2mm 간격으로 60mm.
+        const double r = 28.26;
+        var poses = Enumerable.Range(0, 31).Select(i => { var a = i * 2.0 / r; return P(r * Math.Sin(a), 0, r * Math.Cos(a)); }).ToList();
+        var tight = GasPassSplitter.MergeCollinear(poses, 0.3);
+        var loose = GasPassSplitter.MergeCollinear(poses, 1.0);
+        Assert.True(loose.Count < tight.Count);
+        Assert.Equal(0, loose[0]);
+        Assert.Equal(poses.Count - 1, loose[^1]);
+
+        // 합친 직선에서 사이 경유점까지의 거리가 허용 오차 이내.
+        for (var m = 0; m + 1 < loose.Count; m++)
+        {
+            double[] a = poses[loose[m]], b = poses[loose[m + 1]];
+            double dx = b[0] - a[0], dz = b[2] - a[2], len = Math.Sqrt(dx * dx + dz * dz);
+            for (var k = loose[m] + 1; k < loose[m + 1]; k++)
+                Assert.True(Math.Abs((poses[k][0] - a[0]) * dz - (poses[k][2] - a[2]) * dx) / len <= 1.0 + 1e-9);
+        }
+    }
 }

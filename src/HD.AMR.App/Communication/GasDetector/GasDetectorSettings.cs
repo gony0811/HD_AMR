@@ -101,6 +101,14 @@ public class GasDetectorSettings
     public double NonStopBlendRadiusMm { get; set; }
 
     /// <summary>
+    /// 무정지 이동의 직선 병합 허용 오차 [mm] — 경유점들이 한 직선에서 이 거리 안이면 이동 명령 하나로 합친다.
+    /// 키우면 곡선(코로게이션)을 더 긴 직선 몇 개로 지나가 블렌딩 반경이 커지고(구간 길이의 45%까지) 덜 끊기지만,
+    /// 경로가 교시 곡선에서 최대 이만큼 벗어난다 — 볼록한 Top 에서는 표면 쪽으로 내려간다. 측정 구간 분할은 원래 경유점 그대로다.
+    /// 0 이하·비정상이면 기본 <see cref="GasPassSplitter.MergeTolMm"/>(0.3), 상한 <see cref="GasPassSplitter.MaxMergeTolMm"/>.
+    /// </summary>
+    public double NonStopMergeTolMm { get; set; } = GasPassSplitter.MergeTolMm;
+
+    /// <summary>
     /// 검사 팁 진입 거리 [mm] — 도면 순회 직전 '검사 팁 진입' 단계가 TCP 를 벽면 쪽(작업물 좌표계 법선)으로 이만큼 옮기고,
     /// 도면 순회는 모든 경유점을 같은 깊이만큼 벽면 쪽으로 당겨 지나간 뒤 끝나면 이만큼 다시 물러난다. 0 = 진입하지 않음.
     /// </summary>

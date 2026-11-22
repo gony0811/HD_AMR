@@ -443,6 +443,9 @@ public sealed class GasDetectorService : BackgroundService
     /// <summary>연속 측정이 무정지(경유점 블렌딩)로 도는지 — 연속 모드이고 블렌딩 반경이 0 보다 클 때.</summary>
     public bool IsNonStopMode => IsContinuousMode && NonStopBlendRadiusMm > 0;
 
+    /// <summary>무정지 이동의 직선 병합 허용 오차 [mm] — 설정 <see cref="GasDetectorSettings.NonStopMergeTolMm"/> (비정상이면 0.3).</summary>
+    public double NonStopMergeTolMm => GasPassSplitter.ResolveMergeTol(Settings.NonStopMergeTolMm);
+
     /// <summary>
     /// 무정지 연속 측정 1회 — <paramref name="poses"/>[0](지금 서 있는 출발점)에서 나머지 경유점을 멈추지 않고 차례로
     /// 지나가는 동안 계속 샘플링하고, 샘플을 구간별로 나눠(<see cref="GasPassSplitter.Split"/>) 구간마다 측정 1건으로 기록한다.
@@ -462,7 +465,7 @@ public sealed class GasDetectorService : BackgroundService
         var lengths = Enumerable.Range(0, poses.Count - 1)
             .Select(k => GasPassSplitter.Distance(poses[k], poses[k + 1])).ToList();
         // 이동은 직선으로 이어지는 경유점을 합친 것만 보낸다(MergeCollinear) — 측정 분할(lengths)은 원래 경유점 단위 그대로.
-        var motion = GasPassSplitter.MergeCollinear(poses);
+        var motion = GasPassSplitter.MergeCollinear(poses, NonStopMergeTolMm);
         var motionLengths = Enumerable.Range(0, motion.Count - 1)
             .Select(m => GasPassSplitter.Distance(poses[motion[m]], poses[motion[m + 1]])).ToList();
         var radii = GasPassSplitter.BlendRadii(motionLengths, NonStopBlendRadiusMm);
@@ -513,8 +516,9 @@ public sealed class GasDetectorService : BackgroundService
         var delay = TimeSpan.FromMilliseconds(Math.Max(0, Settings.MeasureDwellMs));
         var parts = GasPassSplitter.Split(samples, moveStart, moveEnd, delay, lengths);
         var passSec = (moveEnd - moveStart).TotalSeconds;
-        _logger.LogInformation("[가스 측정] 무정지 연속 측정 — {N}구간 {Len:0} mm 를 {Sec:0.0} 초에 통과(평균 {Speed:0.0} mm/s), {Samples}샘플 (이동 명령 {Moves}개 — 직선 병합, 블렌딩 최대 {R:0.#} mm)",
-            lengths.Count, lengths.Sum(), passSec, passSec > 0 ? lengths.Sum() / passSec : 0, samples.Count, motion.Count - 1, radii.DefaultIfEmpty(0).Max());
+        _logger.LogInformation("[가스 측정] 무정지 연속 측정 — {N}구간 {Len:0} mm 를 {Sec:0.0} 초에 통과(평균 {Speed:0.0} mm/s), {Samples}샘플 (이동 명령 {Moves}개 — 직선 병합 {Tol:0.##} mm, 블렌딩 {RMin:0.#}~{R:0.#} mm)",
+            lengths.Count, lengths.Sum(), passSec, passSec > 0 ? lengths.Sum() / passSec : 0, samples.Count, motion.Count - 1,
+            NonStopMergeTolMm, radii.DefaultIfEmpty(0).Min(), radii.DefaultIfEmpty(0).Max());
         var scans = new List<GasMeasurementResult>(parts.Count);
         for (var k = 0; k < parts.Count; k++)
         {
@@ -535,7 +539,7 @@ public sealed class GasDetectorService : BackgroundService
     {
         var lengths = Enumerable.Range(0, poses.Count - 1)
             .Select(k => GasPassSplitter.Distance(poses[k], poses[k + 1])).ToList();
-        var motion = GasPassSplitter.MergeCollinear(poses);
+        var motion = GasPassSplitter.MergeCollinear(poses, NonStopMergeTolMm);
         var motionLengths = Enumerable.Range(0, motion.Count - 1)
             .Select(m => GasPassSplitter.Distance(poses[motion[m]], poses[motion[m + 1]])).ToList();
         var radii = GasPassSplitter.BlendRadii(motionLengths, NonStopBlendRadiusMm);
@@ -791,6 +795,7 @@ public sealed class GasDetectorService : BackgroundService
             if (await p.GetIntAsync(KeyPrefix + "MeasureSampleIntervalMs") is { } iv) s.MeasureSampleIntervalMs = iv;
             if (Enum.TryParse<GasMeasureMode>(await p.GetAsync(KeyPrefix + "MeasureMode"), out var mode)) s.MeasureMode = mode;
             if (await p.GetDoubleAsync(KeyPrefix + "NonStopBlendRadiusMm") is { } blend) s.NonStopBlendRadiusMm = blend;
+            if (await p.GetDoubleAsync(KeyPrefix + "NonStopMergeTolMm") is { } mergeTol) s.NonStopMergeTolMm = mergeTol;
             if (await p.GetDoubleAsync(KeyPrefix + "TipApproachMm") is { } tip) s.TipApproachMm = tip;
             if (await p.GetIntAsync(KeyPrefix + "TipApproachVelPercent") is { } tipVel) s.TipApproachVelPercent = tipVel;
             lock (_lock)
@@ -825,6 +830,7 @@ public sealed class GasDetectorService : BackgroundService
             await p.SetAsync(KeyPrefix + "MeasureSampleIntervalMs", s.MeasureSampleIntervalMs.ToString(inv), "경유점 측정 샘플 간격 [ms]");
             await p.SetAsync(KeyPrefix + "MeasureMode", s.MeasureMode.ToString(), "가스 측정 방식 (Point=경유점 정지 / Continuous=이동 중 연속)");
             await p.SetDoubleAsync(KeyPrefix + "NonStopBlendRadiusMm", s.NonStopBlendRadiusMm, "연속 측정 경유점 블렌딩 반경 [mm] (0=경유점마다 정지, >0=무정지)");
+            await p.SetDoubleAsync(KeyPrefix + "NonStopMergeTolMm", s.NonStopMergeTolMm, "무정지 이동 직선 병합 허용 오차 [mm] — 키우면 곡선을 긴 직선으로 지나 블렌딩이 커진다(경로가 교시 곡선에서 이만큼 벗어남, 기본 0.3)");
             await p.SetDoubleAsync(KeyPrefix + "TipApproachMm", s.TipApproachMm, "검사 팁 진입 거리 [mm] — 도면 순회 직전 벽면 쪽으로 근접 (0=진입 안 함)");
             await p.SetAsync(KeyPrefix + "TipApproachVelPercent", s.TipApproachVelPercent.ToString(inv), "검사 팁 진입·이탈 속도 [%]");
         }

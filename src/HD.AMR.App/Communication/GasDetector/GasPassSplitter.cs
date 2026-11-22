@@ -75,6 +75,13 @@ public static class GasPassSplitter
     /// <summary>직선 병합 위치 허용 편차 [mm] — 사이 경유점이 합친 직선에서 이보다 멀면 끊는다.</summary>
     public const double MergeTolMm = 0.3;
 
+    /// <summary>직선 병합 허용 편차 설정 상한 [mm] — 이보다 크면 경로가 교시 곡선에서 너무 벗어난다.</summary>
+    public const double MaxMergeTolMm = 5.0;
+
+    /// <summary>설정값을 쓸 수 있는 허용 편차로 — 0 이하·비정상이면 기본값, 상한을 넘으면 상한.</summary>
+    public static double ResolveMergeTol(double settingMm)
+        => double.IsFinite(settingMm) && settingMm > 0 ? Math.Min(settingMm, MaxMergeTolMm) : MergeTolMm;
+
     /// <summary>직선 병합 자세 허용 차 [도] — 사이 경유점의 툴 자세가 합친 구간 시작 자세와 이보다 다르면 끊는다.</summary>
     public const double MergeTolDeg = 0.5;
 

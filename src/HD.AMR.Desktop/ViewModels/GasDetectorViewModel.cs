@@ -38,6 +38,7 @@ public sealed partial class GasDetectorViewModel : ViewModelBase
     [ObservableProperty] private bool _isContinuous;
     /// <summary>연속 측정 경유점 블렌딩 반경 [mm] — 0 = 경유점마다 정지, 0 초과 = 무정지.</summary>
     [ObservableProperty] private string _blendRadiusMm = "0";
+    [ObservableProperty] private string _mergeTolMm = "0.3";
     /// <summary>검사 팁 진입 거리 [mm] — 도면 순회 직전 벽면 쪽으로 근접. 0 = 진입 안 함.</summary>
     [ObservableProperty] private string _tipApproachMm = "0";
     /// <summary>검사 팁 진입·이탈 속도 [%].</summary>
@@ -265,6 +266,7 @@ public sealed partial class GasDetectorViewModel : ViewModelBase
         SampleIntervalMs = s.MeasureSampleIntervalMs.ToString(inv);
         IsContinuous = s.MeasureMode == GasMeasureMode.Continuous;
         BlendRadiusMm = s.NonStopBlendRadiusMm.ToString("0.###", inv);
+        MergeTolMm = GasPassSplitter.ResolveMergeTol(s.NonStopMergeTolMm).ToString("0.###", inv);
         TipApproachMm = s.TipApproachMm.ToString("0.###", inv);
         TipApproachVelPercent = s.TipApproachVelPercent.ToString(inv);
     }
@@ -316,6 +318,9 @@ public sealed partial class GasDetectorViewModel : ViewModelBase
             if (!double.TryParse(BlendRadiusMm.Trim(), NumberStyles.Float, inv, out var blend) || blend < 0 || blend > 50)
                 throw new FormatException("블렌딩 반경은 0~50 mm 여야 합니다 (0 = 경유점마다 정지).");
             s.NonStopBlendRadiusMm = blend;
+            if (!double.TryParse(MergeTolMm.Trim(), NumberStyles.Float, inv, out var mergeTol) || mergeTol <= 0 || mergeTol > GasPassSplitter.MaxMergeTolMm)
+                throw new FormatException($"직선 병합 허용 오차는 0 초과~{GasPassSplitter.MaxMergeTolMm:0.#} mm 여야 합니다 (기본 0.3).");
+            s.NonStopMergeTolMm = mergeTol;
             if (!double.TryParse(TipApproachMm.Trim(), NumberStyles.Float, inv, out var tip)
                 || tip < 0 || tip > HD.AMR.App.Service.Sequence.Steps.GasTipApproachStep.MaxApproachMm)
                 throw new FormatException($"검사 팁 진입 거리는 0~{HD.AMR.App.Service.Sequence.Steps.GasTipApproachStep.MaxApproachMm:0} mm 여야 합니다 (0 = 진입 안 함).");

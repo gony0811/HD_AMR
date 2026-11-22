@@ -183,6 +183,9 @@
                     <CheckBox Content="이동 중 연속 측정" IsChecked="{Binding IsContinuous}" />
                     <TextBlock Text="무정지 블렌딩 반경 [mm]" VerticalAlignment="Center" Margin="16,0,0,0" />
                     <TextBox Width="80" Text="{Binding BlendRadiusMm}" IsEnabled="{Binding IsContinuous}" />
+                    <TextBlock Text="직선 병합 오차 [mm]" VerticalAlignment="Center" Margin="16,0,0,0"
+                               ToolTip.Tip="무정지 이동에서 경유점들이 한 직선에서 이 거리 안이면 이동 명령 하나로 합친다. 키우면 코로게이션 곡선을 긴 직선 몇 개로 지나 블렌딩 반경이 커지고(구간 길이의 45%까지) 덜 끊긴다. 대신 경로가 교시 곡선에서 최대 이만큼 벗어난다 — 볼록한 Top 에서는 표면 쪽. 기본 0.3" />
+                    <TextBox Width="80" Text="{Binding MergeTolMm}" IsEnabled="{Binding IsContinuous}" />
                 </StackPanel>
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <TextBlock Text="검사 팁 진입 거리 [mm]" VerticalAlignment="Center" />
