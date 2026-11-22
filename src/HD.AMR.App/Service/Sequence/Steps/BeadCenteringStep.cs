@@ -279,32 +279,73 @@ public class BeadCenteringStep : ISequenceStep
         await WeldSequenceSupport.ApplyDlModelAsync(_param, _weld);   // 저장된 DL 모델 선택 적용
         if (WeldSequenceSupport.MissingModel(_weld) is { } noModel)
             return StepResult.Fail($"Bead{_peakId} 재측정 중단 — {noModel}");
-        var (m2, detect2) = await _weld.CapturePeakAsync(_peakId, peakRoi, beadRoi, ct);
-        string? autoFail = detect2 is null || !detect2.Success || m2 is null
-            ? $"이동 후 Bead{_peakId} 재검출 실패 — '{axisKey}' 매핑" +
-              $"(현재 툴{FlatSurfaceCenteringService.AxisName(toolAxis)}) 또는 ROI 를 확인하세요." +
-              (detect2 is null ? "" : $" ({detect2.Message})")
-            // ⑦과 같은 게이트 — 직선피팅 실패(중앙값 폴백) d 로 방향 검증·M1 갱신을 하면 잘못 통과/실패한다.
-            : !detect2.LineFitOk
-                ? $"이동 후 Bead{_peakId} 직선피팅 실패(중앙값 폴백) — 잔차를 신뢰할 수 없습니다. coverage={detect2.Confidence:P0}"
-                : null;
+        // 이동 후 재측정 한 번 — 잔차(mm), 수동 입력 메모, 실패 사유. 실패면 Residual = null.
+        async Task<(double? Residual, string Note, string? Fail)> RemeasureAsync()
+        {
+            var (m2, detect2) = await _weld.CapturePeakAsync(_peakId, peakRoi, beadRoi, ct);
+            string? autoFail = detect2 is null || !detect2.Success || m2 is null
+                ? $"이동 후 Bead{_peakId} 재검출 실패 — '{axisKey}' 매핑" +
+                  $"(현재 툴{FlatSurfaceCenteringService.AxisName(toolAxis)}) 또는 ROI 를 확인하세요." +
+                  (detect2 is null ? "" : $" ({detect2.Message})")
+                // ⑦과 같은 게이트 — 직선피팅 실패(중앙값 폴백) d 로 방향 검증·M1 갱신을 하면 잘못 통과/실패한다.
+                : !detect2.LineFitOk
+                    ? $"이동 후 Bead{_peakId} 직선피팅 실패(중앙값 폴백) — 잔차를 신뢰할 수 없습니다. coverage={detect2.Confidence:P0}"
+                    : null;
 
-        // 재측정도 비드 찾기와 같은 수동 입력 조건을 따른다(수동으로 찾은 뒤 재검출만 실패해 멈추지 않게).
-        var assist = await _manual.RunAsync(_peakId, $"{DisplayName}(재측정)", m2, detect2, autoFail is null, autoFail,
-            peakRoi, beadRoi, context, ct);
-        if (assist.Kind == BeadAssistKind.Manual) m2 = assist.Measurement;
-        else if (!assist.UseAutoPath || autoFail is not null)
-            return StepResult.Fail((autoFail ?? $"이동 후 Bead{_peakId} 재측정 실패") + assist.Note);
-        if (m2 is null)
-            return StepResult.Fail($"이동 후 Bead{_peakId} 재측정 결과가 없습니다.{assist.Note}");
+            // 재측정도 비드 찾기와 같은 수동 입력 조건을 따른다(수동으로 찾은 뒤 재검출만 실패해 멈추지 않게).
+            var a = await _manual.RunAsync(_peakId, $"{DisplayName}(재측정)", m2, detect2, autoFail is null, autoFail,
+                peakRoi, beadRoi, context, ct);
+            if (a.Kind == BeadAssistKind.Manual) m2 = a.Measurement;
+            else if (!a.UseAutoPath || autoFail is not null)
+                return (null, a.Note, (autoFail ?? $"이동 후 Bead{_peakId} 재측정 실패") + a.Note);
+            if (m2 is null)
+                return (null, a.Note, $"이동 후 Bead{_peakId} 재측정 결과가 없습니다.{a.Note}");
+            return (_weld.DMm(m2), a.Note, null);
+        }
 
-        var residualMm = _weld.DMm(m2);
+        var (firstRes, assistNote, firstFail) = await RemeasureAsync();
+        if (firstFail is not null) return StepResult.Fail(firstFail);
+        var residualMm = firstRes!.Value;
+        var recenterNote = "";
 
         if (Math.Abs(residualMm) >= Math.Abs(initialDMm))
-            return StepResult.Fail(
-                $"비드 이격이 증가했습니다 (d={initialDMm:+0.0;-0.0} → {residualMm:+0.0;-0.0}mm) — " +
-                $"'{axisKey}' 를 현재 툴{FlatSurfaceCenteringService.AxisName(toolAxis)} 의 " +
-                "반대 부호 축으로 설정해 보세요 (카메라 페이지).");
+        {
+            if (ClassifyRecheck(initialDMm, clamped, residualMm) == BeadRecheck.AxisReversed)
+                return StepResult.Fail(
+                    $"비드 이격이 증가했습니다 (d={initialDMm:+0.0;-0.0} → {residualMm:+0.0;-0.0}mm) — " +
+                    $"'{axisKey}' 를 현재 툴{FlatSurfaceCenteringService.AxisName(toolAxis)} 의 " +
+                    "반대 부호 축으로 설정해 보세요 (카메라 페이지).");
+
+            // 축이 반대일 때 나올 값(처음 d + 이동량)과도 맞지 않는다 — 첫 검출이 비드가 아닌 선을 잡은 것으로 보고
+            // 재측정 값으로 한 번 더 센터링한다(실기 2026-11-22 17:03 M2: 첫 검출 −6.8mm·두드러짐 3.4mm, 재측정 +119.2mm·26.4mm).
+            if (failOnLarge && IsUncorrectableResidual(ResidualAfterClamp(residualMm, MaxCenteringMoveMm)))
+                return StepResult.Fail(LargeResidualFail(residualMm, ResidualAfterClamp(residualMm, MaxCenteringMoveMm)));
+            var move2 = Math.Clamp(residualMm, -MaxCenteringMoveMm, MaxCenteringMoveMm);
+            _logger.LogWarning(
+                "Bead{Id} 센터링: 첫 검출 d={D1:+0.0;-0.0}mm 가 재측정 d={D2:+0.0;-0.0}mm 와 맞지 않음(축 반대면 {Rev:+0.0;-0.0}mm) — " +
+                "첫 검출을 버리고 재측정 값으로 다시 센터링: 툴{Axis} {Off:+0.0;-0.0}mm",
+                _peakId, initialDMm, residualMm, initialDMm + clamped, FlatSurfaceCenteringService.AxisName(toolAxis), move2);
+
+            var anchor2 = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
+            var offset2 = new double[6];
+            FlatSurfaceCenteringService.ApplyAxis(offset2, toolAxis, move2);
+            var rc2 = await _cobot.Rpc.MoveByToolOffsetAsync(anchor2, user: 0, offset2,
+                tool: context.Tool, vel: context.Velocity, ct: ct);
+            if (rc2 != 0)
+                return StepResult.Fail($"비드 재센터링 이동 실패 (rc={rc2}){FairinoErrorCodes.Suffix(rc2)}.");
+            await Task.Delay(SettleMs, ct);
+
+            var (secondRes, secondNote, secondFail) = await RemeasureAsync();
+            if (secondFail is not null) return StepResult.Fail(secondFail);
+            if (Math.Abs(secondRes!.Value) >= Math.Abs(residualMm))
+                return StepResult.Fail(
+                    $"비드 재센터링 후에도 이격이 줄지 않았습니다 (d={initialDMm:+0.0;-0.0} → {residualMm:+0.0;-0.0} → {secondRes.Value:+0.0;-0.0}mm) — " +
+                    $"비드 검출이 불안정하거나 '{axisKey}' 매핑(현재 툴{FlatSurfaceCenteringService.AxisName(toolAxis)})이 틀렸습니다. ROI·조명·매핑을 확인하세요.");
+
+            recenterNote = $" 첫 검출(d={initialDMm:+0.0;-0.0}mm)이 재측정(d={residualMm:+0.0;-0.0}mm)과 맞지 않아 재측정 값으로 다시 센터링({move2:+0.0;-0.0}mm).";
+            assistNote += secondNote;
+            residualMm = secondRes.Value;
+        }
 
         if (residualMax > 0 && Math.Abs(residualMm) > residualMax)
             residualWarn = $"잔차 {residualMm:+0.0;-0.0}mm 가 허용 ±{residualMax:0.#}mm 초과 — 그대로 진행";
@@ -312,7 +353,7 @@ public class BeadCenteringStep : ISequenceStep
         if (failOnLarge && IsUncorrectableResidual(residualMm))
             return StepResult.Fail(
                 $"Bead{_peakId} 센터링 후 잔차 {residualMm:+0.0;-0.0}mm 가 점 보정 상한 ±{WObjPointStep.MaxResidualCorrectionMm:0}mm 를 넘습니다 " +
-                $"(이동 전 {initialDMm:+0.0;-0.0}mm) — 작업물 좌표계가 기울어지므로 중단.{assist.Note}");
+                $"(이동 전 {initialDMm:+0.0;-0.0}mm) — 작업물 좌표계가 기울어지므로 중단.{recenterNote}{assistNote}");
 
         context.Bag[WeldSequenceSupport.BeadDMmBagKey(_peakId)] = residualMm;
         var corr1 = RecordPointCorrection(context, toolAxis, residualMm, "재측정 잔차");
@@ -324,7 +365,33 @@ public class BeadCenteringStep : ISequenceStep
 
         return StepResult.Ok(
             $"Bead{_peakId} 센터링 완료 — {clamped:+0.0;-0.0}mm 이동, " +
-            $"잔차 d={residualMm:+0.0;-0.0}mm (이동 전 {initialDMm:+0.0;-0.0}mm), M1 갱신.{progressNote}{corr1}{assist.Note}{shiftedNote}{ResidualNote(residualWarn)}");
+            $"잔차 d={residualMm:+0.0;-0.0}mm (이동 전 {initialDMm:+0.0;-0.0}mm), M1 갱신.{recenterNote}{progressNote}{corr1}{assistNote}{shiftedNote}{ResidualNote(residualWarn)}");
+    }
+
+    /// <summary>센터링 이동 뒤 재측정 판정.</summary>
+    internal enum BeadRecheck
+    {
+        /// <summary>이격이 줄었다 — 정상.</summary>
+        Ok,
+        /// <summary>이격이 "처음 d + 이동량" 근처로 늘었다 — cross 축 부호가 반대.</summary>
+        AxisReversed,
+        /// <summary>이격이 줄지도, 축 반대 값과 맞지도 않는다 — 첫 검출이 비드가 아닌 선을 잡았다.</summary>
+        FirstDetectionWrong,
+    }
+
+    /// <summary>축 반대 판정 허용 폭 하한 [mm] — 이동량이 작을 때 검출 노이즈로 오판하지 않게.</summary>
+    internal const double AxisReversedTolMinMm = 10.0;
+
+    /// <summary>
+    /// 센터링 이동(<paramref name="movedMm"/>) 뒤 재측정한 이격으로 무슨 일이 있었는지 가른다. cross 축 부호가 반대면 비드에서
+    /// 이동량만큼 더 멀어져 재측정이 "처음 d + 이동량"(클램프가 없으면 2배) 근처로 나온다 — 그 값에서
+    /// max(<see cref="AxisReversedTolMinMm"/>, 이동량의 30%) 안이면 축 반대, 아니면 첫 검출 오류로 본다.
+    /// </summary>
+    internal static BeadRecheck ClassifyRecheck(double initialDMm, double movedMm, double residualMm)
+    {
+        if (Math.Abs(residualMm) < Math.Abs(initialDMm)) return BeadRecheck.Ok;
+        var tol = Math.Max(AxisReversedTolMinMm, Math.Abs(movedMm) * 0.3);
+        return Math.Abs(residualMm - (initialDMm + movedMm)) <= tol ? BeadRecheck.AxisReversed : BeadRecheck.FirstDetectionWrong;
     }
 
     /// <summary>
