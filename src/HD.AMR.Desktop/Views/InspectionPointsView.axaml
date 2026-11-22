@@ -123,6 +123,8 @@
                         <NumericUpDown Value="{Binding CorrugSpacingMm}" Minimum="0.5" Increment="0.5" FormatString="0.0" Width="110" />
                         <TextBlock Classes="axis" VerticalAlignment="Center" Text="이격(mm)" />
                         <NumericUpDown Value="{Binding CorrugStandoffMm}" Minimum="0" Increment="1" FormatString="0.0" Width="110" />
+                        <TextBlock Classes="axis" VerticalAlignment="Center" Text="옆면 여유(mm)" ToolTip.Tip="평탄부에서 이만큼 일찍 올라가기 시작한다(내려올 때는 이만큼 늦게 평탄부에 닿는다). 여유는 Top 으로 갈수록 줄어 Top 에서 0 — 코로게이션 발치 구석만 비켜 간다. 0 = 도면 단면 그대로" />
+                        <NumericUpDown Value="{Binding CorrugFlankClearanceMm}" Minimum="0" Maximum="50" Increment="1" FormatString="0.0" Width="110" />
                         <Button Content="코로게이션 1피치 채우기" Command="{Binding FillCorrugationPitchCommand}" IsEnabled="{Binding !IsRunning}" />
                     </StackPanel>
                     <TextBlock Classes="axis" VerticalAlignment="Center" Text="{Binding PointCount, StringFormat='{}{0} 점'}" />

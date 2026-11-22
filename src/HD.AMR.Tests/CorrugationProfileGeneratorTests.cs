@@ -90,4 +90,58 @@ public class CorrugationProfileGeneratorTests
     public void Generate_RejectsBadOptions(double spacing, double standoff)
         => Assert.False(CorrugationProfileGenerator.TrySample(G,
             new CorrugationSamplingOptions(spacing, standoff), out _, out _));
+
+    [Fact]
+    public void Generate_FlankClearanceTapersToZeroAtTop()
+    {
+        const double c = 10.0;
+        Assert.True(CorrugationProfileGenerator.TrySample(G, new CorrugationSamplingOptions(2.0, 0, c), out var s, out var err), err);
+        CorrugationProfileGenerator.TrySample(G, new CorrugationSamplingOptions(2.0), out var b, out _);
+
+        // 양 끝은 Top 그대로 — Top 에서는 여유가 0 이다(평평하게 넓히지 않는다).
+        Assert.Equal((0.0, 33.8), (s[0].X, s[0].Z));
+        Assert.Equal(360.0, s[^1].X, 9);
+        Assert.Equal(33.8, s[^1].Z, 9);
+        Assert.True(s[1].Z < 33.8);
+
+        foreach (var p in s)
+        {
+            var dx = Math.Min(p.X, 360.0 - p.X);
+            var surfaceZ = CorrugationProfileGenerator.Evaluate(G, p.X).Z;
+            // 실제 표면보다 낮아지는 곳이 없다.
+            Assert.True(p.Z >= surfaceZ - 1e-6);
+            // 경로 점은 같은 높이의 표면 점을 수평으로 c·(1 − z/H) 만큼 민 것 — 그만큼 안쪽 표면 높이와 같다.
+            var shift = c * (1 - p.Z / 33.8);
+            Assert.Equal(CorrugationProfileGenerator.Evaluate(G, Math.Max(0, dx - shift)).Z, p.Z, 3);
+        }
+
+        // 평탄부는 c 만큼 일찍 끝난다(양쪽 같은 만큼).
+        var flatStartBase = b.First(p => p.Z < 1e-6).X;
+        var flatStart = s.First(p => p.Z < 1e-6).X;
+        Assert.InRange(flatStart - flatStartBase, c - 2.0, c + 2.0);
+
+        // 좌우 대칭, 간격은 호장 등간격(2mm 이하).
+        for (var i = 0; i < s.Count; i++)
+            Assert.Equal(s[i].Z, s[^(i + 1)].Z, 5);
+        for (var i = 1; i < s.Count; i++)
+            Assert.InRange(Math.Sqrt(Math.Pow(s[i].X - s[i - 1].X, 2) + Math.Pow(s[i].Z - s[i - 1].Z, 2)), 1.9, 2.0 + 1e-6);
+    }
+
+    [Fact]
+    public void Evaluate_ClearanceSlopeMatchesFiniteDifference()
+    {
+        foreach (var x in new[] { 5.0, 15.0, 28.0, 36.0, 44.0, 330.0 })
+        {
+            var (_, slope) = CorrugationProfileGenerator.Evaluate(G, x, 10);
+            var fd = (CorrugationProfileGenerator.Evaluate(G, x + 1e-4, 10).Z - CorrugationProfileGenerator.Evaluate(G, x - 1e-4, 10).Z) / 2e-4;
+            Assert.Equal(fd, slope, 3);
+        }
+    }
+
+    [Theory]
+    [InlineData(-1.0)]
+    [InlineData(200.0)]
+    public void Generate_RejectsBadFlankClearance(double clearance)
+        => Assert.False(CorrugationProfileGenerator.TrySample(G,
+            new CorrugationSamplingOptions(2.0, 0, clearance), out _, out _));
 }

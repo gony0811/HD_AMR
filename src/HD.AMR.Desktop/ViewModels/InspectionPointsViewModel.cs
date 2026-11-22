@@ -100,6 +100,8 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
     [ObservableProperty] private double _corrugSpacingMm = 2.0;
     /// <summary>코로게이션 채우기 — 팁 이격 [mm](작업물 Z+ 로 띄움). 0 = TCP 가 표면 위.</summary>
     [ObservableProperty] private double _corrugStandoffMm;
+    /// <summary>코로게이션 채우기 — 옆면 여유 [mm]. 평탄부에서 이만큼 일찍 올라가기 시작하고, 여유는 Top 으로 갈수록 줄어 Top 에서 0. 0 = 도면 그대로.</summary>
+    [ObservableProperty] private double _corrugFlankClearanceMm;
 
     private CancellationTokenSource? _runCts;
 
@@ -264,7 +266,7 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
     [RelayCommand]
     private void FillCorrugationPitch()
     {
-        var opts = new CorrugationSamplingOptions(CorrugSpacingMm, CorrugStandoffMm);
+        var opts = new CorrugationSamplingOptions(CorrugSpacingMm, CorrugStandoffMm, CorrugFlankClearanceMm);
         if (!CorrugationProfileGenerator.TryGenerate(CorrugationProfileShape.MembraneA, opts, out var wps, out var err))
         {
             Notify($"코로게이션 생성 실패: {err}", true);
@@ -275,8 +277,8 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
             Points.Add(new XyPointVm(this) { X = w.X, Y = w.Y, Z = w.Z, Rx = 0, Theta = 0, Rz = 0, Surface = w.Surface });
         Selected = -1;
         AfterPointsChanged();
-        var spacing = CorrugationProfileGenerator.Length(CorrugationProfileShape.MembraneA) / (wps.Count - 1);
-        Notify($"코로게이션 1피치 {Points.Count}점 채움 (곡선 간격 {spacing:0.000}mm, 이격 {CorrugStandoffMm:0.#}mm, 손목 평면 수직 고정)", false);
+        var spacing = CorrugationProfileGenerator.Length(CorrugationProfileShape.MembraneA, CorrugFlankClearanceMm) / (wps.Count - 1);
+        Notify($"코로게이션 1피치 {Points.Count}점 채움 (곡선 간격 {spacing:0.000}mm, 이격 {CorrugStandoffMm:0.#}mm, 옆면 여유 {CorrugFlankClearanceMm:0.#}mm, 손목 평면 수직 고정)", false);
     }
 
     [RelayCommand]

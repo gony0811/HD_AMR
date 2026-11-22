@@ -41,7 +41,10 @@ public sealed record CorrugationProfileShape
 /// (양 끝 Top 이 정확히 포함되도록 실제 간격은 이 값보다 약간 작을 수 있다).</param>
 /// <param name="StandoffMm">팁 이격 [mm] — 작업물 Z+(평면 수직, 툴축) 방향으로 띄운다. 0 = TCP 를 표면 위에 둔다(기존 LINE-1-COR 와 동일).
 /// 툴축이 평면 수직 고정이라 경사 θ 인 옆면에서 표면까지의 수직 거리는 이격·cosθ 로 줄어든다(73° 옆면 ≈ 0.3배).</param>
-public sealed record CorrugationSamplingOptions(double SpacingMm = 2.0, double StandoffMm = 0.0);
+/// <param name="FlankClearanceMm">옆면 여유 [mm] — 평탄부에서 실제 필렛 시작보다 이만큼 일찍 올라가기 시작한다(내려올 때는 이만큼
+/// 늦게 평탄부에 닿는다). 수평 여유는 바닥에서 이 값이고 높이에 비례해 줄어 <b>Top 에서 0</b> 이 된다 — 경로는 Top 을 그대로 지나고
+/// 평탄부와 만나는 구석만 비켜 간다(팁이 코로게이션 발치까지 들어가지 않게). 0 = 도면 단면 그대로. 필렛 끝 + 여유가 반 피치를 넘으면 실패.</param>
+public sealed record CorrugationSamplingOptions(double SpacingMm = 2.0, double StandoffMm = 0.0, double FlankClearanceMm = 0.0);
 
 /// <summary>샘플 한 점(작업물 프레임). <see cref="SurfaceSlopeDeg"/> = 그 점의 표면 경사(참고용, 툴 자세엔 쓰지 않음).</summary>
 public readonly record struct CorrugationSample(double S, double X, double Z, double SurfaceSlopeDeg, SurfaceType Surface);
@@ -77,17 +80,40 @@ public static class CorrugationProfileGenerator
     }
 
     /// <summary>단면 높이 Z(x)와 기울기 dZ/dX (x ∈ [0, Pitch]).</summary>
-    public static (double Z, double Slope) Evaluate(CorrugationProfileShape g, double x)
+    public static (double Z, double Slope) Evaluate(CorrugationProfileShape g, double x) => Evaluate(g, x, 0);
+
+    /// <summary>
+    /// 옆면 여유 <paramref name="clearanceMm"/> 를 준 경로 단면의 높이·기울기. 표면 위 점 (s, Z(s)) 를 수평으로
+    /// 여유·(1 − Z(s)/Top높이) 만큼 Top 에서 멀어지는 쪽으로 민 곡선이다 — 바닥에서 여유만큼, Top 에서 0.
+    /// 표면보다 낮아지는 곳은 없다.
+    /// </summary>
+    public static (double Z, double Slope) Evaluate(CorrugationProfileShape g, double x, double clearanceMm)
     {
         var half = g.PitchMm / 2;
         if (x <= half)
-            return Half(g, Math.Max(0, x));
-        var (z, m) = Half(g, Math.Max(0, g.PitchMm - x));
+            return HalfWithClearance(g, Math.Max(0, x), clearanceMm);
+        var (z, m) = HalfWithClearance(g, Math.Max(0, g.PitchMm - x), clearanceMm);
         return (z, -m);
     }
 
+    private static (double Z, double Slope) HalfWithClearance(CorrugationProfileShape g, double dx, double c)
+    {
+        if (!(c > 0)) return Half(g, dx);
+        var foot = FilletCenterDx(g);
+        if (dx >= foot + c) return (0.0, 0.0);
+        // dx = s + c·(1 − Z(s)/H) 를 s 에 대해 푼다 — Z 가 s 에 대해 줄어들기만 하므로 우변은 단조 증가(이분법).
+        double lo = 0, hi = foot;
+        for (var i = 0; i < 50; i++)
+        {
+            var mid = (lo + hi) / 2;
+            if (mid + c * (1 - Half(g, mid).Z / g.TopHeightMm) < dx) lo = mid; else hi = mid;
+        }
+        var (z, slope) = Half(g, (lo + hi) / 2);
+        return (z, slope / (1 - c * slope / g.TopHeightMm));
+    }
+
     /// <summary>1 피치 단면 전체 길이(호장) [mm].</summary>
-    public static double Length(CorrugationProfileShape g) => BuildArcLengthTable(g).S[^1];
+    public static double Length(CorrugationProfileShape g, double clearanceMm = 0) => BuildArcLengthTable(g, clearanceMm).S[^1];
 
     /// <summary>호장 등간격 샘플. 실패 시 false + error.</summary>
     public static bool TrySample(CorrugationProfileShape g, CorrugationSamplingOptions o,
@@ -106,12 +132,23 @@ public static class CorrugationProfileGenerator
             error = $"팁 이격({o.StandoffMm})은 0 이상이어야 합니다.";
             return false;
         }
+        if (!(o.FlankClearanceMm >= 0) || !double.IsFinite(o.FlankClearanceMm))
+        {
+            error = $"옆면 여유({o.FlankClearanceMm})는 0 이상이어야 합니다.";
+            return false;
+        }
+        if (FilletCenterDx(g) + o.FlankClearanceMm > g.PitchMm / 2)
+        {
+            error = $"옆면 여유({o.FlankClearanceMm})가 너무 큽니다 — 평탄부가 남지 않습니다.";
+            return false;
+        }
 
-        var (xs, s) = BuildArcLengthTable(g);
+        var c = o.FlankClearanceMm;
+        var (xs, s) = BuildArcLengthTable(g, c);
         var length = s[^1];
         var n = Math.Max(1, (int)Math.Ceiling(length / o.SpacingMm - 1e-9));
         var step = length / n;
-        var filletEnd = FilletCenterDx(g);
+        var filletEnd = FilletCenterDx(g) + c;
 
         var j = 1;
         for (var k = 0; k <= n; k++)
@@ -123,7 +160,7 @@ public static class CorrugationProfileGenerator
             if (k == 0) x = 0;
             if (k == n) x = g.PitchMm;
 
-            var (z, slope) = Evaluate(g, x);
+            var (z, slope) = Evaluate(g, x, c);
             var slopeDeg = Math.Atan(slope) * 180.0 / Math.PI;
 
             var dx = Math.Min(x, g.PitchMm - x);
@@ -205,15 +242,15 @@ public static class CorrugationProfileGenerator
         return (z, dz);
     }
 
-    private static (double[] X, double[] S) BuildArcLengthTable(CorrugationProfileShape g)
+    private static (double[] X, double[] S) BuildArcLengthTable(CorrugationProfileShape g, double clearanceMm = 0)
     {
         var xs = new double[DenseSteps + 1];
         var s = new double[DenseSteps + 1];
-        var prevZ = Evaluate(g, 0).Z;
+        var prevZ = Evaluate(g, 0, clearanceMm).Z;
         for (var i = 1; i <= DenseSteps; i++)
         {
             xs[i] = g.PitchMm * i / DenseSteps;
-            var z = Evaluate(g, xs[i]).Z;
+            var z = Evaluate(g, xs[i], clearanceMm).Z;
             var dx = xs[i] - xs[i - 1];
             s[i] = s[i - 1] + Math.Sqrt(dx * dx + (z - prevZ) * (z - prevZ));
             prevZ = z;
