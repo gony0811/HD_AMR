@@ -132,7 +132,8 @@ public class LineSurfaceHeightTests
     public void 보정량_한계를_넘으면_멈춘다()
     {
         Assert.Null(LineSurfaceHeightStep.Problem(12, -20));
-        Assert.NotNull(LineSurfaceHeightStep.Problem(31, 0));
+        Assert.Null(LineSurfaceHeightStep.Problem(50, 0));
+        Assert.NotNull(LineSurfaceHeightStep.Problem(81, 0));
         Assert.NotNull(LineSurfaceHeightStep.Problem(0, -31));
     }
 
@@ -142,10 +143,20 @@ public class LineSurfaceHeightTests
         // 툴이 좌표계와 같은 자세(광축 툴 Z)일 때 툴 Z 로 400mm 앞 평면 — 좌표계 Z 높이 400(광축 쪽이 −Z 가 아닌 이 가정에서는 +), 기울기 0.
         var tool = (double[])Frame.Clone();
         var plane = new PlanePose(0, 75, 400, 0, 0, 0, new double[] { 0, 0, 1 }, true, null);
-        var p = LineSurfaceHeightStep.SurfacePointBase(plane, tool);
+        var p = LineSurfaceHeightStep.SurfacePointBase(plane, tool, ToolAxisDir.PlusZ);
         var (a, h) = InternalWorkpieceFrame.AlongAndHeight(Frame, p);
         Assert.Equal(0, a, 6);
         Assert.Equal(400, h, 6);
+
+        // 광축이 툴 −Z(가스 검사 AMR)면 면은 툴 −Z 쪽 400mm — 뒤집어 놓지 않으면 벽이 멀수록 높이가 커져 보정이 반대로 걸린다.
+        var minus = LineSurfaceHeightStep.SurfacePointBase(plane, tool, ToolAxisDir.MinusZ);
+        Assert.Equal(-400, InternalWorkpieceFrame.AlongAndHeight(Frame, minus).Height, 6);
+        var outward = LineSurfaceHeightStep.OutwardNormal(Frame, tool, ToolAxisDir.MinusZ);
+        Assert.Equal(-400, LineSurfaceHeightStep.HeightOutMm(Frame, new[] { minus[0], minus[1], minus[2] }, outward), 6);
+        Assert.Equal(-400, LineSurfaceHeightStep.WdReferenceHeightMm(Frame, outward, 400), 6);
+        // 벽이 5mm 더 멀면 면 점은 바깥 기준으로 5mm 더 깊다(높이가 작아진다).
+        var far = LineSurfaceHeightStep.SurfacePointBase(plane with { Z = 405 }, tool, ToolAxisDir.MinusZ);
+        Assert.Equal(-405, LineSurfaceHeightStep.HeightOutMm(Frame, new[] { far[0], far[1], far[2] }, outward), 6);
         Assert.Equal(0, LineSurfaceHeightStep.PlaneTiltToFrameDeg(plane, tool, Frame), 6);
 
         var s = Math.Sin(10 * Math.PI / 180);
@@ -201,5 +212,27 @@ public class LineSurfaceHeightTests
         var (along, _) = InternalWorkpieceFrame.AlongAndHeight(Frame, at);
         Assert.Equal(120, along, 6);
         for (var i = 3; i < 6; i++) Assert.Equal(start[i], at[i], 9);
+    }
+
+    [Fact]
+    public void WD_기준이면_시작과_끝에서_좌표계_면이_벽에서_WD_만큼_떨어진다()
+    {
+        // 물려받은 좌표계가 벽에서 시작점 405mm, 끝점 409mm 떨어져 있다(WD 목표 400) — 보정 뒤에는 두 점 모두 400mm.
+        var outward = LineSurfaceHeightStep.OutwardNormal(Frame, Frame, ToolAxisDir.MinusZ);
+        var reference = LineSurfaceHeightStep.WdReferenceHeightMm(Frame, outward, 400);
+        Assert.Equal(400, Math.Abs(reference), 9);
+        var toWall = Math.Sign(reference);   // 벽 쪽 좌표계 Z 부호
+        var start = At(Frame, 10, 150, toWall * 405);
+        var end = At(Frame, 370, 150, toWall * 409);
+
+        var (f, off, _, rise, _) = InternalWorkpieceFrame.CorrectBySurfaceHeights(Frame, start, end, reference);
+        Assert.Equal(toWall * 5, off, 6);
+        Assert.Equal(toWall * 4, rise, 6);
+        Assert.Null(LineSurfaceHeightStep.Problem(off, rise));
+        Assert.Equal(reference, InternalWorkpieceFrame.AlongAndHeight(f, start).Height, 3);
+        Assert.Equal(reference, InternalWorkpieceFrame.AlongAndHeight(f, end).Height, 3);
+        // 벽은 바깥 법선의 반대쪽 — 바깥이 뒤집히면 기준 부호도 뒤집힌다.
+        var inverse = LineSurfaceHeightStep.OutwardNormal(Frame, Frame, ToolAxisDir.PlusZ);
+        Assert.Equal(-reference, LineSurfaceHeightStep.WdReferenceHeightMm(Frame, inverse, 400), 9);
     }
 }
