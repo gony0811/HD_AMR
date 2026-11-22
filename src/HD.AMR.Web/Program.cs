@@ -213,6 +213,7 @@ builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstanc
 builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<BeadFindStep>(sp, 2));
 builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<BeadCenteringStep>(sp, 2));   // 1150
 builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<WObjPointStep>(sp, 2));   // 1160: 작업물 좌표계 점2(X방향)
+builder.Services.AddScoped<ISequenceStep, WObjPoint3Step>();   // 1165: 점3(면 기울기) — CROSS4 묶음·용접선만
 builder.Services.AddScoped<ISequenceStep, WObjRegisterStep>();   // 1170: 가상 점3(툴Z+50mm) + 좌표계 등록
 // 드라이런 2점 교시 끝점 이동(1155) — seamEndW 접근점으로 MoveL. wobjPoint2 가 그 자리에서 점2를 기록.
 builder.Services.AddScoped<ISequenceStep, CobotSeamEndMoveStep>();

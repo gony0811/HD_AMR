@@ -92,9 +92,10 @@ public class WObjRegisterStep : ISequenceStep
                 "(0 = 점1 을 평탄부 초점 높이에서 기록, 33.8 = 주름 꼭대기 초점 높이에서 기록).");
 
         double[] frame;
+        var point3Normal = context.Bag.TryGetValue(WObjPoint3Step.NormalBagKey, out var nv) && nv is double[] { Length: 3 } n3 ? n3 : null;
         try
         {
-            frame = InternalWorkpieceFrame.Compute(p1, p2, heightMm);
+            frame = InternalWorkpieceFrame.Compute(p1, p2, heightMm, point3Normal);
         }
         catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
         {
@@ -102,11 +103,13 @@ public class WObjRegisterStep : ISequenceStep
         }
 
         context.Bag[InternalWorkpieceFrame.BagKey] = frame;
-        var slopeNote = "";
+        var slopeNote = point3Normal is not null && context.Bag.TryGetValue(WObjPoint3Step.RollBagKey, out var rv) && rv is double roll
+            ? $" 점3 면 기울기 반영(X축 둘레 {roll:+0.00;-0.00}°)."
+            : "";
         if (context.Bag.TryGetValue(BundleTeach.Point2WdKey, out var wd) && wd is true)
         {
             var slope = InternalWorkpieceFrame.SlopeAlongSeamDeg(p1, p2);
-            slopeNote = $" 묶음 보정 — X는 비드 센터(Y), Z는 두 점 WD 실측에 직교(기울기 {slope:+0.00;-0.00}°).";
+            slopeNote += $" 묶음 보정 — X는 비드 센터(Y), Z는 두 점 WD 실측에 직교(기울기 {slope:+0.00;-0.00}°).";
             _logger.LogInformation("내부 작업물 좌표계 묶음 보정: 기울기 {Slope:+0.00;-0.00}°", slope);
         }
         var span = Math.Sqrt(

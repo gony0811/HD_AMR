@@ -258,6 +258,8 @@ internal static class ServiceRegistration
         services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<BeadFindStep>(sp, 2));
         services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<BeadCenteringStep>(sp, 2));
         services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<WObjPointStep>(sp, 2));
+        // 점3(면 기울기, 1165) — CROSS4 가 든 묶음·용접선에서만 오케스트레이터가 붙인다.
+        services.AddScoped<ISequenceStep, WObjPoint3Step>();
         services.AddScoped<ISequenceStep, WObjRegisterStep>();
         // 드라이런 2점 교시 끝점 이동(1155) — seamEndW 접근점으로 MoveL. wobjPoint2 가 그 자리에서 점2를 기록.
         services.AddScoped<ISequenceStep, CobotSeamEndMoveStep>();

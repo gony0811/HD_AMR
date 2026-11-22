@@ -45,6 +45,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
     private (double[] Start, double[] End)? _lastAnchorSeamW;     // 그 프레임을 쓴 task 의 용접선(맵) — 꺾인 용접선이 같은 프레임을 물려받지 않게
     private double[]? _lastAnchorStartBase;                       // 그 프레임을 쓴 task 의 ② 시작 접근점(BASE) — 다음 task 프레임 평행 이동 기준
     private double[]? _lastAnchorEndTcp;                           // 그 task 종료 시 TCP(BASE) — 다음 task 연속 이동 판정
+    private bool _lastFrameHasPoint3;                               // 그 프레임을 점3(면 기울기)까지 재서 잡았는가 — CROSS4 는 아니면 재교시
     private double? _lastAnchorStrokeMm;                           // 그 프레임을 쓴 task 의 텔레스코픽 스트로크(mm) — 높이 변경 시 캐시 무효화
     private CancellationTokenSource? _currentRunCts;
     private readonly Dictionary<string, BundleAssignment> _bundleByAction = new();
@@ -67,7 +68,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         Sequence.Steps.DepthCamCenterShiftStep.StepKey,
         "peak1Find", "peak1Center", "bead1Find", "bead1Center", "wobjPoint1",
         "peak2Approach", "peak2Find", "peak2Center", "bead2Find", "bead2Center", "wobjPoint2",
-        "wobjRegister",
+        "wobjRegister", Sequence.Steps.WObjPoint3Step.StepKey,
         FlatSurfaceAlignStep.BundlePoint2Key, LaserWorkingDistanceStep.BundlePoint2Key,
         // 드라이런 2점 교시의 끝점 이동 — anchor 적중 시 캐시 프레임 재사용으로 재교시 생략.
         "cobotSeamEnd",
@@ -642,6 +643,14 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                         "anchor 용접선 줄 변경(직전 용접선과 도면상 옆 {Tol:0}mm 초과) — 작업물 좌표계 재교시 (anchorGroup={Group}, jobRef={JobRef})",
                         InternalWorkpieceFrame.MaxDroppedLateralMm, req.AnchorGroupId, req.JobRef);
                 }
+                // CROSS4 는 교차 arm 이 용접선 옆으로 멀리 가므로 점3(면 기울기)까지 잰 좌표계만 물려받는다.
+                if (anchorHit && TaskBundlePlanner.IsCross4(req.SeamType) && !_lastFrameHasPoint3)
+                {
+                    anchorHit = false;
+                    _logger.LogInformation(
+                        "CROSS4 — 영역 캐시 좌표계가 점3(면 기울기) 없이 잡혀 재교시 (anchorGroup={Group}, jobRef={JobRef})",
+                        req.AnchorGroupId, req.JobRef);
+                }
                 if (!anchorHit && _lastAnchor is { } prev
                     && prev.OrderId == orderId && prev.AnchorGroupId == req.AnchorGroupId
                     && (prev.Direction != direction || prev.WallCode != req.DrawingPos.WallCode))
@@ -754,6 +763,13 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                 && sequence.Steps.Any(st => st.Key == Sequence.Steps.BundleEndWdStep.StepKey))
                 stepKeys = stepKeys.Append(Sequence.Steps.BundleEndWdStep.StepKey).ToArray();
 
+            // 점3(면 기울기) — CROSS4 가 든 묶음 리더·단독 CROSS4 가 좌표계를 새로 잡을 때만 붙인다.
+            var needPoint3 = !anchorHit && !recipe.DryRun && stepKeys.Contains("wobjRegister")
+                             && (bundle?.Role == BundleRole.Leader ? bundle.HasCross4 : TaskBundlePlanner.IsCross4(req.SeamType))
+                             && sequence.Steps.Any(st => st.Key == Sequence.Steps.WObjPoint3Step.StepKey);
+            if (needPoint3 && !stepKeys.Contains(Sequence.Steps.WObjPoint3Step.StepKey))
+                stepKeys = stepKeys.Append(Sequence.Steps.WObjPoint3Step.StepKey).ToArray();
+
             if (stepKeys.Length == 0)
                 return InspectionActionResult.Fail("inspectionFailed",
                     $"recipe {recipeId} 에 실행할 스텝이 남지 않았습니다 — 레시피 실행 스텝 구성을 확인하세요.");
@@ -857,6 +873,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                 context.Bag[CobotInspectionMoveStep.PreviousEndTcpBagKey] = cachedAnchorEndTcp;
             if (bundle?.Role == BundleRole.Leader)
                 BundleTeach.Activate(context, bundle);
+            if (needPoint3)
+                context.Bag[Sequence.Steps.WObjPoint3Step.RequiredBagKey] = true;
 
             // CROSS3/CROSS4 는 LINE 과 동일하게 티칭 프로필 경유점을 실행한다 — 코로게이션 격자 교차부는
             // 평탄하지 않아 수식 생성으로 법선·깊이를 담을 수 없으므로 6-DOF 캡처 교시(/inspection-points)로
@@ -936,6 +954,9 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                                 _lastAnchor = (orderId, req.AnchorGroupId, direction, req.DrawingPos.WallCode);
                                 _lastAnchorSeamW = (req.SeamStartW.ToArray(), req.SeamEndW.ToArray());
                                 _lastInternalWorkpieceFrame = (double[])internalFrame.Clone();
+                                // 이번에 새로 잡았으면 점3 여부를, 물려받았으면 종전 값을 유지한다.
+                                if (!anchorHit)
+                                    _lastFrameHasPoint3 = context.Bag.ContainsKey(Sequence.Steps.WObjPoint3Step.NormalBagKey);
                                 _lastAnchorStartBase = startBase;
                                 _lastAnchorEndTcp = endTcp;
                                 _lastAnchorStrokeMm = strokeAtEnd;

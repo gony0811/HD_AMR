@@ -14,7 +14,8 @@ public sealed record BundleTaskInput(
     double? LiftStrokeMm,
     InspectionMoveDirection? Direction,
     double[]? SeamStartW,
-    double[]? SeamEndW);
+    double[]? SeamEndW,
+    bool IsCross4 = false);
 
 /// <summary>묶음에서의 역할. 리더만 점1·점2 교시를 하고, 팔로워는 그 좌표계를 재사용한다.</summary>
 public sealed record BundleAssignment(
@@ -28,7 +29,9 @@ public sealed record BundleAssignment(
     double[]? FirstStartW,
     double[]? FirstEndW,
     /// <summary>점2 — 묶음 마지막 TASK 의 <b>끝점</b>(2026-11-18 변경, 종전 시작점). 점1→점2 를 실측으로 이어 마지막 용접선을 외삽 없이 순회한다.</summary>
-    double[]? Point2W);
+    double[]? Point2W,
+    /// <summary>묶음(단독이면 자기 자신)에 십자 CROSS4 용접선이 있는가 — 있으면 리더가 좌표계를 잡을 때 점3 으로 면 기울기를 잰다.</summary>
+    bool HasCross4 = false);
 
 /// <summary>
 /// 연속 TASK 묶음. 리프트 높이·wall_code·수직/수평이 모두 같고, 방향 판별이 확실한 액션만
@@ -52,7 +55,7 @@ public static class TaskBundlePlanner
             var ok = SeamDirectionResolver.TryClassify(req.SeamStartW, req.SeamEndW, nodeThetaRad, out var dir, out _);
             list.Add(new BundleTaskInput(
                 action.ActionId, req.JobRef, req.DrawingPos.WallCode, req.LiftStrokeMm,
-                ok ? dir : null, req.SeamStartW, req.SeamEndW));
+                ok ? dir : null, req.SeamStartW, req.SeamEndW, IsCross4(req.SeamType)));
         }
         return list;
     }
@@ -70,13 +73,15 @@ public static class TaskBundlePlanner
                 var id = tasks[i].ActionId;
                 var first = tasks[i];
                 var last = tasks[j - 1];
+                var hasCross4 = false;
+                for (var k = i; k < j; k++) hasCross4 |= tasks[k].IsCross4;
                 for (var k = i; k < j; k++)
                 {
                     result[k] = new BundleAssignment(
                         tasks[k].ActionId, tasks[k].JobRef,
                         k == i ? BundleRole.Leader : BundleRole.Follower,
                         id, first.WallCode, first.LiftStrokeMm, first.Direction,
-                        Clone3(first.SeamStartW), Clone3(first.SeamEndW), Clone3(last.SeamEndW));
+                        Clone3(first.SeamStartW), Clone3(first.SeamEndW), Clone3(last.SeamEndW), hasCross4);
                 }
             }
             else
@@ -204,7 +209,11 @@ public static class TaskBundlePlanner
 
     private static BundleAssignment Solo(BundleTaskInput t) => new(
         t.ActionId, t.JobRef, BundleRole.None, null, t.WallCode, t.LiftStrokeMm, t.Direction,
-        null, null, null);
+        null, null, null, t.IsCross4);
+
+    /// <summary>십자 4갈래(좌/우 구분 없는 구 계약 포함)인가.</summary>
+    public static bool IsCross4(SeamTypeKind kind)
+        => kind is SeamTypeKind.Cross or SeamTypeKind.Cross4L or SeamTypeKind.Cross4R;
 
     private static double[]? Clone3(double[]? v) => v is { Length: 3 } a ? (double[])a.Clone() : null;
 }
