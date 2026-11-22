@@ -38,7 +38,9 @@ public static class IoTowerLampPolicy
     public static bool IsAlarm(bool[] inputs, bool[]? outputs, bool emoLatched, bool amrError, bool cobotError,
         bool deviceAlarm = false)
         => (inputs.Length > Communication.IoPointMap.In.EmergencyStop && inputs[Communication.IoPointMap.In.EmergencyStop])
-           || (outputs is not null && outputs.Length > Communication.IoPointMap.Out.EmergencyStop
+           // EMO 출력이 없는 배치(−1)면 출력 되읽기를 보지 않는다.
+           || (outputs is not null && Communication.IoPointMap.Out.EmergencyStop >= 0
+               && outputs.Length > Communication.IoPointMap.Out.EmergencyStop
                && outputs[Communication.IoPointMap.Out.EmergencyStop])
            || emoLatched || amrError || cobotError || deviceAlarm;
 }

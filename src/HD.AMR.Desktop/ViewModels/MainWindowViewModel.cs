@@ -13,7 +13,13 @@ namespace HD.AMR.Desktop.ViewModels;
 public sealed partial class MainWindowViewModel : ObservableObject
 {
     /// <summary>EMO 비상정지 출력 포인트 (IO 모듈 OUT 10, 0-based).</summary>
-    private const int EmoOutputIndex = 10;
+    private static int EmoOutputIndex => IoPointMap.Out.EmergencyStop;
+
+    /// <summary>EMO 출력 접점이 있는 배치인가 — 없으면(−1, 가스검사 AMR 재배선 전) 화면 비상정지가 소프트웨어 정지만 한다.</summary>
+    private static bool HasEmoOutput => EmoOutputIndex >= 0;
+
+    // EMO 출력이 없는 모델에서 화면 비상정지 버튼의 눌림 상태(출력 되읽기를 대신한다).
+    private bool _softEmoActive;
 
     private readonly AMRService _amr;
     private readonly CobotService _cobot;
@@ -295,7 +301,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         // 표시 상태는 클릭이 아니라 폴링된 출력 스냅샷 기준 → 쓰기 미반영 시 자동 원복.
         var state = _io.GetState();
-        IsEmoActive = state is not null && state.Outputs.Length > EmoOutputIndex && state.Outputs[EmoOutputIndex];
+        IsEmoActive = HasEmoOutput
+            ? state is not null && state.Outputs.Length > EmoOutputIndex && state.Outputs[EmoOutputIndex]
+            : _softEmoActive;
 
         // 조작반 입력(자동/수동 셀렉터) — 포인트가 끊긴 경우 false.
         IsAutoMode = state is not null && state.Inputs.Length > IoPointMap.In.Auto && state.Inputs[IoPointMap.In.Auto];
@@ -357,7 +365,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     /// <summary>비상정지(활성화)는 IO 연결과 무관하게 항상 누를 수 있다 — 소프트웨어 정지(코봇·주행·임무)는
     /// IO 없이도 동작해야 한다. 해제(OFF)만 IO 출력 쓰기가 필요하다.</summary>
-    private bool CanToggleEmo() => IsIoConnected || !IsEmoActive;
+    private bool CanToggleEmo() => !HasEmoOutput || IsIoConnected || !IsEmoActive;
 
     /// <summary>
     /// 비상정지 토글. <b>AllowConcurrentExecutions</b> — 이전 처리(정지 대기·IO 쓰기)가 끝나지 않아도 버튼이
@@ -378,12 +386,20 @@ public sealed partial class MainWindowViewModel : ObservableObject
         string outNote;
         try
         {
+            if (!HasEmoOutput)
+            {
+                _softEmoActive = target;
+                outNote = "EMO 출력 접점 없는 모델 — 소프트웨어 정지만";
+            }
+            else
+            {
             if (!IsIoConnected)
                 throw new InvalidOperationException("IO 모듈 미연결");
             var confirmed = await _io.WriteOutputAsync(EmoOutputIndex, target);
             outNote = confirmed
                 ? $"EMO(OUT {EmoOutputIndex}) {(target ? "출력 ON" : "리셋(OFF)")} — 되읽기 반영 확인"
                 : "쓰기는 수락됐지만 반영되지 않음 — RAPIEnet 상태 확인 필요";
+            }
         }
         catch (Exception ex)
         {

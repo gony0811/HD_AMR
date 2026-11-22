@@ -52,6 +52,11 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<VisionInterfaceSer
 
 // 검사 센서 선택 + 헬륨 가스 디텍터(XL3000flex). Mode=GasDetector 일 때만 가스 디텍터가 통신하고 비전은 휴면.
 builder.Services.Configure<InspectionSensorSettings>(builder.Configuration.GetSection("InspectionSensor"));
+// 조작반 IO 배치 — 가스검사 AMR 은 버튼·램프 접점이 용접검사 AMR 과 다르다(IoPanelLayout). 서비스가 뜨기 전에 고른다.
+HD.AMR.App.Communication.IoPointMap.Select(
+    builder.Configuration.GetSection("InspectionSensor").Get<InspectionSensorSettings>()?.UsesGasDetector == true
+        ? HD.AMR.App.Communication.IoPanelLayout.GasDetector
+        : HD.AMR.App.Communication.IoPanelLayout.WeldInspection);
 builder.Services.Configure<HD.AMR.App.Communication.GasDetector.GasDetectorSettings>(
     builder.Configuration.GetSection("GasDetector"));
 builder.Services.AddSingleton<GasDetectorService>();

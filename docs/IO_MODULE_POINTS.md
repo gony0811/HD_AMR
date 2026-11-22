@@ -64,6 +64,29 @@
 | STOP | IN 5 | OUT 7 |
 | EMO | IN 0 | OUT 10 |
 
+## 가스검사 AMR 배치 (2026-11-22 현장 확인)
+
+위 표는 **용접검사 AMR**(비전) 기준이다. 가스검사 AMR 은 조작반 배선이 달라 별도 배치(`IoPanelLayout.GasDetector`)를 쓴다.
+appsettings `InspectionSensor:Mode` 가 `GasDetector` 면 기동 때 자동으로 선택된다(`IoPointMap.Select`).
+
+다른 접점만 적는다 — 나머지(IN 0·1·2·4, OUT 0~3·9)는 용접검사 AMR 과 같다.
+
+| 접점 | 용접검사 AMR | 가스검사 AMR |
+|---|---|---|
+| IN 3 | AUTO | **STOP** |
+| IN 5 | STOP | **AUTO** |
+| OUT 4 | START BUTTON LAMP | **RESET BUTTON LAMP** |
+| OUT 5 | RESET BUTTON LAMP | **START BUTTON LAMP** |
+| OUT 6 | A/M BUTTON LAMP | **STOP BUTTON LAMP** |
+| OUT 7 | STOP BUTTON LAMP | **A/M BUTTON LAMP** |
+| OUT 10 | 비상정지(EMO) 출력 | **전원 램프(POWER LAMP)** |
+
+가스검사 AMR 에는 지금 EMO 출력 접점이 없다(`IoPointMap.Out.EmergencyStop` = −1). 화면 비상정지 버튼은 소프트웨어 정지만 하고,
+타워램프 적색 조건에서도 OUT 10 되읽기를 보지 않는다.
+
+> 전장에서 OUT 10 을 EMO 로 다시 배선할 예정이다. 배선이 끝나면 `IoPanelLayout.GasDetector` 의
+> `OutEmergencyStop = 10`, `OutPowerLamp = -1` 로 바꾸고 이 표의 OUT 10 줄을 지운다.
+
 ## 미확정 사항
 
 1. **OUT 10 "비상정지(EMO)"의 부하** — EMO 버튼 램프인지, 안전회로로 나가는 접점인지 미확인. 구동 전 현장 확인 필요.

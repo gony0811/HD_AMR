@@ -8,8 +8,104 @@ namespace HD.AMR.App.Communication;
 public sealed record IoPoint(string Name, string Code);
 
 /// <summary>
+/// 조작반 배선 한 벌 — 장비 모델마다 버튼·램프가 붙은 접점이 다르다. 인덱스는 비트 번호, −1 = 그 모델에 없는 신호.
+/// </summary>
+public sealed class IoPanelLayout
+{
+    public required string Name { get; init; }
+
+    /// <summary>이 배치의 근거 — UI 각주에 그대로 노출한다.</summary>
+    public required string SourceNote { get; init; }
+
+    // 입력
+    public int InEmergencyStop { get; init; } = 0;
+    public int InReset { get; init; } = 1;
+    public int InStart { get; init; } = 2;
+    public required int InAuto { get; init; }
+    public int InManual { get; init; } = 4;
+    public required int InStop { get; init; }
+
+    // 출력
+    public int OutTowerLampRed { get; init; } = 0;
+    public int OutTowerLampYellow { get; init; } = 1;
+    public int OutTowerLampGreen { get; init; } = 2;
+    public int OutBuzzer { get; init; } = 3;
+    public required int OutStartButtonLamp { get; init; }
+    public required int OutResetButtonLamp { get; init; }
+    public required int OutAutoManualButtonLamp { get; init; }
+    public required int OutStopButtonLamp { get; init; }
+    public int OutGuideLamp { get; init; } = 9;
+
+    /// <summary>비상정지(EMO) 출력. −1 = 없음.</summary>
+    public required int OutEmergencyStop { get; init; }
+
+    /// <summary>전원 램프. −1 = 없음.</summary>
+    public required int OutPowerLamp { get; init; }
+
+    /// <summary>입력 접점 정의(16점) — 미배선은 null.</summary>
+    public IoPoint?[] BuildInputs() => Build(
+        (InEmergencyStop, new IoPoint("비상정지 버튼", "EMO BUTTON")),
+        (InReset, new IoPoint("리셋", "RESET")),
+        (InStart, new IoPoint("시작", "START")),
+        (InAuto, new IoPoint("자동", "AUTO")),
+        (InManual, new IoPoint("수동", "MANUAL")),
+        (InStop, new IoPoint("정지", "STOP")));
+
+    /// <summary>출력 접점 정의(16점) — 미배선은 null.</summary>
+    public IoPoint?[] BuildOutputs() => Build(
+        (OutTowerLampRed, new IoPoint("타워램프 적색", "TOWER LAMP RED")),
+        (OutTowerLampYellow, new IoPoint("타워램프 황색", "TOWER LAMP YELLOW")),
+        (OutTowerLampGreen, new IoPoint("타워램프 녹색", "TOWER LAMP GREEN")),
+        (OutBuzzer, new IoPoint("부저", "BUZZER")),
+        (OutStartButtonLamp, new IoPoint("시작 버튼 램프", "START BUTTON LAMP")),
+        (OutResetButtonLamp, new IoPoint("리셋 버튼 램프", "RESET BUTTON LAMP")),
+        (OutAutoManualButtonLamp, new IoPoint("자동/수동 버튼 램프", "A/M BUTTON LAMP")),
+        (OutStopButtonLamp, new IoPoint("정지 버튼 램프", "STOP BUTTON LAMP")),
+        (OutGuideLamp, new IoPoint("가이드 램프", "GUIDE LAMP")),
+        (OutEmergencyStop, new IoPoint("비상정지(EMO)", "EMO")),
+        (OutPowerLamp, new IoPoint("전원 램프", "POWER LAMP")));
+
+    private static IoPoint?[] Build(params (int Index, IoPoint Point)[] points)
+    {
+        var arr = new IoPoint?[16];
+        foreach (var (i, p) in points)
+        {
+            if (i < 0) continue;
+            if (arr[i] is { } taken)
+                throw new InvalidOperationException($"IO 접점 {i} 중복 배정: {taken.Code} / {p.Code}");
+            arr[i] = p;
+        }
+        return arr;
+    }
+
+    /// <summary>용접검사 AMR(비전) — 2026-09-18 현장 확인 IO 리스트.</summary>
+    public static readonly IoPanelLayout WeldInspection = new()
+    {
+        Name = "용접검사 AMR",
+        SourceNote = "2026-09-18 현장 확인 IO 리스트 기준",
+        InAuto = 3, InStop = 5,
+        OutStartButtonLamp = 4, OutResetButtonLamp = 5, OutAutoManualButtonLamp = 6, OutStopButtonLamp = 7,
+        OutEmergencyStop = 10, OutPowerLamp = -1,
+    };
+
+    /// <summary>가스검사 AMR — 2026-11-22 현장 확인. 용접검사 AMR 과 다른 점: IN03 STOP·IN05 AUTO(서로 바뀜),
+    /// OUT04 RESET·OUT05 START·OUT06 STOP·OUT07 A/M 램프, OUT10 은 EMO 출력이 아니라 전원 램프.
+    /// 전장에서 OUT10 을 EMO 로 다시 배선하면 OutEmergencyStop = 10, OutPowerLamp = -1 로 바꾼다(용접검사 AMR 과 동일).</summary>
+    public static readonly IoPanelLayout GasDetector = new()
+    {
+        Name = "가스검사 AMR",
+        SourceNote = "2026-11-22 가스검사 AMR 현장 확인 기준",
+        InAuto = 5, InStop = 3,
+        OutStartButtonLamp = 5, OutResetButtonLamp = 4, OutAutoManualButtonLamp = 7, OutStopButtonLamp = 6,
+        OutEmergencyStop = -1, OutPowerLamp = 10,
+    };
+}
+
+/// <summary>
 /// LS산전 IO 모듈(XBE-DC16A 입력 16점 / XBE-TN16A 출력 16점) 접점 ↔ 조작반 신호 맵.
-/// 근거: 2026-09-18 현장 확인 IO 리스트(docs/IO_MODULE_POINTS.md 에 표로 기록).
+/// 장비 모델별 배치는 <see cref="IoPanelLayout"/> 에 있고, 기동 때 <see cref="Select"/> 로 고른다
+/// (appsettings InspectionSensor:Mode — GasDetector 면 가스검사 AMR 배치). 고르지 않으면 용접검사 AMR 배치.
+/// 근거·표는 docs/IO_MODULE_POINTS.md.
 ///
 /// 인덱스는 <see cref="IoModuleState.Inputs"/>/<see cref="IoModuleState.Outputs"/> 의 비트 인덱스와 동일하다
 /// (입력 = FC02 <see cref="IoModuleModbusTcpSettings.InputStart"/> 부터, 출력 = Holding
@@ -20,113 +116,90 @@ public sealed record IoPoint(string Name, string Code);
 /// </summary>
 public static class IoPointMap
 {
-    /// <summary>이 맵의 근거 — UI 각주에 그대로 노출한다.</summary>
-    public const string SourceNote = "2026-09-18 현장 확인 IO 리스트 기준";
+    private static IoPanelLayout _layout = IoPanelLayout.WeldInspection;
+    private static IoPoint?[] _inputs = IoPanelLayout.WeldInspection.BuildInputs();
+    private static IoPoint?[] _outputs = IoPanelLayout.WeldInspection.BuildOutputs();
 
-    /// <summary>입력 접점 인덱스 상수 — 시퀀스/인터록 코드에서 매직 넘버 대신 사용.</summary>
+    /// <summary>지금 쓰는 조작반 배치.</summary>
+    public static IoPanelLayout Layout => _layout;
+
+    /// <summary>조작반 배치 선택 — 서비스가 뜨기 전(기동 구성 단계)에 한 번 부른다.</summary>
+    public static void Select(IoPanelLayout layout)
+    {
+        _inputs = layout.BuildInputs();
+        _outputs = layout.BuildOutputs();
+        _layout = layout;
+    }
+
+    /// <summary>이 맵의 근거 — UI 각주에 그대로 노출한다.</summary>
+    public static string SourceNote => _layout.SourceNote;
+
+    /// <summary>입력 접점 인덱스 — 시퀀스/인터록 코드에서 매직 넘버 대신 사용.</summary>
     public static class In
     {
         /// <summary>비상정지 버튼(EMO BUTTON)</summary>
-        public const int EmergencyStop = 0;
+        public static int EmergencyStop => _layout.InEmergencyStop;
 
         /// <summary>리셋 버튼(RESET)</summary>
-        public const int Reset = 1;
+        public static int Reset => _layout.InReset;
 
         /// <summary>시작 버튼(START)</summary>
-        public const int Start = 2;
+        public static int Start => _layout.InStart;
 
         /// <summary>자동 모드 선택(AUTO)</summary>
-        public const int Auto = 3;
+        public static int Auto => _layout.InAuto;
 
         /// <summary>수동 모드 선택(MANUAL)</summary>
-        public const int Manual = 4;
+        public static int Manual => _layout.InManual;
 
         /// <summary>정지 버튼(STOP)</summary>
-        public const int Stop = 5;
+        public static int Stop => _layout.InStop;
     }
 
-    /// <summary>출력 접점 인덱스 상수 — 램프/부저 제어 코드에서 매직 넘버 대신 사용.</summary>
+    /// <summary>출력 접점 인덱스 — 램프/부저 제어 코드에서 매직 넘버 대신 사용.</summary>
     public static class Out
     {
         /// <summary>타워램프 적색</summary>
-        public const int TowerLampRed = 0;
+        public static int TowerLampRed => _layout.OutTowerLampRed;
 
         /// <summary>타워램프 황색</summary>
-        public const int TowerLampYellow = 1;
+        public static int TowerLampYellow => _layout.OutTowerLampYellow;
 
         /// <summary>타워램프 녹색</summary>
-        public const int TowerLampGreen = 2;
+        public static int TowerLampGreen => _layout.OutTowerLampGreen;
 
         /// <summary>부저</summary>
-        public const int Buzzer = 3;
+        public static int Buzzer => _layout.OutBuzzer;
 
         /// <summary>시작 버튼 램프</summary>
-        public const int StartButtonLamp = 4;
+        public static int StartButtonLamp => _layout.OutStartButtonLamp;
 
         /// <summary>리셋 버튼 램프</summary>
-        public const int ResetButtonLamp = 5;
+        public static int ResetButtonLamp => _layout.OutResetButtonLamp;
 
         /// <summary>자동/수동(A/M) 선택 버튼 램프</summary>
-        public const int AutoManualButtonLamp = 6;
+        public static int AutoManualButtonLamp => _layout.OutAutoManualButtonLamp;
 
         /// <summary>정지 버튼 램프</summary>
-        public const int StopButtonLamp = 7;
+        public static int StopButtonLamp => _layout.OutStopButtonLamp;
 
         /// <summary>가이드 램프</summary>
-        public const int GuideLamp = 9;
+        public static int GuideLamp => _layout.OutGuideLamp;
 
-        /// <summary>비상정지(EMO) 출력</summary>
-        public const int EmergencyStop = 10;
+        /// <summary>비상정지(EMO) 출력. −1 = 이 모델에 없음(가스검사 AMR, 재배선 전) — 쓰기 전에 0 이상인지 확인할 것.</summary>
+        public static int EmergencyStop => _layout.OutEmergencyStop;
+
+        /// <summary>전원 램프. −1 = 이 모델에 없음(용접검사 AMR).</summary>
+        public static int PowerLamp => _layout.OutPowerLamp;
     }
-
-    // null = 미배선.
-    private static readonly IoPoint?[] InputPoints =
-    {
-        /* 00 */ new("비상정지 버튼", "EMO BUTTON"),
-        /* 01 */ new("리셋", "RESET"),
-        /* 02 */ new("시작", "START"),
-        /* 03 */ new("자동", "AUTO"),
-        /* 04 */ new("수동", "MANUAL"),
-        /* 05 */ new("정지", "STOP"),
-        /* 06 */ null,
-        /* 07 */ null,
-        /* 08 */ null,
-        /* 09 */ null,
-        /* 10 */ null,
-        /* 11 */ null,
-        /* 12 */ null,
-        /* 13 */ null,
-        /* 14 */ null,
-        /* 15 */ null,
-    };
-
-    private static readonly IoPoint?[] OutputPoints =
-    {
-        /* 00 */ new("타워램프 적색", "TOWER LAMP RED"),
-        /* 01 */ new("타워램프 황색", "TOWER LAMP YELLOW"),
-        /* 02 */ new("타워램프 녹색", "TOWER LAMP GREEN"),
-        /* 03 */ new("부저", "BUZZER"),
-        /* 04 */ new("시작 버튼 램프", "START BUTTON LAMP"),
-        /* 05 */ new("리셋 버튼 램프", "RESET BUTTON LAMP"),
-        /* 06 */ new("자동/수동 버튼 램프", "A/M BUTTON LAMP"),
-        /* 07 */ new("정지 버튼 램프", "STOP BUTTON LAMP"),
-        /* 08 */ null,
-        /* 09 */ new("가이드 램프", "GUIDE LAMP"),
-        /* 10 */ new("비상정지(EMO)", "EMO"),
-        /* 11 */ null,
-        /* 12 */ null,
-        /* 13 */ null,
-        /* 14 */ null,
-        /* 15 */ null,
-    };
 
     /// <summary>입력 접점 정의 — 미배선이면 null.</summary>
     public static IoPoint? Input(int index) =>
-        index >= 0 && index < InputPoints.Length ? InputPoints[index] : null;
+        index >= 0 && index < _inputs.Length ? _inputs[index] : null;
 
     /// <summary>출력 접점 정의 — 미배선이면 null.</summary>
     public static IoPoint? Output(int index) =>
-        index >= 0 && index < OutputPoints.Length ? OutputPoints[index] : null;
+        index >= 0 && index < _outputs.Length ? _outputs[index] : null;
 
     /// <summary>화면 표시용 입력 라벨("IN 00 · 시작" 형태의 뒷부분).</summary>
     public static string InputLabel(int index) => Input(index)?.Name ?? "미배선";

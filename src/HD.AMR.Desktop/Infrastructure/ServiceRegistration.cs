@@ -67,6 +67,11 @@ internal static class ServiceRegistration
 
         // 검사 센서 선택(InspectionSensor:Mode) — Vision 이면 비전 인터페이스, GasDetector 면 가스 디텍터만 실제로 통신한다.
         services.Configure<InspectionSensorSettings>(config.GetSection("InspectionSensor"));
+        // 조작반 IO 배치 — 가스검사 AMR 은 버튼·램프 접점이 용접검사 AMR 과 다르다(IoPanelLayout). 서비스가 뜨기 전에 고른다.
+        HD.AMR.App.Communication.IoPointMap.Select(
+            config.GetSection("InspectionSensor").Get<InspectionSensorSettings>()?.UsesGasDetector == true
+                ? HD.AMR.App.Communication.IoPanelLayout.GasDetector
+                : HD.AMR.App.Communication.IoPanelLayout.WeldInspection);
 
         AddHostedSingleton<VisionInterfaceService>(services);
         services.Configure<HD.AMR.App.Communication.Vision.VisionInterfaceSettings>(config.GetSection("Vision"));
