@@ -508,7 +508,9 @@ public sealed class Vda5050AdapterService : BackgroundService
                         break;
 
                     case "cancelOrder":
-                        await _executor.CancelOrderAsync();
+                        // mode=afterCurrentAction 이면 진행 중 검사를 마친 뒤 중단·홈 복귀(§5.4), 그 밖·누락은 즉시 취소.
+                        await _executor.CancelOrderAsync(afterCurrentAction:
+                            CancelPolicy.IsAfterCurrent(Vda5050OrderExecutor.GetStringParam(action, "mode")));
                         break;
 
                     case "factsheetRequest":
