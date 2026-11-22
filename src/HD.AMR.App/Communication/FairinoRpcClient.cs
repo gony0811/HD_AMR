@@ -398,7 +398,7 @@ public class FairinoRpcClient : IDisposable
     public async Task<int> MoveLAsync(double[] descPose, double[]? jointPos = null, int? tool = null, int? user = null,
                                       double? vel = null, double acc = 0.0, double ovl = 100.0, double blendR = -1.0,
                                       int offsetFlag = 0, double[]? offsetPos = null,
-                                      CancellationToken ct = default, int blendMode = 0)
+                                      CancellationToken ct = default)
     {
         int t = tool ?? _settings.DefaultToolId;
         int u = user ?? _settings.DefaultUserId;
@@ -412,7 +412,7 @@ public class FairinoRpcClient : IDisposable
             j[0], j[1], j[2], j[3], j[4], j[5],
             descPose[0], descPose[1], descPose[2], descPose[3], descPose[4], descPose[5],
             t, u, v, acc, ovl, blendR,
-            blendMode,                          // blendMode: 0=접선(내접) 전이, 1=모서리 전이
+            0,                                  // blendMode
             0.0, 0.0, 0.0, 0.0,                 // exaxis_pos[4]
             0, offsetFlag,                      // search, offset_flag
             off[0], off[1], off[2], off[3], off[4], off[5], // offset_pos[6]
@@ -1026,14 +1026,6 @@ public class FairinoRpcClient : IDisposable
     /// 조회 API 가 없어 이전 값을 읽을 수 없으므로 복원은 <see cref="BaseOaccScalePct"/> 로 한다.</summary>
     public Task<int> SetOaccScaleAsync(double accPct, CancellationToken ct = default)
         => InvokeAsync("SetOaccScale", p => ToErr(p.SetOaccScale(Math.Clamp(accPct, 1.0, 100.0))), ct);
-
-    /// <summary>직선·원호 모션 FIR 필터 켜기(가속도·저크 상한) — 컨트롤러 전역 상태라 켠 쪽이 반드시 꺼야 한다. 미지원 펌웨어면 예외/오류 코드.</summary>
-    public Task<int> LinArcFirStartAsync(double maxAccLin, double maxAccDeg, double maxJerkLin, double maxJerkDeg, CancellationToken ct = default)
-        => InvokeAsync("LinArcFIRPlanningStart", p => ToErr(p.LinArcFIRPlanningStart(maxAccLin, maxAccDeg, maxJerkLin, maxJerkDeg)), ct, faultRecovery: false);
-
-    /// <summary>직선·원호 모션 FIR 필터 끄기.</summary>
-    public Task<int> LinArcFirEndAsync(CancellationToken ct = default)
-        => InvokeAsync("LinArcFIRPlanningEnd", p => ToErr(p.LinArcFIRPlanningEnd()), ct, faultRecovery: false);
 
     /// <summary>전역 가속도 배율 공장 기본값(%) — 파라미터 <see cref="OaccScaleKey"/> 가 비었을 때의 값.</summary>
     public const double DefaultOaccScalePct = 100.0;

@@ -158,7 +158,7 @@ public class InspectionRunStep : ISequenceStep
         _logger = logger;
     }
 
-    public string Key => _dryRun ? DryStepKey : StepKey;
+    public string Key => _dryRun ? "inspectionRunDry" : "inspectionRun";
     public string DisplayName => _dryRun
         ? (_useGas ? "검사 수행 (도면 순회·측정 없음)" : "검사 수행 (도면 순회·비전 없음)")
         : (_useGas ? "검사 수행 (도면 순회·가스 측정)" : "검사 수행 (도면 순회)");
@@ -279,8 +279,6 @@ public class InspectionRunStep : ISequenceStep
         if (scan.TargetMmPerSec is { } wantMm && scan.Vel >= 100.0 && basis is { } b100 && wantMm > b100 + 0.05)
             _logger.LogWarning("[검사 수행] 목표 검사 속도 {Want:0.#}mm/s 를 낼 수 없어 최대 지령 100%(약 {Max:0.#}mm/s)로 순회합니다 — 코봇 전역 속도를 올려야 목표에 닿습니다",
                 wantMm, b100);
-        // 무정지 이동 블렌딩 방식(0=접선 전이, 1=모서리 전이) — 끊김 시험용. 비우면 0.
-        var scanBlendMode = ResolveBlendMode(await GetParamStringAsync(NonStopBlendModeKey));
         // 무정지 통과 실측 TCP 속도 로그(진단용) — 비우면 가스 켬·비전 끔.
         var logTcpSpeed = TcpSpeedProbe.ResolveEnabled(await GetParamStringAsync(TcpSpeedProbe.EnableKey), _useGas);
         TcpSpeedProbe? StartTcpProbe() => logTcpSpeed ? TcpSpeedProbe.TryStart(_cobot) : null;
@@ -290,7 +288,7 @@ public class InspectionRunStep : ISequenceStep
             try
             {
                 var samples = await probe.StopAsync();
-                var motion = GasPassSplitter.MergeCollinear(passPoses, _gas.NonStopMergeTolMm);
+                var motion = GasPassSplitter.MergeCollinear(passPoses);
                 var planned = Enumerable.Range(0, motion.Count - 1)
                     .Select(m => GasPassSplitter.Distance(passPoses[motion[m]], passPoses[motion[m + 1]])).ToList();
                 if (TcpSpeedProbe.Analyze(samples, planned) is { } report)
@@ -304,7 +302,7 @@ public class InspectionRunStep : ISequenceStep
 
         Task<int> ScanMoveLAsync(double[] pose, double[]? joints, double blendR, CancellationToken c)
             => _cobot.Rpc.MoveLAsync(pose, jointPos: joints, tool: context.Tool, user: 0,
-                vel: scan.Vel, acc: scan.Acc, ovl: MoveOvl, blendR: blendR, ct: c, blendMode: scanBlendMode);
+                vel: scan.Vel, acc: scan.Acc, ovl: MoveOvl, blendR: blendR, ct: c);
 
         _logger.LogInformation(
             "[검사 수행] 시작: 도면 {Draw}, 티칭설정 '{Prof}'({N}점), 내부 wobj #{Id} 원점 [{X:0.0},{Y:0.0},{Z:0.0}], " +
@@ -327,20 +325,6 @@ public class InspectionRunStep : ISequenceStep
         if (tipDz != 0)
             _logger.LogInformation("[검사 수행] 검사 팁 진입 깊이 적용 — 경유점 작업물 Z {Dz:+0.#;-0.#}mm", tipDz);
 
-        // 순회 툴 좌표 오프셋(가스) — 스니퍼가 휘는 등 팁이 TCP 에서 벗어나 있을 때 모든 경유점을 툴 좌표로 같은 만큼 옮긴다.
-        double[]? scanToolOffset = null;
-        if (_useGas)
-        {
-            var rawOffset = await GetParamStringAsync(ScanToolOffsetKey);
-            scanToolOffset = ResolveScanToolOffset(rawOffset);
-            if (scanToolOffset is { } so)
-                _logger.LogInformation("[검사 수행] 순회 툴 좌표 오프셋 적용 — 툴 X{X:+0.#;-0.#} / Y{Y:+0.#;-0.#} / Z{Z:+0.#;-0.#} mm ('{Key}')",
-                    so[0], so[1], so[2], ScanToolOffsetKey);
-            else if (!string.IsNullOrWhiteSpace(rawOffset) && !IsZeroOffsetText(rawOffset))
-                _logger.LogWarning("[검사 수행] 순회 툴 좌표 오프셋 '{Raw}' 형식 오류 — 'x,y,z'(mm, 각 ±{Max:0} 이내)여야 합니다. 오프셋 없이 진행 ('{Key}')",
-                    rawOffset, MaxScanToolOffsetMm, ScanToolOffsetKey);
-        }
-
         double[] ToTargetBase(InspectionWaypoint w) => ToTargetBaseAt(w, tipDz);
 
         // dz = 경유점 작업물 Z 에 더할 깊이 — 0 이면 티칭 높이 그대로(검사 팁 진입 전 스테이징용).
@@ -352,11 +336,7 @@ public class InspectionRunStep : ISequenceStep
                 : attitude.Pose(w.X, w.Y, w.Z, w.Theta, w.RzDeg);
             var targetBase = InternalWorkpieceFrame.ToBasePose(pose, frame);
             // 절대 모드는 RzDeg 가 프레임 X(검사 이동 방향) 기준이라 역방향 검사에서 J6 가 180° 뒤집힌다 — 보정.
-            var result = profile.PoseAbsolute ? attitude.KeepTwist(targetBase) : targetBase;
-            // 툴 좌표 오프셋 — 최종 툴 자세 기준으로 위치만 옮긴다(자세 유지).
-            return scanToolOffset is { } o
-                ? FrameMath.FromFrame(new[] { o[0], o[1], o[2], 0.0, 0.0, 0.0 }, result)
-                : result;
+            return profile.PoseAbsolute ? attitude.KeepTwist(targetBase) : targetBase;
         }
 
         // ── 첫 경유점으로 바로 이동(검사 시작 스테이징) — RZ 는 현재값 유지(회전 없음) ──
@@ -406,9 +386,6 @@ public class InspectionRunStep : ISequenceStep
         var chainError = await CheckWaypointChainAsync(context, chainTargets, checkedJoints, ct);
         if (chainError is not null)
         {
-            // 여기까지 ⑱ 은 코봇을 움직이지 않았다 — 실패 원인은 이 용접선의 도달성이지 작업물 좌표계가 아니다.
-            // 오케스트레이터가 이 표시를 보고 물려받은 좌표계를 버리지 않는다(다음 용접선이 재교시·홈 왕복을 하지 않게).
-            context.Bag[PrecheckOnlyFailureBagKey] = true;
             _logger.LogWarning("[검사 수행] 경유점 사전 검증 실패 — {Err}", chainError);
             return StepResult.Fail($"{chainError} — 움직이지 않고 중단. 정차 위치를 이 용접선 쪽으로 옮기거나 티칭설정 '{profile.Name}' 의 자세를 확인하세요.");
         }
@@ -750,8 +727,6 @@ public class InspectionRunStep : ISequenceStep
 
         // 검사 가속도: 순회 동안만 전역 가속도 배율 변경 → finally 에서 기본값 복원(성공·실패·취소 공통).
         var accChanged = await ApplyInspectAccelerationAsync(context, ct);
-        // FIR 필터(직선·원호 평활화): 켜져 있으면 순회 동안만 적용 → finally 에서 끈다.
-        var firOn = _useGas && await ApplyFirAsync(scanBlendMode, ct);
         try
         {
         for (var i = 0; i < waypoints.Count; i++)
@@ -888,7 +863,6 @@ public class InspectionRunStep : ISequenceStep
         }
         finally
         {
-            if (firOn) await EndFirAsync();
             if (accChanged) await RestoreAccelerationAsync();
         }
 
@@ -952,116 +926,6 @@ public class InspectionRunStep : ISequenceStep
         }
 
         return StepResult.Ok(msg);
-    }
-
-    /// <summary>Bag 키(bool true) — ⑱ 이 경유점 사전 검증(IK 사슬)에서 <b>움직이기 전에</b> 실패했다는 표시.</summary>
-    public const string PrecheckOnlyFailureBagKey = "inspectionRun.precheckOnlyFailure";
-
-    /// <summary>스텝 키 — 시퀀스 실패 단계 판정용.</summary>
-    public const string StepKey = "inspectionRun";
-
-    /// <summary>드라이런(측정 없는 순회) 스텝 키.</summary>
-    public const string DryStepKey = "inspectionRunDry";
-
-    /// <summary>파라미터 키 — 가스 순회 경유점 전체에 주는 툴 좌표 오프셋 "x,y,z" [mm]. 스니퍼 팁이 휘어 TCP 에서 벗어났을 때
-    /// 임시로 맞춘다(예: "0,-20,0" = 툴 Y− 로 20mm). 비우거나 0,0,0 이면 없음. 각 성분 ±<see cref="MaxScanToolOffsetMm"/> 이내.</summary>
-    public const string ScanToolOffsetKey = "Sequence.Gas.ScanToolOffsetMm";
-
-    /// <summary>순회 툴 좌표 오프셋 한 성분의 상한 [mm] — 이보다 크면 설정 실수로 본다.</summary>
-    internal const double MaxScanToolOffsetMm = 50.0;
-
-    /// <summary>순회 툴 좌표 오프셋 해석 — "x,y,z" 숫자 3개, 각 ±<see cref="MaxScanToolOffsetMm"/> 이내. 비었거나 전부 0 이거나 형식이 틀리면 null.</summary>
-    internal static double[]? ResolveScanToolOffset(string? raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw)) return null;
-        var parts = raw.Split(',', StringSplitOptions.TrimEntries);
-        if (parts.Length != 3) return null;
-        var v = new double[3];
-        for (var i = 0; i < 3; i++)
-            if (!double.TryParse(parts[i], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out v[i])
-                || !double.IsFinite(v[i]) || Math.Abs(v[i]) > MaxScanToolOffsetMm)
-                return null;
-        return v.All(x => x == 0) ? null : v;
-    }
-
-    private static bool IsZeroOffsetText(string raw)
-    {
-        var parts = raw.Split(',', StringSplitOptions.TrimEntries);
-        return parts.Length == 3 && parts.All(p => double.TryParse(p, System.Globalization.NumberStyles.Float,
-            System.Globalization.CultureInfo.InvariantCulture, out var x) && x == 0);
-    }
-
-    /// <summary>파라미터 키 — 가스 무정지 순회 동안 컨트롤러의 직선·원호 FIR 필터(가속도·저크 상한 평활화)를 켠다.
-    /// 값 = "maxAccLin,maxAccDeg,maxJerkLin,maxJerkDeg"(mm/s², °/s², mm/s³, °/s³) 또는 on(=1000,1000,1000,1000). 비우면 끔.</summary>
-    public const string NonStopFirKey = "Sequence.Gas.NonStopFir";
-
-    /// <summary>파라미터 키 — 가스 무정지 순회 MoveL 의 블렌딩 방식. 0 = 접선(내접) 전이(기본), 1 = 모서리 전이.</summary>
-    public const string NonStopBlendModeKey = "Sequence.Gas.NonStopBlendMode";
-
-    internal static int ResolveBlendMode(string? raw) => raw?.Trim() == "1" ? 1 : 0;
-
-    private static bool IsOff(string? s) => string.IsNullOrEmpty(s) || s is "0" or "off" or "false" or "no";
-
-    /// <summary>FIR 설정 해석 — 비었거나 off/0/false 면 null(끔), on/1/true 면 문서 예제값(1000×4), 그 외는 양수 4개(쉼표). 형식이 틀리면 null.</summary>
-    internal static double[]? ResolveFir(string? raw)
-    {
-        var s = raw?.Trim().ToLowerInvariant();
-        if (IsOff(s)) return null;
-        if (s is "1" or "on" or "true" or "yes") return [1000, 1000, 1000, 1000];
-        var parts = s!.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length != 4) return null;
-        var v = new double[4];
-        for (var i = 0; i < 4; i++)
-            if (!double.TryParse(parts[i], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out v[i])
-                || !double.IsFinite(v[i]) || v[i] <= 0)
-                return null;
-        return v;
-    }
-
-    /// <summary>FIR 필터가 설정돼 있으면 켠다. 켰으면 true(끄기 필요). 실패(미지원 펌웨어 등)해도 검사는 필터 없이 진행한다.</summary>
-    private async Task<bool> ApplyFirAsync(int blendMode, CancellationToken ct)
-    {
-        var raw = await GetParamStringAsync(NonStopFirKey);
-        if (blendMode != 0)
-            _logger.LogInformation("[검사 수행] 무정지 블렌딩 방식 {Mode}(모서리 전이) 적용 ('{Key}')", blendMode, NonStopBlendModeKey);
-        if (ResolveFir(raw) is not { } f)
-        {
-            if (!IsOff(raw?.Trim().ToLowerInvariant()))
-                _logger.LogWarning("[검사 수행] FIR 필터 설정 '{Raw}' 형식 오류 — 양수 4개(쉼표) 또는 on 이어야 합니다. 필터 없이 진행 ('{Key}')", raw, NonStopFirKey);
-            return false;
-        }
-        try
-        {
-            var rc = await _cobot.Rpc.LinArcFirStartAsync(f[0], f[1], f[2], f[3], ct);
-            if (rc == 0)
-            {
-                _logger.LogInformation("[검사 수행] 직선 FIR 필터 켬 — 가속도 {A:0.#}mm/s²·{Ad:0.#}°/s², 저크 {J:0.#}mm/s³·{Jd:0.#}°/s³ (순회 뒤 끔)", f[0], f[1], f[2], f[3]);
-                return true;
-            }
-            _logger.LogWarning("[검사 수행] 직선 FIR 필터 켜기 실패 (rc={Rc}){Desc} — 필터 없이 진행", rc, FairinoErrorCodes.Suffix(rc));
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            _logger.LogWarning("[검사 수행] 직선 FIR 필터 켜기 실패 — 이 컨트롤러가 지원하지 않을 수 있습니다. 필터 없이 진행: {Err}", ex.Message);
-        }
-        // 켜기 실패라도 일부 반영됐을 수 있으므로 끄기는 시도한다.
-        return true;
-    }
-
-    /// <summary>FIR 필터 끄기. 취소된 뒤에도 반드시 보내야 하므로 호출자 토큰을 쓰지 않는다.</summary>
-    private async Task EndFirAsync()
-    {
-        try
-        {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            var rc = await _cobot.Rpc.LinArcFirEndAsync(cts.Token);
-            if (rc == 0) _logger.LogInformation("[검사 수행] 직선 FIR 필터 끔");
-            else _logger.LogWarning("[검사 수행] 직선 FIR 필터 끄기 실패 (rc={Rc}){Desc}", rc, FairinoErrorCodes.Suffix(rc));
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning("[검사 수행] 직선 FIR 필터 끄기 실패: {Err}", ex.Message);
-        }
     }
 
     /// <summary>레시피 검사 가속도가 있으면 전역 가속도 배율을 그 값으로 바꾼다. 바꿨으면 true(복원 필요).

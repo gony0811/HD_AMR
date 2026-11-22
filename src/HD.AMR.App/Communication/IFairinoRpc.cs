@@ -100,15 +100,6 @@ public interface IFairinoRpc : IXmlRpcProxy
     [XmlRpcMethod("SetOaccScale")]
     object SetOaccScale(double acc);
 
-    /// <summary>직선·원호(LIN/ARC) 모션 FIR 필터 켜기 — 가속도·저크 상한으로 속도 변화를 둥글린다.
-    /// maxAccLin [mm/s²], maxAccDeg [°/s²], maxJerkLin [mm/s³], maxJerkDeg [°/s³]. SDK v2.0.7 이후 — 이 컨트롤러 지원 여부는 실기 확인 필요.</summary>
-    [XmlRpcMethod("LinArcFIRPlanningStart")]
-    object LinArcFIRPlanningStart(double maxAccLin, double maxAccDeg, double maxJerkLin, double maxJerkDeg);
-
-    /// <summary>직선·원호 모션 FIR 필터 끄기.</summary>
-    [XmlRpcMethod("LinArcFIRPlanningEnd")]
-    object LinArcFIRPlanningEnd();
-
     /// <summary>현재 관절각(도) 조회. flag: 0=블로킹,1=논블로킹. 반환 [errcode, j0..j5].</summary>
     [XmlRpcMethod("GetActualJointPosDegree")]
     object GetActualJointPosDegree(int flag);
