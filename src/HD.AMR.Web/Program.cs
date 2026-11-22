@@ -226,6 +226,7 @@ builder.Services.AddScoped<ISequenceStep, CobotSeamEndMoveStep>();
 // ⑱ 검사 수행 — 일반(비전 캡처)과 드라이런(이동만) 두 변형. dryRun 이 첫 생성자 인자.
 builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<InspectionRunStep>(sp, false));   // 1200: inspectionRun
 builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<InspectionRunStep>(sp, true));    // 1210: inspectionRunDry
+builder.Services.AddScoped<ISequenceStep, LineSurfaceHeightStep>();   // 1185: 줄 시작·끝 면 높이 측정(다른 줄 좌표계 재사용 보정)
 builder.Services.AddScoped<ISequenceStep, BundleEndWdStep>();   // 1190: 묶음 마지막 용접선 끝 WD 확인
 builder.Services.AddScoped<ISequenceStep, GasTipApproachStep>();   // 1195: 가스 검사 팁 진입(벽면 근접)
 builder.Services.AddScoped<ISequenceStep, WObjResetStep>();   // 1300: 활성 작업물 좌표계 0 복귀

@@ -47,6 +47,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
     private double[]? _lastAnchorEndTcp;                           // 그 task 종료 시 TCP(BASE) — 다음 task 연속 이동 판정
     private double _lastTipKeptDepthMm;                            // 직전 task 가 물러나지 않고 유지한 검사 팁 진입 깊이(mm) — 다음 task 연속 이동이 띄우지 않게
     private double? _lastAnchorStrokeMm;                           // 그 프레임을 쓴 task 의 텔레스코픽 스트로크(mm) — 높이 변경 시 캐시 무효화
+    private double? _lastSurfaceRefMm;                             // 다른 줄 재사용 — 그 좌표계를 교시한 줄에서 잰 기준 면 높이(좌표계 Z, mm)
     private CancellationTokenSource? _currentRunCts;
     private readonly Dictionary<string, BundleAssignment> _bundleByAction = new();
     private readonly List<BundleAssignment> _bundleOrder = new();   // 노드 액션 순서 — 리더 실패 시 남은 TASK 재묶음용
@@ -344,6 +345,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             _lastAnchorStartBase = null;
             _lastAnchorEndTcp = null;
             _lastAnchorStrokeMm = null;
+            _lastSurfaceRefMm = null;
         }
     }
 
@@ -425,6 +427,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             _currentRunCts?.Cancel();
             _lastAnchor = null;
             _lastAnchorStrokeMm = null;
+            _lastSurfaceRefMm = null;
         }
         try
         {
@@ -618,6 +621,16 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             double[]? cachedAnchorSeamW = null;   // cachedAnchorStartBase 와 짝인 용접선 맵 좌표 [시작, 끝](m)
             double[]? cachedAnchorEndTcp;
             var currentStrokeMm = _lift.TryGetStrokeMm(out _);
+            // 다른 줄 좌표계 재사용 — 같은 지령·정차·면이면 줄·방향(수직↔수평)이 바뀌어도 좌표계 하나를 옮겨 쓰고,
+            // 줄마다 시작·끝 레이저 면 높이로 좌표계 높이·기울기를 보정한다(⑰⁻ LineSurfaceHeightStep).
+            var reuseAcrossLines = false;
+            try { reuseAcrossLines = await param.GetBoolAsync(InternalWorkpieceFrame.ReuseAcrossLinesKey) ?? false; }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(ex, "'{Key}' 조회 실패 — 끔으로 진행", InternalWorkpieceFrame.ReuseAcrossLinesKey);
+            }
+            var crossLineReuse = false;
+            double? surfaceRefMm = null;
             lock (_sync)
             {
                 if (ShouldInvalidateForStroke(_lastAnchor is not null, _lastAnchorStrokeMm, currentStrokeMm))
@@ -630,6 +643,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                     _lastAnchorStartBase = null;
                     _lastAnchorEndTcp = null;
                     _lastAnchorStrokeMm = null;
+                    _lastSurfaceRefMm = null;
                 }
 
                 anchorHit = recipe.SeamType != SeamTypeKind.Corner
@@ -664,6 +678,26 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                         "anchor 방향/면 변경({Old}/{OldWall}→{New}/{NewWall}) — 작업물 좌표계 재교시 (anchorGroup={Group})",
                         prev.Direction, prev.WallCode ?? "-", direction, req.DrawingPos.WallCode ?? "-", req.AnchorGroupId);
                 }
+                // 다른 줄 재사용: 위 판정으로 재교시가 정해졌어도 같은 지령·정차·면이면 직전 좌표계를 옮겨 쓴다
+                // (② 가 면 평행 이동 + 90° 단위 회전, ⑰⁻ 가 시작·끝 레이저 높이로 높이·기울기 보정).
+                if (!anchorHit && reuseAcrossLines
+                    && CanReuseAcrossLines(recipe.SeamType != SeamTypeKind.Corner,
+                        _lastAnchor is { } la ? (la.OrderId, la.AnchorGroupId, la.WallCode) : null,
+                        orderId, req.AnchorGroupId, req.DrawingPos.WallCode,
+                        _lastInternalWorkpieceFrame is { Length: 6 } && _lastAnchorStartBase is { Length: 3 },
+                        _lastAnchorSeamW is { } ls0
+                            ? InternalWorkpieceFrame.GridAngleErrorDeg(ls0.Start, ls0.End, req.SeamStartW, req.SeamEndW)
+                            : null))
+                {
+                    anchorHit = true;
+                    crossLineReuse = true;
+                    _logger.LogInformation(
+                        "anchor 다른 줄 좌표계 재사용 — 재교시하지 않고 직전 좌표계를 옮겨 쓰며 줄 시작·끝 레이저 면 높이로 보정합니다 " +
+                        "('{Key}' 켜짐, 방향 {Dir}, anchorGroup={Group}, jobRef={JobRef}, 기준 높이 {Ref})",
+                        InternalWorkpieceFrame.ReuseAcrossLinesKey, direction, req.AnchorGroupId, req.JobRef,
+                        _lastSurfaceRefMm is { } r0 ? $"{r0:+0.0;-0.0}mm" : "없음(기울기만)");
+                }
+                surfaceRefMm = anchorHit ? _lastSurfaceRefMm : null;
                 cachedInternalFrame = anchorHit ? (double[])_lastInternalWorkpieceFrame!.Clone() : null;
                 cachedAnchorStartBase = anchorHit ? _lastAnchorStartBase?.ToArray() : null;
                 cachedAnchorSeamW = anchorHit && _lastAnchorSeamW is { } lastSeam ? lastSeam.Start.Concat(lastSeam.End).ToArray() : null;
@@ -673,7 +707,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             BundleAssignment? bundle = null;
             var bundleEndWd = false;   // 묶음 마지막 팔로워 — 공통 좌표계를 연장해 쓰므로 끝점 WD 로 기울기를 다시 잡는다
             lock (_sync) _bundleByAction.TryGetValue(action.ActionId, out bundle);
-            if (bundle?.Role == BundleRole.Leader && anchorHit)
+            if (bundle?.Role == BundleRole.Leader && anchorHit && !crossLineReuse)
             {
                 // 묶음 리더는 자기 묶음(점1 = 이 용접선 시작, 점2 = 묶음 마지막 끝)으로 좌표계를 새로 잡는다 — 앞 묶음 좌표계를
                 // 영역 캐시로 물려받으면 이 묶음 팔로워까지 교시 없이 앞 묶음 좌표계를 쓰게 된다.
@@ -766,6 +800,14 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             if (bundleEndWd && !recipe.DryRun && stepKeys.Contains("inspectionRun")
                 && sequence.Steps.Any(st => st.Key == Sequence.Steps.BundleEndWdStep.StepKey))
                 stepKeys = stepKeys.Append(Sequence.Steps.BundleEndWdStep.StepKey).ToArray();
+            // 다른 줄 재사용이 켜져 있으면 줄 면 높이 측정을 붙인다 — 교시 줄은 기준 높이 기록, 물려받은 줄은 높이·기울기 보정.
+            var lineSurfaceMode = LineSurfaceMode(reuseAcrossLines, recipe.SeamType != SeamTypeKind.Corner, anchorHit, crossLineReuse);
+            if (lineSurfaceMode is not null
+                && (stepKeys.Contains("inspectionRun") || stepKeys.Contains("inspectionRunDry"))
+                && sequence.Steps.Any(st => st.Key == Sequence.Steps.LineSurfaceHeightStep.StepKey))
+                stepKeys = stepKeys.Append(Sequence.Steps.LineSurfaceHeightStep.StepKey).ToArray();
+            else
+                lineSurfaceMode = null;
             // 검사 팁 진입은 도면 순회가 있으면 늘 붙인다 — 레시피 StepKeysJson 에 없어도. 비전 모드·진입 거리 0 이면 스텝이 스스로 생략한다.
             if ((stepKeys.Contains("inspectionRun") || stepKeys.Contains("inspectionRunDry"))
                 && !stepKeys.Contains(Sequence.Steps.GasTipApproachStep.StepKey)
@@ -869,6 +911,12 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                 context.Bag[InternalWorkpieceFrame.BagKey] = cachedInternalFrame;
             if (bundleEndWd)
                 context.Bag[Sequence.Steps.BundleEndWdStep.RequestBagKey] = true;
+            if (lineSurfaceMode is not null)
+                context.Bag[Sequence.Steps.LineSurfaceHeightStep.RequestBagKey] = lineSurfaceMode;
+            if (surfaceRefMm is { } refMm)
+                context.Bag[Sequence.Steps.LineSurfaceHeightStep.ReferenceHeightBagKey] = refMm;
+            if (crossLineReuse && cachedAnchorStartBase is not null)
+                context.Bag[CobotInspectionMoveStep.AnchorCrossLineBagKey] = true;
             // 묶음에서 이 구역 뒤에 같은 묶음 구역이 이어지면 검사 팁 진입 깊이를 유지한 채 넘어간다(빠졌다 다시 들어오지 않음).
             if (bundle?.BundleId is { } keepBid)
             {
@@ -904,13 +952,13 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                 recipeId, recipe.DryRun ? "[드라이런]" : "", profile?.Name ?? "(미사용 — CORNER 티칭 슬롯)",
                 chamferSlope ? "(챔퍼 수직용)" : "",
                 profile?.Id ?? 0, profile?.DrawingId ?? 0,
-                anchorHit ? "적중(정렬 생략)" : "신규(정렬 수행)",
+                crossLineReuse ? "다른 줄 재사용(정렬 생략·면 높이 보정)" : anchorHit ? "적중(정렬 생략)" : "신규(정렬 수행)",
                 string.Join(",", stepKeys));
             _opLog.Log(OperationLogService.SourceAcs, OpCategory.Action, "검사 구성", null,
                 $"jobRef={req.JobRef}, seam={req.SeamType}, wall={req.DrawingPos.WallCode}, recipe={recipeId}" +
                 (recipe.DryRun ? "[드라이런]" : "") +
                 $", profile='{profile?.Name ?? "(미사용)"}'{(chamferSlope ? "(챔퍼 수직용)" : "")}, 방향={direction}, anchor={req.AnchorGroupId}#{req.SeqInGroup} " +
-                (anchorHit ? "적중(정렬 생략)" : "신규(정렬 수행)") +
+                (crossLineReuse ? "다른 줄 재사용(정렬 생략·면 높이 보정)" : anchorHit ? "적중(정렬 생략)" : "신규(정렬 수행)") +
                 (req.LiftStrokeMm is { } ls ? $", lift={ls:0}mm" : "") +
                 $", tool={context.Tool}, vel={context.Velocity}%, 카메라 목표 {context.CameraTargetDistanceMm:0}mm, " +
                 $"seamStartW=[{string.Join(", ", req.SeamStartW.Select(v => v.ToString("0.###")))}], " +
@@ -966,6 +1014,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                                 _lastAnchorStartBase = null;
                                 _lastAnchorEndTcp = null;
                                 _lastAnchorStrokeMm = null;
+                                _lastSurfaceRefMm = null;
                             }
                             else
                             {
@@ -975,6 +1024,10 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                                 _lastAnchorStartBase = startBase;
                                 _lastAnchorEndTcp = endTcp;
                                 _lastAnchorStrokeMm = strokeAtEnd;
+                                // 기준 면 높이 — 이번 실행이 쟀으면 그 값, 아니면 물려받은 좌표계일 때만 앞 값을 이어 쓴다.
+                                _lastSurfaceRefMm = context.Bag.TryGetValue(Sequence.Steps.LineSurfaceHeightStep.ReferenceHeightBagKey, out var sref)
+                                                    && sref is double srefMm ? srefMm
+                                                    : anchorHit ? surfaceRefMm : null;
                                 _lastTipKeptDepthMm = context.Bag.TryGetValue(Sequence.Steps.GasTipApproachStep.KeptDepthMmBagKey, out var kept)
                                                       && kept is double keptMm ? keptMm : 0;
                                 if (bundle?.BundleId is { } bid
@@ -1102,6 +1155,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                     _lastAnchorStartBase = null;
                     _lastAnchorEndTcp = null;
                     _lastAnchorStrokeMm = null;
+                    _lastSurfaceRefMm = null;
                 }
             }
             _logger.LogInformation(
@@ -1225,6 +1279,29 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         return (profile, null);
     }
 
+    /// <summary>
+    /// 다른 줄 좌표계 재사용 조건(순수 함수) — CORNER 가 아니고, 직전 좌표계가 <b>같은 지령·같은 정차(anchor 그룹)·같은 면</b>의
+    /// 것이며(주행·면 전환 뒤에는 쓰지 않는다), 프레임과 기준 시작점이 있고, 그 좌표계를 쓴 용접선과 이번 용접선 방향이
+    /// 0·90·180° 중 하나에서 <see cref="InternalWorkpieceFrame.CrossLineAxisTolDeg"/> 안일 때만 true. 수직↔수평도 같은
+    /// 좌표계를 90° 돌려 쓴다 — 면 높이 차는 줄 시작·끝 레이저 측정이 보정한다.
+    /// </summary>
+    internal static bool CanReuseAcrossLines(bool notCorner, (string OrderId, string? AnchorGroupId, string? WallCode)? last,
+        string orderId, string? anchorGroupId, string? wallCode, bool hasFrameAndStart, double? gridAngleErrorDeg)
+        => notCorner && hasFrameAndStart
+           && last is { } l && l.OrderId == orderId && l.AnchorGroupId == anchorGroupId
+           && !string.IsNullOrEmpty(wallCode) && l.WallCode == wallCode
+           && gridAngleErrorDeg is { } e && e <= InternalWorkpieceFrame.CrossLineAxisTolDeg;
+
+    /// <summary>
+    /// 줄 면 높이 측정 모드(순수 함수) — 재사용이 꺼졌거나 CORNER 면 null. 다른 줄에서 물려받았으면 보정,
+    /// 새로 교시했으면 기준 기록, 같은 줄에서 물려받았으면(종전 anchor 적중) null(기준 높이를 그대로 이어 쓴다).
+    /// </summary>
+    internal static string? LineSurfaceMode(bool reuseAcrossLines, bool notCorner, bool anchorHit, bool crossLineReuse)
+        => !reuseAcrossLines || !notCorner ? null
+           : crossLineReuse ? Sequence.Steps.LineSurfaceHeightStep.ModeCorrect
+           : !anchorHit ? Sequence.Steps.LineSurfaceHeightStep.ModeReference
+           : null;
+
     /// <summary>StepKeysJson(문자열 배열) → 스텝 키 목록. null/빈/파싱 실패 → null(풀시퀀스).</summary>
     /// <summary>이 task 가 실행할 스텝 키 — 드라이런은 고정 집합, 일반은 레시피 지정 키(미지정이면 드라이런 전용을
     /// 뺀 전체)에서 anchor 적중 시 정렬 스텝군, 마지막 검사가 아니면 홈 복귀를 제외한다.</summary>
@@ -1239,6 +1316,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             .Where(k => k != Sequence.Steps.AmrMoveStep.StepKey)
             // 묶음 마지막 끝 WD 확인은 오케스트레이터가 해당 TASK 에만 붙인다.
             .Where(k => k != Sequence.Steps.BundleEndWdStep.StepKey)
+            .Where(k => k != Sequence.Steps.LineSurfaceHeightStep.StepKey)
             .Where(k => !(anchorHit && AlignmentStepKeys.Contains(k)))
             .Where(k => isLastInspection || k != HomeStepKey)
             .ToArray();

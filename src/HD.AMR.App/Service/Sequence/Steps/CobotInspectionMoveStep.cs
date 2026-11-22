@@ -75,6 +75,11 @@ public class CobotInspectionMoveStep : ISequenceStep
     /// 이번 용접선이 도면상 같은 줄인지 보는 데 쓴다(<see cref="InternalWorkpieceFrame.MapSeamOffsetMm"/>).</summary>
     public const string AnchorSeamWBagKey = "anchor.seamW";
 
+    /// <summary>Bag 키(bool true) — 직전 좌표계를 <b>다른 줄</b>(옆 줄·수직↔수평 전환)에서 재교시 없이 물려받는다
+    /// (<see cref="InternalWorkpieceFrame.ReuseAcrossLinesKey"/>). ② 가 면 평행 이동 + 90° 단위 회전으로 옮기고,
+    /// 면 높이·기울기는 <see cref="LineSurfaceHeightStep"/> 이 레이저로 보정한다.</summary>
+    public const string AnchorCrossLineBagKey = "anchor.crossLine";
+
     /// <summary>anchor 적중 시 직전 task 종료 TCP(BASE pose) — 그대로면 복귀 없이 연속 이동.</summary>
     public const string PreviousEndTcpBagKey = "anchor.previousEndTcp";
 
@@ -833,7 +838,7 @@ public class CobotInspectionMoveStep : ISequenceStep
             context.Bag[WeldSequenceSupport.SeamDirBaseBagKey] = seamDir.ToArray();
         else
             context.Bag.Remove(WeldSequenceSupport.SeamDirBaseBagKey);
-        if (ShiftAnchorFrame(context, seam.Base) is { } shiftError)
+        if (ShiftAnchorFrame(context, seam.Base, seam.SeamDirBase) is { } shiftError)
             return StepResult.Fail(shiftError);
 
         // ── 같은 anchor 그룹 연속 task: 직전 종료 자세 그대로면 복귀 없이 다음 시작점으로 ─────
@@ -1398,13 +1403,33 @@ public class CobotInspectionMoveStep : ISequenceStep
     /// <summary>anchor 적중 task — Bag 의 캐시 프레임(직전 task 위치)을 이번 시작 접근점으로 평행 이동한다.
     /// 캐시 프레임이 없으면(신규 anchor) 할 일 없음. 프레임은 있는데 기준 시작점이 없으면 이동량을 알 수 없어
     /// 직전 구간을 다시 돌게 되므로 실패.</summary>
-    private string? ShiftAnchorFrame(SequenceContext context, double[] startBase)
+    private string? ShiftAnchorFrame(SequenceContext context, double[] startBase, double[]? seamDirBase = null)
     {
         if (!context.Bag.TryGetValue(InternalWorkpieceFrame.BagKey, out var fv) || fv is not double[] { Length: 6 } frame)
             return null;
         if (!context.Bag.TryGetValue(AnchorStartBaseBagKey, out var av) || av is not double[] { Length: 3 } anchorStart)
             return "[Cobot 검사위치 이동] anchor 공유 프레임의 기준 시작점이 없어 이번 용접선 위치로 옮길 수 없습니다 — " +
                    "직전 구간을 다시 검사하게 되므로 중단합니다. 같은 그룹을 처음부터(정렬 포함) 다시 실행하세요.";
+
+        // 다른 줄에서 재교시 없이 물려받기 — 면 평행 이동 + 프레임 Z 둘레 90° 단위 회전(수직↔수평 전환 포함, 좌표계 하나).
+        // 면 높이·기울기는 이어지는 ⑰⁻ 줄 면 높이 측정이 레이저로 맞춘다.
+        if (context.Bag.TryGetValue(AnchorCrossLineBagKey, out var cl) && cl is true)
+        {
+            if (seamDirBase is not { Length: 3 })
+                return "[Cobot 검사위치 이동] 다른 줄 좌표계 재사용 — 이번 용접선 방향(BASE)을 알 수 없어 좌표계를 돌릴 수 없습니다 " +
+                       $"(용접선 끝점·wall_code 확인). 재교시하려면 '{InternalWorkpieceFrame.ReuseAcrossLinesKey}' 를 끄세요.";
+            var (other, rotDeg, axisErrDeg, dropNormalMm) = InternalWorkpieceFrame.MoveToOtherLine(frame, anchorStart, startBase, seamDirBase);
+            if (other is null)
+                return $"[Cobot 검사위치 이동] 다른 줄 좌표계 재사용 — 이번 용접선 방향이 직전 좌표계 축에서 {axisErrDeg:+0.0;-0.0}° 벗어나 " +
+                       $"(허용 ±{InternalWorkpieceFrame.CrossLineAxisTolDeg:0}°) 물려받을 수 없습니다. 재교시하려면 '{InternalWorkpieceFrame.ReuseAcrossLinesKey}' 를 끄세요.";
+            context.Bag[InternalWorkpieceFrame.BagKey] = other;
+            _logger.LogWarning(
+                "[Cobot 검사위치 이동] 다른 줄 좌표계 재사용(재교시 생략, '{Key}') — 면 평행 이동 Δ=[{Dx:0.0}, {Dy:0.0}, {Dz:0.0}]mm(법선 성분 {N:+0.0;-0.0}mm 제외), " +
+                "프레임 Z 둘레 {Rot:+0;-0}° 회전(ACS 방향과 축 차이 {Err:+0.0;-0.0}°) — 원점 [{X:0.0}, {Y:0.0}, {Z:0.0}]. 면 높이·기울기는 줄 시작·끝 레이저 측정으로 보정합니다.",
+                InternalWorkpieceFrame.ReuseAcrossLinesKey, other[0] - frame[0], other[1] - frame[1], other[2] - frame[2], dropNormalMm,
+                rotDeg, axisErrDeg, other[0], other[1], other[2]);
+            return null;
+        }
 
         // 비드 방향(프레임 X)으로만 옮긴다 — ACS 시작점 차이의 옆 성분(맵·AMR 방향 오차)이 LINE 마다 누적되지 않게.
         // 옆으로 떨어졌는지는 맵(도면) 좌표로 판단한다 — BASE 로 바꾼 ACS 시작점은 task 마다 AMR 위치·방향 오차를 따로 먹어
