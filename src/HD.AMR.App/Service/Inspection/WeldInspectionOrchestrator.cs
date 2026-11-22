@@ -975,7 +975,29 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                         "onboard sequence busy — UI 등 다른 실행이 장비 점유 중");
 
                 case SequenceRunOutcome.Failed:
-                    InvalidateAnchor();   // 정렬 신뢰 불가 — 다음 액션은 풀시퀀스
+                    if (ShouldKeepAnchorOnFailure(anchorHit, runResult.FailedStepKey,
+                            context.Bag.TryGetValue(Sequence.Steps.InspectionRunStep.PrecheckOnlyFailureBagKey, out var pf) && pf is true))
+                    {
+                        // 물려받은 좌표계로 ⑱ 사전 검증만 실패(코봇은 ② 연속 이동 자리에 그대로) — 좌표계는 멀쩡하므로 버리지 않는다.
+                        // 직전 성공 용접선의 좌표계·기준 시작점은 그대로 두고, 종료 TCP 만 지금 자리로 바꿔 다음 용접선이
+                        // 검사 준비 자세·홈 왕복 없이 여기서 이어 가게 한다(실기 2026-11-22 18:52 M2: 실패 뒤 홈 왕복 → 재교시 → 재교시도 실패).
+                        double[]? tcpNow = null;
+                        try { tcpNow = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct); }
+                        catch (Exception ex) when (ex is not OperationCanceledException)
+                        {
+                            _logger.LogWarning(ex, "사전 검증 실패 뒤 TCP 조회 실패 — 좌표계는 유지하되 다음 task 는 복귀 경로로 진입");
+                        }
+                        lock (_sync)
+                        {
+                            _lastAnchorEndTcp = tcpNow;
+                            _lastTipKeptDepthMm = 0;
+                        }
+                        _logger.LogWarning(
+                            "anchor 유지 — {Job} 은 순회 사전 검증에서 움직이기 전에 실패했습니다. 직전 용접선의 작업물 좌표계를 그대로 두고 다음 용접선으로 이어 갑니다 (anchorGroup={Group}).",
+                            req.JobRef, req.AnchorGroupId);
+                    }
+                    else
+                        InvalidateAnchor();   // 정렬 신뢰 불가 — 다음 액션은 풀시퀀스
                     // 활성 작업물 좌표계 0·공구 복귀(best-effort)는 SequenceService.RunSequenceAsync 가 실패 종료
                     // 시(취소 제외) 수행한다 — UI 풀오토와 이 경로가 같은 반납을 공유한다.
                     var failDesc = $"recipe={recipeId} step={runResult.FailedStepKey ?? "?"} fail: {runResult.Message}";
@@ -1278,6 +1300,15 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
 
         return (profile, null);
     }
+
+    /// <summary>
+    /// 시퀀스가 실패했어도 작업물 좌표계(anchor)를 버리지 않을 조건 — <b>물려받은</b> 좌표계로(이 시퀀스에서 새로 교시한 것이 아님)
+    /// ⑱ 검사 수행이 경유점 사전 검증에서 움직이기 전에 실패했을 때만. 그 좌표계는 앞 용접선에서 이미 쓰인 것이고 실패 원인은
+    /// 이 용접선의 도달성이다. 새로 교시한 좌표계는 교시가 틀려 사전 검증이 실패했을 수 있으므로 종전대로 버린다(다음 용접선이 다시 교시).
+    /// </summary>
+    internal static bool ShouldKeepAnchorOnFailure(bool anchorHit, string? failedStepKey, bool precheckOnlyFailure)
+        => anchorHit && precheckOnlyFailure
+           && failedStepKey is Sequence.Steps.InspectionRunStep.StepKey or Sequence.Steps.InspectionRunStep.DryStepKey;
 
     /// <summary>
     /// 다른 줄 좌표계 재사용 조건(순수 함수) — CORNER 가 아니고, 직전 좌표계가 <b>같은 지령·같은 정차(anchor 그룹)·같은 면</b>의

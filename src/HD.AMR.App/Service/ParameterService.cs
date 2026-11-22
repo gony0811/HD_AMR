@@ -214,6 +214,16 @@ public class ParameterService
                 "가스 측정 없는 드라이런(on/off) — 켜면 ACS 검사 미션에서 정렬·교시·검사 팁 진입·순회 동작은 평소대로 하고 가스만 재지 않는다. " +
                 "디텍터가 꺼져 있거나 연결이 끊겨도 미션을 수행하고, 가스 디텍터 HEAVY 감시도 생략한다. 결과는 가스 측정값 없이 완료로 보고된다. " +
                 "레시피 드라이런(비전 정렬 없이 ACS 좌표로 2점 교시)과 다르다. 비우면 끔. 가스 검사기에서만 쓴다. 검사마다 읽는다."),
+            (Sequence.Steps.InspectionRunStep.ScanToolOffsetKey, "",
+                "가스 순회 툴 좌표 오프셋 'x,y,z'(mm) — 검사 순회의 모든 경유점을 코봇 툴 좌표계 기준으로 같은 만큼 옮긴다(자세 유지). " +
+                "스니퍼 팁이 휘어 실제 팁이 TCP 에서 벗어났을 때 임시 보정용(예: 0,-20,0 = 툴 Y− 로 20mm). 좌표계 교시·접근 이동에는 쓰지 않고 순회에만 쓴다. " +
+                "각 성분 ±50 이내, 비우면 없음. 검사마다 읽는다. 스니퍼를 바로잡으면 반드시 비울 것."),
+            (Sequence.Steps.InspectionRunStep.NonStopFirKey, "",
+                "가스 무정지 순회 — 컨트롤러 직선 FIR 필터(가속도·저크 상한으로 속도 변화를 둥글림, 코로게이션에서 끊김·출렁임 시험용). " +
+                "값 = 'maxAccLin,maxAccDeg,maxJerkLin,maxJerkDeg'(mm/s², °/s², mm/s³, °/s³) 또는 on(=1000,1000,1000,1000). 순회 동안만 켜고 끝나면 끈다. " +
+                "컨트롤러가 지원하지 않으면 경고만 남기고 필터 없이 순회한다. 비우면 끔. 검사마다 읽는다."),
+            (Sequence.Steps.InspectionRunStep.NonStopBlendModeKey, "",
+                "가스 무정지 순회 MoveL 블렌딩 방식 — 0 = 접선(내접) 전이(기본), 1 = 모서리 전이. 끊김 시험용. 비우면 0. 검사마다 읽는다."),
             (Inspection.InternalWorkpieceFrame.ReuseAcrossLinesKey, "false",
                 "다른 줄 좌표계 재사용(true/false) — 켜면 같은 지령·같은 정차·같은 면에서 용접선 줄이나 방향(수직↔수평)이 바뀌어도 " +
                 "재교시(카메라 거리·평탄면·레이저 WD·Peak/Bead·두 점 교시)를 하지 않고 좌표계 하나를 면 평행 이동·90° 단위 회전으로 옮겨 쓴다. " +

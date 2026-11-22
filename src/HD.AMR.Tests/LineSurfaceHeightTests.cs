@@ -173,4 +173,15 @@ public class LineSurfaceHeightTests
             new[] { "cobotInspection", LineSurfaceHeightStep.StepKey, "inspectionRun" }, anchorHit: false, isLastInspection: true);
         Assert.DoesNotContain(LineSurfaceHeightStep.StepKey, keys);
     }
+
+    [Fact]
+    public void 사전_검증만_실패하면_물려받은_좌표계는_유지한다()
+    {
+        Assert.True(WeldInspectionOrchestrator.ShouldKeepAnchorOnFailure(true, "inspectionRun", true));
+        Assert.True(WeldInspectionOrchestrator.ShouldKeepAnchorOnFailure(true, "inspectionRunDry", true));     // 드라이런 순회
+        Assert.False(WeldInspectionOrchestrator.ShouldKeepAnchorOnFailure(false, "inspectionRun", true));    // 이 시퀀스에서 새로 교시한 좌표계
+        Assert.False(WeldInspectionOrchestrator.ShouldKeepAnchorOnFailure(true, "inspectionRun", false));    // 움직인 뒤 실패
+        Assert.False(WeldInspectionOrchestrator.ShouldKeepAnchorOnFailure(true, "cobotInspection", true));   // 다른 단계 실패
+        Assert.False(WeldInspectionOrchestrator.ShouldKeepAnchorOnFailure(true, null, true));
+    }
 }

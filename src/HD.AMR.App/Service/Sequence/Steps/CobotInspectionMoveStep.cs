@@ -1403,6 +1403,19 @@ public class CobotInspectionMoveStep : ISequenceStep
     /// <summary>anchor 적중 task — Bag 의 캐시 프레임(직전 task 위치)을 이번 시작 접근점으로 평행 이동한다.
     /// 캐시 프레임이 없으면(신규 anchor) 할 일 없음. 프레임은 있는데 기준 시작점이 없으면 이동량을 알 수 없어
     /// 직전 구간을 다시 돌게 되므로 실패.</summary>
+    /// <summary>
+    /// 좌표계 원점을 툴 좌표 오프셋만큼 옮긴 점(자세 성분은 그대로) — 오프셋은 <paramref name="toolPose"/> 의 툴 축 방향으로 푼다.
+    /// ⑱ 이 경유점에 주는 순회 툴 좌표 오프셋과 같은 변위다(툴 자세가 같을 때).
+    /// </summary>
+    internal static double[] OffsetOriginByTool(double[] frameOrigin, double[] toolPose, double[] toolOffset)
+    {
+        var m = FrameMath.PoseToMatrix(toolPose);
+        var moved = (double[])frameOrigin.Clone();
+        for (var i = 0; i < 3; i++)
+            moved[i] += m[i, 0] * toolOffset[0] + m[i, 1] * toolOffset[1] + m[i, 2] * toolOffset[2];
+        return moved;
+    }
+
     private string? ShiftAnchorFrame(SequenceContext context, double[] startBase, double[]? seamDirBase = null)
     {
         if (!context.Bag.TryGetValue(InternalWorkpieceFrame.BagKey, out var fv) || fv is not double[] { Length: 6 } frame)
@@ -1506,15 +1519,35 @@ public class CobotInspectionMoveStep : ISequenceStep
             wallOut = mOut;
             orientation = AlignOpticalAxisToDirection(cur, new[] { -mOut[0], -mOut[1], -mOut[2] }, seam.OpticalAxis);
         }
-        var measured = frame is not null
-            ? ChainTargetFromMeasuredFrame(cur, frame, wallOut, chainStandoffMm)
+        // 순회 툴 좌표 오프셋(가스 — 휜 스니퍼 보정)이 있으면 연속 이동 목표도 같은 만큼 옮긴다. ⑱ 은 경유점을 오프셋만큼 옮겨
+        // 돌기 때문에, 여기서 오프셋 없는 시작점 정면으로 가면 이어지는 용접선마다 오프셋만큼 옆으로 갔다가 ⑱ 이 "팁이 이미
+        // 들어가 있지 않다"고 보고 빠졌다 다시 들어온다(실기 2026-11-22 15:31: 21mm 이동 → 55mm 후퇴 → 재진입).
+        var chainOrigin = frame;
+        if (frame is not null)
+        {
+            double[]? scanOffset = null;
+            try { scanOffset = InspectionRunStep.ResolveScanToolOffset(await _param.GetAsync(InspectionRunStep.ScanToolOffsetKey)); }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning("[Cobot 검사위치 이동] 순회 툴 좌표 오프셋 조회 실패 — 오프셋 없이 연속 이동: {Err}", ex.Message);
+            }
+            if (scanOffset is not null)
+            {
+                chainOrigin = OffsetOriginByTool(frame, cur, scanOffset);
+                _logger.LogInformation(
+                    "[Cobot 검사위치 이동] 연속 이동 목표에 순회 툴 좌표 오프셋 반영 — 툴 X{X:+0.#;-0.#} / Y{Y:+0.#;-0.#} / Z{Z:+0.#;-0.#} mm → BASE [{Bx:+0.0;-0.0}, {By:+0.0;-0.0}, {Bz:+0.0;-0.0}]mm",
+                    scanOffset[0], scanOffset[1], scanOffset[2], chainOrigin[0] - frame[0], chainOrigin[1] - frame[1], chainOrigin[2] - frame[2]);
+            }
+        }
+        var measured = chainOrigin is not null
+            ? ChainTargetFromMeasuredFrame(cur, chainOrigin, wallOut, chainStandoffMm)
             : ((double[] Target, double HeightMm, bool KeptHeight)?)null;
         // 앞 구역이 검사 팁 진입 깊이를 유지한 채 끝났으면(묶음 연속) 그 깊이만큼 면에 붙어 있는 것이 정상이다 —
         // 하한(MinContinueHeightMm)을 진입 깊이만큼 낮춰, 이어지는 용접선이면 띄우지 않고 그 높이로 옆으로만 옮긴다.
         // (종전: 깊이 50mm 면 높이 −16mm 로 보여 100mm 까지 들어 올렸다가 ⑱ 이 다시 내려와 진입 — 실기 2026-11-21 18:26.)
         if (measured is { KeptHeight: false } m0 && frame is not null
             && context.Bag.TryGetValue(GasTipApproachStep.PreviousKeptDepthBagKey, out var kd) && kd is double keptDepth && keptDepth > 0
-            && KeepHeightForKeptTipDepth(cur, frame, wallOut, keptDepth, await GetChainContinueTolMmAsync()) is { } keepTarget)
+            && KeepHeightForKeptTipDepth(cur, chainOrigin!, wallOut, keptDepth, await GetChainContinueTolMmAsync()) is { } keepTarget)
         {
             _logger.LogInformation(
                 "[Cobot 검사위치 이동] 앞 구역 검사 팁 진입 깊이 {D:0.#}mm 유지 중 — 들어 올리지 않고 현재 높이({H:0.#}mm)로 시작점 정면에 맞춤",
