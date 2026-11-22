@@ -27,6 +27,9 @@ public sealed partial class SequenceViewModel : ViewModelBase
 
     private IServiceScope? _scope;
     private SequenceService? _seq;
+    /// <summary>전역 실행 잠금 — 이 페이지가 아닌 곳(ACS order 등)에서 시작한 시퀀스도 보고 멈추기 위해.</summary>
+    private SequenceRunGate? _runGate;
+    private Vda5050OrderExecutor? _orders;
     private ParameterService? _param;
     private TeachingService? _teaching;
     private DrawingService? _drawing;
@@ -146,6 +149,8 @@ public sealed partial class SequenceViewModel : ViewModelBase
         _scope = _scopeFactory.CreateScope();
         var sp = _scope.ServiceProvider;
         _seq = sp.GetRequiredService<SequenceService>();
+        _runGate = sp.GetService<SequenceRunGate>();
+        _orders = sp.GetService<Vda5050OrderExecutor>();
         _param = sp.GetRequiredService<ParameterService>();
         _teaching = sp.GetRequiredService<TeachingService>();
         _drawing = sp.GetRequiredService<DrawingService>();
@@ -442,7 +447,7 @@ public sealed partial class SequenceViewModel : ViewModelBase
     {
         CobotConnected = _cobot.IsConnected;
         FaultText = _cobot.State is { ErrorCode: not 0 } st ? $"오류 코드 {st.ErrorCode} — '오류 해제' 필요" : null;
-        Busy = _seq?.IsBusy ?? false;
+        Busy = (_seq?.IsBusy ?? false) || (_runGate?.HasActiveSequence ?? false);
         RunAllCommand.NotifyCanExecuteChanged();
         StopCommand.NotifyCanExecuteChanged();
     }
@@ -472,7 +477,8 @@ public sealed partial class SequenceViewModel : ViewModelBase
 
     // ── 실행 제어 ──
     private bool CanRunAll => _cobot.IsConnected && !(_seq?.IsBusy ?? false);
-    private bool CanStop => _seq?.IsBusy ?? false;
+    // 정지는 이 페이지가 시작한 실행뿐 아니라 ACS order 가 시작한 실행(다른 scope 의 SequenceService)도 대상이다.
+    private bool CanStop => (_seq?.IsBusy ?? false) || (_runGate?.HasActiveSequence ?? false) || (_orders?.HasActiveMission ?? false);
 
     [RelayCommand(CanExecute = nameof(CanRunAll))]
     private async Task RunAll()
@@ -497,7 +503,27 @@ public sealed partial class SequenceViewModel : ViewModelBase
     }
 
     [RelayCommand(CanExecute = nameof(CanStop))]
-    private async Task Stop() { if (_seq is not null) await _seq.StopAsync(); }
+    private async Task Stop()
+    {
+        if (_seq is { IsBusy: true })
+        {
+            await _seq.StopAsync();
+            return;
+        }
+        // ACS order 가 돌리는 시퀀스 — 코봇을 먼저 즉시 멈추고(시퀀스 취소 + StopMotion), 임무째 폐기한다.
+        // 시퀀스만 멈추면 그 action 만 실패하고 order 의 다음 용접선으로 넘어간다.
+        // 시퀀스 사이(주행·홈 복귀 중)여도 ACS 임무가 살아 있으면 임무를 폐기한다.
+        var acsOrder = _runGate?.ActiveAcsOrderId;
+        var stopped = _runGate is not null && await _runGate.StopActiveAsync();
+        var aborted = (acsOrder is not null || (_orders?.HasActiveMission ?? false))
+                      && _orders is not null && await _orders.AbortByOperatorAsync();
+        acsOrder ??= aborted ? "진행 중" : null;
+        IsError = !(stopped || aborted);
+        Message = aborted ? $"정지 — ACS 임무 중단(order {acsOrder}). ACS 가 새 order 를 보내면 다시 시작될 수 있습니다."
+            : stopped ? "정지 — 실행 중이던 시퀀스를 멈췄습니다."
+            : "멈출 실행이 없습니다.";
+        RefreshConnection();
+    }
 
     [RelayCommand]
     private void ResetStatuses()

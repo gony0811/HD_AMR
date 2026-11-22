@@ -112,6 +112,7 @@ public class SequenceService
     {
         if (IsBusy || !_gate.TryEnter())
             return new SequenceRunResult(SequenceRunOutcome.Busy, null, "다른 시퀀스가 실행 중입니다.");
+        _gate.SetActive(this, context.AcsOrderId);
 
         try
         {
@@ -215,6 +216,7 @@ public class SequenceService
     {
         if (IsBusy || !_gate.TryEnter())
             return StepResult.Fail("이미 실행 중입니다.");
+        _gate.SetActive(this, context.AcsOrderId);
 
         try
         {

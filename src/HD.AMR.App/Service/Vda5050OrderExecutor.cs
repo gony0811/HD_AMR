@@ -1647,6 +1647,24 @@ public sealed class Vda5050OrderExecutor
     }
 
     /// <summary>
+    /// 작업자 정지(앱 정지 버튼) — 진행 중 임무 폐기(cancelOrder 와 같은 경로: 주행 정지·검사 실행기 취소·잔여 action FAILED).
+    /// 검사 시퀀스만 멈추면 그 action 만 실패하고 order 의 다음 action(다음 용접선)으로 넘어가므로 임무째 끝낸다.
+    /// 수행 중 임무가 없으면 false.
+    /// </summary>
+    public async Task<bool> AbortByOperatorAsync(string reason = "작업자 정지(앱 정지 버튼)")
+    {
+        string? running;
+        lock (_gate) running = _missionTask is { IsCompleted: false } ? _orderId : null;
+        if (running is null) return false;
+
+        _logger.LogWarning("작업자 정지로 임무 중단: {OrderId} — {Reason}", running, reason);
+        OpLog(OpCategory.Order, "임무 중단(작업자 정지)", false,
+            $"{reason} — 진행 중 order {running} 주행 정지·잔여 action FAILED", running);
+        await AbortActiveMissionAsync(true, $"aborted by operator: {reason}");
+        return true;
+    }
+
+    /// <summary>
     /// 장치 HEAVY 알람(통신 두절)으로 진행 중 임무 즉시 중단 — 주행 정지, 잔여 action FAILED, 일시정지 해소.
     /// 수행 중 임무가 없으면 아무것도 하지 않는다(false). 신규 order 는 게이트가 알람 해제(RESET) 전까지 거부한다.
     /// </summary>
