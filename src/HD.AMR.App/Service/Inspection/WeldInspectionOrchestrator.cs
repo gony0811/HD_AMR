@@ -623,11 +623,11 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             var currentStrokeMm = _lift.TryGetStrokeMm(out _);
             // 다른 줄 좌표계 재사용 — 같은 지령·정차·면이면 줄·방향(수직↔수평)이 바뀌어도 좌표계 하나를 옮겨 쓰고,
             // 줄마다 시작·끝 레이저 면 높이로 좌표계 높이·기울기를 보정한다(⑰⁻ LineSurfaceHeightStep).
-            var reuseAcrossLines = false;
-            try { reuseAcrossLines = await param.GetBoolAsync(InternalWorkpieceFrame.ReuseAcrossLinesKey) ?? false; }
+            var reuseAcrossLines = true;
+            try { reuseAcrossLines = await param.GetBoolAsync(InternalWorkpieceFrame.ReuseAcrossLinesKey) ?? true; }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                _logger.LogWarning(ex, "'{Key}' 조회 실패 — 끔으로 진행", InternalWorkpieceFrame.ReuseAcrossLinesKey);
+                _logger.LogWarning(ex, "'{Key}' 조회 실패 — 기본값(켬)으로 진행", InternalWorkpieceFrame.ReuseAcrossLinesKey);
             }
             var crossLineReuse = false;
             double? surfaceRefMm = null;

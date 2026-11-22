@@ -224,12 +224,12 @@ public class ParameterService
                 "컨트롤러가 지원하지 않으면 경고만 남기고 필터 없이 순회한다. 비우면 끔. 검사마다 읽는다."),
             (Sequence.Steps.InspectionRunStep.NonStopBlendModeKey, "",
                 "가스 무정지 순회 MoveL 블렌딩 방식 — 0 = 접선(내접) 전이(기본), 1 = 모서리 전이. 끊김 시험용. 비우면 0. 검사마다 읽는다."),
-            (Inspection.InternalWorkpieceFrame.ReuseAcrossLinesKey, "false",
+            (Inspection.InternalWorkpieceFrame.ReuseAcrossLinesKey, "true",
                 "다른 줄 좌표계 재사용(true/false) — 켜면 같은 지령·같은 정차·같은 면에서 용접선 줄이나 방향(수직↔수평)이 바뀌어도 " +
                 "재교시(카메라 거리·평탄면·레이저 WD·Peak/Bead·두 점 교시)를 하지 않고 좌표계 하나를 면 평행 이동·90° 단위 회전으로 옮겨 쓴다. " +
                 "대신 줄마다 시작점과 끝점에서 레이저로 면 높이를 재서 좌표계 높이(교시한 줄의 면 높이에 맞춤)와 줄 방향 기울기를 보정한다. " +
                 "옆 위치(용접선 옆 방향)는 다시 재지 않으므로 ACS·AMR 위치 오차가 그대로 남는다. AMR 이 움직이거나 면이 바뀌면 항상 재교시한다. " +
-                "보정량이 30mm 를 넘으면 그 줄은 멈추고 다음 줄은 다시 교시한다. 기본 false. 검사마다 읽는다."),
+                "보정량이 30mm 를 넘으면 그 줄은 멈추고 다음 줄은 다시 교시한다. 기본 true(비우면 켬). 검사마다 읽는다."),
             (Sequence.Steps.LineSurfaceHeightStep.LiftKey, "",
                 "줄 면 높이 측정 들어올림(mm) — 다른 줄 좌표계 재사용에서 시작·끝 면 높이를 잴 때 면 바깥으로 이만큼 띄운 채 옮겨 가며 잰다(검사 팁·면 기울기 충돌 방지). " +
                 "0~100, 비우면 30. 검사마다 읽는다."),

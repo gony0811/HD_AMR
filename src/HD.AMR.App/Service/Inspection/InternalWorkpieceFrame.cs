@@ -129,7 +129,7 @@ public static class InternalWorkpieceFrame
 
     /// <summary>다른 줄 좌표계 재사용 파라미터 키 — true 면 같은 지령·같은 정차·같은 면에서 용접선 줄이나 방향(수직↔수평)이
     /// 바뀌어도 재교시하지 않고 <b>하나의</b> 좌표계를 옮겨 쓴다(<see cref="MoveToOtherLine"/>). 면 높이와 기울기는 줄마다
-    /// 시작·끝점 레이저 측정으로 보정한다(<see cref="CorrectBySurfaceHeights"/>). 기본 false(줄이 바뀌면 재교시).</summary>
+    /// 시작·끝점 레이저 측정으로 보정한다(<see cref="CorrectBySurfaceHeights"/>). 기본 true — false 면 줄이 바뀔 때 재교시.</summary>
     public const string ReuseAcrossLinesKey = "inspection.reuseFrameAcrossLines";
 
     /// <summary>다른 줄 재사용에서 용접선 방향이 직전 좌표계 축(0·90·180·270°)에서 벗어나도 되는 한계 [도].</summary>
