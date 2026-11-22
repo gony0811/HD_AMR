@@ -69,9 +69,11 @@ public class FlatSurfaceAlignStep : ISequenceStep
     /// (실기 2026-11-21 14:00 S203 H1: 1~3° 에서 재탐색마다 다른 자리를 재 오르내리다 '발산').</summary>
     internal const double RecenterMinTiltDeg = 3.0;
 
-    /// <summary>첫 측정 틸트가 이 값(°)을 넘으면 회전하지 않고 그 자리를 버린다 — 1회 클램프와 같은 값
-    /// (같은 오더 자리3: 첫 rx −32°, 코루게이션에 걸린 채 클램프 회전·재탐색으로 마지막 자리를 낭비).</summary>
-    internal const double MaxFirstTiltDeg = MaxTiltCorrectionDeg;
+    /// <summary>첫 측정 틸트가 이 값(°)을 넘으면 회전하지 않고 그 자리를 버린다
+    /// (같은 오더 자리3: 첫 rx −32°, 코루게이션에 걸린 채 클램프 회전·재탐색으로 마지막 자리를 낭비).
+    /// 1회 클램프(10°)와 같게 두면 실제로 ~10° 기운 벽을 버린다(2026-11-22 F L4-R01C04 V6: 자리 3곳 모두 −10.8~−11°,
+    /// 09:42 엔 −9.4° 를 한 번에 0.6° 로 보정해 성공) — 클램프 2배로 둬 11° 는 10° + 1° 두 번에 맞춘다.</summary>
+    internal const double MaxFirstTiltDeg = 2 * MaxTiltCorrectionDeg;
 
     /// <summary>그리드 분할 수 (gridSize × gridSize 셀).</summary>
     private const int GridSize = 5;

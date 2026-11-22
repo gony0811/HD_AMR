@@ -17,8 +17,9 @@ public class TiltRecenterGateTests
 
     [Theory]
     [InlineData(32.0, true)]    // 코루게이션에 걸린 첫 측정 — 버림
-    [InlineData(10.5, true)]
-    [InlineData(10.0, false)]   // 클램프 이내 — 보정
+    [InlineData(20.5, true)]
+    [InlineData(20.0, false)]
+    [InlineData(11.13, false)]  // 11-22 F V6 — 실제로 ~10° 기운 평탄면, 보정한다
     [InlineData(4.25, false)]
     public void 첫_측정이_크게_기울면_자리를_버린다(double tilt, bool expected)
         => Assert.Equal(expected, LaserTiltCorrector.IsFirstTiltTooLarge(tilt, FlatSurfaceAlignStep.MaxFirstTiltDeg));
