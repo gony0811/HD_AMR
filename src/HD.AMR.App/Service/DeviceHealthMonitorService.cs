@@ -26,6 +26,7 @@ public sealed class DeviceHealthMonitorService : BackgroundService
     private readonly GasDetectorService _gas;
     private readonly LaserDisplacementSensorService _laser;
     private readonly Vda5050OrderExecutor _executor;
+    private readonly CobotFaultGuard _faultGuard;
     private readonly OperationLogService _opLog;
     private readonly ILogger<DeviceHealthMonitorService> _logger;
 
@@ -46,8 +47,9 @@ public sealed class DeviceHealthMonitorService : BackgroundService
         VisionInterfaceService vision, GasDetectorService gas, IOptions<InspectionSensorSettings> sensor,
         LaserDisplacementSensorService laser,
         Vda5050OrderExecutor executor, OperationLogService opLog, IServiceScopeFactory scopeFactory,
-        ILogger<DeviceHealthMonitorService> logger)
+        CobotFaultGuard faultGuard, ILogger<DeviceHealthMonitorService> logger)
     {
+        _faultGuard = faultGuard;
         _scopeFactory = scopeFactory;
         _s = options.Value;
         _state = state;
@@ -128,7 +130,8 @@ public sealed class DeviceHealthMonitorService : BackgroundService
         _state.Update(snapshot);
 
         foreach (var ev in events.Where(e => e.Event == DeviceAlarmEventKind.Raised))
-            await _executor.AbortForDeviceFaultAsync($"{DeviceAlarmTracker.DisplayName(ev.Kind)} 통신 두절({ev.Detail})");
+            await _executor.AbortForDeviceFaultAsync(
+                $"{DeviceAlarmTracker.DisplayName(ev.Kind)} {(ev.Detail.StartsWith(CobotFaultGuard.DetailPrefix, StringComparison.Ordinal) ? "결함" : "통신 두절")}({ev.Detail})");
     }
 
     private void OnResetRequested(string source)
@@ -167,6 +170,7 @@ public sealed class DeviceHealthMonitorService : BackgroundService
             : !_cobot.IsStateConnected ? new(false, "상태 소켓(20004) 끊김")
             : cs is null ? new(false, "상태 미수신")
             : !Fresh(cs.UpdatedAt, _s.CobotStaleSec) ? new(false, "상태 패킷 중단")
+            : _faultGuard.Unhealthy is { } fault ? new(false, fault)   // 결함 — 감시기가 이미 정지·임무 중단, 여기서는 HEAVY 래치
             : new(true, "");
 
         r[DeviceKind.IoModule] = !_io.IsConnected ? new(false, "Modbus 미연결")

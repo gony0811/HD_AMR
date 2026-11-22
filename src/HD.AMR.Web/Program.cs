@@ -103,6 +103,8 @@ builder.Services.Configure<DeviceHealthSettings>(builder.Configuration.GetSectio
 builder.Services.AddSingleton<DeviceAlarmState>();
 // 코봇 도달·순회 경고 배너 — HEAVY 알람과 분리(order 를 잠그지 않음). 확인 버튼으로 지운다.
 builder.Services.AddSingleton<OperatorAlarmState>();
+builder.Services.AddSingleton<CobotFaultGuard>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<CobotFaultGuard>());
 builder.Services.AddSingleton<DeviceHealthMonitorService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<DeviceHealthMonitorService>());
 // AMR 장비 자체 상태 변화(모드·이동·조그·오류)를 운영 로그(출처 AMR)로 기록.
