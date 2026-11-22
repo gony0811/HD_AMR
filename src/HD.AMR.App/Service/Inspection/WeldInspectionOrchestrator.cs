@@ -47,6 +47,9 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
     private double[]? _lastAnchorEndTcp;                           // 그 task 종료 시 TCP(BASE) — 다음 task 연속 이동 판정
     private double _lastTipKeptDepthMm;                            // 직전 task 가 물러나지 않고 유지한 검사 팁 진입 깊이(mm) — 다음 task 연속 이동이 띄우지 않게
     private double? _lastAnchorStrokeMm;                           // 그 프레임을 쓴 task 의 텔레스코픽 스트로크(mm) — 높이 변경 시 캐시 무효화
+    // 다른 줄 좌표계 재사용용 — 지금 anchor(같은 지령·정차·면·리프트 높이)에서 교시한 좌표계를 용접선 축(수직/수평)마다 하나씩.
+    // 수직·수평 용접선은 면에서의 높이(Z)가 달라 한 좌표계를 돌려 쓰지 않는다. _lastAnchor 가 지워지면 함께 비운다.
+    private readonly List<AxisFrame> _axisFrames = new();
     private CancellationTokenSource? _currentRunCts;
     private readonly Dictionary<string, BundleAssignment> _bundleByAction = new();
     private readonly List<BundleAssignment> _bundleOrder = new();   // 노드 액션 순서 — 리더 실패 시 남은 TASK 재묶음용
@@ -344,7 +347,30 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             _lastAnchorStartBase = null;
             _lastAnchorEndTcp = null;
             _lastAnchorStrokeMm = null;
+            _axisFrames.Clear();
         }
+    }
+
+    /// <summary>용접선 축(수직/수평)별로 보관하는 작업물 좌표계 — 그 좌표계를 쓴 용접선(맵 좌표 m)과 ② 시작 접근점(BASE)이 짝이다.</summary>
+    internal sealed record AxisFrame(double[] SeamStartW, double[] SeamEndW, double[] Frame, double[] StartBase);
+
+    /// <summary>이번 용접선과 같은 축(같은·반대 방향, <see cref="InternalWorkpieceFrame.CrossLineAxisTolDeg"/> 안)의
+    /// 좌표계를 찾는다 — 직교하는 축의 좌표계는 고르지 않는다. 없으면 null(그 축은 아직 교시 전).</summary>
+    internal static AxisFrame? FindAxisFrame(IReadOnlyList<AxisFrame> frames, double[]? seamStartW, double[]? seamEndW)
+    {
+        for (var i = frames.Count - 1; i >= 0; i--)
+            if (InternalWorkpieceFrame.ParallelAngleErrorDeg(frames[i].SeamStartW, frames[i].SeamEndW, seamStartW, seamEndW) is { } e
+                && e <= InternalWorkpieceFrame.CrossLineAxisTolDeg)
+                return frames[i];
+        return null;
+    }
+
+    /// <summary>축별 좌표계 보관 — 같은 축의 앞 좌표계는 새 것으로 바꾸고, 다른 축의 좌표계는 그대로 둔다.</summary>
+    internal static void StoreAxisFrame(List<AxisFrame> frames, AxisFrame entry)
+    {
+        frames.RemoveAll(f => InternalWorkpieceFrame.ParallelAngleErrorDeg(f.SeamStartW, f.SeamEndW, entry.SeamStartW, entry.SeamEndW) is not { } e
+                              || e <= InternalWorkpieceFrame.CrossLineAxisTolDeg);
+        frames.Add(entry);
     }
 
     /// <summary>anchor 캐시 시점의 리프트 스트로크와 현재 스트로크가 허용 오차를 넘어 달라졌는지 판정한다.</summary>
@@ -425,6 +451,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             _currentRunCts?.Cancel();
             _lastAnchor = null;
             _lastAnchorStrokeMm = null;
+            _axisFrames.Clear();
         }
         try
         {
@@ -618,6 +645,14 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             double[]? cachedAnchorSeamW = null;   // cachedAnchorStartBase 와 짝인 용접선 맵 좌표 [시작, 끝](m)
             double[]? cachedAnchorEndTcp;
             var currentStrokeMm = _lift.TryGetStrokeMm(out _);
+            // 다른 줄 좌표계 재사용(시험 옵션) — 같은 지령·같은 정차(anchor 그룹)·같은 면이면 줄이나 방향이 바뀌어도 재교시하지 않는다.
+            var reuseAcrossLines = false;
+            try { reuseAcrossLines = await param.GetBoolAsync(InternalWorkpieceFrame.ReuseAcrossLinesKey) ?? false; }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(ex, "'{Key}' 조회 실패 — 끔으로 진행", InternalWorkpieceFrame.ReuseAcrossLinesKey);
+            }
+            var crossLineReuse = false;
             lock (_sync)
             {
                 if (ShouldInvalidateForStroke(_lastAnchor is not null, _lastAnchorStrokeMm, currentStrokeMm))
@@ -630,6 +665,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                     _lastAnchorStartBase = null;
                     _lastAnchorEndTcp = null;
                     _lastAnchorStrokeMm = null;
+                    _axisFrames.Clear();
                 }
 
                 anchorHit = recipe.SeamType != SeamTypeKind.Corner
@@ -664,16 +700,54 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                         "anchor 방향/면 변경({Old}/{OldWall}→{New}/{NewWall}) — 작업물 좌표계 재교시 (anchorGroup={Group})",
                         prev.Direction, prev.WallCode ?? "-", direction, req.DrawingPos.WallCode ?? "-", req.AnchorGroupId);
                 }
-                cachedInternalFrame = anchorHit ? (double[])_lastInternalWorkpieceFrame!.Clone() : null;
-                cachedAnchorStartBase = anchorHit ? _lastAnchorStartBase?.ToArray() : null;
-                cachedAnchorSeamW = anchorHit && _lastAnchorSeamW is { } lastSeam ? lastSeam.Start.Concat(lastSeam.End).ToArray() : null;
+                // 다른 줄 재사용: 위 판정으로 재교시가 정해졌어도, 같은 지령·정차·면에서 이번 용접선과 <b>같은 축</b>(수직끼리·
+                // 수평끼리)으로 교시한 좌표계가 있으면 그것을 옮겨 쓴다 — ② 가 면 평행 이동(+반대 방향이면 180° 회전)을 한다.
+                // 수직·수평은 면에서의 높이(Z)가 달라 좌표계를 돌려 쓰지 않는다 — 그 축을 처음 만나면 한 번 교시한다.
+                AxisFrame? axisFrame = null;
+                if (!anchorHit && reuseAcrossLines)
+                {
+                    axisFrame = FindAxisFrame(_axisFrames, req.SeamStartW, req.SeamEndW);
+                    if (CanReuseAcrossLines(recipe.SeamType != SeamTypeKind.Corner, _lastAnchor is { } la ? (la.OrderId, la.AnchorGroupId, la.WallCode) : null,
+                            orderId, req.AnchorGroupId, req.DrawingPos.WallCode,
+                            axisFrame is not null,
+                            axisFrame is null ? null : InternalWorkpieceFrame.ParallelAngleErrorDeg(
+                                axisFrame.SeamStartW, axisFrame.SeamEndW, req.SeamStartW, req.SeamEndW)))
+                    {
+                        anchorHit = true;
+                        crossLineReuse = true;
+                        _logger.LogWarning(
+                            "anchor 다른 줄 좌표계 재사용 — 줄이 바뀌었지만 같은 축({Dir})으로 교시한 좌표계가 있어 재교시하지 않습니다 " +
+                            "('{Key}' 켜짐, anchorGroup={Group}, jobRef={JobRef}). 옆 위치·면 거리는 ACS 좌표와 그 좌표계로만 정합니다.",
+                            direction, InternalWorkpieceFrame.ReuseAcrossLinesKey, req.AnchorGroupId, req.JobRef);
+                    }
+                    else if (axisFrame is null && _axisFrames.Count > 0 && recipe.SeamType != SeamTypeKind.Corner)
+                    {
+                        _logger.LogInformation(
+                            "anchor 축별 좌표계 없음 — 이번 용접선 축({Dir})은 이 정차에서 아직 교시하지 않아 한 번 교시합니다. " +
+                            "다른 축 좌표계는 그대로 보관합니다 ('{Key}' 켜짐, anchorGroup={Group}, jobRef={JobRef}).",
+                            direction, InternalWorkpieceFrame.ReuseAcrossLinesKey, req.AnchorGroupId, req.JobRef);
+                    }
+                }
+                if (crossLineReuse)
+                {
+                    cachedInternalFrame = (double[])axisFrame!.Frame.Clone();
+                    cachedAnchorStartBase = axisFrame.StartBase.ToArray();
+                    cachedAnchorSeamW = axisFrame.SeamStartW.Concat(axisFrame.SeamEndW).ToArray();
+                }
+                else
+                {
+                    cachedInternalFrame = anchorHit ? (double[])_lastInternalWorkpieceFrame!.Clone() : null;
+                    cachedAnchorStartBase = anchorHit ? _lastAnchorStartBase?.ToArray() : null;
+                    cachedAnchorSeamW = anchorHit && _lastAnchorSeamW is { } lastSeam ? lastSeam.Start.Concat(lastSeam.End).ToArray() : null;
+                }
+                // 종료 TCP 는 좌표계가 아니라 코봇이 지금 서 있는 자리(직전 task) 기준이다.
                 cachedAnchorEndTcp = anchorHit ? _lastAnchorEndTcp?.ToArray() : null;
             }
 
             BundleAssignment? bundle = null;
             var bundleEndWd = false;   // 묶음 마지막 팔로워 — 공통 좌표계를 연장해 쓰므로 끝점 WD 로 기울기를 다시 잡는다
             lock (_sync) _bundleByAction.TryGetValue(action.ActionId, out bundle);
-            if (bundle?.Role == BundleRole.Leader && anchorHit)
+            if (bundle?.Role == BundleRole.Leader && anchorHit && !reuseAcrossLines)
             {
                 // 묶음 리더는 자기 묶음(점1 = 이 용접선 시작, 점2 = 묶음 마지막 끝)으로 좌표계를 새로 잡는다 — 앞 묶음 좌표계를
                 // 영역 캐시로 물려받으면 이 묶음 팔로워까지 교시 없이 앞 묶음 좌표계를 쓰게 된다.
@@ -886,6 +960,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                 context.Bag[CobotInspectionMoveStep.AnchorSeamWBagKey] = cachedAnchorSeamW;
             if (cachedAnchorEndTcp is not null)
                 context.Bag[CobotInspectionMoveStep.PreviousEndTcpBagKey] = cachedAnchorEndTcp;
+            if (crossLineReuse && cachedAnchorStartBase is not null)
+                context.Bag[CobotInspectionMoveStep.AnchorCrossLineBagKey] = true;
             // 직전 task 가 유지한 검사 팁 진입 깊이 — 한 번만 넘긴다(그 사이 다른 task·실패가 끼면 0 으로 돌아가 종전대로 띄운다).
             double prevTipKept;
             lock (_sync) { prevTipKept = _lastTipKeptDepthMm; _lastTipKeptDepthMm = 0; }
@@ -904,7 +980,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                 recipeId, recipe.DryRun ? "[드라이런]" : "", profile?.Name ?? "(미사용 — CORNER 티칭 슬롯)",
                 chamferSlope ? "(챔퍼 수직용)" : "",
                 profile?.Id ?? 0, profile?.DrawingId ?? 0,
-                anchorHit ? "적중(정렬 생략)" : "신규(정렬 수행)",
+                crossLineReuse ? "다른 줄 재사용(정렬 생략)" : anchorHit ? "적중(정렬 생략)" : "신규(정렬 수행)",
                 string.Join(",", stepKeys));
             _opLog.Log(OperationLogService.SourceAcs, OpCategory.Action, "검사 구성", null,
                 $"jobRef={req.JobRef}, seam={req.SeamType}, wall={req.DrawingPos.WallCode}, recipe={recipeId}" +
@@ -927,7 +1003,29 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                         "onboard sequence busy — UI 등 다른 실행이 장비 점유 중");
 
                 case SequenceRunOutcome.Failed:
-                    InvalidateAnchor();   // 정렬 신뢰 불가 — 다음 액션은 풀시퀀스
+                    if (ShouldKeepAnchorOnFailure(anchorHit, runResult.FailedStepKey,
+                            context.Bag.TryGetValue(Sequence.Steps.InspectionRunStep.PrecheckOnlyFailureBagKey, out var pf) && pf is true))
+                    {
+                        // 물려받은 좌표계로 ⑱ 사전 검증만 실패(코봇은 ② 연속 이동 자리에 그대로) — 좌표계는 멀쩡하므로 버리지 않는다.
+                        // 직전 성공 용접선의 좌표계·기준 시작점은 그대로 두고, 종료 TCP 만 지금 자리로 바꿔 다음 용접선이
+                        // 검사 준비 자세·홈 왕복 없이 여기서 이어 가게 한다(실기 2026-11-22 18:52 M2: 실패 뒤 홈 왕복 → 재교시 → 재교시도 실패).
+                        double[]? tcpNow = null;
+                        try { tcpNow = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct); }
+                        catch (Exception ex) when (ex is not OperationCanceledException)
+                        {
+                            _logger.LogWarning(ex, "사전 검증 실패 뒤 TCP 조회 실패 — 좌표계는 유지하되 다음 task 는 복귀 경로로 진입");
+                        }
+                        lock (_sync)
+                        {
+                            _lastAnchorEndTcp = tcpNow;
+                            _lastTipKeptDepthMm = 0;
+                        }
+                        _logger.LogWarning(
+                            "anchor 유지 — {Job} 은 순회 사전 검증에서 움직이기 전에 실패했습니다. 직전 용접선의 작업물 좌표계를 그대로 두고 다음 용접선으로 이어 갑니다 (anchorGroup={Group}).",
+                            req.JobRef, req.AnchorGroupId);
+                    }
+                    else
+                        InvalidateAnchor();   // 정렬 신뢰 불가 — 다음 액션은 풀시퀀스
                     // 활성 작업물 좌표계 0·공구 복귀(best-effort)는 SequenceService.RunSequenceAsync 가 실패 종료
                     // 시(취소 제외) 수행한다 — UI 풀오토와 이 경로가 같은 반납을 공유한다.
                     var failDesc = $"recipe={recipeId} step={runResult.FailedStepKey ?? "?"} fail: {runResult.Message}";
@@ -966,9 +1064,17 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                                 _lastAnchorStartBase = null;
                                 _lastAnchorEndTcp = null;
                                 _lastAnchorStrokeMm = null;
+                                _axisFrames.Clear();
                             }
                             else
                             {
+                                // 축별 좌표계는 같은 지령·정차·면 안에서만 유효 — 바뀌었으면 앞 것을 버리고 이번 것부터 다시 모은다.
+                                if (_lastAnchor is not { } before || before.OrderId != orderId
+                                    || before.AnchorGroupId != req.AnchorGroupId || before.WallCode != req.DrawingPos.WallCode)
+                                    _axisFrames.Clear();
+                                if (startBase is not null)
+                                    StoreAxisFrame(_axisFrames, new AxisFrame(
+                                        req.SeamStartW.ToArray(), req.SeamEndW.ToArray(), (double[])internalFrame.Clone(), startBase.ToArray()));
                                 _lastAnchor = (orderId, req.AnchorGroupId, direction, req.DrawingPos.WallCode);
                                 _lastAnchorSeamW = (req.SeamStartW.ToArray(), req.SeamEndW.ToArray());
                                 _lastInternalWorkpieceFrame = (double[])internalFrame.Clone();
@@ -1102,6 +1208,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                     _lastAnchorStartBase = null;
                     _lastAnchorEndTcp = null;
                     _lastAnchorStrokeMm = null;
+                    _axisFrames.Clear();
                 }
             }
             _logger.LogInformation(
@@ -1224,6 +1331,28 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
 
         return (profile, null);
     }
+
+    /// <summary>
+    /// 시퀀스가 실패했어도 작업물 좌표계(anchor)를 버리지 않을 조건 — <b>물려받은</b> 좌표계로(이 시퀀스에서 새로 교시한 것이 아님)
+    /// ⑱ 검사 수행이 경유점 사전 검증에서 움직이기 전에 실패했을 때만. 그 좌표계는 앞 용접선에서 이미 쓰인 것이고 실패 원인은
+    /// 이 용접선의 도달성이다. 새로 교시한 좌표계는 교시가 틀려 사전 검증이 실패했을 수 있으므로 종전대로 버린다(다음 용접선이 다시 교시).
+    /// </summary>
+    internal static bool ShouldKeepAnchorOnFailure(bool anchorHit, string? failedStepKey, bool precheckOnlyFailure)
+        => anchorHit && precheckOnlyFailure
+           && failedStepKey is Sequence.Steps.InspectionRunStep.StepKey or Sequence.Steps.InspectionRunStep.DryStepKey;
+
+    /// <summary>
+    /// 다른 줄 좌표계 재사용 조건(순수 함수) — CORNER 가 아니고, 직전 좌표계가 <b>같은 지령·같은 정차(anchor 그룹)·같은 면</b>의
+    /// 것이며(주행·면 전환 뒤에는 쓰지 않는다), 프레임과 기준 시작점이 있고, 그 좌표계를 쓴 용접선과 이번 용접선이 같은 축
+    /// (같은·반대 방향, <see cref="InternalWorkpieceFrame.ParallelAngleErrorDeg"/>)에서
+    /// <see cref="InternalWorkpieceFrame.CrossLineAxisTolDeg"/> 안일 때만 true. 직교(수직↔수평)는 false — 높이가 달라 따로 교시한다.
+    /// </summary>
+    internal static bool CanReuseAcrossLines(bool notCorner, (string OrderId, string? AnchorGroupId, string? WallCode)? last,
+        string orderId, string? anchorGroupId, string? wallCode, bool hasFrameAndStart, double? parallelAngleErrorDeg)
+        => notCorner && hasFrameAndStart
+           && last is { } l && l.OrderId == orderId && l.AnchorGroupId == anchorGroupId
+           && !string.IsNullOrEmpty(wallCode) && l.WallCode == wallCode
+           && parallelAngleErrorDeg is { } e && e <= InternalWorkpieceFrame.CrossLineAxisTolDeg;
 
     /// <summary>StepKeysJson(문자열 배열) → 스텝 키 목록. null/빈/파싱 실패 → null(풀시퀀스).</summary>
     /// <summary>이 task 가 실행할 스텝 키 — 드라이런은 고정 집합, 일반은 레시피 지정 키(미지정이면 드라이런 전용을

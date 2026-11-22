@@ -75,6 +75,10 @@ public class CobotInspectionMoveStep : ISequenceStep
     /// 이번 용접선이 도면상 같은 줄인지 보는 데 쓴다(<see cref="InternalWorkpieceFrame.MapSeamOffsetMm"/>).</summary>
     public const string AnchorSeamWBagKey = "anchor.seamW";
 
+    /// <summary>Bag 키(bool true) — 직전 좌표계를 <b>다른 줄</b>(옆 줄·방향 전환)에서 재교시 없이 물려받는다
+    /// (<see cref="InternalWorkpieceFrame.ReuseAcrossLinesKey"/>). ② 가 면 평행 이동 + 90° 단위 회전으로 옮긴다.</summary>
+    public const string AnchorCrossLineBagKey = "anchor.crossLine";
+
     /// <summary>anchor 적중 시 직전 task 종료 TCP(BASE pose) — 그대로면 복귀 없이 연속 이동.</summary>
     public const string PreviousEndTcpBagKey = "anchor.previousEndTcp";
 
@@ -207,6 +211,19 @@ public class CobotInspectionMoveStep : ISequenceStep
         var height = keep ? h : Math.Max(chainStandoffMm, h);
         return (new[] { frameOrigin[0] + height * wallOut[0], frameOrigin[1] + height * wallOut[1], frameOrigin[2] + height * wallOut[2] },
             height, keep);
+    }
+
+    /// <summary>
+    /// 좌표계 원점을 툴 좌표 오프셋만큼 옮긴 점(자세 성분은 그대로) — 오프셋은 <paramref name="toolPose"/> 의 툴 축 방향으로 푼다.
+    /// ⑱ 이 경유점에 주는 순회 툴 좌표 오프셋과 같은 변위다(툴 자세가 같을 때).
+    /// </summary>
+    internal static double[] OffsetOriginByTool(double[] frameOrigin, double[] toolPose, double[] toolOffset)
+    {
+        var m = FrameMath.PoseToMatrix(toolPose);
+        var moved = (double[])frameOrigin.Clone();
+        for (var i = 0; i < 3; i++)
+            moved[i] += m[i, 0] * toolOffset[0] + m[i, 1] * toolOffset[1] + m[i, 2] * toolOffset[2];
+        return moved;
     }
 
     /// <summary>
@@ -833,7 +850,7 @@ public class CobotInspectionMoveStep : ISequenceStep
             context.Bag[WeldSequenceSupport.SeamDirBaseBagKey] = seamDir.ToArray();
         else
             context.Bag.Remove(WeldSequenceSupport.SeamDirBaseBagKey);
-        if (ShiftAnchorFrame(context, seam.Base) is { } shiftError)
+        if (ShiftAnchorFrame(context, seam.Base, seam.SeamDirBase) is { } shiftError)
             return StepResult.Fail(shiftError);
 
         // ── 같은 anchor 그룹 연속 task: 직전 종료 자세 그대로면 복귀 없이 다음 시작점으로 ─────
@@ -1398,13 +1415,33 @@ public class CobotInspectionMoveStep : ISequenceStep
     /// <summary>anchor 적중 task — Bag 의 캐시 프레임(직전 task 위치)을 이번 시작 접근점으로 평행 이동한다.
     /// 캐시 프레임이 없으면(신규 anchor) 할 일 없음. 프레임은 있는데 기준 시작점이 없으면 이동량을 알 수 없어
     /// 직전 구간을 다시 돌게 되므로 실패.</summary>
-    private string? ShiftAnchorFrame(SequenceContext context, double[] startBase)
+    private string? ShiftAnchorFrame(SequenceContext context, double[] startBase, double[]? seamDirBase = null)
     {
         if (!context.Bag.TryGetValue(InternalWorkpieceFrame.BagKey, out var fv) || fv is not double[] { Length: 6 } frame)
             return null;
         if (!context.Bag.TryGetValue(AnchorStartBaseBagKey, out var av) || av is not double[] { Length: 3 } anchorStart)
             return "[Cobot 검사위치 이동] anchor 공유 프레임의 기준 시작점이 없어 이번 용접선 위치로 옮길 수 없습니다 — " +
                    "직전 구간을 다시 검사하게 되므로 중단합니다. 같은 그룹을 처음부터(정렬 포함) 다시 실행하세요.";
+
+        // 다른 줄에서 재교시 없이 물려받기 — 면 평행 이동 + 프레임 Z 둘레 90° 단위 회전. 오케스트레이터가 같은 축(수직끼리·
+        // 수평끼리)의 좌표계만 넘기므로 실제 회전은 0°(같은 방향) 또는 180°(반대 방향)다.
+        if (context.Bag.TryGetValue(AnchorCrossLineBagKey, out var cl) && cl is true)
+        {
+            if (seamDirBase is not { Length: 3 })
+                return "[Cobot 검사위치 이동] 다른 줄 좌표계 재사용 — 이번 용접선 방향(BASE)을 알 수 없어 좌표계를 돌릴 수 없습니다 " +
+                       $"(용접선 끝점·wall_code 확인). 재교시하려면 '{InternalWorkpieceFrame.ReuseAcrossLinesKey}' 를 끄세요.";
+            var (other, rotDeg, axisErrDeg, dropNormalMm) = InternalWorkpieceFrame.MoveToOtherLine(frame, anchorStart, startBase, seamDirBase);
+            if (other is null)
+                return $"[Cobot 검사위치 이동] 다른 줄 좌표계 재사용 — 이번 용접선 방향이 직전 좌표계 축에서 {axisErrDeg:+0.0;-0.0}° 벗어나 " +
+                       $"(허용 ±{InternalWorkpieceFrame.CrossLineAxisTolDeg:0}°) 물려받을 수 없습니다. 재교시하려면 '{InternalWorkpieceFrame.ReuseAcrossLinesKey}' 를 끄세요.";
+            context.Bag[InternalWorkpieceFrame.BagKey] = other;
+            _logger.LogWarning(
+                "[Cobot 검사위치 이동] 다른 줄 좌표계 재사용(재교시 생략, '{Key}') — 면 평행 이동 Δ=[{Dx:0.0}, {Dy:0.0}, {Dz:0.0}]mm(법선 성분 {N:+0.0;-0.0}mm 제외), " +
+                "프레임 Z 둘레 {Rot:+0;-0}° 회전(ACS 방향과 축 차이 {Err:+0.0;-0.0}°) — 원점 [{X:0.0}, {Y:0.0}, {Z:0.0}]. 옆 위치·면 거리는 다시 재지 않습니다(ACS·AMR 오차 그대로).",
+                InternalWorkpieceFrame.ReuseAcrossLinesKey, other[0] - frame[0], other[1] - frame[1], other[2] - frame[2], dropNormalMm,
+                rotDeg, axisErrDeg, other[0], other[1], other[2]);
+            return null;
+        }
 
         // 비드 방향(프레임 X)으로만 옮긴다 — ACS 시작점 차이의 옆 성분(맵·AMR 방향 오차)이 LINE 마다 누적되지 않게.
         // 옆으로 떨어졌는지는 맵(도면) 좌표로 판단한다 — BASE 로 바꾼 ACS 시작점은 task 마다 AMR 위치·방향 오차를 따로 먹어
@@ -1481,15 +1518,35 @@ public class CobotInspectionMoveStep : ISequenceStep
             wallOut = mOut;
             orientation = AlignOpticalAxisToDirection(cur, new[] { -mOut[0], -mOut[1], -mOut[2] }, seam.OpticalAxis);
         }
-        var measured = frame is not null
-            ? ChainTargetFromMeasuredFrame(cur, frame, wallOut, chainStandoffMm)
+        // 순회 툴 좌표 오프셋(가스 — 휜 스니퍼 보정)이 있으면 연속 이동 목표도 같은 만큼 옮긴다. ⑱ 은 경유점을 오프셋만큼 옮겨
+        // 돌기 때문에, 여기서 오프셋 없는 시작점 정면으로 가면 이어지는 용접선마다 오프셋만큼 옆으로 갔다가 ⑱ 이 "팁이 이미
+        // 들어가 있지 않다"고 보고 빠졌다 다시 들어온다(실기 2026-11-22 15:31: 21mm 이동 → 55mm 후퇴 → 재진입).
+        var chainOrigin = frame;
+        if (frame is not null)
+        {
+            double[]? scanOffset = null;
+            try { scanOffset = InspectionRunStep.ResolveScanToolOffset(await _param.GetAsync(InspectionRunStep.ScanToolOffsetKey)); }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning("[Cobot 검사위치 이동] 순회 툴 좌표 오프셋 조회 실패 — 오프셋 없이 연속 이동: {Err}", ex.Message);
+            }
+            if (scanOffset is not null)
+            {
+                chainOrigin = OffsetOriginByTool(frame, cur, scanOffset);
+                _logger.LogInformation(
+                    "[Cobot 검사위치 이동] 연속 이동 목표에 순회 툴 좌표 오프셋 반영 — 툴 X{X:+0.#;-0.#} / Y{Y:+0.#;-0.#} / Z{Z:+0.#;-0.#} mm → BASE [{Bx:+0.0;-0.0}, {By:+0.0;-0.0}, {Bz:+0.0;-0.0}]mm",
+                    scanOffset[0], scanOffset[1], scanOffset[2], chainOrigin[0] - frame[0], chainOrigin[1] - frame[1], chainOrigin[2] - frame[2]);
+            }
+        }
+        var measured = chainOrigin is not null
+            ? ChainTargetFromMeasuredFrame(cur, chainOrigin, wallOut, chainStandoffMm)
             : ((double[] Target, double HeightMm, bool KeptHeight)?)null;
         // 앞 구역이 검사 팁 진입 깊이를 유지한 채 끝났으면(묶음 연속) 그 깊이만큼 면에 붙어 있는 것이 정상이다 —
         // 하한(MinContinueHeightMm)을 진입 깊이만큼 낮춰, 이어지는 용접선이면 띄우지 않고 그 높이로 옆으로만 옮긴다.
         // (종전: 깊이 50mm 면 높이 −16mm 로 보여 100mm 까지 들어 올렸다가 ⑱ 이 다시 내려와 진입 — 실기 2026-11-21 18:26.)
         if (measured is { KeptHeight: false } m0 && frame is not null
             && context.Bag.TryGetValue(GasTipApproachStep.PreviousKeptDepthBagKey, out var kd) && kd is double keptDepth && keptDepth > 0
-            && KeepHeightForKeptTipDepth(cur, frame, wallOut, keptDepth, await GetChainContinueTolMmAsync()) is { } keepTarget)
+            && KeepHeightForKeptTipDepth(cur, chainOrigin!, wallOut, keptDepth, await GetChainContinueTolMmAsync()) is { } keepTarget)
         {
             _logger.LogInformation(
                 "[Cobot 검사위치 이동] 앞 구역 검사 팁 진입 깊이 {D:0.#}mm 유지 중 — 들어 올리지 않고 현재 높이({H:0.#}mm)로 시작점 정면에 맞춤",
