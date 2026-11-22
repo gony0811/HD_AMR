@@ -25,7 +25,10 @@ public sealed class TcpSpeedProbe : IAsyncDisposable
     public readonly record struct Sample(double TSec, double X, double Y, double Z);
 
     public readonly record struct CommandSpeed(int Index, double PlannedMm, double MovedMm, double Sec, double AvgMmPerSec, double PeakMmPerSec,
-        IReadOnlyList<double>? Profile = null);
+        IReadOnlyList<double>? Profile = null, IReadOnlyList<double>? FineProfile = null);
+
+    /// <summary>세밀한 속도 곡선 구간 폭 [s] — 짧은 명령(곡선)에서 모서리마다 속도가 꺼지는지 본다.</summary>
+    internal const double FineBinSec = 0.2;
 
     /// <summary>속도 곡선 구간 폭 [s] — 긴 명령의 속도를 이 간격 평균으로 나열한다(가속·정속·감속 모양 확인용).</summary>
     internal const double ProfileBinSec = 0.5;
@@ -125,15 +128,15 @@ public sealed class TcpSpeedProbe : IAsyncDisposable
             return best;
         }
 
-        // [a,b] 구간을 ProfileBinSec 간격으로 잘라 구간 평균 속도
-        List<double> Bins(int a, int b)
+        // [a,b] 구간을 binSec 간격으로 잘라 구간 평균 속도
+        List<double> Bins(int a, int b, double binSec = ProfileBinSec)
         {
             var list = new List<double>();
             var i = a;
             while (i < b)
             {
                 var j = i;
-                while (j < b && samples[j].TSec - samples[i].TSec < ProfileBinSec) j++;
+                while (j < b && samples[j].TSec - samples[i].TSec < binSec) j++;
                 var dt = samples[j].TSec - samples[i].TSec;
                 if (dt > 0) list.Add((cum[j] - cum[i]) / dt);
                 if (j == i) break;
@@ -162,7 +165,7 @@ public sealed class TcpSpeedProbe : IAsyncDisposable
             var mm = cum[endIdx] - cum[startIdx];
             var dt = samples[endIdx].TSec - samples[startIdx].TSec;
             cmds.Add(new CommandSpeed(m + 1, plannedMm[m], mm, dt, dt > 0 ? mm / dt : 0, endIdx > startIdx ? Peak(startIdx, endIdx) : 0,
-                Bins(startIdx, endIdx)));
+                Bins(startIdx, endIdx), Bins(startIdx, endIdx, FineBinSec)));
             startIdx = endIdx;
         }
         return new Report(moved, planned, sec, Peak(first, lastIdx), cmds);
@@ -184,8 +187,17 @@ public sealed class TcpSpeedProbe : IAsyncDisposable
         if (shortCmds.Count > 0)
         {
             double mm = shortCmds.Sum(c => c.MovedMm), s = shortCmds.Sum(c => c.Sec);
-            logger.LogInformation("[{Where}]   짧은 명령 {N}개(<{L:0}mm, 곡선 등): {Mm:0.0} mm {Sec:0.00} 초 — 평균 {Avg:0.0} mm/s",
-                where, shortCmds.Count, longMm, mm, s, s > 0 ? mm / s : 0);
+            // 명령별 길이@평균속도 — 모서리마다 속도가 떨어지는지(끊김) 본다. 줄이 길어지지 않게 40개까지.
+            var each = string.Join(" ", shortCmds.Take(40).Select(c => $"{c.PlannedMm:0.#}@{c.AvgMmPerSec:0}"));
+            logger.LogInformation("[{Where}]   짧은 명령 {N}개(<{L:0}mm, 곡선 등): {Mm:0.0} mm {Sec:0.00} 초 — 평균 {Avg:0.0} mm/s, 가장 느린 명령 {Min:0.0} mm/s, 길이mm@속도 [{Each}]",
+                where, shortCmds.Count, longMm, mm, s, s > 0 ? mm / s : 0, shortCmds.Min(c => c.AvgMmPerSec), each);
+            // 처음 이어지는 곡선 구간(연속된 짧은 명령들)의 세밀한 속도 곡선 — 모서리에서 순간적으로 멈추는지.
+            var run = r.Commands.SkipWhile(c => c.PlannedMm >= longMm).TakeWhile(c => c.PlannedMm < longMm).ToList();
+            var fine = run.SelectMany(c => c.FineProfile ?? Array.Empty<double>()).Take(120).ToList();
+            if (fine.Count > 0)
+                logger.LogInformation("[{Where}]   첫 곡선 구간(명령 {A}~{B}) {Bin}s 간격 속도 — 최저 {Min:0.0} / 최고 {Max:0.0} mm/s [{Profile}]",
+                    where, run[0].Index, run[^1].Index, FineBinSec, fine.Min(), fine.Max(),
+                    string.Join(" ", fine.Select(v => v.ToString("0"))));
         }
     }
 }
