@@ -25,7 +25,9 @@ public class AcsFactsheetTests
         var taught = new Dictionary<string, double[]> { ["home2"] = Home2, ["ready"] = Ready, ["wall.T"] = WallT };
         var s = AcsFactsheet.StartJointsByWall(taught, new[] { "T", "PU", "F", "B", "SM" });
         Assert.Equal(WallT, s["T"]);          // 상부 면 = 그 면 검사 준비 슬롯
-        Assert.Equal(Home2, s["PU"]);         // 슬롯이 없으면 홈 위치_2
+        Assert.Equal(Ready, s["PU"]);         // 상부 챔퍼는 홈 모드 — 작업 준비 위치(2026-11-24)
+        Assert.Equal(Home2, AcsFactsheet.StartJointsByWall(
+            new Dictionary<string, double[]> { ["home2"] = Home2 }, new[] { "T" })["T"]);   // 천장 슬롯이 없으면 홈 위치_2
         Assert.Equal(Ready, s["F"]);          // 그 외 = 작업 준비 위치
         Assert.Equal(Ready, s["B"]);          // 홈 위치_3 미티칭이면 하부 면도 ready
         Assert.Equal(Ready, s["SM"]);

@@ -30,7 +30,7 @@ public class ReachMapService
 
     /// <summary>
     /// 면별 운영 ② 출발 관절각 — <see cref="SequenceEntry.PrepareAsync"/> 가 실제로 ② 직전에 세우는 자세와 같다:
-    /// 상부 면(T/PU/SU)은 그 면 검사 준비 슬롯(미티칭이면 홈 위치_2), 그 외는 작업 준비 위치(ready).
+    /// 천장(T)은 그 면 검사 준비 슬롯(미티칭이면 홈 위치_2), 그 외(상부 챔퍼 PU/SU 포함)는 작업 준비 위치(ready).
     /// 티칭이 없는 면은 넣지 않는다(그 면은 종전처럼 출발 자세 없이 판정).
     /// </summary>
     private async Task<Dictionary<string, double[]>> LoadStartJointsAsync(IEnumerable<string> wallCodes, CancellationToken ct)

@@ -20,8 +20,8 @@ namespace HD.AMR.App.Service.Sequence.Steps;
 ///  ③ <b>작업 준비 위치 경유</b> — 홈에서 검사 위치로 MoveJ 시 900mm 이하 영역에서 툴이 차체와 충돌할 수
 ///     있다. 홈 복귀 후 "ready" 티칭 위치(홈에서 툴 Z −300mm)로 먼저 이동해 충돌 영역을 벗어난다.
 ///     미티칭이면 홈에서 툴 Z −300mm 오프셋을 자동 계산해 사용한다.
-///  ④ <b>자세 모드</b> — 상부 면(T/PU/SU)은 "홈 위치_2", 바닥·하부 챔퍼(B/PL/SL)는 "홈 위치_3"(티칭돼 있을 때),
-///     그 외 면은 홈 모드에서만 진입한다. 모드 전환은 운영자 수동 전용이라 모드가 맞지 않으면 움직이지 않고
+///  ④ <b>자세 모드</b> — 천장(T)은 "홈 위치_2", 바닥·하부 챔퍼(B/PL/SL)는 "홈 위치_3"(티칭돼 있을 때),
+///     그 외 면(상부 챔퍼 PU/SU 포함)은 홈 모드에서만 진입한다. 모드 전환은 운영자 수동 전용이라 모드가 맞지 않으면 움직이지 않고
 ///     실패한다(<see cref="ModeMismatch"/>).
 ///
 /// 부르는 곳은 ② <see cref="CobotInspectionMoveStep"/>(LINE/CROSS)이다. 같은 anchor 그룹의 연속 task 는
@@ -93,9 +93,10 @@ internal static class SequenceEntry
 
     private static readonly PoseMode[] SideModes = { PoseMode.Home2, PoseMode.Home3, PoseMode.Home4 };
 
-    /// <summary>홈 위치_2 모드가 필요한 면 — 천장(T)·상부 챔퍼(PU/SU). 홈 위치 쪽에서는 벽 충돌·역기구학 오류로 도달 불가.</summary>
+    /// <summary>홈 위치_2 모드가 필요한 면 — 천장(T)만. 홈 위치 쪽에서는 벽 충돌·역기구학 오류로 도달 불가.
+    /// 상부 챔퍼(PU/SU)는 2026-11-24 운영안부터 홈 위치(작업 준비 경유)에서 진입한다 — 종전에는 홈 위치_2 모드였다.</summary>
     internal static bool IsUpperRoute(string? wallCode)
-        => WallCodes.Find(wallCode)?.Orientation is SurfaceOrientation.Ceiling or SurfaceOrientation.ChamferUpper;
+        => WallCodes.Find(wallCode)?.Orientation is SurfaceOrientation.Ceiling;
 
     /// <summary>홈 위치_3 모드 면 — 바닥(B)·하부 챔퍼(PL/SL).</summary>
     internal static bool IsLowerRoute(string? wallCode)
@@ -236,7 +237,7 @@ internal static class SequenceEntry
     /// <summary>활성 좌표계 정규화 + 자세 모드 확인 + 진입 경유점 이동. 모드가 작업 면과 맞지 않으면 움직이지 않고
     /// 실패를 돌려준다. 성공 시 결과 메시지에 붙일 주석을 돌려준다.
     /// · 홈 모드(일반 면): 이미 ready 면 그대로, 아니면 <see cref="ReturnToBaseAsync"/>(후퇴 → ready → 홈) → ready.
-    /// · 홈 2 모드(T/PU/SU): <see cref="ReturnToBaseAsync"/>(후퇴 → 검사 준비 → 홈 2) → 해당 면 검사 준비(티칭돼 있을 때).</summary>
+    /// · 홈 2 모드(T): <see cref="ReturnToBaseAsync"/>(후퇴 → 검사 준비 → 홈 2) → 해당 면 검사 준비(티칭돼 있을 때).</summary>
     public static async Task<(bool Ok, string Note)> PrepareAsync(
         CobotService cobot, SequenceContext context, ILogger logger, CancellationToken ct)
     {
