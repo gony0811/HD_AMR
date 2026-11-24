@@ -147,6 +147,24 @@ public static class TaskBundlePlanner
         return result;
     }
 
+    /// <summary>
+    /// 묶음을 앞에서부터 <paramref name="keepCount"/>개 TASK 로 줄인다 — 리더가 점2 를 계획보다 가까운 자리에 잡았을 때
+    /// (<see cref="Sequence.Steps.BundleTeach.Point2PitchesKey"/>), 점1~점2 실측 구간 안의 줄만 그 좌표계를 쓰게 한다.
+    /// 떼어 낸 뒤쪽 TASK 는 새 묶음 ID(첫 번째 떼어 낸 TASK 의 ActionId)의 팔로워로 남긴다 — 그 묶음에는 좌표계가 없으므로
+    /// 차례가 오면 <see cref="Rebundle"/> 로 자기들끼리 다시 묶여 새로 교시한다(하나뿐이면 단독 교시).
+    /// </summary>
+    /// <returns>바뀐 배정만(떼어 낸 TASK). 뗄 것이 없으면 null.</returns>
+    public static IReadOnlyList<BundleAssignment>? Truncate(
+        IReadOnlyList<BundleAssignment> ordered, string bundleId, int keepCount)
+    {
+        var members = ordered.Where(a => a.Role != BundleRole.None && a.BundleId == bundleId).ToList();
+        if (keepCount < 1 || keepCount >= members.Count) return null;
+        var newId = members[keepCount].ActionId;
+        return members.Skip(keepCount)
+            .Select(a => a with { Role = BundleRole.Follower, BundleId = newId })
+            .ToList();
+    }
+
     /// <summary>묶음 리더의 점2(마지막 TASK 시작점)를 도달 점검에 한 점 더 넣는다.</summary>
     public static IReadOnlyList<ReachPoint> Point2ReachPoints(IReadOnlyList<BundleAssignment> assignments, bool allowBackup)
         => assignments.Where(a => a.Role == BundleRole.Leader && a.LastStartW is { Length: 3 })

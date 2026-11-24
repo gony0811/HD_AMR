@@ -81,14 +81,39 @@ public class PeakApproachStep : ISequenceStep
             context.Progress?.Invoke($"묶음 점2로 면을 따라 피치 {count}회 이동");
 
             StepResult? failed = null;
+            var done = 0;
+            double[]? lastGood = null;   // 마지막으로 끝낸 피치 자리(내린 뒤 TCP) — 다음 피치가 실패하면 여기를 점2 로 쓴다
             for (var i = 0; i < count; i++)
             {
                 var step = await BundleTeach.MoveOnePitchAsync(
                     _cobot, _param, _logger, context, sign, fromBead1: i == 0, ct, MeasureLaserAsync);
                 if (!step.Success) { failed = step; break; }
+                done++;
+                if (i < count - 1)
+                    lastGood = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
             }
             if (failed is null)
                 return StepResult.Ok($"묶음 점2 추정 완료 — 면 위 피치 {count}회(직선 점프 없음).");
+
+            // 먼 자리가 안 되면 단독(피치 1회)까지 내려가지 않고 가장 먼 성공 자리를 점2 로 써서 묶음을 유지한다 —
+            // 실기 2026-11-24 M2: 피치 3회째 자리만 레이저가 34.7mm 가깝게 읽혀 묶음이 풀리고 줄마다 다시 교시했다.
+            if (BundleTeach.FallbackPitchCount(done) > 0 && lastGood is not null)
+            {
+                _logger.LogWarning(
+                    "묶음 점2 피치 {N}회째 실패 — 묶음을 풀지 않고 {Done}회째 자리(약 {Mm:0}mm)를 점2 로 씁니다: {Msg}",
+                    done + 1, done, done * pitchMm, failed.Message);
+                context.Progress?.Invoke($"⚠ 묶음 점2 피치 {done + 1}회째 실패 — {done}회째 자리를 점2 로 사용");
+                var returnError = await BundleTeach.ReturnToPitchAsync(_cobot, _param, _logger, context, lastGood, ct);
+                if (returnError is null)
+                {
+                    // 오케스트레이터가 묶음을 이 구간 안의 줄로 줄인다 — 점2 너머 줄은 다시 교시.
+                    context.Bag[BundleTeach.Point2PitchesKey] = done;
+                    return StepResult.Ok(
+                        $"묶음 점2 추정 — 피치 {count}회 중 {done}회 자리(약 {done * pitchMm:0}mm)를 점2 로 사용(그 구간 안의 줄만 묶음 유지). 원인: {failed.Message}");
+                }
+                _logger.LogWarning("묶음 점2 앞 피치 자리 복귀 실패 — 단독 교시로 전환: {Msg}", returnError);
+                failed = StepResult.Fail($"{failed.Message} / {returnError}");
+            }
 
             if (!BundleTeach.TryMarkDissolved(context))
                 return failed;

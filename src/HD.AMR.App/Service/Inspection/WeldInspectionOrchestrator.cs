@@ -1093,6 +1093,22 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                                     _bundleFrames[bid] = next;
                                     if (bundle.Role == BundleRole.Leader)
                                         _bundleSeamW[bid] = req.SeamStartW.Concat(req.SeamEndW).ToArray();
+                                    // 리더가 점2 를 계획보다 가까운 자리에 잡았으면 묶음을 그 실측 구간 안의 줄로 줄인다 —
+                                    // 점2 너머 줄은 이 좌표계를 물려받지 않고 자기들끼리 다시 묶여 새로 교시한다.
+                                    if (bundle.Role == BundleRole.Leader
+                                        && context.Bag.TryGetValue(BundleTeach.Point2PitchesKey, out var p2v) && p2v is int point2Pitches
+                                        && TaskBundlePlanner.Truncate(_bundleOrder, bid, point2Pitches) is { } detached)
+                                    {
+                                        foreach (var a in detached)
+                                        {
+                                            _bundleByAction[a.ActionId] = a;
+                                            var at = _bundleOrder.FindIndex(o => o.ActionId == a.ActionId);
+                                            if (at >= 0) _bundleOrder[at] = a;
+                                        }
+                                        _logger.LogWarning(
+                                            "묶음 {Id} — 점2 를 피치 {P}회 자리에 잡아 앞 {P}개 구역만 공통 좌표계를 씁니다. 그 너머 {N}건({Jobs})은 다시 교시합니다.",
+                                            bid, point2Pitches, point2Pitches, detached.Count, string.Join(", ", detached.Select(a => a.JobRef)));
+                                    }
                                 }
                             }
                         }

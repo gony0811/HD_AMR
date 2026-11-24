@@ -6,6 +6,7 @@ namespace HD.AMR.App.Service.Sequence.Steps;
 
 /// <summary>
 /// 연속 TASK 묶음의 점2 교시. 리더만 Bag 에 켜지고, 실패하면 풀고 현행 1피치 단독 교시로 돌아간다.
+/// 단, 점2 로 가는 피치 이동이 도중에 실패했고 앞서 <see cref="MinFallbackPitches"/>회 이상 끝냈으면 풀지 않고 그 자리를 점2 로 쓴다.
 /// </summary>
 public static class BundleTeach
 {
@@ -150,8 +151,88 @@ public static class BundleTeach
         context.Bag[FirstStartKey] = assignment.FirstStartW!;
         context.Bag[FirstEndKey] = assignment.FirstEndW!;
         context.Bag[LastStartKey] = assignment.LastStartW!;
+        context.Bag.Remove(Point2PitchesKey);
         context.Bag.Remove(Point2WdKey);
         context.Bag.Remove(Point2ReturnPoseKey);
+    }
+
+    /// <summary>
+    /// 묶음 점2 피치 추정이 도중에 실패했을 때, 묶음을 풀지 않고 점2 로 쓸 수 있는 최소 완료 피치 수.
+    /// 1회(= 단독 교시와 같은 간격)로는 뒤 줄까지 늘여 쓰기에 기울기가 부정확하다(실기 2026-11-24 M2: 360mm 간격으로 교시한
+    /// 인접 두 줄의 벽 방향 기울기가 −0.92°/−0.49° — 1080mm 뒤에서 깊이 약 8mm 차).
+    /// </summary>
+    public const int MinFallbackPitches = 2;
+
+    /// <summary>
+    /// 피치 <paramref name="completed"/>회까지 끝낸 뒤 다음 피치가 실패했을 때 점2 로 쓸 피치 수 — <see cref="MinFallbackPitches"/> 이상이면
+    /// 그 자리(가장 먼 성공 자리)를 쓰고, 모자라면 0(묶음을 풀고 단독 교시).
+    /// </summary>
+    public static int FallbackPitchCount(int completed) => completed >= MinFallbackPitches ? completed : 0;
+
+    /// <summary>
+    /// Bag 키(int) — 묶음 점2 를 계획보다 가까운 자리에 잡았을 때 그 피치 수. 오케스트레이터가 이 값을 보고 묶음을 그 구간 안의
+    /// 줄로 줄인다(<see cref="Inspection.TaskBundlePlanner.Truncate"/>) — 점2 너머(재지 못한 구간)의 줄은 좌표계를 물려받지 않고
+    /// 다시 교시한다. 가스 검사기는 묶음 마지막 줄 끝 WD 확인이 기본으로 꺼져 있어 늘여 쓴 구간을 확인할 수단이 없다.
+    /// </summary>
+    public const string Point2PitchesKey = "bundle.point2Pitches";
+
+    /// <summary>자세 그대로 면 바깥 법선으로 <paramref name="liftMm"/> 띄운 포즈. 법선 길이가 0 이면 그대로.</summary>
+    internal static double[] LiftedAlongNormal(double[] pose, double[] wallOut, double liftMm)
+    {
+        var len = Math.Sqrt(wallOut[0] * wallOut[0] + wallOut[1] * wallOut[1] + wallOut[2] * wallOut[2]);
+        if (len < 1e-9) return (double[])pose.Clone();
+        return new[]
+        {
+            pose[0] + liftMm * wallOut[0] / len, pose[1] + liftMm * wallOut[1] / len, pose[2] + liftMm * wallOut[2] / len,
+            pose[3], pose[4], pose[5],
+        };
+    }
+
+    /// <summary><paramref name="pose"/> 가 <paramref name="reference"/> 보다 면 바깥 방향으로 얼마나 낮은지 [mm] — 높으면 음수.</summary>
+    internal static double HeightShortfallMm(double[] pose, double[] reference, double[] wallOut)
+    {
+        var len = Math.Sqrt(wallOut[0] * wallOut[0] + wallOut[1] * wallOut[1] + wallOut[2] * wallOut[2]);
+        if (len < 1e-9) return 0;
+        return ((reference[0] - pose[0]) * wallOut[0] + (reference[1] - pose[1]) * wallOut[1] + (reference[2] - pose[2]) * wallOut[2]) / len;
+    }
+
+    /// <summary>
+    /// 실패한 피치 자리(들어올린 채 멈춤)에서 앞 피치를 끝낸 자리 <paramref name="target"/> 로 돌아간다 — 피치 이동과 같이
+    /// 들어올린 높이로 그 자리 위까지 간 뒤 내린다(면 법선·들어올림이 없으면 곧바로). 실패하면 사유, 성공하면 null.
+    /// </summary>
+    public static async Task<string?> ReturnToPitchAsync(
+        CobotService cobot, ParameterService param, ILogger logger, SequenceContext context, double[] target, CancellationToken ct)
+    {
+        object? nv = null;
+        var hasNormal = context.Bag.TryGetValue(MeasuredWallOutBagKey, out nv) && nv is double[] { Length: 3 }
+                        || context.Bag.TryGetValue(WeldSequenceSupport.WallOutNormalBagKey, out nv);
+        var liftMm = await GetPitchLiftMmAsync(param);
+        if (hasNormal && nv is double[] { Length: 3 } wallOut && liftMm > 0)
+        {
+            var above = LiftedAlongNormal(target, wallOut, liftMm);
+            // 내리다 멈춘 경우 등 지금 높이가 들어올린 높이보다 낮으면, 옆으로 가기 전에 제자리에서 그 높이까지 올린다.
+            var cur = await cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
+            var shortMm = HeightShortfallMm(cur, above, wallOut);
+            if (shortMm > 0.5)
+            {
+                var rcRaise = await cobot.Rpc.MoveLAsync(LiftedAlongNormal(cur, wallOut, shortMm), tool: context.Tool, user: 0,
+                    vel: context.Velocity, acc: 100, ovl: 100, blendR: -1, ct: ct);
+                if (rcRaise != 0)
+                    return $"복귀 전 들어올림 실패 (rc={rcRaise}){FairinoErrorCodes.Suffix(rcRaise)}.";
+            }
+            var rcUp = await cobot.Rpc.MoveLAsync(above, tool: context.Tool, user: 0,
+                vel: context.Velocity, acc: 100, ovl: 100, blendR: -1, ct: ct);
+            if (rcUp != 0)
+                return $"앞 피치 자리 위로 복귀 실패 (rc={rcUp}){FairinoErrorCodes.Suffix(rcUp)}.";
+        }
+        else
+            logger.LogWarning("피치 복귀: 면 법선 또는 들어올림 없음 — 앞 피치 자리로 곧바로 이동");
+        var rc = await cobot.Rpc.MoveLAsync(target, tool: context.Tool, user: 0,
+            vel: context.Velocity, acc: 100, ovl: 100, blendR: -1, ct: ct);
+        if (rc != 0)
+            return $"앞 피치 자리로 내림 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.";
+        await Task.Delay(500, ct);
+        return null;
     }
 
     /// <summary>비드1 위치로 돌아가 피치 1회(단독 점2)만 이동한다.</summary>
