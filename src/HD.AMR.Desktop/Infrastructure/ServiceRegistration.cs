@@ -88,6 +88,7 @@ internal static class ServiceRegistration
         // ── 시퀀스 그래프 지원 서비스 ───────────────────────────────
         // 평탄 중심 정렬(무상태 루틴) — 카메라 페이지/FlatSurfaceAlignStep 공유.
         services.AddTransient<FlatSurfaceCenteringService>();
+        services.AddTransient<HD.AMR.App.Service.Sequence.Steps.SeamAlongPeakAnchor>();   // ⑱ 용접선 방향 Peak 맞춤(다른 줄 좌표계 재사용)
         services.AddTransient<LaserTiltCorrector>();   // 레이저 틸트 수평 보정(④ Phase C · /laser 보정 적용 공용)
         // 최근 평탄면 검출 스냅샷 — 시퀀스/정렬 루틴이 발행하고 카메라 페이지가 정지 화면으로 표시.
         services.AddSingleton<FlatDetectionMonitor>();

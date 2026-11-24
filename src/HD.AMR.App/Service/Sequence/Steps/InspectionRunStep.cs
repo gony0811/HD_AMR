@@ -51,6 +51,7 @@ public class InspectionRunStep : ISequenceStep
     private readonly DrawingService _drawing;
     private readonly ParameterService _param;
     private readonly MissionPauseGate _pauseGate;
+    private readonly SeamAlongPeakAnchor _peakAnchor;
     private readonly ILogger<InspectionRunStep> _logger;
 
     /// <summary>비전 CAPTURE_REQ 응답 대기 기본값(초) — 프로필 DelaySec 미설정(0 이하) 시. 검사 프로파일 화면 기본값과 동일.</summary>
@@ -145,8 +146,9 @@ public class InspectionRunStep : ISequenceStep
     public InspectionRunStep(
         bool dryRun, CobotService cobot, VisionInterfaceService vision, GasDetectorService gas,
         IOptions<InspectionSensorSettings> sensor, DrawingService drawing,
-        ParameterService param, MissionPauseGate pauseGate, ILogger<InspectionRunStep> logger)
+        ParameterService param, MissionPauseGate pauseGate, SeamAlongPeakAnchor peakAnchor, ILogger<InspectionRunStep> logger)
     {
+        _peakAnchor = peakAnchor;
         _gas = gas;
         _useGas = sensor.Value.UsesGasDetector;
         _dryRun = dryRun;
@@ -381,29 +383,34 @@ public class InspectionRunStep : ISequenceStep
         // 멈추면 팔이 특이 자세에 남아 다음 task 의 복귀 경로까지 막힌다(실기 2026-11-03 L2-R02C05 H04 #5: J5 0.48°, rc=185).
         // 통과한 관절 해 사슬은 무정지 통과가 그대로 쓴다 — 같은 IK 를 다시 풀면 구역마다 약 3초 더 멈춘다(실기 2026-11-21 14:57).
         var checkedJoints = new Dictionary<int, double[]>();
-        var chainTargets = Enumerable.Range(0, waypoints.Count).Where(i => !IsSkipped(waypoints[i]))
-            .Select(i => (i, ToTargetBase(waypoints[i]))).ToList();
         // 앞 구역이 진입 깊이를 유지한 채 넘어왔으면(묶음 연속) 빠졌다 들어오지 않고 그 깊이로 바로 첫 경유점에 선다.
         var tipAlreadyIn = tipDz != 0 && GasTipApproachStep.IsAlreadyIn(
             await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct),
             ToTargetBase(waypoints[firstIdx]), ToTargetBaseAt(waypoints[firstIdx], 0));
-        // 검사 팁 진입이 있으면 스테이징은 티칭 높이의 첫 경유점까지 가고, 거기서 벽면 쪽으로 진입한다 — 그 경로도 함께 검증.
-        if (tipDz != 0 && !tipAlreadyIn)
-            chainTargets.Insert(0, (firstIdx, ToTargetBaseAt(waypoints[firstIdx], 0)));
-        // 가스 무정지: 경유점(약 5mm 간격)을 전부 IK 로 풀지 않고 위치 50mm·자세 5° 마다 솎아 검증한다 — 사이 경로는
-        // CheckWaypointChainAsync 가 100mm·10° 간격으로 이어 샘플링하므로 안전 기준(특이점·가지 전환)은 그대로다.
-        // 무정지 통과가 필요한 나머지 관절 해는 이동 명령을 보낼 때 그 점만 푼다(RunNonStopPassAsync).
-        // 드라이런도 같은 무정지 이동을 하므로(측정만 생략) 같이 솎는다.
         var gasNonStopPlanned = _useGas
             && _gas.Settings.MeasureMode == GasMeasureMode.Continuous && _gas.Settings.NonStopBlendRadiusMm > 0;
-        if (gasNonStopPlanned)
+        // 사전 검증할 목표 사슬 — 좌표계가 바뀌면(용접선 방향 Peak 맞춤) 다시 만든다.
+        List<(int Index, double[] Target)> BuildChainTargets()
         {
-            var before = chainTargets.Count;
-            chainTargets = SubsampleChain(chainTargets, NonStopCheckStepMm, NonStopCheckStepDeg);
-            _logger.LogInformation("[검사 수행] 무정지 사전 검증 — 경유점 {N}점 중 {M}점 IK (위치 {Mm:0}mm·자세 {Deg:0}° 간격)",
-                before, chainTargets.Count, NonStopCheckStepMm, NonStopCheckStepDeg);
+            var targets = Enumerable.Range(0, waypoints.Count).Where(i => !IsSkipped(waypoints[i]))
+                .Select(i => (i, ToTargetBase(waypoints[i]))).ToList();
+            // 검사 팁 진입이 있으면 스테이징은 티칭 높이의 첫 경유점까지 가고, 거기서 벽면 쪽으로 진입한다 — 그 경로도 함께 검증.
+            if (tipDz != 0 && !tipAlreadyIn)
+                targets.Insert(0, (firstIdx, ToTargetBaseAt(waypoints[firstIdx], 0)));
+            // 가스 무정지: 경유점(약 5mm 간격)을 전부 IK 로 풀지 않고 위치 50mm·자세 5° 마다 솎아 검증한다 — 사이 경로는
+            // CheckWaypointChainAsync 가 100mm·10° 간격으로 이어 샘플링하므로 안전 기준(특이점·가지 전환)은 그대로다.
+            // 무정지 통과가 필요한 나머지 관절 해는 이동 명령을 보낼 때 그 점만 푼다(RunNonStopPassAsync).
+            // 드라이런도 같은 무정지 이동을 하므로(측정만 생략) 같이 솎는다.
+            if (gasNonStopPlanned)
+            {
+                var before = targets.Count;
+                targets = SubsampleChain(targets, NonStopCheckStepMm, NonStopCheckStepDeg);
+                _logger.LogInformation("[검사 수행] 무정지 사전 검증 — 경유점 {N}점 중 {M}점 IK (위치 {Mm:0}mm·자세 {Deg:0}° 간격)",
+                    before, targets.Count, NonStopCheckStepMm, NonStopCheckStepDeg);
+            }
+            return targets;
         }
-        var chainError = await CheckWaypointChainAsync(context, chainTargets, checkedJoints, ct);
+        var chainError = await CheckWaypointChainAsync(context, BuildChainTargets(), checkedJoints, ct);
         if (chainError is not null)
         {
             // 여기까지 ⑱ 은 코봇을 움직이지 않았다 — 실패 원인은 이 용접선의 도달성이지 작업물 좌표계가 아니다.
@@ -428,6 +435,50 @@ public class InspectionRunStep : ISequenceStep
         if (stageRc != 0)
             return StepResult.Fail(
                 $"첫 경유점 #{firstIdx + 1} 스테이징 이동 실패 (rc={stageRc}){FairinoErrorCodes.Suffix(stageRc)}.");
+
+        // ── 용접선 방향 Peak 맞춤 — 교시한 줄과 직각인 줄로 처음 넘어왔을 때 한 번(SeamAlongPeakAnchor) ──
+        // 첫 경유점에 선 순회 자세(용접선이 영상 가로)에서, 검사 팁을 넣기 전에 잰다. 좌표계가 바뀌면 사전 검증을 다시 하고 다시 선다.
+        if (await NeedsAlongAnchorAsync(context, tipAlreadyIn))
+        {
+            var (alongMm, anchorNote) = await _peakAnchor.MeasureAsync(context, frame, ToTargetBaseAt(waypoints[firstIdx], 0), ct);
+            if (alongMm is { } along)
+            {
+                var shifted = InternalWorkpieceFrame.ShiftAlongX(frame, along);
+                context.Bag[InternalWorkpieceFrame.AlongAnchorBagKey] =
+                    new[] { shifted[0] - frame[0], shifted[1] - frame[1], shifted[2] - frame[2] };
+                _logger.LogInformation(
+                    "[검사 수행] 용접선 방향 Peak 맞춤 — {Note}. 좌표계 원점 [{X0:0.0}, {Y0:0.0}, {Z0:0.0}] → [{X:0.0}, {Y:0.0}, {Z:0.0}] ('{Key}', 이 면의 다음 줄은 이 좌표계를 물려받습니다)",
+                    anchorNote, frame[0], frame[1], frame[2], shifted[0], shifted[1], shifted[2], SeamAlongPeakAnchor.EnableKey);
+                if (along != 0)
+                {
+                    frame = shifted;
+                    context.Bag[InternalWorkpieceFrame.BagKey] = shifted;
+                    checkedJoints.Clear();
+                    var shiftedError = await CheckWaypointChainAsync(context, BuildChainTargets(), checkedJoints, ct);
+                    if (shiftedError is not null)
+                        return StepResult.Fail($"용접선 방향 Peak 맞춤({along:+0.0;-0.0}mm) 뒤 경유점 사전 검증 실패 — {shiftedError}");
+                }
+            }
+            else
+                _logger.LogWarning(
+                    "[검사 수행] 용접선 방향 Peak 맞춤 실패 — {Note}. 좌표계를 그대로 쓰고 다음 줄에서 다시 시도합니다 ('{Key}')",
+                    anchorNote, SeamAlongPeakAnchor.EnableKey);
+
+            // 돌아올 때도 옆 이동은 측정 높이에서 끝내고(첫 경유점 바로 위) 제자리에서 내려간다.
+            await _pauseGate.WaitWhilePausedAsync(ct);
+            var restage = ToTargetBaseAt(waypoints[firstIdx], 0);
+            var above = await _peakAnchor.LiftedOverAsync(context, frame, restage);
+            var needsDescent = Enumerable.Range(0, 3).Any(i => Math.Abs(above[i] - restage[i]) > 0.05);
+            foreach (var target in needsDescent ? new[] { above, restage } : new[] { restage })
+            {
+                var restageRc = await _cobot.Rpc.MoveLAsync(target, tool: context.Tool, user: 0,
+                    vel: context.Velocity, acc: MoveAcc, ovl: MoveOvl, blendR: -1, ct: ct);
+                if (restageRc != 0)
+                    return StepResult.Fail(
+                        $"용접선 방향 Peak 맞춤 뒤 첫 경유점 #{firstIdx + 1} 복귀 실패 (rc={restageRc}){FairinoErrorCodes.Suffix(restageRc)}.");
+            }
+        }
+
         if (tipDz != 0 && !tipAlreadyIn)
         {
             _logger.LogInformation("[검사 팁 진입] 첫 경유점 #{Idx} 에서 벽면 쪽으로 {D:0.#}mm 근접 (속도 {Vel}%)",
@@ -1268,6 +1319,27 @@ public class InspectionRunStep : ISequenceStep
     /// <summary>지령 100% 일 때의 실제 속도 = 전역 100% 기준 × 전역%/100.</summary>
     public static double AutoBasisMmPerSec(double fullGlobalBasis, double globalPercent)
         => fullGlobalBasis * Math.Clamp(globalPercent, 0.1, 100.0) / 100.0;
+
+    /// <summary>
+    /// 이번 순회 시작에 용접선 방향 Peak 맞춤이 필요한지 — 다른 줄 재사용으로 교시한 줄과 직각인 줄에 넘어왔고 아직 맞추지 않았으며
+    /// (<see cref="InternalWorkpieceFrame.NeedsAlongAnchor"/>), 파라미터가 켜져 있고, 검사 팁이 아직 들어가 있지 않을 때.
+    /// </summary>
+    private async Task<bool> NeedsAlongAnchorAsync(SequenceContext context, bool tipAlreadyIn)
+    {
+        var rotation = context.Bag.TryGetValue(InternalWorkpieceFrame.CrossRotationBagKey, out var rv) && rv is double r ? r : 0.0;
+        var anchored = context.Bag.TryGetValue(InternalWorkpieceFrame.AlongAnchorBagKey, out var av) && av is double[] { Length: 3 };
+        if (!InternalWorkpieceFrame.NeedsAlongAnchor(rotation, anchored)) return false;
+        bool? enabled = null;
+        try { enabled = await _param.GetBoolAsync(SeamAlongPeakAnchor.EnableKey); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { /* DB 미준비 — 센서 모드 기본값 */ }
+        if (!SeamAlongPeakAnchor.ResolveEnabled(enabled, _useGas)) return false;
+        if (tipAlreadyIn)
+        {
+            _logger.LogInformation("[검사 수행] 용접선 방향 Peak 맞춤 생략 — 앞 구역의 검사 팁 진입 깊이를 유지한 채 넘어옴(카메라 거리가 아님)");
+            return false;
+        }
+        return true;
+    }
 
     private async Task<double> GetWObjIdAsync()
     {

@@ -92,7 +92,7 @@ public class LineSurfaceHeightTests
         var y = Col(Frame, 1);
         var from = At(Frame, 0, 0, 0);
         var to = At(Frame, 200, 300, 0);
-        var (moved, rot, err, _) = InternalWorkpieceFrame.MoveToOtherLine(Frame, from, to, y);
+        var (moved, rot, err, _, _) = InternalWorkpieceFrame.MoveToOtherLine(Frame, from, to, y);
         Assert.NotNull(moved);
         Assert.Equal(90, rot, 6);
         Assert.Equal(0, err, 6);

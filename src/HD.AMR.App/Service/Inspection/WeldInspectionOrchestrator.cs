@@ -49,6 +49,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
     private double? _lastAnchorStrokeMm;                           // 그 프레임을 쓴 task 의 텔레스코픽 스트로크(mm) — 높이 변경 시 캐시 무효화
     private double? _lastVerticalTiltDeg;                          // 다른 줄 재사용 — 그 좌표계에 이미 들어 있는 수직 방향 정적 기울기(도). 두 번 주지 않게 함께 넘긴다
     private double? _lastSurfaceRefMm;                             // 다른 줄 재사용 — 그 좌표계를 교시한 줄에서 잰 기준 면 높이(좌표계 Z, mm)
+    private double? _lastCrossRotationDeg;                         // 다른 줄 재사용 — 교시한 뒤로 그 좌표계를 돌린 각의 합(도). 직각인 줄로 넘어갔는지 판정
+    private double[]? _lastAlongAnchorBase;                        // 다른 줄 재사용 — 용접선 방향 Peak 실측으로 그 좌표계 원점을 옮긴 양(BASE mm). 있으면 다시 찾지 않는다
     private CancellationTokenSource? _currentRunCts;
     private readonly Dictionary<string, BundleAssignment> _bundleByAction = new();
     private readonly List<BundleAssignment> _bundleOrder = new();   // 노드 액션 순서 — 리더 실패 시 남은 TASK 재묶음용
@@ -639,6 +641,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             var crossLineReuse = false;
             double? surfaceRefMm = null;
             double? appliedTiltDeg;
+            double? crossRotationDeg;
+            double[]? alongAnchorBase;
             lock (_sync)
             {
                 if (ShouldInvalidateForStroke(_lastAnchor is not null, _lastAnchorStrokeMm, currentStrokeMm))
@@ -707,6 +711,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                 }
                 surfaceRefMm = anchorHit ? _lastSurfaceRefMm : null;
                 appliedTiltDeg = _lastVerticalTiltDeg;
+                crossRotationDeg = _lastCrossRotationDeg;
+                alongAnchorBase = _lastAlongAnchorBase?.ToArray();
                 cachedInternalFrame = anchorHit ? (double[])_lastInternalWorkpieceFrame!.Clone() : null;
                 cachedAnchorStartBase = anchorHit ? _lastAnchorStartBase?.ToArray() : null;
                 cachedAnchorSeamW = anchorHit && _lastAnchorSeamW is { } lastSeam ? lastSeam.Start.Concat(lastSeam.End).ToArray() : null;
@@ -932,6 +938,11 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                 context.Bag[InternalWorkpieceFrame.VerticalTiltTargetBagKey] = verticalTiltDeg;
                 if (appliedTiltDeg is { } applied)
                     context.Bag[InternalWorkpieceFrame.VerticalTiltAppliedBagKey] = applied;
+                // 좌표계를 돌린 각의 합과 용접선 방향 Peak 보정 — 직각인 줄로 처음 넘어갈 때만 Peak 를 찾고 그 뒤 줄은 물려받는다.
+                if (crossRotationDeg is { } crossRot)
+                    context.Bag[InternalWorkpieceFrame.CrossRotationBagKey] = crossRot;
+                if (alongAnchorBase is { Length: 3 })
+                    context.Bag[InternalWorkpieceFrame.AlongAnchorBagKey] = alongAnchorBase;
             }
             // 묶음에서 이 구역 뒤에 같은 묶음 구역이 이어지면 검사 팁 진입 깊이를 유지한 채 넘어간다(빠졌다 다시 들어오지 않음).
             if (bundle?.BundleId is { } keepBid)
@@ -1064,6 +1075,10 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                                 _lastAnchorStrokeMm = strokeAtEnd;
                                 _lastVerticalTiltDeg = context.Bag.TryGetValue(InternalWorkpieceFrame.VerticalTiltAppliedBagKey, out var vt)
                                                        && vt is double vtDeg ? vtDeg : null;
+                                _lastCrossRotationDeg = context.Bag.TryGetValue(InternalWorkpieceFrame.CrossRotationBagKey, out var crv)
+                                                        && crv is double crDeg ? crDeg : null;
+                                _lastAlongAnchorBase = context.Bag.TryGetValue(InternalWorkpieceFrame.AlongAnchorBagKey, out var aav)
+                                                       && aav is double[] { Length: 3 } aaBase ? aaBase.ToArray() : null;
                                 // 기준 면 높이 — 이번 실행이 쟀으면 그 값, 아니면 물려받은 좌표계일 때만 앞 값을 이어 쓴다.
                                 _lastSurfaceRefMm = context.Bag.TryGetValue(Sequence.Steps.LineSurfaceHeightStep.ReferenceHeightBagKey, out var sref)
                                                     && sref is double srefMm ? srefMm

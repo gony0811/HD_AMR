@@ -1431,10 +1431,26 @@ public class CobotInspectionMoveStep : ISequenceStep
             if (seamDirBase is not { Length: 3 })
                 return "[Cobot 검사위치 이동] 다른 줄 좌표계 재사용 — 이번 용접선 방향(BASE)을 알 수 없어 좌표계를 돌릴 수 없습니다 " +
                        $"(용접선 끝점·wall_code 확인). 재교시하려면 '{InternalWorkpieceFrame.ReuseAcrossLinesKey}' 를 끄세요.";
-            var (other, rotDeg, axisErrDeg, dropNormalMm) = InternalWorkpieceFrame.MoveToOtherLine(frame, anchorStart, startBase, seamDirBase);
+            var (other, rotDeg, axisErrDeg, dropNormalMm, gridTiltMm) = InternalWorkpieceFrame.MoveToOtherLine(frame, anchorStart, startBase, seamDirBase);
             if (other is null)
                 return $"[Cobot 검사위치 이동] 다른 줄 좌표계 재사용 — 이번 용접선 방향이 직전 좌표계 축에서 {axisErrDeg:+0.0;-0.0}° 벗어나 " +
                        $"(허용 ±{InternalWorkpieceFrame.CrossLineAxisTolDeg:0}°) 물려받을 수 없습니다. 재교시하려면 '{InternalWorkpieceFrame.ReuseAcrossLinesKey}' 를 끄세요.";
+            if (Math.Abs(gridTiltMm) >= 0.05)
+                _logger.LogInformation(
+                    "[Cobot 검사위치 이동] 다른 줄 좌표계 재사용 — 격자 기울기 {Err:+0.00;-0.00}°(좌표계 축 대비 ACS 방향)를 따라 용접선 방향으로 {Mm:+0.0;-0.0}mm 고침",
+                    axisErrDeg, gridTiltMm);
+            // 용접선 방향 Peak 실측으로 옮겨 둔 양 — 좌표계를 다시 90° 돌리면 그 방향에서는 옆 오차가 되므로 되돌린다.
+            if (InternalWorkpieceFrame.IsQuarterTurn(rotDeg)
+                && context.Bag.TryGetValue(InternalWorkpieceFrame.AlongAnchorBagKey, out var av0) && av0 is double[] { Length: 3 } anchorShift)
+            {
+                for (var i = 0; i < 3; i++) other[i] -= anchorShift[i];
+                context.Bag.Remove(InternalWorkpieceFrame.AlongAnchorBagKey);
+                _logger.LogInformation(
+                    "[Cobot 검사위치 이동] 다른 줄 좌표계 재사용 — 좌표계를 {Rot:+0;-0}° 돌려 넘기므로 앞 방향의 용접선 방향 Peak 보정 [{X:+0.0;-0.0}, {Y:+0.0;-0.0}, {Z:+0.0;-0.0}]mm 를 되돌림",
+                    rotDeg, anchorShift[0], anchorShift[1], anchorShift[2]);
+            }
+            var crossRotation = context.Bag.TryGetValue(InternalWorkpieceFrame.CrossRotationBagKey, out var cr0) && cr0 is double crd ? crd : 0.0;
+            context.Bag[InternalWorkpieceFrame.CrossRotationBagKey] = (crossRotation + rotDeg) % 360.0;
             // 수직 방향 정적 기울기 — 직전 좌표계가 맞는 자리(그 원점)를 지나는 수평축으로 면을 기울인다. 이미 들어 있는 만큼은 빼고 준다.
             var tiltTarget = context.Bag.TryGetValue(InternalWorkpieceFrame.VerticalTiltTargetBagKey, out var tt) && tt is double ttd ? ttd : 0.0;
             var tiltApplied = context.Bag.TryGetValue(InternalWorkpieceFrame.VerticalTiltAppliedBagKey, out var ta) && ta is double tad ? tad : 0.0;

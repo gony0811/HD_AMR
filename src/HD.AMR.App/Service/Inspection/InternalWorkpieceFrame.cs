@@ -158,25 +158,81 @@ public static class InternalWorkpieceFrame
     /// 시작→끝)에 맞춘다. 방향은 직전 좌표계의 축을 따르고 ACS 방향은 어느 축인지 고르는 데만 쓴다.
     /// 면 높이·기울기는 여기서 바꾸지 않는다 — 시작·끝점 레이저 측정(<see cref="CorrectBySurfaceHeights"/>)이 보정한다.
     /// </summary>
-    /// <returns>(옮긴 프레임, 돌린 각 °, 축에서 벗어난 각 °, 버린 법선 성분 mm). 방향이 축에서
+    /// <param name="followGridTilt">true 면 옮긴 거리의 <b>이번 용접선 방향 성분</b>을 격자 기울기만큼 고친다 —
+    /// ACS 시작점 차이는 로봇이 수평이라고 보고 BASE 로 바꾼 값인데, 실제 격자는 좌표계 축(비드 두 점으로 잰 방향)만큼 면 안에서
+    /// 돌아가 있다. 옆으로 멀리 옮길수록 그만큼 용접선 방향으로 어긋난다(2026-11-24 M2: 수평 비드 0.19° — 900mm 옆 수직 줄이
+    /// 3mm 높게 잡힘). 옆(용접선에 수직) 성분은 ACS 값을 그대로 둔다.</param>
+    /// <returns>(옮긴 프레임, 돌린 각 °, 축에서 벗어난 각 °, 버린 법선 성분 mm, 격자 기울기로 고친 용접선 방향 거리 mm). 방향이 축에서
     /// <see cref="CrossLineAxisTolDeg"/> 넘게 벗어나거나 면에 수직이면 Frame = null.</returns>
-    public static (double[]? Frame, double RotatedDeg, double AxisErrorDeg, double NormalMm) MoveToOtherLine(
-        double[] frameBase, double[] fromStartBase, double[] toStartBase, double[] seamDirBase)
+    public static (double[]? Frame, double RotatedDeg, double AxisErrorDeg, double NormalMm, double GridTiltMm) MoveToOtherLine(
+        double[] frameBase, double[] fromStartBase, double[] toStartBase, double[] seamDirBase, bool followGridTilt = true)
     {
         RequirePose(frameBase, nameof(frameBase));
         var m = FrameMath.PoseToMatrix(frameBase);
         double Comp(int col) => seamDirBase[0] * m[0, col] + seamDirBase[1] * m[1, col] + seamDirBase[2] * m[2, col];
         var (a, b) = (Comp(0), Comp(1));
-        if (Math.Sqrt(a * a + b * b) < 1e-6) return (null, 0, 90, 0);
+        if (Math.Sqrt(a * a + b * b) < 1e-6) return (null, 0, 90, 0, 0);
 
         var phi = Math.Atan2(b, a) * 180.0 / Math.PI;          // 프레임 X → 용접선 방향, Z 둘레 [도]
         var snapped = Math.Round(phi / 90.0) * 90.0;
         var err = phi - snapped;
-        if (Math.Abs(err) > CrossLineAxisTolDeg) return (null, snapped, err, 0);
+        if (Math.Abs(err) > CrossLineAxisTolDeg) return (null, snapped, err, 0, 0);
 
         var (moved, normalMm) = TranslateInPlane(frameBase, fromStartBase, toStartBase);
+        var gridTiltMm = 0.0;
+        if (followGridTilt && Math.Abs(err) > 1e-9)
+        {
+            // ACS 격자 → 실제 격자: 면 안 이동량을 프레임 Z 둘레로 −err 돌린다. 그중 이번 용접선 방향 성분만 쓴다.
+            double[] d = { moved[0] - frameBase[0], moved[1] - frameBase[1], moved[2] - frameBase[2] };
+            var dx = d[0] * m[0, 0] + d[1] * m[1, 0] + d[2] * m[2, 0];
+            var dy = d[0] * m[0, 1] + d[1] * m[1, 1] + d[2] * m[2, 1];
+            var t = -err * Math.PI / 180.0;
+            var (c, s) = (Math.Cos(t), Math.Sin(t));
+            var alongIsY = Math.Abs(Math.Abs(snapped) % 180.0 - 90.0) < 1e-6;   // 이번 용접선이 프레임 Y 를 따른다
+            var col = alongIsY ? 1 : 0;
+            var fix = alongIsY ? dx * s + dy * c - dy : dx * c - dy * s - dx;   // 돌린 값 − ACS 값(용접선 방향 성분)
+            for (var i = 0; i < 3; i++) moved[i] += fix * m[i, col];
+            // 부호는 이번 용접선(시작→끝) 방향 기준 — 프레임 축이 반대를 보면 뒤집는다.
+            var axisSign = Math.Cos(snapped * Math.PI / 180.0) + Math.Sin(snapped * Math.PI / 180.0) >= 0 ? 1.0 : -1.0;
+            gridTiltMm = fix * axisSign;
+        }
         var rotated = FrameMath.FromFrame(new[] { 0.0, 0.0, 0.0, 0.0, 0.0, snapped }, moved);
-        return (new[] { moved[0], moved[1], moved[2], rotated[3], rotated[4], rotated[5] }, snapped, err, normalMm);
+        return (new[] { moved[0], moved[1], moved[2], rotated[3], rotated[4], rotated[5] }, snapped, err, normalMm, gridTiltMm);
+    }
+
+    /// <summary>
+    /// Bag 키(double, 도) — 교시한 뒤로 좌표계를 다른 줄로 옮기며 프레임 Z 둘레로 돌린 각의 합(<see cref="MoveToOtherLine"/>).
+    /// 새로 교시한 좌표계에는 없다(0). 좌표계와 함께 다음 줄로 넘긴다.
+    /// </summary>
+    public const string CrossRotationBagKey = "wobj.crossRotationDeg";
+
+    /// <summary>
+    /// Bag 키(double[3], BASE mm) — 용접선 방향 Peak 실측으로 좌표계 원점을 옮긴 양(<see cref="ShiftAlongX"/>). 있으면 이미 맞춘
+    /// 좌표계라 다시 찾지 않는다. 좌표계를 다시 90° 돌려 넘길 때는 이만큼 되돌린다(그 방향에서는 옆 오차가 되므로).
+    /// </summary>
+    public const string AlongAnchorBagKey = "wobj.alongAnchorBase";
+
+    /// <summary>각이 90° 의 홀수 배인지 — 교시한 줄과 직각인 줄로 넘어간 좌표계.</summary>
+    public static bool IsQuarterTurn(double deg)
+        => Math.Abs(Math.Abs(deg % 180.0) - 90.0) < 1.0;
+
+    /// <summary>
+    /// 용접선 방향 Peak 실측이 필요한지 — 교시한 줄과 직각인 줄로 넘어왔고(<paramref name="crossRotationDeg"/>) 아직 맞추지 않았을 때.
+    /// 교시한 줄과 같은 방향의 줄은 교시 때 Peak 찾기로 이미 맞춰져 있다.
+    /// </summary>
+    public static bool NeedsAlongAnchor(double crossRotationDeg, bool alreadyAnchored)
+        => !alreadyAnchored && IsQuarterTurn(crossRotationDeg);
+
+    /// <summary>좌표계 원점을 프레임 X(용접선 방향)로 <paramref name="mm"/> 옮긴다. 자세는 그대로.</summary>
+    public static double[] ShiftAlongX(double[] frameBase, double mm)
+    {
+        RequirePose(frameBase, nameof(frameBase));
+        var m = FrameMath.PoseToMatrix(frameBase);
+        return new[]
+        {
+            frameBase[0] + mm * m[0, 0], frameBase[1] + mm * m[1, 0], frameBase[2] + mm * m[2, 0],
+            frameBase[3], frameBase[4], frameBase[5],
+        };
     }
 
     /// <summary>

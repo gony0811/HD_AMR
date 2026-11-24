@@ -72,6 +72,7 @@ builder.Services.AddTransient<LaserHeadCalibrationRoutine>();
 
 // 평탄 중심 정렬 — 카메라 페이지와 FlatSurfaceAlignStep 이 공유하는 무상태 루틴.
 builder.Services.AddTransient<FlatSurfaceCenteringService>();
+builder.Services.AddTransient<HD.AMR.App.Service.Sequence.Steps.SeamAlongPeakAnchor>();   // ⑱ 용접선 방향 Peak 맞춤(다른 줄 좌표계 재사용)
 builder.Services.AddTransient<LaserTiltCorrector>();   // 레이저 틸트 수평 보정(④ Phase C · /laser 보정 적용 공용)
 // 최근 평탄면 검출 스냅샷 — 시퀀스/정렬 루틴이 발행하고 카메라 페이지가 표시.
 builder.Services.AddSingleton<FlatDetectionMonitor>();
