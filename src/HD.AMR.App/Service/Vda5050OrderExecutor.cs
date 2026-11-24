@@ -65,6 +65,8 @@ public sealed class Vda5050OrderExecutor
     /// <summary>주행 중 코봇 반경 장애물 감시(파라미터 cobotGuard.enabled). 없으면 감시하지 않는다.</summary>
     private readonly CobotObstacleGuard? _obstacleGuard;
     private bool _paused;
+    // cancelOrder(mode=afterCurrentAction) 예약 — 진행 중 액션(용접선 검사)을 끝낸 뒤 남은 액션을 버리고 코봇을 홈으로.
+    private volatile bool _cancelAfterCurrent;
     private PauseReason _pauseReason;
     private string? _orderMapId;   // 재개 전 mapId 일치 확인용(§4.2)
 
@@ -301,6 +303,7 @@ public sealed class Vda5050OrderExecutor
 
             _missionCts = new CancellationTokenSource();
             ct = _missionCts.Token;
+            _cancelAfterCurrent = false;   // 예약 취소는 그 Order 에만 유효
         }
         if (wasPaused) PauseCleared?.Invoke();
         // 신규 order = 정렬(anchor) 캐시 무효(사양 §8.1 — 그룹 캐시는 order 내에서만 유효).
@@ -480,6 +483,7 @@ public sealed class Vda5050OrderExecutor
             var firstInspectionIndex = node.Actions.FindIndex(a =>
                 a.ActionType == "startWeldInspection" && !skippedActions.Contains(a.ActionId));
             var equipmentDown = false;
+            var cancelHomed = false;
             int failedActions = skippedActions.Count;
             for (var ai = 0; ai < node.Actions.Count; ai++)
             {
@@ -513,6 +517,28 @@ public sealed class Vda5050OrderExecutor
                     failedActions++;
                     StateChanged?.Invoke();
                     continue;
+                }
+
+                // 예약 취소(cancelOrder mode=afterCurrentAction, 사양 §5.4) — 앞 액션(용접선 검사)은 끝까지 마쳤다.
+                // 코봇을 홈으로 되돌린 뒤 남은 액션을 FAILED 로 끝낸다(홈 복귀가 끝나야 종결 보고 — 복귀 중 새 지령 방지).
+                if (_cancelAfterCurrent)
+                {
+                    var cancelHome = await EnsureCobotHomeBeforeDriveAsync(orderId, ct, CancelHomeLabel);
+                    if (cancelHome is not null)
+                        _logger.LogWarning("중단 후 코봇 홈 복귀 실패 — 팔이 뻗은 채 남을 수 있습니다: {Reason}", cancelHome);
+                    cancelHomed = true;
+                    int dropped = 0;
+                    for (var j = ai; j < node.Actions.Count; j++)
+                    {
+                        if (skippedActions.Contains(node.Actions[j].ActionId)) continue;
+                        SetActionStatus(node.Actions[j].ActionId, "FAILED", CancelPolicy.AfterCurrentResult);
+                        failedActions++; dropped++;
+                    }
+                    OpLog(OpCategory.Order, "임무 중단(현재 검사 완료 후)", null,
+                        $"남은 액션 {dropped}건 FAILED — {CancelPolicy.AfterCurrentResult}" +
+                        (cancelHome is null ? "" : $" · 홈 복귀 실패: {cancelHome}"), orderId);
+                    StateChanged?.Invoke();
+                    break;
                 }
 
                 SetActionStatus(action.ActionId, "RUNNING", null);
@@ -637,6 +663,15 @@ public sealed class Vda5050OrderExecutor
                 }
                 StateChanged?.Invoke();
             }
+            // 예약 취소가 마지막 액션 도중에 걸렸으면 버릴 액션은 없다 — 홈 복귀만 보장한다
+            // (마지막 본검사는 스스로 홈으로 가지만 시험 이동(moveToSeamStart)은 팔을 뻗은 채 끝난다).
+            if (_cancelAfterCurrent && !cancelHomed)
+            {
+                var cancelHome = await EnsureCobotHomeBeforeDriveAsync(orderId, ct, CancelHomeLabel);
+                OpLog(OpCategory.Order, "임무 중단(현재 검사 완료 후)", null,
+                    "남은 액션 없음" + (cancelHome is null ? "" : $" · 홈 복귀 실패: {cancelHome}"), orderId);
+            }
+            _cancelAfterCurrent = false;
             _logger.LogInformation("VDA5050 order 완결: {OrderId} (액션 {N}건)", _orderId, node.Actions.Count);
             OpLog(OpCategory.Order, "order 완결", failedActions == 0,
                 $"액션 {node.Actions.Count}건 처리 — 성공 {node.Actions.Count - failedActions}, 실패 {failedActions}", orderId);
@@ -831,6 +866,7 @@ public sealed class Vda5050OrderExecutor
     /// 복귀 성공·생략이면 null, 복귀를 시도했는데 실패하면 그 사유 — 호출측은 주행하지 않고 임무를 실패시킨다.</summary>
     private const string BeforeDriveHomeLabel = "주행 전 홈 복귀";
     private const string AfterFailHomeLabel = "검사 실패 후 홈 복귀";
+    private const string CancelHomeLabel = "중단 후 홈 복귀";
 
     private async Task<string?> EnsureCobotHomeBeforeDriveAsync(string orderId, CancellationToken ct,
         string label = BeforeDriveHomeLabel)
@@ -1430,7 +1466,7 @@ public sealed class Vda5050OrderExecutor
     /// JsonElement(문자열 kind) 또는 raw string 으로 역직렬화된다 — 둘 다 수용(§8.3/N7).
     /// 누락이면 빈 문자열 반환.
     /// </summary>
-    private static string GetStringParam(VdaAction action, string key)
+    internal static string GetStringParam(VdaAction action, string key)
     {
         var p = action.ActionParameters.FirstOrDefault(x => string.Equals(x.Key, key, StringComparison.Ordinal));
         return p?.Value switch
@@ -1622,10 +1658,27 @@ public sealed class Vda5050OrderExecutor
     /// cancelOrder instantAction — 진행 중 임무 폐기(취소→REST 정지→임무 종료 대기, D-3 순서), 미종결 action FAILED.
     /// 비상정지와 달리 emergencyStopActive 를 남기지 않으므로 다음 Order 를 바로 수락한다. 일시정지·통신 단절 에러도 클리어(§5).
     /// </summary>
-    public async Task CancelOrderAsync(string reason = "ACS cancelOrder instantAction")
+    /// <paramref name="afterCurrentAction"/>(mode=afterCurrentAction, 사양 §5.4): 액션(용접선 검사)이 진행 중이면 그 액션은
+    /// 끝까지 마치고, 남은 액션만 버린 뒤 코봇을 홈으로 되돌린다. 주행 중·일시정지 중·진행 액션 없음이면 즉시 취소와 같다.
+    public async Task CancelOrderAsync(string reason = "ACS cancelOrder instantAction", bool afterCurrentAction = false)
     {
         string? running;
-        lock (_gate) running = _missionTask is { IsCompleted: false } ? _orderId : null;
+        bool defer;
+        lock (_gate)
+        {
+            running = _missionTask is { IsCompleted: false } ? _orderId : null;
+            defer = CancelPolicy.ShouldDefer(afterCurrentAction, running is not null, _paused, _driving,
+                _actionStates.Any(a => a.ActionStatus == "RUNNING"));
+            if (defer) _cancelAfterCurrent = true;
+        }
+        if (defer)
+        {
+            _logger.LogWarning("cancelOrder({Reason}) — 진행 중 액션 완료 후 중단 예약: {Order}", reason, running);
+            OpLog(OpCategory.Order, "임무 취소 예약(cancelOrder)", null,
+                $"{reason} — 진행 중 검사를 마친 뒤 남은 액션을 버리고 코봇을 홈으로 복귀", running);
+            StateChanged?.Invoke();
+            return;
+        }
         _logger.LogWarning("cancelOrder({Reason}) — {Running}", reason, running ?? "진행 중 임무 없음");
         OpLog(OpCategory.Order, "임무 취소(cancelOrder)", null,
             running is null ? $"{reason} — 진행 중 임무 없음" : $"{reason} — 진행 중 order {running} 주행 정지·임무 폐기");
@@ -1653,6 +1706,7 @@ public sealed class Vda5050OrderExecutor
     /// 잔여 action FAILED → 일시정지 해소. emergencyStopActive 는 세팅하지 않는다.</summary>
     private async Task AbortActiveMissionAsync(bool running, string resultDescription)
     {
+        _cancelAfterCurrent = false;   // 즉시 폐기가 예약 취소를 덮는다
         lock (_gate) _missionCts?.Cancel();
         if (running)
         {
@@ -1787,6 +1841,24 @@ internal static class ReachPartialPolicy
 {
     public static bool CanRunPartially(int inspections, int unreachable)
         => inspections > 0 && unreachable < inspections;
+}
+
+/// <summary>cancelOrder 의 취소 방식 판정(사양 §5.4).</summary>
+internal static class CancelPolicy
+{
+    public const string AfterCurrentMode = "afterCurrentAction";
+    public const string AfterCurrentResult = "cancelled by cancelOrder (진행 중 검사 완료 후 중단)";
+
+    /// <summary>instantAction 의 mode 파라미터가 "현재 액션 완료 후"인가(대소문자 무시, 그 밖·누락 = 즉시).</summary>
+    public static bool IsAfterCurrent(string? mode)
+        => string.Equals(mode?.Trim(), AfterCurrentMode, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// 취소를 진행 중 액션이 끝날 때까지 미루는가. 미루는 것은 요청이 있고, 임무가 돌고 있고, 액션이 RUNNING 일 때뿐이다.
+    /// 주행 중이면 끝낼 검사가 없고(코봇은 이미 홈), 일시정지 중이면 재개 전 확인 없이 검사를 이어 갈 수 없으므로 즉시 취소한다.
+    /// </summary>
+    public static bool ShouldDefer(bool afterCurrentRequested, bool missionRunning, bool paused, bool driving, bool actionRunning)
+        => afterCurrentRequested && missionRunning && !paused && !driving && actionRunning;
 }
 
 internal static class InspectionHomePolicy
