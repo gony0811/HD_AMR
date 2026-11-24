@@ -344,6 +344,47 @@ public static class InternalWorkpieceFrame
         return FrameMath.MatrixToPose(r);
     }
 
+    /// <summary>
+    /// Bag 키(double[3], BASE mm) — 수직 방향 기울기의 회전축이 지나는 점: 좌표계를 교시한 줄의 원점(그 자리에서는 좌표계가 실측과 맞는다).
+    /// 다른 줄로 처음 넘어갈 때 ② 가 남기고, 좌표계와 함께 다음 줄로 넘긴다.
+    /// </summary>
+    public const string VerticalTiltPivotBagKey = "wobj.verticalTiltPivotBase";
+
+    /// <summary>
+    /// Bag 키(double, 도) — 레이저 한 점 실측으로 정적 기울기에 더한 수직 방향 기울기(<see cref="TiltFromOffset"/>). 있으면 이 정차 위치에서는
+    /// 이미 잰 것이라 다시 재지 않는다. 좌표계와 함께 다음 줄로 넘긴다.
+    /// </summary>
+    public const string VerticalTiltMeasuredBagKey = "wobj.verticalTiltMeasuredDeg";
+
+    /// <summary>기울기를 한 점으로 잴 수 있는 최소 거리 [mm] — 회전축(교시한 줄)에서 위아래로 이만큼은 떨어져야 한다.</summary>
+    public const double MinTiltLeverMm = 500.0;
+
+    /// <summary>한 점 실측으로 더할 수 있는 기울기 한계 [도] — 넘으면 좌표계가 크게 틀렸거나 다른 면을 잰 것으로 본다(1.6m 에서 약 28mm).</summary>
+    public const double MaxMeasuredTiltDeg = 1.0;
+
+    /// <summary>
+    /// 면 실측점 한 곳으로 수직 방향 기울기 보정각 [도] 을 구한다 — <paramref name="pivotBase"/>(교시한 줄, 좌표계가 맞는 자리)에서
+    /// 위아래로 떨어진 <paramref name="pointBase"/> 에서 면 높이가 기준과 <paramref name="offsetMm"/>(좌표계 Z, + = 면이 프레임 +Z 쪽)
+    /// 만큼 달랐다면, <see cref="TiltAboutHorizontal"/> 로 이 각만큼 더 기울이면 그 자리의 높이 차가 없어진다.
+    /// 면 안의 위쪽 거리(Lever)가 <see cref="MinTiltLeverMm"/> 미만이거나 면이 수평이면 Deg = null.
+    /// </summary>
+    public static (double? Deg, double LeverMm) TiltFromOffset(double[] frameBase, double[] pivotBase, double[] pointBase, double offsetMm)
+    {
+        RequirePose(frameBase, nameof(frameBase));
+        var m = FrameMath.PoseToMatrix(frameBase);
+        double[] n = { m[0, 2], m[1, 2], m[2, 2] };
+        // TiltAboutHorizontal 과 같은 축 — h = up × n(면 안의 수평), u = n × h(면 안의 위쪽).
+        double[] h = { -n[1], n[0], 0.0 };
+        var hl = Math.Sqrt(h[0] * h[0] + h[1] * h[1]);
+        if (hl < 1e-6) return (null, 0);
+        h[0] /= hl; h[1] /= hl;
+        double[] u = { n[1] * h[2] - n[2] * h[1], n[2] * h[0] - n[0] * h[2], n[0] * h[1] - n[1] * h[0] };
+        var lever = (pointBase[0] - pivotBase[0]) * u[0] + (pointBase[1] - pivotBase[1]) * u[1] + (pointBase[2] - pivotBase[2]) * u[2];
+        if (!double.IsFinite(offsetMm) || Math.Abs(lever) < MinTiltLeverMm) return (null, lever);
+        // +각은 축 위쪽(lever > 0)의 점을 프레임 +Z 로 lever·sin 만큼 보낸다.
+        return (Math.Asin(Math.Clamp(offsetMm / lever, -1.0, 1.0)) * 180.0 / Math.PI, lever);
+    }
+
     /// <summary>점의 프레임 좌표(X 방향 거리, Z 방향 높이) [mm].</summary>
     public static (double Along, double Height) AlongAndHeight(double[] frameBase, double[] pointBase)
     {

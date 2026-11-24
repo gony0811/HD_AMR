@@ -58,6 +58,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
     private readonly Dictionary<string, double[]> _bundleSeamW = new();   // 묶음 공통 좌표계를 잡은 리더 용접선의 맵 좌표 [시작, 끝](m) — 팔로워가 같은 줄인지 판단
     private readonly HashSet<string> _dissolvedBundles = new(StringComparer.Ordinal);
     private readonly Dictionary<string, (double MeasuredMm, double NominalMm)> _bundleSpans = new();   // 묶음 리더가 교시로 잰 점1~점2 거리와 그 구간의 도면 거리 — 팔로워 줄을 실측 간격에 맞춰 놓는다
+    private double[]? _lastVerticalTiltPivotBase;                  // 다른 줄 재사용 — 수직 방향 기울기 회전축 자리(교시한 줄의 원점, BASE mm)
+    private double? _lastVerticalTiltMeasuredDeg;                  // 다른 줄 재사용 — 레이저 한 점 실측으로 그 좌표계에 더한 수직 방향 기울기(도). 있으면 다시 재지 않는다
     private double[]? _lastPitchScaleShiftBase;                    // 그 좌표계 원점을 실측 간격에 맞추느라 ACS 거리 대비 옮긴 양(BASE mm) — 다른 줄로 넘어갈 때 되돌린다
 
     /// <summary>
@@ -664,6 +666,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             double? crossRotationDeg;
             double[]? alongAnchorBase;
             double[]? pitchScaleShiftBase;
+            double[]? verticalTiltPivotBase;
+            double? verticalTiltMeasuredDeg;
             (double MeasuredMm, double NominalMm)? bundleSpan = null;
             var followMeasuredPitch = _sensor.UsesGasDetector;
             try { followMeasuredPitch = InternalWorkpieceFrame.ResolveFollowMeasuredPitch(await param.GetBoolAsync(InternalWorkpieceFrame.FollowMeasuredPitchKey), _sensor.UsesGasDetector); }
@@ -742,6 +746,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                 crossRotationDeg = _lastCrossRotationDeg;
                 alongAnchorBase = _lastAlongAnchorBase?.ToArray();
                 pitchScaleShiftBase = _lastPitchScaleShiftBase?.ToArray();
+                verticalTiltPivotBase = _lastVerticalTiltPivotBase?.ToArray();
+                verticalTiltMeasuredDeg = _lastVerticalTiltMeasuredDeg;
                 cachedInternalFrame = anchorHit ? (double[])_lastInternalWorkpieceFrame!.Clone() : null;
                 cachedAnchorStartBase = anchorHit ? _lastAnchorStartBase?.ToArray() : null;
                 cachedAnchorSeamW = anchorHit && _lastAnchorSeamW is { } lastSeam ? lastSeam.Start.Concat(lastSeam.End).ToArray() : null;
@@ -981,6 +987,11 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                     context.Bag[InternalWorkpieceFrame.BundleSpanBagKey] = new[] { bs.MeasuredMm, bs.NominalMm };
                 if (pitchScaleShiftBase is { Length: 3 })
                     context.Bag[InternalWorkpieceFrame.PitchScaleShiftBagKey] = pitchScaleShiftBase;
+                // 수직 방향 기울기 실측 — 회전축 자리와, 이미 잰 값(있으면 이 정차 위치에서는 다시 재지 않는다).
+                if (verticalTiltPivotBase is { Length: 3 })
+                    context.Bag[InternalWorkpieceFrame.VerticalTiltPivotBagKey] = verticalTiltPivotBase;
+                if (verticalTiltMeasuredDeg is { } measuredTilt)
+                    context.Bag[InternalWorkpieceFrame.VerticalTiltMeasuredBagKey] = measuredTilt;
             }
             // 묶음에서 이 구역 뒤에 같은 묶음 구역이 이어지면 검사 팁 진입 깊이를 유지한 채 넘어간다(빠졌다 다시 들어오지 않음).
             if (bundle?.BundleId is { } keepBid)
@@ -1119,6 +1130,10 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                                                        && aav is double[] { Length: 3 } aaBase ? aaBase.ToArray() : null;
                                 _lastPitchScaleShiftBase = context.Bag.TryGetValue(InternalWorkpieceFrame.PitchScaleShiftBagKey, out var pss)
                                                            && pss is double[] { Length: 3 } pssBase ? pssBase.ToArray() : null;
+                                _lastVerticalTiltPivotBase = context.Bag.TryGetValue(InternalWorkpieceFrame.VerticalTiltPivotBagKey, out var vtp)
+                                                             && vtp is double[] { Length: 3 } vtpBase ? vtpBase.ToArray() : null;
+                                _lastVerticalTiltMeasuredDeg = context.Bag.TryGetValue(InternalWorkpieceFrame.VerticalTiltMeasuredBagKey, out var vtm)
+                                                               && vtm is double vtmDeg ? vtmDeg : null;
                                 // 기준 면 높이 — 이번 실행이 쟀으면 그 값, 아니면 물려받은 좌표계일 때만 앞 값을 이어 쓴다.
                                 _lastSurfaceRefMm = context.Bag.TryGetValue(Sequence.Steps.LineSurfaceHeightStep.ReferenceHeightBagKey, out var sref)
                                                     && sref is double srefMm ? srefMm

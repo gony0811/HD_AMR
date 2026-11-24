@@ -150,6 +150,12 @@ public class LineSurfaceHeightStep : ISequenceStep
         catch (Exception ex) when (ex is not OperationCanceledException) { /* DB 미준비 — 기본(켬) */ }
         if (!measure)
         {
+            // 줄마다 시작·끝을 재는 대신, 물려받은 줄에서 레이저 한 점으로 수직 방향 기울기만 실측한다(정차 위치마다 한 번).
+            if (mode == ModeCorrect && await TiltMeasureEnabledAsync()
+                && context.Bag.TryGetValue(InternalWorkpieceFrame.VerticalTiltPivotBagKey, out var pvv) && pvv is double[] { Length: 3 } pivot
+                && !(context.Bag.TryGetValue(InternalWorkpieceFrame.VerticalTiltMeasuredBagKey, out var mdv) && mdv is double))
+                return await MeasureTiltAsync(context, frame, pivot, ct);
+
             var tilt = context.Bag.TryGetValue(InternalWorkpieceFrame.VerticalTiltAppliedBagKey, out var tv) && tv is double td ? td : 0.0;
             _logger.LogInformation(
                 "[줄 면 높이] 측정 끔('{Key}'=false) — 이동·레이저 측정 없이 좌표계를 그대로 씁니다 (모드 {Mode}, 수직 방향 정적 기울기 {Tilt:+0.00;-0.00}° 반영됨, 원점 [{X:0.0}, {Y:0.0}, {Z:0.0}])",
@@ -247,6 +253,122 @@ public class LineSurfaceHeightStep : ISequenceStep
         {
             await ReturnAsync(start, context, ct);
         }
+    }
+
+    /// <summary>
+    /// 수직 방향 기울기 한 점 실측 파라미터 키(true/false) — 줄 면 높이 측정(<see cref="MeasureKey"/>)이 꺼져 있을 때, 다른 줄로 처음 넘어간
+    /// 줄의 시작 자리에서 레이저로 벽 거리를 한 번 재서 정적 기울기(<see cref="InternalWorkpieceFrame.VerticalTiltKey"/>)의 남은 오차를
+    /// 바로잡는다. 정적 기울기는 고정값이라 AMR 이 선 자리에 따라 틀린다(실기 2026-11-24 M2: 1.4° 설정에 실제 약 1.7° — 1.6m 아래에서
+    /// 팁이 벽에서 9mm 멀고 위로 갈수록 붙음). 비우면 검사 센서 모드로 정한다 — 가스 켬, 비전(용접검사기) 끔.
+    /// </summary>
+    public const string TiltMeasureKey = "Sequence.Line.TiltMeasure";
+
+    /// <summary>기울기 실측 때 서 있을 높이 범위 [mm, 좌표계 면 바깥] — 지금 높이가 이 안이면 움직이지 않고 그 자리에서 잰다.
+    /// 벽 쪽으로 미리 내려가지 않기 위해서다(좌표계가 아직 틀렸을 수 있다). 레이저는 WD + 이 높이를 읽는다(측정 범위 약 450mm).</summary>
+    internal const double MinTiltMeasureHeightMm = 20.0, MaxTiltMeasureHeightMm = 40.0;
+
+    /// <summary>파라미터 값 → 기울기 한 점 실측 사용 여부. 비면 센서 모드 기본값(가스 켬 / 비전 끔).</summary>
+    internal static bool ResolveTiltMeasure(bool? value, bool usesGas) => value ?? usesGas;
+
+    /// <summary>기울기 실측 때 설 높이 — 지금 높이를 범위(<see cref="MinTiltMeasureHeightMm"/>~<see cref="MaxTiltMeasureHeightMm"/>) 안으로만 맞춘다.</summary>
+    internal static double TiltMeasureHeightMm(double heightNowMm)
+        => Math.Clamp(heightNowMm, MinTiltMeasureHeightMm, MaxTiltMeasureHeightMm);
+
+    private async Task<bool> TiltMeasureEnabledAsync()
+    {
+        try { return ResolveTiltMeasure(await _param.GetBoolAsync(TiltMeasureKey), _useGas); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { return ResolveTiltMeasure(null, _useGas); }
+    }
+
+    /// <summary>
+    /// 레이저 한 점으로 수직 방향 기울기를 실측해 좌표계를 <paramref name="pivot"/>(교시한 줄) 둘레로 더 기울인다.
+    /// 지금 서 있는 높이에서 평탄 자리를 찾아 재고(벽 쪽으로 내려가지 않는다), 끝나면 측정 전 자리로 돌아온다.
+    /// 재지 못하면 좌표계를 그대로 둔다(정적 기울기만). 보정각이 한계를 넘으면 멈춘다.
+    /// </summary>
+    private async Task<StepResult> MeasureTiltAsync(SequenceContext context, double[] frame, double[] pivot, CancellationToken ct)
+    {
+        if (!_laser.IsConnected)
+        {
+            _logger.LogWarning("[줄 기울기 실측] 레이저 미연결 — 정적 기울기만으로 진행합니다.");
+            return StepResult.Ok("레이저 미연결 — 기울기 실측 생략(정적 기울기만).");
+        }
+        var start = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
+        var outward = OutwardNormal(frame, start, context.OpticalAxis ?? ToolAxisDir.MinusZ);
+        var heightNowMm = HeightOutMm(frame, start, outward);
+        var measureHeightMm = TiltMeasureHeightMm(heightNowMm);
+        var travelMm = measureHeightMm - heightNowMm;
+        if (Math.Abs(travelMm) > MaxHeightTravelMm)
+        {
+            _logger.LogWarning("[줄 기울기 실측] 현재 높이 {Now:+0.0;-0.0}mm 가 측정 높이에서 너무 멉니다 — 정적 기울기만으로 진행합니다.", heightNowMm);
+            return StepResult.Ok("현재 높이가 측정 높이에서 멀어 기울기 실측 생략(정적 기울기만).");
+        }
+        var applied = context.Bag.TryGetValue(InternalWorkpieceFrame.VerticalTiltAppliedBagKey, out var av) && av is double ad ? ad : 0.0;
+        var lifted = Offset(start, outward, travelMm);
+        _outward = outward;
+        _seekHintMm = 0;
+        try { _seekMaxMm = LaserWorkingDistanceStep.ResolveLostSearchMm(await _param.GetDoubleAsync(LaserWorkingDistanceStep.LostSearchKey), _useGas); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { _seekMaxMm = LaserWorkingDistanceStep.ResolveLostSearchMm(null, _useGas); }
+        var flat = await LoadFlatSetupAsync(context);
+        _logger.LogInformation(
+            "[줄 기울기 실측] 레이저 한 점으로 수직 방향 기울기 실측('{Key}') — 측정 높이 {H:+0.0;-0.0}mm(현재 {Now:+0.0;-0.0}mm 에서 {T:+0.0;-0.0}mm), 정적 기울기 {Tilt:+0.00;-0.00}° 반영됨, 평탄면 탐색 {Flat}",
+            TiltMeasureKey, measureHeightMm, heightNowMm, travelMm, applied, flat is null ? "안 씀(정해진 옆 자리)" : "사용");
+        context.Progress?.Invoke("줄 기울기 실측 — 레이저 한 점");
+
+        if (Math.Abs(travelMm) > 0.05)
+        {
+            var rc = await _cobot.Rpc.MoveLAsync(lifted, tool: context.Tool, user: 0, vel: context.Velocity, ct: ct);
+            if (rc != 0)
+            {
+                _logger.LogWarning("[줄 기울기 실측] 측정 높이로 {T:+0.0;-0.0}mm 이동 실패 (rc={Rc}){Desc} — 정적 기울기만으로 진행합니다.",
+                    travelMm, rc, FairinoErrorCodes.Suffix(rc));
+                await ReturnAsync(start, context, ct);
+                return StepResult.Ok($"측정 높이 이동 실패(rc={rc}) — 기울기 실측 생략(정적 기울기만).");
+            }
+        }
+
+        double[]? point;
+        try { point = await MeasureAsync(context, frame, lifted, 0, +1, "기울기", flat, ct); }
+        finally { await ReturnAsync(start, context, ct); }
+        if (point is null)
+        {
+            _logger.LogWarning("[줄 기울기 실측] 유효 측정 없음 — 정적 기울기만으로 진행합니다(다음 열에서 다시 시도).");
+            return StepResult.Ok("기울기 실측 실패 — 좌표계 그대로(정적 기울기만).");
+        }
+
+        var (wdMm, wdSource) = await LaserWorkingDistanceSetting.ResolveAsync(_param, LaserWorkingDistanceSetting.WallOf(context));
+        if (!(double.IsFinite(wdMm) && wdMm >= MinWdTargetMm && wdMm <= MaxWdTargetMm))
+        {
+            _logger.LogWarning("[줄 기울기 실측] WD 목표 {Wd}mm({Src}) 가 범위 밖 — 정적 기울기만으로 진행합니다.", wdMm, wdSource);
+            return StepResult.Ok("WD 목표가 범위 밖이라 기울기 실측 생략(정적 기울기만).");
+        }
+        var (_, height) = InternalWorkpieceFrame.AlongAndHeight(frame, point);
+        var offsetMm = height - WdReferenceHeightMm(frame, outward, wdMm);
+        var (deg, leverMm) = InternalWorkpieceFrame.TiltFromOffset(frame, pivot, point, offsetMm);
+        if (deg is not { } d)
+        {
+            _logger.LogInformation(
+                "[줄 기울기 실측] 교시한 줄에서 위아래 {L:+0;-0}mm 뿐이라(최소 {Min:0}mm) 기울기를 구하지 않습니다 — 면 높이 차 {Off:+0.0;-0.0}mm",
+                leverMm, InternalWorkpieceFrame.MinTiltLeverMm, offsetMm);
+            return StepResult.Ok($"교시한 줄에서 {Math.Abs(leverMm):0}mm 뿐 — 기울기 실측 생략(정적 기울기만).");
+        }
+        if (Math.Abs(d) > InternalWorkpieceFrame.MaxMeasuredTiltDeg)
+        {
+            var msg = $"물려받은 좌표계의 면 높이가 실측과 {offsetMm:+0.0;-0.0}mm 다릅니다(교시한 줄에서 {leverMm:+0;-0}mm — 기울기 {d:+0.00;-0.00}°, " +
+                      $"한계 ±{InternalWorkpieceFrame.MaxMeasuredTiltDeg:0.#}°) — 좌표계가 크게 틀렸거나 다른 면을 쟀습니다. 검사하지 않고 멈춥니다(다음 줄은 다시 교시).";
+            _logger.LogWarning("[줄 기울기 실측] {Msg}", msg);
+            return StepResult.Fail(msg);
+        }
+
+        var corrected = InternalWorkpieceFrame.TiltAboutHorizontal(frame, pivot, d);
+        context.Bag[InternalWorkpieceFrame.BagKey] = corrected;
+        context.Bag[InternalWorkpieceFrame.VerticalTiltMeasuredBagKey] = d;
+        _logger.LogInformation(
+            "[줄 기울기 실측] 면 높이 차 {Off:+0.0;-0.0}mm (WD 목표 {Wd:0.#}mm 기준, 교시한 줄에서 {L:+0;-0}mm) → 기울기 {D:+0.00;-0.00}° 더함 " +
+            "(정적 {S:+0.00;-0.00}° + 실측 = {Total:+0.00;-0.00}°) — 원점 [{X:0.0}, {Y:0.0}, {Z:0.0}] → [{X2:0.0}, {Y2:0.0}, {Z2:0.0}]. 이 정차 위치의 다음 줄은 이 좌표계를 물려받습니다.",
+            offsetMm, wdMm, leverMm, d, applied, applied + d,
+            frame[0], frame[1], frame[2], corrected[0], corrected[1], corrected[2]);
+        return StepResult.Ok(
+            $"줄 기울기 실측 — 면 높이 차 {offsetMm:+0.0;-0.0}mm → 기울기 {d:+0.00;-0.00}° 더함(정적 {applied:+0.00;-0.00}° → {applied + d:+0.00;-0.00}°).");
     }
 
     /// <summary>

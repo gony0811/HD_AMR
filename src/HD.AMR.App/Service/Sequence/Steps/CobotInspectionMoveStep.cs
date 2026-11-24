@@ -1460,6 +1460,9 @@ public class CobotInspectionMoveStep : ISequenceStep
             }
             var crossRotation = context.Bag.TryGetValue(InternalWorkpieceFrame.CrossRotationBagKey, out var cr0) && cr0 is double crd ? crd : 0.0;
             context.Bag[InternalWorkpieceFrame.CrossRotationBagKey] = (crossRotation + rotDeg) % 360.0;
+            // 수직 방향 기울기의 회전축 자리 — 교시한 줄에서 처음 벗어날 때의 그 좌표계 원점(실측과 맞는 자리). 이후 줄에도 그대로 넘긴다.
+            if (!(context.Bag.TryGetValue(InternalWorkpieceFrame.VerticalTiltPivotBagKey, out var pv0) && pv0 is double[] { Length: 3 }))
+                context.Bag[InternalWorkpieceFrame.VerticalTiltPivotBagKey] = new[] { frame[0], frame[1], frame[2] };
             // 수직 방향 정적 기울기 — 직전 좌표계가 맞는 자리(그 원점)를 지나는 수평축으로 면을 기울인다. 이미 들어 있는 만큼은 빼고 준다.
             var tiltTarget = context.Bag.TryGetValue(InternalWorkpieceFrame.VerticalTiltTargetBagKey, out var tt) && tt is double ttd ? ttd : 0.0;
             var tiltApplied = context.Bag.TryGetValue(InternalWorkpieceFrame.VerticalTiltAppliedBagKey, out var ta) && ta is double tad ? tad : 0.0;
