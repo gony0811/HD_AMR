@@ -156,6 +156,7 @@ public class ParameterService
                 "중심 편차 측정 태그 한 변(mm) — 검은 테두리 바깥 정사각형 실측(흰 여백 제외). 0 이면 측정 안 함."),
             .. FlatCandidateOptions.SeedDefaults(),
             .. LaserFootprintOptions.SeedDefaults(),
+            .. LaserDataLogService.SeedDefaults(),
             (Motion.Fr5Kinematics.LinksKey,
                 Motion.Fr5Kinematics.FormatLinks(Motion.Fr5Kinematics.WeldAmrLinksMm),
                 "코봇 FR5-WML 링크 치수 d1,a2,a3,d4,d5,d6 [mm] — 오프라인 기구학(리치 맵·도달 사전 점검·자기 간섭)이 쓴다. " +
