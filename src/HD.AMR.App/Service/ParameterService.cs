@@ -88,6 +88,7 @@ public class ParameterService
         if (name == Motion.Fr5Kinematics.LinksKey) await ApplyKinematicsLinksAsync();
         if (name == Motion.CobotEnvelope.BaseHeightKey) await ApplyCobotBaseHeightAsync();
         if (name == Sequence.Steps.CobotInspectionMoveStep.MaxEntryJointTravelKey) await ApplyMaxEntryJointTravelAsync();
+        if (name == Sequence.Steps.SequenceEntry.RetractDistanceKey) await ApplyRetractDistanceAsync();
         Changed?.Invoke(name);
     }
 
@@ -100,6 +101,12 @@ public class ParameterService
     public async Task<bool> ApplyMaxEntryJointTravelAsync()
         => Sequence.Steps.CobotInspectionMoveStep.ApplyMaxEntryJointTravel(
             await GetDoubleAsync(Sequence.Steps.CobotInspectionMoveStep.MaxEntryJointTravelKey));
+
+    /// <summary>벽면 후퇴 거리 파라미터를 읽어 <see cref="Sequence.Steps.SequenceEntry"/> 에 적용한다(기동·저장·삭제 때).
+    /// 100~600mm 밖이면 기본값(300mm)을 쓰고 false.</summary>
+    public async Task<bool> ApplyRetractDistanceAsync()
+        => Sequence.Steps.SequenceEntry.ApplyRetractDistance(
+            await GetDoubleAsync(Sequence.Steps.SequenceEntry.RetractDistanceKey));
 
     /// <summary>링크 치수 파라미터를 읽어 <see cref="Motion.Fr5Kinematics.Fr5Wml"/> 에 적용한다(기동·저장·삭제 때).
     /// 6개가 아니거나 공칭에서 5 mm 넘게 벗어나면 공칭을 쓰고 false.</summary>
@@ -176,6 +183,10 @@ public class ParameterService
                 "진입 관절 이동 한계(도) — 출발 자세 → 진입 해의 관절별(J1~J5) 최대 이동. 넘으면 가지 전환으로 보고 그 진입점·용접선을 쓰지 않는다 " +
                 "(진입 경로·도달 사전 점검·리치 맵 공통). 클수록 팔을 크게 돌리는 진입을 허용한다. 저장하면 바로 적용. " +
                 "30~360 밖이거나 비면 160. ACS 의 Acs:Reach:MaxEntryJointTravelDeg 와 같게 둘 것."),
+            (Sequence.Steps.SequenceEntry.RetractDistanceKey,
+                Sequence.Steps.SequenceEntry.DefaultRetractDistanceMm.ToString(CultureInfo.InvariantCulture),
+                "홈 복귀 때 벽면에서 직선으로 물러나는 거리(mm) — 광축 반대 방향(상부 챔퍼처럼 툴이 위를 보면 높이 유지·수평). " +
+                "툴 자세를 유지한 직선 이동이라 멀리 물러날수록 손목(J4)이 더 돈다. 저장하면 바로 적용. 100~600 밖이거나 비면 300."),
             (Sequence.Steps.BeadFindStep.RetreatKey, "",
                 "⑦/⑪ 용접선(비드) 못 찾을 때 후퇴 재검출 거리(mm) — 자동 검출이 실패하면 수동 입력 팝업 전에 벽에서 이만큼 물러나 " +
                 "FOV 를 넓혀 다시 찍고, 결과와 상관없이 원래 자리로 돌아온다(찾으면 그 d 로 진행). 0 = 끔. " +
@@ -250,6 +261,7 @@ public class ParameterService
         await ApplyKinematicsLinksAsync();  // 기동 시 저장된 링크 치수(DH 보정) 적용
         await ApplyCobotBaseHeightAsync();  // 기동 시 저장된 코봇 BASE 높이 적용
         await ApplyMaxEntryJointTravelAsync();  // 기동 시 저장된 진입 관절 이동 한계 적용
+        await ApplyRetractDistanceAsync();  // 기동 시 저장된 벽면 후퇴 거리 적용
     }
 
     /// <summary>id 로 파라미터 1건 삭제. 없으면 무시.</summary>
@@ -264,6 +276,7 @@ public class ParameterService
             if (p.Name == Motion.Fr5Kinematics.LinksKey) await ApplyKinematicsLinksAsync();
             if (p.Name == Motion.CobotEnvelope.BaseHeightKey) await ApplyCobotBaseHeightAsync();
             if (p.Name == Sequence.Steps.CobotInspectionMoveStep.MaxEntryJointTravelKey) await ApplyMaxEntryJointTravelAsync();
+            if (p.Name == Sequence.Steps.SequenceEntry.RetractDistanceKey) await ApplyRetractDistanceAsync();
             Changed?.Invoke(p.Name);
         }
     }
