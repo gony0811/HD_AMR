@@ -96,6 +96,7 @@ builder.Services.PostConfigure<HD.AMR.App.Communication.Vda5050.Vda5050AdapterSe
     HD.AMR.App.Communication.Vda5050.AcsBrokerStore.ApplyTo);
 builder.Services.AddSingleton<CobotObstacleGuard>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<CobotObstacleGuard>());
+builder.Services.AddSingleton<AcsOrderRunState>();   // 대시보드 ACS order 카드
 builder.Services.AddSingleton<Vda5050OrderExecutor>();
 builder.Services.AddSingleton<AcsFactsheetService>();   // ACS factsheet(§7.3)
 builder.Services.AddSingleton<Vda5050AdapterService>();
