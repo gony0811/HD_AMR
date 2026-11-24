@@ -146,6 +146,7 @@ internal static class ServiceRegistration
             HD.AMR.App.Communication.Vda5050.AcsBrokerStore.ApplyTo);
         // 주행 중 코봇 반경 장애물 감시(파라미터 cobotGuard.enabled, 기본 끔) — 실행기·어댑터·IO 가 상태를 본다.
         AddHostedSingleton<CobotObstacleGuard>(services);
+        services.AddSingleton<AcsOrderRunState>();   // 대시보드 ACS order 카드
         services.AddSingleton<Vda5050OrderExecutor>();
         services.AddSingleton<AcsFactsheetService>();   // ACS factsheet(§7.3) — 티칭·리프트·장착 보정 보고
         AddHostedSingleton<Vda5050AdapterService>(services);

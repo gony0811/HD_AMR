@@ -103,3 +103,41 @@
     .lamp-dot.is-red-on    { background-color: var(--danger); box-shadow: 0 0 10px var(--danger); }
     .lamp-dot.is-yellow-on { background-color: var(--warn);   box-shadow: 0 0 10px var(--warn); }
     .lamp-dot.is-green-on  { background-color: #22c55e;       box-shadow: 0 0 10px #22c55e; }
+
+.order-id {
+    font-size: 1.25rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.order-phase {
+    font-weight: 600;
+    margin-top: 0.5rem;
+}
+
+.order-progress {
+    height: 6px;
+    margin-top: 0.5rem;
+}
+
+.order-tasks {
+    margin-top: 0.7rem;
+    font-size: 0.82rem;
+}
+
+    .order-tasks .mono {
+        font-family: monospace;
+    }
+
+    .order-tasks .order-result {
+        max-width: 18rem;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: var(--text-muted);
+    }
+
+    .order-tasks tr.is-current td {
+        background: var(--accent-soft);
+    }
