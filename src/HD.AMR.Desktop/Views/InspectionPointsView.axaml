@@ -25,13 +25,14 @@
             <StackPanel Spacing="8">
                 <TextBlock Text="코봇 실행 (작업물 좌표계, pose=[X,Y,Z])" FontWeight="SemiBold" />
                 <Border Classes="alert" IsVisible="{Binding !CobotConnected}"><TextBlock Text="⚠ 코봇 RPC 미연결." /></Border>
-                <Border Classes="alert" IsVisible="{Binding !VisionConnected}"><TextBlock Text="⚠ 비전 인터페이스 미연결 — 실행 시 CAPTURE_REQ를 보낼 수 없습니다." /></Border>
+                <Border Classes="alert" IsVisible="{Binding ShowGasWarning}"><TextBlock Text="⚠ 가스 디텍터 미연결 — 실행 시 가스 측정을 할 수 없습니다." /></Border>
+                <Border Classes="alert" IsVisible="{Binding ShowVisionWarning}"><TextBlock Text="⚠ 비전 인터페이스 미연결 — 실행 시 CAPTURE_REQ를 보낼 수 없습니다." /></Border>
                 <StackPanel Orientation="Horizontal" Spacing="10">
                     <StackPanel><TextBlock Classes="axis" Text="공구(tool)" /><NumericUpDown Value="{Binding RunTool}" Minimum="0" Maximum="15" Increment="1" FormatString="0" /></StackPanel>
                     <StackPanel><TextBlock Classes="axis" Text="작업물(user)" /><NumericUpDown Value="{Binding RunUser}" Minimum="0" Maximum="14" Increment="1" FormatString="0" /></StackPanel>
-                    <StackPanel><TextBlock Classes="axis" Text="속도(%)" /><NumericUpDown Value="{Binding RunVel}" Minimum="1" Maximum="100" Increment="1" FormatString="0" /></StackPanel>
+                    <StackPanel ToolTip.Tip="프로파일에 저장되는 검사 속도 — 이 화면의 실행과 ⑱ 검사 수행(시퀀스·ACS)의 경유점 순회에 쓰입니다. 레시피에 검사 속도를 따로 넣으면 그 값이 우선합니다."><TextBlock Classes="axis" Text="검사 속도(%)" /><NumericUpDown Value="{Binding RunVel}" Minimum="1" Maximum="100" Increment="1" FormatString="0" /></StackPanel>
                     <StackPanel ToolTip.Tip="각 경유점 도착 후 진동이 가라앉을 때까지 촬영 전 대기"><TextBlock Classes="axis" Text="정착 대기(초)" /><NumericUpDown Value="{Binding SettleSec}" Minimum="0" Increment="0.1" FormatString="0.0" /></StackPanel>
-                    <StackPanel ToolTip.Tip="ACS 검사 실행 시 비전 촬영 요청(CAPTURE_REQ) 후 응답을 기다리는 최대 시간. 초과하면 그 점은 비전 실패로 집계. 드라이런에는 쓰이지 않음"><TextBlock Classes="axis" Text="비전 응답 대기(초)" /><NumericUpDown Value="{Binding VisionTimeoutSec}" Minimum="0.5" Increment="0.5" FormatString="0.0" /></StackPanel>
+                    <StackPanel IsVisible="{Binding UsesVision}" ToolTip.Tip="ACS 검사 실행 시 비전 촬영 요청(CAPTURE_REQ) 후 응답을 기다리는 최대 시간. 초과하면 그 점은 비전 실패로 집계. 드라이런에는 쓰이지 않음"><TextBlock Classes="axis" Text="비전 응답 대기(초)" /><NumericUpDown Value="{Binding VisionTimeoutSec}" Minimum="0.5" Increment="0.5" FormatString="0.0" /></StackPanel>
                     <StackPanel ToolTip.Tip="CAPTURE_REQ Wall ID — Wall Code 정본 10면 중 선택"><TextBlock Classes="axis" Text="Wall ID" />
                         <ComboBox MinWidth="170" ItemsSource="{Binding WallOptions}" SelectedValue="{Binding WallId}" SelectedValueBinding="{Binding SurfaceId}">
                             <ComboBox.ItemTemplate><DataTemplate x:DataType="vm:SurfaceOption"><TextBlock Text="{Binding Label}" /></DataTemplate></ComboBox.ItemTemplate>
@@ -43,7 +44,7 @@
                           ToolTip.Tip="ACS 코봇 이동 시험으로 도달한 용접선의 taskId·attempt 를 촬영 요청(CAPTURE_REQ)에 싣는다. 끄면 빈 taskId·attempt 1(종전). 시험 도달 때 자동으로 켜지고, 새 시험·본검사가 시작되면 해제된다.">
                     <TextBlock TextWrapping="Wrap"><Run Text="ACS 시험 용접선 taskId 로 촬영 — " /><Run Text="{Binding AcsTestTaskText}" /></TextBlock>
                 </CheckBox>
-                <TextBlock Classes="axis" Text="각 포인트 이동·정착 후 비전 인터페이스로 CAPTURE_REQ를 전송하고 CAPTURE_RES를 기다립니다. 비전 실패는 표시하고 다음 포인트를 계속 실행합니다." TextWrapping="Wrap" />
+                <TextBlock Classes="axis" Text="{Binding RunHint}" TextWrapping="Wrap" />
                 <TextBlock Text="{Binding RunMsg}" IsVisible="{Binding RunMsg, Converter={x:Static ObjectConverters.IsNotNull}}"
                            Foreground="{Binding RunErr, Converter={x:Static vm:OkErrConverters.Brush}}" />
             </StackPanel>

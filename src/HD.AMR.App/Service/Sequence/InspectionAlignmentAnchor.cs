@@ -30,7 +30,7 @@ internal static class InspectionAlignmentAnchor
 
     /// <summary>
     /// ④⁺ 복귀 기준점을 고른다. 용접선 점 S가 있으면 S, 없으면(세미오토 단독 ④) 최초 접근 포즈 A의 위치.
-    /// S를 우선하는 이유: A는 면에서 접근 거리(기본 400mm)만큼 떨어진 점이라 평행도 보정으로 광축이 θ 바뀌면
+    /// S를 우선하는 이유: A는 면에서 접근 거리(기본 300mm)만큼 떨어진 점이라 평행도 보정으로 광축이 θ 바뀌면
     /// A를 지나는 새 광축 직선이 용접선에서 약 400·tanθ 옆으로 비켜 간다. S를 지나는 직선은 항상 S를 지난다.
     /// </summary>
     public static (double[]? Point, string Source) GetReturnReference(SequenceContext context)

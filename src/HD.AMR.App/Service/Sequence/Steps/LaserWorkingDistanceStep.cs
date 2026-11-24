@@ -38,7 +38,7 @@ public class LaserWorkingDistanceStep : ISequenceStep
     /// 면별 값은 뒤에 <c>.{wall_code}</c> 를 붙인 키로 따로 둘 수 있다(<see cref="LaserWorkingDistanceSetting"/>).</summary>
     public const string WorkingDistanceKey = "Sequence.Laser.WorkingDistanceMm";
 
-    /// <summary>파라미터 미설정 시 레이저 WD [mm]. 리치 맵 정렬 준비 거리의 기본값과 같다.</summary>
+    /// <summary>파라미터 미설정 시 레이저 WD [mm]. 리치 맵 정렬 준비 거리(고정 300)와는 별개 값이다.</summary>
     public const double DefaultWorkingDistanceMm = 300.0;
 
     /// <summary>수렴 판정 허용오차(mm).</summary>
@@ -78,8 +78,19 @@ public class LaserWorkingDistanceStep : ISequenceStep
     /// <summary>안정화 대기 한도(ms). 초과 시 측정 실패 처리.</summary>
     private const int StabilizeTimeoutMs = 8000;
 
-    /// <summary>횡복귀 성분별 절대 한계(mm). 초과 시 이동하지 않고 실패 — 앵커/자세 이상 가드.</summary>
-    private const double MaxReturnMm = 300.0;
+    /// <summary>횡복귀 성분별 절대 한계 파라미터 키 [mm]. 초과 시 이동하지 않고 실패 — 앵커/자세 이상 가드.</summary>
+    public const string MaxReturnKey = "Sequence.Laser.MaxReturnMm";
+
+    /// <summary>횡복귀 한계 기본값 [mm] — 300 → 400(2026-11-21 T L4-R09C26 H1: 평탄면 자리 재시도 2회 + 재탐색으로
+    /// 용접선에서 306.7mm 떨어져 복귀 거부).</summary>
+    internal const double DefaultMaxReturnMm = 400.0;
+
+    /// <summary>허용 범위 [mm] — 밖이거나 비면 기본값.</summary>
+    internal const double MinMaxReturnMm = 50.0, MaxMaxReturnMm = 1000.0;
+
+    /// <summary>파라미터 값 → 쓸 한계 [mm]. 비거나 범위 밖이면 기본값.</summary>
+    internal static double ResolveMaxReturnMm(double? value)
+        => value is { } v && double.IsFinite(v) && v >= MinMaxReturnMm && v <= MaxMaxReturnMm ? v : DefaultMaxReturnMm;
 
     /// <summary>이 값 미만의 횡복귀 성분은 무시한다(mm).</summary>
     private const double SkipReturnMm = 0.5;
@@ -344,10 +355,14 @@ public class LaserWorkingDistanceStep : ISequenceStep
         if (Math.Abs(dx) < SkipReturnMm && Math.Abs(dy) < SkipReturnMm && Math.Abs(dz) < SkipReturnMm)
             return (true, "");
 
-        if (Math.Abs(dx) > MaxReturnMm || Math.Abs(dy) > MaxReturnMm || Math.Abs(dz) > MaxReturnMm)
+        double? rawLimit = null;
+        try { rawLimit = await _param.GetDoubleAsync(MaxReturnKey); }
+        catch { /* DB 미준비 — 기본값 */ }
+        var maxReturnMm = ResolveMaxReturnMm(rawLimit);
+        if (Math.Abs(dx) > maxReturnMm || Math.Abs(dy) > maxReturnMm || Math.Abs(dz) > maxReturnMm)
             return (false,
-                $"검사 준비 위치 횡복귀량 (X{dx:+0.0;-0.0}, Y{dy:+0.0;-0.0}, Z{dz:+0.0;-0.0})mm 가 한계 ±{MaxReturnMm:0}mm 초과 — " +
-                "앵커 포즈/자세를 확인하세요.");
+                $"검사 준비 위치 횡복귀량 (X{dx:+0.0;-0.0}, Y{dy:+0.0;-0.0}, Z{dz:+0.0;-0.0})mm 가 한계 ±{maxReturnMm:0}mm 초과 — " +
+                $"앵커 포즈/자세를 확인하세요('{MaxReturnKey}').");
 
         _logger.LogInformation(
             "[레이저 WD 거리 조정] {Ref} 정면 횡복귀: 툴 X{Dx:+0.0;-0.0} / Y{Dy:+0.0;-0.0} / Z{Dz:+0.0;-0.0} mm (광축 {Axis}·자세 유지)", refSource, dx, dy, dz, depthAxis);

@@ -17,6 +17,15 @@ public class RetractSelfCollisionTests
     private static readonly double[] FaultJ = { -0.4, 23.07, 140.26, -163.89, 90.02, -179.61 };   // 결함 발생 순간
     private static readonly double[] WallFrontJ = { 26.07, 26.29, 26.75, -53.04, 116.07, -179.61 };   // 같은 날 SM 벽 앞 자세
 
+    // 그날은 리프트 장착 상태(BASE 1635, 차체 887) — 현 기본값(리프트 제거·고정 기둥)이 아니라 그때 모델로 본다.
+    private static readonly HD.AMR.App.Service.Motion.CobotEnvelope LiftEra = new()
+    {
+        BaseHeightMm = 1635, AmrHeightMm = 887, LiftInstalled = true,
+    };
+
+    private static string? RetractSelfBlocker(double[] start, double[] joints)
+        => SequenceEntry.RetractSelfBlocker(start, joints, LiftEra);
+
     private static TeachingPosition Taught(string key, double[] j) => new()
     {
         Key = key, Name = key,

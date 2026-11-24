@@ -78,26 +78,40 @@ public readonly record struct WObjAttitude(double Rz0, double TiltSign)
     /// (<see cref="Service.ParameterService"/> 가 기동·저장 때 <see cref="ApplySafeJ6Range"/> 를 부른다).</summary>
     public const string SafeJ6MinKey = "inspection.safeJ6MinDeg", SafeJ6MaxKey = "inspection.safeJ6MaxDeg";
 
+    /// <summary>대기(홈) 자세의 J6 실제 관절값 [도] 기본값 — 용접검사 AMR 은 −180°.</summary>
+    public const double DefaultSafeJ6StandbyDeg = -180.0;
+
+    /// <summary>대기(홈) 자세 J6 파라미터 키 [도, 실제 관절값] — 안전 범위가 반드시 포함해야 하는 각.
+    /// 툴을 플랜지에 180° 돌려 단 장비(가스검사 AMR: 홈 J6 0°)는 0 으로 두고 범위를 −140~40 처럼 같이 옮긴다.</summary>
+    public const string SafeJ6StandbyKey = "inspection.safeJ6StandbyDeg";
+
     /// <summary>지금 적용 중인 J6 안전 범위 [도]. 2026-11-14 −320°~−140°(기본)로 넓히고 파라미터로 뺐다.</summary>
     public static double SafeJ6MinDeg { get; private set; } = DefaultSafeJ6MinDeg;
     public static double SafeJ6MaxDeg { get; private set; } = DefaultSafeJ6MaxDeg;
 
+    /// <summary>지금 적용 중인 대기(홈) 자세 J6 [도, 실제 관절값] — 범위 파라미터가 잘못됐으면 기본값(−180°).
+    /// 검사 방향별 J6 절대각(<see cref="Sequence.Steps.CobotInspectionMoveStep.VerticalJ6Deg"/>)의 기준.</summary>
+    public static double SafeJ6StandbyDeg { get; private set; } = DefaultSafeJ6StandbyDeg;
+
     /// <summary>
-    /// 파라미터 값 → 적용할 범위. 값이 없으면 기본값. 대기 자세(−180°)를 포함하지 않거나, 하한 ≥ 상한이거나,
-    /// 폭이 360° 이상(감김 기준 판정이 무의미)이거나, 유한하지 않으면 통째로 기본값으로 되돌린다(Ok = false).
+    /// 파라미터 값 → 적용할 범위. 값이 없으면 기본값. 대기 자세(<paramref name="standby"/>, 기본 −180°)를 포함하지 않거나,
+    /// 하한 ≥ 상한이거나, 폭이 360° 이상(감김 기준 판정이 무의미)이거나, 유한하지 않으면 통째로 기본값으로 되돌린다(Ok = false).
     /// </summary>
-    public static (double Min, double Max, bool Ok) ResolveSafeJ6Range(double? min, double? max)
+    public static (double Min, double Max, bool Ok) ResolveSafeJ6Range(double? min, double? max, double? standby = null)
     {
         var lo = min ?? DefaultSafeJ6MinDeg;
         var hi = max ?? DefaultSafeJ6MaxDeg;
-        var ok = double.IsFinite(lo) && double.IsFinite(hi) && lo < hi && hi - lo < 360.0 && lo <= -180.0 && hi >= -180.0;
+        var home = standby ?? DefaultSafeJ6StandbyDeg;
+        var ok = double.IsFinite(lo) && double.IsFinite(hi) && double.IsFinite(home)
+                 && lo < hi && hi - lo < 360.0 && lo <= home && hi >= home;
         return ok ? (lo, hi, true) : (DefaultSafeJ6MinDeg, DefaultSafeJ6MaxDeg, false);
     }
 
     /// <summary>파라미터 값을 검증해 적용한다. 잘못된 값이면 기본값을 적용하고 false.</summary>
-    public static bool ApplySafeJ6Range(double? min, double? max)
+    public static bool ApplySafeJ6Range(double? min, double? max, double? standby = null)
     {
-        var (lo, hi, ok) = ResolveSafeJ6Range(min, max);
+        var (lo, hi, ok) = ResolveSafeJ6Range(min, max, standby);
+        SafeJ6StandbyDeg = ok ? standby ?? DefaultSafeJ6StandbyDeg : DefaultSafeJ6StandbyDeg;
         SafeJ6MinDeg = lo;
         SafeJ6MaxDeg = hi;
         return ok;

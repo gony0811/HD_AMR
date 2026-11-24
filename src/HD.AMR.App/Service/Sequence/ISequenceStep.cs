@@ -57,8 +57,9 @@ public class SequenceContext
     /// <summary>이동 속도 (%).</summary>
     public int Velocity { get; set; } = 20;
 
-    /// <summary>⑱ 경유점 순회(검사 스캔) 전용 속도 [%]. null = <see cref="Velocity"/> 사용.
-    /// ACS 경로에서 레시피 InspectVelPercent 로 주입된다 — 접근/복귀는 Velocity, 스캔만 이 값.</summary>
+    /// <summary>⑱ 경유점 순회(검사 스캔) 전용 속도 [%] 지정값. null = 검사 프로파일에 저장된 속도, 그것도 없으면
+    /// 기본 검사 속도 파라미터(<c>Inspection.DefaultInspectVelPercent</c>) — 이동 속도(<see cref="Velocity"/>)로는 떨어지지 않는다.
+    /// ACS 경로에서 레시피 InspectVelPercent 로, 시퀀스 화면에서 '검사 속도' 입력으로 주입된다.</summary>
     public int? InspectVelocity { get; set; }
 
     /// <summary>⑱ 경유점 순회 동안만 적용할 전역 가속도 배율 [%]. null = 변경 안 함.

@@ -236,7 +236,7 @@ public class InspectionRecipeService
                 // 그 외는 풀시퀀스(null) — 타입별 부분 구성은 현장 튜닝으로 조정.
                 StepKeysJson = null,
                 CameraTargetDistanceMm = null,     // 전역 기본(400mm) 사용
-                MoveVelPercent = null,             // 이동 속도 — null=프로필 RunVel(미지정 20) 폴백
+                MoveVelPercent = null,             // 이동 속도 — null=기본 20%
                 InspectVelPercent = null,          // 검사 속도 — null=이동 속도와 동일
                 InspectAccPercent = null,          // 검사 가속도 — null=변경 안 함
                 VisionFailRatioMax = 1.0,          // 판정 안 함 — 정책 확정 시 하향

@@ -330,25 +330,46 @@ internal static class SequenceEntry
             logger.LogInformation("기준 자세 복귀: {Route} 이동 경로 위에서 멈춘 자세 — 벽면 후퇴 없이 경유점으로 복귀", route);
             onWaypoint = true;
         }
+        // 벽 앞에서 물러났다면 그 면 평면(면 위 한 점·면에서 코봇 쪽 법선) — 다음 관절 이동이 면 쪽으로 휘는지 본다.
+        (double[] Point, double[] Out)? wall = null;
         if (!onWaypoint)
         {
             // ② 가 후퇴 평면을 따라 들어왔으면 같은 길로 나온다 — 300mm 후퇴 후 경유점으로 바로 MoveJ 하면, 면을 따라
             // 멀리 내려간 자세(챔퍼 아래쪽 끝 등)에서 팔이 면 쪽으로 휘둘린다(실기 2026-11-02 13:57 L4-R03C09 #3 복귀 EMO).
+            var planarRec = ApproachPathMemory.Last;
+            var beforeRetract = await cobot.Rpc.GetTcpPoseInBaseAsync(ctx.Tool, ct);
             if (await RetracePlanarAsync(cobot, ctx, logger, ct) is { } retraced)
             {
                 done.Add(retraced);
                 cur = await cobot.Rpc.GetActualJointPosAsync(ct: ct);
+                if (planarRec is not null) wall = (planarRec.ApproachPoint, planarRec.WallOut);
             }
             else if (await RetractFromWallAsync(cobot, ctx, logger, ct))
             {
                 done.Add("벽면 후퇴");
+                cur = await cobot.Rpc.GetActualJointPosAsync(ct: ct);
+                if (ctx.OpticalAxis is { } axis && Unit(PlanRetract(beforeRetract, opticalAxis: axis).OffsetBase) is { } outDir)
+                    wall = (beforeRetract.Take(3).ToArray(), outDir);
+            }
+        }
+
+        // 다음 관절 이동 목표 — 홈 2 모드는 상부 면 검사 준비(있으면) → 기준 자세, 홈 모드는 작업 준비 → 홈.
+        var viaSlot = mode != PoseMode.Home ? ModeViaSlot(cur, ctx, mode, LastModeWall) : null;
+        if (wall is { } w)
+        {
+            var (nextKey, nextName) = viaSlot is { } vs ? (vs.Key, $"검사 준비({vs.Code})")
+                : mode != PoseMode.Home ? (baseKey, BaseNameOf(mode))
+                : TaughtJoints(ctx, "ready") is not null ? ("ready", "작업 준비 위치") : ("home", "홈 위치");
+            if (await EnsureClearJointPathAsync(cobot, ctx, logger, w.Point, w.Out, nextKey, nextName, ct) is { } cleared)
+            {
+                done.Add(cleared);
                 cur = await cobot.Rpc.GetActualJointPosAsync(ct: ct);
             }
         }
 
         if (mode != PoseMode.Home)
         {
-            if (ModeViaSlot(cur, ctx, mode, LastModeWall) is { } slot)
+            if (viaSlot is { } slot)
             {
                 await MoveJToTaughtAsync(cobot, ctx, slot.Key, $"검사 준비({slot.Code})", ct);
                 done.Add($"검사 준비({slot.Code}) 경유");
@@ -581,9 +602,9 @@ internal static class SequenceEntry
     /// <see cref="RetractSelfMarginMm"/> 안으로 출발 자세보다 더 붙게 하면 사유, 아니면 null(<see cref="CobotEnvelope"/>).
     /// 리프트 높이는 모르므로 완전 하강(0mm)으로 본다 — 차체·신호탑까지는 가장 가까운 경우다.
     /// </summary>
-    internal static string? RetractSelfBlocker(double[] startJoints, double[] joints)
+    internal static string? RetractSelfBlocker(double[] startJoints, double[] joints, CobotEnvelope? envelope = null)
     {
-        var env = CobotEnvelope.Default;
+        var env = envelope ?? CobotEnvelope.Default;
         var kin = Fr5Kinematics.Fr5Wml;
         var at = env.Evaluate(kin, joints, 0, CobotObstacleZone.FallbackMountYawDeg);
         if (at.Collides) return $"자기 간섭 — {at}";
@@ -958,7 +979,7 @@ internal static class SequenceEntry
     /// <summary>
     /// 벽면 후퇴 직선(현재 TCP → <paramref name="endTcp"/>, 자세 유지)을 <see cref="CobotInspectionMoveStep.PlanarSampleMm"/>
     /// 간격으로 현재 관절에서 이어 풀어, 점마다 <see cref="CobotInspectionMoveStep.PathStepBlocker"/>(관절 한계 근접·점프·
-    /// 팔꿈치·손목 특이점)와 <see cref="RetractSelfBlocker"/>(차체·리프트 기둥·신호탑 간섭)를 본다. 걸리면 "[점] 사유", 통과하면 null. 관절·IK 조회 실패도 사유로 돌려준다(움직이지 않는다).
+    /// 팔꿈치·손목 특이점)와 <see cref="RetractSelfBlocker"/>(차체·받침 기둥·신호탑 간섭)를 본다. 걸리면 "[점] 사유", 통과하면 null. 관절·IK 조회 실패도 사유로 돌려준다(움직이지 않는다).
     /// </summary>
     private static async Task<string?> RetractPathBlockerAsync(
         CobotService cobot, SequenceContext ctx, double[] currentPose, double[] endTcp, CancellationToken ct)
@@ -991,6 +1012,122 @@ internal static class SequenceEntry
             seed = j;
         }
         return null;
+    }
+
+    /// <summary>복귀 관절 이동 전 면 여유 확보 — 더 물러날 거리 후보 [mm](수평). 0 = 높이만 맞춘다.</summary>
+    internal static readonly double[] ClearExtraBackMm = { 0, 100, 200 };
+
+    /// <summary>복귀 관절 이동 전 면 여유 확보 — 다음 경유점 높이 쪽으로 옮기는 간격 [mm].</summary>
+    internal const double ClearHeightStepMm = 200.0;
+
+    private static double[]? Unit(double[] v)
+    {
+        var n = Math.Sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+        return n > 1e-6 ? new[] { v[0] / n, v[1] / n, v[2] / n } : null;
+    }
+
+    /// <summary>
+    /// 면 여유 확보 이동 후보(BASE 오프셋 [dx,dy,dz] mm) — 짧은 순. 면에서 수평으로 더 물러나기(<see cref="ClearExtraBackMm"/>)와
+    /// 다음 경유점 높이(<paramref name="targetZ"/>) 쪽으로 <see cref="ClearHeightStepMm"/> 씩 옮기기(그 높이를 넘지 않음)를 조합한다.
+    /// 면 법선에 수평 성분이 없으면(천장·바닥) 물러나기는 빼고 높이만 본다.
+    /// </summary>
+    internal static List<double[]> ClearMoveCandidates(double[] tcp, double[] wallOut, double targetZ)
+    {
+        var h = Math.Sqrt(wallOut[0] * wallOut[0] + wallOut[1] * wallOut[1]);
+        var backs = h > 0.2 ? ClearExtraBackMm : new[] { 0.0 };
+        var dzTotal = targetZ - tcp[2];
+        var dzs = new List<double> { 0 };
+        for (var s = ClearHeightStepMm; s < Math.Abs(dzTotal); s += ClearHeightStepMm) dzs.Add(Math.Sign(dzTotal) * s);
+        if (Math.Abs(dzTotal) > 1) dzs.Add(dzTotal);
+        var list = new List<(double Cost, double[] Off)>();
+        foreach (var b in backs)
+        foreach (var dz in dzs)
+        {
+            if (b == 0 && dz == 0) continue;
+            var bx = h > 0.2 ? wallOut[0] / h * b : 0;
+            var by = h > 0.2 ? wallOut[1] / h * b : 0;
+            list.Add((b + Math.Abs(dz), new[] { bx, by, dz }));
+        }
+        return list.OrderBy(t => t.Cost).Select(t => t.Off).ToList();
+    }
+
+    /// <summary>목표 관절을 현재 관절 쪽으로 ±360° 감아 맞춘다(컨트롤러 MoveJ 와 같은 보간 경로를 보기 위해).</summary>
+    private static double[] UnwrapNear(double[] target, double[] from)
+        => target.Select((v, i) => from[i] + (((v - from[i]) % 360.0 + 540.0) % 360.0 - 180.0)).ToArray();
+
+    /// <summary>
+    /// 기준 자세 복귀의 다음 관절 이동(→ <paramref name="targetKey"/>)이 면 쪽으로 휘는지 오프라인 기구학으로 보고, 휘면 먼저 곧게 옮긴다.
+    /// <para>기준: 이동 경로 내내 팔·검사 툴이 면 평면(<paramref name="wallPoint"/>, 법선 <paramref name="wallOut"/>)에서
+    /// min(<see cref="CobotInspectionMoveStep.EntryPathMarginMm"/>, 출발 여유, 도착 여유) 밖에 있을 것 —
+    /// ② 직접 진입 MoveJ 점검(<see cref="CobotInspectionMoveStep.JointPathBlocker"/>)과 같은 기준이다.</para>
+    /// <para>통과하면 아무것도 하지 않는다(null). 안 되면 <see cref="ClearMoveCandidates"/> 를 짧은 순으로 보아, 직선 이동 경로
+    /// (역기구학·손목·차체 간섭 — <see cref="RetractPathBlockerAsync"/>)와 그 뒤 관절 이동(면 여유 + 차체 간섭)이 모두 통과하는
+    /// 첫 후보로 MoveL 한다. 높은 곳에서 300mm 만 물러나 낮은 경유점으로 MoveJ 하면 팔이 내려오며 면 쪽으로 휜다 —
+    /// 더 물러나기보다 높이를 먼저 맞추는 편이 효과가 크다(실기 2026-11-20 19:26 SL 상부 z 1255mm → 작업 준비 EMO:
+    /// 모델상 300mm 후퇴 −92mm, 800mm 후퇴 +54mm, 300mm 후퇴 + 600mm 하강 +148mm).</para>
+    /// 맞는 후보가 없으면 움직이지 않고 예외 — 종전처럼 휘는 경로로 가지 않는다.
+    /// </summary>
+    private static async Task<string?> EnsureClearJointPathAsync(CobotService cobot, SequenceContext ctx, ILogger logger,
+        double[] wallPoint, double[] wallOut, string targetKey, string targetName, CancellationToken ct)
+    {
+        if (TaughtJoints(ctx, targetKey) is not { } targetRaw
+            || !ctx.Positions.TryGetValue(targetKey, out var tp) || tp.Z is not double targetZ)
+            return null;
+
+        var kin = Fr5Kinematics.Fr5Wml;
+        var env = CobotEnvelope.Default;
+        (double ClearanceMm, string Part) Wall(double[] q) => env.WallClearance(kin, q, wallPoint, wallOut);
+        string? Self(double[] q)
+        {
+            var c = env.Evaluate(kin, q, 0, CobotObstacleZone.FallbackMountYawDeg);
+            return c.Collides ? c.ToString() : null;
+        }
+
+        var curJ = await cobot.Rpc.GetActualJointPosAsync(ct: ct);
+        var direct = CobotInspectionMoveStep.JointPathBlocker(curJ, UnwrapNear(targetRaw, curJ), null, Wall);
+        if (direct is null) return null;
+
+        var pose = await cobot.Rpc.GetTcpPoseInBaseAsync(ctx.Tool, ct);
+        string Fmt(double[] v) => string.Join(", ", v.Select(x => x.ToString("0")));
+        logger.LogWarning("기준 자세 복귀: {Target} 관절 이동이 면 쪽으로 휨({Why}) — 곧게 물러나기·높이 맞추기 후보 탐색 (현재 TCP [{Pose}], 목표 높이 {Z:0}mm)",
+            targetName, direct, Fmt(pose.Take(3).ToArray()), targetZ);
+
+        var candidates = ClearMoveCandidates(pose, wallOut, targetZ);
+        var rejects = new List<string>();
+        foreach (var off in candidates)
+        {
+            var back = Math.Sqrt(off[0] * off[0] + off[1] * off[1]);
+            var label = $"뒤 {back:0}mm·{(off[2] < 0 ? "아래" : "위")} {Math.Abs(off[2]):0}mm";
+            var end = new[] { pose[0] + off[0], pose[1] + off[1], pose[2] + off[2] };
+            if (await RetractPathBlockerAsync(cobot, ctx, pose, end, ct) is { } pathWhy) { rejects.Add($"{label}: {pathWhy}"); continue; }
+
+            double[] jEnd;
+            try
+            {
+                jEnd = await cobot.Rpc.GetInverseKinNearestAsync(new[] { end[0], end[1], end[2], pose[3], pose[4], pose[5] },
+                    curJ, ctx.Tool, 0, ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException) { rejects.Add($"{label}: 도달 불가({ex.Message})"); continue; }
+
+            if (CobotInspectionMoveStep.JointPathBlocker(jEnd, UnwrapNear(targetRaw, jEnd), Self, Wall) is { } why)
+            {
+                rejects.Add($"{label}: {why}");
+                continue;
+            }
+
+            logger.LogInformation("기준 자세 복귀: 면 여유 확보 이동 {Label} → [{End}] (거부 {Count}건)", label, Fmt(end), rejects.Count);
+            var rc = await cobot.Rpc.MoveByOffsetAsync(pose, user: 0, new[] { off[0], off[1], off[2], 0, 0, 0 },
+                tool: ctx.Tool, vel: ctx.Velocity, ct: ct);
+            if (rc != 0)
+                throw new InvalidOperationException(
+                    $"면 여유 확보 이동({label}) 실패 rc={rc}{FairinoErrorCodes.Suffix(rc)} — 움직이지 않고 정지합니다. 펜던트/조그로 벽에서 떼어 낸 뒤 재시도하세요.");
+            return $"면 여유 확보({label})";
+        }
+
+        logger.LogWarning("기준 자세 복귀: 면 여유 확보 후보 {Count}개 모두 불가 — {Rejects}", candidates.Count, string.Join(" / ", rejects.Take(4)));
+        throw new InvalidOperationException(
+            $"{targetName} 로 가는 관절 이동이 면 쪽으로 휩니다({direct}). 곧게 물러나기·높이 맞추기 후보 {candidates.Count}개 모두 불가 " +
+            $"({string.Join(" / ", rejects.Take(3))}) — 움직이지 않고 정지합니다. 펜던트/조그로 벽에서 떼어 낸 뒤 재시도하세요.");
     }
 
     /// <summary>벽면 후퇴 경로 검증 점 — 출발점 제외, 끝점 포함(<see cref="CobotInspectionMoveStep.SampleSegment"/>).</summary>

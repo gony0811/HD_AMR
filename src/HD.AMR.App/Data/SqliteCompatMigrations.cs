@@ -158,9 +158,9 @@ CREATE TABLE IF NOT EXISTS TeachingPositions (
     UserFrame INTEGER NULL,
     RelX REAL NULL, RelY REAL NULL, RelZ REAL NULL,
     RelRx REAL NULL, RelRy REAL NULL, RelRz REAL NULL,
-    SurfaceId INTEGER NOT NULL DEFAULT 0
+    SurfaceId INTEGER NOT NULL DEFAULT 0,
+    LiftMode TEXT NOT NULL DEFAULT 'SHORT'
 );
-CREATE UNIQUE INDEX IF NOT EXISTS IX_TeachingPositions_Key ON TeachingPositions (""Key"");
 ");
 
         // 기존 TeachingPositions 에 작업물 좌표계(추종 절대위치) 컬럼이 없으면 추가(기존 데이터 보존).
@@ -181,6 +181,18 @@ CREATE UNIQUE INDEX IF NOT EXISTS IX_TeachingPositions_Key ON TeachingPositions 
             .AsEnumerable().First() > 0;
         if (!hasSurfaceId)
             db.Database.ExecuteSqlRaw("ALTER TABLE TeachingPositions ADD COLUMN SurfaceId INTEGER NOT NULL DEFAULT 0;");
+
+        // 리프트 모드(SHORT/LONG)별 티칭 세트(2026-11-19). 기존 행은 SHORT 로 채우고,
+        // unique 키를 Key → (LiftMode, Key) 로 바꿔 같은 슬롯을 모드마다 한 행씩 둔다.
+        var hasLiftMode = db.Database
+            .SqlQueryRaw<long>("SELECT COUNT(*) AS Value FROM pragma_table_info('TeachingPositions') WHERE name = 'LiftMode'")
+            .AsEnumerable().First() > 0;
+        if (!hasLiftMode)
+            db.Database.ExecuteSqlRaw("ALTER TABLE TeachingPositions ADD COLUMN LiftMode TEXT NOT NULL DEFAULT 'SHORT';");
+        db.Database.ExecuteSqlRaw(@"
+DROP INDEX IF EXISTS IX_TeachingPositions_Key;
+CREATE UNIQUE INDEX IF NOT EXISTS IX_TeachingPositions_LiftMode_Key ON TeachingPositions (LiftMode, ""Key"");
+");
 
         // Backward-compatible schema add for Parameters (범용 key/value 설정 저장소; 기존 데이터 보존).
         db.Database.ExecuteSqlRaw(@"

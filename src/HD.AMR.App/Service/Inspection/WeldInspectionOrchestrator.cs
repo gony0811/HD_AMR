@@ -7,6 +7,7 @@ using HD.AMR.App.Service.Sequence.Steps;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using HD.AMR.App.Models;
 using HD.AMR.App.Service.Motion;
 
@@ -31,6 +32,9 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
     private readonly CobotService _cobot;
     private readonly TelescopicService _lift;
     private readonly VisionInterfaceService _vision;
+    private readonly GasDetectorService _gas;
+    private readonly InspectionSensorSettings _sensor;
+    private readonly Vda5050AdapterSettings _vdaSettings;
     private readonly ILogger<WeldInspectionOrchestrator> _logger;
 
     private readonly object _sync = new();
@@ -41,6 +45,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
     private (double[] Start, double[] End)? _lastAnchorSeamW;     // 그 프레임을 쓴 task 의 용접선(맵) — 꺾인 용접선이 같은 프레임을 물려받지 않게
     private double[]? _lastAnchorStartBase;                       // 그 프레임을 쓴 task 의 ② 시작 접근점(BASE) — 다음 task 프레임 평행 이동 기준
     private double[]? _lastAnchorEndTcp;                           // 그 task 종료 시 TCP(BASE) — 다음 task 연속 이동 판정
+    private bool _lastFrameHasPoint3;                               // 그 프레임을 점3(면 기울기)까지 재서 잡았는가 — CROSS4 는 아니면 재교시
     private double? _lastAnchorStrokeMm;                           // 그 프레임을 쓴 task 의 텔레스코픽 스트로크(mm) — 높이 변경 시 캐시 무효화
     private CancellationTokenSource? _currentRunCts;
     private readonly Dictionary<string, BundleAssignment> _bundleByAction = new();
@@ -63,7 +68,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         Sequence.Steps.DepthCamCenterShiftStep.StepKey,
         "peak1Find", "peak1Center", "bead1Find", "bead1Center", "wobjPoint1",
         "peak2Approach", "peak2Find", "peak2Center", "bead2Find", "bead2Center", "wobjPoint2",
-        "wobjRegister",
+        "wobjRegister", Sequence.Steps.WObjPoint3Step.StepKey,
         FlatSurfaceAlignStep.BundlePoint2Key, LaserWorkingDistanceStep.BundlePoint2Key,
         // 드라이런 2점 교시의 끝점 이동 — anchor 적중 시 캐시 프레임 재사용으로 재교시 생략.
         "cobotSeamEnd",
@@ -94,11 +99,15 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         CobotService cobot,
         TelescopicService lift,
         VisionInterfaceService vision,
+        GasDetectorService gas,
+        IOptions<InspectionSensorSettings> sensor,
+        IOptions<Vda5050AdapterSettings> vdaSettings,
         OperationLogService opLog,
         SequenceRunGate runGate,
         ILogger<WeldInspectionOrchestrator> logger,
         AcsTestCaptureTarget? testTarget = null)
     {
+        _vdaSettings = vdaSettings.Value;
         _testTarget = testTarget;
         _opLog = opLog;
         _runGate = runGate;
@@ -106,6 +115,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         _cobot = cobot;
         _lift = lift;
         _vision = vision;
+        _gas = gas;
+        _sensor = sensor.Value;
         _logger = logger;
     }
 
@@ -517,12 +528,15 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                 "CORNER3 검사 시퀀스가 제거되어 실행할 수 없습니다.");
 
         // 비전 링크 — 드라이런 스텝 집합은 촬영(CAPTURE_REQ)을 하지 않으므로 링크 다운이어도 진행한다.
-        if (!_vision.Client.IsConnected)
+        // 가스 검출 AMR 은 비전 대신 가스 디텍터 링크를 본다(InspectionSensor:Mode).
+        var sensorUp = _sensor.UsesGasDetector ? _gas.IsConnected : _vision.Client.IsConnected;
+        var sensorName = _sensor.UsesGasDetector ? "가스 디텍터" : "비전 S/W";
+        if (!sensorUp)
         {
             if (!recipe.DryRun)
-                return InspectionActionResult.Fail("equipmentError", "비전 S/W 링크 다운 — 검사 실행 불가");
-            _logger.LogInformation("비전 링크 확인 생략(드라이런) — 비전 S/W 링크 다운 상태로 진행 (recipe={Recipe})",
-                recipeId);
+                return InspectionActionResult.Fail("equipmentError", $"{sensorName} 링크 다운 — 검사 실행 불가");
+            _logger.LogInformation("{Sensor} 링크 확인 생략(드라이런) — 링크 다운 상태로 진행 (recipe={Recipe})",
+                sensorName, recipeId);
         }
 
         // 6) 검사 방향 자동 유도(§4.4·§8.1) — 프로필 선택(챔퍼 수직 전용)과 anchor 판정보다 먼저 결정한다.
@@ -619,6 +633,24 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                         "anchor 용접선 방향 변경(직전 용접선과 {Tol:0}° 넘게 꺾임) — 작업물 좌표계 재교시 (anchorGroup={Group}, jobRef={JobRef})",
                         TaskBundlePlanner.SeamParallelTolDeg, req.AnchorGroupId, req.JobRef);
                 }
+                // 평행해도 옆 줄이면 물려받지 않는다 — 옆으로 옮기는 거리는 BASE 환산 ACS 값이라 AMR 위치·방향 오차가 그대로
+                // 섞인다(실기 2026-11-20 PM L2-R01C14: V3 좌표계를 720mm 옆 V6 가 그대로 받아 교시 없이 순회). 묶음 기준과 같다.
+                if (anchorHit && _lastAnchorSeamW is { } prevLine
+                    && !TaskBundlePlanner.OnSameLine(prevLine.Start, prevLine.End, req.SeamStartW))
+                {
+                    anchorHit = false;
+                    _logger.LogInformation(
+                        "anchor 용접선 줄 변경(직전 용접선과 도면상 옆 {Tol:0}mm 초과) — 작업물 좌표계 재교시 (anchorGroup={Group}, jobRef={JobRef})",
+                        InternalWorkpieceFrame.MaxDroppedLateralMm, req.AnchorGroupId, req.JobRef);
+                }
+                // CROSS4 는 교차 arm 이 용접선 옆으로 멀리 가므로 점3(면 기울기)까지 잰 좌표계만 물려받는다.
+                if (anchorHit && TaskBundlePlanner.IsCross4(req.SeamType) && !_lastFrameHasPoint3)
+                {
+                    anchorHit = false;
+                    _logger.LogInformation(
+                        "CROSS4 — 영역 캐시 좌표계가 점3(면 기울기) 없이 잡혀 재교시 (anchorGroup={Group}, jobRef={JobRef})",
+                        req.AnchorGroupId, req.JobRef);
+                }
                 if (!anchorHit && _lastAnchor is { } prev
                     && prev.OrderId == orderId && prev.AnchorGroupId == req.AnchorGroupId
                     && (prev.Direction != direction || prev.WallCode != req.DrawingPos.WallCode))
@@ -636,6 +668,17 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             BundleAssignment? bundle = null;
             var bundleEndWd = false;   // 묶음 마지막 팔로워 — 공통 좌표계를 연장해 쓰므로 끝점 WD 로 기울기를 다시 잡는다
             lock (_sync) _bundleByAction.TryGetValue(action.ActionId, out bundle);
+            if (bundle?.Role == BundleRole.Leader && anchorHit)
+            {
+                // 묶음 리더는 자기 묶음(점1 = 이 용접선 시작, 점2 = 묶음 마지막 끝)으로 좌표계를 새로 잡는다 — 앞 묶음 좌표계를
+                // 영역 캐시로 물려받으면 이 묶음 팔로워까지 교시 없이 앞 묶음 좌표계를 쓰게 된다.
+                anchorHit = false;
+                cachedInternalFrame = null;
+                cachedAnchorStartBase = null;
+                cachedAnchorSeamW = null;
+                cachedAnchorEndTcp = null;
+                _logger.LogInformation("묶음 {Id} 리더 {Job} — 영역 캐시 대신 묶음 좌표계를 새로 교시합니다.", bundle.BundleId, req.JobRef);
+            }
             if (bundle?.Role == BundleRole.Follower)
             {
                 var dissolved = false;
@@ -720,6 +763,13 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                 && sequence.Steps.Any(st => st.Key == Sequence.Steps.BundleEndWdStep.StepKey))
                 stepKeys = stepKeys.Append(Sequence.Steps.BundleEndWdStep.StepKey).ToArray();
 
+            // 점3(면 기울기) — CROSS4 가 든 묶음 리더·단독 CROSS4 가 좌표계를 새로 잡을 때만 붙인다.
+            var needPoint3 = !anchorHit && !recipe.DryRun && stepKeys.Contains("wobjRegister")
+                             && (bundle?.Role == BundleRole.Leader ? bundle.HasCross4 : TaskBundlePlanner.IsCross4(req.SeamType))
+                             && sequence.Steps.Any(st => st.Key == Sequence.Steps.WObjPoint3Step.StepKey);
+            if (needPoint3 && !stepKeys.Contains(Sequence.Steps.WObjPoint3Step.StepKey))
+                stepKeys = stepKeys.Append(Sequence.Steps.WObjPoint3Step.StepKey).ToArray();
+
             if (stepKeys.Length == 0)
                 return InspectionActionResult.Fail("inspectionFailed",
                     $"recipe {recipeId} 에 실행할 스텝이 남지 않았습니다 — 레시피 실행 스텝 구성을 확인하세요.");
@@ -764,9 +814,10 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             {
                 InspectionDirection = direction,
                 Tool = profile is { RunTool: > 0 } ? profile.RunTool : 1,
-                // 이동 속도: 레시피 MoveVelPercent 우선, 없으면 종전대로 프로필 RunVel(미지정 20).
-                // 검사(스캔) 속도: 레시피 InspectVelPercent — null 이면 ⑱이 이동 속도로 폴백.
-                Velocity = recipe.MoveVelPercent ?? profile?.RunVel ?? 20,
+                // 이동 속도: 레시피 MoveVelPercent, 없으면 기본 20%. 프로필 RunVel 은 검사(스캔) 속도라 이동 속도로 쓰지 않는다
+                // (프로필을 2% 로 저장하면 접근·복귀까지 2% 로 느려지던 것을 분리).
+                // 검사(스캔) 속도: 레시피 InspectVelPercent — null 이면 ⑱이 프로필 검사 속도 → 기본 검사 속도 파라미터로 정한다.
+                Velocity = recipe.MoveVelPercent ?? InspectionRecipe.DefaultMoveVelPercent,
                 InspectVelocity = recipe.InspectVelPercent,
                 InspectAcceleration = recipe.InspectAccPercent,
                 InspectionDrawingId = profile?.DrawingId ?? 0,
@@ -822,6 +873,12 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                 context.Bag[CobotInspectionMoveStep.PreviousEndTcpBagKey] = cachedAnchorEndTcp;
             if (bundle?.Role == BundleRole.Leader)
                 BundleTeach.Activate(context, bundle);
+            if (needPoint3)
+            {
+                context.Bag[Sequence.Steps.WObjPoint3Step.RequiredBagKey] = true;
+                if (bundle?.Role == BundleRole.Leader && bundle.Cross4AlongMm is { } alongMm)
+                    context.Bag[Sequence.Steps.WObjPoint3Step.AlongBagKey] = alongMm;   // 없으면(단독) 점1·점2 가운데
+            }
 
             // CROSS3/CROSS4 는 LINE 과 동일하게 티칭 프로필 경유점을 실행한다 — 코로게이션 격자 교차부는
             // 평탄하지 않아 수식 생성으로 법선·깊이를 담을 수 없으므로 6-DOF 캡처 교시(/inspection-points)로
@@ -901,6 +958,9 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                                 _lastAnchor = (orderId, req.AnchorGroupId, direction, req.DrawingPos.WallCode);
                                 _lastAnchorSeamW = (req.SeamStartW.ToArray(), req.SeamEndW.ToArray());
                                 _lastInternalWorkpieceFrame = (double[])internalFrame.Clone();
+                                // 이번에 새로 잡았으면 점3 여부를, 물려받았으면 종전 값을 유지한다.
+                                if (!anchorHit)
+                                    _lastFrameHasPoint3 = context.Bag.ContainsKey(Sequence.Steps.WObjPoint3Step.NormalBagKey);
                                 _lastAnchorStartBase = startBase;
                                 _lastAnchorEndTcp = endTcp;
                                 _lastAnchorStrokeMm = strokeAtEnd;
@@ -917,6 +977,30 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                         }
                         if (dissolved)
                             _logger.LogWarning("묶음 {Id} 점2 교시 실패 — 공통 좌표계를 공유하지 않습니다.", bundle?.BundleId);
+                    }
+                    // 가스 모드: actionState.resultDescription = SAIGE 결과 본문(JSON, SAIGE 규격 §2) — ACS 가 SAIGE 로 올린다.
+                    if (context.Bag.TryGetValue(Communication.GasDetector.GasTaskResult.BagKey, out var gasValue)
+                        && gasValue is Communication.GasDetector.GasTaskResult gasTask)
+                    {
+                        // 측정 실패(유효 측정값이 없는 포인트)가 있으면 결과를 보고하지 않고 검사 실패로 끝낸다 —
+                        // SAIGE 는 OK·NG 판정과 포인트마다 측정 1건 이상만 받는다. ACS 가 실패로 기록하고 재검사한다.
+                        if (gasTask.MeasurementFailure() is { } gasFailure)
+                        {
+                            _logger.LogWarning("[가스 결과] task={Task} round={Round} 측정 실패 — 검사 실패로 종결: {Reason}",
+                                req.TaskId?.ToString() ?? "—", req.Round?.ToString() ?? "—", gasFailure);
+                            _opLog.Log(OperationLogService.SourceAcs, OpCategory.Action, "가스 측정 실패", false,
+                                $"jobRef={req.JobRef}, task={req.TaskId?.ToString() ?? "—"}, round={req.Round?.ToString() ?? "—"} — {gasFailure}", orderId);
+                            return InspectionActionResult.Fail("inspectionFailed", $"가스 측정 FAIL — {gasFailure}");
+                        }
+                        var report = Communication.GasDetector.SaigeGasResultReport.Build(
+                            gasTask, req.DrawingPos.Tank, req.TaskId, req.Round, _vdaSettings.SerialNumber);
+                        var json = report.ToJson();
+                        _logger.LogInformation("[가스 결과] task={Task} round={Round} 판정 {Result} ({N}포인트) — ACS 보고",
+                            req.TaskId?.ToString() ?? "—", req.Round?.ToString() ?? "—", report.Result, report.Points.Count);
+                        _opLog.Log(OperationLogService.SourceAcs, OpCategory.Action, "가스 측정 결과", report.Result == "OK",
+                            $"jobRef={req.JobRef}, tank={report.TankId}, task={report.TaskId}, round={report.Round?.ToString() ?? "—"}, " +
+                            $"판정 {report.Result}, 임계 {report.Threshold.Value:0.###} {report.Threshold.Unit}, {report.Points.Count}포인트", orderId);
+                        return InspectionActionResult.Ok(json);
                     }
                     return InspectionActionResult.Ok(
                         $"recipe={recipeId} profile='{profile?.Name ?? $"corner3.{cornerSide}"}' anchor={req.AnchorGroupId}#{req.SeqInGroup}" +

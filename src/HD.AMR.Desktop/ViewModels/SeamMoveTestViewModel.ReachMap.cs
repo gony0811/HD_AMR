@@ -29,7 +29,7 @@ public sealed partial class SeamMoveTestViewModel
     [ObservableProperty] private double _reachZTo = 4000;
     [ObservableProperty] private double _reachZStep = 500;
     [ObservableProperty] private double _reachApproachMm = CobotInspectionMoveStep.DefaultApproachStandoffMm;
-    [ObservableProperty] private double _reachAlignMm = 300;
+    [ObservableProperty] private double _reachAlignMm = ReachMapSpec.DefaultAlignStandoffMm;
     [ObservableProperty] private double _reachFocusMm = 0;
     [ObservableProperty] private bool _reachOffline;
     [ObservableProperty] private bool _reachRunning;

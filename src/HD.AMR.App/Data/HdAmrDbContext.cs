@@ -82,7 +82,8 @@ public class HdAmrDbContext : DbContext
             b.HasKey(p => p.Id);
             b.Property(p => p.Key).IsRequired().HasMaxLength(100);
             b.Property(p => p.Name).IsRequired().HasMaxLength(200);
-            b.HasIndex(p => p.Key).IsUnique();
+            b.Property(p => p.LiftMode).IsRequired().HasMaxLength(10).HasDefaultValue(Models.TeachingLiftMode.Short);
+            b.HasIndex(p => new { p.LiftMode, p.Key }).IsUnique();
             b.Ignore(p => p.IsTaught);
         });
 

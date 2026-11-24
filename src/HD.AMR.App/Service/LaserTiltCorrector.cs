@@ -124,6 +124,12 @@ public sealed class LaserTiltCorrector
                     "측정면이 평탄하지 않거나 레이저 헤드 기하(/laser) 확인이 필요합니다.", iter, pose, jac);
             prevTilt = tilt;
 
+            // 첫 측정부터 클램프 수준으로 크게 기울면 평탄면이 아니라 코루게이션·비드에 걸린 것 — 돌리지 않고 이 자리를 버린다.
+            if (iter == 0 && IsFirstTiltTooLarge(tilt, o.MaxFirstTiltDeg))
+                return TiltLevelResult.Fail(
+                    $"첫 측정 틸트 {tilt:0.##}° 가 한계 {o.MaxFirstTiltDeg:0.#}° 초과 (rx={pose.Rx:0.###}°, ry={pose.Ry:0.###}°) — " +
+                    "스팟이 평탄면이 아닌 코루게이션/비드에 걸린 것으로 보고 보정하지 않습니다.", iter, pose, jac);
+
             if (iter >= o.MaxCorrections)
                 return TiltLevelResult.Fail(
                     $"틸트 보정 {o.MaxCorrections}회 후에도 평탄 기준 미달 " +
@@ -169,6 +175,25 @@ public sealed class LaserTiltCorrector
             if (rc != 0)
                 return TiltLevelResult.Fail($"틸트 보정 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.", iter, pose, jac) with { MotionFailure = true };
 
+            // 재확인 측정 전 — 회전 뒤 스팟이 평탄면을 벗어났을 수 있어 호출측이 자리를 다시 맞춘다(시퀀스 ④: depth 재탐색).
+            // 강체 평면 위 평행 이동은 틸트를 바꾸지 않으므로 아래 예측·실측 비교는 그대로 성립한다.
+            // 작은 틸트는 회전해도 스팟이 거의 움직이지 않는다 — 재탐색하면 오히려 다른 자리를 재 1~3° 가 오르내리며
+            // '발산'으로 끝났다(실기 2026-11-21 14:00 S203 H1: 4.25→2.95→1.27→2.37°). 이때는 같은 자리에서 다시 잰다.
+            var recheck = o.BeforeRecheck;
+            if (recheck is not null && !ShouldRecenter(tilt, o.RecenterMinTiltDeg))
+            {
+                Report($"보정 {iter + 1} 후 재확인: 틸트 {tilt:0.##}° < {o.RecenterMinTiltDeg:0.#}° — 평탄 자리 재탐색 없이 같은 자리에서 재측정");
+                recheck = null;
+            }
+            if (recheck is not null)
+            {
+                var (err, motion) = await recheck(iter + 1, ct);
+                if (err is not null)
+                    return TiltLevelResult.Fail($"보정 {iter + 1} 후 재확인 전 평탄 자리 재탐색 실패: {err}", iter + 1, pose, jac)
+                        with { MotionFailure = motion };
+                await WaitSettledAsync(o, Report, ct);
+            }
+
             predicted = (pose.Rx + jac[0, 0] * applyRx + jac[0, 1] * applyRy,
                          pose.Ry + jac[1, 0] * applyRx + jac[1, 1] * applyRy);
             lastAppliedMag = Math.Sqrt(applyRx * applyRx + applyRy * applyRy);
@@ -191,6 +216,12 @@ public sealed class LaserTiltCorrector
             _logger.LogInformation("틸트 보정 측정 {Iter} 노이즈: {Detail}", iter + 1, report.DetailText());
         return $" | {report.ShortText()}" + (reasons.Count > 0 ? $" ⚠ {string.Join(", ", reasons)}" : "");
     }
+
+    /// <summary>보정 전 틸트(두 축 중 큰 값)가 <paramref name="minTiltDeg"/> 이상일 때만 재확인 전 평탄 자리 재탐색을 한다.</summary>
+    public static bool ShouldRecenter(double tiltDeg, double minTiltDeg) => tiltDeg >= minTiltDeg;
+
+    /// <summary>첫 측정 틸트가 <paramref name="maxFirstTiltDeg"/> 를 넘으면 그 자리를 보정 없이 버린다.</summary>
+    public static bool IsFirstTiltTooLarge(double tiltDeg, double maxFirstTiltDeg) => tiltDeg > maxFirstTiltDeg;
 
     /// <summary>이 각도(°) 미만 보정은 감쇠 — 두 축 모두 이 안일 때.</summary>
     internal const double SmallCorrectionDeg = 2.0;
@@ -441,6 +472,18 @@ public sealed class TiltLevelOptions
     /// <summary>판정 측정 샘플 수 — 이 샘플의 채널별 중앙값으로 틸트를 계산하고 같은 샘플로 노이즈 통계를 낸다
     /// (기본 20 × 50ms ≈ 1s/측정). 0 = 종전 방식(3샘플 평균 판정, |Δ| 기준 안정화, 노이즈 통계 없음).</summary>
     public int NoiseSamples { get; init; } = 20;
+
+    /// <summary>
+    /// 보정 회전 뒤 재확인 측정 직전에 호출(인자 = 적용한 보정 회차, 1부터). 레이저 스팟을 다시 평탄한 자리로 옮기는 데 쓴다.
+    /// 반환 (오류, 코봇 이동 실패 여부) — 오류가 null 이 아니면 보정을 중단한다. null 이면 호출하지 않는다(종전).
+    /// </summary>
+    public Func<int, CancellationToken, Task<(string? Error, bool MotionFailure)>>? BeforeRecheck { get; init; }
+
+    /// <summary>보정 전 틸트가 이 값(°) 미만이면 <see cref="BeforeRecheck"/> 를 건너뛰고 같은 자리에서 재측정한다. 0 = 항상 호출(종전).</summary>
+    public double RecenterMinTiltDeg { get; init; }
+
+    /// <summary>첫 측정 틸트가 이 값(°)을 넘으면 보정하지 않고 실패(호출측이 다른 자리로 재시도). 기본 무제한(종전).</summary>
+    public double MaxFirstTiltDeg { get; init; } = double.PositiveInfinity;
 
     /// <summary>판정 측정·정착 판정 샘플 간격(ms).</summary>
     public int NoiseIntervalMs { get; init; } = 50;

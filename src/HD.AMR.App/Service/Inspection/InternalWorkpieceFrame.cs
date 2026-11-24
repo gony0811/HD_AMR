@@ -22,10 +22,13 @@ public static class InternalWorkpieceFrame
     /// 코로게이션 Top의 점1 포즈와 용접선 X+ 방향의 점2 포즈로 BASE 기준 작업물 프레임을 계산한다.
     /// 두 교시점의 위치 차이가 X+가 되고, 점1의 툴 +Z가 Z+ 기준이 된다.
     /// </summary>
+    /// <param name="planeNormalBase">점3 실측으로 구한 면 법선(BASE 단위벡터, 바깥쪽). 주면 점1 툴 +Z 대신 이 방향을 Z 기준으로 쓴다
+    /// (<see cref="Point3Normal"/>). null 이면 종전처럼 점1 툴 +Z.</param>
     public static double[] Compute(
         double[] topPoseBase,
         double[] xDirectionPoseBase,
-        double corrugationTopHeightMm = DefaultCorrugationTopHeightMm)
+        double corrugationTopHeightMm = DefaultCorrugationTopHeightMm,
+        double[]? planeNormalBase = null)
     {
         RequirePose(topPoseBase, nameof(topPoseBase));
         RequirePose(xDirectionPoseBase, nameof(xDirectionPoseBase));
@@ -33,14 +36,79 @@ public static class InternalWorkpieceFrame
             throw new ArgumentOutOfRangeException(nameof(corrugationTopHeightMm),
                 "코로게이션 Top 높이는 0 이상의 유한값이어야 합니다.");
 
-        // 점1의 교시 자세에 고정된 툴 +Z를 표면 바깥쪽(작업물 Z+)으로 사용한다.
-        var zPoint = FrameMath.FromFrame(
-            new[] { 0.0, 0.0, VirtualZPointOffsetMm, 0.0, 0.0, 0.0 }, topPoseBase);
+        // 점1의 교시 자세에 고정된 툴 +Z를 표면 바깥쪽(작업물 Z+)으로 사용한다. 점3 법선이 있으면 그 방향.
+        var zPoint = planeNormalBase is { Length: 3 } nz
+            ? new[]
+            {
+                topPoseBase[0] + nz[0] * VirtualZPointOffsetMm,
+                topPoseBase[1] + nz[1] * VirtualZPointOffsetMm,
+                topPoseBase[2] + nz[2] * VirtualZPointOffsetMm,
+                0.0, 0.0, 0.0,
+            }
+            : FrameMath.FromFrame(new[] { 0.0, 0.0, VirtualZPointOffsetMm, 0.0, 0.0, 0.0 }, topPoseBase);
         var topFrame = FairinoRpcClient.ComputeFramePose(topPoseBase, xDirectionPoseBase, zPoint, method: 0);
 
         // 교시점은 Top이지만 레시피 Z=0은 코로게이션 바닥이다. 방향은 유지하고 원점만 Z-로 내린다.
         return FrameMath.FromFrame(
             new[] { 0.0, 0.0, -corrugationTopHeightMm, 0.0, 0.0, 0.0 }, topFrame);
+    }
+
+    /// <summary>점3(면 기울기) 실측 결과 — 법선과 진단값.</summary>
+    /// <param name="NormalBase">보정한 면 법선(BASE 단위벡터, 바깥쪽).</param>
+    /// <param name="RollDeg">점1 툴 +Z 대비 작업물 X축 둘레로 돌린 각 [도].</param>
+    /// <param name="HeightMm">점1 면 대비 점3 면 높이 [mm, 바깥쪽 +].</param>
+    /// <param name="LateralMm">점1→점3 의 작업물 Y 성분 [mm].</param>
+    public sealed record Point3Result(double[] NormalBase, double RollDeg, double HeightMm, double LateralMm);
+
+    /// <summary>
+    /// 점3 실측으로 작업물 Y(용접선과 수직, 면 안) 방향 기울기를 잡는다 — 2점 좌표계는 Y 방향 기울기를 점1 한 곳의
+    /// 레이저 수평 자세에만 기대므로, CROSS4 교차 arm 처럼 Y 로 멀리 가면 거리가 벌어진다.
+    /// 점1 은 레이저 WD 목표 거리(<paramref name="wdTargetMm"/>)에서 면 안으로만 옮겨 기록하므로 점1 면 높이 = 점1·Z − 목표.
+    /// 점3 은 레이저 측정 TCP(<paramref name="laserPosBase"/>)와 그때 거리(<paramref name="laserZmm"/>)로 면 높이 = TCP·Z − 거리.
+    /// 높이 차를 Y 거리로 나눈 각만큼 X축 둘레로 Z 를 돌린다. Y 거리가 <paramref name="minLateralMm"/> 미만이면 null.
+    /// </summary>
+    public static Point3Result? Point3Normal(double[] topPoseBase, double[] xDirectionPoseBase,
+        double[] laserPosBase, double laserZmm, double wdTargetMm, double minLateralMm = 100.0)
+    {
+        RequirePose(topPoseBase, nameof(topPoseBase));
+        RequirePose(xDirectionPoseBase, nameof(xDirectionPoseBase));
+        if (laserPosBase is not { Length: >= 3 } || !double.IsFinite(laserZmm) || !double.IsFinite(wdTargetMm)) return null;
+
+        var x = Unit(new[] { xDirectionPoseBase[0] - topPoseBase[0], xDirectionPoseBase[1] - topPoseBase[1], xDirectionPoseBase[2] - topPoseBase[2] });
+        var zPoint = FrameMath.FromFrame(new[] { 0.0, 0.0, VirtualZPointOffsetMm, 0.0, 0.0, 0.0 }, topPoseBase);
+        var zt = new[] { zPoint[0] - topPoseBase[0], zPoint[1] - topPoseBase[1], zPoint[2] - topPoseBase[2] };
+        if (x is null) return null;
+        var ztx = Dot(zt, x);
+        var z = Unit(new[] { zt[0] - ztx * x[0], zt[1] - ztx * x[1], zt[2] - ztx * x[2] });
+        if (z is null) return null;
+        var y = Cross(z, x);
+
+        var d = new[] { laserPosBase[0] - topPoseBase[0], laserPosBase[1] - topPoseBase[1], laserPosBase[2] - topPoseBase[2] };
+        var lateral = Dot(d, y);
+        if (Math.Abs(lateral) < minLateralMm) return null;
+        var height = Dot(d, z) - (laserZmm - wdTargetMm);
+
+        // 면 위 Y 방향 접선 = lateral·y + height·z → 법선 = x × 접선(바깥쪽 유지).
+        var tangent = Unit(new[]
+        {
+            lateral * y[0] + height * z[0], lateral * y[1] + height * z[1], lateral * y[2] + height * z[2],
+        });
+        if (tangent is null) return null;
+        if (lateral < 0) tangent = new[] { -tangent[0], -tangent[1], -tangent[2] };
+        var n = Cross(x, tangent);
+        var roll = Math.Atan2(height, Math.Abs(lateral)) * 180.0 / Math.PI * Math.Sign(lateral);
+        return new Point3Result(n, roll, height, lateral);
+    }
+
+    private static double Dot(double[] a, double[] b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    private static double[] Cross(double[] a, double[] b) => new[]
+    {
+        a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0],
+    };
+    private static double[]? Unit(double[] v)
+    {
+        var l = Math.Sqrt(Dot(v, v));
+        return l < 1e-9 ? null : new[] { v[0] / l, v[1] / l, v[2] / l };
     }
 
     /// <summary>

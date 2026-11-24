@@ -14,7 +14,8 @@ public sealed record BundleTaskInput(
     double? LiftStrokeMm,
     InspectionMoveDirection? Direction,
     double[]? SeamStartW,
-    double[]? SeamEndW);
+    double[]? SeamEndW,
+    bool IsCross4 = false);
 
 /// <summary>묶음에서의 역할. 리더만 점1·점2 교시를 하고, 팔로워는 그 좌표계를 재사용한다.</summary>
 public sealed record BundleAssignment(
@@ -28,7 +29,12 @@ public sealed record BundleAssignment(
     double[]? FirstStartW,
     double[]? FirstEndW,
     /// <summary>점2 — 묶음 마지막 TASK 의 <b>끝점</b>(2026-11-18 변경, 종전 시작점). 점1→점2 를 실측으로 이어 마지막 용접선을 외삽 없이 순회한다.</summary>
-    double[]? Point2W);
+    double[]? Point2W,
+    /// <summary>묶음(단독이면 자기 자신)에 십자 CROSS4 용접선이 있는가 — 있으면 리더가 좌표계를 잡을 때 점3 으로 면 기울기를 잰다.</summary>
+    bool HasCross4 = false,
+    /// <summary>점1(첫 TASK 시작)에서 점2 쪽으로 첫 CROSS4 TASK 가운데까지 [mm] — 점3 을 그 자리에서 잰다.
+    /// 세로 용접선이 CROSS4 좌/우 어느 쪽이든 한 피치 안이라 가운데로 둔다. 묶음이 아니거나 CROSS4 가 없으면 null.</summary>
+    double? Cross4AlongMm = null);
 
 /// <summary>
 /// 연속 TASK 묶음. 리프트 높이·wall_code·수직/수평이 모두 같고, 방향 판별이 확실한 액션만
@@ -52,7 +58,7 @@ public static class TaskBundlePlanner
             var ok = SeamDirectionResolver.TryClassify(req.SeamStartW, req.SeamEndW, nodeThetaRad, out var dir, out _);
             list.Add(new BundleTaskInput(
                 action.ActionId, req.JobRef, req.DrawingPos.WallCode, req.LiftStrokeMm,
-                ok ? dir : null, req.SeamStartW, req.SeamEndW));
+                ok ? dir : null, req.SeamStartW, req.SeamEndW, IsCross4(req.SeamType)));
         }
         return list;
     }
@@ -70,13 +76,21 @@ public static class TaskBundlePlanner
                 var id = tasks[i].ActionId;
                 var first = tasks[i];
                 var last = tasks[j - 1];
+                var hasCross4 = false;
+                double? cross4AlongMm = null;
+                for (var k = i; k < j; k++)
+                {
+                    if (!tasks[k].IsCross4) continue;
+                    hasCross4 = true;
+                    cross4AlongMm ??= AlongMm(first.SeamStartW!, last.SeamEndW!, tasks[k].SeamStartW, tasks[k].SeamEndW);
+                }
                 for (var k = i; k < j; k++)
                 {
                     result[k] = new BundleAssignment(
                         tasks[k].ActionId, tasks[k].JobRef,
                         k == i ? BundleRole.Leader : BundleRole.Follower,
                         id, first.WallCode, first.LiftStrokeMm, first.Direction,
-                        Clone3(first.SeamStartW), Clone3(first.SeamEndW), Clone3(last.SeamEndW));
+                        Clone3(first.SeamStartW), Clone3(first.SeamEndW), Clone3(last.SeamEndW), hasCross4, cross4AlongMm);
                 }
             }
             else
@@ -167,8 +181,19 @@ public static class TaskBundlePlanner
             return false;
         return origin.SeamStartW is { Length: 3 } && next.SeamStartW is { Length: 3 }
                && origin.SeamEndW is { Length: 3 }
-               && SameSeamLine(origin.SeamStartW, origin.SeamEndW, next.SeamStartW, next.SeamEndW);
+               && SameSeamLine(origin.SeamStartW, origin.SeamEndW, next.SeamStartW, next.SeamEndW)
+               && OnSameLine(origin.SeamStartW, origin.SeamEndW, next.SeamStartW);
     }
+
+    /// <summary>
+    /// 이번 용접선 시작점이 묶음 첫 용접선의 직선 위(도면상 옆 거리 ≤ <see cref="InternalWorkpieceFrame.MaxDroppedLateralMm"/>)인지.
+    /// 평행만 보고 묶으면 옆 줄(예: 720mm 옆) 용접선도 한 묶음이 되어, 팔로워가 좌표계를 BASE 환산 ACS 옆 성분만큼
+    /// 옆으로 옮겨 쓰는데 그 값에 AMR 위치·방향 오차가 그대로 섞인다(실기 2026-11-20 PM L2-R01C14 V6~V8:
+    /// 도면 720mm 인데 769.9mm 이동 → 촬영 품질 저하). 옆 줄은 자기 묶음을 새로 만들어 직접 교시한다.
+    /// </summary>
+    internal static bool OnSameLine(double[] firstStartW, double[] firstEndW, double[] nextStartW)
+        => InternalWorkpieceFrame.MapSeamOffsetMm(firstStartW, firstEndW, nextStartW) is { } o
+           && o.LateralMm <= InternalWorkpieceFrame.MaxDroppedLateralMm;
 
     /// <summary>두 용접선을 같은 줄로 보는 방향 차 한계 [도].</summary>
     public const double SeamParallelTolDeg = 20.0;
@@ -193,7 +218,22 @@ public static class TaskBundlePlanner
 
     private static BundleAssignment Solo(BundleTaskInput t) => new(
         t.ActionId, t.JobRef, BundleRole.None, null, t.WallCode, t.LiftStrokeMm, t.Direction,
-        null, null, null);
+        null, null, null, t.IsCross4);
+
+    /// <summary>십자 4갈래(좌/우 구분 없는 구 계약 포함)인가.</summary>
+    public static bool IsCross4(SeamTypeKind kind)
+        => kind is SeamTypeKind.Cross or SeamTypeKind.Cross4L or SeamTypeKind.Cross4R;
+
+    /// <summary>점1→점2 선 위로 본, 점1 에서 용접선 가운데까지 거리 [mm](도면 좌표는 m). 계산할 수 없으면 null.</summary>
+    internal static double? AlongMm(double[] point1W, double[] point2W, double[]? startW, double[]? endW)
+    {
+        if (startW is not { Length: 3 } || endW is not { Length: 3 }) return null;
+        double dx = point2W[0] - point1W[0], dy = point2W[1] - point1W[1], dz = point2W[2] - point1W[2];
+        var len = Math.Sqrt(dx * dx + dy * dy + dz * dz);
+        if (len < 1e-9) return null;
+        double mx = (startW[0] + endW[0]) / 2 - point1W[0], my = (startW[1] + endW[1]) / 2 - point1W[1], mz = (startW[2] + endW[2]) / 2 - point1W[2];
+        return (mx * dx + my * dy + mz * dz) / len * 1000.0;
+    }
 
     private static double[]? Clone3(double[]? v) => v is { Length: 3 } a ? (double[])a.Clone() : null;
 }

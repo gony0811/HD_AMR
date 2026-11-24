@@ -12,7 +12,7 @@ namespace HD.AMR.App.Service.Sequence.Steps;
 ///     진입 준비(활성 좌표계 정규화 → 필요 시 벽면 후퇴·홈 복귀 → ready)를 그대로 쓴다. 홈→검사 위치를
 ///     바로 MoveJ 하면 900mm 이하 영역에서 툴이 차체와 부딪힐 수 있어 ready 를 반드시 거친다.
 ///  2. <b>용접선 시작점 접근</b> — 해당 작업의 용접선 시작점(seamStartW, 맵 좌표)을 코봇 BASE 로 환산해
-///     (<see cref="SeamBaseTransform"/>) 면 법선 반대로 <see cref="ApproachStandoffKey"/>(기본 400mm) 물러난 점으로
+///     (<see cref="SeamBaseTransform"/>) 면 법선 반대로 <see cref="ApproachStandoffKey"/>(기본 300mm) 물러난 점으로
 ///     <b>툴(TCP)</b>을 MoveJ 로 보낸다. 자세는 wall_code 가 유효하면 광축이 면을 바라보는 계산 자세,
 ///     없으면 1단계 도착(ready) 자세를 유지한다.
 ///
@@ -83,13 +83,13 @@ public class CobotInspectionMoveStep : ISequenceStep
     internal const double ChainPoseTolDeg = 2.0;
 
     /// <summary>② 면 이격 기본값 [mm] — 파라미터가 없거나 범위 밖일 때.</summary>
-    public const double DefaultApproachStandoffMm = 400.0;
+    public const double DefaultApproachStandoffMm = 300.0;
 
     /// <summary>② 면 이격 허용 범위 [mm]. 하한은 ③ 카메라 거리 정렬이 들어갈 여지와 벽 충돌 여유.</summary>
     internal const double MinApproachStandoffMm = 200.0;
     internal const double MaxApproachStandoffMm = 1000.0;
 
-    /// <summary>② 면 이격 [mm] — 파라미터 <see cref="ApproachStandoffKey"/>, 없거나 범위 밖이면 기본 400(경고 로그).</summary>
+    /// <summary>② 면 이격 [mm] — 파라미터 <see cref="ApproachStandoffKey"/>, 없거나 범위 밖이면 기본 300(경고 로그).</summary>
     public static async Task<double> GetApproachStandoffMmAsync(ParameterService param, ILogger? logger = null)
     {
         double? raw = null;
@@ -245,7 +245,7 @@ public class CobotInspectionMoveStep : ISequenceStep
     public const string SelfCollisionGuardKey = "inspection.selfCollisionGuard";
 
     /// <summary>
-    /// ② 관절 해가 팔·검사 툴을 차체·리프트 기둥·신호탑에 닿게 하는지(<see cref="CobotEnvelope"/>). 닿으면 사유, 아니면 null.
+    /// ② 관절 해가 팔·검사 툴을 차체·받침 기둥·신호탑에 닿게 하는지(<see cref="CobotEnvelope"/>). 닿으면 사유, 아니면 null.
     /// 스트로크·장착 yaw 를 모르면(티칭 폴백) 판정하지 않는다.
     /// </summary>
     internal static string? SelfCollisionBlocker(double[] joints, SeamApproachResult seam)
@@ -375,19 +375,34 @@ public class CobotInspectionMoveStep : ISequenceStep
         c.InspectionOffsetU, c.InspectionOffsetV, 0.0, 0.0, 0.0, 0.0,
     };
 
-    /// <summary>수평 용접라인 검사 J6 절대각 [도].</summary>
-    internal const double HorizontalJ6Deg = 90.0;
+    /// <summary>수평 용접라인 검사 J6 절대각 [도] — 대기 자세에서 −90°. 용접검사 AMR(대기 −180°)은 90°,
+    /// 툴을 180° 돌려 단 가스검사 AMR(대기 0°)은 −90°.</summary>
+    internal static double HorizontalJ6Deg => WrapDeg180(VerticalJ6Deg - 90.0);
 
-    /// <summary>수직 용접라인 검사 J6 절대각 [도] — 검사 대기 자세(J6=180°)와 같다.</summary>
-    internal const double VerticalJ6Deg = 180.0;
+    /// <summary>수직 용접라인 검사 J6 절대각 [도] — 검사 대기 자세의 J6(<see cref="WObjAttitude.SafeJ6StandbyDeg"/>)와 같다.
+    /// 용접검사 AMR 은 180°(= −180°), 가스검사 AMR 은 0°.</summary>
+    internal static double VerticalJ6Deg => WrapDeg180(WObjAttitude.SafeJ6StandbyDeg);
+
+    /// <summary>각도를 (−180, 180] 로 정규화 — 표시·목표용(실제 지령은 <see cref="NearestWinding"/> 이 현재 감김으로 푼다).</summary>
+    internal static double WrapDeg180(double deg)
+    {
+        var d = deg % 360.0;
+        if (d > 180.0) d -= 360.0;
+        else if (d <= -180.0) d += 360.0;
+        return d;
+    }
 
     /// <summary>
     /// 검사 방향별 J6 절대각. 센서 헤드(레이저·Depth 카메라)가 플랜지 한쪽으로 길게 나와 있어,
-    /// J6 를 이 두 값(180°/90°) 밖으로 돌리면 J3–J4 링크암과 간섭한다. 그래서 벽면·이동 방향과 무관하게
-    /// 수직 = 180°, 수평 = 90° 로 고정하고, 대기 자세(180°)에서 최대 −90° 만 돌게 한다.
+    /// J6 를 이 두 값 밖으로 돌리면 J3–J4 링크암과 간섭한다. 그래서 벽면·이동 방향과 무관하게
+    /// 수직 = 대기 자세 J6, 수평 = 대기 자세 − 90° 로 고정하고, 대기 자세에서 최대 −90° 만 돌게 한다
+    /// (용접검사 AMR: 180°/90°, 가스검사 AMR: 0°/−90°).
     /// </summary>
-    public static double TargetJ6Deg(SequenceContext c)
-        => c.InspectionDirection == InspectionMoveDirection.Vertical ? VerticalJ6Deg : HorizontalJ6Deg;
+    public static double TargetJ6Deg(SequenceContext c) => TargetJ6Deg(c.InspectionDirection);
+
+    /// <inheritdoc cref="TargetJ6Deg(SequenceContext)"/>
+    public static double TargetJ6Deg(InspectionMoveDirection direction)
+        => direction == InspectionMoveDirection.Vertical ? VerticalJ6Deg : HorizontalJ6Deg;
 
     /// <summary>J6 목표 허용 오차 [도].</summary>
     private const double J6ToleranceDeg = 0.5;
@@ -450,7 +465,7 @@ public class CobotInspectionMoveStep : ISequenceStep
     /// <summary>
     /// ③ 카메라 목표거리(레시피 값) — 면 이격을 주지 않은 호출(<see cref="SeamApproachResolver.ResolveAsync"/>
     /// 폴백)과 ⑤ Peak 탐색의 가정 거리에 쓴다. 운영 ② 접근점은 이 값이 아니라 거친 접근 거리
-    /// <see cref="ApproachStandoffKey"/>(기본 400mm)로 물러나고, ③·④⁺(레이저 WD 300mm)가 실측으로 확정한다.
+    /// <see cref="ApproachStandoffKey"/>(기본 300mm)로 물러나고, ③·④⁺(레이저 WD)가 실측으로 확정한다.
     /// ACS <c>params.standoffMm</c>
     /// (<see cref="SequenceContext.StandoffMmOverride"/>)은 쓰지 않는다 — 계약에서 그 단어는 §4.4 의
     /// 정차 이격(벽↔로봇 기준점, 이미 nodePosition 에 반영됨)과 같은 이름이고, 툴 이격은 AMR 이
@@ -787,7 +802,7 @@ public class CobotInspectionMoveStep : ISequenceStep
             return StepResult.Fail($"[Cobot 검사위치 이동] {seam.Note}");
 
         context.Bag[SeamStartBaseBagKey] = seam.Base.ToArray();
-        // ④⁺ 복귀 기준 — 접근점(이격 400mm)이 아닌 면 위 용접선 점. 틸트 보정 후에도 광축이 이 점을 지나게 복귀한다.
+        // ④⁺ 복귀 기준 — 접근점(이격 300mm)이 아닌 면 위 용접선 점. 틸트 보정 후에도 광축이 이 점을 지나게 복귀한다.
         InspectionAlignmentAnchor.SetSeamPoint(context, seam.SeamPointBase);
         RecordSeamOrientation(seam, context.WallCode);
         // ⑧ Peak2 이동이 점1 과 같은 면 거리를 유지하는 기준(모델 면 법선 — ④ 국부 틸트와 무관).
@@ -813,7 +828,7 @@ public class CobotInspectionMoveStep : ISequenceStep
         if (!entryOk)
             return StepResult.Fail(entryNote);
 
-        // ── 2단계: 용접선 시작점에서 400mm 떨어진 접근점 ───────────────
+        // ── 2단계: 용접선 시작점에서 접근 거리(기본 300mm)만큼 떨어진 접근점 ───────────────
         // 자세: ready 도착 자세에서 광축만 면 법선으로 최소 회전시킨다 — 광축 둘레 비틀림(J6)은 그대로.
         // 계산 법선 자세를 통째로 쓰면 비틀림(툴 X/Y)이 ready 와 달라 J6·손목이 불필요하게 돈다.
         // wall_code 가 없으면 ready 자세를 그대로 유지한다.
@@ -1429,7 +1444,7 @@ public class CobotInspectionMoveStep : ISequenceStep
     /// 접근점으로 간다(사양 §8.1 "액션 사이 홈 왕복 금지"). 조건이 하나라도 안 맞으면 null — 호출측이 종전 경로로 간다.
     /// 경로: ① 면에 연속 이동 이격(<see cref="ChainStandoffKey"/>, 기본 100mm)보다 가까우면 면 법선 방향으로만 그 면까지
     /// 들어 올림(자세 유지) → ② 그 면을 따라 시작점 정면으로 MoveL(같은 면 이격 유지, 광축은 면 법선, 광축 둘레 비틀림은
-    /// 직전 종료 자세 유지 — J6 180° 정렬 안 함). 첫 진입 접근점(400mm)까지 빠지지 않는다 — ⑱이 곧바로 첫 경유점으로
+    /// 직전 종료 자세 유지 — J6 180° 정렬 안 함). 첫 진입 접근점(기본 300mm)까지 빠지지 않는다 — ⑱이 곧바로 첫 경유점으로
     /// 다시 들어오므로 그 왕복은 헛이동이다.
     /// </summary>
     private async Task<StepResult?> TryChainFromPreviousAsync(

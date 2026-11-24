@@ -24,9 +24,13 @@ public class VisionInterfaceService : BackgroundService, IAsyncDisposable
 
     public VisionInterfaceSettings Settings => _settings;
 
-    public VisionInterfaceService(IOptions<VisionInterfaceSettings> options, ILoggerFactory loggerFactory)
+    private readonly InspectionSensorSettings _sensor;
+
+    public VisionInterfaceService(IOptions<VisionInterfaceSettings> options, IOptions<InspectionSensorSettings> sensor,
+        ILoggerFactory loggerFactory)
     {
         _settings = options.Value;
+        _sensor = sensor.Value;
         _logger = loggerFactory.CreateLogger<VisionInterfaceService>();
 
         Client = new VisionEngine(SideRole.Client) { HeartbeatPeriodMs = _settings.HeartbeatPeriodMs };
@@ -37,6 +41,13 @@ public class VisionInterfaceService : BackgroundService, IAsyncDisposable
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        // 가스 검출 AMR(InspectionSensor:Mode=GasDetector)에는 비전 서버가 없다 — 자동 접속 루프를 돌지 않는다.
+        if (!_sensor.UsesVision)
+        {
+            _logger.LogInformation("VisionInterfaceService 휴면 — 검사 센서 모드 {Mode}", _sensor.Mode);
+            return;
+        }
+
         _logger.LogInformation(
             "VisionInterfaceService 시작 (server={Host}:{Port}) — 상시 자동 접속",
             _settings.ServerHost, _settings.Port);

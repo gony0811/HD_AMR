@@ -1,0 +1,109 @@
+using System.IO.Ports;
+
+namespace HD.AMR.App.Communication.GasDetector;
+
+/// <summary>가스 디텍터 통신 경로.</summary>
+public enum GasDetectorTransportKind
+{
+    /// <summary>시리얼(RS485/RS232) — USB 변환기 등 COM 포트.</summary>
+    Serial,
+    /// <summary>이더넷(TCP) — 시리얼-이더넷 디바이스 서버의 TCP 투명 모드(Raw socket).</summary>
+    Tcp,
+}
+
+/// <summary>검사 시퀀스의 가스 측정 방식.</summary>
+public enum GasMeasureMode
+{
+    /// <summary>경유점마다 멈춰서 대기 → 샘플 N회(기본).</summary>
+    Point,
+    /// <summary>경유점 사이를 이동하는 동안 계속 샘플링 — 구간 최대값으로 판정.</summary>
+    Continuous,
+}
+
+/// <summary>
+/// 헬륨 가스 디텍터(INFICON XL3000flex) 설정. <c>appsettings.json</c> 의 <c>GasDetector</c> 섹션에 바인딩한다.
+/// 통신 경로·포트·판정 기준은 화면(SETTINGS > Gas Detector)에서 바꿀 수 있고, 바꾼 값은 DB 파라미터
+/// (<c>GasDetector.*</c>)로 저장되어 이 기본값보다 우선한다.
+/// 프로토콜은 두 경로 모두 ASCII(사양 기본)로 같고, 전송 계층만 다르다.
+/// </summary>
+public class GasDetectorSettings
+{
+    public string Name { get; set; } = "GasDetector";
+
+    /// <summary>표시용 모델명.</summary>
+    public string Model { get; set; } = "XL3000flex";
+
+    public GasDetectorTransportKind Transport { get; set; } = GasDetectorTransportKind.Serial;
+
+    // ── 시리얼(RS485) ──
+    public string PortName { get; set; } = "COM5";
+    public int BaudRate { get; set; } = Xl3000AsciiProtocol.DefaultBaudRate;
+    public Parity Parity { get; set; } = Parity.None;
+    public int DataBits { get; set; } = 8;
+    public StopBits StopBits { get; set; } = StopBits.One;
+
+    // ── 이더넷(TCP) ──
+    public string Host { get; set; } = "192.168.0.50";
+    public int TcpPort { get; set; } = 4001;
+    public int ConnectTimeoutMs { get; set; } = 3000;
+
+    // ── 타이밍 ──
+    /// <summary>명령 1건 응답 대기(ms). 사양 권장 1500.</summary>
+    public int ResponseTimeoutMs { get; set; } = Xl3000AsciiProtocol.RecommendedTimeoutMs;
+
+    /// <summary>실시간 값 폴링 주기(ms). 사양 권장 100 이상.</summary>
+    public int PollIntervalMs { get; set; } = 500;
+
+    /// <summary>연결 실패 시 재시도 간격(ms).</summary>
+    public int ReconnectDelayMs { get; set; } = 5000;
+
+    /// <summary>연속 무응답이 이 횟수에 이르면 포트를 닫고 다시 연다.</summary>
+    public int MaxConsecutiveTimeouts { get; set; } = 3;
+
+    // ── 경유점 측정·판정 ──
+    /// <summary>
+    /// 판정 임계값 — 측정값이 이 값을 <b>초과</b>하면 NG, 이하면 OK(SAIGE 연동 규격 §2 값 규칙).
+    /// 운영 중에는 SAIGE → ACS → AMR(<c>setGasThreshold</c> instantAction)로 받은 값이 이 자리를 덮는다.
+    /// 기본값은 SAIGE 사양 예시값(임시)이다.
+    /// </summary>
+    public double ThresholdValue { get; set; } = 5.0;
+
+    /// <summary>
+    /// 임계값 단위 — 측정값도 이 단위로 비교한다. 장비 인터페이스 단위(<c>*CONFig:UNIT:LRSniff</c>)가 이와 같아야
+    /// 하며, 다르면 측정을 실패로 처리한다(단위가 다른 값을 판정하지 않음). 포밍가스 검사 기본은 <c>ppm</c>.
+    /// </summary>
+    public string ThresholdUnit { get; set; } = "ppm";
+
+    /// <summary>NG 일 때 같은 자리에서 다시 측정하는 최대 횟수(SAIGE 규격: 최초 1회 + 재측정 0~2회).</summary>
+    public int MaxRetries { get; set; } = 2;
+
+    /// <summary>경유점 도착 후 첫 샘플까지 대기(ms) — 스니퍼 응답 지연(가스가 프로브까지 오는 시간) 흡수.</summary>
+    public int MeasureDwellMs { get; set; } = 2000;
+
+    /// <summary>경유점 1곳에서 읽는 샘플 수.</summary>
+    public int MeasureSampleCount { get; set; } = 5;
+
+    /// <summary>샘플 간격(ms). 연속 측정에서도 이 간격으로 읽는다(사양 최소 100).</summary>
+    public int MeasureSampleIntervalMs { get; set; } = 200;
+
+    /// <summary>
+    /// 측정 방식. <see cref="GasMeasureMode.Continuous"/> 면 경유점 사이 이동 중에 계속 샘플링하고, 도착 후
+    /// <see cref="MeasureDwellMs"/> 동안 더 읽어(스니퍼 응답 지연 — 구간 끝부분의 가스가 센서에 닿는 시간) 구간 최대값으로 판정한다.
+    /// </summary>
+    public GasMeasureMode MeasureMode { get; set; } = GasMeasureMode.Point;
+
+    /// <summary>
+    /// 연속 측정의 경유점 블렌딩 반경 [mm]. 0 = 경유점마다 정지(구간 단위 이동 — 종전 방식).
+    /// 0 보다 크면 <b>무정지</b>: 첫 경유점 이후 경유점들을 이 반경으로 둥글려 한 번에 지나가며 계속 샘플링한다
+    /// (경유점을 정확히 찍지 않고 최대 이 거리만큼 안쪽으로 돌아간다 — 인접 구간이 짧으면 자동으로 줄인다).
+    /// <see cref="MeasureMode"/> 가 <see cref="GasMeasureMode.Continuous"/> 일 때만 쓰인다.
+    /// </summary>
+    public double NonStopBlendRadiusMm { get; set; }
+
+    public GasDetectorSettings Clone() => (GasDetectorSettings)MemberwiseClone();
+
+    /// <summary>화면·로그용 연결 대상 요약.</summary>
+    public string EndpointText => Transport == GasDetectorTransportKind.Serial
+        ? $"RS485 {PortName} @ {BaudRate} {DataBits}{Parity.ToString()[0]}{(StopBits == StopBits.Two ? 2 : 1)}"
+        : $"TCP {Host}:{TcpPort}";
+}

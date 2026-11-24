@@ -1,36 +1,54 @@
 namespace HD.AMR.App.Service.Motion;
 
 /// <summary>
-/// 코봇 자기 간섭 외곽 — 팔 링크·검사 툴이 <b>AMR 차체·리프트 기둥·신호탑</b>에 닿는지 관절각만으로 판정한다
-/// (컨트롤러 없이, 탱크 면과 무관). 치수는 장비 STEP(E26003-E-A000-000-0, 2026-11-01 파싱) 실측이다.
+/// 코봇 자기 간섭 외곽 — 팔 링크·검사 툴이 <b>AMR 차체·받침 기둥·신호탑</b>에 닿는지 관절각만으로 판정한다
+/// (컨트롤러 없이, 탱크 면과 무관). 팔·툴 치수는 장비 STEP(E26003-E-A000-000-0, 2026-11-01 파싱) 실측이다.
 ///
-/// <b>왜 필요한가.</b> 컨트롤러 역기구학은 같은 TCP 에 최대 8개 해를 주고 그중 하나는 상완이 리프트 기둥 옆으로
-/// 늘어지는 elbow-down 가지다 — 수직벽 한가운데처럼 흔한 목표에서도 팔꿈치가 기둥 단면 안으로 들어간다.
+/// <b>설치 치수는 appsettings 의 <c>"CobotEnvelope"</c> 섹션(<see cref="CobotEnvelopeSettings"/>)으로 정한다.</b>
+/// 현재 장비(2026-11-19)는 리프트(CTD-LF144)를 떼어 내고 차체(767mm) 위 160mm 고정 기둥에 BASE 를 얹었다 —
+/// BASE 높이 927mm, 스트로크는 판정에 쓰지 않는다(<see cref="LiftInstalled"/> = false).
+///
+/// <b>왜 필요한가.</b> 컨트롤러 역기구학은 같은 TCP 에 최대 8개 해를 주고 그중 하나는 상완이 기둥·차체 옆으로
+/// 늘어지는 elbow-down 가지다 — 수직벽 한가운데처럼 흔한 목표에서도 팔꿈치가 차체·기둥 안으로 들어간다.
 /// 관절 한계·특이점 여유(<see cref="PostureLimits"/>)는 이것을 거르지 못한다.
 ///
-/// 좌표: AMR 차체 기준 mm(+X 전방·+Y 좌측·z 바닥 위). 코봇 BASE 는 차체 중심 위 <see cref="BaseHeightMm"/> + 스트로크,
-/// BASE 축은 차체 축을 z 둘레로 장착 yaw(T_A_B rz)만큼 돌린 것으로 둔다(rx·ry 는 작아 무시).
+/// 좌표: AMR 차체 기준 mm(+X 전방·+Y 좌측·z 바닥 위). 코봇 BASE 는 차체 중심 위 <see cref="BaseHeightMm"/>
+/// (리프트가 있으면 + 스트로크), BASE 축은 차체 축을 z 둘레로 장착 yaw(T_A_B rz)만큼 돌린 것으로 둔다(rx·ry 는 작아 무시).
 /// 링크는 캡슐(선분 + 반경), 검사 툴은 몸체 중심부 원통(<see cref="ToolSegments"/>)으로 감싸고, 장애물은 차체 좌표
 /// 축정렬 상자다. ACS 리치·간섭 시뮬레이터(HD.Acs.Core.Reach)의 자기 간섭과 같은 모델.
 /// </summary>
 public sealed record CobotEnvelope
 {
-    /// <summary>차체 바닥 → 코봇 BASE 면 높이(스트로크 0) [mm]. 현장 값은 파라미터 <see cref="BaseHeightKey"/>.</summary>
-    public double BaseHeightMm { get; init; } = DefaultBaseHeightMm;
+    /// <summary>차체 바닥 → 코봇 BASE 면 높이(리프트가 있으면 스트로크 0 기준) [mm]. 차체 767 + 고정 기둥 160.</summary>
+    public double BaseHeightMm { get; init; } = 927;
+
+    /// <summary>
+    /// true 면 BASE 가 리프트 위라 <see cref="Evaluate"/> 의 스트로크만큼 오르내린다. false(고정 기둥)면 스트로크를 무시한다 —
+    /// 텔레스코픽 설정·ACS 지령과 무관하게 BASE 는 <see cref="BaseHeightMm"/> 에 있다.
+    /// </summary>
+    public bool LiftInstalled { get; init; }
 
     public double AmrFrontMm { get; init; } = 395;
     public double AmrRearMm { get; init; } = 365;
     public double AmrHalfWidthMm { get; init; } = 350;
-    public double AmrHeightMm { get; init; } = 887;
 
-    /// <summary>리프트 기둥(CTD-LF144) 사각 단면 반폭 [mm] — 200×200, 차체 중심, 차체 윗면 → BASE.</summary>
+    /// <summary>차체 윗면 높이 [mm].</summary>
+    public double AmrHeightMm { get; init; } = 767;
+
+    /// <summary>받침 기둥 사각 단면 반폭 [mm] — 차체 중심, 차체 윗면 → BASE.</summary>
     public double ColumnHalfMm { get; init; } = 100;
 
-    /// <summary>차체 윗면 신호탑(SWTEL) — 후방 77~225 · 좌우 ±108 · 높이 933 [mm].</summary>
+    /// <summary>받침 기둥 이름(간섭 사유에 쓴다).</summary>
+    public string ColumnName => LiftInstalled ? "리프트 기둥" : "고정 기둥";
+
+    /// <summary>차체 윗면 신호탑(SWTEL) — 후방 77~225 · 좌우 ±108 · 차체 윗면 위 46 [mm].</summary>
     public double TowerRearFromMm { get; init; } = 77;
     public double TowerRearToMm { get; init; } = 225;
     public double TowerHalfWidthMm { get; init; } = 108;
-    public double TowerTopMm { get; init; } = 933;
+    public double TowerHeightMm { get; init; } = 46;
+
+    /// <summary>신호탑 꼭대기 높이 [mm] — 차체 윗면 + <see cref="TowerHeightMm"/>.</summary>
+    public double TowerTopMm => AmrHeightMm + TowerHeightMm;
 
     /// <summary>J2·J3 축 방향 가로 오프셋 — 어깨(상완 위치)·팔꿈치 이후(전완 위치) [mm].</summary>
     public double ShoulderOffsetMm { get; init; } = 185;
@@ -53,39 +71,83 @@ public sealed record CobotEnvelope
         ("검사 툴(몸체)", 0.0, 293.0, 169.0),
     };
 
-    /// <summary>지금 쓰는 외곽 — 기본 치수에 파라미터 <see cref="BaseHeightKey"/> 를 반영한 값(<see cref="ApplyBaseHeight"/>).</summary>
-    public static CobotEnvelope Default { get; private set; } = new();
+    private static volatile CobotEnvelope _configured = new();
+    private static volatile CobotEnvelope _default = _configured;
 
-    /// <summary>차체 바닥(바퀴 닿는 면) → 코봇 BASE 장착면 높이 [mm] 파라미터 키. 리프트를 떼고 받침에 직접 올리면 바뀐다
-    /// (2026-11-17 리프트 탈거: 927mm). 비거나 범위 밖이면 기본 <see cref="DefaultBaseHeightMm"/>.</summary>
+    /// <summary>
+    /// 앱 전체가 쓰는 외곽 — appsettings 치수(<see cref="Configured"/>)에 파라미터 <see cref="BaseHeightKey"/> 가 있으면
+    /// BASE 높이만 덮어쓴 값(<see cref="ApplyBaseHeight"/>).
+    /// </summary>
+    public static CobotEnvelope Default => _default;
+
+    /// <summary>appsettings <c>"CobotEnvelope"</c> 로 정한 외곽(파라미터 반영 전). 설정하지 않았으면 코드 기본값 = 현 장비.</summary>
+    public static CobotEnvelope Configured => _configured;
+
+    /// <summary>appsettings 값으로 외곽을 정한다(기동 때). 값이 맞지 않으면 예외 — 기동을 멈춰 잘못된 모델로 돌지 않게 한다.</summary>
+    public static CobotEnvelope Configure(CobotEnvelopeSettings? settings)
+    {
+        var env = FromSettings(settings ?? new CobotEnvelopeSettings());
+        _configured = env;
+        _default = env;
+        return env;
+    }
+
+    /// <summary>코봇 BASE 높이 덮어쓰기 파라미터 키 [mm, 차체 바닥 → BASE 장착면]. 비어 있으면 appsettings 값을 쓴다.</summary>
     public const string BaseHeightKey = "cobot.baseHeightMm";
 
-    /// <summary>리프트(CTD-LF144) 장착 시 STEP 실측 높이 [mm].</summary>
-    public const double DefaultBaseHeightMm = 1635;
-
-    /// <summary>허용 범위 [mm] — 차체 윗면(<see cref="AmrHeightMm"/>) 아래이거나 지나치게 높으면 설정 실수로 본다.</summary>
+    /// <summary>파라미터 허용 범위 [mm] — 차체 윗면 아래이거나 지나치게 높으면 설정 실수로 본다.</summary>
     public const double MinBaseHeightMm = 800, MaxBaseHeightMm = 2500;
 
-    /// <summary>파라미터 문자열을 읽어 <see cref="Default"/> 의 BASE 높이를 바꾼다(기동·저장·삭제 때).
-    /// 비거나 숫자가 아니거나 범위 밖이면 기본값을 쓰고 false.</summary>
+    /// <summary>
+    /// 파라미터 문자열로 <see cref="Default"/> 의 BASE 높이를 덮어쓴다(기동·저장·삭제 때). 다른 치수는 <see cref="Configured"/> 그대로.
+    /// 비어 있으면 appsettings 값으로 되돌리고 true, 숫자가 아니거나 범위(차체 윗면 이상, 800~2500) 밖이면 appsettings 값을 쓰고 false.
+    /// </summary>
     public static bool ApplyBaseHeight(string? raw)
     {
+        var cfg = _configured;
         var ok = double.TryParse(raw, System.Globalization.NumberStyles.Float,
                      System.Globalization.CultureInfo.InvariantCulture, out var v)
-                 && double.IsFinite(v) && v is >= MinBaseHeightMm and <= MaxBaseHeightMm;
-        Default = new CobotEnvelope { BaseHeightMm = ok ? v : DefaultBaseHeightMm };
+                 && double.IsFinite(v) && v is >= MinBaseHeightMm and <= MaxBaseHeightMm && v >= cfg.AmrHeightMm;
+        _default = ok ? cfg with { BaseHeightMm = v } : cfg;
         return ok || string.IsNullOrWhiteSpace(raw);
     }
+
+    /// <summary>설정 → 외곽. 팔 링크 치수(어깨·상완 오프셋/반경)는 로봇 고유값이라 코드 기본값을 그대로 쓴다.</summary>
+    public static CobotEnvelope FromSettings(CobotEnvelopeSettings s)
+    {
+        s.Validate();
+        return new CobotEnvelope
+        {
+            BaseHeightMm = s.EffectiveBaseHeightMm,
+            LiftInstalled = s.LiftInstalled,
+            AmrFrontMm = s.BodyFrontMm,
+            AmrRearMm = s.BodyRearMm,
+            AmrHalfWidthMm = s.BodyWidthMm / 2,
+            AmrHeightMm = s.BodyHeightMm,
+            ColumnHalfMm = s.ColumnWidthMm / 2,
+            TowerRearFromMm = s.TowerRearFromMm,
+            TowerRearToMm = s.TowerRearToMm,
+            TowerHalfWidthMm = s.TowerWidthMm / 2,
+            TowerHeightMm = s.TowerHeightMm,
+            ToolSegments = new[] { ("검사 툴(몸체)", 0.0, s.ToolBodyLengthMm, s.ToolBodyRadiusMm) },
+            ToolOuterRadiusMm = s.ToolOuterRadiusMm,
+        };
+    }
+
+    public override string ToString() =>
+        $"BASE {BaseHeightMm:0}mm({(LiftInstalled ? "리프트 + 스트로크" : "고정")}), 차체 +{AmrFrontMm:0}/−{AmrRearMm:0}×±{AmrHalfWidthMm:0}×{AmrHeightMm:0}, " +
+        $"{ColumnName} {ColumnHalfMm * 2:0}×{ColumnHalfMm * 2:0}, 신호탑 꼭대기 {TowerTopMm:0}mm";
 
     /// <summary>
     /// 관절각 한 벌의 자기 간섭 여유 — 팔 부품마다 차체·신호탑·기둥까지 최단거리 − 반경의 최소 [mm].
     /// 음수면 그만큼 파고든다. 기둥에 붙은 어깨는 기둥과 재지 않는다(BASE 는 기둥 위라 아예 제외).
     /// </summary>
+    /// <param name="strokeMm">리프트 스트로크 [mm] — <see cref="LiftInstalled"/> 가 false 면 무시한다.</param>
     /// <param name="mountYawDeg">장착 yaw(T_A_B rz) [도] — BASE +X 가 차체 +X 에서 반시계로 돈 각.</param>
     public SelfClearance Evaluate(Fr5Kinematics kin, double[] jointsDeg, double strokeMm, double mountYawDeg)
     {
         var fr = kin.Frames(jointsDeg);
-        var baseZ = BaseHeightMm + strokeMm;
+        var baseZ = BaseHeightMm + (LiftInstalled ? strokeMm : 0);
         var yaw = mountYawDeg * Math.PI / 180;
         double cy = Math.Cos(yaw), sy = Math.Sin(yaw);
 
@@ -118,7 +180,7 @@ public sealed record CobotEnvelope
         {
             ("AMR 차체", new[] { -AmrRearMm, -AmrHalfWidthMm, 0 }, new[] { AmrFrontMm, AmrHalfWidthMm, AmrHeightMm }),
             ("신호탑", new[] { -TowerRearToMm, -TowerHalfWidthMm, AmrHeightMm }, new[] { -TowerRearFromMm, TowerHalfWidthMm, TowerTopMm }),
-            ("리프트 기둥", new[] { -ColumnHalfMm, -ColumnHalfMm, AmrHeightMm }, new[] { ColumnHalfMm, ColumnHalfMm, baseZ }),
+            (ColumnName, new[] { -ColumnHalfMm, -ColumnHalfMm, AmrHeightMm }, new[] { ColumnHalfMm, ColumnHalfMm, baseZ }),
         };
 
         var best = new SelfClearance(double.PositiveInfinity, "", "");
@@ -128,7 +190,7 @@ public sealed record CobotEnvelope
             var b = Amr(p.B);
             foreach (var box in boxes)
             {
-                if (p.NearColumn && box.Name == "리프트 기둥") continue;
+                if (p.NearColumn && box.Name == ColumnName) continue;
                 var cl = SegmentBoxDistanceMm(a, b, box.Min, box.Max) - p.R;
                 if (cl < best.ClearanceMm) best = new SelfClearance(cl, p.Name, box.Name);
             }
@@ -185,7 +247,7 @@ public sealed record CobotEnvelope
 
     /// <summary>
     /// 관절각 한 벌에서 코봇(팔·검사 툴)을 바닥에 투영한 외곽 — 차체 좌표(+X 전방·+Y 좌측) mm 의 볼록 다각형(반시계).
-    /// BASE 가 차체 중심 위라 차체 중심도 안에 든다. 리프트 높이와 무관하다. 주행 중 장애물 감시 영역에 쓴다.
+    /// BASE 가 차체 중심 위라 차체 중심도 안에 든다. BASE 높이와 무관하다. 주행 중 장애물 감시 영역에 쓴다.
     /// </summary>
     /// <param name="mountYawDeg">장착 yaw(T_A_B rz) [도].</param>
     public IReadOnlyList<(double X, double Y)> Footprint(Fr5Kinematics kin, double[] jointsDeg, double mountYawDeg)

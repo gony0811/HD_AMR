@@ -577,6 +577,25 @@ public class FairinoRpcClient : IDisposable
     }
 
     /// <summary>
+    /// 연속으로 지나갈 경유점들의 관절 해를 <b>앞 점 해 기준</b>으로 차례로 푼다(첫 점은 현재 관절 기준).
+    /// 무정지(블렌딩) 이동은 출발 전에 이동 명령을 한꺼번에 큐에 넣으므로, 명령마다 "현재 관절" 기준으로 풀면
+    /// 먼 경유점의 감김·가지가 순차 이동 때와 달라질 수 있다 — 미리 사슬로 풀어 각 MoveL 에 넘긴다.
+    /// 해가 없으면 <see cref="InvalidOperationException"/>. 계산만 하며 코봇은 움직이지 않는다.
+    /// </summary>
+    public async Task<IReadOnlyList<double[]>> ResolveChainJointsAsync(IReadOnlyList<double[]> poses, int tool, int user,
+        CancellationToken ct = default)
+    {
+        var seed = await GetActualJointPosAsync(ct: ct);
+        var chain = new List<double[]>(poses.Count);
+        foreach (var pose in poses)
+        {
+            seed = await GetInverseKinNearestAsync(pose, seed, tool, user, ct);
+            chain.Add(seed);
+        }
+        return chain;
+    }
+
+    /// <summary>
     /// IK config 0–7 을 모두 시도해 <paramref name="referenceJoints"/> 에 가장 가까운
     /// (총 관절 변위 최소) 해를 반환한다. 해가 없으면 예외.
     /// <see cref="GetInverseKinForMoveAsync"/> 와 동일한 tool/user 프레임 보정을 수행한다.

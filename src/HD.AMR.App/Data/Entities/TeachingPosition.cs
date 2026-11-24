@@ -12,6 +12,10 @@ public class TeachingPosition
     /// <summary>슬롯 식별자(home, wall.B, user-… 등). 코드 시드와 매칭되는 unique 키.</summary>
     public string Key { get; set; } = "";
 
+    /// <summary>리프트 모드(SHORT/LONG, <see cref="Models.TeachingLiftMode"/>). 같은 Key 가 모드마다 한 행씩 있다
+    /// — unique 키는 (LiftMode, Key). 기존 DB 의 행은 SHORT.</summary>
+    public string LiftMode { get; set; } = Models.TeachingLiftMode.Short;
+
     /// <summary>표시 이름(홈 위치, 검사 준비 위치 …).</summary>
     public string Name { get; set; } = "";
 

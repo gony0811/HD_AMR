@@ -108,6 +108,16 @@ public sealed class VdaInformation
     [JsonPropertyName("infoType")] public string InfoType { get; set; } = "";
     [JsonPropertyName("infoLevel")] public string InfoLevel { get; set; } = "INFO";
     [JsonPropertyName("infoDescription")] public string? InfoDescription { get; set; }
+    /// <summary>VDA5050 표준 infoReferences(key/value) — 없으면 직렬화하지 않는다.</summary>
+    [JsonPropertyName("infoReferences")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<VdaInfoReference>? InfoReferences { get; set; }
+}
+
+public sealed class VdaInfoReference
+{
+    [JsonPropertyName("referenceKey")] public string ReferenceKey { get; set; } = "";
+    [JsonPropertyName("referenceValue")] public string ReferenceValue { get; set; } = "";
 }
 
 // ── order (수신) ─────────────────────────────────────────

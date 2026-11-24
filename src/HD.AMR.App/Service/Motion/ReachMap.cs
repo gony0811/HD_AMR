@@ -16,8 +16,8 @@ namespace HD.AMR.App.Service.Motion;
 /// T_A_B(장착 보정)와 텔레스코픽 스트로크는 실제 값을 쓴다.
 ///
 /// 셀마다 운영 시퀀스와 같은 세 자세를 본다:
-///  · ② 거친 접근 — 면에서 <see cref="ReachMapSpec.ApproachStandoffMm"/>(기본 400) 물러난 TCP. 팔이 가장 접히는 지점.
-///  · 정렬 준비 — 면에서 <see cref="ReachMapSpec.AlignStandoffMm"/>(기본 300, 레이저 WD) 물러난 TCP. 초점 위치로
+///  · ② 거친 접근 — 면에서 <see cref="ReachMapSpec.ApproachStandoffMm"/>(기본 300 — 정렬 준비와 같은 자리) 물러난 TCP. 팔이 가장 접히는 지점.
+///  · 정렬 준비 — 면에서 <see cref="ReachMapSpec.AlignStandoffMm"/>(고정 300) 물러난 TCP. 초점 위치로
 ///    가기 전에 수평 맞춤 등 사전 작업을 하는 자세다.
 ///  · 초점 검사 — TCP(검사 툴 초점)를 면에서 <see cref="ReachMapSpec.FocusStandoffMm"/>(기본 0) 에 둔다. 실제 검사
 ///    자세이자 가장 뻗는 지점.
@@ -381,7 +381,8 @@ public static class ReachMap
 /// <param name="Zs">용접선 점의 바닥 위 높이. 바닥(B)은 무시하고 0, 천장(T)은 천장 높이로 읽는다.</param>
 /// <param name="ApproachStandoffMm">② 거친 접근 거리 — TCP 의 면 후퇴(inspection.approachStandoffMm).</param>
 /// <param name="AlignStandoffMm">정렬 준비 거리 — 초점 위치로 가기 전 수평 맞춤 등을 하는 TCP 후퇴
-/// (레이저 WD, Sequence.Laser.WorkingDistanceMm).</param>
+/// (고정 <see cref="DefaultAlignStandoffMm"/>. 레이저 WD 가 아니다 — ④⁺ 가 실측으로 맞추는 거리는 면마다 다르지만
+/// 판정용 정렬 준비 자세는 한 값으로 둔다).</param>
 /// <param name="FocusStandoffMm">초점 검사 거리 — TCP(검사 툴 초점)의 면 후퇴. 초점을 용접선 위에 두므로 0.</param>
 /// <param name="GoodMarginDeg">이 여유 미만이면 '빠듯' 으로 분류 [도].</param>
 /// <param name="MaxBaseDistanceMm">BASE→TCP 거리가 이보다 멀면 IK 없이 범위 밖으로 친다.
@@ -395,14 +396,17 @@ public sealed record ReachMapSpec(
     double[] Xs,
     double[] Ys,
     double[] Zs,
-    double ApproachStandoffMm = 400,
-    double AlignStandoffMm = 300,
+    double ApproachStandoffMm = Sequence.Steps.CobotInspectionMoveStep.DefaultApproachStandoffMm,
+    double AlignStandoffMm = ReachMapSpec.DefaultAlignStandoffMm,
     double FocusStandoffMm = 0,
     double GoodMarginDeg = 10,
     double MaxBaseDistanceMm = 2500,
     double[]? TiltTowardMm = null,
     double TiltDeg = 0)
 {
+    /// <summary>정렬 준비 거리 [mm] — 고정값. 리치 맵 UI 기본값과 도달 사전 점검이 같은 값을 써야 저장 맵 셀이 맞는다.</summary>
+    public const double DefaultAlignStandoffMm = 300.0;
+
     /// <summary>[from, to] 를 step 간격으로 — 끝값 포함. step ≤ 0 이면 from 하나.</summary>
     public static double[] Range(double from, double to, double step)
     {
@@ -453,7 +457,7 @@ public enum ReachStatus
     /// <summary>닿는 해는 있지만 운영 ② 출발 자세(검사 준비·ready)와 가지가 달라 팔꿈치·손목을 뒤집거나 관절을 크게
     /// 돌려야 한다 — 운영 ② 는 이런 이동을 하지 않으므로 실제로는 닿지 않는다.</summary>
     BranchChange,
-    /// <summary>팔·검사 툴이 AMR 차체·리프트 기둥·신호탑에 닿는다(<see cref="CobotEnvelope"/>).</summary>
+    /// <summary>팔·검사 툴이 AMR 차체·받침 기둥·신호탑에 닿는다(<see cref="CobotEnvelope"/>).</summary>
     SelfCollision,
     /// <summary>IK 해가 관절 한계·특이점 여유를 벗어난다.</summary>
     PostureLimit,

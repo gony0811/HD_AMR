@@ -46,6 +46,37 @@ public class TaskBundlePlannerTests
         Assert.Equal(0.72, plan[0].Point2W![0]);   // 점2 는 꺾인 선이 아니라 h2 끝점
     }
 
+    // 실기 2026-11-20 PM L2-R01C14: V3~V5 와 720mm 옆 줄 V6~V8 이 평행이라 한 묶음이 되어, V6~V8 이 좌표계를
+    // ACS 옆 성분(769.9mm, 도면 720mm)만큼 옮겨 써 촬영이 빗나갔다. 옆 줄은 자기 묶음으로 따로 교시한다.
+    [Fact]
+    public void 평행해도_옆_줄은_따로_묶는다()
+    {
+        var v = InspectionMoveDirection.Vertical;
+        BundleTaskInput Seam(string id, double x, double z0)
+            => new(id, id, "PM", 0, v, new[] { x, 1.0, z0 }, new[] { x, 1.0, z0 + 0.36 });
+        var plan = TaskBundlePlanner.Assign(new[]
+        {
+            Seam("v3", 12.0, 0.0), Seam("v4", 12.0, 0.36), Seam("v5", 12.0, 0.72),
+            Seam("v6", 12.72, 0.0), Seam("v7", 12.72, 0.36), Seam("v8", 12.72, 0.72),
+        });
+        Assert.Equal(new[] { BundleRole.Leader, BundleRole.Follower, BundleRole.Follower,
+                             BundleRole.Leader, BundleRole.Follower, BundleRole.Follower },
+                     plan.Select(p => p.Role).ToArray());
+        Assert.Equal("v3", plan[2].BundleId);
+        Assert.Equal("v6", plan[5].BundleId);
+        Assert.Equal(1.08, plan[0].Point2W![2], 6);   // 점2 = 같은 줄 마지막(v5) 끝점
+        Assert.Equal(12.0, plan[0].Point2W![0], 6);
+    }
+
+    [Theory]
+    [InlineData(0.000, true)]
+    [InlineData(0.009, true)]    // 도면 오차 수준(≤10mm)
+    [InlineData(0.020, false)]
+    [InlineData(0.720, false)]
+    public void 같은_직선_위_판정(double lateralM, bool expected)
+        => Assert.Equal(expected, TaskBundlePlanner.OnSameLine(
+            new[] { 1.0, 2.0, 0.0 }, new[] { 1.0, 2.0, 0.36 }, new[] { 1.0 + lateralM, 2.0, 0.72 }));
+
     [Theory]
     [InlineData(0.36, 0.0, true)]       // 같은 방향
     [InlineData(0.36, 0.10, true)]      // 15.5° — 허용

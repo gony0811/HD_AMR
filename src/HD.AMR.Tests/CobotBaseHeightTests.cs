@@ -19,30 +19,40 @@ public class CobotBaseHeightTests : IDisposable
         Assert.Equal(927, CobotEnvelope.Default.BaseHeightMm, 6);
     }
 
+    [Fact]
+    public void 덮어써도_appsettings_치수는_그대로_두고_리프트_여부도_유지한다()
+    {
+        Assert.True(CobotEnvelope.ApplyBaseHeight("1000"));
+        Assert.Equal(1000, CobotEnvelope.Default.BaseHeightMm, 6);
+        Assert.Equal(CobotEnvelope.Configured.LiftInstalled, CobotEnvelope.Default.LiftInstalled);
+        Assert.Equal(CobotEnvelope.Configured.AmrHeightMm, CobotEnvelope.Default.AmrHeightMm);
+        Assert.Equal(CobotEnvelope.Configured.TowerTopMm, CobotEnvelope.Default.TowerTopMm);
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]
     public void 비어_있으면_기본값(string? raw)
     {
         Assert.True(CobotEnvelope.ApplyBaseHeight(raw));
-        Assert.Equal(CobotEnvelope.DefaultBaseHeightMm, CobotEnvelope.Default.BaseHeightMm, 6);
+        Assert.Equal(CobotEnvelope.Configured.BaseHeightMm, CobotEnvelope.Default.BaseHeightMm, 6);
     }
 
     [Theory]
     [InlineData("abc")]
-    [InlineData("500")]     // 차체 윗면(887)보다 낮음 — 설정 실수
+    [InlineData("500")]     // 차체 윗면(767)보다 낮음 — 설정 실수
     [InlineData("3000")]
     public void 잘못된_값은_기본값으로_두고_false(string raw)
     {
         Assert.False(CobotEnvelope.ApplyBaseHeight(raw));
-        Assert.Equal(CobotEnvelope.DefaultBaseHeightMm, CobotEnvelope.Default.BaseHeightMm, 6);
+        Assert.Equal(CobotEnvelope.Configured.BaseHeightMm, CobotEnvelope.Default.BaseHeightMm, 6);
     }
 
     [Fact]
     public void 다른_치수는_그대로()
     {
         CobotEnvelope.ApplyBaseHeight("927");
-        var fresh = new CobotEnvelope();
+        var fresh = CobotEnvelope.Configured;
         Assert.Equal(fresh.AmrHeightMm, CobotEnvelope.Default.AmrHeightMm);
         Assert.Equal(fresh.ColumnHalfMm, CobotEnvelope.Default.ColumnHalfMm);
     }

@@ -1,0 +1,903 @@
+{
+ "format": 1,
+ "source": "용접검사 AMR hd_amr.db (2026-11-17)",
+ "exportedAt": "2026-11-16T16:14:33",
+ "parameters": [
+  {
+   "name": "Calib.HandEye.Pose",
+   "value": "[-225,1.56,33.56,-0.8,-2.9,-88.865]",
+   "description": "핸드아이 오프셋 T_T_C [x,y,z,rx,ry,rz] (mm/도, 코봇 툴 TCP→컬러카메라 광학 프레임)",
+   "group": "ttc"
+  },
+  {
+   "name": "Calib.Mount.Pose",
+   "value": "[0,0,1635,0,0,180]",
+   "description": "코봇 장착 오프셋 T_A_B [x,y,z,rx,ry,rz] (mm/도, AMR 차체→코봇 BASE)",
+   "group": "tab"
+  },
+  {
+   "name": "Camera.Align.DepthAxis",
+   "value": "5",
+   "description": "거리 접근: 광축(전방)→툴축 (ToolAxisDir)",
+   "group": "camera"
+  },
+  {
+   "name": "Camera.Align.ImageXAxis",
+   "value": "1",
+   "description": "평탄 정렬: 이미지 X→툴축 (ToolAxisDir)",
+   "group": "camera"
+  },
+  {
+   "name": "Camera.Align.ImageYAxis",
+   "value": "2",
+   "description": "평탄 정렬: 이미지 Y→툴축 (ToolAxisDir)",
+   "group": "camera"
+  },
+  {
+   "name": "Camera.Align.TargetDistanceMm",
+   "value": "300",
+   "description": "거리 접근: 목표 거리(mm)",
+   "group": "camera"
+  },
+  {
+   "name": "Camera.Align.Tool",
+   "value": "1",
+   "description": "평탄 정렬: 툴 번호",
+   "group": "camera"
+  },
+  {
+   "name": "Camera.Axis.XSign",
+   "value": "1",
+   "description": "영상 +X → BASE X 부호 (⑥⑩ Peak 센터링 방향, +1/−1)",
+   "group": "camera"
+  },
+  {
+   "name": "Camera.Bead.Roi.Enabled",
+   "value": "true",
+   "description": "Bead ROI 사용 여부",
+   "group": "camera"
+  },
+  {
+   "name": "Camera.Bead.Roi.H",
+   "value": "0.5958333333333333",
+   "description": "Bead ROI 높이 (정규화 0~1)",
+   "group": "camera"
+  },
+  {
+   "name": "Camera.Bead.Roi.W",
+   "value": "0.5955188679245284",
+   "description": "Bead ROI 너비 (정규화 0~1)",
+   "group": "camera"
+  },
+  {
+   "name": "Camera.Bead.Roi.X",
+   "value": "0.1721698113207547",
+   "description": "Bead ROI 좌상단 X (정규화 0~1)",
+   "group": "camera"
+  },
+  {
+   "name": "Camera.Bead.Roi.Y",
+   "value": "0.14791666666666667",
+   "description": "Bead ROI 좌상단 Y (정규화 0~1)",
+   "group": "camera"
+  },
+  {
+   "name": "Camera.Depth.Roi.Enabled",
+   "value": "true",
+   "description": "깊이 ROI 사용",
+   "group": "camera"
+  },
+  {
+   "name": "Camera.Depth.Roi.H",
+   "value": "0.657",
+   "description": "깊이 ROI H(0~1)",
+   "group": "camera"
+  },
+  {
+   "name": "Camera.Depth.Roi.W",
+   "value": "0.6579999999999999",
+   "description": "깊이 ROI W(0~1)",
+   "group": "camera"
+  },
+  {
+   "name": "Camera.Depth.Roi.X",
+   "value": "0.22",
+   "description": "깊이 ROI X(0~1)",
+   "group": "camera"
+  },
+  {
+   "name": "Camera.Depth.Roi.Y",
+   "value": "0.19399999999999998",
+   "description": "깊이 ROI Y(0~1)",
+   "group": "camera"
+  },
+  {
+   "name": "Camera.Peak.Roi.Enabled",
+   "value": "true",
+   "description": "Peak ROI 사용 여부",
+   "group": "camera"
+  },
+  {
+   "name": "Camera.Peak.Roi.H",
+   "value": "0.6041666666666666",
+   "description": "Peak ROI 높이 (정규화 0~1)",
+   "group": "camera"
+  },
+  {
+   "name": "Camera.Peak.Roi.W",
+   "value": "0.6002358490566038",
+   "description": "Peak ROI 너비 (정규화 0~1)",
+   "group": "camera"
+  },
+  {
+   "name": "Camera.Peak.Roi.X",
+   "value": "0.16981132075471697",
+   "description": "Peak ROI 좌상단 X (정규화 0~1)",
+   "group": "camera"
+  },
+  {
+   "name": "Camera.Peak.Roi.Y",
+   "value": "0.14791666666666667",
+   "description": "Peak ROI 좌상단 Y (정규화 0~1)",
+   "group": "camera"
+  },
+  {
+   "name": "Sequence.Bead.FailOnLargeResidual",
+   "value": "true",
+   "description": "⑦⁺/⑪⁺ 비드 센터링 — 1회 이동(±100mm) 뒤 남는 잔차가 점 보정 상한(±30mm)을 넘으면 그 용접선을 실패 처리(true). 넘는 잔차는 보정되지 않아 작업물 좌표계가 기울어진 채 순회한다. false 면 종전대로 경고만 남기고 진행.",
+   "group": null
+  },
+  {
+   "name": "Sequence.BeadManual.JogStepMm",
+   "value": "100",
+   "description": "수동 비드 입력 팝업 조그 1회 이동량(mm) — 좌/우/상/하 버튼 한 번에 움직이는 거리. 0.5~100. 팝업에서 바꾸면 이 값도 바뀐다.",
+   "group": null
+  },
+  {
+   "name": "Sequence.BeadManual.JogVelPct",
+   "value": "20",
+   "description": "수동 비드 입력 팝업 조그 속도(%) — 툴 좌표계 평면 이동. 1~100. 팝업에서 바꾸면 이 값도 바뀐다.",
+   "group": null
+  },
+  {
+   "name": "Sequence.BeadManual.MinConfidence",
+   "value": "0.5",
+   "description": "Bead 찾기 수동 입력 — lowConfidence 조건의 coverage 임계(0~1). 이 값 미만이면 팝업.",
+   "group": null
+  },
+  {
+   "name": "Sequence.BeadManual.TimeoutSec",
+   "value": "300",
+   "description": "Bead 찾기 수동 입력 대기 시간(초). 응답이 없으면 자동 결과가 있으면 그걸로 진행, 없으면 실패 처리. 10~3600.",
+   "group": null
+  },
+  {
+   "name": "Sequence.BeadManual.Trigger",
+   "value": "lowConfidence",
+   "description": "Bead 찾기 수동 입력 팝업 조건 — off(사용 안 함) / failure(자동 검출 실패 시) / lowConfidence(실패 또는 coverage 가 MinConfidence 미만) / always(매번 확인). 입력한 비드선은 학습 데이터(캡처 폴더의 _line.json·_maskdraft.png)로 저장되고 그 선으로 시퀀스를 계속한다.",
+   "group": null
+  },
+  {
+   "name": "Sequence.Camera.TargetDistance",
+   "value": "300",
+   "description": "③ 카메라 거리 정렬 목표 거리 (mm)",
+   "group": "tool"
+  },
+  {
+   "name": "Sequence.CameraAlign.ExpectedTolMm",
+   "value": "300",
+   "description": "카메라 거리 정렬 시작 거리 허용폭(mm)",
+   "group": null
+  },
+  {
+   "name": "Sequence.FlatSurface.CameraToLaserShiftYmm",
+   "value": "-77",
+   "description": "④ 평탄면 센터링: 카메라→레이저 중심 보정 횡이동 (mm, 툴 Y). 레이저 장착 오프셋",
+   "group": "tool"
+  },
+  {
+   "name": "Sequence.FlatSurface.Candidate.DistancePenaltyPerMm",
+   "value": "0.01",
+   "description": "④ 평탄 후보 점수 = σ + 이 값 × ROI 중심 거리(mm). 클수록 가까운 셀 우선. 0 = σ 순.",
+   "group": null
+  },
+  {
+   "name": "Sequence.FlatSurface.Candidate.MaxResidualMm",
+   "value": "1.5",
+   "description": "④ 평탄 후보 셀 평면 잔차 상한(mm) — 넘으면 비드·단차가 걸친 셀로 보고 제외. 0 이하 = 비활성.",
+   "group": null
+  },
+  {
+   "name": "Sequence.FlatSurface.Candidate.MaxSigmaAboveBestMm",
+   "value": "1",
+   "description": "④ 평탄 후보 σ 상한 = 최소 σ + 이 값(mm). 0 이하 = 비활성.",
+   "group": null
+  },
+  {
+   "name": "Sequence.FlatSurface.Footprint.BlockMm",
+   "value": "4",
+   "description": "④ 스팟 원 안 국부 높이 평균 블록 한 변(mm) — 클수록 노이즈에 강하고 작은 요철에 둔감.",
+   "group": null
+  },
+  {
+   "name": "Sequence.FlatSurface.Footprint.Enabled",
+   "value": "true",
+   "description": "④ 레이저 3점 풋프린트 판정 사용 — 셀 중심 대신 세 스팟이 떨어질 자리를 깊이로 평가해 고른다. false = 종전(셀 중심).",
+   "group": null
+  },
+  {
+   "name": "Sequence.FlatSurface.Footprint.ExcludeRadiusMm",
+   "value": "25",
+   "description": "④ 재시도 때 실패한 자리 주변을 제외할 반경(mm).",
+   "group": null
+  },
+  {
+   "name": "Sequence.FlatSurface.Footprint.HeightToleranceMm",
+   "value": "0.4",
+   "description": "④ 국부 높이 허용 편차(mm) — 기준 평면 대비 이 안은 깊이 노이즈로 본다. 로그의 '기준면 노이즈 σ'가 크면 올린다.",
+   "group": null
+  },
+  {
+   "name": "Sequence.FlatSurface.Footprint.MarginMm",
+   "value": "8",
+   "description": "④ 스팟 위치 오차 여유 반경(mm) — 각 스팟이 이 원 안 어디에 떨어져도 평탄해야 한다.",
+   "group": null
+  },
+  {
+   "name": "Sequence.FlatSurface.Footprint.MaxPredictedTiltDeg",
+   "value": "1",
+   "description": "④ 깊이로 예측한 레이저 틸트 오차 최악값 상한(°). 넘는 자리는 탈락(2mm 비드가 스팟에 걸리면 3° 이상).",
+   "group": null
+  },
+  {
+   "name": "Sequence.FlatSurface.Footprint.MaxSiteRetries",
+   "value": "2",
+   "description": "④ Phase C(레이저 틸트) 실패 시 시작 위치로 돌아가 다른 자리로 재시도하는 최대 횟수(0~5).",
+   "group": null
+  },
+  {
+   "name": "Sequence.FlatSurface.Footprint.SearchRangeMm",
+   "value": "18",
+   "description": "④ 후보 셀 중심 기준 풋프린트 탐색 반폭(mm). 0 = 셀 중심만 평가.",
+   "group": null
+  },
+  {
+   "name": "Sequence.FlatSurface.Footprint.SearchStepMm",
+   "value": "6",
+   "description": "④ 풋프린트 탐색 격자 간격(mm).",
+   "group": null
+  },
+  {
+   "name": "Sequence.FlatSurface.JointMoveVelocityScale",
+   "value": "0.45",
+   "description": "④ 평탄면 센터링 관절 이동(MoveJ) 속도 비율 — 시퀀스/카메라 페이지 속도에 곱한다(0~1). MoveJ 는 같은 % 에서 MoveL 보다 약 2배 빨라 0.45 로 종전 체감 속도에 맞춤.",
+   "group": null
+  },
+  {
+   "name": "Sequence.FlatSurface.Reach.TiltMarginDeg",
+   "value": "3",
+   "description": "④ 평탄 후보 도달성 판정의 틸트 보정 여유(°) — 레이저 위치에서 툴 Rx/Ry 를 ± 이만큼 돌려도 자세 한계 안이어야 후보로 인정. 0 = 생략.",
+   "group": null
+  },
+  {
+   "name": "Sequence.InspectCam.OffsetXMm",
+   "value": "20",
+   "description": "⑨/⑬ 검사캠 장착 오프셋 영상 +X(화면 오른쪽) 성분 (mm)",
+   "group": "tool"
+  },
+  {
+   "name": "Sequence.InspectCam.OffsetYMm",
+   "value": "203",
+   "description": "⑨/⑬ 검사캠 장착 오프셋 영상 +Y(화면 아래) 성분 (mm)",
+   "group": "tool"
+  },
+  {
+   "name": "Sequence.Inspection.Direction",
+   "value": "0",
+   "description": "검사위치 이동 방향 (0=수평, 1=수직/RZ-90°)",
+   "group": "selection"
+  },
+  {
+   "name": "Sequence.Inspection.DrawingId",
+   "value": "2",
+   "description": "⑱ 검사 수행: 대상 도면 id",
+   "group": "selection"
+  },
+  {
+   "name": "Sequence.Inspection.OffsetU",
+   "value": "0",
+   "description": "검사위치 이동 수평 오프셋 u (mm), 좌+/우− → TOOL Y",
+   "group": "selection"
+  },
+  {
+   "name": "Sequence.Inspection.OffsetV",
+   "value": "0",
+   "description": "검사위치 이동 수직 오프셋 v (mm), 상+/하− → TOOL X",
+   "group": "selection"
+  },
+  {
+   "name": "Sequence.Inspection.ProfileId",
+   "value": "8",
+   "description": "⑱ 검사 수행: 티칭설정(InspectionProfile) id",
+   "group": "selection"
+  },
+  {
+   "name": "Sequence.Inspection.SurfaceId",
+   "value": "2",
+   "description": "⑱ 검사 수행: 비전 CAPTURE_REQ Surface ID",
+   "group": "selection"
+  },
+  {
+   "name": "Sequence.Inspection.ZDatumOffsetMm",
+   "value": "0",
+   "description": null,
+   "group": "selection"
+  },
+  {
+   "name": "Sequence.Laser.WorkingDistanceMm",
+   "value": "323",
+   "description": "④⁺ 레이저 WD 거리 조정 목표 (mm, 3점 평균 z)",
+   "group": "tool"
+  },
+  {
+   "name": "Sequence.Laser.WorkingDistanceMm.T",
+   "value": "323",
+   "description": "④ T면_레이저 WD 거리 조정 목표 (mm, 3점 평균 z)",
+   "group": "tool"
+  },
+  {
+   "name": "Sequence.Test.AmrMove.Enabled",
+   "value": "1",
+   "description": null,
+   "group": "test"
+  },
+  {
+   "name": "Sequence.Test.AmrMove.ThetaDeg",
+   "value": "90.17",
+   "description": null,
+   "group": "test"
+  },
+  {
+   "name": "Sequence.Test.AmrMove.X",
+   "value": "25.375",
+   "description": null,
+   "group": "test"
+  },
+  {
+   "name": "Sequence.Test.AmrMove.Y",
+   "value": "14.681",
+   "description": null,
+   "group": "test"
+  },
+  {
+   "name": "Sequence.Test.SeamEndW.X",
+   "value": "0",
+   "description": null,
+   "group": "test"
+  },
+  {
+   "name": "Sequence.Test.SeamEndW.Y",
+   "value": "0",
+   "description": null,
+   "group": "test"
+  },
+  {
+   "name": "Sequence.Test.SeamEndW.Z",
+   "value": "0",
+   "description": null,
+   "group": "test"
+  },
+  {
+   "name": "Sequence.Test.SeamStartW.X",
+   "value": "0",
+   "description": null,
+   "group": "test"
+  },
+  {
+   "name": "Sequence.Test.SeamStartW.Y",
+   "value": "0",
+   "description": null,
+   "group": "test"
+  },
+  {
+   "name": "Sequence.Test.SeamStartW.Z",
+   "value": "0",
+   "description": null,
+   "group": "test"
+  },
+  {
+   "name": "Sequence.WObj.BeadResidualCorrection",
+   "value": "true",
+   "description": "⑦⁺/⑪⁺ 비드 센터링 후 남은 cross 잔차를 작업물 좌표계 점1/점2 기록에 보정(true). 잔차가 X축을 돌려 연속 LINE 이 V01 에서 멀수록 옆으로 벗어나는 것을 줄인다. 점2 는 각도(⑫)를 건드리지 않는 별도 재측정으로 잔차를 잰다.",
+   "group": null
+  },
+  {
+   "name": "Sequence.WObj.Id",
+   "value": "5",
+   "description": "작업물 좌표계 번호 (3점법 등록 대상, 0~14)",
+   "group": "tool"
+  },
+  {
+   "name": "Sequence.WObj.Point1HeightMm",
+   "value": "0",
+   "description": "작업물 좌표계 — 점1 을 기록한 TCP 높이가 티칭 프로필 Z=0(평탄부 초점 높이)에서 떨어진 거리(mm). 33.8 = 점1 을 주름 꼭대기 초점 높이에서 기록(종전). 0 = 점1 을 평탄부 초점 높이(레이저 WD 로 맞춘 높이)에서 기록 — 33.8 인 채로 WD 높이에서 점1 을 기록하면 순회 전체가 면 쪽으로 33.8mm 들어간다. 뒤에 .T/.PU 등 면 코드를 붙인 키로 면별 지정 가능. 0~100.",
+   "group": null
+  },
+  {
+   "name": "Sequence.Weld.ProgressAxisAlwaysHorizontal",
+   "value": "true",
+   "description": "Peak·Bead 찾기와 센터링의 진행축을 항상 영상 가로로 둔다(true). ② 가 툴을 돌려 용접선을 늘 영상 가로선으로 맞추기 때문이다. false 면 종전 규칙(가로 정렬 표시·용접선 기록이 없으면 검사방향으로 결정 — 수평 용접선은 영상 세로).",
+   "group": null
+  },
+  {
+   "name": "Teaching.JointMoveVelocityScale",
+   "value": "0.45",
+   "description": "Teaching '이동'(저장 관절값 MoveJ) 속도 비율 — 화면 속도에 곱한다(0~1). MoveJ 는 같은 % 에서 MoveL 보다 약 2배 빨라 0.45 로 종전 체감 속도에 맞춤.",
+   "group": null
+  },
+  {
+   "name": "Weld.ImageMode",
+   "value": "RgbGrayscale",
+   "description": "용접 추적 검출 입력 영상 (Ir / RgbGrayscale / RgbHsv)",
+   "group": null
+  },
+  {
+   "name": "Weld.Method",
+   "value": "Dl",
+   "description": "비드 검출 방식 (Dl/Param/Ridge/Unet)",
+   "group": null
+  },
+  {
+   "name": "Weld.Peak.PitchDir",
+   "value": "1",
+   "description": "⑧ Peak2 이동 방향 (+1/−1)",
+   "group": null
+  },
+  {
+   "name": "Weld.Peak.PitchMm",
+   "value": "360",
+   "description": "Peak 간 pitch (mm) — ⑧ 이동량, ⑫ 각도식 분모",
+   "group": null
+  },
+  {
+   "name": "Weld.Ridge.MaxAngleDeg",
+   "value": "15",
+   "description": "Ridge 선 방향 허용각(진행축 대비 °)",
+   "group": null
+  },
+  {
+   "name": "Weld.Ridge.Polarity",
+   "value": "Dark",
+   "description": "Ridge 선 극성 (Both/Bright/Dark)",
+   "group": null
+  },
+  {
+   "name": "Weld.Ridge.Relative",
+   "value": "0.5",
+   "description": "Ridge 슬라이스 상대 임계(0~1)",
+   "group": null
+  },
+  {
+   "name": "Weld.Ridge.Scales",
+   "value": "2",
+   "description": "Ridge σ 스케일 개수(1~6)",
+   "group": null
+  },
+  {
+   "name": "Weld.Ridge.SigmaMax",
+   "value": "2",
+   "description": "Ridge σ 최대(px) — 낮추면 넓은 하이라이트(코로게이션 능선) 응답 감소",
+   "group": null
+  },
+  {
+   "name": "Weld.Ridge.SigmaMin",
+   "value": "1",
+   "description": "Ridge σ 최소(px) — 비드 반폭 정도",
+   "group": null
+  },
+  {
+   "name": "Weld.Ridge.ThresholdK",
+   "value": "1.5",
+   "description": "Ridge 전역 잡음 하한 k (중앙값 + k·MAD)",
+   "group": null
+  },
+  {
+   "name": "Weld.Unet.Threshold",
+   "value": "0.5",
+   "description": "U-Net 비드 확률 임계값",
+   "group": null
+  },
+  {
+   "name": "Weld.Yolo.Confidence",
+   "value": "0.1",
+   "description": "DL 비드 검출 confidence 임계값",
+   "group": null
+  },
+  {
+   "name": "Weld.Yolo.MaskThreshold",
+   "value": "0.4",
+   "description": "DL 비드 마스크 확률 임계값",
+   "group": null
+  },
+  {
+   "name": "arrival.deviationTheta",
+   "value": "0.07",
+   "description": "도착 판정 각도 허용 오차(rad)",
+   "group": null
+  },
+  {
+   "name": "arrival.deviationXy",
+   "value": "0.2",
+   "description": "도착 판정 XY 허용 오차(m)",
+   "group": null
+  },
+  {
+   "name": "cobotGuard.enabled",
+   "value": "false",
+   "description": "주행 중 코봇 반경 장애물 감시 — true 면 ACS 지령 주행 중 라이다 점이 코봇 반경 안에 들어오면 AMR 을 세우고 경고 알람을 낸다. 장애물이 사라지면 같은 목표로 다시 출발한다. 라이다가 2D 한 대(전방 ±135°, 바닥 근처 높이)라 후방·코봇 높이 장애물은 못 본다.",
+   "group": null
+  },
+  {
+   "name": "cobotGuard.marginMm",
+   "value": "100",
+   "description": "코봇 반경 장애물 감시 — 코봇 외곽(또는 반경)에 더하는 여유(mm). 크게 잡으면 벽을 보고 서는 정차에서 벽을 장애물로 본다. 0~1000.",
+   "group": null
+  },
+  {
+   "name": "cobotGuard.minPoints",
+   "value": "3",
+   "description": "코봇 반경 장애물 감시 — 감시 영역 안 라이다 점이 이 수 이상이고 두 번 연속 잡혀야 장애물로 본다(잡음 제거). 1~50.",
+   "group": null
+  },
+  {
+   "name": "cobotGuard.pollMs",
+   "value": "400",
+   "description": "코봇 반경 장애물 감시 — 라이다 조회 주기(ms). 200~2000.",
+   "group": null
+  },
+  {
+   "name": "cobotGuard.radiusMm",
+   "value": "0",
+   "description": "코봇 반경 장애물 감시 — 차체 중심 기준 감시 반경(mm). 0 = 코봇 현재 자세의 바닥 투영 외곽을 쓴다(권장 — 홈 자세는 전방으로 약 1.03m, 좌우는 차체 폭 안팎). 값을 주면 그 반경의 원으로 감시한다(홈 자세를 다 덮으려면 1100 이상, 벽 옆에서 자주 선다).",
+   "group": null
+  },
+  {
+   "name": "inspection.approachStandoffMm",
+   "value": "300",
+   "description": "② Cobot 검사위치 이동 — 용접선 시작점에서 벽면 법선 방향으로 TCP 를 물리는 거리(mm). 정차 이격·이동 경로 시험용. 모든 벽 동일 적용, 용접선 끝점 이동·ACS 시험 접근도 같은 값. 200~1000 밖이거나 비면 300.",
+   "group": null
+  },
+  {
+   "name": "inspection.chainContinueTolMm",
+   "value": "50",
+   "description": "이어지는 용접선 판정 거리(mm) — 직전 검사 종료 위치와 다음 시작점이 면을 따라 이 거리 안이면 면에서 띄우지 않고 그 높이에서 바로 이어 간다. 0 = 끔(항상 inspection.chainStandoffMm 까지 띄움). 0~100 밖이면 50.",
+   "group": null
+  },
+  {
+   "name": "inspection.chainStandoffMm",
+   "value": "100",
+   "description": "같은 anchor 그룹 연속 LINE — 직전 검사 종료 자세에서 다음 시작점으로 옮길 때 면에서 TCP 를 띄우는 거리(mm). 첫 진입 이격(inspection.approachStandoffMm)까지 빠지지 않는다. 30~첫 진입 이격 밖이거나 비면 100.",
+   "group": null
+  },
+  {
+   "name": "inspection.useComputedNormalOrientation",
+   "value": "true",
+   "description": "② 검사위치 이동 자세 = 계산된 면 법선(true) / 티칭 포즈(false). 현장 검증 후 켠다. 측위·장착보정·wall_code 가 없으면 자동으로 티칭 폴백.",
+   "group": null
+  },
+  {
+   "name": "seamStartTag.dictionary",
+   "value": "DictAprilTag_36h11",
+   "description": "moveToSeamStart 도달 후 중심 편차 측정 태그 사전(DictAprilTag_36h11 등). ArUco 장착 보정 설정과 별개.",
+   "group": null
+  },
+  {
+   "name": "seamStartTag.markerId",
+   "value": "",
+   "description": "중심 편차 측정 태그 기대 ID. 비우면 화면에서 가장 큰 태그.",
+   "group": null
+  },
+  {
+   "name": "seamStartTag.sizeMm",
+   "value": "65",
+   "description": "중심 편차 측정 태그 한 변(mm) — 검은 테두리 바깥 정사각형 실측(흰 여백 제외). 0 이면 측정 안 함.",
+   "group": null
+  }
+ ],
+ "profiles": [
+  {
+   "Id": 9,
+   "Name": "CROSS-4-V1",
+   "SpacingMm": 0.0,
+   "CorrugThresholdDeg": 0.0,
+   "CorrugStepDeg": 0.0,
+   "RunTool": 1,
+   "RunUser": 5,
+   "RunVel": 20,
+   "DelaySec": 10.0,
+   "ThMax": 180.0,
+   "SettleDelaySec": 0.5,
+   "MoveHomeFirst": 0,
+   "SeamType": "CROSS",
+   "PoseAbsolute": 1,
+   "WaypointsJson": "[{\"X\":0,\"Z\":33.8,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":4.91,\"Z\":33.37,\"Theta\":10,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":9.67,\"Z\":32.1,\"Theta\":20,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":14.13,\"Z\":30.02,\"Theta\":30,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":18.17,\"Z\":27.19,\"Theta\":40,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":23.2,\"Z\":21.68,\"Theta\":45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":25.76,\"Z\":17.17,\"Theta\":45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":27.54,\"Z\":11.88,\"Theta\":45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":55,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":100,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":145,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":225,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":270,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":315,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":329.36,\"Z\":11.88,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":331.8,\"Z\":17.17,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":334.35,\"Z\":21.68,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":341.83,\"Z\":27.19,\"Theta\":-40,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":345.87,\"Z\":30.02,\"Theta\":-30,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":350.33,\"Z\":32.1,\"Theta\":-20,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":354.09,\"Z\":33.37,\"Theta\":-10,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":360,\"Z\":33.8,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":175,\"Z\":33.8,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-195,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":175,\"Z\":33.37,\"Theta\":-10,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":-189.09,\"RzDeg\":-90,\"RxDeg\":5.17859189130832E-05},{\"X\":175,\"Z\":32,\"Theta\":-20,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":-185.33,\"RzDeg\":-90,\"RxDeg\":5.17890039191116E-05},{\"X\":175,\"Z\":30.02,\"Theta\":-30,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":-180.87,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":175,\"Z\":27.19,\"Theta\":-40,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":-176.83,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":175,\"Z\":21.68,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-169.35,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":175,\"Z\":17.17,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-166.8,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":175,\"Z\":11.88,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-164.36,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":175,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-145,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":175,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-100,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":175,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-55,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":175,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":30,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":175,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":75,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":175,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":120,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":175,\"Z\":11.88,\"Theta\":45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":139.36,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":175,\"Z\":17.17,\"Theta\":45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":141.8,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":175,\"Z\":21.68,\"Theta\":45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":144.35,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":175,\"Z\":27.19,\"Theta\":40,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":151.83,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":175,\"Z\":30.02,\"Theta\":30,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":155.87,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":175,\"Z\":32.1,\"Theta\":20,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":160.33,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":175,\"Z\":33.37,\"Theta\":10,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":164.09,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":175,\"Z\":33.8,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":170,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":180,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-25,\"RzDeg\":0,\"RxDeg\":0},{\"X\":170,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-5,\"RzDeg\":0,\"RxDeg\":0},{\"X\":185,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":185,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-17.5,\"RzDeg\":0,\"RxDeg\":0}]",
+   "CreatedAt": "2026-09-16 03:28:39.6028916",
+   "UpdatedAt": "2026-11-14 05:24:00.7989568",
+   "DrawingName": "MEMBRANE-C"
+  },
+  {
+   "Id": 13,
+   "Name": "CROSS-3-R0-V1",
+   "SpacingMm": 0.0,
+   "CorrugThresholdDeg": 0.0,
+   "CorrugStepDeg": 0.0,
+   "RunTool": 1,
+   "RunUser": 2,
+   "RunVel": 20,
+   "DelaySec": 10.0,
+   "ThMax": 180.0,
+   "SettleDelaySec": 0.5,
+   "MoveHomeFirst": 0,
+   "SeamType": "CROSS3_R0",
+   "PoseAbsolute": 1,
+   "WaypointsJson": "[{\"X\":0,\"Z\":33.8,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":4.91,\"Z\":33.37,\"Theta\":10,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":9.67,\"Z\":32.1,\"Theta\":20,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":14.13,\"Z\":30.02,\"Theta\":30,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":18.17,\"Z\":27.19,\"Theta\":40,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":21.65,\"Z\":23.71,\"Theta\":50,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":23.2,\"Z\":21.68,\"Theta\":45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":25.76,\"Z\":17.17,\"Theta\":45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":27.54,\"Z\":11.88,\"Theta\":45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":30.93,\"Z\":2.94,\"Theta\":45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":55,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":100,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":145,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":225,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":270,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":315,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":331.07,\"Z\":2.94,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":334.36,\"Z\":11.88,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":336.8,\"Z\":16.17,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":339.35,\"Z\":18.68,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":342.35,\"Z\":20.71,\"Theta\":-50,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":346.83,\"Z\":25.19,\"Theta\":-40,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":350.87,\"Z\":27.02,\"Theta\":-30,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":355.33,\"Z\":29.1,\"Theta\":-20,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":359.09,\"Z\":28.37,\"Theta\":-10,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":365,\"Z\":29.8,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":205,\"Z\":29.8,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-195,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":205,\"Z\":28.37,\"Theta\":-10,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":-189.09,\"RzDeg\":-90,\"RxDeg\":5.17859189130832E-05},{\"X\":205,\"Z\":29.1,\"Theta\":-20,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":-185.33,\"RzDeg\":-90,\"RxDeg\":5.17890039191116E-05},{\"X\":205,\"Z\":27.02,\"Theta\":-30,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":-180.87,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":205,\"Z\":25.19,\"Theta\":-40,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":-176.83,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":205,\"Z\":20.17,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":-172.35,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":205,\"Z\":18.68,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-169.35,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":205,\"Z\":16.17,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-166.8,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":205,\"Z\":11.88,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-164.36,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":205,\"Z\":2.94,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-161.07,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":205,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-145,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":205,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-100,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":205,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-55,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":182,\"Z\":-12,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-25,\"RzDeg\":0,\"RxDeg\":-7},{\"X\":170.5,\"Z\":-12,\"Theta\":7,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-12.5,\"RzDeg\":0,\"RxDeg\":0},{\"X\":183,\"Z\":-12,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":7},{\"X\":195.5,\"Z\":-12,\"Theta\":-7,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-12.5,\"RzDeg\":0,\"RxDeg\":0}]",
+   "CreatedAt": "2026-10-06 20:06:03.334986",
+   "UpdatedAt": "2026-10-06 20:06:03.334986",
+   "DrawingName": null
+  },
+  {
+   "Id": 14,
+   "Name": "CROSS-3-R90-V1",
+   "SpacingMm": 0.0,
+   "CorrugThresholdDeg": 0.0,
+   "CorrugStepDeg": 0.0,
+   "RunTool": 1,
+   "RunUser": 2,
+   "RunVel": 20,
+   "DelaySec": 10.0,
+   "ThMax": 180.0,
+   "SettleDelaySec": 0.5,
+   "MoveHomeFirst": 0,
+   "SeamType": "CROSS3_R90",
+   "PoseAbsolute": 1,
+   "WaypointsJson": "[{\"X\":0,\"Z\":33.8,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":4.91,\"Z\":33.37,\"Theta\":10,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":9.67,\"Z\":32.1,\"Theta\":20,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":14.13,\"Z\":30.02,\"Theta\":30,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":18.17,\"Z\":27.19,\"Theta\":40,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":21.65,\"Z\":23.71,\"Theta\":50,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":23.2,\"Z\":21.68,\"Theta\":45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":25.76,\"Z\":17.17,\"Theta\":45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":27.54,\"Z\":11.88,\"Theta\":45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":30.93,\"Z\":2.94,\"Theta\":45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":55,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":100,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":145,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":225,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":270,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":315,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":331.07,\"Z\":2.94,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":334.36,\"Z\":11.88,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":336.8,\"Z\":16.17,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":339.35,\"Z\":18.68,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":342.35,\"Z\":20.71,\"Theta\":-50,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":346.83,\"Z\":25.19,\"Theta\":-40,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":350.87,\"Z\":27.02,\"Theta\":-30,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":355.33,\"Z\":29.1,\"Theta\":-20,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":359.09,\"Z\":28.37,\"Theta\":-10,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":365,\"Z\":29.8,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":205,\"Z\":29.8,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-195,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":205,\"Z\":28.37,\"Theta\":-10,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":-189.09,\"RzDeg\":-90,\"RxDeg\":5.17859189130832E-05},{\"X\":205,\"Z\":29.1,\"Theta\":-20,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":-185.33,\"RzDeg\":-90,\"RxDeg\":5.17890039191116E-05},{\"X\":205,\"Z\":27.02,\"Theta\":-30,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":-180.87,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":205,\"Z\":25.19,\"Theta\":-40,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":-176.83,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":205,\"Z\":20.17,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":-172.35,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":205,\"Z\":18.68,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-169.35,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":205,\"Z\":16.17,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-166.8,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":205,\"Z\":11.88,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-164.36,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":205,\"Z\":2.94,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-161.07,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":205,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-145,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":205,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-100,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":205,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-55,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":182,\"Z\":-12,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-25,\"RzDeg\":0,\"RxDeg\":-7},{\"X\":170.5,\"Z\":-12,\"Theta\":7,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-12.5,\"RzDeg\":0,\"RxDeg\":0},{\"X\":183,\"Z\":-12,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":7},{\"X\":195.5,\"Z\":-12,\"Theta\":-7,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-12.5,\"RzDeg\":0,\"RxDeg\":0}]",
+   "CreatedAt": "2026-10-07 02:04:36.9061179",
+   "UpdatedAt": "2026-10-07 02:04:36.9061179",
+   "DrawingName": null
+  },
+  {
+   "Id": 15,
+   "Name": "CROSS-3-R180-V1",
+   "SpacingMm": 0.0,
+   "CorrugThresholdDeg": 0.0,
+   "CorrugStepDeg": 0.0,
+   "RunTool": 1,
+   "RunUser": 2,
+   "RunVel": 20,
+   "DelaySec": 10.0,
+   "ThMax": 180.0,
+   "SettleDelaySec": 0.5,
+   "MoveHomeFirst": 0,
+   "SeamType": "CROSS3_R180",
+   "PoseAbsolute": 1,
+   "WaypointsJson": "[{\"X\":0,\"Z\":33.8,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":4.91,\"Z\":33.37,\"Theta\":10,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":9.67,\"Z\":32.1,\"Theta\":20,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":14.13,\"Z\":30.02,\"Theta\":30,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":18.17,\"Z\":27.19,\"Theta\":40,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":21.65,\"Z\":23.71,\"Theta\":50,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":23.2,\"Z\":21.68,\"Theta\":45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":25.76,\"Z\":17.17,\"Theta\":45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":27.54,\"Z\":11.88,\"Theta\":45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":30.93,\"Z\":2.94,\"Theta\":45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":55,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":100,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":145,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":225,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":270,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":315,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":331.07,\"Z\":2.94,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":334.36,\"Z\":11.88,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":336.8,\"Z\":16.17,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":339.35,\"Z\":18.68,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":342.35,\"Z\":20.71,\"Theta\":-50,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":346.83,\"Z\":25.19,\"Theta\":-40,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":350.87,\"Z\":27.02,\"Theta\":-30,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":355.33,\"Z\":29.1,\"Theta\":-20,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":359.09,\"Z\":28.37,\"Theta\":-10,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":365,\"Z\":29.8,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":205,\"Z\":29.8,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-195,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":205,\"Z\":28.37,\"Theta\":-10,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":-189.09,\"RzDeg\":-90,\"RxDeg\":5.17859189130832E-05},{\"X\":205,\"Z\":29.1,\"Theta\":-20,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":-185.33,\"RzDeg\":-90,\"RxDeg\":5.17890039191116E-05},{\"X\":205,\"Z\":27.02,\"Theta\":-30,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":-180.87,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":205,\"Z\":25.19,\"Theta\":-40,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":-176.83,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":205,\"Z\":20.17,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":-172.35,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":205,\"Z\":18.68,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-169.35,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":205,\"Z\":16.17,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-166.8,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":205,\"Z\":11.88,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-164.36,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":205,\"Z\":2.94,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-161.07,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":205,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-145,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":205,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-100,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":205,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-55,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":182,\"Z\":-12,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-25,\"RzDeg\":0,\"RxDeg\":-7},{\"X\":170.5,\"Z\":-12,\"Theta\":7,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-12.5,\"RzDeg\":0,\"RxDeg\":0},{\"X\":183,\"Z\":-12,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":7},{\"X\":195.5,\"Z\":-12,\"Theta\":-7,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-12.5,\"RzDeg\":0,\"RxDeg\":0}]",
+   "CreatedAt": "2026-10-07 02:04:46.1726656",
+   "UpdatedAt": "2026-10-07 02:04:46.1726656",
+   "DrawingName": null
+  },
+  {
+   "Id": 16,
+   "Name": "CROSS-3-R270-V1",
+   "SpacingMm": 0.0,
+   "CorrugThresholdDeg": 0.0,
+   "CorrugStepDeg": 0.0,
+   "RunTool": 1,
+   "RunUser": 2,
+   "RunVel": 20,
+   "DelaySec": 10.0,
+   "ThMax": 180.0,
+   "SettleDelaySec": 0.5,
+   "MoveHomeFirst": 0,
+   "SeamType": "CROSS3_R270",
+   "PoseAbsolute": 1,
+   "WaypointsJson": "[{\"X\":0,\"Z\":33.8,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":4.91,\"Z\":33.37,\"Theta\":10,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":9.67,\"Z\":32.1,\"Theta\":20,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":14.13,\"Z\":30.02,\"Theta\":30,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":18.17,\"Z\":27.19,\"Theta\":40,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":21.65,\"Z\":23.71,\"Theta\":50,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":23.2,\"Z\":21.68,\"Theta\":45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":25.76,\"Z\":17.17,\"Theta\":45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":27.54,\"Z\":11.88,\"Theta\":45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":30.93,\"Z\":2.94,\"Theta\":45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":55,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":100,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":145,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":225,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":270,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":315,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":331.07,\"Z\":2.94,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":334.36,\"Z\":11.88,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":336.8,\"Z\":16.17,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":339.35,\"Z\":18.68,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":342.35,\"Z\":20.71,\"Theta\":-50,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":346.83,\"Z\":25.19,\"Theta\":-40,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":350.87,\"Z\":27.02,\"Theta\":-30,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":355.33,\"Z\":29.1,\"Theta\":-20,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":359.09,\"Z\":28.37,\"Theta\":-10,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":365,\"Z\":29.8,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":205,\"Z\":29.8,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-195,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":205,\"Z\":28.37,\"Theta\":-10,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":-189.09,\"RzDeg\":-90,\"RxDeg\":5.17859189130832E-05},{\"X\":205,\"Z\":29.1,\"Theta\":-20,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":-185.33,\"RzDeg\":-90,\"RxDeg\":5.17890039191116E-05},{\"X\":205,\"Z\":27.02,\"Theta\":-30,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":-180.87,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":205,\"Z\":25.19,\"Theta\":-40,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":-176.83,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":205,\"Z\":20.17,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":-172.35,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":205,\"Z\":18.68,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-169.35,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":205,\"Z\":16.17,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-166.8,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":205,\"Z\":11.88,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-164.36,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":205,\"Z\":2.94,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-161.07,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":205,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-145,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":205,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-100,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":205,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-55,\"RzDeg\":-90,\"RxDeg\":0},{\"X\":182,\"Z\":-12,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-25,\"RzDeg\":0,\"RxDeg\":-7},{\"X\":170.5,\"Z\":-12,\"Theta\":7,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-12.5,\"RzDeg\":0,\"RxDeg\":0},{\"X\":183,\"Z\":-12,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":7},{\"X\":195.5,\"Z\":-12,\"Theta\":-7,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":-12.5,\"RzDeg\":0,\"RxDeg\":0}]",
+   "CreatedAt": "2026-10-07 02:04:54.2771513",
+   "UpdatedAt": "2026-10-07 02:04:54.2771513",
+   "DrawingName": null
+  },
+  {
+   "Id": 18,
+   "Name": "LINE-1-COR-261109",
+   "SpacingMm": 0.0,
+   "CorrugThresholdDeg": 0.0,
+   "CorrugStepDeg": 0.0,
+   "RunTool": 1,
+   "RunUser": 0,
+   "RunVel": 5,
+   "DelaySec": 10.0,
+   "ThMax": 180.0,
+   "SettleDelaySec": 1.0,
+   "MoveHomeFirst": 0,
+   "SeamType": "LINE",
+   "PoseAbsolute": 1,
+   "WaypointsJson": "[{\"X\":0,\"Z\":33.8,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":4.91,\"Z\":33.37,\"Theta\":10,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":9.67,\"Z\":32.1,\"Theta\":20,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":14.13,\"Z\":30.02,\"Theta\":30,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":18.17,\"Z\":27.19,\"Theta\":40,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":23.2,\"Z\":21.68,\"Theta\":45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":25.76,\"Z\":17.17,\"Theta\":45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":25.54,\"Z\":11.88,\"Theta\":45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":45,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":90,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":120,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":150,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":180,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":210,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":240,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":270,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":300,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":332.46,\"Z\":11.88,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":334.24,\"Z\":17.17,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":336.8,\"Z\":21.68,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":341.83,\"Z\":27.19,\"Theta\":-40,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":345.87,\"Z\":30.02,\"Theta\":-30,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":350.33,\"Z\":32.1,\"Theta\":-20,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":355.09,\"Z\":33.37,\"Theta\":-10,\"ThetaManual\":true,\"Surface\":1,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":360,\"Z\":33.8,\"Theta\":0.000429960695328191,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":4.23414348915685E-05,\"RxDeg\":0}]",
+   "CreatedAt": "2026-11-09 06:26:03.5514694",
+   "UpdatedAt": "2026-11-09 06:26:03.5514694",
+   "DrawingName": null
+  },
+  {
+   "Id": 22,
+   "Name": "256.4mm 수직_20261112",
+   "SpacingMm": 0.0,
+   "CorrugThresholdDeg": 0.0,
+   "CorrugStepDeg": 0.0,
+   "RunTool": 1,
+   "RunUser": 0,
+   "RunVel": 5,
+   "DelaySec": 10.0,
+   "ThMax": 180.0,
+   "SettleDelaySec": 0.5,
+   "MoveHomeFirst": 0,
+   "SeamType": "LINE",
+   "PoseAbsolute": 1,
+   "WaypointsJson": "[{\"X\":0,\"Z\":33.8,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":4.91,\"Z\":33.37,\"Theta\":10,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":9.67,\"Z\":32.1,\"Theta\":20,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":14.13,\"Z\":30.02,\"Theta\":30,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":18.17,\"Z\":27.19,\"Theta\":40,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":23.2,\"Z\":21.68,\"Theta\":45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":25.76,\"Z\":17.17,\"Theta\":45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":27.54,\"Z\":11.88,\"Theta\":45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":67.28,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":97.28,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":127.28,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":157.28,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":187.28,\"Z\":0,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":227.02,\"Z\":11.94,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":228.8,\"Z\":17.23,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":231.36,\"Z\":21.74,\"Theta\":-45,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":236.39,\"Z\":27.25,\"Theta\":-40,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":240.43,\"Z\":30.8,\"Theta\":-30,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":244.89,\"Z\":32.16,\"Theta\":-20,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":249.65,\"Z\":33.43,\"Theta\":-10,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0},{\"X\":254.56,\"Z\":33.86,\"Theta\":0,\"ThetaManual\":true,\"Surface\":0,\"SurfaceManual\":true,\"Y\":0,\"RzDeg\":0,\"RxDeg\":0}]",
+   "CreatedAt": "2026-11-12 11:23:47.6843824",
+   "UpdatedAt": "2026-11-12 13:12:39.3574476",
+   "DrawingName": null
+  }
+ ],
+ "recipes": [
+  {
+   "Id": "CORNER3",
+   "DisplayName": "3점 코너 (삼면, 135°·90°·90°)",
+   "SeamType": "Corner",
+   "Orientation": "Any",
+   "Enabled": 0,
+   "StepKeysJson": null,
+   "CameraTargetDistanceMm": null,
+   "VisionFailRatioMax": 1.0,
+   "CreatedAt": "2026-09-14 16:36:04.7699209",
+   "UpdatedAt": "2026-09-14 16:36:04.7699209",
+   "PatternJson": null,
+   "InspectionProfileId": null,
+   "DryRun": 0,
+   "MoveVelPercent": null,
+   "InspectVelPercent": null,
+   "ChamferSlopeProfileId": null,
+   "InspectAccPercent": null
+  },
+  {
+   "Id": "CORNER2",
+   "DisplayName": "2면 코너 (이면, 브릿지 플레이트)",
+   "SeamType": "Corner2",
+   "Orientation": "Any",
+   "Enabled": 0,
+   "StepKeysJson": null,
+   "CameraTargetDistanceMm": null,
+   "VisionFailRatioMax": 1.0,
+   "CreatedAt": "2026-09-15 16:07:46.1800868",
+   "UpdatedAt": "2026-09-15 16:07:46.1800868",
+   "PatternJson": null,
+   "InspectionProfileId": null,
+   "DryRun": 0,
+   "MoveVelPercent": null,
+   "InspectVelPercent": null,
+   "ChamferSlopeProfileId": null,
+   "InspectAccPercent": null
+  },
+  {
+   "Id": "CROSS3-R0",
+   "DisplayName": "T자 3갈래 — 0°",
+   "SeamType": "Cross3R0",
+   "Orientation": "Any",
+   "Enabled": 1,
+   "StepKeysJson": null,
+   "CameraTargetDistanceMm": 400.0,
+   "VisionFailRatioMax": 1.0,
+   "CreatedAt": "2026-10-06 20:04:31.4734142",
+   "UpdatedAt": "2026-11-03 02:53:24.5410626",
+   "PatternJson": null,
+   "InspectionProfileId": 13,
+   "DryRun": 1,
+   "MoveVelPercent": 20,
+   "InspectVelPercent": 10,
+   "ChamferSlopeProfileId": null,
+   "InspectAccPercent": null
+  },
+  {
+   "Id": "CROSS3-R180",
+   "DisplayName": "T자 3갈래 — 180°",
+   "SeamType": "Cross3R180",
+   "Orientation": "Any",
+   "Enabled": 1,
+   "StepKeysJson": null,
+   "CameraTargetDistanceMm": null,
+   "VisionFailRatioMax": 1.0,
+   "CreatedAt": "2026-10-06 20:04:31.5093395",
+   "UpdatedAt": "2026-11-03 02:53:21.1462158",
+   "PatternJson": null,
+   "InspectionProfileId": 15,
+   "DryRun": 1,
+   "MoveVelPercent": null,
+   "InspectVelPercent": null,
+   "ChamferSlopeProfileId": null,
+   "InspectAccPercent": null
+  },
+  {
+   "Id": "CROSS3-R270",
+   "DisplayName": "T자 3갈래 — 270°",
+   "SeamType": "Cross3R270",
+   "Orientation": "Any",
+   "Enabled": 1,
+   "StepKeysJson": null,
+   "CameraTargetDistanceMm": null,
+   "VisionFailRatioMax": 1.0,
+   "CreatedAt": "2026-10-06 20:04:31.5093568",
+   "UpdatedAt": "2026-11-03 02:53:17.7034176",
+   "PatternJson": null,
+   "InspectionProfileId": 16,
+   "DryRun": 1,
+   "MoveVelPercent": null,
+   "InspectVelPercent": null,
+   "ChamferSlopeProfileId": null,
+   "InspectAccPercent": null
+  },
+  {
+   "Id": "CROSS3-R90",
+   "DisplayName": "T자 3갈래 — 90°",
+   "SeamType": "Cross3R90",
+   "Orientation": "Any",
+   "Enabled": 1,
+   "StepKeysJson": null,
+   "CameraTargetDistanceMm": null,
+   "VisionFailRatioMax": 1.0,
+   "CreatedAt": "2026-10-06 20:04:31.509149",
+   "UpdatedAt": "2026-11-03 02:53:13.9040058",
+   "PatternJson": null,
+   "InspectionProfileId": 14,
+   "DryRun": 1,
+   "MoveVelPercent": null,
+   "InspectVelPercent": null,
+   "ChamferSlopeProfileId": null,
+   "InspectAccPercent": null
+  },
+  {
+   "Id": "LINE",
+   "DisplayName": "직선 seam",
+   "SeamType": "Line",
+   "Orientation": "Any",
+   "Enabled": 1,
+   "StepKeysJson": "[\"cobotInspection\",\"cameraAlign\",\"cameraAlignRefine\",\"flatSurfaceAlign\",\"laserWorkingDistance\",\"depthCamCenterShift\",\"peak1Find\",\"peak1Center\",\"bead1Find\",\"bead1Center\",\"wobjPoint1\",\"peak2Approach\",\"flatSurfaceSearchBundlePoint2\",\"laserWorkingDistanceBundlePoint2\",\"peak2Find\",\"peak2Center\",\"bead2Find\",\"bead2Center\",\"wobjPoint2\",\"wobjRegister\",\"inspectionRun\",\"wobjReset\",\"cobotHome\",\"monitorClose\"]",
+   "CameraTargetDistanceMm": 300.0,
+   "VisionFailRatioMax": 1.0,
+   "CreatedAt": "2026-09-14 16:36:04.769563",
+   "UpdatedAt": "2026-11-12 16:34:50.5461918",
+   "PatternJson": null,
+   "InspectionProfileId": 18,
+   "DryRun": 0,
+   "MoveVelPercent": 50,
+   "InspectVelPercent": 30,
+   "ChamferSlopeProfileId": 22,
+   "InspectAccPercent": 30
+  },
+  {
+   "Id": "CROSS4",
+   "DisplayName": "4점 십자",
+   "SeamType": "Cross",
+   "Orientation": "Any",
+   "Enabled": 1,
+   "StepKeysJson": "[\"cobotInspection\",\"cameraAlign\",\"cameraAlignRefine\",\"flatSurfaceAlign\",\"laserWorkingDistance\",\"depthCamCenterShift\",\"peak1Find\",\"peak1Center\",\"bead1Find\",\"bead1Center\",\"wobjPoint1\",\"peak2Approach\",\"flatSurfaceSearchBundlePoint2\",\"laserWorkingDistanceBundlePoint2\",\"peak2Find\",\"peak2Center\",\"bead2Find\",\"bead2Center\",\"wobjPoint2\",\"wobjRegister\",\"inspectionRun\",\"wobjReset\",\"cobotHome\",\"monitorClose\"]",
+   "CameraTargetDistanceMm": 300.0,
+   "VisionFailRatioMax": 1.0,
+   "CreatedAt": "2026-09-14 16:36:04.7698991",
+   "UpdatedAt": "2026-11-12 12:16:47.1839974",
+   "PatternJson": null,
+   "InspectionProfileId": 9,
+   "DryRun": 0,
+   "MoveVelPercent": 70,
+   "InspectVelPercent": 30,
+   "ChamferSlopeProfileId": null,
+   "InspectAccPercent": 30
+  }
+ ]
+}

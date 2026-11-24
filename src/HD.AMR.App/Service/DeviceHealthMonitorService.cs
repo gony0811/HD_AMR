@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -22,19 +23,34 @@ public sealed class DeviceHealthMonitorService : BackgroundService
     private readonly CameraService _camera;
     private readonly IoModuleService _io;
     private readonly VisionInterfaceService _vision;
+    private readonly GasDetectorService _gas;
     private readonly LaserDisplacementSensorService _laser;
     private readonly Vda5050OrderExecutor _executor;
+    private readonly CobotFaultGuard _faultGuard;
     private readonly OperationLogService _opLog;
     private readonly ILogger<DeviceHealthMonitorService> _logger;
 
     private readonly object _lock = new();
     private readonly DeviceAlarmTracker _tracker;
+    private readonly IServiceScopeFactory _scopeFactory;
+
+    /// <summary>드라이런 레시피 확인 주기(초).</summary>
+    private const double DryRunRefreshSec = 2;
+    private DateTime _dryRunCheckedUtc = DateTime.MinValue;
+    /// <summary>사용 중(Enabled) 레시피 중 하나라도 DryRun 이면 true — 가스 디텍터 HEAVY 감시를 생략한다.
+    /// 드라이런 검사 순회는 디텍터 없이 이동만 하므로 디텍터 미연결로 order 거부·임무 중단이 나면 안 된다.
+    /// 일반(비드라이런) 레시피는 오케스트레이터·검사 수행 스텝이 여전히 디텍터 링크를 확인해 막는다.</summary>
+    private volatile bool _gasDryRunBypass;
 
     public DeviceHealthMonitorService(IOptions<DeviceHealthSettings> options, DeviceAlarmState state,
         AMRService amr, CobotService cobot, CameraService camera, IoModuleService io,
-        VisionInterfaceService vision, LaserDisplacementSensorService laser,
-        Vda5050OrderExecutor executor, OperationLogService opLog, ILogger<DeviceHealthMonitorService> logger)
+        VisionInterfaceService vision, GasDetectorService gas, IOptions<InspectionSensorSettings> sensor,
+        LaserDisplacementSensorService laser,
+        Vda5050OrderExecutor executor, OperationLogService opLog, IServiceScopeFactory scopeFactory,
+        CobotFaultGuard faultGuard, ILogger<DeviceHealthMonitorService> logger)
     {
+        _faultGuard = faultGuard;
+        _scopeFactory = scopeFactory;
         _s = options.Value;
         _state = state;
         _amr = amr;
@@ -42,13 +58,14 @@ public sealed class DeviceHealthMonitorService : BackgroundService
         _camera = camera;
         _io = io;
         _vision = vision;
+        _gas = gas;
         _laser = laser;
         _executor = executor;
         _opLog = opLog;
         _logger = logger;
         _tracker = new DeviceAlarmTracker(
             TimeSpan.FromSeconds(_s.LostAfterSec), TimeSpan.FromSeconds(_s.StartupGraceSec),
-            DateTime.UtcNow, _s.Devices.EnabledKinds());
+            DateTime.UtcNow, _s.Devices.EnabledKinds(sensor.Value.Mode));
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -82,6 +99,7 @@ public sealed class DeviceHealthMonitorService : BackgroundService
     private async Task TickAsync()
     {
         var now = DateTime.UtcNow;
+        await RefreshDryRunBypassAsync(now);
         var samples = Sample(now);
 
         IReadOnlyList<DeviceAlarmEvent> events;
@@ -112,7 +130,8 @@ public sealed class DeviceHealthMonitorService : BackgroundService
         _state.Update(snapshot);
 
         foreach (var ev in events.Where(e => e.Event == DeviceAlarmEventKind.Raised))
-            await _executor.AbortForDeviceFaultAsync($"{DeviceAlarmTracker.DisplayName(ev.Kind)} 통신 두절({ev.Detail})");
+            await _executor.AbortForDeviceFaultAsync(
+                $"{DeviceAlarmTracker.DisplayName(ev.Kind)} {(ev.Detail.StartsWith(CobotFaultGuard.DetailPrefix, StringComparison.Ordinal) ? "결함" : "통신 두절")}({ev.Detail})");
     }
 
     private void OnResetRequested(string source)
@@ -151,6 +170,7 @@ public sealed class DeviceHealthMonitorService : BackgroundService
             : !_cobot.IsStateConnected ? new(false, "상태 소켓(20004) 끊김")
             : cs is null ? new(false, "상태 미수신")
             : !Fresh(cs.UpdatedAt, _s.CobotStaleSec) ? new(false, "상태 패킷 중단")
+            : _faultGuard.Unhealthy is { } fault ? new(false, fault)   // 결함 — 감시기가 이미 정지·임무 중단, 여기서는 HEAVY 래치
             : new(true, "");
 
         r[DeviceKind.IoModule] = !_io.IsConnected ? new(false, "Modbus 미연결")
@@ -167,10 +187,39 @@ public sealed class DeviceHealthMonitorService : BackgroundService
             : _s.VisionRxStaleSec > 0 && !Fresh(vc.LastRxUtc, _s.VisionRxStaleSec) ? new(false, "HEARTBEAT 무응답")
             : new(true, "");
 
+        r[DeviceKind.GasDetector] = _gasDryRunBypass ? new(true, "")
+            : !_gas.IsPortOpen ? new(false, _gas.Settings.Transport == HD.AMR.App.Communication.GasDetector.GasDetectorTransportKind.Tcp ? "TCP 미연결" : "시리얼 포트 미연결")
+            : !Fresh(_gas.LastOkUtc, _s.GasDetectorStaleSec) ? new(false, "응답 없음")
+            : new(true, "");
+
         r[DeviceKind.Laser] = !_laser.IsConnected ? new(false, "EtherNet/IP 미연결")
             : !Fresh(_laser.LastAliveUtc, _s.LaserStaleSec) ? new(false, "생존 확인 실패")
             : new(true, "");
 
         return r;
+    }
+
+    /// <summary>레시피 DryRun 상태를 주기적으로 읽어 가스 디텍터 감시 생략 여부를 갱신한다.</summary>
+    private async Task RefreshDryRunBypassAsync(DateTime now)
+    {
+        if (!_tracker.Enabled.Contains(DeviceKind.GasDetector)) return;   // 디텍터 감시 대상이 아니면(비전 AMR 등) DB 조회 불필요
+        if ((now - _dryRunCheckedUtc).TotalSeconds < DryRunRefreshSec) return;
+        _dryRunCheckedUtc = now;
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var recipes = await scope.ServiceProvider.GetRequiredService<InspectionRecipeService>().ListAsync();
+            var bypass = recipes.Any(r => r.Enabled && r.DryRun);
+            if (bypass == _gasDryRunBypass) return;
+            _gasDryRunBypass = bypass;
+            if (bypass)
+                _logger.LogWarning("드라이런 레시피 활성 — 가스 디텍터 HEAVY 감시 생략(디텍터 없이 검사 순회 허용). 이미 뜬 알람은 RESET 으로 해제");
+            else
+                _logger.LogInformation("드라이런 레시피 없음 — 가스 디텍터 HEAVY 감시 재개");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "드라이런 레시피 확인 실패 — 가스 디텍터 감시 상태 유지({Bypass})", _gasDryRunBypass);
+        }
     }
 }
