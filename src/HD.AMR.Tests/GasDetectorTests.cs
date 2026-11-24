@@ -172,7 +172,7 @@ public class GasInspectionReportTests
         var task = new GasTaskResult(T0, T0.AddSeconds(265), th, new[]
         {
             new GasPointResult(1, 1200, 340, new[] { Scan(0, 0.8, offsetMs: 1000) }),
-            new GasPointResult(2, 1202, 340, new[] { Scan(0, 7.4), Scan(1, 6.9), Scan(2, 7.1) }),
+            new GasPointResult(2, 1202, 340, new[] { Scan(0, 7.4), Scan(1, 6.9), Scan(2, 7.1) }, H: 34),
         });
         var taskId = Guid.Parse("3f2b8c1e-7a4d-4e2b-9c11-5d0a6b7e8f90");
 
@@ -197,6 +197,9 @@ public class GasInspectionReportTests
         Assert.Equal(0, s0.GetProperty("retry").GetInt32());
         Assert.Equal(1200, s0.GetProperty("u").GetInt32());
         Assert.Equal(340, s0.GetProperty("v").GetInt32());
+        // h(면에서의 높이): 값이 없는 포인트는 싣지 않고, 있으면 그 포인트의 모든 측정에 싣는다
+        Assert.False(s0.TryGetProperty("h", out _));
+        Assert.All(points[1].GetProperty("scans").EnumerateArray(), s => Assert.Equal(34, s.GetProperty("h").GetInt32()));
         Assert.Equal(0.8, s0.GetProperty("value").GetDouble());
         Assert.Equal(1762151521000, s0.GetProperty("measuredAt").GetInt64());
 

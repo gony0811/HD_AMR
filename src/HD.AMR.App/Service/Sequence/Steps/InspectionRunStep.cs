@@ -526,7 +526,7 @@ public class InspectionRunStep : ISequenceStep
         var lastMoved = -1;
         var prevIdx = -1;   // 직전에 도착한 경유점 — 연속 측정 구간의 출발점
         var deferredFirstIdx = -1;   // 무정지: 정지 측정을 건너뛴 첫 경유점 — 첫 구간 결과로 채운다
-        (int? U, int? V) deferredFirstUv = default;
+        (int? U, int? V, int? H) deferredFirstUv = default;
 
         // 연속 측정 1구간: from → to 를 검사 속도로 이동하면서 샘플링해 구간 최대값으로 판정한다. 결과는 도착 경유점(to)의
         // 포인트로 남긴다. OK 가 아니면(NG·실패) 출발점으로 되돌아가 같은 구간을 다시 훑는다(재측정 — 정지 측정의 "같은 자리").
@@ -570,8 +570,8 @@ public class InspectionRunStep : ISequenceStep
                     return (null, $"구간 #{from + 1}→#{to + 1} 재측정 복귀 이동 실패 (rc={backRc}){FairinoErrorCodes.Suffix(backRc)}");
             }
 
-            var (gu, gv, _) = FaceLocalMapper.ToFaceLocal((ushort)context.InspectionSurfaceId, b.X, b.Y, b.Z, context.FacePlacement);
-            var point = new GasPointResult(to + 1, gu, gv, scans);
+            var (gu, gv, gh) = FaceLocalMapper.ToFaceLocal((ushort)context.InspectionSurfaceId, b.X, b.Y, b.Z, context.FacePlacement);
+            var point = new GasPointResult(to + 1, gu, gv, scans, FaceLocalMapper.CaptureHeight(gh));
             var last = scans[^1];
             var retryNote = scans.Count > 1 ? $" (재측정 {scans.Count - 1}회)" : "";
             var peakNote = peakMm is { } mm ? $", 최대값 추정 위치 #{from + 1} 에서 약 {mm:0} mm" : "";
@@ -755,8 +755,8 @@ public class InspectionRunStep : ISequenceStep
                 else
                 {
                     var wp = waypoints[segTo];
-                    var (pu, pv, _) = FaceLocalMapper.ToFaceLocal((ushort)context.InspectionSurfaceId, wp.X, wp.Y, wp.Z, context.FacePlacement);
-                    passPoint = new GasPointResult(segTo + 1, pu, pv, new[] { first });
+                    var (pu, pv, ph) = FaceLocalMapper.ToFaceLocal((ushort)context.InspectionSurfaceId, wp.X, wp.Y, wp.Z, context.FacePlacement);
+                    passPoint = new GasPointResult(segTo + 1, pu, pv, new[] { first }, FaceLocalMapper.CaptureHeight(ph));
                     context.Progress?.Invoke(passPoint.Result switch
                     {
                         GasJudgement.Ok => $"구간 #{segFrom + 1}→#{segTo + 1} 가스 OK 최대 {first.Value:0.###} {first.Unit} ({first.SampleCount}샘플)",
@@ -770,7 +770,7 @@ public class InspectionRunStep : ISequenceStep
             }
             if (deferredFirstIdx == from && rest.Count > 0 && gasPoints.TryGetValue(idxs[1], out var firstSeg))
             {
-                var firstPoint = new GasPointResult(from + 1, deferredFirstUv.U, deferredFirstUv.V, firstSeg.Scans);
+                var firstPoint = new GasPointResult(from + 1, deferredFirstUv.U, deferredFirstUv.V, firstSeg.Scans, deferredFirstUv.H);
                 gasPoints[from] = firstPoint;
                 visByIndex[from] = firstPoint.Result != GasJudgement.Error;
                 ngByIndex[from] = firstPoint.Result == GasJudgement.Ng;
@@ -883,19 +883,19 @@ public class InspectionRunStep : ISequenceStep
             // 일시정지 재개로 같은 점을 다시 재면 그 점의 결과를 새 측정으로 덮어쓴다.
             if (_useGas)
             {
-                var (gu, gv, _) = FaceLocalMapper.ToFaceLocal((ushort)context.InspectionSurfaceId, w.X, w.Y, w.Z, context.FacePlacement);
+                var (gu, gv, gh) = FaceLocalMapper.ToFaceLocal((ushort)context.InspectionSurfaceId, w.X, w.Y, w.Z, context.FacePlacement);
                 // 무정지: 첫 경유점에서 멈춰 재지 않는다 — 통과가 이 점에서 출발하며 바로 읽기 시작하므로 첫 구간(#1→#2)
                 // 결과를 이 점의 결과로 함께 쓴다(RunNonStopPassAsync 끝). 뒤에 지나갈 경유점이 없으면 종전대로 정지 측정.
                 if (nonStop && deferredFirstIdx < 0 && gasPoints.Count == 0
                     && Enumerable.Range(i + 1, waypoints.Count - i - 1).Any(k => !IsSkipped(waypoints[k])))
                 {
                     deferredFirstIdx = i;
-                    deferredFirstUv = (gu, gv);
+                    deferredFirstUv = (gu, gv, FaceLocalMapper.CaptureHeight(gh));
                     _logger.LogInformation("[검사 수행] 무정지 — 경유점 #{Idx} 정지 측정 생략(첫 구간 결과를 함께 씀)", i + 1);
                     continue;
                 }
                 var scans = await _gas.MeasurePointAsync($"WALL 0x{context.InspectionSurfaceId:X2} #{i + 1}", gasThreshold!, ct);
-                var point = new GasPointResult(i + 1, gu, gv, scans);
+                var point = new GasPointResult(i + 1, gu, gv, scans, FaceLocalMapper.CaptureHeight(gh));
                 gasPoints[i] = point;
                 visByIndex[i] = point.Result != GasJudgement.Error;
                 ngByIndex[i] = point.Result == GasJudgement.Ng;

@@ -29,8 +29,11 @@ public sealed record GasThreshold(
         (Source == GasThresholdSource.Acs ? $" (SAIGE{(RequestedBy is { } by ? $" {by}" : "")}{(TankId is { } t ? $", {t}" : "")})" : " (로컬 설정)");
 }
 
-/// <summary>경유점 1곳(SAIGE <c>points[]</c> 1개) — 최초 측정 + NG 재측정까지의 scan 들.</summary>
-public sealed record GasPointResult(int PointSeq, int? U, int? V, IReadOnlyList<GasMeasurementResult> Scans)
+/// <summary>
+/// 경유점 1곳(SAIGE <c>points[]</c> 1개) — 최초 측정 + NG 재측정까지의 scan 들.
+/// <c>H</c> = 면에서의 높이 [mm] (0 = 벽 표면, + = 선창 안쪽) — 용접검사 촬영 요청 PosZ 와 같은 값(경유점 Z, 음수는 0).
+/// </summary>
+public sealed record GasPointResult(int PointSeq, int? U, int? V, IReadOnlyList<GasMeasurementResult> Scans, int? H = null)
 {
     /// <summary>
     /// 재측정까지 반영한 포인트 판정 — 마지막 유효 측정의 판정(재측정에서 OK 가 나오면 OK).
@@ -110,6 +113,8 @@ public sealed class SaigeGasResultReport
         [JsonPropertyName("retry")] public int Retry { get; set; }
         [JsonPropertyName("u")] public int? U { get; set; }
         [JsonPropertyName("v")] public int? V { get; set; }
+        /// <summary>면에서의 높이 [mm] — 없으면 싣지 않는다.</summary>
+        [JsonPropertyName("h")] public int? H { get; set; }
         [JsonPropertyName("value")] public double Value { get; set; }
         [JsonPropertyName("result")] public string Result { get; set; } = "";
         [JsonPropertyName("measuredAt")] public long MeasuredAt { get; set; }
@@ -155,6 +160,7 @@ public sealed class SaigeGasResultReport
                     Retry = s.Retry,
                     U = p.U,
                     V = p.V,
+                    H = p.H,
                     Value = s.Value!.Value,
                     Result = ResultText(s.Judgement),
                     MeasuredAt = EpochMs(s.MeasuredUtc),
