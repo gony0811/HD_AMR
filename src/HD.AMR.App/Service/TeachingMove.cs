@@ -101,10 +101,22 @@ public static class TeachingMove
     /// <summary>도착 후 리프트를 <see cref="HomeLiftHeightMm"/> 로 내리는 위치(홈 위치·홈 위치_2).</summary>
     public static bool LowersLiftOnArrival(TeachingPosition target) => target.Key is "home" or "home2" or "home3" or "home4";
 
+    /// <summary>
+    /// 기준 자세(홈 위치·_2·_3·_4)로 가는데 현재 관절이 어느 티칭 위치(관절 저장분)에서도
+    /// <see cref="RouteSnapToleranceDeg"/> 밖이면 true — 검사 자세처럼 벽 앞에 팔을 뻗은 상태로 보고
+    /// 자동 주문과 같은 기준 자세 복귀(벽면 후퇴 → 경유 → 기준 자세)를 먼저 한다.
+    /// 티칭 위치 위(경유점·검사 준비 등)면 종전처럼 바로 이동한다.
+    /// </summary>
+    internal static bool NeedsSafeReturn(TeachingPosition target, double[] cur, IEnumerable<TeachingPosition> all)
+    {
+        if (!LowersLiftOnArrival(target) || !UsesJointMove(target)) return false;
+        return !all.Any(p => p.IsTaught && UsesJointMove(p) && JointDistance(cur, Joints(p)) <= RouteSnapToleranceDeg);
+    }
+
     /// <summary>경로 이동 결과. Rc≠0 이면 <see cref="FailedAt"/> 에서 실패, <see cref="Error"/> 가 있으면 움직이지 않았다.
     /// <see cref="Lift"/> 는 홈/홈 2 도착 후 리프트 하강 결과(대상 아니거나 코봇 이동 실패면 null).</summary>
     public sealed record RouteMoveResult(int Rc, RoutePlan Plan, TeachingPosition? FailedAt = null,
-        TelescopicMoveResult? Lift = null)
+        TelescopicMoveResult? Lift = null, IReadOnlyList<string>? SafeReturn = null)
     {
         public bool CobotOk => Rc == 0 && Plan.Error is null;
         public bool Ok => CobotOk && Lift is not { Ok: false };
@@ -115,17 +127,43 @@ public static class TeachingMove
     /// <param name="onStep">각 구간 이동 직전에 불린다(진행 표시용).</param>
     /// <param name="lift">주면 홈/홈 2 도착 후 리프트를 <see cref="HomeLiftHeightMm"/> 로 내리고 도달까지 기다린다.</param>
     /// <param name="onLift">리프트 하강 직전에 불린다(진행 표시용).</param>
+    /// <param name="param">주면 기준 자세(홈 위치·_2·_3·_4)로 갈 때 <see cref="NeedsSafeReturn"/> 이면 자동 주문과 같은
+    /// 복귀(벽면 후퇴 → 경유 → 기준 자세)를 먼저 한다. 광축 설정을 읽는 데 쓴다.</param>
+    /// <param name="onSafeReturn">안전 복귀 직전에 불린다(진행 표시용).</param>
     public static async Task<RouteMoveResult> MoveAlongRouteAsync(CobotService cobot, IEnumerable<TeachingPosition> all,
         TeachingPosition target, int tool, double vel, double jointVelScale, Action<TeachingPosition>? onStep,
-        CancellationToken ct, ILogger? logger = null, TelescopicService? lift = null, Action? onLift = null)
+        CancellationToken ct, ILogger? logger = null, TelescopicService? lift = null, Action? onLift = null,
+        ParameterService? param = null, Action? onSafeReturn = null)
     {
+        var allList = all as IReadOnlyList<TeachingPosition> ?? all.ToList();
         var cur = await cobot.Rpc.GetActualJointPosAsync(ct: ct);
-        var plan = PlanRoute(target, cur, all);
+
+        IReadOnlyList<string>? safeReturn = null;
+        if (param is not null && NeedsSafeReturn(target, cur, allList))
+        {
+            // 검사 자세처럼 티칭 위치 밖에서 기준 자세로 바로 MoveJ 하면 팔을 뻗은 채 J2 가 크게 돌아 공구가 벽·천장을
+            // 쓸고 지나간다(실기 2026-11-19 15:36 T 면 → 홈 위치_2). 자동 주문 복귀와 같은 경로로 먼저 기준 자세에 온다.
+            onSafeReturn?.Invoke();
+            var ctx = new Sequence.SequenceContext
+            {
+                Positions = allList.GroupBy(p => p.Key).ToDictionary(g => g.Key, g => g.First()),
+                Tool = tool,
+                Velocity = (int)Math.Round(vel),
+            };
+            await Sequence.Steps.WeldSequenceSupport.LoadOpticalAxisAsync(param, ctx);
+            logger?.LogInformation("[Teaching] '{Target}' 이동 — 티칭 위치 밖(현재 관절 [{Cur}]) → 자동 주문과 같은 기준 자세 복귀 먼저",
+                target.Name, string.Join(", ", cur.Select(v => v.ToString("0.0"))));
+            safeReturn = await Sequence.Steps.SequenceEntry.ReturnToBaseAsync(cobot, ctx,
+                logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, ct);
+            cur = await cobot.Rpc.GetActualJointPosAsync(ct: ct);
+        }
+
+        var plan = PlanRoute(target, cur, allList);
         var curText = string.Join(", ", cur.Select(v => v.ToString("0.0")));
         if (plan.Error is not null)
         {
             logger?.LogWarning("[Teaching] '{Target}' 이동 거부 — {Error} (현재 관절 [{Cur}])", target.Name, plan.Error, curText);
-            return new(-1, plan);
+            return new(-1, plan, SafeReturn: safeReturn);
         }
         logger?.LogInformation("[Teaching] '{Target}' 이동 시작 — 경로 {Route} (현재 관절 [{Cur}], 속도 {Vel}%)",
             target.Name, string.Join(" → ", plan.Steps.Select(s => s.Name)), curText, vel);
@@ -137,14 +175,14 @@ public static class TeachingMove
             {
                 logger?.LogWarning("[Teaching] '{Step}' 이동 실패 (rc={Rc}){Desc} — 목표 '{Target}'",
                     step.Name, rc, FairinoErrorCodes.Suffix(rc), target.Name);
-                return new(rc, plan, step);
+                return new(rc, plan, step, SafeReturn: safeReturn);
             }
         }
         logger?.LogInformation("[Teaching] '{Target}' 이동 완료", target.Name);
 
         // 리프트를 쓰지 않는 운영(Telescopic:Enabled = false)이면 하강 지령 자체를 건너뛴다.
         if (lift is null || lift.IsDisabled || !LowersLiftOnArrival(target))
-            return new(0, plan);
+            return new(0, plan, SafeReturn: safeReturn);
 
         // 홈/홈 2 = 코봇이 접힌 기준 자세 — 도착을 확인한 뒤에만 리프트를 내린다(이동 실패 시 위에서 이미 반환).
         onLift?.Invoke();
@@ -154,13 +192,14 @@ public static class TeachingMove
             logger?.LogInformation("[Teaching] 리프트 하강 완료 — {Msg}", lr.Message);
         else
             logger?.LogWarning("[Teaching] 리프트 하강 실패 — {Msg}", lr.Message);
-        return new(0, plan, Lift: lr);
+        return new(0, plan, Lift: lr, SafeReturn: safeReturn);
     }
 
     /// <summary>화면 표시용 결과 문구(Web·Desktop 공용).</summary>
     public static string Describe(RouteMoveResult r, TeachingPosition target)
     {
         var via = r.Plan.IsVia ? $" (경유: {string.Join(" → ", r.Plan.Steps.Select(s => s.Name))})" : "";
+        if (r.SafeReturn is { Count: > 0 } sr) via = $" (먼저 {string.Join(" → ", sr)}){via}";
         if (r.Plan.Error is { } err) return err;
         if (!r.CobotOk) return $"'{r.FailedAt?.Name}' 이동 실패 (rc={r.Rc}){FairinoErrorCodes.Suffix(r.Rc)}{via}";
         var liftText = r.Lift switch

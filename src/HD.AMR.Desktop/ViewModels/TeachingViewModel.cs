@@ -124,13 +124,14 @@ public sealed partial class TeachingViewModel : ViewModelBase
         _moveCts = new CancellationTokenSource();
         try
         {
-            double scale;
-            using (var scope = _scopeFactory.CreateScope())
-                scale = await TeachingMove.LoadJointVelocityScaleAsync(scope.ServiceProvider.GetRequiredService<ParameterService>());
+            using var scope = _scopeFactory.CreateScope();
+            var param = scope.ServiceProvider.GetRequiredService<ParameterService>();
+            var scale = await TeachingMove.LoadJointVelocityScaleAsync(param);
             var all = Rows.Select(r => r.Entity).ToList();
             var r = await TeachingMove.MoveAlongRouteAsync(_cobot, all, p, RunTool, Vel, scale,
                 step => Dispatcher.UIThread.Post(() => Message = $"'{step.Name}' 위치로 이동 중…"), _moveCts.Token, _logger,
-                _lift, () => Dispatcher.UIThread.Post(() => Message = $"리프트 {TeachingMove.HomeLiftHeightMm}mm 하강 중…"));
+                _lift, () => Dispatcher.UIThread.Post(() => Message = $"리프트 {TeachingMove.HomeLiftHeightMm}mm 하강 중…"),
+                param, () => Dispatcher.UIThread.Post(() => Message = "벽면 후퇴 후 기준 자세로 복귀 중…"));
             var text = TeachingMove.Describe(r, p);
             if (r.Ok) Ok(text); else Fail(text);
         }

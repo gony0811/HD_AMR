@@ -35,18 +35,14 @@ public class ReachMapService
     /// </summary>
     private async Task<Dictionary<string, double[]>> LoadStartJointsAsync(IEnumerable<string> wallCodes, CancellationToken ct)
     {
-        var positions = (await _teaching.ListAsync(ct)).ToDictionary(p => p.Key, p => p);
-        double[]? Joints(string key) => positions.TryGetValue(key, out var p) && p.IsTaught && p.J1.HasValue
-            ? new[] { p.J1!.Value, p.J2!.Value, p.J3!.Value, p.J4!.Value, p.J5!.Value, p.J6!.Value }
-            : null;
-
-        var result = new Dictionary<string, double[]>();
-        foreach (var code in wallCodes.Distinct())
-        {
-            var start = SequenceEntry.StartJointsFor(code, Joints);
-            if (start is not null) result[code] = start;
-            else _logger.LogWarning("리치 맵: {Wall} 면의 ② 출발 자세(검사 준비/홈 위치_2/ready) 미티칭 — 가지 전환 판정 없이 계산합니다.", code);
-        }
+        var taught = (await _teaching.ListAsync(ct))
+            .Where(p => p.IsTaught && p.J1.HasValue)
+            .ToDictionary(p => p.Key, p => new[] { p.J1!.Value, p.J2!.Value, p.J3!.Value, p.J4!.Value, p.J5!.Value, p.J6!.Value });
+        // ACS factsheet 와 같은 함수 — 리치 맵과 ACS 시뮬레이션의 출발 자세가 어긋나지 않게
+        var codes = wallCodes.Distinct().ToList();
+        var result = AcsFactsheet.StartJointsByWall(taught, codes);
+        foreach (var code in codes.Where(c => !result.ContainsKey(c)))
+            _logger.LogWarning("리치 맵: {Wall} 면의 ② 출발 자세(검사 준비/홈 위치_2/ready) 미티칭 — 가지 전환 판정 없이 계산합니다.", code);
         return result;
     }
 

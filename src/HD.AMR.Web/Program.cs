@@ -84,6 +84,7 @@ builder.Services.PostConfigure<HD.AMR.App.Communication.Vda5050.Vda5050AdapterSe
 builder.Services.AddSingleton<CobotObstacleGuard>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<CobotObstacleGuard>());
 builder.Services.AddSingleton<Vda5050OrderExecutor>();
+builder.Services.AddSingleton<AcsFactsheetService>();   // ACS factsheet(§7.3)
 builder.Services.AddSingleton<Vda5050AdapterService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<Vda5050AdapterService>());
 // 통신 단절 Fail-Safe(docs/HD_AMR_통신단절_FailSafe_사양.md) — 일시정지 게이트 + 단절 감시(GRACE→PAUSE→HOLD).

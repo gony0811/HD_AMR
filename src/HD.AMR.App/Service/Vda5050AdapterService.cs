@@ -245,13 +245,20 @@ public sealed class Vda5050AdapterService : BackgroundService
     /// <summary>수동 비드 입력 팝업 대기 — 떠 있는 동안 state.errors[] 로 ACS 에 알린다.</summary>
     private readonly Sequence.BeadManualLabelHub? _beadHub;
     private readonly CobotObstacleGuard? _obstacleGuard;
+    /// <summary>factsheet 본문(§7.3) — 없으면(테스트·구성 누락) 발행하지 않는다.</summary>
+    private readonly AcsFactsheetService? _factsheet;
+    /// <summary>마지막으로 발행한 factsheet 지문(묶음 지문 이어 붙임) — 같으면 주기 확인에서 다시 발행하지 않는다.</summary>
+    private string? _factsheetSent;
+    private int _factsheetHeaderId;
+    private DateTime _factsheetCheckedAt = DateTime.MinValue;
 
     public Vda5050AdapterService(IOptions<Vda5050AdapterSettings> options, AMRService amr,
         Vda5050OrderExecutor executor, Inspection.IWeldInspectionExecutor inspection,
         CobotService cobot, PowerModeService power, DeviceAlarmState deviceAlarms, OperationLogService opLog,
         ILoggerFactory loggerFactory, Sequence.BeadManualLabelHub? beadHub = null,
-        CobotObstacleGuard? obstacleGuard = null)
+        CobotObstacleGuard? obstacleGuard = null, AcsFactsheetService? factsheet = null)
     {
+        _factsheet = factsheet;
         _beadHub = beadHub;
         _obstacleGuard = obstacleGuard;
         if (_obstacleGuard is not null) _obstacleGuard.Changed += NudgeState;
@@ -386,6 +393,9 @@ public sealed class Vda5050AdapterService : BackgroundService
 
         // connection ONLINE (retained, §7) + 재접속 시 최신 state 즉시 발행(§9.3)
         await PublishAsync(Vda5050Topics.Connection(_s), BuildConnection("ONLINE"), retain: true, ct);
+        // factsheet(§7.3, retained) — 연결할 때마다 지금 값으로. ACS 가 factsheetRequest 로 다시 물을 수도 있다.
+        _factsheetSent = null;
+        await PublishFactsheetAsync(force: true, ct);
 
         // state 발행 루프 — 2초 주기 + 이벤트 즉시(§6.1). retain=false(§2.3).
         try
@@ -393,6 +403,9 @@ public sealed class Vda5050AdapterService : BackgroundService
             while (!ct.IsCancellationRequested && _client.IsConnected)
             {
                 await PublishAsync(Vda5050Topics.State(_s), BuildState(), retain: false, ct);
+                // 티칭·리프트·장착 보정이 바뀌었으면 factsheet 를 다시 발행(§7.3 변경 보고)
+                if (_s.FactsheetCheckSec > 0 && DateTime.UtcNow - _factsheetCheckedAt >= TimeSpan.FromSeconds(_s.FactsheetCheckSec))
+                    await PublishFactsheetAsync(force: false, ct);
 
                 var nudge = _stateNudge.Task;
                 var fired = await Task.WhenAny(nudge, Task.Delay(_s.StatePeriodMs, ct));
@@ -495,7 +508,14 @@ public sealed class Vda5050AdapterService : BackgroundService
                         break;
 
                     case "cancelOrder":
-                        await _executor.CancelOrderAsync();
+                        // mode=afterCurrentAction 이면 진행 중 검사를 마친 뒤 중단·홈 복귀(§5.4), 그 밖·누락은 즉시 취소.
+                        await _executor.CancelOrderAsync(afterCurrentAction:
+                            CancelPolicy.IsAfterCurrent(Vda5050OrderExecutor.GetStringParam(action, "mode")));
+                        break;
+
+                    case "factsheetRequest":
+                        // VDA 5050 2.0 표준 — factsheet 를 지금 값으로 다시 발행(§7.3). ACS 는 AMR 이 ONLINE 이 될 때 묻는다.
+                        await PublishFactsheetAsync(force: true, CancellationToken.None);
                         break;
 
                     case "initPosition":
@@ -613,6 +633,40 @@ public sealed class Vda5050AdapterService : BackgroundService
     }
 
     // ── 발행 ──────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// factsheet 발행(§7.3, retained). force = 지문이 같아도 발행(연결·요청). 아니면 지문이 바뀐 경우에만(주기 확인 — 변경 보고).
+    /// 실패해도 연결·state 발행에 영향을 주지 않는다(경고만).
+    /// </summary>
+    private async Task PublishFactsheetAsync(bool force, CancellationToken ct)
+    {
+        _factsheetCheckedAt = DateTime.UtcNow;
+        if (_factsheet is null || _client is not { IsConnected: true }) return;
+        try
+        {
+            var (body, version, changed) = await _factsheet.BuildAsync(ct);
+            var key = body["hdAmr"]?["fingerprints"]?.ToJsonString();
+            if (!force && key == _factsheetSent) return;
+            body["headerId"] = ++_factsheetHeaderId;
+            body["timestamp"] = DateTime.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'");
+            body["version"] = "2.0.0";
+            body["manufacturer"] = _s.Manufacturer;
+            body["serialNumber"] = _s.SerialNumber;
+            await PublishAsync(Vda5050Topics.Factsheet(_s), body, retain: true, ct);
+            var first = _factsheetSent is null;
+            _factsheetSent = key;
+            if (!first && !force || changed.Count > 0)
+                _opLog.Log(OperationLogService.SourceAcs, OpCategory.Link, "factsheet 발행(설정 변경)", true,
+                    $"v{version} — {(changed.Count > 0 ? string.Join(", ", changed) : "변경")}");
+            else
+                _logger.LogInformation("VDA5050 factsheet 발행 — v{Version}{Why}", version, force ? "" : " (변경)");
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("VDA5050 factsheet 발행 실패 — {Err}", ex.Message);
+        }
+    }
 
     private async Task PublishAsync<T>(string topic, T payload, bool retain, CancellationToken ct)
     {

@@ -107,4 +107,32 @@ public class TeachingRouteTests
         var wall = Taught(TeachingService.WallSlotKey("F"), 10, -90, 80, 0, 90, 0);
         Assert.Equal(new[] { wall.Key }, Keys(TeachingMove.PlanRoute(wall, J(Home2), All)));
     }
+
+    // 검사 자세(어느 티칭 위치에도 없음)에서 기준 자세로 → 자동 주문과 같은 복귀를 먼저(실기 2026-11-19 T 면 → 홈 위치_2).
+    [Fact]
+    public void InspectionPose_ToBasePose_NeedsSafeReturn()
+    {
+        var cur = new[] { 4.4, -154.6, 72.0, -6.6, 89.5, -195.0 };
+        Assert.True(TeachingMove.NeedsSafeReturn(Home2, cur, All));
+        Assert.True(TeachingMove.NeedsSafeReturn(Home, cur, All));
+    }
+
+    // 티칭 위치 위(경유점·홈 등)면 종전처럼 바로/경유 이동.
+    [Fact]
+    public void OnTaughtPosition_NoSafeReturn()
+    {
+        Assert.False(TeachingMove.NeedsSafeReturn(Home2, J(Home), All));
+        Assert.False(TeachingMove.NeedsSafeReturn(Home, J(H15), All));
+        var cur = J(Ready); cur[1] += 1.5;
+        Assert.False(TeachingMove.NeedsSafeReturn(Home2, cur, All));
+    }
+
+    // 기준 자세가 아닌 목표(경유점 등)는 대상 아님.
+    [Fact]
+    public void NonBaseTarget_NoSafeReturn()
+    {
+        var cur = new[] { 4.4, -154.6, 72.0, -6.6, 89.5, -195.0 };
+        Assert.False(TeachingMove.NeedsSafeReturn(H15, cur, All));
+        Assert.False(TeachingMove.NeedsSafeReturn(Ready, cur, All));
+    }
 }
