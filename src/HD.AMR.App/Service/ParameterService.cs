@@ -336,6 +336,13 @@ public class ParameterService
             (TeachingMove.JointVelocityScaleKey,
                 TeachingMove.DefaultJointVelocityScale.ToString(CultureInfo.InvariantCulture),
                 "Teaching '이동'(저장 관절값 MoveJ) 속도 비율 — 화면 속도에 곱한다(0~1). MoveJ 는 같은 % 에서 MoveL 보다 약 2배 빨라 0.45 로 종전 체감 속도에 맞춤."),
+            (Sequence.Steps.FlatSurfaceAlignStep.OutlierHistoryKey, "",
+                "④ 평탄면 정렬 — 레이저 단독 튐 이력 유지(true/false). 같은 자리에서 한 채널이 한 번 튐(나머지 두 채널 평균과 10mm 이상 차이)으로 판정되면 " +
+                "그 뒤 재측정은 5mm 기준으로 본다. 기준 바로 아래로 떨어진 값을 정상으로 받아 가짜 틸트로 툴을 크게 돌리는 것을 막는다" +
+                "(2026-11-24 M2: −10.4mm 로 두 번 걸린 뒤 −9.995mm 가 통과해 10°/10° 회전). 비우면 켬."),
+            (Sequence.Steps.FlatSurfaceAlignStep.MaxApproachKey, "",
+                "④ 평탄면 정렬 — 틸트 보정 회전 뒤 벽 접근 한계(mm). depth ROI 의 가까운 쪽 거리(가까운 1% 픽셀)가 회전 전보다 이만큼 넘게 줄면 " +
+                "회전을 되돌리고 그 자리를 실패 처리한다. 0 = 끔, 0~100, 비우면 20. 카메라 ROI 안만 보므로 보조 수단이다."),
             (Models.TeachingLiftMode.ActiveKey, Models.TeachingLiftMode.Short,
                 "운영에 쓰는 티칭 세트(리프트 모드) — SHORT / LONG. Teaching 페이지 탭으로 전환. 알 수 없는 값은 SHORT."),
         ];

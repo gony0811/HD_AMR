@@ -234,6 +234,52 @@ public class CameraService : BackgroundService
     }
 
     /// <summary>
+    /// ROI 안에서 <b>가까운 쪽</b> 깊이 [mm] — 유효 픽셀을 가까운 순으로 세어 <paramref name="fraction"/>(기본 1%)째 값.
+    /// 최솟값(<see cref="DepthRoiStats.MinMm"/>)은 픽셀 하나의 잡음에 끌려 가므로, 두 시점의 거리를 비교할 때는 이 값을 쓴다.
+    /// 프레임이 없거나 유효 픽셀이 없으면 null.
+    /// </summary>
+    public double? ComputeDepthRoiNearMm(double x, double y, double w, double h, double fraction = 0.01)
+        => NearDepthMm(_client.LatestDepth, x, y, w, h, fraction);
+
+    /// <summary><see cref="ComputeDepthRoiNearMm"/> 의 지정 프레임 버전.</summary>
+    public static double? NearDepthMm(CameraFrame? f, double x, double y, double w, double h, double fraction = 0.01)
+    {
+        if (f is null) return null;
+        int x0 = Math.Clamp((int)Math.Floor(x * f.Width), 0, f.Width - 1);
+        int y0 = Math.Clamp((int)Math.Floor(y * f.Height), 0, f.Height - 1);
+        int x1 = Math.Clamp((int)Math.Ceiling((x + w) * f.Width), 0, f.Width);
+        int y1 = Math.Clamp((int)Math.Ceiling((y + h) * f.Height), 0, f.Height);
+        if (x1 <= x0 || y1 <= y0) return null;
+
+        var span = MemoryMarshal.Cast<byte, ushort>(f.Pixels);
+        var hist = new int[ushort.MaxValue + 1];
+        var valid = 0;
+        for (int py = y0; py < y1; py++)
+        {
+            int rowBase = py * f.Width;
+            for (int px = x0; px < x1; px++)
+            {
+                int idx = rowBase + px;
+                if ((uint)idx >= (uint)span.Length) continue;
+                int d = span[idx];
+                if (d == 0) continue;   // 무효 픽셀 제외
+                hist[d]++;
+                valid++;
+            }
+        }
+        if (valid == 0) return null;
+
+        var target = Math.Max(1, (int)Math.Ceiling(valid * Math.Clamp(fraction, 0.0, 1.0)));
+        var seen = 0;
+        for (var d = 1; d < hist.Length; d++)
+        {
+            seen += hist[d];
+            if (seen >= target) return d;
+        }
+        return null;
+    }
+
+    /// <summary>
     /// ROI를 gridSize×gridSize 그리드로 나눠 각 셀의 깊이 표준편차(σ)를 계산하고,
     /// σ가 최소인 셀(= 가장 평평한 영역)의 정규화 중심 좌표를 반환한다.
     /// 유효 픽셀이 부족한 셀은 후보에서 제외된다.

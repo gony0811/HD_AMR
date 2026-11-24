@@ -165,9 +165,33 @@ public sealed class LaserTiltCorrector
                    (damped ? $" (계산 {uRx:0.###}°, {uRy:0.###}° → {SmallCorrectionDeg}° 미만 감쇠 ×{SmallCorrectionDamping})" : "") +
                    (applyRx != dRx || applyRy != dRy ? $" (계산 {uRx:0.###}°, {uRy:0.###}° → ±{o.MaxCorrectionDeg}° 클램프)" : ""));
 
+            // 회전 전 자세와 벽까지의 거리(depth) — 회전 뒤 벽 쪽으로 다가갔으면 되돌린다.
+            var guardApproach = o.MaxApproachMm > 0 && o.NearDepthMm is not null;
+            var depthBefore = guardApproach ? o.NearDepthMm!() : null;
+            var poseBefore = guardApproach ? await _cobot.Rpc.GetTcpPoseInBaseAsync(o.Tool, ct) : null;
+
             var rc = await RotateToolAsync(o.Tool, applyRx, applyRy, pose.Z, o, Report, ct);
             if (rc != 0)
                 return TiltLevelResult.Fail($"틸트 보정 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.", iter, pose, jac) with { MotionFailure = true };
+
+            if (guardApproach)
+            {
+                var depthAfter = o.NearDepthMm!();
+                if (ApproachedTooMuch(depthBefore, depthAfter, o.MaxApproachMm))
+                {
+                    Report($"보정 {iter + 1} 회전 뒤 벽까지 거리 {depthBefore:0}mm → {depthAfter:0}mm ({depthAfter - depthBefore:+0;-0}mm, 한계 −{o.MaxApproachMm:0}mm) — 회전을 되돌립니다");
+                    var rcBack = await _cobot.Rpc.MoveLAsync(poseBefore!, tool: o.Tool, user: 0, vel: o.Velocity, ct: ct);
+                    if (rcBack != 0)
+                        return TiltLevelResult.Fail(
+                            $"틸트 보정 회전 뒤 벽 쪽으로 {depthBefore - depthAfter:0}mm 다가가 되돌리려 했으나 실패 (rc={rcBack}){FairinoErrorCodes.Suffix(rcBack)}.",
+                            iter, pose, jac) with { MotionFailure = true };
+                    await WaitSettledAsync(o, Report, ct);
+                    return TiltLevelResult.Fail(
+                        $"틸트 보정 회전(Rx={applyRx:+0.##;-0.##}°, Ry={applyRy:+0.##;-0.##}°) 뒤 벽까지 거리가 {depthBefore:0}mm → {depthAfter:0}mm 로 " +
+                        $"{depthBefore - depthAfter:0}mm 줄어(한계 {o.MaxApproachMm:0}mm) 회전을 되돌렸습니다 — 측정이 잘못됐을 수 있습니다.",
+                        iter, pose, jac);
+                }
+            }
 
             // 재확인 측정 전 — 회전 뒤 스팟이 평탄면을 벗어났을 수 있어 호출측이 자리를 다시 맞춘다(시퀀스 ④: depth 재탐색).
             // 강체 평면 위 평행 이동은 틸트를 바꾸지 않으므로 아래 예측·실측 비교는 그대로 성립한다.
@@ -248,17 +272,38 @@ public sealed class LaserTiltCorrector
     /// 한 채널만 튄 값(나머지 두 채널은 서로 일치)이면 그 채널 번호(0-based), 아니면 −1.
     /// 헤드 간격이 ~30mm 라 한 채널 10mm 튐이 수십 ° 가짜 틸트가 된다(10-28 10:25 CH2 −61mm → rx −53°/ry 67°).
     /// </summary>
-    public static int FindOutlierChannel(IReadOnlyList<double> v)
+    public static int FindOutlierChannel(IReadOnlyList<double> v) => FindOutlierChannel(v, OutlierDeviationMm);
+
+    /// <summary><see cref="FindOutlierChannel(IReadOnlyList{double})"/> 의 편차 기준 지정판.</summary>
+    public static int FindOutlierChannel(IReadOnlyList<double> v, double deviationMm)
     {
         if (v.Count < 3) return -1;
         for (var i = 0; i < 3; i++)
         {
             double a = v[(i + 1) % 3], b = v[(i + 2) % 3];
-            if (Math.Abs(a - b) <= OutlierPeerAgreementMm && Math.Abs(v[i] - (a + b) / 2) >= OutlierDeviationMm)
+            if (Math.Abs(a - b) <= OutlierPeerAgreementMm && Math.Abs(v[i] - (a + b) / 2) >= deviationMm)
                 return i;
         }
         return -1;
     }
+
+    /// <summary>
+    /// 같은 자리에서 한 번 튐으로 판정된 뒤의 재측정에 쓰는 편차 기준 [mm] — 평소 기준(<see cref="OutlierDeviationMm"/>)보다 엄격하다.
+    /// 기준 바로 아래로 떨어진 값을 정상으로 받지 않기 위해서다(실기 2026-11-24 13:30 M2: CH3 −10.4mm 로 두 번 걸린 뒤
+    /// 세 번째가 −9.995mm 라 통과 — 가짜 틸트 −15.2°/19.6° 로 툴을 10°/10° 돌려 벽 쪽으로 36mm 다가감).
+    /// </summary>
+    internal const double OutlierDeviationAfterJumpMm = 5;
+
+    /// <summary>튐 판정에 쓸 편차 기준 — 이 자리에서 이미 튐이 나왔고 이력 유지가 켜져 있으면 엄격한 기준.</summary>
+    internal static double OutlierDeviationFor(bool sawOutlier, bool keepHistory)
+        => sawOutlier && keepHistory ? OutlierDeviationAfterJumpMm : OutlierDeviationMm;
+
+    /// <summary>
+    /// 보정 회전 뒤 벽 쪽으로 다가간 것으로 볼지 — depth ROI 가까운 쪽 거리가 회전 전보다 <paramref name="maxApproachMm"/> 넘게
+    /// 줄었을 때. 한계가 0 이하이거나 어느 한쪽 값이 없으면 판정하지 않는다(false).
+    /// </summary>
+    internal static bool ApproachedTooMuch(double? beforeMm, double? afterMm, double maxApproachMm)
+        => maxApproachMm > 0 && beforeMm is { } b && afterMm is { } a && b > 0 && a > 0 && b - a > maxApproachMm;
 
     /// <summary>
     /// <see cref="SampleAsync"/> + 단일 채널 튐 가드 — 튀면 1초 뒤 재측정, 최대 <see cref="MaxOutlierRetries"/>회.
@@ -267,6 +312,7 @@ public sealed class LaserTiltCorrector
     private async Task<(PlanePose Pose, IReadOnlyList<double> Channels, string? OutlierFail, LaserNoiseReport? Noise)>
         SampleGuardedAsync(TiltLevelOptions o, Action<string> report, CancellationToken ct)
     {
+        var sawOutlier = false;   // 이 자리에서 이미 튐이 나왔는지 — 이후 재측정은 엄격한 기준으로 본다
         for (var attempt = 0; ; attempt++)
         {
             var (pose, noise) = await MeasureAsync(o, ct);
@@ -276,8 +322,9 @@ public sealed class LaserTiltCorrector
                 : _laser.GetReadings().Select(r => r.Value).ToList();
             if (!pose.Valid) return (pose, ch, null, noise);
 
-            var bad = FindOutlierChannel(ch);
+            var bad = FindOutlierChannel(ch, OutlierDeviationFor(sawOutlier, o.KeepOutlierHistory));
             if (bad < 0) return (pose, ch, null, noise);
+            sawOutlier = true;
 
             var dev = ch[bad] - (ch[(bad + 1) % 3] + ch[(bad + 2) % 3]) / 2;
             var chText = $"CH {ch[0]:0.##}/{ch[1]:0.##}/{ch[2]:0.##}mm";
@@ -458,6 +505,21 @@ public sealed class TiltLevelOptions
     /// 반환 (오류, 코봇 이동 실패 여부) — 오류가 null 이 아니면 보정을 중단한다. null 이면 호출하지 않는다(종전).
     /// </summary>
     public Func<int, CancellationToken, Task<(string? Error, bool MotionFailure)>>? BeforeRecheck { get; init; }
+
+    /// <summary>
+    /// true(기본) = 같은 자리에서 한 번 단독 튐이 나오면 그 뒤 재측정은 엄격한 기준
+    /// (<see cref="LaserTiltCorrector.OutlierDeviationAfterJumpMm"/>)으로 본다. false = 매번 평소 기준(종전).
+    /// </summary>
+    public bool KeepOutlierHistory { get; init; } = true;
+
+    /// <summary>
+    /// 벽까지의 가까운 쪽 거리 [mm] 를 돌려주는 함수(depth ROI — 없으면 null). <see cref="MaxApproachMm"/> 와 함께 주면
+    /// 보정 회전 전후로 불러 비교한다. null 이면 확인하지 않는다(종전).
+    /// </summary>
+    public Func<double?>? NearDepthMm { get; init; }
+
+    /// <summary>보정 회전 뒤 <see cref="NearDepthMm"/> 가 회전 전보다 이만큼 넘게 줄면 회전을 되돌리고 실패 처리 [mm]. 0 = 끔.</summary>
+    public double MaxApproachMm { get; init; }
 
     /// <summary>판정 측정·정착 판정 샘플 간격(ms).</summary>
     public int NoiseIntervalMs { get; init; } = 50;

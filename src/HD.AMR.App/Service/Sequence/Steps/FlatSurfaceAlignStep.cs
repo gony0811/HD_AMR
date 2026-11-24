@@ -53,6 +53,25 @@ public class FlatSurfaceAlignStep : ISequenceStep
 
     /// <summary>틸트 보정 회전 뒤 재확인 측정 전에 depth 로 평탄 자리를 다시 맞출지 파라미터 키 — 비었으면 켜짐.</summary>
     public const string RecenterBeforeRecheckKey = "Sequence.FlatSurface.RecenterBeforeRecheck";
+
+    /// <summary>
+    /// 레이저 단독 튐 이력 유지 파라미터 키(true/false, 기본 true) — 같은 자리에서 한 채널이 한 번 튐으로 판정되면 그 뒤 재측정은
+    /// 엄격한 기준(<see cref="LaserTiltCorrector.OutlierDeviationAfterJumpMm"/>)으로 본다. 기준 바로 아래로 떨어진 값을 정상으로 받아
+    /// 가짜 틸트로 툴을 크게 돌리는 것을 막는다(실기 2026-11-24 13:30 M2).
+    /// </summary>
+    public const string OutlierHistoryKey = "Sequence.FlatSurface.OutlierHistory";
+
+    /// <summary>
+    /// 틸트 보정 회전 뒤 벽 접근 한계 [mm] 파라미터 키 — depth ROI 의 가까운 쪽 거리가 회전 전보다 이만큼 넘게 줄면 회전을 되돌리고
+    /// 그 자리를 실패 처리한다. 0 = 끔. 비우면 <see cref="DefaultMaxApproachMm"/>. 카메라 ROI 안만 보므로 보조 수단이다.
+    /// </summary>
+    public const string MaxApproachKey = "Sequence.FlatSurface.MaxApproachAfterTiltMm";
+    public const double DefaultMaxApproachMm = 20.0;
+    internal const double MaxMaxApproachMm = 100.0;
+
+    /// <summary>파라미터 값 → 벽 접근 한계 [mm]. 비었거나 범위(0~100) 밖이면 기본값, 0 이면 끔.</summary>
+    internal static double ResolveMaxApproachMm(double? value)
+        => value is { } v && double.IsFinite(v) && v >= 0 && v <= MaxMaxApproachMm ? v : DefaultMaxApproachMm;
     private const double MaxTiltThresholdDeg = 5.0;
 
     /// <summary>평탄 판정 틸트 임계값(°)을 DB 에서 읽는다 — 비었거나 0 이하·5° 초과면 기본값.
@@ -405,6 +424,11 @@ public class FlatSurfaceAlignStep : ISequenceStep
             var tiltThresholdDeg = await LoadTiltThresholdAsync(_param);
             _logger.LogInformation("[평탄면 센터링 (레이저 정렬)] 틸트 완료 기준 {Thr}° ({Key})", tiltThresholdDeg, TiltThresholdKey);
             var recenter = await _param.GetBoolAsync(RecenterBeforeRecheckKey) ?? true;
+            var keepOutlierHistory = await _param.GetBoolAsync(OutlierHistoryKey) ?? true;
+            var maxApproachMm = ResolveMaxApproachMm(await _param.GetDoubleAsync(MaxApproachKey));
+            _logger.LogInformation(
+                "[평탄면 센터링 (레이저 정렬)] 안전 가드 — 단독 튐 이력 유지 {Hist}('{HistKey}'), 회전 뒤 벽 접근 한계 {Appr}('{ApprKey}')",
+                keepOutlierHistory ? "켬" : "끔", OutlierHistoryKey, maxApproachMm > 0 ? $"{maxApproachMm:0}mm" : "끔", MaxApproachKey);
 
             // 보정 회전 뒤 재확인 전: 카메라 위치(레이저 보정 이동 되돌림) → depth 평탄 자리 재탐색·이동 → 레이저 위치.
             async Task<(string? Error, bool MotionFailure)> RecenterAsync(int correction, CancellationToken token)
@@ -442,6 +466,9 @@ public class FlatSurfaceAlignStep : ISequenceStep
                 MaxCorrections = MaxTiltCorrections,
                 MaxCorrectionDeg = MaxTiltCorrectionDeg,
                 BeforeRecheck = recenter ? RecenterAsync : null,
+                KeepOutlierHistory = keepOutlierHistory,
+                NearDepthMm = () => _camera.ComputeDepthRoiNearMm(roiX, roiY, roiW, roiH),
+                MaxApproachMm = maxApproachMm,
             },
             context.Progress,
             (iter, pose) =>
