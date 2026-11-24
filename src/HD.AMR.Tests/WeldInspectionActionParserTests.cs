@@ -270,10 +270,12 @@ public class WeldInspectionActionParserTests
     }
     """;
 
-    // ── round (SAIGE 포밍가스 규격 §2 — 회차 1|2, 선택 필드) ──────────────
+    // ── round (그 구역의 검사 횟수 — 1 이상의 정수, 선택 필드) ──────────────
     [Theory]
     [InlineData("1", 1)]
     [InlineData("2", 2)]
+    [InlineData("3", 3)]
+    [InlineData("12", 12)]
     public void Parse_Round_Accepted(string roundJson, int expected)
     {
         var ok = WeldInspectionActionParser.TryParse(Deserialize(ActionWithParams($", \"round\": {roundJson}")), out var req, out var error);
@@ -290,7 +292,7 @@ public class WeldInspectionActionParserTests
 
     [Theory]
     [InlineData("0")]
-    [InlineData("3")]
+    [InlineData("-1")]
     [InlineData("\"1\"")]
     [InlineData("1.5")]
     public void Parse_Round_Malformed_Rejected(string roundJson)

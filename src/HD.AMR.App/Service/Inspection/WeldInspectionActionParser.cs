@@ -106,14 +106,14 @@ public static class WeldInspectionActionParser
         if (!TryParseLiftStrokeMm(liftStrokeEl, pr, out var liftStrokeMm, ref error))
             return false;
 
-        // ── round (SAIGE 포밍가스 규격 §2 — 선창 전체 검사 회차 1|2) ─────
-        // 선택 필드: 없으면 null(결과 본문에서 생략). 있으면 1 또는 2 만 허용 — SAIGE 가 그 밖의 값을 40001 로 거부한다.
+        // ── round (ACS 가 보내는 그 구역의 검사 횟수 — 1 이상의 정수 → SAIGE 결과 round) ─────
+        // 선택 필드: 없으면 null(결과 본문에서 생략). 있으면 1 이상의 정수(2026-11-24: 1|2 제한 해제 — 검사 횟수라 상한이 없다).
         var roundValue = roundEl ?? (pr.TryGetProperty("round", out var rEl) ? rEl : (JsonElement?)null);
         int? round = null;
         if (roundValue is { ValueKind: not JsonValueKind.Null } rv)
         {
-            if (rv.ValueKind != JsonValueKind.Number || !rv.TryGetInt32(out var parsedRound) || parsedRound is not (1 or 2))
-            { error = "params.round 부적합 (1 또는 2)"; return false; }
+            if (rv.ValueKind != JsonValueKind.Number || !rv.TryGetInt32(out var parsedRound) || parsedRound < 1)
+            { error = "params.round 부적합 (1 이상의 정수)"; return false; }
             round = parsedRound;
         }
 

@@ -95,7 +95,7 @@ SAIGE 규격은 ACS ↔ SAIGE 구간만 정한다. AMR ↔ ACS 구간은 아래�
 
 ### 5.1 회차 `round` — `startWeldInspection` params
 
-`params.round` (정수 1 또는 2, 선택). 없으면 결과 본문에서 생략. 1·2 가 아니면 `orderValidationError` 로 거부한다.
+`params.round` (1 이상의 정수, 선택) — ACS 가 세는 **그 구역(영역)의 검사 횟수**(2026-11-24 변경, 종전 "선창 전체 회차 1·2"). 없으면 결과 본문에서 생략. 1 미만·정수 아님이면 `orderValidationError` 로 거부한다.
 기존 `params.taskId`(GUID) 는 SAIGE `taskId`, `position.drawingPos.tank` 는 `tankId` 로 쓴다.
 
 ### 5.2 측정 결과 — `startWeldInspection` actionState
