@@ -40,7 +40,7 @@ public static class AcsFactsheet
 
     /// <summary>
     /// 면별 운영 ② 출발 관절각 — <see cref="SequenceEntry.PrepareAsync"/> 가 실제로 ② 직전에 세우는 자세와 같다:
-    /// 상부 면(T/PU/SU)은 그 면 검사 준비 슬롯(미티칭이면 홈 위치_2), 하부 면(B/PL/SL)은 하부 홈(바닥 B 는 홈 위치_4 우선,
+    /// 천장(T)은 그 면 검사 준비 슬롯(미티칭이면 홈 위치_2), 하부 면(B/PL/SL)은 하부 홈(바닥 B 는 홈 위치_4 우선,
     /// 없으면 홈 위치_3)이 티칭돼 있으면 그 면 검사 준비 슬롯(없으면 그 홈), 그 외는 작업 준비 위치(ready). 티칭이 없는 면은 넣지 않는다.
     /// </summary>
     public static Dictionary<string, double[]> StartJointsByWall(IReadOnlyDictionary<string, double[]> taught, IEnumerable<string> wallCodes)

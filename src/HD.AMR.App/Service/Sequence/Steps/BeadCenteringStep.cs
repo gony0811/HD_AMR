@@ -57,6 +57,21 @@ public class BeadCenteringStep : ISequenceStep
     internal static bool IsUncorrectableResidual(double residualMm)
         => !double.IsFinite(residualMm) || Math.Abs(residualMm) > WObjPointStep.MaxResidualCorrectionMm;
 
+    /// <summary>
+    /// 이동 뒤 재측정이 기대 잔차(이동 전 d − 이동량)와 이만큼 넘게 다르면 첫 검출을 오검출로 본다 [mm].
+    /// 실기(2026-11-22 18:28 R02C05 점2): d=−113.8 → −100 이동 → 기대 −13.8 인데 재측정 +80.9 — 첫 검출이 옆 선이었다.
+    /// 종전엔 보정만 건너뛰고 진행해 점2 가 비드에서 81mm 벗어나 기록됐고 작업물 X축이 3.6° 돌아갔다.
+    /// </summary>
+    public const double MismatchMaxMm = 30.0;
+
+    /// <summary>재측정을 믿고 그 값으로 다시 센터링해야 하는가 — 기대 잔차와 어긋나거나 점 보정으로 흡수할 수 없는 잔차.</summary>
+    internal static bool NeedsRecenter(double dMm, double movedMm, double residualMm)
+        => IsUncorrectableResidual(residualMm) || Math.Abs(residualMm - (dMm - movedMm)) > MismatchMaxMm;
+
+    private static string MismatchText(double dMm, double movedMm, double residualMm)
+        => $"재측정 {residualMm:+0.0;-0.0}mm 가 기대 잔차 {dMm - movedMm:+0.0;-0.0}mm(이동 전 {dMm:+0.0;-0.0} − 이동 {movedMm:+0.0;-0.0})" +
+           (Math.Abs(residualMm - (dMm - movedMm)) > MismatchMaxMm ? $"와 ±{MismatchMaxMm:0}mm 넘게 다름 — 첫 검출 오검출 의심" : " 이지만 점 보정 상한 밖");
+
     /// <summary>1회 이동 한계로 자른 뒤 남을 잔차 [mm](부호 유지).</summary>
     internal static double ResidualAfterClamp(double dMm)
         => dMm - Math.Clamp(dMm, -MaxCenteringMoveMm, MaxCenteringMoveMm);
@@ -207,7 +222,10 @@ public class BeadCenteringStep : ISequenceStep
         if (_peakId != 1)
         {
             // ⑫ 각도 정합을 위해 M2 는 갱신하지 않는다. 작업물 좌표계 점2 잔차 보정용으로만 슬롯을 건드리지 않고 재측정한다.
-            var corr2 = await MeasurePoint2ResidualAsync(context, toolAxis, initialDMm, clamped, ct);
+            var (corr2, fail2, recentered2) = await MeasurePoint2ResidualAsync(context, toolAxis, initialDMm, clamped, failOnLarge, ct);
+            if (fail2 is not null)
+                return StepResult.Fail(fail2);
+            if (recentered2) residualWarn = null;   // 클램프 잔차 경고는 첫 검출 기준이라 더는 맞지 않는다
             var (ok2, note2) = await ShiftToInspectCamAsync(context, ct);
             return ok2
                 ? StepResult.Ok(
@@ -280,6 +298,33 @@ public class BeadCenteringStep : ISequenceStep
                 $"'{axisKey}' 를 현재 툴{FlatSurfaceCenteringService.AxisName(toolAxis)} 의 " +
                 "반대 부호 축으로 설정해 보세요 (카메라 페이지).");
 
+        // 재측정이 기대와 크게 어긋나면(첫 검출 오검출) 재측정값으로 한 번 더 센터링하고 다시 확인한다.
+        // 수동 입력은 작업자가 확정한 선이라 그대로 쓴다.
+        var recenterNote = "";
+        if (failOnLarge && assist.Kind != BeadAssistKind.Manual && NeedsRecenter(initialDMm, clamped, residualMm))
+        {
+            var why = MismatchText(initialDMm, clamped, residualMm);
+            if (Math.Abs(residualMm) > MaxCenteringMoveMm)
+                return StepResult.Fail($"Bead1 센터링: {why} — 재측정값도 1회 이동 한계 ±{MaxCenteringMoveMm:0}mm 밖이라 중단. " +
+                                       $"작업물 좌표계가 기울어집니다 — 비드 위치·조명을 확인하세요.{assist.Note}");
+            _logger.LogWarning("Bead1 센터링: {Why} → 재측정값으로 다시 센터링 {Mv:+0.0;-0.0}mm", why, residualMm);
+            if (await MoveCrossAsync(context, toolAxis, residualMm, ct) is { } moveErr)
+                return StepResult.Fail(moveErr);
+            var (m3, detect3) = await _weld.CapturePeakAsync(_peakId, peakRoi, beadRoi, ct);
+            if (m3 is null || detect3 is not { Success: true } || !detect3.LineFitOk)
+                return StepResult.Fail($"Bead1 센터링: {why} — 다시 센터링한 뒤 재검출 실패" +
+                                       (detect3 is null ? "" : $"({detect3.Message})") + " — 작업물 좌표계를 믿을 수 없어 중단");
+            var residual3 = _weld.DMm(m3);
+            if (NeedsRecenter(residualMm, residualMm, residual3))
+                return StepResult.Fail($"Bead1 센터링: {why} — 다시 센터링한 뒤에도 잔차 {residual3:+0.0;-0.0}mm 로 맞지 않아 중단 " +
+                                       "(검출이 흔들림 — 비드 위치·조명·ROI 를 확인하세요)");
+            _logger.LogInformation("Bead1 센터링: 재센터링 {Mv:+0.0;-0.0}mm 뒤 잔차 {Res:+0.0;-0.0}mm", residualMm, residual3);
+            recenterNote = $" ⚠ {why} → 재측정값으로 다시 센터링 {residualMm:+0.0;-0.0}mm, 잔차 {residual3:+0.0;-0.0}mm.";
+            clamped += residualMm;
+            residualMm = residual3;
+            residualWarn = null;
+        }
+
         if (residualMax > 0 && Math.Abs(residualMm) > residualMax)
             residualWarn = $"잔차 {residualMm:+0.0;-0.0}mm 가 허용 ±{residualMax:0.#}mm 초과 — 그대로 진행";
 
@@ -298,7 +343,21 @@ public class BeadCenteringStep : ISequenceStep
 
         return StepResult.Ok(
             $"Bead{_peakId} 센터링 완료 — {clamped:+0.0;-0.0}mm 이동, " +
-            $"잔차 d={residualMm:+0.0;-0.0}mm (이동 전 {initialDMm:+0.0;-0.0}mm), M1 갱신.{progressNote}{corr1}{assist.Note}{shiftedNote}{ResidualNote(residualWarn)}");
+            $"잔차 d={residualMm:+0.0;-0.0}mm (이동 전 {initialDMm:+0.0;-0.0}mm), M1 갱신.{recenterNote}{progressNote}{corr1}{assist.Note}{shiftedNote}{ResidualNote(residualWarn)}");
+    }
+
+    /// <summary>cross 툴축으로 <paramref name="mm"/> 이동 후 안정화 대기. 실패면 사유.</summary>
+    private async Task<string?> MoveCrossAsync(SequenceContext context, ToolAxisDir axis, double mm, CancellationToken ct)
+    {
+        var anchor = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
+        var offset = new double[6];
+        FlatSurfaceCenteringService.ApplyAxis(offset, axis, mm);
+        var rc = await _cobot.Rpc.MoveByToolOffsetAsync(anchor, user: 0, offset,
+            tool: context.Tool, vel: context.Velocity, ct: ct);
+        if (rc != 0)
+            return $"Bead{_peakId} 재센터링 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.";
+        await Task.Delay(SettleMs, ct);
+        return null;
     }
 
     /// <summary>
@@ -325,17 +384,19 @@ public class BeadCenteringStep : ISequenceStep
     /// <summary>
     /// ⑪⁺ 이동 후 Bead2 를 M2 를 바꾸지 않고 재측정해 점2 잔차 보정을 남긴다. 검출기 없음·검출 실패·직선피팅 실패면
     /// 보정 없이(종전과 같게) 진행하고 경고만 남긴다 — 점2 는 종전에도 검증 없이 기록됐으므로 실패시키지 않는다.
+    /// 단 재측정이 기대 잔차와 크게 어긋나면(<see cref="NeedsRecenter"/>) 첫 검출을 오검출로 보고 재측정값으로 한 번 더
+    /// 센터링해 다시 잰다 — 그래도 맞지 않으면 실패(묶음이면 단독 교시로 되돌림). M2 는 계속 건드리지 않는다.
     /// </summary>
-    private async Task<string> MeasurePoint2ResidualAsync(
-        SequenceContext context, ToolAxisDir crossAxis, double initialDMm, double movedMm, CancellationToken ct)
+    private async Task<(string Note, string? Fail, bool Recentered)> MeasurePoint2ResidualAsync(
+        SequenceContext context, ToolAxisDir crossAxis, double initialDMm, double movedMm, bool failOnLarge, CancellationToken ct)
     {
         if (await _param.GetBoolAsync(WObjPointStep.ResidualCorrectionKey) == false)
-            return "";
+            return ("", null, false);
 
-        string Skip(string why)
+        (string, string?, bool) Skip(string why)
         {
             _logger.LogWarning("Bead2 센터링: 점2 잔차 재측정 생략 — {Why} (점2 는 센터링 위치 그대로 기록)", why);
-            return $" ⚠ 점2 잔차 재측정 생략({why}).";
+            return ($" ⚠ 점2 잔차 재측정 생략({why}).", null, false);
         }
 
         try
@@ -358,7 +419,29 @@ public class BeadCenteringStep : ISequenceStep
                 residual, initialDMm, movedMm);
             if (Math.Abs(movedMm) >= 2.0 && Math.Abs(residual) >= Math.Abs(initialDMm))
                 return Skip($"재측정 d={residual:+0.0;-0.0}mm 가 이동 전 {initialDMm:+0.0;-0.0}mm 보다 큼 — 오검출 의심");
-            return RecordPointCorrection(context, crossAxis, residual, "점2 재측정 잔차");
+            if (!failOnLarge || !NeedsRecenter(initialDMm, movedMm, residual))
+                return (RecordPointCorrection(context, crossAxis, residual, "점2 재측정 잔차"), null, false);
+
+            // 재측정이 기대와 어긋남 — 재측정값으로 다시 센터링하고 한 번 더 잰다.
+            var why = MismatchText(initialDMm, movedMm, residual);
+            if (Math.Abs(residual) > MaxCenteringMoveMm)
+                return ("", $"Bead2 센터링: {why} — 재측정값도 1회 이동 한계 ±{MaxCenteringMoveMm:0}mm 밖이라 중단 " +
+                            "(점2 가 비드에서 벗어나 작업물 좌표계가 기울어짐)", false);
+            _logger.LogWarning("Bead2 센터링: {Why} → 재측정값으로 다시 센터링 {Mv:+0.0;-0.0}mm", why, residual);
+            if (await MoveCrossAsync(context, crossAxis, residual, ct) is { } moveErr)
+                return ("", moveErr, false);
+
+            var (m3, detect3) = await _weld.MeasureWithoutStoringAsync(_peakId, peakRoi, beadRoi, ct);
+            if (m3 is null || detect3 is not { Success: true } || !detect3.LineFitOk)
+                return ("", $"Bead2 센터링: {why} — 다시 센터링한 뒤 재검출 실패" +
+                            (detect3 is null ? "" : $"({detect3.Message})") + " — 점2 를 믿을 수 없어 중단", false);
+            var residual3 = _weld.DMm(m3);
+            if (NeedsRecenter(residual, residual, residual3))
+                return ("", $"Bead2 센터링: {why} — 다시 센터링한 뒤에도 잔차 {residual3:+0.0;-0.0}mm 로 맞지 않아 중단 " +
+                            "(검출이 흔들림 — 비드 위치·조명·ROI 를 확인하세요)", false);
+            _logger.LogInformation("Bead2 센터링: 재센터링 {Mv:+0.0;-0.0}mm 뒤 점2 잔차 {Res:+0.0;-0.0}mm", residual, residual3);
+            return ($" ⚠ {why} → 재측정값으로 다시 센터링 {residual:+0.0;-0.0}mm, 잔차 {residual3:+0.0;-0.0}mm." +
+                    RecordPointCorrection(context, crossAxis, residual3, "재센터링 뒤 점2 재측정 잔차"), null, true);
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)

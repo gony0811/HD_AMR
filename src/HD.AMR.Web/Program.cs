@@ -103,6 +103,8 @@ builder.Services.Configure<DeviceHealthSettings>(builder.Configuration.GetSectio
 builder.Services.AddSingleton<DeviceAlarmState>();
 // 코봇 도달·순회 경고 배너 — HEAVY 알람과 분리(order 를 잠그지 않음). 확인 버튼으로 지운다.
 builder.Services.AddSingleton<OperatorAlarmState>();
+builder.Services.AddSingleton<CobotFaultGuard>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<CobotFaultGuard>());
 builder.Services.AddSingleton<DeviceHealthMonitorService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<DeviceHealthMonitorService>());
 // AMR 장비 자체 상태 변화(모드·이동·조그·오류)를 운영 로그(출처 AMR)로 기록.
@@ -213,6 +215,7 @@ builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstanc
 builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<BeadFindStep>(sp, 2));
 builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<BeadCenteringStep>(sp, 2));   // 1150
 builder.Services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<WObjPointStep>(sp, 2));   // 1160: 작업물 좌표계 점2(X방향)
+builder.Services.AddScoped<ISequenceStep, WObjPoint3Step>();   // 1165: 점3(면 기울기) — CROSS4 묶음·용접선만
 builder.Services.AddScoped<ISequenceStep, WObjRegisterStep>();   // 1170: 가상 점3(툴Z+50mm) + 좌표계 등록
 // 드라이런 2점 교시 끝점 이동(1155) — seamEndW 접근점으로 MoveL. wobjPoint2 가 그 자리에서 점2를 기록.
 builder.Services.AddScoped<ISequenceStep, CobotSeamEndMoveStep>();

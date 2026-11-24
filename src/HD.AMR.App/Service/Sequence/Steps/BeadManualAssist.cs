@@ -69,10 +69,21 @@ public sealed class BeadManualAssist
     /// <param name="autoFailNote">자동 실패 사유(팝업 표시용). autoOk 면 null.</param>
     public async Task<BeadAssistOutcome> RunAsync(int peakId, string stage, PeakMeasurement? autoM,
         WeldDetectionResult? detect, bool autoOk, string? autoFailNote, RoiRect peakRoi, RoiRect beadRoi,
-        SequenceContext context, CancellationToken ct)
+        SequenceContext context, CancellationToken ct, bool foundAfterRetreat = false)
     {
         var trigger = BeadManualSettings.ParseTrigger(await _param.GetAsync(BeadManualSettings.TriggerKey))
                       ?? BeadManualSettings.DefaultTrigger;
+
+        // 후퇴 재검출로 찾았으면 저신뢰(coverage) 확인은 건너뛴다 — 후퇴 자체가 실패 대응이고, FOV 가 넓어져 coverage 가
+        // 낮게 나오는 게 정상이다. '매번(always)' 은 작업자가 명시적으로 고른 확인이라 그대로 묻는다.
+        if (foundAfterRetreat && autoOk && trigger != BeadManualTrigger.Always)
+        {
+            _logger.LogInformation("[{Stage}] 후퇴 재검출로 찾음 — 수동 비드 입력 생략 (조건={Trigger})",
+                stage, BeadManualSettings.ToParam(trigger));
+            return new(BeadAssistKind.NotAsked, autoM, "");
+        }
+        // 후퇴 자리에서 찾은 선은 원래 자리 프레임과 픽셀 좌표가 달라 팝업 초안으로 쓸 수 없다.
+        var draft = foundAfterRetreat ? null : detect;
         var minConf = Math.Clamp(await _param.GetDoubleAsync(BeadManualSettings.MinConfidenceKey)
                                  ?? BeadManualSettings.DefaultMinConfidence, 0, 1);
         var timeoutSec = Math.Clamp(await _param.GetIntAsync(BeadManualSettings.TimeoutSecKey)
@@ -97,7 +108,7 @@ public sealed class BeadManualAssist
         while (true)
         {
             var useAuto = autoOk && jogs == 0;
-            snap = await _weld.PrepareManualBeadAsync(peakId, peakRoi, beadRoi, detect, ct);
+            snap = await _weld.PrepareManualBeadAsync(peakId, peakRoi, beadRoi, draft, ct);
             if (snap is null)
             {
                 _logger.LogWarning("[{Stage}] 수동 비드 입력 불가 — IR/Depth 프레임 없음. 자동 결과로 판정.", stage);
@@ -150,12 +161,12 @@ public sealed class BeadManualAssist
 
             // 새 자리에서 자동 검출을 다시 돌려 찾은 선을 팝업에 초안으로 보여준다(측정 슬롯도 새 자리 값으로 갱신 —
             // 이후 결과는 수동 확정으로만 쓰므로 영향 없음). 실패해도 수동 입력은 계속한다.
-            try { detect = (await _weld.CapturePeakAsync(peakId, peakRoi, beadRoi, ct)).Detect; }
+            try { draft = (await _weld.CapturePeakAsync(peakId, peakRoi, beadRoi, ct)).Detect; }
             catch (OperationCanceledException) { throw; }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "[{Stage}] 조그 후 자동 검출 실패 — 선 초안 없이 수동 입력", stage);
-                detect = null;
+                draft = null;
             }
         }
         autoOk = autoOk && jogs == 0;

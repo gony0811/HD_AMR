@@ -157,6 +157,8 @@ internal static class ServiceRegistration
         services.AddSingleton<DeviceAlarmState>();
         // 코봇 도달·순회 경고 배너 — HEAVY 알람과 분리(order 를 잠그지 않음).
         services.AddSingleton<OperatorAlarmState>();
+        // 코봇 결함 즉시 정지·임무 중단(결함 해제 뒤 남은 이동 자동 재개 방지) — HEAVY 알람 관측값도 낸다.
+        AddHostedSingleton<CobotFaultGuard>(services);
         AddHostedSingleton<DeviceHealthMonitorService>(services);
         // 검사 프로필(순회 경유점)을 ACS 로 올려 보냄 — ACS 가 정차 위치를 고를 때 순회를 미리 계산한다.
         services.Configure<AcsProfileSyncSettings>(config.GetSection("AcsProfileSync"));
@@ -258,6 +260,8 @@ internal static class ServiceRegistration
         services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<BeadFindStep>(sp, 2));
         services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<BeadCenteringStep>(sp, 2));
         services.AddScoped<ISequenceStep>(sp => ActivatorUtilities.CreateInstance<WObjPointStep>(sp, 2));
+        // 점3(면 기울기, 1165) — CROSS4 가 든 묶음·용접선에서만 오케스트레이터가 붙인다.
+        services.AddScoped<ISequenceStep, WObjPoint3Step>();
         services.AddScoped<ISequenceStep, WObjRegisterStep>();
         // 드라이런 2점 교시 끝점 이동(1155) — seamEndW 접근점으로 MoveL. wobjPoint2 가 그 자리에서 점2를 기록.
         services.AddScoped<ISequenceStep, CobotSeamEndMoveStep>();

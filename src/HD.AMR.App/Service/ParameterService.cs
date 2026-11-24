@@ -167,11 +167,19 @@ public class ParameterService
                 "AMR 차체 바닥(바퀴 닿는 면) → 코봇 BASE 장착면 높이 [mm] 덮어쓰기 — 자기 간섭(팔 ↔ 차체·기둥·신호탑) 점검과 도달 사전 점검이 쓴다. " +
                 "비워 두면 appsettings \"CobotEnvelope\"(차체 BodyHeightMm + 기둥 ColumnHeightMm, 현 장비 767+160=927)를 쓴다. 저장하면 바로 적용. " +
                 "차체 윗면 아래이거나 800~2500 밖이면 무시. 좌표 환산은 장착 보정(Calib.Mount.Pose)이 따로 하므로 둘 다 맞춰야 한다."),
+            (Sequence.Steps.LaserWorkingDistanceStep.MaxReturnKey,
+                Sequence.Steps.LaserWorkingDistanceStep.DefaultMaxReturnMm.ToString(CultureInfo.InvariantCulture),
+                "④⁺ 레이저 WD 뒤 용접선 쪽 횡복귀 한계(mm, 툴 X·Y·Z 성분별) — 평탄면 센터링이 이보다 멀리 옮겨 갔으면 돌아가지 않고 실패한다 " +
+                "(앵커·자세 이상 가드). 실행할 때마다 읽는다. 50~1000 밖이거나 비면 400."),
             (Sequence.Steps.CobotInspectionMoveStep.MaxEntryJointTravelKey,
                 Sequence.Steps.CobotInspectionMoveStep.DefaultMaxEntryJointTravelDeg.ToString(CultureInfo.InvariantCulture),
                 "진입 관절 이동 한계(도) — 출발 자세 → 진입 해의 관절별(J1~J5) 최대 이동. 넘으면 가지 전환으로 보고 그 진입점·용접선을 쓰지 않는다 " +
                 "(진입 경로·도달 사전 점검·리치 맵 공통). 클수록 팔을 크게 돌리는 진입을 허용한다. 저장하면 바로 적용. " +
                 "30~360 밖이거나 비면 160. ACS 의 Acs:Reach:MaxEntryJointTravelDeg 와 같게 둘 것."),
+            (Sequence.Steps.BeadFindStep.RetreatKey, "",
+                "⑦/⑪ 용접선(비드) 못 찾을 때 후퇴 재검출 거리(mm) — 자동 검출이 실패하면 수동 입력 팝업 전에 벽에서 이만큼 물러나 " +
+                "FOV 를 넓혀 다시 찍고, 결과와 상관없이 원래 자리로 돌아온다(찾으면 그 d 로 진행). 0 = 끔. " +
+                "비우면 검사 센서 모드로 정한다 — 가스 검사기 100, 비전(용접검사기) 끔. 0~300. 실행할 때마다 읽는다."),
             (Inspection.WObjAttitude.SafeJ6MinKey,
                 Inspection.WObjAttitude.DefaultSafeJ6MinDeg.ToString(CultureInfo.InvariantCulture),
                 "J6 안전 범위 하한(도, 실제 관절값 — 대기 자세 −180° 쪽 감김 기준). 이보다 더 감기는 J6 로는 움직이지 않는다 " +
