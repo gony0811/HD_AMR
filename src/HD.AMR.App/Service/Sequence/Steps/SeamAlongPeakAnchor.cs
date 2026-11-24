@@ -243,6 +243,177 @@ public class SeamAlongPeakAnchor
             : $"Peak 이격 {along:+0.0;-0.0}mm(한계 ±{maxShiftMm:0}mm)");
     }
 
+    // ── 수직 열 비드 두 점 측정(기록만) ─────────────────────────────────────────────
+
+    /// <summary>
+    /// 물려받은 줄의 비드 두 점 측정 파라미터 키(true/false) — 다른 줄로 넘어간 줄(수직 열의 첫 줄)마다 원점 자리와 용접선 방향으로
+    /// <see cref="BeadProbeSpanKey"/> 떨어진 자리에서 비드의 옆 위치를 재서 <b>로그로만</b> 남긴다. 좌표계는 바꾸지 않는다.
+    /// 수직 열 경로가 비드와 사선으로 어긋나는 양이 열의 좌우 위치에 따라 달라 보여(실기 2026-11-24 M2 C03~C05:
+    /// 1.8m 에 +5 / 0 / −5 / −10mm) 그 크기를 숫자로 모으기 위한 진단이다. 비우면 검사 센서 모드로 정한다 — 가스 켬, 비전(용접검사기) 끔.
+    /// </summary>
+    public const string BeadProbeKey = "inspection.reuseFrameBeadProbe";
+
+    /// <summary>비드 두 점 사이 거리 [mm] 파라미터 키 — 원점에서 용접선 방향으로 이만큼 간 자리에서 한 번 더 잰다. 비우면 <see cref="DefaultBeadProbeSpanMm"/>.</summary>
+    public const string BeadProbeSpanKey = "inspection.reuseFrameBeadProbeSpanMm";
+    public const double DefaultBeadProbeSpanMm = 1080.0;
+    internal const double MinBeadProbeSpanMm = 300.0, MaxBeadProbeSpanMm = 1500.0;
+
+    /// <summary>파라미터 값 → 비드 두 점 측정 사용 여부. 비면 센서 모드 기본값(가스 켬 / 비전 끔).</summary>
+    public static bool ResolveBeadProbe(bool? value, bool usesGas) => value ?? usesGas;
+
+    /// <summary>파라미터 값 → 두 점 사이 거리 [mm]. 비었거나 범위 밖이면 기본값.</summary>
+    public static double ResolveBeadProbeSpanMm(double? value)
+        => value is { } v && double.IsFinite(v) && v >= MinBeadProbeSpanMm && v <= MaxBeadProbeSpanMm ? v : DefaultBeadProbeSpanMm;
+
+    /// <summary>한 자리의 측정 — 좌표계 X 위치, 비드의 옆 이격(프레임 Y·BASE), Peak 의 용접선 방향 이격. 못 잰 값은 null.</summary>
+    public sealed record BeadProbePoint(double AtMm, double[] ViewTcp, double? BeadLateralMm, double[]? BeadBase, double? PeakAlongMm, string Note);
+
+    /// <summary>
+    /// 두 점의 비드 옆 이격으로 경로가 비드에서 벗어나는 기울기 [mm/m] — (먼 점 − 원점) / 거리. + = 용접선 방향으로 갈수록 비드가 프레임 +Y 쪽.
+    /// 어느 한쪽을 못 쟀거나 거리가 0 이면 null.
+    /// </summary>
+    internal static double? BeadSlopeMmPerM(BeadProbePoint near, BeadProbePoint far)
+        => near.BeadLateralMm is { } a && far.BeadLateralMm is { } b && Math.Abs(far.AtMm - near.AtMm) > 1e-6
+            ? (b - a) / (far.AtMm - near.AtMm) * 1000.0
+            : null;
+
+    /// <summary>
+    /// 물려받은 줄의 비드를 두 자리에서 재서 로그로 남긴다(좌표계는 바꾸지 않는다). 순회 자세·측정 높이(<see cref="LiftedPose"/>) 그대로
+    /// 원점 정면 → 용접선 방향으로 떨어진 자리 순으로 가서 각각 Peak·비드를 잰다. 코봇은 마지막 측정 자리에 남는다 —
+    /// 부른 쪽이 첫 경유점으로 다시 세운다. 결과 요약 문자열을 돌려준다(못 쟀으면 사유).
+    /// </summary>
+    public async Task<string> ProbeBeadLineAsync(SequenceContext context, double[] frame, double[] stagedPose, CancellationToken ct)
+    {
+        if (!_camera.IsConnected || _camera.LatestIr is null)
+            return LogProbeSkip("카메라 미연결/IR 프레임 없음");
+        if (!_weld.DetectorAvailable)
+            return LogProbeSkip("비드 검출기 비활성");
+        await WeldSequenceSupport.ApplyDlModelAsync(_param, _weld);
+        if (WeldSequenceSupport.MissingModel(_weld) is { } noModel)
+            return LogProbeSkip(noModel);
+
+        var (axX, _) = await WeldSequenceSupport.GetImageXAxisAsync(_param);
+        var (axY, _) = await WeldSequenceSupport.GetImageYAxisAsync(_param);
+        var (optical, _) = await WeldSequenceSupport.GetDepthAxisAsync(_param);
+        if (IsDepthAxis(axX) || IsDepthAxis(axY))
+            return LogProbeSkip("영상 축 매핑이 툴 Z 를 가리킴");
+        var tiltDeg = OpticalTiltDeg(frame, stagedPose, context.OpticalAxis ?? optical);
+        if (tiltDeg > MaxOpticalTiltDeg)
+            return LogProbeSkip($"첫 경유점 자세의 광축이 좌표계 면 법선에서 {tiltDeg:0.0}° 기움");
+
+        var spanMm = DefaultBeadProbeSpanMm;
+        try { spanMm = ResolveBeadProbeSpanMm(await _param.GetDoubleAsync(BeadProbeSpanKey)); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { /* DB 미준비 — 기본값 */ }
+
+        var (offX, offY) = await WeldSequenceSupport.GetInspectCamOffsetAsync(_param);
+        var camShift = WeldSequenceSupport.ImageShiftToToolOffset(axX, axY, offX, offY);
+        var outward = LineSurfaceHeightStep.OutwardNormal(frame, stagedPose, context.OpticalAxis ?? optical);
+        var lifted = LiftedPose(frame, stagedPose, outward);
+        _logger.LogInformation(
+            "[수직 열 비드 측정] 시작 — 원점 [{X:0.0}, {Y:0.0}, {Z:0.0}], 용접선 방향 0mm·{Span:0}mm 두 자리, 면 위 높이 {H:0.0}mm (기록만, 좌표계는 바꾸지 않음 — '{Key}')",
+            frame[0], frame[1], frame[2], spanMm, LineSurfaceHeightStep.HeightOutMm(frame, lifted, outward), BeadProbeKey);
+        context.Progress?.Invoke("수직 열 비드 측정 — 두 자리(기록만)");
+
+        // 옆으로 가기 전에 높이부터 — 첫 경유점이 낮으면 제자리에서 들어 올린다.
+        var hereNow = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
+        if (LineSurfaceHeightStep.HeightOutMm(frame, hereNow, outward) < MinViewHeightMm - 0.05)
+        {
+            var rcLift = await _cobot.Rpc.MoveLAsync(LiftedPose(frame, hereNow, outward), tool: context.Tool, user: 0, vel: context.Velocity, ct: ct);
+            if (rcLift != 0)
+                return LogProbeSkip($"측정 높이로 들어 올리기 실패 (rc={rcLift}){FairinoErrorCodes.Suffix(rcLift)}");
+        }
+
+        var points = new List<BeadProbePoint>();
+        foreach (var at in new[] { 0.0, spanMm })
+        {
+            var view = ViewPose(InternalWorkpieceFrame.ShiftAlongX(frame, at), lifted, camShift);
+            var rc = await _cobot.Rpc.MoveLAsync(view, tool: context.Tool, user: 0, vel: context.Velocity, ct: ct);
+            if (rc != 0)
+            {
+                _logger.LogWarning("[수직 열 비드 측정] 용접선 방향 {At:0}mm 자리 이동 실패 (rc={Rc}){Desc} — 여기까지만 기록합니다.",
+                    at, rc, FairinoErrorCodes.Suffix(rc));
+                break;
+            }
+            await Task.Delay(SettleMs, ct);
+            points.Add(await ProbeHereAsync(context, frame, at, ct));
+        }
+        if (points.Count == 0)
+            return LogProbeSkip("측정 자리로 이동하지 못함");
+
+        var slope = points.Count == 2 ? BeadSlopeMmPerM(points[0], points[1]) : null;
+        var parts = string.Join(" / ", points.Select(p =>
+            $"X {p.AtMm:0}mm: 비드 옆 {(p.BeadLateralMm is { } b ? $"{b:+0.0;-0.0}mm" : "—")}" +
+            $"(BASE {(p.BeadBase is { } v ? $"[{v[0]:+0.0;-0.0}, {v[1]:+0.0;-0.0}, {v[2]:+0.0;-0.0}]" : "—")}), " +
+            $"Peak {(p.PeakAlongMm is { } k ? $"{k:+0.0;-0.0}mm" : "—")}{(p.Note.Length > 0 ? $" [{p.Note}]" : "")}"));
+        var summary = $"원점 BASE [{frame[0]:0.0}, {frame[1]:0.0}, {frame[2]:0.0}] — {parts}" +
+                      (slope is { } s ? $" → 비드 대비 경로 기울기 {s:+0.00;-0.00}mm/m (1.8m 에 {s * 1.8:+0.0;-0.0}mm)" : " → 기울기 계산 불가");
+        _logger.LogInformation("[수직 열 비드 측정] 결과 — {Summary}", summary);
+        return summary;
+    }
+
+    private string LogProbeSkip(string why)
+    {
+        _logger.LogWarning("[수직 열 비드 측정] 생략 — {Why}", why);
+        return $"비드 측정 생략({why})";
+    }
+
+    /// <summary>지금 자리(카메라가 좌표계 X <paramref name="atMm"/> 자리를 보고 있다)에서 Peak 와 비드를 잰다. 로봇은 움직이지 않는다.</summary>
+    private async Task<BeadProbePoint> ProbeHereAsync(SequenceContext context, double[] frame, double atMm, CancellationToken ct)
+    {
+        var tcp = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
+        var notes = new List<string>();
+        double? peakAlong = null, beadLateral = null;
+        double[]? beadBase = null;
+        try
+        {
+            var (progressAxis, _) = await WeldSequenceSupport.ApplyProgressAxisAsync(_weld, context, _cobot, _param, ct);
+            var (progressTool, _) = await WeldSequenceSupport.GetProgressToolAxisAsync(_param, progressAxis);
+            var (crossTool, _) = await WeldSequenceSupport.GetCrossToolAxisAsync(_param, progressAxis);
+
+            if (await FindAsync(ct) is { } peak)
+            {
+                var po = new double[6];
+                FlatSurfaceCenteringService.ApplyAxis(po, progressTool, peak.Mm);
+                peakAlong = ToFrameComponents(frame, tcp, po).AlongMm;
+            }
+            else notes.Add("Peak 미검출");
+
+            var (peakRoi, _) = await WeldSequenceSupport.GetPeakRoiAsync(_param, _camera);
+            var (beadRoi, _) = await WeldSequenceSupport.GetBeadRoiAsync(_param, _camera);
+            if (peakRoi is null || beadRoi is null) notes.Add("ROI 없음");
+            else
+            {
+                var (m, detect) = await _weld.MeasureWithoutStoringAsync(2, peakRoi, beadRoi, ct);
+                if (m is null || detect is not { Success: true })
+                    notes.Add($"비드 미검출{(detect?.Message is { Length: > 0 } msg ? $": {msg}" : "")}");
+                else if (!detect.LineFitOk)
+                    notes.Add($"비드 직선피팅 실패(coverage={detect.Confidence:P0})");
+                else
+                {
+                    var bo = new double[6];
+                    FlatSurfaceCenteringService.ApplyAxis(bo, crossTool, _weld.DMm(m));
+                    beadLateral = ToFrameComponents(frame, tcp, bo).LateralMm;
+                    var t = FrameMath.PoseToMatrix(tcp);
+                    beadBase = new double[3];
+                    for (var i = 0; i < 3; i++) beadBase[i] = t[i, 0] * bo[0] + t[i, 1] * bo[1] + t[i, 2] * bo[2];
+                    notes.Add($"coverage={detect.Confidence:P0}");
+                }
+            }
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            notes.Add($"오류: {ex.Message}");
+        }
+        var point = new BeadProbePoint(atMm, tcp, beadLateral, beadBase, peakAlong, string.Join(", ", notes));
+        _logger.LogInformation(
+            "[수직 열 비드 측정] 용접선 방향 {At:0}mm 자리 — TCP [{X:0.0}, {Y:0.0}, {Z:0.0}], 비드 옆 이격 {Bead}, Peak 용접선 방향 이격 {Peak} ({Note})",
+            atMm, tcp[0], tcp[1], tcp[2],
+            beadLateral is { } bl ? $"{bl:+0.0;-0.0}mm(프레임 Y), BASE [{beadBase![0]:+0.0;-0.0}, {beadBase[1]:+0.0;-0.0}, {beadBase[2]:+0.0;-0.0}]" : "—",
+            peakAlong is { } pa ? $"{pa:+0.0;-0.0}mm" : "—", point.Note);
+        return point;
+    }
+
     private async Task<(double Mm, PeakFindResult Result, string Scale)?> FindAsync(CancellationToken ct)
     {
         for (var attempt = 0; attempt < 2; attempt++)

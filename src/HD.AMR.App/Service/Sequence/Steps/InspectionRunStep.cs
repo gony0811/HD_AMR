@@ -438,7 +438,9 @@ public class InspectionRunStep : ISequenceStep
 
         // ── 용접선 방향 Peak 맞춤 — 교시한 줄과 직각인 줄로 처음 넘어왔을 때 한 번(SeamAlongPeakAnchor) ──
         // 첫 경유점에 선 순회 자세(용접선이 영상 가로)에서, 검사 팁을 넣기 전에 잰다. 좌표계가 바뀌면 사전 검증을 다시 하고 다시 선다.
-        if (await NeedsAlongAnchorAsync(context, tipAlreadyIn))
+        var anchorAlong = await NeedsAlongAnchorAsync(context, tipAlreadyIn);
+        var probeBead = await NeedsBeadProbeAsync(context, tipAlreadyIn);
+        if (anchorAlong)
         {
             var (alongMm, anchorNote) = await _peakAnchor.MeasureAsync(context, frame, ToTargetBaseAt(waypoints[firstIdx], 0), ct);
             if (alongMm is { } along)
@@ -463,7 +465,17 @@ public class InspectionRunStep : ISequenceStep
                 _logger.LogWarning(
                     "[검사 수행] 용접선 방향 Peak 맞춤 실패 — {Note}. 좌표계를 그대로 쓰고 다음 줄에서 다시 시도합니다 ('{Key}')",
                     anchorNote, SeamAlongPeakAnchor.EnableKey);
+        }
 
+        // ── 수직 열 비드 두 점 측정(기록만) — 다른 줄로 넘어간 줄마다(SeamAlongPeakAnchor.ProbeBeadLineAsync). 좌표계는 바꾸지 않는다 ──
+        if (probeBead)
+        {
+            await _pauseGate.WaitWhilePausedAsync(ct);
+            await _peakAnchor.ProbeBeadLineAsync(context, frame, ToTargetBaseAt(waypoints[firstIdx], 0), ct);
+        }
+
+        if (anchorAlong || probeBead)
+        {
             // 돌아올 때도 옆 이동은 측정 높이에서 끝내고(첫 경유점 바로 위) 제자리에서 내려간다.
             await _pauseGate.WaitWhilePausedAsync(ct);
             var restage = ToTargetBaseAt(waypoints[firstIdx], 0);
@@ -475,7 +487,7 @@ public class InspectionRunStep : ISequenceStep
                     vel: context.Velocity, acc: MoveAcc, ovl: MoveOvl, blendR: -1, ct: ct);
                 if (restageRc != 0)
                     return StepResult.Fail(
-                        $"용접선 방향 Peak 맞춤 뒤 첫 경유점 #{firstIdx + 1} 복귀 실패 (rc={restageRc}){FairinoErrorCodes.Suffix(restageRc)}.");
+                        $"측정 뒤 첫 경유점 #{firstIdx + 1} 복귀 실패 (rc={restageRc}){FairinoErrorCodes.Suffix(restageRc)}.");
             }
         }
 
@@ -1339,6 +1351,20 @@ public class InspectionRunStep : ISequenceStep
             return false;
         }
         return true;
+    }
+
+    /// <summary>
+    /// 이번 순회 시작에 비드 두 점 측정(기록만)을 할지 — 다른 줄 재사용으로 넘어온 줄(수직 열의 첫 줄)이고, 파라미터가 켜져 있고,
+    /// 검사 팁이 아직 들어가 있지 않을 때.
+    /// </summary>
+    private async Task<bool> NeedsBeadProbeAsync(SequenceContext context, bool tipAlreadyIn)
+    {
+        if (!(context.Bag.TryGetValue(CobotInspectionMoveStep.AnchorCrossLineBagKey, out var cl) && cl is true)) return false;
+        if (tipAlreadyIn) return false;
+        bool? enabled = null;
+        try { enabled = await _param.GetBoolAsync(SeamAlongPeakAnchor.BeadProbeKey); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { /* DB 미준비 — 센서 모드 기본값 */ }
+        return SeamAlongPeakAnchor.ResolveBeadProbe(enabled, _useGas);
     }
 
     private async Task<double> GetWObjIdAsync()

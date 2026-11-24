@@ -249,6 +249,13 @@ public class ParameterService
                 "첫 경유점에 선 뒤 검사 팁을 넣기 전에 좌표계 원점 자리의 코루게이션 Peak 를 depth 로 찾아 좌표계를 용접선 방향으로 옮긴다. " +
                 "물려받은 직각 줄은 용접선 방향 위치를 도면 거리로만 잡아 경로가 위아래로 밀릴 수 있다. 한 번 맞춘 좌표계는 같은 면의 다음 줄·다른 열이 그대로 물려받는다" +
                 "(열을 옮길 때 격자 기울기만큼 용접선 방향으로 따라간다). 못 찾거나 한계를 넘으면 좌표계를 그대로 쓴다. 비우면 가스 검사기 켬, 비전(용접검사기) 끔. 검사마다 읽는다."),
+            (Sequence.Steps.SeamAlongPeakAnchor.BeadProbeKey, "",
+                "다른 줄 좌표계 재사용의 비드 두 점 측정(true/false) — 기록만 한다(좌표계는 바꾸지 않음). 다른 줄로 넘어간 줄(수직 열의 첫 줄)마다 첫 경유점에 선 뒤 " +
+                "검사 팁을 넣기 전에 원점 자리와 용접선 방향으로 떨어진 자리(inspection.reuseFrameBeadProbeSpanMm)에서 비드의 옆 위치와 Peak 위치를 재서 로그 " +
+                "'[수직 열 비드 측정]'에 남긴다. 수직 열 경로가 비드와 사선으로 어긋나는 양을 숫자로 모으기 위한 진단이며, 열마다 측정 이동 시간이 붙는다. " +
+                "데이터를 모은 뒤에는 false 로 끈다. 비우면 가스 검사기 켬, 비전(용접검사기) 끔. 검사마다 읽는다."),
+            (Sequence.Steps.SeamAlongPeakAnchor.BeadProbeSpanKey, "",
+                "비드 두 점 측정의 두 자리 사이 거리(mm) — 원점에서 용접선 방향으로 이만큼 간 자리에서 한 번 더 잰다. 300~1500, 비우면 1080(피치 3회). 검사마다 읽는다."),
             (Sequence.Steps.SeamAlongPeakAnchor.MaxShiftKey, "",
                 "용접선 방향 Peak 맞춤 보정 한계(mm) — 잰 이격이 이보다 크면 옆 Peak 를 잡았거나 좌표계가 크게 틀린 것으로 보고 보정하지 않는다. 5~100, 비우면 40. 검사마다 읽는다."),
             (Sequence.Steps.LineSurfaceHeightStep.TiltMeasureKey, "",

@@ -195,6 +195,63 @@ public class SeamAlongPeakAnchorTests
         Assert.Equal(expectedHeight, FrameMath.ToFrame(view, frame)[2], 6);
     }
 
+    private static SeamAlongPeakAnchor.BeadProbePoint Point(double at, double? bead)
+        => new(at, new double[6], bead, bead is null ? null : new[] { 0.0, -bead.Value, 0.0 }, null, "");
+
+    [Fact]
+    public void 두_자리의_비드_옆_이격으로_경로_기울기를_구한다()
+    {
+        // 아래에서 비드가 +0.5mm, 1080mm 위에서 −5.5mm → 1m 에 −5.56mm, 1.8m 에 −10mm.
+        var slope = SeamAlongPeakAnchor.BeadSlopeMmPerM(Point(0, 0.5), Point(1080, -5.5));
+        Assert.Equal(-6.0 / 1.08, slope!.Value, 6);
+        Assert.Equal(-10.0, slope.Value * 1.8, 6);
+        // 평행이면 0.
+        Assert.Equal(0.0, SeamAlongPeakAnchor.BeadSlopeMmPerM(Point(0, 5.0), Point(1080, 5.0))!.Value, 9);
+    }
+
+    [Fact]
+    public void 한쪽을_못_쟀으면_기울기를_구하지_않는다()
+    {
+        Assert.Null(SeamAlongPeakAnchor.BeadSlopeMmPerM(Point(0, null), Point(1080, 3.0)));
+        Assert.Null(SeamAlongPeakAnchor.BeadSlopeMmPerM(Point(0, 1.0), Point(1080, null)));
+        Assert.Null(SeamAlongPeakAnchor.BeadSlopeMmPerM(Point(0, 1.0), Point(0, 2.0)));
+    }
+
+    [Theory]
+    [InlineData(null, 1080.0)]
+    [InlineData(720.0, 720.0)]
+    [InlineData(100.0, 1080.0)]     // 범위 밖
+    [InlineData(3000.0, 1080.0)]
+    [InlineData(double.NaN, 1080.0)]
+    public void 두_자리_사이_거리(double? value, double expected)
+        => Assert.Equal(expected, SeamAlongPeakAnchor.ResolveBeadProbeSpanMm(value));
+
+    [Theory]
+    [InlineData(null, true, true)]     // 비움 — 가스 켬
+    [InlineData(null, false, false)]   // 비움 — 비전 끔
+    [InlineData(false, true, false)]
+    [InlineData(true, false, true)]
+    public void 비드_측정_사용_여부는_비우면_센서_모드를_따른다(bool? value, bool usesGas, bool expected)
+        => Assert.Equal(expected, SeamAlongPeakAnchor.ResolveBeadProbe(value, usesGas));
+
+    [Fact]
+    public void 떨어진_자리의_정면_자세는_용접선_방향으로만_옮겨진다()
+    {
+        var frame = HorizontalFrame(0.19, new[] { -1573.2, 607.2, -885.9 });
+        var staged = FrameMath.FromFrame(new[] { 5.0, 3.0, 33.8, 0.0, 0.0, 180.0 }, frame);
+        var shift = new[] { -20.0, 202.0, 0.0, 0.0, 0.0, 0.0 };
+
+        var near = SeamAlongPeakAnchor.ViewPose(frame, staged, shift);
+        var far = SeamAlongPeakAnchor.ViewPose(InternalWorkpieceFrame.ShiftAlongX(frame, 1080.0), staged, shift);
+
+        var a = FrameMath.ToFrame(near, frame);
+        var b = FrameMath.ToFrame(far, frame);
+        Assert.Equal(1080.0, b[0] - a[0], 6);      // 용접선 방향으로 1080mm
+        Assert.Equal(a[1], b[1], 6);               // 옆으로는 그대로
+        Assert.Equal(a[2], b[2], 6);               // 높이 그대로
+        for (var i = 3; i < 6; i++) Assert.Equal(near[i], far[i], 6);
+    }
+
     [Fact]
     public void 툴_이동량을_좌표계_성분으로_바꾼다()
     {
