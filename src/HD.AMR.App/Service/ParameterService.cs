@@ -286,6 +286,10 @@ public class ParameterService
             (Sequence.Steps.WObjPointStep.ResidualCorrectionKey, "true",
                 "⑦⁺/⑪⁺ 비드 센터링 후 남은 cross 잔차를 작업물 좌표계 점1/점2 기록에 보정(true). 잔차가 X축을 돌려 연속 LINE 이 " +
                 "V01 에서 멀수록 옆으로 벗어나는 것을 줄인다. 점2 는 각도(⑫)를 건드리지 않는 별도 재측정으로 잔차를 잰다."),
+            (Sequence.Steps.WObjPointStep.PeakResidualCorrectionKey, "",
+                "⑥/⑩ Peak 센터링 후 남은 진행축 잔차를 작업물 좌표계 점1/점2 기록에 보정(true/false) — 센터링은 잔차가 허용치(Sequence.Peak.CenterResidualMaxMm, 기본 5mm) " +
+                "안이면 더 움직이지 않아, 남은 잔차만큼 좌표계 원점이 용접선 방향으로 밀린다(2026-11-24 M2: 잔차가 늘 −4mm 안팎 — 구역 전체가 약 5mm 더 감). " +
+                "로봇은 움직이지 않고 기록 포즈만 옮긴다. 잔차가 ±10mm 를 넘으면 옆 Peak 를 잡았을 수 있어 보정하지 않는다. 비우면 가스 검사기 켬, 비전(용접검사기) 끔. 교시할 때마다 읽는다."),
             (Sequence.Steps.WObjPointStep.Point2DistanceCorrectionKey, "",
                 "작업물 좌표계 점2 면 거리 보정(true/false) — 점1·점2 기록 자리에서 잰 레이저 3채널의 채널별 차이로 " +
                 "점2 가 점1 보다 면에서 얼마나 멀고 가까운지 구해, 점2 기록을 광축 방향으로 그만큼 옮긴다(로봇은 움직이지 않음). " +

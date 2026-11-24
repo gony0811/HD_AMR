@@ -55,6 +55,36 @@ public class WObjPointStep : ISequenceStep
         return offset;
     }
 
+    /// <summary>점 N 기록 시 더할 Peak 잔차 보정(툴 프레임 오프셋 double[6]) Bag 키 — ⑥(점1)·⑩(점2) Peak 센터링이 남긴다.</summary>
+    public static string PointAlongCorrectionBagKey(int n) => $"wobj.point{n}AlongCorrection";
+
+    /// <summary>
+    /// Peak 잔차 보정 사용 여부 파라미터 키(true/false) — Peak 센터링 뒤 남은 진행축 잔차만큼 점 기록을 옮긴다(로봇은 움직이지 않음).
+    /// 센터링은 잔차가 허용치(<see cref="PeakCenteringStep.ResidualMaxKey"/>, 기본 5mm) 안이면 더 움직이지 않는데, 영상 mm 환산이
+    /// 실제보다 작게 나와 잔차가 늘 같은 쪽으로 남는다(실기 2026-11-24 M2: −3.7 / −4.6 / −4.4mm — 좌표계 원점이 그만큼 진행 방향으로
+    /// 밀려 구역 전체가 약 5mm 더 감). 비우면 검사 센서 모드로 정한다 — 가스 켬, 비전(용접검사기) 끔.
+    /// </summary>
+    public const string PeakResidualCorrectionKey = "Sequence.WObj.PeakResidualCorrection";
+
+    /// <summary>이보다 큰 Peak 잔차는 보정하지 않는다(mm) — 재측정이 옆 Peak 를 잡았을 수 있다.</summary>
+    public const double MaxPeakResidualCorrectionMm = 10.0;
+
+    /// <summary>파라미터 값 → Peak 잔차 보정 사용 여부. 비면 센서 모드 기본값(가스 켬 / 비전 끔).</summary>
+    internal static bool ResolvePeakResidualCorrection(bool? value, bool usesGas) => value ?? usesGas;
+
+    /// <summary>
+    /// 진행축 잔차 <paramref name="residualMm"/>(d 규약: Peak − 센터, 양수 = 진행축 + 방향)를 툴 프레임 오프셋으로 바꾼다.
+    /// Peak 센터링이 d 만큼 <see cref="FlatSurfaceCenteringService.ApplyAxis"/> 로 움직여 Peak 를 센터에 놓으므로, 남은 잔차도
+    /// 같은 규약으로 더하면 Peak 위 점이 된다. |잔차| 가 <see cref="MaxPeakResidualCorrectionMm"/> 를 넘거나 유한하지 않으면 null.
+    /// </summary>
+    public static double[]? AlongCorrectionOffset(ToolAxisDir progressAxis, double residualMm)
+    {
+        if (!double.IsFinite(residualMm) || Math.Abs(residualMm) > MaxPeakResidualCorrectionMm) return null;
+        var offset = new double[6];
+        FlatSurfaceCenteringService.ApplyAxis(offset, progressAxis, residualMm);
+        return offset;
+    }
+
     /// <summary>기록 포즈에 툴 프레임 보정 오프셋을 더한다(자세 유지).</summary>
     public static double[] ApplyCorrection(double[] poseBase, double[] toolOffset)
         => FrameMath.FromFrame(toolOffset, poseBase);
@@ -159,6 +189,25 @@ public class WObjPointStep : ISequenceStep
             else
                 correctionNote = " (비드 잔차 보정 꺼짐 — 센터링 위치 그대로 기록)";
         }
+        // Peak 잔차 보정 — 센터링 뒤 남은 진행축 잔차만큼 기록을 옮겨 Peak 위 점으로 기록한다(로봇은 움직이지 않음).
+        if (context.Bag.TryGetValue(PointAlongCorrectionBagKey(_pointNum), out var av) && av is double[] { Length: 6 } along)
+        {
+            // 한 번만 쓴다 — Peak 센터링 없이 점만 다시 기록하는 실행(드라이런·단계 단독 실행)에 앞 실행 값이 섞이지 않게.
+            context.Bag.Remove(PointAlongCorrectionBagKey(_pointNum));
+            if (await IsPeakCorrectionEnabledAsync())
+            {
+                var corrected = ApplyCorrection(pose, along);
+                _logger.LogInformation(
+                    "내부 작업물 좌표계 {Point} Peak 잔차 보정: 툴 오프셋 [{Ox:+0.0;-0.0}, {Oy:+0.0;-0.0}, {Oz:+0.0;-0.0}]mm → " +
+                    "TCP [{X0:0.0}, {Y0:0.0}, {Z0:0.0}] → [{X:0.0}, {Y:0.0}, {Z:0.0}] ('{Key}')",
+                    PointName, along[0], along[1], along[2], pose[0], pose[1], pose[2], corrected[0], corrected[1], corrected[2],
+                    PeakResidualCorrectionKey);
+                correctionNote += $" Peak 잔차 보정 툴 [{along[0]:+0.0;-0.0}, {along[1]:+0.0;-0.0}, {along[2]:+0.0;-0.0}]mm 반영.";
+                Array.Copy(corrected, pose, 6);
+            }
+            else
+                correctionNote += " (Peak 잔차 보정 꺼짐)";
+        }
         correctionNote += await CorrectPoint2DistanceAsync(context, pose);
         context.Bag[PointPoseBagKey(_pointNum)] = (double[])pose.Clone();
 
@@ -211,6 +260,12 @@ public class WObjPointStep : ISequenceStep
             _logger.LogWarning("내부 작업물 좌표계 점2 면 거리 보정 실패 — 보정 없이 기록: {Msg}", ex.Message);
             return " (점2 면 거리 보정 실패 — 보정 없이 기록)";
         }
+    }
+
+    private async Task<bool> IsPeakCorrectionEnabledAsync()
+    {
+        try { return ResolvePeakResidualCorrection(await _param.GetBoolAsync(PeakResidualCorrectionKey), _useGas); }
+        catch { return ResolvePeakResidualCorrection(null, _useGas); }
     }
 
     private async Task<bool> IsCorrectionEnabledAsync()

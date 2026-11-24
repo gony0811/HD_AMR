@@ -107,8 +107,12 @@ public class PeakCenteringStep : ISequenceStep
         if (context.Bag[WeldSequenceSupport.OffsetMmBagKey(_peakId)] is not double initialOffsetMm)
             return StepResult.Fail($"Peak{_peakId} 측정값을 읽을 수 없습니다 — 앞 단계를 다시 실행하세요.");
 
+        // 이전 실행의 잔차 보정이 이번 점 기록에 섞이지 않게 먼저 지운다.
+        context.Bag.Remove(WObjPointStep.PointAlongCorrectionBagKey(_peakId));
+
         var (progressAxis, axisSrc) = await WeldSequenceSupport.ApplyProgressAxisAsync(_weld, context, _cobot, _param, ct);
         var axisKey = WeldSequenceSupport.ProgressToolAxisKey(progressAxis);
+        var (toolAxis, axisFromParam) = await WeldSequenceSupport.GetProgressToolAxisAsync(_param, progressAxis);
 
         // ④와 동일 규약: d = 타깃 − 센터(양수 = 진행축 + 방향)를 부호 반전 없이 그대로 싣는다.
         // 검사캠 오프셋은 여기서 다루지 않는다 — depth 시야 중심에서 센터링·검증을 끝내야
@@ -117,20 +121,21 @@ public class PeakCenteringStep : ISequenceStep
 
         if (Math.Abs(moveMm) < SkipMoveMm)
             return StepResult.Ok(
-                $"Peak{_peakId} 이미 센터 근방 ({initialOffsetMm:+0.0;-0.0}mm) — 이동 생략.");
+                $"Peak{_peakId} 이미 센터 근방 ({initialOffsetMm:+0.0;-0.0}mm) — 이동 생략." +
+                RecordPointCorrection(context, toolAxis, initialOffsetMm));
 
         // 이미 허용 잔차 안이면 움직이지 않는다 — 센터링 후 남아도 되는 잔차와 같은 기준.
         var residualMax = await _param.GetDoubleAsync(ResidualMaxKey) ?? DefaultResidualMaxMm;
         if (AlreadyCentered(initialOffsetMm, residualMax))
             return StepResult.Ok(
-                $"Peak{_peakId} 이미 허용 범위 안 ({initialOffsetMm:+0.0;-0.0}mm, 허용 ±{residualMax:0.#}mm) — 이동 생략.");
+                $"Peak{_peakId} 이미 허용 범위 안 ({initialOffsetMm:+0.0;-0.0}mm, 허용 ±{residualMax:0.#}mm) — 이동 생략." +
+                RecordPointCorrection(context, toolAxis, initialOffsetMm));
 
         var clamped = Math.Clamp(moveMm, -MaxCenteringMoveMm, MaxCenteringMoveMm);
         if (Math.Abs(clamped - moveMm) > 1e-6)
             _logger.LogWarning(
                 "Peak{Id} 센터링 이동량 {Raw:0.0}mm 가 한계 ±{Max:0}mm 로 클램프됨.",
                 _peakId, moveMm, MaxCenteringMoveMm);
-        var (toolAxis, axisFromParam) = await WeldSequenceSupport.GetProgressToolAxisAsync(_param, progressAxis);
         if (!axisFromParam)
             _logger.LogWarning(
                 "'{Key}' 매핑 파라미터 없음/범위 밖 — 기본값 사용. 카메라 페이지에서 매핑을 설정·저장하세요.",
@@ -247,6 +252,28 @@ public class PeakCenteringStep : ISequenceStep
             $"Peak{_peakId} 센터링 완료 — {clamped:+0.0;-0.0}mm 이동, " +
             $"잔차 {residualMm:+0.0;-0.0}mm (이동 전 {initialOffsetMm:+0.0;-0.0}mm, 예상 {expectedMm:+0.0;-0.0}mm" +
             (corrections > 0 ? $", 잔차 보정 {corrections}회" : "") + $"), {scaleNote}" +
-            (residualWarn is not null ? $" ⚠ {residualWarn}" : ""));
+            (residualWarn is not null ? $" ⚠ {residualWarn}" : "") +
+            RecordPointCorrection(context, toolAxis, residualMm));
+    }
+
+    /// <summary>
+    /// 센터링 뒤 남은 진행축 잔차를 점 기록 보정으로 남긴다(<see cref="WObjPointStep.PointAlongCorrectionBagKey"/>) — ⑦⁺/⑪⁺ 뒤의
+    /// 점 기록(<see cref="WObjPointStep"/>)이 그만큼 옮겨 Peak 위 점으로 기록한다. 로봇은 움직이지 않는다. 결과 메시지에 붙일 메모를 돌려준다.
+    /// </summary>
+    private string RecordPointCorrection(SequenceContext context, ToolAxisDir progressToolAxis, double residualMm)
+    {
+        var offset = WObjPointStep.AlongCorrectionOffset(progressToolAxis, residualMm);
+        if (offset is null)
+        {
+            _logger.LogWarning(
+                "Peak{Id} 센터링: 잔차 {Res:+0.0;-0.0}mm 가 점 기록 보정 상한 ±{Max:0}mm 밖 — 점{Id2} 보정 안 함(옆 Peak 를 잡았을 수 있음).",
+                _peakId, residualMm, WObjPointStep.MaxPeakResidualCorrectionMm, _peakId);
+            return $" ⚠ 잔차 {residualMm:+0.0;-0.0}mm 가 점 기록 보정 상한 ±{WObjPointStep.MaxPeakResidualCorrectionMm:0}mm 밖 — 점{_peakId} 보정 안 함.";
+        }
+        context.Bag[WObjPointStep.PointAlongCorrectionBagKey(_peakId)] = offset;
+        _logger.LogInformation(
+            "Peak{Id} 센터링: 작업물 좌표계 점 잔차 보정 {Res:+0.0;-0.0}mm → 툴{Axis} (점 기록 때 반영)",
+            _peakId, residualMm, FlatSurfaceCenteringService.AxisName(progressToolAxis));
+        return $" 점{_peakId} 잔차 보정 {residualMm:+0.0;-0.0}mm.";
     }
 }
