@@ -77,6 +77,8 @@ internal static class ServiceRegistration
 
         AddHostedSingleton<LaserDisplacementSensorService>(services);
         services.Configure<LaserDisplacementSensorSettings>(config.GetSection("LaserDisplacementSensor"));
+        // 레이저 고속 기록 모드(Laser.DataLog.*) — 켜면 logs/laser-YYYY-MM-DD.csv 에 100ms 간격 기록.
+        AddHostedSingleton<LaserDataLogService>(services);
         // 헤드 XY 오프셋 틸트 응답 캘리브레이션 — Laser 페이지에서 실행하는 무상태 루틴.
         services.AddTransient<LaserHeadCalibrationRoutine>();
 

@@ -68,6 +68,9 @@ builder.Services.AddTransient<LaserHeadCalibrationRoutine>();
 // 평탄 중심 정렬 — 카메라 페이지와 FlatSurfaceAlignStep 이 공유하는 무상태 루틴.
 builder.Services.AddTransient<FlatSurfaceCenteringService>();
 builder.Services.AddTransient<LaserTiltCorrector>();   // 레이저 틸트 수평 보정(④ Phase C · /laser 보정 적용 공용)
+// 레이저 고속 기록 모드(Laser.DataLog.*) — 켜면 logs/laser-YYYY-MM-DD.csv 에 100ms 간격 기록.
+builder.Services.AddSingleton<LaserDataLogService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<LaserDataLogService>());
 // 최근 평탄면 검출 스냅샷 — 시퀀스/정렬 루틴이 발행하고 카메라 페이지가 표시.
 builder.Services.AddSingleton<FlatDetectionMonitor>();
 
