@@ -152,6 +152,7 @@ public static class BundleTeach
         context.Bag[FirstEndKey] = assignment.FirstEndW!;
         context.Bag[LastStartKey] = assignment.LastStartW!;
         context.Bag.Remove(Point2PitchesKey);
+        context.Bag.Remove(Point2NominalMmKey);
         context.Bag.Remove(Point2WdKey);
         context.Bag.Remove(Point2ReturnPoseKey);
     }
@@ -175,6 +176,12 @@ public static class BundleTeach
     /// 다시 교시한다. 가스 검사기는 묶음 마지막 줄 끝 WD 확인이 기본으로 꺼져 있어 늘여 쓴 구간을 확인할 수단이 없다.
     /// </summary>
     public const string Point2PitchesKey = "bundle.point2Pitches";
+
+    /// <summary>
+    /// Bag 키(double, mm) — 묶음 점2 까지의 <b>도면상</b> 거리(피치 수 × 피치). 오케스트레이터가 교시로 잰 점1~점2 거리와 함께 남겨
+    /// 팔로워 줄을 실측 간격에 맞춰 놓는 데 쓴다(<see cref="Inspection.InternalWorkpieceFrame.MeasuredPitchAlong"/>).
+    /// </summary>
+    public const string Point2NominalMmKey = "bundle.point2NominalMm";
 
     /// <summary>자세 그대로 면 바깥 법선으로 <paramref name="liftMm"/> 띄운 포즈. 법선 길이가 0 이면 그대로.</summary>
     internal static double[] LiftedAlongNormal(double[] pose, double[] wallOut, double liftMm)

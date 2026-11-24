@@ -93,7 +93,10 @@ public class PeakApproachStep : ISequenceStep
                     lastGood = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
             }
             if (failed is null)
+            {
+                context.Bag[BundleTeach.Point2NominalMmKey] = count * pitchMm;
                 return StepResult.Ok($"묶음 점2 추정 완료 — 면 위 피치 {count}회(직선 점프 없음).");
+            }
 
             // 먼 자리가 안 되면 단독(피치 1회)까지 내려가지 않고 가장 먼 성공 자리를 점2 로 써서 묶음을 유지한다 —
             // 실기 2026-11-24 M2: 피치 3회째 자리만 레이저가 34.7mm 가깝게 읽혀 묶음이 풀리고 줄마다 다시 교시했다.
@@ -108,6 +111,7 @@ public class PeakApproachStep : ISequenceStep
                 {
                     // 오케스트레이터가 묶음을 이 구간 안의 줄로 줄인다 — 점2 너머 줄은 다시 교시.
                     context.Bag[BundleTeach.Point2PitchesKey] = done;
+                    context.Bag[BundleTeach.Point2NominalMmKey] = done * pitchMm;
                     return StepResult.Ok(
                         $"묶음 점2 추정 — 피치 {count}회 중 {done}회 자리(약 {done * pitchMm:0}mm)를 점2 로 사용(그 구간 안의 줄만 묶음 유지). 원인: {failed.Message}");
                 }

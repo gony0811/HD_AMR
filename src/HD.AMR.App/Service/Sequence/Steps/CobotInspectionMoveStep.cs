@@ -1439,6 +1439,15 @@ public class CobotInspectionMoveStep : ISequenceStep
                 _logger.LogInformation(
                     "[Cobot 검사위치 이동] 다른 줄 좌표계 재사용 — 격자 기울기 {Err:+0.00;-0.00}°(좌표계 축 대비 ACS 방향)를 따라 용접선 방향으로 {Mm:+0.0;-0.0}mm 고침",
                     axisErrDeg, gridTiltMm);
+            // 묶음 실측 간격 맞춤으로 옮겨 둔 양 — 다른 줄(수직↔수평·다른 열)로 넘어갈 때는 되돌려 그 줄 위치를 종전(ACS 거리 기준)대로 둔다.
+            if (context.Bag.TryGetValue(InternalWorkpieceFrame.PitchScaleShiftBagKey, out var psv) && psv is double[] { Length: 3 } pitchShift)
+            {
+                for (var i = 0; i < 3; i++) other[i] -= pitchShift[i];
+                context.Bag.Remove(InternalWorkpieceFrame.PitchScaleShiftBagKey);
+                _logger.LogInformation(
+                    "[Cobot 검사위치 이동] 다른 줄 좌표계 재사용 — 앞 줄의 묶음 실측 간격 맞춤 [{X:+0.0;-0.0}, {Y:+0.0;-0.0}, {Z:+0.0;-0.0}]mm 를 되돌림(이 줄 위치는 ACS 거리 기준)",
+                    pitchShift[0], pitchShift[1], pitchShift[2]);
+            }
             // 용접선 방향 Peak 실측으로 옮겨 둔 양 — 좌표계를 다시 90° 돌리면 그 방향에서는 옆 오차가 되므로 되돌린다.
             if (InternalWorkpieceFrame.IsQuarterTurn(rotDeg)
                 && context.Bag.TryGetValue(InternalWorkpieceFrame.AlongAnchorBagKey, out var av0) && av0 is double[] { Length: 3 } anchorShift)
@@ -1484,6 +1493,26 @@ public class CobotInspectionMoveStep : ISequenceStep
             : null;
         var sameLine = map is { } mo && mo.LateralMm <= InternalWorkpieceFrame.MaxDroppedLateralMm;
         var (moved, lateralMm, normalMm, alongX) = InternalWorkpieceFrame.TranslateAlongX(frame, anchorStart, startBase, forceAlongX: sameLine);
+        // 묶음 팔로워 — 리더가 교시로 잰 점1~점2 간격에 맞춰 놓는다(ACS 도면 거리 대신). 옮긴 양은 Bag 에 남겨 다른 줄로 넘어갈 때 되돌린다.
+        if (alongX && sameLine && map is { } mapOffset
+            && context.Bag.TryGetValue(InternalWorkpieceFrame.BundleSpanBagKey, out var bsv) && bsv is double[] { Length: 2 } span)
+        {
+            var (acsAlong, _) = InternalWorkpieceFrame.AlongAndHeight(frame, moved);
+            var (scaledAlong, reject) = InternalWorkpieceFrame.MeasuredPitchAlong(acsAlong, mapOffset.AlongMm, span[0], span[1]);
+            if (scaledAlong is { } sa)
+            {
+                var placed = InternalWorkpieceFrame.ShiftAlongX(frame, sa);
+                context.Bag[InternalWorkpieceFrame.PitchScaleShiftBagKey] =
+                    new[] { placed[0] - moved[0], placed[1] - moved[1], placed[2] - moved[2] };
+                _logger.LogInformation(
+                    "[Cobot 검사위치 이동] 묶음 실측 간격 맞춤 — 점1~점2 실측 {Meas:0.0}mm / 도면 {Nom:0}mm (×{Scale:0.0000}), 이 줄 도면 {Map:0}mm → 용접선 방향 {Acs:+0.0;-0.0}mm 대신 {New:+0.0;-0.0}mm ({Diff:+0.0;-0.0}mm) ('{Key}')",
+                    span[0], span[1], span[0] / span[1], Math.Abs(mapOffset.AlongMm), acsAlong, sa, sa - acsAlong,
+                    InternalWorkpieceFrame.FollowMeasuredPitchKey);
+                moved = placed;
+            }
+            else
+                _logger.LogWarning("[Cobot 검사위치 이동] 묶음 실측 간격 맞춤 안 함 — {Why}. ACS 거리 그대로 옮깁니다.", reject);
+        }
         context.Bag[InternalWorkpieceFrame.BagKey] = moved;
         if (alongX && sameLine && Math.Abs(lateralMm) > InternalWorkpieceFrame.MaxDroppedLateralMm)
             _logger.LogWarning(

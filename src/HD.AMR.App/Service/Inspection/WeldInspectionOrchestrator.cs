@@ -57,6 +57,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
     private readonly Dictionary<string, (double[] Frame, double[]? Start, double[]? EndTcp)> _bundleFrames = new();
     private readonly Dictionary<string, double[]> _bundleSeamW = new();   // 묶음 공통 좌표계를 잡은 리더 용접선의 맵 좌표 [시작, 끝](m) — 팔로워가 같은 줄인지 판단
     private readonly HashSet<string> _dissolvedBundles = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (double MeasuredMm, double NominalMm)> _bundleSpans = new();   // 묶음 리더가 교시로 잰 점1~점2 거리와 그 구간의 도면 거리 — 팔로워 줄을 실측 간격에 맞춰 놓는다
+    private double[]? _lastPitchScaleShiftBase;                    // 그 좌표계 원점을 실측 간격에 맞추느라 ACS 거리 대비 옮긴 양(BASE mm) — 다른 줄로 넘어갈 때 되돌린다
 
     /// <summary>
     /// <b>정렬·작업물 좌표계 교시 스텝군(③~⑯)</b> — anchor 적중(같은 노드의 2번째 이후 task) 시 건너뛴다.
@@ -318,6 +320,23 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             _ => null,
         };
 
+    /// <summary>
+    /// 묶음 리더 실행이 남긴 점1·점2 교시 포즈에서 [좌표계 X 방향 실측 거리, 그 구간의 도면 거리] 를 구한다.
+    /// 점2 를 묶음으로 잡지 않았거나(도면 거리 표식 없음) 포즈가 없으면 null.
+    /// </summary>
+    internal static (double MeasuredMm, double NominalMm)? MeasuredBundleSpan(SequenceContext context, double[] frame)
+    {
+        if (!context.Bag.TryGetValue(BundleTeach.Point2NominalMmKey, out var nv) || nv is not double nominal || !(nominal > 0))
+            return null;
+        if (!context.Bag.TryGetValue(Sequence.Steps.WObjPointStep.PointPoseBagKey(1), out var p1v) || p1v is not double[] { Length: 6 } p1
+            || !context.Bag.TryGetValue(Sequence.Steps.WObjPointStep.PointPoseBagKey(2), out var p2v) || p2v is not double[] { Length: 6 } p2)
+            return null;
+        var a1 = InternalWorkpieceFrame.AlongAndHeight(frame, p1).Along;
+        var a2 = InternalWorkpieceFrame.AlongAndHeight(frame, p2).Along;
+        var measured = Math.Abs(a2 - a1);
+        return double.IsFinite(measured) && measured > 0 ? (measured, nominal) : null;
+    }
+
     public void BeginBundles(IReadOnlyList<BundleAssignment> assignments)
     {
         lock (_sync)
@@ -326,6 +345,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             _bundleOrder.Clear();
             _bundleFrames.Clear();
             _bundleSeamW.Clear();
+            _bundleSpans.Clear();
             _dissolvedBundles.Clear();
             foreach (var a in assignments)
             {
@@ -643,6 +663,14 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             double? appliedTiltDeg;
             double? crossRotationDeg;
             double[]? alongAnchorBase;
+            double[]? pitchScaleShiftBase;
+            (double MeasuredMm, double NominalMm)? bundleSpan = null;
+            var followMeasuredPitch = _sensor.UsesGasDetector;
+            try { followMeasuredPitch = InternalWorkpieceFrame.ResolveFollowMeasuredPitch(await param.GetBoolAsync(InternalWorkpieceFrame.FollowMeasuredPitchKey), _sensor.UsesGasDetector); }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(ex, "'{Key}' 조회 실패 — 센서 모드 기본값으로 진행", InternalWorkpieceFrame.FollowMeasuredPitchKey);
+            }
             lock (_sync)
             {
                 if (ShouldInvalidateForStroke(_lastAnchor is not null, _lastAnchorStrokeMm, currentStrokeMm))
@@ -713,6 +741,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                 appliedTiltDeg = _lastVerticalTiltDeg;
                 crossRotationDeg = _lastCrossRotationDeg;
                 alongAnchorBase = _lastAlongAnchorBase?.ToArray();
+                pitchScaleShiftBase = _lastPitchScaleShiftBase?.ToArray();
                 cachedInternalFrame = anchorHit ? (double[])_lastInternalWorkpieceFrame!.Clone() : null;
                 cachedAnchorStartBase = anchorHit ? _lastAnchorStartBase?.ToArray() : null;
                 cachedAnchorSeamW = anchorHit && _lastAnchorSeamW is { } lastSeam ? lastSeam.Start.Concat(lastSeam.End).ToArray() : null;
@@ -790,6 +819,10 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                     cachedAnchorEndTcp = shared.EndTcp?.ToArray();
                     lock (_sync)
                         cachedAnchorSeamW = _bundleSeamW.TryGetValue(bundle.BundleId!, out var bsw) ? bsw.ToArray() : null;
+                    // 공통 좌표계는 리더가 교시한 그대로(실측 간격 맞춤 전)라 앞 줄의 맞춤 이동량은 넘기지 않는다 — 이 줄 것을 ② 가 새로 구한다.
+                    pitchScaleShiftBase = null;
+                    lock (_sync)
+                        bundleSpan = followMeasuredPitch && _bundleSpans.TryGetValue(bundle.BundleId!, out var bspan) ? bspan : null;
                     lock (_sync)
                         bundleEndWd = _bundleOrder.LastOrDefault(a => a.BundleId == bundle.BundleId)?.ActionId == action.ActionId;
                     _logger.LogInformation("묶음 {Id} 공통 좌표계 — {Job} 교시 생략{Last}", bundle.BundleId, req.JobRef,
@@ -943,6 +976,11 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                     context.Bag[InternalWorkpieceFrame.CrossRotationBagKey] = crossRot;
                 if (alongAnchorBase is { Length: 3 })
                     context.Bag[InternalWorkpieceFrame.AlongAnchorBagKey] = alongAnchorBase;
+                // 묶음 실측 간격 맞춤 — 팔로워에는 리더가 잰 간격을, 그 뒤 줄에는 좌표계에 들어 있는 맞춤 이동량을 넘긴다.
+                if (bundleSpan is { } bs)
+                    context.Bag[InternalWorkpieceFrame.BundleSpanBagKey] = new[] { bs.MeasuredMm, bs.NominalMm };
+                if (pitchScaleShiftBase is { Length: 3 })
+                    context.Bag[InternalWorkpieceFrame.PitchScaleShiftBagKey] = pitchScaleShiftBase;
             }
             // 묶음에서 이 구역 뒤에 같은 묶음 구역이 이어지면 검사 팁 진입 깊이를 유지한 채 넘어간다(빠졌다 다시 들어오지 않음).
             if (bundle?.BundleId is { } keepBid)
@@ -1079,6 +1117,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                                                         && crv is double crDeg ? crDeg : null;
                                 _lastAlongAnchorBase = context.Bag.TryGetValue(InternalWorkpieceFrame.AlongAnchorBagKey, out var aav)
                                                        && aav is double[] { Length: 3 } aaBase ? aaBase.ToArray() : null;
+                                _lastPitchScaleShiftBase = context.Bag.TryGetValue(InternalWorkpieceFrame.PitchScaleShiftBagKey, out var pss)
+                                                           && pss is double[] { Length: 3 } pssBase ? pssBase.ToArray() : null;
                                 // 기준 면 높이 — 이번 실행이 쟀으면 그 값, 아니면 물려받은 좌표계일 때만 앞 값을 이어 쓴다.
                                 _lastSurfaceRefMm = context.Bag.TryGetValue(Sequence.Steps.LineSurfaceHeightStep.ReferenceHeightBagKey, out var sref)
                                                     && sref is double srefMm ? srefMm
@@ -1093,6 +1133,15 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                                     _bundleFrames[bid] = next;
                                     if (bundle.Role == BundleRole.Leader)
                                         _bundleSeamW[bid] = req.SeamStartW.Concat(req.SeamEndW).ToArray();
+                                    // 리더가 교시로 잰 점1~점2 거리와 그 구간의 도면 거리 — 팔로워 줄을 실측 간격에 맞춰 놓는 데 쓴다.
+                                    if (bundle.Role == BundleRole.Leader
+                                        && MeasuredBundleSpan(context, internalFrame) is { } measuredSpan)
+                                    {
+                                        _bundleSpans[bid] = measuredSpan;
+                                        _logger.LogInformation(
+                                            "묶음 {Id} 점1~점2 실측 {Meas:0.0}mm / 도면 {Nom:0}mm (×{Scale:0.0000})",
+                                            bid, measuredSpan.MeasuredMm, measuredSpan.NominalMm, measuredSpan.MeasuredMm / measuredSpan.NominalMm);
+                                    }
                                     // 리더가 점2 를 계획보다 가까운 자리에 잡았으면 묶음을 그 실측 구간 안의 줄로 줄인다 —
                                     // 점2 너머 줄은 이 좌표계를 물려받지 않고 자기들끼리 다시 묶여 새로 교시한다.
                                     if (bundle.Role == BundleRole.Leader

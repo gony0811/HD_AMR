@@ -223,6 +223,56 @@ public static class InternalWorkpieceFrame
     public static bool NeedsAlongAnchor(double crossRotationDeg, bool alreadyAnchored)
         => !alreadyAnchored && IsQuarterTurn(crossRotationDeg);
 
+    /// <summary>
+    /// 묶음 팔로워 줄을 실측 간격에 맞춰 놓기 파라미터 키(true/false) — 비우면 검사 센서 모드로 정한다(가스 켬, 비전 끔).
+    /// 묶음 좌표계는 점1(첫 줄 시작 Peak)과 점2(마지막 줄 시작 Peak)를 실제로 재서 잡는데, 팔로워 줄 원점은 ACS 도면 거리로 옮겨
+    /// 실제 코루게이션 간격이 도면과 다르면 뒤 줄일수록 용접선 방향으로 밀린다(실기 2026-11-24 M2: 도면 3×360=1080mm 인데
+    /// 실측 1064.8mm — 4번째 줄이 14.5mm 더 가서 CROSS4 수직 부분이 비드 옆을 지남).
+    /// </summary>
+    public const string FollowMeasuredPitchKey = "inspection.bundleFollowMeasuredPitch";
+
+    /// <summary>실측/도면 간격 비가 1 에서 이만큼 넘게 벗어나면 Peak 오검출로 보고 쓰지 않는다(±2.5% — 1080mm 에서 ±27mm).</summary>
+    public const double MaxPitchScaleDeviation = 0.025;
+
+    /// <summary>실측 간격 비를 쓸 수 있는 최소 도면 거리 [mm] — 피치 1회 미만은 의미가 없다.</summary>
+    public const double MinPitchScaleSpanMm = 300.0;
+
+    /// <summary>
+    /// Bag 키(double[2]) — 묶음 리더가 교시로 잰 [점1~점2 실측 거리 mm, 그 구간의 도면 거리 mm]. 오케스트레이터가 팔로워에 넣는다.
+    /// </summary>
+    public const string BundleSpanBagKey = "bundle.measuredSpan";
+
+    /// <summary>
+    /// Bag 키(double[3], BASE mm) — 팔로워 줄 원점을 실측 간격에 맞추느라 ACS 거리 대비 옮긴 양. 좌표계와 함께 넘기고,
+    /// 다른 줄(수직↔수평·다른 열)로 넘어갈 때 되돌린다 — 그쪽 줄 위치는 종전(ACS 거리 기준)과 같게 둔다.
+    /// </summary>
+    public const string PitchScaleShiftBagKey = "wobj.pitchScaleShiftBase";
+
+    /// <summary>파라미터 값 → 실측 간격 맞춤 사용 여부. 비면 센서 모드 기본값(가스 켬 / 비전 끔).</summary>
+    public static bool ResolveFollowMeasuredPitch(bool? value, bool usesGas) => value ?? usesGas;
+
+    /// <summary>
+    /// 팔로워 줄 원점을 놓을 프레임 X 거리 [mm] — 도면상 거리 <paramref name="mapAlongMm"/> 에 실측/도면 비
+    /// (<paramref name="measuredSpanMm"/>/<paramref name="nominalSpanMm"/>)를 곱한다. 부호(방향)는 ACS 로 구한
+    /// <paramref name="acsAlongMm"/> 를 따른다. 쓸 수 없으면 null + 사유(종전 ACS 거리 그대로).
+    /// </summary>
+    public static (double? AlongMm, string? Reject) MeasuredPitchAlong(
+        double acsAlongMm, double mapAlongMm, double measuredSpanMm, double nominalSpanMm)
+    {
+        if (!double.IsFinite(acsAlongMm) || !double.IsFinite(mapAlongMm) || !double.IsFinite(measuredSpanMm) || !double.IsFinite(nominalSpanMm))
+            return (null, "값 이상");
+        if (nominalSpanMm < MinPitchScaleSpanMm)
+            return (null, $"도면 거리 {nominalSpanMm:0}mm 가 {MinPitchScaleSpanMm:0}mm 미만");
+        var scale = measuredSpanMm / nominalSpanMm;
+        if (Math.Abs(scale - 1.0) > MaxPitchScaleDeviation)
+            return (null, $"실측 {measuredSpanMm:0.0}mm / 도면 {nominalSpanMm:0}mm = {scale:0.0000} 이 ±{MaxPitchScaleDeviation * 100:0.#}% 밖 — Peak 오검출 의심");
+        // 실측 구간(점1~점2) 안의 줄만 — 너머로는 늘여 쓰지 않는다.
+        if (Math.Abs(mapAlongMm) > nominalSpanMm + 1.0)
+            return (null, $"이 줄(도면 {Math.Abs(mapAlongMm):0}mm)이 실측 구간({nominalSpanMm:0}mm) 밖");
+        var sign = acsAlongMm >= 0 ? 1.0 : -1.0;
+        return (sign * Math.Abs(mapAlongMm) * scale, null);
+    }
+
     /// <summary>좌표계 원점을 프레임 X(용접선 방향)로 <paramref name="mm"/> 옮긴다. 자세는 그대로.</summary>
     public static double[] ShiftAlongX(double[] frameBase, double mm)
     {
