@@ -701,6 +701,9 @@ public class InspectionRunStep : ISequenceStep
     private async Task<bool> ApplyInspectAccelerationAsync(SequenceContext context, CancellationToken ct)
     {
         if (context.InspectAcceleration is not { } acc) return false;
+        // 순회 동안 CobotService 의 주기 동기화가 평소 값으로 덮어쓰지 않게 일시 값으로 등록한다
+        // (실기 2026-11-25 12:35:09: 순회 중 파라미터를 10→15% 로 저장하자 동기화가 레시피 10% 를 15% 로 바꿨다).
+        FairinoRpcClient.SetOaccOverride(acc);
         try
         {
             var rc = await _cobot.Rpc.SetOaccScaleAsync(acc, ct);
@@ -723,6 +726,8 @@ public class InspectionRunStep : ISequenceStep
     /// <summary>전역 가속도 배율 복원. 취소된 뒤에도 반드시 보내야 하므로 호출자 토큰을 쓰지 않는다.</summary>
     private async Task RestoreAccelerationAsync()
     {
+        // 일시 값 해제 — 아래 복원이 실패해도 CobotService 가 5초 안에 평소 값(파라미터)을 다시 보낸다.
+        FairinoRpcClient.SetOaccOverride(null);
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));

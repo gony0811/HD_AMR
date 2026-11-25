@@ -124,7 +124,7 @@ public class CobotService : BackgroundService
                         _logger.LogWarning("코봇 상태 패킷 미수신 — 활성 좌표계 시딩 생략(수동 확인 필요)");
 
                     _logger.LogInformation("코봇 XML-RPC 연결 완료");
-                    _sentAccPct = null;   // 컨트롤러 쪽 값을 알 수 없으므로 다시 보낸다
+                    _rpc.InvalidateOaccScale();   // 컨트롤러 쪽 값을 알 수 없으므로 다시 보낸다
                 }
 
                 await SyncAccScaleAsync(stoppingToken);
@@ -148,27 +148,33 @@ public class CobotService : BackgroundService
         await stateTask;
     }
 
-    // 컨트롤러에 마지막으로 보낸 전역 가속도 배율(null = 아직 안 보냄/재연결). 실패 warn 은 값당 1회.
-    private double? _sentAccPct;
+    // 실패 warn 은 값당 1회. 마지막으로 보낸 값은 FairinoRpcClient.LastOaccSentPct(검사 순회의 일시 변경·복원도 반영).
     private double? _accWarnedPct;
+    private DateTime _accAssertedAt = DateTime.MinValue;
+
+    /// <summary>값이 같아도 이 간격마다 다시 보낸다 — 조회 API 가 없어 컨트롤러가 스스로 되돌렸는지(펜던트·오류 처리 등) 알 수 없다.</summary>
+    internal static readonly TimeSpan AccReassertInterval = TimeSpan.FromSeconds(60);
 
     /// <summary>
-    /// 전역 가속도 배율(파라미터 <see cref="FairinoRpcClient.OaccScaleKey"/>)을 컨트롤러와 맞춘다 — 연결 직후와 값이 바뀐 뒤
-    /// 다음 루프(5초 이내)에 SetOaccScale 을 보낸다. 모션 중이면 RPC 직렬화로 그 모션이 끝난 뒤 적용된다.
-    /// 실패해도 연결은 유지하고 다음 루프에 다시 시도한다.
+    /// 전역 가속도 배율을 컨트롤러와 맞춘다 — 원하는 값(<see cref="FairinoRpcClient.DesiredOaccScalePct"/>: 레시피 검사 가속도 일시 값이
+    /// 있으면 그 값, 없으면 파라미터 <see cref="FairinoRpcClient.OaccScaleKey"/>)과 마지막으로 보낸 값이 다르거나 모르면(연결 직후·오류 해제·
+    /// 서보 on/off 뒤) 다음 루프(5초 이내)에, 같아도 <see cref="AccReassertInterval"/> 마다 SetOaccScale 을 보낸다.
+    /// 모션 중이면 RPC 직렬화로 그 모션이 끝난 뒤 적용된다. 실패해도 연결은 유지하고 다음 루프에 다시 시도한다.
     /// </summary>
     private async Task SyncAccScaleAsync(CancellationToken ct)
     {
-        var want = FairinoRpcClient.BaseOaccScalePct;
-        if (!_rpc.IsConnected || _sentAccPct == want) return;
+        var want = FairinoRpcClient.DesiredOaccScalePct;
+        if (!_rpc.IsConnected) return;
+        var same = _rpc.LastOaccSentPct == want;
+        if (same && DateTime.UtcNow - _accAssertedAt < AccReassertInterval) return;
         try
         {
             var rc = await _rpc.SetOaccScaleAsync(want, ct);
             if (rc == 0)
             {
-                _sentAccPct = want;
+                _accAssertedAt = DateTime.UtcNow;
                 _accWarnedPct = null;
-                _logger.LogInformation("코봇 전역 가속도 배율 {Acc}% 적용", want);
+                if (!same) _logger.LogInformation("코봇 전역 가속도 배율 {Acc}% 적용", want);
                 return;
             }
             if (_accWarnedPct != want)
