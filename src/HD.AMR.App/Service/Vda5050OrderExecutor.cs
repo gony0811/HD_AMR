@@ -45,6 +45,8 @@ public sealed class Vda5050OrderExecutor
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly OperationLogService _opLog;
     private readonly ILogger<Vda5050OrderExecutor> _logger;
+    /// <summary>대시보드 표시용 order 실행 상태(없으면 갱신하지 않음).</summary>
+    private readonly AcsOrderRunState? _runState;
 
     private readonly object _gate = new();
     private CancellationTokenSource? _missionCts;
@@ -102,8 +104,10 @@ public sealed class Vda5050OrderExecutor
         Inspection.IWeldInspectionExecutor inspection, PowerModeService power,
         IOptions<AmrRestSettings> restOptions, IServiceScopeFactory scopeFactory,
         MissionPauseGate pauseGate, DeviceAlarmState deviceAlarms, OperationLogService opLog,
-        ILogger<Vda5050OrderExecutor> logger, CobotObstacleGuard? obstacleGuard = null)
+        ILogger<Vda5050OrderExecutor> logger, CobotObstacleGuard? obstacleGuard = null,
+        AcsOrderRunState? runState = null)
     {
+        _runState = runState;
         _obstacleGuard = obstacleGuard;
         _rest = rest;
         _deviceAlarms = deviceAlarms;
@@ -308,6 +312,7 @@ public sealed class Vda5050OrderExecutor
         if (wasPaused) PauseCleared?.Invoke();
         // 신규 order = 정렬(anchor) 캐시 무효(사양 §8.1 — 그룹 캐시는 order 내에서만 유효).
         _inspection.InvalidateAnchor();
+        _runState?.BeginOrder(order.OrderId, node.NodeId, node.NodePosition!.MapId, node.Actions);
         _logger.LogInformation("VDA5050 order 수리: {OrderId}, node={NodeId} → ({X:0.###}, {Y:0.###}, θ={Theta:0.###})",
             order.OrderId, node.NodeId, node.NodePosition!.X, node.NodePosition.Y, node.NodePosition.Theta);
         OpLog(OpCategory.Order, "order 수신", null,
@@ -358,6 +363,7 @@ public sealed class Vda5050OrderExecutor
 
             // 코봇 도달·순회 — 홈 복귀·주행·리프트보다 먼저. 닿는 용접선이 하나도 없으면 아무것도 움직이지 않는다.
             // 일부만 닿지 않으면 그 용접선만 실패로 끝내고 나머지는 수행한다.
+            _runState?.SetPhase("도달 사전 점검");
             var reach = await PrecheckReachBeforeDriveAsync(orderId, node, ct);
             if (reach.Block is { } reachBlock)
             {
@@ -395,6 +401,7 @@ public sealed class Vda5050OrderExecutor
             var (devXy, devTheta) = await ResolveDeviationsAsync(pos);
 
             // 코봇 홈 복귀 — 팔이 뻗은 채 AMR 이 주행하면 구조물 충돌 위험. 복귀가 실패하면 주행하지 않는다.
+            _runState?.SetPhase("주행 전 코봇 홈 복귀");
             if (await EnsureCobotHomeBeforeDriveAsync(orderId, ct) is { } homeFail)
             {
                 FailMission($"주행 전 코봇 홈 복귀 실패 — {homeFail} (팔을 뻗은 채 주행하지 않도록 임무 중단, " +
@@ -426,6 +433,7 @@ public sealed class Vda5050OrderExecutor
                 //    주행 발생 = 정렬(anchor) 캐시 무효(사양 §8.1 — 정차점이 바뀌면 정렬 재수행).
                 _inspection.InvalidateAnchor();
                 lock (_gate) _driving = true;
+                _runState?.SetPhase($"주행 중 → node {node.NodeId}");
                 StateChanged?.Invoke();
 
                 // 이동 전 status.error 에 이미 남아 있던 항목은 과거 실패의 잔재다(플랫폼이 배열을
@@ -463,6 +471,7 @@ public sealed class Vda5050OrderExecutor
                 _nodeStates.Clear();   // 도달한 노드는 nodeStates 에서 제거(§6.2)
             }
             _logger.LogInformation("VDA5050 노드 도달: {NodeId} (seq={Seq})", node.NodeId, node.SequenceId);
+            _runState?.SetPhase($"node {node.NodeId} 도착");
             OpLog(OpCategory.Order, "노드 도달", true, $"node={node.NodeId} (seq={node.SequenceId}), 현재 {DescribePose()}", orderId);
             StateChanged?.Invoke();
 
@@ -542,6 +551,7 @@ public sealed class Vda5050OrderExecutor
                 }
 
                 SetActionStatus(action.ActionId, "RUNNING", null);
+                _runState?.SetPhase($"{action.ActionType} {ai + 1}/{node.Actions.Count}");
                 OpLog(OpCategory.Action, $"{action.ActionType} 시작", null,
                     $"[{ai + 1}/{node.Actions.Count}] {DescribeAction(action)}" +
                     (ai == lastInspectionIndex ? " · 노드 마지막 검사(종료 후 코봇 홈 복귀)" : ""), orderId);
@@ -671,11 +681,14 @@ public sealed class Vda5050OrderExecutor
                 OpLog(OpCategory.Order, "임무 중단(현재 검사 완료 후)", null,
                     "남은 액션 없음" + (cancelHome is null ? "" : $" · 홈 복귀 실패: {cancelHome}"), orderId);
             }
+            var cancelledAfterCurrent = _cancelAfterCurrent;
             _cancelAfterCurrent = false;
             _logger.LogInformation("VDA5050 order 완결: {OrderId} (액션 {N}건)", _orderId, node.Actions.Count);
             OpLog(OpCategory.Order, "order 완결", failedActions == 0,
                 $"액션 {node.Actions.Count}건 처리 — 성공 {node.Actions.Count - failedActions}, 실패 {failedActions}", orderId);
             // 완결 후에도 orderId·actionStates 는 다음 Order 수신까지 유지 보고(§4.5.4).
+            if (cancelledAfterCurrent) _runState?.Cancel("ACS cancelOrder(현재 검사 완료 후)");
+            else _runState?.Complete();
 
             // 마지막 action 이 끝나는 순간 PAUSE 가 걸렸다면 멈출 대상이 없다 — 일시정지를 해소한다
             // (통신 단절 정지는 수행 중 Order 에만 적용, 사양 §1).
@@ -725,6 +738,7 @@ public sealed class Vda5050OrderExecutor
 
         _inspection.InvalidateAnchor();   // 정차점이 바뀌면 정렬 재수행(§8.1)
         lock (_gate) _driving = true;
+        _runState?.SetPhase("정차 보정 주행");
         StateChanged?.Invoke();
         var staleErrors = await SnapshotErrorKeysAsync(ct);
         OpLog(OpCategory.Drive, "정차 보정 주행", null,
@@ -1435,6 +1449,7 @@ public sealed class Vda5050OrderExecutor
     {
         _logger.LogWarning("VDA5050 임무 실패: {OrderId} — {Reason}", _orderId, reason);
         OpLog(OpCategory.Order, "임무 실패", false, reason);
+        _runState?.Fail(reason);
         bool wasPaused;
         lock (_gate)
         {
@@ -1459,6 +1474,7 @@ public sealed class Vda5050OrderExecutor
             a.ActionStatus = status;
             if (result is not null) a.ResultDescription = result;
         }
+        _runState?.SetActionStatus(actionId, status, result);
     }
 
     /// <summary>
@@ -1514,6 +1530,7 @@ public sealed class Vda5050OrderExecutor
         if (!stop.Ok)
             _logger.LogWarning("배터리 CRITICAL REST 정지 실패(code={Code}): {Msg}", stop.Code, stop.Message);
         await AbortMissionAsync("stopped by batteryCritical");
+        _runState?.Fail("배터리 CRITICAL — 그 자리 안전정지");
 
         bool wasPaused;
         lock (_gate)
@@ -1577,6 +1594,7 @@ public sealed class Vda5050OrderExecutor
                 _logger.LogWarning("일시정지 REST 정지 실패(code={Code}): {Msg}", stop.Code, stop.Message);
             lock (_gate) _driving = false;
         }
+        _runState?.SetPaused(true);
         StateChanged?.Invoke();
         return true;
     }
@@ -1648,6 +1666,7 @@ public sealed class Vda5050OrderExecutor
         {
             _logger.LogInformation("임무 재개({Source}) — order {OrderId}", source, orderId);
             OpLog(OpCategory.Order, "임무 재개", true, $"{source} — 정지 지점부터 이어서 수행", orderId);
+            _runState?.SetPaused(false);
             PauseCleared?.Invoke();
         }
         StateChanged?.Invoke();
@@ -1683,6 +1702,7 @@ public sealed class Vda5050OrderExecutor
         OpLog(OpCategory.Order, "임무 취소(cancelOrder)", null,
             running is null ? $"{reason} — 진행 중 임무 없음" : $"{reason} — 진행 중 order {running} 주행 정지·임무 폐기");
         await AbortActiveMissionAsync(running is not null, "cancelled by cancelOrder");
+        _runState?.Cancel("ACS cancelOrder");
     }
 
     /// <summary>
@@ -1699,6 +1719,7 @@ public sealed class Vda5050OrderExecutor
         OpLog(OpCategory.Order, "임무 중단(장치 알람)", false,
             $"{description} — 진행 중 order {running} 주행 정지·잔여 action FAILED", running);
         await AbortActiveMissionAsync(true, $"aborted: {description} (HEAVY)");
+        _runState?.Fail($"장치 알람 — {description}");
         return true;
     }
 
@@ -1764,6 +1785,7 @@ public sealed class Vda5050OrderExecutor
         if (!stop.Ok)
             _logger.LogWarning("emergencyStop REST 정지 실패(code={Code}): {Msg}", stop.Code, stop.Message);
         await AbortMissionAsync("stopped by emergencyStop");
+        _runState?.Fail($"비상정지 — {reason}");
 
         bool wasPaused;
         lock (_gate)

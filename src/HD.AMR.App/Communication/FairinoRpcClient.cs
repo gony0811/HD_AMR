@@ -1021,12 +1021,32 @@ public class FairinoRpcClient : IDisposable
         => InvokeAsync("SetSpeed", p => ToErr(p.SetSpeed(velPct)), ct);
 
     /// <summary>전역 가속도 배율(%) 설정 — 컨트롤러 전역 상태라 바꾼 쪽이 반드시 되돌려야 한다.
-    /// 조회 API 가 없어 이전 값을 읽을 수 없으므로 복원은 <see cref="DefaultOaccScalePct"/> 로 한다.</summary>
+    /// 조회 API 가 없어 이전 값을 읽을 수 없으므로 복원은 <see cref="BaseOaccScalePct"/> 로 한다.</summary>
     public Task<int> SetOaccScaleAsync(double accPct, CancellationToken ct = default)
         => InvokeAsync("SetOaccScale", p => ToErr(p.SetOaccScale(Math.Clamp(accPct, 1.0, 100.0))), ct);
 
-    /// <summary>전역 가속도 배율 기본값(%) — 복원 대상.</summary>
+    /// <summary>전역 가속도 배율 공장 기본값(%) — 파라미터 <see cref="OaccScaleKey"/> 가 비었을 때의 값.</summary>
     public const double DefaultOaccScalePct = 100.0;
+
+    /// <summary>파라미터 키 — 코봇 모든 모션(홈 복귀·검사 위치 이동·정렬·순회)에 쓰는 전역 가속도 배율 [%].</summary>
+    public const string OaccScaleKey = "cobot.accScalePercent";
+
+    private static double _baseOaccScalePct = DefaultOaccScalePct;
+
+    /// <summary>평소 유지할 전역 가속도 배율(%) — 파라미터 <see cref="OaccScaleKey"/> 반영값.
+    /// <see cref="Service.CobotService"/> 가 연결 때와 값이 바뀔 때 컨트롤러에 보내고, 일시 변경한 쪽의 복원 대상이기도 하다.</summary>
+    public static double BaseOaccScalePct => Volatile.Read(ref _baseOaccScalePct);
+
+    /// <summary>파라미터 문자열을 <see cref="BaseOaccScalePct"/> 에 반영한다(기동·저장·삭제 때).
+    /// 비어 있으면 100% 로 두고 true, 숫자가 아니거나 1~100 밖이면 100% 를 쓰고 false.</summary>
+    public static bool ApplyBaseOaccScale(string? raw)
+    {
+        var ok = double.TryParse(raw, System.Globalization.NumberStyles.Float,
+                     System.Globalization.CultureInfo.InvariantCulture, out var v)
+                 && double.IsFinite(v) && v is >= 1.0 and <= 100.0;
+        Volatile.Write(ref _baseOaccScalePct, ok ? v : DefaultOaccScalePct);
+        return ok || string.IsNullOrWhiteSpace(raw);
+    }
 
     public Task<int> StopMotionAsync(CancellationToken ct = default)
         => InvokeAsync("StopMotion", p => ToErr(p.StopMotion()), ct, faultRecovery: false);

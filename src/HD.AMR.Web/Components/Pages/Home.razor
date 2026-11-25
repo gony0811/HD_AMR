@@ -6,6 +6,7 @@
 @inject CobotService Cobot
 @inject CameraService Camera
 @inject Vda5050AdapterService Vda
+@inject AcsOrderRunState OrderRun
 @implements IDisposable
 
 <PageTitle>대시보드</PageTitle>
@@ -129,6 +130,71 @@
         </div>
     </div>
 
+    <!-- ACS order 실행 정보 -->
+    <div class="col-12 col-xl-8">
+        <div class="card-surface stat">
+            <div class="stat-head">
+                <span class="stat-icon stat-icon-teach"></span>
+                <span class="stat-title">ACS Order</span>
+                <span class="pill @OrderPillClass ms-auto">@Order.StatusText</span>
+            </div>
+            <div class="stat-value order-id" title="@Order.OrderId">@(Order.OrderId ?? "수신한 order 없음")</div>
+            @if (Order.Status == AcsOrderRunStatus.Idle)
+            {
+                <div class="stat-sub">ACS order 를 받으면 orderId·task·면·진행 단계를 표시합니다.</div>
+            }
+            else
+            {
+                <div class="stat-sub">
+                    node @Order.NodeId · @HD.AMR.App.Communication.Vda5050.FloorMap.Display(Order.MapId ?? "")
+                    @if (Order.StartedAt is { } started)
+                    {
+                        <span> · 시작 @started.ToString("HH:mm:ss")</span>
+                    }
+                    @if (Order.EndedAt is { } ended)
+                    {
+                        <span> · 종료 @ended.ToString("HH:mm:ss")</span>
+                    }
+                    @if (Order.Elapsed(DateTime.Now) is { } el)
+                    {
+                        <span> · 경과 @(((int)el.TotalMinutes).ToString("00")):@el.Seconds.ToString("00")</span>
+                    }
+                </div>
+                <div class="order-phase">단계: @Order.Phase</div>
+                <div class="progress order-progress">
+                    <div class="progress-bar" style="width:@(Order.ProgressPercent.ToString("0", System.Globalization.CultureInfo.InvariantCulture))%"></div>
+                </div>
+                <div class="stat-sub">액션 @Order.DoneCount/@Order.TotalCount (성공 @Order.FinishedCount, 실패 @Order.FailedCount)</div>
+                @if (Order.Tasks.Count > 0)
+                {
+                    <table class="table table-sm order-tasks">
+                        <thead>
+                            <tr><th>#</th><th>상태</th><th>액션</th><th>taskId</th><th>면(surfaceId)</th><th>seam</th><th>결과</th></tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var t in Order.Tasks)
+                            {
+                                <tr class="@(t.Status is "RUNNING" or "PAUSED" ? "is-current" : "")">
+                                    <td>@t.Number</td>
+                                    <td><span class="pill @TaskPillClass(t)">@t.StatusText</span></td>
+                                    <td>@t.ActionType</td>
+                                    <td class="mono" title="@t.TaskId">@t.TaskIdShort</td>
+                                    <td>@t.SurfaceText</td>
+                                    <td>@(t.SeamType ?? "-")</td>
+                                    <td class="order-result" title="@t.ResultDescription">@t.ResultDescription</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+                @if (!string.IsNullOrEmpty(Order.Message))
+                {
+                    <div class="stat-sub">@Order.Message</div>
+                }
+            }
+        </div>
+    </div>
+
     <!-- Inspection shortcut -->
     <div class="col-12 col-md-6 col-xl-4">
         <div class="card-surface stat stat-accent">
@@ -188,6 +254,27 @@
         Vda.SetMapId(_selectedMapId);
         _mapIdStatus = $"적용됨 {DateTime.Now:HH:mm:ss} — 현재 층 {HD.AMR.App.Communication.Vda5050.FloorMap.Display(Vda.CurrentMapId)} (state 즉시 발행)";
     }
+
+    // ACS order 카드 — 1초 폴링으로 다시 그린다(스냅샷은 불변이라 렌더 중 바뀌지 않는다).
+    private AcsOrderRunSnapshot Order => OrderRun.Current;
+
+    private string OrderPillClass => Order.Status switch
+    {
+        AcsOrderRunStatus.Idle => "pill-off",
+        AcsOrderRunStatus.Running => "pill-on",
+        AcsOrderRunStatus.Paused => "pill-warn",
+        AcsOrderRunStatus.Completed => "pill-on",
+        AcsOrderRunStatus.CompletedWithFailures => "pill-warn",
+        _ => "pill-danger",
+    };
+
+    private static string TaskPillClass(AcsOrderTaskInfo t) => t.Status switch
+    {
+        "FINISHED" => "pill-on",
+        "FAILED" => "pill-danger",
+        "RUNNING" or "PAUSED" => "pill-warn",
+        _ => "pill-off",
+    };
 
     private CancellationTokenSource? _cts;
 

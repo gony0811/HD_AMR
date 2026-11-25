@@ -88,8 +88,15 @@ public class ParameterService
         if (name == Motion.Fr5Kinematics.LinksKey) await ApplyKinematicsLinksAsync();
         if (name == Motion.CobotEnvelope.BaseHeightKey) await ApplyCobotBaseHeightAsync();
         if (name == Sequence.Steps.CobotInspectionMoveStep.MaxEntryJointTravelKey) await ApplyMaxEntryJointTravelAsync();
+        if (name == Sequence.Steps.SequenceEntry.RetractDistanceKey) await ApplyRetractDistanceAsync();
+        if (name == Communication.FairinoRpcClient.OaccScaleKey) await ApplyCobotAccScaleAsync();
         Changed?.Invoke(name);
     }
+
+    /// <summary>코봇 전역 가속도 배율 파라미터를 읽어 <see cref="Communication.FairinoRpcClient.BaseOaccScalePct"/> 에 적용한다
+    /// (기동·저장·삭제 때). 컨트롤러 전송은 <see cref="CobotService"/> 가 한다. 1~100 밖이면 100% 를 쓰고 false.</summary>
+    public async Task<bool> ApplyCobotAccScaleAsync()
+        => Communication.FairinoRpcClient.ApplyBaseOaccScale(await GetAsync(Communication.FairinoRpcClient.OaccScaleKey));
 
     /// <summary>코봇 BASE 높이 파라미터를 읽어 <see cref="Motion.CobotEnvelope.Default"/> 에 적용한다(기동·저장·삭제 때).</summary>
     public async Task<bool> ApplyCobotBaseHeightAsync()
@@ -100,6 +107,12 @@ public class ParameterService
     public async Task<bool> ApplyMaxEntryJointTravelAsync()
         => Sequence.Steps.CobotInspectionMoveStep.ApplyMaxEntryJointTravel(
             await GetDoubleAsync(Sequence.Steps.CobotInspectionMoveStep.MaxEntryJointTravelKey));
+
+    /// <summary>벽면 후퇴 거리 파라미터를 읽어 <see cref="Sequence.Steps.SequenceEntry"/> 에 적용한다(기동·저장·삭제 때).
+    /// 100~600mm 밖이면 기본값(300mm)을 쓰고 false.</summary>
+    public async Task<bool> ApplyRetractDistanceAsync()
+        => Sequence.Steps.SequenceEntry.ApplyRetractDistance(
+            await GetDoubleAsync(Sequence.Steps.SequenceEntry.RetractDistanceKey));
 
     /// <summary>링크 치수 파라미터를 읽어 <see cref="Motion.Fr5Kinematics.Fr5Wml"/> 에 적용한다(기동·저장·삭제 때).
     /// 6개가 아니거나 공칭에서 5 mm 넘게 벗어나면 공칭을 쓰고 false.</summary>
@@ -157,6 +170,7 @@ public class ParameterService
                 "중심 편차 측정 태그 한 변(mm) — 검은 테두리 바깥 정사각형 실측(흰 여백 제외). 0 이면 측정 안 함."),
             .. FlatCandidateOptions.SeedDefaults(),
             .. LaserFootprintOptions.SeedDefaults(),
+            .. LaserDataLogService.SeedDefaults(),
             (Motion.Fr5Kinematics.LinksKey,
                 Motion.Fr5Kinematics.FormatLinks(Motion.Fr5Kinematics.WeldAmrLinksMm),
                 "코봇 FR5-WML 링크 치수 d1,a2,a3,d4,d5,d6 [mm] — 오프라인 기구학(리치 맵·도달 사전 점검·자기 간섭)이 쓴다. " +
@@ -167,6 +181,10 @@ public class ParameterService
                 "AMR 차체 바닥(바퀴 닿는 면) → 코봇 BASE 장착면 높이 [mm] 덮어쓰기 — 자기 간섭(팔 ↔ 차체·기둥·신호탑) 점검과 도달 사전 점검이 쓴다. " +
                 "비워 두면 appsettings \"CobotEnvelope\"(차체 BodyHeightMm + 기둥 ColumnHeightMm, 현 장비 767+160=927)를 쓴다. 저장하면 바로 적용. " +
                 "차체 윗면 아래이거나 800~2500 밖이면 무시. 좌표 환산은 장착 보정(Calib.Mount.Pose)이 따로 하므로 둘 다 맞춰야 한다."),
+            (Communication.FairinoRpcClient.OaccScaleKey, "",
+                "코봇 전역 가속도 배율(%) — 홈 복귀·검사 위치 이동·레이저 정렬·교시·검사 순회 등 코봇 모든 모션의 가감속에 적용한다. " +
+                "가감속 때 진동이 크면 낮춘다(예: 30~50). 저장하면 몇 초 안에 컨트롤러에 반영되고, 재연결 때도 다시 보낸다. " +
+                "레시피 '검사 가속도'가 있으면 ⑱ 순회 동안만 그 값을 쓰고 끝나면 이 값으로 돌아온다. 비우면 100. 1~100 밖이면 100."),
             (Sequence.Steps.LaserWorkingDistanceStep.MaxReturnKey,
                 Sequence.Steps.LaserWorkingDistanceStep.DefaultMaxReturnMm.ToString(CultureInfo.InvariantCulture),
                 "④⁺ 레이저 WD 뒤 용접선 쪽 횡복귀 한계(mm, 툴 X·Y·Z 성분별) — 평탄면 센터링이 이보다 멀리 옮겨 갔으면 돌아가지 않고 실패한다 " +
@@ -176,6 +194,10 @@ public class ParameterService
                 "진입 관절 이동 한계(도) — 출발 자세 → 진입 해의 관절별(J1~J5) 최대 이동. 넘으면 가지 전환으로 보고 그 진입점·용접선을 쓰지 않는다 " +
                 "(진입 경로·도달 사전 점검·리치 맵 공통). 클수록 팔을 크게 돌리는 진입을 허용한다. 저장하면 바로 적용. " +
                 "30~360 밖이거나 비면 160. ACS 의 Acs:Reach:MaxEntryJointTravelDeg 와 같게 둘 것."),
+            (Sequence.Steps.SequenceEntry.RetractDistanceKey,
+                Sequence.Steps.SequenceEntry.DefaultRetractDistanceMm.ToString(CultureInfo.InvariantCulture),
+                "홈 복귀 때 벽면에서 직선으로 물러나는 거리(mm) — 광축 반대 방향(상부 챔퍼처럼 툴이 위를 보면 높이 유지·수평). " +
+                "툴 자세를 유지한 직선 이동이라 멀리 물러날수록 손목(J4)이 더 돈다. 저장하면 바로 적용. 100~600 밖이거나 비면 300."),
             (Sequence.Steps.BeadFindStep.RetreatKey, "",
                 "⑦/⑪ 용접선(비드) 못 찾을 때 후퇴 재검출 거리(mm) — 자동 검출이 실패하면 수동 입력 팝업 전에 벽에서 이만큼 물러나 " +
                 "FOV 를 넓혀 다시 찍고, 결과와 상관없이 원래 자리로 돌아온다(찾으면 그 d 로 진행). 0 = 끔. " +
@@ -250,6 +272,8 @@ public class ParameterService
         await ApplyKinematicsLinksAsync();  // 기동 시 저장된 링크 치수(DH 보정) 적용
         await ApplyCobotBaseHeightAsync();  // 기동 시 저장된 코봇 BASE 높이 적용
         await ApplyMaxEntryJointTravelAsync();  // 기동 시 저장된 진입 관절 이동 한계 적용
+        await ApplyRetractDistanceAsync();  // 기동 시 저장된 벽면 후퇴 거리 적용
+        await ApplyCobotAccScaleAsync();    // 기동 시 저장된 코봇 전역 가속도 배율 적용
     }
 
     /// <summary>id 로 파라미터 1건 삭제. 없으면 무시.</summary>
@@ -264,6 +288,8 @@ public class ParameterService
             if (p.Name == Motion.Fr5Kinematics.LinksKey) await ApplyKinematicsLinksAsync();
             if (p.Name == Motion.CobotEnvelope.BaseHeightKey) await ApplyCobotBaseHeightAsync();
             if (p.Name == Sequence.Steps.CobotInspectionMoveStep.MaxEntryJointTravelKey) await ApplyMaxEntryJointTravelAsync();
+            if (p.Name == Sequence.Steps.SequenceEntry.RetractDistanceKey) await ApplyRetractDistanceAsync();
+            if (p.Name == Communication.FairinoRpcClient.OaccScaleKey) await ApplyCobotAccScaleAsync();
             Changed?.Invoke(p.Name);
         }
     }

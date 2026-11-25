@@ -20,8 +20,8 @@ namespace HD.AMR.App.Service.Sequence.Steps;
 ///  ③ <b>작업 준비 위치 경유</b> — 홈에서 검사 위치로 MoveJ 시 900mm 이하 영역에서 툴이 차체와 충돌할 수
 ///     있다. 홈 복귀 후 "ready" 티칭 위치(홈에서 툴 Z −300mm)로 먼저 이동해 충돌 영역을 벗어난다.
 ///     미티칭이면 홈에서 툴 Z −300mm 오프셋을 자동 계산해 사용한다.
-///  ④ <b>자세 모드</b> — 상부 면(T/PU/SU)은 "홈 위치_2", 바닥·하부 챔퍼(B/PL/SL)는 "홈 위치_3"(티칭돼 있을 때),
-///     그 외 면은 홈 모드에서만 진입한다. 모드 전환은 운영자 수동 전용이라 모드가 맞지 않으면 움직이지 않고
+///  ④ <b>자세 모드</b> — 천장(T)은 "홈 위치_2", 바닥·하부 챔퍼(B/PL/SL)는 "홈 위치_3"(티칭돼 있을 때),
+///     그 외 면(상부 챔퍼 PU/SU 포함)은 홈 모드에서만 진입한다. 모드 전환은 운영자 수동 전용이라 모드가 맞지 않으면 움직이지 않고
 ///     실패한다(<see cref="ModeMismatch"/>).
 ///
 /// 부르는 곳은 ② <see cref="CobotInspectionMoveStep"/>(LINE/CROSS)이다. 같은 anchor 그룹의 연속 task 는
@@ -49,8 +49,31 @@ internal static class SequenceEntry
     /// <summary>ready 미티칭 시 홈에서 툴 Z 방향 자동 후퇴 거리 [mm].</summary>
     private const double ReadyToolZOffsetMm = -300.0;
 
-    /// <summary>벽면에서 직선 후퇴 거리 [mm]. 툴 Z+ 방향(벽에서 멀어지는 방향).</summary>
-    internal const double RetractDistanceMm = 300.0;
+    /// <summary>벽면에서 직선 후퇴 거리 [mm] — 광축 반대(벽에서 멀어지는 방향). 파라미터 <see cref="RetractDistanceKey"/> 로
+    /// 현장에서 바꾼다(기동·저장·삭제 때 <see cref="ApplyRetractDistance"/>). 툴 자세를 유지한 직선 이동이라 멀리 물러날수록
+    /// 손목(J4)이 더 돈다(실기 2026-11-09 09:20 수평 후퇴 중 J4 75.8°→85° 한계 정지).</summary>
+    internal static double RetractDistanceMm { get; private set; } = DefaultRetractDistanceMm;
+
+    /// <summary><see cref="RetractDistanceMm"/> 기본값 [mm].</summary>
+    internal const double DefaultRetractDistanceMm = 300.0;
+
+    /// <summary>벽면 후퇴 거리 파라미터 키.</summary>
+    public const string RetractDistanceKey = "inspection.retractDistanceMm";
+
+    /// <summary>후퇴 거리 허용 범위 [mm] — 밖이면 설정 실수로 보고 기본값을 쓴다.</summary>
+    internal const double MinRetractDistanceMm = 100.0, MaxRetractDistanceMm = 600.0;
+
+    /// <summary>파라미터 값 → 쓸 후퇴 거리 [mm]. 비거나 범위 밖이면 기본값.</summary>
+    internal static double ResolveRetractDistance(double? value)
+        => value is { } v && double.IsFinite(v) && v >= MinRetractDistanceMm && v <= MaxRetractDistanceMm
+            ? v : DefaultRetractDistanceMm;
+
+    /// <summary>파라미터 값을 적용한다. 값이 범위 안이거나 비어 있으면 true, 범위 밖이라 기본값을 쓰면 false.</summary>
+    internal static bool ApplyRetractDistance(double? value)
+    {
+        RetractDistanceMm = ResolveRetractDistance(value);
+        return value is null || RetractDistanceMm == value;
+    }
 
     /// <summary>툴 Z+ 의 BASE 연직 성분이 이보다 작으면(아래로 향하면) 후퇴가 내려가는 것으로 본다.</summary>
     private const double RetractDescendDirZ = -0.05;
@@ -93,9 +116,10 @@ internal static class SequenceEntry
 
     private static readonly PoseMode[] SideModes = { PoseMode.Home2, PoseMode.Home3, PoseMode.Home4 };
 
-    /// <summary>홈 위치_2 모드가 필요한 면 — 천장(T)·상부 챔퍼(PU/SU). 홈 위치 쪽에서는 벽 충돌·역기구학 오류로 도달 불가.</summary>
+    /// <summary>홈 위치_2 모드가 필요한 면 — 천장(T)만. 홈 위치 쪽에서는 벽 충돌·역기구학 오류로 도달 불가.
+    /// 상부 챔퍼(PU/SU)는 2026-11-24 운영안부터 홈 위치(작업 준비 경유)에서 진입한다 — 종전에는 홈 위치_2 모드였다.</summary>
     internal static bool IsUpperRoute(string? wallCode)
-        => WallCodes.Find(wallCode)?.Orientation is SurfaceOrientation.Ceiling or SurfaceOrientation.ChamferUpper;
+        => WallCodes.Find(wallCode)?.Orientation is SurfaceOrientation.Ceiling;
 
     /// <summary>홈 위치_3 모드 면 — 바닥(B)·하부 챔퍼(PL/SL).</summary>
     internal static bool IsLowerRoute(string? wallCode)
@@ -249,7 +273,7 @@ internal static class SequenceEntry
     /// <summary>활성 좌표계 정규화 + 자세 모드 확인 + 진입 경유점 이동. 모드가 작업 면과 맞지 않으면 움직이지 않고
     /// 실패를 돌려준다. 성공 시 결과 메시지에 붙일 주석을 돌려준다.
     /// · 홈 모드(일반 면): 이미 ready 면 그대로, 아니면 <see cref="ReturnToBaseAsync"/>(후퇴 → ready → 홈) → ready.
-    /// · 홈 2 모드(T/PU/SU): <see cref="ReturnToBaseAsync"/>(후퇴 → 검사 준비 → 홈 2) → 해당 면 검사 준비(티칭돼 있을 때).</summary>
+    /// · 홈 2 모드(T): <see cref="ReturnToBaseAsync"/>(후퇴 → 검사 준비 → 홈 2) → 해당 면 검사 준비(티칭돼 있을 때).</summary>
     public static async Task<(bool Ok, string Note)> PrepareAsync(
         CobotService cobot, SequenceContext context, ILogger logger, CancellationToken ct)
     {
@@ -871,8 +895,11 @@ internal static class SequenceEntry
     /// · 그 외(옆벽처럼 광축이 수평, 천장처럼 거의 연직)는 종전대로 툴 Z+.
     /// · <see cref="RetractMinBlockingDescentMm"/> 넘게 내려가면서 끝점이 <see cref="RetractMinDescendEndZMm"/> 아래로 가면 Blocker.
     /// </summary>
-    internal static RetractPlan PlanRetract(double[] tcpPose, double distanceMm = RetractDistanceMm,
+    internal static RetractPlan PlanRetract(double[] tcpPose, double? distanceMm = null,
         double minDescendEndZMm = RetractMinDescendEndZMm, ToolAxisDir opticalAxis = ToolAxisDir.MinusZ)
+        => PlanRetractCore(tcpPose, distanceMm ?? RetractDistanceMm, minDescendEndZMm, opticalAxis);
+
+    private static RetractPlan PlanRetractCore(double[] tcpPose, double distanceMm, double minDescendEndZMm, ToolAxisDir opticalAxis)
     {
         // 후퇴 방향 = 광축(카메라가 면을 바라보는 툴축)의 반대. 현장 광축 −Z 면 툴 +Z(종전 동작과 같다).
         var m = FrameMath.PoseToMatrix(tcpPose);
@@ -1020,6 +1047,109 @@ internal static class SequenceEntry
     /// <summary>복귀 관절 이동 전 면 여유 확보 — 다음 경유점 높이 쪽으로 옮기는 간격 [mm].</summary>
     internal const double ClearHeightStepMm = 200.0;
 
+    /// <summary>
+    /// 면 여유 확보 이동에서 툴 자세를 다음 경유점 자세 쪽으로 돌리는 비율 — 앞쪽부터 시도한다. 0 = 자세 유지(종전).
+    /// 자세를 그대로 둔 채 크게 내려가면 손목이 비틀린다(실기 2026-11-24 11:03 SU → 홈 위치_2: 뒤 100·아래 800mm 에서
+    /// 모델상 J4 −108°→−176°, 운영자 EMO). 같은 후보에 경유점 자세를 75% 섞으면 J4 회전이 10° 안쪽으로 준다
+    /// (같은 모델, 목표 홈 위치_2·작업 준비 위치 모두). 100% 는 반대쪽으로 20~40° 돌 수 있어 그다음에 본다.
+    /// </summary>
+    internal static readonly double[] ClearOrientationBlends = { 0.75, 1.0, 0.5, 0.0 };
+
+    /// <summary>면 여유 확보 이동 동안 J4 가 출발 관절에서 벗어날 수 있는 최대 각 [도]. 넘는 후보는 쓰지 않는다.</summary>
+    internal const double ClearMaxWristTravelDeg = 30.0;
+
+    /// <summary>면 여유 확보 직선 이동 검증 간격 — 자세 회전 [도]. 위치는 <see cref="CobotInspectionMoveStep.PlanarSampleMm"/>.</summary>
+    internal const double ClearSampleRotDeg = 10.0;
+
+    /// <summary>두 pose 의 자세 사이 회전각 [도].</summary>
+    internal static double RotationAngleDeg(double[] fromPose, double[] toPose)
+    {
+        var rel = FrameMath.Multiply(FrameMath.Invert(RotOnly(fromPose)), RotOnly(toPose));
+        var c = Math.Clamp((rel[0, 0] + rel[1, 1] + rel[2, 2] - 1) / 2, -1.0, 1.0);
+        return Math.Acos(c) * 180.0 / Math.PI;
+    }
+
+    /// <summary>
+    /// 자세 보간 — <paramref name="fromPose"/> 자세에서 <paramref name="toPose"/> 자세로 최단 회전의 <paramref name="t"/> 만큼
+    /// 돌린 [rx,ry,rz](도). 컨트롤러 MoveL 의 자세 보간(최단 회전)과 같은 경로를 검증하기 위해 쓴다.
+    /// </summary>
+    internal static double[] BlendOrientation(double[] fromPose, double[] toPose, double t)
+    {
+        var ra = RotOnly(fromPose);
+        var rel = FrameMath.Multiply(FrameMath.Invert(ra), RotOnly(toPose));
+        var ang = Math.Acos(Math.Clamp((rel[0, 0] + rel[1, 1] + rel[2, 2] - 1) / 2, -1.0, 1.0));
+        double[,] step;
+        if (ang < 1e-9 || t == 0) step = Identity();
+        else if (Math.PI - ang < 1e-6)
+        {
+            // 180° — 축은 R+I 의 열에서 구한다.
+            var k = new[] { Math.Sqrt(Math.Max(0, (rel[0, 0] + 1) / 2)), Math.Sqrt(Math.Max(0, (rel[1, 1] + 1) / 2)), Math.Sqrt(Math.Max(0, (rel[2, 2] + 1) / 2)) };
+            if (rel[0, 1] < 0) k[1] = -k[1];
+            if (rel[0, 2] < 0) k[2] = -k[2];
+            step = AxisAngle(k, ang * t);
+        }
+        else
+        {
+            var s = 2 * Math.Sin(ang);
+            step = AxisAngle(new[] { (rel[2, 1] - rel[1, 2]) / s, (rel[0, 2] - rel[2, 0]) / s, (rel[1, 0] - rel[0, 1]) / s }, ang * t);
+        }
+        var p = FrameMath.MatrixToPose(FrameMath.Multiply(ra, step));
+        return new[] { p[3], p[4], p[5] };
+
+        static double[,] Identity() => new double[,] { { 1, 0, 0, 0 }, { 0, 1, 0, 0 }, { 0, 0, 1, 0 }, { 0, 0, 0, 1 } };
+        static double[,] AxisAngle(double[] k, double th)
+        {
+            double c = Math.Cos(th), sn = Math.Sin(th), v = 1 - c, x = k[0], y = k[1], z = k[2];
+            return new double[,]
+            {
+                { x * x * v + c, x * y * v - z * sn, x * z * v + y * sn, 0 },
+                { x * y * v + z * sn, y * y * v + c, y * z * v - x * sn, 0 },
+                { x * z * v - y * sn, y * z * v + x * sn, z * z * v + c, 0 },
+                { 0, 0, 0, 1 },
+            };
+        }
+    }
+
+    private static double[,] RotOnly(double[] pose) => FrameMath.PoseToMatrix(new[] { 0, 0, 0, pose[3], pose[4], pose[5] });
+
+    /// <summary>
+    /// 면 여유 확보 직선 이동(위치 <paramref name="pose"/> → <paramref name="end"/>, 자세는 보간)을 위치
+    /// <see cref="CobotInspectionMoveStep.PlanarSampleMm"/>·자세 <see cref="ClearSampleRotDeg"/> 간격으로 이어 풀어 본다 —
+    /// 관절 한계·점프·팔꿈치·손목 특이점(<see cref="CobotInspectionMoveStep.PathStepBlocker"/>), 차체 간섭(<see cref="RetractSelfBlocker"/>),
+    /// 면 여유(출발 여유·<see cref="CobotInspectionMoveStep.EntryPathMarginMm"/> 중 작은 값 아래로 내려가지 않을 것 — 자세를 돌리면
+    /// 툴이 면 쪽으로 쓸 수 있다), J4 회전(<see cref="ClearMaxWristTravelDeg"/>). 통과하면 끝 관절, 아니면 사유.
+    /// </summary>
+    private static async Task<(double[]? EndJoints, string? Why, double Wrist)> ClearMovePathAsync(CobotService cobot, SequenceContext ctx,
+        double[] pose, double[] end, double[] curJ, Func<double[], (double ClearanceMm, string Part)> wall, CancellationToken ct)
+    {
+        var len = Math.Sqrt(Enumerable.Range(0, 3).Sum(i => (end[i] - pose[i]) * (end[i] - pose[i])));
+        var rot = RotationAngleDeg(pose, end);
+        var n = Math.Max(1, (int)Math.Ceiling(Math.Max(len / CobotInspectionMoveStep.PlanarSampleMm, rot / ClearSampleRotDeg)));
+        var floor = Math.Min(CobotInspectionMoveStep.EntryPathMarginMm, wall(curJ).ClearanceMm) - 1.0;
+        var seed = curJ;
+        var wrist = 0.0;
+        var j4 = curJ[3];
+        for (var k = 1; k <= n; k++)
+        {
+            var t = (double)k / n;
+            var r = BlendOrientation(pose, end, t);
+            var pt = new[] { pose[0] + (end[0] - pose[0]) * t, pose[1] + (end[1] - pose[1]) * t, pose[2] + (end[2] - pose[2]) * t, r[0], r[1], r[2] };
+            double[] j;
+            try { j = await cobot.Rpc.GetInverseKinNearestAsync(pt, seed, ctx.Tool, 0, ct); }
+            catch (Exception ex) when (ex is not OperationCanceledException) { return (null, $"{100 * t:0}% 지점 도달 불가({ex.Message})", wrist); }
+            if (CobotInspectionMoveStep.PathStepBlocker(seed, j, curJ) is { } why) return (null, $"{100 * t:0}% 지점 {why}", wrist);
+            if (RetractSelfBlocker(curJ, j) is { } self) return (null, $"{100 * t:0}% 지점 {self}", wrist);
+            if (wall(j) is var w && w.ClearanceMm < floor)
+                return (null, $"{100 * t:0}% 지점 면 여유 {w.ClearanceMm:0}mm < {floor + 1:0}mm ({w.Part})", wrist);
+            j4 += UnwrapNear(j, seed)[3] - seed[3];   // ±360° 표현 차이를 빼고 누적
+            wrist = Math.Max(wrist, Math.Abs(j4 - curJ[3]));
+            if (wrist > ClearMaxWristTravelDeg)
+                return (null, $"{100 * t:0}% 지점 손목 J4 {curJ[3]:0.0}°→{j4:0.0}° 회전 > {ClearMaxWristTravelDeg:0}°", wrist);
+            seed = j;
+        }
+        return (seed, null, wrist);
+    }
+
     private static double[]? Unit(double[] v)
     {
         var n = Math.Sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
@@ -1093,21 +1223,24 @@ internal static class SequenceEntry
             targetName, direct, Fmt(pose.Take(3).ToArray()), targetZ);
 
         var candidates = ClearMoveCandidates(pose, wallOut, targetZ);
+        var targetPose = tp.X is double tx && tp.Y is double ty && tp.Rx is double trx && tp.Ry is double tryy && tp.Rz is double trz
+            ? new[] { tx, ty, targetZ, trx, tryy, trz } : null;
+        // 경유점 자세를 모르면(좌표 미저장) 종전처럼 자세 유지만 본다.
+        var blends = targetPose is null ? new[] { 0.0 } : ClearOrientationBlends;
         var rejects = new List<string>();
+        var tried = 0;
+        foreach (var blend in blends)
         foreach (var off in candidates)
         {
+            tried++;
             var back = Math.Sqrt(off[0] * off[0] + off[1] * off[1]);
-            var label = $"뒤 {back:0}mm·{(off[2] < 0 ? "아래" : "위")} {Math.Abs(off[2]):0}mm";
-            var end = new[] { pose[0] + off[0], pose[1] + off[1], pose[2] + off[2] };
-            if (await RetractPathBlockerAsync(cobot, ctx, pose, end, ct) is { } pathWhy) { rejects.Add($"{label}: {pathWhy}"); continue; }
+            var label = $"뒤 {back:0}mm·{(off[2] < 0 ? "아래" : "위")} {Math.Abs(off[2]):0}mm" +
+                        (blend > 0 ? $"·자세 {blend * 100:0}% {targetName} 쪽" : "·자세 유지");
+            var rot = blend > 0 ? BlendOrientation(pose, targetPose!, blend) : new[] { pose[3], pose[4], pose[5] };
+            var end = new[] { pose[0] + off[0], pose[1] + off[1], pose[2] + off[2], rot[0], rot[1], rot[2] };
 
-            double[] jEnd;
-            try
-            {
-                jEnd = await cobot.Rpc.GetInverseKinNearestAsync(new[] { end[0], end[1], end[2], pose[3], pose[4], pose[5] },
-                    curJ, ctx.Tool, 0, ct);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException) { rejects.Add($"{label}: 도달 불가({ex.Message})"); continue; }
+            var (jEnd, pathWhy, wrist) = await ClearMovePathAsync(cobot, ctx, pose, end, curJ, Wall, ct);
+            if (jEnd is null) { rejects.Add($"{label}: {pathWhy}"); continue; }
 
             if (CobotInspectionMoveStep.JointPathBlocker(jEnd, UnwrapNear(targetRaw, jEnd), Self, Wall) is { } why)
             {
@@ -1115,18 +1248,20 @@ internal static class SequenceEntry
                 continue;
             }
 
-            logger.LogInformation("기준 자세 복귀: 면 여유 확보 이동 {Label} → [{End}] (거부 {Count}건)", label, Fmt(end), rejects.Count);
-            var rc = await cobot.Rpc.MoveByOffsetAsync(pose, user: 0, new[] { off[0], off[1], off[2], 0, 0, 0 },
-                tool: ctx.Tool, vel: ctx.Velocity, ct: ct);
+            logger.LogInformation("기준 자세 복귀: 면 여유 확보 이동 {Label} → [{End}] 관절 [{From}] → [{To}] (J4 최대 {Wrist:0}°, 거부 {Count}건)",
+                label, string.Join(", ", end.Select(v => v.ToString("0.#"))),
+                string.Join(", ", curJ.Select(v => v.ToString("0.0"))), string.Join(", ", jEnd.Select(v => v.ToString("0.0"))),
+                wrist, rejects.Count);
+            var rc = await cobot.Rpc.MoveLAsync(end, jointPos: jEnd, tool: ctx.Tool, user: 0, vel: ctx.Velocity, ct: ct);
             if (rc != 0)
                 throw new InvalidOperationException(
                     $"면 여유 확보 이동({label}) 실패 rc={rc}{FairinoErrorCodes.Suffix(rc)} — 움직이지 않고 정지합니다. 펜던트/조그로 벽에서 떼어 낸 뒤 재시도하세요.");
             return $"면 여유 확보({label})";
         }
 
-        logger.LogWarning("기준 자세 복귀: 면 여유 확보 후보 {Count}개 모두 불가 — {Rejects}", candidates.Count, string.Join(" / ", rejects.Take(4)));
+        logger.LogWarning("기준 자세 복귀: 면 여유 확보 후보 {Count}개 모두 불가 — {Rejects}", tried, string.Join(" / ", rejects.Take(4)));
         throw new InvalidOperationException(
-            $"{targetName} 로 가는 관절 이동이 면 쪽으로 휩니다({direct}). 곧게 물러나기·높이 맞추기 후보 {candidates.Count}개 모두 불가 " +
+            $"{targetName} 로 가는 관절 이동이 면 쪽으로 휩니다({direct}). 곧게 물러나기·높이 맞추기 후보 {tried}개 모두 불가 " +
             $"({string.Join(" / ", rejects.Take(3))}) — 움직이지 않고 정지합니다. 펜던트/조그로 벽에서 떼어 낸 뒤 재시도하세요.");
     }
 

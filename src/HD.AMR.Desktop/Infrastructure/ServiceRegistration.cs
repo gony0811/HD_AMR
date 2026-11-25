@@ -77,6 +77,8 @@ internal static class ServiceRegistration
 
         AddHostedSingleton<LaserDisplacementSensorService>(services);
         services.Configure<LaserDisplacementSensorSettings>(config.GetSection("LaserDisplacementSensor"));
+        // 레이저 고속 기록 모드(Laser.DataLog.*) — 켜면 logs/laser-YYYY-MM-DD.csv 에 100ms 간격 기록.
+        AddHostedSingleton<LaserDataLogService>(services);
         // 헤드 XY 오프셋 틸트 응답 캘리브레이션 — Laser 페이지에서 실행하는 무상태 루틴.
         services.AddTransient<LaserHeadCalibrationRoutine>();
 
@@ -146,6 +148,7 @@ internal static class ServiceRegistration
             HD.AMR.App.Communication.Vda5050.AcsBrokerStore.ApplyTo);
         // 주행 중 코봇 반경 장애물 감시(파라미터 cobotGuard.enabled, 기본 끔) — 실행기·어댑터·IO 가 상태를 본다.
         AddHostedSingleton<CobotObstacleGuard>(services);
+        services.AddSingleton<AcsOrderRunState>();   // 대시보드 ACS order 카드
         services.AddSingleton<Vda5050OrderExecutor>();
         services.AddSingleton<AcsFactsheetService>();   // ACS factsheet(§7.3) — 티칭·리프트·장착 보정 보고
         AddHostedSingleton<Vda5050AdapterService>(services);

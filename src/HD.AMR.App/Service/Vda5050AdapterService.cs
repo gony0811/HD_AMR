@@ -891,6 +891,15 @@ public sealed class Vda5050AdapterService : BackgroundService
                 ErrorDescription = $"SoC {_power.LastObservedSoc:0.0}% ≤ {PowerModeService.CriticalThresholdPercent}% — 안전정지",
             });
 
+        // 배터리 보호 임시 해제 — 해제 중에는 저전력 에러 대신 이 경고를 상주 발행(ACS 알람·화면에서 계속 보이게).
+        if (_power.Bypassed)
+            state.Errors.Add(new VdaError
+            {
+                ErrorType = "batteryGuardBypassed",
+                ErrorLevel = "WARNING",
+                ErrorDescription = $"배터리 보호 임시 해제 중 — BMS SoC {_power.LastObservedSoc?.ToString("0.0") ?? "?"}% (판정 {_power.RawMode}) 무시, 정상 모드로 운용",
+            });
+
         // 수동 비드 입력 대기 — 팝업이 떠 있는 동안만 WARNING 으로 싣는다(실패 아님, 작업자 입력 요청).
         if (_beadHub?.Pending is { } beadRequest)
             state.Errors.Add(ManualBeadNotice.ToError(beadRequest));

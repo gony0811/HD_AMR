@@ -124,7 +124,10 @@ public class CobotService : BackgroundService
                         _logger.LogWarning("코봇 상태 패킷 미수신 — 활성 좌표계 시딩 생략(수동 확인 필요)");
 
                     _logger.LogInformation("코봇 XML-RPC 연결 완료");
+                    _sentAccPct = null;   // 컨트롤러 쪽 값을 알 수 없으므로 다시 보낸다
                 }
+
+                await SyncAccScaleAsync(stoppingToken);
             }
             catch (OperationCanceledException)
             {
@@ -143,6 +146,40 @@ public class CobotService : BackgroundService
         }
 
         await stateTask;
+    }
+
+    // 컨트롤러에 마지막으로 보낸 전역 가속도 배율(null = 아직 안 보냄/재연결). 실패 warn 은 값당 1회.
+    private double? _sentAccPct;
+    private double? _accWarnedPct;
+
+    /// <summary>
+    /// 전역 가속도 배율(파라미터 <see cref="FairinoRpcClient.OaccScaleKey"/>)을 컨트롤러와 맞춘다 — 연결 직후와 값이 바뀐 뒤
+    /// 다음 루프(5초 이내)에 SetOaccScale 을 보낸다. 모션 중이면 RPC 직렬화로 그 모션이 끝난 뒤 적용된다.
+    /// 실패해도 연결은 유지하고 다음 루프에 다시 시도한다.
+    /// </summary>
+    private async Task SyncAccScaleAsync(CancellationToken ct)
+    {
+        var want = FairinoRpcClient.BaseOaccScalePct;
+        if (!_rpc.IsConnected || _sentAccPct == want) return;
+        try
+        {
+            var rc = await _rpc.SetOaccScaleAsync(want, ct);
+            if (rc == 0)
+            {
+                _sentAccPct = want;
+                _accWarnedPct = null;
+                _logger.LogInformation("코봇 전역 가속도 배율 {Acc}% 적용", want);
+                return;
+            }
+            if (_accWarnedPct != want)
+                _logger.LogWarning("코봇 전역 가속도 배율 {Acc}% 설정 실패 (rc={Rc}){Desc} — 재시도", want, rc, FairinoErrorCodes.Suffix(rc));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            if (_accWarnedPct != want)
+                _logger.LogWarning("코봇 전역 가속도 배율 {Acc}% 설정 실패 — 재시도: {Err}", want, ex.Message);
+        }
+        _accWarnedPct = want;
     }
 
     public override async Task StopAsync(CancellationToken cancellationToken)

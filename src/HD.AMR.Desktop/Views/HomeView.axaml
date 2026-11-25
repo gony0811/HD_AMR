@@ -2,6 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:HD.AMR.Desktop.ViewModels"
              xmlns:controls="using:HD.AMR.Desktop.Controls"
+             xmlns:app="using:HD.AMR.App.Service"
              x:Class="HD.AMR.Desktop.Views.HomeView"
              x:DataType="vm:HomeViewModel">
     <StackPanel>
@@ -178,6 +179,43 @@
                             ToolTip.Tip="라이브 화면(또는 저장된 사진)으로 팝업을 열어 비드선 입력·d 계산을 시험합니다. 시퀀스에는 영향이 없습니다." />
                     <TextBlock Classes="muted" FontSize="12" TextWrapping="Wrap" Text="{Binding BeadManualInfo}" />
                     <TextBlock Classes="muted" FontSize="12" TextWrapping="Wrap" Text="{Binding BeadTriggerStatus}" />
+                </StackPanel>
+            </Border>
+
+            <!-- ACS order 실행 정보 -->
+            <Border Classes="card stat" Width="612">
+                <StackPanel Spacing="6">
+                    <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Grid.Column="0" Text="📋  ACS Order" FontWeight="SemiBold" />
+                        <Border Grid.Column="1" Classes="badge" Classes.on="{Binding OrderGood}" Classes.off="{Binding OrderBad}">
+                            <TextBlock Text="{Binding OrderStatusText}" />
+                        </Border>
+                    </Grid>
+                    <TextBlock Text="{Binding OrderIdText}" FontSize="18" FontWeight="Bold"
+                               TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding OrderIdText}" />
+                    <TextBlock Classes="muted" FontSize="12" Text="{Binding OrderNodeText}" IsVisible="{Binding HasOrder}" />
+                    <TextBlock Text="{Binding OrderPhaseText}" IsVisible="{Binding HasOrder}" />
+                    <TextBlock Classes="muted" FontSize="12" Text="{Binding OrderTimeText}" IsVisible="{Binding HasOrder}" />
+                    <ProgressBar Height="6" Minimum="0" Maximum="100" Value="{Binding OrderProgress}" IsVisible="{Binding HasOrder}" />
+                    <TextBlock Classes="muted" FontSize="12" Text="{Binding OrderProgressText}" IsVisible="{Binding HasOrder}" />
+                    <ItemsControl ItemsSource="{Binding OrderTasks}" IsVisible="{Binding HasOrder}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="app:AcsOrderTaskInfo">
+                                <Grid ColumnDefinitions="28,52,*,90,96" Margin="0,2">
+                                    <TextBlock Grid.Column="0" Classes="muted" FontSize="12" Text="{Binding Number, StringFormat='#{0}'}" />
+                                    <TextBlock Grid.Column="1" FontSize="12" FontWeight="SemiBold" Text="{Binding StatusText}" />
+                                    <TextBlock Grid.Column="2" FontSize="12" TextTrimming="CharacterEllipsis"
+                                               Text="{Binding ActionType}" ToolTip.Tip="{Binding ResultDescription}" />
+                                    <TextBlock Grid.Column="3" FontSize="12" FontFamily="monospace" Text="{Binding TaskIdShort, StringFormat='task {0}'}"
+                                               ToolTip.Tip="{Binding TaskId}" />
+                                    <TextBlock Grid.Column="4" FontSize="12" Text="{Binding SurfaceText, StringFormat='면 {0}'}" />
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <TextBlock Classes="muted" FontSize="12" TextWrapping="Wrap" Text="{Binding OrderMessage}" IsVisible="{Binding HasOrderMessage}" />
+                    <TextBlock Classes="muted" FontSize="12" TextWrapping="Wrap" IsVisible="{Binding !HasOrder}"
+                               Text="ACS order 를 받으면 orderId·task·면·진행 단계를 표시합니다." />
                 </StackPanel>
             </Border>
 

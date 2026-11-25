@@ -28,11 +28,11 @@ public class HomePoseModeTests
     private static readonly TeachingPosition SlotT = Taught(TeachingService.WallSlotKey("T"), 70, -110, -60, 40, 80, 0);
     private static readonly TeachingPosition SlotSU = Taught(TeachingService.WallSlotKey("SU"), 90, -100, -50, 40, 80, 0);
 
-    // 천장·상부 챔퍼만 홈 위치_2 모드 면 — 하부 챔퍼·수직벽·바닥·미지정은 홈 모드.
+    // 천장만 홈 위치_2 모드 면 — 상부 챔퍼(2026-11-24부터)·하부 챔퍼·수직벽·바닥·미지정은 홈 모드.
     [Theory]
     [InlineData("T", true)]
-    [InlineData("PU", true)]
-    [InlineData("SU", true)]
+    [InlineData("PU", false)]
+    [InlineData("SU", false)]
     [InlineData("PL", false)]
     [InlineData("F", false)]
     [InlineData("B", false)]
@@ -58,7 +58,9 @@ public class HomePoseModeTests
     // 면과 모드가 어긋나면 실패 사유(수동 자세 전환 필요), 맞으면 null.
     [Theory]
     [InlineData(false, "T", true)]
-    [InlineData(false, "SU", true)]
+    [InlineData(false, "SU", false)]   // 상부 챔퍼는 홈 위치에서 검사(2026-11-24)
+    [InlineData(false, "PU", false)]
+    [InlineData(true, "SU", true)]
     [InlineData(true, "F", true)]
     [InlineData(true, "T", false)]
     [InlineData(false, "F", false)]
@@ -76,6 +78,8 @@ public class HomePoseModeTests
         Assert.True(ValidateRoute(Ctx("T", Home, Home2)).IsValid);
         Assert.False(ValidateRoute(Ctx("F", Home, Home2)).IsValid);
         Assert.True(ValidateRoute(Ctx("F", Home, Ready)).IsValid);
+        Assert.True(ValidateRoute(Ctx("SU", Home, Ready)).IsValid);    // 상부 챔퍼는 ready 로 진입
+        Assert.False(ValidateRoute(Ctx("PU", Home, Home2)).IsValid);
     }
 
     // 복귀 경유 슬롯 — 작업 면(없으면 마지막 진입 상부 면) 슬롯이 홈 위치_2 보다 가까울 때만.
@@ -98,8 +102,9 @@ public class HomePoseModeTests
         Assert.Null(UpperViaSlot(nearT, Ctx(null, Home, Home2, SlotT, SlotSU), lastUpperWall: "PU"));   // 주행 전 복귀
         Assert.Null(UpperViaSlot(nearT, Ctx(null, Home, Home2, SlotT, SlotSU)));                         // 면 모름 → 경유 없음
         Assert.Null(UpperViaSlot(nearT, Ctx(null, Home, Home2, SlotT, SlotSU), lastUpperWall: "F"));    // 상부 면 아님
-        // 작업 면 정보가 있으면 마지막 진입 면보다 우선
-        Assert.Null(UpperViaSlot(nearT, Ctx("PU", Home, Home2, SlotT), lastUpperWall: "T"));
+        // 상부 챔퍼(PU)는 2026-11-24부터 홈 위치_2 면이 아니다 — 작업 면이 PU 여도 홈 위치_2 쪽에 남은 자세는
+        // 마지막으로 진입한 천장(T) 경로를 거슬러 간다.
+        Assert.Equal("T", UpperViaSlot(nearT, Ctx("PU", Home, Home2, SlotT), lastUpperWall: "T")?.Code);
     }
 
     [Fact]

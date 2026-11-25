@@ -25,6 +25,7 @@ public sealed partial class HomeViewModel : ViewModelBase
     private readonly DispatcherTimer _timer;
     private readonly IServiceScopeFactory _scopes;
     private readonly BeadManualLabelHub _beadHub;
+    private readonly AcsOrderRunState? _orderRun;
     public AmrMapViewModel Map { get; }
 
     public ObservableCollection<string> MapIdOptions { get; } = new();
@@ -32,8 +33,10 @@ public sealed partial class HomeViewModel : ViewModelBase
     [ObservableProperty] private string? _mapIdStatus;
 
     public HomeViewModel(AMRService amr, CobotService cobot, CameraService camera, IoModuleService io,
-        Vda5050AdapterService vda, AmrMapViewModel map, IServiceScopeFactory scopes, BeadManualLabelHub beadHub)
+        Vda5050AdapterService vda, AmrMapViewModel map, IServiceScopeFactory scopes, BeadManualLabelHub beadHub,
+        AcsOrderRunState? orderRun = null)
     {
+        _orderRun = orderRun;
         _scopes = scopes;
         _beadHub = beadHub;
         _amr = amr;
@@ -134,6 +137,40 @@ public sealed partial class HomeViewModel : ViewModelBase
         _vda.SetMapId(SelectedMapId);
         MapIdStatus = $"적용됨 {DateTime.Now:HH:mm:ss} — 현재 층 {HD.AMR.App.Communication.Vda5050.FloorMap.Display(_vda.CurrentMapId)} (state 즉시 발행)";
         OnPropertyChanged(string.Empty);
+    }
+
+    // ── ACS order 실행 카드 ─────────────────────────────────────────
+    // 타이머(1초)가 OnPropertyChanged(string.Empty) 로 전부 다시 읽는다 — 목록은 스냅샷 버전이 바뀔 때만 새로 만든다.
+    private AcsOrderRunSnapshot Order => _orderRun?.Current ?? AcsOrderRunSnapshot.Empty;
+    private long _orderTasksVersion = -1;
+    private IReadOnlyList<AcsOrderTaskInfo> _orderTasks = Array.Empty<AcsOrderTaskInfo>();
+
+    public string OrderStatusText => Order.StatusText;
+    public bool OrderActive => Order.IsActive;
+    public bool OrderBad => Order.Status is AcsOrderRunStatus.Failed or AcsOrderRunStatus.Cancelled
+        or AcsOrderRunStatus.CompletedWithFailures;
+    public bool OrderGood => Order.Status == AcsOrderRunStatus.Completed;
+    public bool HasOrder => Order.Status != AcsOrderRunStatus.Idle;
+    public string OrderIdText => Order.OrderId ?? "수신한 order 없음";
+    public string OrderNodeText => Order.NodeId is null ? "" :
+        $"node {Order.NodeId} · {HD.AMR.App.Communication.Vda5050.FloorMap.Display(Order.MapId ?? "")}";
+    public string OrderPhaseText => $"단계: {Order.Phase}";
+    public string OrderTimeText => Order.StartedAt is { } s
+        ? $"시작 {s:HH:mm:ss}" + (Order.EndedAt is { } e ? $" · 종료 {e:HH:mm:ss}" : "") +
+          (Order.Elapsed(DateTime.Now) is { } el ? $" · 경과 {(int)el.TotalMinutes:00}:{el.Seconds:00}" : "")
+        : "";
+    public string OrderProgressText => $"액션 {Order.DoneCount}/{Order.TotalCount} (성공 {Order.FinishedCount}, 실패 {Order.FailedCount})";
+    public double OrderProgress => Order.ProgressPercent;
+    public string? OrderMessage => Order.Message;
+    public bool HasOrderMessage => !string.IsNullOrEmpty(Order.Message);
+    public IReadOnlyList<AcsOrderTaskInfo> OrderTasks
+    {
+        get
+        {
+            var o = Order;
+            if (o.Version != _orderTasksVersion) { _orderTasks = o.Tasks; _orderTasksVersion = o.Version; }
+            return _orderTasks;
+        }
     }
 
     // ── 수동 비드 입력(시퀀스 Bead 찾기 팝업) ─────────────────────────

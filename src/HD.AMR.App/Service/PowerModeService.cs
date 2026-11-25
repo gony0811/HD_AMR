@@ -1,4 +1,5 @@
 using HD.AMR.App.Enums;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 
 namespace HD.AMR.App.Service;
@@ -20,6 +21,11 @@ namespace HD.AMR.App.Service;
 ///
 /// SoC 가 <c>null</c>(AMR 미연결/미수신)이면 디바운스 카운터를 리셋하고 모드는 유지한다 —
 /// 통신두절로 인한 ghost 전이를 막는다.
+///
+/// <b>임시 해제</b>(<see cref="BypassKey"/> = true, 기본 false, 앱 재시작 후 적용): BMS 고장으로 SoC 를 믿을 수 없을 때만 쓴다.
+/// 판정은 그대로 하되(<see cref="RawMode"/>) <see cref="CurrentMode"/> 를 항상 Normal 로 돌려준다 — Order 거부·CRITICAL 안전정지·
+/// 저전력 잔여 액션 중단·재개 전 확인이 모두 통과한다. 해제 중에는 VDA <c>batteryGuardBypassed</c>(WARNING)를 상주 발행해 ACS 에 알린다.
+/// 실제 잔량을 모르는 채 운용하는 것이므로 팩 전압을 따로 확인할 것.
 /// </summary>
 public sealed class PowerModeService : BackgroundService
 {
@@ -37,13 +43,23 @@ public sealed class PowerModeService : BackgroundService
     private int _aboveResume;
     private PowerMode _mode;
 
-    public PowerMode CurrentMode => _mode;
+    /// <summary>배터리 보호 임시 해제 설정 키(appsettings) — true 면 SoC 와 무관하게 Normal 로 취급한다.</summary>
+    public const string BypassKey = "PowerMode:BypassBatteryGuard";
+
+    /// <summary>배터리 보호 임시 해제 중인가(기동 때 설정에서 읽는다).</summary>
+    public bool Bypassed { get; }
+
+    /// <summary>SoC 로 판정한 실제 모드 — 해제 중에도 판정은 계속한다(경고 문구·로그용).</summary>
+    public PowerMode RawMode => _mode;
+
+    /// <summary>운영에 쓰는 모드 — 해제 중이면 항상 Normal.</summary>
+    public PowerMode CurrentMode => Bypassed ? PowerMode.Normal : _mode;
 
     /// <summary>LOW 또는 CRITICAL 모드. VDA5050 <c>batteryLow</c> WARNING 상주 발행 조건.</summary>
-    public bool BatteryLow => _mode is PowerMode.Low or PowerMode.Critical;
+    public bool BatteryLow => CurrentMode is PowerMode.Low or PowerMode.Critical;
 
     /// <summary>CRITICAL 모드. VDA5050 <c>batteryCritical</c> FATAL 상주 발행 조건.</summary>
-    public bool BatteryCritical => _mode == PowerMode.Critical;
+    public bool BatteryCritical => CurrentMode == PowerMode.Critical;
 
     /// <summary>마지막 관측 SoC — 에러 설명 문자열(백분율) 용. 미관측/미연결 시 null.</summary>
     public float? LastObservedSoc { get; private set; }
@@ -51,17 +67,25 @@ public sealed class PowerModeService : BackgroundService
     /// <summary>모드 전환 시 발행. 어댑터가 구독해 state 즉시 재발행(nudge).</summary>
     public event Action? Changed;
 
-    public PowerModeService(AMRService amr, OperationLogService opLog)
+    public PowerModeService(AMRService amr, OperationLogService opLog, IConfiguration config)
+        : this(amr, opLog, config.GetValue(BypassKey, false)) { }
+
+    internal PowerModeService(AMRService amr, OperationLogService opLog, bool bypass)
     {
         _amr = amr;
         _opLog = opLog;
+        Bypassed = bypass;
+        if (bypass)
+            _opLog?.Log(OperationLogService.SourceAmr, OpCategory.AmrState,
+                "배터리 보호 임시 해제 중 — SoC 와 무관하게 정상 모드로 운용 (PowerMode:BypassBatteryGuard)", false,
+                "BMS 고장 임시 조치 — 팩 전압을 따로 확인할 것");
     }
 
     /// <summary>
     /// 테스트/수동 호출용 생성자 — <see cref="Observe"/> 만 호출할 때 사용.
     /// 실제 서비스로 쓰려면 DI 의 2-인자 생성자가 선택된다.
     /// </summary>
-    internal PowerModeService() : this(null!, null!) { }
+    internal PowerModeService(bool bypass = false) : this(null!, null!, bypass) { }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -131,7 +155,7 @@ public sealed class PowerModeService : BackgroundService
         if (_mode != prev)
         {
             _opLog?.Log(OperationLogService.SourceAmr, OpCategory.AmrState,
-                $"전력 모드 {prev} → {_mode}",
+                Bypassed ? $"전력 모드 {prev} → {_mode} (배터리 보호 해제 중 — 운영은 정상 모드)" : $"전력 모드 {prev} → {_mode}",
                 _mode == PowerMode.Normal ? true
                     : _mode == PowerMode.Critical ? false
                     : (bool?)null,
