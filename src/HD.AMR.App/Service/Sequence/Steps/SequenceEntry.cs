@@ -20,9 +20,9 @@ namespace HD.AMR.App.Service.Sequence.Steps;
 ///  ③ <b>작업 준비 위치 경유</b> — 홈에서 검사 위치로 MoveJ 시 900mm 이하 영역에서 툴이 차체와 충돌할 수
 ///     있다. 홈 복귀 후 "ready" 티칭 위치(홈에서 툴 Z −300mm)로 먼저 이동해 충돌 영역을 벗어난다.
 ///     미티칭이면 홈에서 툴 Z −300mm 오프셋을 자동 계산해 사용한다.
-///  ④ <b>자세 모드</b> — 천장(T)은 "홈 위치_2"(검사 준비 슬롯 경유) 또는 홈 위치(작업 준비 경유) 어느 쪽에서도 진입한다
-///     (2026-11-25 운영안 — 지금 있는 모드 그대로 시작). 바닥·하부 챔퍼(B/PL/SL)는 "홈 위치_3"(티칭돼 있을 때),
-///     그 외 면(상부 챔퍼 PU/SU 포함)은 홈 모드에서만 진입한다. 모드 전환은 운영자 수동 전용이라 모드가 맞지 않으면 움직이지 않고
+///  ④ <b>자세 모드</b> — 천장(T)·상부 챔퍼(PU/SU)는 "홈 위치_2"(검사 준비 슬롯 경유) 또는 홈 위치(작업 준비 경유) 어느 쪽에서도
+///     진입한다(2026-11-25 운영안 — 지금 있는 모드 그대로 시작). 바닥·하부 챔퍼(B/PL/SL)는 "홈 위치_3"(티칭돼 있을 때),
+///     그 외 면은 홈 모드에서만 진입한다. 모드 전환은 운영자 수동 전용이라 모드가 맞지 않으면 움직이지 않고
 ///     실패한다(<see cref="ModeMismatch"/>).
 ///
 /// 부르는 곳은 ② <see cref="CobotInspectionMoveStep"/>(LINE/CROSS)이다. 같은 anchor 그룹의 연속 task 는
@@ -122,11 +122,15 @@ internal static class SequenceEntry
     internal static bool IsUpperRoute(string? wallCode)
         => WallCodes.Find(wallCode)?.Orientation is SurfaceOrientation.Ceiling;
 
+    /// <summary>상부 챔퍼(PU/SU).</summary>
+    internal static bool IsChamferUpper(string? wallCode)
+        => WallCodes.Find(wallCode)?.Orientation is SurfaceOrientation.ChamferUpper;
+
     /// <summary>
-    /// 홈 위치 모드에서도 진입하는 상부 면 — 천장(T). 2026-11-25 운영안: T 는 홈 위치_2(검사 준비 슬롯 경유)와 홈 위치(작업 준비 경유)
-    /// 어느 모드에서도 시작한다. 자동 운전은 모드를 바꾸지 않으므로 지금 있는 모드의 경로로 들어간다.
+    /// 홈 위치·홈 위치_2 두 모드 모두에서 진입하는 상부 면 — 천장(T)·상부 챔퍼(PU/SU). 2026-11-25 운영안: 홈 위치_2(검사 준비 슬롯 경유)와
+    /// 홈 위치(작업 준비 경유) 어느 모드에서도 시작한다. 자동 운전은 모드를 바꾸지 않으므로 지금 있는 모드의 경로로 들어간다.
     /// </summary>
-    internal static bool AcceptsHomeMode(string? wallCode) => IsUpperRoute(wallCode);
+    internal static bool AcceptsBothUpperModes(string? wallCode) => IsUpperRoute(wallCode) || IsChamferUpper(wallCode);
 
     /// <summary>홈 위치_3 모드 면 — 바닥(B)·하부 챔퍼(PL/SL).</summary>
     internal static bool IsLowerRoute(string? wallCode)
@@ -168,7 +172,7 @@ internal static class SequenceEntry
     /// 바닥(B)은 홈 위치_4 가 티칭돼 있으면 홈 위치_4, 아니면 홈 위치_3 쪽이다.</summary>
     private static bool BelongsTo(PoseMode mode, string? wallCode, SequenceContext ctx) => mode switch
     {
-        PoseMode.Home2 => IsUpperRoute(wallCode),
+        PoseMode.Home2 => AcceptsBothUpperModes(wallCode),
         PoseMode.Home3 => IsLowerRoute(wallCode) && !(IsFloor(wallCode) && Home4Taught(ctx)),
         PoseMode.Home4 => IsFloor(wallCode) && Home4Taught(ctx),
         _ => false,
@@ -180,11 +184,11 @@ internal static class SequenceEntry
     /// <summary>진입 경유점 티칭 여부 — 천장은 홈 위치_2 또는 ready, 바닥은 홈 위치_4·_3, 하부 챔퍼는 홈 위치_3(있으면), 그 외는 ready.</summary>
     public static StepValidation ValidateRoute(SequenceContext context)
     {
-        if (IsUpperRoute(context.WallCode))
+        if (AcceptsBothUpperModes(context.WallCode))
             return TaughtJoints(context, Home2Key) is not null || TaughtJoints(context, "ready") is not null
                 ? StepValidation.Ok()
                 : StepValidation.Fail(
-                    $"홈 위치_2·작업 준비 위치(ready) 모두 미티칭 — 천장({context.WallCode})은 홈 위치_2 또는 홈 위치(작업 준비 경유)에서 진입합니다. " +
+                    $"홈 위치_2·작업 준비 위치(ready) 모두 미티칭 — {context.WallCode} 면은 홈 위치_2 또는 홈 위치(작업 준비 경유)에서 진입합니다. " +
                     "Teaching에서 먼저 저장하세요.");
         if (RequiredMode(context.WallCode, context) is PoseMode.Home3 or PoseMode.Home4)
             return StepValidation.Ok();
@@ -258,7 +262,7 @@ internal static class SequenceEntry
     {
         var need = RequiredMode(wallCode, home3Taught, home4Taught);
         if (need == mode) return null;
-        if (mode == PoseMode.Home && AcceptsHomeMode(wallCode)) return null;   // 천장은 홈 위치에서도 진입(작업 준비 경유)
+        if (mode is PoseMode.Home or PoseMode.Home2 && AcceptsBothUpperModes(wallCode)) return null;   // 천장·상부 챔퍼는 두 모드 모두
         var via = need == PoseMode.Home2 && mode == PoseMode.Home ? "(작업 준비·홈 위치_1.5·1.6 자동 경유)"
             : need == PoseMode.Home && mode == PoseMode.Home2 ? "(홈 위치_1.6·1.5·작업 준비 자동 경유)"
             : "";
