@@ -363,7 +363,17 @@ internal static class SequenceEntry
             // 멀리 내려간 자세(챔퍼 아래쪽 끝 등)에서 팔이 면 쪽으로 휘둘린다(실기 2026-11-02 13:57 L4-R03C09 #3 복귀 EMO).
             var planarRec = ApproachPathMemory.Last;
             var beforeRetract = await cobot.Rpc.GetTcpPoseInBaseAsync(ctx.Tool, ct);
-            if (await RetracePlanarAsync(cobot, ctx, logger, ct) is { } retraced)
+            string? retraced;
+            try { retraced = await RetracePlanarAsync(cobot, ctx, logger, ct); }
+            catch (RetraceBlockedException ex)
+            {
+                // 경로 검증에서 막힘 — 아직 움직이지 않았다. 종전 벽면 후퇴로 넘어간다(그 경로도 움직이기 전에 검증한다).
+                logger.LogWarning("복귀: ② 평면 경유 역순 경로 불가 — 종전 벽면 후퇴로 진행: {Msg}", ex.Message);
+                ApproachPathMemory.Clear();
+                retraced = null;
+                planarRec = null;
+            }
+            if (retraced is not null)
             {
                 done.Add(retraced);
                 cur = await cobot.Rpc.GetActualJointPosAsync(ct: ct);
@@ -449,7 +459,9 @@ internal static class SequenceEntry
         var n = rec.WallOut;
         var h = 0.0;
         for (var i = 0; i < 3; i++) h += (cur[i] - rec.ApproachPoint[i]) * n[i];
-        if (h < -RetraceMaxBehindMm || h > rec.RetreatMm + RetraceMaxAheadMm) return null;
+        // 검사를 마친 툴은 면 가까이(접근점 평면보다 ② 면 이격만큼 뒤)에 있다 — 그 범위까지는 그 면 앞으로 본다.
+        // 종전에는 접근점 평면 뒤 50mm 까지만 받아 검사 뒤에는 늘 기록을 버렸다(실기 2026-11-25 12:39·13:08·13:28 PU 높은 용접선).
+        if (h < -(rec.StandoffMm + RetraceMaxBehindMm) || h > rec.RetreatMm + RetraceMaxAheadMm) return null;
 
         double[]? lift = null;
         var level = rec.RetreatMm;
@@ -513,12 +525,16 @@ internal static class SequenceEntry
             try { j = await cobot.Rpc.GetInverseKinNearestAsync(Pose(pt), seed, ctx.Tool, 0, ct); }
             catch (InvalidOperationException ex)
             {
-                throw new InvalidOperationException(
+                throw new RetraceBlockedException(
                     $"복귀 경로 [{Fmt(pt)}] 도달 불가 — 움직이지 않고 정지합니다. 조그로 면에서 빼낸 뒤 재시도하세요. ({ex.Message})");
             }
             if (CobotInspectionMoveStep.PathStepBlocker(seed, j, curJoints) is { } why)
-                throw new InvalidOperationException(
+                throw new RetraceBlockedException(
                     $"복귀 경로 [{Fmt(pt)}] {why} — 움직이지 않고 정지합니다. 조그로 면에서 빼낸 뒤 재시도하세요.");
+            // 차체·기둥·팔 링크끼리 간섭 — 검사 뒤 면 가까이에서 출발하면 법선 후퇴가 길어 확인한다.
+            if (RetractSelfBlocker(curJoints, j) is { } self)
+                throw new RetraceBlockedException(
+                    $"복귀 경로 [{Fmt(pt)}] {self} — 움직이지 않고 정지합니다. 조그로 면에서 빼낸 뒤 재시도하세요.");
             seed = j;
             if (planar) jEntry = j; else jLift = j;
         }
@@ -1280,6 +1296,9 @@ internal static class SequenceEntry
             $"{targetName} 로 가는 관절 이동이 면 쪽으로 휩니다({direct}). 곧게 물러나기·높이 맞추기 후보 {tried}개 모두 불가 " +
             $"({string.Join(" / ", rejects.Take(3))}) — 움직이지 않고 정지합니다. 펜던트/조그로 벽에서 떼어 낸 뒤 재시도하세요.");
     }
+
+    /// <summary>② 평면 경유 역순 복귀의 경로 검증이 막힘 — 팔은 움직이지 않았다.</summary>
+    internal sealed class RetraceBlockedException(string message) : InvalidOperationException(message);
 
     /// <summary>면 여유 확보 후보가 하나도 없어 작업 준비 위치로 갈 수 없음 — 팔은 움직이지 않았다.</summary>
     internal sealed class ClearPathNotFoundException(string message) : InvalidOperationException(message);

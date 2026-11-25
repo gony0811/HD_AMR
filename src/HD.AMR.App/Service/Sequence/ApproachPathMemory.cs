@@ -9,8 +9,9 @@ namespace HD.AMR.App.Service.Sequence;
 /// <param name="RetreatMm">후퇴 평면 = 접근점 면 이격 평면 + 이 거리.</param>
 /// <param name="Entry">진입점(후퇴 평면 위) — 진입 MoveJ 의 끝점. 복귀는 여기까지 MoveL 로 온 뒤 MoveJ 한다.</param>
 /// <param name="WallCode">면 코드 — 로그용.</param>
+/// <param name="StandoffMm">② 면 이격 [mm] — 접근점에서 면까지. 검사 중에는 툴이 이만큼 면 쪽(접근점 평면 뒤)에 있다. 0 = 모름.</param>
 public sealed record PlanarApproachRecord(
-    double[] WallOut, double[] ApproachPoint, double RetreatMm, double[] Entry, string? WallCode);
+    double[] WallOut, double[] ApproachPoint, double RetreatMm, double[] Entry, string? WallCode, double StandoffMm = 0);
 
 /// <summary>
 /// 마지막 ② 평면 경유 접근 기록. 복귀는 시퀀스 종료·AMR 주행 전 등 <b>다른 SequenceContext</b> 에서도 불리므로

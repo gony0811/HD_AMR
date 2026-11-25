@@ -1377,7 +1377,8 @@ public class CobotInspectionMoveStep : ISequenceStep
 
         // 진입점에 선 순간부터 복귀는 이 길을 거슬러 가야 한다 — 뒤 이동이 실패·정지해도 기록은 남긴다.
         ApproachPathMemory.Record(new PlanarApproachRecord(
-            wallOut, target.Take(3).ToArray(), retreat, entryPos.ToArray(), context.WallCode));
+            wallOut, target.Take(3).ToArray(), retreat, entryPos.ToArray(), context.WallCode,
+            await GetApproachStandoffMmAsync(_param, _logger)));
 
         if (!direct)
         {
