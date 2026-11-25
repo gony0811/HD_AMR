@@ -119,4 +119,26 @@ public class AcsFactsheetTests
         var body = AcsFactsheet.Build(WithJ6(-140, 40, 0), 4, DateTimeOffset.UnixEpoch, new[] { "teaching" });
         Assert.Equal(0, body["hdAmr"]!["teaching"]!["safeJ6"]!["standbyDeg"]!.GetValue<double>());
     }
+
+    [Fact]
+    public void 코봇_묶음에_관절_사용_범위를_싣는다()
+    {
+        var lo = new double[] { -175, -175, -160, -175, -175, -180 };
+        var hi = new double[] { 175, 175, 160, 175, 175, 180 };
+        var cobot = AcsFactsheet.Build(Inputs() with { JointMinDeg = lo, JointMaxDeg = hi }, 1, DateTimeOffset.UtcNow, Array.Empty<string>())
+            ["hdAmr"]!["cobot"]!;
+        Assert.Equal(lo, cobot["jointMinDeg"]!.AsArray().Select(v => v!.GetValue<double>()));
+        Assert.Equal(160, cobot["jointMaxDeg"]![2]!.GetValue<double>());
+
+        // 범위가 바뀌면 cobot 지문이 바뀌어 ACS 에 다시 보고된다.
+        var a = AcsFactsheet.Fingerprints(AcsFactsheet.BuildSections(Inputs() with { JointMinDeg = lo, JointMaxDeg = hi }));
+        var b = AcsFactsheet.Fingerprints(AcsFactsheet.BuildSections(Inputs()));
+        Assert.NotEqual(a["cobot"], b["cobot"]);
+        Assert.Equal(a["teaching"], b["teaching"]);
+
+        // 없거나 6요소가 아니면 싣지 않는다(구버전 보고와 같다).
+        Assert.Null(AcsFactsheet.Build(Inputs(), 1, DateTimeOffset.UtcNow, Array.Empty<string>())["hdAmr"]!["cobot"]!["jointMinDeg"]);
+        Assert.Null(AcsFactsheet.Build(Inputs() with { JointMinDeg = new double[5], JointMaxDeg = hi }, 1, DateTimeOffset.UtcNow,
+            Array.Empty<string>())["hdAmr"]!["cobot"]!["jointMaxDeg"]);
+    }
 }
