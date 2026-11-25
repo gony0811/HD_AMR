@@ -158,11 +158,11 @@ public sealed class LaserTiltCorrector
             }
 
             var (uRx, uRy) = Solve(jac, pose.Rx, pose.Ry);
-            var (dRx, dRy, damped) = DampSmall(uRx, uRy);
+            var (dRx, dRy, damped) = Damp(uRx, uRy);
             var applyRx = Math.Clamp(dRx, -o.MaxCorrectionDeg, o.MaxCorrectionDeg);
             var applyRy = Math.Clamp(dRy, -o.MaxCorrectionDeg, o.MaxCorrectionDeg);
             Report($"보정 {iter + 1}: 툴 Rx={applyRx:+0.###;-0.###}°, Ry={applyRy:+0.###;-0.###}° 회전" +
-                   (damped ? $" (계산 {uRx:0.###}°, {uRy:0.###}° → {SmallCorrectionDeg}° 미만 감쇠 ×{SmallCorrectionDamping})" : "") +
+                   (damped ? $" (계산 {uRx:0.###}°, {uRy:0.###}° → 감쇠 ×{DampFactor(uRx, uRy)})" : "") +
                    (applyRx != dRx || applyRy != dRy ? $" (계산 {uRx:0.###}°, {uRy:0.###}° → ±{o.MaxCorrectionDeg}° 클램프)" : ""));
 
             // 회전 전 자세와 벽까지의 거리(depth) — 회전 뒤 벽 쪽으로 다가갔으면 되돌린다.
@@ -233,27 +233,45 @@ public sealed class LaserTiltCorrector
     /// <summary>작은 보정 감쇠 비율.</summary>
     internal const double SmallCorrectionDamping = 0.5;
 
+    /// <summary>큰 보정(한 축이라도 <see cref="SmallCorrectionDeg"/> 이상) 감쇠 비율.</summary>
+    internal const double LargeCorrectionDamping = 0.6;
+
     /// <summary>
-    /// 두 축 보정량이 모두 <see cref="SmallCorrectionDeg"/> 미만이면 <see cref="SmallCorrectionDamping"/> 배로 줄인다.
+    /// 보정량 감쇠 — 두 축 모두 <see cref="SmallCorrectionDeg"/> 미만이면 <see cref="SmallCorrectionDamping"/>,
+    /// 그 밖에는 <see cref="LargeCorrectionDamping"/> 배로 줄인다.
     /// 1° 안팎에서는 실제 응답이 공칭의 ~2배라 보정마다 부호만 뒤집혀 ±1° 를 오갔다
     /// (10-28 10:57 평탄면 rx +1.07 → −1.03 → +1.02°, 기준 1° 미달로 3회 소진). 응답이 공칭대로여도 절반씩 수렴해 기준을 통과한다.
+    /// 2026-11-25: 큰 보정도 같은 문제였다 — 11-20~25 로그의 보정 전후 측정으로 본 실제 응답은 공칭의 중앙값 1.3~1.5배
+    /// (4건 중 1건은 ~2배)로 크기와 무관했고, 2° 이상을 그대로 돌려 반대쪽으로 넘어갔다(ry +4.27° → −3.70°,
+    /// rx −3.39° → +3.54°). 예측 0° 와 3° 넘게 달라 '비평탄'·'발산'으로 평탄한 자리를 버렸다. ×0.6 이면 응답 1~2배 범위에서
+    /// 넘치지 않고 2~3회에 수렴한다.
     /// </summary>
-    public static (double Rx, double Ry, bool Damped) DampSmall(double uRx, double uRy)
+    public static (double Rx, double Ry, bool Damped) Damp(double uRx, double uRy)
+    {
+        var k = Math.Abs(uRx) < SmallCorrectionDeg && Math.Abs(uRy) < SmallCorrectionDeg
+            ? SmallCorrectionDamping
+            : LargeCorrectionDamping;
+        return (uRx * k, uRy * k, true);
+    }
+
+    /// <summary><see cref="Damp"/> 가 적용한 비율.</summary>
+    public static double DampFactor(double uRx, double uRy)
         => Math.Abs(uRx) < SmallCorrectionDeg && Math.Abs(uRy) < SmallCorrectionDeg
-            ? (uRx * SmallCorrectionDamping, uRy * SmallCorrectionDamping, true)
-            : (uRx, uRy, false);
+            ? SmallCorrectionDamping
+            : LargeCorrectionDamping;
 
     /// <summary>공칭 응답 — 헤드 캘리브레이션 규약(툴 +Rx → 측정 rx gain −1, 툴 +Ry → 측정 ry gain +1).</summary>
     public static double[,] NominalJacobian() => new[,] { { -1.0, 0.0 }, { 0.0, 1.0 } };
 
     /// <summary>
-    /// 보정 후 실측이 예측과 맞는가 — 허용 오차 max(3°, 0.5×|적용 회전|), 축별.
+    /// 보정 후 실측이 예측과 맞는가 — 허용 오차 max(3°, 1.0×|적용 회전|), 축별.
     /// 헤드 간격 ~30mm 에서 1mm 가 ~2° 라 종전 2° 는 판 표면 잡음 수준이었다(10-28 10:40 평탄면에서 rx 0.95° 초과로 NG).
+    /// 2026-11-25: 0.5× → 1.0× — 실제 응답이 공칭의 1~2배로 흩어져(11-20~25 로그) 예측과의 차이가 적용 회전만큼 날 수 있다.
     /// 최종 합격(ThresholdDeg)·발산 가드는 그대로라 완화로 오합격이 늘지 않고, 비드 판정이 한 회차 늦어질 뿐이다.
     /// </summary>
     public static bool IsResponseConsistent(double predRx, double predRy, double rx, double ry, double appliedMagDeg)
     {
-        var tol = Math.Max(3.0, 0.5 * appliedMagDeg);
+        var tol = Math.Max(3.0, 1.0 * appliedMagDeg);
         return Math.Abs(rx - predRx) <= tol && Math.Abs(ry - predRy) <= tol;
     }
 

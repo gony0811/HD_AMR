@@ -87,8 +87,9 @@ public class FlatSurfaceAlignStep : ISequenceStep
     /// 레이저 중심이 카메라 대비 얼마나 좌측(툴 +Y)에 장착됐는지에 따른 장착 오프셋이라 DB로 외부화한다.</summary>
     private const double MaxCameraToLaserShiftMm = 200.0;
 
-    /// <summary>틸트 회전 보정 최대 시도 횟수 (측정 노이즈 대비 재시도).</summary>
-    private const int MaxTiltCorrections = 3;
+    /// <summary>틸트 회전 보정 최대 시도 횟수 (측정 노이즈 대비 재시도).
+    /// 2026-11-25: 3 → 4 — 큰 보정도 ×0.6 감쇠(<see cref="LaserTiltCorrector.Damp"/>)해 수렴이 한 회차 늦어질 수 있다.</summary>
+    private const int MaxTiltCorrections = 4;
 
     /// <summary>1회 회전 보정 클램프(°/축). 폭주 방지.</summary>
     private const double MaxTiltCorrectionDeg = 10.0;
