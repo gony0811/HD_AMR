@@ -57,7 +57,7 @@ public class HomePoseModeTests
 
     // 면과 모드가 어긋나면 실패 사유(수동 자세 전환 필요), 맞으면 null.
     [Theory]
-    [InlineData(false, "T", true)]
+    [InlineData(false, "T", false)]    // 천장은 홈 위치에서도 진입(2026-11-25)
     [InlineData(false, "SU", false)]   // 상부 챔퍼는 홈 위치에서 검사(2026-11-24)
     [InlineData(false, "PU", false)]
     [InlineData(true, "SU", true)]
@@ -74,8 +74,9 @@ public class HomePoseModeTests
     [Fact]
     public void ValidateRoute_UpperNeedsHome2_NormalNeedsReady()
     {
-        Assert.False(ValidateRoute(Ctx("T", Home, Ready)).IsValid);
+        Assert.True(ValidateRoute(Ctx("T", Home, Ready)).IsValid);     // 천장 — 홈 위치 쪽(작업 준비 경유)도 된다
         Assert.True(ValidateRoute(Ctx("T", Home, Home2)).IsValid);
+        Assert.False(ValidateRoute(Ctx("T", Home)).IsValid);           // 홈 위치_2·ready 모두 없음
         Assert.False(ValidateRoute(Ctx("F", Home, Home2)).IsValid);
         Assert.True(ValidateRoute(Ctx("F", Home, Ready)).IsValid);
         Assert.True(ValidateRoute(Ctx("SU", Home, Ready)).IsValid);    // 상부 챔퍼는 ready 로 진입
