@@ -196,8 +196,12 @@ public sealed class DepthDistanceMoveOptions
 }
 
 /// <summary>깊이 거리 접근 이동 결과.</summary>
+/// <param name="NoResponse">이동했는데 깊이 거리가 기대만큼 변하지 않아 실패했다(<see cref="FlatSurfaceCenteringService.CheckDistanceResponse"/>).</param>
+/// <param name="CommandedMm">그때 광축으로 지령한 이동량 [mm].</param>
+/// <param name="ActualMovedMm">이동 전후 TCP(BASE) 실측 변위 크기 [mm] — 읽지 못했으면 null.</param>
 public sealed record DepthDistanceMoveResult(
-    bool Success, double? MeasuredMm, double? MovedMm, string Message);
+    bool Success, double? MeasuredMm, double? MovedMm, string Message,
+    bool NoResponse = false, double? CommandedMm = null, double? ActualMovedMm = null);
 
 /// <summary>카메라 페이지 단계 버튼('카메라 이동'/'레이저 이동') 옵션 — 시퀀스 ④와 같은 값을 넣는다.</summary>
 public sealed class LaserToFlatOptions
@@ -1049,9 +1053,11 @@ public class FlatSurfaceCenteringService
 
             // 재측정(N회 평균)·실측 BASE 변위 — 광축 매핑·프레임이 맞는지 응답으로 검증한다.
             var d2 = _camera.LastFrameAt > movedAt ? await MeasureRoiDistanceAsync(o, ct) : null;
+            double? actualMoved = null;
             try
             {
                 var after = await _cobot.Rpc.GetTcpPoseInBaseAsync(o.Tool, ct);
+                actualMoved = Math.Sqrt(Math.Pow(after[0] - anchor[0], 2) + Math.Pow(after[1] - anchor[1], 2) + Math.Pow(after[2] - anchor[2], 2));
                 Report(progress,
                     $"접근 실측: BASE Δ=[{after[0] - anchor[0]:+0.#;-0.#}, {after[1] - anchor[1]:+0.#;-0.#}, " +
                     $"{after[2] - anchor[2]:+0.#;-0.#}]mm, 거리 {d:0}→{(d2 is not null ? $"{d2:0}" : "?")}mm");
@@ -1060,7 +1066,7 @@ public class FlatSurfaceCenteringService
             catch { /* 진단 실패는 결과에 영향 없음 */ }
 
             if (CheckDistanceResponse(d, d2, delta, o.TargetDistanceMm, o.ToleranceMm) is { } responseFail)
-                return DistFail(responseFail, d2 ?? d);
+                return DistFail(responseFail, d2 ?? d) with { NoResponse = true, CommandedMm = delta, ActualMovedMm = actualMoved };
 
             return DistOk(d2 ?? d, delta,
                 $"거리 접근 완료: {d:0.#}→{(d2 is not null ? $"{d2:0.#}" : "?")}mm " +

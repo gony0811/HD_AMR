@@ -25,6 +25,11 @@ public class CameraAlignRefineStep : ISequenceStep
     /// </summary>
     internal const double NearSlackMm = 20, FarSlackMm = 30;
 
+    /// <summary>
+    /// 깊이 무응답을 경고로 넘길 때 코봇 실측 이동이 지령 대비 이 비율 이상이어야 한다 — 로봇이 실제로 움직였는데 깊이만 안 변한 경우만.
+    /// </summary>
+    internal const double MovedMinRatio = 0.8;
+
     /// <summary>추가 접근 최대 횟수.</summary>
     internal const int MaxMoves = 3;
 
@@ -100,7 +105,32 @@ public class CameraAlignRefineStep : ISequenceStep
         // 공용 루틴은 취소를 삼키고 실패 결과로 반환 — 스텝은 ③처럼 취소 예외로 전파한다.
         ct.ThrowIfCancellationRequested();
         if (!ok) _logger.LogWarning("카메라 거리 재정렬 실패: {Msg}", msg);
+        else if (msg.StartsWith('⚠'))
+        {
+            _logger.LogWarning("카메라 거리 재정렬: {Msg}", msg);
+            context.Progress?.Invoke(msg);
+        }
         return ok ? StepResult.Ok(msg) : StepResult.Fail(msg);
+    }
+
+    /// <summary>
+    /// 재정렬 접근에서 "이동했는데 깊이 거리가 기대만큼 안 변함"이 났을 때 경고로 넘길지. 넘기면 그 메시지(⚠ 로 시작), 아니면 null.
+    /// 깊이 거리는 ROI 에서 가장 가까운 점이라, 면이 아닌 물체(천장 아래 구조물·케이블 등)가 ROI 에 걸리면 코봇이 다가가도
+    /// 값이 줄지 않는다(실기 2026-11-26 11:03 T L4-R09C24-4: +43.2mm 이동에 343→344mm, 11-24 이후 T·SU 에서 9회).
+    /// 넘기는 조건 — 둘 다 만족할 때만:
+    ///  · 코봇 실측 이동이 지령의 <see cref="MovedMinRatio"/> 이상(로봇이 실제로 움직였다 — 정지·막힘이면 종전대로 실패)
+    ///  · 가장 가까운 물체 거리가 목표 − <see cref="NearSlackMm"/> 이상(근접 허용과 같은 기준 — 그보다 가까운 물체는 없다)
+    /// 더 다가가지 않고 그 자리에서 다음 단계로 넘긴다 — 면까지 거리는 뒤의 레이저 WD 단계가 면을 직접 재서 맞춘다.
+    /// </summary>
+    internal static string? AcceptDepthNoResponse(DepthDistanceMoveResult r, double targetMm, int attempt)
+    {
+        if (!r.NoResponse || r.CommandedMm is not { } cmd || r.ActualMovedMm is not { } moved || r.MeasuredMm is not { } nearest)
+            return null;
+        if (moved < MovedMinRatio * Math.Abs(cmd)) return null;
+        if (nearest < targetMm - NearSlackMm) return null;
+        return $"⚠ 재정렬 {attempt}회차 깊이 무응답을 경고로 넘김 — 코봇은 {moved:0.#}mm 이동(지령 {cmd:+0.#;-0.#}mm)했는데 " +
+               $"깊이 거리(ROI 가장 가까운 점)는 {nearest:0.#}mm. ROI 안 가장 가까운 점이 면이 아닌 물체로 보고 더 다가가지 않습니다 " +
+               $"(가장 가까운 물체 {nearest:0}mm ≥ 목표 {targetMm:0}−{NearSlackMm:0}mm). 면 거리는 레이저 WD 단계에서 다시 맞춥니다. [{r.Message}]";
     }
 
     /// <summary>
@@ -115,7 +145,11 @@ public class CameraAlignRefineStep : ISequenceStep
         {
             var r = await move();
             if (!r.Success)
+            {
+                if (AcceptDepthNoResponse(r, targetMm, i + 1) is { } warn)
+                    return (true, warn);
                 return (false, $"재정렬 {i + 1}회차 접근 실패 — {r.Message}");
+            }
             first ??= r.MeasuredMm;
 
             if (r.MovedMm is null or 0)
