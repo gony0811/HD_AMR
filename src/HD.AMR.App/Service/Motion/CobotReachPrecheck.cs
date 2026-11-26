@@ -225,7 +225,11 @@ public sealed class CobotReachPrecheck
         }
 
         var stamp = new ReachMapStamp(approach, align, FocusMm: 0, toolLen, limits.MinFlangeReachMm, limits.WristMarginDeg, mount);
-        return (new SimContext(stamp, axis, useController, zDatum), null);
+        var tiltCheck = await _param.GetBoolAsync(ReachMap.CorrugationTiltCheckKey).ConfigureAwait(false) ?? true;
+        if (!tiltCheck)
+            _logger.LogInformation("도달 사전 점검: 코루게이션 기울임 판정 끔({Key}=false) — 순회 경유점 사전 검증만 봅니다.",
+                ReachMap.CorrugationTiltCheckKey);
+        return (new SimContext(stamp, axis, useController, zDatum, tiltCheck), null);
     }
 
     private async Task<PointVerdict> JudgeAsync(SimContext ctx, ReachPoint point, double xm, double ym, double yaw, CancellationToken ct)
@@ -250,7 +254,7 @@ public sealed class CobotReachPrecheck
 
         // 코루게이션 기울임(순회 경사 구간)까지 볼 점 — 저장 맵에는 그 판정이 없으므로 새로 계산한다.
         double[]? tiltToward = null;
-        if (!point.TestMove && point.TowardW is { Length: 3 } towardW)
+        if (!point.TestMove && ctx.TiltCheck && point.TowardW is { Length: 3 } towardW)
         {
             var tb = ReachStationFrame.WorldToBodyMm(towardW, xm, ym, yaw, ctx.ZDatumMm);
             tiltToward = new[] { tb[0], tb[1], ReachStationFrame.CellZMm(point.WallCode, tb[2]) };
@@ -300,7 +304,7 @@ public sealed class CobotReachPrecheck
         => new(usable, status,
             $"{point.Label}: {ReachMapResult.Label(status)} ({reason}) — 차체 x={x:0} y={y:0} z={z:0} mm, 리프트 {stroke:0} mm [{via}]");
 
-    private sealed record SimContext(ReachMapStamp Stamp, ToolAxisDir Axis, bool UseController, double ZDatumMm);
+    private sealed record SimContext(ReachMapStamp Stamp, ToolAxisDir Axis, bool UseController, double ZDatumMm, bool TiltCheck = true);
 
     private sealed record PointVerdict(bool Usable, ReachStatus Status, string Reason)
     {

@@ -240,10 +240,13 @@ public static class ReachMap
                     calls++;
                     var fail = TiltCandidateFailure(jT, tErr, rawFn, limits, robot, h, focus.PlanarDistanceMm);
                     if (fail is null) { passed = true; break; }
-                    firstFail ??= twist == 0 ? fail : $"{fail} (비틀림 180°)";
+                    var diag = $"비틀림 {twist:0}° 자세 [{Fmt(pose)}] → 해 [{(jT is { Length: 6 } ? Fmt(jT) : "없음")}]";
+                    firstFail = firstFail is null ? fail + $" (진단: {diag}" : firstFail + $"; {diag}";
                 }
                 if (!passed)
-                    return (Cell(ReachStatus.PathUnsafe, $"{tiltLabel}{firstFail}", margin, jA, jL, jF), calls);
+                    return (Cell(ReachStatus.PathUnsafe,
+                        $"{tiltLabel}{firstFail}; 초점 자세 [{Fmt(focusPose)}] 해 [{Fmt(rawF)}], 반대 끝 [{Fmt(towardPose)}])",
+                        margin, jA, jL, jF), calls);
             }
         }
 
@@ -310,6 +313,13 @@ public static class ReachMap
 
     /// <summary>순회가 코루게이션 경사에서 쓰는 최대 기울임 [도] — 티칭설정 경유점 Theta ±45.</summary>
     public const double CorrugationTiltDeg = 45.0;
+
+    /// <summary>
+    /// 주행 전 도달 사전 점검에서 코루게이션 기울임 판정을 할지(기본 true). 끄면 기울임은 순회 단계의 경유점 사전 검증
+    /// (실측 작업물 좌표계·컨트롤러 IK — 움직이기 전에 멈춤)만 본다. 실기 2026-11-26 PL L2-R01C03-4: 사전 점검은 두 비틀림 모두
+    /// 손목 반전 해만 나와 거부했으나 같은 정차 수동 순회는 ±45° 를 같은 손목 자세로 완료 — 모델의 기울인 자세가 실제와 다르다.
+    /// </summary>
+    public const string CorrugationTiltCheckKey = "inspection.reachPrecheck.corrugationTilt";
 
     /// <summary>초점 해 → 기울인 해가 팔꿈치·손목 반전이거나 관절이 크게 튀면 그 사유, 아니면 null(J6 제외).</summary>
     internal static string? TiltBranchReason(double[] focus, double[] tilted)
@@ -411,6 +421,8 @@ public static class ReachMap
         p[0] = pose[0]; p[1] = pose[1]; p[2] = pose[2];
         return p;
     }
+
+    private static string Fmt(double[] v) => string.Join(", ", v.Select(x => x.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)));
 
     private static double[] WithoutJ6(double[] j) => new[] { j[0], j[1], j[2], j[3], j[4], 0.0 };
 

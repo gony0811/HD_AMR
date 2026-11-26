@@ -232,6 +232,10 @@ public class ParameterService
             .. Sequence.BeadManualSettings.SeedDefaults(),
             .. Sequence.Steps.ManualPoint1Check.SeedDefaults(),
             .. Motion.CobotObstacleZone.SeedDefaults(),
+            (Motion.ReachMap.CorrugationTiltCheckKey, "true",
+                "주행 전 도달 사전 점검의 코루게이션 기울임(45°) 판정 — true 면 기울인 자세가 같은 손목 자세로 닿지 않는 용접선은 " +
+                "주행 전에 거부한다. false 면 이 판정을 하지 않고 순회 단계의 경유점 사전 검증(실측 좌표계·움직이기 전 중단)만 본다. " +
+                "사전 점검이 거부하는데 수동 순회는 되는 용접선이 있으면 false. 다음 지령부터 적용."),
             (FlatReachOptions.TiltMarginKey,
                 FlatReachOptions.DefaultTiltMarginDeg.ToString(CultureInfo.InvariantCulture),
                 "④ 평탄 후보 도달성 판정의 틸트 보정 여유(°) — 레이저 위치에서 툴 Rx/Ry 를 ± 이만큼 돌려도 자세 한계 안이어야 후보로 인정. 0 = 생략."),

@@ -60,7 +60,7 @@ public class ReachTiltCheckTests
             TiltTowardMm: t, TiltDeg: ReachMap.CorrugationTiltDeg);
         var c = (await ReachMap.BuildAsync(spec, robot, ik)).Cells[0];
         Assert.Equal(usable, c.Usable);
-        if (!usable) Assert.Contains("코루게이션 기울임", c.Reason);
+        if (!usable) { Assert.Contains("코루게이션 기울임", c.Reason); Assert.Contains("비틀림 180° 자세", c.Reason); Assert.Contains("초점 자세", c.Reason); }
     }
 
     [Fact]
