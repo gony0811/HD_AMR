@@ -32,7 +32,7 @@ public class BeadCenteringStep : ISequenceStep
     private readonly BeadManualAssist _manual;
     private readonly ILogger<BeadCenteringStep> _logger;
 
-    /// <summary>1회 이동 클램프(mm). 매핑 오설정·측정 폭주 가드 — ⑥과 동일 관례.</summary>
+    /// <summary>1회 이동 클램프(mm) — 조그 후 Peak 진행축 보정에만 적용. 비드 cross 센터링은 비드를 찾았으면 한계 없이 이동(2026-11-26).</summary>
     private const double MaxCenteringMoveMm = 100.0;
 
     /// <summary>이 값 미만이면 이동을 생략한다(mm).</summary>
@@ -84,11 +84,6 @@ public class BeadCenteringStep : ISequenceStep
         => peakOffsetMm is { } o && double.IsFinite(o) && Math.Abs(o) > Math.Max(0, toleranceMm)
             ? Math.Clamp(o, -MaxCenteringMoveMm, MaxCenteringMoveMm)
             : 0.0;
-
-    private string LargeResidualFail(double dMm, double residualMm) =>
-        $"Bead{_peakId} 이격 {dMm:+0.0;-0.0}mm — 1회 이동 한계 ±{MaxCenteringMoveMm:0}mm 로는 잔차 {residualMm:+0.0;-0.0}mm 가 남아 " +
-        $"점 보정 상한 ±{WObjPointStep.MaxResidualCorrectionMm:0}mm 를 넘습니다. 움직이지 않고 중단 — 작업물 좌표계가 기울어집니다. " +
-        "비드가 화면 중앙 근처에 오도록 정차 위치·캘리브레이션을 확인하거나, 수동 입력이면 검사할 비드를 다시 그리세요.";
 
     /// <param name="peakId">1 또는 2. DI 에서 <c>ActivatorUtilities.CreateInstance</c> 로 주입되므로 첫 인자여야 한다.</param>
     public BeadCenteringStep(
@@ -179,17 +174,15 @@ public class BeadCenteringStep : ISequenceStep
 
         var residualMax = await _param.GetDoubleAsync(ResidualMaxKey) ?? DefaultResidualMaxMm;
         var failOnLarge = await _param.GetBoolAsync(FailOnLargeResidualKey) ?? true;
-        if (failOnLarge && IsUncorrectableResidual(ResidualAfterClamp(moveMm)))
-            return StepResult.Fail(LargeResidualFail(initialDMm, ResidualAfterClamp(moveMm)));
         string? residualWarn = null;
-        if (residualMax > 0 && Math.Abs(moveMm) - MaxCenteringMoveMm > residualMax)
-            residualWarn = $"이격 {initialDMm:+0.0;-0.0}mm 가 1회 이동 한계 ±{MaxCenteringMoveMm:0}mm 를 넘어 " +
-                           $"잔차 약 {Math.Abs(moveMm) - MaxCenteringMoveMm:0.0}mm 가 남음(허용 {residualMax:0.#}mm)";
 
-        var clamped = Math.Clamp(moveMm, -MaxCenteringMoveMm, MaxCenteringMoveMm);
-        if (Math.Abs(clamped - moveMm) > 1e-6)
+        // 비드를 찾았으면 cross 축은 1회 이동 한계 없이 측정 d 만큼 그대로 간다 — 한계로 자르면 남는 잔차가
+        // 점 보정 상한을 넘어 움직이지도 못하고 중단됐다(2026-11-26 d=−148.4mm, 한계 100mm → 잔차 −48.4mm 로 실패).
+        // 1회 이동 한계는 조그 후 Peak 진행축 보정에만 쓴다.
+        var crossMove = moveMm;
+        if (Math.Abs(moveMm) > MaxCenteringMoveMm)
             _logger.LogWarning(
-                "Bead{Id} 센터링 이동량 {Raw:0.0}mm 가 한계 ±{Max:0}mm 로 클램프됨.",
+                "Bead{Id} 센터링 이동량 {Raw:0.0}mm 가 1회 이동 한계 ±{Max:0}mm 를 넘지만 비드를 찾았으므로 한계 없이 이동.",
                 _peakId, moveMm, MaxCenteringMoveMm);
         if (!axisFromParam)
             _logger.LogWarning(
@@ -198,7 +191,7 @@ public class BeadCenteringStep : ISequenceStep
 
         var anchor = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
         var offset = new double[6];
-        FlatSurfaceCenteringService.ApplyAxis(offset, toolAxis, clamped);
+        FlatSurfaceCenteringService.ApplyAxis(offset, toolAxis, crossMove);
         if (progressMm != 0)
         {
             var (progToolAxis, _) = await WeldSequenceSupport.GetProgressToolAxisAsync(_param, progressAxis);
@@ -210,7 +203,7 @@ public class BeadCenteringStep : ISequenceStep
 
         _logger.LogInformation(
             "Bead{Id} 센터링: 진행축={Prog}, cross 툴{Axis} {Off:+0.0;-0.0}mm (측정 d={Meas:+0.0;-0.0}mm)",
-            _peakId, progressAxis, FlatSurfaceCenteringService.AxisName(toolAxis), clamped, initialDMm);
+            _peakId, progressAxis, FlatSurfaceCenteringService.AxisName(toolAxis), crossMove, initialDMm);
 
         var rc = await _cobot.Rpc.MoveByToolOffsetAsync(anchor, user: 0, offset,
             tool: context.Tool, vel: context.Velocity, ct: ct);
@@ -222,14 +215,14 @@ public class BeadCenteringStep : ISequenceStep
         if (_peakId != 1)
         {
             // ⑫ 각도 정합을 위해 M2 는 갱신하지 않는다. 작업물 좌표계 점2 잔차 보정용으로만 슬롯을 건드리지 않고 재측정한다.
-            var (corr2, fail2, recentered2) = await MeasurePoint2ResidualAsync(context, toolAxis, initialDMm, clamped, failOnLarge, ct);
+            var (corr2, fail2, recentered2) = await MeasurePoint2ResidualAsync(context, toolAxis, initialDMm, crossMove, failOnLarge, ct);
             if (fail2 is not null)
                 return StepResult.Fail(fail2);
             if (recentered2) residualWarn = null;   // 클램프 잔차 경고는 첫 검출 기준이라 더는 맞지 않는다
             var (ok2, note2) = await ShiftToInspectCamAsync(context, ct);
             return ok2
                 ? StepResult.Ok(
-                    $"Bead2 센터링 완료 — 툴{FlatSurfaceCenteringService.AxisName(toolAxis)} {clamped:+0.0;-0.0}mm 이동 " +
+                    $"Bead2 센터링 완료 — 툴{FlatSurfaceCenteringService.AxisName(toolAxis)} {crossMove:+0.0;-0.0}mm 이동 " +
                     $"(각도 산출 정합을 위해 M2 는 갱신하지 않음).{progressNote}{corr2}{note2}{ResidualNote(residualWarn)}")
                 : StepResult.Fail(note2);
         }
@@ -240,7 +233,7 @@ public class BeadCenteringStep : ISequenceStep
         // 생략되므로 cross 축 매핑이 현장에서 검증돼 있어야 한다.
         if (IsManualMeasurement(_weld.M1, _weld.DMm, initialDMm))
         {
-            var shifted = await _weld.ShiftMeasurementByMoveAsync(_peakId, clamped, ct);
+            var shifted = await _weld.ShiftMeasurementByMoveAsync(_peakId, crossMove, ct);
             if (shifted is not null)
             {
                 var residualManual = _weld.DMm(shifted);
@@ -256,7 +249,7 @@ public class BeadCenteringStep : ISequenceStep
                 if (!shiftOkM)
                     return StepResult.Fail(shiftNoteM);
                 return StepResult.Ok(
-                    $"Bead{_peakId} 센터링 완료 — {clamped:+0.0;-0.0}mm 이동, 수동 비드선을 이동량만큼 옮겨 " +
+                    $"Bead{_peakId} 센터링 완료 — {crossMove:+0.0;-0.0}mm 이동, 수동 비드선을 이동량만큼 옮겨 " +
                     $"잔차 d={residualManual:+0.0;-0.0}mm (이동 전 {initialDMm:+0.0;-0.0}mm), M1 갱신(재측정 생략).{progressNote}{corrM}{shiftNoteM}{ResidualNote(residualWarn)}");
             }
             _logger.LogWarning("Bead{Id} 센터링: 수동 측정 이동 반영 불가(측정/스케일 없음) — 재측정으로 진행", _peakId);
@@ -301,12 +294,9 @@ public class BeadCenteringStep : ISequenceStep
         // 재측정이 기대와 크게 어긋나면(첫 검출 오검출) 재측정값으로 한 번 더 센터링하고 다시 확인한다.
         // 수동 입력은 작업자가 확정한 선이라 그대로 쓴다.
         var recenterNote = "";
-        if (failOnLarge && assist.Kind != BeadAssistKind.Manual && NeedsRecenter(initialDMm, clamped, residualMm))
+        if (failOnLarge && assist.Kind != BeadAssistKind.Manual && NeedsRecenter(initialDMm, crossMove, residualMm))
         {
-            var why = MismatchText(initialDMm, clamped, residualMm);
-            if (Math.Abs(residualMm) > MaxCenteringMoveMm)
-                return StepResult.Fail($"Bead1 센터링: {why} — 재측정값도 1회 이동 한계 ±{MaxCenteringMoveMm:0}mm 밖이라 중단. " +
-                                       $"작업물 좌표계가 기울어집니다 — 비드 위치·조명을 확인하세요.{assist.Note}");
+            var why = MismatchText(initialDMm, crossMove, residualMm);
             _logger.LogWarning("Bead1 센터링: {Why} → 재측정값으로 다시 센터링 {Mv:+0.0;-0.0}mm", why, residualMm);
             if (await MoveCrossAsync(context, toolAxis, residualMm, ct) is { } moveErr)
                 return StepResult.Fail(moveErr);
@@ -320,7 +310,7 @@ public class BeadCenteringStep : ISequenceStep
                                        "(검출이 흔들림 — 비드 위치·조명·ROI 를 확인하세요)");
             _logger.LogInformation("Bead1 센터링: 재센터링 {Mv:+0.0;-0.0}mm 뒤 잔차 {Res:+0.0;-0.0}mm", residualMm, residual3);
             recenterNote = $" ⚠ {why} → 재측정값으로 다시 센터링 {residualMm:+0.0;-0.0}mm, 잔차 {residual3:+0.0;-0.0}mm.";
-            clamped += residualMm;
+            crossMove += residualMm;
             residualMm = residual3;
             residualWarn = null;
         }
@@ -342,7 +332,7 @@ public class BeadCenteringStep : ISequenceStep
             return StepResult.Fail(shiftedNote);
 
         return StepResult.Ok(
-            $"Bead{_peakId} 센터링 완료 — {clamped:+0.0;-0.0}mm 이동, " +
+            $"Bead{_peakId} 센터링 완료 — {crossMove:+0.0;-0.0}mm 이동, " +
             $"잔차 d={residualMm:+0.0;-0.0}mm (이동 전 {initialDMm:+0.0;-0.0}mm), M1 갱신.{recenterNote}{progressNote}{corr1}{assist.Note}{shiftedNote}{ResidualNote(residualWarn)}");
     }
 
@@ -424,9 +414,6 @@ public class BeadCenteringStep : ISequenceStep
 
             // 재측정이 기대와 어긋남 — 재측정값으로 다시 센터링하고 한 번 더 잰다.
             var why = MismatchText(initialDMm, movedMm, residual);
-            if (Math.Abs(residual) > MaxCenteringMoveMm)
-                return ("", $"Bead2 센터링: {why} — 재측정값도 1회 이동 한계 ±{MaxCenteringMoveMm:0}mm 밖이라 중단 " +
-                            "(점2 가 비드에서 벗어나 작업물 좌표계가 기울어짐)", false);
             _logger.LogWarning("Bead2 센터링: {Why} → 재측정값으로 다시 센터링 {Mv:+0.0;-0.0}mm", why, residual);
             if (await MoveCrossAsync(context, crossAxis, residual, ct) is { } moveErr)
                 return ("", moveErr, false);
