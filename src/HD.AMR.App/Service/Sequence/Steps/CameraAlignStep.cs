@@ -119,9 +119,9 @@ public class CameraAlignStep : ISequenceStep
         try { allowCloser = await _param.GetBoolAsync(AllowCloserKey) ?? true; }
         catch { allowCloser = true; }
 
-        var r = await _centering.MoveToDistanceAsync(new DepthDistanceMoveOptions
+        DepthDistanceMoveOptions Options(double? expectedMm) => new()
         {
-            ExpectedDistanceMm = expected,
+            ExpectedDistanceMm = expectedMm,
             ExpectedToleranceMm = expectedTol,
             ExpectedNearFloorMm = allowCloser ? context.CameraTargetDistanceMm : null,
             RoiX = rx, RoiY = ry, RoiW = rw, RoiH = rh,
@@ -131,11 +131,48 @@ public class CameraAlignStep : ISequenceStep
             DepthAxis = depthAxis,
             Tool = context.Tool,
             Velocity = context.Velocity,
-        }, progress: context.Progress, ct);
+        };
+
+        var r = await _centering.MoveToDistanceAsync(Options(expected), progress: context.Progress, ct);
+        ct.ThrowIfCancellationRequested();
+
+        // 로봇은 움직였는데 깊이만 엉뚱하게 변했고, 이동 후 값이 도면 기대(이동분 반영)와 맞으면 처음 값이 면이 아니었던 것 —
+        // 경고를 남기고 이동 후 값에서 한 번 더 접근한다.
+        if (!r.Success && AcceptNoResponse(r, expected, expectedTol, context.CameraTargetDistanceMm) is { } waived)
+        {
+            _logger.LogWarning("Sequence [카메라 거리 정렬] {Msg}", waived.Message);
+            context.Progress?.Invoke(waived.Message);
+            r = await _centering.MoveToDistanceAsync(Options(waived.ExpectedAfterMm), progress: context.Progress, ct);
+            ct.ThrowIfCancellationRequested();
+            if (r.Success)
+                return StepResult.Ok($"{r.Message} ({waived.Message})");
+        }
 
         // 공용 루틴은 취소를 삼키고 실패 결과로 반환 — 스텝은 기존처럼 취소 예외로 전파한다.
-        ct.ThrowIfCancellationRequested();
         return r.Success ? StepResult.Ok(r.Message) : StepResult.Fail(r.Message);
+    }
+
+    /// <summary>
+    /// ③ 접근에서 "이동했는데 깊이 거리가 기대만큼 안 변함"을 넘기고 다시 접근할지. 넘기면 (경고 메시지, 다시 접근할 때의 기대 거리), 아니면 null.
+    /// 실기 2026-11-26 13:04 T L4-R09C24 #4: 시작 415mm(도면 기대 680mm — 면이 아닌 무언가) → 코봇 +114.6mm 이동 → 560mm 로 멀어져 실패.
+    /// 같은 자리 재시도는 682→287mm 로 정상이었다 — 이동 후 560mm 가 실제 면(682 − 114.6 ≈ 567)이었다.
+    /// 넘기는 조건 — 모두 만족할 때만:
+    ///  · 코봇 실측 이동 ≥ 지령의 <see cref="CameraAlignRefineStep.MovedMinRatio"/>(로봇이 실제로 움직였다)
+    ///  · 이동 후 가장 가까운 물체 ≥ 목표 − <see cref="CameraAlignRefineStep.NearSlackMm"/>(그보다 가까운 물체는 없다)
+    ///  · 이동 후 값이 도면 기대 − 실측 이동 ± 허용폭 안(면을 보고 있다는 근거 — 기대가 없으면 넘기지 않는다)
+    /// </summary>
+    internal static (string Message, double ExpectedAfterMm)? AcceptNoResponse(
+        DepthDistanceMoveResult r, double? expectedMm, double expectedTolMm, double targetMm)
+    {
+        if (!r.NoResponse || r.CommandedMm is not { } cmd || r.ActualMovedMm is not { } moved || r.MeasuredMm is not { } after)
+            return null;
+        if (expectedMm is not { } exp || expectedTolMm <= 0) return null;
+        if (moved < CameraAlignRefineStep.MovedMinRatio * Math.Abs(cmd)) return null;
+        if (after < targetMm - CameraAlignRefineStep.NearSlackMm) return null;
+        var expectedAfter = exp - Math.Sign(cmd) * moved;
+        if (Math.Abs(after - expectedAfter) > expectedTolMm) return null;
+        return ($"⚠ 깊이 무응답을 넘기고 다시 접근 — 코봇은 {moved:0.#}mm 이동(지령 {cmd:+0.#;-0.#}mm), 이동 후 {after:0}mm 가 " +
+                $"도면 기대 {expectedAfter:0}±{expectedTolMm:0}mm 안이라 처음 값이 면이 아니었던 것으로 봄 [{r.Message}]", expectedAfter);
     }
 
     /// <summary>카메라 페이지에서 저장한 ROI가 있으면 사용, 없으면 중앙 30% 기본영역. ③-1 재정렬과 공유.</summary>

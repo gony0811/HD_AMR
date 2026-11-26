@@ -314,6 +314,43 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             _ => null,
         };
 
+    /// <summary>
+    /// 묶음 TASK 가 <c>inspectionRun</c>(경유점 순회)에서 실패했을 때 공유 상태 갱신 — 좌표계·시작점은 그대로 두고
+    /// 연속 이동 기준(EndTcp)만 방금 멈춘 자리로 옮긴다. 공유 좌표계가 없거나(리더 실패) 다른 단계 실패·TCP 조회 실패면 null(그대로).
+    /// <para>
+    /// 실기 2026-11-26 10:12: 팔로워 #2 가 비전 응답 0/25 로 실패 → EndTcp 가 #1 종료 자리로 남아 #3 이 "현재 TCP 가 직전 종료와 다름"으로
+    /// 연속 이동을 못 하고 법선 후퇴·865mm 역주행·홈 경유 재진입에 38초를 썼다. 팔은 순회를 마친 자리에 그대로 있었다.
+    /// 다음 TASK 는 여전히 현재 TCP 가 이 자리와 5mm·각도 허용 안인지 확인하므로, 그 사이 조그·정지가 있으면 복귀 경로로 간다.
+    /// </para>
+    /// </summary>
+    internal static (double[] Frame, double[]? Start, double[]? EndTcp)? AfterFailedBundleTask(
+        (double[] Frame, double[]? Start, double[]? EndTcp)? existing, string? failedStepKey, double[]? endTcp)
+        => failedStepKey == "inspectionRun" && existing is { } e && endTcp is { Length: 6 }
+            ? (e.Frame, e.Start, endTcp.ToArray())
+            : null;
+
+    /// <summary>묶음 TASK 가 순회 중 실패했으면 다음 TASK 가 이어 갈 수 있게 연속 이동 기준을 지금 자리로 옮긴다(<see cref="AfterFailedBundleTask"/>).</summary>
+    private async Task KeepBundleChainAfterFailureAsync(BundleAssignment? bundle, string? failedStepKey, int tool, CancellationToken ct)
+    {
+        if (bundle?.BundleId is not { } bid || failedStepKey != "inspectionRun") return;
+        double[]? endTcp = null;
+        try { endTcp = await _cobot.Rpc.GetTcpPoseInBaseAsync(tool, ct); }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "묶음 {Id} 검사 실패 뒤 TCP 조회 실패 — 다음 TASK 는 복귀 경로로 진입", bid);
+            return;
+        }
+        lock (_sync)
+        {
+            if (_dissolvedBundles.Contains(bid)) return;
+            if (AfterFailedBundleTask(_bundleFrames.TryGetValue(bid, out var shared) ? shared : null, failedStepKey, endTcp)
+                is not { } next) return;
+            _bundleFrames[bid] = next;
+        }
+        _logger.LogInformation("묶음 {Id} 검사 순회 실패 — 공통 좌표계 유지, 다음 TASK 는 지금 자리 [{Tcp}] 에서 이어 갑니다",
+            bid, string.Join(", ", endTcp!.Take(3).Select(v => v.ToString("0.#"))));
+    }
+
     public void BeginBundles(IReadOnlyList<BundleAssignment> assignments)
     {
         lock (_sync)
@@ -914,6 +951,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
 
                 case SequenceRunOutcome.Failed:
                     InvalidateAnchor();   // 정렬 신뢰 불가 — 다음 액션은 풀시퀀스
+                    await KeepBundleChainAfterFailureAsync(bundle, runResult.FailedStepKey, context.Tool, ct);
                     // 활성 작업물 좌표계 0·공구 복귀(best-effort)는 SequenceService.RunSequenceAsync 가 실패 종료
                     // 시(취소 제외) 수행한다 — UI 풀오토와 이 경로가 같은 반납을 공유한다.
                     var failDesc = $"recipe={recipeId} step={runResult.FailedStepKey ?? "?"} fail: {runResult.Message}";
