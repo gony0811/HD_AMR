@@ -78,4 +78,52 @@ public class CameraAlignRefineTests
         Assert.False(ok);
         Assert.Contains("rc=112", msg);
     }
+
+    private static DepthDistanceMoveResult NoResponse(double before, double after, double cmd, double? moved) =>
+        new(false, after, null, $"광축 {cmd:+0.#}mm 이동했는데 거리가 {before:0}→{after:0}mm 로 기대만큼 변하지 않았습니다",
+            NoResponse: true, CommandedMm: cmd, ActualMovedMm: moved);
+
+    // 실기 2026-11-26 11:03 T L4-R09C24-4 — 코봇은 43.2mm 올라갔는데 ROI 최소 깊이가 343→344mm. 경고로 넘기고 더 다가가지 않는다.
+    [Fact]
+    public async Task DepthNoResponse_RobotMoved_NotTooClose_ContinuesWithWarning()
+    {
+        var moves = 0;
+        var (ok, msg) = await CameraAlignRefineStep.RefineAsync(
+            () => { moves++; return Task.FromResult(NoResponse(343, 344, 43.1, 43.2)); },
+            () => Task.FromResult<double?>(344), 300);
+        Assert.True(ok);
+        Assert.StartsWith("⚠", msg);
+        Assert.Contains("43.2mm 이동", msg);
+        Assert.Equal(1, moves);   // 더 다가가지 않는다
+    }
+
+    // 로봇이 실제로 움직이지 않았으면(지령의 80% 미만·실측 없음) 종전대로 실패.
+    [Theory]
+    [InlineData(10.0)]
+    [InlineData(null)]
+    public async Task DepthNoResponse_RobotDidNotMove_Fails(double? moved)
+    {
+        var (ok, msg) = await CameraAlignRefineStep.RefineAsync(
+            Moves(NoResponse(343, 344, 43.1, moved)), () => Task.FromResult<double?>(344), 300);
+        Assert.False(ok);
+        Assert.Contains("접근 실패", msg);
+    }
+
+    // 가장 가까운 물체가 목표 − 20mm 보다 가까우면 안전상 실패(근접 허용과 같은 기준).
+    [Fact]
+    public async Task DepthNoResponse_NearestTooClose_Fails()
+    {
+        var (ok, _) = await CameraAlignRefineStep.RefineAsync(
+            Moves(NoResponse(290, 275, 20, 20)), () => Task.FromResult<double?>(275), 300);
+        Assert.False(ok);
+        var (ok2, _) = await CameraAlignRefineStep.RefineAsync(
+            Moves(NoResponse(290, 280, 20, 20)), () => Task.FromResult<double?>(280), 300);
+        Assert.True(ok2);   // 경계(목표 − 20mm)는 넘긴다
+    }
+
+    // 깊이 무응답이 아닌 실패(이동 명령 실패 등)는 그대로 실패.
+    [Fact]
+    public void OtherFailures_AreNotWaived()
+        => Assert.Null(CameraAlignRefineStep.AcceptDepthNoResponse(
+            new DepthDistanceMoveResult(false, 490, null, "접근 이동 실패 (rc=112)"), 300, 1));
 }
