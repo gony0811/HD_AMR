@@ -145,9 +145,10 @@ internal static class SequenceEntry
          : PoseMode.Home;
 
     /// <summary>
-    /// 면별 운영 ② 출발 관절각 — <see cref="PrepareAsync"/> 가 ② 직전에 세우는 자세: 상부 면(T/PU/SU)은 그 면 검사 준비 슬롯
+    /// 면별 운영 ② 출발 관절각 — <see cref="PrepareAsync"/> 가 ② 직전에 세우는 자세: 천장(T)은 그 면 검사 준비 슬롯
     /// (미티칭이면 홈 위치_2), 하부 면(B/PL/SL)은 홈 위치_4·_3 이 티칭돼 있으면 그 면 검사 준비 슬롯(미티칭이면 그 홈), 그 외는
-    /// 작업 준비 위치(ready). <paramref name="joints"/> = 키 → 티칭된 관절값(미티칭 null). 리치 맵·ACS 프로필 전송이 같은 규칙을 쓴다.
+    /// 작업 준비 위치(ready) — 상부 챔퍼(PU/SU)도 2026-11-24 부터 기본은 작업 준비 위치(홈 위치_2 쪽에서 시작해도 ACS 보고는 이 값).
+    /// <paramref name="joints"/> = 키 → 티칭된 관절값(미티칭 null). 리치 맵·ACS 프로필 전송이 같은 규칙을 쓴다.
     /// </summary>
     internal static double[]? StartJointsFor(string wallCode, Func<string, double[]?> joints)
         => IsUpperRoute(wallCode)

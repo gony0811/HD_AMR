@@ -172,9 +172,10 @@ public class AcsProfilePayloadTests
         var (positions, starts) = AcsProfilePayload.BuildTeaching(teaching);
 
         Assert.Equal(new[] { "home", "home2", "ready" }, positions.Select(p => p.Key).OrderBy(k => k));
-        // 상부 면 = 홈 위치_2, 그 외(홈 위치_3·_4 미티칭) = 작업 준비 위치 — 실행(SequenceEntry)과 같은 규칙
-        foreach (var w in new[] { "T", "SU", "PU" }) Assert.Equal(Home2, starts[w]);
-        foreach (var w in new[] { "B", "SL", "PL", "SM", "PM", "F", "A" }) Assert.Equal(Ready, starts[w]);
+        // 천장 = 홈 위치_2, 그 외(상부 챔퍼 PU/SU 포함 — 2026-11-24 부터 기본 출발은 작업 준비 위치, 홈 위치_3·_4 미티칭) = 작업 준비 위치
+        // — 실행(SequenceEntry.StartJointsFor)·ACS factsheet 와 같은 규칙
+        Assert.Equal(Home2, starts["T"]);
+        foreach (var w in new[] { "SU", "PU", "B", "SL", "PL", "SM", "PM", "F", "A" }) Assert.Equal(Ready, starts[w]);
 
         var body = AcsProfilePayload.Build("AMR-01", Array.Empty<InspectionProfile>(), out _)
             with { TeachingPositions = positions, StartJointsByWall = starts };
@@ -193,7 +194,7 @@ public class AcsProfilePayloadTests
             { Pos("home2", Home2), Pos("ready", Ready), Pos("wall.T", wallT), Pos("home3", home3) });
 
         Assert.Equal(wallT, starts["T"]);     // 그 면 검사 준비 슬롯 우선
-        Assert.Equal(Home2, starts["PU"]);
+        Assert.Equal(Ready, starts["PU"]);    // 상부 챔퍼 기본 출발 = 작업 준비 위치(2026-11-24)
         Assert.Equal(home3, starts["PL"]);    // 하부 챔퍼 = 홈 위치_3
         Assert.Equal(home3, starts["B"]);     // 홈 위치_4 미티칭이면 바닥도 홈 위치_3
         Assert.Equal(Ready, starts["F"]);
