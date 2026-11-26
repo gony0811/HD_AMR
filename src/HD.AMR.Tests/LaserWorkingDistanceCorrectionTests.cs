@@ -34,6 +34,25 @@ public class LaserWorkingDistanceCorrectionTests
     public void 뒤로_물러나는_이동도_정상_반응이면_보정한다()
         // 목표보다 가까워 후퇴(이동 −), 거리는 늘어남(측정변화 +).
         => Assert.True(LaserWorkingDistanceStep.ShouldCorrect(move: -20.0, change: +18.5, residual: -1.5));
+
+    [Fact]
+    public void 실기_R10C25_작은_이동_약한_응답은_다시_재고_보정한다()
+    {
+        // 2026-11-25 13:48: 이동 +1.47mm, 0.3초 뒤 측정변화 −0.34mm, 잔차 +1.13mm → 무반응 판정으로 묶음 해제.
+        Assert.True(LaserWorkingDistanceStep.NeedsSettleRetry(move: 1.47, change: -0.34, residual: 1.13));
+        Assert.True(LaserWorkingDistanceStep.ShouldCorrectSmall(move: 1.47, change: -0.34, residual: 1.13));
+    }
+
+    [Theory]
+    [InlineData(26.0, 0.0, 3.0)]     // 큰 이동에 무반응 — 종전대로 바로 실패
+    [InlineData(1.5, +1.4, 2.9)]     // 반대 방향 응답 — 축 부호 오류
+    [InlineData(1.5, -0.3, 0.8)]     // 이미 허용 이내
+    public void 작은_이동_예외가_아니면_다시_재지_않는다(double move, double change, double residual)
+        => Assert.False(LaserWorkingDistanceStep.NeedsSettleRetry(move, change, residual));
+
+    [Fact]
+    public void 작은_이동이라도_잔차가_크면_보정하지_않는다()
+        => Assert.False(LaserWorkingDistanceStep.ShouldCorrectSmall(move: 2.0, change: 0.0, residual: 3.5));
 }
 
 /// <summary>WD 이동 도착 판정 — 실기 2026-11-18 11:37 묶음 점2 +1.03mm 보정이 움직이기 전 값으로 확정된 문제.</summary>

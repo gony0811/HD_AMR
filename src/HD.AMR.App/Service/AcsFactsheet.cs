@@ -31,12 +31,15 @@ public static class AcsFactsheet
     /// factsheet 를 만드는 데 필요한 값. TeachingLiftMode = 운영 티칭 세트(SHORT/LONG). TaughtJoints = 티칭된 슬롯 키 → 관절각 6개(미티칭 슬롯은 넣지 않는다, 운영 리프트 모드 세트).
     /// MountPose = 저장된 T_A_B [x,y,z,rx,ry,rz](모두 0 이면 미보정 → null).
     /// SafeJ6* = 적용 중인 J6 안전 범위·대기(홈) 각도(<see cref="Inspection.WObjAttitude"/>) — 티칭 출발 자세 J6 와 짝이라 teaching 묶음에 싣는다.
+    /// JointMinDeg·JointMaxDeg = 도달 사전 점검이 쓰는 관절 사용 범위(저장된 자세 허용 범위 J1~J6) — cobot 묶음에 싣는다. ACS 리치 판정이
+    /// 하드웨어 범위(J3 ±170°)로 정차를 고르면 AMR(예 J3 ±160°)이 그 자리를 거부한다(2026-11-25 SU L4-R02C13-5: J3 160.9°).
     /// </summary>
     public sealed record Inputs(
         string TeachingLiftMode, IReadOnlyDictionary<string, double[]> TaughtJoints,
         bool LiftEnabled, double DisabledStrokeMm, int MinHeightMm, int MaxHeightMm, double MmPerUnit, int HeightOffsetMm,
         double[]? MountPose, double[] LinksMm, double MaxEntryJointTravelDeg,
-        double? SafeJ6MinDeg = null, double? SafeJ6MaxDeg = null, double? SafeJ6StandbyDeg = null);
+        double? SafeJ6MinDeg = null, double? SafeJ6MaxDeg = null, double? SafeJ6StandbyDeg = null,
+        double[]? JointMinDeg = null, double[]? JointMaxDeg = null);
 
     /// <summary>
     /// 면별 운영 ② 출발 관절각 — <see cref="SequenceEntry.PrepareAsync"/> 가 실제로 ② 직전에 세우는 자세와 같다:
@@ -111,12 +114,24 @@ public static class AcsFactsheet
                 ["heightOffsetMm"] = i.HeightOffsetMm,
             },
             ["mount"] = new() { ["tAB"] = mount },
-            ["cobot"] = new()
-            {
-                ["linksMm"] = Arr(i.LinksMm),
-                ["maxEntryJointTravelDeg"] = i.MaxEntryJointTravelDeg,
-            },
+            ["cobot"] = CobotSection(i),
         };
+    }
+
+    /// <summary>cobot 묶음 — 링크·진입 이동 한계, 그리고 관절 사용 범위(둘 다 6요소일 때만).</summary>
+    private static JsonObject CobotSection(Inputs i)
+    {
+        var o = new JsonObject
+        {
+            ["linksMm"] = Arr(i.LinksMm),
+            ["maxEntryJointTravelDeg"] = i.MaxEntryJointTravelDeg,
+        };
+        if (i.JointMinDeg is { Length: 6 } lo && i.JointMaxDeg is { Length: 6 } hi)
+        {
+            o["jointMinDeg"] = Arr(lo);
+            o["jointMaxDeg"] = Arr(hi);
+        }
+        return o;
     }
 
     /// <summary>묶음 지문 — 정렬 없는 JSON 문자열의 SHA-256 앞 16자(묶음 안 필드 순서는 코드가 고정한다).</summary>
@@ -210,6 +225,7 @@ public sealed class AcsFactsheetService
             var teaching = sp.GetRequiredService<TeachingService>();
             var param = sp.GetRequiredService<ParameterService>();
             var calib = sp.GetRequiredService<CalibrationService>();
+            var limits = (await sp.GetRequiredService<Motion.PostureLimitsService>().GetAsync()).Normalized();
 
             var mode = await teaching.GetActiveLiftModeAsync();
             var taught = (await teaching.ListAsync(mode, ct))
@@ -218,7 +234,8 @@ public sealed class AcsFactsheetService
             var inputs = new AcsFactsheet.Inputs(
                 mode, taught, _lift.Enabled, _lift.DisabledStrokeMm, _lift.MinHeightMm, _lift.MaxHeightMm, _lift.MmPerUnit, _lift.HeightOffsetMm,
                 await calib.GetMountAsync(), Motion.Fr5Kinematics.Fr5Wml.LinksMm, CobotInspectionMoveStep.MaxEntryJointTravelDeg,
-                Inspection.WObjAttitude.SafeJ6MinDeg, Inspection.WObjAttitude.SafeJ6MaxDeg, Inspection.WObjAttitude.SafeJ6StandbyDeg);
+                Inspection.WObjAttitude.SafeJ6MinDeg, Inspection.WObjAttitude.SafeJ6MaxDeg, Inspection.WObjAttitude.SafeJ6StandbyDeg,
+                limits.JointMinDeg, limits.JointMaxDeg);
 
             var now = AcsFactsheet.Fingerprints(AcsFactsheet.BuildSections(inputs));
             var prevVersion = int.TryParse(await param.GetAsync(VersionKey), out var v) ? v : 0;

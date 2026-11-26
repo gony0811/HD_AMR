@@ -195,7 +195,60 @@ public sealed record CobotEnvelope
                 if (cl < best.ClearanceMm) best = new SelfClearance(cl, p.Name, box.Name);
             }
         }
+
+        // 팔 링크끼리 — 팔꿈치를 크게 접으면 손목·검사 툴이 어깨·상완 쪽으로 말려 들어간다(실기 2026-11-25 13:28 PU 높은 용접선
+        // 복귀의 면 여유 확보 이동: J3 142°→167°, 모델상 툴–어깨 9mm, 운영자 EMO). 거리에서 반경과 LinkMarginMm 를 뺀 값을 여유로 본다.
+        if (CheckLinkCollision)
+        {
+            var near = new[] { parts[0], parts[1] };                     // 어깨(J2)·상완
+            var far = parts.Where(p => p.Name is "손목2(J5)" or "손목3(J6)")
+                           .Concat(parts.Skip(7)).ToArray();              // 손목2·3 + 검사 툴
+            foreach (var f in far)
+            foreach (var n in near)
+            {
+                var cl = SegmentSegmentDistanceMm(f.A, f.B, n.A, n.B) - f.R - n.R - LinkMarginMm;
+                if (cl < best.ClearanceMm) best = new SelfClearance(cl, f.Name, $"코봇 {n.Name}");
+            }
+        }
         return best;
+    }
+
+    /// <summary>팔 링크끼리(손목2·3·검사 툴 ↔ 어깨·상완) 간섭도 본다. 끄면 차체·기둥·신호탑만(종전).</summary>
+    public bool CheckLinkCollision { get; init; } = true;
+
+    /// <summary>팔 링크끼리 판정의 추가 여유 [mm] — 캡슐 반경 위에 더 둔다(모델 오차·실물 케이블).</summary>
+    public double LinkMarginMm { get; init; } = 30;
+
+    /// <summary>두 선분 사이 최단 거리 [입력 단위] — 닫힌 형태(Ericson, Real-Time Collision Detection 5.1.9).</summary>
+    public static double SegmentSegmentDistanceMm(double[] p1, double[] q1, double[] p2, double[] q2)
+    {
+        double[] d1 = { q1[0] - p1[0], q1[1] - p1[1], q1[2] - p1[2] };
+        double[] d2 = { q2[0] - p2[0], q2[1] - p2[1], q2[2] - p2[2] };
+        double[] r = { p1[0] - p2[0], p1[1] - p2[1], p1[2] - p2[2] };
+        static double Dot(double[] u, double[] v) => u[0] * v[0] + u[1] * v[1] + u[2] * v[2];
+        double a = Dot(d1, d1), e = Dot(d2, d2), f = Dot(d2, r);
+        double s, t;
+        const double eps = 1e-9;
+        if (a <= eps && e <= eps) { s = t = 0; }
+        else if (a <= eps) { s = 0; t = Math.Clamp(f / e, 0, 1); }
+        else
+        {
+            var c = Dot(d1, r);
+            if (e <= eps) { t = 0; s = Math.Clamp(-c / a, 0, 1); }
+            else
+            {
+                var b = Dot(d1, d2);
+                var denom = a * e - b * b;
+                s = denom > eps ? Math.Clamp((b * f - c * e) / denom, 0, 1) : 0;
+                t = (b * s + f) / e;
+                if (t < 0) { t = 0; s = Math.Clamp(-c / a, 0, 1); }
+                else if (t > 1) { t = 1; s = Math.Clamp((b - c) / a, 0, 1); }
+            }
+        }
+        double dx = p1[0] + d1[0] * s - (p2[0] + d2[0] * t);
+        double dy = p1[1] + d1[1] * s - (p2[1] + d2[1] * t);
+        double dz = p1[2] + d1[2] * s - (p2[2] + d2[2] * t);
+        return Math.Sqrt(dx * dx + dy * dy + dz * dz);
     }
 
     /// <summary>

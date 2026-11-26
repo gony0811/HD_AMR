@@ -57,10 +57,11 @@ public class HomePoseModeTests
 
     // 면과 모드가 어긋나면 실패 사유(수동 자세 전환 필요), 맞으면 null.
     [Theory]
-    [InlineData(false, "T", true)]
+    [InlineData(false, "T", false)]    // 천장은 홈 위치에서도 진입(2026-11-25)
     [InlineData(false, "SU", false)]   // 상부 챔퍼는 홈 위치에서 검사(2026-11-24)
     [InlineData(false, "PU", false)]
-    [InlineData(true, "SU", true)]
+    [InlineData(true, "SU", false)]    // 상부 챔퍼도 홈 위치_2 에서 진입(2026-11-25)
+    [InlineData(true, "PU", false)]
     [InlineData(true, "F", true)]
     [InlineData(true, "T", false)]
     [InlineData(false, "F", false)]
@@ -74,12 +75,14 @@ public class HomePoseModeTests
     [Fact]
     public void ValidateRoute_UpperNeedsHome2_NormalNeedsReady()
     {
-        Assert.False(ValidateRoute(Ctx("T", Home, Ready)).IsValid);
+        Assert.True(ValidateRoute(Ctx("T", Home, Ready)).IsValid);     // 천장 — 홈 위치 쪽(작업 준비 경유)도 된다
         Assert.True(ValidateRoute(Ctx("T", Home, Home2)).IsValid);
+        Assert.False(ValidateRoute(Ctx("T", Home)).IsValid);           // 홈 위치_2·ready 모두 없음
         Assert.False(ValidateRoute(Ctx("F", Home, Home2)).IsValid);
         Assert.True(ValidateRoute(Ctx("F", Home, Ready)).IsValid);
         Assert.True(ValidateRoute(Ctx("SU", Home, Ready)).IsValid);    // 상부 챔퍼는 ready 로 진입
-        Assert.False(ValidateRoute(Ctx("PU", Home, Home2)).IsValid);
+        Assert.True(ValidateRoute(Ctx("PU", Home, Home2)).IsValid);    // 상부 챔퍼 — 홈 위치_2 쪽도 된다(2026-11-25)
+        Assert.False(ValidateRoute(Ctx("SU", Home)).IsValid);          // 홈 위치_2·ready 모두 없음
     }
 
     // 복귀 경유 슬롯 — 작업 면(없으면 마지막 진입 상부 면) 슬롯이 홈 위치_2 보다 가까울 때만.
@@ -102,9 +105,9 @@ public class HomePoseModeTests
         Assert.Null(UpperViaSlot(nearT, Ctx(null, Home, Home2, SlotT, SlotSU), lastUpperWall: "PU"));   // 주행 전 복귀
         Assert.Null(UpperViaSlot(nearT, Ctx(null, Home, Home2, SlotT, SlotSU)));                         // 면 모름 → 경유 없음
         Assert.Null(UpperViaSlot(nearT, Ctx(null, Home, Home2, SlotT, SlotSU), lastUpperWall: "F"));    // 상부 면 아님
-        // 상부 챔퍼(PU)는 2026-11-24부터 홈 위치_2 면이 아니다 — 작업 면이 PU 여도 홈 위치_2 쪽에 남은 자세는
-        // 마지막으로 진입한 천장(T) 경로를 거슬러 간다.
-        Assert.Equal("T", UpperViaSlot(nearT, Ctx("PU", Home, Home2, SlotT), lastUpperWall: "T")?.Code);
+        // 상부 챔퍼(PU)도 다시 홈 위치_2 면이다(2026-11-25) — 작업 면이 PU 면 PU 슬롯만 보고, 비어 있으면 T 슬롯을 빌리지 않는다.
+        Assert.Null(UpperViaSlot(nearT, Ctx("PU", Home, Home2, SlotT), lastUpperWall: "T"));
+        Assert.Equal("SU", UpperViaSlot(new double[] { 89, -101, -51, 40, 80, 0 }, Ctx("SU", Home, Home2, SlotT, SlotSU))?.Code);
     }
 
     [Fact]

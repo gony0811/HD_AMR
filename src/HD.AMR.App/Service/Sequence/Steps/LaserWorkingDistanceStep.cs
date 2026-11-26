@@ -59,6 +59,16 @@ public class LaserWorkingDistanceStep : ISequenceStep
     /// <summary>보정 이동을 허용하는 측정 응답 비율 범위(|측정변화| / |이동량|). 정상 반응일 때만 보정한다.</summary>
     private const double MinResponseRatio = 0.5, MaxResponseRatio = 1.5;
 
+    /// <summary>
+    /// 작은 이동(mm) 기준 — 이보다 작게 움직였으면 측정 응답이 약해도 곧바로 "무반응" 실패로 보지 않는다.
+    /// 1~2mm 이동은 센서 평균화 필터가 늦게 따라와 직후 측정이 일부만 반영된다
+    /// (실기 2026-11-25 13:48 T R10C25 묶음 점2: 이동 +1.47mm, 0.3초 뒤 측정변화 −0.34mm → 묶음 해제).
+    /// </summary>
+    internal const double SmallMoveMm = 3.0;
+
+    /// <summary>작은 이동 뒤 응답이 약하면 이만큼 더 기다렸다가 다시 잰다(ms).</summary>
+    private const int SmallMoveSettleMs = 1000;
+
     /// <summary>안정화 폴링 간격(ms).</summary>
     private const int PollMs = 150;
 
@@ -232,15 +242,34 @@ public class LaserWorkingDistanceStep : ISequenceStep
             _logger.LogInformation(
                 "[레이저 WD 거리 조정] WD 검증: z={Z:0.##}mm, 잔차={Res:+0.##;-0.##}mm, 측정변화={Chg:+0.##;-0.##}mm (기대 {Exp:+0.##;-0.##}mm)",
                 z2Value, residual, change, -move);
+
+            // 작은 이동인데 응답이 약하면 센서가 아직 따라오는 중일 수 있다 — 잠깐 기다렸다 다시 잰다.
+            if (NeedsSettleRetry(move, change, residual))
+            {
+                _logger.LogInformation(
+                    "[레이저 WD 거리 조정] 작은 이동({Move:+0.##;-0.##}mm)에 측정변화 {Chg:+0.##;-0.##}mm — {Ms}ms 기다렸다 다시 측정",
+                    move, change, SmallMoveSettleMs);
+                await Task.Delay(SmallMoveSettleMs, ct);
+                var (z3, note3) = await SampleStableZAsync(ct);
+                if (z3 is null)
+                    return StepResult.Fail($"이동 후 레이저 재측정 실패: {note3}");
+                z2Value = z3.Value;
+                residual = z2Value - wd;
+                change = z2Value - zBefore;
+                _logger.LogInformation(
+                    "[레이저 WD 거리 조정] WD 재검증: z={Z:0.##}mm, 잔차={Res:+0.##;-0.##}mm, 측정변화={Chg:+0.##;-0.##}mm (기대 {Exp:+0.##;-0.##}mm)",
+                    z2Value, residual, change, -move);
+            }
             await LogDiagnosticsAsync(attempt == 0 ? "이동 후" : $"보정 {attempt}회차 후", context, wall, wd, wdSource, depthAxis, ct);
 
+            var normal = ShouldCorrect(move, change, residual);
             if (Math.Abs(residual) <= ToleranceMm || attempt >= MaxCorrections
-                || !ShouldCorrect(move, change, residual))
+                || !(normal || ShouldCorrectSmall(move, change, residual)))
                 break;
 
             _logger.LogInformation(
-                "[레이저 WD 거리 조정] 잔차 {Res:+0.##;-0.##}mm — 정상 반응(측정변화 {Chg:+0.##;-0.##}mm / 이동 {Move:+0.##;-0.##}mm)이라 잔차만큼 보정 이동",
-                residual, change, move);
+                "[레이저 WD 거리 조정] 잔차 {Res:+0.##;-0.##}mm — {Why}(측정변화 {Chg:+0.##;-0.##}mm / 이동 {Move:+0.##;-0.##}mm)이라 잔차만큼 보정 이동",
+                residual, normal ? "정상 반응" : "작은 이동·작은 잔차", change, move);
             move = residual;
             zBefore = z2Value;
         }
@@ -292,6 +321,25 @@ public class LaserWorkingDistanceStep : ISequenceStep
         => Math.Abs(residual) > ToleranceMm
            && Math.Abs(residual) <= MaxCorrectionMm
            && IsNormalResponse(move, change);
+
+    /// <summary>
+    /// 작은 이동(&lt; <see cref="SmallMoveMm"/>)의 응답이 약해 잔차가 남았으면 다시 잴지. 반대 방향 응답(축 부호 오류)은 제외.
+    /// </summary>
+    internal static bool NeedsSettleRetry(double move, double change, double residual)
+        => Math.Abs(move) < SmallMoveMm
+           && Math.Abs(residual) > ToleranceMm
+           && change * move <= 0
+           && !IsNormalResponse(move, change);
+
+    /// <summary>
+    /// 작은 이동 뒤 응답이 약해도, 남은 잔차가 <see cref="SmallMoveMm"/> 이하면 잔차만큼 보정한다 — 잘못 가도 수 mm 라 위험이 작다.
+    /// 반대 방향 응답(축 부호 오류)은 보정하지 않는다.
+    /// </summary>
+    internal static bool ShouldCorrectSmall(double move, double change, double residual)
+        => Math.Abs(move) < SmallMoveMm
+           && Math.Abs(residual) > ToleranceMm
+           && Math.Abs(residual) <= SmallMoveMm
+           && change * move <= 0;
 
     /// <summary>
     /// 면별 WD 차이의 원인 조사용 진단 로그(<see cref="LaserWorkingDistanceSetting.Diagnostics"/>).

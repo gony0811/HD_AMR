@@ -1027,6 +1027,11 @@ public sealed class Vda5050OrderExecutor
         var settleTimeout = TimeSpan.FromSeconds(_restSettings.SettleTimeoutSec);
         var entryLogged = false;
 
+        // AMR 경고(W…) — 주행을 끝내지 않고 기록만 한다. 경고 뒤 그대로 서 버리면 정체로 실패 처리.
+        var warnedKeys = new HashSet<string>(StringComparer.Ordinal);
+        var warnStall = new AmrDriveWarning.StallWatch();
+        string lastWarningText = "";
+
         _logger.LogInformation("VDA5050 도착 대기 시작: 목표=({X:F3}, {Y:F3}, θ={T:F3}), " +
             "허용 dxy≤{DevXy:F3}m, dθ≤{DevTheta:F3}rad, 타임아웃={Timeout}s, {Settle}",
             pos.X, pos.Y, pos.Theta ?? 0.0, devXy, devTheta, _restSettings.DriveTimeoutSec, DescribeSettleCriteria());
@@ -1097,6 +1102,7 @@ public sealed class Vda5050OrderExecutor
                 // 재주행 — 정차 판정을 처음부터 다시 한다.
                 settle.Reset();
                 entryLogged = false;
+                warnStall.Reset();
             }
 
             // 코봇 반경 장애물 — 감시가 이미 주행을 세웠다. 사라질 때까지 기다렸다가 같은 목표로 다시 지령한다.
@@ -1118,6 +1124,7 @@ public sealed class Vda5050OrderExecutor
                     return (false, $"장애물 해소 후 이동 명령 실패 (code={again.Code}): {again.Message}");
                 settle.Reset();
                 entryLogged = false;
+                warnStall.Reset();
             }
 
             if (DateTime.UtcNow > deadline)
@@ -1130,9 +1137,11 @@ public sealed class Vda5050OrderExecutor
             }
 
             // 1차: Modbus 폴링 pose (1초 주기 갱신, AMRService).
+            (double X, double Y, double Theta)? curPose = null;
             var st = _amr.LatestStatus;
             if (st is not null)
             {
+                curPose = (st.Pose.X, st.Pose.Y, st.Pose.Angle);
                 var dx = st.Pose.X - pos.X;
                 var dy = st.Pose.Y - pos.Y;
                 var dxy = Math.Sqrt(dx * dx + dy * dy);
@@ -1152,6 +1161,7 @@ public sealed class Vda5050OrderExecutor
                 var restPose = await TryGetRestPoseAsync(ct);
                 if (restPose is var (rx, ry, rTheta))
                 {
+                    curPose = (rx, ry, rTheta);
                     var dx = rx - pos.X;
                     var dy = ry - pos.Y;
                     var dxy = Math.Sqrt(dx * dx + dy * dy);
@@ -1190,14 +1200,44 @@ public sealed class Vda5050OrderExecutor
                 lastDiagLog = DateTime.UtcNow;
             }
 
-            // 보조: status.error 감시 — 이동 전 기준선(staleErrors)에 없던 신규 항목만 실패로 본다.
+            // 보조: status.error 감시 — 이동 전 기준선(staleErrors)에 없던 신규 항목만 본다.
+            // 오류(E… 등)는 즉시 실패, 경고(W…)는 기록만 하고 계속 주행한다(AmrDriveWarning).
             var status = await _rest.GetStatusAsync(ct);
             if (status.Ok && status.Data is JsonElement data)
             {
                 var fresh = GetErrorEntries(data).Where(e => !staleErrors.Contains(e.Key)).ToList();
                 // 장애물 감시가 방금 세웠으면 그 정지가 남긴 항목일 수 있다 — 다음 바퀴에서 해소를 기다리고 기준선을 다시 잡는다.
                 if (fresh.Count > 0 && _obstacleGuard?.Active is null)
-                    return (false, $"로봇 이동 오류 보고: [{string.Join(",", fresh.Select(e => e.Text))}]");
+                {
+                    var errors = fresh.Where(e => !AmrDriveWarning.IsWarning(e.Key)).ToList();
+                    if (errors.Count > 0)
+                        return (false, $"로봇 이동 오류 보고: [{string.Join(",", fresh.Select(e => e.Text))}]");
+
+                    var newWarnings = fresh.Where(e => warnedKeys.Add(e.Key)).ToList();
+                    if (newWarnings.Count > 0)
+                    {
+                        lastWarningText = string.Join(",", newWarnings.Select(e => e.Text));
+                        _logger.LogWarning("VDA5050 주행 중 AMR 경고 — 주행 계속: [{Warnings}] ({Pose}, 잔여 dxy={Dxy:F3}m, dθ={DTheta:F3}rad). " +
+                            "{Stall:0}s 동안 움직임이 없으면 실패로 봅니다",
+                            lastWarningText, lastPoseDesc, lastDxy, lastDTheta, AmrDriveWarning.StallSec);
+                        OpLog(OpCategory.Drive, "AMR 경고 — 주행 계속", null, $"[{lastWarningText}] {lastPoseDesc}");
+                        ReportError(AmrDriveWarning.ErrorType, $"주행 중 AMR 경고(주행 계속): [{lastWarningText}]");
+                        StateChanged?.Invoke();
+                        warnStall.Arm(DateTime.UtcNow);
+                    }
+                }
+            }
+
+            // 경고 뒤 정체 — 허용 오차 밖에서 그대로 서 있으면 타임아웃까지 기다리지 않고 끝낸다.
+            // (허용 오차 안에서는 정차 판정이 맡는다.)
+            if (entryLogged) warnStall.Rebase();
+            if (warnStall.Armed && !entryLogged && curPose is { } cp
+                && warnStall.Feed(DateTime.UtcNow, cp.X, cp.Y, cp.Theta))
+            {
+                _logger.LogWarning("VDA5050 주행 정체: AMR 경고 뒤 {Stall:0}s 동안 움직임 없음 — {Pose}, 경고 [{Warnings}]",
+                    AmrDriveWarning.StallSec, lastPoseDesc, lastWarningText);
+                return (false, $"로봇 이동 경고 뒤 {AmrDriveWarning.StallSec:0}s 동안 움직임 없음 — 경고 [{lastWarningText}] " +
+                               $"(최종 {lastPoseDesc}, 잔여 dxy={lastDxy:F3}m, dθ={lastDTheta:F3}rad)");
             }
 
             await Task.Delay(_restSettings.StatusPollMs, ct);

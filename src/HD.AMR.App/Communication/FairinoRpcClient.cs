@@ -128,6 +128,7 @@ public class FairinoRpcClient : IDisposable
         _stopProxy = null;
         _activeTool = -1;
         _activeUser = -1;
+        InvalidateOaccScale();
     }
 
     // ── 좌표계 ─────────────────────────────────────────────────────
@@ -1012,7 +1013,10 @@ public class FairinoRpcClient : IDisposable
 
     // ── 상태/제어 ──────────────────────────────────────────────────
     public Task<int> RobotEnableAsync(bool enable, CancellationToken ct = default)
-        => InvokeAsync("RobotEnable", p => ToErr(p.RobotEnable(enable ? 1 : 0)), ct);
+    {
+        InvalidateOaccScale();   // 서보 on/off 뒤 컨트롤러가 전역 배율을 되돌렸을 수 있다 — 다시 보낸다
+        return InvokeAsync("RobotEnable", p => ToErr(p.RobotEnable(enable ? 1 : 0)), ct);
+    }
 
     public Task<int> ModeAsync(int mode, CancellationToken ct = default)
         => InvokeAsync("Mode", p => ToErr(p.Mode(mode)), ct);
@@ -1022,8 +1026,41 @@ public class FairinoRpcClient : IDisposable
 
     /// <summary>전역 가속도 배율(%) 설정 — 컨트롤러 전역 상태라 바꾼 쪽이 반드시 되돌려야 한다.
     /// 조회 API 가 없어 이전 값을 읽을 수 없으므로 복원은 <see cref="BaseOaccScalePct"/> 로 한다.</summary>
-    public Task<int> SetOaccScaleAsync(double accPct, CancellationToken ct = default)
-        => InvokeAsync("SetOaccScale", p => ToErr(p.SetOaccScale(Math.Clamp(accPct, 1.0, 100.0))), ct);
+    public async Task<int> SetOaccScaleAsync(double accPct, CancellationToken ct = default)
+    {
+        var v = Math.Clamp(accPct, 1.0, 100.0);
+        var rc = await InvokeAsync("SetOaccScale", p => ToErr(p.SetOaccScale(v)), ct);
+        LastOaccSentPct = rc == 0 ? v : null;   // 실패면 컨트롤러 값을 모른다 — 다음 동기화에서 다시 보낸다
+        return rc;
+    }
+
+    private double _lastOaccSentPct = double.NaN;
+
+    /// <summary>컨트롤러에 마지막으로 성공적으로 보낸 전역 가속도 배율(%). null = 모름(연결 직후·오류 해제·서보 on/off 뒤 —
+    /// 컨트롤러가 값을 되돌렸을 수 있다). <see cref="Service.CobotService"/> 가 <see cref="DesiredOaccScalePct"/> 와 다르면 다시 보낸다.</summary>
+    public double? LastOaccSentPct
+    {
+        get { var v = Volatile.Read(ref _lastOaccSentPct); return double.IsNaN(v) ? null : v; }
+        private set => Volatile.Write(ref _lastOaccSentPct, value ?? double.NaN);
+    }
+
+    /// <summary>컨트롤러 가속도 배율을 모르는 상태로 둔다 — 다음 동기화(5초 이내)에 원하는 값을 다시 보낸다.</summary>
+    public void InvalidateOaccScale() => LastOaccSentPct = null;
+
+    private static double _oaccOverridePct = double.NaN;
+
+    /// <summary>일시 가속도 배율(%) — 레시피 '검사 가속도'로 ⑱ 순회 동안만. null = 없음(평소 값 <see cref="BaseOaccScalePct"/>).</summary>
+    public static double? OaccOverridePct
+    {
+        get { var v = Volatile.Read(ref _oaccOverridePct); return double.IsNaN(v) ? null : v; }
+    }
+
+    /// <summary>일시 가속도 배율 시작/해제 — 그동안 <see cref="Service.CobotService"/> 의 동기화가 평소 값으로 덮어쓰지 않는다.</summary>
+    public static void SetOaccOverride(double? pct)
+        => Volatile.Write(ref _oaccOverridePct, pct is { } p ? Math.Clamp(p, 1.0, 100.0) : double.NaN);
+
+    /// <summary>지금 컨트롤러에 걸려 있어야 할 전역 가속도 배율(%) — 일시 값이 있으면 그 값, 없으면 파라미터 평소 값.</summary>
+    public static double DesiredOaccScalePct => OaccOverridePct ?? BaseOaccScalePct;
 
     /// <summary>전역 가속도 배율 공장 기본값(%) — 파라미터 <see cref="OaccScaleKey"/> 가 비었을 때의 값.</summary>
     public const double DefaultOaccScalePct = 100.0;
@@ -1054,7 +1091,10 @@ public class FairinoRpcClient : IDisposable
     /// <summary>컨트롤러의 걸린 오류 상태를 해제(복구). errcode 14("interface execution failed" — fault 상태)에서
     /// 복구하려면 이 호출이 필요하다. 반환 rc(0=성공).</summary>
     public Task<int> ResetAllErrorAsync(CancellationToken ct = default)
-        => InvokeAsync("ResetAllError", p => ToErr(p.ResetAllError()), ct, faultRecovery: false);
+    {
+        InvalidateOaccScale();   // 오류 해제 뒤 컨트롤러가 전역 배율을 되돌렸을 수 있다 — 다시 보낸다
+        return InvokeAsync("ResetAllError", p => ToErr(p.ResetAllError()), ct, faultRecovery: false);
+    }
 
     /// <summary>현재 로봇 오류 코드 [main, sub] 조회. 오류 없으면 (0,0). 호출 자체 실패 시 예외.</summary>
     public async Task<(int Main, int Sub)> GetRobotErrorCodeAsync(CancellationToken ct = default)
