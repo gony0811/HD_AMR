@@ -41,8 +41,10 @@ public class PeakApproachStep : ISequenceStep
     // 이제 피치 중에는 재기만 하고 GuardMinMm 보다 가까울 때만 물러나며(충돌 방지 — 1440mm·10° 면 250mm 붙는다),
     // 마지막 피치 뒤 점2 자리에서 한 번만 목표 거리(SequenceContext.CameraTargetDistanceMm, 현장 300mm)로 맞춘다.
 
-    /// <summary>피치 중 이보다 가까우면 목표 거리로 물러난다 [mm].</summary>
-    internal const double GuardMinMm = 200.0;
+    /// <summary>피치 중 이보다 가까우면 목표 거리로 물러난다 [mm]. 센서 기준 거리다 — 툴 앞면이 센서보다 면 쪽으로 나와 있어
+    /// 레이저 약 240mm 에서 툴이 천장에 닿았다(실기 2026-11-26, 감시 200mm 일 때 256·244mm 로 통과 → main=4 sub=3).
+    /// 접촉 거리에 30mm 여유를 둔다.</summary>
+    internal const double GuardMinMm = 270.0;
 
     /// <summary>목표에서 이 이내면 움직이지 않는다 [mm].</summary>
     internal const double DepthKeepToleranceMm = 10.0;

@@ -184,6 +184,31 @@ public static class WeldSequenceSupport
         return new[] { p[0] * s, p[1] * s, p[2] * s };
     }
 
+    /// <summary>피치 이동에 실측 법선(광축)을 쓰는 최대 각 [도] — 도면 법선과 이보다 크게 다르면 정렬이 잘못된 것으로 보고 도면 법선을 쓴다.</summary>
+    internal const double MaxMeasuredPitchNormalDeviationDeg = 15.0;
+
+    /// <summary>
+    /// 피치 이동 기준 면 법선 — <paramref name="anchorPose"/> 의 광축(툴 <paramref name="opticalAxis"/>, 면을 향함)을 뒤집은 방향.
+    /// 앵커는 ④ 레이저 평탄면 정렬로 광축을 실제 면에 수직으로 맞춘 자세라, 이 법선에 평행하게 가면 실제 면과의 거리가 유지된다.
+    /// 도면 법선(<paramref name="modelWallOut"/>)만 쓰면 실제 면이 비스듬할 때 피치마다 면 쪽으로 파고든다
+    /// (실기 2026-11-26 천장: 도면 법선이 실면보다 1.7° 기울어 피치당 +10.5mm, 레이저 317→264mm, 세 번째 피치에서 툴 접촉 main=4 sub=3).
+    /// 부호는 도면 법선 쪽으로 맞추고, 도면과 <see cref="MaxMeasuredPitchNormalDeviationDeg"/> 넘게 다르면 null.
+    /// </summary>
+    internal static double[]? MeasuredPitchWallOut(double[] anchorPose, ToolAxisDir opticalAxis, double[] modelWallOut)
+    {
+        var m = HD.AMR.App.Communication.FrameMath.PoseToMatrix(anchorPose);
+        var col = (int)opticalAxis / 2;
+        var sgn = (int)opticalAxis % 2 == 0 ? 1.0 : -1.0;
+        double[] n = { -sgn * m[0, col], -sgn * m[1, col], -sgn * m[2, col] };
+        var nLen = Math.Sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+        var mLen = Math.Sqrt(modelWallOut.Sum(v => v * v));
+        if (nLen < 1e-9 || mLen < 1e-9) return null;
+        var cos = (n[0] * modelWallOut[0] + n[1] * modelWallOut[1] + n[2] * modelWallOut[2]) / (nLen * mLen);
+        if (cos < 0) { n = new[] { -n[0], -n[1], -n[2] }; cos = -cos; }
+        var deg = Math.Acos(Math.Clamp(cos, -1.0, 1.0)) * 180.0 / Math.PI;
+        return deg <= MaxMeasuredPitchNormalDeviationDeg ? new[] { n[0] / nLen, n[1] / nLen, n[2] / nLen } : null;
+    }
+
     /// <summary>
     /// Peak(코로게이션) 탐색용 ROI — 우선순위: Peak ROI(Depth 뷰에서 저장) → 평탄면 ROI 폴백 → 중앙 30%.
     /// ⑤⑥⑨⑩ 측정과 ⑦⑪의 Peak ROI 인자로 쓴다. 어느 것을 썼는지 Src 로 반환.

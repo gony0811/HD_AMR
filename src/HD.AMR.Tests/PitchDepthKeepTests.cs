@@ -8,9 +8,9 @@ public class PitchDepthKeepTests
 {
     [Theory]
     [InlineData(361, 0)]       // 멀어져도 피치 중에는 움직이지 않는다
-    [InlineData(264, 0)]
-    [InlineData(200, 0)]       // 안전 거리 그대로
-    [InlineData(190, -110)]    // 안전 거리보다 가까우면 목표로 물러남
+    [InlineData(270, 0)]       // 안전 거리 그대로
+    [InlineData(264, -36)]     // 2026-11-26 천장 접촉 직전 값 — 이제 물러남
+    [InlineData(244, -56)]
     [InlineData(120, -180)]
     public void 피치_중에는_가까울_때만_물러난다(double measured, double expectedMove)
     {

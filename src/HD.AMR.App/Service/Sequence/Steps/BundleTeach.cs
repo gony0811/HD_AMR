@@ -149,12 +149,30 @@ public static class BundleTeach
 
         int rc;
         var wallNote = "";
-        if (context.Bag.TryGetValue(WeldSequenceSupport.WallOutNormalBagKey, out var nv) && nv is double[] { Length: 3 } wallOut
+        double[]? wallOut = null;
+        var normalSrc = "";
+        if (context.Bag.TryGetValue(WeldSequenceSupport.WallOutNormalBagKey, out var nv) && nv is double[] { Length: 3 } modelOut)
+        {
+            wallOut = modelOut;
+            normalSrc = "도면 법선";
+            // 실측 법선(앵커 광축 — 레이저 평탄면 정렬 결과)이 있으면 그쪽을 따른다. 도면 법선은 실제 면과 어긋날 수 있다.
+            var (optical, opticalFromParam) = await WeldSequenceSupport.GetDepthAxisAsync(param);
+            if (opticalFromParam && WeldSequenceSupport.MeasuredPitchWallOut(anchor, optical, modelOut) is { } measuredOut)
+            {
+                var dev = CobotInspectionMoveStep.AngleDeg(measuredOut, modelOut);
+                wallOut = measuredOut;
+                normalSrc = $"실측 법선(광축, 도면과 {dev:0.0}°)";
+            }
+            else
+                logger.LogWarning("피치 이동: 실측 법선 사용 불가(광축 파라미터 없음 또는 도면과 {Max:0}° 초과) — 도면 법선 사용",
+                    WeldSequenceSupport.MaxMeasuredPitchNormalDeviationDeg);
+        }
+        if (wallOut is not null
             && WeldSequenceSupport.ToolOffsetParallelToWall(anchor, offset, wallOut) is { } baseMove)
         {
             logger.LogInformation(
-                "피치 이동: 면 평행 BASE 오프셋 [{Dx:+0.0;-0.0}, {Dy:+0.0;-0.0}, {Dz:+0.0;-0.0}]mm",
-                baseMove[0], baseMove[1], baseMove[2]);
+                "피치 이동: 면 평행 BASE 오프셋 [{Dx:+0.0;-0.0}, {Dy:+0.0;-0.0}, {Dz:+0.0;-0.0}]mm ({Src})",
+                baseMove[0], baseMove[1], baseMove[2], normalSrc);
             rc = await cobot.Rpc.MoveByOffsetAsync(anchor, user: 0,
                 new[] { baseMove[0], baseMove[1], baseMove[2], 0.0, 0.0, 0.0 },
                 tool: context.Tool, vel: context.Velocity, ct: ct);
