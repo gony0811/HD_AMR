@@ -222,28 +222,28 @@ public static class ReachMap
             if (towardTarget.TargetPoseBase is { } towardPose
                 && TiltedPose(focusPose, towardPose, robot.OpticalAxis, spec.TiltDeg) is { } tilted)
             {
-                double[]? jT;
-                string? tErr = null;
-                try { jT = await inverseKin(tilted, h, rawF, ct).ConfigureAwait(false); }
-                catch (OperationCanceledException) { throw; }
-                catch (Exception ex) { jT = null; tErr = $" — {FirstLine(ex.Message)}"; }
-                calls++;
+                // 순회는 비틀림(광축 둘레 0°/180°)을 J6 가 덜 움직이는 쪽으로 골라 돈다(InspectionRunStep 비틀림 선택). 같은 기울인
+                // 자세를 비틀림 하나로만 풀면 nearest IK 가 J6 를 반 바퀴 돌리는 대신 손목 반전 해를 골라 거짓 거부한다(실기
+                // 2026-11-26 16:50 PL L2-R01C03-4: J5 77.8° → −90.6° 로 거부, 같은 정차 수동 순회는 비틀림 180° 로 J5 81° 유지·완료).
+                // 그래서 두 비틀림을 모두 풀고 하나라도 같은 팔 자세로 닿으면 통과 — 둘 다 막히면 첫 사유를 보고한다.
                 var tiltLabel = $"코루게이션 기울임 {spec.TiltDeg:0}°";
-                if (jT is not { Length: 6 })
-                    return (Cell(ReachStatus.PathUnsafe, $"{tiltLabel} IK 실패{tErr}", margin, jA, jL, jF), calls);
-                var jTn = limits.NormalizeJoints(jT);
-                if (TiltBranchReason(limits.NormalizeJoints(rawF), jTn) is { } tb)
-                    return (Cell(ReachStatus.PathUnsafe, $"{tiltLabel} — {tb}", margin, jA, jL, jF), calls);
-                var mT = limits.Evaluate(WithoutJ6(jTn), focus.PlanarDistanceMm);
-                if (!mT.Feasible)
-                    return (Cell(ReachStatus.PathUnsafe, $"{tiltLabel} — {mT.Limiting}", margin, jA, jL, jF), calls);
-                if (robot.Envelope is { } envT)
+                var rawFn = limits.NormalizeJoints(rawF);
+                string? firstFail = null;
+                var passed = false;
+                foreach (var (twist, pose) in new[] { (0.0, tilted), (180.0, SpinAboutAxis(tilted, robot.OpticalAxis, 180.0)) })
                 {
-                    var yawT = robot.MountAtHome is { Length: 6 } m6t ? m6t[5] : 0;
-                    var selfT = envT.Evaluate(Fr5Kinematics.Fr5Wml, WithoutJ6(jTn), h, yawT);
-                    if (selfT.Collides)
-                        return (Cell(ReachStatus.PathUnsafe, $"{tiltLabel} — 자기 간섭 {selfT}", margin, jA, jL, jF), calls);
+                    double[]? jT;
+                    string? tErr = null;
+                    try { jT = await inverseKin(pose, h, rawF, ct).ConfigureAwait(false); }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception ex) { jT = null; tErr = $" — {FirstLine(ex.Message)}"; }
+                    calls++;
+                    var fail = TiltCandidateFailure(jT, tErr, rawFn, limits, robot, h, focus.PlanarDistanceMm);
+                    if (fail is null) { passed = true; break; }
+                    firstFail ??= twist == 0 ? fail : $"{fail} (비틀림 180°)";
                 }
+                if (!passed)
+                    return (Cell(ReachStatus.PathUnsafe, $"{tiltLabel}{firstFail}", margin, jA, jL, jF), calls);
             }
         }
 
@@ -362,6 +362,54 @@ public static class ReachMap
         var pose = FrameMath.MatrixToPose(m);
         pose[0] = focusPose[0]; pose[1] = focusPose[1]; pose[2] = focusPose[2];
         return pose;
+    }
+
+    /// <summary>기울인 자세 IK 해 하나의 판정 — 통과면 null, 아니면 사유(앞에 " — " 또는 " IK 실패" 형태로 붙는다).</summary>
+    private static string? TiltCandidateFailure(double[]? jT, string? ikError, double[] focusNormalized, PostureLimits limits,
+        ReachMapRobot robot, double h, double planarDistanceMm)
+    {
+        if (jT is not { Length: 6 }) return $" IK 실패{ikError}";
+        var jTn = limits.NormalizeJoints(jT);
+        if (TiltBranchReason(focusNormalized, jTn) is { } tb) return $" — {tb}";
+        var mT = limits.Evaluate(WithoutJ6(jTn), planarDistanceMm);
+        if (!mT.Feasible) return $" — {mT.Limiting}";
+        if (robot.Envelope is { } envT)
+        {
+            var yawT = robot.MountAtHome is { Length: 6 } m6t ? m6t[5] : 0;
+            var selfT = envT.Evaluate(Fr5Kinematics.Fr5Wml, WithoutJ6(jTn), h, yawT);
+            if (selfT.Collides) return $" — 자기 간섭 {selfT}";
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// 자세를 TCP 를 지나는 자기 광축 둘레로 <paramref name="deg"/> 돌린 자세(위치 그대로) — 툴 비틀림을 바꾼 것과 같다.
+    /// </summary>
+    internal static double[] SpinAboutAxis(double[] pose, ToolAxisDir opticalAxis, double deg)
+    {
+        var r = FrameMath.PoseToMatrix(pose);
+        var col = (int)opticalAxis / 2;
+        double[] a = { r[0, col], r[1, col], r[2, col] };   // 광축(부호는 회전 180° 에 무관하지만 일반 각도 위해 유지)
+        if ((int)opticalAxis % 2 == 1) { a[0] = -a[0]; a[1] = -a[1]; a[2] = -a[2]; }
+        var th = deg * Math.PI / 180.0;
+        double c = Math.Cos(th), s = Math.Sin(th), v = 1 - c;
+        var rot = new double[3, 3]
+        {
+            { c + a[0] * a[0] * v, a[0] * a[1] * v - a[2] * s, a[0] * a[2] * v + a[1] * s },
+            { a[1] * a[0] * v + a[2] * s, c + a[1] * a[1] * v, a[1] * a[2] * v - a[0] * s },
+            { a[2] * a[0] * v - a[1] * s, a[2] * a[1] * v + a[0] * s, c + a[2] * a[2] * v },
+        };
+        var m = new double[4, 4];
+        for (var i = 0; i < 3; i++)
+        {
+            for (var j = 0; j < 3; j++)
+                m[i, j] = rot[i, 0] * r[0, j] + rot[i, 1] * r[1, j] + rot[i, 2] * r[2, j];
+            m[i, 3] = r[i, 3];
+        }
+        m[3, 3] = 1;
+        var p = FrameMath.MatrixToPose(m);
+        p[0] = pose[0]; p[1] = pose[1]; p[2] = pose[2];
+        return p;
     }
 
     private static double[] WithoutJ6(double[] j) => new[] { j[0], j[1], j[2], j[3], j[4], 0.0 };
