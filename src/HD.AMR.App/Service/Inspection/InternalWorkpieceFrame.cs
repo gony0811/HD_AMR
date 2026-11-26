@@ -273,6 +273,56 @@ public static class InternalWorkpieceFrame
         return (sign * Math.Abs(mapAlongMm) * scale, null);
     }
 
+    /// <summary>
+    /// Bag 키(double[5]) — 비드 두 점 실측으로 이 줄에 맞추느라 좌표계에 넣은 [옆 이동 mm(프레임 Y), 프레임 Z 둘레 회전 도,
+    /// 보정한 좌표계 원점 BASE x, y, z] (<see cref="ApplyBeadLine"/>, <see cref="BeadLineRecord"/>). 좌표계와 함께 같은 줄의 다음 구간으로 넘기고, 다른 줄(다른 열·수직↔수평)로 넘어갈 때는
+    /// <see cref="UndoBeadLine"/> 로 되돌린다 — 이 보정은 그 줄에서 잰 값이라 다른 줄에는 맞지 않는다.
+    /// </summary>
+    public const string BeadLineCorrectionBagKey = "wobj.beadLineCorrection";
+
+    /// <summary>두 점의 비드 옆 이격으로 좌표계 X축이 비드를 지나게 할 회전각 [도] — atan((먼 점 − 원점) / 거리).</summary>
+    public static double BeadLineRotationDeg(double nearLateralMm, double farLateralMm, double spanMm)
+        => Math.Abs(spanMm) < 1e-6 ? 0.0 : Math.Atan2(farLateralMm - nearLateralMm, spanMm) * 180.0 / Math.PI;
+
+    /// <summary>
+    /// 좌표계를 비드에 맞춘다 — 원점을 프레임 Y 로 <paramref name="lateralMm"/> 옮기고, 그 자리에서 프레임 Z(면 법선) 둘레로
+    /// <paramref name="rotDeg"/> 돌린다. 면(프레임 Z 방향·면까지 거리)은 그대로다. 옛 좌표계에서 (x, lateral + x·tan(rot)) 에 있던
+    /// 점이 새 좌표계의 X축 위에 놓인다.
+    /// </summary>
+    public static double[] ApplyBeadLine(double[] frameBase, double lateralMm, double rotDeg)
+    {
+        RequirePose(frameBase, nameof(frameBase));
+        var local = FrameMath.PoseToMatrix(new[] { 0.0, lateralMm, 0.0, 0.0, 0.0, rotDeg });
+        return FrameMath.MatrixToPose(FrameMath.Multiply(FrameMath.PoseToMatrix(frameBase), local));
+    }
+
+    /// <summary><see cref="BeadLineCorrectionBagKey"/> 에 넣을 기록 — [옆 이동 mm, 회전 도, 보정한 좌표계 원점 BASE x, y, z].</summary>
+    public static double[] BeadLineRecord(double lateralMm, double rotDeg, double[] correctedFrame)
+        => new[] { lateralMm, rotDeg, correctedFrame[0], correctedFrame[1], correctedFrame[2] };
+
+    /// <summary>
+    /// <see cref="ApplyBeadLine"/> 을 되돌린다. 그 뒤 좌표계가 같은 줄의 다음 구간으로 옮겨졌어도 <b>보정 전 줄</b>(보정 전 좌표계의 X축)
+    /// 위로 돌아간다 — 회전을 보정한 자리(<paramref name="pivotBase"/>, 보정 직후의 좌표계 원점)에서 풀기 때문이다. 지금 원점에서
+    /// 풀면 줄을 따라 간 거리 × sin(회전) 만큼 옆 오차가 남는다(10mm/m 보정 뒤 1.4m 가면 14mm).
+    /// 용접선 방향으로 간 거리와 면 법선 방향 차이는 그대로 둔다.
+    /// </summary>
+    public static double[] UndoBeadLine(double[] frameBase, double lateralMm, double rotDeg, double[] pivotBase)
+    {
+        RequirePose(frameBase, nameof(frameBase));
+        if (pivotBase is not { Length: >= 3 }) throw new ArgumentException("pivotBase 는 3개 이상이어야 합니다.", nameof(pivotBase));
+        var cur = FrameMath.PoseToMatrix(frameBase);
+        // 보정한 좌표계 기준으로 지금 원점이 보정 자리에서 얼마나 갔는지(용접선 방향·옆·법선).
+        double[] d = { frameBase[0] - pivotBase[0], frameBase[1] - pivotBase[1], frameBase[2] - pivotBase[2] };
+        var local = new double[3];
+        for (var j = 0; j < 3; j++) local[j] = cur[0, j] * d[0] + cur[1, j] * d[1] + cur[2, j] * d[2];
+        // 자세는 회전만 되돌리고, 원점은 보정 자리에서 옆 이동을 뺀 곳(보정 전 원점)을 기준으로 같은 거리만큼 보정 전 축을 따라 놓는다.
+        var unrot = FrameMath.Multiply(cur, FrameMath.PoseToMatrix(new[] { 0.0, 0.0, 0.0, 0.0, 0.0, -rotDeg }));
+        double[] off = { local[0], local[1] - lateralMm, local[2] };
+        for (var i = 0; i < 3; i++)
+            unrot[i, 3] = pivotBase[i] + unrot[i, 0] * off[0] + unrot[i, 1] * off[1] + unrot[i, 2] * off[2];
+        return FrameMath.MatrixToPose(unrot);
+    }
+
     /// <summary>좌표계 원점을 프레임 X(용접선 방향)로 <paramref name="mm"/> 옮긴다. 자세는 그대로.</summary>
     public static double[] ShiftAlongX(double[] frameBase, double mm)
     {

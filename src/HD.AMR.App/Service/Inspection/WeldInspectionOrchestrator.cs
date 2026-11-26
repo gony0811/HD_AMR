@@ -60,6 +60,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
     private readonly Dictionary<string, (double MeasuredMm, double NominalMm)> _bundleSpans = new();   // 묶음 리더가 교시로 잰 점1~점2 거리와 그 구간의 도면 거리 — 팔로워 줄을 실측 간격에 맞춰 놓는다
     private double[]? _lastVerticalTiltPivotBase;                  // 다른 줄 재사용 — 수직 방향 기울기 회전축 자리(교시한 줄의 원점, BASE mm)
     private double? _lastVerticalTiltMeasuredDeg;                  // 다른 줄 재사용 — 레이저 한 점 실측으로 그 좌표계에 더한 수직 방향 기울기(도). 있으면 다시 재지 않는다
+    private double[]? _lastBeadLineCorrection;                     // 비드 두 점 실측으로 그 좌표계에 넣은 [옆 이동 mm, 회전 도, 보정 자리 BASE xyz] — 같은 줄은 물려받고 다른 줄로 넘어갈 때 되돌린다
     private double[]? _lastPitchScaleShiftBase;                    // 그 좌표계 원점을 실측 간격에 맞추느라 ACS 거리 대비 옮긴 양(BASE mm) — 다른 줄로 넘어갈 때 되돌린다
 
     /// <summary>
@@ -666,6 +667,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
             double? crossRotationDeg;
             double[]? alongAnchorBase;
             double[]? pitchScaleShiftBase;
+            double[]? beadLineCorrection;
             double[]? verticalTiltPivotBase;
             double? verticalTiltMeasuredDeg;
             (double MeasuredMm, double NominalMm)? bundleSpan = null;
@@ -746,6 +748,7 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                 crossRotationDeg = _lastCrossRotationDeg;
                 alongAnchorBase = _lastAlongAnchorBase?.ToArray();
                 pitchScaleShiftBase = _lastPitchScaleShiftBase?.ToArray();
+                beadLineCorrection = _lastBeadLineCorrection?.ToArray();
                 verticalTiltPivotBase = _lastVerticalTiltPivotBase?.ToArray();
                 verticalTiltMeasuredDeg = _lastVerticalTiltMeasuredDeg;
                 cachedInternalFrame = anchorHit ? (double[])_lastInternalWorkpieceFrame!.Clone() : null;
@@ -987,6 +990,9 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                     context.Bag[InternalWorkpieceFrame.BundleSpanBagKey] = new[] { bs.MeasuredMm, bs.NominalMm };
                 if (pitchScaleShiftBase is { Length: 3 })
                     context.Bag[InternalWorkpieceFrame.PitchScaleShiftBagKey] = pitchScaleShiftBase;
+                // 비드 두 점 실측 보정 — 좌표계에 들어 있는 양을 함께 넘긴다(다른 줄로 넘어갈 때 ② 가 되돌린다).
+                if (beadLineCorrection is { Length: 5 })
+                    context.Bag[InternalWorkpieceFrame.BeadLineCorrectionBagKey] = beadLineCorrection;
                 // 수직 방향 기울기 실측 — 회전축 자리와, 이미 잰 값(있으면 이 정차 위치에서는 다시 재지 않는다).
                 if (verticalTiltPivotBase is { Length: 3 })
                     context.Bag[InternalWorkpieceFrame.VerticalTiltPivotBagKey] = verticalTiltPivotBase;
@@ -1128,6 +1134,8 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
                                                         && crv is double crDeg ? crDeg : null;
                                 _lastAlongAnchorBase = context.Bag.TryGetValue(InternalWorkpieceFrame.AlongAnchorBagKey, out var aav)
                                                        && aav is double[] { Length: 3 } aaBase ? aaBase.ToArray() : null;
+                                _lastBeadLineCorrection = context.Bag.TryGetValue(InternalWorkpieceFrame.BeadLineCorrectionBagKey, out var blc)
+                                                          && blc is double[] { Length: 5 } blcFix ? blcFix.ToArray() : null;
                                 _lastPitchScaleShiftBase = context.Bag.TryGetValue(InternalWorkpieceFrame.PitchScaleShiftBagKey, out var pss)
                                                            && pss is double[] { Length: 3 } pssBase ? pssBase.ToArray() : null;
                                 _lastVerticalTiltPivotBase = context.Bag.TryGetValue(InternalWorkpieceFrame.VerticalTiltPivotBagKey, out var vtp)

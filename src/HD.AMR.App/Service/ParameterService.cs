@@ -254,6 +254,11 @@ public class ParameterService
                 "검사 팁을 넣기 전에 원점 자리와 용접선 방향으로 떨어진 자리(inspection.reuseFrameBeadProbeSpanMm)에서 비드의 옆 위치와 Peak 위치를 재서 로그 " +
                 "'[수직 열 비드 측정]'에 남긴다. 수직 열 경로가 비드와 사선으로 어긋나는 양을 숫자로 모으기 위한 진단이며, 열마다 측정 이동 시간이 붙는다. " +
                 "데이터를 모은 뒤에는 false 로 끈다. 비우면 가스 검사기 켬, 비전(용접검사기) 끔. 검사마다 읽는다."),
+            (Sequence.Steps.SeamAlongPeakAnchor.BeadCorrectKey, "",
+                "비드 두 점 측정값으로 그 줄 좌표계를 맞춤(true/false, 비우면 끔) — inspection.reuseFrameBeadProbe 측정이 켜져 있어야 한다. 원점 자리의 비드 옆 이격만큼 " +
+                "좌표계를 옆으로 옮기고 두 점의 차이만큼 면 법선 둘레로 돌려, 수직 열 경로가 비드를 따라가게 한다. 같은 줄의 다음 구간은 물려받고 다른 줄(다른 열·수평 줄)로 " +
+                "넘어갈 때는 되돌린다. 원점 자리 옆 이격 ±30mm, 기울기 ±20mm/m, coverage 50% 를 벗어나면 보정하지 않고 로그 '[검사 수행] 비드 실측 보정 생략'을 남긴다. " +
+                "먼 점을 못 쟀으면 옆 이동만 한다. 검사마다 읽는다."),
             (Sequence.Steps.SeamAlongPeakAnchor.BeadProbeSpanKey, "",
                 "비드 두 점 측정의 두 자리 사이 거리(mm) — 원점에서 용접선 방향으로 이만큼 간 자리에서 한 번 더 잰다. 300~1500, 비우면 1080(피치 3회). 검사마다 읽는다."),
             (Sequence.Steps.SeamAlongPeakAnchor.MaxShiftKey, "",

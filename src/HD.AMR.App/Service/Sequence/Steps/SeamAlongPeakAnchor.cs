@@ -266,7 +266,63 @@ public class SeamAlongPeakAnchor
         => value is { } v && double.IsFinite(v) && v >= MinBeadProbeSpanMm && v <= MaxBeadProbeSpanMm ? v : DefaultBeadProbeSpanMm;
 
     /// <summary>한 자리의 측정 — 좌표계 X 위치, 비드의 옆 이격(프레임 Y·BASE), Peak 의 용접선 방향 이격. 못 잰 값은 null.</summary>
-    public sealed record BeadProbePoint(double AtMm, double[] ViewTcp, double? BeadLateralMm, double[]? BeadBase, double? PeakAlongMm, string Note);
+    public sealed record BeadProbePoint(double AtMm, double[] ViewTcp, double? BeadLateralMm, double[]? BeadBase, double? PeakAlongMm, string Note,
+        double? Coverage = null);
+
+    /// <summary>두 점 측정 결과 — 요약 문자열과 잰 점들(못 갔으면 비어 있다).</summary>
+    public sealed record BeadProbeResult(string Summary, IReadOnlyList<BeadProbePoint> Points);
+
+    // ── 비드 두 점 실측으로 그 줄 보정 ──────────────────────────────────────────────
+
+    /// <summary>
+    /// 비드 두 점 실측값으로 그 줄의 좌표계를 맞추는 파라미터 키(true/false, 기본 끔) — <see cref="BeadProbeKey"/> 측정이 켜져 있어야 한다.
+    /// 원점 자리의 비드 옆 이격만큼 좌표계를 옆으로 옮기고, 두 점의 차이만큼 프레임 Z 둘레로 돌려 X축이 비드를 지나게 한다.
+    /// 수직 열 경로가 비드에서 벗어나는 양이 열 위치·수평 줄 교시 기울기에 따라 실행마다 달라(실기 2026-11-25~26 M2 17개 열:
+    /// 시작점 −9~+22mm, 기울기 −11~+8mm/m) 고정값으로는 맞출 수 없어 잰 값을 바로 쓴다. 같은 줄의 다음 구간은 물려받고,
+    /// 다른 줄로 넘어갈 때는 되돌린다(<see cref="InternalWorkpieceFrame.BeadLineCorrectionBagKey"/>).
+    /// </summary>
+    public const string BeadCorrectKey = "inspection.reuseFrameBeadCorrect";
+
+    /// <summary>보정 한계 — 원점 자리 옆 이격 [mm]. 넘으면 오검출로 보고 보정하지 않는다(실측 최대 22.5mm).</summary>
+    public const double MaxBeadCorrectLateralMm = 30.0;
+
+    /// <summary>보정 한계 — 기울기 [mm/m]. 넘으면 보정하지 않는다(실측 최대 10.8mm/m).</summary>
+    public const double MaxBeadCorrectSlopeMmPerM = 20.0;
+
+    /// <summary>보정에 쓰는 비드 검출 최소 coverage(0~1). 실측은 0.60~1.00.</summary>
+    public const double MinBeadCorrectCoverage = 0.5;
+
+    /// <summary>
+    /// 두 점 측정 → 좌표계 보정량 [옆 이동 mm, 회전 도]. 쓸 수 없으면 null + 사유(좌표계를 그대로 둔다).
+    /// 원점 자리는 반드시 재야 한다. 먼 점을 못 쟀으면(이동 실패·미검출·coverage 부족) 옆 이동만 하고 돌리지 않는다.
+    /// </summary>
+    public static ((double LateralMm, double RotDeg)? Correction, string Note) DecideBeadCorrection(IReadOnlyList<BeadProbePoint> points)
+    {
+        static bool Usable(BeadProbePoint p)
+            => p.BeadLateralMm is { } v && double.IsFinite(v) && p.Coverage is { } c && c >= MinBeadCorrectCoverage;
+
+        if (points.Count == 0 || Math.Abs(points[0].AtMm) > 1e-6)
+            return (null, "원점 자리를 재지 못함");
+        var near = points[0];
+        if (!Usable(near))
+            return (null, near.BeadLateralMm is null
+                ? "원점 자리 비드 미검출"
+                : $"원점 자리 coverage {near.Coverage ?? 0:P0} 가 {MinBeadCorrectCoverage:P0} 미만");
+        var lateral = near.BeadLateralMm!.Value;
+        if (Math.Abs(lateral) > MaxBeadCorrectLateralMm)
+            return (null, $"원점 자리 옆 이격 {lateral:+0.0;-0.0}mm 가 한계 ±{MaxBeadCorrectLateralMm:0}mm 밖 — 오검출 의심");
+
+        if (points.Count < 2 || !Usable(points[1]))
+            return ((lateral, 0.0), "먼 점을 쓸 수 없어 옆 이동만(기울기 보정 없음)");
+        var far = points[1];
+        var slope = BeadSlopeMmPerM(near, far);
+        if (slope is not { } s || !double.IsFinite(s))
+            return ((lateral, 0.0), "기울기 계산 불가 — 옆 이동만");
+        if (Math.Abs(s) > MaxBeadCorrectSlopeMmPerM)
+            return (null, $"기울기 {s:+0.00;-0.00}mm/m 가 한계 ±{MaxBeadCorrectSlopeMmPerM:0}mm/m 밖 — 오검출 의심");
+        var rot = InternalWorkpieceFrame.BeadLineRotationDeg(lateral, far.BeadLateralMm!.Value, far.AtMm - near.AtMm);
+        return ((lateral, rot), $"옆 {lateral:+0.0;-0.0}mm, 기울기 {s:+0.00;-0.00}mm/m({rot:+0.000;-0.000}°)");
+    }
 
     /// <summary>
     /// 두 점의 비드 옆 이격으로 경로가 비드에서 벗어나는 기울기 [mm/m] — (먼 점 − 원점) / 거리. + = 용접선 방향으로 갈수록 비드가 프레임 +Y 쪽.
@@ -282,24 +338,24 @@ public class SeamAlongPeakAnchor
     /// 원점 정면 → 용접선 방향으로 떨어진 자리 순으로 가서 각각 Peak·비드를 잰다. 코봇은 마지막 측정 자리에 남는다 —
     /// 부른 쪽이 첫 경유점으로 다시 세운다. 결과 요약 문자열을 돌려준다(못 쟀으면 사유).
     /// </summary>
-    public async Task<string> ProbeBeadLineAsync(SequenceContext context, double[] frame, double[] stagedPose, CancellationToken ct)
+    public async Task<BeadProbeResult> ProbeBeadLineAsync(SequenceContext context, double[] frame, double[] stagedPose, CancellationToken ct)
     {
         if (!_camera.IsConnected || _camera.LatestIr is null)
-            return LogProbeSkip("카메라 미연결/IR 프레임 없음");
+            return new BeadProbeResult(LogProbeSkip("카메라 미연결/IR 프레임 없음"), Array.Empty<BeadProbePoint>());
         if (!_weld.DetectorAvailable)
-            return LogProbeSkip("비드 검출기 비활성");
+            return new BeadProbeResult(LogProbeSkip("비드 검출기 비활성"), Array.Empty<BeadProbePoint>());
         await WeldSequenceSupport.ApplyDlModelAsync(_param, _weld);
         if (WeldSequenceSupport.MissingModel(_weld) is { } noModel)
-            return LogProbeSkip(noModel);
+            return new BeadProbeResult(LogProbeSkip(noModel), Array.Empty<BeadProbePoint>());
 
         var (axX, _) = await WeldSequenceSupport.GetImageXAxisAsync(_param);
         var (axY, _) = await WeldSequenceSupport.GetImageYAxisAsync(_param);
         var (optical, _) = await WeldSequenceSupport.GetDepthAxisAsync(_param);
         if (IsDepthAxis(axX) || IsDepthAxis(axY))
-            return LogProbeSkip("영상 축 매핑이 툴 Z 를 가리킴");
+            return new BeadProbeResult(LogProbeSkip("영상 축 매핑이 툴 Z 를 가리킴"), Array.Empty<BeadProbePoint>());
         var tiltDeg = OpticalTiltDeg(frame, stagedPose, context.OpticalAxis ?? optical);
         if (tiltDeg > MaxOpticalTiltDeg)
-            return LogProbeSkip($"첫 경유점 자세의 광축이 좌표계 면 법선에서 {tiltDeg:0.0}° 기움");
+            return new BeadProbeResult(LogProbeSkip($"첫 경유점 자세의 광축이 좌표계 면 법선에서 {tiltDeg:0.0}° 기움"), Array.Empty<BeadProbePoint>());
 
         var spanMm = DefaultBeadProbeSpanMm;
         try { spanMm = ResolveBeadProbeSpanMm(await _param.GetDoubleAsync(BeadProbeSpanKey)); }
@@ -320,7 +376,7 @@ public class SeamAlongPeakAnchor
         {
             var rcLift = await _cobot.Rpc.MoveLAsync(LiftedPose(frame, hereNow, outward), tool: context.Tool, user: 0, vel: context.Velocity, ct: ct);
             if (rcLift != 0)
-                return LogProbeSkip($"측정 높이로 들어 올리기 실패 (rc={rcLift}){FairinoErrorCodes.Suffix(rcLift)}");
+                return new BeadProbeResult(LogProbeSkip($"측정 높이로 들어 올리기 실패 (rc={rcLift}){FairinoErrorCodes.Suffix(rcLift)}"), Array.Empty<BeadProbePoint>());
         }
 
         var points = new List<BeadProbePoint>();
@@ -338,7 +394,7 @@ public class SeamAlongPeakAnchor
             points.Add(await ProbeHereAsync(context, frame, at, ct));
         }
         if (points.Count == 0)
-            return LogProbeSkip("측정 자리로 이동하지 못함");
+            return new BeadProbeResult(LogProbeSkip("측정 자리로 이동하지 못함"), Array.Empty<BeadProbePoint>());
 
         var slope = points.Count == 2 ? BeadSlopeMmPerM(points[0], points[1]) : null;
         var parts = string.Join(" / ", points.Select(p =>
@@ -348,7 +404,7 @@ public class SeamAlongPeakAnchor
         var summary = $"원점 BASE [{frame[0]:0.0}, {frame[1]:0.0}, {frame[2]:0.0}] — {parts}" +
                       (slope is { } s ? $" → 비드 대비 경로 기울기 {s:+0.00;-0.00}mm/m (1.8m 에 {s * 1.8:+0.0;-0.0}mm)" : " → 기울기 계산 불가");
         _logger.LogInformation("[수직 열 비드 측정] 결과 — {Summary}", summary);
-        return summary;
+        return new BeadProbeResult(summary, points);
     }
 
     private string LogProbeSkip(string why)
@@ -362,7 +418,7 @@ public class SeamAlongPeakAnchor
     {
         var tcp = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
         var notes = new List<string>();
-        double? peakAlong = null, beadLateral = null;
+        double? peakAlong = null, beadLateral = null, coverage = null;
         double[]? beadBase = null;
         try
         {
@@ -396,6 +452,7 @@ public class SeamAlongPeakAnchor
                     var t = FrameMath.PoseToMatrix(tcp);
                     beadBase = new double[3];
                     for (var i = 0; i < 3; i++) beadBase[i] = t[i, 0] * bo[0] + t[i, 1] * bo[1] + t[i, 2] * bo[2];
+                    coverage = detect.Confidence;
                     notes.Add($"coverage={detect.Confidence:P0}");
                 }
             }
@@ -405,7 +462,7 @@ public class SeamAlongPeakAnchor
         {
             notes.Add($"오류: {ex.Message}");
         }
-        var point = new BeadProbePoint(atMm, tcp, beadLateral, beadBase, peakAlong, string.Join(", ", notes));
+        var point = new BeadProbePoint(atMm, tcp, beadLateral, beadBase, peakAlong, string.Join(", ", notes), coverage);
         _logger.LogInformation(
             "[수직 열 비드 측정] 용접선 방향 {At:0}mm 자리 — TCP [{X:0.0}, {Y:0.0}, {Z:0.0}], 비드 옆 이격 {Bead}, Peak 용접선 방향 이격 {Peak} ({Note})",
             atMm, tcp[0], tcp[1], tcp[2],

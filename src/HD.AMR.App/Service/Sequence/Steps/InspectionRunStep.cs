@@ -467,11 +467,51 @@ public class InspectionRunStep : ISequenceStep
                     anchorNote, SeamAlongPeakAnchor.EnableKey);
         }
 
-        // ── 수직 열 비드 두 점 측정(기록만) — 다른 줄로 넘어간 줄마다(SeamAlongPeakAnchor.ProbeBeadLineAsync). 좌표계는 바꾸지 않는다 ──
+        // ── 수직 열 비드 두 점 측정 — 다른 줄로 넘어간 줄마다(SeamAlongPeakAnchor.ProbeBeadLineAsync) ──
+        // 기본은 기록만. 'inspection.reuseFrameBeadCorrect' 가 켜져 있으면 잰 값으로 이 줄의 좌표계를 비드에 맞춘다.
         if (probeBead)
         {
             await _pauseGate.WaitWhilePausedAsync(ct);
-            await _peakAnchor.ProbeBeadLineAsync(context, frame, ToTargetBaseAt(waypoints[firstIdx], 0), ct);
+            var probe = await _peakAnchor.ProbeBeadLineAsync(context, frame, ToTargetBaseAt(waypoints[firstIdx], 0), ct);
+            if (await BeadCorrectEnabledAsync())
+            {
+                var (correction, note) = SeamAlongPeakAnchor.DecideBeadCorrection(probe.Points);
+                if (correction is not { } fix)
+                    _logger.LogWarning("[검사 수행] 비드 실측 보정 생략 — {Note}. 좌표계를 그대로 씁니다 ('{Key}')",
+                        note, SeamAlongPeakAnchor.BeadCorrectKey);
+                else if (Math.Abs(fix.LateralMm) < 0.05 && Math.Abs(fix.RotDeg) < 0.001)
+                    _logger.LogInformation("[검사 수행] 비드 실측 보정 — {Note}: 보정 불필요", note);
+                else
+                {
+                    var corrected = InternalWorkpieceFrame.ApplyBeadLine(frame, fix.LateralMm, fix.RotDeg);
+                    var before = frame;
+                    frame = corrected;
+                    checkedJoints.Clear();
+                    var correctedError = await CheckWaypointChainAsync(context, BuildChainTargets(), checkedJoints, ct);
+                    if (correctedError is not null)
+                    {
+                        // 보정한 경로가 사전 검증을 통과하지 못하면 보정 없이 간다(종전 동작) — 원래 좌표계로 다시 검증해 관절 해를 되살린다.
+                        frame = before;
+                        checkedJoints.Clear();
+                        var restoredError = await CheckWaypointChainAsync(context, BuildChainTargets(), checkedJoints, ct);
+                        if (restoredError is not null)
+                            return StepResult.Fail($"비드 실측 보정 취소 뒤 경유점 사전 검증 실패 — {restoredError}");
+                        _logger.LogWarning(
+                            "[검사 수행] 비드 실측 보정 취소 — 보정한 경로가 사전 검증 실패({Err}). 좌표계를 그대로 씁니다 ('{Key}')",
+                            correctedError, SeamAlongPeakAnchor.BeadCorrectKey);
+                    }
+                    else
+                    {
+                        context.Bag[InternalWorkpieceFrame.BagKey] = corrected;
+                        context.Bag[InternalWorkpieceFrame.BeadLineCorrectionBagKey] =
+                            InternalWorkpieceFrame.BeadLineRecord(fix.LateralMm, fix.RotDeg, corrected);
+                        _logger.LogInformation(
+                            "[검사 수행] 비드 실측 보정 적용 — {Note}. 좌표계 원점 [{X0:0.0}, {Y0:0.0}, {Z0:0.0}] → [{X:0.0}, {Y:0.0}, {Z:0.0}] " +
+                            "('{Key}', 이 줄의 다음 구간은 물려받고 다른 줄로 넘어갈 때 되돌립니다)",
+                            note, before[0], before[1], before[2], corrected[0], corrected[1], corrected[2], SeamAlongPeakAnchor.BeadCorrectKey);
+                    }
+                }
+            }
         }
 
         if (anchorAlong || probeBead)
@@ -1365,6 +1405,13 @@ public class InspectionRunStep : ISequenceStep
         try { enabled = await _param.GetBoolAsync(SeamAlongPeakAnchor.BeadProbeKey); }
         catch (Exception ex) when (ex is not OperationCanceledException) { /* DB 미준비 — 센서 모드 기본값 */ }
         return SeamAlongPeakAnchor.ResolveBeadProbe(enabled, _useGas);
+    }
+
+    /// <summary>비드 두 점 실측값으로 이 줄의 좌표계를 맞출지('inspection.reuseFrameBeadCorrect', 기본 끔).</summary>
+    private async Task<bool> BeadCorrectEnabledAsync()
+    {
+        try { return await _param.GetBoolAsync(SeamAlongPeakAnchor.BeadCorrectKey) ?? false; }
+        catch (Exception ex) when (ex is not OperationCanceledException) { return false; }
     }
 
     private async Task<double> GetWObjIdAsync()

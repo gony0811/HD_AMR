@@ -1431,6 +1431,15 @@ public class CobotInspectionMoveStep : ISequenceStep
             if (seamDirBase is not { Length: 3 })
                 return "[Cobot 검사위치 이동] 다른 줄 좌표계 재사용 — 이번 용접선 방향(BASE)을 알 수 없어 좌표계를 돌릴 수 없습니다 " +
                        $"(용접선 끝점·wall_code 확인). 재교시하려면 '{InternalWorkpieceFrame.ReuseAcrossLinesKey}' 를 끄세요.";
+            // 앞 줄에서 비드 두 점 실측으로 넣은 옆 이동·회전 — 그 줄에서 잰 값이라 다른 줄에는 맞지 않는다. 옮기기 전에 되돌린다.
+            if (context.Bag.TryGetValue(InternalWorkpieceFrame.BeadLineCorrectionBagKey, out var blv) && blv is double[] { Length: 5 } beadFix)
+            {
+                frame = InternalWorkpieceFrame.UndoBeadLine(frame, beadFix[0], beadFix[1], beadFix[2..]);
+                context.Bag.Remove(InternalWorkpieceFrame.BeadLineCorrectionBagKey);
+                _logger.LogInformation(
+                    "[Cobot 검사위치 이동] 다른 줄 좌표계 재사용 — 앞 줄의 비드 실측 보정(옆 {Lat:+0.0;-0.0}mm, 회전 {Rot:+0.000;-0.000}°)을 되돌림",
+                    beadFix[0], beadFix[1]);
+            }
             var (other, rotDeg, axisErrDeg, dropNormalMm, gridTiltMm) = InternalWorkpieceFrame.MoveToOtherLine(frame, anchorStart, startBase, seamDirBase);
             if (other is null)
                 return $"[Cobot 검사위치 이동] 다른 줄 좌표계 재사용 — 이번 용접선 방향이 직전 좌표계 축에서 {axisErrDeg:+0.0;-0.0}° 벗어나 " +
