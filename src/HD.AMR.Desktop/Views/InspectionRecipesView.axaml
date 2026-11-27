@@ -111,7 +111,7 @@
                                                    Text="챔퍼 면(SL/PL/SU/PU)에서 수직(경사 방향) 용접선일 때 위 프로필 대신 이 프로필의 경유점을 씁니다. 챔퍼 수평·일반 면은 위 프로필을 씁니다. 미지정이면 챔퍼 수직 ACS 액션이 FAILED 입니다." />
                                     </StackPanel>
 
-                                    <!-- 면별 프로필 (십자 CROSS4_L/CROSS4_R 전용) -->
+                                    <!-- 면별 프로필 (십자 CROSS4_T1~T4 전용) -->
                                     <StackPanel IsVisible="{Binding IsCross4}">
                                         <TextBlock Classes="section" Text="면별 프로필" />
                                         <ItemsControl ItemsSource="{Binding WallProfiles}">
@@ -131,12 +131,12 @@
                                             </ItemsControl.ItemTemplate>
                                         </ItemsControl>
                                         <TextBlock Classes="hint"
-                                                   Text="면마다 다른 프로필을 쓰려면 여기서 고릅니다. '기본 프로필 사용'인 면은 위 티칭 프로필을 씁니다. 좌/우는 면을 정면으로 바라본 기준이며, ACS 가 seamType(CROSS4_L/CROSS4_R)으로 알려 줍니다." />
+                                                   Text="면마다 다른 프로필을 쓰려면 여기서 고릅니다. '기본 프로필 사용'인 면은 위 티칭 프로필을 씁니다. 십자 타입(T1~T4)은 ACS 가 seamType(CROSS4_T1~T4)으로 알려 주며, 타입마다 위에서 프로필을 따로 고릅니다." />
                                     </StackPanel>
 
-                                    <!-- 좌/우 미지정(CROSS4) 지령의 면별 기본값 (CROSS4_R 전용) -->
-                                    <StackPanel IsVisible="{Binding IsCross4R}">
-                                        <TextBlock Classes="section" Text="ACS 가 좌/우 없이 CROSS4 만 보낼 때 — 우측으로 실행할 면" />
+                                    <!-- 타입 미지정(CROSS4) 지령의 면별 기본값 (CROSS4_T2 전용) -->
+                                    <StackPanel IsVisible="{Binding IsCross4T2}">
+                                        <TextBlock Classes="section" Text="ACS 가 타입 없이 CROSS4 만 보낼 때 — T2 로 실행할 면" />
                                         <ItemsControl ItemsSource="{Binding UnspecifiedSideWalls}">
                                             <ItemsControl.ItemsPanel>
                                                 <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
@@ -148,10 +148,10 @@
                                             </ItemsControl.ItemTemplate>
                                         </ItemsControl>
                                         <TextBlock Classes="hint"
-                                                   Text="체크한 면의 CROSS4 지령은 이 레시피(우측)로, 체크하지 않은 면은 CROSS4_L(좌측)로 실행합니다. ACS 가 CROSS4_L/CROSS4_R 를 보낸 십자는 이 설정과 무관하게 그대로 따릅니다." />
+                                                   Text="체크한 면의 CROSS4 지령은 이 레시피(T2)로, 체크하지 않은 면은 CROSS4_T1 로 실행합니다. ACS 가 CROSS4_T1~T4 를 보낸 십자는 이 설정과 무관하게 그대로 따릅니다." />
                                     </StackPanel>
-                                    <TextBlock Classes="hint" IsVisible="{Binding IsCross4L}"
-                                               Text="ACS 가 좌/우 없이 CROSS4 만 보낸 십자는 기본으로 이 레시피(좌측)로 실행합니다. 우측으로 실행할 면은 CROSS4_R 레시피에서 고릅니다." />
+                                    <TextBlock Classes="hint" IsVisible="{Binding IsCross4T1}"
+                                               Text="ACS 가 타입 없이 CROSS4 만 보낸 십자는 기본으로 이 레시피(T1)로 실행합니다. T2 로 실행할 면은 CROSS4_T2 레시피에서 고릅니다." />
 
                                     <!-- 실행 스텝 — 시퀀스 풀에서 끌어오기 -->
                                     <StackPanel Spacing="6">

@@ -27,7 +27,7 @@ public record DrawingTeachingSummary(
 /// <summary>
 /// 검사 레시피(<see cref="InspectionRecipe"/>, 9종 카탈로그) CRUD + 기동 시드.
 /// 시드는 upsert-if-missing — 기본값은 코드(git)로 버전 관리하되, 이미 존재하는 행(현장 조정값)은
-/// 건드리지 않는다. LINE 만 Enabled=true (CROSS3-R*/CROSS4_L·R/CORNER2/CORNER3 은 실행 게이트 OFF — N13/캡처 교시 대기).
+/// 건드리지 않는다. LINE 만 Enabled=true (CROSS3-R*/CROSS4_T1~T4/CORNER2/CORNER3 은 실행 게이트 OFF — N13/캡처 교시 대기).
 /// 면 자세별 변종(LINE-WALL 등)은 면 자세-독립 단일 레시피로 통합됨(§9-8) — 구 DB 행 정리는 <see cref="Data.SqliteCompatMigrations"/>.
 /// </summary>
 public class InspectionRecipeService
@@ -134,16 +134,16 @@ public class InspectionRecipeService
     /// <summary>레시피에 지정할 티칭 프로필 검증 — 저장 전 UI 가 호출. 문제 없으면 null, 있으면 사유.
     /// 규칙: CORNER3 은 실행 시퀀스가 없어 지정 불가, 프로필 존재, 프로필 SeamType = 레시피 타입, 경유점 2점 이상.
     /// 챔퍼 수직용 프로필(<see cref="InspectionRecipe.ChamferSlopeProfileId"/>)은 LINE 레시피에만,
-    /// 면별 프로필(<see cref="InspectionRecipe.WallProfilesJson"/>)은 십자(CROSS4_L/CROSS4_R) 레시피에만 지정할 수 있고 같은 규칙을 따른다.</summary>
+    /// 면별 프로필(<see cref="InspectionRecipe.WallProfilesJson"/>)은 십자(CROSS4_T1~T4) 레시피에만 지정할 수 있고 같은 규칙을 따른다.</summary>
     public async Task<string?> ValidateProfileAssignmentAsync(InspectionRecipe recipe, CancellationToken ct = default)
     {
         if (recipe.ChamferSlopeProfileId is not null && recipe.Id != RecipeIds.Line)
             return $"챔퍼 수직용 프로필은 LINE 레시피에만 지정할 수 있습니다(현재 {recipe.Id}).";
 
-        if (!string.IsNullOrWhiteSpace(recipe.UnspecifiedSideWalls) && recipe.Id != RecipeIds.Cross4R)
-            return $"좌/우 미지정 지령의 면별 기본값은 CROSS4_R 레시피에만 설정할 수 있습니다(현재 {recipe.Id}).";
+        if (!string.IsNullOrWhiteSpace(recipe.UnspecifiedSideWalls) && recipe.Id != RecipeIds.Cross4T2)
+            return $"타입 미지정 지령의 면별 기본값은 CROSS4_T2 레시피에만 설정할 수 있습니다(현재 {recipe.Id}).";
         if (!string.IsNullOrWhiteSpace(recipe.WallProfilesJson) && !InspectionRecipeResolver.IsCross4(recipe.Id))
-            return $"면별 프로필은 CROSS4_L/CROSS4_R 레시피에만 지정할 수 있습니다(현재 {recipe.Id}).";
+            return $"면별 프로필은 CROSS4_T1~T4 레시피에만 지정할 수 있습니다(현재 {recipe.Id}).";
 
         if ((await ValidateOneAsync(recipe, recipe.InspectionProfileId, "", ct)
              ?? await ValidateOneAsync(recipe, recipe.ChamferSlopeProfileId, "챔퍼 수직용 ", ct)) is { } error)
@@ -179,7 +179,7 @@ public class InspectionRecipeService
         return wantSeamType is not null && string.Equals(seam, wantSeamType, StringComparison.OrdinalIgnoreCase);
     }
 
-    /// <summary>기동 시드 — 카탈로그 9종 중 없는 행만 추가(현장 수정값 보존).</summary>
+    /// <summary>기동 시드 — 카탈로그 중 없는 행만 추가(현장 수정값 보존).</summary>
     public async Task SeedDefaultsAsync(CancellationToken ct = default)
     {
         var existingIds = await _db.InspectionRecipes.Select(r => r.Id).ToListAsync(ct);
@@ -201,7 +201,7 @@ public class InspectionRecipeService
         }
     }
 
-    /// <summary>카탈로그 9종 기본값 (INSPECTION_TYPES.md §5 / 사양 §8.5.1). 면 자세-독립 — 접근 자세·방향은
+    /// <summary>카탈로그 기본값 (INSPECTION_TYPES.md §5 / 사양 §8.5.1). 면 자세-독립 — 접근 자세·방향은
     /// 런타임이 wall_code 로 계산하고, 면별 경유점 차이는 레시피에 바인딩된 티칭 프로파일이 흡수한다.</summary>
     private static IEnumerable<InspectionRecipe> BuildDefaults()
     {
@@ -214,9 +214,12 @@ public class InspectionRecipeService
             (RecipeIds.Cross3R90, "T자 3갈래 — 90°", SeamTypeKind.Cross3R90, SurfaceOrientation.Any, false),
             (RecipeIds.Cross3R180, "T자 3갈래 — 180°", SeamTypeKind.Cross3R180, SurfaceOrientation.Any, false),
             (RecipeIds.Cross3R270, "T자 3갈래 — 270°", SeamTypeKind.Cross3R270, SurfaceOrientation.Any, false),
-            // 십자 — 수직 용접선이 좌측/우측에 있는 두 타입(ACS seamType CROSS4_L/CROSS4_R). 면별 프로필 지정 가능.
-            (RecipeIds.Cross4L, "4점 십자 — 수직선 좌측", SeamTypeKind.Cross4L, SurfaceOrientation.Any, false),
-            (RecipeIds.Cross4R, "4점 십자 — 수직선 우측", SeamTypeKind.Cross4R, SurfaceOrientation.Any, false),
+            // 십자 — 접합 형상 4타입(ACS seamType CROSS4_T1~T4). 타입마다 티칭 프로필을 지정하고 면별 프로필도 지정할 수 있다.
+            // T3/T4 는 프로필을 지정하고 Enabled 를 켤 때까지 실행되지 않는다.
+            (RecipeIds.Cross4T1, "4점 십자 — T1", SeamTypeKind.Cross4T1, SurfaceOrientation.Any, false),
+            (RecipeIds.Cross4T2, "4점 십자 — T2", SeamTypeKind.Cross4T2, SurfaceOrientation.Any, false),
+            (RecipeIds.Cross4T3, "4점 십자 — T3", SeamTypeKind.Cross4T3, SurfaceOrientation.Any, false),
+            (RecipeIds.Cross4T4, "4점 십자 — T4", SeamTypeKind.Cross4T4, SurfaceOrientation.Any, false),
             (RecipeIds.Corner2, "2면 코너 (이면, 브릿지 플레이트)", SeamTypeKind.Corner2, SurfaceOrientation.Any, false),
             (RecipeIds.Corner3, "3면 코너 (삼면, 135°·90°·90°, 브릿지 플레이트)", SeamTypeKind.Corner, SurfaceOrientation.Any, false),
         };

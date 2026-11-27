@@ -222,7 +222,7 @@ public static class TaskBundlePlanner
 
     /// <summary>십자 4갈래(좌/우 구분 없는 구 계약 포함)인가.</summary>
     public static bool IsCross4(SeamTypeKind kind)
-        => kind is SeamTypeKind.Cross or SeamTypeKind.Cross4L or SeamTypeKind.Cross4R;
+        => kind is SeamTypeKind.Cross or SeamTypeKind.Cross4T1 or SeamTypeKind.Cross4T2 or SeamTypeKind.Cross4T3 or SeamTypeKind.Cross4T4;
 
     /// <summary>점1→점2 선 위로 본, 점1 에서 용접선 가운데까지 거리 [mm](도면 좌표는 m). 계산할 수 없으면 null.</summary>
     internal static double? AlongMm(double[] point1W, double[] point2W, double[]? startW, double[]? endW)

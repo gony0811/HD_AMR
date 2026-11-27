@@ -47,7 +47,8 @@ public sealed partial class InspectionMapViewModel : ViewModelBase
                     Cell(SeamTypeKind.Line, w.Code, byId),
                     Cell(SeamTypeKind.Cross3R0, w.Code, byId), Cell(SeamTypeKind.Cross3R90, w.Code, byId),
                     Cell(SeamTypeKind.Cross3R180, w.Code, byId), Cell(SeamTypeKind.Cross3R270, w.Code, byId),
-                    Cell(SeamTypeKind.Cross4L, w.Code, byId), Cell(SeamTypeKind.Cross4R, w.Code, byId),
+                    Cell(SeamTypeKind.Cross4T1, w.Code, byId), Cell(SeamTypeKind.Cross4T2, w.Code, byId),
+                    Cell(SeamTypeKind.Cross4T3, w.Code, byId), Cell(SeamTypeKind.Cross4T4, w.Code, byId),
                     Cell(SeamTypeKind.Cross, w.Code, byId, rightWalls),
                     Cell(SeamTypeKind.Corner2, w.Code, byId), Cell(SeamTypeKind.Corner, w.Code, byId)));
 
@@ -103,7 +104,7 @@ public sealed partial class InspectionMapViewModel : ViewModelBase
 public sealed record MapCell(string Label, bool Enabled);
 public sealed record WallMapRow(string Code, string Label, MapCell Line,
     MapCell Cross3R0, MapCell Cross3R90, MapCell Cross3R180, MapCell Cross3R270,
-    MapCell Cross4L, MapCell Cross4R, MapCell Cross4Unspecified, MapCell Corner2, MapCell Corner3);
+    MapCell Cross4T1, MapCell Cross4T2, MapCell Cross4T3, MapCell Cross4T4, MapCell Cross4Unspecified, MapCell Corner2, MapCell Corner3);
 public sealed record RecipeStatusRow(string Id, string SeamType, string Orientation, bool Enabled, string Source, string AssignedProfile);
 public sealed record TeachingRow(string DrawingName, string FileName, string ProfileName, string SeamType, string UsedBy,
     int WaypointCount, string TaughtAt, string Status, bool Runnable);

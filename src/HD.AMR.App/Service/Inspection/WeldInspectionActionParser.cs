@@ -67,9 +67,11 @@ public static class WeldInspectionActionParser
         switch (seamTypeRaw)
         {
             case "LINE": seamType = SeamTypeKind.Line; break;
-            case "CROSS4_L": seamType = SeamTypeKind.Cross4L; break;            // 십자 — 수직선 좌측
-            case "CROSS4_R": seamType = SeamTypeKind.Cross4R; break;            // 십자 — 수직선 우측
-            case "CROSS4": case "CROSS": seamType = SeamTypeKind.Cross; break;   // 좌/우 미구분 — 레시피에 설정한 면별 기본값(L 또는 R)으로 실행
+            case "CROSS4_T1": case "CROSS4_L": seamType = SeamTypeKind.Cross4T1; break;   // 십자 T1 (구 "CROSS4_L" 수용)
+            case "CROSS4_T2": case "CROSS4_R": seamType = SeamTypeKind.Cross4T2; break;   // 십자 T2 (구 "CROSS4_R" 수용)
+            case "CROSS4_T3": seamType = SeamTypeKind.Cross4T3; break;                    // 십자 T3
+            case "CROSS4_T4": seamType = SeamTypeKind.Cross4T4; break;                    // 십자 T4
+            case "CROSS4": case "CROSS": seamType = SeamTypeKind.Cross; break;   // 타입 미구분 — 레시피에 설정한 면별 기본값(T1 또는 T2)으로 실행
             case "CROSS3_R0": case "CROSS3": seamType = SeamTypeKind.Cross3R0; break;   // T자 0° (legacy bare "CROSS3" → 0°)
             case "CROSS3_R90": seamType = SeamTypeKind.Cross3R90; break;          // T자 90°
             case "CROSS3_R180": seamType = SeamTypeKind.Cross3R180; break;        // T자 180°
@@ -78,7 +80,7 @@ public static class WeldInspectionActionParser
             case "CORNER2": seamType = SeamTypeKind.Corner2; break;               // 2면 코너
             default:
                 // POLYLINE 포함 미정의 값은 계약 위반으로 거부(§8.1 — 2점 계약이라 세그먼트 방향 불명).
-                error = $"미정의 seamType '{seamTypeRaw ?? "(누락)"}' — LINE/CROSS3_R0·R90·R180·R270/CROSS4_L·CROSS4_R/CORNER2/CORNER3 만 수용(legacy CROSS4/CROSS/CORNER/bare CROSS3 허용)";
+                error = $"미정의 seamType '{seamTypeRaw ?? "(누락)"}' — LINE/CROSS3_R0·R90·R180·R270/CROSS4_T1·T2·T3·T4/CORNER2/CORNER3 만 수용(legacy CROSS4_L·CROSS4_R/CROSS4/CROSS/CORNER/bare CROSS3 허용)";
                 return false;
         }
 

@@ -13,7 +13,7 @@ namespace HD.AMR.App.Data.Entities;
 /// </summary>
 public class InspectionRecipe
 {
-    /// <summary>레시피 id — "LINE"/"CROSS4_L"/"CROSS3-R0".. 등 9종 문자열 그대로 (사양 §8.5.1, FK 없음).</summary>
+    /// <summary>레시피 id — "LINE"/"CROSS4_T1"/"CROSS3-R0".. 등 11종 문자열 그대로 (사양 §8.5.1, FK 없음).</summary>
     public string Id { get; set; } = "";
 
     public string DisplayName { get; set; } = "";
@@ -24,7 +24,7 @@ public class InspectionRecipe
     /// 런타임 실행 분기에 쓰지 않는다(§9-8 — 접근 자세·법선은 wall_code 로 계산).</summary>
     public SurfaceOrientation Orientation { get; set; }
 
-    /// <summary>실행 가능 게이트 — 미구현 타입(CROSS4_L·R/CROSS3-R*/CORNER2/CORNER3)은 false 시드.
+    /// <summary>실행 가능 게이트 — 미구현 타입(CROSS4_T1~T4/CROSS3-R*/CORNER2/CORNER3)은 false 시드.
     /// false 인 레시피로 매핑된 액션은 FAILED + inspectionFailed(실행 불가) 보고.</summary>
     public bool Enabled { get; set; }
 
@@ -49,15 +49,15 @@ public class InspectionRecipe
     /// (기본 프로필로 대체하지 않음 — 엉뚱한 위치를 스캔하게 된다). 현장 지정값이라 '기본값' 재적용 시에도 보존된다.</summary>
     public int? ChamferSlopeProfileId { get; set; }
 
-    /// <summary>십자(CROSS4_L/CROSS4_R) 전용 — 면(wall_code)별로 따로 쓸 티칭 프로필 지정. JSON object
+    /// <summary>십자(CROSS4_T1~T4) 전용 — 면(wall_code)별로 따로 쓸 티칭 프로필 지정. JSON object
     /// (예 {"SM":12,"PM":13}, 값 = <see cref="InspectionProfile.Id"/>). 여기 없는 면은 <see cref="InspectionProfileId"/> 를 쓴다.
     /// null = 모든 면이 기본 프로필. 해석은 <see cref="InspectionRecipeResolver.ParseWallProfiles"/>.
     /// 현장 지정값이라 '기본값' 재적용 시에도 보존된다.</summary>
     public string? WallProfilesJson { get; set; }
 
-    /// <summary>CROSS4_R 전용 — ACS 가 좌/우를 밝히지 않은 구 seamType("CROSS4"·"CROSS")을 보냈을 때 <b>우측</b>으로 실행할 면
-    /// (wall_code 쉼표 구분, 예 "SM,SL"). 여기 없는 면은 좌측(CROSS4_L)으로 실행한다. null = 전부 좌측.
-    /// 좌/우는 면을 정면으로 바라본 기준이다. ACS 가 CROSS4_L/CROSS4_R 를 보내면 이 값은 쓰지 않는다.
+    /// <summary>CROSS4_T2 전용 — ACS 가 타입을 밝히지 않은 구 seamType("CROSS4"·"CROSS")을 보냈을 때 <b>T2</b>로 실행할 면
+    /// (wall_code 쉼표 구분, 예 "SM,SL"). 여기 없는 면은 T1(CROSS4_T1)으로 실행한다. null = 전부 T1.
+    /// ACS 가 CROSS4_T1~T4(또는 구 CROSS4_L/R)를 보내면 이 값은 쓰지 않는다.
     /// 현장 지정값이라 '기본값' 재적용 시에도 보존된다.</summary>
     public string? UnspecifiedSideWalls { get; set; }
 

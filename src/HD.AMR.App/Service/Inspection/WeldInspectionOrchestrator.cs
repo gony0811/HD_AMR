@@ -541,14 +541,14 @@ public sealed class WeldInspectionOrchestrator : IWeldInspectionExecutor
         var sequence = scope.ServiceProvider.GetRequiredService<SequenceService>();
         var param = scope.ServiceProvider.GetRequiredService<ParameterService>();
 
-        // 좌/우를 밝히지 않은 십자("CROSS4")는 레시피에 설정한 면별 기본값(L 또는 R)으로 고른다.
+        // 타입을 밝히지 않은 십자("CROSS4")는 레시피에 설정한 면별 기본값(T1 또는 T2)으로 고른다.
         if (req.SeamType == SeamTypeKind.Cross)
         {
             var rightWalls = InspectionRecipeResolver.ParseWallList(
-                (await recipeService.GetAsync(RecipeIds.Cross4R, ct))?.UnspecifiedSideWalls);
+                (await recipeService.GetAsync(RecipeIds.Cross4T2, ct))?.UnspecifiedSideWalls);
             recipeId = InspectionRecipeResolver.ResolveRecipeId(req.SeamType, req.DrawingPos.WallCode, rightWalls);
             _logger.LogInformation(
-                "seamType CROSS4(좌/우 미지정) — wall={Wall} 면별 기본값으로 recipe={Recipe} 선택 (jobRef={JobRef})",
+                "seamType CROSS4(타입 미지정) — wall={Wall} 면별 기본값으로 recipe={Recipe} 선택 (jobRef={JobRef})",
                 req.DrawingPos.WallCode, recipeId, req.JobRef);
         }
 

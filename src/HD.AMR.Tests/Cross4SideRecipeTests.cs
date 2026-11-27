@@ -10,7 +10,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace HD.AMR.Tests;
 
 /// <summary>
-/// 십자 4갈래를 수직 용접선 좌/우 두 타입(CROSS4_L/CROSS4_R)으로 나눈 사양 — ACS seamType 을 그대로 따르고,
+/// 십자 4갈래를 접합 형상 네 타입(CROSS4_T1~T4)으로 나눈 사양 — ACS seamType 을 그대로 따르고,
 /// 면별로 다른 프로필을 지정할 수 있으며, 구 CROSS4 레시피의 현장 설정은 양쪽으로 옮겨진다.
 /// </summary>
 public class Cross4SideRecipeTests : IDisposable
@@ -45,9 +45,9 @@ public class Cross4SideRecipeTests : IDisposable
     // ── 레시피 선택: ACS 가 보낸 좌/우를 그대로 따른다 ────────────────
 
     [Theory]
-    [InlineData(SeamTypeKind.Cross4L, "CROSS4_L")]
-    [InlineData(SeamTypeKind.Cross4R, "CROSS4_R")]
-    [InlineData(SeamTypeKind.Cross, "CROSS4_L")]   // 좌/우 미지정 "CROSS4" — 면별 기본값 설정이 없으면 좌측
+    [InlineData(SeamTypeKind.Cross4T1, "CROSS4_T1")]
+    [InlineData(SeamTypeKind.Cross4T2, "CROSS4_T2")]
+    [InlineData(SeamTypeKind.Cross, "CROSS4_T1")]   // 타입 미지정 "CROSS4" — 면별 기본값 설정이 없으면 T1
     public void 좌우_유형은_면과_무관하게_각자의_레시피로_간다(SeamTypeKind seam, string expected)
     {
         foreach (var wall in HD.AMR.App.Models.WallCodes.All)
@@ -59,18 +59,18 @@ public class Cross4SideRecipeTests : IDisposable
     {
         var recipes = new[]
         {
-            new InspectionRecipe { Id = RecipeIds.Cross4L },
-            new InspectionRecipe { Id = RecipeIds.Cross4R, UnspecifiedSideWalls = "SM, SL,XX" },   // 정본 코드가 아닌 XX 는 버린다
+            new InspectionRecipe { Id = RecipeIds.Cross4T1 },
+            new InspectionRecipe { Id = RecipeIds.Cross4T2, UnspecifiedSideWalls = "SM, SL,XX" },   // 정본 코드가 아닌 XX 는 버린다
         };
         var right = InspectionRecipeResolver.Cross4RightWalls(recipes);
         Assert.Equal(new[] { "SL", "SM" }, right.OrderBy(w => w));
 
-        Assert.Equal("CROSS4_R", InspectionRecipeResolver.ResolveRecipeId(SeamTypeKind.Cross, "SM", right));
-        Assert.Equal("CROSS4_R", InspectionRecipeResolver.ResolveRecipeId(SeamTypeKind.Cross, "SL", right));
-        Assert.Equal("CROSS4_L", InspectionRecipeResolver.ResolveRecipeId(SeamTypeKind.Cross, "PM", right));
+        Assert.Equal("CROSS4_T2", InspectionRecipeResolver.ResolveRecipeId(SeamTypeKind.Cross, "SM", right));
+        Assert.Equal("CROSS4_T2", InspectionRecipeResolver.ResolveRecipeId(SeamTypeKind.Cross, "SL", right));
+        Assert.Equal("CROSS4_T1", InspectionRecipeResolver.ResolveRecipeId(SeamTypeKind.Cross, "PM", right));
         // ACS 가 좌/우를 밝혔으면 면별 기본값과 반대여도 그대로
-        Assert.Equal("CROSS4_L", InspectionRecipeResolver.ResolveRecipeId(SeamTypeKind.Cross4L, "SM", right));
-        Assert.Equal("CROSS4_R", InspectionRecipeResolver.ResolveRecipeId(SeamTypeKind.Cross4R, "PM", right));
+        Assert.Equal("CROSS4_T1", InspectionRecipeResolver.ResolveRecipeId(SeamTypeKind.Cross4T1, "SM", right));
+        Assert.Equal("CROSS4_T2", InspectionRecipeResolver.ResolveRecipeId(SeamTypeKind.Cross4T2, "PM", right));
         Assert.Null(InspectionRecipeResolver.ResolveRecipeId(SeamTypeKind.Cross, "W03", right));
 
         Assert.Equal("SM,SL", InspectionRecipeResolver.SerializeWallList(new[] { "SL", "SM" }));   // 정본 표 순
@@ -83,8 +83,8 @@ public class Cross4SideRecipeTests : IDisposable
     [Fact]
     public void 면별로_지정한_프로필이_실행_경로에서_선택된다()
     {
-        var left = new InspectionRecipe { Id = RecipeIds.Cross4L, InspectionProfileId = 9, WallProfilesJson = "{\"SM\":12,\"T\":13}" };
-        var right = new InspectionRecipe { Id = RecipeIds.Cross4R, InspectionProfileId = 21, WallProfilesJson = "{\"SM\":22}" };
+        var left = new InspectionRecipe { Id = RecipeIds.Cross4T1, InspectionProfileId = 9, WallProfilesJson = "{\"SM\":12,\"T\":13}" };
+        var right = new InspectionRecipe { Id = RecipeIds.Cross4T2, InspectionProfileId = 21, WallProfilesJson = "{\"SM\":22}" };
 
         int? Pick(InspectionRecipe r, string wall, InspectionMoveDirection dir = InspectionMoveDirection.Horizontal)
             => InspectionRecipeResolver.SelectProfileId(r, wall, dir).ProfileId;
@@ -104,8 +104,8 @@ public class Cross4SideRecipeTests : IDisposable
     {
         const int wallProfile = 9, chamferProfile = 30;
         var chamferWalls = "{\"SL\":30,\"PL\":30,\"SU\":30,\"PU\":30}";
-        var left = new InspectionRecipe { Id = RecipeIds.Cross4L, InspectionProfileId = wallProfile, WallProfilesJson = chamferWalls };
-        var right = new InspectionRecipe { Id = RecipeIds.Cross4R, InspectionProfileId = 21, WallProfilesJson = "{\"SL\":31,\"PL\":31,\"SU\":31,\"PU\":31}" };
+        var left = new InspectionRecipe { Id = RecipeIds.Cross4T1, InspectionProfileId = wallProfile, WallProfilesJson = chamferWalls };
+        var right = new InspectionRecipe { Id = RecipeIds.Cross4T2, InspectionProfileId = 21, WallProfilesJson = "{\"SL\":31,\"PL\":31,\"SU\":31,\"PU\":31}" };
 
         foreach (var dir in new[] { InspectionMoveDirection.Horizontal, InspectionMoveDirection.Vertical })
         {
@@ -122,9 +122,9 @@ public class Cross4SideRecipeTests : IDisposable
         }
 
         var table = AcsProfilePayload.BuildAssignments(new[] { left, right });
-        Assert.All(table.Where(a => a.SeamType == "CROSS4_L"),
+        Assert.All(table.Where(a => a.SeamType == "CROSS4_T1"),
             a => Assert.Equal(a.WallCode is "SL" or "PL" or "SU" or "PU" ? chamferProfile : wallProfile, a.ProfileId));
-        Assert.All(table.Where(a => a.SeamType == "CROSS4_R"),
+        Assert.All(table.Where(a => a.SeamType == "CROSS4_T2"),
             a => Assert.Equal(a.WallCode is "SL" or "PL" or "SU" or "PU" ? 31 : 21, a.ProfileId));
     }
 
@@ -144,7 +144,7 @@ public class Cross4SideRecipeTests : IDisposable
     public void 면별_지정이_비었거나_깨졌으면_기본_프로필을_쓴다(string? json)
     {
         Assert.Empty(InspectionRecipeResolver.ParseWallProfiles(json));
-        var recipe = new InspectionRecipe { Id = RecipeIds.Cross4L, InspectionProfileId = 9, WallProfilesJson = json };
+        var recipe = new InspectionRecipe { Id = RecipeIds.Cross4T1, InspectionProfileId = 9, WallProfilesJson = json };
         Assert.Equal(9, InspectionRecipeResolver.SelectProfileId(recipe, "SM", InspectionMoveDirection.Horizontal).ProfileId);
     }
 
@@ -164,37 +164,132 @@ public class Cross4SideRecipeTests : IDisposable
     {
         var table = AcsProfilePayload.BuildAssignments(new[]
         {
-            new InspectionRecipe { Id = RecipeIds.Cross4L, InspectionProfileId = 9, WallProfilesJson = "{\"SM\":12}" },
-            new InspectionRecipe { Id = RecipeIds.Cross4R, InspectionProfileId = 21, UnspecifiedSideWalls = "F" },
+            new InspectionRecipe { Id = RecipeIds.Cross4T1, InspectionProfileId = 9, WallProfilesJson = "{\"SM\":12}" },
+            new InspectionRecipe { Id = RecipeIds.Cross4T2, InspectionProfileId = 21, UnspecifiedSideWalls = "F" },
         });
         int? Of(string type, string wall, string dir) =>
             table.SingleOrDefault(a => a.SeamType == type && a.WallCode == wall && a.Direction == dir)?.ProfileId;
 
-        Assert.Equal(9, Of("CROSS4_L", "PM", "H"));
-        Assert.Equal(12, Of("CROSS4_L", "SM", "H"));
-        Assert.Equal(12, Of("CROSS4_L", "SM", "V"));
-        Assert.Equal(21, Of("CROSS4_R", "SM", "H"));
+        Assert.Equal(9, Of("CROSS4_T1", "PM", "H"));
+        Assert.Equal(12, Of("CROSS4_T1", "SM", "H"));
+        Assert.Equal(12, Of("CROSS4_T1", "SM", "V"));
+        Assert.Equal(21, Of("CROSS4_T2", "SM", "H"));
         // 좌/우 미지정 "CROSS4" 는 실행 때와 같은 면별 기본값으로 실린다 — F 면만 우측, 나머지는 좌측
         Assert.Equal(9, Of("CROSS4", "PM", "H"));
         Assert.Equal(12, Of("CROSS4", "SM", "H"));
         Assert.Equal(21, Of("CROSS4", "F", "H"));
-        Assert.Equal(3 * 20, table.Count);
+        Assert.Equal(5 * 20, table.Count);   // T1·구 L 이름·T2·구 R 이름·CROSS4(미지정) × 10면 × 2방향
+    }
+
+    // ── T3·T4: 타입마다 프로필을 따로 지정 ─────────────────────────
+
+    [Theory]
+    [InlineData(SeamTypeKind.Cross4T3, "CROSS4_T3")]
+    [InlineData(SeamTypeKind.Cross4T4, "CROSS4_T4")]
+    public void T3_T4_도_면과_무관하게_각자의_레시피로_간다(SeamTypeKind seam, string expected)
+    {
+        foreach (var wall in HD.AMR.App.Models.WallCodes.All)
+            Assert.Equal(expected, InspectionRecipeResolver.ResolveRecipeId(seam, wall.Code));
+    }
+
+    [Fact]
+    public void 네_타입은_각자_지정한_프로필을_쓰고_면별_지정도_따른다()
+    {
+        var recipes = new[]
+        {
+            new InspectionRecipe { Id = RecipeIds.Cross4T1, InspectionProfileId = 9 },
+            new InspectionRecipe { Id = RecipeIds.Cross4T2, InspectionProfileId = 24 },
+            new InspectionRecipe { Id = RecipeIds.Cross4T3, InspectionProfileId = 31, WallProfilesJson = "{\"SM\":33}" },
+            new InspectionRecipe { Id = RecipeIds.Cross4T4, InspectionProfileId = 41 },
+        };
+        int? Pick(SeamTypeKind seam, string wall)
+        {
+            var id = InspectionRecipeResolver.ResolveRecipeId(seam, wall)!;
+            return InspectionRecipeResolver.SelectProfileId(recipes.Single(r => r.Id == id), wall, InspectionMoveDirection.Horizontal).ProfileId;
+        }
+
+        Assert.Equal(9, Pick(SeamTypeKind.Cross4T1, "SM"));
+        Assert.Equal(24, Pick(SeamTypeKind.Cross4T2, "SM"));
+        Assert.Equal(31, Pick(SeamTypeKind.Cross4T3, "PM"));
+        Assert.Equal(33, Pick(SeamTypeKind.Cross4T3, "SM"));   // T3 의 면별 지정
+        Assert.Equal(41, Pick(SeamTypeKind.Cross4T4, "SM"));
+        Assert.All(new[] { "CROSS4_T1", "CROSS4_T2", "CROSS4_T3", "CROSS4_T4" }, id => Assert.True(InspectionRecipeResolver.IsCross4(id)));
+        Assert.False(InspectionRecipeResolver.IsCross4("CROSS4_L"));
+    }
+
+    [Fact]
+    public void ACS_지정표에_네_타입과_구_이름이_실린다()
+    {
+        var table = AcsProfilePayload.BuildAssignments(new[]
+        {
+            new InspectionRecipe { Id = RecipeIds.Cross4T1, InspectionProfileId = 9 },
+            new InspectionRecipe { Id = RecipeIds.Cross4T2, InspectionProfileId = 24 },
+            new InspectionRecipe { Id = RecipeIds.Cross4T3, InspectionProfileId = 31 },
+            new InspectionRecipe { Id = RecipeIds.Cross4T4, InspectionProfileId = 41 },
+        });
+        int? Of(string type) => table.SingleOrDefault(a => a.SeamType == type && a.WallCode == "SM" && a.Direction == "H")?.ProfileId;
+
+        Assert.Equal(9, Of("CROSS4_T1"));
+        Assert.Equal(24, Of("CROSS4_T2"));
+        Assert.Equal(31, Of("CROSS4_T3"));
+        Assert.Equal(41, Of("CROSS4_T4"));
+        Assert.Equal(9, Of("CROSS4_L"));    // 구 이름 — 구버전 ACS 호환
+        Assert.Equal(24, Of("CROSS4_R"));
+        Assert.Equal(9, Of("CROSS4"));      // 타입 미지정은 면별 기본값(없으면 T1)
     }
 
     // ── 시드·마이그레이션 ─────────────────────────────────────────
 
     [Fact]
-    public async Task 새_DB_는_좌우_두_레시피로_시드되고_구_CROSS4_는_없다()
+    public async Task 구_L_R_레시피는_T1_T2_로_이름만_바뀌고_현장_설정은_남는다()
+    {
+        SqliteCompatMigrations.Apply(_db);
+        _db.Database.ExecuteSqlRaw(
+            "INSERT INTO InspectionRecipes (Id, DisplayName, SeamType, Orientation, Enabled, DryRun, VisionFailRatioMax, InspectionProfileId, WallProfilesJson, UnspecifiedSideWalls, CreatedAt, UpdatedAt) VALUES " +
+            "('CROSS4_L', '4점 십자 — 수직선 좌측', 'Cross4L', 'Any', 1, 0, 1.0, 9, '{{\"SM\":12}}', NULL, '2026-11-01', '2026-11-01')," +
+            "('CROSS4_R', '현장에서 고친 이름', 'Cross4R', 'Any', 1, 0, 1.0, 24, NULL, 'SM,SL', '2026-11-01', '2026-11-01');");
+
+        SqliteCompatMigrations.Apply(_db);
+        SqliteCompatMigrations.Apply(_db);            // 멱등
+        await Service().SeedDefaultsAsync();          // 시드는 옮겨진 행을 건드리지 않고 T3/T4 만 추가한다
+        _db.ChangeTracker.Clear();
+
+        Assert.False(_db.InspectionRecipes.Any(r => r.Id == "CROSS4_L" || r.Id == "CROSS4_R"));
+        var t1 = _db.InspectionRecipes.AsNoTracking().Single(r => r.Id == "CROSS4_T1");
+        Assert.Equal(SeamTypeKind.Cross4T1, t1.SeamType);
+        Assert.True(t1.Enabled);
+        Assert.Equal(9, t1.InspectionProfileId);
+        Assert.Equal("{\"SM\":12}", t1.WallProfilesJson);
+        Assert.Equal("4점 십자 — T1", t1.DisplayName);
+
+        var t2 = _db.InspectionRecipes.AsNoTracking().Single(r => r.Id == "CROSS4_T2");
+        Assert.Equal(SeamTypeKind.Cross4T2, t2.SeamType);
+        Assert.Equal(24, t2.InspectionProfileId);
+        Assert.Equal("SM,SL", t2.UnspecifiedSideWalls);
+        Assert.Equal("현장에서 고친 이름", t2.DisplayName);   // 기본 이름일 때만 바꾼다
+
+        foreach (var id in new[] { "CROSS4_T3", "CROSS4_T4" })
+        {
+            var r = _db.InspectionRecipes.AsNoTracking().Single(x => x.Id == id);
+            Assert.False(r.Enabled);                  // 프로필을 지정하고 켤 때까지 실행되지 않는다
+            Assert.Null(r.InspectionProfileId);
+        }
+    }
+
+    [Fact]
+    public async Task 새_DB_는_T1_T4_네_레시피로_시드되고_구_CROSS4_는_없다()
     {
         SqliteCompatMigrations.Apply(_db);
         await Service().SeedDefaultsAsync();
 
         var ids = _db.InspectionRecipes.AsNoTracking().Select(r => r.Id).ToList();
-        Assert.Contains("CROSS4_L", ids);
-        Assert.Contains("CROSS4_R", ids);
+        Assert.Contains("CROSS4_T1", ids);
+        Assert.Contains("CROSS4_T2", ids);
+        Assert.Contains("CROSS4_T3", ids);
+        Assert.Contains("CROSS4_T4", ids);
         Assert.DoesNotContain("CROSS4", ids);
         Assert.Equal(RecipeIds.All.OrderBy(i => i), ids.OrderBy(i => i));
-        Assert.Equal(SeamTypeKind.Cross4R, _db.InspectionRecipes.AsNoTracking().Single(r => r.Id == "CROSS4_R").SeamType);
+        Assert.Equal(SeamTypeKind.Cross4T2, _db.InspectionRecipes.AsNoTracking().Single(r => r.Id == "CROSS4_T2").SeamType);
     }
 
     [Fact]
@@ -217,7 +312,7 @@ public class Cross4SideRecipeTests : IDisposable
         _db.ChangeTracker.Clear();
 
         Assert.False(_db.InspectionRecipes.Any(r => r.Id == "CROSS4"));
-        foreach (var (id, seam) in new[] { ("CROSS4_L", SeamTypeKind.Cross4L), ("CROSS4_R", SeamTypeKind.Cross4R) })
+        foreach (var (id, seam) in new[] { ("CROSS4_T1", SeamTypeKind.Cross4T1), ("CROSS4_T2", SeamTypeKind.Cross4T2) })
         {
             var r = _db.InspectionRecipes.AsNoTracking().Single(x => x.Id == id);
             Assert.Equal(seam, r.SeamType);
@@ -239,7 +334,7 @@ public class Cross4SideRecipeTests : IDisposable
         SqliteCompatMigrations.Apply(_db);
         _db.InspectionRecipes.Add(new InspectionRecipe
         {
-            Id = "CROSS4_R", DisplayName = "우", SeamType = SeamTypeKind.Cross4R, InspectionProfileId = 77,
+            Id = "CROSS4_T2", DisplayName = "우", SeamType = SeamTypeKind.Cross4T2, InspectionProfileId = 77,
             WallProfilesJson = "{\"SM\":78}", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
         });
         _db.SaveChanges();
@@ -247,7 +342,7 @@ public class Cross4SideRecipeTests : IDisposable
         SqliteCompatMigrations.Apply(_db);
         _db.ChangeTracker.Clear();
 
-        var r = _db.InspectionRecipes.AsNoTracking().Single(x => x.Id == "CROSS4_R");
+        var r = _db.InspectionRecipes.AsNoTracking().Single(x => x.Id == "CROSS4_T2");
         Assert.Equal(77, r.InspectionProfileId);
         Assert.Equal("{\"SM\":78}", r.WallProfilesJson);
     }
@@ -264,14 +359,14 @@ public class Cross4SideRecipeTests : IDisposable
 
         InspectionRecipe R(string id, string? walls) => new() { Id = id, InspectionProfileId = cross, WallProfilesJson = walls };
 
-        Assert.Null(await svc.ValidateProfileAssignmentAsync(R(RecipeIds.Cross4R, $"{{\"SM\":{cross}}}")));
-        Assert.Contains("SM 면용", await svc.ValidateProfileAssignmentAsync(R(RecipeIds.Cross4R, $"{{\"SM\":{line}}}")));
-        Assert.Contains("2점 미만", await svc.ValidateProfileAssignmentAsync(R(RecipeIds.Cross4L, $"{{\"T\":{onePoint}}}")));
-        Assert.Contains("찾을 수 없습니다", await svc.ValidateProfileAssignmentAsync(R(RecipeIds.Cross4L, "{\"T\":9999}")));
-        Assert.Contains("CROSS4_R 레시피에만",
-            await svc.ValidateProfileAssignmentAsync(new InspectionRecipe { Id = RecipeIds.Cross4L, InspectionProfileId = cross, UnspecifiedSideWalls = "SM" }));
-        Assert.Null(await svc.ValidateProfileAssignmentAsync(new InspectionRecipe { Id = RecipeIds.Cross4R, InspectionProfileId = cross, UnspecifiedSideWalls = "SM" }));
-        Assert.Contains("CROSS4_L/CROSS4_R 레시피에만",
+        Assert.Null(await svc.ValidateProfileAssignmentAsync(R(RecipeIds.Cross4T2, $"{{\"SM\":{cross}}}")));
+        Assert.Contains("SM 면용", await svc.ValidateProfileAssignmentAsync(R(RecipeIds.Cross4T2, $"{{\"SM\":{line}}}")));
+        Assert.Contains("2점 미만", await svc.ValidateProfileAssignmentAsync(R(RecipeIds.Cross4T1, $"{{\"T\":{onePoint}}}")));
+        Assert.Contains("찾을 수 없습니다", await svc.ValidateProfileAssignmentAsync(R(RecipeIds.Cross4T1, "{\"T\":9999}")));
+        Assert.Contains("CROSS4_T2 레시피에만",
+            await svc.ValidateProfileAssignmentAsync(new InspectionRecipe { Id = RecipeIds.Cross4T1, InspectionProfileId = cross, UnspecifiedSideWalls = "SM" }));
+        Assert.Null(await svc.ValidateProfileAssignmentAsync(new InspectionRecipe { Id = RecipeIds.Cross4T2, InspectionProfileId = cross, UnspecifiedSideWalls = "SM" }));
+        Assert.Contains("CROSS4_T1~T4 레시피에만",
             await svc.ValidateProfileAssignmentAsync(new InspectionRecipe { Id = RecipeIds.Cross3R0, WallProfilesJson = $"{{\"SM\":{cross}}}" }));
     }
 
@@ -281,7 +376,7 @@ public class Cross4SideRecipeTests : IDisposable
         SqliteCompatMigrations.Apply(_db);
         var svc = Service();
         await svc.SeedDefaultsAsync();
-        var seeded = (await svc.GetAsync(RecipeIds.Cross4R))!;
+        var seeded = (await svc.GetAsync(RecipeIds.Cross4T2))!;
         seeded.Enabled = true;
         seeded.InspectionProfileId = 21;
         seeded.WallProfilesJson = "{\"SM\":22}";
@@ -289,10 +384,10 @@ public class Cross4SideRecipeTests : IDisposable
         await svc.SaveAsync(seeded);
         _db.ChangeTracker.Clear();
 
-        Assert.True(await svc.ResetToDefaultAsync(RecipeIds.Cross4R));
+        Assert.True(await svc.ResetToDefaultAsync(RecipeIds.Cross4T2));
         _db.ChangeTracker.Clear();
 
-        var r = (await svc.GetAsync(RecipeIds.Cross4R))!;
+        var r = (await svc.GetAsync(RecipeIds.Cross4T2))!;
         Assert.False(r.Enabled);                       // 코드 기본값으로
         Assert.Equal(21, r.InspectionProfileId);       // 현장 지정은 그대로
         Assert.Equal("{\"SM\":22}", r.WallProfilesJson);

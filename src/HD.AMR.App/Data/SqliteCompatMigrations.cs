@@ -263,8 +263,8 @@ CREATE TABLE IF NOT EXISTS InspectionRecipes (
         if (!hasChamferSlopeProfileId)
             db.Database.ExecuteSqlRaw("ALTER TABLE InspectionRecipes ADD COLUMN ChamferSlopeProfileId INTEGER NULL;");
 
-        // 십자 CROSS4_L/R 컬럼도 후방호환 추가 — WallProfilesJson(면별 티칭 프로필 지정, NULL = 전부 기본 프로필),
-        // UnspecifiedSideWalls(CROSS4_R — 좌/우 없는 구 CROSS4 지령을 우측으로 실행할 면, NULL = 전부 좌측).
+        // 십자 CROSS4_T1~T4 컬럼도 후방호환 추가 — WallProfilesJson(면별 티칭 프로필 지정, NULL = 전부 기본 프로필),
+        // UnspecifiedSideWalls(CROSS4_T2 — 타입 없는 구 CROSS4 지령을 T2 로 실행할 면, NULL = 전부 T1).
         foreach (var cross4Col in new[] { "WallProfilesJson", "UnspecifiedSideWalls" })
         {
             var hasCol = db.Database
@@ -317,12 +317,12 @@ CREATE TABLE IF NOT EXISTS InspectionRecipes (
             db.Database.ExecuteSqlRaw($"DELETE FROM InspectionRecipes WHERE Id LIKE '{newId}-%';");
         }
 
-        // 십자 CROSS4 를 수직 용접선 좌/우 두 타입(CROSS4_L/CROSS4_R)으로 분리. 구 'CROSS4' 행의 현장 설정(프로필 지정·
-        // Enabled·스텝·속도 등)을 양쪽에 그대로 복사한 뒤 구 행을 지운다 — 분리 직후에는 좌/우가 같은 프로필을 쓰므로
-        // 종전과 같은 동작이고, 현장에서 우측용 프로필을 교시해 CROSS4_R 에 바꿔 지정한다.
+        // 십자 CROSS4 를 타입별 레시피(CROSS4_T1/T2)로 분리. 구 'CROSS4' 행의 현장 설정(프로필 지정·
+        // Enabled·스텝·속도 등)을 양쪽에 그대로 복사한 뒤 구 행을 지운다 — 분리 직후에는 T1/T2 가 같은 프로필을 쓰므로
+        // 종전과 같은 동작이고, 현장에서 T2 용 프로필을 교시해 CROSS4_T2 에 바꿔 지정한다.
         // 멱등: 새 id 가 이미 있으면 INSERT 는 no-op 이고, 구 행이 없으면 둘 다 no-op. 위 통합 블록보다 뒤에 있어야 한다
-        // (구 면 자세별 CROSS4-* → CROSS4 → CROSS4_L/R 순). LIKE 'CROSS4-%' 는 '_' 가 든 새 id 에 걸리지 않는다.
-        foreach (var (newId, name, seam) in new[] { ("CROSS4_L", "4점 십자 — 수직선 좌측", "Cross4L"), ("CROSS4_R", "4점 십자 — 수직선 우측", "Cross4R") })
+        // (구 면 자세별 CROSS4-* → CROSS4 → CROSS4_T1/T2 순). LIKE 'CROSS4-%' 는 '_' 가 든 새 id 에 걸리지 않는다.
+        foreach (var (newId, name, seam) in new[] { ("CROSS4_T1", "4점 십자 — T1", "Cross4T1"), ("CROSS4_T2", "4점 십자 — T2", "Cross4T2") })
         {
             db.Database.ExecuteSqlRaw(
                 "INSERT INTO InspectionRecipes (Id, DisplayName, SeamType, Orientation, Enabled, DryRun, StepKeysJson, " +
@@ -333,6 +333,22 @@ CREATE TABLE IF NOT EXISTS InspectionRecipes (
                 $"AND NOT EXISTS (SELECT 1 FROM InspectionRecipes WHERE Id = '{newId}');");
         }
         db.Database.ExecuteSqlRaw("DELETE FROM InspectionRecipes WHERE Id = 'CROSS4';");
+
+        // 구 수직선 좌/우 레시피(CROSS4_L/CROSS4_R)를 T1/T2 로 이름만 바꾼다 — 프로필 지정·면별 지정·Enabled·속도 등
+        // 현장 설정은 같은 행에 그대로 남는다. 멱등: 구 행이 없으면 no-op. 새 id 가 이미 있으면(드문 경우) 새 행을 우선하고
+        // 구 행은 지운다. 구 DisplayName 이 기본값 그대로일 때만 새 이름으로 바꿔 현장에서 고친 이름은 보존한다.
+        foreach (var (oldId, newId, name, seam, oldName) in new[]
+        {
+            ("CROSS4_L", "CROSS4_T1", "4점 십자 — T1", "Cross4T1", "4점 십자 — 수직선 좌측"),
+            ("CROSS4_R", "CROSS4_T2", "4점 십자 — T2", "Cross4T2", "4점 십자 — 수직선 우측"),
+        })
+        {
+            db.Database.ExecuteSqlRaw(
+                $"UPDATE InspectionRecipes SET Id = '{newId}', SeamType = '{seam}', " +
+                $"DisplayName = CASE WHEN DisplayName = '{oldName}' THEN '{name}' ELSE DisplayName END " +
+                $"WHERE Id = '{oldId}' AND NOT EXISTS (SELECT 1 FROM InspectionRecipes WHERE Id = '{newId}');");
+            db.Database.ExecuteSqlRaw($"DELETE FROM InspectionRecipes WHERE Id = '{oldId}';");
+        }
 
         // 운영 로그(수동/ACS 동작 이력 + 실패 원인) — UI 로그 페이지 데이터 원본.
         db.Database.ExecuteSqlRaw(@"

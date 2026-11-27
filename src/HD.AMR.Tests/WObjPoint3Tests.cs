@@ -126,8 +126,8 @@ public class WObjPoint3Tests
     }
 
     [Theory]
-    [InlineData(SeamTypeKind.Cross4L, true)]
-    [InlineData(SeamTypeKind.Cross4R, true)]
+    [InlineData(SeamTypeKind.Cross4T1, true)]
+    [InlineData(SeamTypeKind.Cross4T2, true)]
     [InlineData(SeamTypeKind.Cross, true)]
     [InlineData(SeamTypeKind.Line, false)]
     public void CROSS4_종류를_가린다(SeamTypeKind kind, bool expected)

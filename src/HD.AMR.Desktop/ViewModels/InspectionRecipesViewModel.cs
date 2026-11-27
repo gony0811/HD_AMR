@@ -197,17 +197,17 @@ public sealed partial class RecipeRow : ObservableObject
     /// <summary>챔퍼 수직용 프로필은 LINE 레시피에만 있다.</summary>
     public bool IsLine => _entity.Id == RecipeIds.Line;
 
-    /// <summary>면별 프로필은 십자(CROSS4_L/CROSS4_R) 레시피에만 있다.</summary>
+    /// <summary>면별 프로필은 십자(CROSS4_T1~T4) 레시피에만 있다.</summary>
     public bool IsCross4 => InspectionRecipeResolver.IsCross4(_entity.Id);
 
     /// <summary>십자 전용 — 면(wall_code)마다 따로 쓸 프로필. '기본 프로필 사용'이면 위 티칭 프로필을 쓴다.</summary>
     public List<WallProfilePick> WallProfiles { get; } = new();
 
-    /// <summary>좌/우 미지정 지령의 면별 기본값은 CROSS4_R 레시피에 둔다.</summary>
-    public bool IsCross4R => _entity.Id == RecipeIds.Cross4R;
-    public bool IsCross4L => _entity.Id == RecipeIds.Cross4L;
+    /// <summary>타입 미지정 지령의 면별 기본값은 CROSS4_T2 레시피에 둔다.</summary>
+    public bool IsCross4T2 => _entity.Id == RecipeIds.Cross4T2;
+    public bool IsCross4T1 => _entity.Id == RecipeIds.Cross4T1;
 
-    /// <summary>CROSS4_R 전용 — ACS 가 좌/우 없이 CROSS4 만 보냈을 때 우측으로 실행할 면(체크). 나머지는 좌측.</summary>
+    /// <summary>CROSS4_T2 전용 — ACS 가 타입 없이 CROSS4 만 보냈을 때 T2 로 실행할 면(체크). 나머지는 T1.</summary>
     public List<WallCheck> UnspecifiedSideWalls { get; } = new();
 
     /// <summary>생성(로드) 이후 편집되었고 아직 저장하지 않음 — 목록에 ● 표시.</summary>
@@ -337,7 +337,7 @@ public sealed partial class RecipeRow : ObservableObject
         _selectedProfile = ProfileOptions.FirstOrDefault(o => o.Id == e.InspectionProfileId) ?? ProfileOption.None;
         _selectedChamferSlopeProfile = ProfileOptions.FirstOrDefault(o => o.Id == e.ChamferSlopeProfileId) ?? ProfileOption.None;
 
-        if (IsCross4R)
+        if (IsCross4T2)
         {
             var right = InspectionRecipeResolver.ParseWallList(e.UnspecifiedSideWalls);
             foreach (var w in WallCodes.All)
@@ -395,7 +395,7 @@ public sealed partial class RecipeRow : ObservableObject
         _entity.InspectAccPercent = InspectAccPercent is { } ia ? Math.Clamp((int)Math.Round(ia), 1, 100) : null;
         _entity.InspectionProfileId = IsCorner3 ? null : SelectedProfile?.Id;
         _entity.ChamferSlopeProfileId = IsLine ? SelectedChamferSlopeProfile?.Id : null;
-        _entity.UnspecifiedSideWalls = IsCross4R
+        _entity.UnspecifiedSideWalls = IsCross4T2
             ? InspectionRecipeResolver.SerializeWallList(UnspecifiedSideWalls.Where(w => w.Checked).Select(w => w.Code))
             : null;
         _entity.WallProfilesJson = IsCross4
