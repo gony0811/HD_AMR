@@ -247,6 +247,49 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
         Notify($"십자 {Points.Count}점 채움", false);
     }
 
+    /// <summary>
+    /// 작업물 좌표계(RunUser&gt;0)로 보낼 때의 광축 둘레 비틀림(0/180°)을 고른다 — 시퀀스 <c>InspectionRunStep</c> 과 같은 규칙.
+    /// 3점 교시 프레임은 X 가 점1→점2 방향이라 툴이 프레임 대비 Rz≈180° 일 수 있고, 경유점의 Rz(0)를 그대로 보내면 J6 이
+    /// 사양 밖으로 가야 해 컨트롤러 자동 IK 가 errcode=112 를 낸다(<see cref="ManualPointTwist"/>).
+    /// 후보 0/180° 를 첫 경유점 <paramref name="first"/> 로 IK(현재 관절 기준 최소 변위 해)해 J6 안전 범위 안인 쪽을 고른다.
+    /// 베이스(user=0)·프레임 미등록·IK 후보가 모두 없으면 0(종전 동작)이며 사유를 <c>Note</c> 로 돌려준다.
+    /// </summary>
+    private async Task<(double TwistDeg, string? Note)> SelectTwistAsync(double[] first, CancellationToken ct)
+    {
+        if (RunUser <= 0) return (0.0, null);
+        try
+        {
+            var frame = await _cobot.Rpc.GetWObjCoordAsync(RunUser, ct);
+            if (frame.Length != 6 || frame.All(v => v == 0.0)) return (0.0, null);
+            var current = await _cobot.Rpc.GetActualJointPosAsync(ct: ct);
+
+            var candidates = new List<(double TwistDeg, double? J6, double? TotalDeg)>();
+            foreach (var twist in ManualPointTwist.Candidates)
+            {
+                double? j6 = null, total = null;
+                try
+                {
+                    var joints = await _cobot.Rpc.GetInverseKinNearestAsync(
+                        ManualPointTwist.ToBase(first, frame, twist), current, RunTool, 0, ct);
+                    j6 = joints[5];
+                    total = joints.Zip(current, (a, b) => Math.Abs(a - b)).Sum();
+                }
+                catch (InvalidOperationException) { }
+                candidates.Add((twist, j6, total));
+            }
+
+            var desc = string.Join(", ", candidates.Select(c =>
+                c.J6 is { } j ? $"{c.TwistDeg:0}°→J6 {j:0.0}°" : $"{c.TwistDeg:0}°→IK 불가"));
+            if (WObjAttitude.SelectSafeTwist(current[5], candidates) is { } pick)
+                return (pick.TwistDeg, pick.TwistDeg != 0 ? $"툴 비틀림 {pick.TwistDeg:0}° 보정(작업물 #{RunUser} 기준 Rz≈180° — {desc})" : null);
+            return (0.0, $"비틀림 후보 중 J6 안전 범위({WObjAttitude.SafeJ6RangeText}) 안인 것이 없어 보정 없이 시도합니다 — {desc}");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return (0.0, $"비틀림 보정 생략({ex.Message})");
+        }
+    }
+
     [RelayCommand]
     private async Task MoveToPoint(XyPointVm p)
     {
@@ -254,10 +297,11 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
         Selected = Points.IndexOf(p);
         try
         {
-            var rc = await _cobot.Rpc.MoveLAsync(p.Pose(), tool: RunTool, user: RunUser, vel: RunVel,
+            var (twist, note) = await SelectTwistAsync(p.Pose(), CancellationToken.None);
+            var rc = await _cobot.Rpc.MoveLAsync(ManualPointTwist.Apply(p.Pose(), twist), tool: RunTool, user: RunUser, vel: RunVel,
                 acc: 100, ovl: 100, blendR: -1);
             RunErr = rc != 0;
-            RunMsg = $"#{Selected + 1} 이동 (rc={rc})";
+            RunMsg = $"#{Selected + 1} 이동 (rc={rc})" + (note is null ? "" : $" · {note}");
         }
         catch (Exception ex) { RunErr = true; RunMsg = $"이동 실패: {ex.Message}"; }
     }
@@ -338,6 +382,10 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
             var gasContinuous = _useGas && _gas.IsContinuousMode;
             var gasNonStop = gasContinuous && _gas.IsNonStopMode;   // 블렌딩 반경 > 0 — 경유점 무정지
             var gasNote = "";
+            // 작업물 좌표계로 보낼 때의 비틀림(0/180°)은 첫 점으로 한 번 정해 모든 점에 같게 쓴다(시퀀스와 같은 규칙).
+            var (twist, twistNote) = await SelectTwistAsync(Points[0].Pose(), ct);
+            if (twistNote is not null) RunMsg = twistNote;
+            double[] PoseOf(XyPointVm x) => ManualPointTwist.Apply(x.Pose(), twist);
             for (int i = 0; i < Points.Count; i++)
             {
                 ct.ThrowIfCancellationRequested();
@@ -346,7 +394,7 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
                 // 무정지: 남은 포인트 전체를 멈추지 않고 한 번에 지나가며 재고 끝낸다.
                 if (gasNonStop && i > 0)
                 {
-                    var passPoses = Points.Skip(i - 1).Select(x => x.Pose()).ToList();   // [0] = 지금 서 있는 포인트
+                    var passPoses = Points.Skip(i - 1).Select(PoseOf).ToList();   // [0] = 지금 서 있는 포인트
                     var passLabels = Enumerable.Range(i, Points.Count - i).Select(k => $"수동 #{k}→#{k + 1}").ToList();
                     RunMsg = $"#{i}→#{Points.Count} 무정지 이동·가스 연속 측정 중...";
                     IReadOnlyList<double[]> chain;
@@ -369,8 +417,8 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
                 if (gasContinuous && i > 0)
                 {
                     var segRc = 0;
-                    var to = Points[i].Pose();
-                    var from = Points[i - 1].Pose();
+                    var to = PoseOf(Points[i]);
+                    var from = PoseOf(Points[i - 1]);
                     RunMsg = $"구간 #{i}→#{i + 1} 이동·가스 연속 측정 중...";
                     var seg = await _gas.MeasureSegmentForDisplayAsync($"수동 #{i}→#{i + 1}",
                         async c => (segRc = await _cobot.Rpc.MoveLAsync(to, tool: RunTool, user: RunUser, vel: RunVel,
@@ -386,7 +434,7 @@ public sealed partial class InspectionPointsViewModel : ViewModelBase
                     RunMsg = $"구간 #{i}→#{i + 1} {s.Text}" + (s.Judgement == GasJudgement.Ok ? "" : " (다음 구간 계속)");
                     continue;
                 }
-                var rc = await _cobot.Rpc.MoveLAsync(Points[i].Pose(), tool: RunTool, user: RunUser, vel: RunVel,
+                var rc = await _cobot.Rpc.MoveLAsync(PoseOf(Points[i]), tool: RunTool, user: RunUser, vel: RunVel,
                     acc: 100, ovl: 100, blendR: -1, ct: ct);
                 RunMsg = $"#{i + 1} 이동 (rc={rc})";
                 if (rc != 0) { RunErr = true; RunMsg = $"#{i + 1} 이동 실패 (rc={rc}) — 중단"; return; }
