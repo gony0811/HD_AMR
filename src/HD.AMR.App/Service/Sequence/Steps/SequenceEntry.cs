@@ -341,6 +341,24 @@ internal static class SequenceEntry
     }
 
     /// <summary>
+    /// 면 앞 이송(같은 정차·같은 면의 다음 용접선으로 기준 자세 왕복 없이 이동) 전 준비 — 활성 좌표계 정규화와 자세 모드 확인만 한다.
+    /// 모드가 면과 맞지 않으면 사유(호출측은 종전 <see cref="PrepareAsync"/> 로 넘긴다), 맞으면 null.
+    /// </summary>
+    internal static async Task<string?> PrepareInPlaceAsync(
+        CobotService cobot, SequenceContext context, ILogger logger, CancellationToken ct)
+    {
+        var cur = await cobot.Rpc.GetActualJointPosAsync(ct: ct);
+        var mode = ResolveMode(cur, context);
+        if (ModeMismatch(mode, context.WallCode, Home3Taught(context), Home4Taught(context)) is { } mismatch)
+            return mismatch;
+        await NormalizeActiveFramesAsync(cobot, context, logger, ct);
+        RememberMode(mode);
+        Volatile.Write(ref _lastEntryWall, context.WallCode);
+        if (mode != PoseMode.Home) Volatile.Write(ref _lastModeWall, context.WallCode);
+        return null;
+    }
+
+    /// <summary>
     /// 현재 자세 모드의 기준 자세로 안전하게 돌아온다 — 시퀀스 진입·종료, AMR 주행 전 복귀가 모두 이 경로를 쓴다.
     /// 자세 모드(<see cref="ResolveMode"/> — 벽 앞에 뻗은 채면 시작할 때의 모드)는 바꾸지 않는다:
     /// · 홈 모드: 벽면 후퇴 → ready → 홈 (종전 경로)
@@ -378,7 +396,9 @@ internal static class SequenceEntry
             var planarRec = ApproachPathMemory.Last;
             var beforeRetract = await cobot.Rpc.GetTcpPoseInBaseAsync(ctx.Tool, ct);
             string? retraced;
-            try { retraced = await RetracePlanarAsync(cobot, ctx, logger, ct); }
+            // 홈 모드면 역주행 뒤 작업 준비 위치(미티칭이면 홈)로 관절 이동한다 — 그 경로까지 미리 본다.
+            var retraceNext = mode == PoseMode.Home ? (TaughtJoints(ctx, "ready") is not null ? "ready" : "home") : null;
+            try { retraced = await RetracePlanarAsync(cobot, ctx, logger, ct, retraceNext); }
             catch (RetraceBlockedException ex)
             {
                 // 경로 검증에서 막힘 — 아직 움직이지 않았다. 종전 벽면 후퇴로 넘어간다(그 경로도 움직이기 전에 검증한다).
@@ -502,7 +522,7 @@ internal static class SequenceEntry
     internal const double RetraceMaxInPlaneMm = 1800.0;
 
     private static async Task<string?> RetracePlanarAsync(
-        CobotService cobot, SequenceContext ctx, ILogger logger, CancellationToken ct)
+        CobotService cobot, SequenceContext ctx, ILogger logger, CancellationToken ct, string? nextKey = null)
     {
         if (ApproachPathMemory.Last is not { } rec) return null;
 
@@ -514,29 +534,44 @@ internal static class SequenceEntry
             return null;
         }
 
-        var skipPlanar = plan.InPlaneMm < CobotInspectionMoveStep.PlanarSkipMm;
+        // 진입 당시 자세를 알면 면 방향 이동 중에 그 자세로 되돌린다 — 도착 관절이 진입 MoveJ 의 끝(EntryJoints)과 같아져
+        // 그 뒤 기준 자세 MoveJ 가 진입 때 검증한 경로의 역경로가 된다. 자세 차이가 작으면(이미 같은 자세) 돌리지 않는다.
+        var restore = rec.EntryPose is { Length: 6 } ep && RotationAngleDeg(pose, ep) > RetraceRestoreMinDeg ? ep : null;
+        var skipPlanar = plan.InPlaneMm < CobotInspectionMoveStep.PlanarSkipMm && restore is null;
         if (plan.Lift is null && skipPlanar)
             return "후퇴 평면 진입점(이미 도착)";
 
-        double[] Pose(double[] p) => new[] { p[0], p[1], p[2], pose[3], pose[4], pose[5] };
         string Fmt(double[] v) => string.Join(", ", v.Select(x => x.ToString("0")));
 
         // ── 경로 검증(모션 없음) ─────────────────────────────────────────
         var curJoints = await cobot.Rpc.GetActualJointPosAsync(ct: ct);
         var start = pose.Take(3).ToArray();
-        var path = new List<(double[] Pt, bool Planar)>();
-        if (plan.Lift is { } lift)
-            path.AddRange(CobotInspectionMoveStep.SampleSegment(start, lift, CobotInspectionMoveStep.PlanarSampleMm).Select(p => (p, false)));
+        var liftPose = plan.Lift is { } lp ? new[] { lp[0], lp[1], lp[2], pose[3], pose[4], pose[5] } : pose.ToArray();
+        var entryPose = new[]
+        {
+            plan.Entry[0], plan.Entry[1], plan.Entry[2],
+            restore?[3] ?? pose[3], restore?[4] ?? pose[4], restore?[5] ?? pose[5],
+        };
+        var path = new List<(double[] Pose, bool Planar)>();
+        if (plan.Lift is not null)
+            path.AddRange(CobotInspectionMoveStep.SampleSegment(start, plan.Lift, CobotInspectionMoveStep.PlanarSampleMm)
+                .Select(p => (new[] { p[0], p[1], p[2], pose[3], pose[4], pose[5] }, false)));
         if (!skipPlanar)
-            path.AddRange(CobotInspectionMoveStep.SampleSegment(plan.Lift ?? start, plan.Entry, CobotInspectionMoveStep.PlanarSampleMm)
-                .Select(p => (p, true)));
+            path.AddRange(RetracePlanarSamples(liftPose, entryPose).Select(p => (p, true)));
+
+        // 면 여유 — 자세를 돌리며 가면 툴·손목이 면 쪽으로 쓸 수 있다. 기록에 면 이격이 있으면 실제 면, 없으면 접근점 평면 기준.
+        var kin = Fr5Kinematics.Fr5Wml;
+        var env = CobotEnvelope.Default;
+        var wallPoint = Enumerable.Range(0, 3).Select(i => rec.ApproachPoint[i] - rec.StandoffMm * rec.WallOut[i]).ToArray();
+        (double ClearanceMm, string Part) Wall(double[] q) => env.WallClearance(kin, q, wallPoint, rec.WallOut);
+        var floor = Math.Min(CobotInspectionMoveStep.EntryPathMarginMm, Wall(curJoints).ClearanceMm) - 1.0;
 
         var seed = curJoints;
         double[]? jLift = null, jEntry = null;
         foreach (var (pt, planar) in path)
         {
             double[] j;
-            try { j = await cobot.Rpc.GetInverseKinNearestAsync(Pose(pt), seed, ctx.Tool, 0, ct); }
+            try { j = await cobot.Rpc.GetInverseKinNearestAsync(pt, seed, ctx.Tool, 0, ct); }
             catch (InvalidOperationException ex)
             {
                 throw new RetraceBlockedException(
@@ -549,32 +584,97 @@ internal static class SequenceEntry
             if (RetractSelfBlocker(curJoints, j) is { } self)
                 throw new RetraceBlockedException(
                     $"복귀 경로 [{Fmt(pt)}] {self} — 움직이지 않고 정지합니다. 조그로 면에서 빼낸 뒤 재시도하세요.");
+            if (Wall(j) is var w && w.ClearanceMm < floor)
+                throw new RetraceBlockedException(
+                    $"복귀 경로 [{Fmt(pt)}] 면 여유 {w.ClearanceMm:0}mm < {floor + 1:0}mm ({w.Part}) — 움직이지 않습니다.");
             seed = j;
             if (planar) jEntry = j; else jLift = j;
         }
 
+        // 진입 자세로 돌렸는데 진입 때와 다른 해 가지로 왔다면 진입 MoveJ 의 역경로가 아니다 — 쓰지 않는다.
+        if (restore is not null && rec.EntryJoints is { Length: 6 } ej && RetraceEntryJointMismatch(seed, ej) is { } mismatch)
+            throw new RetraceBlockedException($"복귀 진입점 관절이 진입 때와 다름({mismatch}) — 움직이지 않습니다.");
+
+        // 도착한 뒤 이어질 기준 자세 관절 이동이 면 쪽으로 휘면 지금 움직이지 않는다 — 진입점까지 가서 갇히는 일을 막는다
+        // (실기 2026-11-27 15:31: 1393mm 역주행 뒤 작업 준비 위치 경로 면 여유 82mm < 100mm, 대체 후보 32개 모두 불가).
+        // 판정은 뒤의 EnsureClearJointPathAsync 와 같은 면 평면(접근점 평면)·같은 기준이다.
+        if (nextKey is not null && TaughtJoints(ctx, nextKey) is { } nextJ)
+        {
+            (double ClearanceMm, string Part) Plane(double[] q) => env.WallClearance(kin, q, rec.ApproachPoint, rec.WallOut);
+            if (CobotInspectionMoveStep.JointPathBlocker(seed, UnwrapNear(nextJ, seed), null, Plane) is { } bend)
+                throw new RetraceBlockedException(
+                    $"복귀 진입점 [{Fmt(plan.Entry)}] 에서 {nextKey} 관절 이동이 면 쪽으로 휨({bend}) — 역주행하지 않습니다.");
+        }
+
         logger.LogInformation(
-            "복귀: ② 평면 경유 역순 — 현재 [{Cur}] → 법선 후퇴 [{Lift}] → 면 방향 {D:0}mm → 진입점 [{Entry}] (면 {Wall}, 경로 검증 {N}점 통과)",
+            "복귀: ② 평면 경유 역순 — 현재 [{Cur}] → 법선 후퇴 [{Lift}] → 면 방향 {D:0}mm → 진입점 [{Entry}]{Restore} (면 {Wall}, 경로 검증 {N}점 통과)",
             Fmt(start), plan.Lift is null ? "생략" : Fmt(plan.Lift), skipPlanar ? 0 : plan.InPlaneMm, Fmt(plan.Entry),
+            restore is null ? "" : $", 진입 자세 복원 {RotationAngleDeg(pose, restore):0}°(J6 {curJoints[5]:0.0}°→{seed[5]:0.0}°)",
             rec.WallCode ?? "-", path.Count);
 
         // ── 실행 ─────────────────────────────────────────────────────────
-        if (plan.Lift is { } l)
+        if (plan.Lift is not null)
         {
-            var rc = await cobot.Rpc.MoveLAsync(Pose(l), jLift!, tool: ctx.Tool, user: 0, vel: ctx.Velocity, ct: ct);
+            var rc = await cobot.Rpc.MoveLAsync(liftPose, jLift!, tool: ctx.Tool, user: 0, vel: ctx.Velocity, ct: ct);
             if (rc != 0)
                 throw new InvalidOperationException($"복귀 법선 후퇴(MoveL) 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)} — 정지합니다.");
         }
         if (!skipPlanar)
         {
-            var rc = await cobot.Rpc.MoveLAsync(Pose(plan.Entry), jEntry!, tool: ctx.Tool, user: 0, vel: ctx.Velocity, ct: ct);
+            var rc = await cobot.Rpc.MoveLAsync(entryPose, jEntry!, tool: ctx.Tool, user: 0, vel: ctx.Velocity, ct: ct);
             if (rc != 0)
                 throw new InvalidOperationException($"복귀 면 방향 이동(MoveL) 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)} — 정지합니다.");
         }
 
         return skipPlanar
             ? "법선 후퇴(후퇴 평면)"
-            : $"법선 후퇴 → 후퇴 평면 {plan.InPlaneMm:0}mm 역주행(진입점)";
+            : $"법선 후퇴 → 후퇴 평면 {plan.InPlaneMm:0}mm 역주행(진입점{(restore is null ? "" : "·진입 자세 복원")})";
+    }
+
+    /// <summary>진입 자세 복원 — 현재 자세와 기록 자세의 차이가 이 이하면 돌리지 않는다 [도].</summary>
+    internal const double RetraceRestoreMinDeg = 2.0;
+
+    /// <summary>진입 자세로 돌아온 관절이 진입 때 관절과 이만큼 넘게 다르면(±360° 감김 제외) 다른 해 가지로 본다 [도].</summary>
+    internal const double RetraceEntryJointTolDeg = 15.0;
+
+    /// <summary>역주행 도착 관절 <paramref name="arrived"/> 가 진입 관절 <paramref name="entry"/> 와 다른 가지면 사유, 같으면 null.</summary>
+    internal static string? RetraceEntryJointMismatch(double[] arrived, double[] entry)
+    {
+        var a = UnwrapNear(arrived, entry);
+        for (var i = 0; i < 6; i++)
+            if (Math.Abs(a[i] - entry[i]) > RetraceEntryJointTolDeg)
+                return $"J{i + 1} {entry[i]:0.0}° → {arrived[i]:0.0}°";
+        return null;
+    }
+
+    /// <summary>후퇴 평면 위 역주행(위치 <paramref name="from"/>→<paramref name="to"/>, 자세 보간) 검증 점 —
+    /// 위치 <see cref="CobotInspectionMoveStep.PlanarSampleMm"/>·자세 <see cref="ClearSampleRotDeg"/> 이하 간격, 시작 제외·끝 포함.</summary>
+    internal static List<double[]> RetracePlanarSamples(double[] from, double[] to)
+    {
+        var len = Math.Sqrt(Enumerable.Range(0, 3).Sum(i => (to[i] - from[i]) * (to[i] - from[i])));
+        var n = Math.Max(1, (int)Math.Ceiling(Math.Max(len / CobotInspectionMoveStep.PlanarSampleMm,
+            RotationAngleDeg(from, to) / ClearSampleRotDeg)));
+        var list = new List<double[]>(n);
+        for (var k = 1; k <= n; k++)
+        {
+            var t = (double)k / n;
+            var r = k == n ? new[] { to[3], to[4], to[5] } : BlendOrientation(from, to, t);
+            list.Add(new[] { from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t, from[2] + (to[2] - from[2]) * t, r[0], r[1], r[2] });
+        }
+        return list;
+    }
+
+    /// <summary>
+    /// 정차 식별자 — 같은 ACS order 의 같은 정차 목표면 같다. 둘 다 모르면(수동 시퀀스) null — 같은 정차로 보지 않는다.
+    /// 같은 정차의 다음 용접선을 면 앞 이송으로 이어 갈 수 있는지(<see cref="PlanarApproachRecord.StopKey"/>) 판정한다.
+    /// </summary>
+    public static string? StopKeyOf(SequenceContext ctx)
+    {
+        if (ctx.AcsOrderId is null && ctx.AmrTargetX is null) return null;
+        var target = ctx.AmrTargetX is { } x && ctx.AmrTargetY is { } y
+            ? FormattableString.Invariant($"{x:0.000},{y:0.000},{ctx.AmrTargetThetaRad ?? 0:0.000}")
+            : "-";
+        return $"{ctx.AcsOrderId ?? "-"}|{target}";
     }
 
     /// <summary>모드(홈 위치_2·_3·_4)에 속한 면들의 검사 준비 슬롯 키. 홈 모드는 없다(ready 를 쓴다).</summary>
@@ -1351,6 +1451,10 @@ internal static class SequenceEntry
     {
         if (InspectReadyFallback(ctx, LastEntryWall) is not { } fb)
         {
+            // 홈 모드 면(옆벽·후벽 등)이라도 그 면의 검사 준비 자세가 티칭돼 있으면 검사 준비 → 홈 위치로 돌아간다
+            // (실기 2026-11-27 15:34 A 후벽: 자동 복귀가 막힌 뒤 운영자가 '검사 준비 — 후벽' → '홈 위치' 로 수동 복구).
+            if (await ReturnViaHomeWallSlotAsync(cobot, ctx, logger, wallPoint, wallOut, blockedWhy, ct) is { } viaSlot)
+                return viaSlot;
             logger.LogWarning("기준 자세 복귀: 검사 준비 대체 경로 없음 — 면 {Wall} 이 홈 위치_2·_3·_4 모드 면이 아니거나 그 기준 자세 미티칭",
                 ctx.WallCode ?? LastEntryWall ?? "(모름)");
             return null;
@@ -1391,6 +1495,58 @@ internal static class SequenceEntry
         RememberMode(fb.Mode);
         Volatile.Write(ref _lastModeWall, fb.Code);
         return parts;
+    }
+
+    /// <summary>홈 모드 면 복귀 대체 경로에 쓸 그 면의 검사 준비 슬롯 키 — 면은 context 의 wall_code, 없으면 마지막 진입 면.
+    /// 슬롯·홈 위치가 둘 다 티칭돼 있어야 한다(아니면 null).</summary>
+    internal static string? HomeWallSlotFallback(SequenceContext ctx, string? lastWall = null)
+    {
+        var code = ctx.WallCode ?? lastWall;
+        if (code is null) return null;
+        var slot = TeachingService.WallSlotKey(code);
+        return TaughtJoints(ctx, slot) is not null && TaughtJoints(ctx, "home") is not null ? slot : null;
+    }
+
+    /// <summary>
+    /// 홈 모드 면의 복귀 대체 경로 — 작업 준비 위치로 가는 관절 이동이 면 쪽으로 휘어 막혔을 때, 그 면의 검사 준비 자세로 관절 이동한 뒤
+    /// 홈 위치로 간다. 두 관절 이동 모두 면 여유·차체 간섭 기준(<see cref="CobotInspectionMoveStep.JointPathBlocker"/>)을 통과해야 하고,
+    /// 아니면 움직이지 않고 null.
+    /// </summary>
+    private static async Task<List<string>?> ReturnViaHomeWallSlotAsync(CobotService cobot, SequenceContext ctx, ILogger logger,
+        double[] wallPoint, double[] wallOut, string blockedWhy, CancellationToken ct)
+    {
+        if (HomeWallSlotFallback(ctx, LastEntryWall) is not { } slotKey) return null;
+        var code = ctx.WallCode ?? LastEntryWall;
+        var slotName = $"검사 준비({code})";
+        var slotJ = TaughtJoints(ctx, slotKey)!;
+        var homeJ = TaughtJoints(ctx, "home")!;
+        var kin = Fr5Kinematics.Fr5Wml;
+        var env = CobotEnvelope.Default;
+        (double ClearanceMm, string Part) Wall(double[] q) => env.WallClearance(kin, q, wallPoint, wallOut);
+        string? Self(double[] q)
+        {
+            var c = env.Evaluate(kin, q, 0, CobotObstacleZone.FallbackMountYawDeg);
+            return c.Collides ? c.ToString() : null;
+        }
+
+        var curJ = await cobot.Rpc.GetActualJointPosAsync(ct: ct);
+        var slotNear = UnwrapNear(slotJ, curJ);
+        if (CobotInspectionMoveStep.JointPathBlocker(curJ, slotNear, Self, Wall) is { } why1)
+        {
+            logger.LogWarning("기준 자세 복귀: {Slot} 대체 경로도 막힘 — {Why}", slotName, why1);
+            return null;
+        }
+        if (CobotInspectionMoveStep.JointPathBlocker(slotNear, UnwrapNear(homeJ, slotNear), Self, Wall) is { } why2)
+        {
+            logger.LogWarning("기준 자세 복귀: {Slot} → 홈 위치 대체 경로 막힘 — {Why}", slotName, why2);
+            return null;
+        }
+
+        logger.LogWarning("기준 자세 복귀: 작업 준비 위치 경로 불가({Why}) — {Slot} 경유 홈 위치로 대체", blockedWhy, slotName);
+        await MoveJToTaughtAsync(cobot, ctx, slotKey, slotName, ct);
+        await MoveJToTaughtAsync(cobot, ctx, "home", "홈 위치", ct);
+        RememberMode(PoseMode.Home);
+        return new List<string> { $"{slotName} 경유(대체 경로)", "홈 위치 복귀" };
     }
 
     /// <summary>벽면 후퇴 경로 검증 점 — 출발점 제외, 끝점 포함(<see cref="CobotInspectionMoveStep.SampleSegment"/>).</summary>

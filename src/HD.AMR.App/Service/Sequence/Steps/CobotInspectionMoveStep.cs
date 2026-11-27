@@ -422,8 +422,14 @@ public class CobotInspectionMoveStep : ISequenceStep
 
     public static async Task<(double[] Pose, double[] Joints)> AlignTwistToJ6Async(
         CobotService cobot, double[] pose, int tool, double targetJ6Deg, CancellationToken ct)
+        => await AlignTwistToJ6FromAsync(cobot, pose, tool, targetJ6Deg, await cobot.Rpc.GetActualJointPosAsync(ct: ct), ct);
+
+    /// <summary><see cref="AlignTwistToJ6Async(CobotService, double[], int, double, CancellationToken)"/> 의 기준 관절 지정판 —
+    /// 현재 관절이 아니라 그 자세 근처의 해(<paramref name="referenceJoints"/>, 예: 이송 경로 끝 해)를 기준으로 푼다.</summary>
+    internal static async Task<(double[] Pose, double[] Joints)> AlignTwistToJ6FromAsync(
+        CobotService cobot, double[] pose, int tool, double targetJ6Deg, double[] referenceJoints, CancellationToken ct)
     {
-        var reference = (await cobot.Rpc.GetActualJointPosAsync(ct: ct)).ToArray();
+        var reference = referenceJoints.ToArray();
         targetJ6Deg = NearestWinding(targetJ6Deg, reference[5]);
         reference[5] = targetJ6Deg;
 
@@ -821,6 +827,10 @@ public class CobotInspectionMoveStep : ISequenceStep
         // ── 같은 anchor 그룹 연속 task: 직전 종료 자세 그대로면 복귀 없이 다음 시작점으로 ─────
         if (await TryChainFromPreviousAsync(context, seam, approachStandoffMm, ct) is { } chained)
             return chained;
+
+        // ── 같은 정차·같은 면의 다음 용접선(새 anchor 등): 기준 자세 왕복 없이 면 앞 평면을 따라 이송 ─────
+        if (await TryTransitSameWallAsync(context, seam, approachStandoffMm, ct) is { } transited)
+            return transited;
 
         // ── 1단계: 작업 준비 위치(ready) — 홈 위치_2 모드(상부 면)는 홈 위치_2·검사 준비 ─────
         // 자세 모드가 면과 맞지 않으면(수동 전환 필요) 움직이지 않고 실패한다.
@@ -1378,7 +1388,8 @@ public class CobotInspectionMoveStep : ISequenceStep
         // 진입점에 선 순간부터 복귀는 이 길을 거슬러 가야 한다 — 뒤 이동이 실패·정지해도 기록은 남긴다.
         ApproachPathMemory.Record(new PlanarApproachRecord(
             wallOut, target.Take(3).ToArray(), retreat, entryPos.ToArray(), context.WallCode,
-            await GetApproachStandoffMmAsync(_param, _logger)));
+            await GetApproachStandoffMmAsync(_param, _logger),
+            EntryPose: Pose(entryPos), EntryJoints: jEntry!.ToArray(), StopKey: SequenceEntry.StopKeyOf(context)));
 
         if (!direct)
         {
@@ -1438,6 +1449,176 @@ public class CobotInspectionMoveStep : ISequenceStep
                 map is { } m2 ? $", 도면상 옆 {m2.LateralMm:0.0}mm" : ", 도면 좌표 없음",
                 moved[0] - frame[0], moved[1] - frame[1], moved[2] - frame[2], normalMm, moved[0], moved[1], moved[2]);
         return null;
+    }
+
+    /// <summary>면 앞 이송을 쓰지 않는 사유, 쓸 수 있으면 null — ② 진입 기록이 있고(진입 자세·관절 포함), 같은 면이며,
+    /// 같은 정차(<see cref="SequenceEntry.StopKeyOf"/>, 모르면 쓰지 않음)여야 한다.</summary>
+    internal static string? TransitSkipReason(PlanarApproachRecord? rec, string? wallCode, string? stopKey)
+    {
+        if (rec is null) return "② 진입 기록 없음";
+        if (rec.EntryPose is not { Length: 6 } || rec.EntryJoints is not { Length: 6 }) return "진입 기록에 자세 정보 없음";
+        if (wallCode is null || !string.Equals(rec.WallCode, wallCode, StringComparison.OrdinalIgnoreCase))
+            return $"다른 면(기록 {rec.WallCode ?? "-"} → 이번 {wallCode ?? "-"})";
+        if (stopKey is null || rec.StopKey is null) return "정차 식별 불가(수동 시퀀스)";
+        if (rec.StopKey != stopKey) return "정차가 바뀜";
+        return null;
+    }
+
+    /// <summary>면 앞 이송 계획(위치, BASE mm).</summary>
+    /// <param name="Lift">면 법선 방향으로 이송 높이까지 물러난 점 — 이미 그 높이 이상이면 null.</param>
+    /// <param name="Plunge">이송 높이에서 접근점 정면 — 여기서 법선 방향으로 접근점까지 들어간다.</param>
+    /// <param name="InPlaneMm">이송 높이 평면 위 이동 거리.</param>
+    /// <param name="LevelMm">이송 높이 — 접근점 평면에서 면 바깥으로 [mm].</param>
+    internal sealed record SameWallTransitPlan(double[]? Lift, double[] Plunge, double InPlaneMm, double LevelMm);
+
+    /// <summary>
+    /// 현재 TCP <paramref name="cur"/> 에서 같은 면의 접근점 <paramref name="approach"/> 로 가는 면 앞 이송 계획.
+    /// 이송 높이 = max(후퇴 평면(접근점 평면 + <paramref name="retreatMm"/>), 현재 높이) — 면 쪽으로 들어가며 옆으로 가지 않는다.
+    /// 현재가 그 면 앞(접근점 평면 뒤 면 이격+50mm ~ 후퇴 평면 앞 400mm)이 아니거나 면 방향 거리가
+    /// <see cref="SequenceEntry.RetraceMaxInPlaneMm"/> 를 넘으면 null.
+    /// </summary>
+    internal static SameWallTransitPlan? PlanSameWallTransit(double[] cur, double[] approach, double[] wallOut,
+        double retreatMm, double standoffMm)
+    {
+        var h = 0.0;
+        for (var i = 0; i < 3; i++) h += (cur[i] - approach[i]) * wallOut[i];
+        if (h < -(standoffMm + SequenceEntry.RetraceMaxBehindMm) || h > retreatMm + SequenceEntry.RetraceMaxAheadMm) return null;
+        var level = Math.Max(h, retreatMm);
+        double[]? lift = h < level - 1.0
+            ? Enumerable.Range(0, 3).Select(i => cur[i] + (level - h) * wallOut[i]).ToArray()
+            : null;
+        var start = lift ?? cur.Take(3).ToArray();
+        var plunge = Enumerable.Range(0, 3).Select(i => approach[i] + level * wallOut[i]).ToArray();
+        var d = Math.Sqrt(Enumerable.Range(0, 3).Sum(i => (plunge[i] - start[i]) * (plunge[i] - start[i])));
+        if (d > SequenceEntry.RetraceMaxInPlaneMm) return null;
+        return new SameWallTransitPlan(lift, plunge, d, level);
+    }
+
+    /// <summary>
+    /// 같은 정차·같은 면의 다음 용접선 — 기준 자세(작업 준비 위치 등)로 돌아가지 않고 면 앞에서 바로 다음 접근점으로 간다.
+    /// 같은 면 앞을 옆으로만 옮기는 이동이라 기준 자세 왕복보다 짧고, 면 쪽으로 휘는 관절 이동(MoveJ)이 없다
+    /// (실기 2026-11-27 15:31 A L4-R01C09 #5: 기준 자세 복귀가 1393mm 역주행 뒤 작업 준비 위치 경로 면 여유 부족으로 갇힘 —
+    /// 같은 면 다음 접근점은 면을 따라 약 750mm 였다).
+    /// 경로: ① 면 법선 방향으로 이송 높이(후퇴 평면)까지 후퇴(MoveL, 자세 유지) → ② 그 평면을 따라 접근점 정면까지(MoveL, 자세를
+    /// 면 법선·J6 대기각으로 보간) → ③ 법선 방향으로 접근점까지(MoveL). 움직이기 전에 경로 전체를 역기구학·관절 점프·손목·
+    /// 차체/자기 간섭·면 여유로 검증하고, 하나라도 걸리면 움직이지 않고 null(종전 진입 준비 경로).
+    /// 도착 뒤 ② 진입 기록은 진입점(문)을 그대로 두고 접근점만 바꾼다 — 이후 복귀는 처음 들어온 진입 MoveJ 의 역경로를 탄다.
+    /// </summary>
+    private async Task<StepResult?> TryTransitSameWallAsync(
+        SequenceContext context, SeamApproachResult seam, double approachStandoffMm, CancellationToken ct)
+    {
+        var rec = ApproachPathMemory.Last;
+        if (TransitSkipReason(rec, context.WallCode, SequenceEntry.StopKeyOf(context)) is { } skip)
+        {
+            if (rec is not null)
+                _logger.LogInformation("[Cobot 검사위치 이동] 면 앞 이송 생략 — {Why} → 진입 준비 경로", skip);
+            return null;
+        }
+        if (seam.ComputedPose is not { Length: 6 } computed || seam.Base is not { Length: 3 } approach)
+            return null;
+
+        var wallOut = WallOutNormal(computed, seam.OpticalAxis);
+        var cur = await _cobot.Rpc.GetTcpPoseInBaseAsync(context.Tool, ct);
+        string Fmt(double[] v) => string.Join(", ", v.Take(3).Select(x => x.ToString("0")));
+        if (PlanSameWallTransit(cur, approach, wallOut, rec!.RetreatMm, approachStandoffMm) is not { } plan)
+        {
+            _logger.LogInformation("[Cobot 검사위치 이동] 면 앞 이송 생략 — 현재 TCP [{Cur}] 가 면 {Wall} 앞이 아니거나 너무 멂 → 진입 준비 경로",
+                Fmt(cur), context.WallCode);
+            return null;
+        }
+
+        // 도착 자세 — 광축은 면 법선, 광축 둘레 비틀림은 J6 대기각(종전 진입과 같은 기준). 맞추지 못하면 현재 비틀림 유지.
+        var reference = await _cobot.Rpc.GetActualJointPosAsync(ct: ct);
+        var keepTwist = AlignOpticalAxisKeepTwist(cur, computed, seam.OpticalAxis);
+        var target = new[] { approach[0], approach[1], approach[2], keepTwist[3], keepTwist[4], keepTwist[5] };
+        var twistNote = "";
+        try
+        {
+            (target, _) = await AlignTwistToJ6FromAsync(_cobot, target, context.Tool, VerticalJ6Deg, reference, ct);
+            twistNote = $", 비틀림 J6 {VerticalJ6Deg:0}° 정렬";
+        }
+        catch (InvalidOperationException ex)
+        {
+            _logger.LogWarning("[Cobot 검사위치 이동] 면 앞 이송: 비틀림 J6 {Target:0}° 정렬 실패 — 현재 비틀림 유지: {Msg}", VerticalJ6Deg, ex.Message);
+        }
+        var liftPose = plan.Lift is { } l ? new[] { l[0], l[1], l[2], cur[3], cur[4], cur[5] } : cur.ToArray();
+        var plungePose = new[] { plan.Plunge[0], plan.Plunge[1], plan.Plunge[2], target[3], target[4], target[5] };
+
+        // ── 경로 검증(모션 없음) ─────────────────────────────────────────
+        var segments = new List<(List<double[]> Poses, string Name)>();
+        if (plan.Lift is not null) segments.Add((SamplePoseSegment(cur, liftPose, PlanarSampleMm, ChainSampleDeg), "법선 후퇴"));
+        segments.Add((SamplePoseSegment(liftPose, plungePose, PlanarSampleMm, ChainSampleDeg), "면 방향 이송"));
+        if (plan.LevelMm > 0.5) segments.Add((SamplePoseSegment(plungePose, target, PlanarSampleMm, ChainSampleDeg), "법선 진입"));
+
+        var guardOn = await SelfCollisionGuardOnAsync();
+        var wallPoint = seam.SeamPointBase is { Length: 3 } sp
+            ? sp
+            : Enumerable.Range(0, 3).Select(i => approach[i] - approachStandoffMm * wallOut[i]).ToArray();
+        (double ClearanceMm, string Part) Wall(double[] q) => CobotEnvelope.Default.WallClearance(Fr5Kinematics.Fr5Wml, q, wallPoint, wallOut);
+        var floor = Math.Min(EntryPathMarginMm, Wall(reference).ClearanceMm) - 1.0;
+
+        var seed = reference;
+        var ends = new List<double[]>();
+        foreach (var (poses, name) in segments)
+        {
+            foreach (var pose in poses)
+            {
+                var at = $"{name} [{Fmt(pose)}]";
+                string? why = null;
+                double[]? j = null;
+                try { j = await _cobot.Rpc.GetInverseKinNearestAsync(pose, seed, context.Tool, 0, ct); }
+                catch (InvalidOperationException) { why = "도달 불가"; }
+                if (j is not null)
+                    why = PathStepBlocker(seed, j, reference)
+                          ?? WObjAttitude.J6RangeBlocker(reference[5], j[5])
+                          ?? SequenceEntry.RetractSelfBlocker(reference, j)
+                          ?? (guardOn && SelfCollisionBlocker(j, seam) is not null ? "자기 간섭" : null)
+                          ?? (Wall(j) is var w && w.ClearanceMm < floor ? $"면 여유 {w.ClearanceMm:0}mm < {floor + 1:0}mm ({w.Part})" : null);
+                if (why is not null)
+                {
+                    _logger.LogWarning("[Cobot 검사위치 이동] 면 앞 이송 생략 — 경로 {At} {Why} → 진입 준비 경로", at, why);
+                    return null;
+                }
+                seed = j!;
+            }
+            ends.Add(seed);
+        }
+
+        if (await SequenceEntry.PrepareInPlaceAsync(_cobot, context, _logger, ct) is { } mismatch)
+        {
+            _logger.LogInformation("[Cobot 검사위치 이동] 면 앞 이송 생략 — {Why} → 진입 준비 경로", mismatch);
+            return null;
+        }
+
+        _logger.LogInformation(
+            "[Cobot 검사위치 이동] 면 앞 이송(같은 정차·면 {Wall}): 현재 [{Cur}] → 법선 후퇴 [{Lift}] → 면 방향 {D:0}mm → 접근점 정면 [{P}] → 법선 {L:0}mm 진입 → 접근점 [{T}] (J6 {J0:0.0}°→{J1:0.0}°, 경로 검증 {N}점 통과)",
+            context.WallCode, Fmt(cur), plan.Lift is null ? "생략" : Fmt(plan.Lift), plan.InPlaneMm, Fmt(plan.Plunge), plan.LevelMm,
+            Fmt(target), reference[5], seed[5], segments.Sum(s => s.Poses.Count));
+
+        // ── 실행 ─────────────────────────────────────────────────────────
+        var k = 0;
+        if (plan.Lift is not null)
+        {
+            var rc = await _cobot.Rpc.MoveLAsync(liftPose, ends[k++], tool: context.Tool, user: 0, vel: context.Velocity, ct: ct);
+            if (rc != 0) return StepResult.Fail($"[Cobot 검사위치 이동] 면 앞 이송 법선 후퇴 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.");
+        }
+        {
+            var rc = await _cobot.Rpc.MoveLAsync(plungePose, ends[k++], tool: context.Tool, user: 0, vel: context.Velocity, ct: ct);
+            if (rc != 0) return StepResult.Fail($"[Cobot 검사위치 이동] 면 앞 이송 면 방향 이동 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.");
+        }
+        // 접근점이 바뀌었다 — 진입점(문)·진입 자세는 처음 들어온 그대로 둔다.
+        ApproachPathMemory.Record(rec with { ApproachPoint = approach.ToArray(), StandoffMm = approachStandoffMm });
+        if (plan.LevelMm > 0.5)
+        {
+            var rc = await _cobot.Rpc.MoveLAsync(target, ends[k], tool: context.Tool, user: 0, vel: context.Velocity, ct: ct);
+            if (rc != 0) return StepResult.Fail($"[Cobot 검사위치 이동] 면 앞 이송 법선 진입 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)}.");
+        }
+
+        context.SeamLeveledInImage = false;
+        var levelNote = await LevelSeamInPlaceAsync(context, seam, ct);
+        return StepResult.Ok(
+            $"면 앞 이송(기준 자세 왕복 생략) — 같은 정차·면 {context.WallCode}: 법선 후퇴 → 면 방향 {plan.InPlaneMm:0}mm 직선 이동(MoveL) → " +
+            $"법선 {plan.LevelMm:0}mm 진입 → {seam.Note} [자세=면 법선{twistNote}, J6={seed[5]:0.0}°].{levelNote}");
     }
 
     /// <summary>
