@@ -84,6 +84,36 @@ public class AmrDriveWarningTests
         Assert.False(w.Feed(t.AddSeconds(500), 1, 1, 0));
     }
 
+    [Theory]
+    [InlineData(null, 120)]       // 미설정 — 기본 120초(30초였을 때 일시 정지를 실패로 봤다, 2026-11-27 09:14)
+    [InlineData(45.0, 45)]
+    [InlineData(10.0, 10)]
+    [InlineData(600.0, 600)]
+    [InlineData(5.0, 120)]        // 범위 밖 — 기본값
+    [InlineData(601.0, 120)]
+    [InlineData(double.NaN, 120)]
+    public void ResolveStallSec_FallsBackToDefault(double? raw, double expected)
+        => Assert.Equal(expected, AmrDriveWarning.ResolveStallSec(raw));
+
+    [Fact]
+    public void StallWatch_UsesConfiguredLimit()
+    {
+        var w = new AmrDriveWarning.StallWatch(45);
+        var t = new DateTime(2026, 11, 27, 9, 0, 0, DateTimeKind.Utc);
+        w.Arm(t);
+        Assert.False(w.Feed(t, 1, 1, 0));
+        Assert.False(w.Feed(t.AddSeconds(44), 1, 1, 0));
+        Assert.True(w.Feed(t.AddSeconds(45), 1, 1, 0));
+    }
+
+    [Fact]
+    public void SeedDefault_IsDefaultStall()
+    {
+        var seed = Assert.Single(AmrDriveWarning.SeedDefaults());
+        Assert.Equal(AmrDriveWarning.StallSecKey, seed.Name);
+        Assert.Equal(120.0, double.Parse(seed.Value, System.Globalization.CultureInfo.InvariantCulture));
+    }
+
     [Fact]
     public void StallWatch_ArmTwice_KeepsReference()
     {

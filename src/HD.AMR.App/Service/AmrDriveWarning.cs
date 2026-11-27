@@ -10,8 +10,27 @@ namespace HD.AMR.App.Service;
 /// </summary>
 public static class AmrDriveWarning
 {
-    /// <summary>경고 뒤 pose 가 이 시간 동안 그대로면 주행 실패로 본다(초).</summary>
-    public const double StallSec = 30.0;
+    /// <summary>경고 뒤 pose 가 이 시간 동안 그대로면 주행 실패로 본다(초) — 기본값. 파라미터 <see cref="StallSecKey"/> 로 바꾼다.
+    /// 30초였을 때 경로 막힘·전진 제한 경고로 AMR 이 잠깐 서 있다가 스스로 다시 가서 도착했는데도 실패로 끝났다
+    /// (실기 2026-11-27 09:14 — 실패 뒤 약 1분 반에 목표 도착). 주행 타임아웃(600초) 안에서 충분히 기다린다.</summary>
+    public const double StallSec = 120.0;
+
+    /// <summary>경고 뒤 정체 한도(초) 파라미터 키.</summary>
+    public const string StallSecKey = "drive.amrWarningStallSec";
+
+    public const double MinStallSec = 10.0, MaxStallSec = 600.0;
+
+    /// <summary>파라미터 값 정리 — 없거나 숫자가 아니거나 <see cref="MinStallSec"/>~<see cref="MaxStallSec"/> 밖이면 기본값.</summary>
+    public static double ResolveStallSec(double? raw)
+        => raw is { } v && double.IsFinite(v) && v >= MinStallSec && v <= MaxStallSec ? v : StallSec;
+
+    /// <summary>파라미터 시드 행.</summary>
+    public static IEnumerable<(string Name, string Value, string Desc)> SeedDefaults() =>
+    [
+        (StallSecKey, StallSec.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            "AMR 주행 중 경고(W…: 경로 막힘·모터 전진 제한 등)가 뜬 뒤 위치·방향이 이 시간(초) 동안 그대로면 주행 실패로 본다. " +
+            "그 안에 움직이거나 경고가 사라지면 계속 기다린다. 10~600, 주행 타임아웃(600초)보다 길게 해도 의미 없다. 다음 주행부터 적용."),
+    ];
 
     /// <summary>정체 판정 — 이만큼 움직이면 "움직였다"(m).</summary>
     public const double StallMoveM = 0.005;
@@ -36,8 +55,11 @@ public static class AmrDriveWarning
     /// <summary>경고 뒤 정체 감시 — 경고가 한 번 뜬 뒤부터 pose 가 얼마나 오래 그대로인지 센다.</summary>
     public sealed class StallWatch
     {
+        private readonly double _stallSec;
         private (double X, double Y, double Theta)? _ref;
         private DateTime _refAt;
+
+        public StallWatch(double stallSec = StallSec) => _stallSec = stallSec;
 
         /// <summary>감시 중인가(경고가 떴는가).</summary>
         public bool Armed { get; private set; }
@@ -76,7 +98,7 @@ public static class AmrDriveWarning
                 _refAt = now;
                 return false;
             }
-            return (now - _refAt).TotalSeconds >= StallSec;
+            return (now - _refAt).TotalSeconds >= _stallSec;
         }
 
         /// <summary>정체 기준을 버린다(감시는 유지) — 허용 오차 안에서 정차 판정이 맡는 동안 호출해,

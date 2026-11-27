@@ -1029,7 +1029,19 @@ public sealed class Vda5050OrderExecutor
 
         // AMR 경고(W…) — 주행을 끝내지 않고 기록만 한다. 경고 뒤 그대로 서 버리면 정체로 실패 처리.
         var warnedKeys = new HashSet<string>(StringComparer.Ordinal);
-        var warnStall = new AmrDriveWarning.StallWatch();
+        double? stallRaw = null;
+        try
+        {
+            using var stallScope = _scopeFactory.CreateScope();
+            stallRaw = await stallScope.ServiceProvider.GetRequiredService<ParameterService>()
+                .GetDoubleAsync(AmrDriveWarning.StallSecKey);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "경고 정체 한도 파라미터 조회 실패 — 기본값 사용");
+        }
+        var stallSec = AmrDriveWarning.ResolveStallSec(stallRaw);
+        var warnStall = new AmrDriveWarning.StallWatch(stallSec);
         string lastWarningText = "";
 
         _logger.LogInformation("VDA5050 도착 대기 시작: 목표=({X:F3}, {Y:F3}, θ={T:F3}), " +
@@ -1219,12 +1231,18 @@ public sealed class Vda5050OrderExecutor
                         lastWarningText = string.Join(",", newWarnings.Select(e => e.Text));
                         _logger.LogWarning("VDA5050 주행 중 AMR 경고 — 주행 계속: [{Warnings}] ({Pose}, 잔여 dxy={Dxy:F3}m, dθ={DTheta:F3}rad). " +
                             "{Stall:0}s 동안 움직임이 없으면 실패로 봅니다",
-                            lastWarningText, lastPoseDesc, lastDxy, lastDTheta, AmrDriveWarning.StallSec);
+                            lastWarningText, lastPoseDesc, lastDxy, lastDTheta, stallSec);
                         OpLog(OpCategory.Drive, "AMR 경고 — 주행 계속", null, $"[{lastWarningText}] {lastPoseDesc}");
                         ReportError(AmrDriveWarning.ErrorType, $"주행 중 AMR 경고(주행 계속): [{lastWarningText}]");
                         StateChanged?.Invoke();
                         warnStall.Arm(DateTime.UtcNow);
                     }
+                }
+                else if (fresh.Count == 0 && warnStall.Armed && _obstacleGuard?.Active is null)
+                {
+                    // 경고 항목이 status 에서 빠졌다 — 막힘이 풀린 것이다. 정체 감시를 끄고 다음 경고부터 다시 센다.
+                    warnStall.Reset();
+                    _logger.LogInformation("VDA5050 AMR 경고 해소 — 정체 감시 해제, 주행 계속 ({Pose})", lastPoseDesc);
                 }
             }
 
@@ -1235,8 +1253,8 @@ public sealed class Vda5050OrderExecutor
                 && warnStall.Feed(DateTime.UtcNow, cp.X, cp.Y, cp.Theta))
             {
                 _logger.LogWarning("VDA5050 주행 정체: AMR 경고 뒤 {Stall:0}s 동안 움직임 없음 — {Pose}, 경고 [{Warnings}]",
-                    AmrDriveWarning.StallSec, lastPoseDesc, lastWarningText);
-                return (false, $"로봇 이동 경고 뒤 {AmrDriveWarning.StallSec:0}s 동안 움직임 없음 — 경고 [{lastWarningText}] " +
+                    stallSec, lastPoseDesc, lastWarningText);
+                return (false, $"로봇 이동 경고 뒤 {stallSec:0}s 동안 움직임 없음 — 경고 [{lastWarningText}] " +
                                $"(최종 {lastPoseDesc}, 잔여 dxy={lastDxy:F3}m, dθ={lastDTheta:F3}rad)");
             }
 
