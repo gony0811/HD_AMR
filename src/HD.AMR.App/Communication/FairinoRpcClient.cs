@@ -822,9 +822,17 @@ public class FairinoRpcClient : IDisposable
         return sum;
     }
 
+    /// <summary>MoveJ 의 넘겨받은 desc 와 정기구학 desc 가 이만큼 넘게 다르면 로그로 남긴다 [mm].</summary>
+    internal const double DescGapLogMm = 0.5;
+
+    /// <summary>두 desc pose 의 위치 차이 [mm].</summary>
+    internal static double DescPositionGapMm(double[] a, double[] b)
+        => Math.Sqrt(Enumerable.Range(0, 3).Sum(i => (a[i] - b[i]) * (a[i] - b[i])));
+
     /// <summary>관절 이동(MoveJ). jointPos = 6축 각도, descPose = 대응 직교 포즈.
-    /// ⚠ 실물 펌웨어는 desc_pos=0(전부 0)을 rc=154(관절 지령점 오류)로 거부한다 — joint_pos 에 대응하는
-    /// 유효 pose 가 필요하므로, 0 배열/미제공이면 정기구학(GetForwardKin)으로 채워 보낸다.</summary>
+    /// ⚠ 실물 펌웨어는 desc_pos 가 joint_pos 의 정기구학(지금 공구·작업물 기준)과 다르면 rc=154(관절 지령점 오류)로
+    /// 거부한다(전부 0 도 거부). 그래서 descPose 는 <b>참고용</b>이고 항상 정기구학(GetForwardKin)으로 채워 보낸다 —
+    /// 정기구학을 못 구할 때만 넘겨받은 descPose 를 쓴다.</summary>
     /// <param name="allowUnknownFrames">true 면 활성 좌표계 미상일 때도 기본값 가정으로 진행한다.
     /// <see cref="ResetActiveFrameAsync"/> 전용 — 프레임을 '알려진 값으로 만드는' 복구 경로가 strict 검사에
     /// 스스로 막히면 사용자가 빠져나올 수단이 없어진다. 현재 관절각을 그대로 지령하는 무변위 호출에만 쓴다.</param>
@@ -834,10 +842,16 @@ public class FairinoRpcClient : IDisposable
     {
         int t = tool ?? _settings.DefaultToolId;
         int u = user ?? _settings.DefaultUserId;
-        bool fkFill = descPose is null || descPose.All(v => v == 0.0);
+        // 저장 desc 는 쓰지 않고 항상 관절값의 정기구학으로 채운다 — 컨트롤러는 desc 가 '지금 공구·작업물로 계산한
+        // joint_pos 의 pose' 와 다르면 rc=154 로 거부한다. 티칭 desc 는 티칭 당시 공구 기준이라 공구를 다시 보정하면
+        // 어긋난다(실기 2026-11-28 17:57~: 공구 #1 Z 365→363mm 변경 뒤 작업 준비 위치 desc 가 2.1mm 어긋나 모든
+        // 티칭 위치 MoveJ 가 154·결함 main=1/sub=1). MoveJ 의 목표는 관절값이므로 동작은 같다.
+        // FK 를 못 구하면(좌표계 미상 등) 넘겨받은 desc 로 보낸다.
+        var givenDesc = descPose is { Length: >= 6 } && descPose.Any(v => v != 0.0) ? descPose : null;
+        bool fkFill = true;
         int activeTool = -1;
         double[]? descActive = null;   // FK-채움 시 '활성 공구' 기준 desc(재프레임 실패/거부 폴백용)
-        if (fkFill)
+        try
         {
             // descPose 를 정기구학으로 채운다. 이 펌웨어의 GetForwardKin 은 '현재 활성 작업물 프레임'
             // 기준 pose 를 주므로, GetForwardKinInBaseAsync 로 베이스 pose 를 만들어 desc_pos↔user
@@ -861,6 +875,18 @@ public class FairinoRpcClient : IDisposable
             if (u > 0)
                 descPose = FrameMath.ToFrame(descPose, await GetWObjCoordAsync(u, ct));   // desc 는 user 프레임 기준
         }
+        catch (Exception ex) when (givenDesc is not null && ex is not OperationCanceledException)
+        {
+            _logger.LogWarning("{Name} MoveJ: 관절값 정기구학 desc 계산 실패 — 넘겨받은 desc 로 전송 ({Msg})",
+                _settings.Name, ex.Message);
+            fkFill = false;
+            t = tool ?? _settings.DefaultToolId;
+            descPose = givenDesc;
+        }
+        if (fkFill && givenDesc is not null && DescPositionGapMm(givenDesc, descPose!) is var gap && gap > DescGapLogMm)
+            _logger.LogInformation(
+                "{Name} MoveJ: 넘겨받은 desc 가 관절값 정기구학과 {Gap:0.0}mm 다름(티칭 뒤 공구·작업물 좌표계 변경 등) — 정기구학 desc 로 전송",
+                _settings.Name, gap);
         var rc = await MoveJRawAsync(jointPos, descPose!, t, u, vel, acc, ovl, blendT, ct);
         if (rc != 0 && fkFill && descActive is not null && t != activeTool)
         {
