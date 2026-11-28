@@ -615,13 +615,16 @@ internal static class SequenceEntry
         // ── 실행 ─────────────────────────────────────────────────────────
         if (plan.Lift is not null)
         {
-            var rc = await cobot.Rpc.MoveLAsync(liftPose, jLift!, tool: ctx.Tool, user: 0, vel: ctx.Velocity, ct: ct);
+            var rc = await MoveLRetryOnRejectAsync(cobot, ctx, logger, "복귀 법선 후퇴", liftPose, jLift!, null, ct);
             if (rc != 0)
                 throw new InvalidOperationException($"복귀 법선 후퇴(MoveL) 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)} — 정지합니다.");
         }
         if (!skipPlanar)
         {
-            var rc = await cobot.Rpc.MoveLAsync(entryPose, jEntry!, tool: ctx.Tool, user: 0, vel: ctx.Velocity, ct: ct);
+            // 재시도 전 법선 후퇴 끝점으로 다시 맞춘다 — 거부 순간 팔이 후퇴 선분 위(끝점 직전)에 있었을 수 있고
+            // (실기 2026-11-28 14:01 끝점 6mm 앞), 면 방향 이동은 후퇴 끝점 출발로 검증했다.
+            var before = plan.Lift is not null ? (liftPose, jLift!) : ((double[], double[])?)null;
+            var rc = await MoveLRetryOnRejectAsync(cobot, ctx, logger, "복귀 면 방향 이동", entryPose, jEntry!, before, ct);
             if (rc != 0)
                 throw new InvalidOperationException($"복귀 면 방향 이동(MoveL) 실패 (rc={rc}){FairinoErrorCodes.Suffix(rc)} — 정지합니다.");
         }
@@ -629,6 +632,66 @@ internal static class SequenceEntry
         return skipPlanar
             ? "법선 후퇴(후퇴 평면)"
             : $"법선 후퇴 → 후퇴 평면 {plan.InPlaneMm:0}mm 역주행(진입점{(restore is null ? "" : "·진입 자세 복원")})";
+    }
+
+    /// <summary>컨트롤러가 이동 지령을 받지 않고 거부할 때의 MoveL 반환값. 경로·도달 문제가 아니라 일시 거부로 보여
+    /// 같은 목표를 다시 보내면 통과한다(실기 2026-11-28 14:01 PU L4-R02C23 #5: 면 방향 역주행이 rc=74·결함 main=1/sub=2
+    /// 로 거부 → 실패 처리 복귀가 같은 진입점·같은 관절로 바로 성공).</summary>
+    internal const int MoveRejectedRc = 74;
+
+    /// <summary>rc=74 뒤 오류 해제(ResetAllError)하고 결함 상태를 다시 보기까지 기다리는 시간 [ms].</summary>
+    internal const int MoveRejectRetryDelayMs = 500;
+
+    /// <summary>
+    /// rc=74 거부 재시도를 막을 사유, 없으면 null. 오류 해제가 실패했거나, 상태를 모르거나, 해제 뒤에도 결함이 남아
+    /// 있으면 재시도하지 않는다 — 진짜 결함은 <see cref="CobotFaultGuard"/> 가 임무를 멈추게 둔다.
+    /// </summary>
+    internal static string? RejectRetryBlocker(int resetRc, int? faultMain, int? faultSub)
+    {
+        if (resetRc != 0) return $"오류 해제(ResetAllError) rc={resetRc}";
+        if (faultMain is null) return "코봇 상태 미수신";
+        if (faultMain != 0) return $"해제 뒤에도 결함 main={faultMain}, sub={faultSub}";
+        return null;
+    }
+
+    /// <summary>
+    /// 복귀 MoveL — 컨트롤러가 rc=74 로 거부하면 오류 해제 뒤 <b>이미 검증한 같은 목표</b>로 1회만 다시 보낸다.
+    /// 거부 직후 바로 해제한다(실패 처리의 관절 조회가 errcode 14 로 하던 해제와 같은 시점 — 결함 감시 확정 전).
+    /// <paramref name="before"/> 가 있으면 재시도 전에 그 점(앞 선분의 끝)으로 먼저 다시 간다.
+    /// rc=74 가 아니거나 재시도할 수 없으면 원래 rc 를 돌려준다.
+    /// </summary>
+    private static async Task<int> MoveLRetryOnRejectAsync(
+        CobotService cobot, SequenceContext ctx, ILogger logger, string what,
+        double[] target, double[] joints, (double[] Pose, double[] Joints)? before, CancellationToken ct)
+    {
+        Task<int> Move(double[] p, double[] j) => cobot.Rpc.MoveLAsync(p, j, tool: ctx.Tool, user: 0, vel: ctx.Velocity, ct: ct);
+
+        var rc = await Move(target, joints);
+        if (rc != MoveRejectedRc) return rc;
+
+        var resetRc = await cobot.Rpc.ResetAllErrorAsync(ct);
+        await Task.Delay(MoveRejectRetryDelayMs, ct);
+        var s = cobot.IsStateConnected ? cobot.State : null;
+        if (RejectRetryBlocker(resetRc, s?.ErrorCode, s?.SubCode) is { } why)
+        {
+            logger.LogWarning("{What}(MoveL) rc={Rc} 거부 — 재시도 안 함: {Why}", what, rc, why);
+            return rc;
+        }
+
+        logger.LogWarning("{What}(MoveL) rc={Rc} 거부 — 오류 해제 후 같은 목표로 1회 재시도{Before}",
+            what, rc, before is null ? "" : "(앞 선분 끝점 먼저 재확인)");
+        if (before is { } b)
+        {
+            var rcB = await Move(b.Pose, b.Joints);
+            if (rcB != 0)
+            {
+                logger.LogWarning("{What} 재시도: 앞 선분 끝점 재확인 MoveL rc={Rc} — 중단", what, rcB);
+                return rcB;
+            }
+        }
+        rc = await Move(target, joints);
+        if (rc == 0) logger.LogInformation("{What}(MoveL) 재시도 성공", what);
+        return rc;
     }
 
     /// <summary>진입 자세 복원 — 현재 자세와 기록 자세의 차이가 이 이하면 돌리지 않는다 [도].</summary>
